@@ -441,6 +441,7 @@ fn start_engine_stats_runtime(
     let (stats_update_tx, stats_update_rx) = stats_aggregator_update_channel(stats_config);
     let mut config =
         EngineStatsStreamConfig::new(&args.dynamo_relay_grpc_url, args.engine_stats_stream);
+    config.subscriber_id = args.inference_server_id.clone();
     config.metrics = Some(metrics);
     config.runtime_state = Some(runtime_state);
     start_engine_stats_stream(config, stats_update_tx).map(|handle| (handle, stats_update_rx))

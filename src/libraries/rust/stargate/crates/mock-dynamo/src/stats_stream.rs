@@ -7,13 +7,18 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use futures::Stream;
-use stargate_proto::dynamo_pool_relay as proto;
+use stargate_proto::dynamo_kvrelay as proto;
 use tokio::sync::broadcast;
 use tonic::{Request, Response, Status};
 
 use crate::AppState;
 
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(1);
+const NAMESPACE: &str = "dynamo";
+const RELAY: proto::RelayIdentity = proto::RelayIdentity {
+    drt_instance_id: 1,
+    relay_incarnation: 1,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct StatsStreamEvent {
@@ -25,61 +30,101 @@ pub(crate) struct StatsStreamEvent {
 }
 
 pub(crate) fn grpc_router(state: AppState) -> axum::Router {
-    let service = proto::pool_relay_server::PoolRelayServer::new(MockPoolRelay { state });
+    let service = proto::kv_event_relay_server::KvEventRelayServer::new(MockRelay { state });
     tonic::service::Routes::new(service).into_axum_router()
 }
 
 #[derive(Clone)]
-struct MockPoolRelay {
+struct MockRelay {
     state: AppState,
 }
 
 type ResponseStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 
 #[tonic::async_trait]
-impl proto::pool_relay_server::PoolRelay for MockPoolRelay {
-    type WatchKvBlockIndexStream = ResponseStream<proto::KvBlockIndexUpdate>;
-    type WatchKvUsageStream = ResponseStream<proto::KvUsageSnapshot>;
-    type WatchLoadStream = ResponseStream<proto::LoadSnapshot>;
+impl proto::kv_event_relay_server::KvEventRelay for MockRelay {
+    type WatchKvPoolCatalogStream = ResponseStream<proto::KvPoolCatalogUpdate>;
+    type SubscribeKvPoolStream = ResponseStream<proto::FilterUpdate>;
+    type SubscribeServingReadinessStream = ResponseStream<proto::ServingReadinessUpdate>;
+    type SubscribeKvPoolLoadStream = ResponseStream<proto::KvPoolLoadUpdate>;
+    type SubscribeServingLoadStream = ResponseStream<proto::ServingLoadUpdate>;
 
-    async fn watch_kv_block_index(
+    async fn get_relay_info(
         &self,
-        _request: Request<()>,
-    ) -> Result<Response<Self::WatchKvBlockIndexStream>, Status> {
-        Err(Status::unimplemented(
-            "mock Dynamo does not model the KV block index stream",
-        ))
+        _request: Request<proto::RelayInfoRequest>,
+    ) -> Result<Response<proto::RelayInfo>, Status> {
+        Ok(Response::new(proto::RelayInfo {
+            protocol_version: proto::PROTOCOL_VERSION,
+            relay: Some(RELAY),
+            contract_marker: proto::CONTRACT_MARKER,
+        }))
     }
 
-    async fn watch_kv_usage(
+    async fn watch_kv_pool_catalog(
         &self,
-        _request: Request<()>,
-    ) -> Result<Response<Self::WatchKvUsageStream>, Status> {
+        _request: Request<proto::WatchKvPoolCatalogRequest>,
+    ) -> Result<Response<Self::WatchKvPoolCatalogStream>, Status> {
         ensure_enabled(&self.state)?;
         let state = self.state.clone();
         let stream = async_stream::stream! {
+            yield Ok(catalog(&state.model_name));
+            // The catalog never changes; hold the stream open until disabled.
             let mut interval = snapshot_interval();
-            loop {
+            while state.stats_stream_enabled.load(Ordering::Relaxed) {
                 interval.tick().await;
-                if !state.stats_stream_enabled.load(Ordering::Relaxed) {
-                    break;
-                }
-                yield Ok(usage_snapshot(&state).await);
             }
         };
         Ok(Response::new(Box::pin(stream)))
     }
 
-    async fn watch_load(
+    async fn subscribe_kv_pool(
         &self,
-        _request: Request<()>,
-    ) -> Result<Response<Self::WatchLoadStream>, Status> {
+        _request: Request<proto::SubscribeKvPoolRequest>,
+    ) -> Result<Response<Self::SubscribeKvPoolStream>, Status> {
+        Err(Status::unimplemented(
+            "mock Dynamo does not model KV pool filters",
+        ))
+    }
+
+    async fn subscribe_serving_readiness(
+        &self,
+        _request: Request<proto::SubscribeServingReadinessRequest>,
+    ) -> Result<Response<Self::SubscribeServingReadinessStream>, Status> {
+        Err(Status::unimplemented(
+            "mock Dynamo does not model serving readiness",
+        ))
+    }
+
+    async fn subscribe_kv_pool_load(
+        &self,
+        _request: Request<proto::SubscribeKvPoolLoadRequest>,
+    ) -> Result<Response<Self::SubscribeKvPoolLoadStream>, Status> {
+        ensure_enabled(&self.state)?;
+        let state = self.state.clone();
+        let stream = async_stream::stream! {
+            let mut interval = snapshot_interval();
+            for window_sequence in 1.. {
+                interval.tick().await;
+                if !state.stats_stream_enabled.load(Ordering::Relaxed) {
+                    break;
+                }
+                yield Ok(kv_pool_load(&state, window_sequence).await);
+            }
+        };
+        Ok(Response::new(Box::pin(stream)))
+    }
+
+    async fn subscribe_serving_load(
+        &self,
+        _request: Request<proto::SubscribeServingLoadRequest>,
+    ) -> Result<Response<Self::SubscribeServingLoadStream>, Status> {
         ensure_enabled(&self.state)?;
         let state = self.state.clone();
         let stream = async_stream::stream! {
             let mut events = state.stats_events.subscribe();
             let mut accumulator = LoadAccumulator::default();
             let mut interval = snapshot_interval();
+            let mut window_sequence = 0;
             loop {
                 tokio::select! {
                     event = events.recv() => match event {
@@ -94,7 +139,8 @@ impl proto::pool_relay_server::PoolRelay for MockPoolRelay {
                         if !state.stats_stream_enabled.load(Ordering::Relaxed) {
                             break;
                         }
-                        yield Ok(accumulator.snapshot(&state.model_name));
+                        window_sequence += 1;
+                        yield Ok(accumulator.window(&state.model_name, window_sequence));
                     }
                 }
             }
@@ -168,7 +214,7 @@ impl LoadAccumulator {
         }
     }
 
-    fn snapshot(&self, configured_model: &str) -> proto::LoadSnapshot {
+    fn window(&self, configured_model: &str, window_sequence: u64) -> proto::ServingLoadUpdate {
         let mut model_ids = BTreeSet::from([configured_model.to_string()]);
         model_ids.extend(self.live.values().map(|request| request.model.clone()));
         model_ids.extend(self.totals.keys().cloned());
@@ -191,8 +237,9 @@ impl LoadAccumulator {
                     .map(|request| request.input_tokens)
                     .sum();
                 let inflight_input_tokens = live.iter().map(|request| request.input_tokens).sum();
-                proto::ModelView {
-                    model: Some(model_registration(&model)),
+                proto::ModelServingLoad {
+                    namespace: NAMESPACE.to_string(),
+                    canonical_model_id: model,
                     load: Some(proto::LoadView {
                         requests: Some(proto::RequestLifecycleStats {
                             requests_started_total: totals
@@ -216,79 +263,115 @@ impl LoadAccumulator {
                             ..Default::default()
                         }),
                         status: proto::DataStatus::Complete as i32,
-                        source_observed_at_unix_ms: crate::openai::unix_millis(),
+                        source_observed_ms: crate::openai::unix_millis(),
                     }),
                     deployment: Some(proto::ModelDeploymentStatus {
                         expected_frontends: 1,
                         observed_frontends: 1,
                         ready_frontends: 1,
-                        serving_pools: vec![pool_identity()],
+                        serving_pools: vec![pool_id()],
                     }),
                 }
             })
             .collect();
-        proto::LoadSnapshot {
-            metadata: Some(metadata()),
-            pools: vec![proto::PoolView {
-                pool: Some(pool_identity()),
+        proto::ServingLoadUpdate {
+            protocol_version: proto::PROTOCOL_VERSION,
+            relay: Some(RELAY),
+            window_sequence,
+            observed_ms: crate::openai::unix_millis(),
+            window_ms: SNAPSHOT_INTERVAL.as_millis() as u64,
+            pools: vec![proto::PoolServingLoad {
+                producer: Some(producer()),
                 load: Some(proto::LoadView {
                     status: proto::DataStatus::Complete as i32,
-                    source_observed_at_unix_ms: crate::openai::unix_millis(),
+                    source_observed_ms: crate::openai::unix_millis(),
                     ..Default::default()
                 }),
                 deployment: Some(proto::PoolDeploymentStatus {
-                    roles: vec![proto::WorkerRole::Aggregated as i32],
                     live_workers: Some(1),
                     max_concurrency: Some(1),
                 }),
             }],
             models,
+            contract_marker: proto::CONTRACT_MARKER,
         }
     }
 }
 
-async fn usage_snapshot(state: &AppState) -> proto::KvUsageSnapshot {
+async fn kv_pool_load(state: &AppState, window_sequence: u64) -> proto::KvPoolLoadUpdate {
     let stats = state.kv_cache.lock().await.stats(&state.model_name);
-    proto::KvUsageSnapshot {
-        metadata: Some(metadata()),
-        pools: vec![proto::PoolKvUsage {
-            pool: Some(pool_identity()),
-            models: vec![model_registration(&state.model_name)],
-            roles: vec![proto::WorkerRole::Aggregated as i32],
-            block_size_tokens: 1,
-            expected_ranks: 1,
-            observed_ranks: 1,
-            capacity_blocks: Some(stats.kv_cache_capacity_tokens),
-            used_blocks: Some(stats.kv_cache_used_tokens),
-            status: proto::DataStatus::Complete as i32,
-            source_observed_at_unix_ms: crate::openai::unix_millis(),
+    proto::KvPoolLoadUpdate {
+        protocol_version: proto::PROTOCOL_VERSION,
+        relay: Some(RELAY),
+        window_sequence,
+        observed_ms: crate::openai::unix_millis(),
+        window_ms: SNAPSHOT_INTERVAL.as_millis() as u64,
+        pools: vec![proto::KvPoolLoadEntry {
+            producer: Some(producer()),
+            kv_used_blocks: stats.kv_cache_used_tokens,
+            total_kv_blocks: stats.kv_cache_capacity_tokens,
+            kv_observed_ranks: 1,
+            kv_expected_ranks: 1,
         }],
+        contract_marker: proto::CONTRACT_MARKER,
     }
 }
 
-fn metadata() -> proto::RelayMessageMetadata {
-    proto::RelayMessageMetadata {
-        relay_incarnation: 1,
-        emitted_at_unix_ms: crate::openai::unix_millis(),
+/// One aggregated pool serving the configured model with one-token KV blocks.
+fn catalog(model: &str) -> proto::KvPoolCatalogUpdate {
+    proto::KvPoolCatalogUpdate {
+        protocol_version: proto::PROTOCOL_VERSION,
+        relay: Some(RELAY),
+        revision: 1,
+        snapshot: Some(proto::KvPoolCatalogSnapshot {
+            pools: vec![proto::KvPoolDescriptor {
+                producer: Some(producer()),
+                serving_endpoint: Some(proto::DynamoEndpointId {
+                    namespace: NAMESPACE.to_string(),
+                    component: "backend".to_string(),
+                    endpoint: "generate".to_string(),
+                }),
+                registrations: vec![proto::ModelRegistration {
+                    canonical_model_id: model.to_string(),
+                    target: Some(proto::ModelTarget {
+                        target: Some(proto::model_target::Target::Base(proto::BaseModelTarget {
+                            base_model: model.to_string(),
+                        })),
+                    }),
+                    aliases: Vec::new(),
+                }],
+                query_semantics: Some(proto::KvQuerySemantics {
+                    kv_block_size: 1,
+                    hash_format: proto::KvQueryHashFormat::DynamoStandardV1 as i32,
+                }),
+                pool_roles: vec![proto::WorkerRole::Aggregated as i32],
+            }],
+        }),
+        contract_marker: proto::CONTRACT_MARKER,
     }
 }
 
-fn model_registration(model: &str) -> proto::ModelRegistration {
-    proto::ModelRegistration {
-        model: model.to_string(),
-        base_model: model.to_string(),
-        adapter: None,
-        aliases: Vec::new(),
+fn producer() -> proto::ProducerIdentity {
+    proto::ProducerIdentity {
+        pool_id: Some(pool_id()),
+        producer_incarnation: 1,
+        layout_generation: 1,
+        ckf_format: None,
     }
 }
 
-fn pool_identity() -> proto::PoolIdentity {
-    proto::PoolIdentity {
-        cache_semantics_digest: vec![1; 16],
-        cache_semantics_source: proto::IdentitySource::DefaultDerived as i32,
-        routing_scope_digest: vec![2; 16],
-        routing_scope_source: proto::IdentitySource::DefaultDerived as i32,
-        locality_id: 1,
+fn pool_id() -> proto::KvPoolId {
+    let digest = |byte| proto::DigestIdentity {
+        digest: vec![byte; 16],
+        source: proto::IdentitySource::DefaultDerived as i32,
+    };
+    proto::KvPoolId {
+        identity_version: 1,
+        indexer_domain: Some(proto::IndexerDomainId {
+            cache_semantics: Some(digest(1)),
+            routing_scope: Some(digest(2)),
+        }),
+        dc_id: 1,
     }
 }
 
@@ -297,7 +380,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn load_snapshots_keep_cumulative_counters_and_live_gauges() {
+    fn load_windows_keep_cumulative_counters_and_live_gauges() {
         let mut accumulator = LoadAccumulator::default();
         accumulator.observe(StatsStreamEvent {
             request_id: "req-1".to_string(),
@@ -308,7 +391,7 @@ mod tests {
         });
 
         for _ in 0..2 {
-            let snapshot = accumulator.snapshot("model-a");
+            let snapshot = accumulator.window("model-a", 1);
             let load = snapshot.models[0].load.as_ref().unwrap();
             let requests = load.requests.as_ref().unwrap();
             let tokens = load.tokens.as_ref().unwrap();

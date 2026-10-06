@@ -31,7 +31,7 @@ use axum::extract::State;
 use axum::http::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use pylon_lib::{
     EngineStatsStreamConfig, EngineStatsStreamMode, InferenceServerRegistrationClient,
     InferenceServerRegistrationConfig, PylonRuntimeState, QuicHttpTunnelConfig,
@@ -41,7 +41,7 @@ use pylon_lib::{
 };
 use stargate::routing::RoutingTargetKey;
 use stargate::test_support::StargateState;
-use stargate_proto::{dynamo_pool_relay as stats_proto, pb::InferenceServerStatus};
+use stargate_proto::{dynamo_kvrelay as stats_proto, pb::InferenceServerStatus};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
@@ -515,11 +515,11 @@ async fn start_engine_stats_inst(
         model: model.to_string(),
         connected_tx,
     };
-    let grpc = tonic::service::Routes::new(stats_proto::pool_relay_server::PoolRelayServer::new(
-        EngineStatsGrpc {
+    let grpc = tonic::service::Routes::new(
+        stats_proto::kv_event_relay_server::KvEventRelayServer::new(EngineStatsGrpc {
             state: state.clone(),
-        },
-    ))
+        }),
+    )
     .into_axum_router();
     let app = Router::new()
         .route("/v1/chat/completions", post(engine_stats_chat))
@@ -573,45 +573,100 @@ struct EngineStatsGrpc {
     state: EngineStatsState,
 }
 
-#[tonic::async_trait]
-impl stats_proto::pool_relay_server::PoolRelay for EngineStatsGrpc {
-    type WatchKvBlockIndexStream =
-        Pin<Box<dyn Stream<Item = Result<stats_proto::KvBlockIndexUpdate, tonic::Status>> + Send>>;
-    type WatchKvUsageStream =
-        Pin<Box<dyn Stream<Item = Result<stats_proto::KvUsageSnapshot, tonic::Status>> + Send>>;
-    type WatchLoadStream =
-        Pin<Box<dyn Stream<Item = Result<stats_proto::LoadSnapshot, tonic::Status>> + Send>>;
+type RelayStream<T> = Pin<Box<dyn Stream<Item = Result<T, tonic::Status>> + Send>>;
 
-    async fn watch_kv_block_index(
+#[tonic::async_trait]
+impl stats_proto::kv_event_relay_server::KvEventRelay for EngineStatsGrpc {
+    type WatchKvPoolCatalogStream = RelayStream<stats_proto::KvPoolCatalogUpdate>;
+    type SubscribeKvPoolStream = RelayStream<stats_proto::FilterUpdate>;
+    type SubscribeServingReadinessStream = RelayStream<stats_proto::ServingReadinessUpdate>;
+    type SubscribeKvPoolLoadStream = RelayStream<stats_proto::KvPoolLoadUpdate>;
+    type SubscribeServingLoadStream = RelayStream<stats_proto::ServingLoadUpdate>;
+
+    async fn get_relay_info(
         &self,
-        _request: tonic::Request<()>,
-    ) -> Result<tonic::Response<Self::WatchKvBlockIndexStream>, tonic::Status> {
+        request: tonic::Request<stats_proto::RelayInfoRequest>,
+    ) -> Result<tonic::Response<stats_proto::RelayInfo>, tonic::Status> {
+        require_contract(request.get_ref().contract_marker, "pylon")?;
+        Ok(tonic::Response::new(stats_proto::RelayInfo {
+            protocol_version: stats_proto::PROTOCOL_VERSION,
+            relay: Some(RELAY),
+            contract_marker: stats_proto::CONTRACT_MARKER,
+        }))
+    }
+
+    async fn watch_kv_pool_catalog(
+        &self,
+        request: tonic::Request<stats_proto::WatchKvPoolCatalogRequest>,
+    ) -> Result<tonic::Response<Self::WatchKvPoolCatalogStream>, tonic::Status> {
+        let request = request.into_inner();
+        require_contract(request.contract_marker, &request.subscriber_id)?;
+        let update = stats_proto::KvPoolCatalogUpdate {
+            protocol_version: stats_proto::PROTOCOL_VERSION,
+            relay: Some(RELAY),
+            revision: 1,
+            snapshot: Some(stats_proto::KvPoolCatalogSnapshot {
+                pools: vec![stats_proto::KvPoolDescriptor {
+                    producer: Some(stats_producer()),
+                    serving_endpoint: None,
+                    registrations: vec![stats_proto::ModelRegistration {
+                        canonical_model_id: self.state.model.clone(),
+                        target: None,
+                        aliases: Vec::new(),
+                    }],
+                    query_semantics: Some(stats_proto::KvQuerySemantics {
+                        kv_block_size: 1,
+                        hash_format: stats_proto::KvQueryHashFormat::DynamoStandardV1 as i32,
+                    }),
+                    pool_roles: vec![stats_proto::WorkerRole::Aggregated as i32],
+                }],
+            }),
+            contract_marker: stats_proto::CONTRACT_MARKER,
+        };
+        let stream = futures::stream::once(async { Ok(update) }).chain(futures::stream::pending());
+        Ok(tonic::Response::new(Box::pin(stream)))
+    }
+
+    async fn subscribe_kv_pool(
+        &self,
+        _request: tonic::Request<stats_proto::SubscribeKvPoolRequest>,
+    ) -> Result<tonic::Response<Self::SubscribeKvPoolStream>, tonic::Status> {
         Err(tonic::Status::unimplemented(
-            "the Pylon integration fixture does not model KV block index data",
+            "the Pylon integration fixture does not model KV pool filters",
         ))
     }
 
-    async fn watch_kv_usage(
+    async fn subscribe_serving_readiness(
         &self,
-        _request: tonic::Request<()>,
-    ) -> Result<tonic::Response<Self::WatchKvUsageStream>, tonic::Status> {
-        let model = self.state.model.clone();
+        _request: tonic::Request<stats_proto::SubscribeServingReadinessRequest>,
+    ) -> Result<tonic::Response<Self::SubscribeServingReadinessStream>, tonic::Status> {
+        Err(tonic::Status::unimplemented(
+            "the Pylon integration fixture does not model serving readiness",
+        ))
+    }
+
+    async fn subscribe_kv_pool_load(
+        &self,
+        request: tonic::Request<stats_proto::SubscribeKvPoolLoadRequest>,
+    ) -> Result<tonic::Response<Self::SubscribeKvPoolLoadStream>, tonic::Status> {
+        let request = request.into_inner();
+        require_contract(request.contract_marker, &request.subscriber_id)?;
         let stream = async_stream::stream! {
-            loop {
-                yield Ok(stats_proto::KvUsageSnapshot {
-                    metadata: Some(relay_metadata()),
-                    pools: vec![stats_proto::PoolKvUsage {
-                        pool: Some(stats_pool_identity()),
-                        models: vec![stats_model_registration(&model)],
-                        roles: vec![stats_proto::WorkerRole::Aggregated as i32],
-                        block_size_tokens: 1,
-                        expected_ranks: 1,
-                        observed_ranks: 1,
-                        capacity_blocks: Some(1_000),
-                        used_blocks: Some(400),
-                        status: stats_proto::DataStatus::Complete as i32,
-                        source_observed_at_unix_ms: 1,
+            for window_sequence in 1.. {
+                yield Ok(stats_proto::KvPoolLoadUpdate {
+                    protocol_version: stats_proto::PROTOCOL_VERSION,
+                    relay: Some(RELAY),
+                    window_sequence,
+                    observed_ms: 1,
+                    window_ms: 100,
+                    pools: vec![stats_proto::KvPoolLoadEntry {
+                        producer: Some(stats_producer()),
+                        kv_used_blocks: 400,
+                        total_kv_blocks: 1_000,
+                        kv_observed_ranks: 1,
+                        kv_expected_ranks: 1,
                     }],
+                    contract_marker: stats_proto::CONTRACT_MARKER,
                 });
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
@@ -619,20 +674,24 @@ impl stats_proto::pool_relay_server::PoolRelay for EngineStatsGrpc {
         Ok(tonic::Response::new(Box::pin(stream)))
     }
 
-    async fn watch_load(
+    async fn subscribe_serving_load(
         &self,
-        _request: tonic::Request<()>,
-    ) -> Result<tonic::Response<Self::WatchLoadStream>, tonic::Status> {
+        request: tonic::Request<stats_proto::SubscribeServingLoadRequest>,
+    ) -> Result<tonic::Response<Self::SubscribeServingLoadStream>, tonic::Status> {
+        let request = request.into_inner();
+        require_contract(request.contract_marker, &request.subscriber_id)?;
         let _ = self.state.connected_tx.send(true);
         let model = self.state.model.clone();
         let stream = async_stream::stream! {
-            let mut sample = 0_u64;
-            loop {
-                sample += 1;
-                yield Ok(stats_proto::LoadSnapshot {
-                    metadata: Some(relay_metadata()),
-                    pools: vec![stats_proto::PoolView {
-                        pool: Some(stats_pool_identity()),
+            for sample in 1_u64.. {
+                yield Ok(stats_proto::ServingLoadUpdate {
+                    protocol_version: stats_proto::PROTOCOL_VERSION,
+                    relay: Some(RELAY),
+                    window_sequence: sample,
+                    observed_ms: sample.saturating_mul(100),
+                    window_ms: 100,
+                    pools: vec![stats_proto::PoolServingLoad {
+                        producer: Some(stats_producer()),
                         load: Some(stats_proto::LoadView {
                             requests: None,
                             tokens: Some(stats_proto::TokenLoadStats {
@@ -641,16 +700,16 @@ impl stats_proto::pool_relay_server::PoolRelay for EngineStatsGrpc {
                                 ..Default::default()
                             }),
                             status: stats_proto::DataStatus::Complete as i32,
-                            source_observed_at_unix_ms: 1,
+                            source_observed_ms: 1,
                         }),
                         deployment: Some(stats_proto::PoolDeploymentStatus {
-                            roles: vec![stats_proto::WorkerRole::Aggregated as i32],
                             live_workers: Some(1),
                             max_concurrency: Some(8),
                         }),
                     }],
-                    models: vec![stats_proto::ModelView {
-                        model: Some(stats_model_registration(&model)),
+                    models: vec![stats_proto::ModelServingLoad {
+                        namespace: "dynamo".to_string(),
+                        canonical_model_id: model.clone(),
                         load: Some(stats_proto::LoadView {
                             requests: Some(stats_proto::RequestLifecycleStats {
                                 requests_started_total: sample.saturating_mul(4),
@@ -668,15 +727,16 @@ impl stats_proto::pool_relay_server::PoolRelay for EngineStatsGrpc {
                                 ..Default::default()
                             }),
                             status: stats_proto::DataStatus::Complete as i32,
-                            source_observed_at_unix_ms: sample.saturating_mul(100),
+                            source_observed_ms: sample.saturating_mul(100),
                         }),
                         deployment: Some(stats_proto::ModelDeploymentStatus {
                             expected_frontends: 1,
                             observed_frontends: 1,
                             ready_frontends: 1,
-                            serving_pools: vec![stats_pool_identity()],
+                            serving_pools: vec![stats_pool_id()],
                         }),
                     }],
+                    contract_marker: stats_proto::CONTRACT_MARKER,
                 });
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
@@ -685,29 +745,44 @@ impl stats_proto::pool_relay_server::PoolRelay for EngineStatsGrpc {
     }
 }
 
-fn relay_metadata() -> stats_proto::RelayMessageMetadata {
-    stats_proto::RelayMessageMetadata {
-        relay_incarnation: 1,
-        emitted_at_unix_ms: 1,
+const RELAY: stats_proto::RelayIdentity = stats_proto::RelayIdentity {
+    drt_instance_id: 1,
+    relay_incarnation: 1,
+};
+
+/// Rejects requests the real Relay would reject, so the fixture checks Pylon's
+/// request envelope.
+#[allow(clippy::result_large_err)]
+fn require_contract(contract_marker: u32, subscriber_id: &str) -> Result<(), tonic::Status> {
+    if contract_marker != stats_proto::CONTRACT_MARKER || subscriber_id.is_empty() {
+        return Err(tonic::Status::failed_precondition(
+            "request lacks the Relay v1 contract marker or a subscriber_id",
+        ));
+    }
+    Ok(())
+}
+
+fn stats_producer() -> stats_proto::ProducerIdentity {
+    stats_proto::ProducerIdentity {
+        pool_id: Some(stats_pool_id()),
+        producer_incarnation: 1,
+        layout_generation: 1,
+        ckf_format: None,
     }
 }
 
-fn stats_pool_identity() -> stats_proto::PoolIdentity {
-    stats_proto::PoolIdentity {
-        cache_semantics_digest: vec![1; 16],
-        cache_semantics_source: stats_proto::IdentitySource::DefaultDerived as i32,
-        routing_scope_digest: vec![2; 16],
-        routing_scope_source: stats_proto::IdentitySource::DefaultDerived as i32,
-        locality_id: 1,
-    }
-}
-
-fn stats_model_registration(model: &str) -> stats_proto::ModelRegistration {
-    stats_proto::ModelRegistration {
-        model: model.to_string(),
-        base_model: model.to_string(),
-        adapter: None,
-        aliases: Vec::new(),
+fn stats_pool_id() -> stats_proto::KvPoolId {
+    let digest = |byte| stats_proto::DigestIdentity {
+        digest: vec![byte; 16],
+        source: stats_proto::IdentitySource::DefaultDerived as i32,
+    };
+    stats_proto::KvPoolId {
+        identity_version: 1,
+        indexer_domain: Some(stats_proto::IndexerDomainId {
+            cache_semantics: Some(digest(1)),
+            routing_scope: Some(digest(2)),
+        }),
+        dc_id: 1,
     }
 }
 

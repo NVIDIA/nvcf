@@ -33,7 +33,7 @@ struct Args {
     /// Base URL of the upstream HTTP inference server (for example http://127.0.0.1:8090)
     #[arg(long, value_name = "URL")]
     upstream_http_base_url: String,
-    /// Pool Relay gRPC URL used for canonical load and KV-usage streams
+    /// KV DC Relay `KvEventRelay` gRPC URL (the Relay's `--bind` address) for load and KV-usage streams
     #[arg(long, default_value = DEFAULT_DYNAMO_RELAY_GRPC_URL, value_name = "URL")]
     dynamo_relay_grpc_url: String,
     /// QUIC tunnel listen address (advertised to stargate in forward mode)

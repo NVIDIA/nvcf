@@ -1,38 +1,52 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-//! Translation from Dynamo's Relay-owned contract into Pylon model state.
+//! Translation from the Dynamo KV DC Relay contract (`dynamo.kvrelay.v1`) into
+//! Pylon model state.
+//!
+//! Load windows identify pools by `ProducerIdentity`; Pylon joins them to the
+//! catalog by its stable `pool_id` alone. The remaining producer fields name a
+//! KV-index generation, which changes neither usage nor load, so a producer
+//! restart does not orphan a pool's load. Window entries for pools absent from
+//! the latest catalog are dropped.
+//!
+//! Dynamo keys models by `(namespace, canonical_model_id)`, but Pylon advertises
+//! model names. A model served from several namespaces is reported as the sum of
+//! its per-namespace views, complete only when every view is complete, so a
+//! rollout across namespaces neither hides capacity nor reads as lower load.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use stargate_proto::dynamo_pool_relay as proto;
+use stargate_proto::dynamo_kvrelay as proto;
 
 use super::aggregator::{
     KvCacheStatsEnvelope, KvCacheStatsSnapshot, RelayLoadStatsEnvelope, RelayLoadStatsSnapshot,
 };
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct PoolKey {
-    cache_semantics: [u8; 16],
-    cache_source: i32,
-    routing_scope: [u8; 16],
-    routing_source: i32,
-    locality_id: u64,
+const POOL_IDENTITY_VERSION: u32 = 1;
+const POOL_DIGEST_BYTES: usize = 16;
+
+/// The latest complete `WatchKvPoolCatalog` snapshot.
+#[derive(Debug, Default)]
+pub(super) struct KvPoolCatalog {
+    /// `None` quarantines a pool whose identity, roles, query semantics, or
+    /// registrations Pylon does not understand: models it serves are reported
+    /// incomplete rather than summed without it.
+    pools: HashMap<proto::KvPoolId, Option<ServingPool>>,
+    /// Canonical model ID to the pools registering it, across namespaces.
+    models: BTreeMap<String, Vec<proto::KvPoolId>>,
+    /// Advertised name (canonical ID or alias) to its canonical model ID;
+    /// `None` when pools assign the name to different models, which omits it.
+    names: BTreeMap<String, Option<String>>,
 }
 
-#[derive(Clone)]
-struct UsagePool {
+#[derive(Debug)]
+struct ServingPool {
     roles: Vec<proto::WorkerRole>,
-    identities: Vec<String>,
-    capacity_tokens: Option<u64>,
-    used_tokens: Option<u64>,
-    source_observed_at_unix_ms: u64,
-    complete: bool,
+    kv_block_size: u32,
 }
 
-#[derive(Clone)]
 struct LoadPool {
-    roles: Vec<proto::WorkerRole>,
     live_workers: Option<u64>,
     max_concurrency: Option<u64>,
     complete: bool,
@@ -51,146 +65,210 @@ struct CounterBaseline {
     output_tokens_total: u64,
 }
 
+/// Dynamo's serving-load key: `(namespace, canonical_model_id)`.
+type ModelKey = (String, String);
+
 #[derive(Default)]
 pub(super) struct RelayLoadTranslator {
-    counters: HashMap<String, CounterBaseline>,
+    counters: HashMap<ModelKey, CounterBaseline>,
 }
 
-pub(super) fn kv_snapshot_from_proto(
-    snapshot: proto::KvUsageSnapshot,
-) -> anyhow::Result<KvCacheStatsEnvelope> {
-    snapshot
-        .metadata
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("KV usage snapshot metadata is missing"))?;
-    let mut pools = Vec::with_capacity(snapshot.pools.len());
-    let mut pool_ids = HashSet::new();
-    let mut identity_owner = HashMap::<String, String>::new();
-    for pool in snapshot.pools {
-        let key = pool_key(pool.pool)?;
-        anyhow::ensure!(pool_ids.insert(key.clone()), "duplicate KV usage pool");
-        let roles = worker_roles(&pool.roles)?;
-        let identities = registration_identities(&pool.models, &mut identity_owner)?;
-        let complete = data_complete(pool.status)
-            && pool.expected_ranks > 0
-            && pool.observed_ranks == pool.expected_ranks
-            && pool.block_size_tokens > 0;
-        let (capacity_tokens, used_tokens) = match (pool.capacity_blocks, pool.used_blocks) {
-            (Some(capacity), Some(used)) if used <= capacity => (
-                capacity.checked_mul(u64::from(pool.block_size_tokens)),
-                used.checked_mul(u64::from(pool.block_size_tokens)),
-            ),
-            _ => (None, None),
-        };
-        pools.push(UsagePool {
-            roles,
-            identities,
-            capacity_tokens,
-            used_tokens,
-            source_observed_at_unix_ms: pool.source_observed_at_unix_ms,
-            complete: complete
-                && pool.source_observed_at_unix_ms > 0
-                && capacity_tokens.is_some()
-                && used_tokens.is_some(),
-        });
+impl KvPoolCatalog {
+    pub(super) fn from_proto(update: proto::KvPoolCatalogUpdate) -> anyhow::Result<Self> {
+        let snapshot = update
+            .snapshot
+            .ok_or_else(|| anyhow::anyhow!("pool catalog snapshot is missing"))?;
+        let mut catalog = Self::default();
+        for descriptor in snapshot.pools {
+            let pool_id = descriptor
+                .producer
+                .and_then(|producer| producer.pool_id)
+                .ok_or_else(|| anyhow::anyhow!("catalog pool ID is missing"))?;
+            let mut registrations_valid = true;
+            for registration in &descriptor.registrations {
+                let canonical = &registration.canonical_model_id;
+                if !valid_name(canonical) {
+                    registrations_valid = false;
+                    continue;
+                }
+                let pools = catalog.models.entry(canonical.clone()).or_default();
+                if !pools.contains(&pool_id) {
+                    pools.push(pool_id.clone());
+                }
+                for name in std::iter::once(canonical).chain(&registration.aliases) {
+                    if valid_name(name) {
+                        catalog.index_name(name, canonical);
+                    } else {
+                        registrations_valid = false;
+                    }
+                }
+            }
+            let serving = (registrations_valid && supported_pool_id(&pool_id))
+                .then(|| {
+                    Some(ServingPool {
+                        roles: pool_roles(&descriptor.pool_roles)?,
+                        kv_block_size: descriptor
+                            .query_semantics
+                            .map(|semantics| semantics.kv_block_size)
+                            .filter(|size| *size > 0)?,
+                    })
+                })
+                .flatten();
+            if serving.is_none() {
+                tracing::warn!(
+                    ?pool_id,
+                    "quarantining unsupported Dynamo Relay catalog pool"
+                );
+            }
+            anyhow::ensure!(
+                catalog.pools.insert(pool_id, serving).is_none(),
+                "duplicate catalog pool"
+            );
+        }
+        Ok(catalog)
     }
 
-    let mut by_identity = BTreeMap::<String, Vec<usize>>::new();
-    for (index, pool) in pools.iter().enumerate() {
-        for identity in &pool.identities {
-            let indexes = by_identity.entry(identity.clone()).or_default();
-            if !indexes.contains(&index) {
-                indexes.push(index);
+    fn index_name(&mut self, name: &str, canonical: &str) {
+        match self.names.get_mut(name) {
+            None => {
+                self.names
+                    .insert(name.to_string(), Some(canonical.to_string()));
             }
+            Some(owner) if owner.as_deref() != Some(canonical) => *owner = None,
+            Some(_) => {}
         }
     }
 
-    let models = by_identity
-        .into_iter()
-        .map(|(model, indexes)| {
-            let role = serving_role(indexes.iter().map(|index| pools[*index].roles.as_slice()));
-            let selected = indexes
-                .into_iter()
-                .filter(|index| pools[*index].roles.contains(&role))
+    /// Names Pylon advertises for a canonical model: the ID and its aliases,
+    /// minus any name the catalog also assigns to another model.
+    fn names_of(&self, canonical: &str) -> Vec<String> {
+        if !self.names.contains_key(canonical) {
+            return vec![canonical.to_string()];
+        }
+        self.names
+            .iter()
+            .filter(|(_, owner)| owner.as_deref() == Some(canonical))
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    /// The pool's serving description, or `None` when it is absent or quarantined.
+    fn serving_pool(&self, pool_id: &proto::KvPoolId) -> Option<&ServingPool> {
+        self.pools.get(pool_id)?.as_ref()
+    }
+}
+
+pub(super) fn kv_usage_from_proto(
+    catalog: &KvPoolCatalog,
+    update: proto::KvPoolLoadUpdate,
+) -> anyhow::Result<KvCacheStatsEnvelope> {
+    // Usage in tokens for pools whose aggregate is authoritative; `None` otherwise.
+    let mut usage = HashMap::<proto::KvPoolId, Option<(u64, u64)>>::new();
+    for entry in update.pools {
+        let pool_id = entry
+            .producer
+            .and_then(|producer| producer.pool_id)
+            .ok_or_else(|| anyhow::anyhow!("KV load pool ID is missing"))?;
+        anyhow::ensure!(!usage.contains_key(&pool_id), "duplicate KV load pool");
+        let Some(pool) = catalog.pools.get(&pool_id) else {
+            continue;
+        };
+        // Incomplete rank coverage and unknown (zero) capacity are not zero load.
+        let authoritative = entry.kv_expected_ranks > 0
+            && entry.kv_observed_ranks == entry.kv_expected_ranks
+            && entry.total_kv_blocks > 0
+            && entry.kv_used_blocks <= entry.total_kv_blocks;
+        let tokens = pool.as_ref().filter(|_| authoritative).and_then(|pool| {
+            let block_size = u64::from(pool.kv_block_size);
+            Some((
+                entry.total_kv_blocks.checked_mul(block_size)?,
+                entry.kv_used_blocks.checked_mul(block_size)?,
+            ))
+        });
+        usage.insert(pool_id, tokens);
+    }
+
+    let mut models = Vec::new();
+    for (canonical, pool_ids) in &catalog.models {
+        let pools = pool_ids
+            .iter()
+            .map(|pool_id| Some((catalog.serving_pool(pool_id)?, pool_id)))
+            .collect::<Option<Vec<_>>>();
+        let totals = pools.and_then(|pools| {
+            let role = serving_role(pools.iter().map(|(pool, _)| pool.roles.as_slice()));
+            let selected = pools
+                .iter()
+                .filter(|(pool, _)| pool.roles.contains(&role))
                 .collect::<Vec<_>>();
-            let complete =
-                !selected.is_empty() && selected.iter().all(|index| pools[*index].complete);
-            let totals = complete
-                .then(|| {
-                    selected
-                        .iter()
-                        .try_fold((0_u64, 0_u64), |(capacity, used), index| {
-                            Some((
-                                capacity.checked_add(pools[*index].capacity_tokens?)?,
-                                used.checked_add(pools[*index].used_tokens?)?,
-                            ))
-                        })
+            if selected.is_empty() {
+                return None;
+            }
+            selected
+                .into_iter()
+                .try_fold((0_u64, 0_u64), |(capacity, used), (_, pool_id)| {
+                    let (pool_capacity, pool_used) = (*usage.get(*pool_id)?)?;
+                    Some((
+                        capacity.checked_add(pool_capacity)?,
+                        used.checked_add(pool_used)?,
+                    ))
                 })
-                .flatten();
-            let (capacity, used, free) = totals
-                .and_then(|(capacity, used)| Some((capacity, used, capacity.checked_sub(used)?)))
-                .unwrap_or_default();
-            KvCacheStatsSnapshot {
-                model,
+        });
+        let (capacity, used) = totals.unwrap_or_default();
+        for name in catalog.names_of(canonical) {
+            models.push(KvCacheStatsSnapshot {
+                model: name,
                 aliases: Vec::new(),
                 kv_cache_capacity_tokens: capacity,
                 kv_cache_used_tokens: used,
-                kv_cache_free_tokens: free,
-                source_observed_at_unix_ms: selected
-                    .iter()
-                    .map(|index| pools[*index].source_observed_at_unix_ms)
-                    .filter(|timestamp| *timestamp > 0)
-                    .min()
-                    .unwrap_or_default(),
-                complete: complete && totals.is_some(),
-            }
-        })
-        .collect();
+                kv_cache_free_tokens: capacity - used,
+                source_observed_at_unix_ms: update.observed_ms,
+                complete: totals.is_some(),
+            });
+        }
+    }
     Ok(KvCacheStatsEnvelope { models })
 }
 
 impl RelayLoadTranslator {
     pub(super) fn translate(
         &mut self,
-        snapshot: proto::LoadSnapshot,
+        catalog: &KvPoolCatalog,
+        update: proto::ServingLoadUpdate,
     ) -> anyhow::Result<RelayLoadTranslation> {
-        let relay_incarnation = snapshot
-            .metadata
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("load snapshot metadata is missing"))?
+        let relay_incarnation = update
+            .relay
+            .ok_or_else(|| anyhow::anyhow!("serving-load Relay identity is missing"))?
             .relay_incarnation;
-        let mut pools = HashMap::<PoolKey, LoadPool>::new();
-        for pool in snapshot.pools {
-            let key = pool_key(pool.pool)?;
+        let mut pools = HashMap::<proto::KvPoolId, LoadPool>::new();
+        for pool in update.pools {
+            let pool_id = pool
+                .producer
+                .and_then(|producer| producer.pool_id)
+                .ok_or_else(|| anyhow::anyhow!("serving-load pool ID is missing"))?;
             let deployment = pool.deployment.unwrap_or_default();
             let load_pool = LoadPool {
-                roles: worker_roles(&deployment.roles)?,
                 live_workers: deployment.live_workers,
                 max_concurrency: deployment.max_concurrency,
                 complete: pool.load.is_some_and(|load| data_complete(load.status)),
             };
             anyhow::ensure!(
-                pools.insert(key, load_pool).is_none(),
-                "duplicate load pool"
+                pools.insert(pool_id, load_pool).is_none(),
+                "duplicate serving-load pool"
             );
         }
 
-        let mut identity_owner = HashMap::<String, String>::new();
         let mut seen_models = HashSet::new();
         let mut next_counters = HashMap::new();
-        let mut relay_models = BTreeMap::new();
-        let mut models = Vec::new();
-        for model in snapshot.models {
-            let registration = model
-                .model
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("load model registration is missing"))?;
-            let identities =
-                registration_identities(std::slice::from_ref(registration), &mut identity_owner)?;
-            let canonical_model = registration.model.trim();
+        let mut by_canonical = BTreeMap::<String, (RelayLoadStatsSnapshot, bool)>::new();
+        for model in update.models {
             anyhow::ensure!(
-                seen_models.insert(canonical_model.to_string()),
-                "duplicate load model"
+                valid_name(&model.canonical_model_id),
+                "serving-load canonical model ID is invalid"
+            );
+            let key = (model.namespace, model.canonical_model_id);
+            anyhow::ensure!(
+                seen_models.insert(key.clone()),
+                "duplicate serving-load model"
             );
             let proto::ModelDeploymentStatus {
                 expected_frontends,
@@ -200,30 +278,23 @@ impl RelayLoadTranslator {
             } = model.deployment.unwrap_or_default();
             let load = model.load.unwrap_or_default();
             let tokens = load.tokens.unwrap_or_default();
-            let serving_pools = serving_pools
-                .into_iter()
-                .map(|pool| pool_key(Some(pool)))
-                .collect::<anyhow::Result<HashSet<_>>>()?;
-            anyhow::ensure!(
-                serving_pools.iter().all(|pool| pools.contains_key(pool)),
-                "load model references an unknown serving pool"
-            );
             let serving = serving_pools
                 .iter()
-                .filter_map(|key| pools.get(key))
+                .filter_map(|pool_id| Some((catalog.serving_pool(pool_id)?, pools.get(pool_id)?)))
                 .collect::<Vec<_>>();
-            let role = serving_role(serving.iter().map(|pool| pool.roles.as_slice()));
+            let all_pools_known = serving.len() == serving_pools.len();
+            let role = serving_role(serving.iter().map(|(pool, _)| pool.roles.as_slice()));
             let selected = serving
                 .into_iter()
-                .filter(|pool| pool.roles.contains(&role))
+                .filter(|(pool, _)| pool.roles.contains(&role))
+                .map(|(_, load)| load)
                 .collect::<Vec<_>>();
             let scheduler_live = selected
                 .iter()
                 .any(|pool| pool.complete && pool.live_workers.is_some_and(|workers| workers > 0));
-            let max_engine_concurrency = (!selected.is_empty()
-                && selected
-                    .iter()
-                    .all(|pool| pool.complete && pool.max_concurrency.is_some()))
+            let max_engine_concurrency = (all_pools_known
+                && !selected.is_empty()
+                && selected.iter().all(|pool| pool.complete))
             .then(|| {
                 selected.iter().try_fold(0_u64, |total, pool| {
                     total.checked_add(pool.max_concurrency?)
@@ -244,26 +315,26 @@ impl RelayLoadTranslator {
             let load_complete = data_complete(load.status)
                 && expected_frontends > 0
                 && observed_frontends == expected_frontends
-                && load.source_observed_at_unix_ms > 0
+                && load.source_observed_ms > 0
                 && num_running_queries.is_some();
             let rates = tokens
                 .output_tokens_total
                 .filter(|_| load_complete)
                 .map(|output_tokens_total| CounterBaseline {
                     relay_incarnation,
-                    observed_at_unix_ms: load.source_observed_at_unix_ms,
+                    observed_at_unix_ms: load.source_observed_ms,
                     input_tokens_total: tokens.input_tokens_total,
                     output_tokens_total,
                 })
                 .map(|current| {
                     let rates = self
                         .counters
-                        .get(canonical_model)
+                        .get(&key)
                         .and_then(|previous| counter_rates(*previous, current));
                     (current, rates)
                 });
             if let Some((current, _)) = rates {
-                next_counters.insert(canonical_model.to_string(), current);
+                next_counters.insert(key.clone(), current);
             }
             let (input_tps, output_tps) = rates
                 .and_then(|(_, rates)| rates)
@@ -271,34 +342,80 @@ impl RelayLoadTranslator {
             let stats_complete = load_complete && output_tps.is_some();
             let active =
                 load_complete && !serving_pools.is_empty() && ready_frontends > 0 && scheduler_live;
-            for identity in &identities {
-                relay_models.insert(identity.clone(), active);
-                models.push(RelayLoadStatsSnapshot {
-                    model: identity.clone(),
-                    input_tps: stats_complete.then_some(input_tps).flatten(),
-                    output_tps: output_tps.unwrap_or_default(),
-                    queue_size: awaiting_first_token.unwrap_or_default(),
-                    queued_input_size: load_complete
-                        .then_some(tokens.awaiting_first_token_input_tokens)
-                        .flatten(),
-                    num_running_queries: num_running_queries.unwrap_or_default(),
-                    max_engine_concurrency,
-                    total_query_input_size: load_complete
-                        .then_some(tokens.inflight_input_tokens)
-                        .flatten(),
-                    input_processing_queries: awaiting_first_token.unwrap_or_default(),
-                    output_generation_queries: generating.unwrap_or_default(),
-                    source_observed_at_unix_ms: load.source_observed_at_unix_ms,
-                    complete: stats_complete,
-                });
+            let stats = RelayLoadStatsSnapshot {
+                model: String::new(),
+                input_tps: stats_complete.then_some(input_tps).flatten(),
+                output_tps: output_tps.unwrap_or_default(),
+                queue_size: awaiting_first_token.unwrap_or_default(),
+                queued_input_size: load_complete
+                    .then_some(tokens.awaiting_first_token_input_tokens)
+                    .flatten(),
+                num_running_queries: num_running_queries.unwrap_or_default(),
+                max_engine_concurrency,
+                total_query_input_size: load_complete
+                    .then_some(tokens.inflight_input_tokens)
+                    .flatten(),
+                input_processing_queries: awaiting_first_token.unwrap_or_default(),
+                output_generation_queries: generating.unwrap_or_default(),
+                source_observed_at_unix_ms: load.source_observed_ms,
+                complete: stats_complete,
+            };
+            let (_, canonical) = key;
+            match by_canonical.get_mut(&canonical) {
+                Some((total, total_active)) => {
+                    add_namespace_load(total, &stats);
+                    *total_active |= active;
+                }
+                None => {
+                    by_canonical.insert(canonical, (stats, active));
+                }
             }
         }
         self.counters = next_counters;
+
+        let mut relay_models = BTreeMap::new();
+        let mut models = Vec::new();
+        for (canonical, (stats, active)) in by_canonical {
+            for name in catalog.names_of(&canonical) {
+                relay_models.insert(name.clone(), active);
+                models.push(RelayLoadStatsSnapshot {
+                    model: name,
+                    ..stats.clone()
+                });
+            }
+        }
         Ok(RelayLoadTranslation {
             stats: RelayLoadStatsEnvelope { models },
             relay_models,
         })
     }
+}
+
+/// Adds one namespace's view of a model to the total of its other namespaces.
+/// Optional values stay known only when known in every view.
+fn add_namespace_load(total: &mut RelayLoadStatsSnapshot, view: &RelayLoadStatsSnapshot) {
+    fn add(total: Option<u64>, view: Option<u64>) -> Option<u64> {
+        total?.checked_add(view?)
+    }
+    total.complete &= view.complete;
+    total.input_tps = total.input_tps.zip(view.input_tps).map(|(a, b)| a + b);
+    total.output_tps += view.output_tps;
+    total.queue_size = total.queue_size.saturating_add(view.queue_size);
+    total.queued_input_size = add(total.queued_input_size, view.queued_input_size);
+    total.num_running_queries = total
+        .num_running_queries
+        .saturating_add(view.num_running_queries);
+    total.max_engine_concurrency = add(total.max_engine_concurrency, view.max_engine_concurrency);
+    total.total_query_input_size = add(total.total_query_input_size, view.total_query_input_size);
+    total.input_processing_queries = total
+        .input_processing_queries
+        .saturating_add(view.input_processing_queries);
+    total.output_generation_queries = total
+        .output_generation_queries
+        .saturating_add(view.output_generation_queries);
+    total.source_observed_at_unix_ms = total
+        .source_observed_at_unix_ms
+        .min(view.source_observed_at_unix_ms);
 }
 
 fn counter_rates(
@@ -325,52 +442,36 @@ fn counter_rates(
     Some((input_tps, output_tps))
 }
 
-fn pool_key(pool: Option<proto::PoolIdentity>) -> anyhow::Result<PoolKey> {
-    let pool = pool.ok_or_else(|| anyhow::anyhow!("pool identity is missing"))?;
-    let cache_semantics: [u8; 16] = pool
-        .cache_semantics_digest
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("cache-semantics digest must contain 16 bytes"))?;
-    let routing_scope: [u8; 16] = pool
-        .routing_scope_digest
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("routing-scope digest must contain 16 bytes"))?;
-    identity_source(pool.cache_semantics_source)?;
-    identity_source(pool.routing_scope_source)?;
-    Ok(PoolKey {
-        cache_semantics,
-        cache_source: pool.cache_semantics_source,
-        routing_scope,
-        routing_source: pool.routing_scope_source,
-        locality_id: pool.locality_id,
-    })
+fn supported_pool_id(pool_id: &proto::KvPoolId) -> bool {
+    let supported_digest = |digest: Option<&proto::DigestIdentity>| {
+        digest.is_some_and(|digest| {
+            digest.digest.len() == POOL_DIGEST_BYTES
+                && matches!(
+                    proto::IdentitySource::try_from(digest.source),
+                    Ok(proto::IdentitySource::DefaultDerived | proto::IdentitySource::Explicit)
+                )
+        })
+    };
+    pool_id.identity_version == POOL_IDENTITY_VERSION
+        && pool_id.indexer_domain.as_ref().is_some_and(|domain| {
+            supported_digest(domain.cache_semantics.as_ref())
+                && supported_digest(domain.routing_scope.as_ref())
+        })
 }
 
-fn identity_source(value: i32) -> anyhow::Result<proto::IdentitySource> {
-    let source = proto::IdentitySource::try_from(value)
-        .map_err(|_| anyhow::anyhow!("invalid pool identity source"))?;
-    anyhow::ensure!(
-        matches!(
-            source,
-            proto::IdentitySource::DefaultDerived | proto::IdentitySource::Explicit
-        ),
-        "unspecified pool identity source"
-    );
-    Ok(source)
-}
-
-fn worker_roles(values: &[i32]) -> anyhow::Result<Vec<proto::WorkerRole>> {
-    anyhow::ensure!(!values.is_empty(), "pool has no worker roles");
+/// Declared pool roles, or `None` when empty or any role is unknown. `LEGACY`
+/// marks a worker card without a role, which Dynamo serves as an aggregated
+/// worker, so it counts as `AGGREGATED`.
+fn pool_roles(values: &[i32]) -> Option<Vec<proto::WorkerRole>> {
+    if values.is_empty() {
+        return None;
+    }
     values
         .iter()
-        .map(|value| match proto::WorkerRole::try_from(*value) {
-            Ok(
-                role @ (proto::WorkerRole::Aggregated
-                | proto::WorkerRole::Prefill
-                | proto::WorkerRole::Decode
-                | proto::WorkerRole::Encode),
-            ) => Ok(role),
-            _ => anyhow::bail!("invalid or unspecified worker role"),
+        .map(|value| match proto::WorkerRole::try_from(*value).ok()? {
+            proto::WorkerRole::Legacy => Some(proto::WorkerRole::Aggregated),
+            proto::WorkerRole::Unspecified => None,
+            role => Some(role),
         })
         .collect()
 }
@@ -393,74 +494,119 @@ fn data_complete(value: i32) -> bool {
     proto::DataStatus::try_from(value).ok() == Some(proto::DataStatus::Complete)
 }
 
-fn registration_identities(
-    registrations: &[proto::ModelRegistration],
-    owners: &mut HashMap<String, String>,
-) -> anyhow::Result<Vec<String>> {
-    let mut identities = Vec::new();
-    for registration in registrations {
-        let model = registration.model.trim();
-        anyhow::ensure!(!model.is_empty(), "model registration is empty");
-        anyhow::ensure!(
-            !registration.base_model.trim().is_empty(),
-            "base model registration is empty"
-        );
-        let mut registration_identities = Vec::with_capacity(registration.aliases.len() + 1);
-        registration_identities.push(model.to_string());
-        for alias in &registration.aliases {
-            anyhow::ensure!(!alias.trim().is_empty(), "model alias is empty");
-            if alias != model && !registration_identities.contains(alias) {
-                registration_identities.push(alias.clone());
-            }
-        }
-        for identity in registration_identities {
-            if let Some(owner) = owners.insert(identity.clone(), model.to_string()) {
-                anyhow::ensure!(
-                    owner == model,
-                    "model identity {identity} is owned by both {owner} and {model}"
-                );
-            }
-            if !identities.contains(&identity) {
-                identities.push(identity);
-            }
-        }
-    }
-    Ok(identities)
+fn valid_name(name: &str) -> bool {
+    !name.is_empty() && name.trim() == name
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn metadata() -> proto::RelayMessageMetadata {
-        proto::RelayMessageMetadata {
-            relay_incarnation: 2,
-            emitted_at_unix_ms: 99,
+    const RELAY: proto::RelayIdentity = proto::RelayIdentity {
+        drt_instance_id: 7,
+        relay_incarnation: 2,
+    };
+
+    fn pool_id(seed: u8) -> proto::KvPoolId {
+        let digest = |seed: u8, source: proto::IdentitySource| proto::DigestIdentity {
+            digest: vec![seed; 16],
+            source: source as i32,
+        };
+        proto::KvPoolId {
+            identity_version: POOL_IDENTITY_VERSION,
+            indexer_domain: Some(proto::IndexerDomainId {
+                cache_semantics: Some(digest(seed, proto::IdentitySource::Explicit)),
+                routing_scope: Some(digest(
+                    seed.wrapping_add(1),
+                    proto::IdentitySource::DefaultDerived,
+                )),
+            }),
+            dc_id: u64::from(seed),
         }
     }
 
-    fn pool(seed: u8) -> proto::PoolIdentity {
-        proto::PoolIdentity {
-            cache_semantics_digest: vec![seed; 16],
-            cache_semantics_source: proto::IdentitySource::Explicit as i32,
-            routing_scope_digest: vec![seed.wrapping_add(1); 16],
-            routing_scope_source: proto::IdentitySource::DefaultDerived as i32,
-            locality_id: u64::from(seed),
+    fn producer(seed: u8) -> proto::ProducerIdentity {
+        proto::ProducerIdentity {
+            pool_id: Some(pool_id(seed)),
+            producer_incarnation: 1,
+            layout_generation: 1,
+            ckf_format: None,
         }
     }
 
     fn registration(model: &str) -> proto::ModelRegistration {
         proto::ModelRegistration {
-            model: model.to_string(),
-            base_model: model.to_string(),
-            adapter: None,
+            canonical_model_id: model.to_string(),
+            target: Some(proto::ModelTarget {
+                target: Some(proto::model_target::Target::Base(proto::BaseModelTarget {
+                    base_model: model.to_string(),
+                })),
+            }),
             aliases: vec![format!("{model}-alias")],
         }
     }
 
-    fn load_pool(identity: proto::PoolIdentity) -> proto::PoolView {
-        proto::PoolView {
-            pool: Some(identity),
+    fn descriptor(
+        seed: u8,
+        roles: &[proto::WorkerRole],
+        models: &[&str],
+    ) -> proto::KvPoolDescriptor {
+        proto::KvPoolDescriptor {
+            producer: Some(producer(seed)),
+            serving_endpoint: None,
+            registrations: models.iter().map(|model| registration(model)).collect(),
+            query_semantics: Some(proto::KvQuerySemantics {
+                kv_block_size: 16,
+                hash_format: proto::KvQueryHashFormat::DynamoStandardV1 as i32,
+            }),
+            pool_roles: roles.iter().map(|role| *role as i32).collect(),
+        }
+    }
+
+    fn catalog(pools: Vec<proto::KvPoolDescriptor>) -> KvPoolCatalog {
+        KvPoolCatalog::from_proto(proto::KvPoolCatalogUpdate {
+            protocol_version: proto::PROTOCOL_VERSION,
+            relay: Some(RELAY),
+            revision: 1,
+            snapshot: Some(proto::KvPoolCatalogSnapshot { pools }),
+            contract_marker: proto::CONTRACT_MARKER,
+        })
+        .unwrap()
+    }
+
+    fn aggregated_catalog(models: &[&str]) -> KvPoolCatalog {
+        catalog(vec![descriptor(
+            1,
+            &[proto::WorkerRole::Aggregated],
+            models,
+        )])
+    }
+
+    fn usage(seed: u8, total_kv_blocks: u64, kv_used_blocks: u64) -> proto::KvPoolLoadEntry {
+        proto::KvPoolLoadEntry {
+            producer: Some(producer(seed)),
+            kv_used_blocks,
+            total_kv_blocks,
+            kv_observed_ranks: 1,
+            kv_expected_ranks: 1,
+        }
+    }
+
+    fn usage_window(pools: Vec<proto::KvPoolLoadEntry>) -> proto::KvPoolLoadUpdate {
+        proto::KvPoolLoadUpdate {
+            protocol_version: proto::PROTOCOL_VERSION,
+            relay: Some(RELAY),
+            window_sequence: 1,
+            observed_ms: 7,
+            window_ms: 1_000,
+            pools,
+            contract_marker: proto::CONTRACT_MARKER,
+        }
+    }
+
+    fn load_pool(seed: u8) -> proto::PoolServingLoad {
+        proto::PoolServingLoad {
+            producer: Some(producer(seed)),
             load: Some(proto::LoadView {
                 requests: None,
                 tokens: Some(proto::TokenLoadStats {
@@ -469,19 +615,19 @@ mod tests {
                     ..Default::default()
                 }),
                 status: proto::DataStatus::Complete as i32,
-                source_observed_at_unix_ms: 4,
+                source_observed_ms: 4,
             }),
             deployment: Some(proto::PoolDeploymentStatus {
-                roles: vec![proto::WorkerRole::Aggregated as i32],
                 live_workers: Some(2),
                 max_concurrency: Some(8),
             }),
         }
     }
 
-    fn model_load(model: &str, serving_pools: Vec<proto::PoolIdentity>) -> proto::ModelView {
-        proto::ModelView {
-            model: Some(registration(model)),
+    fn model_load(model: &str, serving_pools: Vec<proto::KvPoolId>) -> proto::ModelServingLoad {
+        proto::ModelServingLoad {
+            namespace: "dynamo".to_string(),
+            canonical_model_id: model.to_string(),
             load: Some(proto::LoadView {
                 requests: Some(proto::RequestLifecycleStats {
                     requests_started_total: 4,
@@ -499,7 +645,7 @@ mod tests {
                     ..Default::default()
                 }),
                 status: proto::DataStatus::Complete as i32,
-                source_observed_at_unix_ms: 5_000,
+                source_observed_ms: 5_000,
             }),
             deployment: Some(proto::ModelDeploymentStatus {
                 expected_frontends: 1,
@@ -512,52 +658,68 @@ mod tests {
 
     /// Sets the model's cumulative token counters and their observation time.
     fn with_totals(
-        mut model: proto::ModelView,
-        observed_at_unix_ms: u64,
+        mut model: proto::ModelServingLoad,
+        observed_ms: u64,
         input_tokens_total: u64,
         output_tokens_total: u64,
-    ) -> proto::ModelView {
+    ) -> proto::ModelServingLoad {
         let load = model.load.as_mut().unwrap();
-        load.source_observed_at_unix_ms = observed_at_unix_ms;
+        load.source_observed_ms = observed_ms;
         let tokens = load.tokens.as_mut().unwrap();
         tokens.input_tokens_total = Some(input_tokens_total);
         tokens.output_tokens_total = Some(output_tokens_total);
         model
     }
 
-    fn usage_pool(
-        identity: proto::PoolIdentity,
-        roles: &[proto::WorkerRole],
-        capacity_blocks: u64,
-        used_blocks: u64,
-    ) -> proto::PoolKvUsage {
-        proto::PoolKvUsage {
-            pool: Some(identity),
-            models: vec![registration("model-a")],
-            roles: roles.iter().map(|role| *role as i32).collect(),
-            block_size_tokens: 16,
-            expected_ranks: 1,
-            observed_ranks: 1,
-            capacity_blocks: Some(capacity_blocks),
-            used_blocks: Some(used_blocks),
-            status: proto::DataStatus::Complete as i32,
-            source_observed_at_unix_ms: 7,
+    fn load_window(
+        relay: proto::RelayIdentity,
+        pools: Vec<proto::PoolServingLoad>,
+        models: Vec<proto::ModelServingLoad>,
+    ) -> proto::ServingLoadUpdate {
+        proto::ServingLoadUpdate {
+            protocol_version: proto::PROTOCOL_VERSION,
+            relay: Some(relay),
+            window_sequence: 1,
+            observed_ms: 1,
+            window_ms: 1_000,
+            pools,
+            models,
+            contract_marker: proto::CONTRACT_MARKER,
         }
+    }
+
+    /// Translates two windows a second apart so the second carries rates.
+    fn translate_with_rates(
+        catalog: &KvPoolCatalog,
+        pools: impl Fn() -> Vec<proto::PoolServingLoad>,
+        models: impl Fn() -> Vec<proto::ModelServingLoad>,
+    ) -> RelayLoadTranslation {
+        let mut translator = RelayLoadTranslator::default();
+        let baseline = models()
+            .into_iter()
+            .map(|model| with_totals(model, 4_000, 0, 0))
+            .collect();
+        translator
+            .translate(catalog, load_window(RELAY, pools(), baseline))
+            .unwrap();
+        translator
+            .translate(catalog, load_window(RELAY, pools(), models()))
+            .unwrap()
     }
 
     #[test]
     fn kv_usage_prefers_aggregated_pools_and_scales_blocks_to_tokens() {
-        let mut decode = usage_pool(pool(2), &[proto::WorkerRole::Decode], 1_000, 900);
-        decode.source_observed_at_unix_ms = 8;
-        let snapshot = proto::KvUsageSnapshot {
-            metadata: Some(metadata()),
-            pools: vec![
-                usage_pool(pool(1), &[proto::WorkerRole::Aggregated], 100, 40),
-                decode,
-            ],
-        };
+        let catalog = catalog(vec![
+            descriptor(1, &[proto::WorkerRole::Aggregated], &["model-a"]),
+            descriptor(2, &[proto::WorkerRole::Decode], &["model-a"]),
+        ]);
 
-        let translated = kv_snapshot_from_proto(snapshot).unwrap();
+        let translated = kv_usage_from_proto(
+            &catalog,
+            usage_window(vec![usage(1, 100, 40), usage(2, 1_000, 900)]),
+        )
+        .unwrap();
+
         assert_eq!(translated.models.len(), 2);
         for model in translated.models {
             assert!(matches!(model.model.as_str(), "model-a" | "model-a-alias"));
@@ -571,21 +733,26 @@ mod tests {
 
     #[test]
     fn kv_usage_counts_mixed_role_pools_by_their_decode_role() {
-        let snapshot = proto::KvUsageSnapshot {
-            metadata: Some(metadata()),
-            pools: vec![
-                usage_pool(pool(1), &[proto::WorkerRole::Prefill], 1_000, 900),
-                usage_pool(
-                    pool(2),
-                    &[proto::WorkerRole::Prefill, proto::WorkerRole::Decode],
-                    100,
-                    40,
-                ),
-                usage_pool(pool(3), &[proto::WorkerRole::Decode], 10, 5),
-            ],
-        };
+        let catalog = catalog(vec![
+            descriptor(1, &[proto::WorkerRole::Prefill], &["model-a"]),
+            descriptor(
+                2,
+                &[proto::WorkerRole::Prefill, proto::WorkerRole::Decode],
+                &["model-a"],
+            ),
+            descriptor(3, &[proto::WorkerRole::Decode], &["model-a"]),
+        ]);
 
-        let translated = kv_snapshot_from_proto(snapshot).unwrap();
+        let translated = kv_usage_from_proto(
+            &catalog,
+            usage_window(vec![
+                usage(1, 1_000, 900),
+                usage(2, 100, 40),
+                usage(3, 10, 5),
+            ]),
+        )
+        .unwrap();
+
         for model in translated.models {
             assert_eq!(model.kv_cache_capacity_tokens, 1_760);
             assert_eq!(model.kv_cache_used_tokens, 720);
@@ -594,26 +761,94 @@ mod tests {
     }
 
     #[test]
+    fn kv_usage_without_full_rank_coverage_capacity_or_window_entry_is_incomplete() {
+        let catalog = aggregated_catalog(&["model-a"]);
+        let mut partial = usage(1, 100, 40);
+        partial.kv_observed_ranks = 0;
+
+        for window in [
+            vec![partial],
+            vec![usage(1, 0, 0)],
+            Vec::new(),
+            // A pool absent from the catalog is dropped, not attributed.
+            vec![usage(9, 100, 40)],
+        ] {
+            let translated = kv_usage_from_proto(&catalog, usage_window(window)).unwrap();
+            assert_eq!(translated.models.len(), 2);
+            for model in translated.models {
+                assert!(!model.complete);
+                assert_eq!(model.kv_cache_capacity_tokens, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_role_counts_as_aggregated_and_unknown_role_quarantines_its_pool() {
+        let legacy = catalog(vec![
+            descriptor(1, &[proto::WorkerRole::Legacy], &["model-a"]),
+            descriptor(2, &[proto::WorkerRole::Decode], &["model-a"]),
+        ]);
+        let window = || usage_window(vec![usage(1, 100, 40), usage(2, 1_000, 900)]);
+        for model in kv_usage_from_proto(&legacy, window()).unwrap().models {
+            assert!(model.complete);
+            assert_eq!(model.kv_cache_capacity_tokens, 1_600);
+        }
+
+        let mut unknown = descriptor(2, &[proto::WorkerRole::Decode], &["model-a"]);
+        unknown.pool_roles = vec![99];
+        let quarantined = catalog(vec![
+            descriptor(1, &[proto::WorkerRole::Aggregated], &["model-a"]),
+            unknown,
+        ]);
+        for model in kv_usage_from_proto(&quarantined, window()).unwrap().models {
+            assert!(!model.complete);
+        }
+    }
+
+    #[test]
+    fn names_assigned_to_two_models_are_omitted() {
+        let mut other = descriptor(2, &[proto::WorkerRole::Aggregated], &["model-b"]);
+        other.registrations[0].aliases = vec!["model-a-alias".to_string()];
+        let catalog = catalog(vec![
+            descriptor(1, &[proto::WorkerRole::Aggregated], &["model-a"]),
+            other,
+        ]);
+
+        let names = kv_usage_from_proto(&catalog, usage_window(Vec::new()))
+            .unwrap()
+            .models
+            .into_iter()
+            .map(|model| model.model)
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, ["model-a", "model-b"]);
+    }
+
+    #[test]
     fn complete_load_activates_model_and_alias() {
-        let identity = pool(1);
+        let catalog = aggregated_catalog(&["model-a"]);
         let mut translator = RelayLoadTranslator::default();
-        let baseline = with_totals(model_load("model-a", vec![identity.clone()]), 4_000, 0, 0);
+        let baseline = with_totals(model_load("model-a", vec![pool_id(1)]), 4_000, 0, 0);
         let first = translator
-            .translate(proto::LoadSnapshot {
-                metadata: Some(metadata()),
-                pools: vec![load_pool(identity.clone())],
-                models: vec![baseline],
-            })
+            .translate(
+                &catalog,
+                load_window(RELAY, vec![load_pool(1)], vec![baseline]),
+            )
             .unwrap();
         assert_eq!(first.relay_models.get("model-a"), Some(&true));
         assert!(first.stats.models.iter().all(|model| !model.complete));
-        let snapshot = proto::LoadSnapshot {
-            metadata: Some(metadata()),
-            pools: vec![load_pool(identity.clone())],
-            models: vec![model_load("model-a", vec![identity])],
-        };
 
-        let translated = translator.translate(snapshot).unwrap();
+        let translated = translator
+            .translate(
+                &catalog,
+                load_window(
+                    RELAY,
+                    vec![load_pool(1)],
+                    vec![model_load("model-a", vec![pool_id(1)])],
+                ),
+            )
+            .unwrap();
+
         assert_eq!(translated.relay_models.get("model-a"), Some(&true));
         assert_eq!(translated.relay_models.get("model-a-alias"), Some(&true));
         assert_eq!(translated.stats.models.len(), 2);
@@ -634,36 +869,29 @@ mod tests {
 
     #[test]
     fn counter_reset_skips_one_rate_sample_then_recovers() {
-        let identity = pool(1);
+        let catalog = aggregated_catalog(&["model-a"]);
         let mut translator = RelayLoadTranslator::default();
-        translator
-            .translate(proto::LoadSnapshot {
-                metadata: Some(metadata()),
-                pools: vec![load_pool(identity.clone())],
-                models: vec![model_load("model-a", vec![identity.clone()])],
-            })
-            .unwrap();
+        let mut translate = |observed_ms, input, output| {
+            let model = with_totals(
+                model_load("model-a", vec![pool_id(1)]),
+                observed_ms,
+                input,
+                output,
+            );
+            translator
+                .translate(
+                    &catalog,
+                    load_window(RELAY, vec![load_pool(1)], vec![model]),
+                )
+                .unwrap()
+        };
+        translate(5_000, 40, 20);
 
-        let reset = with_totals(model_load("model-a", vec![identity.clone()]), 6_000, 4, 2);
-        let reset = translator
-            .translate(proto::LoadSnapshot {
-                metadata: Some(metadata()),
-                pools: vec![load_pool(identity.clone())],
-                models: vec![reset],
-            })
-            .unwrap();
+        let reset = translate(6_000, 4, 2);
         assert_eq!(reset.relay_models.get("model-a"), Some(&true));
         assert!(reset.stats.models.iter().all(|model| !model.complete));
 
-        let recovered = with_totals(model_load("model-a", vec![identity.clone()]), 7_000, 14, 7);
-        let recovered = translator
-            .translate(proto::LoadSnapshot {
-                metadata: Some(metadata()),
-                pools: vec![load_pool(identity)],
-                models: vec![recovered],
-            })
-            .unwrap();
-        for model in recovered.stats.models {
+        for model in translate(7_000, 14, 7).stats.models {
             assert!(model.complete);
             assert_eq!(model.input_tps, Some(10.0));
             assert_eq!(model.output_tps, 5.0);
@@ -672,48 +900,33 @@ mod tests {
 
     #[test]
     fn relay_restart_skips_one_rate_sample_even_when_totals_grow() {
-        let identity = pool(1);
+        let catalog = aggregated_catalog(&["model-a"]);
         let mut translator = RelayLoadTranslator::default();
-        translator
-            .translate(proto::LoadSnapshot {
-                metadata: Some(metadata()),
-                pools: vec![load_pool(identity.clone())],
-                models: vec![model_load("model-a", vec![identity.clone()])],
-            })
-            .unwrap();
-        let restarted = proto::RelayMessageMetadata {
+        let mut translate = |relay, observed_ms, input, output| {
+            let model = with_totals(
+                model_load("model-a", vec![pool_id(1)]),
+                observed_ms,
+                input,
+                output,
+            );
+            translator
+                .translate(
+                    &catalog,
+                    load_window(relay, vec![load_pool(1)], vec![model]),
+                )
+                .unwrap()
+        };
+        translate(RELAY, 5_000, 40, 20);
+        let restarted = proto::RelayIdentity {
             relay_incarnation: 3,
-            ..metadata()
+            ..RELAY
         };
 
-        let first = translator
-            .translate(proto::LoadSnapshot {
-                metadata: Some(restarted),
-                pools: vec![load_pool(identity.clone())],
-                models: vec![with_totals(
-                    model_load("model-a", vec![identity.clone()]),
-                    6_000,
-                    100,
-                    50,
-                )],
-            })
-            .unwrap();
+        let first = translate(restarted, 6_000, 100, 50);
         assert_eq!(first.relay_models.get("model-a"), Some(&true));
         assert!(first.stats.models.iter().all(|model| !model.complete));
 
-        let second = translator
-            .translate(proto::LoadSnapshot {
-                metadata: Some(restarted),
-                pools: vec![load_pool(identity.clone())],
-                models: vec![with_totals(
-                    model_load("model-a", vec![identity]),
-                    7_000,
-                    110,
-                    55,
-                )],
-            })
-            .unwrap();
-        for model in second.stats.models {
+        for model in translate(restarted, 7_000, 110, 55).stats.models {
             assert!(model.complete);
             assert_eq!(model.input_tps, Some(10.0));
             assert_eq!(model.output_tps, 5.0);
@@ -721,47 +934,88 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_load_model_rejects_even_an_incomplete_snapshot() {
-        let identity = pool(1);
-        let mut first = model_load("model-a", vec![identity.clone()]);
-        let load = first.load.as_mut().unwrap();
-        load.status = proto::DataStatus::Unavailable as i32;
-        load.tokens.as_mut().unwrap().output_tokens_total = None;
+    fn duplicate_load_model_rejects_even_an_incomplete_window() {
+        let mut first = model_load("model-a", vec![pool_id(1)]);
+        first.load.as_mut().unwrap().status = proto::DataStatus::Unavailable as i32;
         let mut second = first.clone();
         second.deployment.as_mut().unwrap().serving_pools.clear();
 
-        let result = RelayLoadTranslator::default().translate(proto::LoadSnapshot {
-            metadata: Some(metadata()),
-            pools: vec![load_pool(identity)],
-            models: vec![first, second],
-        });
+        let result = RelayLoadTranslator::default().translate(
+            &aggregated_catalog(&["model-a"]),
+            load_window(RELAY, vec![load_pool(1)], vec![first, second]),
+        );
 
         assert!(result.is_err());
     }
 
     #[test]
-    fn unknown_exact_input_gauges_do_not_deactivate_the_model() {
-        let identity = pool(1);
-        let mut translator = RelayLoadTranslator::default();
-        let baseline = with_totals(model_load("model-a", vec![identity.clone()]), 4_000, 0, 0);
-        translator
-            .translate(proto::LoadSnapshot {
-                metadata: Some(metadata()),
-                pools: vec![load_pool(identity.clone())],
-                models: vec![baseline],
-            })
-            .unwrap();
-        let mut model = model_load("model-a", vec![identity.clone()]);
-        let tokens = model.load.as_mut().unwrap().tokens.as_mut().unwrap();
-        tokens.awaiting_first_token_input_tokens = None;
-        tokens.inflight_input_tokens = None;
-        let snapshot = proto::LoadSnapshot {
-            metadata: Some(metadata()),
-            pools: vec![load_pool(identity)],
-            models: vec![model],
+    fn namespaces_serving_one_model_are_summed() {
+        let catalog = catalog(vec![
+            descriptor(1, &[proto::WorkerRole::Aggregated], &["model-a"]),
+            descriptor(2, &[proto::WorkerRole::Aggregated], &["model-a"]),
+        ]);
+        let models = || {
+            let mut blue = model_load("model-a", vec![pool_id(1)]);
+            blue.namespace = "blue".to_string();
+            let mut green = model_load("model-a", vec![pool_id(2)]);
+            green.namespace = "green".to_string();
+            vec![blue, green]
         };
 
-        let translated = translator.translate(snapshot).unwrap();
+        let translated =
+            translate_with_rates(&catalog, || vec![load_pool(1), load_pool(2)], models);
+
+        assert_eq!(translated.relay_models.get("model-a"), Some(&true));
+        for model in translated.stats.models {
+            assert!(model.complete);
+            assert_eq!(model.input_tps, Some(80.0));
+            assert_eq!(model.output_tps, 40.0);
+            assert_eq!(model.num_running_queries, 8);
+            assert_eq!(model.max_engine_concurrency, Some(16));
+            assert_eq!(model.total_query_input_size, Some(62));
+        }
+
+        let degraded = || {
+            let mut models = models();
+            models[1].load.as_mut().unwrap().status = proto::DataStatus::Degraded as i32;
+            models
+        };
+        let translated =
+            translate_with_rates(&catalog, || vec![load_pool(1), load_pool(2)], degraded);
+        assert_eq!(translated.relay_models.get("model-a"), Some(&true));
+        assert!(translated.stats.models.iter().all(|model| !model.complete));
+    }
+
+    #[test]
+    fn unresolved_serving_pool_leaves_concurrency_unknown() {
+        let translated = translate_with_rates(
+            &aggregated_catalog(&["model-a"]),
+            || vec![load_pool(1), load_pool(9)],
+            || vec![model_load("model-a", vec![pool_id(1), pool_id(9)])],
+        );
+
+        assert_eq!(translated.relay_models.get("model-a"), Some(&true));
+        for model in translated.stats.models {
+            assert!(model.complete);
+            assert_eq!(model.max_engine_concurrency, None);
+        }
+    }
+
+    #[test]
+    fn unknown_exact_input_gauges_do_not_deactivate_the_model() {
+        let model = || {
+            let mut model = model_load("model-a", vec![pool_id(1)]);
+            let tokens = model.load.as_mut().unwrap().tokens.as_mut().unwrap();
+            tokens.awaiting_first_token_input_tokens = None;
+            tokens.inflight_input_tokens = None;
+            vec![model]
+        };
+
+        let translated = translate_with_rates(
+            &aggregated_catalog(&["model-a"]),
+            || vec![load_pool(1)],
+            model,
+        );
 
         assert_eq!(translated.relay_models.get("model-a"), Some(&true));
         for stats in translated.stats.models {
@@ -773,26 +1027,30 @@ mod tests {
 
     #[test]
     fn model_without_a_frontend_or_serving_pool_remains_advertised_inactive() {
-        let identity = pool(1);
-        let relay_only = proto::ModelView {
-            model: Some(registration("relay-only")),
+        let relay_only = proto::ModelServingLoad {
+            namespace: "dynamo".to_string(),
+            canonical_model_id: "relay-only".to_string(),
             load: Some(proto::LoadView {
                 status: proto::DataStatus::Unavailable as i32,
                 ..Default::default()
             }),
             deployment: Some(proto::ModelDeploymentStatus {
                 expected_frontends: 1,
-                serving_pools: vec![identity.clone()],
+                serving_pools: vec![pool_id(1)],
                 ..Default::default()
             }),
         };
 
-        let snapshot = proto::LoadSnapshot {
-            metadata: Some(metadata()),
-            pools: vec![load_pool(identity)],
-            models: vec![relay_only, model_load("frontend-only", Vec::new())],
-        };
-        let translated = RelayLoadTranslator::default().translate(snapshot).unwrap();
+        let translated = RelayLoadTranslator::default()
+            .translate(
+                &aggregated_catalog(&["relay-only"]),
+                load_window(
+                    RELAY,
+                    vec![load_pool(1)],
+                    vec![relay_only, model_load("frontend-only", Vec::new())],
+                ),
+            )
+            .unwrap();
 
         assert_eq!(translated.relay_models.get("relay-only"), Some(&false));
         assert_eq!(
@@ -800,35 +1058,32 @@ mod tests {
             Some(&false)
         );
         assert_eq!(translated.relay_models.get("frontend-only"), Some(&false));
-        assert_eq!(
-            translated.relay_models.get("frontend-only-alias"),
-            Some(&false)
-        );
     }
 
     #[test]
-    fn malformed_or_unknown_pool_identity_rejects_the_snapshot() {
-        let mut malformed = pool(1);
-        malformed.cache_semantics_digest.pop();
-        let malformed_snapshot = proto::KvUsageSnapshot {
-            metadata: Some(metadata()),
-            pools: vec![usage_pool(
-                malformed,
-                &[proto::WorkerRole::Aggregated],
-                1,
-                0,
-            )],
-        };
-        assert!(kv_snapshot_from_proto(malformed_snapshot).is_err());
+    fn unidentifiable_entries_reject_the_update() {
+        let mut anonymous = descriptor(1, &[proto::WorkerRole::Aggregated], &["model-a"]);
+        anonymous.producer = None;
+        assert!(
+            KvPoolCatalog::from_proto(proto::KvPoolCatalogUpdate {
+                snapshot: Some(proto::KvPoolCatalogSnapshot {
+                    pools: vec![anonymous],
+                }),
+                ..Default::default()
+            })
+            .is_err()
+        );
 
-        let load_snapshot = proto::LoadSnapshot {
-            metadata: Some(metadata()),
-            pools: Vec::new(),
-            models: vec![model_load("model-a", vec![pool(9)])],
-        };
+        let catalog = aggregated_catalog(&["model-a"]);
+        assert!(
+            kv_usage_from_proto(&catalog, usage_window(vec![usage(1, 1, 0), usage(1, 1, 0)]))
+                .is_err()
+        );
+        let mut anonymous = load_pool(1);
+        anonymous.producer = None;
         assert!(
             RelayLoadTranslator::default()
-                .translate(load_snapshot)
+                .translate(&catalog, load_window(RELAY, vec![anonymous], Vec::new()))
                 .is_err()
         );
     }
