@@ -524,8 +524,8 @@ dropped before replay. The `openai_model_name` label identifies the shadow
 target. The `reason` label is one of `body_read_error`, `body_rewrite_error`,
 or `concurrency_limit`.
 
-`gateway_proxy_outcome` labels the origin of non-2xx responses on the Gateway
-server metric (`http_server_request_duration_seconds`) and as the
+`gateway_proxy_outcome` labels the origin of covered non-2xx responses on the
+Gateway server metric (`http_server_request_duration_seconds`) and as the
 `gateway.proxy.outcome` span attribute. Successful requests omit it. Values:
 
 - `gateway_rejected`: the gateway answered itself with no dependency involved
@@ -537,12 +537,15 @@ server metric (`http_server_request_duration_seconds`) and as the
 - `upstream_status`: a non-2xx status passed through from the upstream,
   including `429` responses whose body the gateway rewrites.
 
-Non-2xx responses also carry an `NVCF-Error-Source` header with the same value.
-Any `NVCF-Error-Source` header sent by the upstream is removed first. Shadow
-replays never set the label, because they share the primary request's metric
-labels and would mislabel the primary response. Status
-codes and bodies are unchanged. Because the metric label set depends on the
-response status, the label values cannot be pre-initialized on the first scrape.
+Responses with a labeled outcome also carry an `NVCF-Error-Source` header with
+the same value. Some non-2xx responses are not labeled and have no header (router
+404/405, panic recovery, request timeout), so a missing label or header does not
+mean the response was successful or came from the upstream. Any
+`NVCF-Error-Source` header sent by the upstream is removed first. Shadow replays
+never set the label, because they share the primary request's metric labels and
+would mislabel the primary response. Status codes and bodies are unchanged.
+Because the metric label set depends on the response status, the label values
+cannot be pre-initialized on the first scrape.
 
 ## Running a Local OpenAI-compatible Model
 

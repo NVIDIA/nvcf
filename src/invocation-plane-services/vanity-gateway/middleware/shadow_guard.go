@@ -17,7 +17,11 @@ limitations under the License.
 
 package middleware
 
-import "net/http"
+import (
+	"net/http"
+
+	"go.uber.org/zap"
+)
 
 // RejectSpoofedShadowRequests returns middleware that rejects any external
 // request carrying the given header. Internal shadow replay requests bypass
@@ -29,6 +33,16 @@ func RejectSpoofedShadowRequests(shadowHeaderName string, observe func(http.Hand
 	reject := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		RecordGatewayProxyOutcome(r.Context(), GatewayProxyOutcomeRejected)
 		w.Header().Set(ErrorSourceHeader, string(GatewayProxyOutcomeRejected))
+		// The guard runs before routing and auth, so function, cluster and org
+		// IDs are not known yet; the shared request log also has not run.
+		zap.L().Warn("rejected request carrying reserved shadow header",
+			append(TraceFields(r.Context()),
+				zap.String("http.method", r.Method),
+				zap.String("http.path", r.URL.Path),
+				zap.String("http.remote_addr", r.RemoteAddr),
+				zap.String(string(GatewayProxyOutcomeMetricAttribute), string(GatewayProxyOutcomeRejected)),
+			)...,
+		)
 		http.Error(w, "reserved header in external request", http.StatusBadRequest)
 	}))
 	if observe != nil {

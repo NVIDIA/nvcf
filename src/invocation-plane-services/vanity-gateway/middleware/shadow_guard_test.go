@@ -23,6 +23,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestRejectSpoofedShadowRequests_RejectsHeaderPresent(t *testing.T) {
@@ -73,4 +75,33 @@ func TestRejectSpoofedShadowRequests_RejectsAnyHeaderValue(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestRejectSpoofedShadowRequests_LogsRejection(t *testing.T) {
+	core, logs := observer.New(zap.WarnLevel)
+	restore := zap.ReplaceGlobals(zap.New(core))
+	t.Cleanup(restore)
+
+	handler := RejectSpoofedShadowRequests("NVCF-Shadow", nil)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("NVCF-Shadow", "secret-value")
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	entries := logs.All()
+	if assert.Len(t, entries, 1) {
+		fields := entries[0].ContextMap()
+		assert.Equal(t, "/v1/chat/completions", fields["http.path"])
+		assert.Equal(t, string(GatewayProxyOutcomeRejected), fields[string(GatewayProxyOutcomeMetricAttribute)])
+		assert.NotContains(t, entries[0].Message+toString(fields), "secret-value")
+	}
+}
+
+func toString(fields map[string]any) string {
+	out := ""
+	for _, value := range fields {
+		if s, ok := value.(string); ok {
+			out += s
+		}
+	}
+	return out
 }
