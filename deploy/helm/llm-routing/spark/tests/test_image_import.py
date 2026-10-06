@@ -1,6 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+import ast
 import copy
+import http.server
+import os
+import re
+import textwrap
 import hashlib
 import importlib.util
 import io
@@ -262,6 +267,43 @@ class ImageImportTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which('helm'), 'Helm is required to render the image-loader chart')
 class ImageLoaderChartTests(unittest.TestCase):
+    def test_acknowledgements_require_pending_nodes_and_uploaded_archive(self):
+        rendered = subprocess.check_output(['helm', 'template', 'image-test', str(HERE/'charts/image-loader'),
+                    '--set', 'enabled=true', '--set', 'nodeNames[0]=node-one', '--set', 'archiveNode=node-one',
+                    '--set', 'archiveSha256='+'a'*64], text=True)
+        code = textwrap.dedent(re.search(r'args:\n            - \|\n(.*?)\n          env:', rendered, re.S).group(1))
+        tree = ast.parse(code)
+        handler = next(node for node in tree.body if isinstance(node, ast.ClassDef))
+        pending = {'node-one', 'node-two'}
+        namespace = {'http': http, 'os': os, 'pending': pending}
+        exec(compile(ast.Module(body=[handler], type_ignores=[]), '<rendered image server>', 'exec'), namespace)
+        with tempfile.TemporaryDirectory() as directory:
+            archive = pathlib.Path(directory)/'images.tar'
+            with patch.dict(os.environ, {'ARCHIVE_NAME': str(archive)}):
+                for node, uploaded, expected in [('node-one', False, 404), ('unknown', True, 404),
+                                                  ('node-one', True, 200), ('node-one', True, 404),
+                                                  ('node-two', True, 200)]:
+                    with self.subTest(node=node, uploaded=uploaded, expected=expected):
+                        if uploaded:
+                            archive.touch()
+                        request = object.__new__(namespace['Handler'])
+                        request.path = '/done/'+node
+                        request.wfile = io.BytesIO()
+                        before = pending.copy()
+                        with patch.object(request, 'send_response') as response, \
+                             patch.object(request, 'send_error') as error, patch.object(request, 'end_headers'):
+                            request.do_GET()
+                        if expected == 200:
+                            response.assert_called_once_with(200)
+                            error.assert_not_called()
+                            self.assertEqual(pending, before-{node})
+                            self.assertEqual(request.wfile.getvalue(), b'OK')
+                        else:
+                            error.assert_called_once_with(404)
+                            response.assert_not_called()
+                            self.assertEqual(pending, before)
+        self.assertEqual(pending, set())
+
     def test_server_uses_rootless_writable_temporary_storage_and_clients_keep_socket_access(self):
         rendered = subprocess.check_output(['helm', 'template', 'image-test', str(HERE/'charts/image-loader'),
                     '--set', 'enabled=true', '--set', 'nodeNames[0]=node-one', '--set', 'archiveNode=node-one',

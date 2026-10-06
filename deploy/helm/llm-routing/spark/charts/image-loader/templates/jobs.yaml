@@ -51,8 +51,9 @@ spec:
               pending = set(os.environ['EXPECTED_NODES'].split(','))
               class Handler(http.server.SimpleHTTPRequestHandler):
                   def do_GET(self):
-                      if self.path.startswith('/done/') and os.path.isfile(os.environ['ARCHIVE_NAME']):
-                          pending.discard(self.path.removeprefix('/done/'))
+                      node = self.path.removeprefix('/done/')
+                      if self.path.startswith('/done/') and node in pending and os.path.isfile(os.environ['ARCHIVE_NAME']):
+                          pending.remove(node)
                           self.send_response(200)
                           self.end_headers()
                           self.wfile.write(b'OK')

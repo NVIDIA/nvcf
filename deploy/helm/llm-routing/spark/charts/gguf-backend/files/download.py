@@ -12,10 +12,8 @@ import time
 import urllib.parse
 import urllib.request
 
-lock = json.loads(pathlib.Path('/checks/model-lock.json').read_text())
+lock = {}
 root = pathlib.Path('/artifacts/model')
-root.mkdir(exist_ok=True)
-assert shutil.disk_usage(root).free > lock['weightFileBytes'] + 20_000_000_000
 progress = {}
 mutex = threading.Lock()
 
@@ -76,22 +74,35 @@ def download(expected):
             if attempt == 11:
                 raise RuntimeError('Download retries exhausted for ' + relative) from None
             time.sleep(min(30, 2 ** attempt))
-    digest = verify(partial, expected)
+    try:
+        digest = verify(partial, expected)
+    except AssertionError:
+        partial.unlink(missing_ok=True)
+        raise
     partial.rename(destination)
     emit({'verified': relative, 'bytes': expected['size'], 'sha256': digest, 'cached': False})
 
 
-started = time.monotonic()
-with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-    futures = [executor.submit(download, f) for f in lock['files']]
-    while not all(f.done() for f in futures):
-        with mutex:
-            transferred = sum(progress.values())
-        emit({'downloadedBytes': transferred, 'totalBytes': lock['weightFileBytes'], 'elapsedSeconds': round(time.monotonic() - started, 1)})
-        concurrent.futures.wait(futures, timeout=30, return_when=concurrent.futures.ALL_COMPLETED)
-    for future in futures:
-        future.result()
-result = {'result': 'PASS', 'model': lock['model'], 'revision': lock['revision'], 'quantization': lock['quantization'],
-          'verifiedFiles': len(lock['files']), 'verifiedBytes': lock['weightFileBytes'], 'elapsedSeconds': round(time.monotonic() - started, 1)}
-(root / 'download-complete.json').write_text(json.dumps(result, indent=2) + '\n')
-emit(result)
+def main():
+    global lock
+    lock = json.loads(pathlib.Path('/checks/model-lock.json').read_text())
+    root.mkdir(exist_ok=True)
+    assert shutil.disk_usage(root).free > lock['weightFileBytes'] + 20_000_000_000
+    started = time.monotonic()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        futures = [executor.submit(download, f) for f in lock['files']]
+        while not all(f.done() for f in futures):
+            with mutex:
+                transferred = sum(progress.values())
+            emit({'downloadedBytes': transferred, 'totalBytes': lock['weightFileBytes'], 'elapsedSeconds': round(time.monotonic() - started, 1)})
+            concurrent.futures.wait(futures, timeout=30, return_when=concurrent.futures.ALL_COMPLETED)
+        for future in futures:
+            future.result()
+    result = {'result': 'PASS', 'model': lock['model'], 'revision': lock['revision'], 'quantization': lock['quantization'],
+              'verifiedFiles': len(lock['files']), 'verifiedBytes': lock['weightFileBytes'], 'elapsedSeconds': round(time.monotonic() - started, 1)}
+    (root / 'download-complete.json').write_text(json.dumps(result, indent=2) + '\n')
+    emit(result)
+
+
+if __name__ == '__main__':
+    main()

@@ -404,8 +404,7 @@ class Recipe:
             if role != 'control':
                 require(int(node['status']['allocatable'].get('nvidia.com/gpu', 0)) >= 1, 'GPU device plugin has not advertised a GPU.')
                 busy = [p['metadata']['name'] for p in pods if p['spec'].get('nodeName') == selected[role]
-                        and p['status']['phase'] not in ('Succeeded', 'Failed')
-                        and any(int(c.get('resources', {}).get('requests', {}).get('nvidia.com/gpu', 0)) > 0 for c in p['spec']['containers'])]
+                        and cluster_setup.requests_gpu(p)]
                 require(not busy, 'Selected model GPU is occupied: '+', '.join(busy))
         for crd in crds:
             if crd['metadata']['name'] == 'inferenceendpoints.pylon.nvidia.com':

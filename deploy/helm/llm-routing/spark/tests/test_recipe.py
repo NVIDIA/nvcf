@@ -302,6 +302,34 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(self.recipe.components(), ['gateway', 'router', 'pylon', 'operator'])
         self.assertEqual(self.recipe.state['stack']['apiKeyFile'], str(key_path.resolve()))
 
+    def test_inventory_rejects_all_gpu_allocations_on_model_nodes(self):
+        nodes = [{'metadata': {'name': name, 'uid': name, 'labels': {'kubernetes.io/arch': 'arm64'}},
+                  'status': {'conditions': [{'type': 'Ready', 'status': 'True'}],
+                             'allocatable': {'nvidia.com/gpu': '1'}}} for name in self.config['nodes'].values()]
+        allocations = [
+            {'containers': [{'resources': {'requests': {'nvidia.com/gpu': '1'}}}]},
+            {'containers': [{'resources': {'limits': {'nvidia.com/gpu': '1'}}}]},
+            {'initContainers': [{'resources': {'requests': {'nvidia.com/gpu': '1'}}}]},
+            {'resourceClaims': [{'name': 'gpu', 'resourceClaimName': 'gpu-claim'}]},
+        ]
+        for allocation in allocations:
+            for phase, node, busy in [('Pending', self.config['nodes']['leader'], True),
+                                      ('Running', self.config['nodes']['worker'], True),
+                                      ('Succeeded', self.config['nodes']['leader'], False),
+                                      ('Failed', self.config['nodes']['leader'], False),
+                                      ('Running', 'another-node', False)]:
+                pod = {'metadata': {'name': 'gpu-consumer', 'namespace': 'another-namespace'},
+                       'spec': {'nodeName': node, **allocation}, 'status': {'phase': phase}}
+                responses = [json.dumps({'items': items}) for items in (nodes, [pod], [])]
+                with self.subTest(allocation=allocation, phase=phase, node=node), \
+                     patch.object(spark, 'output', side_effect=responses), patch.object(spark, 'run') as run:
+                    if busy:
+                        with self.assertRaisesRegex(RuntimeError, 'GPU is occupied: gpu-consumer'):
+                            self.recipe.inventory()
+                        run.assert_not_called()
+                    else:
+                        self.recipe.inventory()
+
     def test_stack_reuses_ui_key_in_existing_release(self):
         encoded = __import__('base64').b64encode(b'private-cluster-token').decode()
         responses = [json.dumps({'data': {'cluster-token': encoded}}), json.dumps({'data': {'ca.crt': 'public-ca'}})]
