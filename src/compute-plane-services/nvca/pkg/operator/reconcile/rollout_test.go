@@ -1599,8 +1599,11 @@ func TestHasEnvOverridesChangedCheck(t *testing.T) {
 }
 
 // The agent is rolled when its cluster-validator setting differs from the
-// operator's or is missing, and not when the Deployment cannot be read. A
-// later override of the same variable is the user's and never rolls the agent.
+// operator's, and not when the Deployment cannot be read. An agent written by
+// an operator that predates the setting has none, which reads as disabled: it
+// is rolled only to enable the validator, so upgrading the operator does not
+// restart every agent on clusters that never enabled it. A later override of
+// the same variable is the user's and never rolls the agent.
 func TestHasClusterValidatorEnabledChangedCheck(t *testing.T) {
 	agent := func(env ...corev1.EnvVar) *appsv1.Deployment {
 		return &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
@@ -1618,7 +1621,8 @@ func TestHasClusterValidatorEnabledChangedCheck(t *testing.T) {
 		{name: "unchanged", enabled: true, dep: agent(setting("true"))},
 		{name: "enabled", enabled: true, dep: agent(setting("false")), want: true},
 		{name: "disabled", enabled: false, dep: agent(setting("true")), want: true},
-		{name: "never set", enabled: false, dep: agent(corev1.EnvVar{Name: "OTHER", Value: "x"}), want: true},
+		{name: "never set, disabled", enabled: false, dep: agent(corev1.EnvVar{Name: "OTHER", Value: "x"})},
+		{name: "never set, enabled", enabled: true, dep: agent(corev1.EnvVar{Name: "OTHER", Value: "x"}), want: true},
 		{name: "user override after it", enabled: false, dep: agent(setting("false"), setting("true"))},
 		{name: "no agent container", enabled: true, dep: &appsv1.Deployment{}},
 		{name: "no Deployment yet", enabled: true,

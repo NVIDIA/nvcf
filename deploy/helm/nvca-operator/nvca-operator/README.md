@@ -273,3 +273,10 @@ With `clusterValidator.enabled`, the validator runs in three ways:
   restart the operator. The init container uses `enabled`, `image`,
   `configMapName`, `resources` and `role`, so changing any of them restarts
   the operator.
+- Changing `enabled` also restarts the NVCA agent once, since the agent
+  publishes the validator metrics only while the validator is enabled. Where
+  the agent Deployment uses the Recreate strategy (the `GracefulNoGPU`
+  feature flag), that is a full stop and start. While the operator rolls out
+  the change, its old and new pods can run side by side for a short time and
+  each set the agent to its own value, so the agent may restart more than
+  once.

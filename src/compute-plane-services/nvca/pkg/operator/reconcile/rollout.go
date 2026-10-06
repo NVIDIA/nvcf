@@ -321,7 +321,10 @@ func hasOTelCollectorConfigChangedCheck(ctx context.Context,
 // chart upgrade would restart only the operator, and the agent would keep
 // publishing, or keep omitting, the validator metrics. Only the operator's
 // own entry is compared, not a later override of the same name, so an override
-// does not roll the agent on every sync.
+// does not roll the agent on every sync. An agent written by an operator that
+// predates the setting has none, which counts as disabled: the operator
+// deletes the summary of a disabled validator, so that agent publishes no
+// validator metrics either, and an operator upgrade does not restart it.
 func hasClusterValidatorEnabledChangedCheck(ctx context.Context, enabled bool,
 	getDeployment func(ctx context.Context, name string, opts metav1.GetOptions) (*appsv1.Deployment, error),
 ) func() bool {
@@ -347,6 +350,9 @@ func hasClusterValidatorEnabledChangedCheck(ctx context.Context, enabled bool,
 					log.Infof("Agent %s changed from %q to %q", clustervalidator.EnabledEnv, env.Value, want)
 					return true
 				}
+			}
+			if !enabled {
+				return false
 			}
 			log.Infof("Agent has no %s, setting it to %q", clustervalidator.EnabledEnv, want)
 			return true

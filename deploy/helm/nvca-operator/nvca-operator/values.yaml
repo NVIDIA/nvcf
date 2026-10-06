@@ -513,6 +513,13 @@ networkPolicy:
 ## @param clusterValidator.resources.requests.memory Memory request for the cluster-validator container
 ## @param clusterValidator.networkChecks [object] Network check configuration (creates the ConfigMap automatically when set)
 clusterValidator:
+  # Changing enabled restarts the operator and, once, the NVCA agent, which
+  # publishes the validator metrics only while the validator is enabled. Where
+  # the agent Deployment uses the Recreate strategy (the GracefulNoGPU feature
+  # flag), that is a full stop and start. While the operator rolls out the
+  # change, its old and new pods can run side by side for a short time and
+  # each set the agent to its own value, so the agent may restart more than
+  # once.
   enabled: false
   # Which check set the CronJob runs. "control-plane" runs the gateway,
   # StorageClass, node-to-node overlay and Tier-1/Tier-2 HA checks and skips

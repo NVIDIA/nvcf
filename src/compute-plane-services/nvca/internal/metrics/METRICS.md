@@ -1408,17 +1408,17 @@ The fixed-cardinality gauges are updated in place on each new ConfigMap update, 
 
 ### Where the metrics are published
 
-The chart passes `clusterValidator.enabled` to the operator, and the operator always sets `NVCA_CLUSTER_VALIDATOR_ENABLED` on the agent to `true` or `false`:
+The chart passes `clusterValidator.enabled` to the operator, and the operator sets `NVCA_CLUSTER_VALIDATOR_ENABLED` on every agent Deployment it writes to `true` or `false`. It does not restart an agent an older operator wrote, which has no setting, only to add `false`: while the validator is disabled that agent finds no summary to republish, so it publishes nothing either.
 
 | Agent sees | Effect |
 |---|---|
 | `true` | The agent publishes the init-to-zero baseline at startup and republishes every summary. |
 | `false` | The agent reads no summary and publishes no `nvca_cluster_validator_*` series, so no alert on them can fire. At startup the operator also deletes a summary ConfigMap the validator wrote while it was enabled. |
-| unset (an operator older than this gating) | The agent republishes any summary it finds but publishes no baseline, so the never-ran alert below cannot fire. |
+| unset (written by an operator older than this gating) | The agent republishes any summary it finds but publishes no baseline, so the never-ran alert below cannot fire. |
 
 An agent older than this gating ignores the variable and publishes the baseline on every cluster. The agent image follows the NVCFBackend `spec.version`, not the operator chart, so the two can differ. Use the never-ran alert only where both the operator and the agent include this gating.
 
-The operator learns the setting only from its own `NVCA_CLUSTER_VALIDATOR_ENABLED`, which the chart sets, and treats it as `false` when unset. Run the operator image with the chart it ships with: under a chart older than this gating, the operator deletes the summary at every start and tells the agent `false`, so no `nvca_cluster_validator_*` series exist although the validator still runs.
+The operator learns the setting only from its own `NVCA_CLUSTER_VALIDATOR_ENABLED`, which the chart sets, and treats it as `false` when unset. Run the operator image with the chart it ships with: under a chart older than this gating, the operator deletes the summary at every start and tells the agent `false` when it next rolls it, so no `nvca_cluster_validator_*` series exist although the validator still runs.
 
 ### Reading a check: 1, 0 or absent
 

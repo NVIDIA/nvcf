@@ -82,11 +82,13 @@ const (
 	SummaryConfigMapNamespaceEnv = "VALIDATOR_SUMMARY_NAMESPACE"
 
 	// EnabledEnv says whether the chart runs the cluster-validator. The chart
-	// sets it on the operator, and the operator always sets it on the agent,
-	// to "true" or "false". The agent publishes the metrics baseline only when
-	// it is true: on a cluster without the validator, a last_run of 0 would
-	// read as a validator that never ran, forever. When it is false the agent
-	// reads no summary, so one left from an enabled period is not republished.
+	// sets it on the operator, and the operator sets it on every agent
+	// Deployment it writes, to "true" or "false"; it does not roll an agent an
+	// older operator wrote, which has none, only to add "false". The agent
+	// publishes the metrics baseline only when it is true: on a cluster
+	// without the validator, a last_run of 0 would read as a validator that
+	// never ran, forever. When it is false the agent reads no summary, so one
+	// left from an enabled period is not republished.
 	EnabledEnv = "NVCA_CLUSTER_VALIDATOR_ENABLED"
 
 	// InitialRunCronJobEnv names the cluster-validator CronJob the operator

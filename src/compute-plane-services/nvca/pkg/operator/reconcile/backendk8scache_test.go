@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"testing"
@@ -3266,6 +3267,56 @@ func TestSyncNVCFBackend_ClusterValidatorToggleRollsTheAgent(t *testing.T) {
 		require.NoError(t, c.syncNVCFBackend(ctx, nb, false))
 		assert.Equal(t, before+1, agentUpdates(), "enabled=%t unchanged leaves the agent alone", enabled)
 	}
+}
+
+// An agent an older operator wrote has no cluster-validator setting. With the
+// validator disabled that means the same as false, so the first sync after
+// the operator upgrade leaves the agent running; enabling the validator still
+// rolls it once.
+func TestSyncNVCFBackend_AgentWithoutValidatorSettingStaysWhileDisabled(t *testing.T) {
+	eventRecorder := record.NewFakeRecorder(0)
+	eventRecorder.Events = nil
+	c := &BackendK8sCache{
+		clients:              mockKubeClients(),
+		operatorNamespace:    NVCAOperatorNamespace,
+		eventRecorder:        eventRecorder,
+		ngcServiceKeyFetcher: &mockTokenFetcher{token: "randomkey"},
+		now:                  time.Now,
+	}
+	ctx := newTestContext()
+	nb := getTestNVCFBackendAllFeatures()
+	nb.Spec.Overrides = nil
+	require.NoError(t, c.CreateOrUpdateNVCFBackend(ctx, nb))
+	require.NoError(t, c.syncNVCFBackend(ctx, nb, false))
+
+	k8s := c.clients.K8s.(*fakek8sclient.Clientset)
+	deployments := k8s.AppsV1().Deployments(getSystemNamespace(nb))
+	dep, err := deployments.Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
+	require.NoError(t, err)
+	for i := range dep.Spec.Template.Spec.Containers {
+		ctr := &dep.Spec.Template.Spec.Containers[i]
+		ctr.Env = slices.DeleteFunc(ctr.Env, func(e corev1.EnvVar) bool { return e.Name == clustervalidator.EnabledEnv })
+	}
+	_, err = deployments.Update(ctx, dep, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	agentUpdates := func() int {
+		n := 0
+		for _, a := range k8s.Actions() {
+			if a.GetVerb() == "update" && a.GetResource().Resource == "deployments" &&
+				a.(k8stesting.UpdateAction).GetObject().(*appsv1.Deployment).Name == nvcaoptypes.NVCAModuleName {
+				n++
+			}
+		}
+		return n
+	}
+	before := agentUpdates()
+
+	require.NoError(t, c.syncNVCFBackend(ctx, nb, false))
+	assert.Equal(t, before, agentUpdates(), "a disabled validator does not roll an agent without the setting")
+
+	c.clusterValidatorEnabled = true
+	require.NoError(t, c.syncNVCFBackend(ctx, nb, false))
+	assert.Equal(t, before+1, agentUpdates(), "enabling it rolls the agent once")
 }
 
 func TestCreateOrUpdateNVCFBackend_PropagatesNVCAOTELConfig(t *testing.T) {
