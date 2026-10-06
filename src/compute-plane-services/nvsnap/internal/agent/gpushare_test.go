@@ -27,6 +27,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
+
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/yaml"
 )
@@ -258,5 +260,44 @@ func TestVisibleGPUUUIDs(t *testing.T) {
 		if got := visibleGPUUUIDs(write(tc.env...)); got != tc.want {
 			t.Errorf("env %v: got %q, want %q", tc.env, got, tc.want)
 		}
+	}
+}
+
+// Collecting the store moves the pod's chunks and chunk lists into the
+// checkpoint and writes the GPU map there. The pod's own directory stays
+// (the workload's mount points at it) but is left empty, so a later capture
+// of the same pod does not write into this checkpoint.
+func TestGPUShareCollectStore(t *testing.T) {
+	root := t.TempDir()
+	podStore := filepath.Join(root, GPUSharePodStoresSubdir, "uid-1")
+	for _, f := range []string{"chunks/ab/abcd", "ckpt/gpu-51.chunks"} {
+		p := filepath.Join(podStore, f)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(f), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ckptDir := filepath.Join(root, "ckpt-1")
+	a := &Agent{config: Config{CheckpointDir: root}}
+	ci := &containerd.ContainerInfo{Labels: map[string]string{"io.kubernetes.pod.uid": "uid-1"}}
+	if err := a.gpushareCollectStore(ci, "/nonexistent-container-root", ckptDir, "GPU-a\nGPU-b\n"); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"chunks/ab/abcd", "ckpt/gpu-51.chunks"} {
+		if b, err := os.ReadFile(filepath.Join(ckptDir, GPUShareCheckpointSubdir, f)); err != nil || string(b) != f {
+			t.Errorf("%s not moved into the checkpoint: %v", f, err)
+		}
+	}
+	if b, err := os.ReadFile(filepath.Join(ckptDir, GPUShareCheckpointSubdir, gpushareCkptSubdir, "gpus")); err != nil || string(b) != "GPU-a\nGPU-b\n" {
+		t.Errorf("GPU map = %q, %v", b, err)
+	}
+	left, err := os.ReadDir(podStore)
+	if err != nil {
+		t.Fatalf("the pod's store directory must remain: %v", err)
+	}
+	if len(left) != 0 {
+		t.Errorf("the pod's store must be emptied, still has %d entries", len(left))
 	}
 }

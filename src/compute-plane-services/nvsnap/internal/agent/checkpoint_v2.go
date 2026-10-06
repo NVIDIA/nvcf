@@ -213,6 +213,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		return nil, gsErr
 	}
 	var gsInfo *GPUShareInfo
+	var gpuMap string
 	if gsOn {
 		if !fileExists(filepath.Join(root, strings.TrimPrefix(GPUShareStoreInContainer, "/"))) {
 			return nil, fmt.Errorf("gpushare: the workload loads %s but has no chunk store at %s "+
@@ -221,9 +222,11 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		if !fileExists(filepath.Join(root, strings.TrimPrefix(v2BinDirInContainer, "/"), gpushareToolName)) {
 			return nil, fmt.Errorf("gpushare: %s is not in the agent bundle; the agent base image predates gpushare", gpushareToolName)
 		}
-		if err := gpushareSuspend(ctx, hostPID, gsPIDs, log); err != nil {
+		gm, err := gpushareSuspend(ctx, hostPID, gsPIDs, log)
+		if err != nil {
 			return nil, fmt.Errorf("gpushare suspend: %w", err)
 		}
+		gpuMap = gm
 		gsInfo = &GPUShareInfo{PIDs: gsPIDs, StorePath: GPUShareStoreInContainer, LibPath: gsLib}
 	}
 
@@ -323,7 +326,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 				return nil, fmt.Errorf("gpushare: resume the source after the dump: %w", err)
 			}
 		}
-		if err := a.gpushareCollectStore(containerInfo, root, checkpointDir); err != nil {
+		if err := a.gpushareCollectStore(containerInfo, root, checkpointDir, gpuMap); err != nil {
 			return nil, err
 		}
 	}
@@ -574,7 +577,7 @@ func criuSupportsDirectImageIO(help string) bool {
 // (checkpointDir/gpushare). Entries are moved, not the directory: the
 // workload's mount still points at that directory, and a later capture of
 // the same pod must start empty rather than write into this checkpoint.
-func (a *Agent) gpushareCollectStore(containerInfo *containerd.ContainerInfo, root, checkpointDir string) error {
+func (a *Agent) gpushareCollectStore(containerInfo *containerd.ContainerInfo, root, checkpointDir, gpuMap string) error {
 	dst := filepath.Join(checkpointDir, GPUShareCheckpointSubdir)
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return fmt.Errorf("gpushare: %w", err)
@@ -591,6 +594,17 @@ func (a *Agent) gpushareCollectStore(containerInfo *containerd.ContainerInfo, ro
 	}
 	if err := moveDirContents(src, dst); err != nil {
 		return fmt.Errorf("gpushare: move chunk store %s to the checkpoint: %w", src, err)
+	}
+	// The GPU map goes in from the agent's side, into the checkpoint it owns:
+	// the agent cannot create files inside a container's mounts through
+	// /proc/<pid>/root. Restore finds it at <store>/ckpt/gpus because the
+	// placeholder mounts this directory at the store path.
+	ckpt := filepath.Join(dst, gpushareCkptSubdir)
+	if err := os.MkdirAll(ckpt, 0o755); err != nil {
+		return fmt.Errorf("gpushare: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(ckpt, "gpus"), []byte(gpuMap), 0o644); err != nil { //nolint:gosec // GPU UUIDs, read back by the restore tool
+		return fmt.Errorf("gpushare: write GPU map: %w", err)
 	}
 	return nil
 }

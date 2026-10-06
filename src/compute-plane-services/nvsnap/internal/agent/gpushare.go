@@ -228,31 +228,27 @@ func gpushareToolEnv(ctx context.Context, hostPID int, env []string, timeout tim
 }
 
 // gpushareSuspend saves the GPU memory of pids to the store and checkpoints
-// their driver state, then hands them to CRIU stopped.
-func gpushareSuspend(ctx context.Context, hostPID int, pids []int, log *logrus.Entry) error {
+// their driver state, then hands them to CRIU stopped. It returns the GPU
+// map (UUIDs of the GPUs the workload saw, in order) for the checkpoint:
+// a restore onto other physical GPUs maps them with resume --gpu-map.
+func gpushareSuspend(ctx context.Context, hostPID int, pids []int, log *logrus.Entry) (string, error) {
 	store := GPUShareStoreInContainer
-	ckpt := store + "/" + gpushareCkptSubdir
-	// The GPU map: UUIDs of the GPUs the workload saw, in order, so a restore
-	// onto other physical GPUs can map them (resume --gpu-map).
 	gpus, err := gpushareToolEnv(ctx, hostPID, podGPUEnv(hostPID), time.Minute, "gpus")
 	if err != nil {
-		return err
+		return "", err
 	}
-	if werr := writeInContainer(hostPID, ckpt+"/gpus", gpus); werr != nil {
-		return fmt.Errorf("gpushare: write GPU map: %w", werr)
-	}
-	args := append([]string{"--timeout-ms", "120000", "--store", store, "--ckpt-dir", ckpt, "suspend"}, intsToStrings(pids)...)
+	args := append([]string{"--timeout-ms", "120000", "--store", store, "--ckpt-dir", store + "/" + gpushareCkptSubdir, "suspend"}, intsToStrings(pids)...)
 	t0 := time.Now()
 	out, err := gpushareTool(ctx, hostPID, 30*time.Minute, args...)
 	if err != nil {
-		return err
+		return "", err
 	}
 	log.WithFields(logrus.Fields{"pids": pids, "duration": time.Since(t0).Round(time.Millisecond).String()}).
 		Info("gpushare: suspended " + lastLines(out, 1))
 	if _, err := gpushareTool(ctx, hostPID, 2*time.Minute, append([]string{"stop"}, intsToStrings(pids)...)...); err != nil {
-		return err
+		return "", err
 	}
-	return nil
+	return gpus, nil
 }
 
 // gpushareResume restores the driver state of pids, loads their saved GPU
@@ -272,20 +268,6 @@ func gpushareResume(ctx context.Context, hostPID int, pids []int, gpuMap string,
 	log.WithFields(logrus.Fields{"pids": pids, "duration": time.Since(t0).Round(time.Millisecond).String()}).
 		Info("gpushare: resumed " + lastLines(out, 1))
 	return nil
-}
-
-// writeInContainer writes content to path inside the mount namespace of the
-// container whose init is hostPID.
-func writeInContainer(hostPID int, path, content string) error {
-	procBase := "/proc"
-	if _, err := os.Stat("/host/proc"); err == nil {
-		procBase = "/host/proc"
-	}
-	p := filepath.Join(procBase, strconv.Itoa(hostPID), "root", path)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(p, []byte(content), 0o644)
 }
 
 func intsToStrings(v []int) []string {
