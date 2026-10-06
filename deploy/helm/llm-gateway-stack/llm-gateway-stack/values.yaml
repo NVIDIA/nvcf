@@ -47,7 +47,7 @@ clusterCredential:
 #       sha256: <output of: printf '%s' "$API_KEY" | shasum -a 256>
 apiKeys: []
 
-# Optional plaintext UI key, supplied from a private file by the Spark recipe.
+# Optional plaintext UI key, supplied from a private file by the routing recipe.
 # Creates Secret demo-ui-api-key (field api-key) in this release's namespace.
 # apiKeys must also contain its matching hash under id demo-ui.
 demoUiApiKey: ""

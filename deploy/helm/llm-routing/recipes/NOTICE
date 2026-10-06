@@ -1,0 +1,7 @@
+# External artifacts
+
+The recipe tool downloads and builds llama.cpp from a pinned public revision. llama.cpp is MIT licensed. Its LICENSE is retained in the generated runtime archive. Source: https://github.com/ggml-org/llama.cpp.
+
+Model weights are external downloads and are not distributed in this repository. Each recipe folder has a NOTICE for its model terms.
+
+NVIDIA container images retain their upstream terms. Access to a public image reference does not grant credentials or image redistribution rights. No third-party runtime binaries, images or model weights are embedded in this tool.

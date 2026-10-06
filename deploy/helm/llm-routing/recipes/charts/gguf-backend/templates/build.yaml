@@ -1,0 +1,85 @@
+{{/* SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. */}}
+{{/* SPDX-License-Identifier: Apache-2.0 */}}
+{{- if and (ne .Values.phase "preflight") (ne .Values.phase "chain") }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-artifacts
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ .Values.artifacts.storageClassName | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.artifacts.size }}
+{{- end }}
+{{- if eq .Values.phase "build" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-build
+data:
+  build.py: |
+{{ .Files.Get "files/build.py" | indent 4 }}
+  rpc-gpu-check.cpp: |
+{{ .Files.Get "files/rpc-gpu-check.cpp" | indent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Job templates are immutable, so any change to the build inputs needs a new Job name.
+  name: {{ .Release.Name }}-build-{{ list (.Files.Get "files/build.py") .Values.build.revision .Values.build.cudaArchitectures | join "\n" | sha256sum | trunc 8 }}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 7200
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: build
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: {{ (index .Values.targets 0).node | quote }}
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: build
+          image: {{ required "image is required" .Values.image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: [python3, -u, /checks/build.py]
+          env:
+            - {name: HOME, value: /tmp}
+            - {name: NVIDIA_VISIBLE_DEVICES, value: void}
+            - {name: PYTHONDONTWRITEBYTECODE, value: '1'}
+            - {name: LLAMA_REVISION, value: {{ required "build.revision is required" .Values.build.revision | quote }}}
+            - {name: CUDA_ARCHITECTURES, value: {{ required "build.cudaArchitectures is required" .Values.build.cudaArchitectures | quote }}}
+            - {name: BUILD_PARALLEL, value: {{ .Values.build.parallel | quote }}}
+            - {name: BUILD_IMAGE, value: {{ .Values.image | quote }}}
+          resources:
+            requests: {cpu: '8', memory: 24Gi}
+            limits: {cpu: '12', memory: 40Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: checks, mountPath: /checks, readOnly: true}
+            - {name: artifacts, mountPath: /artifacts}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: checks
+          configMap: {name: {{ .Release.Name }}-build}
+        - name: artifacts
+          persistentVolumeClaim: {claimName: {{ .Release.Name }}-artifacts}
+        - name: tmp
+          emptyDir: {sizeLimit: 8Gi}
+{{- end }}

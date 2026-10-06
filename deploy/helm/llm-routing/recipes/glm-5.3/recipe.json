@@ -1,0 +1,70 @@
+{
+  "name": "glm-5.3",
+  "description": "GLM-5.3 UD-IQ2_M GGUF served by llama.cpp",
+  "releaseName": "glm",
+  "llamaCppRevision": "f872b591121761ac7b2af18283bd99bdc092a63a",
+  "servedName": "GLM-5.3-UD-IQ2_M",
+  "endpointName": "glm53-iq2",
+  "firstShard": "UD-IQ2_M/GLM-5.3-UD-IQ2_M-00001-of-00006.gguf",
+  "artifactsSize": "400Gi",
+  "rpcCacheSize": "160Gi",
+  "canary": {
+    "timeoutSeconds": 180,
+    "intervalSeconds": 60
+  },
+  "serverArgs": [
+    "--n-gpu-layers",
+    "999",
+    "--split-mode",
+    "layer",
+    "--load-mode",
+    "none",
+    "--lazy-mode",
+    "off",
+    "--fit",
+    "off",
+    "--ctx-size",
+    "2048",
+    "--parallel",
+    "1",
+    "--batch-size",
+    "128",
+    "--ubatch-size",
+    "128",
+    "--cache-ram",
+    "0",
+    "--flash-attn",
+    "on",
+    "--jinja",
+    "--reasoning",
+    "on",
+    "--reasoning-effort",
+    "low",
+    "--reasoning-format",
+    "deepseek",
+    "--chat-template-kwargs",
+    "{\"clear_thinking\":true}",
+    "--predict",
+    "512",
+    "--threads",
+    "8",
+    "--metrics"
+  ],
+  "runtimeEnv": {
+    "GGML_CUDA_DISABLE_GRAPHS": "1",
+    "GGML_RPC_NO_RDMA": "1"
+  },
+  "memory": {
+    "unified": {
+      "reservedGiB": 4,
+      "checkOverShareGiB": 1,
+      "requestUnderShareGiB": 1,
+      "limitOverShareGiB": 2
+    },
+    "discrete": {
+      "gpuHeadroomGiB": 16,
+      "hostRequestGiB": 32,
+      "hostLimitGiB": 64
+    }
+  }
+}
