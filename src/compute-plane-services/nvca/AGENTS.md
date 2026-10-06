@@ -187,7 +187,7 @@ func TestQueueMessageProcessing(t *testing.T) {
 
 **Reconcile error handling:**
 
-- Use `k8sutil.IsTransientK8sError(err)` (`internal/util/k8sutil/errors.go`) to classify K8s API errors before deciding how to handle them
+- Use `k8sutil.IsTransientK8sError(err)` (`internal/util/k8sutil/errors.go`) to classify K8s API errors before deciding how to handle them. Packages that must stay small, such as the cluster-validator, call `k8serr.IsTransient(err)` (`internal/util/k8serr`), which holds the classification
 - **Transient errors** (timeouts, 429, 503, 500, conflicts, network errors) → return `reconcile.Result{Requeue: true}, nil` (silent requeue, no error metric)
 - **Non-transient errors** (Forbidden, Unauthorized, Invalid, Gone) → return `reconcile.Result{}, err` (surfaces as reconcile failure)
 - **Never return both `Requeue: true` and an error** — returning an error already triggers automatic requeue with exponential backoff

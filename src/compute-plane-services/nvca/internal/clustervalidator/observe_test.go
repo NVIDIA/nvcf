@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -268,7 +269,7 @@ func TestCheckNodeToNode_NodeReReadRetriesATransientError(t *testing.T) {
 	assert.Contains(t, strings.Join(state.Warnings, "; "), lost+": removed during the probe")
 }
 
-// Retries follow k8sutil.IsTransientK8sError, plus any other 5xx and errors
+// Retries follow k8serr.IsTransient, plus any other 5xx and errors
 // that are no apiserver answer at all. Every other answer is final.
 func TestRetryable_FollowsTheSharedTransientClassification(t *testing.T) {
 	pods := schema.GroupResource{Resource: "pods"}
@@ -329,6 +330,60 @@ func TestCheckNodeToNode_RetriedCreatesAdoptWhatTheyApplied(t *testing.T) {
 			assert.Empty(t, f.leftovers(t))
 		})
 	}
+}
+
+// A create the apiserver applied but answered only after the client's request
+// timeout is retried in the same window, answered AlreadyExists, and adopted:
+// each attempt ends at the client's timeout, and the window holds another.
+func TestCreateOrAdopt_AdoptsACreateAnsweredAfterTheClientTimeout(t *testing.T) {
+	prevWindow, prevAttempt := observeTimeout, observeAttemptTimeout
+	t.Cleanup(func() { observeTimeout, observeAttemptTimeout = prevWindow, prevAttempt })
+	// The production ratio, scaled down: a window of two attempts and more.
+	observeAttemptTimeout = 100 * time.Millisecond
+	observeTimeout = defaultObserveTimeout * observeAttemptTimeout / RequestTimeout
+
+	client := fake.NewSimpleClientset()
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: "probe-late", Labels: n2nLabels(n2nNamespaceComponent, "mine")}}
+	var creates atomic.Int32
+	create := func(c context.Context) (*corev1.Namespace, error) {
+		if creates.Add(1) > 1 {
+			return client.CoreV1().Namespaces().Create(c, ns, metav1.CreateOptions{})
+		}
+		if _, err := client.CoreV1().Namespaces().Create(c, ns, metav1.CreateOptions{}); err != nil {
+			return nil, err
+		}
+		<-c.Done()
+		return nil, &url.Error{Op: "Post", URL: "https://apiserver/api/v1/namespaces", Err: c.Err()}
+	}
+	get := func(c context.Context) (*corev1.Namespace, error) {
+		return client.CoreV1().Namespaces().Get(c, ns.Name, metav1.GetOptions{})
+	}
+
+	got, err := createOrAdopt(context.Background(), "mine", create, get)
+	require.NoError(t, err, "creates: %d", creates.Load())
+	assert.Equal(t, ns.Name, got.Name)
+	assert.Equal(t, int32(2), creates.Load())
+}
+
+// With the production timings an attempt ends at the client's request timeout,
+// and the window holds a pause and a full second attempt after it.
+func TestObserve_WindowOutlastsTheClientTimeout(t *testing.T) {
+	prev := observeTimeout
+	observeTimeout = defaultObserveTimeout
+	t.Cleanup(func() { observeTimeout = prev })
+
+	var attempt time.Duration
+	_, err := observe(context.Background(), func(c context.Context) (struct{}, error) {
+		deadline, ok := c.Deadline()
+		require.True(t, ok)
+		attempt = time.Until(deadline)
+		return struct{}{}, nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, RequestTimeout, observeAttemptTimeout)
+	assert.LessOrEqual(t, attempt, RequestTimeout)
+	assert.GreaterOrEqual(t, defaultObserveTimeout-RequestTimeout, 2*time.Second+RequestTimeout)
 }
 
 // Only an object carrying the run's instance label is adopted: a namespace of

@@ -37,9 +37,6 @@ const (
 	defaultNamespace     = "nvca-system"
 	podNamespaceFile     = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
-	// requestTimeout bounds every apiserver request, including the discovery
-	// calls that take no context.
-	requestTimeout = 30 * time.Second
 	// runTimeoutEnv bounds the checks, as a Go duration or whole seconds. A
 	// launcher sets it below its Job's activeDeadlineSeconds, so the run ends
 	// with time left to publish its summary instead of being killed first.
@@ -58,7 +55,7 @@ func main() {
 	if err != nil {
 		log.WithError(err).Fatal("Failed to create Kubernetes client")
 	}
-	restCfg.Timeout = requestTimeout
+	restCfg.Timeout = clustervalidator.RequestTimeout
 	client, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		log.WithError(err).Fatal("Failed to create Kubernetes client")

@@ -29,7 +29,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8serr"
 )
 
 // Every check reads the cluster through observe, and every read that still
@@ -37,22 +37,35 @@ import (
 // never evidence about the thing being checked: the row it decides is left
 // unknown (a nil result) with a warning naming the resource and the cause.
 
-// observeTimeout bounds how long observe retries one call, and
+// RequestTimeout bounds every apiserver request, including the discovery calls
+// that take no context. The cluster-validator binary sets it as its client's
+// timeout.
+const RequestTimeout = 30 * time.Second
+
+// defaultObserveTimeout is observe's window for one call. It leaves room for a
+// full second attempt after one the client timed out, so a create the
+// apiserver applied but answered too late is retried, answered AlreadyExists,
+// and adopted by createOrAdopt.
+const defaultObserveTimeout = 2*RequestTimeout + 10*time.Second
+
+// observeTimeout bounds how long observe retries one call,
+// observeAttemptTimeout caps one attempt at the client's request timeout, and
 // observeRetryInterval is the wait between attempts. Vars so tests need not
 // wait them out.
 var (
-	observeTimeout       = 30 * time.Second
-	observeRetryInterval = 2 * time.Second
+	observeTimeout        = defaultObserveTimeout
+	observeAttemptTimeout = RequestTimeout
+	observeRetryInterval  = 2 * time.Second
 )
 
 // retryable reports whether a failed call may succeed if repeated: what
-// k8sutil.IsTransientK8sError calls transient, any other 5xx, such as a 502
+// k8serr.IsTransient calls transient, any other 5xx, such as a 502
 // from a proxy in front of the apiserver, and an error that is no apiserver
 // answer at all, such as a response body cut off mid-read. Any other answer,
 // such as a denial or one about the object itself (absent, already present,
 // invalid), will not change.
 func retryable(err error) bool {
-	if k8sutil.IsTransientK8sError(err) {
+	if k8serr.IsTransient(err) {
 		return true
 	}
 	var status apierrors.APIStatus
@@ -64,15 +77,16 @@ func retryable(err error) bool {
 
 // observe calls fn until it succeeds or fails in a way a retry cannot change,
 // for at most observeTimeout and never past ctx. An attempt may use what is
-// left of that budget, not a poll loop's pollAttemptTimeout: a LIST on a large
-// cluster can take longer than that cap, and every attempt cut off there
-// fails the same way. The client's request timeout bounds a hung request. The
-// one-second floor is attemptContext's: an attempt that starts after a retry
-// pause has crossed the deadline still gets an answer.
+// left of that budget up to the client's request timeout, not a poll loop's
+// pollAttemptTimeout: a LIST on a large cluster can take longer than that cap,
+// and every attempt cut off there fails the same way. The one-second floor is
+// attemptContext's: an attempt that starts after a retry pause has crossed the
+// deadline still gets an answer.
 func observe[T any](ctx context.Context, fn func(context.Context) (T, error)) (T, error) {
 	deadline := time.Now().Add(observeTimeout)
 	for {
-		attemptCtx, cancel := context.WithTimeout(ctx, max(time.Until(deadline), time.Second))
+		attempt := min(max(time.Until(deadline), time.Second), observeAttemptTimeout)
+		attemptCtx, cancel := context.WithTimeout(ctx, attempt)
 		v, err := fn(attemptCtx)
 		cancel()
 		if err == nil || !retryable(err) || ctx.Err() != nil || !time.Now().Before(deadline) {

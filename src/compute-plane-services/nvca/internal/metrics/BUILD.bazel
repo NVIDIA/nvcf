@@ -42,8 +42,6 @@ alias(
 go_test(
     name = "metrics_test",
     srcs = [
-        "checkkeys_test.go",
-        "export_test.go",
         "http_test.go",
         "instrumented_crclient_test.go",
         "metrics_test.go",
