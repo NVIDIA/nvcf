@@ -32,7 +32,7 @@ SPDX-License-Identifier: Apache-2.0
  *                 holder (suspend) it asks the holder; otherwise (after
  *                 stop + CRIU restore, or full-save) it freezes every thread
  *                 except the restore thread itself, SIGCONTs, restores.
- *   gpus          Print the UUIDs of the GPUs visible to this process.
+ *   gpus [FILE]   Print (or write to FILE) the UUIDs of the GPUs visible here.
  *
  * --cache DIR (suspend, resume): node-local cache of the chunk store (e.g. on
  * NVMe; same layout): saved chunks are copied into it, and loads read it
@@ -360,19 +360,21 @@ static int lock_all(const int *pids, int n, unsigned timeout_ms)
 }
 
 /* Bring every pid back to RUNNING after a failed full-save. */
-static void rollback(const int *pids, int n)
+/* Returns the number of pids left not RUNNING. */
+static int rollback(const int *pids, int n)
 {
+    int bad = 0;
     fprintf(stderr, "rolling back %d pid(s) to RUNNING\n", n);
     for (int i = 0; i < n; i++) {
         CUprocessState s;
-        if (get_state(pids[i], &s) < 0) continue;
+        if (get_state(pids[i], &s) < 0) { bad++; continue; }
         if (s == CU_PROCESS_STATE_CHECKPOINTED) {
-            if (do_restore(pids[i]) < 0) continue;
+            if (do_restore(pids[i]) < 0) { bad++; continue; }
             s = CU_PROCESS_STATE_LOCKED;
         }
-        if (s == CU_PROCESS_STATE_LOCKED)
-            do_unlock(pids[i]);
+        if (s == CU_PROCESS_STATE_LOCKED && do_unlock(pids[i]) < 0) bad++;
     }
+    return bad;
 }
 
 /* Run fn on every pid at once (the driver checkpoints and restores each
@@ -729,6 +731,16 @@ out:
 }
 
 /* Holder: runs in the background, owns the ptrace freeze. */
+/* A suspend failed: undo the driver lock or checkpoint (locked), then
+ * what "release" dropped (shared), and say whether the workload runs. */
+static void undo(const int *pids, int n, int locked, int shared)
+{
+    int bad = locked ? rollback(pids, n) : 0;
+    if (shared && remap_all(pids, n) < 0) bad++;
+    if (bad) fprintf(stderr, "suspend failed and so did the rollback: the workload may be stuck (errors above)\n");
+    else fprintf(stderr, "suspend failed; rolled back, the workload runs as before\n");
+}
+
 static int holder(const int *pids, int n, unsigned timeout_ms, int report_fd)
 {
     struct frozen *fz = calloc(n, sizeof(*fz));
@@ -754,25 +766,22 @@ static int holder(const int *pids, int n, unsigned timeout_ms, int report_fd)
     if (store_dir) snprintf(release, sizeof(release), "release %s %s%s%s", store_dir, ckpt_dir,
                             cache_dir ? " " : "", cache_dir ? cache_dir : "");
     if (shared && ctl_all_par(pids, n, release) < 0) {
-        remap_all(pids, n);
+        undo(pids, n, 0, shared);
         goto out;
     }
     if (lock_all(pids, n, timeout_ms) < 0) {
-        rollback(pids, n);
-        if (shared) remap_all(pids, n);
+        undo(pids, n, 1, shared);
         goto out;
     }
     for (int i = 0; i < n; i++) {
         if (freeze_pid(pids[i], &fz[i]) < 0) {
             thaw_all(fz, n);
-            rollback(pids, n);
-            if (shared) remap_all(pids, n);
+            undo(pids, n, 1, shared);
             goto out;
         }
     }
     if (each_par(pids, n, do_checkpoint)) {
-        rollback(pids, n); /* restore runs on the (unfrozen) restore thread */
-        if (shared) remap_all(pids, n);
+        undo(pids, n, 1, shared); /* restore runs on the (unfrozen) restore thread */
         thaw_all(fz, n);
         goto out;
     }
@@ -1148,7 +1157,7 @@ static void usage(const char *prog)
         "         suspend      (full-save + freeze CPU threads until resume)\n"
         "         stop         (after suspend: leave pids SIGSTOPped for CRIU dump)\n"
         "         resume       (restore + unlock all, then thaw)\n"
-        "         gpus         (print visible GPU UUIDs, for --gpu-map)\n"
+        "         gpus [FILE]  (print or write the visible GPU UUIDs, for --gpu-map)\n"
         "--timeout-ms N: lock timeout per pid (default 10000, 0 = wait forever)\n"
         "--gpu-map FILE: restore GPUs listed in FILE onto the GPUs visible here\n"
         "--store S --ckpt-dir C: (suspend) libnvsnap_gpushare processes save GPU memory\n"
@@ -1191,13 +1200,16 @@ int main(int argc, char **argv)
     if (argc - argi == 3 && strcmp(argv[argi], "cache-gc") == 0)
         return cache_gc(argv[argi + 1], strtoull(argv[argi + 2], NULL, 10) << 30) ? 1 : 0;
     if (argi < argc && strcmp(argv[argi], "gpus") == 0) {
+        /* gpus [FILE]: the caller can keep the map out of the workload's filesystem. */
         CUuuid u[MAX_GPUS];
         char str[41];
+        FILE *out = argc - argi > 1 ? fopen(argv[argi + 1], "w") : stdout;
+        if (!out) { fprintf(stderr, "%s: %s\n", argv[argi + 1], strerror(errno)); return 1; }
         if (load_api() < 0) return 1;
         int n = visible_gpus(u, MAX_GPUS);
         if (n < 0) { fprintf(stderr, "cannot query GPUs\n"); return 1; }
-        for (int i = 0; i < n; i++) { uuid_str(&u[i], str); printf("%s\n", str); }
-        return 0;
+        for (int i = 0; i < n; i++) { uuid_str(&u[i], str); fprintf(out, "%s\n", str); }
+        return fclose(out) == 0 ? 0 : 1;
     }
     if (argc - argi < 2) { usage(argv[0]); return 1; }
 

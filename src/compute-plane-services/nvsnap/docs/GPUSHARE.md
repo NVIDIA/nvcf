@@ -42,6 +42,11 @@ Each process that loads the shim runs a control thread on the abstract socket
 | `remap` | each pid | Re-imports peers' memory and rebuilds multicast objects. |
 | `resume` | each pid | Binds multicast memory and reopens launches. |
 
+If any step of `suspend` fails, the tool rolls back: it undoes the driver
+lock or checkpoint, then `load`, `remap` and `resume` restore exactly what
+`release` had dropped, so the workload runs on as before. The tool says
+whether the rollback worked.
+
 The shim backs `cuMemAlloc` of 2 MiB or more with exportable cuMem allocations,
 so that CUDA IPC works across a restore. cuMem memory is reachable only from
 the devices granted with `cuMemSetAccess`, so the shim also follows
@@ -77,7 +82,7 @@ nvsnap-gpu-suspend resume <pids...>
 
 # For CRIU: save GPU memory to a chunk store, hand off to CRIU, and restore
 # elsewhere. Record which GPUs the checkpoint used, for --gpu-map.
-nvsnap-gpu-suspend gpus > /ckpt/<id>/gpus
+nvsnap-gpu-suspend gpus /ckpt/<id>/gpus
 nvsnap-gpu-suspend --store /ckpt/store --ckpt-dir /ckpt/<id> --cache /cache suspend <pids...>
 nvsnap-gpu-suspend stop <pids...>          # then: criu dump
 # ... criu restore (in a new pod or on another node) ...
@@ -104,9 +109,10 @@ under `<store>/chunks/xx/<hash>`:
 - Chunk files use `O_DIRECT`. If a filesystem accepts `O_DIRECT` but fails
   the I/O, the shim falls back to buffered I/O.
 
-`<ckpt-dir>/gpu-<pid>.chunks` lists the chunks each checkpoint uses, for
-accounting and garbage collection. The CRIU image then holds only host process
-memory.
+`release` creates the store and `<ckpt-dir>` if they do not exist (their
+parent directories must). `<ckpt-dir>/gpu-<pid>.chunks` lists the chunks
+each checkpoint uses, for accounting and garbage collection. The CRIU image
+then holds only host process memory.
 
 The optional node cache (`--cache`) is a local directory with the same layout.
 Saves copy chunks into it, and loads read the cache first. A load that misses

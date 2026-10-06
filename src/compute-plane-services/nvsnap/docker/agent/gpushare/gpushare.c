@@ -136,7 +136,7 @@ struct map {
     int imp;
     int ipc;  /* opened by w_ipc_open: we own the VA reservation */
     int gone; /* exporter freed it before checkpoint: left unmapped */
-    int down; /* multicast mapping dropped by "release" */
+    int down; /* unmapped by "release" */
     CUmemAccessDesc acc[MAX_ACC];
     int nacc;
 };
@@ -187,7 +187,7 @@ VEC(struct exp, exps);
 VEC(struct fexp, fexps);
 VEC(struct xreg, xregs);
 /* Page-locked host memory (see "Host memory"). */
-struct hreg { void *p; size_t size; unsigned flags; int owned; CUdeviceptr dptr; };
+struct hreg { void *p; size_t size; unsigned flags; int owned; CUdeviceptr dptr; int down; /* unregistered by "release" */ };
 VEC(struct hreg, hregs);
 
 /* A multicast object (NCCL NVLS) this process created or imported. The
@@ -706,6 +706,7 @@ static void do_release(char *reply, size_t n, const char *args)
         mkdir(store, 0755);
         snprintf(path, sizeof(path), "%s/chunks", store);
         mkdir(path, 0755);
+        mkdir(ckdir, 0755);
         snprintf(path, sizeof(path), "%s/gpu-%d.chunks", ckdir, getpid());
         if (!(chunk_list = fopen(path, "we"))) {
             snprintf(reply, n, "err open %.200s: %s", path, strerror(errno));
@@ -714,44 +715,56 @@ static void do_release(char *reply, size_t n, const char *args)
             return;
         }
     }
+    /* Each object is marked dropped only once it is: if a step fails, the
+     * tool rolls back with "load", "remap" and "resume", which restore
+     * exactly what was dropped. */
     CUresult r = CUDA_SUCCESS;
+    const char *what = "";
     int dev = push_any_ctx();
     int nm = 0, nmc = 0;
     for (int i = 0; r == CUDA_SUCCESS && i < n_maps; i++)
-        if (!maps[i].gone) {
-            r = REAL(r_unmap, "cuMemUnmap")(maps[i].va, maps[i].size);
+        if (!maps[i].gone && !maps[i].down) {
+            what = "unmap import";
+            if ((r = REAL(r_unmap, "cuMemUnmap")(maps[i].va, maps[i].size)) == CUDA_SUCCESS) maps[i].down = 1;
             nm++;
         }
     for (int i = 0; r == CUDA_SUCCESS && i < n_imps; i++) {
         if (imps[i].ufd) close(imps[i].ufd);  /* would pin the exporter's memory */
         imps[i].ufd = 0;
         if (imps[i].released) continue;
+        what = "release import";
         if (!imps[i].app_released) r = REAL(r_release, "cuMemRelease")(imps[i].cur_h);
-        imps[i].released = 1;
+        if (r == CUDA_SUCCESS) imps[i].released = 1;
     }
     /* Multicast: unmap, unbind, then drop the object. */
     for (int i = 0; r == CUDA_SUCCESS && i < n_mcmaps; i++) {
-        r = REAL(r_unmap, "cuMemUnmap")(mcmaps[i].va, mcmaps[i].size);
-        mcmaps[i].down = 1;
+        if (mcmaps[i].down) continue;
+        what = "unmap multicast";
+        if ((r = REAL(r_unmap, "cuMemUnmap")(mcmaps[i].va, mcmaps[i].size)) == CUDA_SUCCESS) mcmaps[i].down = 1;
     }
     for (int i = 0; r == CUDA_SUCCESS && i < n_mcbinds; i++) {
         struct mcbind *b = &mcbinds[i];
+        if (b->unbound) continue;
+        what = "unbind multicast";
         r = REAL(r_mc_unbind, "cuMulticastUnbind")(mcs[b->mc].cur_h, b->dev, b->mcoff, b->size);
-        b->unbound = 1;
+        if (r == CUDA_SUCCESS) b->unbound = 1;
     }
     for (int i = 0; r == CUDA_SUCCESS && i < n_mcs; i++) {
         if (mcs[i].dead || mcs[i].released) continue;
         if (!mc_live(i)) { mcs[i].dead = 1; continue; }
+        what = "release multicast";
         if (!mcs[i].app_released) r = REAL(r_release, "cuMemRelease")(mcs[i].cur_h);
-        mcs[i].released = 1;
+        if (r == CUDA_SUCCESS) mcs[i].released = 1;
         nmc++;
     }
     size_t nb = 0;
     double t0 = secs();
     for (int i = 0; r == CUDA_SUCCESS && i < n_vallocs; i++) {
+        what = "save allocation";
         r = valloc_drop(&vallocs[i]);
         nb += vallocs[i].size;
     }
+    if (r == CUDA_SUCCESS) what = "write chunk list";
     if (chunk_list) {  /* durable before the checkpoint is reported done */
         if (fclose(chunk_list) != 0 && r == CUDA_SUCCESS) r = CUDA_ERROR_FILE_NOT_FOUND;
         chunk_list = NULL;
@@ -762,20 +775,23 @@ static void do_release(char *reply, size_t n, const char *args)
     double ts = secs() - t0;
     stage_put();
     for (int i = 0; r == CUDA_SUCCESS && i < n_hregs; i++) {
+        if (hregs[i].down) continue;
+        what = "unregister host memory";
         r = CU(cuMemHostGetDevicePointer_v2, &hregs[i].dptr, hregs[i].p, 0);
         if (r == CUDA_SUCCESS) r = REAL(r_host_unreg, "cuMemHostUnregister")(hregs[i].p);
+        if (r == CUDA_SUCCESS) hregs[i].down = 1;
     }
-    /* Exported fds pin the pre-checkpoint memory: drop them. */
-    for (int i = 0; i < n_exps; i++) close(exps[i].fd);
-    n_exps = 0;
-    n_fexps = 0;
+    /* Exported fds pin the pre-checkpoint memory: drop them, once nothing
+     * is left to roll back. */
+    for (int i = 0; r == CUDA_SUCCESS && i < n_exps; i++) close(exps[i].fd);
+    if (r == CUDA_SUCCESS) n_exps = n_fexps = 0;
     pop_ctx(dev);
     if (r == CUDA_SUCCESS)
         snprintf(reply, n, "ok released %d mapping(s), %d multicast object(s), %d host buffer(s), "
                  "saved %d allocation(s) (%zu MiB) to %s in %.1fs: %zu MiB written, %zu MiB already stored, "
                  "%zu MiB zero", nm, nmc, n_hregs, n_vallocs, nb >> 20, args ? "store" : "memory", ts,
                  (args ? st_written : nb) >> 20, st_dedup >> 20, st_zero >> 20);
-    else snprintf(reply, n, "err release: %s", errstr(r));
+    else snprintf(reply, n, "err release: %s: %s", what, errstr(r));
     pthread_mutex_unlock(&mu);
 }
 
@@ -810,7 +826,7 @@ static void do_load(char *reply, size_t n, const char *cache_dir)
 static void do_remap(char *reply, size_t n)
 {
     char rep[256] = "no reply";
-    int nm = 0, ngone = 0;
+    int nm = 0, ngone = 0, nh = 0;
     CUresult r = CUDA_SUCCESS;
     if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
     int dev = push_any_ctx();
@@ -822,6 +838,7 @@ static void do_remap(char *reply, size_t n)
         }
     for (int i = 0; i < n_hregs; i++) {
         CUdeviceptr d = 0;
+        if (!hregs[i].down) continue;
         r = REAL(r_host_reg, "cuMemHostRegister_v2")(hregs[i].p, hregs[i].size, hregs[i].flags);
         if (r == CUDA_SUCCESS) r = CU(cuMemHostGetDevicePointer_v2, &d, hregs[i].p, 0);
         if (r == CUDA_SUCCESS && d != hregs[i].dptr) r = CUDA_ERROR_INVALID_VALUE;
@@ -830,6 +847,8 @@ static void do_remap(char *reply, size_t n)
                      hregs[i].size, (unsigned long long)hregs[i].dptr, (unsigned long long)d, errstr(r));
             goto out;
         }
+        hregs[i].down = 0;
+        nh++;
     }
     for (int i = 0; r == CUDA_SUCCESS && i < n_imps; i++) {
         struct imp *im = &imps[i];
@@ -844,7 +863,8 @@ static void do_remap(char *reply, size_t n)
             /* The exporter freed it: like CUDA IPC after the exporter's
              * cuMemFree, the memory is undefined. Keep the VA reserved
              * and unmapped. */
-            for (int j = 0; j < n_maps; j++) if (maps[j].imp == i) { maps[j].gone = 1; ngone++; }
+            for (int j = 0; j < n_maps; j++)
+                if (maps[j].imp == i) { maps[j].gone = 1; maps[j].down = 0; ngone++; }
             im->released = 0;
             im->app_released = 1;
             r = CUDA_SUCCESS;
@@ -855,7 +875,7 @@ static void do_remap(char *reply, size_t n)
             goto out;
         }
         for (int j = 0; r == CUDA_SUCCESS && j < n_maps; j++) {
-            if (maps[j].imp != i) continue;
+            if (maps[j].imp != i || !maps[j].down) continue;
             what = "map";
             r = REAL(r_map, "cuMemMap")(maps[j].va, maps[j].size, maps[j].offset, h, 0);
             if (r == CUDA_SUCCESS && maps[j].nacc) {
@@ -865,6 +885,7 @@ static void do_remap(char *reply, size_t n)
             if (r != CUDA_SUCCESS)
                 snprintf(reply, n, "err remap id %llu from pid %d: %s %#llx+%zu: %s", im->key, im->peer,
                          what, (unsigned long long)maps[j].va, maps[j].size, errstr(r));
+            else maps[j].down = 0;
             nm++;
         }
         if (r != CUDA_SUCCESS) {
@@ -875,6 +896,20 @@ static void do_remap(char *reply, size_t n)
         im->cur_h = h;
         im->released = 0;
         if (im->app_released) REAL(r_release, "cuMemRelease")(h);  /* mappings hold the memory */
+    }
+    /* A release that failed after unmapping an import but before releasing
+     * it: the handle is still held, map it again. */
+    for (int j = 0; r == CUDA_SUCCESS && j < n_maps; j++) {
+        struct map *m = &maps[j];
+        if (!m->down || m->gone || imps[m->imp].released) continue;
+        r = REAL(r_map, "cuMemMap")(m->va, m->size, m->offset, imps[m->imp].cur_h, 0);
+        if (r == CUDA_SUCCESS && m->nacc) r = REAL(r_set_access, "cuMemSetAccess")(m->va, m->size, m->acc, m->nacc);
+        if (r != CUDA_SUCCESS) {
+            snprintf(reply, n, "err map again %#llx+%zu: %s", (unsigned long long)m->va, m->size, errstr(r));
+            goto out;
+        }
+        m->down = 0;
+        nm++;
     }
     /* Multicast objects: rejoin now, bind in "resume" (binding blocks until
      * every device of the group has been added, in every process). */
@@ -907,7 +942,7 @@ static void do_remap(char *reply, size_t n)
         m->released = 0;
     }
     snprintf(reply, n, "ok remapped %d mapping(s), %d freed by their exporter, %d multicast object(s), "
-             "%d host buffer(s)", nm, ngone, nmc, n_hregs);
+             "%d host buffer(s)", nm, ngone, nmc, nh);
 out:
     stage_put();
     pop_ctx(dev);
@@ -934,7 +969,7 @@ static void do_resume(char *reply, size_t n)
         if (b->memh && b->memh_released && h) REAL(r_release, "cuMemRelease")(h);
         if (r != CUDA_SUCCESS)
             snprintf(reply, n, "err rebind multicast id %llu: %s", mcs[b->mc].key, errstr(r));
-        b->unbound = 0;
+        else b->unbound = 0;
         nb++;
     }
     for (int i = 0; r == CUDA_SUCCESS && i < n_mcmaps; i++) {
@@ -944,7 +979,7 @@ static void do_resume(char *reply, size_t n)
         if (r == CUDA_SUCCESS && m->nacc) r = REAL(r_set_access, "cuMemSetAccess")(m->va, m->size, m->acc, m->nacc);
         if (r != CUDA_SUCCESS)
             snprintf(reply, n, "err map multicast %#llx+%zu: %s", (unsigned long long)m->va, m->size, errstr(r));
-        m->down = 0;
+        else m->down = 0;
         nm++;
     }
     if (r == CUDA_SUCCESS) {
@@ -1978,7 +2013,7 @@ static CUresult w_host_alloc(void **pp, size_t size, unsigned flags)
                   (flags & CU_MEMHOSTALLOC_DEVICEMAP ? CU_MEMHOSTREGISTER_DEVICEMAP : 0);
     pthread_mutex_lock(&mu);
     CUresult r = REAL(r_host_reg, "cuMemHostRegister_v2")(p, len ? len : pg, rf);
-    if (r == CUDA_SUCCESS) PUSH(hregs, ((struct hreg){ p, len ? len : pg, rf, 1, 0 }));
+    if (r == CUDA_SUCCESS) PUSH(hregs, ((struct hreg){ p, len ? len : pg, rf, 1, 0, 0 }));
     pthread_mutex_unlock(&mu);
     if (r != CUDA_SUCCESS) { munmap(p, len ? len : pg); return r; }
     start_ctl();  /* "release" must reach every process with host memory */
@@ -2009,7 +2044,7 @@ static CUresult w_host_reg(void *p, size_t size, unsigned flags)
 {
     pthread_mutex_lock(&mu);
     CUresult r = REAL(r_host_reg, "cuMemHostRegister_v2")(p, size, flags);
-    if (r == CUDA_SUCCESS) PUSH(hregs, ((struct hreg){ p, size, flags, 0, 0 }));
+    if (r == CUDA_SUCCESS) PUSH(hregs, ((struct hreg){ p, size, flags, 0, 0, 0 }));
     pthread_mutex_unlock(&mu);
     if (r == CUDA_SUCCESS) start_ctl();
     return r;
