@@ -180,6 +180,13 @@ Limits of the integration:
 - One capture per workload at a time; a second request is refused.
 - Per-pod store directories are emptied when a capture collects them, not
   deleted when the pod goes away.
+- `<checkpoint root>/gpushare-pods/` holds the stores of running pods. A
+  cleanup of the checkpoint root must keep it: deleting a pod's directory
+  leaves its store mount pointing at an unlinked directory, and that pod's
+  next capture fails with "No such file or directory".
+- Only processes that load the shim and use the GPU are suspended. The API
+  server and helper processes inherit the preload but hold no CUDA state;
+  CRIU dumps them as they are.
 
 ## Requirements and limits
 

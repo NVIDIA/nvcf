@@ -60,9 +60,11 @@ func fakeGPUProc(t *testing.T, base string, hostPID, nsPID, sid int, maps []stri
 
 const testShim = "/nvsnap/libnvsnap_gpushare.so"
 
-// The session's shim processes are selected, leader first then by
-// namespace pid; processes outside the session and helpers without GPU or
-// shim are ignored.
+// The session's processes that load the shim and use the GPU are selected,
+// leader first then by namespace pid. A shim process without GPU state (the
+// API server, a multiprocessing helper) is not: the driver checkpoint API
+// refuses a process without a CUDA context. Processes outside the session
+// and helpers without either are ignored.
 func TestGPUShareTargets(t *testing.T) {
 	base := t.TempDir()
 	fakeGPUProc(t, base, 5000, 51, 5000, []string{testShim}, nil)                                       // API server, session leader
@@ -75,7 +77,7 @@ func TestGPUShareTargets(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
-	if want := []int{51, 481, 689}; !slices.Equal(pids, want) {
+	if want := []int{481, 689}; !slices.Equal(pids, want) {
 		t.Errorf("pids = %v, want %v", pids, want)
 	}
 	if lib != testShim {
@@ -299,5 +301,26 @@ func TestGPUShareCollectStore(t *testing.T) {
 	}
 	if len(left) != 0 {
 		t.Errorf("the pod's store must be emptied, still has %d entries", len(left))
+	}
+}
+
+// The session leader is listed first when it is itself a GPU process.
+func TestGPUShareTargets_LeaderFirst(t *testing.T) {
+	base := t.TempDir()
+	fakeGPUProc(t, base, 5000, 90, 5000, []string{testShim, "/dev/nvidia0"}, nil)
+	fakeGPUProc(t, base, 5100, 40, 5000, []string{testShim, "/dev/nvidia1"}, nil)
+	pids, _, ok, err := gpushareTargets(base, 5000)
+	if err != nil || !ok || !slices.Equal(pids, []int{90, 40}) {
+		t.Fatalf("pids=%v ok=%v err=%v; want [90 40]", pids, ok, err)
+	}
+}
+
+// Processes that inherited the preload but none of which use the GPU: not a
+// gpushare capture.
+func TestGPUShareTargets_ShimWithoutGPU(t *testing.T) {
+	base := t.TempDir()
+	fakeGPUProc(t, base, 5000, 51, 5000, []string{testShim}, nil)
+	if pids, _, ok, err := gpushareTargets(base, 5000); err != nil || ok || pids != nil {
+		t.Fatalf("pids=%v ok=%v err=%v", pids, ok, err)
 	}
 }

@@ -92,8 +92,9 @@ type gpushareProc struct {
 
 // gpushareTargets inspects every process of the session that will be dumped
 // (session leader sessionHostPID, host pid numbering under procBase). It
-// returns the namespace pids to suspend, leader first, and the shim path,
-// with ok=false when no process loads the shim (a plain criu-v2 capture).
+// returns the namespace pids to suspend (those that load the shim and use
+// the GPU, leader first) and the shim path, with ok=false when there are
+// none (a plain criu-v2 capture).
 // A process that uses the GPU without the shim cannot be checkpointed this
 // way, since the driver state it holds would reach CRIU unsuspended; that is
 // an error, not a fallback.
@@ -149,10 +150,16 @@ func gpushareTargets(procBase string, sessionHostPID int) (nsPIDs []int, libPath
 		}
 		return procs[i].nsPID < procs[j].nsPID
 	})
+	// Only processes with GPU state are suspended. Others that inherited the
+	// preload (the API server, multiprocessing helpers) hold no CUDA context;
+	// the driver checkpoint API refuses them, and plain CRIU dumps them as is.
 	for _, p := range procs {
-		if p.shim {
+		if p.shim && p.gpu {
 			nsPIDs = append(nsPIDs, p.nsPID)
 		}
+	}
+	if len(nsPIDs) == 0 {
+		return nil, "", false, nil
 	}
 	return nsPIDs, libPath, true, nil
 }
