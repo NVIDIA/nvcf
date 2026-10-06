@@ -681,7 +681,8 @@ func TestClusterValidatorEnabled_ReachesAgentDeployment(t *testing.T) {
 				TokenFetcher:            &mockTokenFetcher{token: "randomkey"},
 			}}
 			bc := a.backendK8sCacheBuilder(clients, nvidiaiov1.EnvTypeStage).newCache()
-			require.NoError(t, bc.setupNVCADeployment(ctx, getTestNVCFBackendMinimal()))
+			nb := getTestNVCFBackendMinimal()
+			require.NoError(t, bc.setupNVCADeployment(ctx, nb, getRequestsNamespace(nb)))
 
 			var dep *appsv1.Deployment
 			require.EventuallyWithT(t, func(ct *assert.CollectT) {
