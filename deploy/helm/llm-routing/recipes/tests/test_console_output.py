@@ -13,7 +13,7 @@ from unittest.mock import patch
 HERE = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 import console_output
-import spark
+import recipe as tool
 
 
 class ConsoleOutputTests(unittest.TestCase):
@@ -138,9 +138,9 @@ class ConsoleOutputTests(unittest.TestCase):
             print('node inspection completed')
             raise RuntimeError('Selected model GPU is occupied: another-model')
 
-        with self.captured(), patch.object(spark, 'Recipe') as recipe:
+        with self.captured(), patch.object(tool, 'Recipe') as recipe:
             recipe.return_value.inventory.side_effect = fail
-            status = spark.cli(arguments)
+            status = tool.cli(arguments)
 
         self.assertEqual(status, 1)
         recipe.return_value.inventory.assert_called_once_with()
@@ -155,9 +155,9 @@ class ConsoleOutputTests(unittest.TestCase):
 
     def test_cli_entrypoint_reports_single_success_after_action_completes(self):
         arguments = self.cli_arguments()
-        with self.captured(), patch.object(spark, 'Recipe') as recipe:
+        with self.captured(), patch.object(tool, 'Recipe') as recipe:
             recipe.return_value.inventory.side_effect = lambda: print('Inventory passed.')
-            status = spark.cli(arguments)
+            status = tool.cli(arguments)
 
         self.assertEqual(status, 0)
         recipe.return_value.inventory.assert_called_once_with()

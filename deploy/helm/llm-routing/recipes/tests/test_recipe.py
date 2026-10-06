@@ -16,23 +16,23 @@ import unittest
 from unittest.mock import Mock, patch
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('spark_recipe', HERE/'spark.py')
-spark = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(spark)
+spec = importlib.util.spec_from_file_location('recipe_tool', HERE/'recipe.py')
+tool = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tool)
 
 
 class RecipeTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix='spark-recipe-test-')
+        self.tmp = tempfile.TemporaryDirectory(prefix='recipe-test-')
         self.addCleanup(self.tmp.cleanup)
         self.config = json.loads((HERE/'config.example.json').read_text())
-        self.recipe = spark.Recipe(self.config, self.tmp.name)
+        self.recipe = tool.Recipe(self.config, self.tmp.name)
 
     def source_repository(self, name='seed'):
         source = pathlib.Path(self.tmp.name).resolve()/name
         source.mkdir()
         subprocess.run(['git', 'init', '--quiet', source], check=True)
-        for path in spark.COMPONENTS.values():
+        for path in tool.COMPONENTS.values():
             (source/path).mkdir(parents=True, exist_ok=True)
         for name in ('llm-gateway-stack', 'llm-api-gateway', 'llm-request-router'):
             chart = source/'deploy/helm'/name/name
@@ -43,17 +43,17 @@ class RecipeTests(unittest.TestCase):
         subprocess.run(['git', '-c', 'user.name=Recipe Test', '-c', 'user.email=recipe@example.com',
                         '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
                         'commit', '--quiet', '-m', 'Initial source'], cwd=source, check=True)
-        revision = spark.output(['git', 'rev-parse', 'HEAD'], cwd=source).strip()
+        revision = tool.output(['git', 'rev-parse', 'HEAD'], cwd=source).strip()
         return source, {'repository': str(source), 'revision': revision}
 
     def test_prepare_only_builds_dependencies_in_the_selected_checkout(self):
         self.recipe.source, lock = self.source_repository()
-        with patch.object(spark, 'run') as run:
+        with patch.object(tool, 'run') as run:
             self.recipe.prepare()
             self.assertEqual(self.recipe.source_identity(), {'revision': lock['revision']})
-        self.assertEqual(spark.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip(), lock['revision'])
+        self.assertEqual(tool.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip(), lock['revision'])
         self.assertEqual((self.recipe.source/'service.txt').read_text(), 'committed service\n')
-        self.assertEqual(spark.output(['git', 'status', '--porcelain'], cwd=self.recipe.source), '')
+        self.assertEqual(tool.output(['git', 'status', '--porcelain'], cwd=self.recipe.source), '')
         run.assert_called_once_with(['helm', 'dependency', 'build', '--skip-refresh',
                                     self.recipe.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack'])
 
@@ -62,25 +62,25 @@ class RecipeTests(unittest.TestCase):
         stale = self.recipe.work/'source'
         stale.mkdir()
         (stale/'unrelated.txt').write_text('leave this old copy alone\n')
-        recipe_path = seed/'deploy/helm/llm-routing/spark'
-        with patch.object(spark, 'HERE', recipe_path), \
-             patch.object(spark, 'run') as run:
-            recipe = spark.Recipe(self.config, self.recipe.work)
+        recipe_path = seed/'deploy/helm/llm-routing/recipes'
+        with patch.object(tool, 'HERE', recipe_path), \
+             patch.object(tool, 'run') as run:
+            recipe = tool.Recipe(self.config, self.recipe.work)
             recipe.prepare()
             recipe.build_images('gateway', 'developer-change')
         self.assertEqual(recipe.source, seed.resolve())
-        self.assertEqual(run.call_args.args[0][-1], str(seed/spark.COMPONENTS['gateway']))
+        self.assertEqual(run.call_args.args[0][-1], str(seed/tool.COMPONENTS['gateway']))
         self.assertEqual((stale/'unrelated.txt').read_text(), 'leave this old copy alone\n')
 
     def test_prepare_and_build_keep_local_edits_at_the_pinned_head(self):
         self.recipe.source, lock = self.source_repository()
         edited = self.recipe.source/'service.txt'
         edited.write_text('local gateway change\n')
-        with patch.object(spark, 'run') as run:
+        with patch.object(tool, 'run') as run:
             self.recipe.prepare()
             self.recipe.build_images('gateway', 'edited-build')
         self.assertEqual(edited.read_text(), 'local gateway change\n')
-        self.assertEqual(spark.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip(), lock['revision'])
+        self.assertEqual(tool.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip(), lock['revision'])
         self.assertEqual([call.args[0][0] for call in run.call_args_list], ['helm', 'docker', 'docker'])
         self.assertIn(self.recipe.image('gateway', 'edited-build'), run.call_args.args[0])
 
@@ -92,15 +92,15 @@ class RecipeTests(unittest.TestCase):
         subprocess.run(['git', '-c', 'user.name=Recipe Test', '-c', 'user.email=recipe@example.com',
                         '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
                         'commit', '--quiet', '-m', 'Developer change'], cwd=self.recipe.source, check=True)
-        head = spark.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip()
+        head = tool.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip()
         edited.write_text('uncommitted follow-up\n')
-        with patch.object(spark, 'run') as run:
+        with patch.object(tool, 'run') as run:
             self.recipe.prepare()
             self.recipe.build_images('router', 'developer-change')
         self.assertNotEqual(head, lock['revision'])
-        self.assertEqual(spark.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip(), head)
+        self.assertEqual(tool.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip(), head)
         self.assertEqual(edited.read_text(), 'uncommitted follow-up\n')
-        self.assertEqual(run.call_args.args[0][-1], str(self.recipe.source/spark.COMPONENTS['router']))
+        self.assertEqual(run.call_args.args[0][-1], str(self.recipe.source/tool.COMPONENTS['router']))
         self.assertEqual([call.args[0][0] for call in run.call_args_list], ['helm', 'docker', 'docker'])
 
     def test_rewritten_history_with_the_same_sources_is_accepted(self):
@@ -111,7 +111,7 @@ class RecipeTests(unittest.TestCase):
                         'commit', '--quiet', '-m', 'Unrelated history'], cwd=self.recipe.source, check=True)
         for action in (self.recipe.prepare, self.recipe.build_images):
             with self.subTest(action=action.__name__), \
-                 patch.object(spark, 'run') as run:
+                 patch.object(tool, 'run') as run:
                 action()
             run.assert_called()
 
@@ -119,13 +119,13 @@ class RecipeTests(unittest.TestCase):
         seed, lock = self.source_repository()
         self.recipe.source = seed/'nested'
         self.recipe.source.mkdir()
-        with patch.object(spark, 'run') as run, self.assertRaises(RuntimeError):
+        with patch.object(tool, 'run') as run, self.assertRaises(RuntimeError):
             self.recipe.prepare()
         run.assert_not_called()
 
     def test_missing_source_does_not_clone_or_create_a_checkout(self):
         self.recipe.source = self.recipe.work/'missing'
-        with patch.object(spark, 'run') as run, self.assertRaises(RuntimeError):
+        with patch.object(tool, 'run') as run, self.assertRaises(RuntimeError):
             self.recipe.prepare()
         run.assert_not_called()
         self.assertFalse(self.recipe.source.exists())
@@ -140,8 +140,8 @@ class RecipeTests(unittest.TestCase):
             operations.append(tuple(str(value) for value in command[:2]))
             return 'kind: List\nitems: []\n'
 
-        with patch.object(self.recipe, 'source_check'), patch.object(spark, 'run', side_effect=run), \
-             patch.object(spark, 'output', side_effect=output):
+        with patch.object(self.recipe, 'source_check'), patch.object(tool, 'run', side_effect=run), \
+             patch.object(tool, 'output', side_effect=output):
             self.recipe.render()
         self.assertEqual(operations[0], ('helm', 'dependency', 'build'))
         self.assertEqual(sum(operation[:2] == ('helm', 'lint') for operation in operations), 8)
@@ -149,8 +149,8 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(len(list((self.recipe.work/'render').glob('*.yaml'))), 8)
 
     def test_render_dependency_failure_stops_before_rendered_files_or_templates(self):
-        with patch.object(self.recipe, 'source_check'), patch.object(spark, 'run', side_effect=RuntimeError('dependency build failed')) as run, \
-             patch.object(spark, 'output') as output, self.assertRaisesRegex(RuntimeError, 'dependency build failed'):
+        with patch.object(self.recipe, 'source_check'), patch.object(tool, 'run', side_effect=RuntimeError('dependency build failed')) as run, \
+             patch.object(tool, 'output') as output, self.assertRaisesRegex(RuntimeError, 'dependency build failed'):
             self.recipe.render()
         self.assertEqual(run.call_args.args[0][:3], ['helm', 'dependency', 'build'])
         run.assert_called_once()
@@ -159,7 +159,7 @@ class RecipeTests(unittest.TestCase):
 
     def test_build_images_does_not_prepare_chart_dependencies(self):
         with patch.object(self.recipe, 'source_check'), patch.object(self.recipe, 'prepare') as prepare, \
-             patch.object(spark, 'run') as run:
+             patch.object(tool, 'run') as run:
             self.recipe.build_images('gateway', 'test-build')
         prepare.assert_not_called()
         self.assertTrue(all(command.args[0][0] == 'docker' for command in run.call_args_list))
@@ -191,13 +191,13 @@ class RecipeTests(unittest.TestCase):
 
     def test_missing_sources_or_charts_are_rejected_before_preparation(self):
         self.recipe.source, _ = self.source_repository()
-        (self.recipe.source/spark.COMPONENTS['gateway']).rmdir()
-        with patch.object(spark, 'run') as run, self.assertRaisesRegex(RuntimeError, 'missing required'):
+        (self.recipe.source/tool.COMPONENTS['gateway']).rmdir()
+        with patch.object(tool, 'run') as run, self.assertRaisesRegex(RuntimeError, 'missing required'):
             self.recipe.prepare()
         run.assert_not_called()
-        (self.recipe.source/spark.COMPONENTS['gateway']).mkdir()
+        (self.recipe.source/tool.COMPONENTS['gateway']).mkdir()
         (self.recipe.source/'deploy/helm/llm-api-gateway/llm-api-gateway/Chart.yaml').unlink()
-        with patch.object(spark, 'run') as run, self.assertRaisesRegex(RuntimeError, 'Missing routing chart'):
+        with patch.object(tool, 'run') as run, self.assertRaisesRegex(RuntimeError, 'Missing routing chart'):
             self.recipe.prepare()
         run.assert_not_called()
 
@@ -206,7 +206,7 @@ class RecipeTests(unittest.TestCase):
                     subprocess.TimeoutExpired(['docker', 'info'], 15))
         for error in failures:
             with self.subTest(error=type(error).__name__), patch.object(self.recipe, 'source_check'), \
-                 patch.object(spark, 'run', side_effect=error) as run, self.assertRaises(spark.DockerUnavailableError) as result:
+                 patch.object(tool, 'run', side_effect=error) as run, self.assertRaises(tool.DockerUnavailableError) as result:
                 self.recipe.build_images('gateway')
             self.assertEqual(str(result.exception), 'Start Docker, then rerun build-images.')
             run.assert_called_once_with(['docker', 'info'], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
@@ -214,7 +214,7 @@ class RecipeTests(unittest.TestCase):
     def test_docker_probe_uses_existing_environment_and_does_not_hide_build_failures(self):
         failure = subprocess.CalledProcessError(1, ['docker', 'buildx', 'build'])
         with patch.dict(os.environ, {'DOCKER_HOST': 'unix:///custom/docker.sock', 'DOCKER_CONFIG': '/custom/config'}), \
-             patch.object(self.recipe, 'source_check'), patch.object(spark, 'run', side_effect=[None, failure]) as run, \
+             patch.object(self.recipe, 'source_check'), patch.object(tool, 'run', side_effect=[None, failure]) as run, \
              self.assertRaises(subprocess.CalledProcessError):
             self.recipe.build_images('gateway')
         self.assertEqual(run.call_args_list[0].args[0], ['docker', 'info'])
@@ -230,29 +230,29 @@ class RecipeTests(unittest.TestCase):
         subprocess.run(['git', '-c', 'user.name=Recipe Test', '-c', 'user.email=recipe@example.com',
                         '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
                         'commit', '--quiet', '-m', 'Operator change'], cwd=self.recipe.source, check=True)
-        head = spark.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip()
+        head = tool.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip()
         self.assertNotEqual(head, lock['revision'])
         for dirty in (False, True):
             if dirty:
                 edited.write_text('uncommitted operator change\n')
-            with self.subTest(dirty=dirty), patch.object(spark, 'run') as run:
+            with self.subTest(dirty=dirty), patch.object(tool, 'run') as run:
                 self.recipe.build_images('operator')
             expected = head + ('-dirty' if dirty else '')
             self.assertIn('SOURCE_REVISION='+expected, run.call_args.args[0])
-            self.assertEqual(run.call_args.args[0][-1], str(self.recipe.source/spark.COMPONENTS['operator']))
+            self.assertEqual(run.call_args.args[0][-1], str(self.recipe.source/tool.COMPONENTS['operator']))
 
     def test_duplicate_model_nodes_and_missing_context_are_rejected(self):
         self.config['nodes']['worker'] = self.config['nodes']['leader']
         with self.assertRaisesRegex(RuntimeError, 'distinct GPU'):
-            spark.validate(self.config)
+            tool.validate(self.config)
         self.config['nodes']['worker'] = 'another-node'
         self.config['context'] = ''
         with self.assertRaisesRegex(RuntimeError, 'context'):
-            spark.validate(self.config)
+            tool.validate(self.config)
 
     def test_work_directory_cannot_put_credentials_in_checkout(self):
         with self.assertRaisesRegex(RuntimeError, 'outside the checkout'):
-            spark.Recipe(self.config, HERE/'.work')
+            tool.Recipe(self.config, HERE/'.work')
 
     def test_extra_model_configuration_is_rejected_before_any_commands(self):
         for field, value in [('retainedModels', ['legacy-model']), ('testFixture', True)]:
@@ -260,9 +260,9 @@ class RecipeTests(unittest.TestCase):
                 config = copy.deepcopy(self.config)
                 config[field] = value
                 directory = pathlib.Path(self.tmp.name)/'rejected'
-                with patch.object(spark, 'run') as run, patch.object(spark, 'output') as output:
+                with patch.object(tool, 'run') as run, patch.object(tool, 'output') as output:
                     with self.assertRaisesRegex(RuntimeError, field):
-                        spark.Recipe(config, directory)
+                        tool.Recipe(config, directory)
                 run.assert_not_called()
                 output.assert_not_called()
                 self.assertFalse(directory.exists())
@@ -288,8 +288,8 @@ class RecipeTests(unittest.TestCase):
         with patch.object(self.recipe, 'source_check'), \
              patch.object(self.recipe, 'bound_cluster', side_effect=lambda: operations.append('bound')), \
              patch.object(self.recipe, 'helm_apply', side_effect=lambda release, *args: operations.append(release)) as helm, \
-             patch.object(spark, 'run', side_effect=lambda *args, **kwargs: operations.append('dependencies')) as run, \
-             patch.object(spark, 'output', side_effect=responses):
+             patch.object(tool, 'run', side_effect=lambda *args, **kwargs: operations.append('dependencies')) as run, \
+             patch.object(tool, 'output', side_effect=responses):
             self.recipe.deploy_stack()
         self.assertEqual(operations, ['bound', 'dependencies', self.recipe.operator, self.recipe.stack])
         self.assertEqual(run.call_args.args[0][:3], ['helm', 'dependency', 'build'])
@@ -301,7 +301,7 @@ class RecipeTests(unittest.TestCase):
         stack_values = helm.call_args_list[1].args[2]
         self.assertNotIn(key, json.dumps(stack_values))
         self.assertEqual(stack_values['apiKeys'][0]['sha256'], hashlib.sha256(key.encode()).hexdigest())
-        self.assertEqual(stack_values['sparkRecipeSource'], self.recipe.source_identity())
+        self.assertEqual(stack_values['recipeSource'], self.recipe.source_identity())
         self.assertEqual(self.recipe.components(), ['gateway', 'router', 'pylon', 'operator'])
         self.assertEqual(self.recipe.state['stack']['apiKeyFile'], str(key_path.resolve()))
 
@@ -325,7 +325,7 @@ class RecipeTests(unittest.TestCase):
                        'spec': {'nodeName': node, **allocation}, 'status': {'phase': phase}}
                 responses = [json.dumps({'items': items}) for items in (nodes, [pod], [])]
                 with self.subTest(allocation=allocation, phase=phase, node=node), \
-                     patch.object(spark, 'output', side_effect=responses), patch.object(spark, 'run') as run:
+                     patch.object(tool, 'output', side_effect=responses), patch.object(tool, 'run') as run:
                     if busy:
                         with self.assertRaisesRegex(RuntimeError, 'GPU is occupied: gpu-consumer'):
                             self.recipe.inventory()
@@ -337,7 +337,7 @@ class RecipeTests(unittest.TestCase):
         encoded = __import__('base64').b64encode(b'private-cluster-token').decode()
         responses = [json.dumps({'data': {'cluster-token': encoded}}), json.dumps({'data': {'ca.crt': 'public-ca'}})]
         with patch.object(self.recipe, 'prepare'), patch.object(self.recipe, 'bound_cluster'), \
-             patch.object(self.recipe, 'helm_apply') as helm, patch.object(spark, 'output', side_effect=responses*2):
+             patch.object(self.recipe, 'helm_apply') as helm, patch.object(tool, 'output', side_effect=responses*2):
             self.recipe.deploy_stack()
             first = copy.deepcopy(helm.call_args.args[2])
             self.recipe.deploy_stack()
@@ -356,8 +356,8 @@ class RecipeTests(unittest.TestCase):
         self.recipe.state = {'inventory': {'nodes': {'control': 'node-uid'}}}
         original = copy.deepcopy(self.recipe.state)
         with patch.object(self.recipe, 'source_check'), patch.object(self.recipe, 'bound_cluster') as cluster, \
-             patch.object(spark, 'run', side_effect=RuntimeError('dependency build failed')) as run, \
-             patch.object(self.recipe, 'helm_apply') as helm, patch.object(spark, 'output') as output, \
+             patch.object(tool, 'run', side_effect=RuntimeError('dependency build failed')) as run, \
+             patch.object(self.recipe, 'helm_apply') as helm, patch.object(tool, 'output') as output, \
              self.assertRaisesRegex(RuntimeError, 'dependency build failed'):
             self.recipe.deploy_stack()
         cluster.assert_called_once()
@@ -381,7 +381,7 @@ class RecipeTests(unittest.TestCase):
         for gateway in (False, True):
             with self.subTest(gateway=gateway):
                 with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'forward') as forward, \
-                     patch.object(self.recipe, 'prepare') as prepare, patch.object(spark, 'run') as run:
+                     patch.object(self.recipe, 'prepare') as prepare, patch.object(tool, 'run') as run:
                     self.recipe.verify(gateway, 18443)
                 prepare.assert_not_called()
                 command = [str(value) for value in run.call_args.args[0]]
@@ -405,26 +405,26 @@ class RecipeTests(unittest.TestCase):
             raise RuntimeError('revocation failed')
 
         with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'forward'), \
-                patch.object(spark.gateway_access, 'temporary_gateway_key', side_effect=incomplete_cleanup), \
-                patch.object(spark, 'run') as run:
+                patch.object(tool.gateway_access, 'temporary_gateway_key', side_effect=incomplete_cleanup), \
+                patch.object(tool, 'run') as run:
             with self.assertRaisesRegex(RuntimeError, 'revocation failed'):
                 self.recipe.verify(True, 18443)
         run.assert_called_once()
         self.assertFalse(self.recipe.state['gateway'])
-        self.assertFalse(spark.Recipe(self.config, self.tmp.name).state['gateway'])
+        self.assertFalse(tool.Recipe(self.config, self.tmp.name).state['gateway'])
 
     def test_failed_verification_invalidates_previous_success(self):
         self.recipe.state = {'stack': {'apiKeyFile': '/unused'}, 'gateway': True, 'direct': True}
         for gateway in (False, True):
-            with self.subTest(gateway=gateway), patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'forward'), patch.object(spark, 'run', side_effect=RuntimeError('verification failed')):
+            with self.subTest(gateway=gateway), patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'forward'), patch.object(tool, 'run', side_effect=RuntimeError('verification failed')):
                 with self.assertRaisesRegex(RuntimeError, 'verification failed'):
                     self.recipe.verify(gateway, 18443)
-                resumed = spark.Recipe(self.config, self.tmp.name)
+                resumed = tool.Recipe(self.config, self.tmp.name)
                 self.assertFalse(resumed.state['gateway' if gateway else 'direct'])
 
     def test_attached_installation_requires_glm_verification_before_update(self):
         self.recipe.state = {'attachedExisting': True}
-        with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'source_check'), patch.object(spark, 'run') as run, patch.object(spark, 'output') as output:
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'source_check'), patch.object(tool, 'run') as run, patch.object(tool, 'output') as output:
             with self.assertRaisesRegex(RuntimeError, 'Verify GLM'):
                 self.recipe.update('gateway', 'next-tag')
         run.assert_not_called()
@@ -468,13 +468,13 @@ class RecipeTests(unittest.TestCase):
             self.assertFalse(saved['qualify'])
             self.assertFalse(saved['download'])
 
-        with patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', side_effect=responses), patch.object(self.recipe, 'helm_apply', side_effect=check_archive) as helm, patch.object(self.recipe, 'logs', return_value=[{'result': 'PASS'}]) as logs:
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(tool, 'output', side_effect=responses), patch.object(self.recipe, 'helm_apply', side_effect=check_archive) as helm, patch.object(self.recipe, 'logs', return_value=[{'result': 'PASS'}]) as logs:
             self.recipe.backend_phase('qualify', retry=True)
         self.assertEqual(helm.call_args_list[0].args[2]['qualification']['attempt'], 6)
         self.assertEqual(helm.call_args_list[1].args[2]['chain']['attempt'], 4)
         self.assertEqual(logs.call_args_list[0].kwargs['job'], self.recipe.glm+'-qualify-6')
         self.assertEqual(logs.call_args_list[1].kwargs['job'], self.recipe.glm+'-chain-4')
-        resumed = spark.Recipe(self.config, self.tmp.name)
+        resumed = tool.Recipe(self.config, self.tmp.name)
         self.assertTrue(resumed.state['qualify'])
         self.assertEqual(resumed.backend_values('qualify')['qualification']['attempt'], 6)
         self.assertEqual(resumed.backend_values('chain')['chain']['attempt'], 4)
@@ -486,15 +486,15 @@ class RecipeTests(unittest.TestCase):
         job = self.qualification_job('-qualify-'+str(attempt))
         pod = self.qualification_pod('node-interrupted', job, 'Failed')
         responses = [json.dumps({'items': [job]}), json.dumps({'items': [pod]}),
-                     spark.subprocess.CalledProcessError(1, ['kubectl', 'logs'], output='container logs unavailable')]
-        with patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', side_effect=responses), patch.object(self.recipe, 'helm_apply', side_effect=RuntimeError('Helm interrupted')) as helm:
+                     tool.subprocess.CalledProcessError(1, ['kubectl', 'logs'], output='container logs unavailable')]
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(tool, 'output', side_effect=responses), patch.object(self.recipe, 'helm_apply', side_effect=RuntimeError('Helm interrupted')) as helm:
             with self.assertRaisesRegex(RuntimeError, 'Helm interrupted'):
                 self.recipe.backend_phase('qualify', retry=True)
         self.assertEqual(helm.call_args.args[2]['qualification']['attempt'], attempt+1)
         self.assertEqual(helm.call_args.args[2]['chain']['attempt'], defaults['chain']['attempt']+1)
         archived = list((self.recipe.work/'evidence').glob('qualification-retry-*'))[0]
         self.assertEqual((archived/'node-interrupted-log-error.txt').read_text(), 'container logs unavailable')
-        resumed = spark.Recipe(self.config, self.tmp.name)
+        resumed = tool.Recipe(self.config, self.tmp.name)
         self.assertEqual(resumed.state['qualificationAttempt'], attempt+1)
         self.assertFalse(resumed.state['qualify'])
 
@@ -503,7 +503,7 @@ class RecipeTests(unittest.TestCase):
         cases = [(self.qualification_job('-qualify-2', 'Running'), 'still active'),
                  (self.qualification_job('-chain-1', release='another-owner'), 'ownership')]
         for job, error in cases:
-            with self.subTest(error=error), patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', return_value=json.dumps({'items': [job]})), patch.object(self.recipe, 'helm_apply') as helm:
+            with self.subTest(error=error), patch.object(self.recipe, 'bound_cluster'), patch.object(tool, 'output', return_value=json.dumps({'items': [job]})), patch.object(self.recipe, 'helm_apply') as helm:
                 with self.assertRaisesRegex(RuntimeError, error):
                     self.recipe.backend_phase('qualify', retry=True)
                 helm.assert_not_called()
@@ -516,7 +516,7 @@ class RecipeTests(unittest.TestCase):
                 self.qualification_pod('current-failed', current, 'Failed'),
                 self.qualification_pod('current-complete', current)]
         for current_log, expected in [('no PASS record', []), ('{"result":"PASS","current":true}', [{'result': 'PASS', 'current': True}])]:
-            with self.subTest(current_log=current_log), patch.object(spark, 'output', side_effect=[json.dumps({'items': pods}), '{"result":"PASS"}', current_log]) as output:
+            with self.subTest(current_log=current_log), patch.object(tool, 'output', side_effect=[json.dumps({'items': pods}), '{"result":"PASS"}', current_log]) as output:
                 self.assertEqual(self.recipe.logs('qualification', job=current['metadata']['name']), expected)
                 names = [call.args[0][-1] for call in output.call_args_list[1:]]
                 self.assertNotIn('old-pass', names)
@@ -540,7 +540,7 @@ class RecipeTests(unittest.TestCase):
         with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'helm_apply', side_effect=fail_helm):
             with self.assertRaisesRegex(RuntimeError, 'qualification failed'):
                 self.recipe.backend_phase('qualify')
-        resumed = spark.Recipe(self.config, self.tmp.name)
+        resumed = tool.Recipe(self.config, self.tmp.name)
         self.assertFalse(resumed.state['qualify'])
         self.assertFalse(resumed.state['download'])
         with patch.object(resumed, 'bound_cluster'), patch.object(resumed, 'helm_apply') as helm:
@@ -551,15 +551,15 @@ class RecipeTests(unittest.TestCase):
 
     def test_retry_option_rejects_other_phases_before_recipe_creation(self):
         for phase in ('load', 'download', 'stack', 'recover'):
-            args = ['spark.py', '--config', '/unused', '--work-dir', '/unused', phase, '--retry']
-            with self.subTest(phase=phase), patch.object(spark.sys, 'argv', args), patch.object(spark, 'Recipe') as recipe:
+            args = ['recipe.py', '--config', '/unused', '--work-dir', '/unused', phase, '--retry']
+            with self.subTest(phase=phase), patch.object(tool.sys, 'argv', args), patch.object(tool, 'Recipe') as recipe:
                 with self.assertRaisesRegex(RuntimeError, 'only for qualify'):
-                    spark.main()
+                    tool.main()
                 recipe.assert_not_called()
 
     def test_retry_does_not_replace_already_successful_qualification(self):
         self.recipe.state = {'runtimeSha256': 'a'*64, 'qualify': True}
-        with patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output') as output, patch.object(self.recipe, 'helm_apply') as helm:
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(tool, 'output') as output, patch.object(self.recipe, 'helm_apply') as helm:
             with self.assertRaisesRegex(RuntimeError, 'already passed'):
                 self.recipe.backend_phase('qualify', retry=True)
             output.assert_not_called()
@@ -567,13 +567,13 @@ class RecipeTests(unittest.TestCase):
 
     def test_image_update_only_changes_selected_tag_and_preserves_other_pods(self):
         values = self.recipe.stack_values('a'*64, 'b'*64)
-        values['sparkRecipeSource'] = {'revision': 'an-older-build'}
+        values['recipeSource'] = {'revision': 'an-older-build'}
         pods = [{'metadata': {'name': 'llm-api-gateway-old', 'uid': 'g1'}, 'status': {'phase': 'Running'}},
                 {'metadata': {'name': 'unrelated-workload', 'uid': 'u1'}, 'status': {'phase': 'Running'}},
                 {'metadata': {'name': self.recipe.glm+'-leader', 'uid': 'm1'}, 'status': {'phase': 'Running'}}]
         after = copy.deepcopy(pods)
         after[0]['metadata']['uid'] = 'g2'
-        with patch.object(self.recipe, 'source_check') as source, patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', side_effect=[json.dumps(values), json.dumps({'items': pods}), json.dumps({'items': after})]), patch.object(spark, 'run') as run:
+        with patch.object(self.recipe, 'source_check') as source, patch.object(self.recipe, 'bound_cluster'), patch.object(tool, 'output', side_effect=[json.dumps(values), json.dumps({'items': pods}), json.dumps({'items': after})]), patch.object(tool, 'run') as run:
             self.recipe.update('gateway', 'next-tag')
         self.assertEqual(source.call_args_list[0].kwargs, {})
         self.assertEqual(source.call_count, 2)
@@ -602,8 +602,8 @@ class RecipeTests(unittest.TestCase):
             return '{"items": []}'
 
         with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'source_check'), \
-             patch.object(spark, 'output', side_effect=read), \
-             patch.object(spark, 'run', side_effect=RuntimeError('dependency build failed')) as run, \
+             patch.object(tool, 'output', side_effect=read), \
+             patch.object(tool, 'run', side_effect=RuntimeError('dependency build failed')) as run, \
              self.assertRaisesRegex(RuntimeError, 'dependency build failed'):
             self.recipe.update('gateway', 'next-tag')
         self.assertEqual(run.call_args.args[0][:3], ['helm', 'dependency', 'build'])
@@ -621,7 +621,7 @@ class RecipeTests(unittest.TestCase):
                 image['tag'] = 'next-tag'
             with self.subTest(mismatch=mismatch), patch.object(self.recipe, 'bound_cluster'), \
                  patch.object(self.recipe, 'source_check'), patch.object(self.recipe, 'prepare') as prepare, \
-                 patch.object(spark, 'output', return_value=json.dumps(values)), patch.object(spark, 'run') as run, \
+                 patch.object(tool, 'output', return_value=json.dumps(values)), patch.object(tool, 'run') as run, \
                  self.assertRaises(RuntimeError):
                 self.recipe.update('gateway', 'next-tag')
             prepare.assert_not_called()
@@ -632,10 +632,10 @@ class RecipeTests(unittest.TestCase):
         self.recipe.state = {'attachedExisting': True, 'gateway': True}
         for digest in (None, '0'*64):
             values = self.recipe.stack_values('a'*64, 'b'*64)
-            values['sparkRecipeChartsSha256'] = digest
+            values['recipeChartsSha256'] = digest
             with self.subTest(digest=digest), patch.object(self.recipe, 'source_check'), \
-                 patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', return_value=json.dumps(values)), \
-                 patch.object(spark, 'run') as run:
+                 patch.object(self.recipe, 'bound_cluster'), patch.object(tool, 'output', return_value=json.dumps(values)), \
+                 patch.object(tool, 'run') as run:
                 with self.assertRaisesRegex(RuntimeError, 'coordinated stack installation'):
                     self.recipe.update('gateway', 'next-tag')
                 run.assert_not_called()
@@ -648,7 +648,7 @@ class RecipeTests(unittest.TestCase):
         after[0]['metadata']['uid'] = 'replacement'
         for component in ('gateway', 'router'):
             with self.subTest(component=component):
-                with patch.object(self.recipe, 'source_check'), patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', side_effect=[json.dumps(values), json.dumps({'items': pods}), json.dumps({'items': after})]), patch.object(spark, 'run'):
+                with patch.object(self.recipe, 'source_check'), patch.object(self.recipe, 'bound_cluster'), patch.object(tool, 'output', side_effect=[json.dumps(values), json.dumps({'items': pods}), json.dumps({'items': after})]), patch.object(tool, 'run'):
                     with self.assertRaisesRegex(RuntimeError, 'Backend pods changed'):
                         self.recipe.update(component, 'next-tag')
                 records = list((pathlib.Path(self.tmp.name)/'evidence').glob('update-*.json'))
@@ -663,7 +663,7 @@ class RecipeTests(unittest.TestCase):
                   'component': 'router', 'newTag': 'next-tag', 'previousTag': 'old-tag', 'source': {'revision': 'an-older-build'}, 'chartsSha256': self.recipe.chart_digest()}
         path = pathlib.Path(self.tmp.name)/'rollback.json'
         path.write_text(json.dumps(record))
-        with patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', return_value=json.dumps(values)), patch.object(self.recipe, 'update') as update:
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(tool, 'output', return_value=json.dumps(values)), patch.object(self.recipe, 'update') as update:
             self.recipe.rollback(path)
         update.assert_called_once_with('router', 'old-tag')
 
@@ -676,7 +676,7 @@ class RecipeTests(unittest.TestCase):
         path.write_text(json.dumps(record))
         reads = [json.dumps(values), json.dumps(values), '{"items": []}', '{"items": []}']
         with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'source_check'), \
-             patch.object(spark, 'output', side_effect=reads), patch.object(spark, 'run') as run:
+             patch.object(tool, 'output', side_effect=reads), patch.object(tool, 'run') as run:
             self.recipe.rollback(path)
         self.assertEqual(run.call_count, 2)
         self.assertEqual(run.call_args_list[0].args[0][:3], ['helm', 'dependency', 'build'])
@@ -688,7 +688,7 @@ class RecipeTests(unittest.TestCase):
                   'component': 'gateway', 'newTag': 'different-tag', 'previousTag': 'old-tag', 'source': {'revision': 'an-older-build'}, 'chartsSha256': self.recipe.chart_digest()}
         path = pathlib.Path(self.tmp.name)/'rollback.json'
         path.write_text(json.dumps(record))
-        with patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', return_value=json.dumps(values)), patch.object(self.recipe, 'update') as update:
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(tool, 'output', return_value=json.dumps(values)), patch.object(self.recipe, 'update') as update:
             with self.assertRaisesRegex(RuntimeError, 'Another image update'):
                 self.recipe.rollback(path)
             update.assert_not_called()
@@ -701,7 +701,7 @@ class RecipeTests(unittest.TestCase):
             record['chartsSha256'] = digest
             path.write_text(json.dumps(record))
             with self.subTest(digest=digest), patch.object(self.recipe, 'bound_cluster'), \
-                 patch.object(spark, 'output') as output, patch.object(self.recipe, 'update') as update:
+                 patch.object(tool, 'output') as output, patch.object(self.recipe, 'update') as update:
                 with self.assertRaisesRegex(RuntimeError, 'chart fingerprint'):
                     self.recipe.rollback(path)
                 output.assert_not_called()
@@ -752,7 +752,7 @@ class RecipeTests(unittest.TestCase):
     def test_explicit_release_and_repository_mapping(self):
         self.config['releases'] = {'stack': 'custom-front', 'operator': 'custom-operator', 'glm': 'custom-model'}
         self.config['images']['repositories'] = {'gateway': 'registry.example.com/another/gateway'}
-        recipe = spark.Recipe(self.config, self.tmp.name)
+        recipe = tool.Recipe(self.config, self.tmp.name)
         self.assertEqual(recipe.stack, 'custom-front')
         self.assertEqual(recipe.glm, 'custom-model')
         self.assertEqual(recipe.image('gateway', 'new'), 'registry.example.com/another/gateway:new')
@@ -762,10 +762,10 @@ class RecipeTests(unittest.TestCase):
         key = pathlib.Path(self.tmp.name)/'key'
         key.write_text('test-only-key')
         self.config['apiKeyFile'] = str(key)
-        recipe = spark.Recipe(self.config, self.tmp.name)
+        recipe = tool.Recipe(self.config, self.tmp.name)
         nodes = {'items': [{'metadata': {'name': name, 'uid': name}} for name in self.config['nodes'].values()]}
         foreign = {'metadata': {'annotations': {'meta.helm.sh/release-name': 'another-owner'}}}
-        with patch.object(spark, 'output', side_effect=[json.dumps(nodes), json.dumps(foreign)]), patch.object(recipe, 'helm_apply') as helm:
+        with patch.object(tool, 'output', side_effect=[json.dumps(nodes), json.dumps(foreign)]), patch.object(recipe, 'helm_apply') as helm:
             with self.assertRaisesRegex(RuntimeError, 'ownership'):
                 recipe.attach_existing()
             helm.assert_not_called()

@@ -1,6 +1,6 @@
 # Build application images
 
-Build gateway, router, Pylon and operator images for `linux/arm64` from your checkout, including local edits. Run these commands from `deploy/helm/llm-routing/spark`.
+Build gateway, router, Pylon and operator images for `linux/arm64` from your checkout, including local edits. Run these commands from `deploy/helm/llm-routing/recipes`.
 
 ## Requirements
 
@@ -14,7 +14,7 @@ Router and Pylon builds use Cargo profile `integration`.
 1. Build all four images.
 
    ```bash
-   python3 spark.py build-images
+   python3 recipe.py build-images
    ```
 
 2. Choose the distribution method.
@@ -22,13 +22,13 @@ Router and Pylon builds use Cargo profile `integration`.
    - Registry: set `images.pullPolicy` to `IfNotPresent`, authenticate Docker with registry write credentials, then push. Every node where Pylon can schedule needs registry pull access.
 
      ```bash
-     python3 spark.py push-images
+     python3 recipe.py push-images
      ```
 
    - Node preload: set `images.pullPolicy` to `Never`, export the images, then [import the archive](#import-an-archive).
 
      ```bash
-     python3 spark.py export-images
+     python3 recipe.py export-images
      ```
 
 3. Continue with [Deploy in order](../README.md#deploy-in-order).
@@ -40,7 +40,7 @@ Router and Pylon builds use Cargo profile `integration`.
    ```bash
    COMPONENT=gateway # Or router.
    NEW_TAG=dev-$(date -u +%Y%m%d%H%M%S)
-   python3 spark.py build-images --component "$COMPONENT" --tag "$NEW_TAG"
+   python3 recipe.py build-images --component "$COMPONENT" --tag "$NEW_TAG"
    ```
 
 2. Distribute the image using your existing method.
@@ -48,13 +48,13 @@ Router and Pylon builds use Cargo profile `integration`.
    - Registry:
 
      ```bash
-     python3 spark.py push-images --component "$COMPONENT" --tag "$NEW_TAG"
+     python3 recipe.py push-images --component "$COMPONENT" --tag "$NEW_TAG"
      ```
 
    - Node preload: export the image, then [import the archive](#import-an-archive).
 
      ```bash
-     python3 spark.py export-images --component "$COMPONENT" --tag "$NEW_TAG"
+     python3 recipe.py export-images --component "$COMPONENT" --tag "$NEW_TAG"
      ```
 
 3. Keep `COMPONENT` and `NEW_TAG` set and continue with [Update only gateway or router](../README.md#update-only-gateway-or-router).
@@ -66,13 +66,13 @@ After `export-images`, upload and import the archive through Kubernetes. Keep ea
 For all four images:
 
 ```bash
-python3 spark.py import-images --allow-containerd-import
+python3 recipe.py import-images --allow-containerd-import
 ```
 
 For a gateway/router rebuild, import only that component on the control node:
 
 ```bash
-python3 spark.py import-images \
+python3 recipe.py import-images \
   --component "$COMPONENT" --tag "$NEW_TAG" --allow-containerd-import
 ```
 

@@ -214,7 +214,7 @@ class GatewayKey:
         name, uid, original = self.discover()
         token = secrets.token_urlsafe(48)
         self.record = {'binding': self.binding, 'secret': name, 'secretUid': uid, 'originalData': original,
-                       'entry': {'id': 'spark-test-' + secrets.token_hex(16),
+                       'entry': {'id': 'recipe-test-' + secrets.token_hex(16),
                                  'sha256': hashlib.sha256(token.encode()).hexdigest()},
                        'createdAt': int(time.time())}
         _save(self.key_path, token + '\n')

@@ -21,9 +21,9 @@ from contextlib import ExitStack, redirect_stdout
 from unittest.mock import patch
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('image_import_recipe', HERE/'spark.py')
-spark = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(spark)
+spec = importlib.util.spec_from_file_location('image_import_recipe', HERE/'recipe.py')
+tool = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tool)
 
 
 class ImageImportTests(unittest.TestCase):
@@ -32,7 +32,7 @@ class ImageImportTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = pathlib.Path(self.tmp.name)
         self.config = json.loads((HERE/'config.example.json').read_text())
-        self.recipe = spark.Recipe(self.config, self.root/'work')
+        self.recipe = tool.Recipe(self.config, self.root/'work')
         self.archive = self.root/'images.tar'
         manifest = json.dumps([{'RepoTags': [self.recipe.image('gateway', 'edited')]}]).encode()
         with tarfile.open(self.archive, 'w') as tar:
@@ -112,9 +112,9 @@ class ImageImportTests(unittest.TestCase):
         with ExitStack() as stack:
             stack.enter_context(patch.object(self.recipe, 'bound_cluster'))
             helm = stack.enter_context(patch.object(self.recipe, 'helm_apply', side_effect=lambda *args, **kwargs: self.helm_calls.append((args, kwargs))))
-            stack.enter_context(patch.object(spark, 'output', side_effect=self.output))
-            stack.enter_context(patch.object(spark, 'run', side_effect=self.execute))
-            stack.enter_context(patch.object(spark.time, 'sleep'))
+            stack.enter_context(patch.object(tool, 'output', side_effect=self.output))
+            stack.enter_context(patch.object(tool, 'run', side_effect=self.execute))
+            stack.enter_context(patch.object(tool.time, 'sleep'))
             stack.enter_context(redirect_stdout(io.StringIO()))
             self.recipe.import_images(self.archive, True, 'gateway', 'edited')
             return helm.call_args
@@ -182,7 +182,7 @@ class ImageImportTests(unittest.TestCase):
 
     def test_failed_own_attempt_can_retry_without_waiting_for_job_deadline(self):
         self.prior_jobs = copy.deepcopy(self.jobs)
-        spark.save(self.recipe.work/'image-import-attempt.json', self.failed_attempt())
+        tool.save(self.recipe.work/'image-import-attempt.json', self.failed_attempt())
         self.invoke()
         self.assertEqual(len(self.helm_calls), 1)
         self.assertFalse((self.recipe.work/'image-import-attempt.json').exists())
@@ -193,7 +193,7 @@ class ImageImportTests(unittest.TestCase):
             with self.subTest(field=field):
                 previous = self.failed_attempt()
                 previous[field] = {} if field == 'jobs' else 'different'
-                spark.save(self.recipe.work/'image-import-attempt.json', previous)
+                tool.save(self.recipe.work/'image-import-attempt.json', previous)
                 with self.assertRaisesRegex(RuntimeError, 'Another image import|revision changed'):
                     self.invoke()
                 self.assertEqual(self.helm_calls, [])

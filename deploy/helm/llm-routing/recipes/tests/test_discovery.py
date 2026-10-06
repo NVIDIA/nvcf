@@ -8,9 +8,9 @@ import unittest
 from unittest.mock import patch
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('discovery_recipe', HERE/'spark.py')
-spark = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(spark)
+spec = importlib.util.spec_from_file_location('discovery_recipe', HERE/'recipe.py')
+tool = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tool)
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -36,7 +36,7 @@ class DiscoveryTests(unittest.TestCase):
                           ('inferenceendpoint', 'glm53-iq2'): endpoint}
         self.deployments = [self.gateway]
         self.values = {
-            'team-stack': {'sparkRecipeSource': {'revision': 'old-build'},
+            'team-stack': {'recipeSource': {'revision': 'old-build'},
                            'clusterId': 'demo', 'apiKeys': [{'id': 'owner', 'sha256': 'DO-NOT-COPY-HASH'}],
                            'tls': {'privateKey': 'DO-NOT-COPY-TLS'},
                            'llm-api-gateway': {'llmApiGateway': {'image': {'registry': 'registry.example.com', 'repository': 'gateway', 'tag': 'current', 'pullPolicy': 'Never'},
@@ -68,8 +68,8 @@ class DiscoveryTests(unittest.TestCase):
         return json.dumps(self.resources[tuple(command[offset+1:offset+3])])
 
     def discover(self, namespace=None):
-        with patch.object(spark, 'output', side_effect=self.output), patch.object(spark, 'run') as mutate:
-            result = spark.discover_config('my-context', namespace)
+        with patch.object(tool, 'output', side_effect=self.output), patch.object(tool, 'run') as mutate:
+            result = tool.discover_config('my-context', namespace)
             mutate.assert_not_called()
             return result
 
@@ -108,7 +108,7 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_source_metadata_is_informational_for_discovery(self):
         for source in (None, {'revision': 'another-build'}, {'repository': 'old-fork', 'revision': 'old-pin'}):
-            self.values['team-stack']['sparkRecipeSource'] = source
+            self.values['team-stack']['recipeSource'] = source
             self.discover()
 
     def test_model_service_foreign_ownership_is_rejected(self):
@@ -131,8 +131,8 @@ class DiscoveryTests(unittest.TestCase):
             self.discover()
 
     def test_missing_context_never_inspects_default_cluster(self):
-        with patch.object(spark, 'output') as output, self.assertRaisesRegex(RuntimeError, '--context'):
-            spark.discover_config(None)
+        with patch.object(tool, 'output') as output, self.assertRaisesRegex(RuntimeError, '--context'):
+            tool.discover_config(None)
         output.assert_not_called()
 
 

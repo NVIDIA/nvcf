@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Discover fresh Spark installation settings without changing the cluster."""
+"""Discover fresh recipe installation settings without changing the cluster."""
 import datetime
 import json
 import pathlib

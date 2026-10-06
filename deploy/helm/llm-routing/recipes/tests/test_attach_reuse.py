@@ -11,14 +11,14 @@ import unittest
 from unittest.mock import patch
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('spark_attach_reuse', HERE/'spark.py')
-spark = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(spark)
+spec = importlib.util.spec_from_file_location('recipe_attach_reuse', HERE/'recipe.py')
+tool = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tool)
 
 
 class AttachReuseTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix='spark-attach-reuse-')
+        self.tmp = tempfile.TemporaryDirectory(prefix='recipe-attach-reuse-')
         self.addCleanup(self.tmp.cleanup)
         self.count = 0
 
@@ -28,8 +28,8 @@ class AttachReuseTests(unittest.TestCase):
         if explicit:
             config['releases'] = {'stack': 'custom-front', 'operator': 'custom-operator', 'glm': 'custom-model'}
             config['images']['repositories'] = {
-                name: 'registry.example.com/custom/'+name for name in spark.COMPONENTS}
-        recipe = spark.Recipe(config, pathlib.Path(self.tmp.name)/str(self.count))
+                name: 'registry.example.com/custom/'+name for name in tool.COMPONENTS}
+        recipe = tool.Recipe(config, pathlib.Path(self.tmp.name)/str(self.count))
         key = recipe.work/'api-key'
         key.write_text('test-only-key\n')
         recipe.state = {
@@ -40,11 +40,11 @@ class AttachReuseTests(unittest.TestCase):
             'serve': True, 'registered': True, 'direct': True, 'gateway': True,
             'lastUpdate': {'component': 'gateway', 'previousTag': 'original', 'newTag': 'changed'},
         }
-        spark.save(recipe.work/'config.json', config)
-        spark.save(recipe.state_path, recipe.state)
+        tool.save(recipe.work/'config.json', config)
+        tool.save(recipe.state_path, recipe.state)
         live = copy.deepcopy(config)
         live['releases'] = {'stack': recipe.stack, 'operator': recipe.operator, 'glm': recipe.glm}
-        live['images']['repositories'] = {name: recipe.repository(name) for name in spark.COMPONENTS}
+        live['images']['repositories'] = {name: recipe.repository(name) for name in tool.COMPONENTS}
         live['apiKeyFile'] = None
         return recipe, live
 
@@ -54,9 +54,9 @@ class AttachReuseTests(unittest.TestCase):
         before_files = {str(p.relative_to(recipe.work)): p.read_bytes()
                         for p in recipe.work.rglob('*') if p.is_file()}
         with patch.object(recipe, 'bound_cluster') as bound, \
-             patch.object(spark, 'discover_config', return_value=copy.deepcopy(live), side_effect=discovery_error) as discover, \
-             patch.object(spark, 'save') as save, patch.object(spark, 'run') as run, \
-             patch.object(spark, 'output') as output, contextlib.redirect_stdout(io.StringIO()):
+             patch.object(tool, 'discover_config', return_value=copy.deepcopy(live), side_effect=discovery_error) as discover, \
+             patch.object(tool, 'save') as save, patch.object(tool, 'run') as run, \
+             patch.object(tool, 'output') as output, contextlib.redirect_stdout(io.StringIO()):
             if rejected:
                 with self.assertRaises(RuntimeError):
                     recipe.attach_existing()
@@ -133,7 +133,7 @@ class AttachReuseTests(unittest.TestCase):
                 self.attempt(recipe, live, rejected=True)
 
     def test_each_component_repository_is_checked(self):
-        for component in spark.COMPONENTS:
+        for component in tool.COMPONENTS:
             with self.subTest(component=component):
                 recipe, live = self.installation()
                 live['images']['repositories'][component] = 'registry.example.com/foreign/'+component
@@ -150,8 +150,8 @@ class AttachReuseTests(unittest.TestCase):
         before = recipe.state_path.read_bytes()
         nodes = {'items': [{'metadata': {'name': name, 'uid': name+'-replacement'}}
                            for name in recipe.c['nodes'].values()]}
-        with patch.object(spark, 'output', return_value=json.dumps(nodes)) as output, \
-             patch.object(spark, 'discover_config') as discover, patch.object(spark, 'save') as save:
+        with patch.object(tool, 'output', return_value=json.dumps(nodes)) as output, \
+             patch.object(tool, 'discover_config') as discover, patch.object(tool, 'save') as save:
             with self.assertRaisesRegex(RuntimeError, 'identities changed|another cluster'):
                 recipe.attach_existing()
             output.assert_called_once_with(recipe.kc+['get', 'nodes', '-o', 'json'])

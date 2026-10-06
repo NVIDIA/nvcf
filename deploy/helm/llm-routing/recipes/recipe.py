@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Explicit phases for the two-GPU Spark recipe. See README.md first."""
+"""Explicit phases for the LLM routing recipes. See README.md first."""
 import argparse
 import base64
 import contextlib
@@ -72,7 +72,7 @@ def validate(c):
 
 def default_work_dir(context):
     require(isinstance(context, str) and bool(context.strip()),
-            'Set SPARK_CONTEXT or --context. The current kubectl context is not selected automatically.')
+            'Set LLM_ROUTING_CONTEXT or --context. The current kubectl context is not selected automatically.')
     xdg = os.environ.get('XDG_STATE_HOME')
     if xdg:
         root = pathlib.Path(xdg)
@@ -103,7 +103,7 @@ def kubeconfig_context():
     if not names:
         raise ContextSelectionError('No Kubernetes context found. Set KUBECONFIG or pass --context NAME.')
     if len(names) != 1:
-        raise ContextSelectionError('Multiple Kubernetes contexts found. Pass --context NAME or set SPARK_CONTEXT.')
+        raise ContextSelectionError('Multiple Kubernetes contexts found. Pass --context NAME or set LLM_ROUTING_CONTEXT.')
     return names.pop()
 
 
@@ -118,7 +118,7 @@ def cli_settings(args):
     work = args.work_dir.expanduser().resolve() if args.work_dir else None
     if config is None and work and not args.config and (work/'config.json').exists():
         config = json.loads((work/'config.json').read_text())
-    context = args.context or os.environ.get('SPARK_CONTEXT') or (config.get('context') if config else None)
+    context = args.context or os.environ.get('LLM_ROUTING_CONTEXT') or (config.get('context') if config else None)
     if not context:
         context = kubeconfig_context()
     work = work or default_work_dir(context)
@@ -130,7 +130,7 @@ def cli_settings(args):
         require(config.get('context') == context, 'Selected context differs from the saved deployment configuration.')
         require(not args.namespace or config.get('namespace') == args.namespace,
                 'Selected namespace differs from the saved deployment. Use a separate --work-dir for another installation.')
-    require(isinstance(context, str) and bool(context.strip()), 'Set --context NAME or SPARK_CONTEXT.')
+    require(isinstance(context, str) and bool(context.strip()), 'Set --context NAME or LLM_ROUTING_CONTEXT.')
     return context, work, config_path, config
 
 
@@ -363,7 +363,7 @@ class Recipe:
     def stack_values(self, token_hash, key_hash, ui_key=None):
         values = {'clusterId': self.c['clusterId'], 'clusterCredential': {'sha256': token_hash},
                   'apiKeys': [{'id': 'poc-client', 'sha256': key_hash}], 'tls': copy.deepcopy(self.c['tls']),
-                  'sparkRecipeSource': self.source_identity(), 'sparkRecipeChartsSha256': self.chart_digest()}
+                  'recipeSource': self.source_identity(), 'recipeChartsSha256': self.chart_digest()}
         if ui_key is not None:
             values['apiKeys'].append({'id': 'demo-ui', 'sha256': hashlib.sha256(ui_key.encode()).hexdigest()})
             values['demoUiApiKey'] = ui_key
@@ -460,10 +460,10 @@ class Recipe:
         save(self.work/'ca.crt', ca)
         self.stamp('attachedExisting')
         self.stamp('inventory', {'nodes': {n['metadata']['name']: n['metadata']['uid'] for n in nodes}})
-        self.stamp('stack', {'apiKeyFile': str(key) if key else None, 'source': values.get('sparkRecipeSource')})
+        self.stamp('stack', {'apiKeyFile': str(key) if key else None, 'source': values.get('recipeSource')})
         self.stamp('serve')
         print('Existing installation inspected. Run verify-gateway next.')
-        if values.get('sparkRecipeChartsSha256') != self.chart_digest():
+        if values.get('recipeChartsSha256') != self.chart_digest():
             console_output.warn('Image updates require matching recorded charts. Use a coordinated stack installation first.')
 
     def bound_cluster(self):
@@ -923,7 +923,7 @@ finally:
         chart, service = {'gateway': ('llm-api-gateway', 'llmApiGateway'), 'router': ('llm-request-router', 'llmRequestRouter')}[component]
         require(re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}', tag) is not None, 'Invalid image tag.')
         values = json.loads(output(self.hm+['get', 'values', self.stack, '-o', 'json']))
-        require(values.get('sparkRecipeChartsSha256') == self.chart_digest(),
+        require(values.get('recipeChartsSha256') == self.chart_digest(),
                 'Installed chart fingerprint is missing or differs from this checkout. Use a coordinated stack installation before image updates.')
         current = values[chart][service]['image']
         require(current['registry']+'/'+current['repository'] == self.repository(component), 'Live image repository differs from config.')
@@ -1015,7 +1015,7 @@ finally:
 def main(argv=None, console=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=pathlib.Path)
-    parser.add_argument('--context', help='Kubernetes context; defaults to SPARK_CONTEXT, saved settings, or the sole kubeconfig context.')
+    parser.add_argument('--context', help='Kubernetes context; defaults to LLM_ROUTING_CONTEXT, saved settings, or the sole kubeconfig context.')
     parser.add_argument('--namespace', help='Select the namespace when the cluster has multiple installations.')
     parser.add_argument('--work-dir', type=pathlib.Path, help='Private local state directory; defaults to a per-context directory.')
     parser.add_argument('--source-dir', type=pathlib.Path, help='Existing source checkout; defaults to the checkout containing this script.')

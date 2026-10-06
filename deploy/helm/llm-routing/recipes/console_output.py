@@ -11,7 +11,7 @@ import sys
 import tempfile
 import traceback
 
-_ACTIVE = contextvars.ContextVar('spark_console', default=None)
+_ACTIVE = contextvars.ContextVar('recipe_console', default=None)
 PAYLOAD_PHASES = {'chat', 'paths', 'context'}
 NEXT_CHECK = {
     'init': 'Check the saved configuration and retained-resource ownership',

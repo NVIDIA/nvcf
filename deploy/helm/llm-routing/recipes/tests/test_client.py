@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('spark_client', HERE/'client.py')
+spec = importlib.util.spec_from_file_location('recipe_client', HERE/'client.py')
 client = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(client)
 MODEL = json.loads((HERE/'backend.defaults.json').read_text())['model']['servedName']

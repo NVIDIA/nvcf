@@ -4,7 +4,7 @@ Deploy the LLM Gateway Stack (LLM API Gateway and request router) and Pylon Oper
 
 ## Overview
 
-The `spark.py` installer coordinates the combined gateway/router chart, the Pylon Operator chart and the GLM backend chart. The backend chart builds llama.cpp, downloads and verifies the GGUF model files, runs GLM across the two GPUs, and creates an `InferenceEndpoint` for Pylon to register.
+The `recipe.py` installer coordinates the combined gateway/router chart, the Pylon Operator chart and the GLM backend chart. The backend chart builds llama.cpp, downloads and verifies the GGUF model files, runs GLM across the two GPUs, and creates an `InferenceEndpoint` for Pylon to register.
 
 Application images and charts use your checkout, including local edits.
 
@@ -14,7 +14,7 @@ Application images and charts use your checkout, including local edits.
 - Kubernetes and storage: an existing ARM64 Kubernetes cluster containing these nodes, with pod networking, `cluster.local` DNS, NetworkPolicy enforcement and node-compatible `ReadWriteOnce` persistent storage. Reserve 400 GiB on the leader and 160 GiB on the worker.
 - GPU enablement: model nodes with a working NVIDIA driver, NVIDIA Container Toolkit configured for the container runtime, and a device plugin advertising `nvidia.com/gpu`. Use an installed `RuntimeClass` matching `runtimeClass` in the config (`nvidia` in the example).
 - Access: kubeconfig for the target cluster. For a kubeconfig with multiple contexts, pass `--context <name>` to the commands below. Initial installation requires creating namespaces, custom resource definitions (CRDs), role-based access control (RBAC) resources and namespaced Helm resources.
-- Workstation: Python 3.11+, Git, Helm 3.14+ or Helm 4, and kubectl. Provide access to GitHub, model downloads and container images. The [image build guide](spark/BUILDING.md) covers build tools and distribution credentials.
+- Workstation: Python 3.11+, Git, Helm 3.14+ or Helm 4, and kubectl. Provide access to GitHub, model downloads and container images. The [image build guide](recipes/BUILDING.md) covers build tools and distribution credentials.
 
 ## Installation
 
@@ -27,8 +27,8 @@ Use your existing kubeconfig.
 1. From the repository root, open the recipe directory and create the configuration.
 
    ```bash
-   cd deploy/helm/llm-routing/spark
-   python3 spark.py init
+   cd deploy/helm/llm-routing/recipes
+   python3 recipe.py init
    ```
 
    Review the selected nodes and generated configuration. `init` discovers idle GPUs, storage and image preload settings for K3s. The configuration is saved at the printed path in a private work directory.
@@ -36,37 +36,37 @@ Use your existing kubeconfig.
 2. Render the manifests and inventory the cluster.
 
    ```bash
-   python3 spark.py render
-   python3 spark.py inventory
+   python3 recipe.py render
+   python3 recipe.py inventory
    ```
 
 `render` lints the Helm charts and generates manifests. `inventory` checks node readiness, GPU availability and cluster prerequisites. Continue after both commands pass.
 
 ### Build and distribute the application images
 
-Build and distribute `gateway`, `router`, `pylon` and `operator` using the [image build guide](spark/BUILDING.md).
+Build and distribute `gateway`, `router`, `pylon` and `operator` using the [image build guide](recipes/BUILDING.md).
 
 ### Deploy in order
 
 Run each command in order and continue after it succeeds.
 
 ```bash
-python3 spark.py preflight
-python3 spark.py stack
-python3 spark.py build-runtime
-python3 spark.py qualify
-python3 spark.py download
-python3 spark.py load
-python3 spark.py verify-direct
-python3 spark.py register
-python3 spark.py verify-gateway
+python3 recipe.py preflight
+python3 recipe.py stack
+python3 recipe.py build-runtime
+python3 recipe.py qualify
+python3 recipe.py download
+python3 recipe.py load
+python3 recipe.py verify-direct
+python3 recipe.py register
+python3 recipe.py verify-gateway
 ```
 
 1. `preflight`: Check GPU calculations and available memory on both model nodes. The reference GPU environment uses NVIDIA driver `580.178.04` and CUDA 13. Rerun `preflight` and `qualify` after changing these versions.
 2. `stack`: Install the gateway, router and Pylon Operator. This generates the default caller API key and self-signed certificates. To supply your own, complete [Optional configuration](#optional-configuration) before running `stack`.
 3. `build-runtime`: Build llama.cpp with CUDA and remote procedure call (RPC) support.
-4. `qualify`: Test calculations and data transfer across both GPUs. (After fixing a failed qualification Job, run `python3 spark.py qualify --retry`.)
-5. `download`: Download the six GLM files and verify their sizes and SHA256 checksums. See the [model and runtime licenses](spark/NOTICE).
+4. `qualify`: Test calculations and data transfer across both GPUs. (After fixing a failed qualification Job, run `python3 recipe.py qualify --retry`.)
+5. `download`: Download the six GLM files and verify their sizes and SHA256 checksums. See the [model and runtime licenses](recipes/NOTICE).
 6. `load`: Load GLM across both GPUs and wait for the model server.
 7. `verify-direct`: Test model answers and streaming directly.
 8. `register`: Register GLM with Pylon and wait for readiness.
@@ -80,12 +80,12 @@ Pinned runtime:
 
 ## Verification
 
-Run these commands from `deploy/helm/llm-routing/spark` after installation or [attachment to an existing stack](#update-an-existing-installation).
+Run these commands from `deploy/helm/llm-routing/recipes` after installation or [attachment to an existing stack](#update-an-existing-installation).
 
 ### Inspect the deployment
 
 ```bash
-context="$(python3 spark.py context)" &&
+context="$(python3 recipe.py context)" &&
   kubectl --context "$context" get nodes -o wide &&
   kubectl --context "$context" get deployments,pods,services,inferenceendpoints --all-namespaces -o wide
 ```
@@ -95,8 +95,8 @@ Check the node placement, ready replicas and model endpoint status.
 ### Send a chat or streaming request
 
 ```bash
-python3 spark.py chat 'What is 17 multiplied by 19? Give one short sentence.'
-python3 spark.py chat 'Explain what a GPU does in two sentences.' --stream
+python3 recipe.py chat 'What is 17 multiplied by 19? Give one short sentence.'
+python3 recipe.py chat 'Explain what a GPU does in two sentences.' --stream
 ```
 
 ## Maintenance
@@ -106,12 +106,12 @@ python3 spark.py chat 'Explain what a GPU does in two sentences.' --stream
 If this workstation has not used the running installation before, [attach to it first](#update-an-existing-installation).
 
 1. Edit the service in your checkout: `src/invocation-plane-services/llm-api-gateway` for gateway or `src/libraries/rust/stargate` for router.
-2. [Build and distribute that component](spark/BUILDING.md#rebuild-gateway-or-router) with a fresh tag. Run the next commands in the same terminal.
+2. [Build and distribute that component](recipes/BUILDING.md#rebuild-gateway-or-router) with a fresh tag. Run the next commands in the same terminal.
 3. Update the selected image and verify gateway requests.
 
    ```bash
-   python3 spark.py update --component "$COMPONENT" --tag "$NEW_TAG"
-   python3 spark.py verify-gateway
+   python3 recipe.py update --component "$COMPONENT" --tag "$NEW_TAG"
+   python3 recipe.py verify-gateway
    ```
 
 4. Save the printed update record path for rollback.
@@ -124,8 +124,8 @@ To roll back the image update:
 2. Restore the recorded tag and verify requests.
 
    ```bash
-   python3 spark.py rollback --result /path/to/saved-update.json
-   python3 spark.py verify-gateway
+   python3 recipe.py rollback --result /path/to/saved-update.json
+   python3 recipe.py verify-gateway
    ```
 
 Use the record from the latest update when rolling back.
@@ -137,14 +137,14 @@ Use your existing kubeconfig.
 1. From the repository root, open the recipe directory.
 
    ```bash
-   cd deploy/helm/llm-routing/spark
+   cd deploy/helm/llm-routing/recipes
    ```
 
 2. Discover the installation and verify gateway requests.
 
    ```bash
-   python3 spark.py attach-existing
-   python3 spark.py verify-gateway
+   python3 recipe.py attach-existing
+   python3 recipe.py verify-gateway
    ```
 
 Add `--namespace <namespace>` to attachment when the cluster has multiple installations or your access is limited to one namespace.
@@ -153,7 +153,7 @@ Continue with [Update only gateway or router](#update-only-gateway-or-router).
 
 ### Uninstall
 
-Run the entire block, including parentheses, from `deploy/helm/llm-routing/spark` in the same configured terminal used for installation. The context lookup uses the recipe's normal selection. If you passed `--context`, `--config` or `--work-dir` during installation, pass the same options before `context` in the lookup below.
+Run the entire block, including parentheses, from `deploy/helm/llm-routing/recipes` in the same configured terminal used for installation. The context lookup uses the recipe's normal selection. If you passed `--context`, `--config` or `--work-dir` during installation, pass the same options before `context` in the lookup below.
 
 The namespace and release names below are the default K3s recipe values. If you changed `namespace`, `releasePrefix` or `releases` in your saved configuration, replace these names to match. The model chain release is the GLM release name plus `-chain`, and the image-import release is the release prefix plus `-images`.
 
@@ -162,9 +162,9 @@ The block skips absent releases, including the optional image importer, and stop
 ```bash
 (
   set -eu
-  context="$(python3 spark.py context)"
+  context="$(python3 recipe.py context)"
   : "${context:?Context lookup returned an empty value}"
-  namespace=llm-spark-poc
+  namespace=llm-routing-poc
   : "${namespace:?Set the namespace from your saved configuration}"
 
   helm --kube-context "$context" -n "$namespace" uninstall llm-poc-glm --ignore-not-found --wait --timeout 3m
@@ -181,9 +181,9 @@ The model/artifact and RPC-cache PVCs, downloaded models, namespace, InferenceEn
 After uninstalling the demo releases, run these commands from the recipe directory with the same configuration and context selection used for installation:
 
 ```bash
-python3 spark.py init
-python3 spark.py render
-python3 spark.py inventory
+python3 recipe.py init
+python3 recipe.py render
+python3 recipe.py inventory
 ```
 
 `init` checks that the demo is uninstalled, reuses the saved placement, image references and credentials, and archives stale progress under `before-reinit-*` in the work directory. Continue with [Deploy in order](#deploy-in-order), starting at `preflight`.
@@ -196,7 +196,7 @@ The stack records a SHA-256 fingerprint of its routing chart files. Image update
 
 1. Make runtime, API and chart changes in the same checkout, including generated files and regression tests.
 2. Render the manifests and run the [local regression checks](#local-validation).
-3. For an existing installation, preserve its installed Helm values and credentials when upgrading the stack. Copy only `sparkRecipeChartsSha256` from the private work directory's `render/stack-values.json` into those preserved values. The remaining render values are offline test data. Review the rendered changes before applying the upgrade. Fresh installations record this automatically during `stack`.
+3. For an existing installation, preserve its installed Helm values and credentials when upgrading the stack. Copy only `recipeChartsSha256` from the private work directory's `render/stack-values.json` into those preserved values. The remaining render values are offline test data. Review the rendered changes before applying the upgrade. Fresh installations record this automatically during `stack`.
 4. Build and deploy gateway and router together when their API contract changes.
 5. Rerun gateway verification, recovery and image update/rollback checks.
 
@@ -208,7 +208,7 @@ This optional resilience check restarts the RPC worker, interrupts model service
 2. Run the explicit recovery check.
 
    ```bash
-   python3 spark.py recover --confirm-model-interruption
+   python3 recipe.py recover --confirm-model-interruption
    ```
 
 3. Save and review the results from the target cluster.
@@ -228,7 +228,7 @@ Both model persistent volume claims (PVCs) remain after uninstall.
 
 ### Alternative container runtimes and external configuration
 
-For a non-K3s cluster or custom container runtime, prepare an external copy of [config.example.json](spark/config.example.json) before installation. Set the context, node placement, storage, runtime and image settings for your cluster. Use that file instead of `init`, and pass `--config /path/to/config.json` to each recipe command, starting with `render` and `inventory`.
+For a non-K3s cluster or custom container runtime, prepare an external copy of [config.example.json](recipes/config.example.json) before installation. Set the context, node placement, storage, runtime and image settings for your cluster. Use that file instead of `init`, and pass `--config /path/to/config.json` to each recipe command, starting with `render` and `inventory`.
 
 ### Runtime image mirror
 
@@ -260,18 +260,18 @@ To use existing certificates, complete these steps before running `stack`:
 
 ## Troubleshooting
 
-If a command fails, follow the next check and diagnostic log path printed by the CLI. Detailed tool output is saved in private `evidence/*.log` files inside the work directory. Use `python3 spark.py paths` to locate that directory.
+If a command fails, follow the next check and diagnostic log path printed by the CLI. Detailed tool output is saved in private `evidence/*.log` files inside the work directory. Use `python3 recipe.py paths` to locate that directory.
 
 ### Gateway check failures
 
 If `verify-gateway` fails, inspect its results in `evidence/gateway.json` under the local work directory. The check uses local port 18443. Stop a previous port-forward if it occupies that port.
 
-If the command reports incomplete key cleanup, run `python3 spark.py cleanup-key`.
+If the command reports incomplete key cleanup, run `python3 recipe.py cleanup-key`.
 
 After resolving the problem, rerun the check from the recipe directory:
 
 ```bash
-python3 spark.py verify-gateway
+python3 recipe.py verify-gateway
 ```
 
 ## Local validation
@@ -281,6 +281,6 @@ From the recipe directory, run the runner/client tests, runtime chart tests and 
 ```bash
 python3 -m unittest discover -s tests -v
 python3 -m unittest discover -s charts/gguf-backend/tests -v
-python3 spark.py render
+python3 recipe.py render
 git diff --check
 ```

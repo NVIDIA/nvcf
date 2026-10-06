@@ -10,9 +10,9 @@ import unittest
 from unittest.mock import patch
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('chat_recipe', HERE/'spark.py')
-spark = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(spark)
+spec = importlib.util.spec_from_file_location('chat_recipe', HERE/'recipe.py')
+tool = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tool)
 
 
 class ChatTests(unittest.TestCase):
@@ -20,7 +20,7 @@ class ChatTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         config = json.loads((HERE/'config.example.json').read_text())
-        self.recipe = spark.Recipe(config, self.tmp.name)
+        self.recipe = tool.Recipe(config, self.tmp.name)
         self.recipe.state = {'stack': {'apiKeyFile': None}, 'gateway': False}
         self.events = []
 
@@ -51,8 +51,8 @@ class ChatTests(unittest.TestCase):
             before = copy.deepcopy(self.recipe.state)
             with self.subTest(streaming=streaming), patch.object(self.recipe, 'bound_cluster') as bound, \
                  patch.object(self.recipe, 'forward', self.forward), \
-                 patch.object(spark.gateway_access, 'temporary_gateway_key', self.key), \
-                 patch.object(spark, 'run') as run:
+                 patch.object(tool.gateway_access, 'temporary_gateway_key', self.key), \
+                 patch.object(tool, 'run') as run:
                 self.recipe.chat('How many planets are in the solar system?', streaming, 18443)
             bound.assert_called_once()
             command = run.call_args.args[0]
@@ -69,7 +69,7 @@ class ChatTests(unittest.TestCase):
     def test_existing_installer_key_is_supported_without_mutating_credentials(self):
         self.recipe.state['stack']['apiKeyFile'] = '/private/existing-key'
         with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'forward', self.forward), \
-             patch.object(spark.gateway_access, 'temporary_gateway_key') as temporary, patch.object(spark, 'run') as run:
+             patch.object(tool.gateway_access, 'temporary_gateway_key') as temporary, patch.object(tool, 'run') as run:
             self.recipe.chat('Hello', False, 18443)
         temporary.assert_not_called()
         command = run.call_args.args[0]
@@ -81,8 +81,8 @@ class ChatTests(unittest.TestCase):
             self.events = []
             with self.subTest(error=type(error).__name__), patch.object(self.recipe, 'bound_cluster'), \
                  patch.object(self.recipe, 'forward', self.forward), \
-                 patch.object(spark.gateway_access, 'temporary_gateway_key', self.key), \
-                 patch.object(spark, 'run', side_effect=error), self.assertRaises(type(error)):
+                 patch.object(tool.gateway_access, 'temporary_gateway_key', self.key), \
+                 patch.object(tool, 'run', side_effect=error), self.assertRaises(type(error)):
                 self.recipe.chat('Hello', False, 18443)
             self.assertEqual(self.events, ['connected', 'registered', 'revoked', 'disconnected'])
             self.assertFalse(self.recipe.state['gateway'])
@@ -90,7 +90,7 @@ class ChatTests(unittest.TestCase):
     def test_changed_cluster_rejects_chat_before_connecting_or_issuing_key(self):
         with patch.object(self.recipe, 'bound_cluster', side_effect=RuntimeError('cluster changed')), \
              patch.object(self.recipe, 'forward') as forward, \
-             patch.object(spark.gateway_access, 'temporary_gateway_key') as key, \
+             patch.object(tool.gateway_access, 'temporary_gateway_key') as key, \
              self.assertRaisesRegex(RuntimeError, 'cluster changed'):
             self.recipe.chat('Hello', False, 18443)
         forward.assert_not_called()
@@ -107,7 +107,7 @@ class ChatTests(unittest.TestCase):
         self.recipe.state['stack']['apiKeyFile'] = '/private/existing-key'
         prompt = '--stream $(echo example) `echo literal`'
         with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'forward', self.forward), \
-             patch.object(spark, 'run') as run:
+             patch.object(tool, 'run') as run:
             self.recipe.chat(prompt, False, 18443)
         self.assertEqual(run.call_args.args[0][-2:], ['--', prompt])
         self.assertNotIn('shell', run.call_args.kwargs)
@@ -115,7 +115,7 @@ class ChatTests(unittest.TestCase):
     def test_omitted_prompt_uses_client_default(self):
         self.recipe.state['stack']['apiKeyFile'] = '/private/existing-key'
         with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'forward', self.forward), \
-             patch.object(spark, 'run') as run:
+             patch.object(tool, 'run') as run:
             self.recipe.chat(None, False, 18443)
         self.assertEqual(run.call_args.args[0][-2:], ['--api-key-file', '/private/existing-key'])
 

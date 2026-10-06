@@ -1,12 +1,12 @@
 {
-  "context": "spark-demo",
-  "namespace": "llm-spark-poc",
+  "context": "llm-routing-demo",
+  "namespace": "llm-routing-poc",
   "releasePrefix": "llm-poc",
-  "clusterId": "spark-poc",
+  "clusterId": "llm-routing-poc",
   "nodes": {
-    "control": "spark-control",
-    "leader": "spark-leader",
-    "worker": "spark-worker"
+    "control": "control",
+    "leader": "model-0",
+    "worker": "model-1"
   },
   "storageClass": "local-path",
   "runtimeClass": "nvidia",
@@ -26,12 +26,12 @@
   "apiKeyFile": null,
   "containerd": {
     "socketPath": "/run/k3s/containerd/containerd.sock",
-    "archiveNode": "spark-control",
+    "archiveNode": "control",
     "runAsUser": 1000,
     "nodeNames": [
-      "spark-control",
-      "spark-leader",
-      "spark-worker"
+      "control",
+      "model-0",
+      "model-1"
     ]
   }
 }

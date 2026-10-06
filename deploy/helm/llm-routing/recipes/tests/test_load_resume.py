@@ -10,17 +10,17 @@ import unittest
 from unittest.mock import patch
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('spark_load_resume', HERE/'spark.py')
-spark = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(spark)
+spec = importlib.util.spec_from_file_location('recipe_load_resume', HERE/'recipe.py')
+tool = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(tool)
 
 
 class LoadResumeTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix='spark-resume-')
+        self.tmp = tempfile.TemporaryDirectory(prefix='recipe-resume-')
         self.addCleanup(self.tmp.cleanup)
         config = json.loads((HERE/'config.example.json').read_text())
-        self.recipe = spark.Recipe(config, self.tmp.name)
+        self.recipe = tool.Recipe(config, self.tmp.name)
         self.recipe.state = {'download': True, 'runtimeSha256': 'a'*64}
         self.values = self.recipe.backend_values('serve')
         self.release = {'name': self.recipe.glm, 'namespace': config['namespace'],
@@ -87,8 +87,8 @@ class LoadResumeTests(unittest.TestCase):
 
     def attempt(self, error=None):
         with patch.object(self.recipe, 'bound_cluster') as bound, \
-             patch.object(self.recipe, 'helm_apply') as helm, patch.object(spark, 'run') as run, \
-             patch.object(spark, 'output', side_effect=self.command_output):
+             patch.object(self.recipe, 'helm_apply') as helm, patch.object(tool, 'run') as run, \
+             patch.object(tool, 'output', side_effect=self.command_output):
             if error:
                 with self.assertRaisesRegex(RuntimeError, error):
                     self.recipe.backend_phase('serve')
@@ -177,7 +177,7 @@ class LoadResumeTests(unittest.TestCase):
 
     def test_read_timeout_preserves_missing_checkpoint(self):
         with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'helm_apply') as helm, \
-             patch.object(spark, 'output', side_effect=subprocess.TimeoutExpired(['helm', 'status'], 45)):
+             patch.object(tool, 'output', side_effect=subprocess.TimeoutExpired(['helm', 'status'], 45)):
             with self.assertRaises(subprocess.TimeoutExpired):
                 self.recipe.backend_phase('serve')
             self.assertNotIn('serve', self.recipe.state)
@@ -186,7 +186,7 @@ class LoadResumeTests(unittest.TestCase):
 
     def test_connection_failure_preserves_missing_checkpoint(self):
         with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'helm_apply') as helm, \
-             patch.object(spark, 'output', side_effect=OSError('connection lost')):
+             patch.object(tool, 'output', side_effect=OSError('connection lost')):
             with self.assertRaisesRegex(OSError, 'connection lost'):
                 self.recipe.backend_phase('serve')
             self.assertNotIn('serve', self.recipe.state)

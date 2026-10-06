@@ -5,11 +5,11 @@
   "targets": [
     {
       "id": "leader",
-      "node": "spark-leader"
+      "node": "model-0"
     },
     {
       "id": "worker",
-      "node": "spark-worker"
+      "node": "model-1"
     }
   ],
   "build": {

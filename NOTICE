@@ -9,7 +9,7 @@ regenerate this file by running:
 The following third-party licenses are included in this repository:
 
     deploy/helm/container-cache/NOTICE
-    deploy/helm/llm-routing/spark/NOTICE
+    deploy/helm/llm-routing/recipes/NOTICE
     deploy/helm/nats/NOTICE
     deploy/helm/openbao/NOTICE
     infra/openbao/plugins/vault-plugin-secrets-jwt/NOTICE
