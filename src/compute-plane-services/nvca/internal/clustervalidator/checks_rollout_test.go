@@ -289,10 +289,10 @@ func TestCheckTier2StatefulSets_RollbackAndLoweredPartitionAreDatedByTheirPods(t
 	assert.False(t, *state.Tier2StatefulSetsOK)
 }
 
-// A pod created anew is progress only when it is the rollout's newest step.
-// A node drain or a failure recreating an old-revision pod, or an already
-// updated pod above the newest step, does not restart the bound of a
-// rollout whose newest step has been down since long ago.
+// A pod created anew is progress only when it is on the update revision. A
+// node drain or a failure recreating an old-revision pod, or a failed pod
+// deleted to be recreated, does not restart the bound of a rollout whose
+// update-revision pods all date from long ago.
 func TestCheckTier2StatefulSets_RecreatedPodsAreNotProgress(t *testing.T) {
 	longAgo, recent := installedAt, time.Now().Add(-time.Minute)
 	wedged := func() []runtime.Object {
@@ -302,8 +302,6 @@ func TestCheckTier2StatefulSets_RecreatedPodsAreNotProgress(t *testing.T) {
 	for name, objs := range map[string][]runtime.Object{
 		"old-revision pod recreated": onRevision(onRevision(wedged(), "nats-2", "nats-r2", false, longAgo),
 			"nats-0", "nats-r1", true, recent),
-		"updated pod recreated above the newest step": onRevision(onRevision(wedged(),
-			"nats-2", "nats-r2", true, recent), "nats-1", "nats-r2", false, longAgo),
 		"failed pod deleted to be recreated": failedAndDeleted(onRevision(wedged(),
 			"nats-2", "nats-r2", false, longAgo), "nats-0", recent),
 	} {
@@ -312,10 +310,65 @@ func TestCheckTier2StatefulSets_RecreatedPodsAreNotProgress(t *testing.T) {
 		assert.False(t, *state.Tier2StatefulSetsOK, name)
 	}
 
-	state := runTier2(onRevision(onRevision(wedged(), "nats-2", "nats-r2", true, longAgo),
-		"nats-1", "nats-r2", false, recent))
+	for name, objs := range map[string][]runtime.Object{
+		"the step below created a minute ago": onRevision(onRevision(wedged(),
+			"nats-2", "nats-r2", true, longAgo), "nats-1", "nats-r2", false, recent),
+		"an updated pod recreated a minute ago": onRevision(onRevision(wedged(),
+			"nats-2", "nats-r2", true, recent), "nats-1", "nats-r2", false, longAgo),
+	} {
+		state := runTier2(objs)
+		require.NotNil(t, state.Tier2StatefulSetsOK, name)
+		assert.True(t, *state.Tier2StatefulSetsOK, name)
+	}
+}
+
+// cassandraRollout is a 5-member Cassandra rolling to cassandra-r2 since
+// started, under the API's default partition of 0, with each pod moved onto
+// the update revision at the given time, Ready, except down, created at
+// downAt and still starting.
+func cassandraRollout(started time.Time, updated map[string]time.Time, down string, downAt time.Time,
+) []runtime.Object {
+	objs := rollTo(makeQuorumSTS("cassandra", "cassandra-system", 5, 4,
+		[]string{"node-1", "node-2", "node-3", "node-4", "node-5"}), "cassandra-r2", started)
+	for name, at := range updated {
+		objs = onRevision(objs, name, "cassandra-r2", true, at)
+	}
+	objs = onRevision(objs, down, "cassandra-r2", false, downAt)
+	partition := int32(0)
+	objs[0].(*appsv1.StatefulSet).Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{
+		Type:          appsv1.RollingUpdateStatefulSetStrategyType,
+		RollingUpdate: &appsv1.RollingUpdateStatefulSetStrategy{Partition: &partition},
+	}
+	return objs
+}
+
+// A drain during a rollout makes the controller recreate a lower ordinal on
+// the update revision out of order. Every update-revision pod created since
+// the rollout began is progress, whatever its ordinal, so the step the
+// controller is working on counts although a lower ordinal came back before
+// it.
+func TestCheckTier2StatefulSets_OutOfOrderRecreationKeepsTheRolloutMoving(t *testing.T) {
+	ago := func(m time.Duration) time.Time { return time.Now().Add(-m * time.Minute) }
+	// cassandra-4 and -3 were replaced, a drain then evicted cassandra-0, and
+	// the controller went on to cassandra-2 and, a minute ago, cassandra-1.
+	objs := cassandraRollout(ago(26), map[string]time.Time{
+		"cassandra-4": ago(26), "cassandra-3": ago(20), "cassandra-0": ago(18), "cassandra-2": ago(7),
+	}, "cassandra-1", ago(1))
+	state, log := runTier2Logged(objs)
 	require.NotNil(t, state.Tier2StatefulSetsOK)
-	assert.True(t, *state.Tier2StatefulSetsOK, "the newest step was created a minute ago")
+	assert.True(t, *state.Tier2StatefulSetsOK, log)
+	assert.Contains(t, strings.Join(state.Warnings, "; "),
+		"cassandra-system/cassandra: rolling update in progress (ready: 4/5)")
+
+	// The same rollout with nothing created or deleted for 16 minutes has
+	// stalled, however its pods were ordered.
+	objs = cassandraRollout(ago(40), map[string]time.Time{
+		"cassandra-4": ago(40), "cassandra-3": ago(34), "cassandra-0": ago(30), "cassandra-2": ago(22),
+	}, "cassandra-1", ago(16))
+	state, log = runTier2Logged(objs)
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.False(t, *state.Tier2StatefulSetsOK)
+	assert.Contains(t, log, "rolling update is not progressing: no progress for 16m0s")
 }
 
 // failedAndDeleted marks pod name in objs Failed and deleted at deleted, as a

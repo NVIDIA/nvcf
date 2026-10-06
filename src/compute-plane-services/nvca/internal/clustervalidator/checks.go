@@ -6139,17 +6139,16 @@ func (c quorumComponent) namespaceName() string {
 var stalledRolloutAfter = 15 * time.Minute
 
 // stalledRollout reports why a one-down StatefulSet rollout cannot finish, or
-// "" when it still can. started is when the rollout began, the update
-// revision's creation, or zero when that is unknown. Since then the rollout
-// moves by deleting a pod, which the controller does to each pod it replaces
-// whatever its revision or readiness, and by creating its newest step: the
-// update-revision pod with the lowest ordinal, since it works down from the
-// highest. A rollback to an older revision or a lowered partition creates no
-// revision, so its first replacement dates it. Any other pod created anew is
-// churn, not progress: one of the old revision recreated after an eviction or
-// a failure, or an already updated one above the newest step. undated reports
-// that a pod is down and nothing dates the rollout, so whether it stalled
-// cannot be told.
+// "" when it still can. started is when the rollout began, or zero when that
+// is unknown. Since then the rollout moves by deleting a pod, which the
+// controller does to each pod it replaces whatever its revision or readiness,
+// and by creating a pod on the update revision, whatever its ordinal: the
+// controller works down from the highest, but recreates any pod a drain or an
+// eviction removed, and under a partition of 0 it does so on the update
+// revision. A pod of the old revision recreated is churn, not progress, and a
+// pod created before the rollout began dates nothing later than its start.
+// undated reports that a pod is down and nothing dates the rollout, so
+// whether it stalled cannot be told.
 func stalledRollout(
 	sts *appsv1.StatefulSet, pods []corev1.Pod, started, now time.Time,
 ) (reason string, undated bool) {
@@ -6169,10 +6168,11 @@ func stalledRollout(
 			return reason, false
 		}
 	}
-	newestStep := rolloutNewestStep(sts, pods)
 	lastProgress := rolloutMoved(started, pods,
 		func(p *corev1.Pod) bool { return metav1.IsControlledBy(p, sts) },
-		func(p *corev1.Pod) bool { return p == newestStep }, rolloutSlot("StatefulSet"))
+		func(p *corev1.Pod) bool {
+			return p.Labels[appsv1.ControllerRevisionHashLabelKey] == sts.Status.UpdateRevision
+		}, rolloutSlot("StatefulSet"))
 	if started.IsZero() && (owned < int(*sts.Spec.Replicas) || lastProgress.IsZero()) {
 		// A pod is down and when the rollout began is unknown. A missing pod
 		// is usually the controller between deleting a pod and recreating
@@ -6184,24 +6184,6 @@ func stalledRollout(
 			idle.Round(time.Minute), lastProgress.UTC().Format(time.RFC3339)), false
 	}
 	return "", false
-}
-
-// rolloutNewestStep is the pod a StatefulSet rollout created last: of its
-// update-revision pods, the one with the lowest ordinal. It is nil when there
-// is none.
-func rolloutNewestStep(sts *appsv1.StatefulSet, pods []corev1.Pod) *corev1.Pod {
-	var newest *corev1.Pod
-	for i := range pods {
-		p := &pods[i]
-		if !metav1.IsControlledBy(p, sts) || p.DeletionTimestamp != nil ||
-			p.Labels[appsv1.ControllerRevisionHashLabelKey] != sts.Status.UpdateRevision {
-			continue
-		}
-		if ordinal := podOrdinal(sts, p); ordinal >= 0 && (newest == nil || ordinal < podOrdinal(sts, newest)) {
-			newest = p
-		}
-	}
-	return newest
 }
 
 // stalledPodReason reports why a down pod of a rolling StatefulSet will never
