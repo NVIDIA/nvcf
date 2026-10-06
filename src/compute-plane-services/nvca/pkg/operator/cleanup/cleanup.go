@@ -779,8 +779,18 @@ func deleteModelCacheBindings(ctx context.Context, dynamicClient dynamic.Interfa
 const workloadNamespaceLabelSelector = "nvca.nvcf.nvidia.io/workload-instance-type," +
 	"nvca.nvcf.nvidia.io/workload-instance-type!=pod_spec"
 
-// requestsNamespaceLabelSelector selects requests namespaces prepared by the operator.
-const requestsNamespaceLabelSelector = "nvca.nvcf.nvidia.io/workload-instance-type=pod_spec"
+const (
+	workloadInstanceTypeLabelKey  = "nvca.nvcf.nvidia.io/workload-instance-type"
+	requestsNamespaceInstanceType = "pod_spec"
+)
+
+// isRequestsNamespace reports whether the operator prepared ns as a requests
+// namespace. The ownership annotation counts on its own so a namespace the
+// operator created is still cleaned up if its label was removed.
+func isRequestsNamespace(ns *corev1.Namespace) bool {
+	return ns.Labels[workloadInstanceTypeLabelKey] == requestsNamespaceInstanceType ||
+		ns.Annotations[nvcaoptypes.CreatedByOperatorAnnotation] == "true"
+}
 
 // requestsNamespaceListBackoff retries a transient list failure for about 7.5s
 // before uninstall cleanup gives up and is retried as a whole.
@@ -795,15 +805,21 @@ func listRequestsNamespaces(ctx context.Context, k8sClient kubernetes.Interface)
 	var nsList *corev1.NamespaceList
 	err := retry.OnError(requestsNamespaceListBackoff, k8sutil.IsTransientK8sError, func() error {
 		var listErr error
-		nsList, listErr = k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{
-			LabelSelector: requestsNamespaceLabelSelector,
-		})
+		// Annotations cannot be selected server-side, so list every namespace.
+		nsList, listErr = k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
 		return listErr
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list requests namespaces: %w", err)
 	}
-	return nsList.Items, nil
+
+	var requestsNamespaces []corev1.Namespace
+	for i := range nsList.Items {
+		if isRequestsNamespace(&nsList.Items[i]) {
+			requestsNamespaces = append(requestsNamespaces, nsList.Items[i])
+		}
+	}
+	return requestsNamespaces, nil
 }
 
 // deleteWorkloadNamespaces lists and deletes all NVCA workload namespaces (sr-*).

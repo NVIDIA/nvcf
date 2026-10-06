@@ -1938,6 +1938,11 @@ func TestCleanupBackendResources_ConfiguredRequestsNamespaces(t *testing.T) {
 		requestsNamespace(DefaultNVCARequestsNamespace, false),
 		requestsNamespace("team-owned", true),
 		requestsNamespace("team-borrowed", false),
+		// Operator-created, but someone removed the pod_spec label.
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name:        "team-owned-unlabeled",
+			Annotations: map[string]string{nvcaoptypes.CreatedByOperatorAnnotation: "true"},
+		}},
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
 			Name:   "sr-workload",
 			Labels: map[string]string{"nvca.nvcf.nvidia.io/workload-instance-type": "miniservice"},
@@ -2008,7 +2013,8 @@ func TestCleanupBackendResources_RequestsNamespaceListFailures(t *testing.T) {
 			calls := 0
 			k8sClient.PrependReactor("list", "namespaces", func(action k8stesting.Action) (bool, runtime.Object, error) {
 				listAction, ok := action.(k8stesting.ListAction)
-				if !ok || listAction.GetListRestrictions().Labels.String() != requestsNamespaceLabelSelector {
+				// The requests-namespace list is the only unfiltered namespace list.
+				if !ok || !listAction.GetListRestrictions().Labels.Empty() {
 					return false, nil, nil
 				}
 				calls++
