@@ -272,6 +272,12 @@ Pylons omit it and make that cluster ineligible in the new
 default mode. Use explicit `last-mean-input-tps` during a mixed-version rollout
 if Pylons cannot be upgraded first.
 
+`rendezvous_weight` is a field of a detailed algorithm configuration object.
+The top-level `default`, an algorithm name in `models` or `request_algorithms`,
+and the built-in defaults always use `max-input-tps`. For a mixed-version
+rollout, give each Pulsar entry in `models` and `request_algorithms` a detailed
+object that sets `last-mean-input-tps`.
+
 Retries walk the same ranking after excluding failed clusters. When
 `consider_kv_free_tokens` is enabled, a ranked candidate is skipped when it
 does not report KV-cache metrics or has fewer free tokens than
