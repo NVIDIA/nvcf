@@ -445,7 +445,12 @@
                 },
                 "requestsNamespace": {
                     "type": "string",
-                    "default": ""
+                    "default": "",
+                    "maxLength": 63,
+                    "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$",
+                    "not": {
+                        "enum": ["default", "kube-system", "kube-public", "kube-node-lease"]
+                    }
                 },
                 "namespaceLabels": {
                     "type": "object",

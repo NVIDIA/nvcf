@@ -19,6 +19,7 @@ package cleanup
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -27,15 +28,19 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 	fakedynamic "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	fakenvcaop "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake"
+	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 )
 
 func TestBackendNamespaces(t *testing.T) {
@@ -1741,4 +1746,169 @@ func TestCleanupBackendResources_WithWorkloadNamespaces(t *testing.T) {
 	// Unrelated namespaces should not be deleted
 	_, err = k8sClient.CoreV1().Namespaces().Get(ctx, "kube-system", metav1.GetOptions{})
 	assert.NoError(t, err, "kube-system should still exist")
+}
+
+func TestAgentRequestsNamespace(t *testing.T) {
+	agentConfig := func(data string) *corev1.ConfigMap {
+		return &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: agentConfigConfigMapName, Namespace: DefaultNVCASystemNamespace},
+			Data:       map[string]string{agentConfigKey: data},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		objects  []runtime.Object
+		expected string
+	}{
+		{
+			name:     "no agent config falls back to the backend value",
+			expected: DefaultNVCARequestsNamespace,
+		},
+		{
+			name:     "agent config without requests namespace falls back to the backend value",
+			objects:  []runtime.Object{agentConfig("agent:\n  logLevel: info\n")},
+			expected: DefaultNVCARequestsNamespace,
+		},
+		{
+			name:     "unparsable agent config falls back to the backend value",
+			objects:  []runtime.Object{agentConfig("agent: [")},
+			expected: DefaultNVCARequestsNamespace,
+		},
+		{
+			name:     "agent config override is used",
+			objects:  []runtime.Object{agentConfig("agent:\n  requestsNamespace: team-x\n")},
+			expected: "team-x",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			k8sClient := fake.NewSimpleClientset(tt.objects...)
+			got := AgentRequestsNamespace(context.Background(), k8sClient, &nvidiaiov1.NVCFBackend{})
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+func TestCleanupBackendResources_ConfiguredRequestsNamespaces(t *testing.T) {
+	ctx := context.Background()
+	icmsGVR := schema.GroupVersionResource{Group: "nvca.nvcf.nvidia.io", Version: "v2beta1", Resource: "icmsrequests"}
+	requestsNamespace := func(name string, createdByOperator bool) *corev1.Namespace {
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name:   name,
+			Labels: map[string]string{"nvca.nvcf.nvidia.io/workload-instance-type": "pod_spec"},
+		}}
+		if createdByOperator {
+			ns.Annotations = map[string]string{nvcaoptypes.CreatedByOperatorAnnotation: "true"}
+		}
+		return ns
+	}
+
+	k8sClient := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultNVCASystemNamespace}},
+		requestsNamespace(DefaultNVCARequestsNamespace, false),
+		requestsNamespace("team-owned", true),
+		requestsNamespace("team-borrowed", false),
+		// Operator-created, but someone removed the pod_spec label.
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name:        "team-owned-unlabeled",
+			Annotations: map[string]string{nvcaoptypes.CreatedByOperatorAnnotation: "true"},
+		}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name:   "sr-workload",
+			Labels: map[string]string{"nvca.nvcf.nvidia.io/workload-instance-type": "miniservice"},
+		}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "unrelated"}},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: agentConfigConfigMapName, Namespace: DefaultNVCASystemNamespace},
+			Data:       map[string]string{agentConfigKey: "agent:\n  requestsNamespace: team-borrowed\n"},
+		},
+	)
+	dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{
+			icmsGVR: "ICMSRequestList",
+		},
+		&unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": "nvca.nvcf.nvidia.io/v2beta1",
+			"kind":       "ICMSRequest",
+			"metadata": map[string]interface{}{
+				"name":       "sr-1",
+				"namespace":  "team-borrowed",
+				"finalizers": []interface{}{"test-finalizer"},
+			},
+		}},
+	)
+
+	require.NoError(t, CleanupBackendResources(ctx, k8sClient, dynamicClient, &nvidiaiov1.NVCFBackend{}))
+
+	remaining, err := dynamicClient.Resource(icmsGVR).Namespace("team-borrowed").List(ctx, metav1.ListOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, remaining.Items, "ICMSRequests in the configured namespace must be cleaned up")
+
+	nsList, err := k8sClient.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+	require.NoError(t, err)
+	var names []string
+	for _, ns := range nsList.Items {
+		names = append(names, ns.Name)
+	}
+	assert.ElementsMatch(t, []string{"team-borrowed", "unrelated"}, names,
+		"only a pre-existing configured namespace and unrelated namespaces may survive uninstall")
+}
+
+func TestCleanupBackendResources_RequestsNamespaceListFailures(t *testing.T) {
+	previousBackoff := requestsNamespaceListBackoff
+	requestsNamespaceListBackoff = wait.Backoff{Steps: 5, Duration: time.Millisecond, Factor: 1}
+	t.Cleanup(func() { requestsNamespaceListBackoff = previousBackoff })
+
+	unavailable := k8serrors.NewServiceUnavailable("apiserver unavailable")
+	forbidden := k8serrors.NewForbidden(corev1.Resource("namespaces"), "", errors.New("denied"))
+	tests := []struct {
+		name      string
+		failures  int
+		err       error
+		wantErr   bool
+		wantCalls int
+	}{
+		{name: "transient failure recovers within the retry budget", failures: 2, err: unavailable, wantCalls: 3},
+		{name: "persistent transient failure stops cleanup", failures: 100, err: unavailable, wantErr: true, wantCalls: 5},
+		{name: "non-transient failure stops cleanup without retrying", failures: 100, err: forbidden, wantErr: true, wantCalls: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			k8sClient := fake.NewSimpleClientset(
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultNVCASystemNamespace}},
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: DefaultNVCARequestsNamespace}},
+			)
+			calls := 0
+			k8sClient.PrependReactor("list", "namespaces", func(action k8stesting.Action) (bool, runtime.Object, error) {
+				listAction, ok := action.(k8stesting.ListAction)
+				// The requests-namespace list is the only unfiltered namespace list.
+				if !ok || !listAction.GetListRestrictions().Labels.Empty() {
+					return false, nil, nil
+				}
+				calls++
+				if calls <= tt.failures {
+					return true, nil, tt.err
+				}
+				return false, nil, nil
+			})
+			dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(),
+				map[schema.GroupVersionResource]string{
+					{Group: "nvca.nvcf.nvidia.io", Version: "v2beta1", Resource: "icmsrequests"}: "ICMSRequestList",
+				})
+
+			err := CleanupBackendResources(ctx, k8sClient, dynamicClient, &nvidiaiov1.NVCFBackend{})
+			assert.Equal(t, tt.wantCalls, calls)
+			_, getErr := k8sClient.CoreV1().Namespaces().Get(ctx, DefaultNVCASystemNamespace, metav1.GetOptions{})
+			if !tt.wantErr {
+				require.NoError(t, err)
+				assert.True(t, k8serrors.IsNotFound(getErr), "cleanup should have completed")
+				return
+			}
+			require.Error(t, err, "callers must not remove the finalizer when requests namespaces are unknown")
+			assert.ErrorIs(t, err, tt.err)
+			assert.NoError(t, getErr, "cleanup must stop before deleting anything")
+		})
+	}
 }
