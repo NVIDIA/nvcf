@@ -210,6 +210,12 @@ func (a *Agent) GeneratePlaceholderManifest(ctx context.Context, req Placeholder
 	// The placeholder runs a bash reaper; the agent restores into it on POST /v1/restore
 	containerImage := metadata.ContainerImage
 
+	gpus := 1
+	if metadata.GPUShare != nil {
+		gpus = gpushareGPUCount(filepath.Join(checkpointDir, GPUShareCheckpointSubdir, gpushareCkptSubdir, "gpus"))
+	}
+	gsMounts, gsVolumes := a.gpushareRestoreMounts(&metadata, req.CheckpointID)
+
 	// criu-v2 placeholder: same image as the source (CRIU's path-based file
 	// checks resolve against an identical rootfs), bash pid1 reaps orphans,
 	// the pod keeps its own fresh pid namespace and bumps ns_last_pid so the
@@ -248,10 +254,10 @@ spec:
         - name: checkpoints
           mountPath: /checkpoints
         - name: dev-shm
-          mountPath: /dev/shm
+          mountPath: /dev/shm%s
       resources:
         limits:
-          nvidia.com/gpu: 1
+          nvidia.com/gpu: %d
   volumes:
     - name: checkpoints
       hostPath:
@@ -259,7 +265,7 @@ spec:
         type: Directory
     - name: dev-shm
       emptyDir:
-        medium: Memory
+        medium: Memory%s
 `,
 		podName,
 		namespace,
@@ -268,7 +274,10 @@ spec:
 		targetNode,
 		containerImage,
 		req.CheckpointID,
-		a.config.CheckpointDir,
+		gsMounts,
+		gpus,
+		a.checkpointHostRoot(),
+		gsVolumes,
 	)
 
 	return manifest, nil

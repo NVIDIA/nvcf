@@ -74,6 +74,10 @@ if [ -z "$WORKLOAD" ]; then
     echo "  nim-llama-8b      Llama-3.1-8B on NVIDIA NIM"
     echo "  e5-mistral        e5-mistral-7B-instruct on vLLM (embedding)"
     echo ""
+    echo "Workloads (gpushare CRIU, default NCCL settings):"
+    echo "  vllm-small-gpushare  TinyLlama 1.1B on vLLM (single GPU)"
+    echo "  vllm-tp4-gpushare    Qwen2.5-7B on vLLM (TP=4)"
+    echo ""
     echo "Workloads (multi-GPU rootfs):"
     echo "  vllm-70b          Llama-3.1-70B on vLLM (TP=4)"
     echo "  nim-qwen3-32b     Qwen3-32B on NVIDIA NIM (TP=2)"
@@ -93,6 +97,21 @@ case "$WORKLOAD" in
         POST_INFER_DATA='{"model":"TinyLlama/TinyLlama-1.1B-Chat-v1.0","prompt":"The meaning of life is","max_tokens":10}'
         SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-small.yaml"
         RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-small-restore.yaml"
+        ;;
+    vllm-small-gpushare|vllm-tp4-gpushare)
+        # gpushare: criu-v2 with libnvsnap_gpushare.so, default NCCL settings
+        # (TP=1 regression on any GPU node; TP=4 needs a node with 4 GPUs).
+        POD_NAME="$WORKLOAD"
+        CONTAINER_NAME="vllm"
+        RESTORE_POD_NAME="${WORKLOAD}-restored"
+        RESTORE_CONTAINER_NAME="restore"
+        PORT=8000
+        if [ "$WORKLOAD" = vllm-tp4-gpushare ]; then MODEL="Qwen/Qwen2.5-7B-Instruct"; else MODEL="TinyLlama/TinyLlama-1.1B-Chat-v1.0"; fi
+        INFER_ENDPOINT="/v1/completions"
+        INFER_DATA="{\"model\":\"$MODEL\",\"prompt\":\"Hello\",\"max_tokens\":5}"
+        POST_INFER_DATA="{\"model\":\"$MODEL\",\"prompt\":\"The meaning of life is\",\"max_tokens\":10}"
+        SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/${WORKLOAD}.yaml"
+        RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/${WORKLOAD}-restore.yaml"
         ;;
     vllm-mp)
         # E0 multi-GPU ladder: TinyLlama TP=1, multi-process EngineCore.
@@ -530,6 +549,9 @@ log_info "Pre-flight: pinning to node $SELECTED_NODE (needs $GPU_REQ GPU)"
 # single-GPU → criu.
 if [ -n "${CAPTURE_PATH:-}" ]; then
     : # respect caller override
+elif grep -q 'nvsnap.io/gpushare: "true"' "$SOURCE_MANIFEST"; then
+    # gpushare makes multi-GPU CRIU work: stay on criu-v2 at any GPU count.
+    CAPTURE_PATH="criu-v2"
 elif [ "$GPU_REQ" -ge 2 ]; then
     CAPTURE_PATH="rootfs"
 else

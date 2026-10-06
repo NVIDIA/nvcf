@@ -362,6 +362,10 @@ type CheckpointMetadata struct {
 	// swrk/ExtMnt path.
 	CapturePath string `json:"capturePath,omitempty"`
 
+	// GPUShare is set when the workload ran under libnvsnap_gpushare.so and
+	// its GPU state was saved by nvsnap-gpu-suspend (see gpushare.go).
+	GPUShare *GPUShareInfo `json:"gpushare,omitempty"`
+
 	// Integrity (v1.6+): SHA-256 checksums for critical checkpoint files
 	Integrity *CheckpointIntegrity `json:"integrity,omitempty"`
 
@@ -449,6 +453,10 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 		discoverSpan.End()
 		return nil, fmt.Errorf("failed to find container: %w", err)
 	}
+	if _, busy := a.capturing.LoadOrStore(containerInfo.ID, struct{}{}); busy {
+		return nil, fmt.Errorf("%w: container %s", ErrCaptureInProgress, containerInfo.ID)
+	}
+	defer a.capturing.Delete(containerInfo.ID)
 	discoverSpan.SetAttributes(
 		attribute.String("nvsnap.container_id", containerInfo.ID[:12]),
 		attribute.Int("nvsnap.container_pid", int(containerInfo.PID)),
@@ -548,12 +556,13 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	// NOTE: vLLM v0.11.2+ spawns multiple GPU processes for single-GPU (main + EngineCore),
 	// so len(gpuPIDs) > 1 doesn't mean multi-GPU. Count distinct /dev/nvidiaX devices instead.
 	distinctGPUs := countDistinctGPUDevices(gpuPIDs, log)
-	// Multi-GPU CRIU path is a dead end (cuda-checkpoint blocks on
-	// libcudart wall, D2H+intercept-lib path can't reconstruct CUDA
-	// context state on restore). Multi-GPU workloads MUST use the
-	// rootfs-only path (nvsnap.io/capture label → agent watcher →
-	// per-capture PVC). Reject CRIU API calls for multi-GPU early.
-	if distinctGPUs > 1 {
+	// Plain multi-GPU CRIU cannot work: cuda-checkpoint cannot restore GPU
+	// memory a process imported from another one (NCCL P2P and NVLS, CUDA
+	// IPC). Reject it early and point at the rootfs-only path (nvsnap.io/
+	// capture label, agent watcher, per-capture PVC).
+	// Unless the workload runs under libnvsnap_gpushare.so, which releases
+	// and re-creates the memory the GPUs share around the checkpoint.
+	if distinctGPUs > 1 && !gpushareLoadedBy(gpuPIDs) {
 		return nil, fmt.Errorf("multi-GPU CRIU is unsupported (distinctGPUs=%d, gpuPIDs=%v); use the rootfs-only path: label the source pod nvsnap.io/capture=true and apply a fresh pod with nvsnap.io/restore-from=<hash>", distinctGPUs, gpuPIDs)
 	}
 
@@ -705,7 +714,8 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	// legacy path — the artifact contract is identical.
 	_, criuSpan := tracing.Tracer().Start(ctx, "checkpoint.criu_dump")
 	criuSpan.SetAttributes(attribute.String("nvsnap.criu.mode", "v2-inns"))
-	if err := a.dumpV2(ctx, containerInfo, checkpointDir, sourceUpperdir, gpuPIDs, req.LeaveRunning, log); err != nil {
+	gpushareInfo, err := a.dumpV2(ctx, containerInfo, checkpointDir, sourceUpperdir, gpuPIDs, req.LeaveRunning, log)
+	if err != nil {
 		criuSpan.RecordError(err)
 		criuSpan.SetStatus(codes.Error, "CRIU dump failed (criu-v2)")
 		criuSpan.End()
@@ -822,6 +832,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 		GPUPID: gpuPID,
 	}
 	metadata.CapturePath = CapturePathCRIUV2
+	metadata.GPUShare = gpushareInfo
 
 	// Calculate checkpoint size (skip integrity checksums — too slow for 28 GB+)
 	var checkpointSize int64

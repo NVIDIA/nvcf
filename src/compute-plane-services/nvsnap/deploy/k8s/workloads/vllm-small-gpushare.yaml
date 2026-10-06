@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# vLLM with TinyLlama 1.1B (single GPU) under gpushare -- criu-v2 checkpoint/restore with the
+# engine's default NCCL and all-reduce settings.
+#
+# nvsnap.io/gpushare: "true" has the webhook preload libnvsnap_gpushare.so and
+# mount a per-pod chunk store; the agent then saves the GPU memory with
+# nvsnap-gpu-suspend and dumps the CPU side with plain CRIU (no CUDA plugin).
+# See docs/GPUSHARE.md. Not privileged, like a function pod: the container
+# sees only its own GPUs. NCCL, gloo and vLLM use loopback so no socket
+# depends on the pod IP (the restore pod has another one).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-small-gpushare
+  namespace: nvsnap-system
+  labels:
+    app: vllm-small-gpushare
+    nvsnap.io/demo: "true"
+  annotations:
+    nvsnap.io/demo-name: "vLLM gpushare"
+    nvsnap.io/desc: "TinyLlama 1.1B (single GPU) under gpushare"
+    nvsnap.io/model: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    nvsnap.io/port: "8000"
+    nvsnap.io/gpus: "1"
+    nvsnap.io/path: "criu"
+    nvsnap.io/gpushare: "true"
+    nvsnap.io/ckpt-size: "30 GB"
+spec:
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+
+  containers:
+    - name: vllm
+      image: vllm/vllm-openai:v0.20.0
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          mkdir -p /var/run/vllm
+          nohup setsid vllm serve \
+            --model TinyLlama/TinyLlama-1.1B-Chat-v1.0 \
+            --tensor-parallel-size 1 \
+            --host 0.0.0.0 \
+            --port 8000 \
+            --max-model-len 4096 \
+            --gpu-memory-utilization 0.3 > /vllm.out 2>&1 < /dev/null &
+          tail -F /vllm.out &
+          while true; do sleep 30; done
+      env:
+        - { name: PYTHONFAULTHANDLER, value: "1" }
+        - { name: PYTHONUNBUFFERED,   value: "1" }
+        - { name: HF_HOME,            value: "/root/.cache/huggingface" }
+        - { name: HF_HUB_DISABLE_XET, value: "1" }
+        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
+        - { name: VLLM_LOGGING_LEVEL, value: "INFO" }
+        - { name: VLLM_NO_USAGE_STATS, value: "1" }
+        - { name: VLLM_HOST_IP,       value: "127.0.0.1" }
+        - { name: NCCL_SOCKET_IFNAME, value: "lo" }
+        - { name: GLOO_SOCKET_IFNAME, value: "lo" }
+      ports:
+        - containerPort: 8000
+          name: http
+      readinessProbe:
+        httpGet: { path: /v1/models, port: 8000 }
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 90
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+        requests:
+          nvidia.com/gpu: "1"
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 16Gi }
