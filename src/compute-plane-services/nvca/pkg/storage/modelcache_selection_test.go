@@ -219,6 +219,27 @@ func TestPersistedModelCacheStorageSelectionRWXReadOnlyContract(t *testing.T) {
 	withReaderOptions := *selection
 	withReaderOptions.RequiredMountOptions = []string{"ro"}
 	require.ErrorContains(t, withReaderOptions.Validate(), "does not create a reader PV")
+
+	// The writer identity is recorded for this shape only, round-trips, and
+	// is absent on selections persisted before it existed.
+	for _, identity := range []string{ModelCacheWriterIdentityFSGroup, ModelCacheWriterIdentityRoot} {
+		withIdentity := *selection
+		withIdentity.WriterIdentity = identity
+		require.NoError(t, withIdentity.Validate(), identity)
+		raw, err := withIdentity.Marshal()
+		require.NoError(t, err)
+		parsed, err := ParsePersistedModelCacheStorageSelection(raw)
+		require.NoError(t, err)
+		assert.Equal(t, identity, parsed.WriterIdentity)
+	}
+	badIdentity := *selection
+	badIdentity.WriterIdentity = "sudo"
+	require.ErrorContains(t, badIdentity.Validate(), "invalid writerIdentity")
+
+	rox := testPersistedModelCacheStorageSelection(ModelCacheSelectionDurable, ModelCacheTransitionROXReadOnly)
+	require.NoError(t, rox.Validate())
+	rox.WriterIdentity = ModelCacheWriterIdentityRoot
+	require.ErrorContains(t, rox.Validate(), "no shared-claim writer")
 }
 
 func TestPersistedModelCacheStorageSelectionMarshalParseRoundTrip(t *testing.T) {

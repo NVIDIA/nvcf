@@ -126,6 +126,7 @@ func (h *OpenAIProxyHandlers) dispatchProxyRequest(
 			RawQuery:      c.Request().URL.RawQuery,
 			Header:        headers,
 			Body:          body,
+			ContentLength: contentLength,
 			InputTokens:   inputTokens,
 			TokenEstimate: inputTokens,
 		},

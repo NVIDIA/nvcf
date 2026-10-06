@@ -489,6 +489,9 @@ func (c Config) Validate() error {
 	if err := c.Agent.BYOOOTelCollector.Validate(); err != nil {
 		return fmt.Errorf("agent.byooOtelCollector: %w", err)
 	}
+	if err := c.Agent.AgentTimeConfig.Validate(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -721,6 +724,33 @@ type AgentTimeConfig struct {
 	PeriodicInstanceStatusInterval time.Duration `yaml:",omitempty"`
 	ICMSRequestAckInterval         time.Duration `yaml:",omitempty"`
 	ICMSRequestAckRetryTimeout     time.Duration `yaml:",omitempty"`
+}
+
+// Validate rejects negative durations. A negative interval is not a valid
+// periodic timer period and would otherwise reach time.NewTicker undetected,
+// which panics at agent startup with "non-positive interval for NewTicker".
+// Zero is intentionally allowed through: Complete() treats it as "unset" and
+// fills in a default.
+func (t AgentTimeConfig) Validate() error {
+	fields := []struct {
+		name  string
+		value time.Duration
+	}{
+		{"agent.credRenewInterval", t.CredRenewInterval},
+		{"agent.heartbeatInterval", t.HeartbeatInterval},
+		{"agent.syncQueueInterval", t.SyncQueueInterval},
+		{"agent.syncRequestStatusInterval", t.SyncRequestStatusInterval},
+		{"agent.syncAcknowledgeRequestInterval", t.SyncAcknowledgeRequestInterval},
+		{"agent.periodicInstanceStatusInterval", t.PeriodicInstanceStatusInterval},
+		{"agent.icmsRequestAckInterval", t.ICMSRequestAckInterval},
+		{"agent.icmsRequestAckRetryTimeout", t.ICMSRequestAckRetryTimeout},
+	}
+	for _, f := range fields {
+		if f.value < 0 {
+			return fmt.Errorf("%s: must not be negative, got %s", f.name, f.value)
+		}
+	}
+	return nil
 }
 
 func (t AgentTimeConfig) Complete() AgentTimeConfig {
