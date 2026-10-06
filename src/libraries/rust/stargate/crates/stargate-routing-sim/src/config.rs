@@ -408,6 +408,22 @@ impl SimConfig {
         Ok(())
     }
 
+    /// Every Stargate in topology order, as its region index and its share of
+    /// client traffic. The simulator and the fleet driver both use this order.
+    pub fn stargates(&self) -> Vec<(usize, f64)> {
+        self.topology
+            .regions
+            .iter()
+            .enumerate()
+            .flat_map(|(index, region)| {
+                std::iter::repeat_n(
+                    (index, region.traffic_weight / region.stargates as f64),
+                    region.stargates,
+                )
+            })
+            .collect()
+    }
+
     /// Engine configuration for backend `backend` in `region`.
     pub fn backend_engine(&self, region: &RegionConfig, backend: usize) -> EngineConfig {
         let speed = region.backend_speed;

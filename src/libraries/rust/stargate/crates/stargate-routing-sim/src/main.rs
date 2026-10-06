@@ -15,51 +15,188 @@
 
 mod backend;
 mod config;
+mod drive;
+mod fleet;
 mod metrics;
 mod sim;
 mod time;
 mod workload;
 
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Context;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 use crate::config::SimConfig;
+use crate::drive::{DriveArgs, FleetRecord};
 use crate::metrics::RunSummary;
 use crate::sim::RunSpec;
 
 #[derive(Parser, Debug)]
 #[command(name = "stargate-routing-sim")]
 struct Cli {
-    /// Simulation config (JSON).
-    #[arg(long)]
-    config: PathBuf,
-    /// Write every run summary to this JSON file.
-    #[arg(long)]
-    output: Option<PathBuf>,
-    /// Parallel worker threads. Defaults to available parallelism.
-    #[arg(long)]
-    jobs: Option<NonZeroUsize>,
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Simulate every seed, rate, and policy in a config.
+    Simulate {
+        /// Simulation config (JSON).
+        #[arg(long)]
+        config: PathBuf,
+        /// Write every run summary to this JSON file.
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Parallel worker threads. Defaults to available parallelism.
+        #[arg(long)]
+        jobs: Option<NonZeroUsize>,
+    },
+    /// Send one region's share of a config's workload to a deployed Stargate.
+    Drive {
+        #[arg(long)]
+        config: PathBuf,
+        /// Stargate HTTP base URL, for example http://router:8000.
+        #[arg(long)]
+        endpoint: String,
+        /// Topology region whose Stargates this process represents.
+        #[arg(long)]
+        region: String,
+        #[arg(long)]
+        rate_rps: f64,
+        #[arg(long)]
+        seed: u64,
+        /// Per-request algorithm sent as x-routing-method.
+        #[arg(long)]
+        routing_method: Option<String>,
+        /// Unique label for this run; prefixes request IDs and cache keys.
+        #[arg(long)]
+        run_label: String,
+        /// Shared start time for all regions, in Unix milliseconds.
+        #[arg(long)]
+        start_at_unix_ms: u64,
+        /// Output file with one JSON record per request.
+        #[arg(long)]
+        records: PathBuf,
+    },
+    /// Summarize fleet driver records from every region of one or more runs.
+    SummarizeFleet {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long, required = true, num_args = 1..)]
+        records: Vec<PathBuf>,
+        /// JSON object mapping backend cluster IDs to GPU worker counts.
+        #[arg(long)]
+        backend_gpus: Option<PathBuf>,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-    let raw = std::fs::read_to_string(&cli.config)
-        .with_context(|| format!("reading {}", cli.config.display()))?;
-    let config: SimConfig =
-        serde_json::from_str(&raw).with_context(|| format!("parsing {}", cli.config.display()))?;
-    config.validate()?;
+    match Cli::parse().command {
+        Command::Simulate {
+            config,
+            output,
+            jobs,
+        } => simulate(&load_config(&config)?, output, jobs),
+        Command::Drive {
+            config,
+            endpoint,
+            region,
+            rate_rps,
+            seed,
+            routing_method,
+            run_label,
+            start_at_unix_ms,
+            records,
+        } => tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+            .block_on(drive::drive(DriveArgs {
+                config: load_config(&config)?,
+                endpoint: endpoint.trim_end_matches('/').to_string(),
+                region,
+                rate_rps,
+                seed,
+                routing_method,
+                run_label,
+                start_at_unix_ms,
+                records,
+            })),
+        Command::SummarizeFleet {
+            config,
+            records,
+            backend_gpus,
+            output,
+        } => summarize_fleet(&load_config(&config)?, &records, backend_gpus, output),
+    }
+}
 
+fn load_config(path: &Path) -> anyhow::Result<SimConfig> {
+    let raw =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let config: SimConfig =
+        serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    config.validate()?;
+    Ok(config)
+}
+
+fn summarize_fleet(
+    config: &SimConfig,
+    paths: &[PathBuf],
+    backend_gpus: Option<PathBuf>,
+    output: Option<PathBuf>,
+) -> anyhow::Result<()> {
+    let mut records: Vec<FleetRecord> = Vec::new();
+    for path in paths {
+        let raw =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        for (line, text) in raw.lines().enumerate() {
+            records.push(
+                serde_json::from_str(text)
+                    .with_context(|| format!("{}:{}", path.display(), line + 1))?,
+            );
+        }
+    }
+    let gpus: HashMap<String, usize> = match backend_gpus {
+        Some(path) => serde_json::from_str(
+            &std::fs::read_to_string(&path)
+                .with_context(|| format!("reading {}", path.display()))?,
+        )?,
+        None => HashMap::new(),
+    };
+    let window = fleet::Window::new(
+        config.workload.warmup_s,
+        config.workload.measure_s,
+        config.client.ttft_slo_ms,
+    );
+    let summaries = fleet::summarize(&records, &window, &gpus);
+    let text = serde_json::to_string_pretty(&summaries)?;
+    match output {
+        Some(output) => std::fs::write(&output, text)
+            .with_context(|| format!("writing {}", output.display()))?,
+        None => println!("{text}"),
+    }
+    Ok(())
+}
+
+fn simulate(
+    config: &SimConfig,
+    output: Option<PathBuf>,
+    jobs: Option<NonZeroUsize>,
+) -> anyhow::Result<()> {
     let mut specs = Vec::new();
     for seed in &config.seeds {
         for rate_rps in &config.workload.rates_rps {
             for policy in &config.policies {
                 specs.push(RunSpec {
-                    config: &config,
+                    config,
                     policy,
                     rate_rps: *rate_rps,
                     seed: *seed,
@@ -67,8 +204,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
-    let jobs = cli
-        .jobs
+    let jobs = jobs
         .or_else(|| std::thread::available_parallelism().ok())
         .map_or(1, NonZeroUsize::get)
         .min(specs.len());
@@ -102,7 +238,7 @@ fn main() -> anyhow::Result<()> {
         .collect::<anyhow::Result<Vec<_>>>()?;
 
     print_table(&config.name, &summaries);
-    if let Some(output) = cli.output {
+    if let Some(output) = output {
         std::fs::write(&output, serde_json::to_string_pretty(&summaries)?)
             .with_context(|| format!("writing {}", output.display()))?;
     }

@@ -129,7 +129,7 @@ pub struct Percentiles {
 }
 
 impl Percentiles {
-    fn from_ms(mut values: Vec<f64>) -> Self {
+    pub(crate) fn from_ms(mut values: Vec<f64>) -> Self {
         if values.is_empty() {
             return Self::default();
         }

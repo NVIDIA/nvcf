@@ -168,7 +168,6 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
     let algorithm = spec.policy.algorithm_config()?;
     let mut backends = Vec::new();
     let mut stargates = Vec::new();
-    let mut stargate_weights = Vec::new();
     for (region_index, region) in config.topology.regions.iter().enumerate() {
         for backend_index in 0..region.backends {
             backends.push(Backend::new(
@@ -186,7 +185,6 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
                 stats: Vec::new(),
                 reservations: Vec::new(),
             });
-            stargate_weights.push(region.traffic_weight / region.stargates as f64);
         }
     }
     let initial_stats: Vec<Rc<ModelStats>> = backends
@@ -198,6 +196,11 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
         stargate.reservations = backends.iter().map(|_| Vec::new()).collect();
     }
 
+    let stargate_weights: Vec<f64> = config
+        .stargates()
+        .into_iter()
+        .map(|(_, weight)| weight)
+        .collect();
     let mut workload = plan(
         &config.workload,
         &stargate_weights,

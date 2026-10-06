@@ -3554,14 +3554,19 @@ name = "stargate-routing-sim"
 version = "0.15.2"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
+ "futures",
  "mock-engine",
  "rand 0.9.3",
+ "reqwest",
  "serde",
  "serde_json",
  "stargate",
  "stargate-proto",
  "stargate-protocol",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

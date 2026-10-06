@@ -23,17 +23,42 @@ configurations. It calls the production `LoadBalancer` implementations from the
 
 ## Usage
 
-Run from `src/libraries/rust/stargate`:
+Simulate every seed, rate, and policy in a config. Run from
+`src/libraries/rust/stargate`:
 
 ```sh
-cargo run --release -p stargate-routing-sim -- \
+cargo run --release -p stargate-routing-sim -- simulate \
   --config crates/stargate-routing-sim/configs/stargate-dev-parity.json \
   --output /tmp/routing-sim.json
 ```
 
-Each config runs every combination of seed, rate, and policy. All policies see
-the same arrival sequence for a seed. Policy `load_balancer` objects use the
-same JSON shape as Stargate per-model load-balancer config.
+All policies see the same arrival sequence for a seed. Policy `load_balancer`
+objects use the same JSON shape as Stargate per-model load-balancer config.
+
+## Driving a deployed fleet
+
+`drive` sends the same workload to a deployed Stargate in real time, so a
+fleet run and a simulation of the same config and seed see identical
+sessions. Requests carry `x-input-tokens`, `x-output-tokens`, and
+`x-cache-affinity-key` instead of prompt text; MockDynamo honors all three.
+Run one driver per region with a shared start time. Each driver sends the
+requests planned for its region's Stargates:
+
+```sh
+stargate-routing-sim drive --config bench.json --region usw2 \
+  --endpoint http://router:8000 --rate-rps 300 --seed 1 \
+  --routing-method pulsar-wait-and-widen --run-label pulsar-300-s1 \
+  --start-at-unix-ms 1791000000000 --records usw2.jsonl
+```
+
+Then summarize all regions' records with the same measurement window and
+TTFT SLO as the simulator:
+
+```sh
+stargate-routing-sim summarize-fleet --config bench.json \
+  --records usw2.jsonl ue1.jsonl ew1.jsonl an1.jsonl as2.jsonl \
+  --backend-gpus backend-gpus.json --output summary.json
+```
 
 ## Fidelity limits
 

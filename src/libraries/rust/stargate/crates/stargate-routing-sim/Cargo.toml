@@ -33,10 +33,17 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
+futures = { workspace = true }
 mock-engine = { workspace = true }
 rand = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 stargate = { workspace = true }
 stargate-proto = { workspace = true }
 stargate-protocol = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+
+[dev-dependencies]
+axum = { workspace = true }
