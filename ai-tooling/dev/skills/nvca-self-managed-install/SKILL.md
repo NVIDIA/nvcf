@@ -47,9 +47,11 @@ also sets the values the control-plane validator role needs from the stack:
 `clusterValidator.storageClass` from `global.storageClass`, and
 `clusterValidator.externalComponents` from the quorum components the stack
 disables. It rewrites them on every render, empty included, so an upgrade does
-not keep a stale value from the release. On a registry other than `nvcr.io` it
-also sets `clusterValidator.nodeToNodeProbeImage` to `busybox:1.36` under the
-stack's repository, so mirror that image there:
+not keep a stale value from the release. On a registry other than NGC
+(`nvcr.io` or a subdomain) it also sets `clusterValidator.nodeToNodeProbeImage`
+to `busybox:1.36` under the stack's repository, so mirror that image there. It
+keeps a probe image the release already sets, and sets none when
+`networkChecks.enforcement.testImage` is set:
 
 ```bash
 make install-from-stack \

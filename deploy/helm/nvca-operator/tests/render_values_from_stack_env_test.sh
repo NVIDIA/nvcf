@@ -120,7 +120,7 @@ if [[ "${actual_external}" != "openbao,cassandra" ]]; then
   exit 1
 fi
 
-actual_probe_image="$(yq -r '.clusterValidator.nodeToNodeProbeImage' "${output_file}")"
+actual_probe_image="$(yq -r '.clusterValidator.nodeToNodeProbeImage // ""' "${output_file}")"
 if [[ -n "${actual_probe_image}" ]]; then
   echo "expected no probe image on nvcr.io, which has no busybox, got ${actual_probe_image}" >&2
   exit 1
@@ -147,7 +147,6 @@ clusterValidator:
   gatewayNames: [envoy-gateway/nvcf-gateway]
   storageClass: ceph-rbd
   externalComponents: [cassandra]
-  nodeToNodeProbeImage: busybox:1.36
 EOF
 
 render_upgrade() {
@@ -183,5 +182,52 @@ if [[ "${actual_probe_image}" != "tools.example.com/busybox:1.37" ]]; then
   echo "expected NODE_TO_NODE_PROBE_IMAGE to override the probe image, got ${actual_probe_image}" >&2
   exit 1
 fi
+
+# render_probe_image REGISTRY CLUSTER_VALIDATOR_VALUES renders with that
+# registry over a release holding those clusterValidator values, and prints
+# the probe image the render wrote, empty when it wrote none.
+render_probe_image() {
+  cat > "${stack_env_file}" <<EOF
+global:
+  image:
+    registry: "$1"
+    repository: nvidia/nvcf
+EOF
+  printf 'clusterValidator:\n%s\n' "$2" > "${existing_values_file}"
+  render_upgrade
+  yq -r '.clusterValidator.nodeToNodeProbeImage // ""' "${output_file}"
+}
+
+expect_probe_image() {
+  local want="$1" registry="$2" existing="$3" why="$4" got
+  got="$(render_probe_image "${registry}" "${existing}")"
+  if [[ "${got}" != "${want}" ]]; then
+    echo "registry ${registry}: expected probe image '${want}' (${why}), got '${got}'" >&2
+    exit 1
+  fi
+}
+
+# No NGC host has busybox, and the probe pods carry no pull secret, so on any
+# spelling of one the render leaves the probe image to the chart default.
+for registry in stg.nvcr.io nvcr.io:443 nvcr.io/ https://nvcr.io/ NVCR.IO; do
+  expect_probe_image "" "${registry}" '  storageClass: ""' "an NGC host"
+done
+expect_probe_image "notnvcr.io/nvidia/nvcf/busybox:1.36" notnvcr.io '  storageClass: ""' \
+  "a host that only ends in nvcr.io is a mirror"
+expect_probe_image "registry.example.com:5000/nvidia/nvcf/busybox:1.36" registry.example.com:5000 \
+  '  storageClass: ""' "a mirror keeps its port"
+
+# A probe image already set is the user's, and the validator's own advice
+# tells them to set it: no render resets it, on NGC or on a mirror.
+for registry in nvcr.io registry.example.com; do
+  expect_probe_image "tools.example.com/busybox:1.36" "${registry}" \
+    "  nodeToNodeProbeImage: tools.example.com/busybox:1.36" "the release's own probe image"
+done
+
+# The probe falls back to the enforcement test image, which a mirror default
+# would shadow.
+expect_probe_image "" registry.example.com \
+  "  networkChecks: {enforcement: {enabled: true, testImage: tools.example.com/busybox:1.36}}" \
+  "the enforcement test image stands in"
 
 echo "render_values_from_stack_env.sh keeps upgrade versions and stack-derived validator values aligned with the stack"

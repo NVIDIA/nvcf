@@ -155,15 +155,28 @@ yq eval -i '.clusterValidator.externalComponents = (strenv(EXTERNAL_COMPONENTS) 
 # The node-to-node probe pods carry no imagePullSecrets, and an air-gapped
 # cluster cannot reach Docker Hub. On a mirror registry they pull
 # busybox:1.36 from the stack's repository, where it must be mirrored and
-# pullable without a secret. The NVIDIA catalog on nvcr.io has no busybox,
-# so there the chart's Docker Hub default stays. NODE_TO_NODE_PROBE_IMAGE
-# overrides both.
+# pullable without a secret. No NGC registry (nvcr.io or a subdomain) has
+# busybox, so there the chart's default stays. A probe image the release or
+# values.local.yml already sets is the user's, and is kept. So is an
+# enforcement test image, which the probe falls back to and a mirror default
+# would shadow. NODE_TO_NODE_PROBE_IMAGE overrides all of these.
+registry_host="${stack_image_registry#*://}"
+registry_host="${registry_host%%/*}"
+registry_host="$(printf '%s' "${registry_host%%:*}" | tr '[:upper:]' '[:lower:]')"
+case "${registry_host}" in
+  nvcr.io | *.nvcr.io) ngc_registry=true ;;
+  *) ngc_registry=false ;;
+esac
 PROBE_IMAGE="${NODE_TO_NODE_PROBE_IMAGE:-}"
-if [ -z "${PROBE_IMAGE}" ] && [ "${stack_image_registry}" != "nvcr.io" ]; then
+if [ -z "${PROBE_IMAGE}" ] && [ "${ngc_registry}" = "false" ] &&
+  [ -z "$(yq -r '.clusterValidator.nodeToNodeProbeImage // ""' "${output_file}")" ] &&
+  [ -z "$(yq -r '.clusterValidator.networkChecks.enforcement.testImage // ""' "${output_file}")" ]; then
   PROBE_IMAGE="${repo_prefix}/busybox:1.36"
 fi
-export PROBE_IMAGE
-yq eval -i '.clusterValidator.nodeToNodeProbeImage = strenv(PROBE_IMAGE)' "${output_file}"
+if [ -n "${PROBE_IMAGE}" ]; then
+  export PROBE_IMAGE
+  yq eval -i '.clusterValidator.nodeToNodeProbeImage = strenv(PROBE_IMAGE)' "${output_file}"
+fi
 
 if [ -n "${NVCA_OPERATOR_VERSION:-}" ]; then
   export NVCA_OPERATOR_VERSION
