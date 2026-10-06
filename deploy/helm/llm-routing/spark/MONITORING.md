@@ -11,57 +11,43 @@ Component /metrics endpoints
 
 ## Install
 
-Run from `deploy/helm/llm-routing/spark` with the same context/configuration selection used for installation. New configurations enable monitoring during `stack`. For an existing routing stack, discover its settings and locate the saved configuration:
-
-```bash
-python3 spark.py attach-monitoring
-python3 spark.py paths
-```
-
-Fresh attachment enables monitoring. If an existing configuration disables it, set:
-
-```json
-"monitoring": {"enabled": true}
-```
-
-[Preload the monitoring images](#offline-images) if the pull policy is `Never`, then install monitoring without changing the serving workloads:
+Run from `deploy/helm/llm-routing/spark` in the configured terminal used for the routing stack:
 
 ```bash
 python3 spark.py monitoring
 ```
 
+The command discovers the existing stack, saves its monitoring settings, and installs or upgrades monitoring. Missing images are pulled automatically by default. Existing model workloads keep serving. If you use explicit `--context`, `--config` or `--work-dir` options, pass the same selection to each command.
+
+## Dashboard
+
+```bash
+python3 spark.py dashboard
+```
+
+Open `http://127.0.0.1:13000/d/llm-demo`. Viewing needs no login. Keep the command running. Ctrl-C closes the tunnel. Use `--port` to choose another local port.
+
+For administration, stop the existing tunnel and run:
+
+```bash
+python3 spark.py dashboard --admin
+```
+
+This prints the login URL, username and stored password from the cluster. Admin access is for managing data sources, users, permissions and Grafana settings. Dashboard editing normally needs only the Editor role. This demo provisions its dashboard and data source from the chart, so save lasting changes in the repository.
+
+Anonymous access has the Viewer role and also applies to clients that can reach Grafana's internal Service. Admin login remains protected. The CLI displays credentials only with `--admin` and does not write them to diagnostic logs.
+
 ## Verification
 
-After a model is registered, run:
+For an optional check after a model is registered, run:
 
 ```bash
 python3 spark.py verify-monitoring --verify-traffic
 ```
 
-The command waits up to 75 seconds for fresh scrapes, then checks the dashboard and metric increases from real model requests. Results are saved in `evidence/monitoring.json`. Omit `--verify-traffic` to check collection only. The default is the first model ID in sorted gateway discovery. Set `monitoring.model` or pass `--model <model-id>` to select another.
+The command waits up to 75 seconds for fresh scrapes, then checks anonymous Viewer access and metric increases from real model requests. Results are saved in `evidence/monitoring.json`. Omit `--verify-traffic` to check collection only. The default is the first model ID in sorted gateway discovery. Set `monitoring.model` or pass `--model <model-id>` to select another.
 
 Set `apiKeyFile` to an existing caller-key file for traffic verification. Otherwise the command uses a temporary key with the stack-managed static-key Secret.
-
-## Dashboard
-
-Print the Grafana password, then start the local tunnel:
-
-```bash
-(
-  set -eu
-  context="$(python3 spark.py context)"
-  : "${context:?Context lookup returned an empty value}"
-  kubectl --context "$context" -n llm-spark-poc \
-    get secret llm-poc-monitoring-grafana-admin -o json |
-    python3 -c 'import base64, json, sys; print(base64.b64decode(json.load(sys.stdin)["data"]["admin-password"]).decode())'
-)
-
-python3 spark.py dashboard --port 13000
-```
-
-The lookup uses the default namespace and release prefix. If customized, replace `llm-spark-poc` and `llm-poc-monitoring-grafana-admin` (`releasePrefix` plus `-monitoring-grafana-admin`). Pass the same `--context`, `--config` or `--work-dir` options to both recipe commands.
-
-Open `http://127.0.0.1:13000/d/llm-demo` and sign in as `admin` with the printed password. Keep the command running. Ctrl-C closes the tunnel. Installation also saves the password as `grafana-admin-password` under the `workDir` shown by `python3 spark.py paths`.
 
 ## Uninstall
 
@@ -95,7 +81,7 @@ The recipe accepts these optional `monitoring` settings:
 | --- | --- | --- |
 | `enabled` | false when omitted | Install monitoring during `stack` |
 | `model` | Gateway model discovery | Select one model for traffic verification, overridden by `--model` |
-| `imagePullPolicy` | Application pull policy | `Never`, `IfNotPresent` or `Always` |
+| `imagePullPolicy` | `IfNotPresent` | `Never`, `IfNotPresent` or `Always` |
 | `images` | Chart version pins | Overrides for `collector`, `victoriaMetrics` and `grafana` |
 | `retentionPeriod` | `3d` | VictoriaMetrics retention duration |
 | `storageSize` | `5Gi` | Initial metrics PVC size |

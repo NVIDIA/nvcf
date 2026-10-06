@@ -63,7 +63,10 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ $secret }}, key: admin-user}}
             - name: GF_SECURITY_ADMIN_PASSWORD
               valueFrom: {secretKeyRef: {name: {{ $secret }}, key: admin-password}}
-            - {name: GF_AUTH_ANONYMOUS_ENABLED, value: "false"}
+            - {name: GF_AUTH_ANONYMOUS_ENABLED, value: "true"}
+            - {name: GF_AUTH_ANONYMOUS_ORG_ROLE, value: Viewer}
+            - {name: GF_AUTH_DISABLE_LOGIN_FORM, value: "false"}
+            - {name: GF_USERS_VIEWERS_CAN_EDIT, value: "false"}
             - {name: GF_USERS_ALLOW_SIGN_UP, value: "false"}
             - {name: GF_ANALYTICS_REPORTING_ENABLED, value: "false"}
             - {name: GF_ANALYTICS_CHECK_FOR_UPDATES, value: "false"}

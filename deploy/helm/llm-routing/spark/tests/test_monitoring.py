@@ -64,6 +64,14 @@ class MonitoringTests(unittest.TestCase):
         self.assertEqual(set(selectors), {'gateway', 'router', 'operator', 'pylon'})
         self.assertEqual(values['nodeSelector'], {'kubernetes.io/hostname': self.config['nodes']['control']})
 
+    def test_monitoring_image_policy_is_independent_of_application_images(self):
+        default = json.loads((monitoring.CHART/'values.yaml').read_text())['imagePullPolicy']
+        for policy in ('Never', 'Always'):
+            self.config['images']['pullPolicy'] = policy
+            self.assertEqual(monitoring.chart_values(self.recipe)['imagePullPolicy'], default)
+        self.config['monitoring']['imagePullPolicy'] = 'Never'
+        self.assertEqual(monitoring.chart_values(self.recipe)['imagePullPolicy'], 'Never')
+
     def test_optional_runtime_targets_do_not_assume_a_model_or_backend(self):
         target = {'name': 'custom-runtime', 'selector': 'app=model-engine', 'portName': 'metrics', 'runtime': 'llama.cpp'}
         self.config['monitoring']['extraTargets'] = [target]
@@ -275,14 +283,13 @@ class MonitoringTests(unittest.TestCase):
         import io
         self.output.return_value = '{"items": []}'
         self.recipe.verify = Mock()
-        (self.recipe.work/'grafana-admin-password').write_text('private-test-password')
         components = {'gateway', 'router', 'operator', 'pylon', 'backend',
                       'monitoring-storage', 'monitoring-grafana', 'monitoring-collector'}
         responses = [
             {'status': 'success', 'data': {'result': []}},
             {'status': 'success', 'data': {'result': [
                 {'metric': {'component': component}, 'value': [0, '1']} for component in components]}},
-            {'dashboard': {'uid': 'llm-demo', 'panels': [{'id': 1}]}}]
+            {'dashboard': {'uid': 'llm-demo', 'panels': [{'id': 1}]}, 'meta': {'canEdit': False, 'canSave': False, 'canAdmin': False}}]
         with patch.object(self.monitor, 'forward', side_effect=lambda *args: contextlib.nullcontext()), \
              patch.object(monitoring.urllib.request, 'urlopen', side_effect=[io.StringIO(json.dumps(r)) for r in responses]) as request, \
              patch.object(monitoring.time, 'monotonic', side_effect=[0, 0]), \
@@ -290,11 +297,14 @@ class MonitoringTests(unittest.TestCase):
             self.monitor.verify(18000)
 
         self.assertEqual(request.call_count, 3)
+        self.assertFalse(request.call_args.args[0].has_header('Authorization'))
+        self.assertFalse((self.recipe.work/'grafana-admin-password').exists())
         sleep.assert_called_once_with(2)
         self.recipe.verify.assert_not_called()
         report = json.loads((self.recipe.work/'evidence/monitoring.json').read_text())
         self.assertTrue(report['passed'])
         self.assertEqual(report['dashboardUid'], 'llm-demo')
+        self.assertTrue(report['anonymousViewer'])
         self.assertEqual({s['metric']['component'] for s in report['targets']}, components)
 
     def test_verifier_bounds_collection_wait_and_preserves_final_failure(self):
@@ -399,6 +409,97 @@ class MonitoringTests(unittest.TestCase):
                         replace.assert_called_once_with('/images/test.tar.upload', '/images/test.tar')
                     unlink.assert_called_once_with('/images/test.tar.upload')
 
+    def test_verifier_rejects_anonymous_edit_or_admin_permissions(self):
+        import contextlib
+        import io
+        self.output.return_value = '{"items": []}'
+        components = {'gateway', 'router', 'operator', 'pylon', 'monitoring-storage', 'monitoring-grafana', 'monitoring-collector'}
+        scrapes = {'status': 'success', 'data': {'result': [
+            {'metric': {'component': component}, 'value': [0, '1']} for component in components]}}
+        for permission in ('canEdit', 'canSave', 'canAdmin', 'missing'):
+            meta = dict.fromkeys(('canEdit', 'canSave', 'canAdmin'), False)
+            if permission == 'missing':
+                meta = {}
+            else:
+                meta[permission] = True
+            dashboard = {'dashboard': {'uid': 'llm-demo', 'panels': [{'id': 1}]}, 'meta': meta}
+            with self.subTest(permission=permission), \
+                 patch.object(self.monitor, 'forward', side_effect=lambda *args: contextlib.nullcontext()), \
+                 patch.object(monitoring.urllib.request, 'urlopen', side_effect=[io.StringIO(json.dumps(r)) for r in (scrapes, dashboard)]), \
+                 self.assertRaisesRegex(RuntimeError, 'Viewer permissions'):
+                self.monitor.verify(18000)
+            self.assertFalse(json.loads((self.recipe.work/'evidence/monitoring.json').read_text())['passed'])
+
+    def test_dashboard_viewer_does_not_read_or_display_credentials(self):
+        import contextlib
+        import io
+        stream = io.StringIO()
+        proc = Mock()
+        proc.poll.return_value = None
+        with patch.object(self.monitor, 'forward', return_value=contextlib.nullcontext(proc)), \
+             patch.object(monitoring.time, 'sleep', side_effect=KeyboardInterrupt), contextlib.redirect_stdout(stream):
+            self.monitor.dashboard(13000)
+        self.output.assert_not_called()
+        self.assertIn('/d/llm-demo', stream.getvalue())
+        self.assertIn('No login required', stream.getvalue())
+        self.assertNotIn('Password', stream.getvalue())
+
+    def admin_secret(self):
+        return {'metadata': {'annotations': {'meta.helm.sh/release-name': self.monitor.release,
+                 'meta.helm.sh/release-namespace': self.config['namespace']}},
+                'data': {key: base64.b64encode(value.encode()).decode()
+                         for key, value in [('admin-user', 'admin'), ('admin-password', 'current-password')]}}
+
+    def test_admin_access_reads_current_owned_secret_and_keeps_credentials_out_of_logs(self):
+        import contextlib
+        import io
+        import console_output
+        stream = io.StringIO()
+        proc = Mock()
+        proc.poll.return_value = None
+        self.output.return_value = json.dumps(self.admin_secret())
+        console = console_output.Console()
+        with patch.object(self.monitor, 'forward', return_value=contextlib.nullcontext(proc)), \
+             patch.object(monitoring.time, 'sleep', side_effect=KeyboardInterrupt), contextlib.redirect_stdout(stream):
+            console.run('dashboard', self.recipe.work, lambda: self.monitor.dashboard(13000, admin=True))
+        self.output.assert_called_once_with(self.recipe.kc+['get', 'secret', self.monitor.release+'-grafana-admin', '-o', 'json'])
+        self.assertIn('http://127.0.0.1:13000/login', stream.getvalue())
+        self.assertIn('User: admin', stream.getvalue())
+        self.assertIn('Password: current-password', stream.getvalue())
+        self.assertIsNone(console.log_path)
+        self.assertFalse((self.recipe.work/'grafana-admin-password').exists())
+
+    def test_admin_access_rejects_foreign_or_malformed_credentials_before_tunneling(self):
+        import contextlib
+        import io
+        for problem in ('owner', 'namespace', 'missing', 'base64', 'utf8', 'empty', 'control'):
+            secret = self.admin_secret()
+            if problem in ('owner', 'namespace'):
+                key = 'meta.helm.sh/release-'+('name' if problem == 'owner' else 'namespace')
+                secret['metadata']['annotations'][key] = 'other'
+            elif problem == 'missing':
+                del secret['data']['admin-password']
+            else:
+                secret['data']['admin-password'] = {'base64': '***', 'utf8': '/w==', 'empty': '',
+                                                    'control': base64.b64encode(b'password\n').decode()}[problem]
+            self.output.return_value = json.dumps(secret)
+            stream = io.StringIO()
+            with self.subTest(problem=problem), patch.object(self.monitor, 'forward') as forward, \
+                 contextlib.redirect_stdout(stream), self.assertRaisesRegex(RuntimeError, 'another installation|malformed'):
+                self.monitor.dashboard(13000, admin=True)
+            forward.assert_not_called()
+            self.assertEqual(stream.getvalue(), '')
+
+    def test_admin_bind_failure_does_not_print_credentials(self):
+        import contextlib
+        import io
+        self.output.return_value = json.dumps(self.admin_secret())
+        stream = io.StringIO()
+        with patch.object(self.monitor, 'forward', side_effect=OSError('Address already in use')), \
+             contextlib.redirect_stdout(stream), self.assertRaises(OSError):
+            self.monitor.dashboard(13000, admin=True)
+        self.assertEqual(stream.getvalue(), '')
+
     def test_dashboard_reports_a_lost_tunnel(self):
         import contextlib
         proc = Mock()
@@ -424,7 +525,6 @@ class MonitoringTests(unittest.TestCase):
             with self.subTest(stalled_metric=stalled_metric):
                 self.output.return_value = '{"items": []}'
                 self.output.side_effect = None
-                (self.recipe.work/'grafana-admin-password').write_text('private-test-password')
                 traffic_sent = False
                 selected = 'vendor/model"quoted\\path\nname\U0001f680'
                 client = Mock()
@@ -439,7 +539,7 @@ class MonitoringTests(unittest.TestCase):
                 def response(request, timeout):
                     url = request if isinstance(request, str) else request.full_url
                     if '/api/dashboards/' in url:
-                        return io.StringIO(json.dumps({'dashboard': {'uid': 'llm-demo', 'panels': [{'id': 1}]}}))
+                        return io.StringIO(json.dumps({'dashboard': {'uid': 'llm-demo', 'panels': [{'id': 1}]}, 'meta': {'canEdit': False, 'canSave': False, 'canAdmin': False}}))
                     query = monitoring.urllib.parse.parse_qs(monitoring.urllib.parse.urlparse(url).query)['query'][0]
                     if query.startswith('up{'):
                         data = [{'metric': {'component': c}, 'value': [0,'1']} for c in components]
@@ -555,7 +655,7 @@ class MonitoringChartTests(unittest.TestCase):
         self.assertEqual(pvc['metadata']['annotations']['helm.sh/resource-policy'], 'keep')
         grafana = next(d for d in self.docs if d['kind']=='Deployment' and d['metadata']['name'].endswith('-grafana'))
         env = {e['name']: e for e in grafana['spec']['template']['spec']['containers'][0]['env']}
-        self.assertEqual(env['GF_AUTH_ANONYMOUS_ENABLED']['value'], 'false')
+        self.assertEqual(env['GF_AUTH_ANONYMOUS_ENABLED']['value'], 'true')
         self.assertIn('secretKeyRef', env['GF_SECURITY_ADMIN_PASSWORD']['valueFrom'])
 
     def test_dashboard_provisioning_and_queries_cover_required_signals(self):

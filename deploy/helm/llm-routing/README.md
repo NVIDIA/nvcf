@@ -46,7 +46,7 @@ Use your existing kubeconfig.
 
 Build and distribute `gateway`, `router`, `pylon` and `operator` using the [image build guide](spark/BUILDING.md).
 
-New configurations also enable [demo monitoring](spark/MONITORING.md). For local image imports, [preload monitoring images](spark/MONITORING.md#offline-images) before `stack`. Set `monitoring.enabled=false` to skip it.
+New configurations also enable [demo monitoring](spark/MONITORING.md). Monitoring uses cached images or pulls them automatically. For an offline installation, [preload monitoring images](spark/MONITORING.md#offline-images) before `stack`. Set `monitoring.enabled=false` to skip it.
 
 ### Deploy in order
 
@@ -232,7 +232,7 @@ Both model persistent volume claims (PVCs) remain after uninstall.
 
 ### Demo monitoring
 
-After registering a model, follow [monitoring verification](spark/MONITORING.md#verification) and [open Grafana](spark/MONITORING.md#dashboard). The guide also covers installation on an existing stack, offline images and removal.
+Run `python3 spark.py monitoring` to install monitoring, then `python3 spark.py dashboard` to view it without login. See the [monitoring guide](spark/MONITORING.md) for admin access, optional verification, offline images and removal.
 
 ### Alternative container runtimes and external configuration
 

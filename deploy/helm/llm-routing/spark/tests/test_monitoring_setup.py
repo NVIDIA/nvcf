@@ -200,12 +200,12 @@ class MonitoringSetupTests(unittest.TestCase):
         with patch.object(spark, 'output', side_effect=self.output), redirect_stdout(io.StringIO()):
             spark.main(args+['attach-monitoring'])
         self.assertEqual(json.loads((self.work/'config.json').read_text()), self.config)
-        for phase, method, expected in [('monitoring', 'install', ()), ('dashboard', 'dashboard', (18443,)),
+        for phase, method, expected in [('monitoring', 'install', ()), ('dashboard', 'dashboard', (13000,)),
                                          ('verify-monitoring', 'verify', (18443, False, None)),
                                          ('export-monitoring-images', 'export_images', (self.work/'monitoring-arm64-images.tar',))]:
             with self.subTest(phase=phase), patch.object(spark.monitoring.Monitoring, method) as call:
                 spark.main(args+[phase])
-            call.assert_called_once_with(*expected)
+            call.assert_called_once_with(*expected, **({'admin': False} if phase == 'dashboard' else {}))
         with patch.object(spark.Recipe, 'cleanup_key') as cleanup:
             spark.main(args+['cleanup-key'])
         cleanup.assert_called_once_with(18443)

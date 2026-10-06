@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Metrics-only monitoring release and read-only verification for the Spark recipe."""
 import base64
+import binascii
 import contextlib
 import copy
 import ipaddress
@@ -48,7 +49,7 @@ def chart_values(recipe):
     options = settings(recipe.c)
     values = json.loads((CHART / 'values.yaml').read_text())
     values.update(enabled=enabled(recipe.c), nodeSelector={'kubernetes.io/hostname': recipe.c['nodes']['control']},
-                  imagePullPolicy=options.get('imagePullPolicy', recipe.c['images']['pullPolicy']))
+                  imagePullPolicy=options.get('imagePullPolicy', values['imagePullPolicy']))
     require(values['imagePullPolicy'] in ('Never', 'IfNotPresent', 'Always'), 'Invalid monitoring imagePullPolicy.')
     namespaces = options.get('namespaces', [recipe.c['namespace']])
     require(isinstance(namespaces, list) and namespaces and all(isinstance(n, str) and re.fullmatch(r'[a-z0-9]([-a-z0-9]*[a-z0-9])?', n) for n in namespaces),
@@ -212,7 +213,7 @@ class Monitoring:
         values['grafana']['adminPassword'] = password
         r.helm_apply(self.release, CHART, values)
         r.stamp('monitoring', {'release': self.release})
-        print('Monitoring installed. Run verify-monitoring after registering a model, then dashboard.')
+        print('Monitoring installed. Run python3 spark.py dashboard.')
 
     def export_images(self, archive):
         images = image_list(self.recipe)
@@ -262,11 +263,33 @@ class Monitoring:
                     proc.kill()
                     proc.wait()
 
-    def dashboard(self, port):
+    def admin_credentials(self):
+        r = self.recipe
+        name = self.release+'-grafana-admin'
+        secret = json.loads(self.output(r.kc+['get', 'secret', name, '-o', 'json']))
+        owner = secret.get('metadata', {}).get('annotations', {})
+        require(owner.get('meta.helm.sh/release-name') == self.release and
+                owner.get('meta.helm.sh/release-namespace') == r.c['namespace'],
+                'Grafana credential Secret belongs to another installation.')
+        try:
+            credentials = tuple(base64.b64decode(secret['data'][key], validate=True).decode()
+                                for key in ('admin-user', 'admin-password'))
+        except (KeyError, TypeError, ValueError, binascii.Error):
+            raise RuntimeError('Grafana admin Secret is malformed.') from None
+        require(all(value and value.isprintable() for value in credentials), 'Grafana admin Secret is malformed.')
+        return credentials
+
+    def dashboard(self, port, admin=False):
         self.recipe.bound_cluster()
+        credentials = self.admin_credentials() if admin else None
         with self.forward('grafana', port, 3000) as proc:
-            print('Dashboard: http://127.0.0.1:'+str(port)+'/d/llm-demo', flush=True)
-            print('User: admin. Password file:', self.recipe.work/'grafana-admin-password', flush=True)
+            path = '/login' if admin else '/d/llm-demo'
+            print('Dashboard: http://127.0.0.1:'+str(port)+path, flush=True)
+            if credentials:
+                print('User:', credentials[0], flush=True)
+                print('Password:', credentials[1], flush=True)
+            else:
+                print('Viewer access. No login required.', flush=True)
             print('Press Ctrl-C to close the tunnel.', flush=True)
             try:
                 while True:
@@ -354,14 +377,15 @@ class Monitoring:
                         require(time.monotonic() < deadline, 'Gateway request, response-duration, TTFT or prompt/completion token metrics did not increase: '+json.dumps({'before': before, 'after': after}))
                         time.sleep(2)
                     report['traffic'] = {'model': selected, 'requests': requests, 'before': before, 'after': after}
-        password = (r.work/'grafana-admin-password').read_text().strip()
         with self.forward('grafana', port+2, 3000):
-            request = urllib.request.Request('http://127.0.0.1:'+str(port+2)+'/api/dashboards/uid/llm-demo',
-                                            headers={'Authorization': 'Basic '+base64.b64encode(('admin:'+password).encode()).decode()})
+            request = urllib.request.Request('http://127.0.0.1:'+str(port+2)+'/api/dashboards/uid/llm-demo')
             with urllib.request.urlopen(request, timeout=20) as response:
                 dashboard = json.load(response)
             require(dashboard.get('dashboard', {}).get('panels'), 'Grafana demo dashboard is missing or empty.')
+            require(all(dashboard.get('meta', {}).get(permission) is False for permission in ('canEdit', 'canSave', 'canAdmin')),
+                    'Grafana anonymous access must have Viewer permissions.')
             report['dashboardUid'] = dashboard['dashboard']['uid']
+            report['anonymousViewer'] = True
         self.save(r.work/'evidence/monitoring.json', report)
         print('Fresh metrics and provisioned dashboard verified:', ', '.join(sorted(expected)))
         if not traffic:

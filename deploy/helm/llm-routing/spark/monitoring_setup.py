@@ -152,4 +152,4 @@ def attach(recipe, output, save):
     recipe.stamp('attachedMonitoring')
     recipe.stamp('inventory', {'nodes': {name: node['metadata']['uid'] for name, node in selected.items()}})
     recipe.stamp('stack', {'apiKeyFile': str(key_path) if key_path else None})
-    print('Routing stack inspected. Run monitoring, then verify-monitoring.')
+    print('Routing stack inspected.')

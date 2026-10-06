@@ -115,7 +115,7 @@ def cli_settings(args):
     config = None
     if args.config:
         path = args.config.expanduser()
-        require(path.exists() or args.phase in ('init', 'attach-monitoring'), 'Configuration file does not exist. Run init, attach-existing or attach-monitoring first.')
+        require(path.exists() or args.phase in ('init', 'attach-monitoring', 'monitoring', 'dashboard'), 'Configuration file does not exist. Run init, attach-existing or monitoring first.')
         if path.exists():
             config = json.loads(path.read_text())
     work = args.work_dir.expanduser().resolve() if args.work_dir else None
@@ -1048,7 +1048,8 @@ def main(argv=None, console=None):
     parser.add_argument('--archive', type=pathlib.Path)
     parser.add_argument('--allow-containerd-import', action='store_true')
     parser.add_argument('--result', type=pathlib.Path)
-    parser.add_argument('--port', type=int, default=18443)
+    parser.add_argument('--port', type=int, help='Local port; defaults to 13000 for dashboard and 18443 for other commands.')
+    parser.add_argument('--admin', action='store_true', help='Show administrator login credentials with dashboard.')
     parser.add_argument('--confirm-model-interruption', action='store_true')
     parser.add_argument('--verify-traffic', action='store_true', help='Send gateway verification requests and check monitoring counter increases.')
     parser.add_argument('--model', help='Served model to use with verify-monitoring --verify-traffic. Defaults to monitoring.model or gateway discovery.')
@@ -1060,6 +1061,9 @@ def main(argv=None, console=None):
     require(not args.verify_traffic or args.phase == 'verify-monitoring', '--verify-traffic requires verify-monitoring.')
     require(args.model is None or (args.phase == 'verify-monitoring' and args.verify_traffic), '--model requires verify-monitoring --verify-traffic.')
     require(not args.retry or args.phase == 'qualify', '--retry is supported only for qualify.')
+    require(not args.admin or args.phase == 'dashboard', '--admin is supported only for dashboard.')
+    if args.port is None:
+        args.port = 13000 if args.phase == 'dashboard' else 18443
     try:
         context, work, config_path, config = cli_settings(args)
     except ContextSelectionError as error:
@@ -1104,14 +1108,26 @@ def execute(args, parser, context, work, config_path, config):
         return
     discovered = config is None
     if discovered:
-        require(args.phase in ('attach-existing', 'attach-monitoring'), 'Run attach-existing first for deployment commands, or attach-monitoring for monitoring.')
+        require(args.phase in ('attach-existing', 'attach-monitoring', 'monitoring', 'dashboard'), 'Run attach-existing first for deployment commands, or monitoring to install the dashboard.')
         require(not (work/'state.json').exists(), 'Saved state is missing its configuration. Use a new work directory.')
         require(not config_path.is_relative_to(HERE.parents[3]), 'Keep generated configuration outside the checkout.')
-        config = (monitoring_setup.discover_config(context, args.namespace, output) if args.phase == 'attach-monitoring'
+        config = (monitoring_setup.discover_config(context, args.namespace, output) if args.phase in ('attach-monitoring', 'monitoring', 'dashboard')
                   else discover_config(context, args.namespace))
+    saved_config = config
+    enable_monitoring = args.phase == 'monitoring' and not monitoring.enabled(config)
+    if enable_monitoring:
+        require(not config_path.is_relative_to(HERE.parents[3]), 'Keep generated configuration outside the checkout.')
+        config = copy.deepcopy(config)
+        config.setdefault('monitoring', {})['enabled'] = True
     monitoring_only = args.phase in ('attach-monitoring', 'monitoring', 'dashboard', 'verify-monitoring',
                                     'monitoring-images', 'export-monitoring-images', 'import-monitoring-images', 'cleanup-key')
     recipe = Recipe(config, work, args.source_dir, monitoring_only=monitoring_only)
+    if args.phase in ('monitoring', 'dashboard'):
+        if not (recipe.state.get('inventory') and recipe.state.get('stack')):
+            recipe.attach_monitoring()
+        if discovered:
+            save(config_path, config)
+            print('Discovered monitoring configuration:', config_path)
     if args.phase == 'prepare': recipe.prepare()
     elif args.phase == 'render': recipe.render()
     elif args.phase == 'inventory': recipe.inventory()
@@ -1137,8 +1153,13 @@ def execute(args, parser, context, work, config_path, config):
             run(['docker', 'push', recipe.image(name, args.tag)])
     elif args.phase == 'import-images':
         recipe.import_images(args.archive or recipe.work/'arm64-images.tar', args.allow_containerd_import, args.component, args.tag)
-    elif args.phase == 'monitoring': monitoring.Monitoring(recipe, run, output, save).install()
-    elif args.phase == 'dashboard': monitoring.Monitoring(recipe, run, output, save).dashboard(args.port)
+    elif args.phase == 'monitoring':
+        monitoring.Monitoring(recipe, run, output, save).install()
+        if enable_monitoring and not discovered:
+            require(config_path.exists() and json.loads(config_path.read_text()) == saved_config,
+                    'Configuration changed during monitoring installation. Check saved settings before retrying.')
+            save(config_path, config)
+    elif args.phase == 'dashboard': monitoring.Monitoring(recipe, run, output, save).dashboard(args.port, admin=args.admin)
     elif args.phase == 'verify-monitoring': monitoring.Monitoring(recipe, run, output, save).verify(args.port, args.verify_traffic, args.model)
     elif args.phase == 'monitoring-images': print('\n'.join(monitoring.image_list(recipe)))
     elif args.phase == 'export-monitoring-images':

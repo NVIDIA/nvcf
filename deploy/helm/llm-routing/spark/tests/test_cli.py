@@ -202,6 +202,158 @@ class CliTests(unittest.TestCase):
         discover.assert_not_called()
         attach.assert_called_once()
 
+    def monitoring_config(self):
+        config = copy.deepcopy(self.config)
+        config.pop('runtimeClass')
+        config['nodes'] = {'control': config['nodes']['control']}
+        config['images'] = {'pullPolicy': 'IfNotPresent'}
+        config['releases'].pop('glm')
+        return config
+
+    def bind_monitoring(self, recipe):
+        recipe.stamp('attachedMonitoring')
+        recipe.stamp('inventory', {'nodes': {recipe.c['nodes']['control']: 'control-uid'}})
+        recipe.stamp('stack', {'apiKeyFile': None})
+
+    def test_monitoring_discovers_attaches_saves_and_installs_with_one_command(self):
+        config = self.monitoring_config()
+        calls = []
+        def attach(recipe):
+            self.assertFalse((self.work/'config.json').exists())
+            self.bind_monitoring(recipe)
+            calls.append('attach')
+        def install(monitor):
+            self.assertEqual(json.loads((self.work/'config.json').read_text()), config)
+            self.assertTrue(monitor.recipe.state['inventory'])
+            self.assertIsNone(monitor.recipe.glm)
+            calls.append('install')
+        with patch.object(spark.monitoring_setup, 'discover_config', return_value=config) as discover, \
+             patch.object(spark.Recipe, 'attach_monitoring', attach), \
+             patch.object(spark.monitoring.Monitoring, 'install', autospec=True, side_effect=install), \
+             patch.object(spark, 'discover_config') as model_discover, \
+             patch.object(spark.Recipe, 'prepare') as prepare, redirect_stdout(io.StringIO()):
+            spark.main(['monitoring'])
+        self.assertEqual(calls, ['attach', 'install'])
+        discover.assert_called_once_with('team-context', None, spark.output)
+        model_discover.assert_not_called()
+        prepare.assert_not_called()
+        self.assertEqual((self.work/'config.json').stat().st_mode & 0o777, 0o600)
+
+    def test_dashboard_discovers_and_attaches_without_installing(self):
+        path = self.root/'dashboard'/'config.json'
+        with patch.object(spark.monitoring_setup, 'discover_config', return_value=self.monitoring_config()) as discover, \
+             patch.object(spark.Recipe, 'attach_monitoring', autospec=True, side_effect=self.bind_monitoring), \
+             patch.object(spark.monitoring.Monitoring, 'dashboard') as dashboard, \
+             patch.object(spark.monitoring.Monitoring, 'install') as install, redirect_stdout(io.StringIO()):
+            spark.main(['--config', str(path), 'dashboard'])
+        discover.assert_called_once_with('team-context', None, spark.output)
+        dashboard.assert_called_once_with(13000, admin=False)
+        install.assert_not_called()
+        self.assertEqual(json.loads(path.read_text()), self.monitoring_config())
+
+    def test_monitoring_reuses_owner_state_and_enables_only_monitoring_settings(self):
+        self.config['monitoring'].update(enabled=False, retentionPeriod='7d')
+        self.write_config()
+        recipe = spark.Recipe(self.config, self.work)
+        original = {'identity': recipe.identity, 'inventory': {'nodes': {'control': 'uid'}},
+                    'stack': {'apiKeyFile': 'owner-key'}, 'serve': {'release': 'test-glm'},
+                    'artifacts': {'ready': True}, 'qualification': {'passed': True}}
+        spark.save(self.work/'state.json', original)
+        spark.save(self.work/'api-key', 'existing-owner-key')
+        def install(monitor):
+            self.assertEqual(monitor.recipe.state, original)
+            self.assertTrue(monitor.recipe.c['monitoring']['enabled'])
+            self.assertFalse(json.loads((self.work/'config.json').read_text())['monitoring']['enabled'])
+        with patch.object(spark.monitoring_setup, 'discover_config') as discover, \
+             patch.object(spark.Recipe, 'attach_monitoring') as attach, \
+             patch.object(spark.monitoring.Monitoring, 'install', autospec=True, side_effect=install):
+            spark.main(['monitoring'])
+        discover.assert_not_called()
+        attach.assert_not_called()
+        expected = copy.deepcopy(self.config)
+        expected['monitoring']['enabled'] = True
+        self.assertEqual(json.loads((self.work/'config.json').read_text()), expected)
+        self.assertEqual(json.loads((self.work/'state.json').read_text()), original)
+        self.assertEqual((self.work/'api-key').read_text(), 'existing-owner-key')
+
+    def test_existing_config_without_monitoring_or_state_attaches_before_install(self):
+        self.config.pop('monitoring')
+        self.write_config()
+        with patch.object(spark.monitoring_setup, 'discover_config') as discover, \
+             patch.object(spark.Recipe, 'attach_monitoring', autospec=True, side_effect=self.bind_monitoring), \
+             patch.object(spark.monitoring.Monitoring, 'install') as install:
+            spark.main(['monitoring'])
+        discover.assert_not_called()
+        install.assert_called_once()
+        self.assertEqual(json.loads((self.work/'config.json').read_text()), dict(self.config, monitoring={'enabled': True}))
+
+    def test_failed_monitoring_install_preserves_saved_disabled_setting(self):
+        self.config['monitoring']['enabled'] = False
+        self.write_config()
+        before = (self.work/'config.json').read_bytes()
+        with patch.object(spark.Recipe, 'attach_monitoring', autospec=True, side_effect=self.bind_monitoring), \
+             patch.object(spark.monitoring.Monitoring, 'install', side_effect=RuntimeError('Wrong Helm owner')), \
+             self.assertRaisesRegex(RuntimeError, 'Wrong Helm owner'):
+            spark.main(['monitoring'])
+        self.assertEqual((self.work/'config.json').read_bytes(), before)
+
+    def test_failed_fresh_attachment_does_not_save_configuration_or_install(self):
+        with patch.object(spark.monitoring_setup, 'discover_config', return_value=self.monitoring_config()), \
+             patch.object(spark.Recipe, 'attach_monitoring', side_effect=RuntimeError('Foreign routing release')), \
+             patch.object(spark.monitoring.Monitoring, 'install') as install, \
+             self.assertRaisesRegex(RuntimeError, 'Foreign routing release'):
+            spark.main(['monitoring'])
+        install.assert_not_called()
+        self.assertFalse((self.work/'config.json').exists())
+        self.assertFalse((self.work/'state.json').exists())
+
+    def test_dashboard_reuses_bound_state_and_supports_optional_admin_and_port(self):
+        self.config['monitoring']['enabled'] = False
+        self.write_config()
+        recipe = spark.Recipe(self.config, self.work)
+        self.bind_monitoring(recipe)
+        before = (self.work/'config.json').read_bytes(), (self.work/'state.json').read_bytes()
+        for arguments, port, admin in [(['dashboard'], 13000, False),
+                                       (['dashboard', '--admin'], 13000, True),
+                                       (['dashboard', '--admin', '--port', '13001'], 13001, True)]:
+            with self.subTest(arguments=arguments), patch.object(spark.Recipe, 'attach_monitoring') as attach, \
+                 patch.object(spark.monitoring.Monitoring, 'dashboard') as dashboard, \
+                 patch.object(spark.monitoring.Monitoring, 'install') as install:
+                spark.main(arguments)
+            attach.assert_not_called()
+            install.assert_not_called()
+            dashboard.assert_called_once_with(port, admin=admin)
+        self.assertEqual(((self.work/'config.json').read_bytes(), (self.work/'state.json').read_bytes()), before)
+
+    def test_admin_flag_is_rejected_before_file_or_context_discovery(self):
+        for phase in ('paths', 'monitoring', 'attach-monitoring', 'verify-gateway'):
+            with self.subTest(phase=phase), patch.dict(os.environ, {'SPARK_CONTEXT': ''}), \
+                 patch.object(spark, 'cli_settings') as settings, patch.object(spark, 'output') as output, \
+                 self.assertRaisesRegex(RuntimeError, '--admin is supported only for dashboard'):
+                spark.main([phase, '--admin'])
+            settings.assert_not_called()
+            output.assert_not_called()
+        self.assertFalse(self.work.exists())
+
+    def test_monitoring_commands_reject_orphan_state_before_discovery(self):
+        spark.save(self.work/'state.json', {'identity': 'original'})
+        for phase in ('monitoring', 'dashboard'):
+            with self.subTest(phase=phase), patch.object(spark.monitoring_setup, 'discover_config') as discover, \
+                 self.assertRaisesRegex(RuntimeError, 'missing its configuration'):
+                spark.main([phase])
+            discover.assert_not_called()
+        self.assertEqual(json.loads((self.work/'state.json').read_text()), {'identity': 'original'})
+
+    def test_monitoring_preserves_concurrent_configuration_change(self):
+        self.config['monitoring']['enabled'] = False
+        self.write_config()
+        edited = dict(self.config, apiKeyFile='updated-key-path')
+        with patch.object(spark.Recipe, 'attach_monitoring', autospec=True, side_effect=self.bind_monitoring), \
+             patch.object(spark.monitoring.Monitoring, 'install', side_effect=lambda: self.write_config(edited)), \
+             self.assertRaisesRegex(RuntimeError, 'Configuration changed during monitoring installation'):
+            spark.main(['monitoring'])
+        self.assertEqual(json.loads((self.work/'config.json').read_text()), edited)
+
     def test_unavailable_docker_reports_one_actionable_line_without_traceback(self):
         self.write_config()
         with patch.object(spark.Recipe, 'source_check'), \

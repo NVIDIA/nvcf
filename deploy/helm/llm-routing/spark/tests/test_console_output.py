@@ -178,7 +178,7 @@ class ConsoleOutputTests(unittest.TestCase):
     def test_dashboard_instructions_are_visible_while_tunnel_is_running(self):
         arguments = self.cli_arguments()[:-1] + ['dashboard', '--port', '13000']
 
-        def dashboard(port):
+        def dashboard(port, admin=False):
             print('Dashboard: http://127.0.0.1:' + str(port) + '/d/llm-demo', flush=True)
             self.assertIn('http://127.0.0.1:13000/d/llm-demo', self.stdout.getvalue())
             raise RuntimeError('Grafana tunnel disconnected')
