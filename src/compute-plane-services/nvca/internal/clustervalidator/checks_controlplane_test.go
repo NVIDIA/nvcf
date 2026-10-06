@@ -695,6 +695,7 @@ func makeQuorumSTS(name, ns string, replicas, ready int32, nodes []string) []run
 	}, &appsv1.ControllerRevision{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: rev, Namespace: ns, CreationTimestamp: installed, Labels: sel, OwnerReferences: owner,
+			ManagedFields: []metav1.ManagedFieldsEntry{revisionWrite(installedAt)},
 		},
 		Revision: 1,
 	}}

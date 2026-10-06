@@ -83,9 +83,9 @@ rules:
     resources: ["daemonsets"]
     verbs: ["list", "create", "delete"]
   - apiGroups: ["apps"]
-    # The update revision's creation time dates a StatefulSet or DaemonSet
-    # rollout, so a replacement pod that never appears is not tolerated
-    # forever.
+    # The update revision's creation, or a StatefulSet rollback's write to
+    # it, dates a StatefulSet or DaemonSet rollout, so a replacement pod that
+    # never appears is not tolerated forever.
     resources: ["controllerrevisions"]
     verbs: ["get"]
   - apiGroups: ["gateway.networking.k8s.io"]

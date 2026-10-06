@@ -4477,38 +4477,42 @@ func specWrittenAt(obj metav1.Object) (latest time.Time, recorded bool) {
 	return latest, recorded
 }
 
-// rolloutSpecFields are the StatefulSet spec fields a write to which can start
-// a rollout step: the pod template, which a rollback rewrites, and the update
-// strategy, whose partition a staged rollout lowers.
-var rolloutSpecFields = []string{"f:template", "f:updateStrategy"}
-
-// rolloutSpecWrittenAt is when sts was last written by a manager that owns
-// one of rolloutSpecFields: the latest such managedFields entry for the object
-// itself. recorded is false when none exists. Entries of managers that own
-// none of them, such as a label edit, an autoscaler's scale or a
-// revisionHistoryLimit edit, are left out. The apiserver re-dates an entry on
-// any write by its manager, so a write by one that owns the template, such as
-// helm, dates a rollout even when it changed only metadata: that grants the
-// rollout at most one more stalledRolloutAfter.
-func rolloutSpecWrittenAt(sts *appsv1.StatefulSet) (latest time.Time, recorded bool) {
-	for _, mf := range sts.ManagedFields {
-		if mf.Subresource != "" || mf.Time == nil || mf.FieldsV1 == nil {
-			continue
-		}
-		var owned struct {
-			Spec map[string]json.RawMessage `json:"f:spec"`
-		}
-		if err := json.Unmarshal(mf.FieldsV1.Raw, &owned); err != nil {
-			continue
-		}
-		for _, field := range rolloutSpecFields {
-			if _, ok := owned.Spec[field]; ok {
-				latest, recorded = laterOf(latest, mf.Time.Time), true
-				break
-			}
+// lastWriteOwning is when obj was last written by a manager that owns the
+// field at path: the latest managedFields entry for the object itself that
+// owns it. recorded is false when none exists. The apiserver re-dates an
+// entry on any write by its manager, so only a field its manager writes for
+// one purpose dates that purpose.
+func lastWriteOwning(obj metav1.Object, path ...string) (latest time.Time, recorded bool) {
+	for _, mf := range obj.GetManagedFields() {
+		if mf.Subresource == "" && mf.Time != nil && mf.FieldsV1 != nil && ownsField(mf.FieldsV1.Raw, path) {
+			latest, recorded = laterOf(latest, mf.Time.Time), true
 		}
 	}
 	return latest, recorded
+}
+
+// ownsField reports whether the FieldsV1 set raw holds the field at path.
+func ownsField(raw []byte, path []string) bool {
+	for _, key := range path {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(raw, &fields) != nil {
+			return false
+		}
+		var ok bool
+		if raw, ok = fields[key]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// partitionWrittenAt is when sts's rollout partition was last written, which
+// is when lowering it started a rollout step: the partition's owner, such as a
+// staged rollout's patch, writes nothing else. A manager that owns the
+// partition and other fields too, such as a chart that renders it, re-dates
+// it on each of its writes.
+func partitionWrittenAt(sts *appsv1.StatefulSet) (time.Time, bool) {
+	return lastWriteOwning(sts, "f:spec", "f:updateStrategy", "f:rollingUpdate", "f:partition")
 }
 
 // hasProgressDeadline reports whether the Deployment controller tracks a
@@ -5784,14 +5788,20 @@ func (s *tier2Scan) assessMembers(
 	// evidence: one the rollout will not replace or that can never start, or
 	// no progress at all for too long.
 	if oneDownRolling {
-		// A new template starts a rollout with a new update revision. A
-		// rollback reuses an old revision and a lowered partition creates
-		// none, so the write to the template or the update strategy that
-		// started either dates it. Without either, the StatefulSet's creation
-		// would date the rollout from before it began.
-		started, revErr := updateRevisionCreated(ctx, client, ns, sts)
-		if written, recorded := rolloutSpecWrittenAt(sts); recorded {
-			started = laterOf(started, written)
+		// A rollout starts when the controller writes its update revision:
+		// it creates one for a new template and bumps the revision number of
+		// the old one a rollback returns to. The last write to the template
+		// dates it only when that revision cannot be read, since its manager
+		// re-dates its entry with any write, a metadata-only upgrade too. A
+		// lowered partition writes no revision, so the write to the partition
+		// dates it. Without any of them, the StatefulSet's creation would
+		// date the rollout from before it began.
+		started, revErr := updateRevisionWritten(ctx, client, ns, sts)
+		if written, recorded := lastWriteOwning(sts, "f:spec", "f:template"); revErr != nil && recorded {
+			started = written
+		}
+		if lowered, recorded := partitionWrittenAt(sts); recorded {
+			started = laterOf(started, lowered)
 		}
 		reason, undated := stalledRollout(sts, pods.Items, started, time.Now())
 		switch {
@@ -6373,12 +6383,13 @@ func podOrdinal(sts *appsv1.StatefulSet, p *corev1.Pod) int {
 	return n
 }
 
-// updateRevisionCreated is when the StatefulSet's update revision was
-// created, or the zero time and why the revision could not be read. A rollout
-// to a new template begins then; a rollback reuses an older revision and a
-// lowered partition creates none, so the spec write that started them dates
-// them (rolloutSpecWrittenAt).
-func updateRevisionCreated(
+// updateRevisionWritten is when the controller last wrote the StatefulSet's
+// update revision, or the zero time and why the revision could not be read: it
+// creates one for a new template, and on a rollback bumps the revision number
+// of the old one the template matches again. Only the controller writes a
+// revision, so its write time moves for a rollout and otherwise only when the
+// controller adopts the revision of a StatefulSet recreated in its place.
+func updateRevisionWritten(
 	ctx context.Context, client kubernetes.Interface, ns string, sts *appsv1.StatefulSet,
 ) (time.Time, error) {
 	if sts.Status.UpdateRevision == "" {
@@ -6390,7 +6401,8 @@ func updateRevisionCreated(
 	if err != nil {
 		return time.Time{}, err
 	}
-	return rev.CreationTimestamp.Time, nil
+	written, _ := lastWriteOwning(rev, "f:revision")
+	return laterOf(rev.CreationTimestamp.Time, written), nil
 }
 
 func laterOf(a, b time.Time) time.Time {
