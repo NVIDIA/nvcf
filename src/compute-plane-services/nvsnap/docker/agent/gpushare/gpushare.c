@@ -18,6 +18,7 @@ SPDX-License-Identifier: Apache-2.0
  */
 #define _GNU_SOURCE
 #include <cuda.h>
+#include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <execinfo.h>
@@ -690,6 +691,33 @@ static double secs(void)
     return t.tv_sec + t.tv_nsec / 1e9;
 }
 
+/* Point the app's own copies of the fds it exported at /dev/null (mu
+ * held, before our dups in exps are closed). Apps can keep them: FlashInfer
+ * sends its export to itself and closes neither copy. They pin the
+ * pre-checkpoint memory and CRIU cannot dump them. The fd numbers stay
+ * valid, for the app to close. Returns how many, or -1. */
+static int void_export_copies(void)
+{
+    DIR *d = opendir("/proc/self/fd");
+    int nul = open("/dev/null", O_RDWR | O_CLOEXEC), nv = 0;
+    pid_t me = getpid();
+    struct dirent *e;
+    if (!d || nul < 0) nv = -1;
+    while (nv >= 0 && (e = readdir(d))) {
+        int fd = atoi(e->d_name), fl;
+        if (e->d_name[0] == '.' || fd == dirfd(d) || fd == nul) continue;
+        for (int i = 0; i < n_exps; i++) {
+            if (fd == exps[i].fd || syscall(SYS_kcmp, me, me, KCMP_FILE, exps[i].fd, fd) != 0) continue;
+            if ((fl = fcntl(fd, F_GETFD)) < 0 || dup3(nul, fd, fl & FD_CLOEXEC ? O_CLOEXEC : 0) < 0) nv = -1;
+            else nv++;
+            break;
+        }
+    }
+    if (d) closedir(d);
+    if (nul >= 0) close(nul);
+    return nv;
+}
+
 /* args "<store> <ckpt-dir> [cache]": save the cuMemAlloc allocations to a
  * chunk store (see valloc_drop), with a copy in the node cache; NULL: to
  * host memory. */
@@ -791,6 +819,12 @@ static void do_release(char *reply, size_t n, const char *args)
     }
     /* Exported fds pin the pre-checkpoint memory: drop them, once nothing
      * is left to roll back. */
+    int nv = 0;
+    if (r == CUDA_SUCCESS && (nv = void_export_copies()) < 0) {
+        what = "point exported fds at /dev/null";
+        r = CUDA_ERROR_OPERATING_SYSTEM;
+    }
+    if (nv > 0) logf_("pointed %d fd(s) the app kept of its exports at /dev/null", nv);
     for (int i = 0; r == CUDA_SUCCESS && i < n_exps; i++) close(exps[i].fd);
     if (r == CUDA_SUCCESS) n_exps = n_fexps = 0;
     pop_ctx(dev);

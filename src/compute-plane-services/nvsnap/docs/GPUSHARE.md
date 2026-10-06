@@ -141,13 +141,19 @@ name. So:
 
 ## Requirements and limits
 
-- Driver: NVLS multicast restore on GB300 needs a driver that lets a
-  restored process create and join multicast objects. 610.57.04 does;
-  580.173.02 does not. On x86 with driver 580.126.16 (RTX PRO 6000), the
-  driver's own restore of processes that share GPU memory with each other
-  (vLLM with TP=2) fails with `CUDA_ERROR_UNKNOWN`, with or without the
-  shim's own steps; processes that share nothing restore there. Validated
-  driver: 610.57.04.
+- Driver: 610 or later (validated: 610.57.04). Driver 580 cannot restore
+  multicast (NVLS) objects: after a restore, `cuMulticastAddDevice` fails
+  (GB300 with 580.173.02, H100 with 580.126.16), so tensor-parallel vLLM on
+  NVSwitch systems fails at `remap`. NCCL NVLS, PyTorch symmetric memory
+  and FlashInfer's all-reduce fusion all use multicast. On x86 with
+  580.126.16 (RTX PRO 6000), the driver's own restore of processes that
+  share GPU memory with each other (vLLM with TP=2) also fails, with
+  `CUDA_ERROR_UNKNOWN`.
+- Exported fds the app keeps: after `release`, every fd in the process that
+  refers to memory it exported is pointed at `/dev/null` (the fd numbers
+  stay valid), so that CRIU can dump the process. FlashInfer keeps such fds
+  on H100. Fds the app received from another process and kept are not
+  covered.
 - IMEX and fabric handles: pods with an IMEX channel do not restore yet.
   After a restore, the driver refuses to export fabric-capable memory.
 - Scope: memory shared across nodes (multi-node NVLink) is not tracked, so
@@ -199,9 +205,16 @@ the same model wrote 20 GiB. A cold start of the same model, including a
 136 GB model download, took 363 s to the first token, or 242 s without the
 download.
 
+On 4x H100 with driver 580.126.16, Qwen2.5-7B-Instruct, TP=4 was dumped
+with CRIU, restored into a new pod and answered as before, with the three
+multicast users off for driver 580 (`NCCL_NVLS_ENABLE=0`,
+`VLLM_ALLREDUCE_USE_SYMM_MEM=0`, and `fuse_allreduce_rms` false in the
+compilation config's `pass_config`).
+
 The GPU tests in `tests/gpushare/` pass on GB300 (driver 610) and on RTX
 PRO 6000 (x86, driver 580). `test_multi_gpu` covers a single process driving
-two GPUs with peer access. `test_ipc_release` and `test_cumem_release` are
+two GPUs with peer access. `test_export_copies` covers an app that keeps the
+fds of its own exports. `test_ipc_release` and `test_cumem_release` are
 probes of the driver without the shim. On both platforms, the driver cannot
 checkpoint or re-export memory shared through its own CUDA IPC, which is
 why the shim replaces it.
