@@ -29,15 +29,21 @@ use crate::routing_state::{RoutedClusterSnapshot, RoutingTargetKey};
 const RANKING_CACHE_LIMIT: usize = 4096;
 const RANKING_CACHE_PROBATION_LIMIT: usize = 4096;
 
-#[derive(Default)]
 pub(super) struct PulsarRankingStore {
+    rendezvous_weight: PulsarRendezvousWeight,
     cache: RwLock<PulsarRankingCache>,
 }
 
 impl PulsarRankingStore {
+    pub(super) fn new(rendezvous_weight: PulsarRendezvousWeight) -> Self {
+        Self {
+            rendezvous_weight,
+            cache: RwLock::default(),
+        }
+    }
+
     pub(super) fn lookup_choice(
         &self,
-        selector: PulsarRendezvousWeight,
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
         choose: impl Fn(&[usize]) -> Option<LoadBalancerCandidateChoice>,
@@ -53,7 +59,7 @@ impl PulsarRankingStore {
 
         {
             let cache = self.cache.read();
-            if cache.matches(request.routing_target, candidates, selector)
+            if cache.matches(request.routing_target, candidates, self.rendezvous_weight)
                 && let Some(ranking) = cache.get_ref(cache_affinity_key)
             {
                 // Choose under the guard to avoid cloning the cached Arc.
@@ -62,7 +68,7 @@ impl PulsarRankingStore {
         }
 
         let mut cache = self.cache.write();
-        cache.refresh_if_needed(request.routing_target, candidates, selector);
+        cache.refresh_if_needed(request.routing_target, candidates, self.rendezvous_weight);
         if let Some(ranking) = cache.get_ref(cache_affinity_key) {
             // Another thread populated the ranking after the read miss.
             return Some((PulsarRankingLookup::Hit, choose(ranking)));
@@ -72,7 +78,6 @@ impl PulsarRankingStore {
 
     pub(super) fn insert_or_choose_existing(
         &self,
-        selector: PulsarRendezvousWeight,
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
         ranking: Arc<Vec<usize>>,
@@ -80,7 +85,7 @@ impl PulsarRankingStore {
     ) -> Option<LoadBalancerCandidateChoice> {
         let cache_affinity_key = request.cache_affinity_key.unwrap_or("");
         let mut cache = self.cache.write();
-        cache.refresh_if_needed(request.routing_target, candidates, selector);
+        cache.refresh_if_needed(request.routing_target, candidates, self.rendezvous_weight);
         if let Some(cached) = cache.get_ref(cache_affinity_key) {
             return choose(cached);
         }
@@ -123,9 +128,9 @@ impl PulsarRankingCache {
         &mut self,
         target: &RoutingTargetKey,
         candidates: &[RoutedClusterSnapshot],
-        selector: PulsarRendezvousWeight,
+        rendezvous_weight: PulsarRendezvousWeight,
     ) {
-        if self.matches(target, candidates, selector) {
+        if self.matches(target, candidates, rendezvous_weight) {
             return;
         }
 
@@ -134,7 +139,7 @@ impl PulsarRankingCache {
             .iter()
             .map(|candidate| PulsarCandidateSignature {
                 cluster_id: candidate.cluster_id.clone(),
-                weight_bits: pulsar_weight(selector, candidate).map(f64::to_bits),
+                weight_bits: pulsar_weight(rendezvous_weight, candidate).map(f64::to_bits),
             })
             .collect();
         self.rankings.clear();
@@ -147,7 +152,7 @@ impl PulsarRankingCache {
         &self,
         target: &RoutingTargetKey,
         candidates: &[RoutedClusterSnapshot],
-        selector: PulsarRendezvousWeight,
+        rendezvous_weight: PulsarRendezvousWeight,
     ) -> bool {
         self.target.as_ref() == Some(target)
             && self.candidate_signature.len() == candidates.len()
@@ -158,7 +163,7 @@ impl PulsarRankingCache {
                 .all(|(cached, candidate)| {
                     cached.cluster_id == candidate.cluster_id
                         && cached.weight_bits
-                            == pulsar_weight(selector, candidate).map(f64::to_bits)
+                            == pulsar_weight(rendezvous_weight, candidate).map(f64::to_bits)
                 })
     }
 
@@ -240,14 +245,14 @@ pub(super) fn compare_ranked_candidate(
 pub(super) struct PulsarScorer {
     hash_bytes: Vec<u8>,
     prefix_len: usize,
-    selector: PulsarRendezvousWeight,
+    rendezvous_weight: PulsarRendezvousWeight,
 }
 
 impl PulsarScorer {
     pub(super) fn new(
         seed: Option<&str>,
         request: &LoadBalancerRequest<'_>,
-        selector: PulsarRendezvousWeight,
+        rendezvous_weight: PulsarRendezvousWeight,
     ) -> Self {
         let hash_bytes = pulsar_hash_prefix(
             seed,
@@ -258,12 +263,12 @@ impl PulsarScorer {
         Self {
             prefix_len: hash_bytes.len(),
             hash_bytes,
-            selector,
+            rendezvous_weight,
         }
     }
 
     pub(super) fn score(&mut self, candidate: &RoutedClusterSnapshot) -> Option<f64> {
-        let weight = pulsar_weight(self.selector, candidate)?;
+        let weight = pulsar_weight(self.rendezvous_weight, candidate)?;
         let u = self.hash_to_unit_interval(candidate);
         let e = -u.ln();
         (e.is_finite() && e > 0.0).then(|| weight / e)
@@ -283,11 +288,11 @@ impl PulsarScorer {
 
 pub(in crate::load_balancer) fn pulsar_ranked_indices(
     seed: Option<&str>,
-    selector: PulsarRendezvousWeight,
+    rendezvous_weight: PulsarRendezvousWeight,
     request: &LoadBalancerRequest<'_>,
     candidates: &[RoutedClusterSnapshot],
 ) -> Vec<usize> {
-    let mut scorer = PulsarScorer::new(seed, request, selector);
+    let mut scorer = PulsarScorer::new(seed, request, rendezvous_weight);
     let mut scored = Vec::with_capacity(candidates.len());
     for (candidate_index, candidate) in candidates.iter().enumerate() {
         if let Some(score) = scorer.score(candidate) {
@@ -313,10 +318,10 @@ pub(in crate::load_balancer) fn pulsar_ranked_indices(
 }
 
 pub(super) fn pulsar_weight(
-    selector: PulsarRendezvousWeight,
+    rendezvous_weight: PulsarRendezvousWeight,
     candidate: &RoutedClusterSnapshot,
 ) -> Option<f64> {
-    let value = match selector {
+    let value = match rendezvous_weight {
         PulsarRendezvousWeight::LastMeanInputTps => Some(candidate.stats.last_mean_input_tps),
         PulsarRendezvousWeight::MaxInputTps => candidate.stats.max_input_tps,
     }?;
