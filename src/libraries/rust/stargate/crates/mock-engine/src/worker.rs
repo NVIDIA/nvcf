@@ -28,6 +28,9 @@ use crate::{EngineConfig, EngineEvent, Micros, RequestId, RequestSpec, WorkerSta
 ///   which then covers input plus output. A session's next turn, whose prompt
 ///   extends that conversation, reuses all of it. Matching is per key, not
 ///   per token block.
+/// - Concurrent sequences that prefill the same new key each release their
+///   input reservation, but the entry grows only once, as block-level prefix
+///   deduplication would store it.
 pub(crate) struct Worker {
     waiting: VecDeque<RequestId>,
     running: Vec<RequestId>,
@@ -216,7 +219,8 @@ impl Worker {
                     }
                     generated
                 }
-                Phase::Waiting => unreachable!("waiting sequences are never scheduled"),
+                // The step's request was cancelled and its ID resubmitted.
+                Phase::Waiting => continue,
             };
             if generated >= sequence.spec.output_tokens {
                 completed.push(id);
@@ -252,13 +256,15 @@ impl Worker {
                 self.cache.pin(key);
             }
             // An oversized request still runs alone rather than blocking forever.
-            if !self.cache.make_room(reserve, self.reserved_tokens) && !self.running.is_empty() {
+            if !self.cache.can_make_room(reserve, self.reserved_tokens) && !self.running.is_empty()
+            {
                 if let Some(key) = spec.cache_key.filter(|_| reused > 0) {
                     self.cache.unpin(key);
                 }
                 // Head-of-line: later requests wait for memory too.
                 return;
             }
+            self.cache.make_room(reserve, self.reserved_tokens);
             self.waiting.pop_front();
             self.running.push(id);
             self.reserved_tokens += reserve;
@@ -272,10 +278,11 @@ impl Worker {
             sequence.phase = Phase::Prefilling {
                 remaining: (spec.input_tokens - reused).max(1),
             };
+            // A new key's entry must survive until this prefill fills it.
             if reused == 0
                 && let Some(key) = spec.cache_key
             {
-                self.cache.pin_new(key);
+                self.cache.pin(key);
             }
         }
     }
@@ -336,12 +343,6 @@ impl PrefixCache {
         self.touch(key).pins += 1;
     }
 
-    /// Pins a key that has no cached tokens yet, so its entry survives until
-    /// the sequence's prefill fills it.
-    fn pin_new(&mut self, key: u64) {
-        self.pin(key);
-    }
-
     fn unpin(&mut self, key: u64) {
         let Some(entry) = self.entries.get_mut(&key) else {
             return;
@@ -361,21 +362,31 @@ impl PrefixCache {
         self.used_tokens += grown;
     }
 
-    /// Evicts unpinned entries until `needed` more tokens fit beside the
-    /// cache and `reserved` sequence tokens. Returns false if they cannot.
-    fn make_room(&mut self, needed: u64, reserved: u64) -> bool {
-        loop {
-            if self.used_tokens + reserved + needed <= self.capacity_tokens {
-                return true;
-            }
-            let victim = self
+    /// Whether evicting unpinned entries can fit `needed` more tokens beside
+    /// the cache and `reserved` sequence tokens.
+    fn can_make_room(&self, needed: u64, reserved: u64) -> bool {
+        let pinned_tokens: u64 = self
+            .entries
+            .values()
+            .filter(|entry| entry.pins > 0)
+            .map(|entry| entry.tokens)
+            .sum();
+        pinned_tokens + reserved + needed <= self.capacity_tokens
+    }
+
+    /// Evicts least recently used unpinned entries until `needed` more tokens
+    /// fit beside the cache and `reserved` sequence tokens, or until none
+    /// remain.
+    fn make_room(&mut self, needed: u64, reserved: u64) {
+        while self.used_tokens + reserved + needed > self.capacity_tokens {
+            let Some(victim) = self
                 .entries
                 .iter()
                 .filter(|(_, entry)| entry.pins == 0 && entry.tokens > 0)
                 .min_by_key(|(_, entry)| entry.last_used)
-                .map(|(key, _)| *key);
-            let Some(victim) = victim else {
-                return false;
+                .map(|(key, _)| *key)
+            else {
+                return;
             };
             let evicted = self.entries.remove(&victim).expect("victim entry exists");
             self.used_tokens -= evicted.tokens;

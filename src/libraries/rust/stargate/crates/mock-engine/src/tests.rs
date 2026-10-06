@@ -181,15 +181,16 @@ fn kv_capacity_evicts_unpinned_prefixes_lru_first() {
         false,
     )
     .unwrap();
-    for (id, key) in [(1, 10), (2, 20)] {
+    for (id, key) in [(1, 10), (2, 20), (3, 10)] {
         engine.submit(id * 1_000_000, id, spec(Some(key), 1000, 1));
         drain(&mut engine);
     }
-    // Key 30 needs 1001 tokens; key 10 is least recently used.
-    engine.submit(3_000_000, 3, spec(Some(30), 1000, 1));
+    // Key 30 needs 1001 tokens. Key 10 was cached first but reused since, so
+    // key 20 is least recently used.
+    engine.submit(4_000_000, 4, spec(Some(30), 1000, 1));
     drain(&mut engine);
-    engine.submit(4_000_000, 4, spec(Some(20), 1000, 1));
-    engine.submit(4_000_000, 5, spec(Some(10), 1000, 1));
+    engine.submit(5_000_000, 5, spec(Some(10), 1000, 1));
+    engine.submit(5_000_000, 6, spec(Some(20), 1000, 1));
     let events = drain(&mut engine);
     let reused = |request| {
         events
@@ -204,8 +205,49 @@ fn kv_capacity_evicts_unpinned_prefixes_lru_first() {
             })
             .unwrap()
     };
-    assert_eq!(reused(4), 1000);
-    assert_eq!(reused(5), 0);
+    assert_eq!(reused(5), 1000);
+    assert_eq!(reused(6), 0);
+}
+
+#[test]
+fn blocked_admission_keeps_the_prefix_cache() {
+    let mut engine = Engine::new(
+        EngineConfig {
+            kv_cache_capacity_tokens: 3000,
+            ..config(1)
+        },
+        false,
+    )
+    .unwrap();
+    engine.submit(0, 1, spec(Some(10), 1000, 1));
+    drain(&mut engine);
+    // Running: 1,500 reserved beside 1,001 cached. Waiting: needs 2,000,
+    // which does not fit even if key 10 is evicted.
+    engine.submit(1_000_000, 2, spec(None, 1000, 500));
+    engine.advance_to(engine.next_event_time().unwrap());
+    engine.submit(1_100_000, 3, spec(None, 1500, 500));
+    engine.advance_to(engine.next_event_time().unwrap());
+
+    let stats = &engine.worker_stats()[0];
+    assert_eq!((stats.running, stats.waiting), (1, 1));
+    assert_eq!(stats.kv_cache_used_tokens, 1001 + 1500);
+}
+
+#[test]
+fn cancelled_id_can_be_resubmitted_mid_step() {
+    let mut engine = Engine::new(config(1), false).unwrap();
+    engine.submit(0, 1, spec(None, 500, 3));
+    let step_end = engine.next_event_time().unwrap();
+    assert!(engine.cancel(step_end / 2, 1));
+    engine.submit(step_end / 2, 1, spec(None, 500, 3));
+
+    let events = drain(&mut engine);
+    let completions = events
+        .iter()
+        .filter(|event| matches!(event, EngineEvent::Completed { id: 1, .. }))
+        .count();
+    assert_eq!(completions, 1);
+    assert!(first_token_at(&events, 1) > step_end);
 }
 
 #[test]
@@ -220,8 +262,11 @@ fn memory_pressure_delays_admission_until_space_frees() {
     .unwrap();
     engine.submit(0, 1, spec(None, 1000, 20));
     engine.submit(0, 2, spec(None, 1000, 20));
-    assert_eq!(engine.worker_stats()[0].running, 1);
-    let events = drain(&mut engine);
+    // The first step boundary would admit request 2 if memory allowed.
+    let mut events = engine.advance_to(engine.next_event_time().unwrap());
+    let stats = &engine.worker_stats()[0];
+    assert_eq!((stats.running, stats.waiting), (1, 1));
+    events.extend(drain(&mut engine));
     assert!(first_token_at(&events, 2) > completed_at(&events, 1));
 }
 

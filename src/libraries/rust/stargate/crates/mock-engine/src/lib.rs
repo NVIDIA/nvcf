@@ -41,7 +41,8 @@ use worker::Worker;
 /// Engine time in microseconds from an arbitrary origin.
 pub type Micros = u64;
 
-/// Caller-assigned request identifier, unique among live requests.
+/// Caller-assigned request identifier, unique among live requests. An ID may
+/// be reused after its request completes or is cancelled.
 pub type RequestId = u64;
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -136,7 +137,7 @@ pub enum EngineEvent {
     Completed { id: RequestId, at: Micros },
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkerStats {
     pub waiting: usize,
     pub running: usize,
@@ -170,13 +171,13 @@ impl Engine {
         })
     }
 
-    pub fn config(&self) -> &EngineConfig {
-        &self.config
-    }
-
     /// Queues a request at `now` and returns the worker chosen for it.
     pub fn submit(&mut self, now: Micros, id: RequestId, spec: RequestSpec) -> usize {
         self.run_until(now);
+        debug_assert!(
+            !self.owners.contains_key(&id),
+            "request {id} is already live"
+        );
         let spec = RequestSpec {
             output_tokens: spec.output_tokens.max(1),
             ..spec
