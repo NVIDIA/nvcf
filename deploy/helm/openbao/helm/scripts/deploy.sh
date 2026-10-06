@@ -261,11 +261,14 @@ initialize_cluster() {
         local recovery_shares="${RECOVERY_SHARES:-5}"
         local recovery_threshold="${RECOVERY_THRESHOLD:-3}"
         log_info "Auto-unseal seal detected; initializing with ${recovery_shares} recovery shares (threshold ${recovery_threshold})"
-        init_output=$(kubectl exec ${statefulset}-0 -c openbao -n ${namespace} -- \
+        if ! init_output=$(kubectl exec ${statefulset}-0 -c openbao -n ${namespace} -- \
             bao operator init \
             -recovery-shares=${recovery_shares} \
             -recovery-threshold=${recovery_threshold} \
-            -format=json)
+            -format=json); then
+            log_error "bao operator init failed. If the server is now initialized its keys were not captured; tear down with cleanup.sh and reinitialize."
+            return 1
+        fi
         root_token=$(echo ${init_output} | jq -r '.root_token')
         if [ -z "${root_token}" ] || [ "${root_token}" = "null" ]; then
             log_error "Failed to get root token from initialization output"
@@ -301,11 +304,14 @@ initialize_cluster() {
         log_warn "Recovery keys stored in Secret '${statefulset}-recovery-keys'. Export them to a break-glass store and delete this Secret."
     else
         # Shamir seal: a single unseal key, stored for the auto-unseal sidecar.
-        init_output=$(kubectl exec ${statefulset}-0 -c openbao -n ${namespace} -- \
+        if ! init_output=$(kubectl exec ${statefulset}-0 -c openbao -n ${namespace} -- \
             bao operator init \
             -key-shares=1 \
             -key-threshold=1 \
-            -format=json)
+            -format=json); then
+            log_error "bao operator init failed. If the server is now initialized its keys were not captured; tear down with cleanup.sh and reinitialize."
+            return 1
+        fi
         local unseal_key=$(echo ${init_output} | jq -r '.unseal_keys_b64[0]')
         root_token=$(echo ${init_output} | jq -r '.root_token')
         if [ -z "${unseal_key}" ] || [ "${unseal_key}" = "null" ]; then
