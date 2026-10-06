@@ -20,6 +20,8 @@
 //! request completes cancels it, as a client disconnect frees engine capacity.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use mock_engine::{Engine, EngineConfig, EngineEvent, RequestId, RequestSpec, WorkerStats};
@@ -28,9 +30,9 @@ use tokio::time::Instant;
 
 enum Command {
     Submit {
+        id: RequestId,
         spec: RequestSpec,
         events: mpsc::UnboundedSender<EngineEvent>,
-        id: oneshot::Sender<RequestId>,
     },
     Cancel(RequestId),
     Stats(oneshot::Sender<Vec<WorkerStats>>),
@@ -39,6 +41,7 @@ enum Command {
 #[derive(Clone)]
 pub(crate) struct EngineDriver {
     commands: mpsc::UnboundedSender<Command>,
+    next_id: Arc<AtomicU64>,
     max_concurrency: u64,
 }
 
@@ -58,6 +61,7 @@ impl EngineDriver {
         tokio::spawn(run(engine, receiver));
         Ok(Self {
             commands,
+            next_id: Arc::new(AtomicU64::new(0)),
             max_concurrency,
         })
     }
@@ -67,14 +71,14 @@ impl EngineDriver {
         self.max_concurrency
     }
 
-    pub(crate) async fn submit(
+    pub(crate) fn submit(
         &self,
         cache_affinity_key: Option<&str>,
         input_tokens: usize,
         output_tokens: usize,
     ) -> EngineRequest {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (events_tx, events) = mpsc::unbounded_channel();
-        let (id_tx, id_rx) = oneshot::channel();
         let spec = RequestSpec {
             cache_key: cache_affinity_key.map(cache_key),
             input_tokens: input_tokens as u64,
@@ -82,13 +86,13 @@ impl EngineDriver {
         };
         self.commands
             .send(Command::Submit {
+                id,
                 spec,
                 events: events_tx,
-                id: id_tx,
             })
             .expect("engine driver runs for the process lifetime");
         EngineRequest {
-            id: id_rx.await.expect("engine driver assigns request IDs"),
+            id,
             events,
             commands: self.commands.clone(),
             completed: false,
@@ -166,7 +170,6 @@ async fn run(mut engine: Engine, mut commands: mpsc::UnboundedReceiver<Command>)
     let origin = Instant::now();
     let now = || u64::try_from(origin.elapsed().as_micros()).unwrap_or(u64::MAX);
     let mut subscribers: HashMap<RequestId, mpsc::UnboundedSender<EngineEvent>> = HashMap::new();
-    let mut next_id: RequestId = 0;
     loop {
         let deadline = engine
             .next_event_time()
@@ -174,11 +177,9 @@ async fn run(mut engine: Engine, mut commands: mpsc::UnboundedReceiver<Command>)
         tokio::select! {
             command = commands.recv() => match command {
                 None => return,
-                Some(Command::Submit { spec, events, id }) => {
-                    next_id += 1;
-                    engine.submit(now(), next_id, spec);
-                    subscribers.insert(next_id, events);
-                    let _ = id.send(next_id);
+                Some(Command::Submit { id, spec, events }) => {
+                    engine.submit(now(), id, spec);
+                    subscribers.insert(id, events);
                 }
                 Some(Command::Cancel(id)) => {
                     engine.cancel(now(), id);

@@ -1445,3 +1445,32 @@ fn stats_stream_pings_advertise_batched_engine_concurrency() {
         "{\"type\":\"ping\",\"v\":1}\n"
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn dropping_an_engine_request_frees_its_slot() {
+    let engine = engine_driver::EngineDriver::spawn(mock_engine::EngineConfig {
+        num_gpu_workers: 1,
+        max_num_seqs: 1,
+        max_batched_tokens: 10_000,
+        step_fixed_ms: 1.0,
+        step_decode_ms_per_seq: 0.0,
+        step_prefill_ms_per_token: 0.0,
+        kv_cache_capacity_tokens: 100_000,
+    })
+    .unwrap();
+    let mut running = engine.submit(None, 10, 1_000_000);
+    running.first_token().await;
+    let mut waiting = engine.submit(None, 10, 1);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), waiting.first_token())
+            .await
+            .is_err(),
+        "the only slot is busy"
+    );
+
+    // A client disconnect drops the request, which cancels it in the engine.
+    drop(running);
+    tokio::time::timeout(Duration::from_millis(100), waiting.first_token())
+        .await
+        .expect("the cancelled request's slot serves the waiting request");
+}

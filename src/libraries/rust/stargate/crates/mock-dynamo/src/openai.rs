@@ -284,7 +284,6 @@ pub(crate) async fn chat_completions(
             cache_affinity_key.as_deref(),
             input_tokens,
             output_tokens,
-            stream,
         )
         .await;
     let kv_cache_access = prepared.kv_cache_access;
@@ -411,7 +410,6 @@ pub(crate) async fn responses(
             cache_affinity_key.as_deref(),
             input_tokens,
             output_tokens,
-            true,
         )
         .await;
 
@@ -505,8 +503,8 @@ pub(crate) async fn kv_cache_stats(State(state): State<AppState>) -> Json<KvCach
 
 impl AppState {
     /// Runs prefill and returns once the first token is ready to be timed.
-    /// `emit_start_counters` sends the zero-progress stats event before
-    /// prefill, as streaming responses do.
+    /// Stats counters report zero progress before prefill and the processed
+    /// input once prefill finishes.
     async fn prepare_request(
         &self,
         model: &str,
@@ -514,24 +512,19 @@ impl AppState {
         cache_affinity_key: Option<&str>,
         input_tokens: usize,
         output_tokens: usize,
-        emit_start_counters: bool,
     ) -> PreparedRequest {
         if let Some(engine) = &self.engine {
-            let mut request = engine
-                .submit(cache_affinity_key, input_tokens, output_tokens)
-                .await;
-            if emit_start_counters {
-                self.emit_counters(request_id, model, 0, 0, false);
-            }
-            let reused = usize::try_from(request.first_token().await)
-                .unwrap_or(input_tokens)
-                .min(input_tokens);
+            let mut request = engine.submit(cache_affinity_key, input_tokens, output_tokens);
+            self.emit_counters(request_id, model, 0, 0, false);
+            // The engine never reports more reuse than the prompt length.
+            let reused = request.first_token().await;
+            self.emit_counters(request_id, model, input_tokens, 0, false);
             return PreparedRequest {
                 request_slot: None,
                 kv_cache_access: KvCacheAccess {
                     hit: reused > 0,
-                    reused_input_tokens: reused as u64,
-                    uncached_input_tokens: (input_tokens - reused) as u64,
+                    reused_input_tokens: reused,
+                    uncached_input_tokens: input_tokens as u64 - reused,
                     ..KvCacheAccess::default()
                 },
                 first_token_delay: Duration::ZERO,
@@ -539,12 +532,11 @@ impl AppState {
             };
         }
         let request_slot = self.acquire_request_slot().await;
-        if emit_start_counters {
-            self.emit_counters(request_id, model, 0, 0, false);
-        }
+        self.emit_counters(request_id, model, 0, 0, false);
         let kv_cache_access = self
             .process_input_with_cache(cache_affinity_key, input_tokens)
             .await;
+        self.emit_counters(request_id, model, input_tokens, 0, false);
         PreparedRequest {
             request_slot,
             kv_cache_access,
@@ -704,8 +696,6 @@ fn stream_response(config: StreamResponseConfig) -> Response {
             ));
         }
         tokio::time::sleep(first_token_delay).await;
-
-        state.emit_counters(&request_id, &model, input_tokens, 0, false);
 
         if let StreamKind::Chat { include_usage, .. } = kind {
             yield Ok(chat_sse_event(&id, &model, ChatStreamChunk::Role, include_usage));

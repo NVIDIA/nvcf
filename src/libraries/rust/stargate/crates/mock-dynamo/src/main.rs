@@ -448,11 +448,11 @@ Default request workload (overridable with --output-tokens-min, --output-tokens-
   actual output tokens: min(selected output tokens, context length - input tokens)
   Pylon canary requests: one output token, "2"
 
-Expected steady-state output rate:
+Legacy expected steady-state output rate:
   per active request: {:.1} tokens/s average ({:.1}..={:.1})
   at {} active requests: about {:.1} tokens/s before runtime overhead
 
-Expected cold-cache TTFT:
+Legacy expected cold-cache TTFT:
   1,000 input tokens: about {:.1} ms average
   5,000 input tokens: about {:.1} ms average
 
@@ -523,7 +523,7 @@ async fn main() -> Result<()> {
                 num_gpu_workers = config.num_gpu_workers,
                 max_num_seqs = config.max_num_seqs,
                 max_concurrency = config.max_concurrency(),
-                "using batched engine; set Pylon --max-engine-concurrency to max_concurrency"
+                "using batched engine; stats stream pings advertise max_concurrency to Pylon"
             );
             Some(engine_driver::EngineDriver::spawn(config).map_err(anyhow::Error::msg)?)
         }

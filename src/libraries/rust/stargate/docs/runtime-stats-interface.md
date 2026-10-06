@@ -223,6 +223,8 @@ deployment:
 - A completed request's cache entry covers its prompt and its output. A later
   request with the same key reuses up to that many tokens. Matching is per
   key, not per token block.
+- `/kv-cache/stats` reports deployment totals for capacity and used tokens.
+  Its entry, hit, miss, and eviction counters report zero for this model.
 - Stats stream pings advertise `max_engine_concurrency` as
   `num_gpu_workers * max_num_seqs`. When Pylon does not read the stats stream,
   set `--max-engine-concurrency` to the same value.
