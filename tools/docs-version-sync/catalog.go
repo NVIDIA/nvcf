@@ -237,7 +237,6 @@ type DenylistEntry struct {
 
 var defaultDenylist = []DenylistEntry{
 	{Name: "nvcf-base", Reason: "retired repository"},
-	{Name: "samba", Reason: "retired internal dependency"},
 }
 
 // Artifact identifies one versioned chart, image, or downloadable resource in the catalog.
