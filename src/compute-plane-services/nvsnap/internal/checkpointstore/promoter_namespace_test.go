@@ -234,3 +234,61 @@ func TestSnapshotClone_EnsureClaimPreProvisionsSnapshot(t *testing.T) {
 		t.Errorf("per-pod clone: want ErrUnsupported, got %v", err)
 	}
 }
+
+// stampedFollower is an election follower admitted in ns before the
+// promote existed: it carries the hash label and names rox-<hash> in its
+// own namespace.
+func stampedFollower(ns string) *corev1.Pod {
+	return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "follower", Namespace: ns, Labels: map[string]string{"nvsnap.io/hash": ShortHash(xnsHash)}}}
+}
+
+// A transient API error creating a follower namespace's claim must not
+// leave that namespace without one: the server releases the follower on
+// ready, and nothing would mint the claim afterwards.
+func TestPerCapturePVCBackend_StampedClaimRetriesTransientErrors(t *testing.T) {
+	restore := claimRetryBackoff
+	claimRetryBackoff.Duration = time.Millisecond
+	t.Cleanup(func() { claimRetryBackoff = restore })
+
+	kc := promotedSharedFixture()
+	if _, err := kc.CoreV1().Pods("fn-ns").Create(context.Background(), stampedFollower("fn-ns"), metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	failures := 1
+	kc.PrependReactor("create", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "fn-ns" && failures > 0 {
+			failures--
+			return true, nil, apierrors.NewTooManyRequests("throttled", 1)
+		}
+		return false, nil, nil
+	})
+	b := &PerCapturePVCBackend{KubeClient: kc, Namespace: "nvsnap-system", StorageClass: "nvmesh-sc", Promoter: sharedPromoter(kc), Log: logrus.New()}
+	b.ensureClaimsForStampedPods(context.Background(), xnsHash, "capture-ns")
+	if _, err := kc.CoreV1().PersistentVolumeClaims("fn-ns").Get(context.Background(), sharedROXName(xnsHash), metav1.GetOptions{}); err != nil {
+		t.Fatalf("follower namespace must hold its claim after a transient create error: %v", err)
+	}
+}
+
+// A claim that cannot be made even after retries is an error, so the
+// promote publishes failed (followers re-elected) rather than ready
+// (followers released into a pod that can never start).
+func TestPerCapturePVCBackend_StampedClaimFailureIsReturned(t *testing.T) {
+	restore := claimRetryBackoff
+	claimRetryBackoff.Duration = time.Millisecond
+	t.Cleanup(func() { claimRetryBackoff = restore })
+
+	kc := promotedSharedFixture()
+	if _, err := kc.CoreV1().Pods("fn-ns").Create(context.Background(), stampedFollower("fn-ns"), metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	kc.PrependReactor("create", "persistentvolumeclaims", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "fn-ns" {
+			return true, nil, apierrors.NewTooManyRequests("throttled", 1)
+		}
+		return false, nil, nil
+	})
+	b := &PerCapturePVCBackend{KubeClient: kc, Namespace: "nvsnap-system", StorageClass: "nvmesh-sc", Promoter: sharedPromoter(kc), Log: logrus.New()}
+	if err := b.ensureClaimsForStampedPods(context.Background(), xnsHash, "capture-ns"); err == nil {
+		t.Fatal("a claim that never got made must be reported, so ready is not published")
+	}
+}
