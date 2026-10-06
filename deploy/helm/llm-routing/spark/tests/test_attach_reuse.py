@@ -107,10 +107,10 @@ class AttachReuseTests(unittest.TestCase):
                 self.attempt(recipe, live, rejected=True).assert_not_called()
                 self.assertNotIn('attachedExisting', recipe.state)
 
-    def test_saved_source_mismatch_is_rejected_before_discovery(self):
+    def test_saved_source_revision_does_not_block_attachment(self):
         recipe, live = self.installation()
         recipe.state['stack']['source']['revision'] = 'f'*40
-        self.attempt(recipe, live, rejected=True).assert_not_called()
+        self.attempt(recipe, live).assert_called_once()
 
     def test_live_identity_and_runtime_mismatches_preserve_local_state(self):
         changes = {

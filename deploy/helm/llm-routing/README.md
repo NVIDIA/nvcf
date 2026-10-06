@@ -116,7 +116,7 @@ If this workstation has not used the running installation before, [attach to it 
 
 4. Save the printed update record path for rollback.
 
-GLM stays loaded. Gateway updates briefly interrupt requests. Router updates reconnect Pylon transports. Image-only updates require unchanged routing charts. For changes to the required source revision, follow [Update the source baseline](#update-the-source-baseline).
+GLM stays loaded. Gateway updates briefly interrupt requests. Router updates reconnect Pylon transports. Image-only updates require unchanged routing charts. For chart or API changes, follow [Update the stack](#update-the-stack).
 
 To roll back the image update:
 
@@ -188,22 +188,17 @@ python3 spark.py inventory
 
 `init` checks that the demo is uninstalled, reuses the saved placement, image references and credentials, and archives stale progress under `before-reinit-*` in the work directory. Continue with [Deploy in order](#deploy-in-order), starting at `preflight`.
 
-### Update the source baseline
+### Update the stack
 
-[spark/source.lock.json](spark/source.lock.json) records the baseline required by the recipe. Update it when the recipe requires newer runtime, API or chart changes.
+Builds use the selected checkout, including local edits. Use `--source-dir /path/to/existing/checkout` to select another checkout. The recorded commit ID is for debugging. Squash and rebase merges are supported.
 
-1. Commit runtime, API and chart fixes in their owning source directories, including generated files and regression tests.
-2. Update the repository and full baseline revision in `spark/source.lock.json`. The revision must exist in the selected checkout and be an ancestor of its `HEAD`.
-3. Render the manifests, then run the [local regression checks](#local-validation).
+The stack records a SHA-256 fingerprint of its routing chart files. Image updates and rollback require matching chart contents. Older installations and rollback records without a fingerprint require a coordinated stack update first.
 
-   ```bash
-   python3 spark.py render
-   ```
-
-4. Build and deploy gateway and router together when their API contract changes. Use the same checkout and compatible chart configuration for both.
+1. Make runtime, API and chart changes in the same checkout, including generated files and regression tests.
+2. Render the manifests and run the [local regression checks](#local-validation).
+3. For an existing installation, preserve its installed Helm values and credentials when upgrading the stack. Copy only `sparkRecipeChartsSha256` from the private work directory's `render/stack-values.json` into those preserved values. The remaining render values are offline test data. Review the rendered changes before applying the upgrade. Fresh installations record this automatically during `stack`.
+4. Build and deploy gateway and router together when their API contract changes.
 5. Rerun gateway verification, recovery and image update/rollback checks.
-
-Use `--source-dir /path/to/existing/checkout` on commands to select another checkout.
 
 ### Recovery and limits
 

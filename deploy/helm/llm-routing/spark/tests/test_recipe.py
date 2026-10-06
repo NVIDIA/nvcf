@@ -32,8 +32,14 @@ class RecipeTests(unittest.TestCase):
         source = pathlib.Path(self.tmp.name).resolve()/name
         source.mkdir()
         subprocess.run(['git', 'init', '--quiet', source], check=True)
+        for path in spark.COMPONENTS.values():
+            (source/path).mkdir(parents=True, exist_ok=True)
+        for name in ('llm-gateway-stack', 'llm-api-gateway', 'llm-request-router'):
+            chart = source/'deploy/helm'/name/name
+            chart.mkdir(parents=True)
+            (chart/'Chart.yaml').write_text('apiVersion: v2\nname: '+name+'\nversion: 0.0.0\n')
         (source/'service.txt').write_text('committed service\n')
-        subprocess.run(['git', 'add', 'service.txt'], cwd=source, check=True)
+        subprocess.run(['git', 'add', '.'], cwd=source, check=True)
         subprocess.run(['git', '-c', 'user.name=Recipe Test', '-c', 'user.email=recipe@example.com',
                         '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
                         'commit', '--quiet', '-m', 'Initial source'], cwd=source, check=True)
@@ -42,9 +48,9 @@ class RecipeTests(unittest.TestCase):
 
     def test_prepare_only_builds_dependencies_in_the_selected_checkout(self):
         self.recipe.source, lock = self.source_repository()
-        with patch.dict(spark.LOCK, lock, clear=True), patch.object(spark, 'run') as run:
+        with patch.object(spark, 'run') as run:
             self.recipe.prepare()
-            self.assertEqual(self.recipe.source_identity(), lock)
+            self.assertEqual(self.recipe.source_identity(), {'revision': lock['revision']})
         self.assertEqual(spark.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip(), lock['revision'])
         self.assertEqual((self.recipe.source/'service.txt').read_text(), 'committed service\n')
         self.assertEqual(spark.output(['git', 'status', '--porcelain'], cwd=self.recipe.source), '')
@@ -57,7 +63,7 @@ class RecipeTests(unittest.TestCase):
         stale.mkdir()
         (stale/'unrelated.txt').write_text('leave this old copy alone\n')
         recipe_path = seed/'deploy/helm/llm-routing/spark'
-        with patch.object(spark, 'HERE', recipe_path), patch.dict(spark.LOCK, lock, clear=True), \
+        with patch.object(spark, 'HERE', recipe_path), \
              patch.object(spark, 'run') as run:
             recipe = spark.Recipe(self.config, self.recipe.work)
             recipe.prepare()
@@ -70,7 +76,7 @@ class RecipeTests(unittest.TestCase):
         self.recipe.source, lock = self.source_repository()
         edited = self.recipe.source/'service.txt'
         edited.write_text('local gateway change\n')
-        with patch.dict(spark.LOCK, lock, clear=True), patch.object(spark, 'run') as run:
+        with patch.object(spark, 'run') as run:
             self.recipe.prepare()
             self.recipe.build_images('gateway', 'edited-build')
         self.assertEqual(edited.read_text(), 'local gateway change\n')
@@ -88,7 +94,7 @@ class RecipeTests(unittest.TestCase):
                         'commit', '--quiet', '-m', 'Developer change'], cwd=self.recipe.source, check=True)
         head = spark.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip()
         edited.write_text('uncommitted follow-up\n')
-        with patch.dict(spark.LOCK, lock, clear=True), patch.object(spark, 'run') as run:
+        with patch.object(spark, 'run') as run:
             self.recipe.prepare()
             self.recipe.build_images('router', 'developer-change')
         self.assertNotEqual(head, lock['revision'])
@@ -97,23 +103,23 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0][-1], str(self.recipe.source/spark.COMPONENTS['router']))
         self.assertEqual([call.args[0][0] for call in run.call_args_list], ['helm', 'docker', 'docker'])
 
-    def test_existing_but_unrelated_baseline_is_rejected(self):
+    def test_rewritten_history_with_the_same_sources_is_accepted(self):
         self.recipe.source, lock = self.source_repository()
         subprocess.run(['git', 'checkout', '--quiet', '--orphan', 'unrelated'], cwd=self.recipe.source, check=True)
         subprocess.run(['git', '-c', 'user.name=Recipe Test', '-c', 'user.email=recipe@example.com',
                         '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
                         'commit', '--quiet', '-m', 'Unrelated history'], cwd=self.recipe.source, check=True)
         for action in (self.recipe.prepare, self.recipe.build_images):
-            with self.subTest(action=action.__name__), patch.dict(spark.LOCK, lock, clear=True), \
-                 patch.object(spark, 'run') as run, self.assertRaises(RuntimeError):
+            with self.subTest(action=action.__name__), \
+                 patch.object(spark, 'run') as run:
                 action()
-            run.assert_not_called()
+            run.assert_called()
 
     def test_source_must_be_the_checkout_root(self):
         seed, lock = self.source_repository()
         self.recipe.source = seed/'nested'
         self.recipe.source.mkdir()
-        with patch.dict(spark.LOCK, lock, clear=True), patch.object(spark, 'run') as run, self.assertRaises(RuntimeError):
+        with patch.object(spark, 'run') as run, self.assertRaises(RuntimeError):
             self.recipe.prepare()
         run.assert_not_called()
 
@@ -158,45 +164,42 @@ class RecipeTests(unittest.TestCase):
         prepare.assert_not_called()
         self.assertTrue(all(command.args[0][0] == 'docker' for command in run.call_args_list))
 
-    def test_image_update_rejects_committed_local_and_untracked_chart_changes(self):
-        for index, chart in enumerate(('llm-gateway-stack', 'llm-api-gateway', 'llm-request-router')):
-            for change in ('committed', 'local', 'untracked'):
-                self.recipe.source, lock = self.source_repository('chart-' + str(index) + '-' + change)
-                template = self.recipe.source/'deploy/helm'/chart/chart/'templates/deployment.yaml'
-                template.parent.mkdir(parents=True)
-                if change != 'untracked':
-                    template.write_text('baseline chart\n')
-                    subprocess.run(['git', 'add', '.'], cwd=self.recipe.source, check=True)
-                    subprocess.run(['git', '-c', 'user.name=Recipe Test', '-c', 'user.email=recipe@example.com',
-                                    '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
-                                    'commit', '--quiet', '-m', 'Baseline chart'], cwd=self.recipe.source, check=True)
-                    lock['revision'] = spark.output(['git', 'rev-parse', 'HEAD'], cwd=self.recipe.source).strip()
-                template.write_text('would change the running chart\n')
-                if change == 'committed':
-                    subprocess.run(['git', 'add', '.'], cwd=self.recipe.source, check=True)
-                    subprocess.run(['git', '-c', 'user.name=Recipe Test', '-c', 'user.email=recipe@example.com',
-                                    '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null',
-                                    'commit', '--quiet', '-m', 'Chart change'], cwd=self.recipe.source, check=True)
-                with self.subTest(chart=chart, change=change), patch.dict(spark.LOCK, lock, clear=True):
-                    self.recipe.source_check()
-                    with self.assertRaisesRegex(RuntimeError, 'unchanged routing charts'):
-                        self.recipe.source_check(image_update=True)
+    def test_chart_digest_detects_changed_added_and_deleted_templates(self):
+        self.recipe.source, _ = self.source_repository()
+        original = self.recipe.chart_digest()
+        for name in ('llm-gateway-stack', 'llm-api-gateway', 'llm-request-router'):
+            template = self.recipe.source/'deploy/helm'/name/name/'templates/deployment.yaml'
+            template.parent.mkdir(parents=True)
+            template.write_text('original template\n')
+            added = self.recipe.chart_digest()
+            self.assertNotEqual(original, added)
+            template.write_text('changed template\n')
+            self.assertNotEqual(added, self.recipe.chart_digest())
+            template.unlink()
+            self.assertEqual(original, self.recipe.chart_digest())
 
-    def test_image_update_accepts_service_changes_without_chart_changes(self):
-        self.recipe.source, lock = self.source_repository()
-        (self.recipe.source/'service.txt').write_text('local service change\n')
-        with patch.dict(spark.LOCK, lock, clear=True):
-            self.recipe.source_check(image_update=True)
+    def test_chart_digest_ignores_source_history_and_generated_dependencies(self):
+        self.recipe.source, _ = self.source_repository()
+        before = self.recipe.chart_digest()
+        (self.recipe.source/'service.txt').write_text('service edit\n')
+        chart = self.recipe.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack'
+        (chart/'charts').mkdir()
+        (chart/'charts/generated.tgz').write_bytes(b'generated dependency archive')
+        (chart/'Chart.lock').write_text('generated timestamp\n')
+        self.assertEqual(before, self.recipe.chart_digest())
+        self.recipe.source_check()
 
-    def test_wrong_or_mutable_source_revision_is_rejected_before_prepare_or_build(self):
-        self.recipe.source, lock = self.source_repository()
-        for revision in ('0'*40, 'main'):
-            lock['revision'] = revision
-            for action in (self.recipe.prepare, self.recipe.build_images):
-                with self.subTest(revision=revision, action=action.__name__), patch.dict(spark.LOCK, lock, clear=True), patch.object(spark, 'run') as run:
-                    with self.assertRaisesRegex(RuntimeError, 'source revision'):
-                        action()
-                    run.assert_not_called()
+    def test_missing_sources_or_charts_are_rejected_before_preparation(self):
+        self.recipe.source, _ = self.source_repository()
+        (self.recipe.source/spark.COMPONENTS['gateway']).rmdir()
+        with patch.object(spark, 'run') as run, self.assertRaisesRegex(RuntimeError, 'missing required'):
+            self.recipe.prepare()
+        run.assert_not_called()
+        (self.recipe.source/spark.COMPONENTS['gateway']).mkdir()
+        (self.recipe.source/'deploy/helm/llm-api-gateway/llm-api-gateway/Chart.yaml').unlink()
+        with patch.object(spark, 'run') as run, self.assertRaisesRegex(RuntimeError, 'Missing routing chart'):
+            self.recipe.prepare()
+        run.assert_not_called()
 
     def test_missing_or_unreachable_docker_fails_before_build_with_clear_action(self):
         failures = (FileNotFoundError('docker'), subprocess.CalledProcessError(1, ['docker', 'info']),
@@ -232,7 +235,7 @@ class RecipeTests(unittest.TestCase):
         for dirty in (False, True):
             if dirty:
                 edited.write_text('uncommitted operator change\n')
-            with self.subTest(dirty=dirty), patch.dict(spark.LOCK, lock, clear=True), patch.object(spark, 'run') as run:
+            with self.subTest(dirty=dirty), patch.object(spark, 'run') as run:
                 self.recipe.build_images('operator')
             expected = head + ('-dirty' if dirty else '')
             self.assertIn('SOURCE_REVISION='+expected, run.call_args.args[0])
@@ -564,6 +567,7 @@ class RecipeTests(unittest.TestCase):
 
     def test_image_update_only_changes_selected_tag_and_preserves_other_pods(self):
         values = self.recipe.stack_values('a'*64, 'b'*64)
+        values['sparkRecipeSource'] = {'revision': 'an-older-build'}
         pods = [{'metadata': {'name': 'llm-api-gateway-old', 'uid': 'g1'}, 'status': {'phase': 'Running'}},
                 {'metadata': {'name': 'unrelated-workload', 'uid': 'u1'}, 'status': {'phase': 'Running'}},
                 {'metadata': {'name': self.recipe.glm+'-leader', 'uid': 'm1'}, 'status': {'phase': 'Running'}}]
@@ -571,7 +575,7 @@ class RecipeTests(unittest.TestCase):
         after[0]['metadata']['uid'] = 'g2'
         with patch.object(self.recipe, 'source_check') as source, patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', side_effect=[json.dumps(values), json.dumps({'items': pods}), json.dumps({'items': after})]), patch.object(spark, 'run') as run:
             self.recipe.update('gateway', 'next-tag')
-        self.assertEqual(source.call_args_list[0].kwargs, {'image_update': True})
+        self.assertEqual(source.call_args_list[0].kwargs, {})
         self.assertEqual(source.call_count, 2)
         self.assertEqual(run.call_args_list[0].args[0][:3], ['helm', 'dependency', 'build'])
         self.assertEqual(run.call_count, 2)
@@ -583,6 +587,7 @@ class RecipeTests(unittest.TestCase):
         record = json.loads(results[0].read_text())
         self.assertEqual(record['previousTag'], self.config['images']['tag'])
         self.assertEqual(record['backendPodsChanged'], [])
+        self.assertEqual(record['chartsSha256'], self.recipe.chart_digest())
         self.assertEqual(record['source'], self.recipe.source_identity())
 
     def test_update_dependency_failure_stops_before_update_record_or_upgrade(self):
@@ -623,20 +628,16 @@ class RecipeTests(unittest.TestCase):
             run.assert_not_called()
             self.assertFalse((self.recipe.work/'evidence').exists())
 
-    def test_image_update_rejects_unmarked_or_different_stack_sources_before_mutation(self):
+    def test_image_update_rejects_missing_or_changed_charts_before_mutation(self):
         self.recipe.state = {'attachedExisting': True, 'gateway': True}
-        cases = [None, {**self.recipe.source_identity(), 'patchSha256': 'a'*64}]
-        for field in self.recipe.source_identity():
-            source = self.recipe.source_identity()
-            source[field] = 'another-source'
-            cases.append(source)
-        for source in cases:
+        for digest in (None, '0'*64):
             values = self.recipe.stack_values('a'*64, 'b'*64)
-            values['sparkRecipeSource'] = source
-            with self.subTest(source=source), patch.object(self.recipe, 'source_check'), patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', return_value=json.dumps(values)) as output, patch.object(spark, 'run') as run:
+            values['sparkRecipeChartsSha256'] = digest
+            with self.subTest(digest=digest), patch.object(self.recipe, 'source_check'), \
+                 patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', return_value=json.dumps(values)), \
+                 patch.object(spark, 'run') as run:
                 with self.assertRaisesRegex(RuntimeError, 'coordinated stack installation'):
                     self.recipe.update('gateway', 'next-tag')
-                output.assert_called_once()
                 run.assert_not_called()
                 self.assertFalse((self.recipe.work/'evidence').exists())
 
@@ -659,7 +660,7 @@ class RecipeTests(unittest.TestCase):
         values = self.recipe.stack_values('a'*64, 'b'*64)
         values['llm-request-router']['llmRequestRouter']['image']['tag'] = 'next-tag'
         record = {'context': self.config['context'], 'namespace': self.config['namespace'], 'release': self.recipe.stack,
-                  'component': 'router', 'newTag': 'next-tag', 'previousTag': 'old-tag', 'source': self.recipe.source_identity()}
+                  'component': 'router', 'newTag': 'next-tag', 'previousTag': 'old-tag', 'source': {'revision': 'an-older-build'}, 'chartsSha256': self.recipe.chart_digest()}
         path = pathlib.Path(self.tmp.name)/'rollback.json'
         path.write_text(json.dumps(record))
         with patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', return_value=json.dumps(values)), patch.object(self.recipe, 'update') as update:
@@ -670,7 +671,7 @@ class RecipeTests(unittest.TestCase):
         values = self.recipe.stack_values('a'*64, 'b'*64)
         values['llm-request-router']['llmRequestRouter']['image']['tag'] = 'next-tag'
         record = {'context': self.config['context'], 'namespace': self.config['namespace'], 'release': self.recipe.stack,
-                  'component': 'router', 'newTag': 'next-tag', 'previousTag': 'old-tag', 'source': self.recipe.source_identity()}
+                  'component': 'router', 'newTag': 'next-tag', 'previousTag': 'old-tag', 'source': {'revision': 'an-older-build'}, 'chartsSha256': self.recipe.chart_digest()}
         path = self.recipe.work/'rollback.json'
         path.write_text(json.dumps(record))
         reads = [json.dumps(values), json.dumps(values), '{"items": []}', '{"items": []}']
@@ -684,7 +685,7 @@ class RecipeTests(unittest.TestCase):
     def test_rollback_refuses_a_subsequent_update(self):
         values = self.recipe.stack_values('a'*64, 'b'*64)
         record = {'context': self.config['context'], 'namespace': self.config['namespace'], 'release': self.recipe.stack,
-                  'component': 'gateway', 'newTag': 'different-tag', 'previousTag': 'old-tag', 'source': self.recipe.source_identity()}
+                  'component': 'gateway', 'newTag': 'different-tag', 'previousTag': 'old-tag', 'source': {'revision': 'an-older-build'}, 'chartsSha256': self.recipe.chart_digest()}
         path = pathlib.Path(self.tmp.name)/'rollback.json'
         path.write_text(json.dumps(record))
         with patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output', return_value=json.dumps(values)), patch.object(self.recipe, 'update') as update:
@@ -692,15 +693,16 @@ class RecipeTests(unittest.TestCase):
                 self.recipe.rollback(path)
             update.assert_not_called()
 
-    def test_rollback_rejects_an_older_source_record_before_reading_or_updating_release(self):
+    def test_rollback_rejects_missing_or_changed_charts_before_reading_release(self):
         record = {'context': self.config['context'], 'namespace': self.config['namespace'], 'release': self.recipe.stack,
                   'component': 'gateway', 'newTag': 'next-tag', 'previousTag': 'old-tag'}
-        path = pathlib.Path(self.tmp.name)/'rollback.json'
-        for source in (None, {**self.recipe.source_identity(), 'patchSha256': 'a'*64}):
-            record['source'] = source
+        path = self.recipe.work/'rollback.json'
+        for digest in (None, '0'*64):
+            record['chartsSha256'] = digest
             path.write_text(json.dumps(record))
-            with self.subTest(source=source), patch.object(self.recipe, 'bound_cluster'), patch.object(spark, 'output') as output, patch.object(self.recipe, 'update') as update:
-                with self.assertRaisesRegex(RuntimeError, 'unknown source revision'):
+            with self.subTest(digest=digest), patch.object(self.recipe, 'bound_cluster'), \
+                 patch.object(spark, 'output') as output, patch.object(self.recipe, 'update') as update:
+                with self.assertRaisesRegex(RuntimeError, 'chart fingerprint'):
                     self.recipe.rollback(path)
                 output.assert_not_called()
                 update.assert_not_called()

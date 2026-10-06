@@ -25,7 +25,6 @@ sys.path.insert(0, str(HERE))
 import gateway_access
 import cluster_setup
 import console_output
-LOCK = json.loads((HERE/'source.lock.json').read_text())
 MODEL = json.loads((HERE/'model.lock.json').read_text())
 COMPONENTS = {'gateway': 'src/invocation-plane-services/llm-api-gateway',
               'router': 'src/libraries/rust/stargate', 'pylon': 'src/libraries/rust/stargate',
@@ -172,8 +171,6 @@ def discover_config(context, namespace=None):
 
     stack = owner(gateway)
     v = values(stack)
-    require(v.get('sparkRecipeSource') == {k: LOCK[k] for k in ('repository', 'revision')},
-            'Installed source differs from source.lock.json. Use the matching recipe checkout.')
     router = get('deployment', 'llm-request-router')
     require(owner(router) == stack, 'Gateway and router belong to different releases.')
     control = placement(gateway)
@@ -303,32 +300,35 @@ class Recipe:
         return self.c['images'].get('repositories', {}).get(component, self.c['images']['prefix'] + '/' + component)
 
     def source_identity(self):
-        require(re.fullmatch(r'[0-9a-f]{40}', LOCK['revision']) is not None, 'Pin a full immutable source revision in source.lock.json.')
-        return {key: LOCK[key] for key in ('repository', 'revision')}
+        return {'revision': self.checkout_revision()}
 
-    def source_check(self, image_update=False):
-        identity = self.source_identity()
+    def source_check(self):
         require(self.source.is_dir(), 'Source checkout does not exist. Use --source-dir to select an existing checkout.')
         try:
             root = output(['git', 'rev-parse', '--show-toplevel'], cwd=self.source, stderr=subprocess.PIPE).strip()
-            require(pathlib.Path(root).resolve() == self.source, 'Source directory must be the repository root.')
-            result = subprocess.run(['git', 'merge-base', '--is-ancestor', identity['revision'], 'HEAD'],
-                                    cwd=self.source, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         except (OSError, subprocess.CalledProcessError):
             raise RuntimeError('Source directory must be an existing Git checkout.') from None
-        require(result.returncode == 0,
-                'Checkout does not contain the source revision in source.lock.json. Use a checkout with that history.')
-        if image_update:
-            charts = ['deploy/helm/'+name+'/'+name for name in
-                      ('llm-gateway-stack', 'llm-api-gateway', 'llm-request-router')]
-            changed = subprocess.run(['git', 'diff', '--quiet', identity['revision'], '--', *charts], cwd=self.source)
-            added = output(['git', 'ls-files', '--others', '--exclude-standard', '--', *charts], cwd=self.source)
-            require(changed.returncode == 0 and not added.strip(),
-                    'Image-only updates require unchanged routing charts. Use a coordinated stack installation for chart changes.')
+        require(pathlib.Path(root).resolve() == self.source, 'Source directory must be the repository root.')
+        require(all((self.source/path).is_dir() for path in COMPONENTS.values()),
+                'Source checkout is missing required gateway, router or operator sources.')
+        self.chart_digest()
+
+    def chart_digest(self):
+        digest = hashlib.sha256()
+        for name in ('llm-gateway-stack', 'llm-api-gateway', 'llm-request-router'):
+            chart = self.source/'deploy/helm'/name/name
+            require((chart/'Chart.yaml').is_file(), 'Missing routing chart: '+name)
+            for path in sorted(chart.rglob('*')):
+                relative = path.relative_to(chart)
+                if path.is_file() and (relative.parts[0] in ('templates', 'files', 'crds')
+                        or str(relative) in ('Chart.yaml', 'values.yaml', 'values.schema.json', '.helmignore')):
+                    digest.update((name+'/'+relative.as_posix()).encode()+b'\0')
+                    digest.update(hashlib.sha256(path.read_bytes()).digest())
+        return digest.hexdigest()
 
     def checkout_revision(self):
-        revision = output(['git', 'rev-parse', 'HEAD'], cwd=self.source).strip()
-        dirty = output(['git', 'status', '--porcelain'], cwd=self.source).strip()
+        revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=self.source, text=True).strip()
+        dirty = subprocess.check_output(['git', 'status', '--porcelain'], cwd=self.source, text=True).strip()
         return revision + ('-dirty' if dirty else '')
 
     def prepare(self):
@@ -363,7 +363,7 @@ class Recipe:
     def stack_values(self, token_hash, key_hash, ui_key=None):
         values = {'clusterId': self.c['clusterId'], 'clusterCredential': {'sha256': token_hash},
                   'apiKeys': [{'id': 'poc-client', 'sha256': key_hash}], 'tls': copy.deepcopy(self.c['tls']),
-                  'sparkRecipeSource': self.source_identity()}
+                  'sparkRecipeSource': self.source_identity(), 'sparkRecipeChartsSha256': self.chart_digest()}
         if ui_key is not None:
             values['apiKeys'].append({'id': 'demo-ui', 'sha256': hashlib.sha256(ui_key.encode()).hexdigest()})
             values['demoUiApiKey'] = ui_key
@@ -423,8 +423,6 @@ class Recipe:
             self.bound_cluster()
             require(all(self.state.get(phase) for phase in ('stack', 'serve', 'registered')),
                     'Saved installation is incomplete. Finish installing and registering GLM before attaching.')
-            require(self.state['stack'].get('source') == self.source_identity(),
-                    'Saved installation source differs from source.lock.json. Use the matching recipe checkout.')
             live = discover_config(self.c['context'], self.c['namespace'])
             for field in ('context', 'namespace', 'clusterId', 'nodes', 'runtimeClass',
                           'runtimeImage', 'storageClass', 'caConfigMap'):
@@ -465,8 +463,8 @@ class Recipe:
         self.stamp('stack', {'apiKeyFile': str(key) if key else None, 'source': values.get('sparkRecipeSource')})
         self.stamp('serve')
         print('Existing installation inspected. Run verify-gateway next.')
-        if values.get('sparkRecipeSource') != self.source_identity():
-            console_output.warn('Image updates are disabled for this source revision. Use a coordinated stack installation to change gateway/router contracts.')
+        if values.get('sparkRecipeChartsSha256') != self.chart_digest():
+            console_output.warn('Image updates require matching recorded charts. Use a coordinated stack installation first.')
 
     def bound_cluster(self):
         require(self.state.get('inventory'), 'Run inventory for this installation first.')
@@ -920,13 +918,13 @@ finally:
 
     def update(self, component, tag):
         self.bound_cluster()
-        self.source_check(image_update=True)
+        self.source_check()
         require(not self.state.get('attachedExisting') or self.state.get('gateway'), 'Verify GLM through the attached gateway before its first update.')
         chart, service = {'gateway': ('llm-api-gateway', 'llmApiGateway'), 'router': ('llm-request-router', 'llmRequestRouter')}[component]
         require(re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}', tag) is not None, 'Invalid image tag.')
         values = json.loads(output(self.hm+['get', 'values', self.stack, '-o', 'json']))
-        require(values.get('sparkRecipeSource') == self.source_identity(),
-                'Installed stack source is missing or differs from source.lock.json. Use a coordinated stack installation before image updates.')
+        require(values.get('sparkRecipeChartsSha256') == self.chart_digest(),
+                'Installed chart fingerprint is missing or differs from this checkout. Use a coordinated stack installation before image updates.')
         current = values[chart][service]['image']
         require(current['registry']+'/'+current['repository'] == self.repository(component), 'Live image repository differs from config.')
         require(current['tag'] != tag, 'Use a fresh tag.')
@@ -937,7 +935,8 @@ finally:
         path = self.work/'evidence'/('update-'+stamp+'.json')
         result = {'component': component, 'previousTag': current['tag'], 'newTag': tag, 'helmValueChanged': value_key,
                   'context': self.c['context'], 'namespace': self.c['namespace'], 'release': self.stack,
-                  'chart': str(self.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack'), 'source': self.source_identity()}
+                  'chart': str(self.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack'),
+                  'source': self.source_identity(), 'chartsSha256': self.chart_digest()}
         save(path, result)
         run(self.hm+['upgrade', self.stack, result['chart'], '--reuse-values', '--set-string', value_key+'='+tag, '--wait', '--timeout', '5m'])
         after = {p['metadata']['uid'] for p in json.loads(output(self.kc+['get', 'pods', '-o', 'json']))['items']}
@@ -952,7 +951,8 @@ finally:
         self.bound_cluster()
         result = json.loads(pathlib.Path(result_file).read_text())
         require(all(result[k] == self.c[k] for k in ('context', 'namespace')) and result['release'] == self.stack, 'Rollback record belongs to another installation.')
-        require(result.get('source') == self.source_identity(), 'Rollback record has a different or unknown source revision. Use a coordinated stack installation.')
+        require(result.get('chartsSha256') == self.chart_digest(),
+                'Rollback record has a different or missing chart fingerprint. Use a coordinated stack installation.')
         chart, service = {'gateway': ('llm-api-gateway', 'llmApiGateway'), 'router': ('llm-request-router', 'llmRequestRouter')}[result['component']]
         current = json.loads(output(self.hm+['get', 'values', self.stack, '-o', 'json']))
         require(current[chart][service]['image']['tag'] == result['newTag'], 'Another image update happened after this record. Review instead of overwriting it.')

@@ -36,7 +36,7 @@ class DiscoveryTests(unittest.TestCase):
                           ('inferenceendpoint', 'glm53-iq2'): endpoint}
         self.deployments = [self.gateway]
         self.values = {
-            'team-stack': {'sparkRecipeSource': {k: spark.LOCK[k] for k in ('repository', 'revision')},
+            'team-stack': {'sparkRecipeSource': {'revision': 'old-build'},
                            'clusterId': 'demo', 'apiKeys': [{'id': 'owner', 'sha256': 'DO-NOT-COPY-HASH'}],
                            'tls': {'privateKey': 'DO-NOT-COPY-TLS'},
                            'llm-api-gateway': {'llmApiGateway': {'image': {'registry': 'registry.example.com', 'repository': 'gateway', 'tag': 'current', 'pullPolicy': 'Never'},
@@ -106,11 +106,10 @@ class DiscoveryTests(unittest.TestCase):
         self.assertNotIn('--all-namespaces', self.commands[0])
         self.assertEqual(self.commands[0][self.commands[0].index('-n')+1], 'demo')
 
-    def test_wrong_source_is_rejected_before_further_inspection(self):
-        self.values['team-stack']['sparkRecipeSource']['revision'] = '0'*40
-        with self.assertRaisesRegex(RuntimeError, 'Installed source differs'):
+    def test_source_metadata_is_informational_for_discovery(self):
+        for source in (None, {'revision': 'another-build'}, {'repository': 'old-fork', 'revision': 'old-pin'}):
+            self.values['team-stack']['sparkRecipeSource'] = source
             self.discover()
-        self.assertEqual(len(self.commands), 2)
 
     def test_model_service_foreign_ownership_is_rejected(self):
         self.resources['service', 'team-glm']['metadata']['annotations']['meta.helm.sh/release-name'] = 'someone-else'
