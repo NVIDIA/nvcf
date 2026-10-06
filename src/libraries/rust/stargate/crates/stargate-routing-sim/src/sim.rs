@@ -20,7 +20,7 @@
 //! its own optimistic reservations. The proxy routing loop
 //! (`stargate/src/http_proxy/run.rs` and `routing.rs`) is mirrored here: timed
 //! waits recheck at most every 25 ms until the routing wait deadline, generic
-//! no-choice retries sleep 1-10 ms while the max-wait budget remains, and
+//! no-choice retries sleep 1-9 ms while the max-wait budget remains, and
 //! Pylon queue-mismatch rejections release the reservation and reroute with
 //! the backend excluded.
 
@@ -131,7 +131,7 @@ struct Reservation {
 struct StargateView {
     region: usize,
     load_balancer: Arc<dyn LoadBalancer>,
-    stats: Vec<Option<Rc<ModelStats>>>,
+    stats: Vec<Rc<ModelStats>>,
     reservations: Vec<Vec<Reservation>>,
 }
 
@@ -170,14 +170,15 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
     let mut backend_engines = Vec::new();
     for (region_index, region) in config.topology.regions.iter().enumerate() {
         for backend_index in 0..region.backends {
-            backend_engines.push(config.backend_engine(region, backend_index));
+            let engine = config.backend_engine(region, backend_index);
             backends.push(Backend::new(
                 format!("{}-backend-{backend_index}", region.name),
                 region_index,
                 region.backend_speed,
-                config.backend_engine(region, backend_index),
+                engine.clone(),
                 &config.pylon,
             )?);
+            backend_engines.push(engine);
         }
         for _ in 0..region.stargates {
             stargates.push(StargateView {
@@ -194,7 +195,7 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
         .map(|backend| Rc::new(backend.stats()))
         .collect();
     for stargate in &mut stargates {
-        stargate.stats = initial_stats.iter().cloned().map(Some).collect();
+        stargate.stats = initial_stats.clone();
         stargate.reservations = backends.iter().map(|_| Vec::new()).collect();
     }
 
@@ -212,6 +213,7 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
         .collect::<Vec<_>>();
 
     let (measure_start, measure_end) = (workload.measure_start, workload.measure_end);
+    let backend_count = backends.len();
     let mut simulation = Simulation {
         config,
         workload,
@@ -230,28 +232,16 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
         // policies that retry differently still see identical demand.
         rng: StdRng::seed_from_u64(spec.seed ^ 0x5eed_0f57_a6a7),
         next_reservation: 0,
-        last_publish: vec![
-            0;
-            config
-                .topology
-                .regions
-                .iter()
-                .map(|region| region.backends)
-                .sum()
-        ],
-        publish_pending: vec![
-            false;
-            config
-                .topology
-                .regions
-                .iter()
-                .map(|region| region.backends)
-                .sum()
-        ],
+        last_publish: vec![0; backend_count],
+        publish_pending: vec![false; backend_count],
     };
     simulation.schedule_initial_events();
     let started = Instant::now();
     simulation.run_to_completion();
+    debug_assert!(
+        simulation.backends.iter().all(Backend::is_idle),
+        "every resolved request left Pylon"
+    );
     let records = simulation
         .requests
         .into_iter()
@@ -358,7 +348,7 @@ impl Simulation<'_> {
                 stats,
             } => {
                 let view = &mut self.stargates[stargate];
-                view.stats[backend] = Some(stats);
+                view.stats[backend] = stats;
                 // A processed heartbeat replaces every pending reservation
                 // for that backend (`cluster_snapshots.rs`).
                 view.reservations[backend].clear();
@@ -384,10 +374,7 @@ impl Simulation<'_> {
         let mut backend_indices = Vec::with_capacity(self.backends.len());
         let now = Instant::now();
         for (backend_index, backend) in self.backends.iter().enumerate() {
-            let Some(base) = &view.stats[backend_index] else {
-                continue;
-            };
-            let mut stats = ModelStats::clone(base);
+            let mut stats = ModelStats::clone(&view.stats[backend_index]);
             for reservation in &view.reservations[backend_index] {
                 apply_reservation(&mut stats, reservation.input_tokens);
             }
@@ -818,4 +805,116 @@ fn expected_queue_ms(stats: &ModelStats) -> Option<u64> {
             .or(Some(0));
     }
     queue_time_delta_ms(stats.queued_input_size, stats.last_mean_input_tps)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(workload: serde_json::Value) -> SimConfig {
+        let config: SimConfig = serde_json::from_value(serde_json::json!({
+            "name": "end-to-end test",
+            "seeds": [1],
+            "topology": {
+                "regions": [
+                    {"name": "a", "stargates": 2, "backends": 2},
+                    {"name": "b", "stargates": 1, "backends": 2, "traffic_weight": 0.5}
+                ],
+                "rtt_ms": [[0, 40], [40, 0]],
+                "intra_region_rtt_ms": 1.0
+            },
+            "engine": {
+                "num_gpu_workers": 1, "max_num_seqs": 4, "max_batched_tokens": 2048,
+                "step_fixed_ms": 4.0, "step_decode_ms_per_seq": 0.1,
+                "step_prefill_ms_per_token": 0.05, "kv_cache_capacity_tokens": 100000
+            },
+            "pylon": {
+                "heartbeat_ms": 1000.0,
+                "stats_update_coalesce_ms": 10.0,
+                "input_tps": {"model": "fallback-window", "initial": 20000.0, "window": 8, "duration_floor_ms": 10.0},
+                "queue_mismatch": {"enabled": true, "min_delta_ms": 25, "tolerance_factor": 1.25}
+            },
+            "stargate": {"max_request_retries": 2, "routing_key": "rk", "model_id": "m"},
+            "client": {"request_slo_ms": 2000, "max_wait_ms": 2000, "timeout_ms": 3000, "ttft_slo_ms": 2000},
+            "workload": workload,
+            "policies": [
+                {"name": "power-of-n", "load_balancer": {"algorithm": "power-of-n"}},
+                {"name": "wait-and-widen", "load_balancer": {
+                    "algorithm": "wait-and-widen",
+                    "max_queue_time_floor_ms": 500, "max_queue_time_ceil_ms": 500
+                }},
+                {"name": "pulsar-wait-and-widen", "load_balancer": {
+                    "algorithm": "pulsar-wait-and-widen", "seed": "s",
+                    "max_queue_time_floor_ms": 500, "max_queue_time_ceil_ms": 500,
+                    "cache_affinity_wait_ms": 100
+                }}
+            ]
+        }))
+        .expect("test config parses");
+        config.validate().expect("test config is valid");
+        config
+    }
+
+    fn assert_runs_resolve_every_request(config: &SimConfig, rate_rps: f64) {
+        for policy in &config.policies {
+            let summary = run(&RunSpec {
+                config,
+                policy,
+                rate_rps,
+                seed: 1,
+            })
+            .expect("run completes");
+            assert!(summary.offered > 0, "{}", policy.name);
+            assert_eq!(
+                summary.succeeded
+                    + summary.failed_no_route
+                    + summary.failed_retries_exhausted
+                    + summary.failed_timeout,
+                summary.offered,
+                "{}: every measured request has one outcome",
+                policy.name
+            );
+            assert!(summary.goodput_rps > 0.0, "{}", policy.name);
+        }
+    }
+
+    #[test]
+    fn fixed_sessions_resolve_every_request() {
+        let config = config(serde_json::json!({
+            "rates_rps": [1.0], "warmup_s": 1.0, "measure_s": 4.0,
+            "fixed": {
+                "sessions": 20, "input_tokens_min": 500, "input_tokens_max": 4000,
+                "output_tokens": 64
+            }
+        }));
+        assert_runs_resolve_every_request(&config, 20.0);
+    }
+
+    #[test]
+    fn growing_sessions_resolve_with_retries() {
+        let config = config(serde_json::json!({
+            "rates_rps": [1.0], "warmup_s": 1.0, "measure_s": 4.0,
+            "growing": {
+                "system_prompt_tokens": 500, "user_tokens_min": 50, "user_tokens_max": 200,
+                "output_tokens_min": 16, "output_tokens_max": 64,
+                "turns_min": 2, "turns_max": 4, "think_time_mean_s": 0.2,
+                "max_context_tokens": 8000, "max_turn_attempts": 2, "retry_backoff_s": 0.1
+            }
+        }));
+        assert_runs_resolve_every_request(&config, 60.0);
+    }
+
+    #[test]
+    fn kv_free_token_policies_are_rejected() {
+        let mut config = config(serde_json::json!({
+            "rates_rps": [1.0], "warmup_s": 0.0, "measure_s": 1.0,
+            "fixed": {"sessions": 1, "input_tokens_min": 1, "input_tokens_max": 1, "output_tokens": 1}
+        }));
+        config.policies = vec![PolicyConfig {
+            name: "pulsar-kv".to_string(),
+            load_balancer: serde_json::json!({"algorithm": "pulsar", "consider_kv_free_tokens": true}),
+        }];
+        let error = config.validate().expect_err("KV stats are not simulated");
+        assert!(error.to_string().contains("consider_kv_free_tokens"));
+    }
 }

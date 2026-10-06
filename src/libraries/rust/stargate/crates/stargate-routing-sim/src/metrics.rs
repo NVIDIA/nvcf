@@ -25,6 +25,7 @@ pub struct RequestRecord {
     pub arrival: Micros,
     pub input_tokens: u64,
     pub stargate_region: usize,
+    /// Load-balancer calls, including timed-wait rechecks.
     pub route_attempts: u32,
     pub mismatch_rejections: u32,
     pub dispatched_at: Option<Micros>,

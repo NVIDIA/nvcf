@@ -157,7 +157,7 @@ pub struct FixedSessionsConfig {
 /// each later turn starts a think time after the previous response finishes,
 /// and its prompt is the previous prompt, the previous output, and a new user
 /// message. A session ends after its sampled turn count, at the context limit,
-/// or when a turn fails.
+/// or when a turn fails every attempt.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GrowingSessionsConfig {
@@ -298,6 +298,14 @@ impl SimConfig {
             if config.max_input_work_seconds.is_some() {
                 bail!(
                     "policy {}: max_input_work_seconds is not modeled yet",
+                    policy.name
+                );
+            }
+            // Simulated Pylons publish no KV-cache stats, so every candidate
+            // would be skipped.
+            if config.considers_kv_free_tokens() {
+                bail!(
+                    "policy {}: consider_kv_free_tokens is not modeled yet",
                     policy.name
                 );
             }

@@ -15,10 +15,15 @@ configurations. It calls the production `LoadBalancer` implementations from the
   decode in shared steps, keep their own KV caches, and receive requests by
   perfect KV routing.
 - Network: per-region round-trip times between Stargates and backends.
-- Clients: open-loop Poisson arrivals over sessions, a client timeout that
-  cancels engine work, and a TTFT SLO for goodput.
+- Clients: fixed sessions with open-loop Poisson arrivals, or growing
+  conversations whose sessions start with Poisson arrivals and whose later
+  turns follow the previous response after a think time. Failed growing turns
+  retry with backoff. A client timeout cancels engine work, and a TTFT SLO
+  defines goodput.
 
 ## Usage
+
+Run from `src/libraries/rust/stargate`:
 
 ```sh
 cargo run --release -p stargate-routing-sim -- \
@@ -37,7 +42,12 @@ same JSON shape as Stargate per-model load-balancer config.
   seed are not bit-for-bit reproducible. Use several seeds.
 - One backend per routed cluster. Shared-engine cluster aggregation and
   sibling-backend retries are not modeled.
-- `max_input_work_seconds` admission, priorities, and registration churn are
-  not modeled.
+- `max_input_work_seconds` admission, `consider_kv_free_tokens`, priorities,
+  and registration churn are not modeled. Simulated Pylons publish no KV-cache
+  stats.
+- Without `pylon.stats_update_coalesce_ms`, Pylons publish only on the
+  heartbeat. Production Pylons also publish on request state changes.
+- Retries for upstream errors other than queue-mismatch rejections are not
+  modeled.
 - Results are relative comparisons until the engine model is calibrated
   against real-engine measurements.
