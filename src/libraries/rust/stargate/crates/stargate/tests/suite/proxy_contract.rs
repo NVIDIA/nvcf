@@ -2452,7 +2452,9 @@ async fn early_response_keeps_connection_reusable_when_body_arrives_late() {
         let mut content_length = 0;
         loop {
             let mut line = String::new();
-            stream.read_line(&mut line).await?;
+            if stream.read_line(&mut line).await? == 0 {
+                return Err(std::io::ErrorKind::UnexpectedEof.into());
+            }
             if line == "\r\n" {
                 break;
             }
@@ -2469,31 +2471,46 @@ async fn early_response_keeps_connection_reusable_when_body_arrives_late() {
 
     let (_, http_addr, handle) = start_stargate("test-sg-early-response-keepalive").await;
     let body = r#"{"model":"nonexistent","messages":[{"role":"user","content":"hi"}]}"#;
-    let head = format!(
-        "POST /v1/chat/completions HTTP/1.1\r\nHost: {http_addr}\r\n\
-         Content-Type: application/json\r\nContent-Length: {}\r\n\
-         X-Model: nonexistent\r\nX-Request-Id: early-response\r\nX-Input-Tokens: 1\r\n\r\n",
-        body.len(),
-    );
-    let mut client = BufReader::new(TcpStream::connect(http_addr).await.unwrap());
-    for request in 1..=2 {
-        // The router rejects from the headers alone; the body follows its decision.
-        client
-            .get_mut()
-            .write_all(head.as_bytes())
-            .await
-            .unwrap_or_else(|error| panic!("request {request}: connection unusable: {error}"));
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let _ = client.get_mut().write_all(body.as_bytes()).await;
-        let status =
-            tokio::time::timeout(Duration::from_secs(5), read_response_status(&mut client))
-                .await
-                .expect("response timed out");
-        assert_eq!(
-            status.ok(),
-            Some(404),
-            "request {request} on the same connection should get the no-candidates response"
+    let cases = [
+        (
+            "content-length",
+            format!("Content-Length: {}", body.len()),
+            body.to_string(),
+        ),
+        (
+            "chunked",
+            "Transfer-Encoding: chunked".to_string(),
+            format!("{:x}\r\n{body}\r\n0\r\n\r\n", body.len()),
+        ),
+    ];
+    for (framing, framing_header, framed_body) in cases {
+        let head = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: {http_addr}\r\n\
+             Content-Type: application/json\r\n{framing_header}\r\n\
+             X-Model: nonexistent\r\nX-Request-Id: early-response\r\nX-Input-Tokens: 1\r\n\r\n",
         );
+        let mut client = BufReader::new(TcpStream::connect(http_addr).await.unwrap());
+        for request in 1..=2 {
+            // The router rejects from the headers alone; the body follows its decision.
+            client
+                .get_mut()
+                .write_all(head.as_bytes())
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("{framing} request {request}: connection unusable: {error}")
+                });
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let _ = client.get_mut().write_all(framed_body.as_bytes()).await;
+            let status =
+                tokio::time::timeout(Duration::from_secs(5), read_response_status(&mut client))
+                    .await
+                    .expect("response timed out");
+            assert_eq!(
+                status.ok(),
+                Some(404),
+                "{framing} request {request} on the same connection should get the no-candidates response"
+            );
+        }
     }
 
     finish_stargate(handle).await;
