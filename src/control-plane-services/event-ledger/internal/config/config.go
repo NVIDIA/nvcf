@@ -279,8 +279,9 @@ type StatsConfig struct {
 // CacheConfig configures the local stats write cache. The inactivity TTL is
 // derived from the flush interval and is not configurable.
 type CacheConfig struct {
-	// Enabled turns the cache on. When false the service writes every stats
-	// event straight to the database.
+	// Enabled is reserved for the local write cache and has no effect until the
+	// cache is applied to writes. The service writes every stats event straight
+	// to the database.
 	Enabled bool `mapstructure:"enabled"`
 	// MaxSize is the maximum number of cached entries before LRU eviction.
 	MaxSize int `mapstructure:"max-size"`
