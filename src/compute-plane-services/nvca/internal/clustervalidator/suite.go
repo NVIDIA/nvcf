@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
@@ -96,6 +97,9 @@ type suite struct {
 	// first Gateway check of a pass so the CRD, Envoy, route, LoadBalancer and
 	// Tier-1 rows judge the same set.
 	gateways *gatewayView
+	// n2nFailed is the path a node-to-node checker dialled when the row
+	// failed, which a recheck dials again.
+	n2nFailed *n2nPath
 }
 
 type gatewayView struct {
@@ -122,29 +126,72 @@ func (su *suite) gatewayView(ctx context.Context) *gatewayView {
 // published verdict stands until the next run, so one transient error must not
 // decide it. A preflight run is graded by its launcher, which can run it again.
 func (su *suite) run(ctx context.Context, state *ValidationState, recheck bool) {
-	checks := su.checks(state.Role)
+	su.runChecks(ctx, state, su.checks(state.Role), recheck)
+}
+
+// runChecks is run for checks. A critical check that fails its first run and
+// passes its second is recorded with a warning saying what the first run saw,
+// so a flapping check shows on a Ready verdict too.
+func (su *suite) runChecks(ctx context.Context, state *ValidationState, checks []check, recheck bool) {
 	results := make([]*ValidationState, len(checks))
+	saw := make([][]string, len(checks))
 	facts := state.fork()
 	for i, c := range checks {
 		results[i] = facts.fork()
-		c.run(ctx, results[i])
+		saw[i] = runRecordingErrors(ctx, c, results[i])
 		c.adopt(facts, results[i])
 	}
 	if recheck {
-		su.recheck(ctx, state, checks, results)
+		su.recheck(ctx, state, checks, results, saw)
 	}
 	for i, c := range checks {
 		state.record(c, results[i])
 	}
 }
 
+// errorLines records the error lines logged through it.
+type errorLines struct{ lines []string }
+
+func (e *errorLines) Levels() []logrus.Level { return []logrus.Level{logrus.ErrorLevel} }
+
+func (e *errorLines) Fire(entry *logrus.Entry) error {
+	if line := strings.TrimSpace(strings.TrimPrefix(entry.Message, iconCross)); line != "" {
+		e.lines = append(e.lines, line)
+	}
+	return nil
+}
+
+// runRecordingErrors runs c on s and returns the error lines it logged. The
+// lines go to s's logger as ever, through a copy of it that also records them.
+func runRecordingErrors(ctx context.Context, c check, s *ValidationState) []string {
+	log := s.Log
+	recorder := &errorLines{}
+	hooks := logrus.LevelHooks{}
+	for level, levelHooks := range log.Logger.Hooks {
+		hooks[level] = slices.Clone(levelHooks)
+	}
+	hooks.Add(recorder)
+	logger := &logrus.Logger{
+		Out: log.Logger.Out, Hooks: hooks, Formatter: log.Logger.Formatter, ReportCaller: log.Logger.ReportCaller,
+		Level: log.Logger.GetLevel(), ExitFunc: log.Logger.ExitFunc, BufferPool: log.Logger.BufferPool,
+	}
+	s.Log = logger.WithFields(log.Data).WithContext(log.Context)
+	c.run(ctx, s)
+	s.Log = log
+	return recorder.lines
+}
+
 // recheck runs again each check in checks whose result in results has a
 // critical row that did not pass, and replaces that result, along with the
 // result of a check that reads a replaced one. A recheck that could not observe
-// a check its first pass saw fail keeps the failure. A check cut short by the
-// run's deadline would report the deadline rather than the cluster, so it, and
-// every check after it, keeps its first result.
-func (su *suite) recheck(ctx context.Context, state *ValidationState, checks []check, results []*ValidationState) {
+// a check its first pass saw fail keeps the failure. One that passes a check
+// whose first run failed adds a warning naming what that run saw, from its
+// error lines in saw. A check cut short by the run's deadline would report the
+// deadline rather than the cluster, so it, and every check after it, keeps its
+// first result.
+func (su *suite) recheck(
+	ctx context.Context, state *ValidationState, checks []check, results []*ValidationState, saw [][]string,
+) {
 	var names []string
 	for i, c := range checks {
 		if c.blocks(results[i]) {
@@ -181,16 +228,31 @@ func (su *suite) recheck(ctx context.Context, state *ValidationState, checks []c
 					"keep their first results", c.name))
 				return
 			}
-			if c.critical != nil && c.critical(results[i]) == failed && c.critical(r) == unobserved {
+			switch {
+			case c.critical != nil && c.critical(results[i]) == failed && c.critical(r) == unobserved:
 				printWarning(log, fmt.Sprintf("The recheck could not observe %s; the failure its first run "+
 					"observed stands", c.name))
-			} else {
+			default:
+				if c.critical != nil && c.critical(results[i]) == failed && c.critical(r) == passed {
+					r.Warnings = append(r.Warnings, clearedWarning(c.name, saw[i]))
+				}
 				results[i] = r
 				replaced[c.name] = true
 			}
 		}
 		c.adopt(facts, results[i])
 	}
+}
+
+// clearedWarning is the warning for critical check name that failed its first
+// run and passed its second, with what the first run saw: the verdict follows
+// the second, and this keeps the failure from vanishing with the first.
+func clearedWarning(name string, saw []string) string {
+	w := name + ": failed its first run and passed when run again, so it may fail intermittently"
+	if len(saw) > 0 {
+		w += "; the first run saw: " + shortMessage(strings.Join(saw[:min(len(saw), 3)], "; "))
+	}
+	return w
 }
 
 // fork returns a state for one check to record its result on: s's settings
@@ -379,7 +441,10 @@ func (su *suite) controlPlaneChecks() []check {
 		{
 			name: "Node-to-Node Communication",
 			run: func(ctx context.Context, s *ValidationState) {
-				checkNodeToNode(ctx, su.client, s, nodeToNodeProbeImage(su.netCfg))
+				path := probeNodeToNode(ctx, su.client, s, nodeToNodeProbeImage(su.netCfg), su.n2nFailed)
+				if s.NodeToNodeOK != nil && !*s.NodeToNodeOK {
+					su.n2nFailed = path
+				}
 			},
 			adopt: func(dst, src *ValidationState) {
 				dst.NodeToNodeOK, dst.NodeToNodeNotApplicable = src.NodeToNodeOK, src.NodeToNodeNotApplicable

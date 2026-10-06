@@ -896,3 +896,106 @@ func TestSweepLeftoverProbes(t *testing.T) {
 		})
 	}
 }
+
+// splitPairChecker is the checker of a 3-node overlay where node-1 and node-2
+// cannot reach each other and both reach node-3.
+func splitPairChecker(f **n2nFixture) func() (*corev1.Pod, error) {
+	return func() (*corev1.Pod, error) {
+		switch (*f).checkerNode {
+		case "node-1":
+			return checkerReported(nodeToNodeUnreachableExit, "unreachable: "+ipOf("node-2")), nil
+		case "node-2":
+			return checkerReported(nodeToNodeUnreachableExit, "unreachable: "+ipOf("node-1")), nil
+		}
+		return checkerPod(0), nil
+	}
+}
+
+// failedNodeToNode runs the suite's node-to-node check until its random
+// checker lands on a node of the broken pair, and returns that result.
+func failedNodeToNode(t *testing.T, n2n check) *ValidationState {
+	t.Helper()
+	for range 50 {
+		first := &ValidationState{Log: testLog(), Role: RoleControlPlane}
+		n2n.run(context.Background(), first)
+		if first.NodeToNodeOK != nil && !*first.NodeToNodeOK {
+			return first
+		}
+	}
+	t.Fatal("no first run failed")
+	return nil
+}
+
+func checkNamed(checks []check, name string) check {
+	for _, c := range checks {
+		if c.name == name {
+			return c
+		}
+	}
+	panic("no check " + name)
+}
+
+// The recheck of a node-to-node failure dials from the same checker node to
+// the same nodes. A checker picked anew tests other paths: with node-1 and
+// node-2 unable to reach each other, a recheck from node-3 passed and
+// replaced the failure it never retested.
+func TestSuite_NodeToNodeRecheckDialsTheFailedPathsAgain(t *testing.T) {
+	var f *n2nFixture
+	f = newN2NFixture(t, readyNodes(3), runningServers("node-1", "node-2", "node-3"), nil, splitPairChecker(&f))
+	su := &suite{client: f.client}
+	n2n := checkNamed(su.checks(RoleControlPlane), "Node-to-Node Communication")
+	first := failedNodeToNode(t, n2n)
+	failedFrom := f.checkerNode
+
+	for range 10 {
+		results := []*ValidationState{first}
+		state := &ValidationState{Log: testLog(), Role: RoleControlPlane}
+		su.recheck(context.Background(), state, []check{n2n}, results, [][]string{nil})
+		assert.Equal(t, failedFrom, f.checkerNode, "the recheck dials from the node the failure was seen from")
+		require.NotNil(t, results[0].NodeToNodeOK)
+		assert.False(t, *results[0].NodeToNodeOK)
+	}
+}
+
+// A recheck that cannot dial the failed paths again leaves the failure
+// standing: its checker node is no longer one to probe. A target that is no
+// longer one to probe is left out, and the rest are dialled again.
+func TestSuite_NodeToNodeRecheckOfPathsNoLongerProbed(t *testing.T) {
+	var f *n2nFixture
+	f = newN2NFixture(t, readyNodes(3), runningServers("node-1", "node-2", "node-3"), nil, splitPairChecker(&f))
+	su := &suite{client: f.client}
+	n2n := checkNamed(su.checks(RoleControlPlane), "Node-to-Node Communication")
+	first := failedNodeToNode(t, n2n)
+	failedFrom, checkers := f.checkerNode, len(f.checkerNodes)
+
+	f.markNotReady(t, failedFrom)
+	log, buf := bufferLog()
+	results := []*ValidationState{first}
+	su.recheck(context.Background(), &ValidationState{Log: log, Role: RoleControlPlane}, []check{n2n}, results,
+		[][]string{nil})
+	assert.Same(t, first, results[0], "the failure stands")
+	assert.Len(t, f.checkerNodes, checkers, "no checker ran")
+	assert.Contains(t, buf.String(), "checker node "+failedFrom+" is no longer one to probe")
+	assert.Contains(t, buf.String(), "The recheck could not observe Node-to-Node Communication")
+
+	for name, leave := range map[string]func(f *n2nFixture){
+		"NotReady": func(f *n2nFixture) { f.markNotReady(t, "node-3") },
+		"removed":  func(f *n2nFixture) { f.removeNode(t, "node-3") },
+	} {
+		var f *n2nFixture
+		f = newN2NFixture(t, readyNodes(3), runningServers("node-1", "node-2", "node-3"), nil, splitPairChecker(&f))
+		su := &suite{client: f.client}
+		n2n := checkNamed(su.checks(RoleControlPlane), "Node-to-Node Communication")
+		first := failedNodeToNode(t, n2n)
+		failedFrom := f.checkerNode
+		leave(f)
+		results := []*ValidationState{first}
+		su.recheck(context.Background(), &ValidationState{Log: testLog(), Role: RoleControlPlane}, []check{n2n},
+			results, [][]string{nil})
+		assert.Equal(t, failedFrom, f.checkerNode, name)
+		assert.NotSame(t, first, results[0], "%s: the paths still probed are dialled again", name)
+		require.NotNil(t, results[0].NodeToNodeOK, name)
+		assert.False(t, *results[0].NodeToNodeOK, "%s: the pair still cannot reach each other", name)
+		assert.Contains(t, strings.Join(results[0].Warnings, "; "), "node-3", "%s: node-3 is a coverage gap", name)
+	}
+}

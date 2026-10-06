@@ -2184,6 +2184,24 @@ func deleteProbePods(ctx context.Context, client kubernetes.Interface, ns, selec
 // Critical: broken overlay means NVCF services on different nodes cannot
 // communicate, causing cascade failures across every API call.
 func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *ValidationState, image string) {
+	probeNodeToNode(ctx, client, state, image, nil)
+}
+
+// n2nPath is a checker's node and the nodes whose server pods it dialled.
+type n2nPath struct {
+	checker string
+	targets []string
+}
+
+// probeNodeToNode is checkNodeToNode, dialling the paths of retest when it is
+// set: a recheck of a failure dials from the same node to the same nodes,
+// those of them still to probe, since a checker on another node tests other
+// paths and its pass says nothing about the path that failed. A checker node
+// no longer to probe leaves the row unknown, so the failure stands. It returns
+// the path its checker dialled, or nil when no checker reported.
+func probeNodeToNode(
+	ctx context.Context, client kubernetes.Interface, state *ValidationState, image string, retest *n2nPath,
+) *n2nPath {
 	log := state.Log
 	printHeader(log, "Node-to-Node Communication")
 
@@ -2193,7 +2211,7 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	if err != nil {
 		printWarning(log, readFailure("nodes", err))
 		state.Warnings = append(state.Warnings, unknownWarning("Node-to-Node", "nodes", err))
-		return
+		return nil
 	}
 
 	// The probe tolerates every taint, so it reaches control-plane and GPU
@@ -2213,6 +2231,23 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 		printWarning(log, msg)
 		state.Warnings = append(state.Warnings, "Node-to-Node: "+msg)
 	}
+	if retest != nil {
+		var removed []string
+		var why string
+		if probeNodes, removed, why = retestNodes(nodes.Items, probeNodes, retest); why != "" {
+			printWarning(log, why)
+			state.Warnings = append(state.Warnings, "Node-to-Node: status unknown ("+why+")")
+			return nil
+		}
+		if len(removed) > 0 {
+			msg := fmt.Sprintf("not probed on %d node(s) the first run dialled: %s (removed since)", len(removed),
+				strings.Join(removed, ", "))
+			printWarning(log, msg)
+			state.Warnings = append(state.Warnings, "Node-to-Node: "+msg)
+		}
+		printInfo(log, fmt.Sprintf("  Dialling again from %s, as the first run did, to %s",
+			retest.checker, strings.Join(probeNodes[1:], ", ")))
+	}
 
 	// Zero and one are different answers. No usable node at all means the
 	// cluster cannot place work and nothing was observed, so the result stays
@@ -2223,14 +2258,14 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 		printWarning(log, "No Ready, schedulable nodes; node-to-node overlay not observed")
 		state.Warnings = append(state.Warnings,
 			"Node-to-Node: status unknown (no Ready, schedulable nodes)")
-		return
+		return nil
 	}
 	if len(probeNodes) == 1 {
 		why := fmt.Sprintf("one eligible node of %d, so there is no cross-node path to probe", len(nodes.Items))
 		printInfo(log, "Node-to-node check not applicable: "+why)
 		state.NodeToNodeNotApplicable = why
 		state.Warnings = append(state.Warnings, "Node-to-Node: not applicable ("+why+")")
-		return
+		return nil
 	}
 
 	p := newN2NProbe(client, state, image)
@@ -2239,10 +2274,39 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	// the cleanup is registered only then.
 	if err := createNodeToNodeNamespace(ctx, client, p.ns, p.instance); err != nil {
 		p.notObserved(fmt.Sprintf("could not create the probe namespace %s: %v", p.ns, err), "")
-		return
+		return nil
 	}
 	defer p.cleanup()
+	if retest != nil {
+		p.checker = retest.checker
+	}
 	p.run(ctx, probeNodes)
+	return p.dialled
+}
+
+// retestNodes returns the nodes a recheck of path probes, its checker's first,
+// of eligible, the nodes to probe now, and the targets that left the cluster
+// since, or why the path cannot be dialled again. A target still in the
+// cluster but no longer to probe is already listed as a coverage gap.
+func retestNodes(nodes []corev1.Node, eligible []string, path *n2nPath) (probe, removed []string, why string) {
+	if !slices.Contains(eligible, path.checker) {
+		return nil, nil, fmt.Sprintf("the first run's checker node %s is no longer one to probe, so the paths "+
+			"it failed on cannot be dialled again", path.checker)
+	}
+	probe = []string{path.checker}
+	for _, n := range path.targets {
+		switch {
+		case slices.Contains(eligible, n):
+			probe = append(probe, n)
+		case !slices.ContainsFunc(nodes, func(node corev1.Node) bool { return node.Name == n }):
+			removed = append(removed, n)
+		}
+	}
+	if len(probe) < 2 {
+		return nil, nil, fmt.Sprintf("none of the nodes the first run's checker on %s dialled is still one to "+
+			"probe, so the paths it failed on cannot be dialled again", path.checker)
+	}
+	return probe, removed, ""
 }
 
 // n2nProbe is one run of the node-to-node probe.
@@ -2264,6 +2328,12 @@ type n2nProbe struct {
 	// eventsErr is why the events could not be read.
 	silent    []string
 	eventsErr error
+	// checker pins the checker to a node; empty picks one at random.
+	checker string
+	// checkers counts the checker pods created, which names the next one.
+	checkers int
+	// dialled is the path the first checker that reported dialled.
+	dialled *n2nPath
 }
 
 func newN2NProbe(client kubernetes.Interface, state *ValidationState, image string) *n2nProbe {
@@ -2387,7 +2457,7 @@ func (p *n2nProbe) run(ctx context.Context, probeNodes []string) {
 		}
 	}
 
-	run, unobserved := p.runChecker(ctx, outcome.running)
+	run, unobserved := p.runChecker(ctx, outcome.running, p.checkerNodes(outcome.running))
 	if unobserved != "" {
 		rec := ""
 		if run.imageProblem {
@@ -2493,20 +2563,32 @@ type checkerRun struct {
 	imageProblem bool
 }
 
-// runChecker runs the checker pod on one node to dial the server pod on each
-// of the others, and returns its result, or why no result was read. The node
-// is picked at random so successive runs test different paths. A node whose
-// kubelet refuses the checker (a node at its pod limit) is passed over for the
-// next: a refusal says nothing about the overlay, and always picking the same
-// node made it UNKNOWN on every run.
-func (p *n2nProbe) runChecker(ctx context.Context, servers []corev1.Pod) (checkerRun, string) {
+// checkerNodes is the order to try the checker on: the pinned node alone, or
+// the nodes of servers at random, so successive runs test different paths.
+func (p *n2nProbe) checkerNodes(servers []corev1.Pod) []string {
+	if p.checker != "" {
+		return []string{p.checker}
+	}
+	nodes := make([]string, 0, len(servers))
+	for _, i := range rand.Perm(len(servers)) {
+		nodes = append(nodes, servers[i].Spec.NodeName)
+	}
+	return nodes
+}
+
+// runChecker runs the checker pod on one of checkers, in order, to dial the
+// server pod on each other node, and returns its result, or why no result was
+// read. A node whose kubelet refuses the checker (a node at its pod limit) is
+// passed over for the next: a refusal says nothing about the overlay, and
+// always picking the same node made it UNKNOWN on every run.
+func (p *n2nProbe) runChecker(ctx context.Context, servers []corev1.Pod, checkers []string) (checkerRun, string) {
 	labels := n2nLabels(n2nCheckerComponent, p.instance)
 	var refusals []string
-	for _, i := range rand.Perm(len(servers)) {
+	for _, node := range checkers {
 		if len(refusals) == nodeToNodeCheckerAttempts {
 			break
 		}
-		run := checkerRun{node: servers[i].Spec.NodeName, nodeOf: map[string]string{}}
+		run := checkerRun{node: node, nodeOf: map[string]string{}}
 		var targetIPs []string
 		for j := range servers {
 			if s := &servers[j]; s.Spec.NodeName != run.node && s.Status.PodIP != "" {
@@ -2520,7 +2602,8 @@ func (p *n2nProbe) runChecker(ctx context.Context, servers []corev1.Pod) (checke
 			// verified overlay.
 			return run, "no server pod on another node to dial"
 		}
-		name := fmt.Sprintf("%s-%s-%d", nodeToNodeCheckerName, p.instance, len(refusals))
+		name := fmt.Sprintf("%s-%s-%d", nodeToNodeCheckerName, p.instance, p.checkers)
+		p.checkers++
 		pod := buildNodeToNodeCheckerPod(name, p.ns, run.node, labels, targetIPs, p.image)
 		if _, err := createOrAdopt(ctx, p.instance, func(c context.Context) (*corev1.Pod, error) {
 			return p.client.CoreV1().Pods(p.ns).Create(c, pod, metav1.CreateOptions{})
@@ -2546,6 +2629,9 @@ func (p *n2nProbe) runChecker(ctx context.Context, servers []corev1.Pod) (checke
 			return run, fmt.Sprintf("checker pod did not report a result: %v", err)
 		}
 		if run.succeeded || !checkerRefused(run.pod) {
+			if p.dialled == nil {
+				p.dialled = &n2nPath{checker: run.node, targets: slices.Sorted(maps.Values(run.nodeOf))}
+			}
 			return run, ""
 		}
 		refusals = append(refusals, fmt.Sprintf("%s (%s)", run.node, run.pod.Status.Reason))

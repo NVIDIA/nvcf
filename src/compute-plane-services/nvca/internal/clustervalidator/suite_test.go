@@ -20,6 +20,7 @@ package clustervalidator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -71,7 +72,9 @@ func cpuComputeCluster() *fake.Clientset {
 // One transient failure does not decide a published verdict: the critical
 // check it failed runs once more, and the summary and exit code follow that
 // second result. Before, one DNS blip published Not-Ready and failed the Job
-// until the next scheduled run.
+// until the next scheduled run. The failure does not vanish with the first
+// result: a warning says what the first run saw, so the verdict is Ready with
+// warnings.
 func TestRun_RecheckClearsATransientFailure(t *testing.T) {
 	var lookups atomic.Int32
 	stubDNS(t, func(context.Context) bool { return lookups.Add(1) > 1 })
@@ -87,6 +90,10 @@ func TestRun_RecheckClearsATransientFailure(t *testing.T) {
 	s := readPublishedSummary(t, client, recheckSummaryNS)
 	assert.True(t, s.VerdictReady)
 	assert.True(t, s.Checks[CheckKeyControlPlane])
+	assert.Contains(t, s.Warnings, "Control Plane: failed its first run and passed when run again, so it may "+
+		"fail intermittently; the first run saw: DNS resolution: failed to resolve kubernetes.default.svc; "+
+		"Some control plane components may need attention")
+	assert.Contains(t, out, VerdictLinePrefix+VerdictReadyWithWarnings)
 }
 
 // A failure that holds on the recheck is published, and the Job fails on it
@@ -184,7 +191,7 @@ func TestSuite_RecheckReplacesAnUnknownWithWhatItObserves(t *testing.T) {
 		state := &ValidationState{Log: testLog()}
 		results := []*ValidationState{state.fork()}
 		c.run(context.Background(), results[0])
-		(&suite{}).recheck(context.Background(), state, []check{c}, results)
+		(&suite{}).recheck(context.Background(), state, []check{c}, results, [][]string{nil})
 		assert.Equal(t, 2, runs, name)
 		assert.Equal(t, tc.want, c.critical(results[0]), name)
 	}
@@ -359,6 +366,57 @@ func TestRun_RecheckCutShortKeepsTheFirstResult(t *testing.T) {
 	s := readPublishedSummary(t, client, recheckSummaryNS)
 	assert.False(t, s.VerdictReady)
 	assert.False(t, s.Checks[CheckKeyControlPlane])
+}
+
+// gpuCheck is a critical check whose runs come out as runs says, in turn,
+// logging an error line for each failure.
+func gpuCheck(runs ...outcome) check {
+	n := 0
+	return check{
+		name: GPUResourcesLabel,
+		run: func(_ context.Context, s *ValidationState) {
+			switch runs[min(n, len(runs)-1)] {
+			case passed:
+				s.GPUAvailable = true
+			case failed:
+				printError(s.Log, fmt.Sprintf("no GPU on run %d", n+1))
+			case unobserved:
+				s.markUnobserved(CheckKeyGPUResources)
+			}
+			n++
+		},
+		adopt: func(dst, src *ValidationState) {
+			dst.GPUAvailable = src.GPUAvailable
+			adoptUnobserved(dst, src, CheckKeyGPUResources)
+		},
+		critical: func(s *ValidationState) outcome {
+			return flagOutcome(s.GPUAvailable, s.Unobserved[CheckKeyGPUResources])
+		},
+	}
+}
+
+// A critical check that fails its first run and passes its second is recorded
+// as passed, with a warning naming what the first run saw. One whose first run
+// observed nothing, or that failed twice, adds no such warning.
+func TestSuite_RecheckThatClearsAFailureWarns(t *testing.T) {
+	for name, tc := range map[string]struct {
+		runs []outcome
+		want string
+	}{
+		"failed, then passed": {[]outcome{failed, passed}, GPUResourcesLabel + ": failed its first run and " +
+			"passed when run again, so it may fail intermittently; the first run saw: no GPU on run 1"},
+		"unobserved, then passed": {runs: []outcome{unobserved, passed}},
+		"failed twice":            {runs: []outcome{failed, failed}},
+	} {
+		state := &ValidationState{Log: testLog()}
+		(&suite{}).runChecks(context.Background(), state, []check{gpuCheck(tc.runs...)}, true)
+		if tc.want == "" {
+			assert.Empty(t, state.Warnings, name)
+			continue
+		}
+		assert.True(t, state.GPUAvailable, name)
+		assert.Equal(t, []string{tc.want}, state.Warnings, name)
+	}
 }
 
 // Every critical row that keeps the verdict from Ready belongs to exactly one
