@@ -611,6 +611,43 @@ func TestModelVolume_SharedFilesystem_FirstPodWritesThroughView(t *testing.T) {
 	}
 }
 
+// Two namespaces admitting the same incomplete model on a shared
+// filesystem: one download Job writes the primary, cluster-wide. The other
+// namespace gets no writer view and no Job; its pod reads the primary
+// through its read-only view and waits for the marker like any reader.
+func TestModelVolume_SharedFilesystem_OneWriterAcrossNamespaces(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	bindClaims(kc, "fss.csi.oraclecloud.com")
+	m, _ := mvMutatorReader(t, modelvolume.ModeRWX, "", election.RoleFollower, kc)
+	ctx := context.Background()
+	uri := "ngc://org/team/nemotron3-ultra-genrm:bf16-fixed"
+	cfg := m.ModelVolume.Cfg
+	for _, ns := range []string{"sr-fn", "sr-other"} {
+		pod := ngcFunctionPod()
+		pod.Namespace = ns
+		patches, err := m.Mutate(ctx, pod)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v := viewMV(pod, patches)
+		if vol := v.volumes["ngc-models"]; vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != cfg.ReadOnlyClaimName(uri) {
+			t.Errorf("%s: the pod reads through its read-only view: %+v", ns, vol)
+		}
+	}
+	jobs := 0
+	for _, ns := range []string{"sr-fn", "sr-other"} {
+		if _, err := kc.BatchV1().Jobs(ns).Get(ctx, modelvolume.JobName(uri), metav1.GetOptions{}); err == nil {
+			jobs++
+		}
+	}
+	if jobs != 1 {
+		t.Errorf("exactly one download Job cluster-wide, got %d", jobs)
+	}
+	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-other").Get(ctx, cfg.WriterViewClaimName(uri), metav1.GetOptions{}); err == nil {
+		t.Error("the second namespace must not get a read-write view of the primary")
+	}
+}
+
 func TestModelVolume_EngineDownload_JobRunsHF(t *testing.T) {
 	kc := fake.NewSimpleClientset()
 	bindClaims(kc, "fss.csi.oraclecloud.com")

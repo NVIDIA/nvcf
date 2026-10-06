@@ -52,6 +52,7 @@ import (
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -318,6 +319,10 @@ func (c Config) ReaderMode() ReaderMode {
 // Mode is consulted for a capability.
 func (c Config) SharedWhileWriting() bool { return c.Mode == ModeRWX }
 
+// DownloadOwnerName is the Lease in the system namespace that names the
+// one namespace whose Job downloads uri.
+func (c Config) DownloadOwnerName(uri string) string { return c.prefix() + "dl-owner-" + Key(uri) }
+
 // WriterViewClaimName is the per-namespace read-write view the download
 // Job writes through when the volume is shared while writing.
 func (c Config) WriterViewClaimName(uri string) string { return c.prefix() + Key(uri) + "-rw" }
@@ -393,6 +398,15 @@ const FailureTTL = time.Hour
 type Provisioner struct {
 	Kube kubernetes.Interface
 	Cfg  Config
+	// Now is a clock seam for tests; nil uses time.Now.
+	Now func() time.Time
+}
+
+func (p *Provisioner) now() time.Time {
+	if p.Now != nil {
+		return p.Now()
+	}
+	return time.Now()
 }
 
 // EnsureWriterClaim creates the claim the download writes into, in ns, at
@@ -603,6 +617,9 @@ func (p *Provisioner) MarkCompleteClaim(ctx context.Context, uri, ns, name strin
 	// with a Delete reclaim policy, releasing the last claim of a volume
 	// whose completion did not persist would destroy the model.
 	if err := p.persistComplete(ctx, pvc.Spec.VolumeName, uri, ns, meta); err != nil {
+		return err
+	}
+	if err := p.ReleaseDownload(ctx, uri); err != nil {
 		return err
 	}
 	if err := p.Kube.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
@@ -850,6 +867,96 @@ func (p *Provisioner) EnsureDownloadJob(ctx context.Context, uri, ns, claim stri
 	return name, nil
 }
 
+// DownloadOwnerGrace is how long an owner may go without a download Job
+// before another namespace may take the download over: it covers the
+// moment between claiming ownership and creating the Job.
+const DownloadOwnerGrace = 2 * time.Minute
+
+// ClaimDownload decides which namespace downloads uri, cluster-wide, and
+// returns it. The first caller creates the owner Lease (a create is
+// atomic, so concurrent admissions agree); later callers get the
+// recorded owner and must not start a writer of their own. An owner whose
+// Job is gone past DownloadOwnerGrace is retired, conditionally on the
+// record not having changed, and the caller claims again.
+func (p *Provisioner) ClaimDownload(ctx context.Context, uri, ns string) (string, error) {
+	sys := p.Cfg.SystemNamespace()
+	name := p.Cfg.DownloadOwnerName(uri)
+	leases := p.Kube.CoordinationV1().Leases(sys)
+	for attempt := 0; attempt < 3; attempt++ {
+		holder := ns
+		lease := &coordinationv1.Lease{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: sys,
+				Labels:      map[string]string{"app.kubernetes.io/managed-by": managedBy, p.Cfg.Label(): Key(uri)},
+				Annotations: map[string]string{IdentityAnnotation: uri}},
+			Spec: coordinationv1.LeaseSpec{HolderIdentity: &holder, AcquireTime: &metav1.MicroTime{Time: p.now()}},
+		}
+		_, err := leases.Create(ctx, lease, metav1.CreateOptions{})
+		if err == nil {
+			return ns, nil
+		}
+		if !apierrors.IsAlreadyExists(err) {
+			return "", fmt.Errorf("claim download of %s: %w", uri, err)
+		}
+		cur, err := leases.Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			continue // released meanwhile
+		}
+		if err != nil {
+			return "", fmt.Errorf("read download owner of %s: %w", uri, err)
+		}
+		owner := ""
+		if cur.Spec.HolderIdentity != nil {
+			owner = *cur.Spec.HolderIdentity
+		}
+		if owner == ns {
+			return ns, nil
+		}
+		stale, err := p.downloadOwnerStale(ctx, uri, owner, cur)
+		if err != nil {
+			return "", err
+		}
+		if !stale {
+			return owner, nil
+		}
+		uid, rv := cur.UID, cur.ResourceVersion
+		err = leases.Delete(ctx, name, metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &rv}})
+		if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+			return "", fmt.Errorf("retire stale download owner of %s: %w", uri, err)
+		}
+	}
+	return "", fmt.Errorf("claim download of %s: owner record kept changing", uri)
+}
+
+// downloadOwnerStale reports whether the recorded owner has no download
+// Job any more, past the grace period.
+func (p *Provisioner) downloadOwnerStale(ctx context.Context, uri, owner string, l *coordinationv1.Lease) (bool, error) {
+	if owner == "" {
+		return true, nil
+	}
+	if l.Spec.AcquireTime != nil && p.now().Sub(l.Spec.AcquireTime.Time) < DownloadOwnerGrace {
+		return false, nil
+	}
+	_, err := p.Kube.BatchV1().Jobs(owner).Get(ctx, JobName(uri), metav1.GetOptions{})
+	switch {
+	case err == nil:
+		return false, nil
+	case apierrors.IsNotFound(err):
+		return true, nil
+	default:
+		return false, fmt.Errorf("read download job %s/%s: %w", owner, JobName(uri), err)
+	}
+}
+
+// ReleaseDownload drops the owner record of uri, after completion or a
+// recorded failure. Idempotent.
+func (p *Provisioner) ReleaseDownload(ctx context.Context, uri string) error {
+	err := p.Kube.CoordinationV1().Leases(p.Cfg.SystemNamespace()).Delete(ctx, p.Cfg.DownloadOwnerName(uri), metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("release download owner of %s: %w", uri, err)
+	}
+	return nil
+}
+
 // JobSucceeded reports whether the download Job for uri in ns finished.
 func (p *Provisioner) JobSucceeded(ctx context.Context, uri, ns string) (bool, error) {
 	job, err := p.Kube.BatchV1().Jobs(ns).Get(ctx, JobName(uri), metav1.GetOptions{})
@@ -880,7 +987,9 @@ func (p *Provisioner) RecordFailure(ctx context.Context, uri, reason string) err
 			return fmt.Errorf("update failure record for %s: %w", uri, err)
 		}
 	}
-	return nil
+	// The failed owner gives the download up; after the record expires
+	// the next admission claims it afresh.
+	return p.ReleaseDownload(ctx, uri)
 }
 
 // ClearFailure removes the failure record for uri. Idempotent.

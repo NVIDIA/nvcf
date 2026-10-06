@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -543,5 +544,65 @@ func TestMarkComplete_ConflictKeepsClaimUntilPersisted(t *testing.T) {
 	got, _ = kc.CoreV1().PersistentVolumes().Get(ctx, "pv-model", metav1.GetOptions{})
 	if got.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimDelete {
 		t.Fatalf("precondition: the fake kept Delete, got %s", got.Spec.PersistentVolumeReclaimPolicy)
+	}
+}
+
+// One namespace owns a model's download cluster-wide. A second namespace
+// admitting the same model sees the owner and must not start its own
+// writer; an owner whose Job is gone past the grace period is replaced,
+// and a failure or completion releases the record.
+func TestClaimDownload_OneOwnerAcrossNamespaces(t *testing.T) {
+	ctx := context.Background()
+	kc := fake.NewSimpleClientset()
+	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	p := &Provisioner{Kube: kc, Cfg: Config{Mode: ModeRWX, StorageClass: "sc", Size: resource.MustParse("1Gi")}, Now: func() time.Time { return now }}
+
+	// Concurrent first admissions in two namespaces: exactly one owner.
+	owners := make([]string, 2)
+	var wg sync.WaitGroup
+	for i, ns := range []string{"fn-a", "fn-b"} {
+		wg.Add(1)
+		go func(i int, ns string) {
+			defer wg.Done()
+			o, err := p.ClaimDownload(ctx, uri, ns)
+			if err != nil {
+				t.Error(err)
+			}
+			owners[i] = o
+		}(i, ns)
+	}
+	wg.Wait()
+	if owners[0] == "" || owners[0] != owners[1] {
+		t.Fatalf("both namespaces must agree on one owner, got %v", owners)
+	}
+	owner := owners[0]
+	other := map[string]string{"fn-a": "fn-b", "fn-b": "fn-a"}[owner]
+
+	// The owner's Job is gone but the grace period has not passed: kept.
+	if o, _ := p.ClaimDownload(ctx, uri, other); o != owner {
+		t.Errorf("an owner within its grace period is kept, got %q", o)
+	}
+	// Its Job runs: kept however old the record is.
+	now = now.Add(2 * DownloadOwnerGrace)
+	if _, err := kc.BatchV1().Jobs(owner).Create(ctx, &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: JobName(uri), Namespace: owner}}, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if o, _ := p.ClaimDownload(ctx, uri, other); o != owner {
+		t.Errorf("an owner whose Job exists is kept, got %q", o)
+	}
+	// Its Job is gone past the grace period: the next namespace takes over.
+	if err := kc.BatchV1().Jobs(owner).Delete(ctx, JobName(uri), metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if o, err := p.ClaimDownload(ctx, uri, other); err != nil || o != other {
+		t.Errorf("a stale owner is replaced, got %q %v", o, err)
+	}
+
+	// A recorded failure releases ownership.
+	if err := p.RecordFailure(ctx, uri, "boom"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := kc.CoordinationV1().Leases(p.Cfg.SystemNamespace()).Get(ctx, p.Cfg.DownloadOwnerName(uri), metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("failure must release the owner record: %v", err)
 	}
 }

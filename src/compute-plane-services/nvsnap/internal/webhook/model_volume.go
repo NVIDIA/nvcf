@@ -155,6 +155,25 @@ func (m *Mutator) modelVolumePatches(ctx context.Context, pod *corev1.Pod) ([]Pa
 // it is already bound, so readers admitted now can view it.
 func (m *Mutator) ensureDownload(ctx context.Context, pod *corev1.Pod, uri string, step modelvolume.DownloadStep, log logrus.FieldLogger) (string, error) {
 	cfg := m.ModelVolume.Cfg
+	// One namespace downloads a model, cluster-wide. Every other namespace
+	// is a reader of the same primary: two Jobs writing one volume through
+	// separate views could leave the marker beside a file the slower
+	// writer is still truncating.
+	owner, err := m.ModelVolume.ClaimDownload(ctx, uri, pod.Namespace)
+	if err != nil {
+		return "", err
+	}
+	if owner != pod.Namespace {
+		pv := ""
+		if cfg.SharedWhileWriting() {
+			// Readers mount the in-flight primary on a shared filesystem.
+			if bound, err := m.ModelVolume.WaitBound(ctx, cfg.SystemNamespace(), cfg.ClaimName(uri), primaryBindWait); err == nil {
+				pv = bound
+			}
+		}
+		log.WithFields(logrus.Fields{"owner": owner, "pv": pv}).Info("model volume: another namespace downloads this model; pod reads")
+		return pv, nil
+	}
 	if !cfg.SharedWhileWriting() {
 		job, err := m.ModelVolume.EnsureDownloadJob(ctx, uri, pod.Namespace, "", step)
 		if err != nil {
