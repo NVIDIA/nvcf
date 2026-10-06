@@ -130,6 +130,14 @@ CREATE TABLE IF NOT EXISTS owner_status_by_account_and_service
     PRIMARY KEY ((nca_id, owner_type, owner_id, issuer_service_id))
 );
 
+CREATE CUSTOM INDEX IF NOT EXISTS owner_status_by_account_owner_idx
+    ON owner_status_by_account (owner_id)
+    USING 'StorageAttachedIndex';
+
+CREATE CUSTOM INDEX IF NOT EXISTS owner_status_by_account_and_service_owner_idx
+    ON owner_status_by_account_and_service (owner_id)
+    USING 'StorageAttachedIndex';
+
 CREATE TABLE IF NOT EXISTS key_operations_by_id
 (
     operation_id        UUID,
