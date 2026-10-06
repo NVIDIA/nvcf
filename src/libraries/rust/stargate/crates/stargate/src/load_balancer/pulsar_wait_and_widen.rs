@@ -34,7 +34,8 @@ use crate::routing_state::RoutedClusterSnapshot;
 pub(super) struct PulsarWaitAndWidenLoadBalancer {
     ranking: PulsarLoadBalancer,
     wait_and_widen: WaitAndWidenLoadBalancer,
-    /// Same selection with `fallback_max_queued` as the capacity limit.
+    /// Same selection with `fallback_max_queued` as the capacity limit, used
+    /// for the open set after the affinity wait.
     fallback_wait_and_widen: WaitAndWidenLoadBalancer,
     affinity_group_size: usize,
     affinity_wait: Duration,
@@ -52,16 +53,26 @@ enum SelectionPhase {
 
 impl PulsarWaitAndWidenLoadBalancer {
     pub(super) fn new(config: LoadBalancerAlgorithmConfig) -> anyhow::Result<Self> {
+        let settings = config
+            .wait_and_widen_settings()
+            .expect("pulsar-wait-and-widen config has wait_and_widen settings");
+        let band_widen_interval = Duration::from_millis(
+            settings
+                .band_widen_interval_ms
+                .or(settings.cache_affinity_wait_ms)
+                .unwrap_or(0),
+        );
+        let fallback_max_queued = settings.fallback_max_queued.unwrap_or(0);
         let wait_and_widen_config = WaitAndWidenConfig::from_algorithm_config(&config)?;
         let mut fallback_config = wait_and_widen_config.clone();
-        fallback_config.max_queued = wait_and_widen_config.fallback_max_queued;
+        fallback_config.max_queued = fallback_max_queued;
         Ok(Self {
             // The Pulsar primary is the affinity group unless configured wider.
             affinity_group_size: wait_and_widen_config
                 .cache_affinity_backend_selection_count
                 .unwrap_or(1),
             affinity_wait: wait_and_widen_config.cache_affinity_wait,
-            band_widen_interval: wait_and_widen_config.band_widen_interval,
+            band_widen_interval,
             affinity_input_tokens_scale: wait_and_widen_config.cache_affinity_input_tokens_scale,
             fallback_wait_and_widen: WaitAndWidenLoadBalancer::new(fallback_config),
             wait_and_widen: WaitAndWidenLoadBalancer::new(wait_and_widen_config),
@@ -647,6 +658,14 @@ mod tests {
             selected_rank(hybrid.decide_at(&request, &candidates, Duration::from_millis(100))),
             1
         );
+        // After the wait, the affinity group is still checked before the open
+        // set, so a free primary wins over free lower ranks every time.
+        for _ in 0..32 {
+            assert_eq!(
+                selected_rank(hybrid.decide_at(&request, &candidates, Duration::from_millis(500))),
+                1
+            );
+        }
     }
 
     #[test]
