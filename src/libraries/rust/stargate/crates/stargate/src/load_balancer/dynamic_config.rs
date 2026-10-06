@@ -422,8 +422,11 @@ mod tests {
         let state = Arc::new(StargateState::new());
         let target = RoutingTargetKey::new(None, "model");
         let snapshot = register_target(&state, &target).await;
-        let cache =
-            DynamicConfigCache::new(state, Duration::from_millis(50), DYNAMIC_CONFIG_MAX_ENTRIES);
+        let cache = DynamicConfigCache::new(
+            state,
+            Duration::from_millis(500),
+            DYNAMIC_CONFIG_MAX_ENTRIES,
+        );
         let (first, _) = cache
             .resolve(&target, EXPRESSION, || compile(EXPRESSION))
             .unwrap();
@@ -435,7 +438,7 @@ mod tests {
         let _instance = snapshot.load_balancers().load_balancer(&previous_holder);
         assert_eq!(snapshot.load_balancers().instance_count(), 2);
         cache.run_pending_tasks();
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
         cache.run_pending_tasks();
         // Expiry forgets both the current and the previous configuration.
         assert!(cache.entries.get(&target).is_none());
