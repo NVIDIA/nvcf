@@ -21,6 +21,7 @@ import com.nvidia.apikeys.config.exceptions.CassandraException;
 import com.nvidia.apikeys.persistance.models.KeyOperationModel;
 import com.nvidia.apikeys.persistance.repositories.KeyOperationRepository;
 import com.nvidia.apikeys.vo.KeyOperationStatus;
+import com.nvidia.boot.exceptions.NotFoundException;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
@@ -28,6 +29,7 @@ import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.cassandra.core.CassandraTemplate;
 import org.springframework.data.cassandra.core.InsertOptions;
+import org.springframework.data.cassandra.core.UpdateOptions;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -36,6 +38,9 @@ public class KeyOperationsDao {
 
     private static final InsertOptions IF_NOT_EXISTS = InsertOptions.builder()
             .withIfNotExists()
+            .build();
+    private static final UpdateOptions IF_EXISTS = UpdateOptions.builder()
+            .withIfExists()
             .build();
 
     private final KeyOperationRepository repository;
@@ -70,12 +75,17 @@ public class KeyOperationsDao {
     }
 
     /**
-     * Writes progress for an existing operation and refreshes updated_at.
+     * Writes progress for an existing operation and refreshes updated_at. Never creates a row.
      */
     public KeyOperationModel update(KeyOperationModel operation) {
-        return repository.save(operation.toBuilder()
-                                       .updatedAt(clock.instant())
-                                       .build());
+        KeyOperationModel model = operation.toBuilder()
+                .updatedAt(clock.instant())
+                .build();
+
+        if (!cassandraTemplate.update(model, IF_EXISTS).wasApplied()) {
+            throw new NotFoundException("Key operation not found: " + model.getOperationId());
+        }
+        return model;
     }
 
     private static Long zeroIfNull(Long value) {

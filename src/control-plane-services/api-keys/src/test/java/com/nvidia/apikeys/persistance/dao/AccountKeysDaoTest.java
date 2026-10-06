@@ -27,6 +27,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.nvidia.apikeys.config.exceptions.CassandraException;
@@ -40,6 +41,8 @@ import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -195,5 +198,18 @@ class AccountKeysDaoTest {
                 BadRequestException.class,
                 () -> dao.listByAccountAndService("nca-1", "service-a", 10, "0x00"),
                 "Invalid cursor: '0x00'");
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, -1})
+    void limitBelowOneIsBadRequestEvenWithCursor(int limit) {
+        assertThrowsExceptionWithDetails(
+                BadRequestException.class, () -> dao.listByAccount("nca-1", limit, null),
+                "Invalid limit: '" + limit + "'");
+        assertThrowsExceptionWithDetails(
+                BadRequestException.class,
+                () -> dao.listByAccountAndService("nca-1", "service-a", limit, "0x00"),
+                "Invalid limit: '" + limit + "'");
+        verifyNoInteractions(repository);
     }
 }

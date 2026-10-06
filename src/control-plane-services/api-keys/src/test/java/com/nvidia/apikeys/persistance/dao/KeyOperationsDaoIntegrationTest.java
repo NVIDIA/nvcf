@@ -18,6 +18,7 @@
 package com.nvidia.apikeys.persistance.dao;
 
 import static com.nvidia.apikeys.TestData.TEST_TIME;
+import static com.nvidia.apikeys.utils.TestUtils.assertThrowsExceptionWithDetails;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -28,11 +29,20 @@ import com.nvidia.apikeys.config.exceptions.CassandraException;
 import com.nvidia.apikeys.persistance.models.KeyOperationModel;
 import com.nvidia.apikeys.utils.TestClock;
 import com.nvidia.apikeys.vo.KeyOperationStatus;
+import com.nvidia.boot.exceptions.NotFoundException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -194,6 +204,56 @@ class KeyOperationsDaoIntegrationTest {
     @Test
     void getReturnsEmptyForUnknownOperation() {
         assertThat(dao.get(UUID.randomUUID())).isEmpty();
+    }
+
+    @Test
+    void updateDoesNotCreateUnknownOperation() {
+        UUID operationId = UUID.randomUUID();
+        KeyOperationModel unknown = operation()
+                .operationId(operationId)
+                .operationStatus(KeyOperationStatus.RUNNING)
+                .build();
+
+        assertThrowsExceptionWithDetails(
+                NotFoundException.class, () -> dao.update(unknown),
+                "Key operation not found: " + operationId);
+        assertThat(dao.get(operationId)).isEmpty();
+    }
+
+    @Test
+    void concurrentCreatesWithSameIdHaveOneWinner() throws Exception {
+        UUID operationId = UUID.randomUUID();
+        int writers = 4;
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(writers);
+        try {
+            List<Future<KeyOperationModel>> results = new ArrayList<>();
+            for (int i = 0; i < writers; i++) {
+                String reason = "writer-" + i;
+                results.add(executor.submit(() -> {
+                    start.await();
+                    return dao.create(operation().operationId(operationId).reason(reason).build());
+                }));
+            }
+            start.countDown();
+
+            List<KeyOperationModel> winners = new ArrayList<>();
+            for (Future<KeyOperationModel> result : results) {
+                try {
+                    winners.add(result.get(30, TimeUnit.SECONDS));
+                } catch (ExecutionException e) {
+                    assertThat(e.getCause()).isInstanceOf(CassandraException.class);
+                }
+            }
+
+            assertThat(winners).hasSize(1);
+            assertThat(dao.get(operationId))
+                    .get()
+                    .extracting(KeyOperationModel::getReason)
+                    .isEqualTo(winners.getFirst().getReason());
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     private static KeyOperationModel.KeyOperationModelBuilder operation() {

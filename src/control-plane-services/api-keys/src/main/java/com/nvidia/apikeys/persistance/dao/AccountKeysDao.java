@@ -53,6 +53,7 @@ import org.springframework.stereotype.Service;
 public class AccountKeysDao {
 
     private static final String MESG_INVALID_CURSOR = "Invalid cursor: '%s'";
+    private static final String MESG_INVALID_LIMIT = "Invalid limit: '%d'";
 
     private final KeyByAccountOwnerAndServiceRepository repository;
     private final KeyModelConverter keyConverter;
@@ -148,6 +149,9 @@ public class AccountKeysDao {
     private AccountKeysSliceVo slice(
             Function<Pageable, Slice<KeyByAccountOwnerAndServiceModel>> query,
             int limit, String cursor) {
+        if (limit < 1) {
+            throw new BadRequestException(MESG_INVALID_LIMIT.formatted(limit));
+        }
         Slice<KeyByAccountOwnerAndServiceModel> pagedResult;
         try {
             var byteBuffer = cursor == null ? null : fromHexString(cursor);

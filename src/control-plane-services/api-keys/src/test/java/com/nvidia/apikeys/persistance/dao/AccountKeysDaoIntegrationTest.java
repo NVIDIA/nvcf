@@ -330,6 +330,22 @@ class AccountKeysDaoIntegrationTest {
     }
 
     @Test
+    void deleteOfMissingKeyIsNoOp() {
+        KeyVo kept = key(NCA_1, OWNER_1, SERVICE_A, "key-1");
+        dao.save(kept);
+        KeyByAccountOwnerAndServiceVo missing =
+                KeyByAccountOwnerAndServiceVo.from(key(NCA_1, OWNER_1, SERVICE_A, "key-2"));
+
+        dao.delete(missing);
+        dao.delete(missing);
+
+        assertThat(dao.list(NCA_1, USER, OWNER_1))
+                .extracting(KeyByAccountOwnerAndServiceVo::getKeyId)
+                .containsExactly("key-1");
+        assertThat(keysDao.getKeyByHash(kept.getKeyHash())).isPresent();
+    }
+
+    @Test
     void legacyKeysDaoWritesNoNcaIdAndNoAccountRow() {
         KeyVo key = key(null, OWNER_1, SERVICE_A, "key-1");
         KeyOwnerVo owner = KeyOwnerVo.builder()
