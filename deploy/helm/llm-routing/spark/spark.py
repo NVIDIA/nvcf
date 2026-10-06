@@ -1048,7 +1048,7 @@ def main(argv=None, console=None):
     parser.add_argument('--archive', type=pathlib.Path)
     parser.add_argument('--allow-containerd-import', action='store_true')
     parser.add_argument('--result', type=pathlib.Path)
-    parser.add_argument('--port', type=int, help='Local port; defaults to 13000 for dashboard and 18443 for other commands.')
+    parser.add_argument('--port', type=int, help='Local port; defaults to 13000 for monitoring/dashboard and 18443 for other commands.')
     parser.add_argument('--admin', action='store_true', help='Show administrator login credentials with dashboard.')
     parser.add_argument('--confirm-model-interruption', action='store_true')
     parser.add_argument('--verify-traffic', action='store_true', help='Send gateway verification requests and check monitoring counter increases.')
@@ -1063,7 +1063,7 @@ def main(argv=None, console=None):
     require(not args.retry or args.phase == 'qualify', '--retry is supported only for qualify.')
     require(not args.admin or args.phase == 'dashboard', '--admin is supported only for dashboard.')
     if args.port is None:
-        args.port = 13000 if args.phase == 'dashboard' else 18443
+        args.port = 13000 if args.phase in ('monitoring', 'dashboard') else 18443
     try:
         context, work, config_path, config = cli_settings(args)
     except ContextSelectionError as error:
@@ -1071,7 +1071,11 @@ def main(argv=None, console=None):
             raise
         parser.exit(2, 'error: ' + str(error) + '\n')
     action = lambda: execute(args, parser, context, work, config_path, config)
-    return console.run(args.phase, work, action) if console else action()
+    result = console.run(args.phase, work, action) if console else action()
+    if args.phase == 'monitoring':
+        action = lambda: result.dashboard(args.port)
+        return console.run('dashboard', work, action) if console else action()
+    return result
 
 
 def execute(args, parser, context, work, config_path, config):
@@ -1154,11 +1158,13 @@ def execute(args, parser, context, work, config_path, config):
     elif args.phase == 'import-images':
         recipe.import_images(args.archive or recipe.work/'arm64-images.tar', args.allow_containerd_import, args.component, args.tag)
     elif args.phase == 'monitoring':
-        monitoring.Monitoring(recipe, run, output, save).install()
+        monitor = monitoring.Monitoring(recipe, run, output, save)
+        monitor.install()
         if enable_monitoring and not discovered:
             require(config_path.exists() and json.loads(config_path.read_text()) == saved_config,
                     'Configuration changed during monitoring installation. Check saved settings before retrying.')
             save(config_path, config)
+        return monitor
     elif args.phase == 'dashboard': monitoring.Monitoring(recipe, run, output, save).dashboard(args.port, admin=args.admin)
     elif args.phase == 'verify-monitoring': monitoring.Monitoring(recipe, run, output, save).verify(args.port, args.verify_traffic, args.model)
     elif args.phase == 'monitoring-images': print('\n'.join(monitoring.image_list(recipe)))

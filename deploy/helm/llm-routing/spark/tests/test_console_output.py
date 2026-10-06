@@ -193,6 +193,33 @@ class ConsoleOutputTests(unittest.TestCase):
         self.assertIn('monitoring-port-forward.log', self.stderr.getvalue())
         self.assertNotIn('passed.', self.stdout.getvalue())
 
+    def test_monitoring_installs_quietly_then_shows_dashboard_and_its_failures(self):
+        arguments = self.cli_arguments()[:-1] + ['monitoring']
+        for error in (None, RuntimeError('Grafana tunnel disconnected')):
+            self.stdout = io.StringIO()
+            self.stderr = io.StringIO()
+            def dashboard(port):
+                self.assertIn('monitoring passed.', self.stdout.getvalue())
+                print('Dashboard: http://127.0.0.1:' + str(port) + '/d/llm-demo', flush=True)
+                self.assertIn('http://127.0.0.1:13000/d/llm-demo', self.stdout.getvalue())
+                if error:
+                    raise error
+            with self.subTest(error=error), self.captured(), patch.object(spark, 'Recipe'), \
+                 patch.object(spark.monitoring, 'Monitoring') as monitor:
+                monitor.return_value.install.side_effect = lambda: print('Helm release details')
+                monitor.return_value.dashboard.side_effect = dashboard
+                status = spark.cli(arguments)
+            monitor.return_value.install.assert_called_once()
+            self.assertEqual(status, 1 if error else 0)
+            self.assertNotIn('Helm release details', self.stdout.getvalue())
+            self.assertNotIn('dashboard passed.', self.stdout.getvalue())
+            if error:
+                self.assertIn('dashboard failed: Grafana tunnel disconnected', self.stderr.getvalue())
+                self.assertIn('monitoring-port-forward.log', self.stderr.getvalue())
+                self.assertNotIn('Log:', self.stderr.getvalue())
+            else:
+                self.assertEqual(self.stderr.getvalue(), '')
+
     def test_monitoring_export_keeps_archive_path_and_hides_tool_chatter(self):
         arguments = self.cli_arguments()[:-1] + ['export-monitoring-images']
 

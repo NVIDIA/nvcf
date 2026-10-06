@@ -215,7 +215,7 @@ class CliTests(unittest.TestCase):
         recipe.stamp('inventory', {'nodes': {recipe.c['nodes']['control']: 'control-uid'}})
         recipe.stamp('stack', {'apiKeyFile': None})
 
-    def test_monitoring_discovers_attaches_saves_and_installs_with_one_command(self):
+    def test_monitoring_discovers_attaches_installs_and_opens_dashboard(self):
         config = self.monitoring_config()
         calls = []
         def attach(recipe):
@@ -227,13 +227,18 @@ class CliTests(unittest.TestCase):
             self.assertTrue(monitor.recipe.state['inventory'])
             self.assertIsNone(monitor.recipe.glm)
             calls.append('install')
+        def dashboard(monitor, port):
+            self.assertEqual(port, 13000)
+            self.assertEqual(json.loads((self.work/'config.json').read_text()), config)
+            calls.append('dashboard')
         with patch.object(spark.monitoring_setup, 'discover_config', return_value=config) as discover, \
              patch.object(spark.Recipe, 'attach_monitoring', attach), \
              patch.object(spark.monitoring.Monitoring, 'install', autospec=True, side_effect=install), \
+             patch.object(spark.monitoring.Monitoring, 'dashboard', autospec=True, side_effect=dashboard), \
              patch.object(spark, 'discover_config') as model_discover, \
              patch.object(spark.Recipe, 'prepare') as prepare, redirect_stdout(io.StringIO()):
             spark.main(['monitoring'])
-        self.assertEqual(calls, ['attach', 'install'])
+        self.assertEqual(calls, ['attach', 'install', 'dashboard'])
         discover.assert_called_once_with('team-context', None, spark.output)
         model_discover.assert_not_called()
         prepare.assert_not_called()
@@ -266,8 +271,10 @@ class CliTests(unittest.TestCase):
             self.assertFalse(json.loads((self.work/'config.json').read_text())['monitoring']['enabled'])
         with patch.object(spark.monitoring_setup, 'discover_config') as discover, \
              patch.object(spark.Recipe, 'attach_monitoring') as attach, \
-             patch.object(spark.monitoring.Monitoring, 'install', autospec=True, side_effect=install):
-            spark.main(['monitoring'])
+             patch.object(spark.monitoring.Monitoring, 'install', autospec=True, side_effect=install), \
+             patch.object(spark.monitoring.Monitoring, 'dashboard') as dashboard:
+            spark.main(['monitoring', '--port', '13001'])
+        dashboard.assert_called_once_with(13001)
         discover.assert_not_called()
         attach.assert_not_called()
         expected = copy.deepcopy(self.config)
@@ -281,10 +288,12 @@ class CliTests(unittest.TestCase):
         self.write_config()
         with patch.object(spark.monitoring_setup, 'discover_config') as discover, \
              patch.object(spark.Recipe, 'attach_monitoring', autospec=True, side_effect=self.bind_monitoring), \
-             patch.object(spark.monitoring.Monitoring, 'install') as install:
+             patch.object(spark.monitoring.Monitoring, 'install') as install, \
+             patch.object(spark.monitoring.Monitoring, 'dashboard') as dashboard:
             spark.main(['monitoring'])
         discover.assert_not_called()
         install.assert_called_once()
+        dashboard.assert_called_once_with(13000)
         self.assertEqual(json.loads((self.work/'config.json').read_text()), dict(self.config, monitoring={'enabled': True}))
 
     def test_failed_monitoring_install_preserves_saved_disabled_setting(self):
@@ -293,9 +302,28 @@ class CliTests(unittest.TestCase):
         before = (self.work/'config.json').read_bytes()
         with patch.object(spark.Recipe, 'attach_monitoring', autospec=True, side_effect=self.bind_monitoring), \
              patch.object(spark.monitoring.Monitoring, 'install', side_effect=RuntimeError('Wrong Helm owner')), \
+             patch.object(spark.monitoring.Monitoring, 'dashboard') as dashboard, \
              self.assertRaisesRegex(RuntimeError, 'Wrong Helm owner'):
             spark.main(['monitoring'])
+        dashboard.assert_not_called()
         self.assertEqual((self.work/'config.json').read_bytes(), before)
+
+    def test_failed_dashboard_keeps_completed_monitoring_installation(self):
+        self.config['monitoring']['enabled'] = False
+        self.write_config()
+        def install(monitor):
+            monitor.recipe.stamp('monitoring', {'release': monitor.release})
+        def dashboard(monitor, port):
+            self.assertTrue(json.loads((self.work/'config.json').read_text())['monitoring']['enabled'])
+            self.assertEqual(monitor.recipe.state['monitoring']['release'], monitor.release)
+            raise OSError('Address already in use')
+        with patch.object(spark.Recipe, 'attach_monitoring', autospec=True, side_effect=self.bind_monitoring), \
+             patch.object(spark.monitoring.Monitoring, 'install', autospec=True, side_effect=install) as install_call, \
+             patch.object(spark.monitoring.Monitoring, 'dashboard', autospec=True, side_effect=dashboard), \
+             self.assertRaisesRegex(OSError, 'Address already in use'):
+            spark.main(['monitoring'])
+        install_call.assert_called_once()
+        self.assertIn('monitoring', json.loads((self.work/'state.json').read_text()))
 
     def test_failed_fresh_attachment_does_not_save_configuration_or_install(self):
         with patch.object(spark.monitoring_setup, 'discover_config', return_value=self.monitoring_config()), \
@@ -350,8 +378,10 @@ class CliTests(unittest.TestCase):
         edited = dict(self.config, apiKeyFile='updated-key-path')
         with patch.object(spark.Recipe, 'attach_monitoring', autospec=True, side_effect=self.bind_monitoring), \
              patch.object(spark.monitoring.Monitoring, 'install', side_effect=lambda: self.write_config(edited)), \
+             patch.object(spark.monitoring.Monitoring, 'dashboard') as dashboard, \
              self.assertRaisesRegex(RuntimeError, 'Configuration changed during monitoring installation'):
             spark.main(['monitoring'])
+        dashboard.assert_not_called()
         self.assertEqual(json.loads((self.work/'config.json').read_text()), edited)
 
     def test_unavailable_docker_reports_one_actionable_line_without_traceback(self):

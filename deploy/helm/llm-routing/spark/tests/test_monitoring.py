@@ -576,8 +576,10 @@ class MonitoringTests(unittest.TestCase):
         responses = [json.dumps({'data': {'cluster-token': base64.b64encode(b'worker').decode()}}),
                      json.dumps({'data': {'ca.crt': 'CA'}})]
         with patch.object(self.recipe, 'prepare'), patch.object(spark, 'output', side_effect=responses), \
-             patch.object(monitoring.Monitoring, 'install', side_effect=lambda: calls.append('monitoring')):
+             patch.object(monitoring.Monitoring, 'install', side_effect=lambda: calls.append('monitoring')), \
+             patch.object(monitoring.Monitoring, 'dashboard') as dashboard:
             self.recipe.deploy_stack()
+        dashboard.assert_not_called()
         self.assertEqual(calls, [self.recipe.operator, self.recipe.stack, 'monitoring'])
 
 

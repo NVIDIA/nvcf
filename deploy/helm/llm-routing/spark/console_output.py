@@ -99,6 +99,7 @@ class Console:
         self.phase = phase
         self.terminal, self.terminal_error = sys.stdout, sys.stderr
         if phase in PAYLOAD_PHASES:
+            self.log_path = None
             return action()
         directory = pathlib.Path(work)/'evidence'
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)

@@ -105,12 +105,11 @@ From `deploy/helm/llm-routing/spark`, install monitoring and view the dashboard:
 
 ```bash
 python3 spark.py monitoring
-python3 spark.py dashboard
 ```
 
-Open `http://127.0.0.1:13000/d/llm-demo`. Viewing requires no login. Keep the command running, or press Ctrl-C to close the tunnel. Use `--port` to change the local port.
+Open `http://127.0.0.1:13000/d/llm-demo`. Viewing requires no login. Ctrl-C closes the tunnel and leaves monitoring running. Use `--port` to change the local port.
 
-See [advanced monitoring configuration](spark/MONITORING.md) for settings, admin access, verification and uninstall.
+See [advanced monitoring configuration](spark/MONITORING.md) for settings, dashboard access, verification and uninstall.
 
 ## Maintenance
 

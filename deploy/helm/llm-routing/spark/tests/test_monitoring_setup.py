@@ -203,9 +203,11 @@ class MonitoringSetupTests(unittest.TestCase):
         for phase, method, expected in [('monitoring', 'install', ()), ('dashboard', 'dashboard', (13000,)),
                                          ('verify-monitoring', 'verify', (18443, False, None)),
                                          ('export-monitoring-images', 'export_images', (self.work/'monitoring-arm64-images.tar',))]:
-            with self.subTest(phase=phase), patch.object(spark.monitoring.Monitoring, method) as call:
+            with self.subTest(phase=phase), patch.object(spark.monitoring, 'Monitoring') as monitor:
                 spark.main(args+[phase])
-            call.assert_called_once_with(*expected, **({'admin': False} if phase == 'dashboard' else {}))
+            getattr(monitor.return_value, method).assert_called_once_with(*expected, **({'admin': False} if phase == 'dashboard' else {}))
+            if phase == 'monitoring':
+                monitor.return_value.dashboard.assert_called_once_with(13000)
         with patch.object(spark.Recipe, 'cleanup_key') as cleanup:
             spark.main(args+['cleanup-key'])
         cleanup.assert_called_once_with(18443)
@@ -249,9 +251,11 @@ class MonitoringSetupTests(unittest.TestCase):
             spark.main(args+['context'])
             spark.main(args+['paths'])
         inspect.assert_not_called()
-        with patch.object(spark.monitoring.Monitoring, 'install') as install:
+        with patch.object(spark.monitoring.Monitoring, 'install') as install, \
+             patch.object(spark.monitoring.Monitoring, 'dashboard') as dashboard:
             spark.main(args+['monitoring'])
         install.assert_called_once()
+        dashboard.assert_called_once_with(13000)
 
 
 if __name__ == '__main__':

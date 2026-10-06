@@ -42,15 +42,15 @@ python3 spark.py import-monitoring-images --archive /path/to/monitoring.tar --al
 
 The importer needs configured `containerd` access and preloaded image-loader helper images. Set `monitoring.imagePullPolicy` to `Never` before installation. Review [image licenses](NOTICE) before distributing bundles.
 
-## Admin access
+## Dashboard and admin access
 
-Stop any existing dashboard tunnel, then run:
+To reopen the dashboard after installation:
 
 ```bash
-python3 spark.py dashboard --admin
+python3 spark.py dashboard
 ```
 
-The command prints the login URL and credentials from the cluster Secret. Admin manages users, permissions and data sources. Viewing uses anonymous Viewer access, including through the internal Service. Save lasting dashboard and data-source changes in the chart. Keep generated Helm values private.
+For admin access, stop the tunnel and run `python3 spark.py dashboard --admin`. This prints the login URL and credentials from the cluster Secret. Admin manages users, permissions and data sources. Viewing uses anonymous Viewer access, including through the internal Service. Save lasting dashboard and data-source changes in the chart. Keep generated Helm values private.
 
 ## Verification
 

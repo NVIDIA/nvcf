@@ -212,7 +212,7 @@ class Monitoring:
         values['grafana']['adminPassword'] = password
         r.helm_apply(self.release, CHART, values)
         r.stamp('monitoring', {'release': self.release})
-        print('Monitoring installed. Run python3 spark.py dashboard.')
+        print('Monitoring installed.')
 
     def export_images(self, archive):
         images = image_list(self.recipe)
