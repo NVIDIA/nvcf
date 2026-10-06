@@ -45,17 +45,29 @@ class UpdateFunctionRequestValidationTest {
     }
 
     @Test
-    void urisOnlyModelUpdateReachesServiceValidation() {
+    void urisInModelUpdateIsRejectedNamingTheField() {
         var request = request(UpdateFunctionRequest.LlmConfigUpdateDto.builder()
                 .uris(List.of("/v1/responses"))
+                .routingMethod("round-robin")
                 .build());
-        assertThat(validator.validate(request)).isEmpty();
+        assertThat(validator.validate(request))
+                .anyMatch(v -> v.getMessage().contains("llmConfig.uris"));
     }
 
     @Test
-    void tokenizerOnlyModelUpdateReachesServiceValidation() {
+    void tokenizerInModelUpdateIsRejectedNamingTheField() {
         var request = request(UpdateFunctionRequest.LlmConfigUpdateDto.builder()
                 .tokenizer("tok")
+                .build());
+        assertThat(validator.validate(request))
+                .anyMatch(v -> v.getMessage().contains("llmConfig.tokenizer"));
+    }
+
+    @Test
+    void routingMethodAndTokenRateLimitAreAccepted() {
+        var request = request(UpdateFunctionRequest.LlmConfigUpdateDto.builder()
+                .routingMethod("round-robin")
+                .tokenRateLimit("1-M")
                 .build());
         assertThat(validator.validate(request)).isEmpty();
     }

@@ -113,7 +113,7 @@ The same configuration can be provided with CLI flags:
 
 These per-model routing fields are mutable. Use `nvcf-cli function update --llm-model-update "name=<model>,routingMethod=<method>,tokenRateLimit=<limit>"` or JSON `modelUpdates` to change them without recreating the function version.
 
-`llmConfig.uris` and `llmConfig.tokenizer` cannot be changed after creation. A `modelUpdates` request that sets either to a different value is rejected with `400 Bad Request`.
+`llmConfig.uris` and `llmConfig.tokenizer` cannot be changed after creation. A `modelUpdates` request that sets either one is rejected with `400 Bad Request`.
 
 For request admission and rate limiting, the gateway uses request estimates until the upstream service returns usage data. Do not depend on gateway-side exact token counts.
 

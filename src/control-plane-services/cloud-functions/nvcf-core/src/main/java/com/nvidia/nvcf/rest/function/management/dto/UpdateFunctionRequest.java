@@ -73,6 +73,9 @@ public record UpdateFunctionRequest(
 
     private static final String MESG_MODEL_CONFIG_UPDATE_REQUIRED =
             "Invalid request: at least one of 'tokenRateLimit' or 'routingMethod' must be specified";
+    private static final String MESG_MODEL_CONFIG_IMMUTABLE_FIELDS =
+            "Invalid request: 'llmConfig.uris' and 'llmConfig.tokenizer' cannot be changed "
+                    + "after creation";
     private static final String MESG_DUPLICATE_MODEL_UPDATES =
             "Invalid request: duplicate model names are not allowed in 'modelUpdates'";
     private static final String MESG_FUNCTION_UPDATE_REQUIRED =
@@ -107,19 +110,14 @@ public record UpdateFunctionRequest(
             String routingMethod,
 
             @Nullable
-            @Schema(description = "Cannot be changed after creation. A value that differs from "
-                    + "the stored one is rejected with 400.")
+            @Schema(description = "Cannot be changed after creation. A request that sets it is "
+                    + "rejected with 400.")
             List<String> uris,
 
             @Nullable
-            @Schema(description = "Cannot be changed after creation. A value that differs from "
-                    + "the stored one is rejected with 400.")
+            @Schema(description = "Cannot be changed after creation. A request that sets it is "
+                    + "rejected with 400.")
             String tokenizer) {
-
-        boolean isEmpty() {
-            return tokenRateLimit == null && routingMethod == null
-                    && uris == null && tokenizer == null;
-        }
     }
 
     @Constraint(validatedBy = ValidUpdateFunctionRequestValidator.class)
@@ -162,7 +160,11 @@ public record UpdateFunctionRequest(
 
             for (var modelUpdate : modelUpdates) {
                 var llmConfig = modelUpdate.llmConfig();
-                if (llmConfig == null || llmConfig.isEmpty()) {
+                if (llmConfig != null && (llmConfig.uris() != null || llmConfig.tokenizer() != null)) {
+                    return violation(context, MESG_MODEL_CONFIG_IMMUTABLE_FIELDS);
+                }
+                if (llmConfig == null
+                        || (llmConfig.tokenRateLimit() == null && llmConfig.routingMethod() == null)) {
                     return violation(context, MESG_MODEL_CONFIG_UPDATE_REQUIRED);
                 }
             }

@@ -17,10 +17,8 @@
 package com.nvidia.nvcf.service.function;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
-import com.nvidia.boot.exceptions.BadRequestException;
 import com.nvidia.nvcf.persistence.function.entity.ApiBodyFormat;
 import com.nvidia.nvcf.persistence.function.entity.FunctionEntity;
 import com.nvidia.nvcf.persistence.function.entity.FunctionStatus;
@@ -38,7 +36,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
-class FunctionLlmServiceUpdateImmutableFieldsTest {
+class FunctionLlmServiceModelUpdateTest {
 
     private static final UUID FUNCTION_ID = UUID.randomUUID();
     private static final String MODEL = "meta/llama-3.1-8b-instruct";
@@ -52,6 +50,7 @@ class FunctionLlmServiceUpdateImmutableFieldsTest {
     private FunctionLlmService service;
 
     private FunctionEntity function;
+    private FunctionModelDto model;
 
     @BeforeEach
     void setUp() {
@@ -68,45 +67,23 @@ class FunctionLlmServiceUpdateImmutableFieldsTest {
                 .build();
         when(functionLookupService.lookupUsingFunctionId(FUNCTION_ID))
                 .thenReturn(List.of(function));
+        model = storedModel();
         when(functionMapperService.toFunctionModels(function.getModelSpecs()))
-                .thenReturn(List.of(storedModel()));
+                .thenReturn(List.of(model));
     }
 
     @Test
-    void rejectsUrisChangeNamingTheField() {
+    void appliesRoutingMethodAndLeavesUrisAndTokenizerUntouched() {
         var request = update(UpdateFunctionRequest.LlmConfigUpdateDto.builder()
-                .uris(List.of("/v1/chat/completions", "/v1/responses"))
-                .build());
-
-        assertThatThrownBy(() -> service.applyLlmUpdates(function, request))
-                .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining("llmConfig.uris")
-                .hasMessageContaining(MODEL);
-    }
-
-    @Test
-    void rejectsTokenizerChangeNamingTheField() {
-        var request = update(UpdateFunctionRequest.LlmConfigUpdateDto.builder()
-                .tokenizer("other-tokenizer")
-                .build());
-
-        assertThatThrownBy(() -> service.applyLlmUpdates(function, request))
-                .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining("llmConfig.tokenizer")
-                .hasMessageContaining(MODEL);
-    }
-
-    @Test
-    void acceptsResubmittedUnchangedUrisAndAppliesRoutingMethod() {
-        var request = update(UpdateFunctionRequest.LlmConfigUpdateDto.builder()
-                .uris(URIS)
-                .tokenizer("meta-llama-tokenizer")
                 .routingMethod("round-robin")
                 .build());
 
-        var siblingsToResave = service.applyLlmUpdates(function, request);
+        service.applyLlmUpdates(function, request);
 
-        assertThat(siblingsToResave).isEmpty();
+        var llmConfig = model.getLlmConfig();
+        assertThat(llmConfig.getRoutingMethod()).isEqualTo("round-robin");
+        assertThat(llmConfig.getUris()).isEqualTo(URIS);
+        assertThat(llmConfig.getTokenizer()).isEqualTo("meta-llama-tokenizer");
     }
 
     private static UpdateFunctionRequest update(
