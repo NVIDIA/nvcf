@@ -118,9 +118,20 @@ Chunks are named by a fast 128-bit hash, which is not cryptographic, and a
 load trusts the name. Whoever can write to a store or cache can therefore
 make another workload restore wrong data. A cryptographic hash alone would
 not prevent that: the writer could still store wrong data under the right
-name. Give each tenant, meaning each set of workloads that trust each
-other, its own store and its own cache directory. Weights are still stored
-once per tenant.
+name. So:
+
+- Only a workload whose checkpoint every restoring workload already trusts
+  may write to a store. Restores should mount the store read-only. For
+  example, a store inside a checkpoint's own volume, written by the
+  checkpointed pod and mounted read-only by the pods restored from it,
+  adds no trust beyond the checkpoint itself.
+- Workloads whose checkpoints are not trusted by the same restores need
+  separate stores. Chunks are then not deduplicated between those stores.
+- The node cache is optional (`--cache`); without it, loads read the store
+  directly. If it is used, a pod saving with `--cache` writes to it, so
+  give each such store its own cache directory, or let only a trusted
+  process fill it with `cache-prefetch`, mount it read-only in workloads,
+  and pass `--cache` to `resume` only.
 
 ## Requirements and limits
 
