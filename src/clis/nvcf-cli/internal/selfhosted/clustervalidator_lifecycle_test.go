@@ -1500,7 +1500,8 @@ func TestRunClusterValidator_ActiveDeadlineFollowsTheRunsTimeout(t *testing.T) {
 	assert.Positive(t, validatorDeadlineOffset, "the deadline must not cut short the run's own wait")
 	assert.LessOrEqual(t, validatorDeadlineOffset+clusterValidatorTerminationGrace, defaultValidatorDeadlineGrace,
 		"the pod must be gone before the CLI stops waiting for it")
-	assert.Equal(t, int64(68), validatorActiveDeadlineSeconds(7200*time.Millisecond))
+	offset := int64(validatorDeadlineOffset / time.Second)
+	assert.Equal(t, 8+offset, validatorActiveDeadlineSeconds(7200*time.Millisecond))
 
 	prev := clusterValidatorTimeout
 	clusterValidatorTimeout = 10 * time.Second
@@ -1522,8 +1523,8 @@ func TestRunClusterValidator_ActiveDeadlineFollowsTheRunsTimeout(t *testing.T) {
 	res := runClusterValidator(context.Background(), client, "nvcr.io/nvidia/validator:1",
 		"", false, clusterValidatorComputePlaneRole, nil, map[string]string{validatorTimeoutEnv: "1h"})
 	require.NoError(t, res.Err)
-	assert.LessOrEqual(t, deadline, int64(8+60), "the deadline counts from the create, not the start of the run")
-	assert.Greater(t, deadline, int64(60))
+	assert.LessOrEqual(t, deadline, 8+offset, "the deadline counts from the create, not the start of the run")
+	assert.Greater(t, deadline, offset)
 
 	// The validator's own timeout counts from the same point and ends its
 	// checks before this run stops waiting, whatever the caller passed.
@@ -1539,6 +1540,20 @@ func TestRunClusterValidator_ActiveDeadlineFollowsTheRunsTimeout(t *testing.T) {
 	assert.Positive(t, got)
 	assert.LessOrEqual(t, got, 4*time.Second,
 		"counted from the time left when the Job was created, not the run's full timeout")
+}
+
+// Past VALIDATOR_TIMEOUT the Job's deadline leaves the pod time to be
+// scheduled and pull its image, which the validator's timeout does not count,
+// and to tear down the probe of a check that timeout cut short. With 90s for
+// both, a pull over 30s and a slow teardown met the deadline, and the run
+// reported a timeout instead of the validator's verdict.
+func TestValidatorActiveDeadline_LeavesRoomPastTheValidatorTimeout(t *testing.T) {
+	for _, left := range []time.Duration{0, 7200 * time.Millisecond, 59 * time.Second, time.Minute, 5 * time.Minute} {
+		timeout, err := time.ParseDuration(validatorRunTimeout(left))
+		require.NoError(t, err)
+		room := time.Duration(validatorActiveDeadlineSeconds(left))*time.Second - timeout
+		assert.GreaterOrEqual(t, room, validatorPodStartSlack+validatorTeardownBudget, "%s left", left)
+	}
 }
 
 // VALIDATOR_TIMEOUT leaves the summary margin of a full run's wait, and half of

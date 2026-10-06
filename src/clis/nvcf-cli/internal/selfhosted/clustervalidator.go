@@ -92,15 +92,24 @@ const validatorDeferredSweeps = 3
 // that finished late, and the container's exit code.
 const validatorGradeReads = 4
 
-// validatorDeadlineOffset is how long after the end of the run's own timeout
-// the Job's active deadline ends its pod. The deadline plus the pod's
-// termination grace must fall inside validatorDeadlineGrace, the wait for it.
-const validatorDeadlineOffset = 60 * time.Second
-
 // validatorTeardownBudget is the longest an interrupted validator spends
 // removing its node-to-node probe: the DaemonSet, the pods and the namespace,
-// one after another, each with its own 20s budget.
+// one after another, each with its own 20s budget. It is the validator's
+// clustervalidator.ProbeCleanupBound, which a run cut short by its own timeout
+// spends too.
 const validatorTeardownBudget = 3 * 20 * time.Second
+
+// validatorPodStartSlack is the time the validator pod may take to be
+// scheduled and pull its image. The Job's deadline counts it, and the
+// validator's own timeout does not.
+const validatorPodStartSlack = 2 * time.Minute
+
+// validatorDeadlineOffset is how long after the end of the run's own timeout
+// the Job's active deadline ends its pod. VALIDATOR_TIMEOUT ends no later than
+// the run's own timeout, so past it the pod has the time to start and to tear
+// down the probe of a check its timeout cut short. The deadline plus the pod's
+// termination grace must fall inside validatorDeadlineGrace, the wait for it.
+const validatorDeadlineOffset = validatorPodStartSlack + validatorTeardownBudget
 
 // clusterValidatorTerminationGrace is the validator pod's termination grace
 // period, the same as the chart's nvcaop.clusterValidatorJobSpec. It leaves
@@ -579,9 +588,10 @@ func setValidatorTimeout(job *batchv1.Job, left time.Duration) {
 }
 
 // validatorActiveDeadlineSeconds is the Job's active deadline when left of
-// the run's own timeout remains: validatorDeadlineOffset after it ends.
+// the run's own timeout remains: validatorDeadlineOffset after it ends, or
+// after the one-second VALIDATOR_TIMEOUT a run with no time left still gets.
 func validatorActiveDeadlineSeconds(left time.Duration) int64 {
-	return int64(math.Ceil(left.Seconds())) + int64(validatorDeadlineOffset/time.Second)
+	return max(int64(math.Ceil(left.Seconds())), 1) + int64(validatorDeadlineOffset/time.Second)
 }
 
 // readValidatorLogs fetches the validator's transcript on a fresh context
