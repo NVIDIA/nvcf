@@ -14,6 +14,7 @@ import os
 import pathlib
 import re
 import secrets
+import shlex
 import socket
 import subprocess
 import sys
@@ -572,6 +573,40 @@ class Recipe:
                           stack={'apiKeyFile': str(key)}, identity=self.identity)
         save(self.state_path, self.state)
         print('Attached to shared infrastructure. Run inventory before preparing the model.')
+
+    def deploy(self, port):
+        require(self.c.get('externalStack') is not None and self.state.get('attachedStack'),
+                'deploy requires a shared stack connection. Supply --config MODEL.json --work-dir DIR --stack-connection CONNECTION.json.')
+        allowed = {'identity', 'attachedStack', 'attachment', 'stack', 'inventory'}
+        require(set(self.state) <= allowed,
+                'Model deployment has already started. Continue with the individual phases in ADVANCED.md using this work directory.')
+        saved = self.work/'config.json'
+        require(saved.exists() and json.loads(saved.read_text()) == self.c,
+                'Saved model configuration differs. Use the attached work directory configuration.')
+        # Inventory remains read-only on the cluster, including when it was run separately.
+        if self.state.get('inventory'):
+            self.bound_cluster()
+            self.check_model_absent()
+        steps = [('inventory', self.inventory),
+                 ('preflight', lambda: self.backend_phase('preflight')),
+                 ('build-runtime', lambda: self.backend_phase('build')),
+                 ('qualify', lambda: self.backend_phase('qualify')),
+                 ('download', lambda: self.backend_phase('download')),
+                 ('load', lambda: self.backend_phase('serve')),
+                 ('verify-direct', lambda: self.verify(False, port)),
+                 ('register', self.register),
+                 ('verify-gateway', lambda: self.verify(True, port))]
+        for phase, action in steps:
+            self.stamp('deploy', {'phase': phase, 'status': 'running'})
+            try:
+                action()
+            except (Exception, KeyboardInterrupt) as error:
+                command = shlex.join([sys.executable, str(HERE/'recipe.py'), '--context', self.c['context'], '--work-dir', str(self.work), phase]
+                                     + (['--port', str(port)] if phase.startswith('verify-') else []))
+                raise RuntimeError('Deployment stopped during '+phase+'. Progress is saved. Inspect the failure, then resume with '+
+                                   command+'. See ADVANCED.md for phase recovery and the remaining steps. '+str(error)) from error
+        self.stamp('deploy', {'phase': 'verify-gateway', 'status': 'complete'})
+        print('Model deployed and verified through the shared gateway:', self.definition['servedName'])
 
     def attach_existing(self):
         self.infrastructure_owner()
@@ -1244,11 +1279,11 @@ def main(argv=None, console=None):
     parser.add_argument('--work-dir', type=pathlib.Path, help='Private local state directory; defaults to a per-context directory.')
     parser.add_argument('--source-dir', type=pathlib.Path, help='Existing source checkout; defaults to the checkout containing this script.')
     parser.add_argument('--recipe', help='Recipe folder for init; defaults to the only recipe present. Available: '+', '.join(available_recipes())+'.')
-    parser.add_argument('phase', choices=['init', 'paths', 'context', 'prepare', 'render', 'inventory', 'attach-existing', 'attach-stack', 'attach-monitoring', 'build-images', 'push-images', 'export-images', 'import-images', 'stack', 'preflight', 'build-runtime', 'qualify', 'download', 'load', 'verify-direct', 'register', 'verify-gateway', 'chat', 'cleanup-key', 'update', 'rollback', 'recover', 'monitoring', 'dashboard', 'verify-monitoring', 'uninstall-monitoring', 'monitoring-images', 'export-monitoring-images', 'import-monitoring-images'])
+    parser.add_argument('phase', choices=['init', 'paths', 'context', 'deploy', 'prepare', 'render', 'inventory', 'attach-existing', 'attach-stack', 'attach-monitoring', 'build-images', 'push-images', 'export-images', 'import-images', 'stack', 'preflight', 'build-runtime', 'qualify', 'download', 'load', 'verify-direct', 'register', 'verify-gateway', 'chat', 'cleanup-key', 'update', 'rollback', 'recover', 'monitoring', 'dashboard', 'verify-monitoring', 'uninstall-monitoring', 'monitoring-images', 'export-monitoring-images', 'import-monitoring-images'])
     parser.add_argument('prompt', nargs='?', help='Prompt for the chat command.')
     parser.add_argument('--stream', action='store_true', help='Stream the chat response.')
     parser.add_argument('--model', help='Served model ID for chat or verify-monitoring --verify-traffic. Chat defaults to the selected recipe; monitoring defaults to its configured model or gateway discovery.')
-    parser.add_argument('--stack-connection', type=pathlib.Path, help='Shared stack connection for attach-stack.')
+    parser.add_argument('--stack-connection', type=pathlib.Path, help='Shared stack connection for attach-stack or a fresh model deploy.')
     parser.add_argument('--component', choices=list(COMPONENTS))
     parser.add_argument('--tag')
     parser.add_argument('--archive', type=pathlib.Path)
@@ -1271,16 +1306,21 @@ def main(argv=None, console=None):
     require(not args.admin or args.phase == 'dashboard', '--admin is supported only for dashboard.')
     if args.port is None:
         args.port = 13000 if args.phase in ('monitoring', 'dashboard') else 18443
-    require(args.stack_connection is None or args.phase == 'attach-stack', '--stack-connection is supported only for attach-stack.')
-    if args.phase == 'attach-stack':
-        require(args.config and args.work_dir and args.stack_connection, 'attach-stack requires --config, --work-dir and --stack-connection.')
+    require(args.stack_connection is None or args.phase in ('attach-stack', 'deploy'), '--stack-connection is supported only for attach-stack or deploy.')
+    if args.phase == 'attach-stack' or (args.phase == 'deploy' and args.stack_connection):
+        require(args.config and args.work_dir and args.stack_connection, args.phase+' requires --config, --work-dir and --stack-connection.')
         connection = stack_binding.load_connection(args.stack_connection.expanduser().resolve())
         require(not args.context or args.context == connection['context'], 'Selected context differs from the shared stack connection.')
         require(not args.namespace or args.namespace == connection['namespace'], 'Selected namespace differs from the shared stack connection.')
         config = stack_binding.overlay(json.loads(args.config.expanduser().read_text()), connection)
         validate(config)
         work = args.work_dir.expanduser().resolve()
-        action = lambda: Recipe(config, work, args.source_dir).attach_stack(work/'config.json')
+        def action():
+            recipe = Recipe(config, work, args.source_dir)
+            if args.phase == 'attach-stack' or not recipe.state:
+                recipe.attach_stack(work/'config.json')
+            if args.phase == 'deploy':
+                recipe.deploy(args.port)
         return console.run(args.phase, work, action) if console else action()
     try:
         context, work, config_path, config = cli_settings(args)
@@ -1333,6 +1373,8 @@ def execute(args, parser, context, work, config_path, config):
         print(json.dumps({'workDir': str(work), 'config': str(config_path), 'source': str(source)}, indent=2))
         return
     discovered = config is None
+    if args.phase == 'deploy':
+        require(config is not None, 'deploy requires --config MODEL.json --work-dir DIR --stack-connection CONNECTION.json, or an attached model work directory.')
     if discovered:
         require(args.phase in ('attach-existing', 'attach-monitoring', 'monitoring', 'dashboard'), 'Run attach-existing first for deployment commands, or monitoring to install the dashboard.')
         require(not (work/'state.json').exists(), 'Saved state is missing its configuration. Use a new work directory.')
@@ -1356,7 +1398,8 @@ def execute(args, parser, context, work, config_path, config):
         if discovered:
             save(config_path, config)
             print('Discovered monitoring configuration:', config_path)
-    if args.phase == 'prepare': recipe.prepare()
+    if args.phase == 'deploy': recipe.deploy(args.port)
+    elif args.phase == 'prepare': recipe.prepare()
     elif args.phase == 'render': recipe.render()
     elif args.phase == 'inventory': recipe.inventory()
     elif args.phase == 'attach-existing':

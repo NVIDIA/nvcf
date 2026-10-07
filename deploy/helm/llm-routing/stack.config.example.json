@@ -1,10 +1,10 @@
 {
-  "context": "spark-demo",
+  "context": "llm-routing-demo",
   "namespace": "llm-stack",
-  "clusterId": "spark-stack",
+  "clusterId": "llm-stack",
   "stackRelease": "llm-stack",
   "operatorRelease": "llm-stack-operator",
-  "controlNode": "spark-control",
+  "controlNode": "routing-node",
   "caConfigMap": "llm-stack-ca",
   "installCRDs": true,
   "images": {

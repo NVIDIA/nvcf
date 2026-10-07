@@ -11,6 +11,7 @@ import ipaddress
 import itertools
 import importlib.util
 import json
+import math
 import pathlib
 import re
 import subprocess
@@ -88,22 +89,65 @@ def capacity(snapshot):
             reasons.append('node is not ready or has resource pressure')
         if n.get('spec', {}).get('unschedulable') or any(t.get('effect') in ('NoSchedule', 'NoExecute', 'PreferNoSchedule') for t in n.get('spec', {}).get('taints', [])):
             reasons.append('node is cordoned or tainted')
-        if labels.get('kubernetes.io/arch') != 'arm64' or labels.get('kubernetes.io/os') != 'linux':
-            reasons.append('requires Linux ARM64')
-        if labels.get('nvidia.com/gpu.product') not in ('NVIDIA-GB10', 'NVIDIA GB10'):
-            reasons.append('requires a DGX Spark GB10 GPU')
         if labels.get('nvidia.com/gpu.sharing-strategy', 'none') != 'none' or labels.get('nvidia.com/gpu.replicas', '1') != '1':
             reasons.append('shared GPUs are not qualified')
         alloc = n.get('status', {}).get('allocatable', {})
         free = {r: quantity(alloc.get(r, 0)) - busy.get(name, {}).get(r, 0)
                 for r in ('nvidia.com/gpu', 'memory', 'cpu', 'ephemeral-storage')}
-        if quantity(alloc.get('nvidia.com/gpu', 0)) != 1 or free['nvidia.com/gpu'] < 1:
-            reasons.append('requires one idle exclusive GPU')
+        if free['nvidia.com/gpu'] < 1:
+            reasons.append('requires an idle exclusive GPU')
         if reasons:
             rejected[name] = reasons
         else:
             candidates.append({'name': name, 'uid': n['metadata']['uid'], 'free': free, 'node': n})
     return sorted(candidates, key=lambda n: n['name']), rejected
+
+
+def gpu_product(value):
+    return re.sub(r'\s+', '-', value.strip())
+
+
+def positive_number(value):
+    return type(value) in (int, float) and math.isfinite(value) and value > 0
+
+
+def profile_hardware(profile):
+    hardware = profile.get('hardware')
+    require(isinstance(hardware, dict), 'Profile must declare hardware requirements: ' + profile['id'])
+    for field in ('os', 'architecture'):
+        require(isinstance(hardware.get(field), str) and bool(hardware[field].strip()),
+                'Profile hardware must declare ' + field + ': ' + profile['id'])
+    for field in ('gpuProducts', 'cudaDeviceNames'):
+        values = hardware.get(field)
+        require(isinstance(values, list) and values and all(isinstance(value, str) and value.strip() for value in values),
+                'Profile hardware must declare ' + field + ': ' + profile['id'])
+    require(type(hardware.get('gpuCount')) is int and hardware['gpuCount'] == 1,
+            'The current runtime supports one assigned GPU per rank; profile hardware.gpuCount must be 1.')
+    require(hardware.get('memoryMode') in ('unified', 'discrete'), 'Profile hardware must declare unified or discrete memoryMode.')
+    if hardware['memoryMode'] == 'discrete':
+        require(positive_number(hardware.get('minDeviceMemoryGiB')), 'Discrete profile hardware must declare positive minDeviceMemoryGiB.')
+    if profile.get('fabric'):
+        require(positive_number(profile.get('minFabricGbps')), 'Distributed profile must declare positive minFabricGbps.')
+    return hardware
+
+
+def matches_hardware(candidate, hardware, facts):
+    node = candidate['node']
+    labels = node['metadata'].get('labels', {})
+    if labels.get('kubernetes.io/os') != hardware['os'] or labels.get('kubernetes.io/arch') != hardware['architecture']:
+        return False
+    product = labels.get('nvidia.com/gpu.product', '')
+    if gpu_product(product) not in {gpu_product(value) for value in hardware['gpuProducts']}:
+        return False
+    if quantity(node.get('status', {}).get('allocatable', {}).get('nvidia.com/gpu', 0)) != hardware['gpuCount']:
+        return False
+    if candidate['free']['nvidia.com/gpu'] < hardware['gpuCount']:
+        return False
+    if hardware['memoryMode'] == 'discrete':
+        memory = facts.get('cudaTotalMemoryGiB')
+        if not positive_number(memory) or memory < hardware['minDeviceMemoryGiB']:
+            return False
+    return True
 
 
 def valid_name(value):
@@ -143,6 +187,7 @@ def plan(snapshot, capabilities, model_ids, namespace, storage_class, runtime_cl
         require(type(ctx) is int and type(conc) is int and ctx > 0 and conc > 0, 'Invalid workload requirements.')
         choices[model_id], failures[model_id] = [], []
         for profile in model['profiles']:
+            hardware = profile_hardware(profile)
             if ctx > profile['maxContext'] or conc > profile['maxConcurrency']:
                 failures[model_id].append(profile['id'] + ': requested context/concurrency exceeds the recipe envelope')
                 continue
@@ -152,6 +197,8 @@ def plan(snapshot, capabilities, model_ids, namespace, storage_class, runtime_cl
             eligible = []
             for n in candidates:
                 facts = capabilities.get(n['name'], {})
+                if not matches_hardware(n, hardware, facts):
+                    continue
                 if n['free']['memory'] < profile['memoryGiB'] * GIB or n['free']['cpu'] < profile['cpu']:
                     continue
                 if profile['offload']:
@@ -165,17 +212,19 @@ def plan(snapshot, capabilities, model_ids, namespace, storage_class, runtime_cl
                         require(address.version == 4 and not address.is_unspecified and not address.is_loopback, 'Invalid fabric IP')
                     except ValueError:
                         continue
-                    if facts.get('gbps', 0) < 200:
+                    if not positive_number(facts.get('gbps')) or facts['gbps'] < profile['minFabricGbps']:
                         continue
                 eligible.append(n)
             for group in itertools.combinations(eligible, profile['nodes']):
+                if len({gpu_product(n['node']['metadata']['labels']['nvidia.com/gpu.product']) for n in group}) != 1:
+                    continue
                 if profile.get('fabric'):
                     facts = [capabilities[n['name']] for n in group]
                     if len({f['fabric'] for f in facts}) != 1 or len({f['address'] for f in facts}) != len(group):
                         continue
                 choices[model_id].append((profile, group, ctx, conc))
             if not any(c[0]['id'] == profile['id'] for c in choices[model_id]):
-                failures[model_id].append(profile['id'] + ': insufficient idle GPU, memory, CPU, NVMe or fabric capacity')
+                failures[model_id].append(profile['id'] + ': no compatible hardware group with sufficient idle GPU, memory, CPU, NVMe or fabric capacity')
     solutions = []
     def search(index, used, selected):
         if index == len(model_ids):
@@ -200,15 +249,16 @@ def plan(snapshot, capabilities, model_ids, namespace, storage_class, runtime_cl
         values = {'phase': 'qualify', 'model': {k: model[k] for k in ('id', 'repository', 'revision', 'precision')},
                   'image': model['image'], 'imagePullPolicy': 'IfNotPresent', 'runtimeClassName': runtime_class,
                   'storageClassName': storage_class, 'profile': copy.deepcopy(profile),
+                  'gpu': {'product': gpu_product(group[0]['node']['metadata']['labels']['nvidia.com/gpu.product'])},
                   'contextLength': ctx, 'concurrency': conc, 'register': True,
                   'ports': {'http': 18000 + port_seed % 2000, 'rendezvous': 21000 + port_seed % 2000, 'bootstrap': 24000 + port_seed % 2000},
                   'targets': [{'node': n['name'], 'uid': n['uid'], **capabilities.get(n['name'], {})} for n in group]}
         releases.append({'name': release, 'model': model_id, 'profile': profile['id'], 'nodes': [n['name'] for n in group],
-                         'reason': f"{profile['nodes']} Spark(s) satisfy context {ctx}, concurrency {conc}, {model['precision']}; " +
+                         'reason': f"{profile['nodes']} GPU node(s) satisfy context {ctx}, concurrency {conc}, {model['precision']}; " +
                                    ('NVMe file offload required.' if profile['offload'] else 'weights remain in memory.'), 'values': values})
     return {'schemaVersion': 1, 'context': snapshot['context'], 'namespace': namespace,
             'inventoryTime': snapshot.get('capturedAt'), 'preference': preference, 'releases': releases,
-            'excludedNodes': rejected, 'validation': 'pending-spark-validation',
+            'excludedNodes': rejected, 'validation': 'pending-hardware-validation',
             'capacityBasis': 'Kubernetes allocatable minus pod requests; runtime checks host memory and disk before loading.'}
 
 
@@ -260,6 +310,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
     sub.add_parser('catalog')
+    deployment = sub.add_parser('deploy', help='Plan, qualify, download, serve and verify fresh model releases.')
+    deployment.add_argument('--stack-connection', type=pathlib.Path, required=True)
+    deployment.add_argument('--model', action='append', required=True)
+    deployment.add_argument('--storage-class', required=True)
+    deployment.add_argument('--runtime-class', required=True)
+    deployment.add_argument('--work-dir', type=pathlib.Path, required=True)
+    deployment.add_argument('--capabilities', type=pathlib.Path)
+    deployment.add_argument('--requirements', type=pathlib.Path)
+    deployment.add_argument('--context-length', type=int, default=8192)
+    deployment.add_argument('--concurrency', type=int, default=1)
+    deployment.add_argument('--no-nvme-offload', action='store_true')
+    deployment.add_argument('--preference', choices=['fewest-nodes', 'latency'], default='fewest-nodes')
     inv = sub.add_parser('inventory')
     inv.add_argument('--context', required=True)
     inv.add_argument('--output', type=pathlib.Path, required=True)
@@ -288,6 +350,9 @@ def main():
     args = parser.parse_args()
     if args.action == 'catalog':
         print((HERE / 'catalog.json').read_text())
+    elif args.action == 'deploy':
+        import deploy_models
+        deploy_models.deploy(args)
     elif args.action == 'inventory':
         save(args.output, inventory(args.context))
     elif args.action == 'plan':

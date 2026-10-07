@@ -4,8 +4,10 @@
 import datetime
 import http.server
 import json
+import math
 import os
 import pathlib
+import platform
 import shutil
 import signal
 import socket
@@ -41,11 +43,34 @@ def command(config, model_path, rank):
     return ['python3', '-m', 'sglang.launch_server'] + flags
 
 
+def check_hardware(config, cuda):
+    hardware = config['profile']['hardware']
+    architecture = platform.machine().lower()
+    architecture = {'aarch64': 'arm64', 'x86_64': 'amd64'}.get(architecture, architecture)
+    if platform.system().lower() != hardware['os'] or architecture != hardware['architecture']:
+        raise RuntimeError('Runtime OS or architecture does not match the hardware profile')
+    if type(hardware['gpuCount']) is not int or hardware['gpuCount'] != 1 or cuda.device_count() != 1:
+        raise RuntimeError('The hardware profile requires one exclusively assigned GPU per rank')
+    gpu = cuda.get_device_name(0)
+    allowed = hardware['cudaDeviceNames']
+    if not isinstance(allowed, list) or gpu not in allowed:
+        raise RuntimeError('Assigned CUDA device does not match the hardware profile: ' + gpu)
+    total_gib = cuda.get_device_properties(0).total_memory / GIB
+    if hardware['memoryMode'] == 'discrete':
+        minimum = hardware.get('minDeviceMemoryGiB')
+        if type(minimum) not in (int, float) or not math.isfinite(minimum) or minimum <= 0:
+            raise RuntimeError('Discrete hardware profiles require a positive minDeviceMemoryGiB')
+        if total_gib < minimum:
+            raise RuntimeError('Assigned CUDA device has insufficient memory for the hardware profile')
+    elif hardware['memoryMode'] != 'unified':
+        raise RuntimeError('Hardware memoryMode must be unified or discrete')
+    return {'gpu': gpu, 'cudaTotalMemoryGiB': total_gib}
+
+
 def qualify(config, rank):
     import torch
     import torch.distributed as dist
-    if torch.cuda.device_count() != 1 or 'GB10' not in torch.cuda.get_device_name(0):
-        raise RuntimeError('Qualification requires one exclusively assigned GB10 GPU')
+    hardware = check_hardware(config, torch.cuda)
     torch.cuda.set_device(0)
     world = config['profile']['nodes']
     if world > 1:
@@ -60,7 +85,7 @@ def qualify(config, rank):
         if not torch.all(x == expected).item():
             raise RuntimeError('GPU collective returned incorrect data')
         torch.cuda.synchronize()
-        log('qualification_pass', rank=rank, nodes=world, nccl=torch.cuda.nccl.version(), gpu=torch.cuda.get_device_name(0))
+        log('qualification_pass', rank=rank, nodes=world, nccl=torch.cuda.nccl.version(), **hardware)
     finally:
         if world > 1:
             dist.destroy_process_group()
@@ -160,6 +185,8 @@ def main():
         return 0
     if phase != 'serve':
         raise RuntimeError('Unknown phase')
+    import torch
+    check_hardware(config, torch.cuda)
     from huggingface_hub import snapshot_download
     complete = pathlib.Path('/cache') / (model['revision'] + '.complete')
     if not complete.exists() or complete.read_text().strip() != model['repository']:

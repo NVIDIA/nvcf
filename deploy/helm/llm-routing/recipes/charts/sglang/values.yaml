@@ -8,6 +8,7 @@ imagePullPolicy: IfNotPresent
 runtimeClassName: ""
 storageClassName: ""
 profile: {}
+gpu: {product: ""}
 targets: []
 contextLength: 8192
 concurrency: 1

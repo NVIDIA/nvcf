@@ -203,10 +203,33 @@ def chart_paths():
     return helm/'pylon-operator/pylon-operator', helm/'llm-gateway-stack/llm-gateway-stack'
 
 
+@contextlib.contextmanager
+def forward_connection(connection, work, port):
+    work = pathlib.Path(work)
+    with socket.socket() as probe:
+        probe.bind(('127.0.0.1', port))
+    with (work/'port-forward.log').open('a') as log:
+        process = subprocess.Popen(kube(connection, 'port-forward', 'svc/llm-api-gateway', str(port)+':8080', '--address', '127.0.0.1'), stdout=log, stderr=log)
+        try:
+            for _ in range(100):
+                require(process.poll() is None, 'Port forward exited. Read port-forward.log.')
+                try:
+                    with socket.create_connection(('127.0.0.1', port), timeout=.2):
+                        break
+                except OSError:
+                    time.sleep(.2)
+            else:
+                raise ValueError('Port forward timed out.')
+            yield 'https://127.0.0.1:' + str(port) + '/v1'
+        finally:
+            process.terminate()
+            process.wait(timeout=10)
+
+
 class Stack:
     def __init__(self, config, work):
         self.config = validate_config(config)
-        self.work = pathlib.Path(work).resolve()
+        self.work = pathlib.Path(work).expanduser().resolve()
         require(not self.work.is_relative_to(REPO), 'Keep generated configuration, credentials and evidence outside the checkout.')
         self.work.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.hm = ['helm', '--kube-context', config['context'], '-n', config['namespace']]
@@ -219,7 +242,7 @@ class Stack:
             path = self.work/'render'/(release + '-values.json')
             save(path, values)
             save(self.work/'render'/(release + '.yaml'), run(self.hm + ['template', release, chart, '-f', path]))
-        print('Rendered shared routing resources. No model, GPU, runtime class or PVC is included.')
+        print('Rendered shared gateway, router and operator resources.')
 
     def install(self):
         config = self.config
@@ -290,24 +313,8 @@ class Stack:
 
     @contextlib.contextmanager
     def forward(self, port):
-        with socket.socket() as probe:
-            probe.bind(('127.0.0.1', port))
-        with (self.work/'port-forward.log').open('a') as log:
-            process = subprocess.Popen(kube(self.config, 'port-forward', 'svc/llm-api-gateway', str(port)+':8080', '--address', '127.0.0.1'), stdout=log, stderr=log)
-            try:
-                for _ in range(100):
-                    require(process.poll() is None, 'Port forward exited. Read port-forward.log.')
-                    try:
-                        with socket.create_connection(('127.0.0.1', port), timeout=.2):
-                            break
-                    except OSError:
-                        time.sleep(.2)
-                else:
-                    raise ValueError('Port forward timed out.')
-                yield 'https://127.0.0.1:' + str(port) + '/v1'
-            finally:
-                process.terminate()
-                process.wait(timeout=10)
+        with forward_connection(self.config, self.work, port) as url:
+            yield url
 
     def chat(self, model, prompt, stream, port):
         require(isinstance(model, str) and model.strip(), 'Choose a served model ID.')
@@ -360,13 +367,14 @@ class Stack:
         print('PASS: ' + ('empty registry and authentication' if expect_empty else 'independent models, chat, streaming and authentication'))
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', type=pathlib.Path, required=True)
+    parser.add_argument('--config', type=pathlib.Path, help='Stack configuration. Later commands use the saved work-directory configuration.')
     parser.add_argument('--work-dir', type=pathlib.Path, required=True)
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('render')
-    commands.add_parser('install')
+    install = commands.add_parser('install', help='Install shared infrastructure and verify the empty gateway.')
+    install.add_argument('--port', type=int, default=18477)
     chat = commands.add_parser('chat')
     chat.add_argument('--model', required=True)
     chat.add_argument('--stream', action='store_true')
@@ -377,13 +385,19 @@ def main():
     group.add_argument('--expect-empty', action='store_true')
     group.add_argument('--model', action='append')
     verify.add_argument('--port', type=int, default=18477)
-    args = parser.parse_args()
-    stack = Stack(json.loads(args.config.read_text()), args.work_dir)
+    args = parser.parse_args(argv)
+    config_path = (args.config or args.work_dir/'config.json').expanduser()
+    require(config_path.is_file(), 'Provide --config for the first installation, or use its saved --work-dir.')
+    stack = Stack(json.loads(config_path.read_text()), args.work_dir)
     if args.command == 'verify':
         require(not args.model or (len(args.model) >= 2 and len(set(args.model)) == len(args.model)), 'Verify at least two distinct model IDs together.')
         stack.verify(args.expect_empty, args.model, args.port)
     elif args.command == 'chat':
         stack.chat(args.model, args.prompt, args.stream, args.port)
+    elif args.command == 'install':
+        stack.install()
+        save(stack.work/'config.json', stack.config)
+        stack.verify(True, None, args.port)
     else:
         getattr(stack, args.command)()
 

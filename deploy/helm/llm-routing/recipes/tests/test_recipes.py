@@ -221,6 +221,129 @@ class PlannerTests(unittest.TestCase):
         inv.assert_called_once_with('explicit-test')
 
 
+class HardwareProfileTests(unittest.TestCase):
+    def setUp(self):
+        self.catalog = json.loads((ROOT/'catalog.json').read_text())
+        self.tmp = tempfile.TemporaryDirectory(prefix='recipe-hardware-test-')
+        self.addCleanup(self.tmp.cleanup)
+        self.directory = pathlib.Path(self.tmp.name)
+        patcher = patch.object(recipes, 'HERE', self.directory)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.write_catalog()
+
+    def write_catalog(self):
+        (self.directory/'catalog.json').write_text(json.dumps(self.catalog))
+
+    def alternate_profile(self):
+        model = self.catalog['models'][0]
+        model['validation'] = 'pending-hardware-validation'
+        model.pop('validatedWorkload', None)
+        profile = model['profiles'][0]
+        profile['id'] = 'fixture-discrete'
+        profile['hardware'] = {'os': 'linux', 'architecture': 'amd64',
+                               'gpuProducts': ['NVIDIA-Test-GPU'], 'cudaDeviceNames': ['NVIDIA Test GPU'],
+                               'gpuCount': 1, 'memoryMode': 'discrete', 'minDeviceMemoryGiB': 80}
+        self.write_catalog()
+        inventory = snapshot(1)
+        inventory['nodes'][0]['metadata']['labels'].update({
+            'kubernetes.io/arch': 'amd64', 'nvidia.com/gpu.product': 'NVIDIA Test GPU'})
+        return inventory, {'nodes': {'spark-0': {'cudaTotalMemoryGiB': 80}}}
+
+    def test_common_capacity_accepts_hardware_independently_of_profiles(self):
+        inventory = snapshot(1)
+        inventory['nodes'][0]['metadata']['labels'].update({
+            'kubernetes.io/arch': 'amd64', 'nvidia.com/gpu.product': 'NVIDIA-Test-GPU'})
+        inventory['nodes'][0]['status']['allocatable']['nvidia.com/gpu'] = '2'
+        candidates, rejected = recipes.capacity(inventory)
+        self.assertEqual([candidate['name'] for candidate in candidates], ['spark-0'])
+        self.assertEqual(candidates[0]['free']['nvidia.com/gpu'], 2)
+        self.assertEqual(rejected, {})
+        with self.assertRaisesRegex(ValueError, 'No placement fits.*compatible hardware'):
+            plan(inventory, models=['qwen3.8-27b'])
+
+    def test_profile_data_enables_alternate_hardware_without_machine_branches(self):
+        inventory, capabilities = self.alternate_profile()
+        result = plan(inventory, capabilities, models=['qwen3.8-27b'])
+        values = result['releases'][0]['values']
+        self.assertEqual(values['gpu'], {'product': 'NVIDIA-Test-GPU'})
+        self.assertEqual(values['profile']['hardware'], self.catalog['models'][0]['profiles'][0]['hardware'])
+        self.assertIn('GPU node(s)', result['releases'][0]['reason'])
+        self.assertNotIn('Spark', result['releases'][0]['reason'])
+        self.assertEqual(result['validation'], 'pending-hardware-validation')
+        self.assertNotIn('validatedWorkload', self.catalog['models'][0])
+
+    def test_current_profiles_preserve_gb10_eligibility_and_normalize_product_aliases(self):
+        inventory = snapshot(2)
+        inventory['nodes'][0]['metadata']['labels']['nvidia.com/gpu.product'] = 'NVIDIA GB10'
+        result = plan(inventory, facts(2), models=['qwen3.8-27b', 'qwen3.8-27b-nvfp4'])
+        self.assertEqual([release['nodes'] for release in result['releases']], [['spark-0'], ['spark-1']])
+        for release in result['releases']:
+            self.assertEqual(release['values']['gpu'], {'product': 'NVIDIA-GB10'})
+            self.assertEqual(release['values']['profile']['hardware']['memoryMode'], 'unified')
+
+    def test_each_profile_checks_os_architecture_product_and_declared_gpu_count(self):
+        for field, value in [('kubernetes.io/os', 'windows'), ('kubernetes.io/arch', 'amd64'),
+                             ('nvidia.com/gpu.product', 'NVIDIA-Other-GPU')]:
+            inventory = snapshot(1)
+            inventory['nodes'][0]['metadata']['labels'][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'No placement fits.*compatible hardware'):
+                plan(inventory, models=['qwen3.8-27b'])
+        inventory = snapshot(1)
+        inventory['nodes'][0]['status']['allocatable']['nvidia.com/gpu'] = '2'
+        with self.assertRaisesRegex(ValueError, 'No placement fits.*compatible hardware'):
+            plan(inventory, models=['qwen3.8-27b'])
+
+    def test_discrete_profile_requires_explicit_sufficient_device_memory(self):
+        inventory, capabilities = self.alternate_profile()
+        for memory in (None, 79, True, '80', float('nan'), float('inf')):
+            capabilities['nodes']['spark-0']['cudaTotalMemoryGiB'] = memory
+            with self.subTest(memory=memory), self.assertRaisesRegex(ValueError, 'No placement fits'):
+                plan(inventory, capabilities, models=['qwen3.8-27b'])
+        capabilities['nodes']['spark-0']['cudaTotalMemoryGiB'] = 80
+        self.assertEqual(plan(inventory, capabilities, models=['qwen3.8-27b'])['releases'][0]['nodes'], ['spark-0'])
+
+    def test_profile_hardware_contract_is_required_and_discrete_memory_is_not_inferred(self):
+        profile = self.catalog['models'][0]['profiles'][0]
+        original = copy.deepcopy(profile['hardware'])
+        invalid = [None, {}, dict(original, architecture=''), dict(original, gpuProducts=[]),
+                   dict(original, cudaDeviceNames=[]), dict(original, gpuCount=True), dict(original, gpuCount=2),
+                   dict(original, memoryMode='unknown'), dict(original, memoryMode='discrete'),
+                   dict(original, memoryMode='discrete', minDeviceMemoryGiB=0)]
+        for hardware in invalid:
+            profile['hardware'] = hardware
+            self.write_catalog()
+            with self.subTest(hardware=hardware), self.assertRaisesRegex(ValueError, 'hardware|memoryMode'):
+                plan(models=['qwen3.8-27b'])
+
+    def test_distributed_group_requires_one_canonical_gpu_product(self):
+        model = next(model for model in self.catalog['models'] if model['id'] == 'qwen3.8-flash-next')
+        model['profiles'] = [profile for profile in model['profiles'] if profile['nodes'] == 2]
+        model['profiles'][0]['hardware']['gpuProducts'].append('NVIDIA-Test-GPU')
+        model['profiles'][0]['hardware']['cudaDeviceNames'].append('NVIDIA Test GPU')
+        self.write_catalog()
+        inventory = snapshot(2)
+        inventory['nodes'][1]['metadata']['labels']['nvidia.com/gpu.product'] = 'NVIDIA GB10'
+        release = plan(inventory, facts(2), models=[model['id']])['releases'][0]
+        self.assertEqual(release['values']['gpu'], {'product': 'NVIDIA-GB10'})
+        inventory['nodes'][1]['metadata']['labels']['nvidia.com/gpu.product'] = 'NVIDIA-Test-GPU'
+        with self.assertRaisesRegex(ValueError, 'No placement fits'):
+            plan(inventory, facts(2), models=[model['id']])
+
+    def test_network_capacity_comes_from_distributed_profile(self):
+        model = next(model for model in self.catalog['models'] if model['id'] == 'qwen3.8-flash-next')
+        model['profiles'] = [profile for profile in model['profiles'] if profile['nodes'] == 2]
+        model['profiles'][0]['minFabricGbps'] = 100
+        self.write_catalog()
+        capabilities = facts(2)
+        for node_facts in capabilities['nodes'].values():
+            node_facts['gbps'] = 100
+        self.assertEqual(len(plan(snapshot(2), capabilities, models=[model['id']])['releases'][0]['nodes']), 2)
+        capabilities['nodes']['spark-1']['gbps'] = 99
+        with self.assertRaisesRegex(ValueError, 'No placement fits'):
+            plan(snapshot(2), capabilities, models=[model['id']])
+
+
 class StackBindingTests(unittest.TestCase):
     def cli(self, extra):
         return ['recipes.py', 'plan', '--model', 'qwen3.8-27b', '--storage-class', 'local-path',

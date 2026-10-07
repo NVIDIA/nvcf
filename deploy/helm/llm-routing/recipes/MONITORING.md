@@ -1,6 +1,6 @@
 # Advanced monitoring configuration
 
-For installation and dashboard access, see [Monitoring](../README.md#monitoring). Run commands from `deploy/helm/llm-routing/recipes`, using the same `--context`, `--config` or `--work-dir` options as installation.
+For installation and dashboard access, see [Monitoring](../README.md#4-view-monitoring). Run commands from `deploy/helm/llm-routing/recipes`, using the same `--context`, `--config` or `--work-dir` options as installation.
 
 ## Configuration
 
@@ -74,4 +74,4 @@ Use `--model <model-id>` to override model selection. The model must support cha
 python3 recipe.py uninstall-monitoring
 ```
 
-Metrics storage is retained. Reinstall with `python3 recipe.py monitoring`, which creates a new Grafana password. For full teardown, continue with [routing uninstall](../README.md#uninstall).
+Metrics storage is retained. Reinstall with `python3 recipe.py monitoring`, which creates a new Grafana password. For full teardown, continue with [routing uninstall](../ADVANCED.md#uninstall).

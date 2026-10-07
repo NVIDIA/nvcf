@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+import copy
 import io
 import json
 import pathlib
@@ -8,7 +9,7 @@ import unittest
 import urllib.error
 from unittest.mock import MagicMock, patch
 
-from test_recipes import ROOT, runtime
+from test_recipes import ROOT, all_profile_releases, runtime
 sys.path.insert(0, str(ROOT))
 import verify
 
@@ -17,6 +18,92 @@ def stream(model='qwen3.8-27b'):
     chunks = [{'model': model, 'choices': [{'delta': {'content': 'Hello'}}]},
               {'model': model, 'choices': [], 'usage': {'completion_tokens': 1}}]
     return (''.join('data: ' + json.dumps(x) + '\n\n' for x in chunks) + 'data: [DONE]\n\n').encode()
+
+
+class HardwareProfileTests(unittest.TestCase):
+    def setUp(self):
+        self.cuda = MagicMock()
+        self.cuda.device_count.return_value = 1
+        self.cuda.get_device_name.return_value = 'NVIDIA Example GPU'
+        self.cuda.get_device_properties.return_value.total_memory = 80 * runtime.GIB
+        self.hardware = {'os': 'linux', 'architecture': 'amd64', 'gpuCount': 1,
+                         'cudaDeviceNames': ['NVIDIA Example GPU'], 'memoryMode': 'discrete', 'minDeviceMemoryGiB': 72}
+        self.config = {'profile': {'hardware': self.hardware, 'nodes': 1}}
+        for field, value in (('system', 'Linux'), ('machine', 'x86_64')):
+            patcher = patch.object(runtime.platform, field, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_discrete_gpu_qualification_uses_profile_and_reports_device_memory(self):
+        torch = MagicMock()
+        torch.cuda = self.cuda
+        torch.all.return_value.item.return_value = True
+        with patch.dict(sys.modules, {'torch': torch, 'torch.distributed': torch.distributed}), \
+             patch.object(runtime, 'log') as log:
+            runtime.qualify(self.config, 0)
+        torch.ones.assert_called_once()
+        self.cuda.synchronize.assert_called_once()
+        log.assert_called_once_with('qualification_pass', rank=0, nodes=1, nccl=self.cuda.nccl.version(),
+                                    gpu='NVIDIA Example GPU', cudaTotalMemoryGiB=80)
+
+    def test_current_unified_catalog_profiles_accept_the_declared_cuda_device(self):
+        self.cuda.get_device_name.return_value = 'NVIDIA GB10'
+        for release in all_profile_releases():
+            with self.subTest(profile=release['profile']), patch.object(runtime.platform, 'machine', return_value='aarch64'):
+                result = runtime.check_hardware(release['values'], self.cuda)
+            self.assertEqual(result['gpu'], 'NVIDIA GB10')
+            self.assertEqual(result['cudaTotalMemoryGiB'], 80)
+
+    def test_wrong_device_or_gpu_count_fails_before_collective(self):
+        for count, name in ((0, 'NVIDIA Example GPU'), (2, 'NVIDIA Example GPU'), (1, 'NVIDIA GB10'),
+                            (1, 'Example')):
+            self.cuda.device_count.return_value = count
+            self.cuda.get_device_name.return_value = name
+            torch = MagicMock()
+            torch.cuda = self.cuda
+            with self.subTest(count=count, name=name), patch.dict(sys.modules, {'torch': torch, 'torch.distributed': torch.distributed}), \
+                 self.assertRaisesRegex(RuntimeError, 'exclusively assigned|does not match'):
+                runtime.qualify(self.config, 0)
+            torch.ones.assert_not_called()
+            torch.distributed.init_process_group.assert_not_called()
+
+    def test_serving_rechecks_hardware_before_loading_model_artifacts(self):
+        config = copy.deepcopy(self.config)
+        config['profile']['memoryGiB'] = 4
+        config['model'] = {'id': 'fixture', 'revision': 'a' * 40}
+        self.cuda.get_device_name.return_value = 'unexpected-device'
+        torch = MagicMock()
+        torch.cuda = self.cuda
+        hub = MagicMock()
+        with patch.dict(sys.modules, {'torch': torch, 'huggingface_hub': hub}), \
+             patch.object(sys, 'argv', ['runtime.py', 'serve', '0']), \
+             patch.object(runtime.pathlib.Path, 'read_text', return_value=json.dumps(config)), \
+             patch.object(runtime, 'host_memory', return_value=8 * runtime.GIB), patch.object(runtime, 'log'), \
+             self.assertRaisesRegex(RuntimeError, 'does not match the hardware profile'):
+            runtime.main()
+        hub.snapshot_download.assert_not_called()
+
+    def test_profile_rejects_mismatched_os_architecture_and_unsupported_gpu_count(self):
+        for field, value in (('os', 'windows'), ('architecture', 'arm64'), ('gpuCount', 2), ('gpuCount', True)):
+            config = copy.deepcopy(self.config)
+            config['profile']['hardware'][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'hardware profile|exclusively assigned'):
+                runtime.check_hardware(config, self.cuda)
+
+    def test_discrete_profile_requires_explicit_valid_device_memory_minimum(self):
+        for value in (None, 0, -1, True, '72', float('inf'), float('nan')):
+            config = copy.deepcopy(self.config)
+            config['profile']['hardware']['minDeviceMemoryGiB'] = value
+            with self.subTest(value=value), self.assertRaisesRegex(RuntimeError, 'positive minDeviceMemoryGiB'):
+                runtime.check_hardware(config, self.cuda)
+        del self.hardware['minDeviceMemoryGiB']
+        with self.assertRaisesRegex(RuntimeError, 'positive minDeviceMemoryGiB'):
+            runtime.check_hardware(self.config, self.cuda)
+
+    def test_discrete_profile_rechecks_actual_cuda_memory(self):
+        self.cuda.get_device_properties.return_value.total_memory = 64 * runtime.GIB
+        with self.assertRaisesRegex(RuntimeError, 'insufficient memory'):
+            runtime.check_hardware(self.config, self.cuda)
 
 
 class MemoryGuardTests(unittest.TestCase):

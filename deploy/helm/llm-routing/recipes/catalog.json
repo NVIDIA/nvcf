@@ -46,7 +46,20 @@
             "5",
             "--mamba-full-memory-ratio",
             "2.55"
-          ]
+          ],
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          }
         }
       ],
       "validatedWorkload": {
@@ -103,7 +116,20 @@
             "5",
             "--mamba-full-memory-ratio",
             "2.55"
-          ]
+          ],
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          }
         }
       ],
       "validatedWorkload": {
@@ -170,7 +196,20 @@
             "file",
             "--ple-offload-dir",
             "/ple"
-          ]
+          ],
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          }
         },
         {
           "id": "spark-nvfp4-tp2",
@@ -208,7 +247,21 @@
             "--max-mamba-cache-size",
             "120",
             "--no-ple-offload-embedding"
-          ]
+          ],
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "minFabricGbps": 200
         }
       ]
     }

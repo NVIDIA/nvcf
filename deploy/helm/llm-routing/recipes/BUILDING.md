@@ -9,7 +9,32 @@ Build gateway, router, Pylon and operator images for `linux/arm64` from your che
 
 Router and Pylon builds use Cargo profile `integration`.
 
-## Build and distribute
+## Build for a new shared stack
+
+Create a private build configuration from the example. Choose a new directory for these build settings:
+
+```bash
+export IMAGE_WORK="$HOME/.local/state/nvcf/llm-images"
+mkdir -p "$IMAGE_WORK"
+cp config.example.json "$IMAGE_WORK/config.json"
+```
+
+Set `images.prefix` to your registry path and `images.tag` to a fresh tag in that file. Build and push use only local sources and Docker. The example node and model settings can stay as supplied for these commands.
+
+Authenticate Docker with registry write credentials, then build and push all four images:
+
+```bash
+python3 recipe.py --work-dir "$IMAGE_WORK" build-images
+python3 recipe.py --work-dir "$IMAGE_WORK" push-images
+```
+
+In your private shared stack configuration, set each `images.COMPONENT.repository` to `PREFIX/COMPONENT` for `gateway`, `router`, `pylon` and `operator`. Set their `tag` to the build tag and `pullPolicy` to `IfNotPresent`. For example, `images.prefix` of `registry.example.com/team/llm-poc` builds the gateway at `registry.example.com/team/llm-poc/gateway:TAG`. If you set `images.repositories`, use those component overrides instead.
+
+The routing node and every node where Pylon can schedule need registry pull access and ARM64 support for these images. Continue with [Install the shared stack](../README.md#1-install-the-shared-stack).
+
+## Build for a combined installation
+
+These commands use the saved configuration from [Configure](../ADVANCED.md#configure). Add `--work-dir DIR` to every command when using a non-default installation directory.
 
 1. Build all four images.
 
@@ -31,7 +56,7 @@ Router and Pylon builds use Cargo profile `integration`.
      python3 recipe.py export-images
      ```
 
-3. Continue with [Deploy in order](../README.md#deploy-in-order).
+3. Continue with [Deploy in order](../ADVANCED.md#deploy-in-order).
 
 ## Rebuild gateway or router
 
@@ -57,7 +82,7 @@ Router and Pylon builds use Cargo profile `integration`.
      python3 recipe.py export-images --component "$COMPONENT" --tag "$NEW_TAG"
      ```
 
-3. Keep `COMPONENT` and `NEW_TAG` set and continue with [Update only gateway or router](../README.md#update-only-gateway-or-router).
+3. Keep `COMPONENT` and `NEW_TAG` set and continue with [Update only gateway or router](../ADVANCED.md#update-only-gateway-or-router).
 
 ## Import an archive
 

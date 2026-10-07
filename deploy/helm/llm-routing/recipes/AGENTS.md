@@ -12,7 +12,7 @@ Keep model-specific settings in the recipe folder (`recipe.json`, `model.lock.js
 
 `catalog.json` owns supported model profiles, immutable artifact pins and workload envelopes. `recipes.py` plans placements from read-only Kubernetes inventory. The SGLang chart owns only a model release, its retained cache claims and its InferenceEndpoint.
 
-Node count comes from the selected eligible profile. Do not calculate tensor parallelism from weight size alone, allocate shared GPUs, or silently evict another workload. Keep deployment status as pending until real hardware verification passes. Runtime or model pin changes require a new hardware validation pass. The detailed workflow is in `MULTI_MODEL.md`.
+Node count comes from the selected eligible profile. Do not calculate tensor parallelism from weight size alone, allocate shared GPUs, or silently evict another workload. Keep deployment status as pending until real hardware verification passes. Runtime or model pin changes require a new hardware validation pass. See [Qwen catalog configuration](../ADVANCED.md#qwen-catalog-configuration) for the detailed workflow.
 
 ## Validation and safety
 

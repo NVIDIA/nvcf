@@ -3,12 +3,18 @@
 {{- if not (kindIs "bool" $v.suspended) }}{{ fail "suspended must be a boolean" }}{{ end -}}
 {{- if and $v.suspended (ne $v.phase "serve") }}{{ fail "suspended is supported only in phase serve" }}{{ end -}}
 {{- if not (has $v.phase (list "qualify" "download" "serve")) }}{{ fail "phase must be qualify, download or serve" }}{{ end -}}
-{{- if not (regexMatch "^.+@sha256:[a-f0-9]{64}$" $v.image) }}{{ fail "Use a digest-pinned ARM64 image" }}{{ end -}}
+{{- if not (regexMatch "^.+@sha256:[a-f0-9]{64}$" $v.image) }}{{ fail "Use a digest-pinned runtime image" }}{{ end -}}
 {{- if not (regexMatch "^[a-f0-9]{40}$" (default "" $v.model.revision)) }}{{ fail "Use a pinned model revision" }}{{ end -}}
 {{- if or (lt (len $v.targets) 1) (gt (len $v.targets) 2) (ne (len $v.targets) (int $v.profile.nodes)) }}{{ fail "targets must match the recipe profile" }}{{ end -}}
 {{- if or (lt (int $v.contextLength) 1) (gt (int $v.contextLength) (int $v.profile.maxContext)) (lt (int $v.concurrency) 1) (gt (int $v.concurrency) (int $v.profile.maxConcurrency)) }}{{ fail "Workload exceeds the recipe context or concurrency envelope" }}{{ end -}}
 {{- if and $v.profile.offload (ne (len $v.targets) 1) }}{{ fail "NVMe offload requires the single-node profile" }}{{ end -}}
 {{- if and (eq (len $v.targets) 2) (eq (index $v.targets 0).node (index $v.targets 1).node) }}{{ fail "Each rank needs a distinct node" }}{{ end -}}
+{{- $hardware := required "profile.hardware is required" $v.profile.hardware -}}
+{{- if ne (int $hardware.gpuCount) 1 }}{{ fail "profile.hardware.gpuCount must be 1 for one GPU per rank" }}{{ end -}}
+{{- if not (has $hardware.memoryMode (list "unified" "discrete")) }}{{ fail "profile.hardware.memoryMode must be unified or discrete" }}{{ end -}}
+{{- if and (eq $hardware.memoryMode "discrete") (le (float64 (default 0 $hardware.minDeviceMemoryGiB)) 0.0) }}{{ fail "Discrete hardware profiles require a positive minDeviceMemoryGiB" }}{{ end -}}
+{{- if not $hardware.cudaDeviceNames }}{{ fail "profile.hardware.cudaDeviceNames is required" }}{{ end -}}
+{{- $gpuProduct := required "gpu.product is required" $v.gpu.product -}}
 {{- $root := . -}}
 apiVersion: v1
 kind: ConfigMap
@@ -83,6 +89,9 @@ spec:
             nodeSelectorTerms:
               - matchFields:
                   - {key: metadata.name, operator: In, values: [{{ required "target.node is required" $target.node | quote }}]}
+                matchExpressions:
+                  - {key: kubernetes.io/os, operator: In, values: [{{ required "profile.hardware.os is required" $hardware.os | quote }}]}
+                  - {key: kubernetes.io/arch, operator: In, values: [{{ required "profile.hardware.architecture is required" $hardware.architecture | quote }}]}
       securityContext:
         seccompProfile: {type: RuntimeDefault}
       containers:
@@ -194,7 +203,7 @@ spec:
   service: {name: {{ .Release.Name }}, port: 8000}
   health: {path: /health}
   maxEngineConcurrency: {{ $v.concurrency }}
-  gpu: {product: NVIDIA-GB10}
+  gpu: {product: {{ $gpuProduct | quote }}}
   canary: {timeoutSeconds: 180, intervalSeconds: 60}
 {{- end }}
 {{- end }}
