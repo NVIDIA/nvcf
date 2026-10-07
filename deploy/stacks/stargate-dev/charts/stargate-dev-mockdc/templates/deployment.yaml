@@ -31,6 +31,10 @@ metadata:
     stargate.nvidia.com/backend-index: {{ $index | quote }}
 spec:
   replicas: 1
+  # Replace the pod in place so the new pod can take the node its
+  # predecessor held; backends of one cluster never share a node.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "stargate-dev-mockdc.selectorLabels" $ | nindent 6 }}
@@ -65,13 +69,11 @@ spec:
           type: RuntimeDefault
       affinity:
         podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-            - weight: 100
-              podAffinityTerm:
-                topologyKey: kubernetes.io/hostname
-                labelSelector:
-                  matchLabels:
-                    {{- include "stargate-dev-mockdc.selectorLabels" $ | nindent 20 }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "stargate-dev-mockdc.selectorLabels" $ | nindent 18 }}
       containers:
         - name: mock-dynamo
           image: {{ include "stargate-dev-mockdc.mockDynamoImage" $ }}
@@ -84,6 +86,15 @@ spec:
             - --num-gpu-workers={{ $mock.numGpuWorkers }}
             - --max-num-seqs={{ $maxNumSeqs }}
             - --kv-cache-capacity-tokens={{ $mock.kvCacheCapacityTokens | default 400000 | int64 }}
+            {{- with $mock.stepFixedMs }}
+            - --step-fixed-ms={{ . }}
+            {{- end }}
+            {{- with $mock.stepDecodeMsPerSeq }}
+            - --step-decode-ms-per-seq={{ . }}
+            {{- end }}
+            {{- with $mock.stepPrefillMsPerToken }}
+            - --step-prefill-ms-per-token={{ . }}
+            {{- end }}
             {{- else }}
             - --profile={{ $mock.profile }}
             {{- end }}

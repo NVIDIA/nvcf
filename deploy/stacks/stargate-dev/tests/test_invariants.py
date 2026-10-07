@@ -527,6 +527,16 @@ class RenderedStackTests(unittest.TestCase):
                     arguments,
                 )
             self.assertIn("--disable-stats-stream", mock_dynamo["args"])
+            self.assertEqual(deployment["spec"]["strategy"], {"type": "Recreate"})
+            anti_affinity = deployment["spec"]["template"]["spec"]["affinity"][
+                "podAntiAffinity"
+            ]
+            self.assertEqual(
+                anti_affinity["requiredDuringSchedulingIgnoredDuringExecution"][0][
+                    "topologyKey"
+                ],
+                "kubernetes.io/hostname",
+            )
             self.assertIn(
                 "--grpc-tls-ca-cert-path=/var/run/stargate/tls/ca.crt", arguments
             )
@@ -555,6 +565,67 @@ class RenderedStackTests(unittest.TestCase):
         }
         self.assertEqual(cluster_ids, expected_backend_ids)
         self.assertEqual(inference_server_ids, expected_backend_ids)
+
+    def test_backend_step_costs_render_as_engine_flags(self) -> None:
+        digest = "sha256:" + "0" * 64
+        values = {
+            "clusterId": "mockdc-test",
+            "modelName": "test-model",
+            "workerToken": "worker-test-token-that-is-long-enough",
+            "stargate": {"address": "https://router:50071", "quicCaSecretName": "ca"},
+            "images": {
+                "mockDynamo": {"repository": "registry/mock-dynamo", "digest": digest},
+                "pylon": {"repository": "registry/pylon", "digest": digest},
+            },
+            "mockDynamo": {
+                "backend0": {
+                    "numGpuWorkers": 2,
+                    "stepFixedMs": 8.0,
+                    "stepDecodeMsPerSeq": 0.17,
+                    "stepPrefillMsPerToken": 0.1,
+                },
+                "backend1": {"numGpuWorkers": 3},
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            values_path = Path(directory) / "values.yaml"
+            values_path.write_text(yaml.safe_dump(values), encoding="utf-8")
+            rendered = subprocess.run(
+                [
+                    "helm",
+                    "template",
+                    "test",
+                    "charts/stargate-dev-mockdc",
+                    "-f",
+                    str(values_path),
+                ],
+                cwd=STACK_DIR,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+        arguments = {
+            document["metadata"]["name"]: next(
+                container["args"]
+                for container in document["spec"]["template"]["spec"]["containers"]
+                if container["name"] == "mock-dynamo"
+            )
+            for document in yaml.safe_load_all(rendered)
+            if document and document["kind"] == "Deployment"
+        }
+        with_steps = next(
+            args for name, args in arguments.items() if name.endswith("-0")
+        )
+        without_steps = next(
+            args for name, args in arguments.items() if name.endswith("-1")
+        )
+        for flag in [
+            "--step-fixed-ms=8",
+            "--step-decode-ms-per-seq=0.17",
+            "--step-prefill-ms-per-token=0.1",
+        ]:
+            self.assertIn(flag, with_steps)
+        self.assertFalse(any(arg.startswith("--step-") for arg in without_steps))
 
     def test_images_secrets_and_metrics_follow_one_contract(self) -> None:
         for _, deployment in self.resources("Deployment"):
