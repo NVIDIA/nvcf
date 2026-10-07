@@ -12,7 +12,7 @@ import tempfile
 import traceback
 
 _ACTIVE = contextvars.ContextVar('recipe_console', default=None)
-PAYLOAD_PHASES = {'chat', 'paths', 'context'}
+PAYLOAD_PHASES = {'chat', 'paths', 'context', 'dashboard', 'monitoring-images'}
 NEXT_CHECK = {
     'init': 'Check the saved configuration and retained-resource ownership',
     'inventory': 'Check Kubernetes access, node readiness and GPU allocation',
@@ -37,6 +37,12 @@ NEXT_CHECK = {
     'recover': 'Check recovery evidence and model/RPC pod status',
     'update': 'Check the update record and workload rollout status',
     'rollback': 'Check the selected update record and workload rollout status',
+    'monitoring': 'Check the monitoring release and its workload logs',
+    'dashboard': 'Check monitoring-port-forward.log and Grafana readiness',
+    'verify-monitoring': 'Check evidence/monitoring.json and monitoring-port-forward.log',
+    'uninstall-monitoring': 'Check the saved cluster identity and monitoring Helm release',
+    'export-monitoring-images': 'Check pinned monitoring images and free disk space',
+    'import-monitoring-images': 'Check the archive and image-import Job evidence',
 }
 
 
@@ -94,6 +100,7 @@ class Console:
         self.phase = phase
         self.terminal, self.terminal_error = sys.stdout, sys.stderr
         if phase in PAYLOAD_PHASES:
+            self.log_path = None
             return action()
         directory = pathlib.Path(work)/'evidence'
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -113,7 +120,7 @@ class Console:
             lines = [line.rstrip() for line in saved_log
                      if line.startswith(('Helm lint/render passed for', 'Configuration created:', 'Reusing configuration:',
                                          'Previous progress archived:', 'Recipe:', 'GPU:', 'Model nodes:', 'Routing node:', 'Run render,',
-                                         'Image archive:', 'Update recorded:')) or re.match(r'^(?:WARNING|Warning|warning)[: ]|^W[0-9]{4} ', line)]
+                                         'Image archive:', 'Monitoring image archive:', 'Update recorded:')) or re.match(r'^(?:WARNING|Warning|warning)[: ]|^W[0-9]{4} ', line)]
         for line in lines:
             if re.match(r'^(?:WARNING|Warning|warning)[: ]|^W[0-9]{4} ', line):
                 print(line, file=self.terminal_error)
@@ -126,6 +133,7 @@ class Console:
             'init': ('Configuration created:', 'Reusing configuration:', 'Previous progress archived:',
                      'Recipe:', 'GPU:', 'Model nodes:', 'Routing node:', 'Run render,'),
             'export-images': ('Image archive:',),
+            'export-monitoring-images': ('Monitoring image archive:',),
             'update': ('Update recorded:',),
         }.get(phase, ())
         for line in lines:

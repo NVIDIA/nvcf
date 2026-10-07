@@ -112,6 +112,18 @@ python3 recipe.py chat 'What is 17 multiplied by 19? Give one short sentence.'
 python3 recipe.py chat 'Explain what a GPU does in two sentences.' --stream
 ```
 
+## Monitoring
+
+From `deploy/helm/llm-routing/recipes`, install monitoring and view the dashboard:
+
+```bash
+python3 recipe.py monitoring
+```
+
+Open `http://127.0.0.1:13000/d/llm-demo`. Viewing requires no login. Ctrl-C closes the tunnel and leaves monitoring running. Use `--port` to change the local port.
+
+See [advanced monitoring configuration](recipes/MONITORING.md) for settings, dashboard access, verification and uninstall.
+
 ## Maintenance
 
 ### Update only gateway or router
@@ -165,6 +177,8 @@ Add `--namespace <namespace>` to attachment when the cluster has multiple instal
 Continue with [Update only gateway or router](#update-only-gateway-or-router).
 
 ### Uninstall
+
+If monitoring is installed, [remove it first](recipes/MONITORING.md#uninstall).
 
 Run the entire block, including parentheses, from `deploy/helm/llm-routing/recipes` in the same configured terminal used for installation. The context lookup uses the recipe's normal selection. If you passed `--context`, `--config` or `--work-dir` during installation, pass the same options before `context` in the lookup below.
 
@@ -322,6 +336,7 @@ python3 recipe.py verify-gateway
 From the recipe directory, run the runner/client tests, runtime chart tests and offline render checks. The render uses the example configuration, so it needs no cluster, context or `init`.
 
 ```bash
+python3 -m pip install -r tests/requirements-monitoring.txt
 python3 -m unittest discover -s tests -v
 python3 -m unittest discover -s charts/gguf-backend/tests -v
 python3 recipe.py --context llm-routing-demo --config config.example.json --work-dir "$(mktemp -d)" render

@@ -75,8 +75,8 @@ spec:
             - {name: ARCHIVE_NAME, value: {{ .Values.archiveName | quote }}}
           ports: [{containerPort: 8080}]
           resources:
-            requests: {cpu: 100m, memory: 32Mi}
-            limits: {cpu: '1', memory: 128Mi}
+            requests: {cpu: 100m, memory: 32Mi, ephemeral-storage: {{ $.Values.archiveSizeLimit }}}
+            limits: {cpu: '1', memory: 128Mi, ephemeral-storage: {{ $.Values.archiveSizeLimit }}}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -85,7 +85,7 @@ spec:
             - {name: images, mountPath: /images}
       volumes:
         - name: images
-          emptyDir: {sizeLimit: 1Gi}
+          emptyDir: {sizeLimit: {{ $.Values.archiveSizeLimit }}}
 {{- range $node := required "nodeNames is required" .Values.nodeNames }}
 ---
 apiVersion: batch/v1
@@ -133,14 +133,14 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
           resources:
-            requests: {cpu: 100m, memory: 128Mi}
-            limits: {cpu: '1', memory: 512Mi}
+            requests: {cpu: 100m, memory: 128Mi, ephemeral-storage: {{ $.Values.archiveSizeLimit }}}
+            limits: {cpu: '1', memory: 512Mi, ephemeral-storage: {{ $.Values.archiveSizeLimit }}}
           volumeMounts:
             - {name: cache, mountPath: /cache}
             - {name: socket, mountPath: /run/image-loader/containerd.sock}
       volumes:
         - name: cache
-          emptyDir: {sizeLimit: 1Gi}
+          emptyDir: {sizeLimit: {{ $.Values.archiveSizeLimit }}}
         - name: socket
           hostPath:
             path: {{ $.Values.socketPath | quote }}

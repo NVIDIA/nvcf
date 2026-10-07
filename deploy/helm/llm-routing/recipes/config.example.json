@@ -43,5 +43,8 @@
       "model-0",
       "model-1"
     ]
+  },
+  "monitoring": {
+    "enabled": true
   }
 }
