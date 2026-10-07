@@ -125,11 +125,13 @@ class RetuneTests(unittest.TestCase):
         recipe.state = dict(state, runtimeSha256='a'*64)
         return recipe
 
-    def retune(self, recipe, deployed):
+    def retune(self, recipe, deployed, status='deployed'):
         outputs = []
 
         def output(command, **kwargs):
             outputs.append(command)
+            if 'status' in command:
+                return json.dumps({'name': recipe.backend, 'info': {'status': status}})
             return json.dumps(deployed)
 
         with patch.object(recipe, 'bound_cluster'), patch.object(recipe, 'helm_apply') as helm, \
@@ -176,7 +178,8 @@ class RetuneTests(unittest.TestCase):
     def test_retune_applies_new_tuning_and_keeps_the_endpoint_registered(self):
         recipe = self.recipe({'serve': True, 'registered': True, 'direct': True, 'gateway': True})
         helm, run, outputs = self.retune(recipe, self.old_values(recipe))
-        self.assertEqual(outputs[0], recipe.hm+['get', 'values', recipe.backend, '-o', 'json'])
+        self.assertEqual(outputs, [recipe.hm+['status', recipe.backend, '-o', 'json'],
+                                   recipe.hm+['get', 'values', recipe.backend, '-o', 'json']])
         release, chart, values, timeout = helm.call_args.args
         self.assertEqual((release, chart, timeout), (recipe.backend, tool.HERE/'charts/gguf-backend', '70m'))
         self.assertEqual(values, recipe.backend_values(register=True))
@@ -191,6 +194,13 @@ class RetuneTests(unittest.TestCase):
         record = json.loads(evidence[0].read_text())
         self.assertEqual(record['tuning'], recipe.tuning)
         self.assertIn('2048', record['previousArgs'])
+
+    def test_retune_reapplies_after_a_failed_upgrade_with_the_same_values(self):
+        # A timed-out upgrade leaves its values on a failed revision; a retry must apply them again.
+        recipe = self.recipe({'serve': True, 'registered': True, 'direct': True})
+        helm, _, _ = self.retune(recipe, recipe.backend_values(register=True), status='failed')
+        self.assertEqual(helm.call_args.args[2], recipe.backend_values(register=True))
+        self.assertFalse(recipe.state['direct'])
 
     def test_retune_before_registration_does_not_register(self):
         recipe = self.recipe({'serve': True})

@@ -302,7 +302,7 @@ python3 recipe.py verify-direct
 python3 recipe.py verify-gateway
 ```
 
-`retune` restarts the model server with the saved tuning and `resources`, and reuses the built runtime and downloaded model. RPC workers restart only when their memory limits change. The endpoint is unavailable while the model reloads. A loaded model holds its GPU memory, so `retune` checks the context against the free GPU memory that `preflight` measured.
+`retune` restarts the model server with the saved tuning and `resources`, and reuses the built runtime and downloaded model. RPC workers restart only when their memory limits change. The endpoint is unavailable while the model reloads. A loaded model holds its GPU memory, so `retune` checks the context against the free GPU memory that `preflight` measured. If the model does not come back, check the model pod logs, lower `tuning` and run `retune` again. It reapplies whenever the last Helm upgrade did not complete.
 
 ### Pod resources
 

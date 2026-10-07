@@ -897,11 +897,13 @@ class Recipe:
         require(not self.state.get('attachedExisting'), 'Retune from the work directory that loaded the model.')
         require(self.state.get('serve'), 'Load the model first. Before load, edit tuning in the configuration and run preflight or load.')
         self.check_fit(self.state.get('preflightGpuFreeBytes'))
+        status = json.loads(output(self.hm+['status', self.backend, '-o', 'json']))
         deployed = json.loads(output(self.hm+['get', 'values', self.backend, '-o', 'json']))
         require(deployed.get('phase') == 'serve', 'The model release is not at the serve phase. Finish load first.')
         registered = bool(self.state.get('registered'))
         values = self.backend_values(register=registered)
-        if deployed == values:
+        # A failed or timed-out upgrade keeps its values on the latest revision, so apply again unless it deployed.
+        if deployed == values and status.get('info', {}).get('status') == 'deployed':
             print('The loaded model already uses this tuning:', sizing.describe_tuning(self.tuning)+'.')
             return
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
