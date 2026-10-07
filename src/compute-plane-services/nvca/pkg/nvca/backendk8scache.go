@@ -745,8 +745,8 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		// Labels must be added for podInstanceNamespace if gxcache is enabled
 		if c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.GXCache) {
 			if err := ensureGXCacheNamespaceLabels(ctx, c.clients.K8s.CoreV1().Namespaces(), c.podInstanceNamespace); err != nil {
-				log.WithError(err).Error("failed to apply label to nvcf-backend namespace for GXCache enablement")
-				return nil, nil, err
+				return nil, nil, fmt.Errorf("apply GXCache label to requests namespace %q (worker.requestsNamespace): %w",
+					c.podInstanceNamespace, err)
 			}
 		}
 

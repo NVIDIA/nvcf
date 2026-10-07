@@ -697,11 +697,12 @@ func TestSelfManagedJWTTenantClaimEnforced(t *testing.T) {
 	}
 }
 
-func TestAPIKeySkipsJWTVerificationAndScopeCheck(t *testing.T) {
+func TestAPIKeySkipsJWTVerification(t *testing.T) {
 	client := &stubPolicyClient{result: map[string]interface{}{
 		"allowed": true,
 		"ncaId":   "nca-1",
 		"ownerId": "owner-1",
+		"policy":  map[string]interface{}{"scopes": []interface{}{"fnds:getEvents"}},
 	}}
 	handler := newAuthTestHandler(t, nil, nil, client, true, ReadScopes)
 
@@ -713,6 +714,184 @@ func TestAPIKeySkipsJWTVerificationAndScopeCheck(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.True(t, client.called, "API key must be authorized by api-keys-api")
+}
+
+// TestSelfManagedAPIKeyScopesEnforcedByRoute guards against a read-scoped key
+// writing: the API Keys service returns allowed for any valid key and does not
+// evaluate scopes, so the route must check the policy scopes itself.
+func TestSelfManagedAPIKeyScopesEnforcedByRoute(t *testing.T) {
+	tests := []struct {
+		name       string
+		policy     interface{}
+		required   Scopes
+		wantStatus int
+	}{
+		{"read scope on read route", map[string]interface{}{"scopes": []interface{}{"fnds:getEvents", "fnds:getStats"}}, ReadScopes, http.StatusOK},
+		{"write scope on write route", map[string]interface{}{"scopes": []interface{}{"fnds:createEvent"}}, WriteScopes, http.StatusOK},
+		{"read scope on write route", map[string]interface{}{"scopes": []interface{}{"fnds:getEvents", "fnds:getStats"}}, WriteScopes, http.StatusForbidden},
+		{"write scope on read route", map[string]interface{}{"scopes": []interface{}{"fnds:createEvent"}}, ReadScopes, http.StatusForbidden},
+		{"unrelated scopes on read route", map[string]interface{}{"scopes": []interface{}{"invoke_function"}}, ReadScopes, http.StatusForbidden},
+		{"empty scopes", map[string]interface{}{"scopes": []interface{}{}}, ReadScopes, http.StatusForbidden},
+		{"policy without scopes", map[string]interface{}{"aud": "event-ledger"}, ReadScopes, http.StatusForbidden},
+		{"no policy", nil, ReadScopes, http.StatusForbidden},
+		{"malformed scopes", map[string]interface{}{"scopes": "fnds:getEvents"}, ReadScopes, http.StatusForbidden},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := map[string]interface{}{"allowed": true, "ncaId": "nca-1", "ownerId": "owner-1"}
+			if tc.policy != nil {
+				result["policy"] = tc.policy
+			}
+			client := &stubPolicyClient{result: result}
+			handler := newAuthTestHandler(t, nil, nil, client, true, tc.required)
+
+			req := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+			req.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+			recorder := httptest.NewRecorder()
+
+			handler.ServeHTTP(recorder, req)
+
+			assert.Equal(t, tc.wantStatus, recorder.Code, recorder.Body.String())
+			assert.True(t, client.called)
+		})
+	}
+}
+
+// newAPIKeyRouter pairs a read route and a write route behind the auth
+// middleware the way cmd/api/startup/run_service.go does.
+func newAPIKeyRouter(t *testing.T, client *stubPolicyClient, requireLocalScopeCheck bool) http.Handler {
+	t.Helper()
+	logger := testLogger(t)
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	router := mux.NewRouter()
+	router.Use(NewAuthMiddleware(client, "nv-cloud-functions", nil, nil, requireLocalScopeCheck, nil, logger))
+	router.Handle("/v3/ledger/namespace/{namespace}/events",
+		MaybeRequireScopes(logger, requireLocalScopeCheck, ReadScopes, RequireAnyScopes)(ok)).Methods(http.MethodGet)
+	router.Handle("/v3/ledger/cloudevents",
+		MaybeRequireScopes(logger, requireLocalScopeCheck, WriteScopes, RequireAnyScopes)(ok)).Methods(http.MethodPost)
+	return router
+}
+
+func apiKeyPolicyResult(scopes ...interface{}) map[string]interface{} {
+	return map[string]interface{}{
+		"allowed": true,
+		"ncaId":   "nca-1",
+		"ownerId": "owner-1",
+		"policy":  map[string]interface{}{"aud": "event-ledger", "scopes": scopes},
+	}
+}
+
+func TestSelfManagedAPIKeyReadAndWriteRoutes(t *testing.T) {
+	tests := []struct {
+		name      string
+		scopes    []interface{}
+		wantRead  int
+		wantWrite int
+	}{
+		{"read-only key", []interface{}{"fnds:getEvents", "fnds:getStats"}, http.StatusOK, http.StatusForbidden},
+		{"write-only key", []interface{}{"fnds:createEvent"}, http.StatusForbidden, http.StatusOK},
+		{"read and write key", []interface{}{"fnds:getEvents", "fnds:createEvent"}, http.StatusOK, http.StatusOK},
+		{"key with no scopes", []interface{}{}, http.StatusForbidden, http.StatusForbidden},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			router := newAPIKeyRouter(t, &stubPolicyClient{result: apiKeyPolicyResult(tc.scopes...)}, true)
+
+			read := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/ns/events", nil)
+			read.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+			readRecorder := httptest.NewRecorder()
+			router.ServeHTTP(readRecorder, read)
+			assert.Equal(t, tc.wantRead, readRecorder.Code, "read route")
+
+			write := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+			write.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+			writeRecorder := httptest.NewRecorder()
+			router.ServeHTTP(writeRecorder, write)
+			assert.Equal(t, tc.wantWrite, writeRecorder.Code, "write route")
+		})
+	}
+}
+
+func TestSelfManagedAPIKeyRequireAllScopes(t *testing.T) {
+	tests := []struct {
+		name       string
+		scopes     []interface{}
+		wantStatus int
+	}{
+		{"has every required scope", []interface{}{"fnds:getEvents", "fnds:getStats"}, http.StatusOK},
+		{"missing one required scope", []interface{}{"fnds:getEvents"}, http.StatusForbidden},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &stubPolicyClient{result: apiKeyPolicyResult(tc.scopes...)}
+			logger := testLogger(t)
+			handler := NewAuthMiddleware(client, "nv-cloud-functions", nil, nil, true, nil, logger)(
+				MaybeRequireScopes(logger, true, "fnds:getEvents fnds:getStats", RequireAllScopes)(
+					http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })))
+
+			req := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/ns/stats", nil)
+			req.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+
+			assert.Equal(t, tc.wantStatus, recorder.Code)
+		})
+	}
+}
+
+// TestManagedAPIKeyScopesNotCheckedLocally pins the managed behavior: the
+// local route scope check is off, so an api key is authorized by the policy
+// decision point alone, even when its result carries no scopes.
+func TestManagedAPIKeyScopesNotCheckedLocally(t *testing.T) {
+	for _, result := range []map[string]interface{}{
+		apiKeyPolicyResult(),
+		{"allowed": true, "ncaId": "nca-1", "ownerId": "owner-1"},
+	} {
+		router := newAPIKeyRouter(t, &stubPolicyClient{result: result}, false)
+
+		write := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+		write.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, write)
+
+		assert.Equal(t, http.StatusOK, recorder.Code)
+	}
+}
+
+func TestPolicyMiddlewareStoresAPIKeyScopesInContext(t *testing.T) {
+	tests := []struct {
+		name   string
+		result map[string]interface{}
+		want   []string
+	}{
+		{"policy scopes", apiKeyPolicyResult("fnds:getEvents", "fnds:getStats"), []string{"fnds:getEvents", "fnds:getStats"}},
+		{"empty scopes", apiKeyPolicyResult(), []string{}},
+		{"no policy", map[string]interface{}{"allowed": true, "ncaId": "nca-1", "ownerId": "owner-1"}, nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/ns/events", nil)
+			req.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+
+			recorder, ctx := servePolicy(t, &stubPolicyClient{result: tc.result}, req)
+
+			require.Equal(t, http.StatusOK, recorder.Code)
+			assert.Equal(t, tc.want, apiKeyScopesFromContext(ctx))
+		})
+	}
+}
+
+func TestPolicyScopes(t *testing.T) {
+	assert.Equal(t, []string{"a", "b"}, policyScopes(json.RawMessage(`{"aud":"x","scopes":["a","b"]}`)))
+	assert.Nil(t, policyScopes(nil))
+	assert.Nil(t, policyScopes(json.RawMessage(`"not-an-object"`)))
+	assert.Nil(t, policyScopes(json.RawMessage(`{"scopes":"a"}`)))
+	assert.Nil(t, policyScopes(json.RawMessage(`{"scopes":[1,2]}`)))
 }
 
 func TestAPIKeyDeniedByPolicyDecisionPoint(t *testing.T) {

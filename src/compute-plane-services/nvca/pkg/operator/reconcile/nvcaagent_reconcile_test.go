@@ -45,6 +45,10 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 
+	"k8s.io/apimachinery/pkg/runtime"
+	fakek8sclient "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
@@ -365,7 +369,7 @@ func TestSetupNVCADeployment(t *testing.T) {
 		},
 	}, agentCfg)
 
-	err = bc.setupNVCADeployment(ctx, inNVCFBackend)
+	err = bc.setupNVCADeployment(ctx, inNVCFBackend, getRequestsNamespace(inNVCFBackend))
 	require.NoError(t, err)
 
 	depIface := clients.K8s.AppsV1().Deployments(DefaultNVCASystemNamespace)
@@ -544,7 +548,7 @@ func TestSetupNVCADeployment(t *testing.T) {
 	assert.Equal(t, appsv1.RecreateDeploymentStrategyType, gotDep.Spec.Strategy.Type)
 
 	// Try rollout with the same spec.
-	err = bc.setupNVCADeployment(ctx, inNVCFBackend)
+	err = bc.setupNVCADeployment(ctx, inNVCFBackend, getRequestsNamespace(inNVCFBackend))
 	require.NoError(t, err)
 
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
@@ -625,7 +629,7 @@ func TestSetupNVCADeployment_OverrideEnvironmentVars(t *testing.T) {
 		},
 	}
 
-	err := bc.setupNVCADeployment(ctx, inNVCFBackend)
+	err := bc.setupNVCADeployment(ctx, inNVCFBackend, getRequestsNamespace(inNVCFBackend))
 	require.NoError(t, err)
 
 	depIface := clients.K8s.AppsV1().Deployments(DefaultNVCASystemNamespace)
@@ -781,7 +785,7 @@ func TestSetupNVCADeployment_Vault(t *testing.T) {
 		},
 	}, agentCfg)
 
-	err = bc.setupNVCADeployment(ctx, inNVCFBackend)
+	err = bc.setupNVCADeployment(ctx, inNVCFBackend, getRequestsNamespace(inNVCFBackend))
 	require.NoError(t, err)
 
 	depIface := clients.K8s.AppsV1().Deployments(DefaultNVCASystemNamespace)
@@ -1091,7 +1095,7 @@ func TestSetupNVCADeployment_SelfHosted(t *testing.T) {
 		},
 	}, agentCfg)
 
-	err = bc.setupNVCADeployment(ctx, inNVCFBackend)
+	err = bc.setupNVCADeployment(ctx, inNVCFBackend, getRequestsNamespace(inNVCFBackend))
 	require.NoError(t, err)
 
 	depIface := clients.K8s.AppsV1().Deployments(DefaultNVCASystemNamespace)
@@ -2953,7 +2957,7 @@ func TestSetupNVCADeployment_OTELConfig(t *testing.T) {
 		},
 	}
 
-	err := bc.setupNVCADeployment(ctx, nb)
+	err := bc.setupNVCADeployment(ctx, nb, getRequestsNamespace(nb))
 	require.NoError(t, err)
 
 	dep, err := clients.K8s.AppsV1().Deployments(DefaultNVCASystemNamespace).Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
@@ -2990,7 +2994,7 @@ func TestSetupNVCADeployment_SecurityContext(t *testing.T) {
 		},
 	}
 
-	err := bc.setupNVCADeployment(ctx, nb)
+	err := bc.setupNVCADeployment(ctx, nb, getRequestsNamespace(nb))
 	require.NoError(t, err)
 
 	dep, err := clients.K8s.AppsV1().Deployments(DefaultNVCASystemNamespace).Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
@@ -3180,7 +3184,7 @@ func TestSetupNVCADeployment_AppliesAgentTolerations(t *testing.T) {
 		},
 	}
 
-	err := bc.setupNVCADeployment(ctx, nb)
+	err := bc.setupNVCADeployment(ctx, nb, getRequestsNamespace(nb))
 	require.NoError(t, err)
 
 	dep, err := clients.K8s.AppsV1().Deployments(DefaultNVCASystemNamespace).Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
@@ -4186,7 +4190,7 @@ func TestGetOTelCollectorContainerCommandArgsAndEnv(t *testing.T) {
 				envType: tt.envType,
 			}
 
-			command, args, env := bc.getOTelCollectorContainerCommandArgsAndEnv(tt.nb)
+			command, args, env := bc.getOTelCollectorContainerCommandArgsAndEnv(tt.nb, getRequestsNamespace(tt.nb))
 
 			// Verify command
 			assert.Equal(t, []string{"/otelcol-contrib"}, command)
@@ -4385,7 +4389,7 @@ func TestGetOTelCollectorContainer(t *testing.T) {
 				},
 			}
 
-			containers := bc.getOTelCollectorContainer(tt.nb)
+			containers := bc.getOTelCollectorContainer(tt.nb, getRequestsNamespace(tt.nb))
 
 			if tt.expectContainer {
 				require.Len(t, containers, tt.expectedLength)
@@ -4612,7 +4616,8 @@ func TestSetupNVCADeployment_WithOTelCollector(t *testing.T) {
 		},
 	}
 
-	err := bc.setupNVCADeployment(ctx, inNVCFBackend)
+	// The caller resolves the requests namespace once per reconcile and passes it in.
+	err := bc.setupNVCADeployment(ctx, inNVCFBackend, "team-x")
 	require.NoError(t, err)
 
 	depIface := clients.K8s.AppsV1().Deployments(DefaultNVCASystemNamespace)
@@ -4634,6 +4639,7 @@ func TestSetupNVCADeployment_WithOTelCollector(t *testing.T) {
 		}
 	}
 	require.NotNil(t, otelContainer, "OTel collector init container not found")
+	assert.Contains(t, otelContainer.Env, corev1.EnvVar{Name: NVCAOTelCollectorRequestsNamespaceEnvVar, Value: "team-x"})
 
 	// Verify OTel collector container properties
 	assert.Equal(t, "nvcr.io/nvidia/nvcf-byoc/opentelemetry-collector-contrib:0.139.0", otelContainer.Image)
@@ -4757,7 +4763,7 @@ func TestGetOTelCollectorContainerCommandArgsAndEnv_OAuthAuth(t *testing.T) {
 				},
 			}
 
-			_, _, env := bc.getOTelCollectorContainerCommandArgsAndEnv(tt.nb)
+			_, _, env := bc.getOTelCollectorContainerCommandArgsAndEnv(tt.nb, getRequestsNamespace(tt.nb))
 
 			// Create map for easier lookup
 			envMap := make(map[string]string)
@@ -4845,7 +4851,7 @@ func TestGetOTelCollectorContainerCommandArgsAndEnv_FNDSEndpoint(t *testing.T) {
 				},
 			}
 
-			_, _, env := bc.getOTelCollectorContainerCommandArgsAndEnv(tt.nb)
+			_, _, env := bc.getOTelCollectorContainerCommandArgsAndEnv(tt.nb, getRequestsNamespace(tt.nb))
 
 			// Find and verify FNDS endpoint env var
 			var found bool
@@ -4950,7 +4956,7 @@ func TestSetupNVCADeployment_WithOTelCollectorOAuthAuthIntegration(t *testing.T)
 		},
 	}
 
-	err := bc.setupNVCADeployment(ctx, inNVCFBackend)
+	err := bc.setupNVCADeployment(ctx, inNVCFBackend, getRequestsNamespace(inNVCFBackend))
 	require.NoError(t, err)
 
 	depIface := clients.K8s.AppsV1().Deployments(DefaultNVCASystemNamespace)
@@ -5506,6 +5512,48 @@ func TestNewAgentConfigConfigMapRejectsStaticGPUCapacityOnDynamicBackend(t *test
 	require.NoError(t, err)
 }
 
+func TestNewAgentConfigConfigMapRequestsNamespaceOverride(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{
+		clients:           clients,
+		envType:           nvidiaiov1.EnvTypeStage,
+		operatorNamespace: NVCAOperatorNamespace,
+	}
+	mergeCM, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      agentConfigMergeConfigMapName,
+			Namespace: NVCAOperatorNamespace,
+		},
+		Data: map[string]string{agentConfigFile: "agent:\n  requestsNamespace: Team_X\n"},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
+	_, err = bc.newAgentConfigConfigMap(ctx, nb)
+	require.Error(t, err)
+	assert.True(t, isInvalidAgentConfigError(err))
+	assert.ErrorContains(t, err, `worker.requestsNamespace "Team_X" is not a valid namespace name`)
+
+	mergeCM.Data[agentConfigFile] = "agent:\n  requestsNamespace: team-x\n"
+	_, err = clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Update(ctx, mergeCM, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	cm, err := bc.newAgentConfigConfigMap(ctx, nb)
+	require.NoError(t, err)
+	cfg, err := nvcaconfig.DecodeConfig([]byte(cm.Data[agentConfigFile]))
+	require.NoError(t, err)
+	assert.Equal(t, "team-x", cfg.Agent.RequestsNamespace)
+}
+
+func TestOTelCollectorEnvUsesEffectiveRequestsNamespace(t *testing.T) {
+	bc := &BackendK8sCache{envType: nvidiaiov1.EnvTypeProd}
+	nb := &nvidiaiov1.NVCFBackend{}
+
+	_, _, env := bc.getOTelCollectorContainerCommandArgsAndEnv(nb, "team-x")
+
+	assert.Contains(t, env, corev1.EnvVar{Name: NVCAOTelCollectorRequestsNamespaceEnvVar, Value: "team-x"})
+}
+
 func TestGetEffectiveOTelCollectorConfig(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -5705,4 +5753,67 @@ func TestMergeMapsNoOverwrites(t *testing.T) {
 			assert.ElementsMatch(t, tt.expectedCols, cols)
 		})
 	}
+}
+
+// TestSetupNVCAAgentInfra_RBACFailureLeavesAgentConfigConfigMapUnwritten is a
+// regression test for a bug where a transient RBAC update failure (for
+// example Kubernetes rejecting a self-granted permission escalation before
+// the operator's own freshly-applied ClusterRoleBinding has propagated)
+// permanently stalled the agent rollout. setupNVCAAgentInfra used to write
+// the agent config ConfigMap before setting up RBAC. Because
+// newAgentConfigChangedCheck detects pending changes by diffing the desired
+// config against the live ConfigMap in the cluster (not against
+// NVCFBackend.Status), an early ConfigMap write made the ConfigMap already
+// match desired state even though RBAC and the Deployment rollout never
+// completed. Every later periodic sync then saw "no change" and skipped
+// retrying RBAC and the Deployment rollout entirely.
+//
+// This test asserts the fix: when RBAC setup fails, the agent config
+// ConfigMap must not have been written, so the next sync's
+// newAgentConfigChangedCheck still reports a pending change and retries the
+// whole rollout, including RBAC.
+func TestSetupNVCAAgentInfra_RBACFailureLeavesAgentConfigConfigMapUnwritten(t *testing.T) {
+	ctx := newTestContext()
+
+	clients := mockKubeClients()
+
+	// Pre-seed an existing "nvca" ClusterRole so createOrUpdateClusterRole
+	// takes the Update path, matching the real failure mode: Kubernetes
+	// rejects the update because the operator's own ServiceAccount does not
+	// yet hold the permissions it is trying to grant.
+	_, err := clients.K8s.RbacV1().ClusterRoles().Create(ctx, &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: nvcaoptypes.NVCAModuleName},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	fakeK8s := clients.K8s.(*fakek8sclient.Clientset)
+	fakeK8s.PrependReactor("update", "clusterroles", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, k8serr.NewForbidden(
+			rbacv1.Resource("clusterroles"), nvcaoptypes.NVCAModuleName,
+			fmt.Errorf("attempting to grant RBAC permissions not currently held"))
+	})
+
+	b := NewBackendK8sCacheBuilder().
+		WithSystemNamespace(NVCAOperatorNamespace).
+		WithClients(clients).
+		WithNGCServiceKeyFetcher(&mockTokenFetcher{token: "randomkey"}).
+		WithClusterSource(nvcaoptypes.ClusterSourceNGCManaged)
+
+	bc, _, err := b.Start(ctx)
+	require.NoError(t, err)
+
+	nb := getTestNVCFBackendMinimal()
+
+	desiredCM, err := bc.newAgentConfigConfigMap(ctx, nb)
+	require.NoError(t, err)
+
+	err = bc.setupNVCAAgentInfra(ctx, nb, desiredCM)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to setup RBAC")
+
+	_, err = clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
+	assert.True(t, k8serr.IsNotFound(err),
+		"agent config ConfigMap must not be written when RBAC setup fails, "+
+			"otherwise newAgentConfigChangedCheck will see no pending change on the next sync "+
+			"and never retry RBAC or the Deployment rollout: got err=%v", err)
 }
