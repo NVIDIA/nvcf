@@ -44,16 +44,18 @@ User has a working NVCF control plane (running somewhere) and wants to register 
    fails it too. SIS reachability is not probed before install.
 
    Without a context for the control-plane cluster, check the new cluster
-   alone with `--compute-plane`, through a kubeconfig whose current context
-   is the new cluster:
+   alone with `--compute-plane`. `check` takes both context flags or neither
+   and has no `--kubeconfig` flag, so give it, through `KUBECONFIG` for this
+   command only, a temporary kubeconfig holding just the new GPU cluster's
+   context. The current context of the user's kubeconfig stays as it was:
 
    ```sh
-   KCFG=$(mktemp)
-   kubectl config view --minify --flatten --context="$CTX" > "$KCFG"
-   KUBECONFIG="$KCFG" nvcf-cli self-hosted check --compute-plane \
+   KC=$(mktemp)
+   kubectl config view --minify --flatten --context="$CTX" > "$KC"
+   KUBECONFIG="$KC" nvcf-cli self-hosted check --compute-plane \
      --icms-url=$ICMS \
      --json 2>&1 >/dev/null | grep '^{' > check.jsonl
-   rm -f "$KCFG"
+   rm -f "$KC"
    jq -se 'any(.[]; .event == "final" and .success)' check.jsonl
    ```
 

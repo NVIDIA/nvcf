@@ -12,14 +12,16 @@ User says NVCA stopped authenticating, or PSAT auth is 401-ing against ICMS. The
 
 1. Confirm the cluster ID. Run `nvcf-cli cluster list-registered --nca-id=$NCA_ID --icms-url=$ICMS`. Identify the row matching the user's compute plane.
 
-2. **Rotate.** From a context that can reach the compute plane's K8s API (because rotation re-fetches the K8s API's `/openid/v1/jwks`):
+2. **Rotate.** Use a context that can reach the compute plane's K8s API (because rotation re-fetches the K8s API's `/openid/v1/jwks`). Write that context alone to a temporary kubeconfig and pass it with `--kubeconfig`, so the current context of your kubeconfig stays as it was:
 
    ```sh
-   kubectl config use-context <ctx>
-   nvcf-cli cluster rotate --cluster-id=<id>
+   KC=$(mktemp)
+   kubectl config view --minify --flatten --context=<ctx> > "$KC" &&
+     nvcf-cli cluster rotate --cluster-id=<id> --kubeconfig="$KC"
+   rm -f "$KC"
    ```
 
-   `cluster rotate` reads the current context, or the one `--kubeconfig=<path>` selects. It re-fetches JWKS from the compute plane's K8s API and PUTs it to ICMS. The cluster ID stays the same.
+   `cluster rotate` re-fetches JWKS from the compute plane's K8s API and PUTs it to ICMS. The cluster ID stays the same. The temporary file holds the context's credentials: `mktemp` makes it readable only by you, and `rm` removes it.
 
 3. **Verify.** `nvcf-cli cluster get --cluster-id=<id>` — confirm `updatedAt` advanced. Then `kubectl logs -n nvca-system -l app.kubernetes.io/name=nvca --tail=20` — register attempts should succeed (200, not 401).
 

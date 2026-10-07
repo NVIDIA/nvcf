@@ -49,20 +49,20 @@ The operator has kubectl access to ONE compute plane only — the control plane 
 nvcf-cli init --api-url=https://api.nvcf.example.com
 
 # Run pre-flight scoped to the compute plane only. check takes both context
-# flags or neither, so select the compute cluster as the current context of
-# a kubeconfig for this command. --compute-plane checks the compute plane as
-# installed, so a docker login nvcr.io rejects fails only when NGC_API_KEY
-# does not work in its place: treat a registry-credentials row that says the
-# docker login was rejected as blocking, since compute-plane install pulls
-# its charts with that login. With a control-plane context, check
-# --pre --control-plane checks the new compute plane as not yet installed
-# instead; see prompts/add-compute-plane.md.
-KCFG=$(mktemp)
-kubectl config view --minify --flatten --context=admin@gpu1 > "$KCFG"
-KUBECONFIG="$KCFG" nvcf-cli self-hosted check --compute-plane \
+# flags or neither and has no --kubeconfig flag, so give it, through
+# KUBECONFIG for this command only, a kubeconfig holding just the compute
+# cluster's context. The current context of your kubeconfig stays as it was.
+# --compute-plane checks the compute plane as installed, so a docker login
+# nvcr.io rejects fails only when NGC_API_KEY does not work in its place:
+# treat a registry-credentials row that says the docker login was rejected
+# as blocking, since compute-plane install pulls its charts with that login.
+# With a control-plane context, check --pre --control-plane checks the new
+# compute plane as not yet installed instead; see prompts/add-compute-plane.md.
+KC=$(mktemp)
+kubectl config view --minify --flatten --context=admin@gpu1 > "$KC"
+KUBECONFIG="$KC" nvcf-cli self-hosted check --compute-plane \
   --icms-url=https://icms.nvcf.example.com \
   --json
-rm -f "$KCFG"
 
 # Register and install just the compute plane, from the profile the
 # control-plane operator exported with `self-hosted control-plane profile export`,
@@ -79,11 +79,13 @@ nvcf-cli self-hosted compute-plane install \
   --kube-context=admin@gpu1 \
   --cluster-name=my-compute-1
 
-# Status of the current context, admin@gpu1 (compute-only: the operator
-# can't see control-plane component health):
-nvcf-cli self-hosted status \
+# Status of admin@gpu1, from the same kubeconfig (compute-only: the operator
+# can't see control-plane component health). Then remove the file, which
+# holds the context's credentials:
+KUBECONFIG="$KC" nvcf-cli self-hosted status \
   --cluster-name=my-compute-1 \
   --icms-url=https://icms.nvcf.example.com
+rm -f "$KC"
 ```
 
 ## Functions targeting specific compute planes
@@ -113,13 +115,17 @@ The `clusters` array (using cluster names, not IDs) limits scheduling to those c
 nvcf-cli cluster list-registered --nca-id=$NCA_ID --icms-url=$ICMS --json \
   | jq -r '.clusters[].clusterName' > clusters.txt
 
-# Status snapshot per compute plane (assuming each context name matches):
+# Status snapshot per compute plane (assuming each context name matches).
+# Each run reads a temporary kubeconfig holding only that cluster's context,
+# so the loop leaves the current context of your kubeconfig alone:
 while read NAME; do
   echo "=== $NAME ==="
-  kubectl config use-context "admin@$NAME" >/dev/null
-  nvcf-cli self-hosted status \
-    --cluster-name=$NAME \
-    --json | jq -c '{cluster:.cluster, verdict:.verdict, reconcile:.reconcileAgeSec}'
+  KC=$(mktemp)
+  kubectl config view --minify --flatten --context="admin@$NAME" > "$KC" &&
+    KUBECONFIG="$KC" nvcf-cli self-hosted status \
+      --cluster-name=$NAME \
+      --json | jq -c '{cluster:.cluster, verdict:.verdict, reconcile:.reconcileAgeSec}'
+  rm -f "$KC"
 done < clusters.txt
 ```
 
