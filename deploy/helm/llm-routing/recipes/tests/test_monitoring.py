@@ -64,6 +64,22 @@ class MonitoringTests(unittest.TestCase):
         self.assertEqual(set(selectors), {'gateway', 'router', 'operator', 'pylon'})
         self.assertEqual(values['nodeSelector'], {'kubernetes.io/hostname': self.config['nodes']['control']})
 
+    def test_retention_accepts_explicit_supported_units_and_preserves_default(self):
+        self.assertEqual(monitoring.chart_values(self.recipe)['victoriaMetrics']['retentionPeriod'], '3d')
+        for retention in ('24h', '48h', '1d', '3d', '1w', '1M', '1y'):
+            with self.subTest(retention=retention):
+                self.config['monitoring']['retentionPeriod'] = retention
+                self.assertEqual(monitoring.chart_values(self.recipe)['victoriaMetrics']['retentionPeriod'], retention)
+
+    def test_invalid_retention_fails_before_any_helm_operation(self):
+        for retention in ('1m', '12h', '23h', '0d', '-1d', '1', '1D', '1.5d', '', None, 24, True, {}):
+            with self.subTest(retention=retention):
+                self.config['monitoring']['retentionPeriod'] = retention
+                with self.assertRaisesRegex(RuntimeError, 'retention of at least 24h'):
+                    self.monitor.install()
+                self.recipe.helm_apply.assert_not_called()
+                self.output.assert_not_called()
+
     def test_monitoring_image_policy_is_independent_of_application_images(self):
         default = json.loads((monitoring.CHART/'values.yaml').read_text())['imagePullPolicy']
         for policy in ('Never', 'Always'):
@@ -221,7 +237,7 @@ class MonitoringTests(unittest.TestCase):
 
     def test_install_only_changes_monitoring_and_preserves_model_state(self):
         self.recipe.state.update(serve=True, runtimeSha256='a'*64, attachedExisting=True)
-        self.output.side_effect = ['[]', '']
+        self.output.side_effect = ['{}', '[]', '']
         self.monitor.install()
         self.recipe.bound_cluster.assert_called_once()
         release, chart, values = self.recipe.helm_apply.call_args.args
@@ -232,21 +248,48 @@ class MonitoringTests(unittest.TestCase):
         self.assertTrue(values['grafana']['adminPassword'])
         self.assertFalse((self.recipe.work/'grafana-admin-password').exists())
 
+    def test_install_discovers_gateway_metrics_port_without_changing_the_stack(self):
+        for metrics, expected in [({}, 9464), ({'enabled': False, 'port': 9465}, 9464),
+                                  ({'enabled': True, 'port': 9465}, 9465)]:
+            with self.subTest(metrics=metrics):
+                stack = {'llm-api-gateway': {'llmApiGateway': {'metrics': metrics}}}
+                self.output.reset_mock()
+                self.output.side_effect = [json.dumps(stack), '[]', '']
+                self.recipe.helm_apply.reset_mock()
+                self.monitor.install()
+                self.assertEqual(self.output.call_args_list[0].args[0],
+                                 self.recipe.hm+['get', 'values', self.recipe.stack, '--all', '-o', 'json'])
+                self.recipe.helm_apply.assert_called_once()
+                release, chart, values = self.recipe.helm_apply.call_args.args
+                self.assertEqual((release, chart), (self.monitor.release, monitoring.CHART))
+                targets = [t for t in values['targets'] if t['name'] == 'gateway']
+                self.assertEqual(len(targets), 1)
+                self.assertEqual((targets[0]['portName'], targets[0]['port']), ('http', expected))
+
+    def test_install_rejects_invalid_enabled_gateway_port_before_upgrade(self):
+        for port in (0, -1, 65536, True, '9465', None):
+            with self.subTest(port=port):
+                stack = {'llm-api-gateway': {'llmApiGateway': {'metrics': {'enabled': True, 'port': port}}}}
+                self.output.return_value = json.dumps(stack)
+                with self.assertRaisesRegex(RuntimeError, 'Gateway metrics port'):
+                    self.monitor.install()
+                self.recipe.helm_apply.assert_not_called()
+
     def test_reinstall_recovers_original_password_and_rejects_foreign_secrets(self):
         secret = {'metadata': {'annotations': {'meta.helm.sh/release-name': self.monitor.release,
                   'meta.helm.sh/release-namespace': self.config['namespace']}}, 'data': {'admin-password': base64.b64encode(b'original-password').decode()}}
-        self.output.side_effect = [json.dumps([{'chart': 'llm-demo-monitoring-0.1.0'}]), json.dumps(secret)]
+        self.output.side_effect = ['{}', json.dumps([{'chart': 'llm-demo-monitoring-0.1.0'}]), json.dumps(secret)]
         self.monitor.install()
         self.assertEqual(self.recipe.helm_apply.call_args.args[2]['grafana']['adminPassword'], 'original-password')
         self.recipe.helm_apply.reset_mock()
         secret['metadata']['annotations']['meta.helm.sh/release-name'] = 'other'
-        self.output.side_effect = ['[]', json.dumps(secret)]
+        self.output.side_effect = ['{}', '[]', json.dumps(secret)]
         with self.assertRaisesRegex(RuntimeError, 'another installation'):
             self.monitor.install()
         self.recipe.helm_apply.assert_not_called()
 
     def test_missing_credentials_on_existing_release_fail_before_upgrade(self):
-        self.output.side_effect = [json.dumps([{'chart': 'llm-demo-monitoring-0.1.0'}]), '']
+        self.output.side_effect = ['{}', json.dumps([{'chart': 'llm-demo-monitoring-0.1.0'}]), '']
         with self.assertRaisesRegex(RuntimeError, 'lost its credential'):
             self.monitor.install()
         self.recipe.helm_apply.assert_not_called()
@@ -730,6 +773,39 @@ class MonitoringChartTests(unittest.TestCase):
             self.assertEqual(len(selected), 1, t)
             ports = [p for c in selected[0]['spec']['template']['spec']['containers'] for p in c.get('ports', []) if p['name']==t['portName']]
             self.assertEqual(len(ports), 1, t)
+
+    def test_gateway_scrape_matches_default_custom_and_undeclared_metrics_ports(self):
+        gateway_chart = HERE.parent.parent/'llm-api-gateway/llm-api-gateway'
+        for enabled, port in ((True, 9464), (True, 9465), (False, 9465)):
+            with self.subTest(enabled=enabled, port=port):
+                metrics = {'enabled': enabled, 'port': port}
+                gateway_values = {'llmApiGateway': {'metrics': metrics, 'image': {'repository': 'example/gateway', 'tag': 'test'}}}
+                path = self.recipe.work/'gateway-port.json'
+                path.write_text(json.dumps(gateway_values))
+                rendered = subprocess.check_output(['helm', 'template', self.recipe.stack, str(gateway_chart), '-f', str(path)], text=True)
+                gateway_docs = [d for d in yaml.safe_load_all(rendered) if d]
+                pod = next(d for d in gateway_docs if d['kind'] == 'Deployment')['spec']['template']['spec']
+                environment_name = pod['containers'][0]['envFrom'][0]['configMapRef']['name']
+                environment = next(d for d in gateway_docs if d['kind'] == 'ConfigMap' and d['metadata']['name'] == environment_name)['data']
+                expected_port = int(environment.get('METRICS_PORT', 9464))
+                output = Mock(side_effect=[json.dumps({'llm-api-gateway': gateway_values}), '[]', ''])
+                monitor = monitoring.Monitoring(self.recipe, Mock(), output, Mock())
+                with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'stamp'), \
+                     patch.object(self.recipe, 'helm_apply') as apply:
+                    monitor.install()
+                path.write_text(json.dumps(apply.call_args.args[2]))
+                rendered = subprocess.check_output(['helm', 'template', monitor.release, str(monitoring.CHART), '-f', str(path)], text=True)
+                docs = [d for d in yaml.safe_load_all(rendered) if d]
+                config = yaml.safe_load(next(d for d in docs if d['kind'] == 'ConfigMap' and d['metadata']['name'].endswith('-collector'))['data']['config.yaml'])
+                jobs = [j for j in config['receivers']['prometheus']['config']['scrape_configs'] if j['job_name'] == 'gateway']
+                self.assertEqual(len(jobs), 1)
+                rules = jobs[0]['relabel_configs']
+                port_filter = next(r for r in rules if r['source_labels'] == ['__meta_kubernetes_pod_container_port_name'])
+                selected = [p for c in pod['containers'] for p in c['ports'] if re.fullmatch(port_filter['regex'], p['name'])]
+                self.assertEqual(len(selected), 1)
+                rewrite = next(r for r in rules if r.get('target_label') == '__address__')
+                self.assertEqual(rewrite['replacement'], '$${1}:'+str(expected_port))
+                self.assertEqual(any(p['name'] == 'metrics' for c in pod['containers'] for p in c['ports']), enabled)
 
     def test_collection_has_scoped_read_only_rbac_and_no_cluster_role(self):
         self.assertFalse(any(d['kind'].startswith('ClusterRole') for d in self.docs))

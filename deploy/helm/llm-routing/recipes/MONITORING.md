@@ -9,7 +9,7 @@ Edit `monitoring` in the saved configuration, then run `python3 recipe.py monito
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `enabled` | `false` when omitted; `init` enables it | Include monitoring in `stack`. The explicit `monitoring` command enables it. |
-| `retentionPeriod` | `3d` | Metrics retention |
+| `retentionPeriod` | `3d` | At least `24h`. Use whole numbers with `h`, `d`, `w`, `M` (months) or `y`. |
 | `storageSize` | `5Gi` | Initial metrics volume size |
 | `namespaces` | Installation namespace | Namespaces to scrape, including the installation namespace |
 | `extraTargets` | `[]` | Additional metric exporters |

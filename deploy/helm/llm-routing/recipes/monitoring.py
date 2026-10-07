@@ -78,7 +78,10 @@ def chart_values(recipe):
                 'Monitoring images must have an explicit version tag or digest.')
         values[component]['image'] = image
     values['victoriaMetrics']['retentionPeriod'] = options.get('retentionPeriod', '3d')
-    require(re.fullmatch(r'[1-9][0-9]*[dhmy]', values['victoriaMetrics']['retentionPeriod']) is not None, 'Use an explicit retention duration such as 3d.')
+    retention = values['victoriaMetrics']['retentionPeriod']
+    duration = re.fullmatch(r'([1-9][0-9]*)([hdwMy])', retention) if isinstance(retention, str) else None
+    require(duration is not None and (duration[2] != 'h' or int(duration[1]) >= 24),
+            'Use a retention of at least 24h with h, d, w, M or y, such as 3d.')
     storage = values['victoriaMetrics']['storage']
     storage.update(storageClass=recipe.c['storageClass'], size=options.get('storageSize', '5Gi'))
     require(re.fullmatch(r'[1-9][0-9]*(Mi|Gi|Ti)', storage['size']) is not None, 'Use a storageSize such as 5Gi.')
@@ -205,6 +208,12 @@ class Monitoring:
         require(enabled(r.c), 'Set monitoring.enabled=true in the saved configuration.')
         r.bound_cluster()
         values = chart_values(r)
+        stack = json.loads(self.output(r.hm+['get', 'values', r.stack, '--all', '-o', 'json']))
+        metrics = stack.get('llm-api-gateway', {}).get('llmApiGateway', {}).get('metrics', {})
+        if metrics.get('enabled'):
+            port = metrics.get('port', 9464)
+            require(type(port) is int and 1 <= port <= 65535, 'Gateway metrics port must be an integer from 1 to 65535.')
+            values['targets'][0]['port'] = port
         existing = self.release_exists()
         secret = json.loads(self.output(r.kc+['get', 'secret', values['grafana']['adminSecret'], '--ignore-not-found', '-o', 'json']) or '{}')
         if secret:
