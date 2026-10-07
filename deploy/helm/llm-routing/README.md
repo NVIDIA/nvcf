@@ -80,4 +80,51 @@ python3 llm.py chat --model qwen3.8-27b-nvfp4 --stream \
 
 Each command retrieves the gateway CA and caller key, opens a temporary local connection, and cleans up its local connection files when it finishes. Use [connection overrides](ADVANCED.md#shared-cli-connection-options) for another context, namespace or an older installation.
 
+## 4. Stop or uninstall a model
+
+Downloaded model weights are the model cache on disk. Choose what to retain:
+
+| Action | GPU and runtime memory | Deployment configuration | Downloaded files |
+| --- | --- | --- | --- |
+| Stop | Released after the model pods terminate | Kept for resume | Kept |
+| Uninstall, keep downloads | Released | Removed | Kept for reinstall |
+| Uninstall completely | Released | Removed | Deleted through separate manual storage cleanup |
+
+These actions affect one model release. Keep the shared gateway and operator installed so other models continue serving and endpoint cleanup can finish.
+
+### Stop and resume
+
+Stop the FP8 release installed above. Use the same chart version that installed the release:
+
+```bash
+helm upgrade qwen-fp8 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
+  --kube-context "$LLM_CONTEXT" --namespace llm-stack \
+  --reuse-values --set suspended=true --timeout 10m &&
+kubectl --context "$LLM_CONTEXT" -n llm-stack wait --for=delete pod \
+  -l app.kubernetes.io/instance=qwen-fp8 --timeout=10m
+```
+
+Wait for the pods to terminate before assigning their GPUs to another model. The stop command omits Helm's readiness wait because the model is intentionally unavailable. The release keeps its node placement and cache claims.
+
+Resume when those GPUs are available again:
+
+```bash
+helm upgrade qwen-fp8 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
+  --kube-context "$LLM_CONTEXT" --namespace llm-stack \
+  --reuse-values --set suspended=false --wait --timeout 120m
+```
+
+### Uninstall, keep downloads
+
+```bash
+helm uninstall qwen-fp8 --kube-context "$LLM_CONTEXT" \
+  --namespace llm-stack --wait --timeout 10m
+```
+
+This removes the model's workloads, endpoint and Helm release. Its persistent volume claims (PVCs) and downloaded files remain. Reinstall using the [retained cache and its original node](ADVANCED.md#helm-cache-reuse-and-recovery).
+
+### Uninstall completely
+
+Follow the [complete removal procedure](ADVANCED.md#remove-downloaded-model-files) to record cache ownership, uninstall the release, then remove its storage. There is no combined uninstall-and-delete command. Delete only this model's dedicated cache claims after checking ownership and use. External or shared claims stay untouched. Physical disk reclamation depends on the volume's reclaim policy and storage provisioner.
+
 [Advanced deployment and configuration](ADVANCED.md) covers credentials, recovery, GLM, monitoring and the existing Python workflows. The common catalog is ready for API consumers. The [recipe API and UI integration](https://github.com/NVIDIA/nvcf/issues/2337) is tracked separately.

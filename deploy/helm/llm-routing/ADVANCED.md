@@ -89,6 +89,34 @@ kubectl --context "$LLM_CONTEXT" -n llm-stack logs deployment/qwen-fp8-serve-0 -
 
 Correct the values and rerun the original Helm command. Set `suspended: true` in the model values to release its GPUs while retaining cache claims. Set it back to `false` and rerun Helm to resume. Automatic recipes withdraw their endpoint while suspended and restore it on resume. The shared release and other models continue serving. `helm uninstall` removes model-owned workloads and endpoint resources while retaining model PVCs.
 
+### Remove downloaded model files
+
+Complete uninstall combines [removing the model release](README.md#uninstall-keep-downloads) with manual storage cleanup. Helm alone retains the model PVCs. Stop preserves both the release and its downloads.
+
+1. Before uninstalling, record the model's cache claims and bound persistent volumes (PVs). Check the installed values for existing-claim overrides. The example below applies to the FP8 release installed from the main README with its own new cache:
+
+   ```bash
+   helm get values qwen-fp8 --kube-context "$LLM_CONTEXT" --namespace llm-stack
+   LLM_MODEL_CACHE=qwen-fp8-cache-0
+   kubectl --context "$LLM_CONTEXT" -n llm-stack get pvc "$LLM_MODEL_CACHE" -o yaml
+   LLM_MODEL_VOLUME="$(kubectl --context "$LLM_CONTEXT" -n llm-stack get pvc "$LLM_MODEL_CACHE" -o jsonpath='{.spec.volumeName}')"
+   kubectl --context "$LLM_CONTEXT" get pv "$LLM_MODEL_VOLUME" -o yaml
+   ```
+
+   Verify that the claim's `meta.helm.sh/release-name` and `meta.helm.sh/release-namespace` annotations match this model release and namespace. Check the PV's `persistentVolumeReclaimPolicy`. Exclude externally supplied claims and any storage shared with another model. Names alone do not establish ownership. Qwen uses one cache claim per rank. GLM uses separate artifact and RPC-cache claims.
+
+2. Uninstall the model release and wait for its pods to terminate. Check that no other workload uses the cache before deleting it. Keep the shared infrastructure and namespace installed.
+
+3. Delete only the confirmed, dedicated claim by its exact name. This is irreversible when the provisioner deletes its backing data:
+
+   ```bash
+   kubectl --context "$LLM_CONTEXT" -n llm-stack delete pvc "$LLM_MODEL_CACHE"
+   ```
+
+   Repeat only for other claims confirmed to belong exclusively to the removed model. Do not delete claims selected only by a name prefix or delete the namespace to reclaim one model's storage.
+
+4. Verify reclamation in the storage system. With `Delete`, the provisioner is responsible for deleting the volume and its data. With `Retain`, deleting the claim leaves the PV and data behind, so complete removal needs the storage administrator's cleanup procedure. Removing a claim alone does not prove disk space was freed.
+
 ### Helm GLM recipe
 
 The committed [GLM values](recipes/values/glm-5.3.yaml) select the automatic two-node GB10 profile. Replace `gpu-node-1` and `gpu-node-2` below with distinct available nodes. Override `runtimeClassName` and `storageClassName` if your cluster uses different names.
