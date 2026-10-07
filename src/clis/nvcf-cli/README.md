@@ -702,10 +702,10 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
 ```
 
 `--llm-model` accepts `name`, `uris`, `routingMethod`, and `tokenRateLimit`
-key/value fields. Separate multiple URIs with `|`. Valid routing
-methods are `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, and
-`random`; the CLI validates and sends these API/auth spellings in the create
-request.
+key/value fields. Separate multiple URIs with `|`. `routingMethod` is a
+routing algorithm name, optionally followed by `;name=value` tuning parameters,
+such as `pulsar;seed=stable-a`. The CLI sends it unchanged; the API checks it
+and the CLI prints the API error.
 `tokenRateLimit` supports positive integer token limits for `S`, `M`, `H`, `D`, and `W`.
 Use `1000-S` for a single inline CLI limit. Use JSON input for combined limits, such as `1000-S,5000-M,100000-H,500000-D,1000000-W`, because inline model specs use commas as field separators.
 Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`,

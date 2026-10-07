@@ -157,43 +157,82 @@ func TestParseLLMModelString(t *testing.T) {
 	}
 }
 
-func TestParseLLMModelStringAcceptsAdvancedRoutingMethods(t *testing.T) {
+// The API validates routing methods; the CLI forwards every value unchanged.
+var verbatimRoutingMethods = []string{
+	"pulsar",
+	"groq-multiregion",
+	"POWER_OF_TWO",
+	"sticky",
+	"pulsar;seed=stable-a;n=2",
+	`pulsar;seed="a = b"`,
+	"wait-and-widen;next_bucket_unlock_factor=\"0.0625\";ignore_queue_time=true",
+}
+
+func TestJSONRoutingMethodReachesAPIRequestVerbatim(t *testing.T) {
 	t.Parallel()
 
-	for _, test := range []struct {
-		input    string
-		expected string
-	}{
-		{input: "groq_multiregion", expected: "groq_multiregion"},
-		{input: "groq-multiregion", expected: "groq_multiregion"},
-		{input: "round-robin", expected: "round_robin"},
-		{input: "power-of-two", expected: "power_of_two"},
-		{input: "wait_and_widen", expected: "wait_and_widen"},
-		{input: "wait-and-widen", expected: "wait_and_widen"},
-		{input: "pulsar_wait_and_widen", expected: "pulsar_wait_and_widen"},
-		{input: "pulsar-wait-and-widen", expected: "pulsar_wait_and_widen"},
-		{input: "pulsar", expected: "pulsar"},
-	} {
-		t.Run(test.input, func(t *testing.T) {
+	for _, routingMethod := range verbatimRoutingMethods {
+		t.Run(routingMethod, func(t *testing.T) {
 			t.Parallel()
 
-			model, err := parseLLMModelString("name=dummy-model,uris=/v1/chat/completions,routingMethod=" + test.input)
+			encoded, err := json.Marshal(routingMethod)
 			if err != nil {
-				t.Fatalf("parse llm model: %v", err)
+				t.Fatalf("encode routing method: %v", err)
 			}
-			if got := stringValue(model.LLMConfig.RoutingMethod); got != test.expected {
-				t.Fatalf("routingMethod = %q, want %q", got, test.expected)
+
+			var createConfig CreateConfig
+			if err := json.Unmarshal([]byte(`{
+				"name": "verbatim-test",
+				"inferenceUrl": "/v1/chat/completions",
+				"inferencePort": 8000,
+				"functionType": "LLM",
+				"models": [{"name": "dummy-model", "llmConfig": {"uris": ["/v1/chat/completions"], "routingMethod": `+string(encoded)+`}}]
+			}`), &createConfig); err != nil {
+				t.Fatalf("unmarshal create config: %v", err)
+			}
+			createRequest, _, err := buildCreateFunctionRequest(&createConfig)
+			if err != nil {
+				t.Fatalf("build create request: %v", err)
+			}
+			if got := stringValue(createRequest.Models[0].LLMConfig.RoutingMethod); got != routingMethod {
+				t.Fatalf("create routingMethod = %q, want %q", got, routingMethod)
+			}
+
+			var updateConfig UpdateConfig
+			if err := json.Unmarshal([]byte(`{
+				"modelUpdates": [{"modelName": "dummy-model", "llmConfig": {"routingMethod": `+string(encoded)+`}}]
+			}`), &updateConfig); err != nil {
+				t.Fatalf("unmarshal update config: %v", err)
+			}
+			updateRequest, err := updateConfigToClientRequest(&updateConfig)
+			if err != nil {
+				t.Fatalf("build update request: %v", err)
+			}
+			if got := stringValue(updateRequest.ModelUpdates[0].LLMConfig.RoutingMethod); got != routingMethod {
+				t.Fatalf("update routingMethod = %q, want %q", got, routingMethod)
 			}
 		})
 	}
 }
 
-func TestParseLLMModelStringRejectsInvalidRoutingMethod(t *testing.T) {
+func TestParseLLMModelStringForwardsRoutingMethodVerbatim(t *testing.T) {
 	t.Parallel()
 
-	_, err := parseLLMModelString("name=dummy-model,uris=/v1/chat/completions,routingMethod=sticky")
-	if err == nil {
-		t.Fatal("expected invalid routing method error")
+	for _, routingMethod := range verbatimRoutingMethods {
+		t.Run(routingMethod, func(t *testing.T) {
+			t.Parallel()
+
+			model, err := parseLLMModelString("name=dummy-model,uris=/v1/chat/completions,routingMethod=" + routingMethod + ",tokenRateLimit=1000-M")
+			if err != nil {
+				t.Fatalf("parse llm model: %v", err)
+			}
+			if got := stringValue(model.LLMConfig.RoutingMethod); got != routingMethod {
+				t.Fatalf("routingMethod = %q, want %q", got, routingMethod)
+			}
+			if got := stringValue(model.LLMConfig.TokenRateLimit); got != "1000-M" {
+				t.Fatalf("tokenRateLimit = %q, want 1000-M", got)
+			}
+		})
 	}
 }
 
@@ -391,32 +430,19 @@ func TestParseLLMModelUpdateString(t *testing.T) {
 	}
 }
 
-func TestParseLLMModelUpdateStringAcceptsAdvancedRoutingMethods(t *testing.T) {
+func TestParseLLMModelUpdateStringForwardsRoutingMethodVerbatim(t *testing.T) {
 	t.Parallel()
 
-	for _, test := range []struct {
-		input    string
-		expected string
-	}{
-		{input: "groq_multiregion", expected: "groq_multiregion"},
-		{input: "groq-multiregion", expected: "groq_multiregion"},
-		{input: "round-robin", expected: "round_robin"},
-		{input: "power-of-two", expected: "power_of_two"},
-		{input: "wait_and_widen", expected: "wait_and_widen"},
-		{input: "wait-and-widen", expected: "wait_and_widen"},
-		{input: "pulsar_wait_and_widen", expected: "pulsar_wait_and_widen"},
-		{input: "pulsar-wait-and-widen", expected: "pulsar_wait_and_widen"},
-		{input: "pulsar", expected: "pulsar"},
-	} {
-		t.Run(test.input, func(t *testing.T) {
+	for _, routingMethod := range verbatimRoutingMethods {
+		t.Run(routingMethod, func(t *testing.T) {
 			t.Parallel()
 
-			update, err := parseLLMModelUpdateString("name=dummy-model,routingMethod=" + test.input)
+			update, err := parseLLMModelUpdateString("name=dummy-model,routingMethod=" + routingMethod)
 			if err != nil {
 				t.Fatalf("parse llm model update: %v", err)
 			}
-			if got := stringValue(update.LLMConfig.RoutingMethod); got != test.expected {
-				t.Fatalf("routingMethod = %q, want %q", got, test.expected)
+			if got := stringValue(update.LLMConfig.RoutingMethod); got != routingMethod {
+				t.Fatalf("routingMethod = %q, want %q", got, routingMethod)
 			}
 		})
 	}
@@ -450,15 +476,6 @@ func TestParseLLMModelUpdateStringRejectsMissingModelName(t *testing.T) {
 	_, err := parseLLMModelUpdateString("routingMethod=round_robin")
 	if err == nil {
 		t.Fatal("expected missing name error")
-	}
-}
-
-func TestParseLLMModelUpdateStringRejectsInvalidRoutingMethod(t *testing.T) {
-	t.Parallel()
-
-	_, err := parseLLMModelUpdateString("name=dummy-model,routingMethod=sticky")
-	if err == nil {
-		t.Fatal("expected invalid routing method error")
 	}
 }
 
