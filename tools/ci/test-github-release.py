@@ -1934,6 +1934,12 @@ class GithubReleaseTest(unittest.TestCase):
         """Only explicit missing-artifact responses may permit a chart push."""
         self.assertTrue(self.github_release.missing_helm_chart_output("manifest unknown"))
         self.assertTrue(self.github_release.missing_helm_chart_output("status code: 404"))
+        self.assertTrue(
+            self.github_release.missing_helm_chart_output(
+                'Error: failed to perform "FetchReference" on source: '
+                "registry.example.com/helm-nvcf-openbao-server:0.33.0: not found"
+            )
+        )
         self.assertFalse(
             self.github_release.missing_helm_chart_output("credentials file not found")
         )

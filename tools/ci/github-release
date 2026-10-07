@@ -1013,7 +1013,12 @@ def helm_archive_signature(path):
 def missing_helm_chart_output(output):
     """Return whether Helm's output specifically reports an absent OCI artifact."""
     lowered = output.lower()
-    return any(phrase in lowered for phrase in ("manifest unknown", "status code: 404"))
+    if any(phrase in lowered for phrase in ("manifest unknown", "status code: 404")):
+        return True
+    # Helm's oras-go v2 registry client reports a missing OCI artifact as:
+    #   Error: failed to perform "FetchReference" on source: <ref>: not found
+    # which carries neither of the phrases above.
+    return 'fetchreference" on source' in lowered and "not found" in lowered
 
 
 def publish_release_chart(root, service, version, dry_run, app_version=None):
