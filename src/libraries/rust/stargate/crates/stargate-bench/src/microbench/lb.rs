@@ -536,31 +536,35 @@ fn excluded_cluster_ids_for_scenario(scenario: LbMicrobenchScenario) -> Option<H
 
 fn build_candidates(count: usize) -> Vec<RoutedClusterSnapshot> {
     (0..count)
-        .map(|index| RoutedClusterSnapshot {
-            cluster_id: format!("cluster-{index:04}"),
-            stats: ModelStats {
-                output_tps: 120.0 + (index % 11) as f64,
-                last_mean_input_tps: 1_200.0 + (index % 13) as f64 * 31.0,
-                max_output_tps: 500.0,
-                queue_size: (index % 7) as u64,
-                queued_input_size: (index % 5) as u64 * 256,
-                kv_cache_capacity_tokens: 131_072,
-                kv_cache_used_tokens: 8_192 + (index % 23) as u64 * 64,
-                kv_cache_free_tokens: 122_880 - (index % 23) as u64 * 64,
-                num_running_queries: (index % 9) as u64,
-                max_engine_concurrency: 16,
-                total_query_input_size: (index % 6) as u64 * 384,
-                queue_time_estimate_ms_by_priority: HashMap::from([
-                    (0, (index % 5) as u64),
-                    (2, 2 + (index % 11) as u64),
-                    (4, 4 + (index % 17) as u64),
-                ]),
-                ..ModelStats::default()
-            },
-            rtt: Duration::from_micros(500 + (index % 19) as u64 * 75),
-            snapshot_updated_at: Instant::now(),
-            status: InferenceServerStatus::Active,
-            active_backend_count: 1,
+        .map(|index| {
+            let input_tps = 1_200.0 + (index % 13) as f64 * 31.0;
+            RoutedClusterSnapshot {
+                cluster_id: format!("cluster-{index:04}"),
+                stats: ModelStats {
+                    output_tps: 120.0 + (index % 11) as f64,
+                    last_mean_input_tps: input_tps,
+                    max_input_tps: Some(input_tps),
+                    max_output_tps: 500.0,
+                    queue_size: (index % 7) as u64,
+                    queued_input_size: (index % 5) as u64 * 256,
+                    kv_cache_capacity_tokens: 131_072,
+                    kv_cache_used_tokens: 8_192 + (index % 23) as u64 * 64,
+                    kv_cache_free_tokens: 122_880 - (index % 23) as u64 * 64,
+                    num_running_queries: (index % 9) as u64,
+                    max_engine_concurrency: 16,
+                    total_query_input_size: (index % 6) as u64 * 384,
+                    queue_time_estimate_ms_by_priority: HashMap::from([
+                        (0, (index % 5) as u64),
+                        (2, 2 + (index % 11) as u64),
+                        (4, 4 + (index % 17) as u64),
+                    ]),
+                    ..ModelStats::default()
+                },
+                rtt: Duration::from_micros(500 + (index % 19) as u64 * 75),
+                snapshot_updated_at: Instant::now(),
+                status: InferenceServerStatus::Active,
+                active_backend_count: 1,
+            }
         })
         .collect()
 }

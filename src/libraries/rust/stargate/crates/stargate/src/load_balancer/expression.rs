@@ -260,6 +260,12 @@ impl RoutingExpression {
                         "cache_affinity_wait_ms" => {
                             settings.cache_affinity_wait_ms = Some(parameter.unsigned()?)
                         }
+                        "band_widen_interval_ms" => {
+                            settings.band_widen_interval_ms = Some(parameter.unsigned()?)
+                        }
+                        "fallback_max_queued" => {
+                            settings.fallback_max_queued = Some(parameter.unsigned()?)
+                        }
                         _ => return Err(parameter.invalid("unsupported wait-and-widen parameter")),
                     },
                     _ => return Err(parameter.invalid("unsupported parameter")),
@@ -301,13 +307,14 @@ impl RoutingExpression {
             | "ttft_bucket_size_ms"
             | "next_bucket_unlock_factor"
             | "ignore_queue_time"
-            | "ignore_input_processing_time" => {
-                matches!(algorithm, WaitAndWiden | PulsarWaitAndWiden)
-            }
-            "cache_affinity_virtual_nodes"
+            | "ignore_input_processing_time"
             | "cache_affinity_backend_selection_count"
             | "cache_affinity_input_tokens_scale"
-            | "cache_affinity_wait_ms" => algorithm == WaitAndWiden,
+            | "cache_affinity_wait_ms" => {
+                matches!(algorithm, WaitAndWiden | PulsarWaitAndWiden)
+            }
+            "cache_affinity_virtual_nodes" => algorithm == WaitAndWiden,
+            "band_widen_interval_ms" | "fallback_max_queued" => algorithm == PulsarWaitAndWiden,
             _ => {
                 return Err(self.reject(
                     "unknown_parameter",
@@ -539,7 +546,7 @@ mod tests {
             ),
             (
                 LoadBalancerAlgorithm::PulsarWaitAndWiden,
-                ";seed=changed;n=3;max_queued=4;ttft_bucket_size_ms=50;next_bucket_unlock_factor=\"0.0625\";ignore_queue_time=true;ignore_input_processing_time=false;max_queue_time_floor_ms=100;max_queue_time_ceil_ms=500;consider_kv_free_tokens=true",
+                ";seed=changed;n=3;max_queued=4;ttft_bucket_size_ms=50;next_bucket_unlock_factor=\"0.0625\";ignore_queue_time=true;ignore_input_processing_time=false;max_queue_time_floor_ms=100;max_queue_time_ceil_ms=500;consider_kv_free_tokens=true;cache_affinity_backend_selection_count=2;cache_affinity_input_tokens_scale=0.5;cache_affinity_wait_ms=20;band_widen_interval_ms=10;fallback_max_queued=1",
             ),
         ] {
             let mut base = LoadBalancerAlgorithmConfig::from(algorithm);
@@ -568,14 +575,16 @@ mod tests {
                     settings.ignore_input_processing_time = Some(false);
                     settings.max_queue_time_floor_ms = Some(100);
                     settings.max_queue_time_ceil_ms = Some(500);
+                    settings.cache_affinity_backend_selection_count = Some(2);
+                    settings.cache_affinity_input_tokens_scale = Some(0.5);
+                    settings.cache_affinity_wait_ms = Some(20);
                     if algorithm == LoadBalancerAlgorithm::WaitAndWiden {
                         settings.comparator = Some(ClusterComparator::Utilization);
                         settings.cache_affinity_virtual_nodes = Some(8);
-                        settings.cache_affinity_backend_selection_count = Some(2);
-                        settings.cache_affinity_input_tokens_scale = Some(0.5);
-                        settings.cache_affinity_wait_ms = Some(20);
                     } else {
                         expected.request_policy.consider_kv_free_tokens = true;
+                        settings.band_widen_interval_ms = Some(10);
+                        settings.fallback_max_queued = Some(1);
                     }
                 }
                 _ => {}
@@ -625,18 +634,8 @@ mod tests {
                 "pulsar-wait-and-widen;cache_affinity_virtual_nodes=1",
                 "not_applicable",
             ),
-            (
-                "pulsar-wait-and-widen;cache_affinity_backend_selection_count=1",
-                "not_applicable",
-            ),
-            (
-                "pulsar-wait-and-widen;cache_affinity_input_tokens_scale=0.5",
-                "not_applicable",
-            ),
-            (
-                "pulsar-wait-and-widen;cache_affinity_wait_ms=1",
-                "not_applicable",
-            ),
+            ("wait-and-widen;band_widen_interval_ms=1", "not_applicable"),
+            ("wait-and-widen;fallback_max_queued=1", "not_applicable"),
             (
                 "wait-and-widen;consider_kv_free_tokens=false",
                 "not_applicable",

@@ -1331,7 +1331,7 @@
           "FILE:@@//src/invocation-plane-services/http-invocation/crates/server/Cargo.toml fd58955d67ba6d2f03a63f582f937a783a9ffa9590c52e5969ac7b993d95b97a",
           "FILE:@@//src/libraries/rust/stargate/Cargo.lock 4e02eb8522889835f86fd866b968c1ab7f9f36b73a541cba0037ee26c8ef2bff",
           "FILE:@@//src/libraries/rust/stargate/Cargo.toml b2314ab83630edb9b57bdd6a396a08a12f2d10966ed6a6fec3e5df700ffe0cfc",
-          "FILE:@@//src/libraries/rust/stargate/crates/mock-dynamo/Cargo.toml 775c65c930aae4b90cd0673fcae8f8004c69dab454175dba6a712a3dc331c4cf",
+          "FILE:@@//src/libraries/rust/stargate/crates/mock-dynamo/Cargo.toml 6dc7e969f92ca031f252a2d1afe9d7a37c9c06a872bf28198467fc98830ec94c",
           "FILE:@@//src/libraries/rust/stargate/crates/proto/Cargo.toml 14c9ed935d6daf6223c449bb026778c4395c2e8d6dc84a67fb372a90b24ffae0",
           "FILE:@@//src/libraries/rust/stargate/crates/protocol/Cargo.toml c08e2034ca5c02374a6bb44a3f4ec1aee43af82a097880624ed1fa77811ee241",
           "FILE:@@//src/libraries/rust/stargate/crates/pylon/Cargo.toml 681f4d77101aacb261932dc14e1ebaf0c3be5dc71307fed5500565ce4c0c8192",
