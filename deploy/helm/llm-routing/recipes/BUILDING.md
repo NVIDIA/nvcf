@@ -4,10 +4,10 @@ Build gateway, router, Pylon and operator images from your checkout, including l
 
 ## Package charts for distribution
 
-From `deploy/helm/llm-routing`, package shared infrastructure and both model charts with their recipe catalog:
+Use the persistent output variables from the [installation guide](../README.md#0-build-images-and-package-charts). From `deploy/helm/llm-routing`, package shared infrastructure and both model charts with their recipe catalog:
 
 ```bash
-./package-charts.sh --output-dir /tmp/llm-chart-packages
+bash package-charts.sh --output-dir "$LLM_CHARTS"
 ```
 
 The output contains three Helm archives, `index.json`, model terms under `notices/`, and `SHA256SUMS`. Development packaging needs Helm and Python 3. The command builds local dependencies in a temporary directory and preserves source files and existing output files. Choose a fresh output directory for another build.
@@ -20,10 +20,11 @@ Run this developer prerequisite from `deploy/helm/llm-routing` before the target
 
 ```bash
 python3 build-shared-images.py \
-  --namespace llm-stack --output-dir /tmp/llm-images --allow-containerd-import
+  --context "$LLM_CONTEXT" --namespace llm-stack \
+  --output-dir "$LLM_IMAGES" --allow-containerd-import
 ```
 
-The command resolves the current kubeconfig context once, builds and exports the four images, preloads every compatible node, and writes `/tmp/llm-images/shared.values.yaml` for the [Helm installation](../README.md). Docker must be running with Buildx support for the selected architecture and access to base images and build dependencies. Use `--context NAME` to choose another context and `--control-node NODE` to select the build architecture. ARM64 and AMD64 are supported.
+The command uses the selected kubeconfig context, builds and exports the four images, preloads every compatible node, and writes `$LLM_IMAGES/shared.values.yaml` for the [Helm installation](../README.md). Docker must be running with Buildx support for the selected architecture and access to base images and build dependencies. Use `--context NAME` to choose another context and `--control-node NODE` to select the build architecture. ARM64 and AMD64 are supported.
 
 The saved configuration keeps fresh image tags and node UIDs stable on retry. The emitted values select that architecture and use `Never` pull policy. Existing unrelated output files are preserved. This command prepares a fresh stack namespace. Existing combined installations can use the component rebuild commands below with their saved configuration.
 

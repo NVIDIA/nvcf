@@ -6,27 +6,41 @@ Install shared routing once, then install each model recipe with Helm and a smal
 
 Use Kubernetes with the NVIDIA device plugin, a GPU RuntimeClass and persistent storage on compatible model nodes. Install Helm and kubectl on your workstation, plus Python 3.11+ for the model access commands. Select available nodes using the hardware profiles in the [common recipe catalog](recipes/index.json). Profiles specify node count, GPUs per node, resource requests and workload limits.
 
-Obtain the local chart packages and a `shared.values.yaml` with application image references for your node architecture. These examples use `/tmp/llm-chart-packages` for packages and `/tmp/llm-images` for private site values. During development, [build and preload the images and package the charts](recipes/BUILDING.md). The image preparation command generates this values file. Published image references can use the same Helm installation flow.
+Until application images are published to a registry, each installer builds them from this checkout and preloads the cluster nodes. Start Docker with Buildx support and access to base images and build dependencies. The image helper supports ARM64 and AMD64 nodes with containerd. Its import Jobs need permission to mount the nodes' containerd sockets.
 
-Run these examples from `deploy/helm/llm-routing`. Commands use your current kubeconfig context and the `llm-stack` namespace:
+Run the following from `deploy/helm/llm-routing`, in the same terminal. Select your target kubeconfig context first. This example creates a new stack in `llm-stack`; that namespace must not already exist when building images. On a shared cluster, coordinate an unused namespace and use it consistently in the build, Helm and client commands.
+
+## 0. Build images and package charts
 
 ```bash
-export LLM_CHARTS=/tmp/llm-chart-packages
+export LLM_CONTEXT="$(kubectl config current-context)"
+export LLM_WORK="$HOME/.local/state/llm-routing/$LLM_CONTEXT/llm-stack"
+export LLM_IMAGES="$LLM_WORK/images"
+export LLM_CHARTS="$LLM_WORK/charts"
+
+python3 build-shared-images.py \
+  --context "$LLM_CONTEXT" --namespace llm-stack \
+  --output-dir "$LLM_IMAGES" --allow-containerd-import
+bash package-charts.sh --output-dir "$LLM_CHARTS"
 ```
+
+Continue only after both commands succeed. The image helper builds gateway, router, operator and Pylon, preloads every compatible node, and generates `$LLM_IMAGES/shared.values.yaml` with matching image tags, architecture and operator settings. No manual image-tag edits or another developer's saved files are needed. Keep this persistent directory outside the checkout; `/tmp` is not required.
+
+Retries before installation reuse the saved image configuration. Chart packaging requires a fresh output directory; reuse existing successful packages instead of packaging over them. For registry images or component rebuilds, see [building and distributing images](recipes/BUILDING.md).
 
 ## 1. Install shared infrastructure
 
 ```bash
 helm upgrade --install llm-stack "$LLM_CHARTS/llm-shared-stack-0.1.0.tgz" \
-  --namespace llm-stack --create-namespace \
-  --values /tmp/llm-images/shared.values.yaml --wait --timeout 10m
+  --kube-context "$LLM_CONTEXT" --namespace llm-stack --create-namespace \
+  --values "$LLM_IMAGES/shared.values.yaml" --wait --timeout 10m
 ```
 
 Helm installs the gateway, router and namespace-scoped operator with an empty model registry. A chart verification Job checks gateway TLS, model discovery, acceptance of the caller key and rejection of an invalid key before Helm reports success. The same checks run on upgrades with registered models. The chart generates the caller credential and TLS material on first installation and preserves them on upgrades. `operator.watchNamespaces` in the values file must contain `llm-stack`. For the first operator in a cluster, set `operator.installCRDs: true`. Other installations reuse that CRD.
 
 ## 2. Install a model
 
-Create `/tmp/llm-images/qwen.values.yaml` using an available node and your cluster's storage and runtime class names:
+Create `$LLM_IMAGES/qwen.values.yaml` using an available node and your cluster's storage and runtime class names:
 
 ```yaml
 recipe: qwen3.8-27b
@@ -40,9 +54,9 @@ Install the FP8 recipe:
 
 ```bash
 helm upgrade --install qwen-fp8 "$LLM_CHARTS/pylon-sglang-recipe-0.2.0.tgz" \
-  --namespace llm-stack \
-  --values /tmp/llm-images/qwen.values.yaml --wait --timeout 120m
-kubectl -n llm-stack wait \
+  --kube-context "$LLM_CONTEXT" --namespace llm-stack \
+  --values "$LLM_IMAGES/qwen.values.yaml" --wait --timeout 120m
+kubectl --context "$LLM_CONTEXT" -n llm-stack wait \
   --for=condition=Registered inferenceendpoint/qwen-fp8 --timeout=5m
 ```
 
@@ -52,8 +66,8 @@ For a second precision on another available node, use the same values file with 
 
 ```bash
 helm upgrade --install qwen-nvfp4 "$LLM_CHARTS/pylon-sglang-recipe-0.2.0.tgz" \
-  --namespace llm-stack \
-  --values /tmp/llm-images/qwen.values.yaml --set recipe=qwen3.8-27b-nvfp4 --set 'nodes[0]=gpu-node-2' \
+  --kube-context "$LLM_CONTEXT" --namespace llm-stack \
+  --values "$LLM_IMAGES/qwen.values.yaml" --set recipe=qwen3.8-27b-nvfp4 --set 'nodes[0]=gpu-node-2' \
   --wait --timeout 120m
 ```
 

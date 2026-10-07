@@ -12,12 +12,12 @@ TLS customization uses `gatewayStack.tls` and the child chart listener TLS value
 
 ### Shared Helm installation and verification
 
-The shared chart runs a verification Job after installation and upgrade. It uses the installed CA to check gateway TLS and the `/v1/models` response, then checks that an unknown model returns HTTP 401 with an invalid key and HTTP 404 with the valid key. An empty registry is valid on first installation. Existing models remain valid on upgrades. A failed check makes the Helm command fail:
+Use the output variables from the [installation guide](README.md#0-build-images-and-package-charts). The shared chart runs a verification Job after installation and upgrade. It uses the installed CA to check gateway TLS and the `/v1/models` response, then checks that an unknown model returns HTTP 401 with an invalid key and HTTP 404 with the valid key. An empty registry is valid on first installation. Existing models remain valid on upgrades. A failed check makes the Helm command fail:
 
 ```bash
 helm upgrade --install llm-stack "$LLM_CHARTS/llm-shared-stack-0.1.0.tgz" \
-  --namespace llm-stack --create-namespace \
-  --values /tmp/llm-images/shared.values.yaml --wait --timeout 10m
+  --kube-context "$LLM_CONTEXT" --namespace llm-stack --create-namespace \
+  --values "$LLM_IMAGES/shared.values.yaml" --wait --timeout 10m
 ```
 
 The Job retries temporary connection and gateway availability failures for up to 120 seconds. TLS certificate and authentication failures stop verification immediately. Successful verification Jobs are removed. Failed Jobs and their logs remain available until the next install or upgrade.
@@ -43,24 +43,24 @@ For an SDK or raw HTTP client, keep a gateway connection open and provide its CA
 Forward the gateway in one terminal:
 
 ```bash
-kubectl -n llm-stack port-forward svc/llm-api-gateway 18443:8080
+kubectl --context "$LLM_CONTEXT" -n llm-stack port-forward svc/llm-api-gateway 18443:8080
 ```
 
-In another terminal, retrieve the gateway CA and caller key, then list models:
+In another terminal, set `LLM_CONTEXT` and `LLM_IMAGES` as in the installation guide, then retrieve the gateway CA and caller key and list models:
 
 ```bash
-kubectl -n llm-stack get configmap llm-gateway-stack-ca \
-  -o 'jsonpath={.data.ca\.crt}' > /tmp/llm-images/gateway-ca.crt
-API_KEY=$(kubectl -n llm-stack get secret llm-shared-caller-key \
+kubectl --context "$LLM_CONTEXT" -n llm-stack get configmap llm-gateway-stack-ca \
+  -o 'jsonpath={.data.ca\.crt}' > "$LLM_IMAGES/gateway-ca.crt"
+API_KEY=$(kubectl --context "$LLM_CONTEXT" -n llm-stack get secret llm-shared-caller-key \
   -o 'go-template={{index .data "api-key" | base64decode}}')
-curl --fail-with-body --cacert /tmp/llm-images/gateway-ca.crt -H "Authorization: Bearer $API_KEY" \
+curl --fail-with-body --cacert "$LLM_IMAGES/gateway-ca.crt" -H "Authorization: Bearer $API_KEY" \
   https://localhost:18443/v1/models
 ```
 
 Send a chat request:
 
 ```bash
-curl --fail-with-body --cacert /tmp/llm-images/gateway-ca.crt -H "Authorization: Bearer $API_KEY" \
+curl --fail-with-body --cacert "$LLM_IMAGES/gateway-ca.crt" -H "Authorization: Bearer $API_KEY" \
   -H 'Content-Type: application/json' https://localhost:18443/v1/chat/completions \
   -d '{"model":"qwen3.8-27b","messages":[{"role":"user","content":"What is 17 multiplied by 19? Give one short sentence."}]}'
 ```
@@ -82,16 +82,16 @@ Select the node holding that PVC. The chart mounts it and preserves its existing
 Inspect startup and readiness:
 
 ```bash
-kubectl -n llm-stack get pods,inferenceendpoints
-kubectl -n llm-stack logs deployment/qwen-fp8-serve-0 -c placement-check
-kubectl -n llm-stack logs deployment/qwen-fp8-serve-0 -c sglang
+kubectl --context "$LLM_CONTEXT" -n llm-stack get pods,inferenceendpoints
+kubectl --context "$LLM_CONTEXT" -n llm-stack logs deployment/qwen-fp8-serve-0 -c placement-check
+kubectl --context "$LLM_CONTEXT" -n llm-stack logs deployment/qwen-fp8-serve-0 -c sglang
 ```
 
 Correct the values and rerun the original Helm command. Set `suspended: true` in the model values to release its GPUs while retaining cache claims. Set it back to `false` and rerun Helm to resume. Automatic recipes withdraw their endpoint while suspended and restore it on resume. The shared release and other models continue serving. `helm uninstall` removes model-owned workloads and endpoint resources while retaining model PVCs.
 
 ### Helm GLM recipe
 
-The GLM automatic profile uses two distinct GB10 nodes. Create `/tmp/llm-images/glm.values.yaml`:
+The GLM automatic profile uses two distinct GB10 nodes. Create `$LLM_IMAGES/glm.values.yaml`:
 
 ```yaml
 recipe: glm-5.3
@@ -106,8 +106,8 @@ Install it with the shared stack already running:
 
 ```bash
 helm upgrade --install glm "$LLM_CHARTS/pylon-gguf-backend-0.2.0.tgz" \
-  --namespace llm-stack \
-  --values /tmp/llm-images/glm.values.yaml --wait --timeout 120m
+  --kube-context "$LLM_CONTEXT" --namespace llm-stack \
+  --values "$LLM_IMAGES/glm.values.yaml" --wait --timeout 120m
 ```
 
 Kubernetes checks placement, builds the pinned llama.cpp runtime, starts the worker RPC server and qualifies both GPUs. It then verifies or downloads the pinned GGUF cache and starts the model server. The served model ID is `GLM-5.3-UD-IQ2_M`. The common catalog lists its per-node resource and storage requirements. The current cached two-node Helm trial stopped at the host-memory guard during loading. Automatic serving validation remains open.
