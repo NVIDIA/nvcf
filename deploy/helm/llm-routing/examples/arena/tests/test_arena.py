@@ -96,5 +96,47 @@ class RulesTests(unittest.TestCase):
         self.assertEqual(arena.post_message(state, 'o', 'gg', 2000.0), 'The game is over.')
 
 
+class GameFileTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='arena-')
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = pathlib.Path(self.tmp.name)
+        arena.save(self.dir, arena.new_state(NAMES, 'x', 1000.0))
+
+    def test_locked_changes_are_saved(self):
+        with arena.locked(self.dir) as state:
+            arena.apply_move(state, 'x', 4, 1001.0)
+        self.assertEqual(arena.load(self.dir)['moves'][0]['column'], 4)
+
+    def test_an_error_inside_the_lock_saves_nothing(self):
+        with self.assertRaises(RuntimeError), arena.locked(self.dir) as state:
+            state['moves'].append({'player': 'x', 'column': 4, 'time': 1001.0})
+            raise RuntimeError('stop')
+        self.assertEqual(arena.load(self.dir)['moves'], [])
+
+    def test_two_processes_do_not_lose_updates(self):
+        code = ('import pathlib, sys\nsys.path.insert(0, sys.argv[1])\nimport arena\n'
+                'for _ in range(200):\n'
+                '    with arena.locked(pathlib.Path(sys.argv[2])) as state:\n'
+                "        state['counter'] = state.get('counter', 0) + 1\n")
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
+        workers = [subprocess.Popen([sys.executable, '-c', code, str(HERE), str(self.dir)], env=env) for _ in range(2)]
+        self.assertEqual([worker.wait(timeout=60) for worker in workers], [0, 0])
+        self.assertEqual(arena.load(self.dir)['counter'], 400)
+
+    def test_missing_or_damaged_game_files_are_explained(self):
+        with self.assertRaisesRegex(arena.ArenaError, 'No game in'):
+            arena.load(self.dir/'elsewhere')
+        with self.assertRaisesRegex(arena.ArenaError, 'No game in'):
+            with arena.locked(self.dir/'elsewhere'):
+                pass
+        (self.dir/'arena.json').write_text('{not json')
+        with self.assertRaisesRegex(arena.ArenaError, 'not valid JSON'):
+            arena.load(self.dir)
+        (self.dir/'arena.json').write_text('[]')
+        with self.assertRaisesRegex(arena.ArenaError, 'not an arena game'):
+            arena.load(self.dir)
+
+
 if __name__ == '__main__':
     unittest.main()

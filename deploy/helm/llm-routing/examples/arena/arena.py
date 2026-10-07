@@ -107,3 +107,35 @@ def post_message(state, player, text, now):
         return 'You already sent a message. Wait for your opponent to move.'
     state['chat'].append({'player': player, 'text': text, 'time': now, 'afterOpponentMoves': replies})
     return None
+
+
+def load(directory):
+    path = pathlib.Path(directory) / STATE
+    if not path.exists():
+        raise ArenaError('No game in ' + str(directory) + '. Run commands from the game directory.')
+    try:
+        state = json.loads(path.read_text())
+    except ValueError:
+        raise ArenaError(STATE + ' is not valid JSON. Start a new game with: python3 arena.py new DIR --force') from None
+    if not isinstance(state, dict) or state.get('version') != 1:
+        raise ArenaError(STATE + ' is not an arena game. Start a new game with: python3 arena.py new DIR --force')
+    return state
+
+
+def save(directory, state):
+    """Replace the game file atomically, so readers never see a partial file."""
+    fd, temporary = tempfile.mkstemp(prefix='.arena-', suffix='.json', dir=directory)
+    with os.fdopen(fd, 'w') as handle:
+        json.dump(state, handle, indent=1)
+    os.replace(temporary, pathlib.Path(directory) / STATE)
+
+
+@contextlib.contextmanager
+def locked(directory):
+    """Yield the game for changes under an exclusive lock, then save it. An exception saves nothing."""
+    load(directory)
+    with open(pathlib.Path(directory) / LOCK, 'a') as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        state = load(directory)
+        yield state
+        save(directory, state)
