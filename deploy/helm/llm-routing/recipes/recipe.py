@@ -7,6 +7,7 @@ import base64
 import contextlib
 import copy
 import datetime
+import decimal
 import hashlib
 import http.client
 import json
@@ -98,14 +99,15 @@ def load_recipe(name):
 RESOURCE_ROLES = ('model', 'rpc')
 RESOURCE_KINDS = ('requests', 'limits')
 RESOURCE_NAMES = ('cpu', 'memory')
-QUANTITY = r'[0-9]+(\.[0-9]+)?(m|k|Ki|Mi|Gi|Ti|Pi|Ei|M|G|T|P|E)?'
-QUANTITY_UNITS = {'': 1, 'm': 1e-3, 'k': 1e3, 'M': 1e6, 'G': 1e9, 'T': 1e12, 'P': 1e15, 'E': 1e18,
+QUANTITY = re.compile(r'([0-9]+(?:\.[0-9]+)?)(m|k|Ki|Mi|Gi|Ti|Pi|Ei|M|G|T|P|E)?')
+QUANTITY_UNITS = {None: 1, 'm': decimal.Decimal('0.001'),
+                  'k': 10**3, 'M': 10**6, 'G': 10**9, 'T': 10**12, 'P': 10**15, 'E': 10**18,
                   'Ki': 2**10, 'Mi': 2**20, 'Gi': 2**30, 'Ti': 2**40, 'Pi': 2**50, 'Ei': 2**60}
 
 
 def quantity(value):
-    match = re.fullmatch(r'([0-9.]+)([A-Za-z]*)', str(value))
-    return float(match[1]) * QUANTITY_UNITS[match[2]]
+    match = QUANTITY.fullmatch(str(value))
+    return decimal.Decimal(match[1]) * QUANTITY_UNITS[match[2]]
 
 
 def check_resources(resources):
@@ -119,8 +121,13 @@ def check_resources(resources):
             for name, value in values.items():
                 require(name != 'nvidia.com/gpu', 'resources.'+role+'.'+kind+' cannot set nvidia.com/gpu. Each model pod uses one GPU.')
                 require(name in RESOURCE_NAMES, 'resources.'+role+'.'+kind+' may set only cpu and memory.')
-                require(isinstance(value, str) and re.fullmatch(QUANTITY, value) is not None,
-                        'resources.'+role+'.'+kind+'.'+name+' must be a Kubernetes quantity string, such as "64Gi" or "8".')
+                field = 'resources.'+role+'.'+kind+'.'+name
+                require(isinstance(value, str) and QUANTITY.fullmatch(value) is not None,
+                        field+' must be a Kubernetes quantity string, such as "64Gi" or "8".')
+                if name == 'cpu':
+                    require(quantity(value) * 1000 % 1 == 0, field+' cannot be finer than 1m.')
+                else:
+                    require(QUANTITY.fullmatch(value)[2] != 'm', field+' cannot use m, which means thousandths of a byte. Use Mi or M.')
 
 
 def with_overrides(resources, role, override):

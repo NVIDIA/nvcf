@@ -56,17 +56,25 @@ class ResourceOverrideTests(unittest.TestCase):
         self.assertEqual(recipe.backend_values('serve')['model']['resources']['limits']['memory'], '200Gi')
 
     def test_invalid_overrides_are_rejected(self):
-        cases = {
-            'only model and rpc': {'gateway': {'limits': {'memory': '1Gi'}}},
-            'only requests and limits': {'model': {'claims': {'memory': '1Gi'}}},
-            'only cpu and memory': {'model': {'limits': {'ephemeral-storage': '1Gi'}}},
-            'Kubernetes quantity': {'model': {'limits': {'memory': 'lots'}}},
-            'Kubernetes quantity ': {'model': {'limits': {'memory': 64}}},
-            'must be an object': {'model': []},
-        }
-        for message, resources in cases.items():
-            with self.subTest(message=message), self.assertRaisesRegex(RuntimeError, message.strip()):
+        cases = [
+            ('only model and rpc', {'gateway': {'limits': {'memory': '1Gi'}}}),
+            ('only requests and limits', {'model': {'claims': {'memory': '1Gi'}}}),
+            ('only cpu and memory', {'model': {'limits': {'ephemeral-storage': '1Gi'}}}),
+            ('Kubernetes quantity', {'model': {'limits': {'memory': 'lots'}}}),
+            ('Kubernetes quantity', {'model': {'limits': {'memory': 64}}}),
+            ('must be an object', {'model': []}),
+            ('finer than 1m', {'model': {'requests': {'cpu': '0.5m'}, 'limits': {'cpu': '1m'}}}),
+            ('finer than 1m', {'rpc': {'limits': {'cpu': '0.0005'}}}),
+            ('thousandths of a byte', {'model': {'limits': {'memory': '512m'}}}),
+        ]
+        for message, resources in cases:
+            with self.subTest(resources=resources), self.assertRaisesRegex(RuntimeError, message):
                 tool.validate(dict(self.config, resources=resources))
+
+    def test_whole_millicpu_values_are_accepted(self):
+        for cpu in ('1.1', '0.25', '250m', '16'):
+            with self.subTest(cpu=cpu):
+                tool.validate(dict(self.config, resources={'model': {'limits': {'cpu': cpu}}}))
 
     def test_request_above_the_merged_limit_is_rejected(self):
         for resources in ({'model': {'limits': {'memory': '100000Mi'}}}, {'rpc': {'limits': {'cpu': '1'}}}):
