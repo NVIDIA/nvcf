@@ -269,3 +269,28 @@ func TestGPUShareStorePathIsTopLevel(t *testing.T) {
 		t.Fatalf("GPUShareStorePath %q must be a top-level directory", GPUShareStorePath)
 	}
 }
+
+// A pod annotated for multi-node sharing gets fabric handles switched on,
+// unless it sets the variable itself; without the annotation it is unset.
+func TestGPUSharePatches_FabricAnnotation(t *testing.T) {
+	m := &Mutator{}
+	pod := gpushareTestPod(true, nil)
+	got := applyPatches(t, pod, m.gpusharePatches(pod))
+	if e := envOf(got.Spec.Containers[1], gpushareFabricEnv); e != nil {
+		t.Errorf("unannotated pod got %s=%q", gpushareFabricEnv, e.Value)
+	}
+
+	pod = gpushareTestPod(true, nil)
+	pod.Annotations[GPUShareFabricAnnotation] = "true"
+	got = applyPatches(t, pod, m.gpusharePatches(pod))
+	if e := envOf(got.Spec.Containers[1], gpushareFabricEnv); e == nil || e.Value != "1" {
+		t.Errorf("%s = %+v, want 1", gpushareFabricEnv, e)
+	}
+
+	pod = gpushareTestPod(true, []corev1.EnvVar{{Name: gpushareFabricEnv, Value: "0"}})
+	pod.Annotations[GPUShareFabricAnnotation] = "true"
+	got = applyPatches(t, pod, m.gpusharePatches(pod))
+	if e := envOf(got.Spec.Containers[1], gpushareFabricEnv); e == nil || e.Value != "0" {
+		t.Errorf("the pod's own %s was overridden: %+v", gpushareFabricEnv, e)
+	}
+}

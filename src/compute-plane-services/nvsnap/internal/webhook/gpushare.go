@@ -32,6 +32,11 @@ import (
 const (
 	// GPUShareAnnotation opts a pod in.
 	GPUShareAnnotation = "nvsnap.io/gpushare"
+	// GPUShareFabricAnnotation marks a pod whose GPU memory is shared with
+	// pods on other nodes over multi-node NVLink. The library then shares
+	// that memory as fabric handles, which a multi-node suspend can
+	// re-establish (see the agent's group checkpoint).
+	GPUShareFabricAnnotation = "nvsnap.io/gpushare-fabric"
 	// GPUShareStorePath is where a GPU container sees its chunk store: a
 	// per-pod directory on the node's local checkpoint disk. A restore
 	// placeholder mounts the checkpoint's copy at the same path. It is a
@@ -49,6 +54,7 @@ const (
 	gpushareLibVolume   = "nvsnap-gpushare-lib"
 	gpushareStoreVolume = "nvsnap-gpushare-store"
 	gpusharePodUIDEnv   = "NVSNAP_POD_UID"
+	gpushareFabricEnv   = "NVSNAP_GPUSHARE_FABRIC"
 )
 
 // gpusharePatches places the library and the store into every container of
@@ -119,7 +125,12 @@ func (m *Mutator) gpusharePatches(pod *corev1.Pod) []PatchOp {
 		}
 		patches = append(patches, addContainerMounts(i, c, mounts)...)
 		uid := corev1.EnvVar{Name: gpusharePodUIDEnv, ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.uid"}}}
-		patches = append(patches, setContainerEnv(i, c, []corev1.EnvVar{uid, preloads[i]})...)
+		vars := []corev1.EnvVar{uid, preloads[i]}
+		// A value the pod sets itself wins: it may switch fabric sharing off.
+		if pod.Annotations[GPUShareFabricAnnotation] == "true" && !hasEnv(c, gpushareFabricEnv) {
+			vars = append(vars, corev1.EnvVar{Name: gpushareFabricEnv, Value: "1"})
+		}
+		patches = append(patches, setContainerEnv(i, c, vars)...)
 	}
 	return patches
 }

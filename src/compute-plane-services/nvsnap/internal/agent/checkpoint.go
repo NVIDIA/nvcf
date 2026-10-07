@@ -207,6 +207,11 @@ type CheckpointRequest struct {
 	// multi-GPU) — on those it returns an error rather than silently
 	// falling back. See resolveCheckpointRedirect.
 	CapturePath string `json:"capturePath,omitempty"`
+
+	// GPUShareFabricSession joins the capture to a multi-node gpushare
+	// session driven by another agent (see gpushare_fabric.go): the
+	// suspend and resume coordinate with the workload's other pods.
+	GPUShareFabricSession string `json:"gpushareFabricSession,omitempty"`
 }
 
 // CheckpointResult is the result of a checkpoint operation
@@ -714,7 +719,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	// legacy path — the artifact contract is identical.
 	_, criuSpan := tracing.Tracer().Start(ctx, "checkpoint.criu_dump")
 	criuSpan.SetAttributes(attribute.String("nvsnap.criu.mode", "v2-inns"))
-	gpushareInfo, err := a.dumpV2(ctx, containerInfo, checkpointDir, sourceUpperdir, gpuPIDs, req.LeaveRunning, log)
+	gpushareInfo, err := a.dumpV2(ctx, containerInfo, checkpointDir, sourceUpperdir, gpuPIDs, req.LeaveRunning, req.GPUShareFabricSession, log)
 	if err != nil {
 		criuSpan.RecordError(err)
 		criuSpan.SetStatus(codes.Error, "CRIU dump failed (criu-v2)")

@@ -238,7 +238,7 @@ func gpushareToolEnv(ctx context.Context, hostPID int, env []string, timeout tim
 // their driver state, then hands them to CRIU stopped. It returns the GPU
 // map (UUIDs of the GPUs the workload saw, in order) for the checkpoint:
 // a restore onto other physical GPUs maps them with resume --gpu-map.
-func gpushareSuspend(ctx context.Context, hostPID int, pids []int, log *logrus.Entry) (string, error) {
+func gpushareSuspend(ctx context.Context, hostPID int, pids []int, fabricDir string, log *logrus.Entry) (string, error) {
 	store := GPUShareStoreInContainer
 	gpus, err := gpushareToolEnv(ctx, hostPID, podGPUEnv(hostPID), time.Minute, "gpus")
 	if err != nil {
@@ -248,7 +248,7 @@ func gpushareSuspend(ctx context.Context, hostPID int, pids []int, log *logrus.E
 	// exists, while a subdirectory would have to be created inside the
 	// workload's mount namespace, which the agent cannot do through
 	// /proc/<pid>/root (and the tool does not create --ckpt-dir).
-	args := append([]string{"--timeout-ms", "120000", "--store", store, "--ckpt-dir", store, "suspend"}, intsToStrings(pids)...)
+	args := gpushareSuspendArgs(store, fabricDir, pids)
 	t0 := time.Now()
 	out, err := gpushareTool(ctx, hostPID, 30*time.Minute, args...)
 	if err != nil {
@@ -265,12 +265,8 @@ func gpushareSuspend(ctx context.Context, hostPID int, pids []int, log *logrus.E
 // gpushareResume restores the driver state of pids, loads their saved GPU
 // memory, re-creates the shared mappings and lets them run. gpuMap, when
 // set, maps the capture's GPUs onto the ones visible here.
-func gpushareResume(ctx context.Context, hostPID int, pids []int, gpuMap string, log *logrus.Entry) error {
-	var args []string
-	if gpuMap != "" {
-		args = append(args, "--gpu-map", gpuMap)
-	}
-	args = append(append(args, "resume"), intsToStrings(pids)...)
+func gpushareResume(ctx context.Context, hostPID int, pids []int, gpuMap, fabricDir string, log *logrus.Entry) error {
+	args := gpushareResumeArgs(gpuMap, fabricDir, pids)
 	t0 := time.Now()
 	out, err := gpushareToolEnv(ctx, hostPID, podGPUEnv(hostPID), 60*time.Minute, args...)
 	if err != nil {
@@ -279,6 +275,28 @@ func gpushareResume(ctx context.Context, hostPID int, pids []int, gpuMap string,
 	log.WithFields(logrus.Fields{"pids": pids, "duration": time.Since(t0).Round(time.Millisecond).String()}).
 		Info("gpushare: resumed " + lastLines(out, 1))
 	return nil
+}
+
+// gpushareSuspendArgs builds the suspend command line. fabricDir, when set,
+// joins a multi-node session (--fabric-map, see gpushare_fabric.go).
+func gpushareSuspendArgs(store, fabricDir string, pids []int) []string {
+	args := []string{"--timeout-ms", "120000", "--store", store, "--ckpt-dir", store}
+	if fabricDir != "" {
+		args = append(args, "--fabric-map", fabricDir)
+	}
+	return append(append(args, "suspend"), intsToStrings(pids)...)
+}
+
+// gpushareResumeArgs builds the resume command line.
+func gpushareResumeArgs(gpuMap, fabricDir string, pids []int) []string {
+	var args []string
+	if gpuMap != "" {
+		args = append(args, "--gpu-map", gpuMap)
+	}
+	if fabricDir != "" {
+		args = append(args, "--fabric-map", fabricDir)
+	}
+	return append(append(args, "resume"), intsToStrings(pids)...)
 }
 
 func intsToStrings(v []int) []string {

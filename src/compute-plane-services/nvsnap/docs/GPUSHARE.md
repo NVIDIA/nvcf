@@ -194,6 +194,50 @@ Limits of the integration:
   server and helper processes inherit the preload but hold no CUDA state;
   CRIU dumps them as they are.
 
+### Workloads that span nodes
+
+A workload whose ranks share memory over multi-node NVLink runs one pod per
+node, and their tools must vote on the quiesce and exchange fabric handles
+(see `--fabric-map` under Requirements and limits). nvsnap drives that as a
+fabric session:
+
+1. Annotate every pod `nvsnap.io/gpushare-fabric: "true"` as well. The
+   webhook sets `NVSNAP_GPUSHARE_FABRIC=1` unless the pod sets it.
+2. Ask any agent for a group checkpoint of all the pods:
+
+   ```bash
+   curl -X POST http://<agent>:8081/v1/gpushare/group-checkpoint \
+     -H "Authorization: Bearer $TOKEN" -d '{
+       "leaveRunning": true,
+       "members": [
+         {"namespace": "llm", "podName": "vllm-0"},
+         {"namespace": "llm", "podName": "vllm-1"}
+       ]}'
+   ```
+
+That agent starts each member's checkpoint on the member's node with a new
+session id. Each member's agent creates a fresh directory for the session in
+the pod's store, passes it to `suspend` and `resume` as `--fabric-map`, and
+serves it at `/v1/gpushare/fabric/<session>/<namespace>/<pod>`. The driving
+agent polls those, answers each vote round (`go` once every member is
+quiesced, `retry` otherwise), and once every member has written its handle
+list, delivers the concatenated lists to all of them, once. A fresh
+directory per session means a list from an earlier cycle is never merged.
+
+Limits:
+
+- `leaveRunning` is required: a member stopped by its dump cannot take part
+  in the others' resume.
+- If a member's checkpoint ends before the vote passes, every later vote is
+  answered `abort`. The tool treats that as `retry` and rolls the workload
+  back at its own timeout (`--timeout-ms`, 120 s here), not at once.
+- A member whose dump fails still resumes, and takes part in the exchange.
+  A member whose checkpoint returns without writing a handle list is left
+  out of it; the others resume among themselves.
+- Restoring a session's checkpoints on other nodes is not covered: the pods
+  get new addresses and NCCL's connections between nodes have to be
+  re-established.
+
 ## Requirements and limits
 
 - Driver: 610 or later (validated: 610.57.04). Driver 580 cannot restore

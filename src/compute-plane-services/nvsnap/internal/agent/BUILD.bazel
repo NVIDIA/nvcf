@@ -17,6 +17,7 @@ go_library(
         "external_tcp.go",
         "fsstore.go",
         "gpushare.go",
+        "gpushare_fabric.go",
         "l2_catalog_writer.go",
         "l2_integration.go",
         "l2_promote_async.go",
@@ -92,6 +93,7 @@ go_test(
         "catalog_test.go",
         "checkpoint_v2_test.go",
         "fsstore_test.go",
+        "gpushare_fabric_test.go",
         "gpushare_test.go",
         "l2_integration_test.go",
         "l2_integration_unqualified_test.go",
@@ -123,6 +125,7 @@ go_test(
     embed = [":agent"],
     deps = [
         "//src/compute-plane-services/nvsnap/internal/checkpointstore",
+        "//src/compute-plane-services/nvsnap/internal/containerd",
         "//src/compute-plane-services/nvsnap/internal/modelvolume",
         "//src/compute-plane-services/nvsnap/internal/objectstore",
         "//src/compute-plane-services/nvsnap/internal/tarstream",

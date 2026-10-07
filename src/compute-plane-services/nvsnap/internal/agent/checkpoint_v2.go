@@ -143,7 +143,7 @@ func (a *Agent) stageV2Bundle(root string, log *logrus.Entry) error {
 
 // dumpV2 stages the bundle and runs CRIU dump inside the container's
 // namespaces. On success the image files have been moved into checkpointDir.
-func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, leaveRunning bool, log *logrus.Entry) (*GPUShareInfo, error) {
+func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, leaveRunning bool, fabricSession string, log *logrus.Entry) (*GPUShareInfo, error) {
 	hostPID := int(containerInfo.PID)
 	procBase := "/proc"
 	if _, err := os.Stat("/host/proc"); err == nil {
@@ -214,6 +214,23 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}
 	var gsInfo *GPUShareInfo
 	var gpuMap string
+	if fabricSession != "" && !gsOn {
+		return nil, fmt.Errorf("gpushare: fabric session %s, but no process of this pod runs on the GPU under %s", fabricSession, gpushareLibName)
+	}
+	// A multi-node session's directory lives in the pod's store and must be
+	// gone before the store is collected into the checkpoint.
+	fabricDir, closeFabric := "", func() {}
+	if fabricSession != "" {
+		dir, closeFn, err := a.openFabricSession(fabricSession, containerInfo.Labels["io.kubernetes.pod.namespace"],
+			containerInfo.Labels["io.kubernetes.pod.name"], containerInfo.Labels["io.kubernetes.pod.uid"])
+		if err != nil {
+			return nil, err
+		}
+		var once sync.Once
+		fabricDir, closeFabric = dir, func() { once.Do(closeFn) }
+		defer closeFabric()
+		log = log.WithField("fabricSession", fabricSession)
+	}
 	if gsOn {
 		if !fileExists(filepath.Join(root, strings.TrimPrefix(GPUShareStoreInContainer, "/"))) {
 			return nil, fmt.Errorf("gpushare: the workload loads %s but has no chunk store at %s "+
@@ -222,7 +239,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		if !fileExists(filepath.Join(root, strings.TrimPrefix(v2BinDirInContainer, "/"), gpushareToolName)) {
 			return nil, fmt.Errorf("gpushare: %s is not in the agent bundle; the agent base image predates gpushare", gpushareToolName)
 		}
-		gm, err := gpushareSuspend(ctx, hostPID, gsPIDs, log)
+		gm, err := gpushareSuspend(ctx, hostPID, gsPIDs, fabricDir, log)
 		if err != nil {
 			return nil, fmt.Errorf("gpushare suspend: %w", err)
 		}
@@ -295,7 +312,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		// CRIU puts a failed dump's tasks back as they were: stopped, GPU
 		// state checkpointed. Bring the workload back rather than leave it
 		// frozen; the capture still fails.
-		if rerr := gpushareResume(ctx, hostPID, gsPIDs, "", log); rerr != nil {
+		if rerr := gpushareResume(ctx, hostPID, gsPIDs, "", fabricDir, log); rerr != nil {
 			log.WithError(rerr).Error("gpushare: resuming the source after a failed dump failed; the workload stays suspended")
 		}
 	}
@@ -322,10 +339,11 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}
 	if gsOn {
 		if leaveRunning {
-			if err := gpushareResume(ctx, hostPID, gsPIDs, "", log); err != nil {
+			if err := gpushareResume(ctx, hostPID, gsPIDs, "", fabricDir, log); err != nil {
 				return nil, fmt.Errorf("gpushare: resume the source after the dump: %w", err)
 			}
 		}
+		closeFabric()
 		if err := a.gpushareCollectStore(containerInfo, root, checkpointDir, gpuMap); err != nil {
 			return nil, err
 		}

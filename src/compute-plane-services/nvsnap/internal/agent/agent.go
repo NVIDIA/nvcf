@@ -289,6 +289,10 @@ type Agent struct {
 	// captures of one workload would each suspend it and both fail.
 	capturing sync.Map
 
+	// fabricSessions maps a multi-node gpushare session's pod key to its
+	// directory on this node (see gpushare_fabric.go).
+	fabricSessions sync.Map
+
 	config     Config
 	log        *logrus.Logger
 	runtime    runtime.Runtime
@@ -541,6 +545,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	// API routes
 	router.HandleFunc("/health", a.healthHandler).Methods("GET")
 	router.HandleFunc("/v1/checkpoint", a.checkpointHandler).Methods("POST")
+	// Multi-node gpushare: a group checkpoint drives one fabric session; the
+	// fabric routes serve this node's pods in a session to that driver.
+	router.HandleFunc("/v1/gpushare/group-checkpoint", a.groupCheckpointHandler).Methods("POST")
+	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}", a.fabricStateHandler).Methods("GET")
+	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}/verdict", a.fabricVerdictHandler).Methods("PUT")
+	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}/in", a.fabricInHandler).Methods("PUT")
 	router.HandleFunc("/v1/restore", a.restoreHandler).Methods("POST")
 	router.HandleFunc("/v1/restore/manifest", a.getPlaceholderManifestHandler).Methods("POST")
 	router.HandleFunc("/v1/checkpoints", a.listCheckpointsHandler).Methods("GET")
