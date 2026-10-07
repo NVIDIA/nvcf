@@ -118,9 +118,14 @@ only controls calibration traffic and does not supply this fallback.
 Transient errors, malformed events, and EOF do not switch `auto` to fallback.
 
 Fallback reads streamed OpenAI usage fields such as `usage.completion_tokens` or
-`output_tokens_so_far`. When usage reports cached prompt tokens, input
-throughput uses only the uncached prompt tokens; without that detail it keeps
-using the total prompt tokens. Text peeking is last resort.
+`output_tokens_so_far`. For Chat Completions, usage is available only when the
+client sets `stream_options.include_usage=true` or the deployment opts in to
+`--force-chat-completions-include-usage` (off by default). For requests expected
+to report usage, input throughput is recorded at stream completion rather than
+published provisionally with total prompt tokens; cached-token details use only
+the uncached prompt count, and absent details fall back to the total count.
+Requests that do not request usage retain the existing total-token timing
+behavior. Text peeking is last resort.
 
 ## Optional KV Stats
 

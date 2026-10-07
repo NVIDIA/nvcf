@@ -173,6 +173,7 @@ pub(crate) struct RequestObserver {
     input_tokens: u64,
     input_tokens_explicit: bool,
     uncached_input_tokens: Option<u64>,
+    input_usage_expected: bool,
     generation: Option<ModelGeneration>,
     embedding_items: Option<u64>,
     chat_calibration: Option<ChatCalibrationState>,
@@ -208,6 +209,7 @@ impl RequestObserver {
             input_tokens,
             input_tokens_explicit: false,
             uncached_input_tokens: None,
+            input_usage_expected: false,
             generation,
             embedding_items: None,
             chat_calibration: (output_token_calibration_enabled
@@ -222,6 +224,13 @@ impl RequestObserver {
 
     pub(crate) fn output_token_calibration_enabled(&self) -> bool {
         self.runtime_state.output_token_calibration_enabled()
+    }
+
+    pub(crate) fn set_input_usage_expected(&mut self, expected: bool) {
+        if self.input_usage_expected != expected {
+            self.input_usage_expected = expected;
+            self.emit();
+        }
     }
 
     pub(super) fn update_embedding_items(&mut self, embedding_items: Option<u64>) {
@@ -558,6 +567,7 @@ impl RequestObserver {
                 input_interval,
                 input_tokens_explicit: self.input_tokens_explicit,
                 uncached_input_tokens: self.uncached_input_tokens,
+                input_usage_expected: self.input_usage_expected,
                 output_calibration: backend
                     .map_or_else(OutputCalibrationFacts::default, |backend| {
                         backend.output_calibration

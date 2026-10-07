@@ -808,6 +808,7 @@ mod tests {
                 input_interval,
                 input_tokens_explicit: false,
                 uncached_input_tokens: None,
+                input_usage_expected: false,
                 output_calibration,
                 upstream_duration: None,
             },
@@ -1371,6 +1372,77 @@ mod tests {
         aggregator.apply_fallback_observation(&event);
 
         assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 40.0);
+    }
+
+    #[test]
+    fn fallback_input_tps_waits_for_expected_terminal_usage() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let submitted_at = std::time::Instant::now();
+        let interval = crate::runtime_state::RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + seconds(1),
+        };
+        let mut live =
+            aggregator
+                .runtime_state
+                .transition_request_observation(completed_observation(
+                    100,
+                    1,
+                    10,
+                    seconds(1),
+                    seconds(2),
+                ));
+        live.observation.state = RequestObservationState::OutputGeneration;
+        live.input_interval = Some(interval);
+        live.input_usage_expected = true;
+        aggregator.apply_fallback_observation(&live);
+
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 0.0);
+        assert_eq!(
+            aggregator
+                .per_model
+                .get("model-a")
+                .expect("model state should exist")
+                .metrics
+                .request_input_intervals
+                .len(),
+            0,
+            "provisional total-token rate must not enter the window"
+        );
+
+        let mut terminal = live;
+        terminal.observation.state = RequestObservationState::Complete;
+        terminal.input_tokens_explicit = true;
+        terminal.uncached_input_tokens = Some(40);
+        aggregator.apply_fallback_observation(&terminal);
+
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 40.0);
+    }
+
+    #[test]
+    fn expected_usage_without_cached_breakdown_falls_back_at_completion() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let submitted_at = std::time::Instant::now();
+        let mut event =
+            aggregator
+                .runtime_state
+                .transition_request_observation(completed_observation(
+                    100,
+                    1,
+                    10,
+                    seconds(1),
+                    seconds(2),
+                ));
+        event.input_interval = Some(crate::runtime_state::RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + seconds(1),
+        });
+        event.input_tokens_explicit = true;
+        event.input_usage_expected = true;
+
+        aggregator.apply_fallback_observation(&event);
+
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 100.0);
     }
 
     #[test]

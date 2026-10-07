@@ -780,6 +780,13 @@ pub(super) async fn forward_tunnel_request(
         } else {
             None
         };
+        if let Some(observer) = lifecycle.observer.as_mut() {
+            observer.set_input_usage_expected(input_usage_expected(
+                observation_endpoint,
+                &body_bytes,
+                app.force_chat_completions_include_usage,
+            ));
+        }
         if let Some(decision) = lifecycle.admit_queue(app, &request_headers) {
             let QueueAdmissionDecision::Rejected {
                 expected_ms,
@@ -1078,6 +1085,24 @@ fn validate_request_body(
     (body.get("stream").and_then(|value| value.as_bool()) == Some(true))
         .then_some(())
         .ok_or(stream_error)
+}
+
+fn input_usage_expected(
+    endpoint: Option<RequestObservationEndpoint>,
+    body_bytes: &[u8],
+    force_chat_completions_include_usage: bool,
+) -> bool {
+    match endpoint {
+        Some(RequestObservationEndpoint::Responses) => true,
+        Some(RequestObservationEndpoint::ChatCompletions) => {
+            force_chat_completions_include_usage
+                || serde_json::from_slice::<serde_json::Value>(body_bytes)
+                    .ok()
+                    .and_then(|body| body.get("stream_options")?.get("include_usage")?.as_bool())
+                    == Some(true)
+        }
+        Some(RequestObservationEndpoint::Embeddings) | None => false,
+    }
 }
 
 fn prepare_chat_completions_usage_rewrite(
@@ -1741,6 +1766,35 @@ mod tests {
             serde_json::from_slice(&inserted).expect("mutated body should remain JSON");
         assert!(mutated);
         assert_eq!(inserted["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn input_usage_expectation_matches_endpoint_and_request_options() {
+        assert!(input_usage_expected(
+            Some(RequestObservationEndpoint::ChatCompletions),
+            br#"{"stream_options":{"include_usage":true}}"#,
+            false,
+        ));
+        assert!(input_usage_expected(
+            Some(RequestObservationEndpoint::ChatCompletions),
+            br#"{"stream":true}"#,
+            true,
+        ));
+        assert!(!input_usage_expected(
+            Some(RequestObservationEndpoint::ChatCompletions),
+            br#"{"stream_options":{"include_usage":false}}"#,
+            false,
+        ));
+        assert!(input_usage_expected(
+            Some(RequestObservationEndpoint::Responses),
+            br#"{"stream":true}"#,
+            false,
+        ));
+        assert!(!input_usage_expected(
+            Some(RequestObservationEndpoint::Embeddings),
+            b"{}",
+            true,
+        ));
     }
 
     #[test]

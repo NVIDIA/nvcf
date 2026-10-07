@@ -142,7 +142,8 @@ impl StatsAggregator {
         if matches!(
             observation.endpoint,
             RequestObservationEndpoint::ChatCompletions | RequestObservationEndpoint::Responses
-        ) && let Some(interval) = event.input_interval()
+        ) && (!event.input_usage_expected() || observation.is_terminal())
+            && let Some(interval) = event.input_interval()
             && let Some(input_tps) = model_state.request_input_intervals.observe(
                 &observation.request_id,
                 interval,
