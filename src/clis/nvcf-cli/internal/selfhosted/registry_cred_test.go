@@ -35,6 +35,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/yaml"
 )
 
@@ -991,29 +992,58 @@ func TestRegistryCredentialCheck_RejectedAfterInstall(t *testing.T) {
 // NGC key is sent before the row is graded. The run then moves to the key,
 // so the validator's pull secret is minted from the credential the row found
 // accepted, and the row says how to renew the login docker still sends.
+// After install that passes.
 func TestProbeRegistryCredential_RejectedLoginGivesWayToTheNGCKey(t *testing.T) {
 	ngc := newFakeNGC(t, "good-key")
 	dockerHome(t, inlineDockerConfig(t, "nvcr.io", "$oauthtoken", "rotated-out", ""))
 	t.Setenv("NGC_API_KEY", "good-key")
 	entry := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: true}
-	for _, postInstall := range []bool{true, false} {
-		rc := NewRegistryCredentials(false)
-		ctx := WithRegistryCredentials(context.Background(), rc)
-		r := registryCredentialCheck(probeRegistryCredential, entry, "nvcr.io", postInstall).Run(ctx)
-		assert.True(t, r.Passed, r.Message)
-		assert.Equal(t, SeverityInfo, r.Severity)
-		assert.Contains(t, r.Message, "credentials from NGC_API_KEY valid")
-		assert.Contains(t, r.Message, "the docker login from docker config")
-		assert.Contains(t, r.Message, "docker and helm on this machine still send it; "+
-			"renew it with: docker login nvcr.io --username '$oauthtoken'")
-		assert.NotContains(t, r.Message, "cannot pull")
+	rc := NewRegistryCredentials(false)
+	ctx := WithRegistryCredentials(context.Background(), rc)
+	r := registryCredentialCheck(probeRegistryCredential, entry, "nvcr.io", true).Run(ctx)
+	assert.True(t, r.Passed, r.Message)
+	assert.Equal(t, SeverityInfo, r.Severity)
+	assert.Contains(t, r.Message, "credentials from NGC_API_KEY valid")
+	assert.Contains(t, r.Message, "the docker login from docker config")
+	assert.Contains(t, r.Message, "docker and helm on this machine still send it; "+
+		"renew it with: docker login nvcr.io --username '$oauthtoken'")
+	assert.NotContains(t, r.Message, "cannot pull")
 
-		got := rc.lookup(ctx, "nvcr.io", "nvidia/cv")
-		require.NoError(t, got.err)
-		require.True(t, got.ok)
-		assert.Equal(t, "good-key", got.cred.pass, "later lookups, the pull secret's among them, get the key")
+	got := rc.lookup(ctx, "nvcr.io", "nvidia/cv")
+	require.NoError(t, got.err)
+	require.True(t, got.ok)
+	assert.Equal(t, "good-key", got.cred.pass, "later lookups, the pull secret's among them, get the key")
+	assert.Equal(t, []string{"rotated-out", "good-key"}, ngc.passwords())
+}
+
+// Before install a docker login nvcr.io rejects fails a critical row even
+// though the NGC key works: helm on this machine pulls the stack's charts
+// with the docker login. The key still serves tag discovery and the
+// validator's pull secret, and the row names both credentials.
+func TestRegistryCredentialCheck_BeforeInstallGradesTheRejectedLogin(t *testing.T) {
+	withTempCacheDir(t)
+	newFakeNGC(t, "good-key")
+	dockerHome(t, inlineDockerConfig(t, "nvcr.io", "$oauthtoken", "rotated-out", ""))
+	t.Setenv("NGC_API_KEY", "good-key")
+	ctx := WithRegistryCredentials(context.Background(), NewRegistryCredentials(false))
+
+	for _, critical := range []bool{true, false} {
+		entry := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: critical}
+		r := registryCredentialCheck(probeRegistryCredential, entry, "nvcr.io", false).Run(ctx)
+		assert.False(t, r.Passed, r.Message)
+		assert.Equal(t, map[bool]Severity{true: SeverityError, false: SeverityWarning}[critical], r.Severity)
+		assert.Contains(t, r.Message, "nvcr.io: the docker login from docker config")
+		assert.Contains(t, r.Message, "renew it with: docker login nvcr.io --username '$oauthtoken'")
+		assert.Contains(t, r.Message, "credentials from NGC_API_KEY valid, and the run uses them in its place")
+		assert.Contains(t, r.Message, "helm on this machine pulls the stack's charts with the docker login")
 	}
-	assert.Equal(t, []string{"rotated-out", "good-key", "rotated-out", "good-key"}, ngc.passwords())
+
+	got, ok := ResolveLatestValidatorTag(ctx, "nvcr.io/nvidia/cv")
+	require.True(t, ok, "tag discovery uses the key")
+	assert.Equal(t, "nvcr.io/nvidia/cv:1.2.0", got)
+	client := fake.NewSimpleClientset()
+	assert.Equal(t, "good-key", mintPullSecret(ctx, t, client, "nvcr.io/nvidia/cv:1.0.0",
+		clusterValidatorComputePlaneRole), "the validator's pull secret carries the key")
 }
 
 // When nvcr.io rejects the key too, the row is graded on the key: an error

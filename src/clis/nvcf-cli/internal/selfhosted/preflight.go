@@ -1150,11 +1150,13 @@ func buildRegistryCredentialCategory(cfg PreflightConfig) categorySpec {
 
 // registryCredentialCheck returns a binaryCheckSpec that probes one registry.
 // Only a credential the registry rejected can fail: at error severity for a
-// critical registry, at warning for any other. A rejection on a post-install
-// run is a warning too: it is this machine's credential, and the cluster
-// pulls with its own pull secret. Everything else the probe can report, from
-// an unreachable registry to a missing local credential, is a warning or an
-// informational pass.
+// critical registry, at warning for any other. Before install that includes a
+// docker login nvcr.io rejected even where the NGC key it gave way to works:
+// helm on this machine pulls the stack's charts with the docker login. A
+// rejection on a post-install run is a warning: it is this machine's
+// credential, and the cluster pulls with its own pull secret. Everything else
+// the probe can report, from an unreachable registry to a missing local
+// credential, is a warning or an informational pass.
 func registryCredentialCheck(
 	checker RegistryCredentialChecker, entry RegistryEntry, label string, postInstall bool,
 ) binaryCheckSpec {
@@ -1193,9 +1195,18 @@ func registryCredentialCheck(
 				r.Passed = true
 				r.Severity = SeverityInfo
 				r.Message = label + ": skipped (" + outcome.detail + ")"
-			case probeAnonymous, probeNotVerified, probeLoginRejected, probeOtherCredential:
+			case probeAnonymous, probeNotVerified, probeOtherCredential:
 				r.Passed = true
 				r.Severity = SeverityInfo
+			case probeLoginRejected:
+				if postInstall {
+					r.Passed = true
+					r.Severity = SeverityInfo
+					break
+				}
+				r.Err = err
+				r.Message += "; before install this fails the check, since helm on this machine pulls the " +
+					"stack's charts with the docker login"
 			case probeNoCredential, probeUnverifiable:
 				r.Severity = SeverityWarning
 				r.Err = err

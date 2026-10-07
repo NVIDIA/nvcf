@@ -88,7 +88,8 @@ const (
 	probeRejected
 	// probeLoginRejected: the registry rejected the docker login and
 	// accepted the NGC key sent in its place. The run uses the key, but
-	// docker and helm on this machine still send the login.
+	// docker and helm on this machine still send the login, so before an
+	// install it fails like a rejected credential.
 	probeLoginRejected
 	// probeOtherCredential: the docker login has no access to the scope, and
 	// the registry accepted the NGC key for it, which the run uses there.
@@ -97,7 +98,7 @@ const (
 
 // registryProbeOutcome is the result of a probe that did not verify a
 // credential, or verified one only after the registry rejected another. Only
-// probeRejected can fail a run.
+// probeRejected, and probeLoginRejected before install, can fail a run.
 type registryProbeOutcome struct {
 	kind   registryProbeKind
 	detail string
@@ -208,8 +209,8 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 		case !hasCred:
 			return anonymousOutcome(registry, critical, lookupErr)
 		case note != "":
-			return registryProbeOutcome{kind: probeLoginRejected,
-				detail: "credentials from " + cred.source + " valid" + note}
+			return registryProbeOutcome{kind: probeLoginRejected, detail: note[2:] + "; credentials from " +
+				cred.source + " valid, and the run uses them in its place"}
 		case settled.noAccessLogin != nil:
 			return registryProbeOutcome{kind: probeOtherCredential, detail: fmt.Sprintf(
 				"credentials from %s valid; the docker login from %s has no access to %s, so the run sends %s for it",

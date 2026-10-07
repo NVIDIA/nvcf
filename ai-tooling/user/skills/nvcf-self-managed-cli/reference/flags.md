@@ -93,8 +93,12 @@ stack's image path: any path in `global.image.registry`, then
 team, is not sent as the scope, since `nvcr.io` refuses it.
 
 Only a credential the registry rejects fails the run, and only for an NVIDIA
-registry the image or the stack names. After install a rejected credential is
-a warning, since the cluster pulls with its own pull secret. A registry this
+registry the image or the stack names. Before install that includes a docker
+login `nvcr.io` rejects even when the NGC key works in its place, since
+`helm` on this machine pulls the stack's charts with the docker login. The
+key is still used for tag discovery and the validator's pull secret, and the
+row names both. After install a rejected credential is a warning, since the
+cluster pulls with its own pull secret. A registry this
 machine cannot reach, a token service that fails, and a missing local
 credential are warnings. A registry the probe cannot speak to, such as ECR or
 one using Basic auth, is skipped with a command to check it by hand. A
