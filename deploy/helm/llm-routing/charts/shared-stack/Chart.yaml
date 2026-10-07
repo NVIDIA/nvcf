@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: v2
+name: llm-shared-stack
+description: Empty LLM gateway, router and namespace-scoped Pylon operator
+type: application
+version: 0.1.0
+dependencies:
+  - name: llm-gateway-stack
+    alias: gatewayStack
+    version: "0.0.0"
+    repository: file://../../../llm-gateway-stack/llm-gateway-stack
+  - name: pylon-operator
+    alias: operator
+    version: "0.0.0"
+    repository: file://../../../pylon-operator/pylon-operator

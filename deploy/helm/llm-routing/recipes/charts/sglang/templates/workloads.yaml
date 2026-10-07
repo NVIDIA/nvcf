@@ -1,5 +1,5 @@
 {{/* SPDX-License-Identifier: Apache-2.0 */}}
-{{- $v := .Values -}}
+{{- $v := include "sglang.settings" . | fromJson -}}
 {{- if not (kindIs "bool" $v.reuseCaches) }}{{ fail "reuseCaches must be a boolean" }}{{ end -}}
 {{- if not (kindIs "bool" $v.suspended) }}{{ fail "suspended must be a boolean" }}{{ end -}}
 {{- if and $v.suspended (ne $v.phase "serve") }}{{ fail "suspended is supported only in phase serve" }}{{ end -}}
@@ -24,9 +24,13 @@ metadata:
 data:
   runtime.py: |
 {{ .Files.Get "files/runtime.py" | indent 4 }}
+  placement.py: |
+{{ .Files.Get "files/placement.py" | indent 4 }}
   config.json: |
-{{ dict "model" $v.model "profile" $v.profile "targets" $v.targets "contextLength" $v.contextLength "concurrency" $v.concurrency "ports" $v.ports "reuseCaches" $v.reuseCaches | toPrettyJson | indent 4 }}
+{{- $config := dict "automatic" $v.automatic "namespace" .Release.Namespace "sharedCAConfigMap" $v.sharedCAConfigMap "storageClassName" $v.storageClassName "claimName" (default (printf "%s-cache-0" .Release.Name) $v.cache.existingClaim) -}}
+{{ merge $config (dict "model" $v.model "profile" $v.profile "targets" $v.targets "contextLength" $v.contextLength "concurrency" $v.concurrency "ports" $v.ports "reuseCaches" $v.reuseCaches) | toPrettyJson | nindent 4 }}
 {{- range $rank, $target := $v.targets }}
+{{- if not (and $v.automatic $v.cache.existingClaim) }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -39,6 +43,7 @@ spec:
   storageClassName: {{ required "storageClassName is required" $v.storageClassName | quote }}
   resources:
     requests: {storage: {{ printf "%dGi" (int $v.profile.cacheGiB) }}}
+{{- end }}
 ---
 {{- if eq $v.phase "serve" }}
 apiVersion: apps/v1
@@ -56,7 +61,7 @@ spec:
 {{- if eq $v.phase "serve" }}
   replicas: {{ ternary 0 1 $v.suspended }}
   strategy: {type: Recreate}
-  progressDeadlineSeconds: 7200
+  progressDeadlineSeconds: {{ ternary 21600 7200 $v.automatic }}
   selector:
     matchLabels:
       app.kubernetes.io/instance: {{ $root.Release.Name }}
@@ -72,10 +77,33 @@ spec:
         app.kubernetes.io/component: sglang
         recipe-rank: {{ $rank | quote }}
       annotations:
+        checksum/placement: {{ $root.Files.Get "files/placement.py" | sha256sum }}
         checksum/runtime: {{ $root.Files.Get "files/runtime.py" | sha256sum }}
         checksum/config: {{ omit $v "suspended" | toJson | sha256sum }}
     spec:
       automountServiceAccountToken: false
+{{- if $v.automatic }}
+      serviceAccountName: {{ $root.Release.Name }}-check
+      initContainers:
+        - name: placement-check
+          image: {{ $v.image | quote }}
+          imagePullPolicy: {{ $v.imagePullPolicy }}
+          command: [python3, -u, /recipe/placement.py]
+          env:
+            - {name: PYTHONDONTWRITEBYTECODE, value: '1'}
+            - name: POD_NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+          resources:
+            requests: {cpu: '100m', memory: 128Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: recipe, mountPath: /recipe, readOnly: true}
+            - {name: cluster-access, mountPath: /var/run/recipe-cluster, readOnly: true}
+            - {name: shared-ca, mountPath: /shared-ca, readOnly: true}
+{{- end }}
       restartPolicy: {{ if eq $v.phase "serve" }}Always{{ else }}Never{{ end }}
 {{- if ne $v.phase "download" }}
       runtimeClassName: {{ required "runtimeClassName is required" $v.runtimeClassName | quote }}
@@ -99,7 +127,7 @@ spec:
         - name: sglang
           image: {{ $v.image | quote }}
           imagePullPolicy: {{ $v.imagePullPolicy }}
-          command: [python3, -u, /recipe/runtime.py, {{ $v.phase | quote }}, {{ $rank | quote }}]
+          command: [python3, -u, /recipe/runtime.py, {{ ternary "automatic" $v.phase $v.automatic | quote }}, {{ $rank | quote }}]
           env:
             - {name: HF_HOME, value: /cache/huggingface}
 {{- if $v.reuseCaches }}
@@ -137,7 +165,7 @@ spec:
 {{- end }}
             periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 720
+            failureThreshold: {{ ternary 2160 720 $v.automatic }}
           readinessProbe:
 {{- if eq $rank 0 }}
             httpGet: {path: /health, port: http}
@@ -174,10 +202,23 @@ spec:
             - {name: ple, mountPath: /ple}
 {{- end }}
       volumes:
+{{- if $v.automatic }}
+        - name: shared-ca
+          configMap:
+            name: {{ $v.sharedCAConfigMap | quote }}
+            items: [{key: ca.crt, path: ca.crt}]
+        - name: cluster-access
+          projected:
+            sources:
+              - serviceAccountToken: {path: token, expirationSeconds: 600}
+              - configMap:
+                  name: kube-root-ca.crt
+                  items: [{key: ca.crt, path: ca.crt}]
+{{- end }}
         - name: recipe
           configMap: {name: {{ $root.Release.Name }}-runtime}
         - name: cache
-          persistentVolumeClaim: {claimName: {{ $root.Release.Name }}-cache-{{ $rank }}}
+          persistentVolumeClaim: {claimName: {{ if and $v.automatic $v.cache.existingClaim }}{{ $v.cache.existingClaim | quote }}{{ else }}{{ $root.Release.Name }}-cache-{{ $rank }}{{ end }}}
         - name: shm
           emptyDir: {medium: Memory, sizeLimit: 8Gi}
         - name: tmp
@@ -196,7 +237,7 @@ metadata:
 spec:
   selector: {app.kubernetes.io/instance: {{ .Release.Name }}, recipe-rank: '0'}
   ports: [{name: http, port: 8000, targetPort: http}]
-{{- if $v.register }}
+{{- if and $v.register (or (not $v.automatic) (not $v.suspended)) }}
 ---
 apiVersion: pylon.nvidia.com/v1alpha1
 kind: InferenceEndpoint

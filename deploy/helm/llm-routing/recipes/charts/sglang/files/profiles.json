@@ -1,0 +1,145 @@
+{
+  "qwen3.8-27b": {
+    "id": "qwen3.8-27b",
+    "name": "Qwen3.8-27B",
+    "precision": "FP8",
+    "repository": "Qwen/Qwen3.8-27B-FP8",
+    "revision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+    "image": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+    "runtime": "SGLang v0.5.19",
+    "license": "Apache-2.0",
+    "source": "https://lmsysorg.mintlify.app/cookbook/autoregressive/Qwen/Qwen3.8-27B",
+    "validation": "spark-smoke-tested",
+    "profiles": [
+      {
+        "id": "spark-fp8",
+        "nodes": 1,
+        "memoryGiB": 104,
+        "memoryLimitGiB": 112,
+        "cpu": 4,
+        "cacheGiB": 80,
+        "minFreeDiskGiB": 40,
+        "maxContext": 9216,
+        "maxConcurrency": 1,
+        "offload": false,
+        "flags": [
+          "--trust-remote-code",
+          "--kv-cache-dtype",
+          "fp8_e4m3",
+          "--mem-fraction-static",
+          "0.80",
+          "--attention-backend",
+          "flashinfer",
+          "--chunked-prefill-size",
+          "2048",
+          "--reasoning-parser",
+          "qwen3",
+          "--tool-call-parser",
+          "qwen3_coder",
+          "--mamba-radix-cache-strategy",
+          "extra_buffer",
+          "--mamba-ssm-dtype",
+          "float32",
+          "--max-mamba-cache-size",
+          "5",
+          "--mamba-full-memory-ratio",
+          "2.55"
+        ],
+        "hardware": {
+          "os": "linux",
+          "architecture": "arm64",
+          "gpuProducts": [
+            "NVIDIA-GB10",
+            "NVIDIA GB10"
+          ],
+          "cudaDeviceNames": [
+            "NVIDIA GB10"
+          ],
+          "gpuCount": 1,
+          "memoryMode": "unified"
+        }
+      }
+    ],
+    "validatedWorkload": {
+      "date": "2026-10-06",
+      "profile": "spark-fp8",
+      "contextLength": 8192,
+      "concurrency": 1,
+      "performanceBenchmarked": false,
+      "qualityEvaluated": false
+    }
+  },
+  "qwen3.8-27b-nvfp4": {
+    "id": "qwen3.8-27b-nvfp4",
+    "name": "Qwen3.8-27B",
+    "precision": "NVFP4",
+    "repository": "nvidia/Qwen3.8-27B-NVFP4",
+    "revision": "482ca0f3832238542f8f5295dde86b5f22711d80",
+    "image": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+    "runtime": "SGLang v0.5.19",
+    "license": "Apache-2.0",
+    "source": "https://lmsysorg.mintlify.app/cookbook/autoregressive/Qwen/Qwen3.8-27B",
+    "validation": "spark-smoke-tested",
+    "profiles": [
+      {
+        "id": "spark-nvfp4",
+        "nodes": 1,
+        "memoryGiB": 104,
+        "memoryLimitGiB": 112,
+        "cpu": 4,
+        "cacheGiB": 80,
+        "minFreeDiskGiB": 40,
+        "maxContext": 9216,
+        "maxConcurrency": 1,
+        "offload": false,
+        "flags": [
+          "--trust-remote-code",
+          "--kv-cache-dtype",
+          "fp8_e4m3",
+          "--mem-fraction-static",
+          "0.80",
+          "--attention-backend",
+          "flashinfer",
+          "--chunked-prefill-size",
+          "2048",
+          "--reasoning-parser",
+          "qwen3",
+          "--tool-call-parser",
+          "qwen3_coder",
+          "--mamba-radix-cache-strategy",
+          "extra_buffer",
+          "--mamba-ssm-dtype",
+          "float32",
+          "--max-mamba-cache-size",
+          "5",
+          "--mamba-full-memory-ratio",
+          "2.55"
+        ],
+        "hardware": {
+          "os": "linux",
+          "architecture": "arm64",
+          "gpuProducts": [
+            "NVIDIA-GB10",
+            "NVIDIA GB10"
+          ],
+          "cudaDeviceNames": [
+            "NVIDIA GB10"
+          ],
+          "gpuCount": 1,
+          "memoryMode": "unified"
+        }
+      }
+    ],
+    "validatedWorkload": {
+      "date": "2026-10-06",
+      "profile": "spark-nvfp4",
+      "contextLength": 8192,
+      "concurrency": 1,
+      "requestType": "short-prompt-smoke",
+      "fullContextExercised": false,
+      "lifecycleIsolationVerified": true,
+      "performanceBenchmarked": false,
+      "qualityEvaluated": false
+    }
+  }
+}

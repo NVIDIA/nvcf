@@ -1,0 +1,172 @@
+{
+  "schemaVersion": 1,
+  "recipes": [
+    {
+      "id": "nemotron-5-nano-12b",
+      "name": "Nemotron 5 Nano 12B",
+      "servedModelId": null,
+      "availability": {
+        "status": "unavailable",
+        "deployable": false,
+        "reason": "Exact-name public artifact and access status remain unverified.",
+        "checkedAt": "2026-10-07",
+        "sources": [
+          "https://huggingface.co/api/models?author=nvidia&search=Nemotron&limit=1000",
+          "https://huggingface.co/nvidia",
+          "https://www.nvidia.com/en-us/ai-data-science/foundation-models/nemotron/"
+        ]
+      },
+      "precision": null,
+      "license": null,
+      "licenseNotice": null,
+      "model": null,
+      "runtime": null,
+      "profiles": [],
+      "upstreamCandidates": []
+    },
+    {
+      "id": "nemotron-5-super-49b",
+      "name": "Nemotron 5 Super 49B",
+      "servedModelId": null,
+      "availability": {
+        "status": "unavailable",
+        "deployable": false,
+        "reason": "Exact-name public artifact and access status remain unverified.",
+        "checkedAt": "2026-10-07",
+        "sources": [
+          "https://huggingface.co/api/models?author=nvidia&search=Nemotron&limit=1000",
+          "https://huggingface.co/nvidia",
+          "https://www.nvidia.com/en-us/ai-data-science/foundation-models/nemotron/"
+        ]
+      },
+      "precision": null,
+      "license": null,
+      "licenseNotice": null,
+      "model": null,
+      "runtime": null,
+      "profiles": [],
+      "upstreamCandidates": []
+    },
+    {
+      "id": "qwen3.8-4b",
+      "name": "Qwen3.8-4B",
+      "servedModelId": null,
+      "availability": {
+        "status": "unavailable",
+        "deployable": false,
+        "reason": "Exact-name public artifact and access status remain unverified. HTTP 401 is ambiguous between private and nonexistent repositories.",
+        "checkedAt": "2026-10-07",
+        "sources": [
+          "https://huggingface.co/collections/Qwen/qwen38",
+          "https://huggingface.co/Qwen",
+          "https://huggingface.co/api/models?author=Qwen&search=Qwen3.8&limit=100&full=true",
+          "https://huggingface.co/api/models/Qwen/Qwen3.8-4B"
+        ]
+      },
+      "precision": null,
+      "license": null,
+      "licenseNotice": null,
+      "model": null,
+      "runtime": null,
+      "profiles": [],
+      "upstreamCandidates": []
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash",
+      "servedModelId": null,
+      "availability": {
+        "status": "planned",
+        "deployable": false,
+        "reason": "The verified checkpoint has upstream four-GPU candidates. Installation requires tensor-parallel chart support, model-specific startup/cache checks and hardware qualification.",
+        "checkedAt": "2026-10-07",
+        "sources": [
+          "https://huggingface.co/api/models/deepseek-ai/DeepSeek-V4-Flash",
+          "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/tree/60d8d70770c6776ff598c94bb586a859a38244f1",
+          "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/raw/60d8d70770c6776ff598c94bb586a859a38244f1/config.json",
+          "https://docs.sglang.io/cookbook/autoregressive/DeepSeek/DeepSeek-V4",
+          "https://github.com/ai-dynamo/dynamo/blob/main/recipes/deepseek-v4/deepseek-v4-flash/README.md",
+          "https://raw.githubusercontent.com/ai-dynamo/dynamo/main/recipes/deepseek-v4/container/sglang/Dockerfile.dsv4.sglang.b200",
+          "https://raw.githubusercontent.com/ai-dynamo/dynamo/main/recipes/deepseek-v4/container/sglang/Dockerfile.dsv4.sglang.gb200",
+          "https://hub.docker.com/v2/repositories/lmsysorg/sglang/tags/deepseek-v4-blackwell",
+          "https://hub.docker.com/v2/repositories/lmsysorg/sglang/tags/deepseek-v4-grace-blackwell",
+          "https://github.com/sgl-project/sglang/issues/39277"
+        ]
+      },
+      "precision": null,
+      "license": null,
+      "licenseNotice": "notices/deepseek-v4-flash/NOTICE",
+      "model": null,
+      "runtime": null,
+      "profiles": [],
+      "upstreamCandidates": [
+        {
+          "id": "b200-tp4",
+          "model": {
+            "repository": "deepseek-ai/DeepSeek-V4-Flash",
+            "revision": "60d8d70770c6776ff598c94bb586a859a38244f1",
+            "weightBytes": 159617149040,
+            "weightShards": 46,
+            "architecture": "DeepseekV4ForCausalLM",
+            "modelType": "deepseek_v4",
+            "totalParametersBillions": 284,
+            "activeParametersBillions": 13,
+            "maximumContextTokens": 1048576
+          },
+          "license": "MIT",
+          "precision": "FP4 MoE experts, FP8 attention/dense with BF16/F32 auxiliary tensors",
+          "runtime": {
+            "backend": "sglang",
+            "image": "lmsysorg/sglang@sha256:940f7652dd16b04e82ecc57c4dcb6a3ae7d7283bc38db1ce3c4aa6ae3685c4aa",
+            "upstreamTag": "deepseek-v4-blackwell"
+          },
+          "hardware": {
+            "os": "linux",
+            "architecture": "amd64",
+            "gpuProduct": "NVIDIA-B200",
+            "modelNodeCount": 1,
+            "gpusPerNode": 4,
+            "tensorParallelSize": 4
+          },
+          "validation": {
+            "status": "unqualified",
+            "scope": "Upstream documentation and image metadata only. No local container launch, model download, inference, recovery or isolation test."
+          }
+        },
+        {
+          "id": "gb200-tp4",
+          "model": {
+            "repository": "deepseek-ai/DeepSeek-V4-Flash",
+            "revision": "60d8d70770c6776ff598c94bb586a859a38244f1",
+            "weightBytes": 159617149040,
+            "weightShards": 46,
+            "architecture": "DeepseekV4ForCausalLM",
+            "modelType": "deepseek_v4",
+            "totalParametersBillions": 284,
+            "activeParametersBillions": 13,
+            "maximumContextTokens": 1048576
+          },
+          "license": "MIT",
+          "precision": "FP4 MoE experts, FP8 attention/dense with BF16/F32 auxiliary tensors",
+          "runtime": {
+            "backend": "sglang",
+            "image": "lmsysorg/sglang@sha256:e0a0ebb70572a70d2a90759de96482e7f482d501283c48c3393b1e62198051ef",
+            "upstreamTag": "deepseek-v4-grace-blackwell"
+          },
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProduct": "NVIDIA-GB200",
+            "modelNodeCount": 1,
+            "gpusPerNode": 4,
+            "tensorParallelSize": 4
+          },
+          "validation": {
+            "status": "unqualified",
+            "scope": "Upstream documentation and image metadata only. No local container launch, model download, inference, recovery or isolation test."
+          }
+        }
+      ]
+    }
+  ]
+}

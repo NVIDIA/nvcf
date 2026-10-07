@@ -41,6 +41,11 @@ def cgroup_memory():
 def supervise(command, marker_path='/tmp/runtime-memory-stop.json'):
     marker = pathlib.Path(marker_path)
     if marker.exists():
+        try:
+            failure = json.loads(marker.read_text())
+            print(json.dumps({'result': 'MEMORY_GUARD_LATCHED', 'failure': failure}), flush=True)
+        except (OSError, ValueError) as error:
+            print(json.dumps({'result': 'MEMORY_GUARD_LATCHED', 'markerError': type(error).__name__}), flush=True)
         print('Runtime remains stopped after a memory guard failure. Replace this owned pod to retry.', flush=True)
         return 78
     floor = int(os.environ.get('MIN_HOST_AVAILABLE_BYTES', 1024**3))
@@ -75,7 +80,9 @@ def supervise(command, marker_path='/tmp/runtime-memory-stop.json'):
         if reason:
             failure = {'time': datetime.datetime.now(datetime.timezone.utc).isoformat(), 'result': 'MEMORY_GUARD_STOP',
                        **reading, 'reason': reason, 'minimumAvailableBytes': floor}
-            marker.write_text(json.dumps(failure) + '\n')
+            pending = marker.with_name(marker.name + '.pending')
+            pending.write_text(json.dumps(failure) + '\n')
+            pending.replace(marker)
             print(json.dumps(failure), flush=True)
             stop_child()
             try:

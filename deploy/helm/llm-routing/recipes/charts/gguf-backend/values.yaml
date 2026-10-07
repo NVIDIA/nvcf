@@ -1,6 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-phase: preflight
+phase: deploy
+recipe: ""
+profileName: ""
+nodes: []
+storageClassName: local-path
+sharedCAConfigMap: ""
+reuseCaches: false
 suspended: false
 image: ""
 runtimeClassName: nvidia
@@ -9,6 +15,7 @@ targets: []
 gpu:
   product: ""
 artifacts:
+  existingClaim: ""
   storageClassName: local-path
   size: 400Gi
 build:
@@ -23,6 +30,7 @@ runtime:
 rpc:
   replicas: 1
   cache:
+    existingClaim: ""
     enabled: false
     storageClassName: local-path
     size: 160Gi

@@ -69,6 +69,30 @@
         "concurrency": 1,
         "performanceBenchmarked": false,
         "qualityEvaluated": false
+      },
+      "automaticHelmValidation": {
+        "date": "2026-10-07",
+        "profile": "spark-fp8",
+        "modelRevision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+        "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+        "contextLength": 8192,
+        "concurrency": 1,
+        "requestType": "short-prompt-smoke",
+        "fullContextExercised": false,
+        "performanceBenchmarked": false,
+        "qualityEvaluated": false,
+        "cacheMode": "retained-offline",
+        "checks": [
+          "placement",
+          "gpu-qualification",
+          "cache-integrity",
+          "readiness",
+          "discovery",
+          "chat",
+          "streaming",
+          "authentication",
+          "original-release-restoration"
+        ]
       }
     },
     {

@@ -39,6 +39,27 @@ class RuntimeGuardTests(unittest.TestCase):
                 self.assertEqual(guard.supervise(['must-not-start'], marker), 78)
                 launch.assert_not_called()
 
+    def test_latched_failure_replays_original_reason_without_starting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            marker = pathlib.Path(directory) / 'stop.json'
+            failure = {'result': 'MEMORY_GUARD_STOP', 'reason': 'process_swap', 'process': {'VmSwap': 4096}}
+            marker.write_text(json.dumps(failure))
+            original = marker.read_bytes()
+            with patch.object(guard.subprocess, 'Popen') as launch, patch('builtins.print') as output:
+                self.assertEqual(guard.supervise(['must-not-start'], marker), 78)
+            launch.assert_not_called()
+            self.assertEqual(json.loads(output.call_args_list[0].args[0]), {'result': 'MEMORY_GUARD_LATCHED', 'failure': failure})
+            self.assertEqual(marker.read_bytes(), original)
+
+    def test_unreadable_latch_keeps_runtime_stopped_and_reports_error_type(self):
+        with tempfile.TemporaryDirectory() as directory:
+            marker = pathlib.Path(directory) / 'stop.json'
+            marker.write_text('incomplete')
+            with patch.object(guard.subprocess, 'Popen') as launch, patch('builtins.print') as output:
+                self.assertEqual(guard.supervise(['must-not-start'], marker), 78)
+            launch.assert_not_called()
+            self.assertEqual(json.loads(output.call_args_list[0].args[0])['markerError'], 'JSONDecodeError')
+
     def test_low_memory_prevents_start(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(guard, 'memory', return_value=(512*1024**2, 0)), patch.object(guard.subprocess, 'Popen') as launch:
             self.assertEqual(guard.supervise(['must-not-start'], pathlib.Path(directory) / 'stop.json'), 78)

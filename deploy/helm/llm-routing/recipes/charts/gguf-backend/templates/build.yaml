@@ -1,6 +1,6 @@
 {{/* SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. */}}
 {{/* SPDX-License-Identifier: Apache-2.0 */}}
-{{- if and (ne .Values.phase "preflight") (ne .Values.phase "chain") }}
+{{- if has .Values.phase (list "build" "qualify" "download" "serve") }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

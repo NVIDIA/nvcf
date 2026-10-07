@@ -1,6 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
-# Generate these values with recipes.py plan. No default model is deployed.
-phase: qualify
+# Automatic mode uses the bundled pinned recipe and explicit node placement.
+# Supplying phase retains the advanced qualify/download/serve workflow.
+mode: automatic
+recipe: qwen3.8-27b
+profileName: ""
+nodes: []
+sharedCAConfigMap: ""
+cache:
+  existingClaim: ""
+phase: deploy
 suspended: false
 reuseCaches: false
 model: {}

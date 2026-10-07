@@ -1,0 +1,15 @@
+# Preload these four locally built images on every eligible node first.
+# Match watchNamespaces to --namespace. This example reuses an installed CRD.
+gatewayStack:
+  llm-api-gateway:
+    llmApiGateway:
+      image: {repository: localhost/llm/gateway, tag: dev, pullPolicy: Never}
+  llm-request-router:
+    llmRequestRouter:
+      image: {repository: localhost/llm/router, tag: dev, pullPolicy: Never}
+operator:
+  watchNamespaces: [llm-stack]
+  installCRDs: false
+  image: {repository: localhost/llm/operator, tag: dev, pullPolicy: Never}
+  pylon:
+    image: {repository: localhost/llm/pylon, tag: dev, pullPolicy: Never}

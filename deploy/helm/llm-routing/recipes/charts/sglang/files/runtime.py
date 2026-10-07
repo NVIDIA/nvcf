@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Qualify, cache, and supervise one rank of a pinned SGLang recipe."""
 import datetime
+import fcntl
 import hashlib
 import http.server
 import json
@@ -183,9 +184,9 @@ def completed_checkpoint(model, cache):
     return complete
 
 
-def reuse_snapshot(model, cache=pathlib.Path('/cache')):
+def reuse_snapshot(model, cache=pathlib.Path('/cache'), require_complete=True, write_marker=True):
     """Validate retained Hugging Face files directly; never import a download client."""
-    complete = completed_checkpoint(model, cache)
+    complete = completed_checkpoint(model, cache) if require_complete else cache / (model['revision'] + '.complete')
     repository = cache / 'huggingface' / 'hub' / ('models--' + model['repository'].replace('/', '--'))
     snapshot = repository / 'snapshots' / model['revision']
     if not repository.resolve().is_relative_to(cache.resolve()) or not snapshot.is_dir() or not snapshot.resolve().is_relative_to(repository.resolve()):
@@ -250,7 +251,10 @@ def reuse_snapshot(model, cache=pathlib.Path('/cache')):
                 raise ValueError('Weight index refers to missing tensors')
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
             raise RuntimeError('Missing or corrupt cached weight shard: ' + name) from error
-    complete.write_text(json.dumps({'model': model['id'], 'repository': model['repository'], 'revision': model['revision']}) + '\n')
+    if write_marker:
+        temporary = complete.with_suffix('.pending')
+        temporary.write_text(json.dumps({'model': model['id'], 'repository': model['repository'], 'revision': model['revision']}) + '\n')
+        os.replace(temporary, complete)
     return snapshot
 
 
@@ -273,6 +277,41 @@ def download(config, cache=pathlib.Path('/cache')):
     return 0
 
 
+def prepare_checkpoint(config, cache):
+    model = config['model']
+    if config.get('reuseCaches') or (cache / (model['revision'] + '.complete')).exists():
+        snapshot = reuse_snapshot(model, cache, write_marker=False)
+        log('download_pass', model=model['id'], revision=model['revision'], reused=True)
+        return snapshot
+    if shutil.disk_usage(cache).free < config['profile']['minFreeDiskGiB'] * GIB:
+        raise RuntimeError('Insufficient cache disk space for the model checkpoint')
+    from huggingface_hub import snapshot_download
+    snapshot_download(repo_id=model['repository'], revision=model['revision'], cache_dir=str(cache / 'huggingface/hub'))
+    snapshot = reuse_snapshot(model, cache, require_complete=False)
+    log('download_pass', model=model['id'], revision=model['revision'], reused=False)
+    return snapshot
+
+
+def automatic(config, rank, cache=pathlib.Path('/cache')):
+    if config['profile']['nodes'] != 1 or rank != 0:
+        raise RuntimeError('Automatic startup supports the pinned single-node profiles')
+    with (cache / '.recipe.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError('Another model process is using this cache claim') from None
+        if host_memory() < config['profile']['memoryGiB'] * GIB:
+            raise RuntimeError('Insufficient host MemAvailable for the pinned profile')
+        qualify(config, rank)
+        import torch
+        torch.cuda.empty_cache()
+        model_path = prepare_checkpoint(config, cache)
+        os.environ['HF_HUB_OFFLINE'] = '1'
+        os.environ['TRANSFORMERS_OFFLINE'] = '1'
+        log('serve_start', model=config['model']['id'], revision=config['model']['revision'])
+        return supervise(command(config, model_path, rank), config)
+
+
 def main():
     config = json.loads(pathlib.Path('/recipe/config.json').read_text())
     phase, rank = sys.argv[1], int(sys.argv[2])
@@ -281,6 +320,8 @@ def main():
     reuse = config.get('reuseCaches', False)
     if type(reuse) is not bool:
         raise RuntimeError('reuseCaches must be a boolean')
+    if phase == 'automatic':
+        return automatic(config, rank)
     if phase == 'download':
         return download(config)
     if host_memory() < profile['memoryGiB'] * GIB:

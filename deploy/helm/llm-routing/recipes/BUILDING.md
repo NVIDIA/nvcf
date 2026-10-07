@@ -1,29 +1,38 @@
-# Build application images
+# Build application images and chart packages
 
 Build gateway, router, Pylon and operator images from your checkout, including local edits. Router and Pylon builds use Cargo profile `integration`.
 
+## Package charts for distribution
+
+From `deploy/helm/llm-routing`, package shared infrastructure and both model charts with their recipe catalog:
+
+```bash
+./package-charts.sh --output-dir /tmp/llm-chart-packages
+```
+
+The output contains three Helm archives, `index.json`, model terms under `notices/`, and `SHA256SUMS`. Development packaging needs Helm and Python 3. The command builds local dependencies in a temporary directory and preserves source files and existing output files. Choose a fresh output directory for another build.
+
+Distribute the archives and catalog to the installer. Installation uses Helm and kubectl. Images must already be available in the configured registry or preloaded on every eligible node. Build and export development images with the commands below until registry images are published.
+
 ## Build for a new shared stack
 
-Run from `deploy/helm/llm-routing`:
+Run this developer prerequisite from `deploy/helm/llm-routing` before the target namespace exists:
 
 ```bash
 export LLM_ROUTING_CONTEXT=YOUR_CONTEXT
-python3 stack.py install --build-images
+python3 build-shared-images.py --context "$LLM_ROUTING_CONTEXT" \
+  --namespace llm-stack --output-dir /tmp/llm-images --allow-containerd-import
 ```
 
-This temporary development flag builds the images for the selected routing node's architecture, exports an archive and imports it onto compatible nodes before installing the shared stack. Docker must be running with Buildx support for the target architecture and access to base images and build dependencies. The command records fresh local tags and `Never` pull policy in the saved configuration.
+The command builds and exports the four images, preloads every compatible node, and writes `/tmp/llm-images/shared.values.yaml` for the [Helm installation](../README.md). Docker must be running with Buildx support for the selected architecture and access to base images and build dependencies. Use `--control-node NODE` to select the build architecture. ARM64 and AMD64 are supported.
 
-Import Jobs run in a separate image preparation namespace and mount the selected nodes' containerd sockets. Setup detects the K3s containerd socket. For another containerd installation, initialize the configuration with `stack.py init` and set `containerd.socketPath` and compatible image-loader client settings before installation. See [Shared stack settings](../ADVANCED.md#shared-stack-settings) for configuration paths.
+The saved configuration keeps fresh image tags and node UIDs stable on retry. The emitted values select that architecture and use `Never` pull policy. Existing unrelated output files are preserved. This command prepares a fresh stack namespace. Existing combined installations can use the component rebuild commands below with their saved configuration.
+
+Import Jobs run in a separate preparation namespace and mount the selected nodes' containerd sockets. Setup detects the K3s socket. For another containerd installation, set `config.containerd.socketPath` and compatible image-loader client settings in the saved `image-build-config.json`, then retry the command.
 
 ## Use registry images
 
-Configure `images.COMPONENT.repository`, `tag` and `pullPolicy` for `gateway`, `router`, `pylon` and `operator` in the shared configuration. Use published images for the target architecture and grant every node where Pylon can schedule registry pull access. Install with:
-
-```bash
-python3 stack.py install
-```
-
-The bundled registry references are placeholders. When published images become the default, the main guide can use this command directly.
+Set the chart's four image repositories, tags and `IfNotPresent` pull policies in a private values file. The gateway and router fields are under `gatewayStack`, and the operator and Pylon fields are under `operator`. Use the [shared values example](../charts/shared-stack/values.local.example.yaml) for the field names. Every eligible node must be able to pull the images for its architecture. Use locally built images until registry images are published.
 
 ## Build for a combined installation
 

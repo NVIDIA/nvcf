@@ -1,5 +1,66 @@
 # Advanced deployment and configuration
 
+## Helm configuration
+
+The [main guide](README.md) uses local chart archives and an explicit values file. Build these archives with [package-charts.sh](package-charts.sh). A chart source directory can also be installed after its local dependencies are built.
+
+Use [shared-stack/values.local.example.yaml](charts/shared-stack/values.local.example.yaml) as a template for existing preloaded images. Replace the four image references with your node cache or registry references and set the operator watch namespace to the installation namespace. Set `operator.installCRDs: true` for the first CRD owner, or `false` to reuse an installed compatible CRD. Each shared stack watches its own namespace.
+
+The shared chart generates the caller key in `llm-shared-caller-key` and the transport credential in `llm-shared-cluster-token`. Existing installations retain these Secrets and their CA during upgrades and reinstalls. For an existing caller credential, set `callerKey.existingSecret` to a Secret containing `api-key`. For an existing transport credential, set `clusterCredential.create: false` and `operator.credential.existingSecret` to a Secret containing `cluster-token`. Both Secrets must be in the release namespace. Keep generated credentials and site values in private storage.
+
+TLS customization uses `gatewayStack.tls` and the child chart listener TLS values. See [shared-stack/values.yaml](charts/shared-stack/values.yaml) and the [gateway chart](../llm-gateway-stack/llm-gateway-stack/values.yaml). Model values reference the same CA ConfigMap through `sharedCAConfigMap`.
+
+### Helm cache reuse and recovery
+
+To install a Qwen release against an existing complete cache in the same namespace, add these values:
+
+```yaml
+reuseCaches: true
+cache:
+  existingClaim: retained-qwen-cache
+```
+
+Select the node holding that PVC. The chart mounts it and preserves its existing Helm ownership. `reuseCaches: true` validates the pinned files locally and fails when required files are missing or corrupt. New downloads use atomic completion markers, so interrupted preparation retries from the retained cache.
+
+Inspect startup and readiness:
+
+```bash
+kubectl --context "$LLM_ROUTING_CONTEXT" -n llm-stack get pods,inferenceendpoints
+kubectl --context "$LLM_ROUTING_CONTEXT" -n llm-stack logs deployment/qwen-fp8-serve-0 -c placement-check
+kubectl --context "$LLM_ROUTING_CONTEXT" -n llm-stack logs deployment/qwen-fp8-serve-0 -c sglang
+```
+
+Correct the values and rerun the original Helm command. Set `suspended: true` in the model values to release its GPUs while retaining cache claims. Set it back to `false` and rerun Helm to resume. Automatic recipes withdraw their endpoint while suspended and restore it on resume. The shared release and other models continue serving. `helm uninstall` removes model-owned workloads and endpoint resources while retaining model PVCs.
+
+### Helm GLM recipe
+
+The GLM automatic profile uses two distinct GB10 nodes. Create `/tmp/llm-images/glm.values.yaml`:
+
+```yaml
+recipe: glm-5.3
+profileName: gb10-x2
+nodes: [gpu-node-1, gpu-node-2]
+runtimeClassName: nvidia
+storageClassName: local-path
+sharedCAConfigMap: llm-gateway-stack-ca
+```
+
+Install it with the shared stack already running:
+
+```bash
+helm upgrade --install glm "$LLM_CHARTS/pylon-gguf-backend-0.2.0.tgz" \
+  --kube-context "$LLM_ROUTING_CONTEXT" --namespace llm-stack \
+  --values /tmp/llm-images/glm.values.yaml --wait --timeout 120m
+```
+
+Kubernetes checks placement, builds the pinned llama.cpp runtime, starts the worker RPC server and qualifies both GPUs. It then verifies or downloads the pinned GGUF cache and starts the model server. The served model ID is `GLM-5.3-UD-IQ2_M`. The common catalog lists its per-node resource and storage requirements. The current cached two-node Helm trial stopped at the host-memory guard during loading. Automatic serving validation remains open.
+
+To reuse existing GLM downloads and runtime artifacts, set `reuseCaches: true`, `artifacts.existingClaim` and `rpc.cache.existingClaim` to the retained claims. Supply their original nodes in leader/worker order. Runtime identity and complete model checksums are validated before serving.
+
+## Existing Python workflows
+
+The following sections retain the original planner, combined installation and maintenance commands. Use the Helm flow above for new independent installations.
+
 Start with the [main guide](README.md) for installation, model deployment, chat and monitoring. Use this guide for configuration details, individual phases, upgrades and recovery.
 
 ## Shared stack settings
@@ -526,7 +587,7 @@ Pin a compatible runtime image and model revision, define the workload limits an
 
 ### Deploy command and recovery
 
-The main guide's `recipes.py deploy` command combines planning, rendering, qualification, download, serving and gateway verification for fresh releases. The optional workload and capability arguments below also apply to `deploy`.
+The existing `recipes.py deploy` command combines planning, rendering, qualification, download, serving and gateway verification for fresh releases. The optional workload and capability arguments below also apply to `deploy`.
 
 The command stops at a failed phase and keeps its releases, caches, plan, logs and rendered values in the chosen work directory. Read `failure.json` and the named log before recovery. Use the saved values with the [individual phase commands](#deploy-and-verify) to resolve and repeat the failed phase, then continue the remaining phases. Keep serving releases in the serving phase. Use [lifecycle operations](#lifecycle) for changes to running models.
 

@@ -414,7 +414,7 @@ class CliTests(unittest.TestCase):
              redirect_stderr(io.StringIO()) as errors, self.assertRaises(SystemExit) as result:
             tool.main(['build-images', '--component', 'gateway'])
         self.assertEqual(result.exception.code, 2)
-        self.assertEqual(errors.getvalue(), 'error: Start Docker, then rerun build-images.\n')
+        self.assertEqual(errors.getvalue(), 'error: Start Docker, then retry the image build.\n')
         self.assertEqual(run.call_count, 1)
 
     def test_prepare_uses_default_saved_config(self):

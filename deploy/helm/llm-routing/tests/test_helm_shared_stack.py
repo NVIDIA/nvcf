@@ -1,0 +1,305 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+import base64
+import copy
+import hashlib
+import json
+import pathlib
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+
+import yaml
+
+HERE = pathlib.Path(__file__).resolve().parents[1]
+HELM = HERE.parent
+
+
+def decode(secret, key):
+    return base64.b64decode(secret['data'][key]).decode()
+
+
+@unittest.skipUnless(shutil.which('helm'), 'Helm is required')
+class SharedHelmTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory(prefix='helm-shared-')
+        cls.root = pathlib.Path(cls.temporary.name)
+        for name in ('llm-gateway-stack', 'llm-api-gateway', 'llm-request-router', 'pylon-operator'):
+            shutil.copytree(HELM/name/name, cls.root/name/name,
+                            ignore=shutil.ignore_patterns('charts', 'Chart.lock'))
+        cls.chart = cls.root/'llm-routing/charts/shared-stack'
+        shutil.copytree(HERE/'charts/shared-stack', cls.chart,
+                        ignore=shutil.ignore_patterns('charts', 'Chart.lock'))
+        for chart in (cls.root/'llm-gateway-stack/llm-gateway-stack', cls.chart):
+            subprocess.run(['helm', 'dependency', 'build', '--skip-refresh', str(chart)], check=True, capture_output=True, text=True)
+        cls.values = yaml.safe_load((cls.chart/'values.local.example.yaml').read_text())
+        cls.values['operator']['watchNamespaces'] = ['test-models']
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+
+    def render(self, values=None, *, chart=None, upgrade=False, api=True, fail=None):
+        values_path = self.root/'test-values.json'
+        values_path.write_text(json.dumps(values or self.values))
+        command = ['helm', 'template', 'test-stack', str(chart or self.chart),
+                   '--namespace', 'test-models', '-f', str(values_path)]
+        if api:
+            command.extend(['--api-versions', 'pylon.nvidia.com/v1alpha1'])
+        if upgrade:
+            command.append('--is-upgrade')
+        result = subprocess.run(command, text=True, capture_output=True)
+        if fail:
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(fail, result.stderr)
+            return
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return [obj for obj in yaml.safe_load_all(result.stdout) if obj]
+
+    def lookup_chart(self, resources):
+        """Replace only Helm's API reads in a disposable copy, never the source."""
+        chart = self.root/'lookup-chart'
+        if chart.exists():
+            shutil.rmtree(chart)
+        shutil.copytree(self.chart, chart)
+        while archives := list(chart.rglob('*.tgz')):
+            for archive in archives:
+                subprocess.run(['tar', '-xzf', str(archive), '-C', str(archive.parent)], check=True)
+                archive.unlink()
+        fixture = {}
+        for item in resources:
+            metadata = item.get('metadata', {})
+            fixture['/'.join((item['apiVersion'], item['kind'], metadata.get('namespace', ''), metadata.get('name', '')))] = item
+        fixtures = json.dumps(json.dumps(fixture))
+        (chart/'templates/_lookup-test.tpl').write_text(
+            '{{- define "shared.test.lookup" -}}'
+            '{{- $data := ' + fixtures + ' | fromJson -}}'
+            '{{- index $data (join "/" .) | default dict | toJson -}}'
+            '{{- end -}}')
+        arg = r'(?:"[^"]*"|[.$][A-Za-z0-9_.]+)'
+        pattern = re.compile(r'lookup\s+(' + arg + r')\s+(' + arg + r')\s+(' + arg + r')\s+(' + arg + r')')
+        for path in chart.rglob('*'):
+            if path.suffix not in ('.tpl', '.yaml'):
+                continue
+            source = path.read_text()
+            path.write_text(pattern.sub(lambda match: '(include "shared.test.lookup" (list ' + ' '.join(match.groups()) + ') | fromJson)', source))
+        return chart
+
+    def installed(self):
+        resources = self.render()
+        for obj in resources:
+            metadata = obj['metadata']
+            metadata.setdefault('annotations', {}).update({
+                'meta.helm.sh/release-name': 'test-stack',
+                'meta.helm.sh/release-namespace': 'test-models'})
+        return resources
+
+    def test_empty_stack_is_gpu_and_model_free(self):
+        resources = self.render()
+        self.assertEqual(sum(item['kind'] == 'Deployment' for item in resources), 3)
+        forbidden = {'InferenceEndpoint', 'PersistentVolumeClaim', 'PersistentVolume', 'RuntimeClass', 'CustomResourceDefinition', 'Job'}
+        self.assertFalse(forbidden & {item['kind'] for item in resources})
+        for item in resources:
+            self.assertNotIn('nvidia.com/gpu', json.dumps(item))
+            if item['kind'] == 'Deployment':
+                pod = item['spec']['template']['spec']
+                self.assertNotIn('runtimeClassName', pod)
+                self.assertNotIn('nodeSelector', pod)
+        operator = next(item for item in resources if item['kind'] == 'Deployment' and any(
+            '--watch-namespaces=test-models' in container.get('args', []) for container in item['spec']['template']['spec']['containers']))
+        self.assertEqual(operator['metadata']['namespace'], 'test-models')
+
+    def test_generated_credentials_match_both_auth_files(self):
+        secrets = {item['metadata']['name']: item for item in self.render() if item['kind'] == 'Secret'}
+        caller = decode(secrets['llm-shared-caller-key'], 'api-key')
+        token = decode(secrets['llm-shared-cluster-token'], 'cluster-token')
+        keys = json.loads(decode(secrets['llm-gateway-stack-api-keys'], 'api-keys.json'))
+        workers = yaml.safe_load(decode(secrets['llm-gateway-stack-worker-credentials'], 'credentials.yaml'))
+        self.assertEqual(keys, {'keys': [{'id': 'stack-client', 'sha256': hashlib.sha256(caller.encode()).hexdigest()}]})
+        self.assertEqual(workers, {'clusters': {'llm-stack': ['sha256:' + hashlib.sha256(token.encode()).hexdigest()]}})
+        for name in ('llm-shared-caller-key', 'llm-shared-cluster-token', 'llm-gateway-stack-ca'):
+            self.assertEqual(secrets[name]['metadata']['annotations']['helm.sh/resource-policy'], 'keep')
+        self.assertNotEqual(caller, token)
+        self.assertGreaterEqual(len(caller), 48)
+
+    def test_upgrade_reuses_all_credentials_and_tls(self):
+        first = self.installed()
+        second = self.render(chart=self.lookup_chart(first), upgrade=True)
+        before = {item['metadata']['name']: item['data'] for item in first if item['kind'] == 'Secret'}
+        after = {item['metadata']['name']: item['data'] for item in second if item['kind'] == 'Secret'}
+        self.assertEqual(after, before)
+
+    def test_upgrade_missing_key_fails_instead_of_rotating(self):
+        first = [item for item in self.installed() if item['metadata']['name'] != 'llm-shared-caller-key']
+        self.render(chart=self.lookup_chart(first), upgrade=True, fail='required Secret llm-shared-caller-key is missing')
+
+    def test_upgrade_missing_ca_fails_instead_of_rotating(self):
+        first = [item for item in self.installed() if not (item['kind'] == 'Secret' and item['metadata']['name'] == 'llm-gateway-stack-ca')]
+        self.render(chart=self.lookup_chart(first), upgrade=True, fail='TLS Secret llm-gateway-stack-ca is missing')
+
+    def test_changed_tls_names_require_explicit_replacement(self):
+        values = copy.deepcopy(self.values)
+        values['gatewayStack']['tls'] = {'selfSigned': {'gatewayDnsNames': ['localhost', 'extra.example.org']}}
+        self.render(values, chart=self.lookup_chart(self.installed()), upgrade=True, fail='TLS names changed')
+
+    def test_foreign_owned_generated_secret_rejected(self):
+        resources = self.installed()
+        for obj in resources:
+            if obj['metadata']['name'] == 'llm-shared-caller-key':
+                obj['metadata']['annotations']['meta.helm.sh/release-name'] = 'other-stack'
+        self.render(chart=self.lookup_chart(resources), fail='not owned by this Helm release')
+
+    def test_existing_credentials_are_referenced_without_adoption(self):
+        values = copy.deepcopy(self.values)
+        values['callerKey'] = {'existingSecret': 'external-caller'}
+        values['clusterCredential'] = {'create': False}
+        values['operator']['credential'] = {'existingSecret': 'external-transport'}
+        resources = [{'apiVersion': 'v1', 'kind': 'Secret', 'metadata': {'name': name, 'namespace': 'test-models'},
+                      'data': {key: base64.b64encode(token.encode()).decode()}}
+                     for name, key, token in [('external-caller', 'api-key', 'owned-outside-chart'),
+                                              ('external-transport', 'cluster-token', 'transport-outside-chart')]]
+        result = self.render(values, chart=self.lookup_chart(resources))
+        names = {item['metadata']['name'] for item in result if item['kind'] == 'Secret'}
+        self.assertNotIn('external-caller', names)
+        self.assertNotIn('external-transport', names)
+        keys = next(item for item in result if item['metadata']['name'] == 'llm-gateway-stack-api-keys')
+        self.assertEqual(json.loads(decode(keys, 'api-keys.json'))['keys'][0]['sha256'], hashlib.sha256(b'owned-outside-chart').hexdigest())
+
+    def test_watch_scope_must_equal_release_namespace(self):
+        for watch in ([], ['other'], ['test-models', 'other']):
+            with self.subTest(watch=watch):
+                values = copy.deepcopy(self.values)
+                values['operator']['watchNamespaces'] = watch
+                self.render(values, fail='must contain exactly the Helm release namespace')
+
+    def test_overlapping_operator_is_rejected_but_other_namespace_is_allowed(self):
+        for watch, blocked in [('', True), ('test-models', True), ('other', False)]:
+            with self.subTest(watch=watch):
+                deployment = {'apiVersion': 'apps/v1', 'kind': 'Deployment', 'metadata': {'namespace': 'other', 'name': 'existing-operator'},
+                              'spec': {'template': {'spec': {'containers': [{'name': 'operator', 'args': [
+                                  '--cluster-credential-secret=existing-token', '--watch-namespaces=' + watch]}]}}}}
+                fixture = {'apiVersion': 'apps/v1', 'kind': 'Deployment', 'items': [deployment]}
+                self.render(chart=self.lookup_chart([fixture]), fail='already watches namespace test-models' if blocked else None)
+
+    def existing_operator_chart(self, args):
+        deployment = {'metadata': {'namespace': 'other', 'name': 'existing-operator'},
+                      'spec': {'template': {'spec': {'containers': [{'name': 'operator', 'args':
+                          ['--pylon-image=localhost/pylon:test'] + args}]}}}}
+        return self.lookup_chart([{'apiVersion': 'apps/v1', 'kind': 'Deployment', 'items': [deployment]}])
+
+    def test_spaced_watch_target_is_rejected_in_both_argument_forms(self):
+        for args in (['--watch-namespaces= other, test-models ,team-b '],
+                     ['--watch-namespaces', ' other, test-models ,team-b ']):
+            with self.subTest(args=args):
+                self.render(chart=self.existing_operator_chart(args), fail='already watches namespace test-models')
+
+    def test_empty_normalized_watch_list_means_all_namespaces(self):
+        for watch in (' ', ',,,', ' , \t, '):
+            for args in (['--watch-namespaces=' + watch], ['--watch-namespaces', watch]):
+                with self.subTest(args=args):
+                    self.render(chart=self.existing_operator_chart(args), fail='already watches namespace test-models')
+
+    def test_spaced_nonoverlapping_watch_list_preserves_generated_scope(self):
+        resources = self.render(chart=self.existing_operator_chart(['--watch-namespaces= other, ,team-b , other ']))
+        operators = [container for item in resources if item['kind'] == 'Deployment'
+                     for container in item['spec']['template']['spec']['containers']
+                     if any(arg.startswith('--pylon-image=') for arg in container.get('args', []))]
+        self.assertEqual(len(operators), 1)
+        self.assertIn('--watch-namespaces=test-models', operators[0]['args'])
+
+    def test_pylon_image_operator_markers_and_duplicate_watches_are_detected(self):
+        for args, message in [(['--pylon-image=localhost/pylon:test', '--watch-namespaces=test-models'], 'already watches'),
+                              (['--pylon-image', 'localhost/pylon:test', '--watch-namespaces', 'test-models'], 'already watches'),
+                              (['--pylon-image=localhost/pylon:test', '--watch-namespaces=test-models', '--watch-namespaces=other'], 'ambiguous duplicate')]:
+            with self.subTest(args=args):
+                deployment = {'apiVersion': 'apps/v1', 'kind': 'Deployment',
+                              'metadata': {'namespace': 'other', 'name': 'existing-operator'},
+                              'spec': {'template': {'spec': {'containers': [{'name': 'operator', 'command': ['operator'] + args}]}}}}
+                self.render(chart=self.lookup_chart([{'apiVersion': 'apps/v1', 'kind': 'Deployment', 'items': [deployment]}]), fail=message)
+
+    def test_crd_is_explicitly_reused_or_installed(self):
+        self.render(api=False, fail='no served InferenceEndpoint API')
+        values = copy.deepcopy(self.values)
+        values['operator']['installCRDs'] = True
+        resources = self.render(values, api=False)
+        crds = [item for item in resources if item['kind'] == 'CustomResourceDefinition']
+        self.assertEqual(len(crds), 1)
+        self.assertEqual(crds[0]['metadata']['annotations']['helm.sh/resource-policy'], 'keep')
+
+    def test_missing_or_placeholder_images_are_rejected(self):
+        values = copy.deepcopy(self.values)
+        values['operator']['image']['repository'] = 'registry.example.com/operator'
+        self.render(values, fail='placeholder images cannot be installed')
+        values['operator']['image']['repository'] = 'localhost/operator'
+        values['operator']['image']['tag'] = ''
+        self.render(values, fail='placeholder images cannot be installed')
+
+    def test_external_tls_and_ca_are_referenced_without_adoption(self):
+        values = copy.deepcopy(self.values)
+        values['gatewayStack']['tls'] = {'selfSigned': {'enabled': False}}
+        resources = [item for item in self.installed() if item['kind'] in ('Secret', 'ConfigMap')
+                     and item['metadata']['name'] in ('llm-gateway-stack-ca', 'llm-gateway-stack-router-tls', 'llm-gateway-stack-gateway-tls')]
+        for resource in resources:
+            resource['metadata']['annotations'] = {'meta.helm.sh/release-name': 'external-pki'}
+        rendered = self.render(values, chart=self.lookup_chart(resources))
+        self.assertFalse({'llm-gateway-stack-ca', 'llm-gateway-stack-router-tls', 'llm-gateway-stack-gateway-tls'} &
+                         {item['metadata']['name'] for item in rendered})
+        self.render(values, chart=self.lookup_chart([]), fail='pre-create TLS Secret')
+
+    def test_missing_or_incomplete_existing_credential_is_rejected(self):
+        values = copy.deepcopy(self.values)
+        values['callerKey'] = {'existingSecret': 'external-caller'}
+        self.render(values, fail='required Secret external-caller is missing')
+        malformed = {'apiVersion': 'v1', 'kind': 'Secret',
+                     'metadata': {'name': 'external-caller', 'namespace': 'test-models'}, 'data': {}}
+        self.render(values, chart=self.lookup_chart([malformed]), fail='missing api-key')
+
+    def test_foreign_crd_is_reused_without_rendering_or_adoption(self):
+        values = copy.deepcopy(self.values)
+        values['operator']['installCRDs'] = True
+        crd = next(item for item in self.render(values, api=False) if item['kind'] == 'CustomResourceDefinition')
+        crd['metadata']['annotations'].update({'meta.helm.sh/release-name': 'original-owner',
+                                                'meta.helm.sh/release-namespace': 'original-namespace'})
+        chart = self.lookup_chart([crd])
+        rendered = self.render(chart=chart)
+        self.assertFalse(any(item['kind'] == 'CustomResourceDefinition' for item in rendered))
+        self.render(values, chart=chart, fail='not owned by this Helm release')
+        crd['spec']['scope'] = 'Cluster'
+        self.render(chart=self.lookup_chart([crd]), fail='existing InferenceEndpoint CRD is incompatible')
+
+    def test_duplicate_secret_names_and_argument_overrides_are_rejected(self):
+        values = copy.deepcopy(self.values)
+        values['callerKey'] = {'secretName': 'llm-shared-cluster-token'}
+        self.render(values, fail='Secret names must be distinct')
+        values = copy.deepcopy(self.values)
+        values['operator']['extraArgs'] = ['--watch-namespaces=other']
+        self.render(values, fail='operator.extraArgs must be empty')
+
+    def test_tls_bypass_is_rejected(self):
+        values = copy.deepcopy(self.values)
+        values['operator']['devInsecureTransport'] = True
+        self.render(values, fail='verified gateway and router TLS is required')
+
+    def test_strict_helm_lint(self):
+        values = copy.deepcopy(self.values)
+        values['operator']['installCRDs'] = True
+        values_path = self.root/'lint-values.json'
+        values_path.write_text(json.dumps(values))
+        result = subprocess.run(['helm', 'lint', str(self.chart), '--strict', '--namespace', 'test-models',
+                                 '-f', str(values_path)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_packaged_chart_contains_all_dependencies(self):
+        package = self.root/'packages'
+        package.mkdir(exist_ok=True)
+        result = subprocess.run(['helm', 'package', str(self.chart), '--destination', str(package)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        resources = self.render(chart=next(package.glob('*.tgz')))
+        self.assertEqual(sum(item['kind'] == 'Deployment' for item in resources), 3)
+
+
+if __name__ == '__main__':
+    unittest.main()

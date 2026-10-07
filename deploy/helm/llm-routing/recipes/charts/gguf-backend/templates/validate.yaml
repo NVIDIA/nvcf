@@ -1,4 +1,6 @@
 {{/* SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. */}}
 {{/* SPDX-License-Identifier: Apache-2.0 */}}
 {{- if not (kindIs "bool" .Values.suspended) }}{{ fail "suspended must be a boolean" }}{{ end -}}
-{{- if and .Values.suspended (ne .Values.phase "serve") }}{{ fail "suspended is supported only in phase serve" }}{{ end -}}
+{{- if and .Values.suspended (not (has .Values.phase (list "" "deploy" "serve"))) }}{{ fail "suspended is supported only in phase serve or deploy" }}{{ end -}}
+
+{{- if not (has .Values.phase (list "" "deploy" "preflight" "build" "qualify" "download" "serve" "chain")) }}{{ fail "Unknown GGUF deployment phase" }}{{ end -}}

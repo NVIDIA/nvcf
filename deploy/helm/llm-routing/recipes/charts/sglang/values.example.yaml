@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+recipe: qwen3.8-27b
+nodes: [gpu-node-1]
+runtimeClassName: nvidia
+storageClassName: local-path
+sharedCAConfigMap: llm-gateway-stack-ca
+# Set reuseCaches: true to require a complete pinned snapshot with no downloads.
+# cache: {existingClaim: retained-qwen-cache}
