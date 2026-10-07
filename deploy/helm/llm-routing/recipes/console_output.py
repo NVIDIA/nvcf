@@ -35,6 +35,7 @@ NEXT_CHECK = {
     'attach-existing': 'Check deployment ownership and the saved configuration',
     'cleanup-key': 'Check the temporary key journal and gateway access',
     'recover': 'Check recovery evidence and model/RPC pod status',
+    'retune': 'Check model/RPC pod logs and the tuning section of the configuration',
     'update': 'Check the update record and workload rollout status',
     'rollback': 'Check the selected update record and workload rollout status',
     'monitoring': 'Check the monitoring release and its workload logs',
@@ -119,7 +120,7 @@ class Console:
         with self.log_path.open() as saved_log:
             lines = [line.rstrip() for line in saved_log
                      if line.startswith(('Helm lint/render passed for', 'Configuration created:', 'Reusing configuration:',
-                                         'Previous progress archived:', 'Recipe:', 'GPU:', 'Model nodes:', 'Routing node:', 'Run render,',
+                                         'Previous progress archived:', 'Recipe:', 'GPU:', 'Model nodes:', 'Context:', 'Routing node:', 'Run render,',
                                          'Image archive:', 'Monitoring image archive:', 'Update recorded:')) or re.match(r'^(?:WARNING|Warning|warning)[: ]|^W[0-9]{4} ', line)]
         for line in lines:
             if re.match(r'^(?:WARNING|Warning|warning)[: ]|^W[0-9]{4} ', line):
@@ -131,7 +132,7 @@ class Console:
             print(phase + ' passed.', file=self.terminal)
         prefixes = {
             'init': ('Configuration created:', 'Reusing configuration:', 'Previous progress archived:',
-                     'Recipe:', 'GPU:', 'Model nodes:', 'Routing node:', 'Run render,'),
+                     'Recipe:', 'GPU:', 'Model nodes:', 'Context:', 'Routing node:', 'Run render,'),
             'export-images': ('Image archive:',),
             'export-monitoring-images': ('Monitoring image archive:',),
             'update': ('Update recorded:',),

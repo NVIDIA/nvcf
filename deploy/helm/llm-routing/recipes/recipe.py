@@ -56,9 +56,12 @@ def output(command, **kwargs):
 
 
 RECIPE_KEYS = ('name', 'releaseName', 'llamaCppRevision', 'servedName', 'endpointName', 'firstShard',
-               'artifactsSize', 'rpcCacheSize', 'canary', 'serverArgs', 'runtimeEnv', 'memory')
+               'artifactsSize', 'rpcCacheSize', 'canary', 'serverArgs', 'tuning', 'kvCacheKiBPerToken', 'runtimeEnv', 'memory')
 # The tool derives these from nodes.model; a recipe that sets them would conflict.
 PLACEMENT_FLAGS = ('--device', '-dev', '--tensor-split', '-ts', '--rpc')
+# The tool derives these from tuning (sizing.tuning_args).
+TUNED_FLAGS = ('--ctx-size', '-c', '--parallel', '-np', '--batch-size', '-b', '--ubatch-size', '-ub',
+               '--predict', '--n-predict', '-n', '--threads', '-t')
 QUALIFICATION_ATTEMPT = 2
 NAME = r'[a-z0-9]([-a-z0-9]*[a-z0-9])?'
 
@@ -85,9 +88,21 @@ def load_recipe(name):
     require(not missing, 'Recipe ' + name + ' is missing: ' + ', '.join(missing))
     require(definition['name'] == name, 'Recipe name must match its folder: ' + name)
     require(re.fullmatch(NAME, definition['releaseName']) is not None, 'Invalid releaseName in recipe ' + name)
-    flags = sorted({arg.split('=', 1)[0] for arg in definition['serverArgs']} & set(PLACEMENT_FLAGS))
+    used = {arg.split('=', 1)[0] for arg in definition['serverArgs']}
+    flags = sorted(used & set(PLACEMENT_FLAGS))
     require(not flags, 'Recipe ' + name + ' must not set placement arguments (' + ', '.join(flags) +
             '). The tool derives them from nodes.model.')
+    flags = sorted(used & set(TUNED_FLAGS))
+    require(not flags, 'Recipe ' + name + ' must not set tuned arguments (' + ', '.join(flags) + '). Set them in tuning.')
+    tuning = definition['tuning']
+    for kind in ('unified', 'discrete'):
+        try:
+            sizing.check_tuning(tuning.get(kind) if isinstance(tuning, dict) else None)
+        except ValueError as error:
+            raise RuntimeError('Recipe ' + name + ' tuning.' + kind + ': ' + str(error)) from None
+    cost = definition['kvCacheKiBPerToken']
+    require(not isinstance(cost, bool) and isinstance(cost, (int, float)) and cost > 0,
+            'Recipe ' + name + ' kvCacheKiBPerToken must be a positive number.')
     lock = json.loads((folder/'model.lock.json').read_text())
     require(definition['firstShard'] in [item['rfilename'] for item in lock['files']],
             'Recipe ' + name + ' firstShard is not in its model lock.')
@@ -141,7 +156,7 @@ def with_overrides(resources, role, override):
 
 
 def validate(c):
-    load_recipe(recipe_name(c))
+    definition = load_recipe(recipe_name(c))
     for key in ('context', 'namespace', 'releasePrefix', 'clusterId', 'storageClass', 'runtimeClass'):
         require(isinstance(c.get(key), str) and bool(c[key].strip()), key + ' must be explicit.')
     for key in ('namespace', 'releasePrefix', 'clusterId'):
@@ -156,6 +171,9 @@ def validate(c):
     require(len(set(model)) == len(model), 'nodes.model must not repeat a node.')
     try:
         sizing.check_gpu(c.get('gpu') or {})
+        if 'tuning' in c:
+            sizing.check_tuning(c['tuning'], partial=True)
+        sizing.check_tuning(sizing.server_tuning(definition, c['gpu'], c.get('tuning')))
     except ValueError as error:
         raise RuntimeError(str(error)) from None
     require(c['images']['pullPolicy'] in ('Never', 'IfNotPresent', 'Always'), 'Invalid pull policy.')
@@ -386,7 +404,8 @@ class Recipe:
         # Target n0 runs the model server. Later targets run RPC workers.
         self.targets = [] if monitoring_only else [{'id': 'n'+str(index), 'node': node} for index, node in enumerate(config['nodes']['model'])]
         self.workers = self.targets[1:]
-        self.plan = None if monitoring_only else sizing.memory_plan(self.definition, config['gpu'], len(self.targets))
+        self.tuning = None if monitoring_only else sizing.server_tuning(self.definition, config['gpu'], config.get('tuning'))
+        self.plan = None if monitoring_only else sizing.memory_plan(self.definition, config['gpu'], len(self.targets), self.tuning)
         releases = config.get('releases', {})
         self.backend = None if monitoring_only else releases.get('model', config['releasePrefix'] + '-' + self.definition['releaseName'])
         self.operator = releases.get('operator', config['releasePrefix'] + '-operator')
@@ -480,7 +499,7 @@ class Recipe:
             'qualification': {'attempt': self.state.get('qualificationAttempt', QUALIFICATION_ATTEMPT)},
             'model': {'lock': d['lock'], 'servedName': d['servedName'], 'firstShard': d['firstShard'],
                       'endpointName': d['endpointName'], 'register': register, 'canary': dict(d['canary']),
-                      'args': d['serverArgs'] + sizing.placement_args(len(self.targets)),
+                      'args': d['serverArgs'] + sizing.tuning_args(self.tuning) + sizing.placement_args(len(self.targets)),
                       'resources': with_overrides({'requests': {'cpu': '4', 'memory': memory['requests'], 'nvidia.com/gpu': 1},
                                                    'limits': {'cpu': '12', 'memory': memory['limits'], 'nvidia.com/gpu': 1}},
                                                   'model', overrides.get('model'))},
@@ -796,8 +815,7 @@ class Recipe:
                         'Insufficient host memory on '+target['node']+': '+str(available//1024**3)+' GiB available, more than '+
                         str(self.plan['hostAvailableGiB'])+' GiB required.')
         if phase == 'preflight':
-            require(self.plan['fits'], self.definition['name']+' does not fit on '+str(len(self.targets))+' node(s) of '+
-                    self.c['gpu']['name']+' per gpu.memoryGiB. Add a model node to nodes.model or fix the gpu settings.')
+            self.check_fit()
         if phase == 'qualify':
             require(re.fullmatch(r'[a-f0-9]{64}', self.state['runtimeSha256']) is not None, 'Invalid built runtime checksum.')
             if retry:
@@ -812,6 +830,9 @@ class Recipe:
             require(bool(records), phase+' did not record PASS.')
             if phase == 'preflight':
                 self.check_preflight(records)
+                if self.plan['gpuFreeGiB'] is not None:
+                    # retune checks against this, because a loaded model holds the GPU memory.
+                    self.state['preflightGpuFreeBytes'] = min(record['cudaFreeBytes'] for record in records)
             if phase == 'build':
                 self.stamp('runtimeSha256', records[-1]['runtimeSHA256'])
             if phase == 'download':
@@ -844,9 +865,53 @@ class Recipe:
                     'Insufficient host memory before CUDA allocation: '+str(available//1024**3)+' GiB available, more than '+
                     str(self.plan['hostAvailableGiB'])+' GiB required.')
             if self.plan['gpuFreeGiB'] is not None:
-                free = record['cudaFreeBytes']
-                require(free >= self.plan['gpuFreeGiB']*1024**3,
-                        'Insufficient GPU memory: '+str(free//1024**3)+' GiB free, '+str(self.plan['gpuFreeGiB'])+' GiB required.')
+                self.check_fit(record['cudaFreeBytes'])
+
+    def check_fit(self, free_bytes=None):
+        """Check the plan against gpu.memoryGiB, or against measured free GPU memory when given."""
+        capacity = self.plan['capacityGiB'] if free_bytes is None else free_bytes / 1024**3
+        if self.plan['needGiB'] <= capacity:
+            return
+        largest = sizing.largest_context(self.definition, self.c['gpu'], len(self.targets), self.tuning, capacity)
+        if free_bytes is None:
+            message = (self.definition['name']+' with '+sizing.describe_tuning(self.tuning)+' does not fit on '+str(len(self.targets))+
+                       ' node(s) of '+self.c['gpu']['name']+': each needs '+str(self.plan['needGiB'])+' GiB, and '+
+                       str(round(capacity, 1))+' GiB is available.')
+        else:
+            message = ('Insufficient GPU memory: '+str(free_bytes//1024**3)+' GiB free, '+str(self.plan['needGiB'])+
+                       ' GiB required for '+sizing.describe_tuning(self.tuning)+'.')
+        if largest:
+            message += (' The largest context that fits is '+str(largest)+' tokens per slot.'
+                        ' Lower tuning.contextPerSlot or tuning.slots in the configuration.')
+        else:
+            message += ' Add a model node to nodes.model or fix the gpu settings.'
+        raise RuntimeError(message)
+
+    def retune(self):
+        """Apply the saved tuning and pod resources to a loaded model. Only changed pods restart."""
+        self.bound_cluster()
+        require(not self.state.get('attachedExisting'), 'Retune from the work directory that loaded the model.')
+        require(self.state.get('serve'), 'Load the model first. Before load, edit tuning in the configuration and run preflight or load.')
+        self.check_fit(self.state.get('preflightGpuFreeBytes'))
+        deployed = json.loads(output(self.hm+['get', 'values', self.backend, '-o', 'json']))
+        require(deployed.get('phase') == 'serve', 'The model release is not at the serve phase. Finish load first.')
+        registered = bool(self.state.get('registered'))
+        values = self.backend_values(register=registered)
+        if deployed == values:
+            print('The loaded model already uses this tuning:', sizing.describe_tuning(self.tuning)+'.')
+            return
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+        save(self.work/'evidence'/('retune-'+stamp+'.json'),
+             {'release': self.backend, 'tuning': self.tuning, 'previousArgs': deployed.get('model', {}).get('args'),
+              'args': values['model']['args']})
+        # The restarted server has not been verified yet.
+        self.state['gateway'] = False
+        self.stamp('direct', False)
+        self.helm_apply(self.backend, HERE/'charts/gguf-backend', values, '70m')
+        if registered:
+            for condition in ('Ready', 'TransportReady', 'Registered'):
+                run(self.kc+['wait', 'inferenceendpoint/'+self.definition['endpointName'], '--for=condition='+condition, '--timeout=300s'])
+        print('Retuned:', sizing.describe_tuning(self.tuning)+'.', 'Run verify-direct, then verify-gateway.')
 
     def deploy_stack(self):
         require(not self.state.get('attachedExisting'), 'Existing installations support verification and image iteration, not fresh stack deployment.')
@@ -1217,7 +1282,7 @@ def main(argv=None, console=None):
     parser.add_argument('--work-dir', type=pathlib.Path, help='Private local state directory; defaults to a per-context directory.')
     parser.add_argument('--source-dir', type=pathlib.Path, help='Existing source checkout; defaults to the checkout containing this script.')
     parser.add_argument('--recipe', help='Recipe folder for init; defaults to the only recipe present. Available: '+', '.join(available_recipes())+'.')
-    parser.add_argument('phase', choices=['init', 'paths', 'context', 'prepare', 'render', 'inventory', 'attach-existing', 'attach-monitoring', 'build-images', 'push-images', 'export-images', 'import-images', 'stack', 'preflight', 'build-runtime', 'qualify', 'download', 'load', 'verify-direct', 'register', 'verify-gateway', 'chat', 'cleanup-key', 'update', 'rollback', 'recover', 'monitoring', 'dashboard', 'verify-monitoring', 'uninstall-monitoring', 'monitoring-images', 'export-monitoring-images', 'import-monitoring-images'])
+    parser.add_argument('phase', choices=['init', 'paths', 'context', 'prepare', 'render', 'inventory', 'attach-existing', 'attach-monitoring', 'build-images', 'push-images', 'export-images', 'import-images', 'stack', 'preflight', 'build-runtime', 'qualify', 'download', 'load', 'verify-direct', 'register', 'verify-gateway', 'chat', 'cleanup-key', 'update', 'rollback', 'recover', 'retune', 'monitoring', 'dashboard', 'verify-monitoring', 'uninstall-monitoring', 'monitoring-images', 'export-monitoring-images', 'import-monitoring-images'])
     parser.add_argument('prompt', nargs='?', help='Prompt for the chat command.')
     parser.add_argument('--stream', action='store_true', help='Stream the chat response.')
     parser.add_argument('--component', choices=list(COMPONENTS))
@@ -1285,6 +1350,7 @@ def execute(args, parser, context, work, config_path, config):
         print('GPU:', config['gpu']['name'], '('+config['gpu']['computeCapability']+',',
               str(config['gpu']['memoryGiB'])+' GiB', 'shared with the CPU)' if config['gpu']['unifiedMemory'] else 'GPU memory)')
         print('Model nodes:', ', '.join(config['nodes']['model']))
+        print('Context:', sizing.describe_tuning(sizing.server_tuning(load_recipe(config['recipe']), config['gpu'], config.get('tuning'))))
         print('Routing node:', config['nodes']['control'])
         print('Run render, inventory, then preflight.')
         return
@@ -1370,6 +1436,7 @@ def execute(args, parser, context, work, config_path, config):
         require(args.result, '--result is required.')
         recipe.rollback(args.result)
     elif args.phase == 'recover': recipe.recovery(args.confirm_model_interruption, args.port)
+    elif args.phase == 'retune': recipe.retune()
 
 
 def cli(argv=None):

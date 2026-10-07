@@ -52,7 +52,7 @@ class ResourceOverrideTests(unittest.TestCase):
         self.config['gpu'] = GB300
         self.config['resources'] = {'model': {'limits': {'memory': '200Gi'}}}
         recipe = tool.Recipe(copy.deepcopy(self.config), self.tmp.name)
-        self.assertEqual((recipe.plan['hostAvailableGiB'], recipe.plan['gpuFreeGiB']), (64, 239))
+        self.assertEqual((recipe.plan['hostAvailableGiB'], recipe.plan['gpuFreeGiB']), (64, 242))
         self.assertEqual(recipe.backend_values('serve')['model']['resources']['limits']['memory'], '200Gi')
 
     def test_invalid_overrides_are_rejected(self):

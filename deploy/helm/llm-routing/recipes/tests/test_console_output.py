@@ -131,7 +131,8 @@ class ConsoleOutputTests(unittest.TestCase):
             self.console.run('init', work, lambda: tool.main(['--context', 'console-test', '--work-dir', str(work), 'init']))
         shown = self.stdout.getvalue()
         for line in ('Recipe: glm-5.3', 'GPU: NVIDIA GB10 (12.1, 121.6 GiB shared with the CPU)',
-                     'Model nodes: model-0, model-1', 'Routing node: control', 'Configuration created:'):
+                     'Model nodes: model-0, model-1', 'Routing node: control', 'Configuration created:',
+                     'Context: 2048 tokens per slot and 1 slot'):
             self.assertIn(line, shown)
 
     def cli_arguments(self):
