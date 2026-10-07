@@ -292,5 +292,43 @@ class CommandTests(unittest.TestCase):
         self.assertTrue(text.startswith('error: No game in '), text)
 
 
+class SpectatorTests(unittest.TestCase):
+    def test_spectator_view_shows_timing_illegal_attempts_and_recent_messages(self):
+        state = play(arena.new_state(NAMES, 'x', 1000.0), [4, 4, 3], start=1002.0)
+        state['illegal']['o'] = 2
+        for index in range(10):
+            state['chat'].append({'player': 'o', 'text': 'msg ' + str(index), 'time': 1005.0, 'afterOpponentMoves': index})
+        text = arena.spectator(state, color=False)
+        self.assertIn('Connect Four: X (pi) vs O (codex)', text)
+        self.assertIn('Move 4. O (codex) to move.', text)
+        self.assertIn('Seconds per move: pi 1.5, codex 1.0', text)
+        self.assertIn('Illegal attempts: pi 0, codex 2', text)
+        self.assertNotIn('  codex: msg 1\n', text)
+        self.assertIn('  codex: msg 2\n', text)
+        self.assertTrue(text.endswith('  codex: msg 9'))
+        self.assertNotIn('\033', text)
+
+    def test_winning_cells_are_marked(self):
+        state = play(arena.new_state(NAMES, 'x', 1000.0), [1, 2, 1, 2, 1, 2, 1])
+        plain = arena.spectator(state, color=False)
+        self.assertIn('Game over. X (pi) wins.', plain)
+        self.assertIn('  * O . . . . .', plain)
+        self.assertIn('\033[7m', arena.spectator(state, color=True))
+
+    def test_watch_redraws_after_a_change_and_stops_when_the_game_ends(self):
+        with tempfile.TemporaryDirectory(prefix='arena-') as tmp:
+            directory = pathlib.Path(tmp)
+            arena.save(directory, play(arena.new_state(NAMES, 'x', 1000.0), [1, 2, 1, 2, 1, 2]))
+
+            def finish(seconds):
+                with arena.locked(directory) as state:
+                    arena.apply_move(state, 'x', 1, 1010.0)
+
+            out = io.StringIO()
+            self.assertEqual(arena.main(['watch', '--no-color'], directory=directory, env={}, out=out, sleep=finish), 0)
+            self.assertIn('Move 7. X (pi) to move.', out.getvalue())
+            self.assertIn('Game over. X (pi) wins.', out.getvalue())
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -253,6 +253,60 @@ def parse_column(words):
     return int(words[0]) if len(words) == 1 and re.fullmatch(r'[0-9]+', words[0]) else None
 
 
+COLORS = {'x': '\033[31m', 'o': '\033[33m'}
+
+
+def spectator(state, color=True):
+    """The audience view: board, turn, pace, illegal attempts and recent messages."""
+    winners = {(ROWS - row, column - 1) for row, column in state['winCells']}
+
+    def show(cell, row, column):
+        text = cell.upper() if cell else '.'
+        if (row, column) in winners:
+            return '\033[7m' + text + '\033[0m' if color else '*'
+        return COLORS[cell] + text + '\033[0m' if cell and color else text
+
+    names = state['names']
+    if state['result'] == 'draw':
+        status = 'Game over. Draw.'
+    elif state['result']:
+        status = 'Game over. ' + label(state, state['result']) + ' wins.'
+    else:
+        status = 'Move ' + str(len(state['moves']) + 1) + '. ' + label(state, turn(state)) + ' to move.'
+    lines = ['Connect Four: ' + label(state, 'x') + ' vs ' + label(state, 'o'), status]
+    lines += render_board(board(state['moves']), show)
+    if state['moves']:
+        last = state['moves'][-1]
+        lines.append('Last move: ' + last['player'].upper() + ' in column ' + str(last['column']) + '.')
+    seconds, previous = {'x': [], 'o': []}, state['started']
+    for move in state['moves']:
+        seconds[move['player']].append(move['time'] - previous)
+        previous = move['time']
+    lines.append('Seconds per move: ' + ', '.join(
+        names[p] + ' ' + (format(sum(seconds[p]) / len(seconds[p]), '.1f') if seconds[p] else '-') for p in PLAYERS))
+    lines.append('Illegal attempts: ' + ', '.join(names[p] + ' ' + str(state['illegal'][p]) for p in PLAYERS))
+    if state['chat']:
+        lines.append('Messages:')
+        lines += ['  ' + names[m['player']] + ': ' + m['text'] for m in state['chat'][-8:]]
+    return '\n'.join(lines)
+
+
+def watch(directory, color, out, sleep):
+    """Redraw whenever the game file changes. Return after drawing the final board."""
+    load(directory)
+    shown = None
+    while True:
+        stamp = (pathlib.Path(directory) / STATE).stat().st_mtime_ns
+        if stamp != shown:
+            shown = stamp
+            state = load(directory)
+            out.write(('\033[2J\033[H' if color else '') + spectator(state, color) + '\n')
+            out.flush()
+            if state['result']:
+                return
+        sleep(POLL_SECONDS)
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog='arena.py', description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -262,6 +316,7 @@ def build_parser():
     wait_command = commands.add_parser('wait', help='block until it is your turn')
     wait_command.add_argument('--timeout', type=float, default=120)
     commands.add_parser('prompt', help='print the launch prompt for ARENA_PLAYER')
+    commands.add_parser('watch', help='spectator view; redraws on every change').add_argument('--no-color', action='store_true')
     new = commands.add_parser('new', help='start a game in a directory')
     new.add_argument('directory')
     new.add_argument('--x', required=True, help='name of the player using X')
@@ -274,6 +329,9 @@ def build_parser():
 def run(args, directory, env, out, now, clock, sleep):
     if args.command == 'new':
         new_game(args.directory, {'x': args.x, 'o': args.o}, args.first, args.force, now(), out)
+        return 0
+    if args.command == 'watch':
+        watch(directory, not args.no_color, out, sleep)
         return 0
     player = player_from(env)
     if args.command == 'prompt':
