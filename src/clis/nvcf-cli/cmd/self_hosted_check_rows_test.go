@@ -390,6 +390,18 @@ func stubRolePolls(t *testing.T, polls ...[]selfhosted.CheckResult) *int {
 	return &calls
 }
 
+// cutShortRows is a poll whose registry checks for each host were cut short
+// by their share at severity.
+func cutShortRows(severity selfhosted.Severity, hosts ...string) []selfhosted.CheckResult {
+	var rows []selfhosted.CheckResult
+	for _, host := range hosts {
+		rows = append(rows, selfhosted.CheckResult{Category: selfhosted.CategoryRegistryCredentials,
+			ID: "registry-cred-" + host, Severity: severity, CutShort: true,
+			Message: "cut short: the check's time budget ran out before it finished"})
+	}
+	return rows
+}
+
 // A check a share stopped keeps the severity it could at worst have had. One
 // that could only warn, a registry that is not critical, does not fail the
 // run or time it out: exit 0, and the row says it was cut short. --wait polls
@@ -397,9 +409,7 @@ func stubRolePolls(t *testing.T, polls ...[]selfhosted.CheckResult) *int {
 // first poll whose share ran out.
 func TestCheck_CutShortRowsKeepTheirSeverityAndWaitPollsAgain(t *testing.T) {
 	cutShort := func(severity selfhosted.Severity) []selfhosted.CheckResult {
-		return []selfhosted.CheckResult{{Category: selfhosted.CategoryRegistryCredentials,
-			ID: "registry-cred-slow.example", Severity: severity, CutShort: true,
-			Message: "cut short: the check's time budget ran out before it finished"}}
+		return cutShortRows(severity, "slow.example")
 	}
 	passed := []selfhosted.CheckResult{{Category: selfhosted.CategoryRegistryCredentials,
 		ID: "registry-cred-slow.example", Passed: true, Severity: selfhosted.SeverityInfo}}
@@ -422,11 +432,48 @@ func TestCheck_CutShortRowsKeepTheirSeverityAndWaitPollsAgain(t *testing.T) {
 		assert.Equal(t, 2, *calls, "%s: the next poll gets fresh shares", severity)
 		assert.Equal(t, "ok", finalEvent(t, run.stderr)["verdict"], severity)
 	}
+}
 
-	stubRolePolls(t, cutShort(selfhosted.SeverityWarning))
-	run = runCheck(t, checkStubs{}, append(args, "--wait", "50ms")...)
-	assert.Equal(t, 5, run.code(), run.stderr)
-	require.ErrorContains(t, run.err, "a check was still cut short by its time budget")
+// The shares are the same on every poll, so a check its share cut short on
+// two polls in a row would most likely be cut short again. When it can only
+// warn, --wait stops there and grades the poll as a single run would: exit 0
+// with the warning, the row still marked cut short. One that can fail the
+// run, one that may clear by itself, or a different check each poll, keeps it
+// polling until DURATION.
+func TestCheck_WaitEndsOnAWarningCutShortTwiceInARow(t *testing.T) {
+	args := []string{"--control-plane", "--skip-cluster-validation", "--wait"}
+
+	calls := stubRolePolls(t, cutShortRows(selfhosted.SeverityWarning, "slow.example"))
+	run := runCheck(t, checkStubs{}, append(args, "10s")...)
+	assert.Equal(t, 0, run.code(), "%v\n%s", run.err, run.stderr)
+	assert.Equal(t, 2, *calls)
+	final := finalEvent(t, run.stderr)
+	assert.Equal(t, "warnings", final["verdict"])
+	assert.Equal(t, true, final["success"])
+	rows := checkEvents(t, run.stderr, "check_completed")
+	require.Len(t, rows, 2)
+	assert.Equal(t, true, rows[1]["cutShort"])
+	assert.Equal(t, "warning", rows[1]["severity"])
+
+	calls = stubRolePolls(t, cutShortRows(selfhosted.SeverityWarning, "a.example"),
+		cutShortRows(selfhosted.SeverityWarning, "b.example"))
+	run = runCheck(t, checkStubs{}, append(args, "10s")...)
+	assert.Equal(t, 0, run.code(), run.stderr)
+	assert.Equal(t, 3, *calls, "a.example was not cut short again, so b.example's first cut does not end the wait")
+
+	transient := cutShortRows(selfhosted.SeverityWarning, "slow.example")
+	transient[0].Transient = true
+	for name, poll := range map[string][]selfhosted.CheckResult{
+		"error":     cutShortRows(selfhosted.SeverityError, "slow.example"),
+		"transient": transient,
+	} {
+		calls = stubRolePolls(t, poll)
+		run = runCheck(t, checkStubs{}, append(args, "200ms")...)
+		assert.Equal(t, 5, run.code(), "%s: %s", name, run.stderr)
+		require.ErrorContains(t, run.err, "a check was still cut short by its time budget", name)
+		assert.Greater(t, *calls, 2, name)
+		assert.Equal(t, "timeout", finalEvent(t, run.stderr)["verdict"], name)
+	}
 }
 
 // A cluster that cannot be contacted at all fails the run, with or without a

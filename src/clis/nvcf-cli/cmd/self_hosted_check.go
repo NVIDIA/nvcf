@@ -453,6 +453,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 			}
 			return &ExitCodeError{Code: 5, Msg: "wait timeout: a rollout was still in progress after " + selfHostedWait}
 		}
+		var previous []selfhosted.CheckResult
 		for {
 			lastResults = runOnce()
 			if interrupted() {
@@ -464,10 +465,11 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 			if anyCutShort(lastResults) && ctx.Err() != nil {
 				return exitBudgetSpent()
 			}
-			if !anyFailed(lastResults) && !anyWarningToWaitOn(lastResults) {
+			if !anyFailed(lastResults) && !anyWarningToWaitOn(lastResults, previous) {
 				emitCheckFinal(ctx, sink, lastResults, ledger.Outstanding())
 				return nil
 			}
+			previous = lastResults
 
 			// The deadline is checked first: with several cases ready, select
 			// picks at random, and the ticker then re-ran the checks on a spent
@@ -1611,13 +1613,31 @@ func anyFindingFailed(results []selfhosted.CheckResult) bool {
 // anyWarningToWaitOn reports a warning a later poll may clear: one expected to
 // clear by itself, such as a rollout the validator saw in progress, or a check
 // its budget stopped. --wait keeps polling on it; a single run still exits 0.
-func anyWarningToWaitOn(results []selfhosted.CheckResult) bool {
+// A warning its share cut short on the previous poll too is not waited on:
+// each poll gets the same shares, so the next would most likely cut it short
+// the same way, and --wait would exit 5 where a single run exits 0.
+func anyWarningToWaitOn(results, previous []selfhosted.CheckResult) bool {
+	cutBefore := map[[2]string]bool{}
+	for _, r := range previous {
+		if cutShortWarning(r) {
+			cutBefore[[2]string{r.Category, r.ID}] = true
+		}
+	}
 	for _, r := range results {
-		if (r.Transient || r.CutShort) && !r.Passed {
+		switch {
+		case r.Passed:
+		case r.Transient:
+			return true
+		case r.CutShort && !(cutShortWarning(r) && cutBefore[[2]string{r.Category, r.ID}]):
 			return true
 		}
 	}
 	return false
+}
+
+// cutShortWarning reports a check a budget stopped that could at worst warn.
+func cutShortWarning(r selfhosted.CheckResult) bool {
+	return r.CutShort && r.IsWarning()
 }
 
 // anyFailed reports a result that fails the run. Warnings do not. The exit
