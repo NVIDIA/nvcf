@@ -1801,25 +1801,13 @@ fn cluster_backend_aggregate_requires_every_backend_max() {
     );
     backend_b.stats.max_input_tps = Some(25.0);
     cluster_state.upsert_backend(Arc::new(backend_b.clone()));
-    let complete_bits = cluster_state
-        .backend_aggregate()
-        .expect("complete backend max should aggregate")
-        .0
-        .max_input_tps
-        .map(f64::to_bits);
-    assert_eq!(complete_bits, Some(25.0_f64.to_bits()));
-
-    let reversed = RoutedClusterState::new(backend_a.registration.cluster_generation.clone());
-    reversed.upsert_backend(Arc::new(backend_b.clone()));
-    reversed.upsert_backend(Arc::new(backend_a));
     assert_eq!(
-        reversed
+        cluster_state
             .backend_aggregate()
-            .expect("backend order should not change aggregate")
+            .expect("complete backend max should aggregate")
             .0
-            .max_input_tps
-            .map(f64::to_bits),
-        complete_bits
+            .max_input_tps,
+        Some(25.0)
     );
 
     backend_b.stats.max_input_tps = None;

@@ -3284,15 +3284,10 @@ fn pulsar_can_use_generation_max_input_tps_as_weight() {
 
     candidate.stats.last_mean_input_tps = 0.0;
     assert_eq!(pulsar.weight(&candidate), Some(456.0));
-}
 
-#[test]
-fn pulsar_max_weight_does_not_fall_back_to_mean() {
-    let pulsar = PulsarLoadBalancer::new(seeded_pulsar_algorithm_config("seed-1"));
-    let mut candidate = work_candidate("inst-a", 5, 123.0, 0);
+    candidate.stats.last_mean_input_tps = 123.0;
     candidate.stats.max_input_tps = None;
-
-    assert_eq!(pulsar.weight(&candidate), None);
+    assert_eq!(pulsar.weight(&candidate), None, "no fallback to the mean");
 }
 
 #[test]
