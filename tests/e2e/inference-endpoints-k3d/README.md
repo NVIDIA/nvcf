@@ -2,8 +2,9 @@
 
 This directory contains an end-to-end test of Pylon Operator with the LLM
 gateway stack on a local k3d cluster. `run.sh` installs the
-`llm-gateway-stack` and `pylon-operator` charts from this checkout, publishes
-an OpenAI-compatible sample backend through an `InferenceEndpoint`, and checks
+`llm-gateway-stack` and `pylon-operator` charts from this checkout, or with
+`IMAGE_SOURCE=ngc` the published charts and images, publishes an
+OpenAI-compatible sample backend through an `InferenceEndpoint`, and checks
 status, the gateway API, failure paths, and restarts of the router, gateway,
 operator and Pylon pods. The
 [Inference Endpoints quickstart](../../../docs/dev/inference-endpoints-quickstart.md)
@@ -16,6 +17,11 @@ walks through the same setup step by step.
   `k3d cluster create pylon-op-e2e --agents 1` or `make cluster`.
 - `kubectl`, `helm` 3.x, `curl`, and `openssl` or `/dev/urandom`.
 - `bash` 3.2 or later. `run.sh` runs with the macOS default bash.
+- With `IMAGE_SOURCE=ngc`: `jq`, the versions file produced by your
+  publishing pipeline, and an NGC API key that can pull from the registry it
+  names. Nothing is built or imported; see
+  [Published images](#published-images). The rest of this list is for the
+  default, `IMAGE_SOURCE=local`.
 - These images imported into the cluster with `k3d image import -c <cluster>`.
   The test runs every pod with `imagePullPolicy: IfNotPresent`.
 
@@ -60,8 +66,8 @@ make -C tests/e2e/inference-endpoints-k3d cluster images import deploy
 | Target | What it does |
 | --- | --- |
 | `cluster` | Creates k3d cluster `pylon-op-e2e` with one agent when it does not exist, which also switches the current context to it, then checks that the current context is `E2E_KUBE_CONTEXT`. For an existing cluster it only checks the context. |
-| `images` | Runs the four Bazel `image_load` targets and builds the sample image. `BAZEL_FLAGS` adds Bazel flags. `DOCKER_CONFIG_DIR=<absolute path of an empty directory>` adds `--repo_env=DOCKER_CONFIG=...`, so the base images are pulled anonymously when the local `nvcr.io` credential is stale. |
-| `import` | Imports the five images with `k3d image import`. |
+| `images` | Runs the four Bazel `image_load` targets and builds the sample image. `BAZEL_FLAGS` adds Bazel flags. `DOCKER_CONFIG_DIR=<absolute path of an empty directory>` adds `--repo_env=DOCKER_CONFIG=...`, so the base images are pulled anonymously when the local `nvcr.io` credential is stale. Does nothing with `IMAGE_SOURCE=ngc`. |
+| `import` | Imports the five images with `k3d image import`. Does nothing with `IMAGE_SOURCE=ngc`. |
 | `deploy` | Runs `run.sh` with `E2E_DEPLOY_ONLY=1`: setup and the steady-state checks, then prints the port-forward and `curl` commands and leaves everything installed. |
 | `test` | Runs `run.sh`. |
 | `test-cleanup` | Runs `run.sh` with `E2E_CLEANUP=1`. |
@@ -73,6 +79,8 @@ make -C tests/e2e/inference-endpoints-k3d cluster images import deploy
 | `check` | `bash -n`, and `shellcheck` when installed. |
 
 `K3D_CLUSTER` defaults to `E2E_KUBE_CONTEXT` without the `k3d-` prefix.
+`make help` lists the targets and the `IMAGE_SOURCE`,
+`PUBLISHED_VERSIONS_FILE` and `NGC_API_KEY` variables.
 
 `run.sh` refuses to run when `kubectl config current-context` differs from
 `E2E_KUBE_CONTEXT`, and it passes that context explicitly to every `kubectl`
@@ -86,6 +94,101 @@ the router and the gateway. A failed setup step or a steady-state condition
 that never converges stops the run, and the remaining groups are reported as
 `SKIP`.
 
+## Published images
+
+With `IMAGE_SOURCE=ngc` the test runs against published charts and images
+instead of this checkout. `PUBLISHED_VERSIONS_FILE` is the versions file
+produced by your publishing pipeline:
+
+```bash
+export NGC_API_KEY=<your NGC API key>
+make -C tests/e2e/inference-endpoints-k3d all IMAGE_SOURCE=ngc PUBLISHED_VERSIONS_FILE=./versions.json
+```
+
+- `run.sh` reads the versions file with `jq` and fails before touching the
+  cluster when a field it needs is missing. A relative path given to make is
+  resolved against the directory you run make from, also with `make -C`.
+- `run.sh` installs `llm-gateway-stack` and `pylon-operator` from the
+  `charts.<name>.ref` and `charts.<name>.version` of the file, and points the
+  router, gateway, operator, Pylon and sample images at
+  `images.<name>.repository` and `images.<name>.tag` of `stargate`,
+  `llm-api-gateway`, `nvcf-pylon-operator`, `pylon` and
+  `openai-compatible-sample`. A file with `images.pylon-operator` but no
+  `images.nvcf-pylon-operator` is rejected. `E2E_IMAGE_REGISTRY`,
+  `E2E_IMAGE_TAG`, the `E2E_*_REPOSITORY` settings and `E2E_SAMPLE_IMAGE` are
+  ignored.
+- `NGC_API_KEY` is never printed and never passed on a command line. `run.sh`
+  writes it into a Docker config file in the work directory, mode 600, and
+  removes the file when it exits. Helm reads the chart credential from that
+  file, so your own `helm registry login` and Docker credential store are not
+  used or changed. The same file becomes the `kubernetes.io/dockerconfigjson`
+  Secret `ngc-pull` in the stack, operator and models namespaces. The
+  operator does not copy pull Secrets, so the transport pods find `ngc-pull`
+  in the models namespace through `pylon.imagePullSecrets`.
+- `images` and `import` do nothing, and every assertion is the same as with
+  the local images.
+
+To check the inputs without a cluster, set `E2E_DRY_RUN=1`. `run.sh` then
+validates the versions file, writes the values files and the sample manifest
+to the work directory, renders both charts from this checkout with those
+values, and prints the `helm` and `kubectl` commands a run would use and the
+image references it rendered. It needs no `NGC_API_KEY` and does not read the
+kube context. At the published commit, a published chart differs from this
+checkout's only in its image tags.
+
+```bash
+E2E_DRY_RUN=1 IMAGE_SOURCE=ngc PUBLISHED_VERSIONS_FILE=./versions.json \
+  tests/e2e/inference-endpoints-k3d/run.sh
+```
+
+### Versions file
+
+The versions file names one consistent set of published images and charts. It
+is the contract between a publishing pipeline and this test, and the chart
+READMEs refer to its fields:
+
+```json
+{
+  "version": 1,
+  "run": 42,
+  "commit": "<sha>",
+  "registry": "<registry>",
+  "images": {
+    "nvcf-pylon-operator": {"tag": "<tag>", "repository": "<registry>/nvcf-pylon-operator"},
+    "llm-api-gateway": {"tag": "<tag>", "repository": "<registry>/llm-api-gateway"},
+    "stargate": {"tag": "<tag>", "repository": "<registry>/stargate"},
+    "pylon": {"tag": "<tag>", "repository": "<registry>/pylon"},
+    "stargate-k8s-router": {"tag": "<tag>", "repository": "<registry>/stargate-k8s-router"},
+    "openai-compatible-sample": {"tag": "<tag>", "repository": "<registry>/openai-compatible-sample"}
+  },
+  "charts": {
+    "llm-api-gateway": {"version": "<version>", "app_version": "<tag>", "ref": "oci://<registry>/helm-nvcf-llm-api-gateway"},
+    "llm-request-router": {"version": "<version>", "app_version": "<tag>", "ref": "oci://<registry>/helm-nvcf-llm-request-router"},
+    "pylon-operator": {"version": "<version>", "app_version": "<tag>", "ref": "oci://<registry>/pylon-operator"},
+    "llm-gateway-stack": {"version": "<version>", "app_version": "<tag>", "ref": "oci://<registry>/llm-gateway-stack"}
+  }
+}
+```
+
+- `version` is the format version and must be `1`. `run` and `commit`
+  identify the publishing run and the source commit; `run.sh` only logs them.
+- `registry` is the registry prefix the set is pushed to, for example
+  `nvcr.io/<org>/<team>`. Its host is the server of the pull Secret.
+- `images.<name>` has the full `repository`, `<registry>/<name>`, and the
+  `tag`. The operator image key and repository name is
+  `nvcf-pylon-operator`, its service name, because the operator chart takes
+  `pylon-operator` in the same registry path.
+- `charts.<name>` has the chart `version`, the `app_version` (the tag of the
+  chart's main image) and the `ref`, `oci://<registry>/<name in Chart.yaml>`.
+  The gateway and router charts publish as `helm-nvcf-llm-api-gateway` and
+  `helm-nvcf-llm-request-router`.
+- A published chart sets the image tags of its set but leaves image
+  registries and repositories empty, so the installer sets them.
+- `run.sh` reads `registry`, the `repository` and `tag` of the images it
+  deploys, and the `ref` and `version` of `llm-gateway-stack` and
+  `pylon-operator`. Each must be a string of letters, digits and `._:/@+-`.
+  It ignores other fields.
+
 ## What it does
 
 Setup:
@@ -93,12 +196,15 @@ Setup:
 1. Generates a cluster token and a caller API key, and computes their SHA-256
    digests. A re-run reuses the token in the credential Secret and the key in
    the work directory; set `E2E_ROTATE_CREDENTIALS=1` for new ones.
-2. Creates namespaces `llm-stack`, `pylon-operator` and `models`.
+2. Creates namespaces `llm-stack`, `pylon-operator` and `models`. With
+   `IMAGE_SOURCE=ngc` it also creates the pull Secret `ngc-pull` in all
+   three.
 3. Creates Secret `e2e-cluster-credential` (key `cluster-token`) in
    `pylon-operator`.
 4. Installs `llm-gateway-stack` in `llm-stack` with `clusterId: spark-e2e`, the
    token digest, one API key digest (id `e2e`), one router and one gateway
-   replica.
+   replica. With `IMAGE_SOURCE=ngc` a second values file sets the published
+   images and `imagePullSecrets`.
 5. Copies ConfigMap `llm-gateway-stack-ca` into `pylon-operator` and points the
    operator's `trustBundle.configMap` at it.
 6. Installs `pylon-operator` in `pylon-operator`, watching `models`, with
@@ -106,8 +212,8 @@ Setup:
    `http://llm-request-router.llm-stack.svc.cluster.local:50071`. The router
    serves plaintext gRPC on that port; the QUIC tunnel is verified against the
    stack CA.
-7. Applies `manifests/sample-backend.yaml` and
-   `manifests/inference-endpoint.yaml` in `models`.
+7. Applies `manifests/sample-backend.yaml`, with its image and pull Secrets
+   filled in, and `manifests/inference-endpoint.yaml` in `models`.
 
 Assertions, each polled for up to `E2E_TIMEOUT` seconds:
 
@@ -181,9 +287,14 @@ uninstalls both releases, deletes the three namespaces and deletes the
 | `E2E_WORK_DIR` | `${TMPDIR:-/tmp}/pylon-operator-k3d-e2e` | Generated values files, the CA, the API key (mode 600) and response bodies. |
 | `E2E_GATEWAY_LOCAL_PORT` | `18443` | Local port of the gateway port-forward. |
 | `E2E_CLUSTER_ID` | `spark-e2e` | `clusterId` of both charts. |
+| `IMAGE_SOURCE` | `local` | `local` uses the charts from this checkout and the imported images. `ngc` uses the published charts and images in `PUBLISHED_VERSIONS_FILE`. |
+| `PUBLISHED_VERSIONS_FILE` | | The versions file produced by your publishing pipeline; see [Versions file](#versions-file). Required with `IMAGE_SOURCE=ngc`. |
+| `NGC_API_KEY` | | NGC API key for the registry in `PUBLISHED_VERSIONS_FILE`. Required with `IMAGE_SOURCE=ngc`, except for `E2E_DRY_RUN=1`. Never printed. |
+| `E2E_DRY_RUN` | `0` | `1` validates the inputs, writes the values files, renders the charts from this checkout and prints the commands, without cluster access. |
 | `E2E_IMAGE_REGISTRY` | `docker.io` | Registry of the four built images. |
 | `E2E_IMAGE_TAG` | `latest` | Tag of the four built images. |
 | `E2E_ROUTER_REPOSITORY`, `E2E_GATEWAY_REPOSITORY`, `E2E_OPERATOR_REPOSITORY`, `E2E_PYLON_REPOSITORY` | the Bazel image names | Image repositories. |
+| `E2E_SAMPLE_IMAGE` | `docker.io/library/openai-compatible-sample:e2e` | Image of the sample backend. |
 | `E2E_ROUTER_GRPC_ADDRESS` | `http://llm-request-router.llm-stack.svc.cluster.local:50071` | `router.grpcAddress` of the operator. |
 | `E2E_DEV_INSECURE_TRANSPORT` | `0` | `1` sets the operator's `devInsecureTransport`, which skips QUIC certificate verification. |
 | `E2E_STACK_NAMESPACE`, `E2E_OPERATOR_NAMESPACE`, `E2E_MODELS_NAMESPACE` | `llm-stack`, `pylon-operator`, `models` | Namespaces. |

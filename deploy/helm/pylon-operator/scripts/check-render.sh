@@ -115,6 +115,9 @@ assert_render_fails "credential.key must be cluster-token" \
 assert_render_fails "'/trustBundle/configMap': 'Router_CA' does not match pattern" \
   --values "${ci_values}" \
   --set trustBundle.configMap=Router_CA
+assert_render_fails "'/pylon/imagePullSecrets/0/name': 'NGC_Pull' does not match pattern" \
+  --values "${ci_values}" \
+  --set 'pylon.imagePullSecrets[0].name=NGC_Pull'
 
 # CI values render.
 default_manifest="${tmp_dir}/default.yaml"
@@ -142,6 +145,9 @@ has_arg "${default_args}" "--health-probe-bind-address=:8081" || fail "missing -
 has_arg "${default_args}" "--leader-elect" || fail "leader election must be on by default"
 ! has_arg_prefix "${default_args}" "--watch-namespaces" || fail "default must watch all namespaces"
 ! has_arg "${default_args}" "--dev-insecure-transport" || fail "default must not disable transport TLS verification"
+! has_arg_prefix "${default_args}" "--pylon-image-pull-secrets" || fail "default must not set transport pull Secrets"
+[ "$(deployment_field "${default_manifest}" '.spec.template.spec.imagePullSecrets // [] | length')" = "0" ] ||
+  fail "default must not set operator pull Secrets"
 
 [ "$(deployment_field "${default_manifest}" '.spec.replicas')" = "1" ] || fail "operator must run one replica"
 [ "$(deployment_field "${default_manifest}" '.spec.strategy.type')" = "RollingUpdate" ] || fail "leader election should allow RollingUpdate"
@@ -219,6 +225,24 @@ has_arg "$(args_of "${trust_manifest}")" "--trust-bundle-configmap=router-ca" ||
 watch_manifest="${tmp_dir}/watch.yaml"
 render "${watch_manifest}" --set 'watchNamespaces={team-b,team-a}'
 has_arg "$(args_of "${watch_manifest}")" "--watch-namespaces=team-b,team-a" || fail "watchNamespaces must render a comma list"
+
+# imagePullSecrets reaches the operator pod and pylon.imagePullSecrets reaches
+# the transport pods through --pylon-image-pull-secrets, in order.
+pull_manifest="${tmp_dir}/pull-secrets.yaml"
+render "${pull_manifest}" \
+  --set 'imagePullSecrets[0].name=ngc-pull' \
+  --set 'pylon.imagePullSecrets[0].name=ngc-pull' \
+  --set 'pylon.imagePullSecrets[1].name=team-pull'
+[ "$(deployment_field "${pull_manifest}" '.spec.template.spec.imagePullSecrets' | yq -o=json -I=0)" = '[{"name":"ngc-pull"}]' ] ||
+  fail "imagePullSecrets must reach the operator pod"
+has_arg "$(args_of "${pull_manifest}")" "--pylon-image-pull-secrets=ngc-pull,team-pull" ||
+  fail "pylon.imagePullSecrets must reach --pylon-image-pull-secrets as a comma list"
+transport_only_manifest="${tmp_dir}/transport-pull-secrets.yaml"
+render "${transport_only_manifest}" --set 'pylon.imagePullSecrets[0].name=ngc-pull'
+[ "$(deployment_field "${transport_only_manifest}" '.spec.template.spec.imagePullSecrets // [] | length')" = "0" ] ||
+  fail "pylon.imagePullSecrets must not reach the operator pod"
+has_arg "$(args_of "${transport_only_manifest}")" "--pylon-image-pull-secrets=ngc-pull" ||
+  fail "pylon.imagePullSecrets must reach --pylon-image-pull-secrets"
 
 # devInsecureTransport adds the flag.
 insecure_manifest="${tmp_dir}/insecure.yaml"

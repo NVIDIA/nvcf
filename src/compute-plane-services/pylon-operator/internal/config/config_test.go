@@ -114,6 +114,7 @@ func TestParseAllFlags(t *testing.T) {
 	c := valid(t,
 		"--pylon-image=nvcr.io/example/pylon:1.0",
 		"--pylon-image-pull-policy=IfNotPresent",
+		"--pylon-image-pull-secrets= ngc-pull, team-pull,,ngc-pull ",
 		"--watch-namespaces= models, team-b,,models ",
 		"--transport-replicas=2",
 		"--probe-interval=30s",
@@ -133,6 +134,7 @@ func TestParseAllFlags(t *testing.T) {
 		RouterGRPCAddress:       "llm-request-router.gateway.svc:50071",
 		PylonImage:              "nvcr.io/example/pylon:1.0",
 		PylonImagePullPolicy:    "IfNotPresent",
+		PylonImagePullSecrets:   []string{"ngc-pull", "team-pull"},
 		WatchNamespaces:         []string{"models", "team-b"},
 		TransportReplicas:       2,
 		ProbeInterval:           30 * time.Second,
@@ -234,6 +236,15 @@ func TestValidate(t *testing.T) {
 			args:    []string{"--cluster-credential-secret=Not A Name"},
 			wantErr: []string{`--cluster-credential-secret "Not A Name"`},
 		},
+		{
+			name: "pull secrets",
+			args: []string{"--pylon-image-pull-secrets=ngc-pull,registry.example.com-pull"},
+		},
+		{
+			name:    "bad pull secret name",
+			args:    []string{"--pylon-image-pull-secrets=ngc-pull,NGC_Pull"},
+			wantErr: []string{`--pylon-image-pull-secrets entry "NGC_Pull" is not a Secret name`},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -310,6 +321,11 @@ func TestFlagValueStrings(t *testing.T) {
 	assert.Equal(t, "", nilList.String())
 	list := namespaceList{"a", "b"}
 	assert.Equal(t, "a,b", list.String())
+
+	var nilNames *nameList
+	assert.Equal(t, "", nilNames.String())
+	names := nameList{"ngc-pull", "team-pull"}
+	assert.Equal(t, "ngc-pull,team-pull", names.String())
 
 	var nilInt *int32Value
 	assert.Equal(t, "0", nilInt.String())

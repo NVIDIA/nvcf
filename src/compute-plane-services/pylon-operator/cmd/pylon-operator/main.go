@@ -62,6 +62,7 @@ func main() {
 		"clusterId", cfg.ClusterID,
 		"operatorNamespace", cfg.OperatorNamespace,
 		"watchNamespaces", cfg.WatchNamespaces,
+		"pylonImagePullSecrets", cfg.PylonImagePullSecrets,
 		"probeInterval", cfg.ProbeInterval.String(),
 		"scrapeInterval", cfg.ScrapeInterval.String(),
 		"leaderElect", cfg.LeaderElect)...)
