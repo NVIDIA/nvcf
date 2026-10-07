@@ -131,6 +131,99 @@ func TestProbeAllNodes_StallingPodsAreBoundedByTheProbeBudget(t *testing.T) {
 	assert.EqualValues(t, probeConcurrency, created.Load())
 }
 
+// A probe pod whose image cannot be pulled, as on an air-gapped cluster with no
+// probe image configured, stays Pending. Each node waited out its own bound,
+// so a poll settled only the first wave and the budget cut the rest short,
+// on every --wait poll of a large cluster. Such a node now fails at once, and
+// one poll settles every node, none of them a node a later poll may reach.
+func TestProbeAllNodes_UnpullableImageFailsEachNodeAtOnce(t *testing.T) {
+	shortenInotifyProbe(t, 600*time.Millisecond, 400*time.Millisecond)
+	const nodes = 5 * probeConcurrency
+	var objs []runtime.Object
+	for i := 0; i < nodes; i++ {
+		objs = append(objs, fakeNode(fmt.Sprintf("node-%02d", i)))
+	}
+	client := fake.NewSimpleClientset(objs...)
+	var created atomic.Int32
+	client.PrependReactor("create", "pods", func(a ktesting.Action) (bool, runtime.Object, error) {
+		pod := a.(ktesting.CreateAction).GetObject().(*corev1.Pod)
+		pod.Name = fmt.Sprintf("%s%d", pod.GenerateName, created.Add(1))
+		pod.Status.Phase = corev1.PodPending
+		pod.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: inotifyProbeContainer,
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+				Reason: "ImagePullBackOff", Message: `Back-off pulling image "busybox:1.36"`}}}}
+		return false, nil, nil
+	})
+
+	results, err := probeAllNodes(context.Background(), client, "", nil)
+	require.NoError(t, err)
+	require.Len(t, results, nodes)
+	for _, r := range results {
+		require.Error(t, r.Err, r.NodeName)
+		assert.Contains(t, r.Err.Error(), "cannot start: ImagePullBackOff", r.NodeName)
+		assert.False(t, r.OutOfBudget, "%s failed on its own", r.NodeName)
+	}
+	assert.EqualValues(t, nodes, created.Load())
+	row := nodeInotifyCheck(func(context.Context, string) ([]NodeInotifyLimits, error) { return results, nil }, "").
+		Run(context.Background())
+	assert.Equal(t, SeverityWarning, row.Severity)
+	assert.False(t, row.Transient, "--wait has nothing to wait for")
+	pods, err := client.CoreV1().Pods(inotifyProbeNamespace).List(context.Background(), metav1.ListOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, pods.Items, "every probe pod created is removed")
+}
+
+// No pod runs on a node that is not Ready, so its probe pod only waited out
+// its bound. Such a node is reported without a pod. A node with no Ready
+// condition is probed as before.
+func TestProbeAllNodes_NodeNotReadyIsNotProbed(t *testing.T) {
+	shortenInotifyProbe(t, 600*time.Millisecond, 400*time.Millisecond)
+	var objs []runtime.Object
+	for i := 0; i < 3*probeConcurrency; i++ {
+		n := fakeNode(fmt.Sprintf("down-%02d", i))
+		n.Status.Conditions = []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionUnknown,
+			Reason: "NodeStatusUnknown"}}
+		objs = append(objs, n)
+	}
+	objs = append(objs, fakeNode("plain"))
+	client := fake.NewSimpleClientset(objs...)
+	var createdOn []string
+	var mu sync.Mutex
+	client.PrependReactor("create", "pods", func(a ktesting.Action) (bool, runtime.Object, error) {
+		pod := a.(ktesting.CreateAction).GetObject().(*corev1.Pod)
+		mu.Lock()
+		createdOn = append(createdOn, pod.Spec.NodeName)
+		mu.Unlock()
+		return true, nil, errors.New("refused")
+	})
+
+	results, err := probeAllNodes(context.Background(), client, "", nil)
+	require.NoError(t, err)
+	require.Len(t, results, 3*probeConcurrency+1)
+	for _, r := range results {
+		require.Error(t, r.Err, r.NodeName)
+		assert.False(t, r.OutOfBudget, r.NodeName)
+		if r.NodeName != "plain" {
+			assert.Contains(t, r.Err.Error(), "node "+r.NodeName+" is not Ready (NodeStatusUnknown)")
+		}
+	}
+	assert.Equal(t, []string{"plain"}, createdOn, "only the node with no Ready condition gets a pod")
+}
+
+// Only a container the kubelet does not get past by itself ends the wait
+// early; one still being created, or an image still being pulled, does not.
+func TestContainerCannotStart(t *testing.T) {
+	for reason, want := range map[string]bool{
+		"ErrImagePull": true, "ImagePullBackOff": true, "InvalidImageName": true, "ErrImageNeverPull": true,
+		"CreateContainerConfigError": true, "ContainerCreating": false, "PodInitializing": false, "": false,
+	} {
+		pod := &corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: reason}}}}}}
+		assert.Equal(t, want, containerCannotStart(pod), reason)
+	}
+	assert.False(t, containerCannotStart(&corev1.Pod{}), "no status yet")
+}
+
 func TestBuildInotifyProbePodShape(t *testing.T) {
 	pod := buildInotifyProbePod("node-x", "run1", "")
 
@@ -350,7 +443,8 @@ func TestProbeAllNodes_StatesResourcesWhenAQuotaRequiresThem(t *testing.T) {
 // own rejection is the node's error, and any other refusal is not retried.
 func TestProbeAllNodes_QuotaRetryIsOnceAndOnlyForMissingResources(t *testing.T) {
 	client, creates := quotaClient(t, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "p",
-		errors.New("exceeded quota: compute, requested: requests.cpu=50m, used: requests.cpu=4, limited: requests.cpu=4")))
+		errors.New("exceeded quota: compute, requested: requests.cpu=50m, used: requests.cpu=4, "+
+			"limited: requests.cpu=4")))
 	results, err := probeAllNodes(context.Background(), client, "", nil)
 	require.NoError(t, err)
 	require.Len(t, results, 1)

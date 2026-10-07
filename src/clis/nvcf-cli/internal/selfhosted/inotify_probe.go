@@ -18,6 +18,7 @@ limitations under the License.
 package selfhosted
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -212,6 +213,14 @@ func probeAllNodes(
 	eg.SetLimit(probeConcurrency)
 	for _, i := range mem.plan(schedulable, results) {
 		node := &schedulable[i]
+		// No pod runs on a node that is not Ready, so its probe would only
+		// wait out its bound, and a wave of such nodes the probe's budget.
+		if why := nodeNotReady(node); why != "" {
+			results[i] = mem.settle(node, NodeInotifyLimits{NodeName: node.Name,
+				Err: fmt.Errorf("node %s is not Ready (%s), so no probe pod can run there", node.Name, why)},
+				probeFinished)
+			continue
+		}
 		eg.Go(func() error {
 			res, stop := probeOneNode(egCtx, client, run, node.Name, image)
 			results[i] = mem.settle(node, res, stop)
@@ -223,6 +232,17 @@ func probeAllNodes(
 	}
 	_ = eg.Wait()
 	return results, nil
+}
+
+// nodeNotReady returns why node's Ready condition is not True, or "" when it
+// is, or when the node reports no Ready condition.
+func nodeNotReady(node *corev1.Node) string {
+	for _, c := range node.Status.Conditions {
+		if c.Type == corev1.NodeReady && c.Status != corev1.ConditionTrue {
+			return strings.TrimSpace(cmp.Or(c.Reason, "Ready="+string(c.Status)))
+		}
+	}
+	return ""
 }
 
 // probeStop says whether the probe's budget stopped a node's probe.
@@ -477,7 +497,9 @@ func buildInotifyProbePod(nodeName, runID, image string) *corev1.Pod {
 
 // waitForPodTerminal polls the pod until its phase is Succeeded or Failed.
 // The probe container is `cat`, so success is the normal exit path; Failed
-// surfaces image-pull errors, scheduling rejections, etc.
+// surfaces scheduling rejections and the like. A container that cannot start,
+// such as one whose image cannot be pulled, leaves the pod Pending, so that
+// ends the wait too rather than running out the node's bound.
 func waitForPodTerminal(ctx context.Context, client kubernetes.Interface, podName string) error {
 	ticker := time.NewTicker(podPollInterval)
 	defer ticker.Stop()
@@ -492,12 +514,31 @@ func waitForPodTerminal(ctx context.Context, client kubernetes.Interface, podNam
 		case corev1.PodFailed:
 			return fmt.Errorf("probe pod %s failed: %s", podName, podFailureMessage(pod))
 		}
+		if containerCannotStart(pod) {
+			return fmt.Errorf("probe pod %s cannot start: %s", podName, podFailureMessage(pod))
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
 		}
 	}
+}
+
+// containerCannotStart reports a container the kubelet is waiting on for a
+// reason it does not get past by itself: an image it cannot pull, or a
+// container it cannot configure.
+func containerCannotStart(pod *corev1.Pod) bool {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if w := cs.State.Waiting; w != nil {
+			switch w.Reason {
+			case "ErrImagePull", "ImagePullBackOff", "ErrImageNeverPull", "InvalidImageName",
+				"CreateContainerConfigError":
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // podFailureMessage extracts a useful single-line failure reason from a
