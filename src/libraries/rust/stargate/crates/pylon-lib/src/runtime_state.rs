@@ -33,7 +33,7 @@ use reqwest::header::HeaderMap;
 pub struct CurrentModelStats {
     // Sticky runtime-observed mean input TPS for this backend.
     pub last_mean_input_tps: f64,
-    // Max input TPS for this model generation. None until configured or observed.
+    // Greatest last_mean_input_tps of this model generation. None until the first mean.
     pub max_input_tps: Option<f64>,
     // Token/sec output rate for streaming generation endpoints. Embeddings item
     // cardinality is observed separately and is not exported through this field.

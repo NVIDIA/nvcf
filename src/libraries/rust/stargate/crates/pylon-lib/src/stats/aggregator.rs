@@ -1052,18 +1052,17 @@ pub(super) fn apply_input_throughput_sample(
     let Some(input_tps) = tps_for_units(sample.units, duration, config.duration_floor) else {
         return false;
     };
-    let max_changed = model_state.observe_max_input_tps(input_tps);
     model_state.input_tps_distribution.update(input_tps);
     let mean_input_tps = model_state.input_tps_distribution.mean;
     if !model_state.input_tps_distribution.has_sufficient_data()
         || !valid_last_mean_input_tps(mean_input_tps)
     {
-        return max_changed;
+        return false;
     }
     if model_state.last_mean_input_tps == mean_input_tps {
-        return max_changed;
+        return false;
     }
-    model_state.last_mean_input_tps = mean_input_tps;
+    model_state.publish_mean_input_tps(mean_input_tps);
     true
 }
 
@@ -1090,16 +1089,14 @@ pub(super) struct ModelStatsSnapshotInputs {
 }
 
 impl ModelMetricsState {
-    pub(super) fn observe_max_input_tps(&mut self, input_tps: f64) -> bool {
-        if !valid_last_mean_input_tps(input_tps)
-            || self
-                .max_input_tps
-                .is_some_and(|maximum| input_tps <= maximum)
-        {
-            return false;
-        }
-        self.max_input_tps = Some(input_tps);
-        true
+    // The maximum follows the published smoothed mean rather than raw samples,
+    // so a single outlier sample cannot set the weight for the whole generation.
+    pub(super) fn publish_mean_input_tps(&mut self, input_tps: f64) {
+        self.last_mean_input_tps = input_tps;
+        self.max_input_tps = Some(
+            self.max_input_tps
+                .map_or(input_tps, |max| max.max(input_tps)),
+        );
     }
 
     pub(super) fn clear_live_output_tps(&mut self) -> bool {
