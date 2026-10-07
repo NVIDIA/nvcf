@@ -359,6 +359,57 @@ mod tests {
     }
 
     #[test]
+    fn routing_expression_series_start_at_zero() {
+        let metrics = StargateMetrics::new().expect("metrics should initialize");
+        let mut series = metrics
+            .registry
+            .gather()
+            .iter()
+            .filter(|family| family.name() == "stargate_routing_expressions_total")
+            .flat_map(|family| family.get_metric())
+            .map(|metric| {
+                assert_eq!(metric.get_counter().value(), 0.0);
+                metric
+                    .get_label()
+                    .iter()
+                    .map(|label| label.value().to_owned())
+                    .collect::<Vec<_>>()
+                    .join("|")
+            })
+            .collect::<Vec<_>>();
+        series.sort();
+
+        // Prometheus sorts labels by name: algorithm|cache|outcome.
+        let mut expected = Vec::new();
+        for algorithm in [
+            "power-of-n",
+            "wait-and-widen",
+            "round-robin",
+            "random",
+            "pulsar",
+            "pulsar-wait-and-widen",
+        ] {
+            for cache in ["hit", "build", "rebuild"] {
+                expected.push(format!("{algorithm}|{cache}|accepted"));
+            }
+        }
+        for class in [
+            "malformed_expression",
+            "unknown_method",
+            "unknown_parameter",
+            "not_applicable",
+            "invalid_value",
+            "inert_combination",
+            "inert_value",
+            "unavailable",
+        ] {
+            expected.push(format!("||{class}"));
+        }
+        expected.sort();
+        assert_eq!(series, expected);
+    }
+
+    #[test]
     fn duration_histograms_distinguish_affinity_holds_and_long_request_waits() {
         let metrics = StargateMetrics::new().expect("metrics should initialize");
         for histogram in [

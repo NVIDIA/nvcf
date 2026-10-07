@@ -144,7 +144,7 @@ impl DynamicConfigCache {
     ) -> anyhow::Result<()> {
         let gauge = IntGauge::new(
             format!("{}routing_expression_cache_entries", metrics.prefix()),
-            "Routing targets that hold a dynamic routing expression configuration",
+            "Routing targets that hold a routing expression configuration",
         )?;
         metrics.registry().register(Box::new(EntryGauge {
             // The cache owns routing state, which owns the metrics; a strong reference would cycle.
