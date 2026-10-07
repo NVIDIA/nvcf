@@ -163,12 +163,14 @@ class ClusterSetupTests(unittest.TestCase):
         config = self.discover()
         self.assertEqual(config['nodes'], {'control': 'server', 'model': ['agent']})
         self.assertEqual(config['gpu'], GB300)
+        self.assertEqual(config['tuning'], GLM['tuning']['discrete'])
         self.assertEqual(self.probed, [['agent', 'server']])
 
     def test_two_gb10_nodes_split_the_model_and_share_routing_with_the_leader(self):
         self.resources['nodes'] = [node('spark-a', True), node('spark-b')]
         config = self.discover()
         self.assertEqual(config['nodes'], {'control': 'spark-b', 'model': ['spark-b', 'spark-a']})
+        self.assertEqual(config['tuning'], GLM['tuning']['unified'])
 
     def test_mixed_gpu_types_are_not_combined(self):
         self.gpus = {'gpu-b': GB300}

@@ -23,14 +23,6 @@
     "off",
     "--fit",
     "off",
-    "--ctx-size",
-    "2048",
-    "--parallel",
-    "1",
-    "--batch-size",
-    "128",
-    "--ubatch-size",
-    "128",
     "--cache-ram",
     "0",
     "--flash-attn",
@@ -44,12 +36,27 @@
     "deepseek",
     "--chat-template-kwargs",
     "{\"clear_thinking\":true}",
-    "--predict",
-    "512",
-    "--threads",
-    "8",
     "--metrics"
   ],
+  "tuning": {
+    "unified": {
+      "contextPerSlot": 2048,
+      "slots": 1,
+      "batchSize": 128,
+      "ubatchSize": 128,
+      "defaultMaxTokens": 512,
+      "threads": 8
+    },
+    "discrete": {
+      "contextPerSlot": 65536,
+      "slots": 2,
+      "batchSize": 2048,
+      "ubatchSize": 512,
+      "defaultMaxTokens": 8192,
+      "threads": 8
+    }
+  },
+  "kvCacheKiBPerToken": 108,
   "runtimeEnv": {
     "GGML_CUDA_DISABLE_GRAPHS": "1",
     "GGML_RPC_NO_RDMA": "1"
@@ -62,7 +69,7 @@
       "limitOverShareGiB": 2
     },
     "discrete": {
-      "gpuHeadroomGiB": 16,
+      "gpuHeadroomGiB": 6,
       "hostRequestGiB": 32,
       "hostLimitGiB": 64
     }

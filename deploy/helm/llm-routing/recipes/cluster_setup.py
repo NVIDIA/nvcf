@@ -201,8 +201,9 @@ def discover_config(context, namespace=None, recipe=None, probe=None):
     probe = probe or (lambda names: probe_gpus(context, names, config['runtimeImage'], runtime_class))
     detected = probe(ordered[:max(sizing.MODEL_NODE_COUNTS)])
     gpu = detected[ordered[0]]
+    tuning = sizing.server_tuning(recipe, gpu)
     try:
-        count = sizing.model_node_count(recipe, gpu)
+        count = sizing.model_node_count(recipe, gpu, tuning)
     except ValueError as error:
         raise ClusterSetupError(str(error)) from None
     require(len(ordered) >= count, recipe['name'] + ' needs ' + str(count) + ' idle ' + gpu['name'] +
@@ -217,7 +218,7 @@ def discover_config(context, namespace=None, recipe=None, probe=None):
     # With no spare node, routing shares the leader; it needs no GPU.
     control = others[0]['metadata']['name'] if others else model[0]
     config.update(context=context, namespace=namespace, clusterId=namespace, recipe=recipe['name'],
-                  nodes={'control': control, 'model': model}, gpu=gpu,
+                  nodes={'control': control, 'model': model}, gpu=gpu, tuning=tuning,
                   storageClass=selected_storage[0]['metadata']['name'], runtimeClass=runtime_class)
     config['images'].update(prefix='localhost/' + namespace,
                             tag='dev-' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S') + '-' + secrets.token_hex(3),
