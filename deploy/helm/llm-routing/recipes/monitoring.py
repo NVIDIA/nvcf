@@ -35,7 +35,7 @@ def settings(config):
     options = config.get('monitoring', {})
     require(isinstance(options, dict), 'monitoring must be an object.')
     require(isinstance(options.get('enabled', False), bool), 'monitoring.enabled must be boolean.')
-    allowed = {'enabled', 'images', 'imagePullPolicy', 'retentionPeriod', 'storageSize', 'namespaces', 'extraTargets', 'networkPolicy', 'model'}
+    allowed = {'enabled', 'images', 'imagePullPolicy', 'retentionPeriod', 'storageSize', 'namespaces', 'extraTargets', 'networkPolicy', 'grafanaIngress', 'model'}
     require(not set(options) - allowed, 'Unknown monitoring setting: ' + ', '.join(sorted(set(options) - allowed)))
     if 'model' in options:
         require(isinstance(options['model'], str) and bool(options['model'].strip()), 'monitoring.model must be a nonempty model ID.')
@@ -104,6 +104,18 @@ def chart_values(recipe):
         require('runtime' not in t or t['runtime'] == 'llama.cpp', 'Supported backend dashboard runtime: llama.cpp. Omit runtime for raw exporter metrics.')
         names.add(t['name'])
     values['targets'].extend(copy.deepcopy(extra))
+    ingress = options.get('grafanaIngress', {})
+    require(isinstance(ingress, dict) and set(ingress) <= {'enabled', 'host', 'className'}, 'Invalid monitoring grafanaIngress.')
+    values['grafana']['ingress'].update(ingress)
+    ingress = values['grafana']['ingress']
+    require(isinstance(ingress['enabled'], bool), 'grafanaIngress.enabled must be boolean.')
+    require(isinstance(ingress['host'], str) and (not ingress['host'] or len(ingress['host']) <= 253 and
+            re.fullmatch(r'[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*', ingress['host']) is not None),
+            'grafanaIngress.host must be a lowercase DNS name.')
+    require(isinstance(ingress['className'], str) and (not ingress['className'] or
+            re.fullmatch(r'[a-z0-9]([-a-z0-9.]*[a-z0-9])?', ingress['className']) is not None),
+            'grafanaIngress.className must name an IngressClass.')
+    require(not ingress['enabled'] or ingress['host'], 'A Grafana ingress needs grafanaIngress.host.')
     values['grafana']['adminSecret'] = recipe.c['releasePrefix']+'-monitoring-grafana-admin'
     return values
 

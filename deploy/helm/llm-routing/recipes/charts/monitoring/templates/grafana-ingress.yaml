@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+{{- if and .Values.enabled .Values.grafana.ingress.enabled }}
+{{- $host := required "grafana.ingress.host must name the dashboard host" .Values.grafana.ingress.host }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-grafana
+  labels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: grafana}
+spec:
+  {{- with .Values.grafana.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-grafana
+                port: {name: http}
+{{- end }}

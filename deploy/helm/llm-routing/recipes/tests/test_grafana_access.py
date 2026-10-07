@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+import copy
 import json
 import pathlib
 import shutil
@@ -28,6 +29,7 @@ class GrafanaAccessTests(unittest.TestCase):
         recipe = tool.Recipe(json.loads((HERE/'config.example.json').read_text()), cls.tmp.name)
         values = monitoring.chart_values(recipe)
         values['grafana']['adminPassword'] = 'test-only-admin-password'
+        cls.values, cls.work = values, recipe.work
         path = recipe.work/'grafana-access-values.json'
         path.write_text(json.dumps(values))
         rendered = subprocess.check_output(['helm', 'template', 'access-test', str(monitoring.CHART), '-f', str(path)], text=True)
@@ -48,6 +50,36 @@ class GrafanaAccessTests(unittest.TestCase):
             self.assertNotIn('value', self.env[setting])
             self.assertEqual(self.env[setting]['valueFrom']['secretKeyRef'], {'name': secret['metadata']['name'], 'key': key})
         self.assertEqual(secret['stringData'], {'admin-user': 'admin', 'admin-password': 'test-only-admin-password'})
+
+    def render_with_ingress(self, ingress):
+        values = copy.deepcopy(self.values)
+        values['grafana']['ingress'] = ingress
+        path = self.work/'grafana-ingress-values.json'
+        path.write_text(json.dumps(values))
+        return subprocess.run(['helm', 'template', 'access-test', str(monitoring.CHART), '-f', str(path)], capture_output=True, text=True)
+
+    def test_dashboard_has_no_ingress_unless_enabled(self):
+        self.assertEqual([doc for doc in self.docs if doc['kind'] == 'Ingress'], [])
+
+    def test_enabled_ingress_routes_its_host_to_the_grafana_service(self):
+        result = self.render_with_ingress({'enabled': True, 'host': 'grafana.demo.example', 'className': 'traefik'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        docs = [doc for doc in yaml.safe_load_all(result.stdout) if doc]
+        ingress = next(doc for doc in docs if doc['kind'] == 'Ingress')
+        self.assertEqual(ingress['spec']['ingressClassName'], 'traefik')
+        [rule] = ingress['spec']['rules']
+        self.assertEqual(rule['host'], 'grafana.demo.example')
+        [path] = rule['http']['paths']
+        self.assertEqual((path['path'], path['pathType']), ('/', 'Prefix'))
+        backend = path['backend']['service']
+        service = next(doc for doc in docs if doc['kind'] == 'Service' and doc['metadata']['name'] == backend['name'])
+        self.assertEqual(service['spec']['selector']['app.kubernetes.io/component'], 'grafana')
+        self.assertIn(backend['port']['name'], [port['name'] for port in service['spec']['ports']])
+
+    def test_chart_rejects_an_enabled_ingress_without_a_host(self):
+        result = self.render_with_ingress({'enabled': True, 'host': '', 'className': ''})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('grafana.ingress.host must name the dashboard host', result.stderr)
 
 
 if __name__ == '__main__':

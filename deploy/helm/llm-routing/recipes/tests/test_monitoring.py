@@ -235,6 +235,19 @@ class MonitoringTests(unittest.TestCase):
         self.config['monitoring']['networkPolicy'] = policy
         self.assertEqual(monitoring.chart_values(self.recipe)['networkPolicy'], policy)
 
+    def test_grafana_ingress_is_off_by_default_and_needs_a_valid_host(self):
+        self.assertEqual(monitoring.chart_values(self.recipe)['grafana']['ingress'], {'enabled': False, 'className': '', 'host': ''})
+        for ingress in ({'enabled': True}, {'enabled': 'true', 'host': 'grafana.example.com'}, {'host': 'Grafana.Example.com'},
+                        {'host': 'grafana_example'}, {'host': 'http://grafana.example.com'}, {'className': 'Traefik Class'},
+                        {'path': '/grafana'}, ['grafana.example.com']):
+            with self.subTest(ingress=ingress):
+                self.config['monitoring']['grafanaIngress'] = ingress
+                with self.assertRaises(RuntimeError):
+                    monitoring.chart_values(self.recipe)
+        ingress = {'enabled': True, 'host': 'grafana.demo.example', 'className': 'traefik'}
+        self.config['monitoring']['grafanaIngress'] = ingress
+        self.assertEqual(monitoring.chart_values(self.recipe)['grafana']['ingress'], ingress)
+
     def test_install_only_changes_monitoring_and_preserves_model_state(self):
         self.recipe.state.update(serve=True, runtimeSha256='a'*64, attachedExisting=True)
         self.output.side_effect = ['{}', '[]', '']

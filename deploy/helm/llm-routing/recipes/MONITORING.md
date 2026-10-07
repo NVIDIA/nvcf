@@ -18,6 +18,9 @@ Edit `monitoring` in the saved configuration, then run `python3 recipe.py monito
 | `images` | [Chart defaults](charts/monitoring/values.yaml) | Override `collector`, `victoriaMetrics` or `grafana` with versioned images |
 | `networkPolicy.enabled` | `false` | Restrict monitoring egress. Requires an enforcing network plugin. |
 | `networkPolicy.apiServerCIDRs` | `[]` | API Service and endpoint IPs as `/32` or `/128` CIDRs when restricting egress |
+| `grafanaIngress.enabled` | `false` | Serve the dashboard through an Ingress, so browsers reach it without a tunnel. Anyone who can reach the host gets Viewer access. |
+| `grafanaIngress.host` | None | DNS name of the dashboard, resolving to the ingress controller. Required when enabled. |
+| `grafanaIngress.className` | Cluster default | IngressClass, such as `traefik` on k3s |
 
 Monitoring runs on `nodes.control` using the installation's storage class. Resource defaults and image versions are in [values.yaml](charts/monitoring/values.yaml). Setting `enabled=false` skips future automatic installation. To remove an installed release, use [Uninstall](#uninstall).
 
@@ -51,6 +54,8 @@ python3 recipe.py dashboard
 ```
 
 For admin access, stop the tunnel and run `python3 recipe.py dashboard --admin`. This opens your browser and signs in automatically. Sign out in Grafana to return to Viewer access. Admin manages users, permissions and data sources. Save lasting dashboard and data-source changes in the chart. Keep generated Helm values private.
+
+With `grafanaIngress` enabled, viewers can open `http://<host>/d/llm-demo` without a tunnel. The ingress has no TLS certificate of its own, so keep using `dashboard --admin` for admin sign-in.
 
 ## Verification
 
