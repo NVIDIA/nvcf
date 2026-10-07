@@ -130,7 +130,7 @@ fn main() -> anyhow::Result<()> {
             .build()?
             .block_on(drive::drive(DriveArgs {
                 config: load_config(&config)?,
-                endpoint: endpoint.trim_end_matches('/').to_string(),
+                endpoint,
                 region,
                 rate_rps,
                 seed,

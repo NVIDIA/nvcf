@@ -34,6 +34,7 @@ use anyhow::{Context, bail};
 use futures::StreamExt;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
+use sse_core::{MessageEvent, SseDecoder, SseEvent};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -100,6 +101,8 @@ struct Driver {
     args: DriveArgs,
     plan: WorkloadPlan,
     client: reqwest::Client,
+    /// The endpoint's chat completions URL.
+    url: reqwest::Url,
     start: Instant,
     records: mpsc::UnboundedSender<FleetRecord>,
     tracker: TaskTracker,
@@ -124,6 +127,10 @@ pub async fn drive(args: DriveArgs) -> anyhow::Result<()> {
     if !matches!(endpoint.scheme(), "http" | "https") {
         bail!("endpoint {} must use http or https", args.endpoint);
     }
+    if endpoint.path() != "/" || endpoint.query().is_some() {
+        bail!("endpoint {} must not have a path or query", args.endpoint);
+    }
+    let url = endpoint.join("v1/chat/completions")?;
     HeaderValue::from_str(&format!("{}-{}", args.run_label, args.region))
         .context("run label and region must be valid header values")?;
     let client = reqwest::Client::builder()
@@ -135,12 +142,6 @@ pub async fn drive(args: DriveArgs) -> anyhow::Result<()> {
     let weights: Vec<f64> = stargates.iter().map(|(_, weight)| *weight).collect();
     let plan = plan(&args.config.workload, &weights, args.rate_rps, args.seed);
     let stargate_regions: Vec<usize> = stargates.iter().map(|(region, _)| *region).collect();
-    let initial: Vec<PlannedRequest> = plan
-        .requests
-        .iter()
-        .filter(|request| stargate_regions[request.stargate] == region_index)
-        .cloned()
-        .collect();
 
     let file = tokio::fs::File::create(&args.records)
         .await
@@ -159,6 +160,7 @@ pub async fn drive(args: DriveArgs) -> anyhow::Result<()> {
     let start = wait_for_start(args.start_at_unix_ms).await?;
     let driver = Arc::new(Driver {
         client,
+        url,
         start,
         records,
         tracker: TaskTracker::new(),
@@ -166,8 +168,15 @@ pub async fn drive(args: DriveArgs) -> anyhow::Result<()> {
         plan,
         args,
     });
-    for request in initial {
-        driver.spawn_request(request);
+    // Spawn each request at its arrival so pending requests hold no task.
+    for request in driver
+        .plan
+        .requests
+        .iter()
+        .filter(|request| stargate_regions[request.stargate] == region_index)
+    {
+        tokio::time::sleep_until(start + Duration::from_micros(request.arrival)).await;
+        driver.spawn_request(request.clone());
     }
     driver.tracker.close();
     driver.tracker.wait().await;
@@ -336,7 +345,7 @@ impl Driver {
         });
         let builder = self
             .client
-            .post(format!("{}/v1/chat/completions", args.endpoint))
+            .post(self.url.clone())
             .header("x-request-id", &request_id)
             .header("x-input-tokens", request.input_tokens)
             .header("x-output-tokens", request.output_tokens)
@@ -375,40 +384,53 @@ impl Driver {
             return record;
         }
         let mut body = response.bytes_stream();
-        let mut unscanned = Vec::new();
+        let mut events = SseDecoder::new();
+        let mut done = false;
         while let Some(chunk) = body.next().await {
-            match chunk {
-                // MockDynamo sends the role event when the first token is
-                // ready.
-                Ok(chunk)
-                    if record.ttft_us.is_none() && first_data_event(&mut unscanned, &chunk) =>
-                {
-                    record.ttft_us = Some(self.now().saturating_sub(at));
-                }
-                Ok(_) => {}
+            let mut chunk = match chunk {
+                Ok(chunk) => chunk,
                 Err(error) => {
                     record.error = Some(transport_error(&error));
                     return record;
                 }
+            };
+            while let Some(event) = events.next(&mut chunk) {
+                let event = match event {
+                    Ok(SseEvent::Message(event)) => event,
+                    Ok(SseEvent::Retry(_)) => continue,
+                    Err(_) => {
+                        record.error = Some("invalid-sse".to_string());
+                        return record;
+                    }
+                };
+                // MockDynamo sends the role event when the first token is
+                // ready.
+                record
+                    .ttft_us
+                    .get_or_insert_with(|| self.now().saturating_sub(at));
+                if is_error_event(&event) {
+                    record.error = Some("stream-error".to_string());
+                    return record;
+                }
+                done |= event.data.trim() == "[DONE]";
             }
         }
-        record.e2e_us = Some(self.now().saturating_sub(at));
+        if done {
+            record.e2e_us = Some(self.now().saturating_sub(at));
+        } else {
+            record.error = Some("incomplete".to_string());
+        }
         record
     }
 }
 
-/// Whether the stream so far contains an SSE `data:` field, skipping
-/// keep-alive comments. `unscanned` carries the end of the previous chunk so
-/// a field split across chunks is still found.
-fn first_data_event(unscanned: &mut Vec<u8>, chunk: &[u8]) -> bool {
-    const FIELD: &[u8] = b"data:";
-    unscanned.extend_from_slice(chunk);
-    if unscanned.windows(FIELD.len()).any(|window| window == FIELD) {
-        return true;
-    }
-    let keep_from = unscanned.len().saturating_sub(FIELD.len() - 1);
-    unscanned.drain(..keep_from);
-    false
+/// An SSE `error` event, or a data payload carrying an OpenAI-style `error`
+/// object.
+fn is_error_event(event: &MessageEvent) -> bool {
+    event.event == "error"
+        || (event.data.contains("\"error\"")
+            && serde_json::from_str::<serde_json::Value>(&event.data)
+                .is_ok_and(|value| value.get("error").is_some_and(|error| !error.is_null())))
 }
 
 fn transport_error(error: &reqwest::Error) -> String {
@@ -492,6 +514,7 @@ mod tests {
             (f64::NAN, endpoint, "round-robin", "rate"),
             (10.0, "router:8000", "round-robin", "http"),
             (10.0, "not a url", "round-robin", "endpoint"),
+            (10.0, "http://router:8000/v1", "round-robin", "path"),
             (10.0, endpoint, "round\nrobin", "x-routing-method"),
         ] {
             let error = drive(args(rate_rps, endpoint, routing_method))
@@ -501,21 +524,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn first_data_event_skips_comments_and_spans_chunks() {
-        let mut unscanned = Vec::new();
-        assert!(!first_data_event(&mut unscanned, b": keep-alive\n\n"));
-        assert!(!first_data_event(&mut unscanned, b"da"));
-        assert!(first_data_event(&mut unscanned, b"ta: {}\n\n"));
-    }
-
     #[derive(Default)]
     struct Seen {
         request_ids: Mutex<Vec<String>>,
     }
 
-    /// Fails the first attempt of every second turn with 503, otherwise
-    /// streams two chunks.
+    /// Fails turn 1's first attempt with 503 and both attempts of turn 2
+    /// in-stream, first with an error event and then by ending before
+    /// `[DONE]`. Other requests stream two events.
     async fn stargate(seen: Arc<Seen>, headers: HeaderMap) -> Response<Body> {
         let header = |name: &str| headers[name].to_str().unwrap().to_string();
         assert!(header("x-input-tokens").parse::<u64>().unwrap() >= 110);
@@ -533,9 +549,16 @@ mod tests {
                 .body(Body::empty())
                 .unwrap();
         }
+        let last = if request_id.ends_with("-t2-a0") {
+            "data: {\"error\":{\"message\":\"engine failed\"}}\n\n"
+        } else if request_id.ends_with("-t2-a1") {
+            ""
+        } else {
+            "data: [DONE]\n\n"
+        };
         let chunks = futures::stream::iter([
-            Ok::<_, std::convert::Infallible>("data: {}\n\n"),
-            Ok("data: [DONE]\n\n"),
+            Ok::<_, std::convert::Infallible>(": keep-alive\n\ndata: {}\n\n"),
+            Ok(last),
         ]);
         Response::builder()
             .header("x-stargate-cluster-id", "backend-a")
@@ -622,7 +645,13 @@ mod tests {
                 .collect();
             // Turns start only after the measured window if their session
             // arrived late, so only check the prefix that ran.
-            let expected = [(0, 0, true), (1, 0, false), (1, 1, true), (2, 0, true)];
+            let expected = [
+                (0, 0, true),
+                (1, 0, false),
+                (1, 1, true),
+                (2, 0, false),
+                (2, 1, false),
+            ];
             assert_eq!(
                 outcomes[..],
                 expected[..outcomes.len()],
@@ -636,15 +665,31 @@ mod tests {
                 assert_eq!(record.reused_input_tokens, Some(100));
                 assert!(record.ttft_us.unwrap() <= record.e2e_us.unwrap());
             }
-            let failed = turns.iter().find(|record| !record.succeeded());
-            if let Some(failed) = failed {
-                assert_eq!(failed.error.as_deref(), Some("overloaded_error"));
-                assert_eq!(failed.status, Some(503));
-            }
+            let failures: Vec<(Option<u16>, Option<&str>, bool)> = turns
+                .iter()
+                .filter(|record| !record.succeeded())
+                .map(|record| {
+                    (
+                        record.status,
+                        record.error.as_deref(),
+                        record.abandoned_session,
+                    )
+                })
+                .collect();
+            let expected = [
+                (Some(503), Some("overloaded_error"), false),
+                (Some(200), Some("stream-error"), false),
+                (Some(200), Some("incomplete"), true),
+            ];
+            assert_eq!(
+                failures[..],
+                expected[..failures.len()],
+                "session {session}"
+            );
         }
         assert!(
             complete_sessions > 0,
-            "some session ran every turn, including a retried one"
+            "some session ran every turn and abandoned the last one"
         );
     }
 }

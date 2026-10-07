@@ -39,6 +39,7 @@ rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sse-core = { workspace = true }
 stargate = { workspace = true }
 stargate-proto = { workspace = true }
 stargate-protocol = { workspace = true }
