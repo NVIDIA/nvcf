@@ -220,7 +220,9 @@ deployment:
   prefill, so concurrent prompts share prefill compute and slow decode.
 - Requests go to the worker caching the most tokens for their
   `x-cache-affinity-key`, even when that worker is busier than the others.
-  Requests without a cached key go to the least-loaded worker.
+  Requests without a cached key go to the least-loaded worker. A key is
+  cached only after its first prefill finishes, so concurrent first requests
+  for one key can land on different workers.
 - A completed request's cache entry covers its prompt and its output. A later
   request with the same key reuses up to that many tokens. Matching is per
   key, not per token block.

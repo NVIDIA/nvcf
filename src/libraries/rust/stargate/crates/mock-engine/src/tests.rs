@@ -406,6 +406,24 @@ fn completed_output_extends_the_cache_for_the_next_turn() {
 }
 
 #[test]
+fn concurrent_prefills_of_a_new_key_cache_it_once() {
+    let mut engine = Engine::new(config(1), false).unwrap();
+    // Request 2 is admitted while request 1 is still prefilling the key.
+    engine.submit(0, 1, spec(Some(9), 2500, 10));
+    engine.submit(0, 2, spec(Some(9), 2500, 10));
+    let events = drain(&mut engine);
+    assert!(events.iter().any(|event| matches!(
+        event,
+        EngineEvent::FirstToken {
+            id: 2,
+            reused_input_tokens: 0,
+            ..
+        }
+    )));
+    assert_eq!(engine.worker_stats()[0].kv_cache_used_tokens, 2510);
+}
+
+#[test]
 fn cancelled_requests_do_not_cache_partial_output() {
     let mut engine = Engine::new(config(1), false).unwrap();
     engine.submit(0, 1, spec(Some(9), 1000, 10_000));
