@@ -1,0 +1,32 @@
+{
+  "context": "spark-demo",
+  "namespace": "llm-stack",
+  "clusterId": "spark-stack",
+  "stackRelease": "llm-stack",
+  "operatorRelease": "llm-stack-operator",
+  "controlNode": "spark-control",
+  "caConfigMap": "llm-stack-ca",
+  "installCRDs": true,
+  "images": {
+    "gateway": {
+      "repository": "registry.example.com/team/llm-gateway",
+      "tag": "build-1",
+      "pullPolicy": "IfNotPresent"
+    },
+    "router": {
+      "repository": "registry.example.com/team/llm-router",
+      "tag": "build-1",
+      "pullPolicy": "IfNotPresent"
+    },
+    "operator": {
+      "repository": "registry.example.com/team/llm-operator",
+      "tag": "build-1",
+      "pullPolicy": "IfNotPresent"
+    },
+    "pylon": {
+      "repository": "registry.example.com/team/llm-pylon",
+      "tag": "build-1",
+      "pullPolicy": "IfNotPresent"
+    }
+  }
+}

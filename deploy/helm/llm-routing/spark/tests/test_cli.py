@@ -303,13 +303,31 @@ class CliTests(unittest.TestCase):
         for arguments in (['chat', 'Name eight planets.', '--stream'], ['chat', '--stream', 'Name eight planets.']):
             with self.subTest(arguments=arguments), patch.object(spark.Recipe, 'chat') as chat:
                 spark.main(arguments)
-                chat.assert_called_once_with('Name eight planets.', True, 18443)
+                chat.assert_called_once_with('Name eight planets.', True, 18443, model=None)
         with patch.object(spark.Recipe, 'chat') as chat:
             spark.main(['chat'])
-        chat.assert_called_once_with(None, False, 18443)
+        chat.assert_called_once_with(None, False, 18443, model=None)
+
+    def test_chat_accepts_model_selection_in_either_option_order(self):
+        self.write_config()
+        for streaming in (False, True):
+            for arguments in (
+                ['chat', 'What is 17 multiplied by 19?', '--model', 'qwen3.8-27b'],
+                ['chat', '--model', 'qwen3.8-27b', 'What is 17 multiplied by 19?'],
+                ['--model', 'qwen3.8-27b', 'chat', 'What is 17 multiplied by 19?'],
+            ):
+                if streaming:
+                    arguments = arguments + ['--stream']
+                with self.subTest(arguments=arguments), patch.object(spark.Recipe, 'chat') as chat:
+                    spark.main(arguments)
+                chat.assert_called_once_with('What is 17 multiplied by 19?', streaming, 18443, model='qwen3.8-27b')
+        with patch.object(spark.Recipe, 'chat') as chat:
+            spark.main(['chat', '--model', 'GLM-5.3-UD-IQ2_M'])
+        chat.assert_called_once_with(None, False, 18443, model='GLM-5.3-UD-IQ2_M')
 
     def test_chat_options_cannot_be_silently_ignored_by_other_phases(self):
-        for arguments in (['verify-gateway', '--stream'], ['paths', 'accidental prompt']):
+        for arguments in (['verify-gateway', '--stream'], ['paths', 'accidental prompt'],
+                          ['verify-gateway', '--model', 'qwen3.8-27b'], ['paths', '--model', 'qwen3.8-27b']):
             with self.subTest(arguments=arguments), patch.object(spark, 'Recipe') as recipe, self.assertRaisesRegex(RuntimeError, 'only for chat'):
                 spark.main(arguments)
             recipe.assert_not_called()

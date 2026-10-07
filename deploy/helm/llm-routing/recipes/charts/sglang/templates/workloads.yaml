@@ -1,0 +1,200 @@
+{{/* SPDX-License-Identifier: Apache-2.0 */}}
+{{- $v := .Values -}}
+{{- if not (kindIs "bool" $v.suspended) }}{{ fail "suspended must be a boolean" }}{{ end -}}
+{{- if and $v.suspended (ne $v.phase "serve") }}{{ fail "suspended is supported only in phase serve" }}{{ end -}}
+{{- if not (has $v.phase (list "qualify" "download" "serve")) }}{{ fail "phase must be qualify, download or serve" }}{{ end -}}
+{{- if not (regexMatch "^.+@sha256:[a-f0-9]{64}$" $v.image) }}{{ fail "Use a digest-pinned ARM64 image" }}{{ end -}}
+{{- if not (regexMatch "^[a-f0-9]{40}$" (default "" $v.model.revision)) }}{{ fail "Use a pinned model revision" }}{{ end -}}
+{{- if or (lt (len $v.targets) 1) (gt (len $v.targets) 2) (ne (len $v.targets) (int $v.profile.nodes)) }}{{ fail "targets must match the recipe profile" }}{{ end -}}
+{{- if or (lt (int $v.contextLength) 1) (gt (int $v.contextLength) (int $v.profile.maxContext)) (lt (int $v.concurrency) 1) (gt (int $v.concurrency) (int $v.profile.maxConcurrency)) }}{{ fail "Workload exceeds the recipe context or concurrency envelope" }}{{ end -}}
+{{- if and $v.profile.offload (ne (len $v.targets) 1) }}{{ fail "NVMe offload requires the single-node profile" }}{{ end -}}
+{{- if and (eq (len $v.targets) 2) (eq (index $v.targets 0).node (index $v.targets 1).node) }}{{ fail "Each rank needs a distinct node" }}{{ end -}}
+{{- $root := . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-runtime
+data:
+  runtime.py: |
+{{ .Files.Get "files/runtime.py" | indent 4 }}
+  config.json: |
+{{ dict "model" $v.model "profile" $v.profile "targets" $v.targets "contextLength" $v.contextLength "concurrency" $v.concurrency "ports" $v.ports | toPrettyJson | indent 4 }}
+{{- range $rank, $target := $v.targets }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $root.Release.Name }}-cache-{{ $rank }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ required "storageClassName is required" $v.storageClassName | quote }}
+  resources:
+    requests: {storage: {{ printf "%dGi" (int $v.profile.cacheGiB) }}}
+---
+{{- if eq $v.phase "serve" }}
+apiVersion: apps/v1
+kind: Deployment
+{{- else }}
+apiVersion: batch/v1
+kind: Job
+{{- end }}
+metadata:
+  name: {{ $root.Release.Name }}-{{ $v.phase }}-{{ $rank }}
+  labels:
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    app.kubernetes.io/component: sglang
+spec:
+{{- if eq $v.phase "serve" }}
+  replicas: {{ ternary 0 1 $v.suspended }}
+  strategy: {type: Recreate}
+  progressDeadlineSeconds: 7200
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+      recipe-rank: {{ $rank | quote }}
+{{- else }}
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ if eq $v.phase "download" }}14400{{ else }}600{{ end }}
+{{- end }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ $root.Release.Name }}
+        app.kubernetes.io/component: sglang
+        recipe-rank: {{ $rank | quote }}
+      annotations:
+        checksum/runtime: {{ $root.Files.Get "files/runtime.py" | sha256sum }}
+        checksum/config: {{ omit $v "suspended" | toJson | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      restartPolicy: {{ if eq $v.phase "serve" }}Always{{ else }}Never{{ end }}
+{{- if ne $v.phase "download" }}
+      runtimeClassName: {{ required "runtimeClassName is required" $v.runtimeClassName | quote }}
+{{- end }}
+{{- if and (eq (len $v.targets) 2) (ne $v.phase "download") }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+{{- end }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchFields:
+                  - {key: metadata.name, operator: In, values: [{{ required "target.node is required" $target.node | quote }}]}
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: sglang
+          image: {{ $v.image | quote }}
+          imagePullPolicy: {{ $v.imagePullPolicy }}
+          command: [python3, -u, /recipe/runtime.py, {{ $v.phase | quote }}, {{ $rank | quote }}]
+          env:
+            - {name: HF_HOME, value: /cache/huggingface}
+            - {name: SGLANG_CACHE_DIR, value: /cache/sglang}
+            - {name: PYTHONDONTWRITEBYTECODE, value: '1'}
+            - {name: PYTORCH_CUDA_ALLOC_CONF, value: 'expandable_segments:True'}
+{{- if $v.hfTokenSecret }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: {name: {{ $v.hfTokenSecret | quote }}, key: token}
+{{- end }}
+{{- if eq (len $v.targets) 2 }}
+            - {name: NCCL_SOCKET_IFNAME, value: {{ required "target.interface is required for TP2" $target.interface | quote }}}
+            - {name: GLOO_SOCKET_IFNAME, value: {{ $target.interface | quote }}}
+            - {name: NCCL_IB_DISABLE, value: '1'}
+            - {name: TORCH_NCCL_ASYNC_ERROR_HANDLING, value: '1'}
+            - {name: TORCH_NCCL_ENABLE_MONITORING, value: '1'}
+            - {name: TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC, value: '120'}
+{{- end }}
+          ports:
+            - {name: http, containerPort: {{ $v.ports.http }}}
+            - {name: bootstrap, containerPort: {{ $v.ports.bootstrap }}}
+{{- if and (eq (len $v.targets) 2) (ne $v.phase "download") }}
+            - {name: rendezvous, containerPort: {{ $v.ports.rendezvous }}, hostPort: {{ $v.ports.rendezvous }}}
+{{- end }}
+{{- if eq $v.phase "serve" }}
+          startupProbe:
+{{- if eq $rank 0 }}
+            httpGet: {path: /health, port: http}
+{{- else }}
+            httpGet: {path: /started, port: bootstrap}
+{{- end }}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 720
+          readinessProbe:
+{{- if eq $rank 0 }}
+            httpGet: {path: /health, port: http}
+{{- else }}
+            httpGet: {path: /started, port: bootstrap}
+{{- end }}
+            periodSeconds: 5
+            timeoutSeconds: 5
+{{- end }}
+          resources:
+            requests:
+              cpu: {{ if eq $v.phase "download" }}'1'{{ else }}{{ $v.profile.cpu | quote }}{{ end }}
+              memory: {{ if eq $v.phase "download" }}4Gi{{ else }}{{ printf "%dGi" (int $v.profile.memoryGiB) }}{{ end }}
+{{- if ne $v.phase "download" }}
+              nvidia.com/gpu: '1'
+{{- end }}
+{{- if $v.profile.offload }}
+              ephemeral-storage: {{ printf "%dGi" (int $v.profile.offloadGiB) }}
+{{- end }}
+            limits:
+              memory: {{ if eq $v.phase "download" }}8Gi{{ else }}{{ printf "%dGi" (int $v.profile.memoryLimitGiB) }}{{ end }}
+{{- if ne $v.phase "download" }}
+              nvidia.com/gpu: '1'
+{{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: recipe, mountPath: /recipe, readOnly: true}
+            - {name: cache, mountPath: /cache}
+            - {name: shm, mountPath: /dev/shm}
+            - {name: tmp, mountPath: /tmp}
+{{- if $v.profile.offload }}
+            - {name: ple, mountPath: /ple}
+{{- end }}
+      volumes:
+        - name: recipe
+          configMap: {name: {{ $root.Release.Name }}-runtime}
+        - name: cache
+          persistentVolumeClaim: {claimName: {{ $root.Release.Name }}-cache-{{ $rank }}}
+        - name: shm
+          emptyDir: {medium: Memory, sizeLimit: 8Gi}
+        - name: tmp
+          emptyDir: {sizeLimit: 4Gi}
+{{- if $v.profile.offload }}
+        - name: ple
+          emptyDir: {sizeLimit: {{ printf "%dGi" (int $v.profile.offloadGiB) }}}
+{{- end }}
+{{- end }}
+{{- if eq $v.phase "serve" }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, recipe-rank: '0'}
+  ports: [{name: http, port: 8000, targetPort: http}]
+{{- if $v.register }}
+---
+apiVersion: pylon.nvidia.com/v1alpha1
+kind: InferenceEndpoint
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  modelName: {{ required "model.id is required" $v.model.id | quote }}
+  inferenceAPIFormat: {type: chat}
+  service: {name: {{ .Release.Name }}, port: 8000}
+  health: {path: /health}
+  maxEngineConcurrency: {{ $v.concurrency }}
+  gpu: {product: NVIDIA-GB10}
+  canary: {timeoutSeconds: 180, intervalSeconds: 60}
+{{- end }}
+{{- end }}

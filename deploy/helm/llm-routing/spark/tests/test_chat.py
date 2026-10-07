@@ -62,9 +62,48 @@ class ChatTests(unittest.TestCase):
             self.assertEqual(command[command.index('--api-key-file') + 1], str(self.recipe.work/'temporary-gateway-key'))
             self.assertEqual(command[-2:], ['--', 'How many planets are in the solar system?'])
             self.assertEqual('--stream' in command, streaming)
+            self.assertNotIn('--model', command)
             self.assertEqual(self.events, ['connected', 'registered', 'revoked', 'disconnected'])
             self.assertEqual(self.recipe.state, before)
             self.assertFalse(self.recipe.state_path.exists())
+
+    def test_selected_model_is_forwarded_for_chat_and_streaming(self):
+        for model in ('GLM-5.3-UD-IQ2_M', 'qwen3.8-27b'):
+            for streaming in (False, True):
+                self.events = []
+                before = copy.deepcopy(self.recipe.state)
+                with self.subTest(model=model, streaming=streaming), patch.object(self.recipe, 'bound_cluster'), \
+                     patch.object(self.recipe, 'forward', self.forward), \
+                     patch.object(spark.gateway_access, 'temporary_gateway_key', self.key), \
+                     patch.object(spark, 'run') as run:
+                    self.recipe.chat('What is 17 multiplied by 19?', streaming, 18443, model=model)
+                command = run.call_args.args[0]
+                self.assertEqual(command[command.index('--model') + 1], model)
+                self.assertEqual('--stream' in command, streaming)
+                self.assertEqual(command[-2:], ['--', 'What is 17 multiplied by 19?'])
+                self.assertEqual(self.events, ['connected', 'registered', 'revoked', 'disconnected'])
+                self.assertEqual(self.recipe.state, before)
+
+    def test_model_id_is_a_literal_argument(self):
+        self.recipe.state['stack']['apiKeyFile'] = '/private/existing-key'
+        model = 'provider/Qwen3.8-27B;$(echo example)`echo literal`'
+        with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'forward', self.forward), \
+             patch.object(spark, 'run') as run:
+            self.recipe.chat('Hello', False, 18443, model=model)
+        command = run.call_args.args[0]
+        self.assertEqual(command[command.index('--model') + 1], model)
+        self.assertNotIn('shell', run.call_args.kwargs)
+
+    def test_empty_model_rejects_before_cluster_access(self):
+        for model in ('', '  ', 123):
+            with self.subTest(model=model), patch.object(self.recipe, 'bound_cluster') as bound, \
+                 patch.object(self.recipe, 'forward') as forward, \
+                 patch.object(spark.gateway_access, 'temporary_gateway_key') as key, \
+                 self.assertRaisesRegex(RuntimeError, 'nonempty'):
+                self.recipe.chat('Hello', False, 18443, model=model)
+            bound.assert_not_called()
+            forward.assert_not_called()
+            key.assert_not_called()
 
     def test_existing_installer_key_is_supported_without_mutating_credentials(self):
         self.recipe.state['stack']['apiKeyFile'] = '/private/existing-key'

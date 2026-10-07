@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: Apache-2.0
+# Generate these values with recipes.py plan. No default model is deployed.
+phase: qualify
+suspended: false
+model: {}
+image: ""
+imagePullPolicy: IfNotPresent
+runtimeClassName: ""
+storageClassName: ""
+profile: {}
+targets: []
+contextLength: 8192
+concurrency: 1
+register: true
+ports: {http: 30000, rendezvous: 34000, bootstrap: 38000}
+hfTokenSecret: ""

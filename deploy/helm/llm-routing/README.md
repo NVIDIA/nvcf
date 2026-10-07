@@ -1,12 +1,71 @@
 # LLM routing stack on DGX Spark
 
-Deploy the LLM Gateway Stack (LLM API Gateway and request router) and Pylon Operator on an existing ARM64 DGX Spark Kubernetes cluster. The stack serves full GLM-5.3 `UD-IQ2_M` on exactly two GPUs and validates inference through authenticated gateway requests.
+Install the shared LLM API Gateway, request router and Pylon Operator on an existing Kubernetes cluster, then add independent model recipes. The shared stack starts with an empty registry and has no default model. Each recipe owns its runtime, cache and `InferenceEndpoint`.
 
-## Overview
+For Qwen models, precision variants and capacity-based Spark placement, use [Independent model recipes](recipes/README.md). GLM is an optional recipe. The original combined GLM installation and maintenance commands remain available below.
 
-The `spark.py` installer coordinates the combined gateway/router chart, the Pylon Operator chart and the GLM backend chart. The backend chart builds llama.cpp, downloads and verifies the GGUF model files, runs GLM across the two GPUs, and creates an `InferenceEndpoint` for Pylon to register.
+## Install shared infrastructure first
 
-Application images and charts use your checkout, including local edits.
+The shared installer needs Python 3.11+, Helm, kubectl, a Ready node and accessible application images. It does not require GPUs, a model runtime, a RuntimeClass or model storage. Supply images built for the selected node architecture. The [image build guide](spark/BUILDING.md) describes the source components and distribution options.
+
+Copy [stack.config.example.json](stack.config.example.json) outside the checkout. Set the context, a new namespace, control node, cluster ID, release names and image references. Use `installCRDs: true` for the first operator in a cluster. If a compatible InferenceEndpoint CRD already exists, set it to `false`. The installer rejects overlapping operator watches and never adopts an existing namespace or CRD from another release.
+
+From this directory, with your private config and work paths:
+
+```bash
+python3 stack.py --config /path/to/stack.json --work-dir /path/to/stack-work render
+python3 stack.py --config /path/to/stack.json --work-dir /path/to/stack-work install
+python3 stack.py --config /path/to/stack.json --work-dir /path/to/stack-work verify --expect-empty
+```
+
+The empty-stack check verifies empty discovery and registry responses, a 404 for an uninstalled model, and a 401 for an invalid caller key. Installation saves a private caller key, CA certificate and `connection.json`. The connection binds the namespace, node and shared resource identities. Model recipes reuse these credentials and cannot upgrade the shared releases. Keep this work directory private and available throughout the installation's lifetime.
+
+### Install two independent models or precisions
+
+Follow [Independent model recipes](recipes/README.md) to select and install two recipes, such as `qwen3.8-27b` (FP8) and `qwen3.8-27b-nvfp4`. The planner selects available nodes from each profile's requirements. A busy GPU is not evicted or shared. Qualify each backend, then verify both through the shared gateway.
+
+Verify both through the same address and caller credential:
+
+```bash
+python3 stack.py --config /path/to/stack.json --work-dir /path/to/stack-work verify \
+  --model qwen3.8-27b --model qwen3.8-27b-nvfp4
+python3 stack.py --config /path/to/stack.json --work-dir /path/to/stack-work chat \
+  --model qwen3.8-27b 'What is 17 multiplied by 19? Give one short sentence.'
+python3 stack.py --config /path/to/stack.json --work-dir /path/to/stack-work chat \
+  --model qwen3.8-27b-nvfp4 'What is 17 multiplied by 19? Give one short sentence.'
+```
+
+Add `--stream` for streaming chat. The shared CLI requires an explicit model ID. The verification checks discovery, healthy registry entries, real chat, streaming with token usage and rejection of an invalid key. Then test a controlled stop or upgrade of one recipe and verify that the other keeps serving. Preserve both model caches for recovery.
+
+### Optional independent GLM recipe
+
+Copy [glm.config.example.json](spark/glm.config.example.json) to a private file and set only the GLM release prefix, leader/worker nodes, runtime image, RuntimeClass and storage class. Attach it to the shared connection:
+
+```bash
+python3 spark/spark.py --config /path/to/glm.json --work-dir /path/to/glm-work attach-stack \
+  --stack-connection /path/to/stack-work/connection.json
+python3 spark/spark.py --work-dir /path/to/glm-work render
+python3 spark/spark.py --work-dir /path/to/glm-work inventory
+```
+
+Attachment reads shared resources and saves the normalized config in `glm-work/config.json`. It does not reserve GPUs or mark a model deployed. Continue only when inventory finds two idle, eligible GPUs:
+
+```bash
+python3 spark/spark.py --work-dir /path/to/glm-work preflight
+python3 spark/spark.py --work-dir /path/to/glm-work build-runtime
+python3 spark/spark.py --work-dir /path/to/glm-work qualify
+python3 spark/spark.py --work-dir /path/to/glm-work download
+python3 spark/spark.py --work-dir /path/to/glm-work load
+python3 spark/spark.py --work-dir /path/to/glm-work verify-direct
+python3 spark/spark.py --work-dir /path/to/glm-work register
+python3 spark/spark.py --work-dir /path/to/glm-work verify-gateway
+```
+
+In this mode, GLM rendering and Helm operations target only its backend and chain-check releases. The `stack`, infrastructure image build/import/update/rollback, credential mutation and existing-install adoption commands are rejected. Shared infrastructure stays under `stack.py` ownership.
+
+## Original combined GLM flow
+
+The commands below preserve the existing installation path. `spark.py` coordinates the shared charts and the GLM backend chart together. This GLM recipe builds llama.cpp, downloads and verifies GGUF files, runs GLM across two GPUs, and creates an `InferenceEndpoint`. Application images and charts use your checkout, including local edits.
 
 ## Prerequisites
 
@@ -98,6 +157,15 @@ Check the node placement, ready replicas and model endpoint status.
 python3 spark.py chat 'What is 17 multiplied by 19? Give one short sentence.'
 python3 spark.py chat 'Explain what a GPU does in two sentences.' --stream
 ```
+
+Use the served model ID to select another model registered with the same gateway. Omitting `--model` preserves the GLM default.
+
+```bash
+python3 spark.py chat --model GLM-5.3-UD-IQ2_M 'What is 17 multiplied by 19? Give one short sentence.'
+python3 spark.py chat --model qwen3.8-27b 'What is 17 multiplied by 19? Give one short sentence.'
+```
+
+Add `--stream` to either command for streaming output.
 
 ## Maintenance
 
@@ -276,11 +344,14 @@ python3 spark.py verify-gateway
 
 ## Local validation
 
-From the recipe directory, run the runner/client tests, runtime chart tests and offline render checks.
+From `deploy/helm/llm-routing`, run shared-infrastructure, recipe/client and runtime chart tests. Render checks use private work directories and do not change a live cluster.
 
 ```bash
 python3 -m unittest discover -s tests -v
-python3 -m unittest discover -s charts/gguf-backend/tests -v
-python3 spark.py render
+python3 -m unittest discover -s spark/tests -v
+python3 -m unittest discover -s spark/charts/gguf-backend/tests -v
+python3 -m unittest discover -s recipes/tests -v
+python3 stack.py --config stack.config.example.json --work-dir /tmp/llm-stack-render render
+python3 spark/spark.py --config spark/config.example.json --work-dir /tmp/llm-glm-render render
 git diff --check
 ```

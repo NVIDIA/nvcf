@@ -25,6 +25,7 @@ sys.path.insert(0, str(HERE))
 import gateway_access
 import cluster_setup
 import console_output
+import stack_binding
 MODEL = json.loads((HERE/'model.lock.json').read_text())
 COMPONENTS = {'gateway': 'src/invocation-plane-services/llm-api-gateway',
               'router': 'src/libraries/rust/stargate', 'pylon': 'src/libraries/rust/stargate',
@@ -60,6 +61,11 @@ def validate(c):
     require(len(c['releasePrefix']) <= 30, 'releasePrefix must be at most 30 characters.')
     require(all(c['nodes'].get(role) for role in ('leader', 'worker', 'control')), 'All three placement roles are required.')
     require(c['nodes']['leader'] != c['nodes']['worker'], 'GLM needs exactly two distinct GPU nodes.')
+    if c.get('externalStack') is not None:
+        stack_binding.validate(c)
+        require(isinstance(c.get('runtimeImage'), str) and bool(c['runtimeImage'].strip()), 'runtimeImage must be explicit.')
+        require(not c.get('retainedModels') and not c.get('testFixture'), 'The model recipe deploys real GLM only.')
+        return
     require(c['images']['pullPolicy'] in ('Never', 'IfNotPresent', 'Always'), 'Invalid pull policy.')
     require(re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}', c['images']['tag']) is not None, 'Invalid image tag.')
     require('/' in c['images']['prefix'] and not c['images']['prefix'].endswith('/'), 'Use registry/path as image prefix.')
@@ -236,7 +242,7 @@ def discover_config(context, namespace=None):
     image_prefix = images['gateway'].rsplit('/', 1)[0]
     if '/' not in image_prefix:
         image_prefix += '/attached'
-    # TLS private material and existing caller/cluster key hashes are intentionally omitted.
+    # Reconstruct public settings from the installed releases.
     config = {'context': context, 'namespace': namespace, 'releasePrefix': prefix, 'clusterId': v['clusterId'],
               'releases': {'stack': stack, 'operator': operator, 'glm': glm}, 'nodes': nodes,
               'storageClass': backend['artifacts']['storageClassName'], 'runtimeClass': backend['runtimeClassName'],
@@ -261,6 +267,8 @@ class Recipe:
         self.state = json.loads(self.state_path.read_text()) if self.state_path.exists() else {}
         identity = {k: config[k] for k in ('context', 'namespace', 'releasePrefix', 'clusterId', 'nodes')}
         identity['releases'] = config.get('releases', {})
+        if config.get('externalStack') is not None:
+            identity['externalStack'] = copy.deepcopy(config['externalStack'])
         require(not self.state or self.state['identity'] == identity, 'Work directory belongs to a different installation.')
         self.identity = identity
         self.kc = ['kubectl', '--context', config['context'], '-n', config['namespace']]
@@ -269,10 +277,17 @@ class Recipe:
         self.glm = releases.get('glm', config['releasePrefix'] + '-glm')
         self.operator = releases.get('operator', config['releasePrefix'] + '-operator')
         self.stack = releases.get('stack', config['releasePrefix'] + '-stack')
+        if self.c.get('externalStack') is not None:
+            require(self.glm not in (self.stack, self.operator) and self.glm+'-chain' not in (self.stack, self.operator),
+                    'GLM and infrastructure must have distinct release names.')
         for name in (self.glm, self.operator, self.stack):
             require(re.fullmatch(r'[a-z0-9]([-a-z0-9]*[a-z0-9])?', name) is not None and len(name) <= 53, 'Invalid release name.')
 
+    def infrastructure_owner(self):
+        require(self.c.get('externalStack') is None, 'This GLM recipe uses externally managed infrastructure. Use the shared stack installer for infrastructure changes.')
+
     def reinitialize(self, config_path):
+        self.infrastructure_owner()
         require(not (self.work/'temporary-gateway-key.json').exists(),
                 'A temporary gateway key still needs cleanup. No progress was reset.')
         if self.state.get('inventory'):
@@ -332,6 +347,10 @@ class Recipe:
         return revision + ('-dirty' if dirty else '')
 
     def prepare(self):
+        if self.c.get('externalStack') is not None:
+            require((HERE/'charts/gguf-backend/Chart.yaml').is_file(), 'Missing GLM backend chart.')
+            print('Using independent GLM backend chart:', HERE/'charts/gguf-backend')
+            return
         self.source_check()
         run(['helm', 'dependency', 'build', '--skip-refresh', self.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack'])
         print('Using source checkout:', self.source)
@@ -375,6 +394,10 @@ class Recipe:
         return values
 
     def helm_apply(self, release, chart, values, timeout='5m', wait=True, jobs=False):
+        if self.c.get('externalStack') is not None:
+            require(release in (self.glm, self.glm+'-chain')
+                    and pathlib.Path(chart).resolve() == (HERE/'charts/gguf-backend').resolve(),
+                    'Independent GLM recipes may update only their own backend releases.')
         path = self.work/(release+'-values.json')
         save(path, values)
         command = self.hm + ['upgrade', '--install', release, str(chart), '--create-namespace', '-f', str(path), '--timeout', timeout]
@@ -387,11 +410,17 @@ class Recipe:
 
     def inventory(self):
         require(not self.state.get('attachedExisting'), 'This work directory is attached for iteration. Do not run fresh-install phases.')
+        external = self.c.get('externalStack') is not None
+        if external:
+            require(self.state.get('attachedStack'), 'Run attach-stack before GLM inventory.')
+            self.bound_cluster()
+            if not self.state.get('inventory'):
+                self.check_model_absent()
         nodes = json.loads(output(self.kc+['get', 'nodes', '-o', 'json']))['items']
         pods = json.loads(output(self.kc+['get', 'pods', '-A', '-o', 'json']))['items']
         crds = json.loads(output(self.kc+['get', 'crds', '-o', 'json']))['items']
         selected = self.c['nodes']
-        if self.c['images']['pullPolicy'] == 'Never':
+        if not external and self.c['images']['pullPolicy'] == 'Never':
             eligible = {n['metadata']['name'] for n in nodes if n['metadata']['labels'].get('kubernetes.io/arch') == 'arm64'}
             imports = set(self.c['containerd'].get('nodeNames', selected.values()))
             require(eligible <= imports, 'Pre-import Pylon on every ARM64 node where it can schedule. Set containerd.nodeNames explicitly.')
@@ -407,18 +436,50 @@ class Recipe:
                         and cluster_setup.requests_gpu(p)]
                 require(not busy, 'Selected model GPU is occupied: '+', '.join(busy))
         for crd in crds:
-            if crd['metadata']['name'] == 'inferenceendpoints.pylon.nvidia.com':
+            if not external and crd['metadata']['name'] == 'inferenceendpoints.pylon.nvidia.com':
                 owner = crd['metadata'].get('annotations', {})
                 require(owner.get('meta.helm.sh/release-name') == self.operator and owner.get('meta.helm.sh/release-namespace') == self.c['namespace'], 'Existing Pylon CRD has another owner. Review compatibility and watch scopes first.')
         existing = [p for p in pods if p['metadata']['namespace'] == self.c['namespace']]
-        require(not existing or self.state.get('inventory'), 'Use an unused namespace for the first run.')
+        require(external or not existing or self.state.get('inventory'), 'Use an unused namespace for the first run.')
         run(self.kc+['get', 'runtimeclass', self.c['runtimeClass']])
         run(self.kc+['get', 'storageclass', self.c['storageClass']])
         save(self.work/'evidence/inventory.json', {'nodes': nodes, 'pods': pods})
         self.stamp('inventory', {'nodes': {n['metadata']['name']: n['metadata']['uid'] for n in nodes}})
         print('Inventory passed.')
 
+    def check_model_absent(self):
+        releases = json.loads(output(self.hm+['list', '--deployed', '--failed', '--pending', '--uninstalled',
+                                               '--superseded', '--uninstalling', '--filter', '^'+re.escape(self.glm)+'(-chain)?$', '-o', 'json']))
+        require(not any(item['name'] in (self.glm, self.glm+'-chain') for item in releases),
+                'The selected GLM release already exists. Use a new model release and work directory.')
+        resources = json.loads(output(self.kc+['get', 'deployments,statefulsets,jobs,services,configmaps,persistentvolumeclaims', '-o', 'json']))['items']
+        require(not any(item['metadata']['name'] == self.glm or item['metadata']['name'].startswith(self.glm+'-') for item in resources),
+                'Resources or retained storage already exist for this GLM release.')
+        endpoints = json.loads(output(self.kc+['get', 'inferenceendpoints', '-o', 'json']))['items']
+        require(not any(item['metadata']['name'] == 'glm53-iq2' or item.get('spec', {}).get('modelName') == 'GLM-5.3-UD-IQ2_M' for item in endpoints),
+                'GLM is already registered in the selected namespace.')
+
+    def attach_stack(self, config_path):
+        require(self.c.get('externalStack') is not None, 'Provide a shared stack connection.')
+        require(not self.state and not pathlib.Path(config_path).exists(),
+                'This model work directory is already configured. Use its saved configuration or a new work directory.')
+        inspected = stack_binding.inspect_connection(self.c['externalStack'])
+        nodes = json.loads(output(self.kc+['get', 'nodes', '-o', 'json']))['items']
+        identities = {node['metadata']['name']: node['metadata']['uid'] for node in nodes}
+        require(set(self.c['nodes'].values()) <= identities.keys(), 'Configured model placement nodes do not exist.')
+        require(identities[self.c['nodes']['control']] == self.c['externalStack']['controlNodeUID'], 'The routing node identity changed.')
+        self.check_model_absent()
+        key = pathlib.Path(self.c['apiKeyFile'])
+        require(key.is_file() and bool(key.read_text().strip()), 'The shared stack API-key file is missing or empty.')
+        save(self.work/'ca.crt', inspected['ca'])
+        save(pathlib.Path(config_path), self.c)
+        self.state.update(attachedStack=True, attachment={'nodes': identities},
+                          stack={'apiKeyFile': str(key)}, identity=self.identity)
+        save(self.state_path, self.state)
+        print('Attached to shared infrastructure. Run inventory before preparing GLM.')
+
     def attach_existing(self):
+        self.infrastructure_owner()
         if self.state and not self.state.get('attachedExisting'):
             self.bound_cluster()
             require(all(self.state.get(phase) for phase in ('stack', 'serve', 'registered')),
@@ -432,8 +493,7 @@ class Recipe:
             for component in COMPONENTS:
                 require(live['images']['repositories'][component] == self.repository(component),
                         'Existing image repository differs: '+component)
-            # Retain installer checkpoints and credentials; attachment must not turn
-            # an installation owner into a restricted iteration-only work directory.
+            # Preserve installation ownership, checkpoints and credentials on repeated attachment.
             print('Existing installation matches the saved setup.')
             return
         if self.state:
@@ -467,9 +527,14 @@ class Recipe:
             console_output.warn('Image updates require matching recorded charts. Use a coordinated stack installation first.')
 
     def bound_cluster(self):
-        require(self.state.get('inventory'), 'Run inventory for this installation first.')
+        if self.c.get('externalStack') is not None:
+            require(self.state.get('attachedStack'), 'Run attach-stack for this GLM installation first.')
+            stack_binding.inspect_connection(self.c['externalStack'])
+            require(self.state.get('stack', {}).get('apiKeyFile') == self.c['apiKeyFile'], 'The shared stack caller-key binding changed.')
+        binding = self.state.get('inventory') or (self.state.get('attachment') if self.c.get('externalStack') is not None else None)
+        require(binding, 'Run inventory for this installation first.')
         live = json.loads(output(self.kc+['get', 'nodes', '-o', 'json']))['items']
-        old = self.state['inventory']['nodes']
+        old = binding['nodes']
         current = {n['metadata']['name']: n['metadata']['uid'] for n in live}
         require(all(current.get(name) == old.get(name) for name in self.c['nodes'].values()), 'The selected node identities changed or the context points to another cluster.')
 
@@ -672,6 +737,7 @@ class Recipe:
         self.stamp(phase)
 
     def deploy_stack(self):
+        self.infrastructure_owner()
         require(not self.state.get('attachedExisting'), 'Existing installations support verification and image iteration, not fresh stack deployment.')
         self.bound_cluster()
         self.prepare()
@@ -699,7 +765,7 @@ class Recipe:
     def register(self):
         require(not self.state.get('attachedExisting'), 'Do not re-register or adopt an attached existing backend.')
         self.bound_cluster()
-        require(self.state.get('serve') and self.state.get('direct') and self.state.get('stack'), 'Load, directly verify GLM, and deploy the stack before registration.')
+        require(self.state.get('serve') and self.state.get('direct') and self.state.get('stack'), 'Load, directly verify GLM, and deploy or attach to the stack before registration.')
         self.helm_apply(self.glm, HERE/'charts/gguf-backend', self.backend_values(register=True), '10m')
         for condition in ('Ready', 'TransportReady', 'Registered'):
             run(self.kc+['wait', 'inferenceendpoint/glm53-iq2', '--for=condition='+condition, '--timeout=300s'])
@@ -728,13 +794,16 @@ class Recipe:
                 proc.terminate()
                 proc.wait(timeout=10)
 
-    def chat(self, prompt, stream, port):
+    def chat(self, prompt, stream, port, model=None):
         require(prompt is None or (isinstance(prompt, str) and bool(prompt.strip())), 'Provide a nonempty chat prompt.')
+        require(model is None or (isinstance(model, str) and bool(model.strip())), 'Provide a nonempty model ID.')
         self.bound_cluster()
         require(self.state.get('stack'), 'Attach to or deploy the stack first.')
         url = 'https://127.0.0.1:' + str(port)
         command = [sys.executable, str(HERE/'client.py'), '--mode', 'chat', '--url', url,
                    '--ca-file', str(self.work/'ca.crt')]
+        if model is not None:
+            command += ['--model', model]
         with self.forward(True, port):
             existing_key = self.state['stack'].get('apiKeyFile')
             access = contextlib.nullcontext(existing_key) if existing_key else gateway_access.temporary_gateway_key(self, url)
@@ -766,6 +835,7 @@ class Recipe:
         self.stamp('gateway' if gateway else 'direct')
 
     def cleanup_key(self, port):
+        self.infrastructure_owner()
         self.bound_cluster()
         require(self.state.get('stack'), 'Attach to the stack first.')
         with self.forward(True, port):
@@ -773,6 +843,7 @@ class Recipe:
         print('Temporary gateway key cleanup completed.')
 
     def build_images(self, component=None, tag=None):
+        self.infrastructure_owner()
         self.source_check()
         try:
             run(['docker', 'info'], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
@@ -787,6 +858,7 @@ class Recipe:
             run(command+[str(self.source/COMPONENTS[name])])
 
     def export_images(self, component=None, tag=None):
+        self.infrastructure_owner()
         self.source_check()
         images = [self.image(name, tag) for name in ([component] if component else self.components())]
         fd, temporary = tempfile.mkstemp(prefix='.arm64-images-', suffix='.tar', dir=self.work)
@@ -804,6 +876,7 @@ class Recipe:
         return list(COMPONENTS)
 
     def import_images(self, archive, allow, component=None, tag=None):
+        self.infrastructure_owner()
         require(allow, 'Import requires --allow-containerd-import, which grants the Jobs access to node runtime sockets.')
         self.bound_cluster()
         import tarfile
@@ -917,6 +990,7 @@ finally:
         print('Images imported on:', ', '.join(nodes))
 
     def update(self, component, tag):
+        self.infrastructure_owner()
         self.bound_cluster()
         self.source_check()
         require(not self.state.get('attachedExisting') or self.state.get('gateway'), 'Verify GLM through the attached gateway before its first update.')
@@ -948,6 +1022,7 @@ finally:
         print('Update recorded:', path, 'Run verify-gateway next.')
 
     def rollback(self, result_file):
+        self.infrastructure_owner()
         self.bound_cluster()
         result = json.loads(pathlib.Path(result_file).read_text())
         require(all(result[k] == self.c[k] for k in ('context', 'namespace')) and result['release'] == self.stack, 'Rollback record belongs to another installation.')
@@ -999,7 +1074,7 @@ finally:
 
     def render(self):
         self.prepare()
-        renders = [('stack', self.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack', self.stack_values('a'*64, 'b'*64, 'offline-demo-ui-placeholder')),
+        renders = [] if self.c.get('externalStack') is not None else [('stack', self.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack', self.stack_values('a'*64, 'b'*64, 'offline-demo-ui-placeholder')),
                    ('operator', self.source/'deploy/helm/pylon-operator/pylon-operator', self.operator_values())]
         for phase in ('preflight', 'build', 'qualify', 'chain', 'download', 'serve'):
             renders.append(('glm-'+phase, HERE/'charts/gguf-backend', self.backend_values(phase, register=phase=='serve', render=True)))
@@ -1019,9 +1094,11 @@ def main(argv=None, console=None):
     parser.add_argument('--namespace', help='Select the namespace when the cluster has multiple installations.')
     parser.add_argument('--work-dir', type=pathlib.Path, help='Private local state directory; defaults to a per-context directory.')
     parser.add_argument('--source-dir', type=pathlib.Path, help='Existing source checkout; defaults to the checkout containing this script.')
-    parser.add_argument('phase', choices=['init', 'paths', 'context', 'prepare', 'render', 'inventory', 'attach-existing', 'build-images', 'push-images', 'export-images', 'import-images', 'stack', 'preflight', 'build-runtime', 'qualify', 'download', 'load', 'verify-direct', 'register', 'verify-gateway', 'chat', 'cleanup-key', 'update', 'rollback', 'recover'])
+    parser.add_argument('phase', choices=['init', 'paths', 'context', 'prepare', 'render', 'inventory', 'attach-existing', 'attach-stack', 'build-images', 'push-images', 'export-images', 'import-images', 'stack', 'preflight', 'build-runtime', 'qualify', 'download', 'load', 'verify-direct', 'register', 'verify-gateway', 'chat', 'cleanup-key', 'update', 'rollback', 'recover'])
     parser.add_argument('prompt', nargs='?', help='Prompt for the chat command.')
     parser.add_argument('--stream', action='store_true', help='Stream the chat response.')
+    parser.add_argument('--model', help='Served model ID for chat. Defaults to GLM-5.3-UD-IQ2_M.')
+    parser.add_argument('--stack-connection', type=pathlib.Path, help='Shared stack connection for attach-stack.')
     parser.add_argument('--component', choices=list(COMPONENTS))
     parser.add_argument('--tag')
     parser.add_argument('--archive', type=pathlib.Path)
@@ -1034,7 +1111,19 @@ def main(argv=None, console=None):
     if console:
         console.phase = args.phase
     require(args.phase == 'chat' or (args.prompt is None and not args.stream), 'Prompt and --stream are supported only for chat.')
+    require(args.model is None or args.phase == 'chat', '--model is supported only for chat.')
     require(not args.retry or args.phase == 'qualify', '--retry is supported only for qualify.')
+    require(args.stack_connection is None or args.phase == 'attach-stack', '--stack-connection is supported only for attach-stack.')
+    if args.phase == 'attach-stack':
+        require(args.config and args.work_dir and args.stack_connection, 'attach-stack requires --config, --work-dir and --stack-connection.')
+        connection = stack_binding.load_connection(args.stack_connection.expanduser().resolve())
+        require(not args.context or args.context == connection['context'], 'Selected context differs from the shared stack connection.')
+        require(not args.namespace or args.namespace == connection['namespace'], 'Selected namespace differs from the shared stack connection.')
+        config = stack_binding.overlay(json.loads(args.config.expanduser().read_text()), connection)
+        validate(config)
+        work = args.work_dir.expanduser().resolve()
+        action = lambda: Recipe(config, work, args.source_dir).attach_stack(work/'config.json')
+        return console.run(args.phase, work, action) if console else action()
     try:
         context, work, config_path, config = cli_settings(args)
     except ContextSelectionError as error:
@@ -1083,6 +1172,8 @@ def execute(args, parser, context, work, config_path, config):
         require(not (work/'state.json').exists(), 'Saved state is missing its configuration. Use a new work directory.')
         config = discover_config(context, args.namespace)
     recipe = Recipe(config, work, args.source_dir)
+    if args.phase in ('build-images', 'push-images', 'export-images', 'import-images', 'stack', 'cleanup-key', 'update', 'rollback', 'attach-existing'):
+        recipe.infrastructure_owner()
     if args.phase == 'prepare': recipe.prepare()
     elif args.phase == 'render': recipe.render()
     elif args.phase == 'inventory': recipe.inventory()
@@ -1109,7 +1200,7 @@ def execute(args, parser, context, work, config_path, config):
     elif args.phase == 'verify-direct': recipe.verify(False, args.port)
     elif args.phase == 'register': recipe.register()
     elif args.phase == 'verify-gateway': recipe.verify(True, args.port)
-    elif args.phase == 'chat': recipe.chat(args.prompt, args.stream, args.port)
+    elif args.phase == 'chat': recipe.chat(args.prompt, args.stream, args.port, model=args.model)
     elif args.phase == 'cleanup-key': recipe.cleanup_key(args.port)
     elif args.phase == 'update':
         require(args.component in ('gateway', 'router') and args.tag, 'Update requires --component gateway|router and --tag.')

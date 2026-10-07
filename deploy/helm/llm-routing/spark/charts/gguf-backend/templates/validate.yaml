@@ -1,0 +1,4 @@
+{{/* SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. */}}
+{{/* SPDX-License-Identifier: Apache-2.0 */}}
+{{- if not (kindIs "bool" .Values.suspended) }}{{ fail "suspended must be a boolean" }}{{ end -}}
+{{- if and .Values.suspended (ne .Values.phase "serve") }}{{ fail "suspended is supported only in phase serve" }}{{ end -}}

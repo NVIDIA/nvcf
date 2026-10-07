@@ -108,7 +108,7 @@ kind: Deployment
 metadata:
   name: {{ $.Release.Name }}-rpc-{{ $target.id }}
 spec:
-  replicas: {{ $.Values.rpc.replicas }}
+  replicas: {{ if $.Values.suspended }}0{{ else }}{{ $.Values.rpc.replicas }}{{ end }}
   strategy: {type: Recreate}
   selector:
     matchLabels: {app.kubernetes.io/instance: {{ $.Release.Name }}, app.kubernetes.io/component: rpc-{{ $target.id }}}
