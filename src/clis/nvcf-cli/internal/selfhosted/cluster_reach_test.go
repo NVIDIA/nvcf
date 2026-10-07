@@ -21,11 +21,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -219,4 +221,101 @@ func TestConnectCluster_CredentialPluginAgainstASilentServer(t *testing.T) {
 		assert.True(t, errors.As(err, &unreachable), "%s: %v", name, err)
 		assert.Less(t, time.Since(start), 5*time.Second, name)
 	}
+}
+
+// shortenFirstCallRetry makes the pause before the first call's retry short.
+func shortenFirstCallRetry(t *testing.T) {
+	t.Helper()
+	prev := firstCallRetryDelay
+	firstCallRetryDelay = 10 * time.Millisecond
+	t.Cleanup(func() { firstCallRetryDelay = prev })
+}
+
+// A server error on the first call, without a Retry-After for client-go to
+// honour, as from a load balancer while an API server rolls, gets one more
+// try. A second failure is still unreachable.
+func TestConnectCluster_RetriesAServerErrorOnce(t *testing.T) {
+	shortenFirstCallRetry(t)
+	for _, code := range []int{
+		http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout,
+	} {
+		for _, failures := range []int32{1, 2} {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if calls.Add(1) <= failures {
+					w.WriteHeader(code)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+			writeKubeconfig(t, srv.URL)
+			_, err := connectCluster(context.Background(), "test")
+			srv.Close()
+			var unreachable *ClusterUnreachableError
+			assert.Equal(t, failures > 1, errors.As(err, &unreachable), "%d x%d: %v", code, failures, err)
+			assert.EqualValues(t, 2, calls.Load(), "%d x%d", code, failures)
+		}
+	}
+}
+
+// A connection dropped on the first call is tried again, whether it drops
+// before the response or part way through its body.
+func TestConnectCluster_RetriesADroppedConnection(t *testing.T) {
+	shortenFirstCallRetry(t)
+	for name, drop := range map[string]func(net.Conn){
+		"closed": func(c net.Conn) { _ = c.Close() },
+		"reset": func(c net.Conn) {
+			_ = c.(*net.TCPConn).SetLinger(0)
+			_ = c.Close()
+		},
+		"closed in the body": func(c net.Conn) {
+			_, _ = c.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
+				"Content-Length: 100\r\n\r\n{\"major\""))
+			_ = c.Close()
+		},
+	} {
+		var calls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			if calls.Add(1) == 1 {
+				conn, _, err := http.NewResponseController(w).Hijack()
+				require.NoError(t, err)
+				drop(conn)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		writeKubeconfig(t, srv.URL)
+		_, err := connectCluster(context.Background(), "test")
+		srv.Close()
+		assert.NoError(t, err, name)
+		assert.EqualValues(t, 2, calls.Load(), name)
+	}
+}
+
+// A body that follows its headers, as an HTTP/1.1 server may send a 401, is
+// read within the first call's bound, before a credential plugin logs in
+// again: a login slower than the bound does not cut off the body and leave the
+// cluster unreachable.
+func TestConnectCluster_SlowReloginAfterADelayedRejectionBody(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer fresh" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		http.NewResponseController(w).Flush()
+		time.Sleep(50 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Unauthorized","code":401}`))
+	}))
+	t.Cleanup(srv.Close)
+	prev := clusterFirstCallTimeout
+	clusterFirstCallTimeout = 500 * time.Millisecond
+	t.Cleanup(func() { clusterFirstCallTimeout = prev })
+
+	writeKubeconfigFor(t, srv.URL, credentialPlugin(t,
+		`if [ -e "$0.ran" ]; then sleep 1; token=fresh; else : > "$0.ran"; token=stale; fi`))
+	_, err := connectCluster(context.Background(), "test")
+	assert.NoError(t, err)
 }

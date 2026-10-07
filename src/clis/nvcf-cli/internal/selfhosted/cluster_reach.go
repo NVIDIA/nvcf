@@ -18,7 +18,9 @@ limitations under the License.
 package selfhosted
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -53,11 +55,20 @@ func (e *ClusterUnreachableError) Unwrap() error { return e.Err }
 // cluster. A var so tests can shorten it.
 var clusterFirstCallTimeout = 15 * time.Second
 
+// firstCallRetryDelay is the pause before a first call that met a server error
+// is tried again. A var so tests can shorten it.
+var firstCallRetryDelay = time.Second
+
+// firstCallBodyLimit caps the body of a first-call response, which is read
+// within the call's bound. /version answers in well under a kilobyte.
+const firstCallBodyLimit = 1 << 20
+
 // connectCluster builds a client for kubeContext, its transport wrapped by
-// wraps, and makes its first API call. When that call fails, whatever the
-// error, the cluster is a ClusterUnreachableError, unless the run's own budget
-// ended or it was interrupted meanwhile: then the run, not the cluster, stopped
-// it, and the probe that follows reports that.
+// wraps, and makes its first API call. A rejected token or a server error gets
+// one more try. When the call still fails, whatever the error, the cluster is
+// a ClusterUnreachableError, unless the run's own budget ended or it was
+// interrupted meanwhile: then the run, not the cluster, stopped it, and the
+// probe that follows reports that.
 func connectCluster(
 	ctx context.Context, kubeContext string, wraps ...func(http.RoundTripper) http.RoundTripper,
 ) (kubernetes.Interface, error) {
@@ -74,15 +85,34 @@ func connectCluster(
 		return nil, &ClusterUnreachableError{Context: kubeContext, Err: fmt.Errorf("building kubernetes client: %w", err)}
 	}
 	err = firstClusterCall(ctx, client)
-	if apierrors.IsUnauthorized(err) && ctx.Err() == nil {
+	switch {
+	case ctx.Err() != nil:
+		// The run's budget ended or it was interrupted: not the cluster's doing.
+	case apierrors.IsUnauthorized(err):
 		// A credential plugin replaces a cached token the server rejected on
 		// the next call.
 		err = firstClusterCall(ctx, client)
+	case isServerError(err):
+		// client-go retries a server error only when it carries a
+		// Retry-After, and a load balancer in front of a rolling API server
+		// answers 502 or 503 without one. A connection dropped before the
+		// response, or part way through its body, client-go retries itself.
+		select {
+		case <-ctx.Done():
+		case <-time.After(firstCallRetryDelay):
+			err = firstClusterCall(ctx, client)
+		}
 	}
 	if err != nil && ctx.Err() == nil {
 		return nil, &ClusterUnreachableError{Context: kubeContext, Err: err}
 	}
 	return client, nil
+}
+
+// isServerError reports an API call the server answered with a 5xx status.
+func isServerError(err error) bool {
+	var status apierrors.APIStatus
+	return errors.As(err, &status) && status.Status().Code >= http.StatusInternalServerError
 }
 
 // firstClusterCall asks the server for its version, each round trip bounded
@@ -97,10 +127,11 @@ func firstClusterCall(ctx context.Context, client kubernetes.Interface) error {
 type firstCallBound struct{}
 
 // boundFirstCall wraps a client's transport to bound a round trip whose
-// context carries a firstCallBound. An exec or auth provider wraps the
-// transport outside it and fetches its credentials before the round trip, so
-// a login the operator is waiting on does not count, while an API server that
-// takes the connection and never answers still does.
+// context carries a firstCallBound, its body included. An exec or auth
+// provider wraps the transport outside it and fetches its credentials before
+// the round trip, and logs in again after a 401 once it returns, so a login
+// the operator is waiting on does not count, while an API server that takes
+// the connection and never answers still does.
 func boundFirstCall(rt http.RoundTripper) http.RoundTripper {
 	return boundedRoundTripper{next: rt}
 }
@@ -113,22 +144,22 @@ func (b boundedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 		return b.next.RoundTrip(req)
 	}
 	ctx, cancel := context.WithTimeout(req.Context(), bound)
+	defer cancel()
 	resp, err := b.next.RoundTrip(req.WithContext(ctx))
 	if err != nil {
-		cancel()
 		return nil, err
 	}
-	// The body is read after the round trip returns, within the same bound.
-	resp.Body = cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+	// Read within the round trip, the body is not cut off by the bound running
+	// out during a login after it, and a connection dropped part way through
+	// the body fails the round trip, which client-go retries.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, firstCallBodyLimit+1))
+	_ = resp.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > firstCallBodyLimit {
+		return nil, fmt.Errorf("response to %s is larger than %d bytes", req.URL.Path, firstCallBodyLimit)
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
 	return resp, nil
-}
-
-type cancelOnClose struct {
-	io.ReadCloser
-	cancel context.CancelFunc
-}
-
-func (c cancelOnClose) Close() error {
-	defer c.cancel()
-	return c.ReadCloser.Close()
 }
