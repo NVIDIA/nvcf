@@ -77,11 +77,14 @@ pub struct FleetRecord {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub status: Option<u16>,
-    /// `x-stargate-error-code`, a transport error, or `timeout`.
+    /// Failure kind: `x-stargate-error-code` or `http-<status>` for error
+    /// responses; `stream-error`, `incomplete`, or `invalid-sse` for a bad
+    /// stream; `timeout`, `connect`, `driver-nofile`, or `transport` for
+    /// client errors.
     pub error: Option<String>,
     /// Time from arrival to the first streamed `data:` event.
     pub ttft_us: Option<Micros>,
-    /// Time from arrival to the end of the response.
+    /// Time from arrival to the stream's `[DONE]` event.
     pub e2e_us: Option<Micros>,
     /// `x-stargate-cluster-id` of the backend that served the request.
     pub cluster_id: Option<String>,
@@ -101,6 +104,8 @@ struct Driver {
     args: DriveArgs,
     plan: WorkloadPlan,
     client: reqwest::Client,
+    /// Run label and region, which start every `x-request-id`.
+    request_prefix: String,
     /// The endpoint's chat completions URL.
     url: reqwest::Url,
     start: Instant,
@@ -131,7 +136,8 @@ pub async fn drive(args: DriveArgs) -> anyhow::Result<()> {
         bail!("endpoint {} must not have a path or query", args.endpoint);
     }
     let url = endpoint.join("v1/chat/completions")?;
-    HeaderValue::from_str(&format!("{}-{}", args.run_label, args.region))
+    let request_prefix = format!("{}-{}", args.run_label, args.region);
+    HeaderValue::from_str(&request_prefix)
         .context("run label and region must be valid header values")?;
     let client = reqwest::Client::builder()
         .default_headers(run_headers(&args)?)
@@ -160,6 +166,7 @@ pub async fn drive(args: DriveArgs) -> anyhow::Result<()> {
     let start = wait_for_start(args.start_at_unix_ms).await?;
     let driver = Arc::new(Driver {
         client,
+        request_prefix,
         url,
         start,
         records,
@@ -168,7 +175,8 @@ pub async fn drive(args: DriveArgs) -> anyhow::Result<()> {
         plan,
         args,
     });
-    // Spawn each request at its arrival so pending requests hold no task.
+    // Spawn each session's first request at its arrival so sessions that have
+    // not started hold no task.
     for request in driver
         .plan
         .requests
@@ -224,6 +232,11 @@ async fn wait_for_start(start_at_unix_ms: u64) -> anyhow::Result<Instant> {
     let start_at = u128::from(start_at_unix_ms);
     if start_at + 1000 < now_ms {
         bail!("start time {start_at_unix_ms} is already in the past");
+    }
+    if start_at > now_ms + 3_600_000 {
+        bail!(
+            "start time {start_at_unix_ms} is more than an hour away; expected Unix milliseconds"
+        );
     }
     let now = Instant::now();
     // A start up to one second late keeps the shared start instant, so this
@@ -311,9 +324,8 @@ impl Driver {
         // Fixed sessions repeat session, turn, and attempt, so a sequence
         // number keeps IDs unique; Pylon tracks live requests by ID.
         let request_id = format!(
-            "{}-{}-{}-s{}-t{}-a{}",
-            args.run_label,
-            args.region,
+            "{}-{}-s{}-t{}-a{}",
+            self.request_prefix,
             self.sent.fetch_add(1, Ordering::Relaxed),
             request.session,
             request.turn,
@@ -385,7 +397,6 @@ impl Driver {
         }
         let mut body = response.bytes_stream();
         let mut events = SseDecoder::new();
-        let mut done = false;
         while let Some(chunk) = body.next().await {
             let mut chunk = match chunk {
                 Ok(chunk) => chunk,
@@ -412,14 +423,16 @@ impl Driver {
                     record.error = Some("stream-error".to_string());
                     return record;
                 }
-                done |= event.data.trim() == "[DONE]";
+                if event.data.trim() == "[DONE]" {
+                    record.e2e_us = Some(self.now().saturating_sub(at));
+                    // Read the end of the body so the connection returns to
+                    // the pool.
+                    while let Some(Ok(_)) = body.next().await {}
+                    return record;
+                }
             }
         }
-        if done {
-            record.e2e_us = Some(self.now().saturating_sub(at));
-        } else {
-            record.error = Some("incomplete".to_string());
-        }
+        record.error = Some("incomplete".to_string());
         record
     }
 }
@@ -434,7 +447,16 @@ fn is_error_event(event: &MessageEvent) -> bool {
 }
 
 fn transport_error(error: &reqwest::Error) -> String {
-    if error.is_timeout() {
+    // EMFILE or ENFILE: the driver host ran out of file descriptors, which
+    // is not a fleet failure.
+    let out_of_files = std::iter::successors(Some(error as &dyn std::error::Error), |error| {
+        error.source()
+    })
+    .filter_map(|error| error.downcast_ref::<std::io::Error>())
+    .any(|error| matches!(error.raw_os_error(), Some(23 | 24)));
+    if out_of_files {
+        "driver-nofile".to_string()
+    } else if error.is_timeout() {
         "timeout".to_string()
     } else if error.is_connect() {
         "connect".to_string()
@@ -479,13 +501,13 @@ mod tests {
                 "queue_mismatch": {"enabled": false, "min_delta_ms": 25, "tolerance_factor": 1.25}
             },
             "stargate": {"max_request_retries": 2, "routing_key": "rk", "model_id": "m"},
-            "client": {"request_slo_ms": 1000, "max_wait_ms": 1000, "timeout_ms": 2000, "ttft_slo_ms": 1000},
+            "client": {"request_slo_ms": 1000, "max_wait_ms": 1000, "timeout_ms": 300, "ttft_slo_ms": 1000},
             "workload": {
-                "rates_rps": [20.0], "warmup_s": 0.0, "measure_s": 1.0,
+                "rates_rps": [20.0], "warmup_s": 0.0, "measure_s": 2.0,
                 "growing": {
                     "system_prompt_tokens": 100, "user_tokens_min": 10, "user_tokens_max": 20,
                     "output_tokens_min": 2, "output_tokens_max": 4,
-                    "turns_min": 3, "turns_max": 3, "think_time_mean_s": 0.0,
+                    "turns_min": 4, "turns_max": 4, "think_time_mean_s": 0.0,
                     "max_context_tokens": 10000, "max_turn_attempts": 2, "retry_backoff_s": 0.01
                 }
             },
@@ -526,45 +548,55 @@ mod tests {
 
     #[derive(Default)]
     struct Seen {
-        request_ids: Mutex<Vec<String>>,
+        headers: Mutex<Vec<HeaderMap>>,
     }
 
-    /// Fails turn 1's first attempt with 503 and both attempts of turn 2
-    /// in-stream, first with an error event and then by ending before
-    /// `[DONE]`. Other requests stream two events.
+    /// Fails turn 1's first attempt with 503, turn 2's first attempt with an
+    /// in-stream error event, and both attempts of turn 3, first by stalling
+    /// past the client timeout and then by ending before `[DONE]`.
     async fn stargate(seen: Arc<Seen>, headers: HeaderMap) -> Response<Body> {
-        let header = |name: &str| headers[name].to_str().unwrap().to_string();
-        assert!(header("x-input-tokens").parse::<u64>().unwrap() >= 110);
-        assert!(header("x-output-tokens").parse::<u64>().unwrap() >= 2);
-        assert!(header("x-cache-affinity-key").starts_with("run-1-session-"));
-        assert_eq!(header("x-routing-method"), "round-robin");
-        assert_eq!(header("authorization"), "Bearer client-token");
-        let request_id = header("x-request-id");
-        assert!(request_id.starts_with("run-1-a-"));
-        seen.request_ids.lock().unwrap().push(request_id.clone());
-        if request_id.contains("-t1-a0") {
+        let request_id = headers["x-request-id"].to_str().unwrap().to_string();
+        seen.headers.lock().unwrap().push(headers);
+        if request_id.ends_with("-t1-a0") {
             return Response::builder()
                 .status(StatusCode::SERVICE_UNAVAILABLE)
                 .header("x-stargate-error-code", "overloaded_error")
                 .body(Body::empty())
                 .unwrap();
         }
-        let last = if request_id.ends_with("-t2-a0") {
-            "data: {\"error\":{\"message\":\"engine failed\"}}\n\n"
-        } else if request_id.ends_with("-t2-a1") {
-            ""
+        let first = futures::stream::iter([Ok::<_, std::convert::Infallible>(
+            ": keep-alive\n\ndata: {}\n\n",
+        )]);
+        let rest = if request_id.ends_with("-t3-a0") {
+            futures::stream::pending().boxed()
+        } else if request_id.ends_with("-t2-a0") {
+            futures::stream::iter([Ok("data: {\"error\":{\"message\":\"engine failed\"}}\n\n")])
+                .boxed()
+        } else if request_id.ends_with("-t3-a1") {
+            futures::stream::empty().boxed()
         } else {
-            "data: [DONE]\n\n"
+            futures::stream::iter([Ok("data: [DONE]\n\n")]).boxed()
         };
-        let chunks = futures::stream::iter([
-            Ok::<_, std::convert::Infallible>(": keep-alive\n\ndata: {}\n\n"),
-            Ok(last),
-        ]);
         Response::builder()
             .header("x-stargate-cluster-id", "backend-a")
             .header("x-kv-cache-reused-input-tokens", "100")
-            .body(Body::from_stream(chunks))
+            .body(Body::from_stream(first.chain(rest)))
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn start_time_must_be_unix_milliseconds_in_the_next_hour() {
+        let now_ms = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+        )
+        .unwrap();
+        for (start_at, message) in [(now_ms / 1000, "past"), (now_ms * 1000, "hour")] {
+            let error = wait_for_start(start_at).await.expect_err(message);
+            assert!(error.to_string().contains(message), "{error}");
+        }
     }
 
     #[tokio::test]
@@ -631,7 +663,21 @@ mod tests {
             .map(|record| record.request_id.as_str())
             .collect();
         assert_eq!(request_ids.len(), written.len(), "request IDs are unique");
-        assert_eq!(seen.request_ids.lock().unwrap().len(), written.len());
+        let sent = std::mem::take(&mut *seen.headers.lock().unwrap());
+        assert_eq!(sent.len(), written.len());
+        for headers in &sent {
+            let header = |name: &str| headers[name].to_str().unwrap();
+            assert_eq!(header("x-model"), "m");
+            assert_eq!(header("x-routing-key"), "rk");
+            assert_eq!(header("x-request-slo-ms"), "1000");
+            assert_eq!(header("x-max-wait-ms"), "1000");
+            assert_eq!(header("x-routing-method"), "round-robin");
+            assert_eq!(header("authorization"), "Bearer client-token");
+            assert!(header("x-request-id").starts_with("run-1-a-"));
+            assert!(header("x-cache-affinity-key").starts_with("run-1-session-"));
+            assert!(header("x-input-tokens").parse::<u64>().unwrap() >= 110);
+            assert!(header("x-output-tokens").parse::<u64>().unwrap() >= 2);
+        }
         let mut complete_sessions = 0;
         for session in sessions {
             let mut turns: Vec<&FleetRecord> = written
@@ -650,7 +696,9 @@ mod tests {
                 (1, 0, false),
                 (1, 1, true),
                 (2, 0, false),
-                (2, 1, false),
+                (2, 1, true),
+                (3, 0, false),
+                (3, 1, false),
             ];
             assert_eq!(
                 outcomes[..],
@@ -679,6 +727,7 @@ mod tests {
             let expected = [
                 (Some(503), Some("overloaded_error"), false),
                 (Some(200), Some("stream-error"), false),
+                (Some(200), Some("timeout"), false),
                 (Some(200), Some("incomplete"), true),
             ];
             assert_eq!(

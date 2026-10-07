@@ -54,6 +54,11 @@ stargate-routing-sim drive --config bench.json --region usw2 \
   --start-at-unix-ms "$START_MS" --records usw2.jsonl
 ```
 
+Each in-flight request holds a connection, so raise the driver's open-file
+limit (`ulimit -n`) for high rates. Running out of descriptors is recorded as
+`driver-nofile`, not as a fleet failure. A request succeeds only when its
+stream reaches `[DONE]`.
+
 Then summarize all regions' records with the same measurement window and
 TTFT SLO as the simulator. The optional `--backend-gpus` file is a JSON object
 that maps backend cluster IDs to GPU worker counts, for example
