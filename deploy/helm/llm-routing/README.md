@@ -139,11 +139,12 @@ Tested in October 2026 with Pi 1.0.4 and Codex 0.161.0 against `glm-5.3` on one 
 
 ### Open the gateway
 
-From `deploy/helm/llm-routing/recipes`, find the work directory, then keep a port-forward running in its own terminal. Use the namespace from your configuration; `llm-routing-poc` is the default.
+From `deploy/helm/llm-routing/recipes`, find the work directory, then keep a port-forward running in its own terminal. Set `NAMESPACE` to the `namespace` in your configuration; `llm-routing-poc` is the default.
 
 ```bash
 python3 recipe.py paths
-kubectl --context "$(python3 recipe.py context)" -n llm-routing-poc port-forward svc/llm-api-gateway 18443:8080 --address 127.0.0.1
+NAMESPACE=llm-routing-poc
+kubectl --context "$(python3 recipe.py context)" -n "$NAMESPACE" port-forward svc/llm-api-gateway 18443:8080 --address 127.0.0.1
 ```
 
 `stack` saved the gateway CA as `ca.crt` in the work directory. It saved the caller API key there as `api-key`, unless the configuration sets `apiKeyFile`; then the key is in that file. A work directory created with `attach-existing` has `ca.crt` but no `api-key`; use the key file from the work directory that ran `stack`.
