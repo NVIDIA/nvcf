@@ -153,9 +153,9 @@ struct Args {
     /// Engine timing model. Defaults to `batched` with --profile and `legacy` otherwise
     #[arg(long, value_enum, value_name = "MODEL")]
     engine_model: Option<EngineModel>,
-    /// Batched engine: inference workers (GPUs) in this deployment
-    #[arg(long, default_value_t = 1, value_name = "N")]
-    num_gpu_workers: usize,
+    /// Batched engine: inference workers (GPUs) in this deployment [default: 1]
+    #[arg(long, value_name = "N")]
+    num_gpu_workers: Option<usize>,
     /// Batched engine: maximum running sequences per worker
     #[arg(long, value_name = "N")]
     max_num_seqs: Option<usize>,
@@ -287,9 +287,20 @@ impl Args {
             EngineModel::Legacy
         });
         if model == EngineModel::Legacy {
+            anyhow::ensure!(
+                self.num_gpu_workers.is_none()
+                    && self.max_num_seqs.is_none()
+                    && self.max_batched_tokens.is_none()
+                    && self.step_fixed_ms.is_none()
+                    && self.step_decode_ms_per_seq.is_none()
+                    && self.step_prefill_ms_per_token.is_none(),
+                "--num-gpu-workers, --max-num-seqs, --max-batched-tokens, and --step-* flags \
+                 apply only to the batched engine model"
+            );
             return Ok(None);
         }
-        let mut config = mock_engine::EngineConfig::h100_llama_3_1_8b(self.num_gpu_workers);
+        let mut config =
+            mock_engine::EngineConfig::h100_llama_3_1_8b(self.num_gpu_workers.unwrap_or(1));
         if self.kv_cache_capacity_tokens > 0 {
             config.kv_cache_capacity_tokens = self.kv_cache_capacity_tokens;
         }

@@ -1327,6 +1327,13 @@ fn profile_defaults_to_the_batched_engine_with_configurable_workers() {
             .unwrap()
             .is_none()
     );
+    assert!(
+        Args::try_parse_from(["mock-dynamo", "--num-gpu-workers", "4"])
+            .unwrap()
+            .engine_config()
+            .is_err(),
+        "batched-only flags must not be ignored by the legacy model"
+    );
 }
 
 #[test]
