@@ -19,6 +19,10 @@ User has a working NVCF control plane (running somewhere) and wants to register 
    - `--kube-context=<context>`: the new GPU cluster's kubectl context
    - `--icms-url=<https://icms.nvcf.example.com>` — control plane's public ICMS URL
    - GPU type? (default `H100`, but ask)
+   - Optional, for the pre-flight in step 2: the control-plane cluster's
+     kubectl context (`$CP_CTX`) and the `--env` the control plane was
+     installed with (`$CP_ENV`). Without either, use the `--compute-plane`
+     fallback in step 2.
 
 2. Pre-flight the new compute plane as not yet installed. With a kubectl
    context for the control-plane cluster as well, `check --pre
@@ -44,8 +48,9 @@ User has a working NVCF control plane (running somewhere) and wants to register 
    `NGC_API_KEY` works. A missing `helm`, `helmfile` or `kubectl` fails it
    too. SIS reachability is not probed before install.
 
-   Without a context for the control-plane cluster, check the new cluster
-   alone with `--compute-plane`. `check` takes both context flags or neither
+   Without a context for the control-plane cluster, or without the `--env`
+   it was installed with, check the new cluster alone with
+   `--compute-plane`. `check` takes both context flags or neither
    and has no `--kubeconfig` flag, so give it, through `KUBECONFIG` for this
    command only, a temporary kubeconfig holding just the new GPU cluster's
    context. The current context of the user's kubeconfig stays as it was:
