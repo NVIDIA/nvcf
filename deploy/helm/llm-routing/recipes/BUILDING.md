@@ -19,12 +19,11 @@ Distribute the archives and catalog to the installer. Installation uses Helm and
 Run this developer prerequisite from `deploy/helm/llm-routing` before the target namespace exists:
 
 ```bash
-export LLM_ROUTING_CONTEXT=YOUR_CONTEXT
-python3 build-shared-images.py --context "$LLM_ROUTING_CONTEXT" \
+python3 build-shared-images.py \
   --namespace llm-stack --output-dir /tmp/llm-images --allow-containerd-import
 ```
 
-The command builds and exports the four images, preloads every compatible node, and writes `/tmp/llm-images/shared.values.yaml` for the [Helm installation](../README.md). Docker must be running with Buildx support for the selected architecture and access to base images and build dependencies. Use `--control-node NODE` to select the build architecture. ARM64 and AMD64 are supported.
+The command resolves the current kubeconfig context once, builds and exports the four images, preloads every compatible node, and writes `/tmp/llm-images/shared.values.yaml` for the [Helm installation](../README.md). Docker must be running with Buildx support for the selected architecture and access to base images and build dependencies. Use `--context NAME` to choose another context and `--control-node NODE` to select the build architecture. ARM64 and AMD64 are supported.
 
 The saved configuration keeps fresh image tags and node UIDs stable on retry. The emitted values select that architecture and use `Never` pull policy. Existing unrelated output files are preserved. This command prepares a fresh stack namespace. Existing combined installations can use the component rebuild commands below with their saved configuration.
 

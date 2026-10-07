@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 import os
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -32,6 +33,8 @@ class DeveloperImagesTests(unittest.TestCase):
         self.get = self.enterContext(patch.object(images.stack, 'get', return_value={'items': []}))
         self.prepare = self.enterContext(patch.object(images.stack, 'prepare_images', return_value={'completed': True}))
         self.install = self.enterContext(patch.object(images.stack, 'Stack', side_effect=AssertionError('Shared installation must not run')))
+        self.current = self.enterContext(patch.object(images.subprocess, 'check_output', return_value='test-context\n'))
+        self.enterContext(patch.dict(os.environ, {}, clear=True))
         self.enterContext(patch('builtins.print'))
 
     def test_prepares_images_and_values_without_installing_shared_resources(self):
@@ -79,10 +82,51 @@ class DeveloperImagesTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
         self.prepare.assert_not_called()
 
-    def test_context_and_containerd_authorization_are_explicit(self):
-        with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(ValueError, 'Set --context'):
-                images.main(self.args[2:])
+    def test_explicit_context_overrides_environment_and_skips_current_lookup(self):
+        with patch.dict(os.environ, {'LLM_ROUTING_CONTEXT': 'other-context'}):
+            images.main(self.args)
+        self.current.assert_not_called()
+        self.discover.assert_called_once_with('test-context', 'test-models', None, build_images=True)
+
+    def test_stale_legacy_environment_does_not_override_current_context(self):
+        with patch.dict(os.environ, {'LLM_ROUTING_CONTEXT': 'stale-context'}):
+            images.main(self.args[2:])
+        self.current.assert_called_once()
+        self.discover.assert_called_once_with('test-context', 'test-models', None, build_images=True)
+
+    def test_current_context_is_captured_once_and_used_for_all_operations(self):
+        self.current.side_effect = ['test-context\n', 'changed-context\n']
+        images.main(self.args[2:])
+        self.current.assert_called_once_with(['kubectl', 'config', 'current-context'],
+                                            text=True, stderr=subprocess.PIPE, timeout=30)
+        self.discover.assert_called_once_with('test-context', 'test-models', None, build_images=True)
+        self.assertEqual(self.get.call_args.args[0]['context'], 'test-context')
+        self.assertEqual(self.prepare.call_args.args[0]['context'], 'test-context')
+        saved = json.loads((self.output/'image-build-config.json').read_text())
+        self.assertEqual(saved['config']['context'], 'test-context')
+
+    def test_missing_current_context_fails_before_cluster_access_or_files(self):
+        self.current.return_value = '  \n'
+        with self.assertRaisesRegex(ValueError, 'No valid Kubernetes context'):
+            images.main(self.args[2:])
+        self.discover.assert_not_called()
+        self.get.assert_not_called()
+        self.prepare.assert_not_called()
+        self.assertFalse(self.output.exists())
+
+    def test_current_context_command_errors_fail_before_mutations(self):
+        for error in (FileNotFoundError('kubectl'), subprocess.CalledProcessError(1, 'kubectl'),
+                      subprocess.TimeoutExpired('kubectl', 30)):
+            with self.subTest(error=type(error).__name__):
+                self.current.side_effect = error
+                with self.assertRaisesRegex(ValueError, 'Could not read the current kubectl context'):
+                    images.main(self.args[2:])
+        self.discover.assert_not_called()
+        self.get.assert_not_called()
+        self.prepare.assert_not_called()
+        self.assertFalse(self.output.exists())
+
+    def test_containerd_authorization_is_required(self):
         with self.assertRaisesRegex(ValueError, '--allow-containerd-import'):
             images.main(self.args[:-1])
         self.discover.assert_not_called()

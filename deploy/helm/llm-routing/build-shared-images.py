@@ -33,10 +33,21 @@ def write_new(path, value):
         stream.write(json.dumps(value, indent=2) + '\n')
 
 
+def selected_context(override):
+    context = override
+    if context is None:
+        try:
+            context = subprocess.check_output(['kubectl', 'config', 'current-context'],
+                                              text=True, stderr=subprocess.PIPE, timeout=30).strip()
+        except (OSError, subprocess.SubprocessError) as error:
+            raise ValueError('Could not read the current kubectl context. Select one with kubectl config use-context NAME, or pass --context.') from error
+    stack.require(isinstance(context, str) and context.strip() and not context.strip().startswith('-'),
+                  'No valid Kubernetes context is selected. Select one with kubectl config use-context NAME, or pass --context.')
+    return context.strip()
+
+
 def prepare(args):
-    context = args.context or os.environ.get('LLM_ROUTING_CONTEXT')
-    stack.require(isinstance(context, str) and context.strip() and not context.startswith('-'),
-                  'Set --context or LLM_ROUTING_CONTEXT. The current kubectl context is not selected automatically.')
+    context = selected_context(args.context)
     stack.require(stack.dns(args.namespace), 'Set a DNS label for --namespace.')
     stack.require(args.allow_containerd_import, 'Use --allow-containerd-import to build and preload images on the selected nodes.')
     output = args.output_dir.expanduser().resolve()
@@ -79,7 +90,7 @@ def prepare(args):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--context')
+    parser.add_argument('--context', help='Override the current kubectl context.')
     parser.add_argument('--namespace', default='llm-stack')
     parser.add_argument('--control-node')
     parser.add_argument('--output-dir', type=Path, required=True)

@@ -537,8 +537,32 @@
               "performanceBenchmarked": false,
               "qualityEvaluated": false
             },
-            "automaticHelmStatus": "pending",
-            "automaticHelmWorkload": null
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-07",
+              "profile": "spark-nvfp4",
+              "modelRevision": "482ca0f3832238542f8f5295dde86b5f22711d80",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "cacheMode": "retained-offline",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication",
+                "other-model-isolation",
+                "original-release-restoration"
+              ]
+            }
           },
           "deployment": {
             "chart": {

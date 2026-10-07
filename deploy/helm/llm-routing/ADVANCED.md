@@ -2,7 +2,7 @@
 
 ## Helm configuration
 
-The [main guide](README.md) uses local chart archives and an explicit values file. Build these archives with [package-charts.sh](package-charts.sh). A chart source directory can also be installed after its local dependencies are built.
+The [main guide](README.md) uses local chart archives and an explicit values file. Build these archives with [package-charts.sh](package-charts.sh). A chart source directory can also be installed after its local dependencies are built. Helm and kubectl use your current kubeconfig context. Use their `--kube-context` and `--context` flags for an explicit override.
 
 Use [shared-stack/values.local.example.yaml](charts/shared-stack/values.local.example.yaml) as a template for existing preloaded images. Replace the four image references with your node cache or registry references and set the operator watch namespace to the installation namespace. Set `operator.installCRDs: true` for the first CRD owner, or `false` to reuse an installed compatible CRD. Each shared stack watches its own namespace.
 
@@ -25,9 +25,9 @@ Select the node holding that PVC. The chart mounts it and preserves its existing
 Inspect startup and readiness:
 
 ```bash
-kubectl --context "$LLM_ROUTING_CONTEXT" -n llm-stack get pods,inferenceendpoints
-kubectl --context "$LLM_ROUTING_CONTEXT" -n llm-stack logs deployment/qwen-fp8-serve-0 -c placement-check
-kubectl --context "$LLM_ROUTING_CONTEXT" -n llm-stack logs deployment/qwen-fp8-serve-0 -c sglang
+kubectl -n llm-stack get pods,inferenceendpoints
+kubectl -n llm-stack logs deployment/qwen-fp8-serve-0 -c placement-check
+kubectl -n llm-stack logs deployment/qwen-fp8-serve-0 -c sglang
 ```
 
 Correct the values and rerun the original Helm command. Set `suspended: true` in the model values to release its GPUs while retaining cache claims. Set it back to `false` and rerun Helm to resume. Automatic recipes withdraw their endpoint while suspended and restore it on resume. The shared release and other models continue serving. `helm uninstall` removes model-owned workloads and endpoint resources while retaining model PVCs.
@@ -49,7 +49,7 @@ Install it with the shared stack already running:
 
 ```bash
 helm upgrade --install glm "$LLM_CHARTS/pylon-gguf-backend-0.2.0.tgz" \
-  --kube-context "$LLM_ROUTING_CONTEXT" --namespace llm-stack \
+  --namespace llm-stack \
   --values /tmp/llm-images/glm.values.yaml --wait --timeout 120m
 ```
 
