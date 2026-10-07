@@ -67,6 +67,7 @@ go_test(
         "clustervalidator_lifecycle_test.go",
         "clustervalidator_ownership_test.go",
         "clustervalidator_test.go",
+        "credential_scope_test.go",
         "credhelper_test.go",
         "inotify_probe_test.go",
         "main_test.go",

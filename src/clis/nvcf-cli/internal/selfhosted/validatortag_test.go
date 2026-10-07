@@ -261,7 +261,7 @@ func TestNGCCredentials_EnvFallback(t *testing.T) {
 	t.Setenv("NGC_API_KEY", "from-env")
 
 	for _, prefer := range []bool{true, false} {
-		cred, ok, err := NewRegistryCredentials(prefer).lookup(context.Background(), "nvcr.io")
+		cred, ok, err := readCredential(context.Background(), NewRegistryCredentials(prefer), "nvcr.io")
 		require.NoError(t, err)
 		require.True(t, ok)
 		assert.Equal(t, "$oauthtoken", cred.user)
@@ -292,7 +292,7 @@ func TestCredentialsForRegistry_NGCKeyOnlyForNvcrIO(t *testing.T) {
 		"example.nvcr.io":                  "own-login",
 		"registry.example.nvidia.com:5000": "own-login",
 	} {
-		cred, ok, _ := NewRegistryCredentials(true).lookup(context.Background(), host)
+		cred, ok, _ := readCredential(context.Background(), NewRegistryCredentials(true), host)
 		require.True(t, ok, host)
 		assert.Equal(t, wantPass, cred.pass, host)
 	}
@@ -487,7 +487,7 @@ func TestExchangeBearerToken_DockerHubDelegatedRealm(t *testing.T) {
 		`scope="repository:library/ubuntu:pull"`
 	// The credential comes from the run's lookup, which must not hand the NGC
 	// key to Docker Hub.
-	cred, ok, _ := NewRegistryCredentials(true).lookup(context.Background(), "registry-1.docker.io")
+	cred, ok, _ := readCredential(context.Background(), NewRegistryCredentials(true), "registry-1.docker.io")
 	var sent *registryCredential
 	if ok {
 		sent = &cred

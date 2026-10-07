@@ -156,9 +156,8 @@ func isRepositoryPath(s string) bool {
 }
 
 // fetchValidatorTags walks the OCI tag-list endpoint for a single repo.
-// Handles the standard Bearer token exchange: try anonymous, on 401 re-auth
-// with the run's local credential for the registry, and with the NGC key when
-// nvcr.io rejects the docker login.
+// Handles the standard Bearer token exchange: try anonymous, then on 401
+// re-auth with the credential the run settled for the repository.
 func fetchValidatorTags(ctx context.Context, registry, repo string) ([]string, error) {
 	tagsURL := fmt.Sprintf("https://%s/v2/%s/tags/list", registry, repo)
 	body, err := fetchWithBearer(ctx, tagsURL, registry, repo)
@@ -175,10 +174,10 @@ func fetchValidatorTags(ctx context.Context, registry, repo string) ([]string, e
 }
 
 // fetchWithBearer GETs rawURL, anonymously first and, on a 401, with a Bearer
-// token for the run's local credential. Its registry round trips share
-// validatorTagFetchTimeout. Reading the credential does not spend it: a helper
-// waiting on a keychain prompt or a pinentry is bounded on its own, and the
-// NGC key it gives way to must still have time to reach the registry.
+// token for the credential the run settled for repo. Its registry round trips
+// share validatorTagFetchTimeout. Reading the credential does not spend it: a
+// helper waiting on a keychain prompt or a pinentry is bounded on its own, and
+// the NGC key it gives way to must still have time to reach the registry.
 func fetchWithBearer(ctx context.Context, rawURL, registry, repo string) ([]byte, error) {
 	client := newRegistryHTTPClient(validatorTagFetchTimeout)
 	start := time.Now()
@@ -205,20 +204,17 @@ func fetchWithBearer(ctx context.Context, rawURL, registry, repo string) ([]byte
 	resp.Body.Close()
 	spent := time.Since(start)
 
+	// The read runs outside the budget; settling the scope, a registry round
+	// trip, runs inside it.
 	creds := registryCredentialsFrom(ctx)
-	cred, hasCred, _ := creds.lookup(ctx, registry)
+	creds.read(ctx, registry)
 	authCtx, cancelAuth := context.WithTimeout(ctx, validatorTagFetchTimeout-spent)
 	defer cancelAuth()
 	var credential *registryCredential
-	if hasCred {
-		credential = &cred
+	if settled := creds.lookupChallenged(authCtx, registry, repo, wwwAuth); settled.ok {
+		credential = &settled.cred
 	}
 	token, err := exchangeBearerToken(authCtx, client, registry, repo, wwwAuth, credential)
-	if hasCred && isRejectedExchange(err) {
-		if next, ok := creds.rejected(registry, cred); ok {
-			token, err = exchangeBearerToken(authCtx, client, registry, repo, wwwAuth, &next)
-		}
-	}
 	if err != nil {
 		return nil, err
 	}

@@ -176,11 +176,12 @@ func resolveValidatorPullSecret(
 			registry, src.Namespace, src.Name, clusterValidatorNamespace, runName), nil
 	}
 
-	cred, ok, lookupErr := registryCredentialsFrom(ctx).lookup(ctx, registry)
-	if !ok {
-		if lookupErr != nil {
+	settled := registryCredentialsFrom(ctx).lookup(ctx, registry, repo)
+	cred := settled.cred
+	if !settled.ok {
+		if settled.err != nil {
 			return "", "", fmt.Errorf("no pull secret for %s in the cluster, and reading this machine's "+
-				"credential failed: %w", registry, lookupErr)
+				"credential failed: %w", registry, settled.err)
 		}
 		return "", "", nil
 	}

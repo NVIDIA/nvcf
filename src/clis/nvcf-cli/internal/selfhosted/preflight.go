@@ -1193,7 +1193,7 @@ func registryCredentialCheck(
 				r.Passed = true
 				r.Severity = SeverityInfo
 				r.Message = label + ": skipped (" + outcome.detail + ")"
-			case probeAnonymous, probeNotVerified, probeLoginRejected:
+			case probeAnonymous, probeNotVerified, probeLoginRejected, probeOtherCredential:
 				r.Passed = true
 				r.Severity = SeverityInfo
 			case probeNoCredential, probeUnverifiable:

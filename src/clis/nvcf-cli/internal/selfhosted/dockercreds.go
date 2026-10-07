@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,36 +65,67 @@ type registryCredential struct {
 }
 
 // RegistryCredentials resolves the local credential for a registry the way
-// docker does, once per registry per run. The credential probe, tag discovery
-// and the validator's pull secret all read it, so the credential the local
-// row checks is the one the validator Job is given.
+// docker does, once per registry per run, and settles which credential the run
+// uses for each repository scope on it. The credential probe, tag discovery
+// and the validator's pull secret all read the settled one, so the credential
+// the local row checks is the one the validator Job is given.
 type RegistryCredentials struct {
 	// preferNGCKey puts the NGC API key ahead of the docker config for
 	// nvcr.io. That is right only where up mints its pull secrets from the
 	// key; anywhere else the docker login is what docker and the cluster use,
-	// and the key is sent only when there is no login or the registry
-	// rejects it.
+	// and the key is sent for a scope only when there is no login, or the
+	// registry rejects the login or gives it no access to that scope.
 	preferNGCKey bool
 
-	mu    sync.Mutex
-	cache map[string]credentialLookup
+	mu     sync.Mutex
+	cache  map[string]credentialLookup
+	scopes map[credentialScope]*scopeSettlement
 }
 
 type credentialLookup struct {
 	cred registryCredential
 	ok   bool
 	err  error
-	// fallback is the credential to send once the registry rejects cred:
-	// the NGC key behind a docker login for nvcr.io.
+	// fallback is the credential that may take cred's place for a scope: the
+	// NGC key behind a docker login for nvcr.io.
 	fallback *registryCredential
-	// rejectedLogin is the source of the docker login the registry rejected
-	// before cred, the fallback, took its place.
-	rejectedLogin string
+}
+
+// credentialScope is one repository scope on a registry. nvcr.io entitles a
+// credential per org and team, so a docker login and the NGC key can each
+// reach a scope the other cannot.
+type credentialScope struct{ registry, repo string }
+
+// scopeSettlement holds one scope's settled credential. lock admits one
+// caller at a time, so the callers that arrive while it settles wait for its
+// result instead of each probing the registry.
+type scopeSettlement struct {
+	lock    chan struct{}
+	settled bool
+	result  settledCredential
+}
+
+// settledCredential is the credential the run uses for one repository scope.
+type settledCredential struct {
+	cred registryCredential
+	ok   bool
+	err  error
+	// rejectedLogin is the docker login the registry answered 401 for this
+	// scope, before the NGC key took its place.
+	rejectedLogin *registryCredential
+	// noAccessLogin is a docker login the registry gave no access to this
+	// scope, a 403, before the NGC key took its place. Its access, not the
+	// login itself, is what the registry refused.
+	noAccessLogin *registryCredential
+	// fallbackFailure says why the NGC key, tried for a scope the docker
+	// login had no access to, did not take its place.
+	fallbackFailure string
 }
 
 // NewRegistryCredentials returns a per-run credential resolver.
 func NewRegistryCredentials(preferNGCKey bool) *RegistryCredentials {
-	return &RegistryCredentials{preferNGCKey: preferNGCKey, cache: map[string]credentialLookup{}}
+	return &RegistryCredentials{preferNGCKey: preferNGCKey, cache: map[string]credentialLookup{},
+		scopes: map[credentialScope]*scopeSettlement{}}
 }
 
 type registryCredentialsKey struct{}
@@ -113,53 +145,140 @@ func registryCredentialsFrom(ctx context.Context) *RegistryCredentials {
 	return NewRegistryCredentials(true)
 }
 
-// lookup returns registry's local credential. ok is false when there is none;
-// err reports a credential store that could not be read, which is not the
-// same as no credential. A lookup the caller's ctx cut short is not cached.
-func (rc *RegistryCredentials) lookup(ctx context.Context, registry string) (registryCredential, bool, error) {
+// read returns registry's local credentials as docker and the environment
+// hold them, before any scope is settled. ok is false when there is none; err
+// reports a credential store that could not be read, which is not the same as
+// no credential. A read the caller's ctx cut short is not cached.
+func (rc *RegistryCredentials) read(ctx context.Context, registry string) credentialLookup {
 	key := strings.ToLower(registry)
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	if hit, ok := rc.cache[key]; ok {
-		return hit.cred, hit.ok, hit.err
+		return hit
 	}
 	found := rc.resolve(ctx, registry)
 	if ctx.Err() == nil {
 		rc.cache[key] = found
 	}
-	return found.cred, found.ok, found.err
+	return found
 }
 
-// rejected records that registry refused cred and returns the credential to
-// send instead, if there is one: the NGC key behind a docker login for
-// nvcr.io. Later lookups return it, so tag discovery, the credential row and
-// the validator's pull secret all move to the credential the registry has not
-// refused.
-func (rc *RegistryCredentials) rejected(registry string, cred registryCredential) (registryCredential, bool) {
-	key := strings.ToLower(registry)
-	rc.mu.Lock()
-	defer rc.mu.Unlock()
-	hit, ok := rc.cache[key]
-	switch {
-	case !ok || !hit.ok:
-		return registryCredential{}, false
-	case hit.cred != cred:
-		// Another check already moved past cred.
-		return hit.cred, true
-	case hit.fallback == nil:
-		return registryCredential{}, false
+// lookup returns the credential the run uses for repo on registry.
+//
+// Where nvcr.io has a docker login with the NGC key behind it, the scope is
+// settled first: a 401 to the login moves the scope to the key, and a 403,
+// no access to the scope, tries the key for it. Each scope is settled once,
+// and callers for it wait for that result, so the row, tag discovery and the
+// validator's pull secret get one credential. Another scope is settled on its
+// own. A result the caller's ctx cut short, or that a fault of the registry
+// left open, is not kept.
+func (rc *RegistryCredentials) lookup(ctx context.Context, registry, repo string) settledCredential {
+	return rc.settle(ctx, registry, repo, nil)
+}
+
+// lookupChallenged is lookup for a caller that already holds the registry's
+// WWW-Authenticate challenge, so settling does not ask /v2/ for it again.
+func (rc *RegistryCredentials) lookupChallenged(
+	ctx context.Context, registry, repo, challenge string,
+) settledCredential {
+	return rc.settle(ctx, registry, repo, &challenge)
+}
+
+func (rc *RegistryCredentials) settle(ctx context.Context, registry, repo string, challenge *string) settledCredential {
+	read := rc.read(ctx, registry)
+	if !read.ok || read.fallback == nil {
+		return settledCredential{cred: read.cred, ok: read.ok, err: read.err}
 	}
-	next := *hit.fallback
-	rc.cache[key] = credentialLookup{cred: next, ok: true, rejectedLogin: cred.source}
-	return next, true
+	s := rc.settlement(registry, repo)
+	select {
+	case s.lock <- struct{}{}:
+	case <-ctx.Done():
+		return settledCredential{err: ctx.Err()}
+	}
+	defer func() { <-s.lock }()
+	if s.settled {
+		return s.result
+	}
+	result, decided := settleScope(ctx, registry, repo, challenge, read.cred, *read.fallback)
+	if decided && ctx.Err() == nil {
+		s.settled, s.result = true, result
+	}
+	return result
 }
 
-// rejectedLogin returns the source of the docker login registry rejected
-// before the run moved to the NGC key, or "".
-func (rc *RegistryCredentials) rejectedLogin(registry string) string {
+func (rc *RegistryCredentials) settlement(registry, repo string) *scopeSettlement {
+	key := credentialScope{registry: strings.ToLower(registry), repo: repo}
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
-	return rc.cache[strings.ToLower(registry)].rejectedLogin
+	s, ok := rc.scopes[key]
+	if !ok {
+		s = &scopeSettlement{lock: make(chan struct{}, 1)}
+		rc.scopes[key] = s
+	}
+	return s
+}
+
+// credentialSettleTimeout bounds the registry round trips that settle one
+// scope. A var so tests can shorten it.
+var credentialSettleTimeout = registryProbeTimeout
+
+// settleScope decides between a docker login and the NGC key behind it for
+// repo, asking /v2/ for the challenge when the caller has none. Only a 401
+// says the login is rejected. A 403 says it has no access to repo, and the
+// key is tried for repo alone. decided is false for an answer that says
+// nothing about either credential.
+func settleScope(
+	ctx context.Context, registry, repo string, challenge *string, login, key registryCredential,
+) (settledCredential, bool) {
+	sctx, cancel := context.WithTimeout(ctx, credentialSettleTimeout)
+	defer cancel()
+	client := newRegistryHTTPClient(credentialSettleTimeout)
+	keep := settledCredential{cred: login, ok: true}
+	if challenge == nil {
+		resp, err := doRegistryRequest(sctx, client, func() (*http.Request, error) {
+			return http.NewRequestWithContext(sctx, http.MethodGet, "https://"+registry+"/v2/", nil)
+		})
+		if err != nil {
+			return keep, false
+		}
+		resp.Body.Close()
+		switch resp.StatusCode {
+		case http.StatusOK:
+			// Anyone may read /v2/, which tells nothing about either credential.
+			return keep, true
+		case http.StatusUnauthorized:
+		default:
+			return keep, false
+		}
+		got := selectAuthChallenge(resp.Header.Values("Www-Authenticate"))
+		challenge = &got
+	}
+	if scheme := authChallengeScheme(*challenge); scheme != "" && !strings.EqualFold(scheme, "Bearer") {
+		return keep, true
+	}
+	_, err := exchangeBearerToken(sctx, client, registry, repo, *challenge, &login)
+	var te *tokenExchangeError
+	switch {
+	case err == nil:
+		return keep, true
+	case !errors.As(err, &te):
+		return keep, false
+	case te.refused:
+		return keep, true
+	case te.credentialed && te.status == http.StatusUnauthorized:
+		return settledCredential{cred: key, ok: true, rejectedLogin: &login}, true
+	case !te.credentialed || te.status != http.StatusForbidden:
+		return keep, false
+	}
+	_, err = exchangeBearerToken(sctx, client, registry, repo, *challenge, &key)
+	switch {
+	case err == nil:
+		return settledCredential{cred: key, ok: true, noAccessLogin: &login}, true
+	case errors.As(err, &te) && (te.rejected() || te.refused):
+		keep.fallbackFailure = key.source + " was tried for it too: " + te.msg
+		return keep, true
+	}
+	return keep, false
 }
 
 func (rc *RegistryCredentials) resolve(ctx context.Context, registry string) credentialLookup {

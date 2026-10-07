@@ -746,11 +746,15 @@ func newFakeRegistry(
 
 // fakeNGC stands in for nvcr.io: every registry request the test makes,
 // whatever its host, reaches it. Its token endpoint refuses a one-segment
-// repository scope with 400, as nvcr.io does, and accepts only the password
-// goodPass. A token it issued lists the tags of any repository.
+// repository scope with 400, as nvcr.io does. It answers 401 to a password it
+// does not know, and 403 to a known one asking for a repository outside the
+// orgs that password is entitled to. A token it issued lists the tags of any
+// repository.
 type fakeNGC struct {
 	mu   sync.Mutex
 	sent []string
+	// failing is how many token requests still get a 503.
+	failing int
 }
 
 // passwords returns the Basic auth password of each token request, in order.
@@ -760,44 +764,9 @@ func (f *fakeNGC) passwords() []string {
 	return slices.Clone(f.sent)
 }
 
+// newFakeNGC accepts only goodPass, for any repository.
 func newFakeNGC(t *testing.T, goodPass string) *fakeNGC {
-	t.Helper()
-	f := &fakeNGC{}
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/token":
-			_, pass, _ := r.BasicAuth()
-			f.mu.Lock()
-			f.sent = append(f.sent, pass)
-			f.mu.Unlock()
-			scope := r.URL.Query().Get("scope")
-			if repo := strings.TrimSuffix(strings.TrimPrefix(scope, "repository:"), ":pull"); scope != "" &&
-				!strings.Contains(repo, "/") {
-				http.Error(w, "malformed token scope", http.StatusBadRequest)
-				return
-			}
-			if pass != goodPass {
-				w.WriteHeader(http.StatusUnauthorized)
-				return
-			}
-			_, _ = w.Write([]byte(`{"token":"t"}`))
-		case r.Header.Get("Authorization") == "Bearer t" && strings.HasSuffix(r.URL.Path, "/tags/list"):
-			_, _ = w.Write([]byte(`{"tags":["1.0.0","1.2.0"]}`))
-		default:
-			bearerChallenge(w, "https://"+ngcKeyRegistryHost+"/token")
-		}
-	}))
-	t.Cleanup(srv.Close)
-	tr := srv.Client().Transport.(*http.Transport).Clone()
-	// The test certificate names example.com, not nvcr.io.
-	tr.TLSClientConfig.ServerName = "example.com"
-	tr.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, network, srv.Listener.Addr().String())
-	}
-	prev := http.DefaultTransport
-	http.DefaultTransport = tr
-	t.Cleanup(func() { http.DefaultTransport = prev })
-	return f
+	return newEntitledNGC(t, map[string][]string{goodPass: {""}})
 }
 
 func bearerChallenge(w http.ResponseWriter, realm string) {
@@ -841,11 +810,11 @@ func TestRegistryCredentialCheck_Grading(t *testing.T) {
 		},
 		"credential rejected with 401": {
 			v2: bearerChallenge, token: tokenStatus(http.StatusUnauthorized), withCred: true,
-			want: want{false, SeverityError, "rejected"},
+			want: want{false, SeverityError, "rejected: token exchange"},
 		},
-		"credential rejected with 403": {
+		"credential with no access, a 403": {
 			v2: bearerChallenge, token: tokenStatus(http.StatusForbidden), withCred: true,
-			want: want{false, SeverityError, "rejected"},
+			want: want{false, SeverityError, "have no access to"},
 		},
 		"no credential, anonymous token refused": {
 			v2: bearerChallenge, token: tokenStatus(http.StatusUnauthorized),
@@ -896,7 +865,7 @@ func TestRegistryCredentialCheck_Grading(t *testing.T) {
 				w.WriteHeader(http.StatusUnauthorized)
 			},
 			token: tokenStatus(http.StatusUnauthorized), withCred: true,
-			want: want{false, SeverityError, "rejected"},
+			want: want{false, SeverityError, "rejected: token exchange"},
 		},
 		"realm on another host": {
 			v2: func(w http.ResponseWriter, _ string) {
@@ -1035,14 +1004,14 @@ func TestProbeRegistryCredential_RejectedLoginGivesWayToTheNGCKey(t *testing.T) 
 		assert.Equal(t, SeverityInfo, r.Severity)
 		assert.Contains(t, r.Message, "credentials from NGC_API_KEY valid")
 		assert.Contains(t, r.Message, "the docker login from docker config")
-		assert.Contains(t, r.Message, "docker on this machine still sends it; "+
+		assert.Contains(t, r.Message, "docker and helm on this machine still send it; "+
 			"renew it with: docker login nvcr.io --username '$oauthtoken'")
 		assert.NotContains(t, r.Message, "cannot pull")
 
-		cred, ok, err := rc.lookup(ctx, "nvcr.io")
-		require.NoError(t, err)
-		require.True(t, ok)
-		assert.Equal(t, "good-key", cred.pass, "later lookups, the pull secret's among them, get the key")
+		got := rc.lookup(ctx, "nvcr.io", "nvidia/cv")
+		require.NoError(t, got.err)
+		require.True(t, got.ok)
+		assert.Equal(t, "good-key", got.cred.pass, "later lookups, the pull secret's among them, get the key")
 	}
 	assert.Equal(t, []string{"rotated-out", "good-key", "rotated-out", "good-key"}, ngc.passwords())
 }

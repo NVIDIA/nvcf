@@ -88,8 +88,11 @@ const (
 	probeRejected
 	// probeLoginRejected: the registry rejected the docker login and
 	// accepted the NGC key sent in its place. The run uses the key, but
-	// docker on this machine still sends the login.
+	// docker and helm on this machine still send the login.
 	probeLoginRejected
+	// probeOtherCredential: the docker login has no access to the scope, and
+	// the registry accepted the NGC key for it, which the run uses there.
+	probeOtherCredential
 )
 
 // registryProbeOutcome is the result of a probe that did not verify a
@@ -165,17 +168,17 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 				"if this is unexpected, check for a proxy or captive portal", registry, resp.Status)}
 	}
 
-	cred, hasCred, lookupErr := creds.lookup(pctx, registry)
 	if resp.StatusCode == http.StatusOK {
 		// Anonymous read works, which says nothing about the repositories
 		// the install pulls, and a credential cannot be checked where /v2/
 		// accepts anyone.
-		if hasCred {
+		read := creds.read(pctx, registry)
+		if read.ok {
 			return registryProbeOutcome{kind: probeNotVerified,
-				detail: "credentials configured (" + cred.source + "); not verified, " +
+				detail: "credentials configured (" + read.cred.source + "); not verified, " +
 					"because the registry allows anonymous access to /v2/"}
 		}
-		return anonymousOutcome(registry, critical, lookupErr)
+		return anonymousOutcome(registry, critical, read.err)
 	}
 
 	// Only the Bearer flow is implemented. Self-hosted Harbor and htpasswd
@@ -186,25 +189,19 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 			detail: fmt.Sprintf("%s uses %s auth; only the OCI Bearer flow is probed", registry, scheme)}
 	}
 
-	// Step 2: exchange the credential for a Bearer token scoped to the actual
-	// repository (repoHint). A made-up repository name draws org-level 403s
-	// from NGC and GHCR that would read as a rejected credential.
+	// Step 2: exchange the credential the run settled for this scope for a
+	// Bearer token scoped to the actual repository (repoHint). A made-up
+	// repository name draws org-level 403s from NGC and GHCR.
+	settled := creds.lookupChallenged(pctx, registry, repoHint, wwwAuth)
+	cred, hasCred, lookupErr := settled.cred, settled.ok, settled.err
 	var sent *registryCredential
 	if hasCred {
 		sent = &cred
 	}
 	_, err = exchangeBearerToken(pctx, client, registry, repoHint, wwwAuth, sent)
-	// A docker login the registry rejects gives way to the NGC key, where the
-	// run has one, before anything is graded.
-	if hasCred && isRejectedExchange(err) {
-		if next, ok := creds.rejected(registry, cred); ok {
-			cred = next
-			_, err = exchangeBearerToken(pctx, client, registry, repoHint, wwwAuth, &cred)
-		}
-	}
 	note := ""
-	if login := creds.rejectedLogin(registry); login != "" && hasCred {
-		note = "; " + rejectedLoginNote(registry, login)
+	if login := settled.rejectedLogin; login != nil && hasCred {
+		note = "; " + rejectedLoginNote(registry, login.source)
 	}
 	if err == nil {
 		switch {
@@ -213,6 +210,10 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 		case note != "":
 			return registryProbeOutcome{kind: probeLoginRejected,
 				detail: "credentials from " + cred.source + " valid" + note}
+		case settled.noAccessLogin != nil:
+			return registryProbeOutcome{kind: probeOtherCredential, detail: fmt.Sprintf(
+				"credentials from %s valid; the docker login from %s has no access to %s, so the run sends %s for it",
+				cred.source, settled.noAccessLogin.source, scopeLabel(registry, repoHint), cred.source)}
 		}
 		return nil
 	}
@@ -223,6 +224,15 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 			detail: "could not verify credentials from this machine: " + err.Error() + note})
 	case te.refused:
 		return registryProbeOutcome{kind: probeSkipped, detail: te.msg}
+	case te.rejected() && te.status == http.StatusForbidden:
+		// A 403 is no access to this repository, which says nothing about
+		// whether the credential itself is still valid.
+		detail := fmt.Sprintf("credentials from %s have no access to %s: %s; use a credential with pull access to it",
+			cred.source, scopeLabel(registry, repoHint), te.msg)
+		if settled.fallbackFailure != "" {
+			detail += "; " + settled.fallbackFailure
+		}
+		return registryProbeOutcome{kind: probeRejected, detail: detail + note}
 	case te.rejected():
 		return registryProbeOutcome{kind: probeRejected, detail: fmt.Sprintf("credentials from %s rejected: %s; %s%s",
 			cred.source, te.msg, rejectedHint(registry, cred), note)}
@@ -235,17 +245,20 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 		detail: "could not verify credentials from this machine: " + te.msg + note})
 }
 
-// isRejectedExchange reports whether a token exchange failed because the
-// registry refused the credential it was sent.
-func isRejectedExchange(err error) bool {
-	var te *tokenExchangeError
-	return errors.As(err, &te) && te.rejected()
+// scopeLabel names the repository a probe asked for, or the registry when it
+// asked for none.
+func scopeLabel(registry, repo string) string {
+	if repo == "" {
+		return registry
+	}
+	return registry + "/" + repo
 }
 
 // rejectedLoginNote says that registry rejected the docker login read from
-// source, which docker on this machine still sends, and how to renew it.
+// source, which docker and helm on this machine still send, and how to renew
+// it.
 func rejectedLoginNote(registry, source string) string {
-	return fmt.Sprintf("the docker login from %s was rejected, and docker on this machine still sends it; "+
+	return fmt.Sprintf("the docker login from %s was rejected, and docker and helm on this machine still send it; "+
 		"renew it with: docker login %s --username '$oauthtoken'", source, registry)
 }
 

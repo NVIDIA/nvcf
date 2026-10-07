@@ -78,11 +78,14 @@ For `nvcr.io` the NGC API key is also read, from the first of
 `NGC_API_KEY` that is set. It goes ahead of the docker login only for a
 bare `--pre` run with the `local` environment, since `up` creates its pull
 secrets from it, and it is never sent to another registry. Elsewhere the key
-is sent when there is no docker login, or when `nvcr.io` rejects the docker
-login. The run then uses the key, for tag discovery and the validator's pull
-secret too, and the row says how to renew the login `docker` still sends.
-Each `--wait` poll reads the credentials again, so a login renewed while the
-run waits counts on the next poll.
+is sent when there is no docker login, or for a repository where `nvcr.io`
+rejects the docker login (a 401) or gives it no access (a 403). This is
+decided once per repository, before tag discovery, the row and the
+validator's pull secret use it, so all three get the same credential, and a
+login with no access to one org still serves the orgs it reaches. A 403 is
+reported as no access to that repository, never as a rejected login. Each
+`--wait` poll reads the credentials again, so a login renewed while the run
+waits counts on the next poll.
 
 The probe asks for pull access to the validator image's repository and to the
 stack's image path: any path in `global.image.registry`, then
