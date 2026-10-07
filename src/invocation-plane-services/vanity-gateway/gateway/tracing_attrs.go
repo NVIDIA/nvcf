@@ -37,6 +37,7 @@ const (
 	traceAttrShadowTargetModel         attribute.Key = "shadow.target_model"
 	traceAttrShadowTargetModels        attribute.Key = "shadow.target_models"
 
+	traceAttrValueEndpointAnthropic  = "anthropic"
 	traceAttrValueEndpointOpenAI     = "openai"
 	traceAttrValueEndpointLLMGateway = "llm_gateway"
 

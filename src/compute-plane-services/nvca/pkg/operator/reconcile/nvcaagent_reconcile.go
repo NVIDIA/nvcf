@@ -575,6 +575,20 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 			nb.Namespace, nb.Name, err)
 	}
 
+	// RBAC must be set up before the agent config ConfigMap is written. The
+	// ConfigMap is the source of truth for rollout change-detection
+	// (newAgentConfigChangedCheck), which compares it against the live
+	// cluster object rather than NVCFBackend status. If the ConfigMap were
+	// written first and a later step such as RBAC then failed, the
+	// ConfigMap would already match the desired state, so subsequent
+	// periodic syncs would see "no change" and never retry RBAC or the
+	// agent Deployment rollout.
+	err = bc.setupNVCARBAC(ctx, nb)
+	if err != nil {
+		return fmt.Errorf("failed to setup RBAC for NVCFBackend %v/%v, err: %w",
+			nb.Namespace, nb.Name, err)
+	}
+
 	if err := bc.setupAgentConfigConfigMap(ctx, desiredAgentConfigCM); err != nil {
 		return fmt.Errorf("failed to setup agent config ConfigMap: %w", err)
 	}
@@ -646,12 +660,6 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 	err = bc.setupVaultConfigmap(ctx, nb)
 	if err != nil {
 		return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", NVCAVaultConfigmapName,
-			nb.Namespace, nb.Name, err)
-	}
-
-	err = bc.setupNVCARBAC(ctx, nb)
-	if err != nil {
-		return fmt.Errorf("failed to setup RBAC for NVCFBackend %v/%v, err: %w",
 			nb.Namespace, nb.Name, err)
 	}
 

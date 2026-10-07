@@ -26,6 +26,8 @@ macro_rules! impl_display {
 mod algorithm;
 mod cluster_comparator;
 mod config;
+pub(crate) mod dynamic_config;
+pub(crate) mod expression;
 mod factory;
 mod power_of_n;
 mod pulsar;
@@ -55,4 +57,5 @@ pub use request::{LoadBalancerCandidateChoice, LoadBalancerDecision, LoadBalance
 pub use router::{
     LoadBalancerAlgorithmResolution, LoadBalancerCandidateSelection, LoadBalancerRouter,
 };
+pub(crate) use target_state::LoadBalancerDefinition;
 pub use target_state::LoadBalancerTargetState;

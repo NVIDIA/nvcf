@@ -142,6 +142,9 @@
                 "openai": {
                   "$ref": "#/definitions/openAIRoutes"
                 },
+                "anthropicMessages": {
+                  "$ref": "#/definitions/openAILLMEndpointRoutes"
+                },
                 "vanity": {
                   "$ref": "#/definitions/vanityRoutes"
                 }
@@ -197,83 +200,110 @@
               "mappingConfig": {
                 "properties": {
                   "v2config": {
-                    "properties": {
-                      "openai": {
-                        "anyOf": [
-                          {
-                            "properties": {
-                              "chatCompletions": {
-                                "not": {
-                                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "properties": {
+                          "openai": {
+                            "anyOf": [
+                              {
+                                "properties": {
+                                  "chatCompletions": {
                                     "not": {
-                                      "properties": {
-                                        "functionType": {
-                                          "const": "LLM"
+                                      "additionalProperties": {
+                                        "not": {
+                                          "properties": {
+                                            "functionType": {
+                                              "const": "LLM"
+                                            }
+                                          },
+                                          "required": [
+                                            "functionType"
+                                          ]
                                         }
-                                      },
-                                      "required": [
-                                        "functionType"
-                                      ]
+                                      }
                                     }
                                   }
-                                }
-                              }
-                            },
-                            "required": [
-                              "chatCompletions"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "responses": {
-                                "not": {
-                                  "additionalProperties": {
+                                },
+                                "required": [
+                                  "chatCompletions"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "responses": {
                                     "not": {
-                                      "properties": {
-                                        "functionType": {
-                                          "const": "LLM"
+                                      "additionalProperties": {
+                                        "not": {
+                                          "properties": {
+                                            "functionType": {
+                                              "const": "LLM"
+                                            }
+                                          },
+                                          "required": [
+                                            "functionType"
+                                          ]
                                         }
-                                      },
-                                      "required": [
-                                        "functionType"
-                                      ]
+                                      }
                                     }
                                   }
-                                }
-                              }
-                            },
-                            "required": [
-                              "responses"
-                            ]
-                          },
-                          {
-                            "properties": {
-                              "embeddings": {
-                                "not": {
-                                  "additionalProperties": {
+                                },
+                                "required": [
+                                  "responses"
+                                ]
+                              },
+                              {
+                                "properties": {
+                                  "embeddings": {
                                     "not": {
-                                      "properties": {
-                                        "functionType": {
-                                          "const": "LLM"
+                                      "additionalProperties": {
+                                        "not": {
+                                          "properties": {
+                                            "functionType": {
+                                              "const": "LLM"
+                                            }
+                                          },
+                                          "required": [
+                                            "functionType"
+                                          ]
                                         }
-                                      },
-                                      "required": [
-                                        "functionType"
-                                      ]
+                                      }
                                     }
                                   }
-                                }
+                                },
+                                "required": [
+                                  "embeddings"
+                                ]
                               }
-                            },
-                            "required": [
-                              "embeddings"
                             ]
                           }
+                        },
+                        "required": [
+                          "openai"
+                        ]
+                      },
+                      {
+                        "properties": {
+                          "anthropicMessages": {
+                            "not": {
+                              "additionalProperties": {
+                                "not": {
+                                  "properties": {
+                                    "functionType": {
+                                      "const": "LLM"
+                                    }
+                                  },
+                                  "required": [
+                                    "functionType"
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "required": [
+                          "anthropicMessages"
                         ]
                       }
-                    },
-                    "required": [
-                      "openai"
                     ]
                   }
                 },
