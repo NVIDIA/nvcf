@@ -1279,19 +1279,15 @@ fn wait_and_widen_validates_cache_affinity_input_tokens_scale() {
 }
 
 #[test]
-fn band_widen_interval_is_rejected_for_wait_and_widen() {
-    let config: LoadBalancerAlgorithmConfig =
-        parse_json(r#"{"algorithm":"wait-and-widen","band_widen_interval_ms":100}"#);
-    let error = create_load_balancer_with_config(&config)
-        .err()
-        .expect("wait-and-widen has no ranking bands");
-    assert!(error.to_string().contains("band_widen_interval_ms"));
-    let config: LoadBalancerAlgorithmConfig =
-        parse_json(r#"{"algorithm":"wait-and-widen","fallback_max_queued":0}"#);
-    let error = create_load_balancer_with_config(&config)
-        .err()
-        .expect("wait-and-widen has no separate fallback capacity");
-    assert!(error.to_string().contains("fallback_max_queued"));
+fn pulsar_only_settings_are_rejected_for_wait_and_widen() {
+    for field in ["band_widen_interval_ms", "fallback_max_queued"] {
+        let config: LoadBalancerAlgorithmConfig =
+            parse_json(&format!(r#"{{"algorithm":"wait-and-widen","{field}":0}}"#));
+        let error = create_load_balancer_with_config(&config)
+            .err()
+            .expect("wait-and-widen must reject Pulsar-only settings");
+        assert!(error.to_string().contains(field));
+    }
 }
 
 #[test]

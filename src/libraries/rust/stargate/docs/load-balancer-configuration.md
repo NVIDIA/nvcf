@@ -302,28 +302,29 @@ Minimal configuration:
 
 `pulsar-wait-and-widen` is `wait-and-widen` with the Pulsar ranking as the
 source of affinity. Without queue-SLO fields, an eligible Pulsar primary wins
-immediately.
+immediately, so the affinity wait, band widening, and `fallback_max_queued`
+below apply only when queue-SLO fields are set or the primary is ineligible.
 
-When queue-SLO fields are enabled or the primary is ineligible, the affinity
-group is the top `cache_affinity_backend_selection_count` clusters of the
-Pulsar ranking. The count defaults to `1`, the primary, and `0` also means `1`.
-WaitAndWiden selection runs within the group, and
-`cache_affinity_input_tokens_scale` discounts the request prefill there. Until `cache_affinity_wait_ms` (X) has elapsed, the proxy
-waits and rechecks the group instead of falling back.
+In that case the affinity group is the top
+`cache_affinity_backend_selection_count` clusters of the Pulsar ranking. The
+count defaults to `1`, the primary, and `0` also means `1`. WaitAndWiden
+selection runs within the group, and `cache_affinity_input_tokens_scale`
+discounts the request prefill there. Until `cache_affinity_wait_ms` (X) has
+elapsed, the proxy waits and rechecks the group instead of falling back.
 
 After X, every attempt still checks the affinity group first, as above. If the
 group cannot serve, the open set grows through the ranking one band per
 `band_widen_interval_ms` (S): ranks 1 through k+2 at X, k+6 at X+S, k+14 at
 X+2S, and so on until it covers every ranked cluster. Here k is the affinity
 group size. The ranking contains only clusters with a valid Pulsar weight, and
-Pulsar feasibility checks still filter it. WaitAndWiden selection runs over the open set at full prefill cost, and
-bucket unlocks count from X. If no open candidate is selectable, the proxy
-waits for the next band or bucket. It does not skip ahead, even when the
-unopened clusters are also full, so a saturated pool waits out the band
-schedule or the request's maximum wait. S defaults to X. With S set to `0`,
-every ranked cluster opens at X. That resembles `wait-and-widen` global
-fallback, except that open-set selection uses `fallback_max_queued` and only
-ranked, feasible clusters are candidates.
+Pulsar feasibility checks still filter it. WaitAndWiden selection runs over the
+open set at full prefill cost, and bucket unlocks count from X. If no open
+candidate is selectable, the proxy waits for the next band or bucket. It does
+not skip ahead, even when the unopened clusters are also full, so a saturated
+pool waits out the band schedule or the request's maximum wait. S defaults to
+X. With S set to `0`, every ranked cluster opens at X. That resembles
+`wait-and-widen` global fallback, except that open-set selection uses
+`fallback_max_queued` and only ranked, feasible clusters are candidates.
 
 ```text
 elapsed < X          rank 1..k              (affinity group, discounted prefill)

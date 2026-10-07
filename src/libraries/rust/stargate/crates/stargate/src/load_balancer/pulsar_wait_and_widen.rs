@@ -56,16 +56,13 @@ impl PulsarWaitAndWidenLoadBalancer {
         let settings = config
             .wait_and_widen_settings()
             .expect("pulsar-wait-and-widen config has wait_and_widen settings");
-        let band_widen_interval = Duration::from_millis(
-            settings
-                .band_widen_interval_ms
-                .or(settings.cache_affinity_wait_ms)
-                .unwrap_or(0),
-        );
-        let fallback_max_queued = settings.fallback_max_queued.unwrap_or(0);
         let wait_and_widen_config = WaitAndWidenConfig::from_algorithm_config(&config)?;
+        let band_widen_interval = settings.band_widen_interval_ms.map_or(
+            wait_and_widen_config.cache_affinity_wait,
+            Duration::from_millis,
+        );
         let mut fallback_config = wait_and_widen_config.clone();
-        fallback_config.max_queued = fallback_max_queued;
+        fallback_config.max_queued = settings.fallback_max_queued.unwrap_or(0);
         Ok(Self {
             // The Pulsar primary is the affinity group unless configured wider.
             affinity_group_size: wait_and_widen_config
@@ -188,10 +185,11 @@ impl PulsarWaitAndWidenLoadBalancer {
             );
         }
 
-        // After X, the open set grows by one ranking band per widen interval:
-        // ranks 1..=k+2, then k+6, and so on until it covers every candidate.
-        // Open candidates compete at full prefill cost, as WaitAndWiden
-        // global buckets do, and bucket unlocks count from X.
+        // After the affinity wait, the open set grows by one ranking band per
+        // widen interval: ranks 1..=k+2, then 1..=k+6, and so on until it
+        // covers the whole ranking. Open candidates compete at full prefill
+        // cost, as WaitAndWiden global buckets do, and bucket unlocks count
+        // from the end of the affinity wait.
         let widened_for = elapsed - self.affinity_wait;
         let bands_open = if self.band_widen_interval.is_zero() {
             usize::MAX
@@ -258,9 +256,6 @@ impl LoadBalancer for PulsarWaitAndWidenLoadBalancer {
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
     ) -> LoadBalancerDecision {
-        if candidates.is_empty() {
-            return LoadBalancerDecision::Unavailable;
-        }
         self.decide_at(request, candidates, request.received_at.elapsed())
     }
 }
