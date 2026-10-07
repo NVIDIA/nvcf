@@ -236,7 +236,8 @@ Values without parameters use the same response for `unknown_method` and
 - A new value starts with new load-balancer state, such as Pulsar rankings or
   the round-robin position.
 - An entry expires after 15 idle minutes. The router removes expired entries
-  during later cache operations. Each router keeps at most 16384 entries.
+  within a minute, even without further requests. Each router keeps at most
+  16384 entries.
 
 ### Logs and traces
 
