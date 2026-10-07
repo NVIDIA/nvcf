@@ -248,16 +248,10 @@ fn prepare_proxy_request(
             .resolve(target, raw, || {
                 RoutingExpression::parse(raw)?.compile(&app.lb_router, model_id)
             })
-            .map_err(|error| {
-                app.metrics
-                    .routing_expressions_total("", error.class, "")
-                    .inc();
-                reject_invalid_routing_algorithm(target, &error)
-            })?;
+            .map_err(|error| reject_invalid_routing_algorithm(target, &error))?;
         app.metrics
             .routing_expressions_total(
                 &definition.config().algorithm().to_string(),
-                "accepted",
                 outcome.as_str(),
             )
             .inc();
@@ -418,8 +412,8 @@ mod test_support {
         )
     }
 
-    // (algorithm, outcome, cache, count) for every exported routing expression series.
-    fn routing_expression_series(app: &ProxyAppState) -> Vec<(String, String, String, u64)> {
+    // (algorithm, cache, count) for every exported routing expression series.
+    fn routing_expression_series(app: &ProxyAppState) -> Vec<(String, String, u64)> {
         let mut series = app
             .metrics
             .registry()
@@ -437,7 +431,6 @@ mod test_support {
                 };
                 (
                     label("algorithm"),
-                    label("outcome"),
                     label("cache"),
                     metric.get_counter().value() as u64,
                 )
@@ -448,7 +441,7 @@ mod test_support {
     }
 
     #[tokio::test]
-    async fn routing_expression_metrics_count_outcomes_with_bounded_labels() {
+    async fn routing_expression_metrics_count_accepted_values_with_bounded_labels() {
         let app = test_proxy_app_state_with_lb_config(LoadBalancerConfig::permissive_default());
         let long_seed = format!("pulsar;seed=\"{}\"", "owner".repeat(150));
         for header in [
@@ -458,6 +451,7 @@ mod test_support {
             r#"pulsar;seed="free text from an owner""#,
             long_seed.as_str(),
             "wait-and-widen;n=2",
+            // Rejections are logged, not counted.
             "pulsar;widen=2",
             "pulsar;seed",
             "fastest;seed=x",
@@ -468,27 +462,21 @@ mod test_support {
         let series = routing_expression_series(&app);
         let counted = series
             .iter()
-            .filter(|(_, _, _, count)| *count > 0)
-            .map(|(algorithm, outcome, cache, count)| {
-                (algorithm.as_str(), outcome.as_str(), cache.as_str(), *count)
-            })
+            .filter(|(_, _, count)| *count > 0)
+            .map(|(algorithm, cache, count)| (algorithm.as_str(), cache.as_str(), *count))
             .collect::<Vec<_>>();
         assert_eq!(
             counted,
             [
-                ("", "malformed_expression", "", 1),
-                ("", "unknown_method", "", 1),
-                ("", "unknown_parameter", "", 1),
-                ("pulsar", "accepted", "build", 1),
-                ("pulsar", "accepted", "hit", 1),
-                ("pulsar", "accepted", "rebuild", 3),
+                ("pulsar", "build", 1),
+                ("pulsar", "hit", 1),
+                ("pulsar", "rebuild", 3),
                 // One target, so a new algorithm replaces the entry.
-                ("wait-and-widen", "accepted", "rebuild", 1),
+                ("wait-and-widen", "rebuild", 1),
             ]
         );
 
         let algorithms = [
-            "",
             "power-of-n",
             "wait-and-widen",
             "round-robin",
@@ -496,21 +484,9 @@ mod test_support {
             "pulsar",
             "pulsar-wait-and-widen",
         ];
-        let outcomes = [
-            "accepted",
-            "malformed_expression",
-            "unknown_method",
-            "unknown_parameter",
-            "not_applicable",
-            "invalid_value",
-            "inert_combination",
-            "inert_value",
-            "unavailable",
-        ];
-        let caches = ["", "hit", "build", "rebuild"];
-        for (algorithm, outcome, cache, _) in &series {
+        let caches = ["hit", "build", "rebuild"];
+        for (algorithm, cache, _) in &series {
             assert!(algorithms.contains(&algorithm.as_str()), "{algorithm}");
-            assert!(outcomes.contains(&outcome.as_str()), "{outcome}");
             assert!(caches.contains(&cache.as_str()), "{cache}");
         }
     }
