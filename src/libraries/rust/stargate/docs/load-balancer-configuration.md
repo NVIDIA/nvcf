@@ -261,9 +261,8 @@ Both Pulsar variants accept `rendezvous_weight`:
 | `last-mean-input-tps` | Explicit legacy mode. Use the last valid mean, which can change during traffic. |
 
 Queue and prefill estimates continue to use `last_mean_input_tps` in either mode.
-For a shared-engine cluster, the maximum is the greatest active backend peak,
-available only when every active backend reports a valid maximum. Historical
-peaks from observers of the same engine are not summed.
+See [multi-backend clusters](multi-backend-clusters.md) for how a shared-engine
+cluster aggregates the maximum.
 
 Upgrade all Pylons and any registration relays, including
 `stargate-k8s-router`, before enabling maximum-based Stargates. Older relays
@@ -276,7 +275,9 @@ if Pylons cannot be upgraded first.
 The top-level `default`, an algorithm name in `models` or `request_algorithms`,
 and the built-in defaults always use `max-input-tps`. For a mixed-version
 rollout, give each Pulsar entry in `models` and `request_algorithms` a detailed
-object that sets `last-mean-input-tps`.
+object that sets `last-mean-input-tps`. If `default` is `pulsar` or
+`pulsar-wait-and-widen`, also list every Pulsar-routed model under `models`, or
+move `default` to another algorithm.
 
 Retries walk the same ranking after excluding failed clusters. When
 `consider_kv_free_tokens` is enabled, a ranked candidate is skipped when it

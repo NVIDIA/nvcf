@@ -30,12 +30,10 @@ set. Every Pylon must also select exactly one local stats initialization source:
 [Pylon onboarding](docs/operations/pylon-onboarding.md) for the complete
 lifecycle and calibration contract.
 
-Pulsar and Pulsar wait-and-widen use generation maximum input TPS for capacity
-weighting by default. Upgrade Pylons and registration relays before Stargates
-so all active backends publish `max_input_tps`, or set
-`rendezvous_weight: last-mean-input-tps` in each detailed Pulsar configuration
-during a mixed-version rollout. See
-[load-balancer configuration](docs/load-balancer-configuration.md#pulsar).
+Pulsar weights clusters by generation maximum input TPS by default. Upgrade
+Pylons and registration relays before Stargates; see
+[load-balancer configuration](docs/load-balancer-configuration.md#pulsar) for
+the rollout order and the mean-weighting option.
 
 Pylon gates startup on an upstream health probe. It tries `/health` and then
 `/v1/health/ready`, reuses whichever path answers first, and forwards Stargate's
