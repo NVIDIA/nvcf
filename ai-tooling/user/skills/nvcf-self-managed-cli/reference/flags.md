@@ -76,9 +76,9 @@ credential, the one `docker` would use: `$DOCKER_CONFIG/config.json`, or
 For `nvcr.io` the NGC API key is also read, from the first of
 `NGC_IMAGE_PULL_API_KEY`, `NVCF_NGCR_API_KEY`, `NVCF_NGC_API_KEY` and
 `NGC_API_KEY` that is set. It goes ahead of the docker login only when the
-registry check's plane, below, is checked before its install with the
-`local` environment, since `up` creates its pull secrets from it, and it is
-never sent to another registry. Elsewhere the key
+registry check's plane, below, is the control plane, checked before its
+install with the `local` environment, since `up` creates its pull secrets
+from it, and it is never sent to another registry. Elsewhere the key
 is sent when there is no docker login, or for a repository where `nvcr.io`
 rejects the docker login (a 401) or gives it no access (a 403). This is
 decided once per repository, before tag discovery, the row and the

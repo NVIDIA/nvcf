@@ -771,12 +771,16 @@ func resolveStackEnv() string {
 }
 
 // preferNGCKey reports whether the NGC API key goes ahead of the docker login
-// for nvcr.io: only where up mints its pull secrets from the key, before a
-// local install of the registry check's plane. Anywhere else the docker login
-// is what docker uses, and the key is sent only for a scope where there is no
+// for nvcr.io: only where up mints its pull secrets from the key, when the
+// registry check's plane is the control plane before a local install.
+// compute-plane install, which installs the compute plane next, mints none,
+// and its helm pulls with the docker login. Anywhere else the docker login is
+// what docker uses, and the key is sent only for a scope where there is no
 // login or nvcr.io refuses it.
 func preferNGCKey() bool {
-	return registryTarget().beforeInstall && strings.EqualFold(resolveStackEnv(), "local")
+	t := registryTarget()
+	return t.name == controlPlaneStackTarget().name && t.beforeInstall &&
+		strings.EqualFold(resolveStackEnv(), "local")
 }
 
 // localStackDir returns src when it points at a readable local directory.
@@ -1083,8 +1087,8 @@ func runPreflightByRole(
 	validatorEnv := clusterValidatorJobEnv(validatorStackValues())
 	// Validated before the run starts.
 	validatorTolerations, _ := configuredValidatorTolerations()
-	cpValidatorEnv := validatorEnvForRole(validatorEnv, checkControlPlane)
-	gpuValidatorEnv := validatorEnvForRole(validatorEnv, checkComputePlane)
+	cpValidatorEnv := validatorEnvForRole(validatorEnv, controlPlaneStackTarget().beforeInstall)
+	gpuValidatorEnv := validatorEnvForRole(validatorEnv, computePlaneStackTarget().beforeInstall)
 
 	// The cluster-validator image is the same for both roles; VALIDATOR_ROLE
 	// in the Job env selects which check set runs inside the binary.
@@ -1239,12 +1243,12 @@ func runPreflightByRole(
 	}
 }
 
-// validatorEnvForRole returns env for one role's validator. A role whose own
-// flag is passed alongside --pre (--pre --control-plane) is checked as
-// installed, the way --all is, so its validator is told the run is
-// post-install. env itself is not modified.
-func validatorEnvForRole(env map[string]string, roleFlag bool) map[string]string {
-	if !roleFlag || env["VALIDATOR_POST_INSTALL"] != "" {
+// validatorEnvForRole returns env for the validator of a role whose plane is
+// checked before its install or not, as checkedBeforeInstall decides. One
+// checked as installed is told the run is post-install, so an empty control
+// plane fails instead of passing as pre-install. env itself is not modified.
+func validatorEnvForRole(env map[string]string, beforeInstall bool) map[string]string {
+	if beforeInstall {
 		return env
 	}
 	out := make(map[string]string, len(env)+1)
@@ -1256,10 +1260,8 @@ func validatorEnvForRole(env map[string]string, roleFlag bool) map[string]string
 }
 
 // clusterValidatorJobEnv is what the validator container needs from the CLI's
-// resolved configuration, matching what the chart CronJob forwards:
-//   - VALIDATOR_POST_INSTALL on every run except a bare --pre, so an empty
-//     control plane fails after install instead of passing as pre-install
-//     (validatorEnvForRole adds it for a role its own flag targets);
+// resolved configuration, matching what the chart CronJob forwards
+// (validatorEnvForRole adds VALIDATOR_POST_INSTALL for each role):
 //   - relocated OpenBao and Envoy Gateway namespaces, without which the Tier
 //     rows assess the defaults and miss the real components;
 //   - NVCF_GATEWAY_NAMES, the override for the NVCF Gateway discovery;
@@ -1271,9 +1273,6 @@ func validatorEnvForRole(env map[string]string, roleFlag bool) map[string]string
 //     no default class is not failed for it.
 func clusterValidatorJobEnv(stack selfhosted.StackValues) map[string]string {
 	env := map[string]string{}
-	if !checkPre || checkAll {
-		env["VALIDATOR_POST_INSTALL"] = "true"
-	}
 	if ns := configValue("NVCF_OPENBAO_NAMESPACE"); ns != "" {
 		env["NVCF_OPENBAO_NAMESPACE"] = ns
 	}

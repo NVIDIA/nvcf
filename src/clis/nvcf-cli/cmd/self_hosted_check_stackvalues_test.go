@@ -355,7 +355,8 @@ func TestCheck_MalformedValidatorRegistryFailsTheCommand(t *testing.T) {
 // One plane decides how the registry rows are read and graded: a plane the
 // run checks before its install, since this machine installs it next, else
 // the control plane when visited. The NGC key goes first only before a local
-// install of that plane, where up mints its pull secrets from it.
+// install of the control plane, where up mints its pull secrets from it:
+// compute-plane install mints none, and its helm sends the docker login.
 func TestCheckScope_RegistryPlaneDecidesKeyOrderAndGrading(t *testing.T) {
 	t.Setenv("HELMFILE_ENV", "")
 	for _, tc := range []struct {
@@ -367,7 +368,7 @@ func TestCheckScope_RegistryPlaneDecidesKeyOrderAndGrading(t *testing.T) {
 		{name: "bare --pre", pre: true, prefer: true, plane: "self-managed"},
 		{name: "--pre --env prod", pre: true, prodEnv: true, plane: "self-managed"},
 		{name: "--pre --compute-plane", pre: true, gpu: true, prefer: true, plane: "self-managed"},
-		{name: "--pre --control-plane", pre: true, cp: true, prefer: true, plane: "nvcf-compute-plane"},
+		{name: "--pre --control-plane", pre: true, cp: true, plane: "nvcf-compute-plane"},
 		{name: "--pre --control-plane --env prod", pre: true, cp: true, prodEnv: true, plane: "nvcf-compute-plane"},
 		{name: "--pre --control-plane --compute-plane", pre: true, cp: true, gpu: true, postInstall: true,
 			plane: "self-managed"},

@@ -36,9 +36,9 @@ import (
 	"nvcf-cli/internal/selfhosted"
 )
 
-// The Job gets what the chart CronJob forwards: the post-install signal on
-// every run but --pre, relocated namespaces, the Gateway override and the
-// probe image.
+// The Job gets what the chart CronJob forwards: relocated namespaces, the
+// Gateway override and the probe image, and for a role whose plane is checked
+// as installed, the post-install signal.
 func TestClusterValidatorJobEnv(t *testing.T) {
 	resetCheckFlags(t)
 	for _, k := range []string{
@@ -50,7 +50,9 @@ func TestClusterValidatorJobEnv(t *testing.T) {
 
 	checkPre = false
 	env := clusterValidatorJobEnv(selfhosted.StackValues{EnvoyGatewayNamespace: "gateway", StorageClass: "fast-ssd"})
-	assert.Equal(t, "true", env["VALIDATOR_POST_INSTALL"], "a post-install run must say so")
+	assert.Equal(t, "true", validatorEnvForRole(env, false)["VALIDATOR_POST_INSTALL"], "a post-install run must say so")
+	assert.NotContains(t, validatorEnvForRole(env, true), "VALIDATOR_POST_INSTALL", "a pre-install run must not")
+	assert.NotContains(t, env, "VALIDATOR_POST_INSTALL", "validatorEnvForRole does not modify env")
 	assert.Equal(t, "gateway", env["NVCF_ENVOY_GATEWAY_NAMESPACE"], "the stack's controller namespace is forwarded")
 	assert.Equal(t, "fast-ssd", env["NVCF_STORAGE_CLASS"], "the stack's global.storageClass is forwarded")
 	assert.NotContains(t, env, "NVCF_OPENBAO_NAMESPACE")
@@ -65,7 +67,6 @@ func TestClusterValidatorJobEnv(t *testing.T) {
 	require.NoError(t, selfHostedCheckCmd.Flags().Set("cluster-validator-probe-image", "mirror.example/busybox:1.36"))
 	env = clusterValidatorJobEnv(selfhosted.StackValues{EnvoyGatewayNamespace: "gateway", StorageClass: "fast-ssd"})
 	assert.Equal(t, "standard", env["NVCF_STORAGE_CLASS"], "an explicit setting beats the stack values")
-	assert.NotContains(t, env, "VALIDATOR_POST_INSTALL", "--pre is pre-install")
 	assert.Equal(t, "openbao", env["NVCF_OPENBAO_NAMESPACE"])
 	assert.Equal(t, "edge", env["NVCF_ENVOY_GATEWAY_NAMESPACE"], "an explicit setting beats the stack values")
 	assert.Equal(t, "gateway/shared-gw", env["NVCF_GATEWAY_NAMES"])
@@ -120,9 +121,10 @@ func TestClusterValidatorJobEnv_GatewayNamesYAMLList(t *testing.T) {
 }
 
 // --pre in split mode visits both clusters, so each gets its own validator
-// role against its own context. A bare --pre is pre-install for both; --all
-// checks both as installed, and a role's own flag checks that role as
-// installed while the other stays pre-install.
+// role against its own context. Each role is told its own plane's install
+// state: a bare --pre is pre-install for both; --all checks both as
+// installed, and a role's own flag checks that role as installed while the
+// other stays pre-install.
 func TestCheck_PreSplitRunsBothValidatorRoles(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
@@ -132,6 +134,8 @@ func TestCheck_PreSplitRunsBothValidatorRoles(t *testing.T) {
 		{name: "bare pre", extra: []string{"--icms-url", "https://sis.example.invalid"}},
 		{name: "pre all", extra: []string{"--all", "--cluster-name", "gpu"}, cpPost: true, gpuPost: true},
 		{name: "pre control-plane", extra: []string{"--control-plane"}, cpPost: true},
+		{name: "pre compute-plane", extra: []string{"--compute-plane", "--icms-url", "https://sis.example.invalid"},
+			gpuPost: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resetCheckFlags(t)
