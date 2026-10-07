@@ -15,9 +15,14 @@ Application images and charts use your checkout, including local edits.
 The model runs on one node, or is split by layer across two nodes with llama.cpp RPC. `init` picks the smallest node count that fits the model in GPU memory:
 
 - DGX Spark (GB10): CPU and GPU share about 122 GiB, so GLM-5.3 needs two nodes.
-- GB300: one GPU has about 268 GiB of its own memory, so GLM-5.3 fits on one node.
+- GB300: one GPU has its own memory, reported by `nvidia-smi` as about 250 GiB, with 249.75 GiB usable through CUDA. GLM-5.3 needs 239 GiB on one node (its 223 GiB share plus 16 GiB headroom), so it fits on one node with about 10 GiB to spare.
 
 The gateway, router and operator run on a separate node when the cluster has one, and share the first model node otherwise. A cluster needs at least one GPU node per model node; two nodes are enough for either example.
+
+Tested configurations:
+
+- Two DGX Spark nodes, model split across both. See [Recovery and limits](#recovery-and-limits) for load times.
+- Two GB300 workstations, model on one node (October 2026). `init` detected compute capability 10.3. `preflight` measured 249 GiB of free GPU memory against the 239 GiB required. The model loaded in about 3 minutes from local disk, decoded at about 42 tokens per second at context 2048, and ran for more than 11 hours without restarts.
 
 ## Prerequisites
 
@@ -245,6 +250,7 @@ On two DGX Spark nodes, a cold load took about 26 minutes and recovery with cach
 Memory and runtime limits:
 
 - On GPUs that share memory with the CPU, such as GB10, monitor host `MemAvailable` when changing context size or adding workloads.
+- On GPUs with their own memory, such as GB300, the model pod's cgroup memory can sit at its limit while the server process uses little memory. The difference is page cache from reading the model files, which the kernel reclaims under pressure. It is not a leak. On GB300 the pod stayed at its 64Gi limit for more than 11 hours with about 1.4 GiB resident, no swap, no memory-guard stops and no restarts.
 - The runtime stops below 1 GiB available memory or when the model process/container swaps.
 - `glm-5.3` uses two-bit quantization, context 2048, one request slot and TCP/RPC between split nodes.
 - `glm-5.3` canary timing is 180 seconds for the timeout and 60 seconds for the interval.
