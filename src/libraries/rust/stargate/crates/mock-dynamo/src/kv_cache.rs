@@ -31,8 +31,8 @@ pub(crate) struct KvCacheStats {
 }
 
 impl KvCacheStats {
-    /// Deployment totals for the batched engine. Hit, miss, and eviction
-    /// counters are not tracked by that model and report zero.
+    /// Deployment totals for the batched engine. Entry, hit, miss, and
+    /// eviction counters are not tracked by that model and report zero.
     pub(crate) fn from_engine_workers(model: &str, workers: &[mock_engine::WorkerStats]) -> Self {
         let capacity: u64 = workers
             .iter()

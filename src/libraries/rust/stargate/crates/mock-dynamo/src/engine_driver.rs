@@ -122,7 +122,10 @@ impl EngineRequest {
 
     /// Waits for the next output token after the first.
     pub(crate) async fn next_token(&mut self) {
-        while !matches!(self.next_event().await, EngineEvent::Token { .. }) {}
+        match self.next_event().await {
+            EngineEvent::Token { .. } => {}
+            event => unreachable!("requested more output tokens than submitted, got {event:?}"),
+        }
     }
 
     /// Waits until the request leaves the engine.
