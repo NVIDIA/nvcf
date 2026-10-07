@@ -61,6 +61,7 @@ async fn routing_expressions_proxy_valid_values_and_reject_before_selection() {
         model,
         CurrentModelStats {
             last_mean_input_tps: 1000.0,
+            max_input_tps: Some(1000.0),
             ..CurrentModelStats::default()
         },
     );
