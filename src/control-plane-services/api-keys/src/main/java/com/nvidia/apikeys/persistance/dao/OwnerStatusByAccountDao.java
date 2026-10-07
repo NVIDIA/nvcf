@@ -35,7 +35,7 @@ import org.springframework.stereotype.Service;
  */
 @Service
 @RequiredArgsConstructor
-public class AccountOwnerStatusDao {
+public class OwnerStatusByAccountDao {
 
     private final OwnerStatusByAccountRepository accountRepository;
     private final OwnerStatusByAccountAndServiceRepository serviceRepository;

@@ -17,37 +17,63 @@
 
 package com.nvidia.apikeys.persistance.dao;
 
+import static com.datastax.oss.driver.api.core.data.ByteUtils.fromHexString;
+import static com.datastax.oss.driver.api.core.data.ByteUtils.toHexString;
+
 import com.datastax.oss.driver.api.core.cql.ResultSet;
 import com.nvidia.apikeys.converters.KeyOwnerVoBuilder;
 import com.nvidia.apikeys.config.exceptions.CassandraException;
+import com.nvidia.apikeys.persistance.models.KeyByAccountAndOwnerAndServiceModel;
 import com.nvidia.apikeys.persistance.models.KeyByOwnerAndServiceModel;
 import com.nvidia.apikeys.persistance.models.KeyModel;
+import com.nvidia.apikeys.persistance.repositories.KeyByAccountAndOwnerAndServiceRepository;
 import com.nvidia.apikeys.persistance.repositories.KeyByOwnerAndServiceRepository;
 import com.nvidia.apikeys.persistance.repositories.KeyRepository;
+import com.nvidia.apikeys.vo.KeysByAccountSliceVo;
+import com.nvidia.apikeys.vo.KeyByAccountAndOwnerAndServiceVo;
 import com.nvidia.apikeys.vo.KeyByOwnerAndServiceVo;
 import com.nvidia.apikeys.vo.KeyOwnerType;
 import com.nvidia.apikeys.vo.KeyOwnerVo;
 import com.nvidia.apikeys.vo.KeyVo;
 import com.nvidia.apikeys.vo.SavedKeyVo;
+import com.nvidia.boot.exceptions.BadRequestException;
 import com.nvidia.boot.exceptions.UnprocessableEntityException;
 import java.time.Clock;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Stream;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.cassandra.core.CassandraBatchOperations;
 import org.springframework.data.cassandra.core.CassandraTemplate;
 import org.springframework.data.cassandra.core.WriteResult;
+import org.springframework.data.cassandra.core.query.CassandraPageRequest;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Service;
 
+/**
+ * Key persistence. Every key has a hash lookup row in keys, read by introspection, and a
+ * management row in an index table. Saves and deletes write both rows in one logged batch.
+ *
+ * <p>Legacy keys are indexed per user in keys_by_owner_and_service. Keys issued for a specific
+ * account are indexed in keys_by_account_owner_and_service and use the account key methods.
+ */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class KeysDao {
 
+    private static final String MESG_INVALID_CURSOR = "Invalid cursor: '%s'";
+    private static final String MESG_INVALID_LIMIT = "Invalid limit: '%d'";
+
     private final KeyRepository keyRepository;
     private final KeyByOwnerAndServiceRepository keyByOwnerAndServiceRepository;
+    private final KeyByAccountAndOwnerAndServiceRepository keyByAccountAndOwnerAndServiceRepository;
     private final KeyModelConverter keyConverter;
-    private final KeyByOwnerAndServiceModelConverter keyByOwnerAndServiceConverter;
     private final KeyOwnerVoBuilder keyOwnerVoBuilder;
     private final Clock clock;
     private final CassandraTemplate cassandraTemplate;
@@ -59,7 +85,7 @@ public class KeysDao {
 
         // populate reverse lookup
         KeyByOwnerAndServiceVo keyByOwnerAndServiceVo = new KeyByOwnerAndServiceVo(key, owner);
-        var keyByOwnerAndServiceModel = keyByOwnerAndServiceConverter.voToModel(
+        var keyByOwnerAndServiceModel = keyConverter.voToModel(
                 keyByOwnerAndServiceVo);
 
         CassandraBatchOperations batchOperations = cassandraTemplate.batchOps()
@@ -125,7 +151,7 @@ public class KeysDao {
                 .keyStatus(key.getKeyStatus())
                 .build();
 
-        var keyByOwnerAndServiceModel = keyByOwnerAndServiceConverter.voToModel(key);
+        var keyByOwnerAndServiceModel = keyConverter.voToModel(key);
 
         CassandraBatchOperations batchOperations = cassandraTemplate.batchOps()
                 .delete(List.of(keyModel))
@@ -160,12 +186,131 @@ public class KeysDao {
                 .toList();
     }
 
+    public KeyByAccountAndOwnerAndServiceVo saveAccountKey(KeyVo key) {
+        if (key.getNcaId() == null) {
+            throw new IllegalArgumentException("nca_id is required for account-scoped keys");
+        }
+
+        KeyModel keyModel = keyConverter.voToModel(key);
+        KeyByAccountAndOwnerAndServiceModel accountKeyModel =
+                keyConverter.voToModel(KeyByAccountAndOwnerAndServiceVo.from(key));
+
+        WriteResult writeResult = cassandraTemplate.batchOps()
+                .insert(List.of(keyModel))
+                .insert(List.of(accountKeyModel))
+                .execute();
+
+        if (!writeResult.wasApplied()) {
+            throw new CassandraException("Failed to write account key into db");
+        }
+
+        if (getKeyByHash(key.getKeyHash()).isEmpty()) {
+            throw new CassandraException("Failed to read saved key");
+        }
+
+        return getAccountKey(key.getNcaId(), key.getOwnerType(), key.getOwnerId(),
+                             key.getIssuerServiceId(), key.getKeyId())
+                .orElseThrow(() -> new CassandraException("Failed to read saved account key"));
+    }
+
+    public Optional<KeyByAccountAndOwnerAndServiceVo> getAccountKey(
+            String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
+            String keyId) {
+        return keyByAccountAndOwnerAndServiceRepository
+                .findByNcaIdAndOwnerTypeAndOwnerIdAndIssuerServiceIdAndKeyId(
+                        ncaId, ownerType, ownerId, issuerServiceId, keyId)
+                .map(keyConverter::modelToVo);
+    }
+
+    public Stream<KeyByAccountAndOwnerAndServiceVo> listAccountKeys(
+            String ncaId, KeyOwnerType ownerType, String ownerId) {
+        return keyByAccountAndOwnerAndServiceRepository
+                .findByNcaIdAndOwnerTypeAndOwnerId(ncaId, ownerType, ownerId)
+                .map(keyConverter::modelToVo);
+    }
+
+    public Stream<KeyByAccountAndOwnerAndServiceVo> listAccountKeys(
+            String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId) {
+        return keyByAccountAndOwnerAndServiceRepository
+                .findByNcaIdAndOwnerTypeAndOwnerIdAndIssuerServiceId(
+                        ncaId, ownerType, ownerId, issuerServiceId)
+                .map(keyConverter::modelToVo);
+    }
+
+    public KeysByAccountSliceVo listKeysByAccount(String ncaId, int limit, String cursor) {
+        return sliceAccountKeys(
+                pageable -> keyByAccountAndOwnerAndServiceRepository.findByNcaId(ncaId, pageable),
+                limit, cursor);
+    }
+
+    public KeysByAccountSliceVo listKeysByAccountAndService(
+            String ncaId, String issuerServiceId, int limit, String cursor) {
+        return sliceAccountKeys(
+                pageable -> keyByAccountAndOwnerAndServiceRepository.findByNcaIdAndIssuerServiceId(
+                        ncaId, issuerServiceId, pageable),
+                limit, cursor);
+    }
+
+    public void deleteAccountKey(KeyByAccountAndOwnerAndServiceVo key) {
+        KeyModel keyModel = KeyModel.builder()
+                .keyHash(key.getKeyHash())
+                .keyStatus(key.getKeyStatus())
+                .build();
+
+        KeyByAccountAndOwnerAndServiceModel accountKeyModel = KeyByAccountAndOwnerAndServiceModel.builder()
+                .ncaId(key.getNcaId())
+                .ownerType(key.getOwnerType())
+                .ownerId(key.getOwnerId())
+                .issuerServiceId(key.getIssuerServiceId())
+                .keyId(key.getKeyId())
+                .build();
+
+        CassandraBatchOperations batchOperations = cassandraTemplate.batchOps()
+                .delete(List.of(keyModel))
+                .delete(List.of(accountKeyModel));
+
+        if (!batchOperations.execute().wasApplied()) {
+            throw new CassandraException("Failed to delete account key.");
+        }
+    }
+
+    private KeysByAccountSliceVo sliceAccountKeys(
+            Function<Pageable, Slice<KeyByAccountAndOwnerAndServiceModel>> query,
+            int limit, String cursor) {
+        if (limit < 1) {
+            throw new BadRequestException(MESG_INVALID_LIMIT.formatted(limit));
+        }
+        Slice<KeyByAccountAndOwnerAndServiceModel> pagedResult;
+        try {
+            var byteBuffer = cursor == null ? null : fromHexString(cursor);
+            var pageRequest = CassandraPageRequest.of(PageRequest.of(0, limit), byteBuffer);
+            pagedResult = query.apply(pageRequest);
+        } catch (RuntimeException e) {
+            if (cursor == null) {
+                throw e;
+            }
+            var mesg = MESG_INVALID_CURSOR.formatted(cursor);
+            log.error(mesg);
+            throw new BadRequestException(mesg, e);
+        }
+
+        var keys = pagedResult.getContent().stream()
+                .map(keyConverter::modelToVo)
+                .toList();
+        var builder = KeysByAccountSliceVo.builder().keys(keys);
+        if (pagedResult.hasNext()) {
+            var pagingState = ((CassandraPageRequest) pagedResult.getPageable()).getPagingState();
+            builder.cursor(toHexString(pagingState));
+            builder.limit(limit);
+        }
+        return builder.build();
+    }
 
     private KeyVo modelToValidatedVo(KeyModel keyModel) {
         return keyConverter.modelToVo(keyModel);
     }
 
     private KeyByOwnerAndServiceVo modelToValidatedVo(KeyByOwnerAndServiceModel model) {
-        return keyByOwnerAndServiceConverter.modelToVo(model);
+        return keyConverter.modelToVo(model);
     }
 }

@@ -17,7 +17,7 @@
 
 package com.nvidia.apikeys.vo;
 
-import com.nvidia.apikeys.persistance.models.KeyByAccountOwnerAndServiceModel;
+import com.nvidia.apikeys.persistance.models.KeyByAccountAndOwnerAndServiceModel;
 import com.nvidia.boot.jwt.services.mapping.annotation.ValueObject;
 import java.time.Instant;
 import java.util.Set;
@@ -30,8 +30,8 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-@ValueObject(model = KeyByAccountOwnerAndServiceModel.class)
-public class KeyByAccountOwnerAndServiceVo {
+@ValueObject(model = KeyByAccountAndOwnerAndServiceModel.class)
+public class KeyByAccountAndOwnerAndServiceVo {
 
     private String ncaId;
     private KeyOwnerType ownerType;
@@ -49,9 +49,9 @@ public class KeyByAccountOwnerAndServiceVo {
     private String description;
     private Set<String> audienceServiceIds;
 
-    public static KeyByAccountOwnerAndServiceVo from(KeyVo key) {
+    public static KeyByAccountAndOwnerAndServiceVo from(KeyVo key) {
         // authorizations stay only on the keys table
-        return KeyByAccountOwnerAndServiceVo.builder()
+        return KeyByAccountAndOwnerAndServiceVo.builder()
                 .ncaId(key.getNcaId())
                 .ownerType(key.getOwnerType())
                 .ownerId(key.getOwnerId())

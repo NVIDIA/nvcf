@@ -17,33 +17,33 @@
 
 package com.nvidia.apikeys.persistance.repositories;
 
-import com.nvidia.apikeys.persistance.models.KeyByAccountOwnerAndServiceModel;
+import com.nvidia.apikeys.persistance.models.KeyByAccountAndOwnerAndServiceModel;
 import com.nvidia.apikeys.vo.KeyOwnerType;
-import java.util.List;
 import java.util.Optional;
+import java.util.stream.Stream;
 import org.springframework.data.cassandra.repository.MapIdCassandraRepository;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public interface KeyByAccountOwnerAndServiceRepository extends
-        MapIdCassandraRepository<KeyByAccountOwnerAndServiceModel> {
+public interface KeyByAccountAndOwnerAndServiceRepository extends
+        MapIdCassandraRepository<KeyByAccountAndOwnerAndServiceModel> {
 
-    List<KeyByAccountOwnerAndServiceModel> findByNcaIdAndOwnerTypeAndOwnerId(
+    Stream<KeyByAccountAndOwnerAndServiceModel> findByNcaIdAndOwnerTypeAndOwnerId(
             String ncaId, KeyOwnerType ownerType, String ownerId);
 
-    List<KeyByAccountOwnerAndServiceModel> findByNcaIdAndOwnerTypeAndOwnerIdAndIssuerServiceId(
+    Stream<KeyByAccountAndOwnerAndServiceModel> findByNcaIdAndOwnerTypeAndOwnerIdAndIssuerServiceId(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId);
 
-    Optional<KeyByAccountOwnerAndServiceModel>
+    Optional<KeyByAccountAndOwnerAndServiceModel>
             findByNcaIdAndOwnerTypeAndOwnerIdAndIssuerServiceIdAndKeyId(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             String keyId);
 
     // served by storage-attached indexes, not by the partition key
-    Slice<KeyByAccountOwnerAndServiceModel> findByNcaId(String ncaId, Pageable pageable);
+    Slice<KeyByAccountAndOwnerAndServiceModel> findByNcaId(String ncaId, Pageable pageable);
 
-    Slice<KeyByAccountOwnerAndServiceModel> findByNcaIdAndIssuerServiceId(
+    Slice<KeyByAccountAndOwnerAndServiceModel> findByNcaIdAndIssuerServiceId(
             String ncaId, String issuerServiceId, Pageable pageable);
 }

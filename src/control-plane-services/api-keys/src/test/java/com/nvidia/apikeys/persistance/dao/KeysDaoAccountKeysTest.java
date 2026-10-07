@@ -31,10 +31,11 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.nvidia.apikeys.config.exceptions.CassandraException;
-import com.nvidia.apikeys.persistance.models.KeyByAccountOwnerAndServiceModel;
+import com.nvidia.apikeys.persistance.models.KeyByAccountAndOwnerAndServiceModel;
 import com.nvidia.apikeys.persistance.models.KeyModel;
-import com.nvidia.apikeys.persistance.repositories.KeyByAccountOwnerAndServiceRepository;
-import com.nvidia.apikeys.vo.KeyByAccountOwnerAndServiceVo;
+import com.nvidia.apikeys.persistance.repositories.KeyByAccountAndOwnerAndServiceRepository;
+import com.nvidia.apikeys.persistance.repositories.KeyRepository;
+import com.nvidia.apikeys.vo.KeyByAccountAndOwnerAndServiceVo;
 import com.nvidia.apikeys.vo.KeyVo;
 import com.nvidia.boot.exceptions.BadRequestException;
 import java.util.List;
@@ -53,20 +54,18 @@ import org.springframework.data.cassandra.core.WriteResult;
 import org.springframework.data.domain.Pageable;
 
 @ExtendWith(MockitoExtension.class)
-class AccountKeysDaoTest {
+class KeysDaoAccountKeysTest {
 
     private static final KeyVo KEY = KEY_VO_1.toBuilder().ncaId("nca-1").build();
-    private static final KeyByAccountOwnerAndServiceVo ACCOUNT_KEY =
-            KeyByAccountOwnerAndServiceVo.from(KEY);
+    private static final KeyByAccountAndOwnerAndServiceVo ACCOUNT_KEY =
+            KeyByAccountAndOwnerAndServiceVo.from(KEY);
 
     @Mock
-    private KeyByAccountOwnerAndServiceRepository repository;
+    private KeyByAccountAndOwnerAndServiceRepository repository;
     @Mock
     private KeyModelConverter keyConverter;
     @Mock
-    private KeyByAccountOwnerAndServiceModelConverter accountKeyConverter;
-    @Mock
-    private KeysDao keysDao;
+    private KeyRepository keyRepository;
     @Mock
     private CassandraTemplate cassandraTemplate;
     @Mock
@@ -76,10 +75,10 @@ class AccountKeysDaoTest {
     @Mock
     private KeyModel keyModel;
     @Mock
-    private KeyByAccountOwnerAndServiceModel accountKeyModel;
+    private KeyByAccountAndOwnerAndServiceModel accountKeyModel;
 
     @InjectMocks
-    private AccountKeysDao dao;
+    private KeysDao dao;
 
     @Test
     void saveThrowsWhenBatchIsNotApplied() {
@@ -87,19 +86,19 @@ class AccountKeysDaoTest {
         when(writeResult.wasApplied()).thenReturn(false);
 
         assertThrowsExceptionWithDetails(
-                CassandraException.class, () -> dao.save(KEY),
+                CassandraException.class, () -> dao.saveAccountKey(KEY),
                 "Failed to write account key into db");
-        verify(keysDao, never()).getKeyByHash(any());
+        verify(keyRepository, never()).findByKeyHash(any());
     }
 
     @Test
     void saveThrowsWhenHashRowCannotBeReadBack() {
         mockInsertBatch();
         when(writeResult.wasApplied()).thenReturn(true);
-        when(keysDao.getKeyByHash(KEY.getKeyHash())).thenReturn(Optional.empty());
+        when(keyRepository.findByKeyHash(KEY.getKeyHash())).thenReturn(Optional.empty());
 
         assertThrowsExceptionWithDetails(
-                CassandraException.class, () -> dao.save(KEY),
+                CassandraException.class, () -> dao.saveAccountKey(KEY),
                 "Failed to read saved key");
     }
 
@@ -107,14 +106,15 @@ class AccountKeysDaoTest {
     void saveThrowsWhenAccountRowCannotBeReadBack() {
         mockInsertBatch();
         when(writeResult.wasApplied()).thenReturn(true);
-        when(keysDao.getKeyByHash(KEY.getKeyHash())).thenReturn(Optional.of(KEY));
+        when(keyRepository.findByKeyHash(KEY.getKeyHash())).thenReturn(Optional.of(keyModel));
+        when(keyConverter.modelToVo(keyModel)).thenReturn(KEY);
         when(repository.findByNcaIdAndOwnerTypeAndOwnerIdAndIssuerServiceIdAndKeyId(
                 KEY.getNcaId(), KEY.getOwnerType(), KEY.getOwnerId(), KEY.getIssuerServiceId(),
                 KEY.getKeyId()))
                 .thenReturn(Optional.empty());
 
         assertThrowsExceptionWithDetails(
-                CassandraException.class, () -> dao.save(KEY),
+                CassandraException.class, () -> dao.saveAccountKey(KEY),
                 "Failed to read saved account key");
     }
 
@@ -122,14 +122,15 @@ class AccountKeysDaoTest {
     void saveWritesBothRowsInOneBatch() {
         mockInsertBatch();
         when(writeResult.wasApplied()).thenReturn(true);
-        when(keysDao.getKeyByHash(KEY.getKeyHash())).thenReturn(Optional.of(KEY));
+        when(keyRepository.findByKeyHash(KEY.getKeyHash())).thenReturn(Optional.of(keyModel));
+        when(keyConverter.modelToVo(keyModel)).thenReturn(KEY);
         when(repository.findByNcaIdAndOwnerTypeAndOwnerIdAndIssuerServiceIdAndKeyId(
                 KEY.getNcaId(), KEY.getOwnerType(), KEY.getOwnerId(), KEY.getIssuerServiceId(),
                 KEY.getKeyId()))
                 .thenReturn(Optional.of(accountKeyModel));
-        when(accountKeyConverter.modelToVo(accountKeyModel)).thenReturn(ACCOUNT_KEY);
+        when(keyConverter.modelToVo(accountKeyModel)).thenReturn(ACCOUNT_KEY);
 
-        assertThat(dao.save(KEY)).isEqualTo(ACCOUNT_KEY);
+        assertThat(dao.saveAccountKey(KEY)).isEqualTo(ACCOUNT_KEY);
         verify(batchOperations).insert(List.of(keyModel));
         verify(batchOperations).insert(List.of(accountKeyModel));
         verify(batchOperations).execute();
@@ -141,20 +142,20 @@ class AccountKeysDaoTest {
         when(batchOperations.delete(anyList())).thenReturn(batchOperations);
         when(writeResult.wasApplied()).thenReturn(true);
 
-        dao.delete(ACCOUNT_KEY);
+        dao.deleteAccountKey(ACCOUNT_KEY);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<?>> deleted = ArgumentCaptor.forClass(List.class);
         verify(batchOperations, times(2)).delete(deleted.capture());
         KeyModel hashRow = (KeyModel) deleted.getAllValues().get(0).get(0);
-        KeyByAccountOwnerAndServiceModel accountRow =
-                (KeyByAccountOwnerAndServiceModel) deleted.getAllValues().get(1).get(0);
+        KeyByAccountAndOwnerAndServiceModel accountRow =
+                (KeyByAccountAndOwnerAndServiceModel) deleted.getAllValues().get(1).get(0);
         assertThat(hashRow.getKeyHash()).isEqualTo(KEY.getKeyHash());
         assertThat(hashRow.getKeyDetails()).isNull();
         assertThat(accountRow.getNcaId()).isEqualTo("nca-1");
         assertThat(accountRow.getKeyId()).isEqualTo(KEY.getKeyId());
         assertThat(accountRow.getKeyDetails()).isNull();
-        verify(accountKeyConverter, never()).voToModel(any());
+        verifyNoInteractions(keyConverter);
     }
 
     @Test
@@ -164,7 +165,7 @@ class AccountKeysDaoTest {
         when(writeResult.wasApplied()).thenReturn(false);
 
         assertThrowsExceptionWithDetails(
-                CassandraException.class, () -> dao.delete(ACCOUNT_KEY),
+                CassandraException.class, () -> dao.deleteAccountKey(ACCOUNT_KEY),
                 "Failed to delete account key.");
     }
 
@@ -176,7 +177,7 @@ class AccountKeysDaoTest {
     private void mockInsertBatch() {
         mockBatch();
         when(keyConverter.voToModel(KEY)).thenReturn(keyModel);
-        when(accountKeyConverter.voToModel(ACCOUNT_KEY)).thenReturn(accountKeyModel);
+        when(keyConverter.voToModel(ACCOUNT_KEY)).thenReturn(accountKeyModel);
         when(batchOperations.insert(anyList())).thenReturn(batchOperations);
     }
 
@@ -185,7 +186,7 @@ class AccountKeysDaoTest {
         var failure = new IllegalStateException("cassandra unavailable");
         when(repository.findByNcaId(eq("nca-1"), any(Pageable.class))).thenThrow(failure);
 
-        assertThatThrownBy(() -> dao.listByAccount("nca-1", 10, null)).isSameAs(failure);
+        assertThatThrownBy(() -> dao.listKeysByAccount("nca-1", 10, null)).isSameAs(failure);
     }
 
     @Test
@@ -196,7 +197,7 @@ class AccountKeysDaoTest {
 
         assertThrowsExceptionWithDetails(
                 BadRequestException.class,
-                () -> dao.listByAccountAndService("nca-1", "service-a", 10, "0x00"),
+                () -> dao.listKeysByAccountAndService("nca-1", "service-a", 10, "0x00"),
                 "Invalid cursor: '0x00'");
     }
 
@@ -204,11 +205,11 @@ class AccountKeysDaoTest {
     @ValueSource(ints = {0, -1})
     void limitBelowOneIsBadRequestEvenWithCursor(int limit) {
         assertThrowsExceptionWithDetails(
-                BadRequestException.class, () -> dao.listByAccount("nca-1", limit, null),
+                BadRequestException.class, () -> dao.listKeysByAccount("nca-1", limit, null),
                 "Invalid limit: '" + limit + "'");
         assertThrowsExceptionWithDetails(
                 BadRequestException.class,
-                () -> dao.listByAccountAndService("nca-1", "service-a", limit, "0x00"),
+                () -> dao.listKeysByAccountAndService("nca-1", "service-a", limit, "0x00"),
                 "Invalid limit: '" + limit + "'");
         verifyNoInteractions(repository);
     }

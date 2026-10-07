@@ -47,7 +47,7 @@ import org.springframework.test.context.ContextConfiguration;
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "spring.profiles.active=integrationtest")
 @ContextConfiguration(initializers = IntegrationTestConfiguration.Initializer.class)
-class AccountOwnerStatusDaoIntegrationTest {
+class OwnerStatusByAccountDaoIntegrationTest {
 
     private static final String NCA_1 = "nca-1";
     private static final String NCA_2 = "nca-2";
@@ -56,7 +56,7 @@ class AccountOwnerStatusDaoIntegrationTest {
     private static final String SERVICE_B = "service-b";
 
     @Autowired
-    private AccountOwnerStatusDao dao;
+    private OwnerStatusByAccountDao dao;
 
     @BeforeEach
     void setUp() {

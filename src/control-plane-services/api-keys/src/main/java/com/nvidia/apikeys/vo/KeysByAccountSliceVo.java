@@ -24,8 +24,8 @@ import lombok.Builder;
  * One slice of account-scoped keys. cursor and limit are null on the last slice.
  */
 @Builder
-public record AccountKeysSliceVo(
-        List<KeyByAccountOwnerAndServiceVo> keys,
+public record KeysByAccountSliceVo(
+        List<KeyByAccountAndOwnerAndServiceVo> keys,
         String cursor,
         Integer limit) {
 }

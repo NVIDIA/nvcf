@@ -22,13 +22,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
 
-class KeyByAccountOwnerAndServiceVoTest {
+class KeyByAccountAndOwnerAndServiceVoTest {
 
     @Test
     void fromCopiesEveryManagementFieldFromKey() {
         KeyVo key = KEY_VO_1.toBuilder().ncaId("nca-1").build();
 
-        KeyByAccountOwnerAndServiceVo vo = KeyByAccountOwnerAndServiceVo.from(key);
+        KeyByAccountAndOwnerAndServiceVo vo = KeyByAccountAndOwnerAndServiceVo.from(key);
 
         assertThat(vo.getNcaId()).isEqualTo("nca-1");
         assertThat(vo.getOwnerType()).isEqualTo(key.getOwnerType());
@@ -47,6 +47,6 @@ class KeyByAccountOwnerAndServiceVoTest {
 
     @Test
     void fromKeepsNullAccount() {
-        assertThat(KeyByAccountOwnerAndServiceVo.from(KEY_VO_1).getNcaId()).isNull();
+        assertThat(KeyByAccountAndOwnerAndServiceVo.from(KEY_VO_1).getNcaId()).isNull();
     }
 }
