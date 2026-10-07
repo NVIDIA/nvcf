@@ -400,12 +400,14 @@ that algorithm's detailed configuration prevents startup.
 | `cache_affinity_wait_ms` | unsigned integer | `0` | Minimum elapsed time before global fallback, or before ranking-band fallback in `pulsar-wait-and-widen`. Fallback bucket widening starts at this time. |
 | `cache_affinity_input_tokens_scale` | number | `1.0` | Request-prefill multiplier during affinity selection, from `0.0` through `1.0`. Does not discount queued work or global selection. |
 
-`pulsar-wait-and-widen` accepts `cache_affinity_virtual_nodes` but ignores it,
-because the Pulsar ranking supplies affinity. It uses
+`pulsar-wait-and-widen` configuration accepts `cache_affinity_virtual_nodes`
+but ignores it, because the Pulsar ranking supplies affinity. Routing
+expressions reject it for that algorithm. The algorithm uses
 `cache_affinity_backend_selection_count` as the affinity group size, defaulting
 to `1`. Because the group always exists, `cache_affinity_wait_ms` and
-`cache_affinity_input_tokens_scale` always apply, even when the selection count
-is unset. In `wait-and-widen`, they apply only when the selection count is set.
+`cache_affinity_input_tokens_scale` apply whenever the affinity group is
+checked, even when the selection count is unset. In `wait-and-widen`, they
+apply only when the selection count is set.
 
 `wait-and-widen` and `pulsar-wait-and-widen` support these wait-and-widen fields:
 

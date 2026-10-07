@@ -718,7 +718,8 @@ mod tests {
         for rank in [0, 1, 3, 4] {
             candidates[ranked[rank]].stats.num_running_queries = 1;
         }
-        // Rank 3 has capacity but sits 495 ms behind rank 2's TTFT bucket.
+        // Only rank 3 has capacity, and it sits 495 ms behind the full
+        // clusters that form the first TTFT bucket.
         candidates[ranked[2]].rtt = Duration::from_millis(500);
         let hybrid = affinity_wait_config("bucket-seed", |settings| {
             settings.band_widen_interval_ms = Some(0);
