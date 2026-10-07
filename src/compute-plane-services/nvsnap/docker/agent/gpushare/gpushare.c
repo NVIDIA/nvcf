@@ -88,6 +88,96 @@ static void *cuda_sym(const char *name)
     if (!p_) p_ = (__typeof__(&fn))cuda_sym(STR(fn)); \
     p_ ? p_(__VA_ARGS__) : CUDA_ERROR_NOT_FOUND; })
 
+/* ── IMEX channel ─────────────────────────────────────────────────────── */
+
+/* Fabric handles need the driver client to be subscribed to an IMEX
+ * channel. libcuda subscribes once, with the RM control
+ * NV0000_CTRL_CMD_CLIENT_SUBSCRIBE_TO_IMEX_CHANNEL on its root client,
+ * passing the fd of /dev/nvidia-caps-imex-channels/channelN. A driver
+ * restore (610) closes that fd and re-creates the root client without the
+ * subscription, and libcuda never subscribes again: fabric create, import
+ * and multicast fail with NOT_PERMITTED. So the shim watches libcuda's
+ * ioctls for root clients and the subscription, and after a restore
+ * subscribes the new root client again (imex_resubscribe). The RM ABI is
+ * from open-gpu-kernel-modules (nvos.h, nv_escape.h, ctrl0000client.h). */
+struct rm_control { uint32_t hClient, hObject, cmd, flags; uint64_t params; uint32_t paramsSize, status; };
+struct rm_alloc { uint32_t hRoot, hObjectParent, hObjectNew, hClass; uint64_t pAllocParms, pRights;
+                  uint32_t paramsSize, flags, status; };
+struct rm_subscribe { uint64_t devDescriptor; uint32_t channel, pad; };
+#define NV_ESC_RM_CONTROL 0x2A
+#define NV_ESC_RM_ALLOC 0x2B
+#define NV01_ROOT_CLIENT 0x41
+#define CMD_SUBSCRIBE_IMEX 0xd08
+#define NV_IOC(nr, T) ((3UL << 30) | ((unsigned long)sizeof(T) << 16) | ('F' << 8) | (nr))
+
+#define N_ROOTS 64
+static struct { int fd; uint32_t h; } roots[N_ROOTS];  /* newest root clients, a ring */
+static unsigned n_roots;
+static char imex_path[64];                      /* channel libcuda subscribed to */
+static pthread_mutex_t imex_mu = PTHREAD_MUTEX_INITIALIZER;
+static int (*real_ioctl)(int, unsigned long, ...);
+
+int ioctl(int fd, unsigned long req, ...)
+{
+    va_list ap;
+    va_start(ap, req);
+    void *arg = va_arg(ap, void *);
+    va_end(ap);
+    if (!real_ioctl) {
+        static pthread_once_t once = PTHREAD_ONCE_INIT;
+        pthread_once(&once, init_real_dlsym);
+        real_ioctl = (int (*)(int, unsigned long, ...))real_dlsym(RTLD_NEXT, "ioctl");
+    }
+    int r = real_ioctl(fd, req, arg);
+    if (r || !arg) return r;
+    if (req == NV_IOC(NV_ESC_RM_ALLOC, struct rm_alloc)) {
+        struct rm_alloc *a = arg;
+        if (!a->status && a->hClass == NV01_ROOT_CLIENT) {
+            pthread_mutex_lock(&imex_mu);
+            roots[n_roots % N_ROOTS].fd = fd;
+            roots[n_roots++ % N_ROOTS].h = a->hObjectNew;
+            pthread_mutex_unlock(&imex_mu);
+        }
+    } else if (req == NV_IOC(NV_ESC_RM_CONTROL, struct rm_control)) {
+        struct rm_control *c = arg;
+        if (!c->status && c->cmd == CMD_SUBSCRIBE_IMEX && !imex_path[0]) {
+            struct rm_subscribe *s = (void *)(uintptr_t)c->params;
+            char p[64];
+            snprintf(p, sizeof(p), "/proc/self/fd/%d", (int)s->devDescriptor);
+            pthread_mutex_lock(&imex_mu);
+            ssize_t k = readlink(p, imex_path, sizeof(imex_path) - 1);
+            imex_path[k > 0 ? k : 0] = 0;
+            pthread_mutex_unlock(&imex_mu);
+        }
+    }
+    return r;
+}
+
+/* After a restore: subscribe the process's root clients to the channel
+ * again. libcuda's is among them, next to others (NVML's); stale ones are
+ * refused (invalid client). Returns 0 if one was subscribed, or if libcuda
+ * never was. */
+static int imex_resubscribe(void)
+{
+    pthread_mutex_lock(&imex_mu);
+    int ok = !imex_path[0], ch = ok ? -1 : open(imex_path, O_RDONLY | O_CLOEXEC), ns = 0;
+    uint32_t st = 0;
+    for (unsigned i = 0; ch >= 0 && i < N_ROOTS && i < n_roots; i++) {
+        unsigned k = (n_roots - 1 - i) % N_ROOTS;
+        struct rm_subscribe s = { (uint64_t)ch, (uint32_t)-1, 0 };
+        struct rm_control c = { roots[k].h, roots[k].h, CMD_SUBSCRIBE_IMEX, 0, (uint64_t)(uintptr_t)&s, sizeof(s), 0 };
+        if (real_ioctl(roots[k].fd, NV_IOC(NV_ESC_RM_CONTROL, struct rm_control), &c) == 0 && !(st = c.status))
+            ns++;
+    }
+    ok |= ns > 0;
+    if (ch >= 0) close(ch);
+    if (!ok) logf_("IMEX channel %s: subscribing again failed (status %#x)", imex_path, st);
+    else if (getenv("NVSNAP_GPUSHARE_DEBUG"))
+        logf_("IMEX channel '%s': subscribed %d of %u root client(s) again", imex_path, ns, n_roots);
+    pthread_mutex_unlock(&imex_mu);
+    return ok ? 0 : -1;
+}
+
 /* Wrapped functions: real pointer, set from whichever lookup path the
  * application used first (dlsym, cuGetProcAddress or direct linking). */
 static __typeof__(&cuMemMap) r_map;
@@ -105,6 +195,7 @@ static __typeof__(&cuMulticastAddDevice) r_mc_add;
 static __typeof__(&cuMulticastBindMem) r_mc_bind_mem;
 static __typeof__(&cuMulticastBindAddr) r_mc_bind_addr;
 static __typeof__(&cuMulticastUnbind) r_mc_unbind;
+static __typeof__(&cuMemCreate) r_mem_create;
 
 static void *real_of(void **p, const char *name)
 {
@@ -143,7 +234,10 @@ struct map {
 };
 
 /* A mapping of a local allocation (to re-export by VA if needed). */
-struct lmap { CUdeviceptr va; size_t size; CUmemGenericAllocationHandle h; };
+struct lmap { CUdeviceptr va; size_t size; CUmemGenericAllocationHandle h; size_t off; };
+/* A local allocation the shim replaced (see replace_alloc): the app's
+ * handle stands for the new one. */
+struct swap { CUmemGenericAllocationHandle app_h, cur_h; };
 
 /* An fd this process exported (dup kept until "release", to identify it).
  * id 0: the handle h was not mapped yet; w_map assigns the id (NCCL exports
@@ -175,6 +269,7 @@ VEC(struct imp, imps);
 VEC(struct map, maps);
 VEC(struct lmap, lmaps);
 VEC(struct lmap, rets);  /* handles from cuMemRetainAllocationHandle */
+VEC(struct swap, swaps);
 /* cuMemAlloc backed by cuMem (see "CUDA IPC on cuMem"). */
 struct valloc {
     CUdeviceptr va; size_t size; CUmemGenericAllocationHandle h; CUdevice dev;
@@ -257,6 +352,14 @@ static int find_imp(CUmemGenericAllocationHandle h)
     return -1;
 }
 
+/* The live handle for a local allocation handle of the app (mu held). */
+static CUmemGenericAllocationHandle own_h(CUmemGenericAllocationHandle h)
+{
+    for (int i = 0; i < n_swaps; i++)
+        if (swaps[i].app_h == h) return swaps[i].cur_h;
+    return h;
+}
+
 static int find_mc(CUmemGenericAllocationHandle h)
 {
     for (int i = 0; i < n_mcs; i++)
@@ -270,11 +373,14 @@ static const char *errstr(CUresult r);
 static CUresult mc_recreate(struct mcobj *m)
 {
     CUmemGenericAllocationHandle h;
-    /* A restored process may not use fabric handles (driver 610: NOT_PERMITTED);
-     * the importers are on this node and re-import as POSIX fds. */
+    /* Without an IMEX channel subscription (see "IMEX channel"), fabric is
+     * refused: importers on this node re-import as POSIX fds. */
     CUmulticastObjectProp p = m->prop;
-    if (p.handleTypes & CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) p.handleTypes &= ~CU_MEM_HANDLE_TYPE_FABRIC;
     CUresult r = REAL(r_mc_create, "cuMulticastCreate")(&h, &p);
+    if (r == CUDA_ERROR_NOT_PERMITTED && (p.handleTypes & CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)) {
+        p.handleTypes &= ~CU_MEM_HANDLE_TYPE_FABRIC;
+        r = REAL(r_mc_create, "cuMulticastCreate")(&h, &p);
+    }
     if (r != CUDA_SUCCESS) { logf_("cuMulticastCreate: %s", errstr(r)); return r; }
     for (int d = 0; r == CUDA_SUCCESS && d < m->ndev; d++)
         if ((r = REAL(r_mc_add, "cuMulticastAddDevice")(h, m->devs[d])) != CUDA_SUCCESS)
@@ -426,16 +532,16 @@ static CUresult fetch_import(int peer, unsigned long long key, int fab, CUmemGen
     return r;
 }
 
-/* Re-import: a restored process may not import fabric handles (driver 610:
- * NOT_PERMITTED), so ask for a POSIX fd first; memory created with fabric
- * handles also allows fds (see w_mem_create). */
+/* Re-import what was shared as a fabric handle as a fabric handle again
+ * (see "IMEX channel"), and as a POSIX fd if that fails: memory created
+ * with fabric handles also allows fds (see w_mem_create). */
 static CUresult refetch(int peer, unsigned long long key, int fab, CUmemGenericAllocationHandle *h,
                         char *rep, size_t n)
 {
-    CUresult r = fetch_import(peer, key, 0, h, rep, n);
+    CUresult r = fetch_import(peer, key, fab, h, rep, n);
     if (r != CUDA_SUCCESS && fab && strncmp(rep, "err gone", 8)) {
-        logf_("re-import id %llu from pid %d as fd: %s (%s); trying fabric", key, peer, errstr(r), rep);
-        r = fetch_import(peer, key, 1, h, rep, n);
+        logf_("re-import id %llu from pid %d as fabric: %s (%s); trying fd", key, peer, errstr(r), rep);
+        r = fetch_import(peer, key, 0, h, rep, n);
     }
     return r;
 }
@@ -844,6 +950,7 @@ static void do_load(char *reply, size_t n, const char *cache_dir)
 {
     if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
     snprintf(cache, sizeof(cache), "%s", cache_dir ? cache_dir : "");
+    imex_resubscribe();  /* before any fabric use (see "IMEX channel") */
     st_hit = st_miss = 0;
     int dev = push_any_ctx(), nl = 0;
     size_t nb = 0;
@@ -1049,6 +1156,72 @@ static void send_export(int s, CUresult r, int fab, int fd, const CUmemFabricHan
     if (fd >= 0) close(fd);
 }
 
+/* Driver 610 will not export an allocation of 512 MiB or more that a
+ * restored process created before its checkpoint (INVALID_VALUE), while
+ * one created afterwards exports. FlashInfer's all-reduce workspace is
+ * such an allocation. So the app's allocation mapped by lmaps[k] is
+ * replaced (mu held): a new one with the same properties gets its
+ * contents and takes its place, and the app's reference to the old one is
+ * dropped. Only an allocation mapped once, from offset 0, is replaced. */
+static CUresult replace_alloc(int k)
+{
+    struct lmap *l = &lmaps[k];
+    CUmemGenericAllocationHandle old = l->h, nh;
+    CUmemAllocationProp p;
+    for (int j = 0; j < n_lmaps; j++)
+        if (j != k && lmaps[j].h == old) return CUDA_ERROR_NOT_SUPPORTED;
+    CUresult r = CU(cuMemGetAllocationPropertiesFromHandle, &p, old);
+    if (r != CUDA_SUCCESS) return r;
+    if (l->off || p.location.type != CU_MEM_LOCATION_TYPE_DEVICE) return CUDA_ERROR_NOT_SUPPORTED;
+    CUmemAccessDesc a[MAX_DEV], own = { { CU_MEM_LOCATION_TYPE_DEVICE, p.location.id }, CU_MEM_ACCESS_FLAGS_PROT_READWRITE };
+    int na = 0, ndev = 0;
+    CU(cuDeviceGetCount, &ndev);
+    for (int d = 0; d < ndev && d < MAX_DEV; d++) {
+        CUmemLocation loc = { CU_MEM_LOCATION_TYPE_DEVICE, d };
+        unsigned long long f = CU_MEM_ACCESS_FLAGS_PROT_NONE;
+        if (CU(cuMemGetAccess, &f, &loc, l->va) == CUDA_SUCCESS && f != CU_MEM_ACCESS_FLAGS_PROT_NONE)
+            a[na++] = (CUmemAccessDesc){ loc, (CUmemAccess_flags)f };
+    }
+    int dev = push_dev_ctx(p.location.id);
+    CUdeviceptr tmp = 0;
+    r = REAL(r_mem_create, "cuMemCreate")(&nh, l->size, &p, 0);
+    if (r == CUDA_ERROR_NOT_PERMITTED && (p.requestedHandleTypes & CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)) {
+        p.requestedHandleTypes &= ~CU_MEM_HANDLE_TYPE_FABRIC;  /* see "IMEX channel" */
+        r = REAL(r_mem_create, "cuMemCreate")(&nh, l->size, &p, 0);
+    }
+    if (r != CUDA_SUCCESS) goto out;
+    if ((r = CU(cuMemAddressReserve, &tmp, l->size, 0, 0, 0)) == CUDA_SUCCESS &&
+        (r = REAL(r_map, "cuMemMap")(tmp, l->size, 0, nh, 0)) == CUDA_SUCCESS) {
+        if ((r = REAL(r_set_access, "cuMemSetAccess")(tmp, l->size, &own, 1)) == CUDA_SUCCESS &&
+            (r = CU(cuMemcpyDtoD_v2, tmp, l->va, l->size)) == CUDA_SUCCESS)
+            r = CU(cuCtxSynchronize);
+        REAL(r_unmap, "cuMemUnmap")(tmp, l->size);
+    }
+    if (tmp) CU(cuMemAddressFree, tmp, l->size);
+    if (r == CUDA_SUCCESS && (r = REAL(r_unmap, "cuMemUnmap")(l->va, l->size)) == CUDA_SUCCESS) {
+        if ((r = REAL(r_map, "cuMemMap")(l->va, l->size, 0, nh, 0)) == CUDA_SUCCESS && na)
+            r = REAL(r_set_access, "cuMemSetAccess")(l->va, l->size, a, na);
+        if (r != CUDA_SUCCESS) {  /* put the old one back */
+            REAL(r_unmap, "cuMemUnmap")(l->va, l->size);
+            if (REAL(r_map, "cuMemMap")(l->va, l->size, 0, old, 0) != CUDA_SUCCESS ||
+                (na && REAL(r_set_access, "cuMemSetAccess")(l->va, l->size, a, na) != CUDA_SUCCESS))
+                logf_("replace %#llx: could not map the old allocation back", (unsigned long long)l->va);
+        }
+    }
+    if (r != CUDA_SUCCESS) { REAL(r_release, "cuMemRelease")(nh); goto out; }
+    REAL(r_release, "cuMemRelease")(old);
+    l->h = nh;
+    for (int j = 0; j < n_mcbinds; j++)
+        if (mcbinds[j].memh == old) mcbinds[j].memh = nh;
+    int j = 0;
+    while (j < n_swaps && swaps[j].cur_h != old) j++;
+    if (j < n_swaps) swaps[j].cur_h = nh;
+    else PUSH(swaps, ((struct swap){ old, nh }));
+out:
+    pop_ctx(dev);
+    return r;
+}
+
 /* Export our allocation or multicast object `id` afresh (mu held, a
  * context current): an fd, or (fab) a fabric handle. NOT_FOUND: freed. */
 static CUresult export_id(unsigned long long id, int fab, int *fd, CUmemFabricHandle *fh)
@@ -1076,6 +1249,15 @@ static CUresult export_id(unsigned long long id, int fab, int *fd, CUmemFabricHa
     if (r == CUDA_SUCCESS)
         r = REAL(r_export, "cuMemExportToShareableHandle")(out, h, type, 0);
     if (retained && h) REAL(r_release, "cuMemRelease")(h);
+    if (r == CUDA_ERROR_INVALID_VALUE && retained) {  /* see replace_alloc */
+        int k = 0;
+        while (k < n_lmaps && lmaps[k].va != xregs[i].va) k++;
+        CUresult r2 = k < n_lmaps ? replace_alloc(k) : CUDA_ERROR_NOT_FOUND;
+        logf_("export id %llu va %#llx: %s; replaced the allocation: %s", id, (unsigned long long)xregs[i].va,
+              errstr(r), errstr(r2));
+        if (r2 == CUDA_SUCCESS)
+            r = REAL(r_export, "cuMemExportToShareableHandle")(out, lmaps[k].h, type, 0);
+    }
     if (getenv("NVSNAP_GPUSHARE_DEBUG")) {
         CUmemAllocationProp p = {0};
         CUmemGenericAllocationHandle ph;
@@ -1269,7 +1451,7 @@ static CUresult w_export(void *sh, CUmemGenericAllocationHandle h, CUmemAllocati
 {
     pthread_mutex_lock(&mu);
     int mc = find_mc(h);
-    if (mc >= 0) h = mcs[mc].cur_h;
+    h = mc >= 0 ? mcs[mc].cur_h : own_h(h);
     pthread_mutex_unlock(&mu);
     CUresult r = REAL(r_export, "cuMemExportToShareableHandle")(sh, h, type, flags);
     if (r == CUDA_SUCCESS && type == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
@@ -1372,12 +1554,13 @@ static CUresult w_map(CUdeviceptr va, size_t size, size_t off, CUmemGenericAlloc
     int i = find_imp(h), m = i < 0 ? find_mc(h) : -1;
     if (i >= 0) h = imps[i].cur_h;
     if (m >= 0) h = mcs[m].cur_h;
+    if (i < 0 && m < 0) h = own_h(h);
     CUresult r = REAL(r_map, "cuMemMap")(va, size, off, h, flags);
     if (r == CUDA_SUCCESS) {
         if (i >= 0) PUSH(maps, ((struct map){ .va = va, .size = size, .offset = off, .imp = i }));
         else if (m >= 0) PUSH(mcmaps, ((struct map){ .va = va, .size = size, .offset = off, .imp = m }));
         else {
-            PUSH(lmaps, ((struct lmap){ va, size, h }));
+            PUSH(lmaps, ((struct lmap){ va, size, h, off }));
             for (int j = 0; j < n_exps; j++) if (exps[j].h == h && !exps[j].id) { exps[j].id = xreg_id(va, 0); exps[j].h = 0; }
             for (int j = 0; j < n_fexps; j++) if (fexps[j].h == h && !fexps[j].id) { fexps[j].id = xreg_id(va, 0); fexps[j].h = 0; }
         }
@@ -1419,6 +1602,8 @@ static CUresult w_release(CUmemGenericAllocationHandle h)
     if (i >= 0) { h = imps[i].cur_h; imps[i].app_released = 1; }
     if (i >= 0 && imps[i].ufd && !imp_live(i)) { close(imps[i].ufd); imps[i].ufd = 0; }  /* pins the exporter's memory */
     if (m >= 0) { h = mcs[m].cur_h; mcs[m].app_released = 1; }
+    for (int j = n_swaps - 1; i < 0 && m < 0 && j >= 0; j--)
+        if (swaps[j].app_h == h) { h = swaps[j].cur_h; DEL(swaps, j); }
     for (int j = 0; i < 0 && m < 0 && j < n_mcbinds; j++)
         if (mcbinds[j].memh == h) mcbinds[j].memh_released = 1;
     /* Exported, never mapped: forget it before the handle value is reused. */
@@ -1477,7 +1662,7 @@ static CUresult w_retain(CUmemGenericAllocationHandle *h, void *addr)
         if (a >= lmaps[i].va && a < lmaps[i].va + lmaps[i].size) base = lmaps[i].va;
     int i = 0;
     while (i < n_rets && rets[i].h != *h) i++;
-    if (i == n_rets) PUSH(rets, ((struct lmap){ base, 0, *h }));
+    if (i == n_rets) PUSH(rets, ((struct lmap){ base, 0, *h, 0 }));
     else rets[i].va = base;
     pthread_mutex_unlock(&mu);
     return r;
@@ -1951,14 +2136,43 @@ static CUresult w_ipc_close(CUdeviceptr va)
     return r == CUDA_SUCCESS ? CU(cuMemAddressFree, va, size) : r;
 }
 
-/* Memory shared as fabric handles (NCCL with an IMEX channel) can also be
+/* Fabric handles (IMEX). A restored process may not use them, and the
+ * driver (610) will not export memory created fabric-capable once the
+ * process is restored, so its peers cannot re-import it. With an IMEX
+ * channel, NCCL, PyTorch and FlashInfer create such memory even on one
+ * node, where POSIX fds would do. So unless NVSNAP_GPUSHARE_FABRIC=1, the
+ * shim hides fabric support: the device attribute reads 0 and fabric
+ * creates fail as without an IMEX channel (NOT_PERMITTED), and those
+ * libraries fall back to POSIX fds. Multi-node NVLink needs fabric
+ * handles: set NVSNAP_GPUSHARE_FABRIC=1 there (not checkpointable). */
+static int fabric_hidden(void)
+{
+    static int hidden = -1;
+    if (hidden < 0) {
+        const char *e = getenv("NVSNAP_GPUSHARE_FABRIC");
+        hidden = !(e && !strcmp(e, "1"));
+        if (hidden) logf_("hiding fabric handle support (NVSNAP_GPUSHARE_FABRIC=1 keeps it)");
+    }
+    return hidden;
+}
+
+static __typeof__(&cuDeviceGetAttribute) r_dev_attr;
+
+static CUresult w_dev_attr(int *v, CUdevice_attribute a, CUdevice dev)
+{
+    CUresult r = REAL(r_dev_attr, "cuDeviceGetAttribute")(v, a, dev);
+    if (r == CUDA_SUCCESS && a == CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED && fabric_hidden()) *v = 0;
+    return r;
+}
+
+/* With NVSNAP_GPUSHARE_FABRIC=1, memory shared as fabric handles can also be
  * exported as a POSIX fd: a restored process may not use fabric handles,
  * and its peers re-import it as an fd instead (see refetch). */
-static __typeof__(&cuMemCreate) r_mem_create;
 
 static CUresult w_mem_create(CUmemGenericAllocationHandle *h, size_t size, const CUmemAllocationProp *p,
                              unsigned long long flags)
 {
+    if ((p->requestedHandleTypes & CU_MEM_HANDLE_TYPE_FABRIC) && fabric_hidden()) return CUDA_ERROR_NOT_PERMITTED;
     CUmemAllocationProp q = *p;
     if (q.requestedHandleTypes & CU_MEM_HANDLE_TYPE_FABRIC)
         q.requestedHandleTypes |= CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
@@ -1976,6 +2190,7 @@ static CUresult w_mem_create(CUmemGenericAllocationHandle *h, size_t size, const
 
 static CUresult w_mc_create(CUmemGenericAllocationHandle *h, const CUmulticastObjectProp *p)
 {
+    if ((p->handleTypes & CU_MEM_HANDLE_TYPE_FABRIC) && fabric_hidden()) return CUDA_ERROR_NOT_PERMITTED;
     CUmulticastObjectProp q = *p;
     if (q.handleTypes & CU_MEM_HANDLE_TYPE_FABRIC) q.handleTypes |= CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR;
     CUresult r = REAL(r_mc_create, "cuMulticastCreate")(h, &q);
@@ -2006,6 +2221,7 @@ static CUresult mc_bind(CUmemGenericAllocationHandle mch, size_t mcoff, CUmemGen
     pthread_mutex_lock(&mu);
     int m = find_mc(mch);
     if (m >= 0) mch = mcs[m].cur_h;
+    if (memh) memh = own_h(memh);
     pthread_mutex_unlock(&mu);
     CUresult r = memh ? REAL(r_mc_bind_mem, "cuMulticastBindMem")(mch, mcoff, memh, memoff, size, flags)
                       : REAL(r_mc_bind_addr, "cuMulticastBindAddr")(mch, mcoff, addr, size, flags);
@@ -2274,6 +2490,7 @@ static const struct { const char *name; void *wrapper; void **real; } hooks[] = 
     { "cuMemHostRegister_v2", w_host_reg, (void **)&r_host_reg },
     { "cuMemHostUnregister", w_host_unreg, (void **)&r_host_unreg },
     { "cuMemCreate", w_mem_create, (void **)&r_mem_create },
+    { "cuDeviceGetAttribute", w_dev_attr, (void **)&r_dev_attr },
     { "cuMulticastCreate", w_mc_create, (void **)&r_mc_create },
     { "cuMulticastAddDevice", w_mc_add, (void **)&r_mc_add },
     { "cuMulticastBindMem", w_mc_bind_mem, (void **)&r_mc_bind_mem },
@@ -2347,6 +2564,7 @@ EXPORT(CUresult, cuMemFreeHost, w_free_host, (void *p), (p))
 EXPORT(CUresult, cuMemHostRegister_v2, w_host_reg, (void *p, size_t s, unsigned f), (p, s, f))
 EXPORT(CUresult, cuMemHostUnregister, w_host_unreg, (void *p), (p))
 EXPORT(CUresult, cuMemCreate, w_mem_create, (CUmemGenericAllocationHandle *h, size_t s, const CUmemAllocationProp *p, unsigned long long f), (h, s, p, f))
+EXPORT(CUresult, cuDeviceGetAttribute, w_dev_attr, (int *v, CUdevice_attribute a, CUdevice d), (v, a, d))
 EXPORT(CUresult, cuMulticastCreate, w_mc_create, (CUmemGenericAllocationHandle *h, const CUmulticastObjectProp *p), (h, p))
 EXPORT(CUresult, cuMulticastAddDevice, w_mc_add, (CUmemGenericAllocationHandle h, CUdevice d), (h, d))
 EXPORT(CUresult, cuMulticastBindMem, w_mc_bind_mem, (CUmemGenericAllocationHandle mh, size_t mo, CUmemGenericAllocationHandle h, size_t o, size_t s, unsigned long long f), (mh, mo, h, o, s, f))

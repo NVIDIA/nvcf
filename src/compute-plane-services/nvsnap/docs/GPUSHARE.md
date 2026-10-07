@@ -154,11 +154,33 @@ name. So:
   stay valid), so that CRIU can dump the process. FlashInfer keeps such fds
   on H100. Fds the app received from another process and kept are not
   covered.
-- IMEX and fabric handles: pods with an IMEX channel do not restore yet.
-  After a restore, the driver refuses to export fabric-capable memory.
+- IMEX and fabric handles: fabric handles need the process's driver
+  clients to be subscribed to an IMEX channel. libcuda subscribes once; a
+  driver restore closes the channel fd and re-creates the clients without
+  the subscription, and libcuda does not subscribe again, so fabric create,
+  import and multicast fail with `NOT_PERMITTED`. The shim watches
+  libcuda's ioctls for its clients and channel, and at `load` subscribes
+  the clients again (`NV0000_CTRL_CMD_CLIENT_SUBSCRIBE_TO_IMEX_CHANNEL`,
+  the call libcuda makes). Memory that was created fabric-capable still
+  cannot be exported as a POSIX fd after a restore, and with an IMEX
+  channel NCCL, PyTorch and FlashInfer create such memory even on one
+  node. So by default the shim hides fabric support from the workload:
+  `CU_DEVICE_ATTRIBUTE_HANDLE_TYPE_FABRIC_SUPPORTED` reads 0, and fabric
+  `cuMemCreate` and `cuMulticastCreate` fail with `NOT_PERMITTED`, as
+  without an IMEX channel, and those libraries share memory as POSIX fds.
+  `NVSNAP_GPUSHARE_FABRIC=1` keeps fabric support, which multi-node NVLink
+  needs; memory shared as fabric handles is then re-imported as fabric
+  handles.
 - Scope: memory shared across nodes (multi-node NVLink) is not tracked, so
   its checkpoint is refused. Exporters are found among the processes on the
   same node, in the same pid namespace.
+- Large shared allocations: driver 610.57.04 will not export an allocation
+  of 512 MiB or more that a restored process created before its
+  checkpoint (`INVALID_VALUE`). FlashInfer's all-reduce workspace is such
+  an allocation. When a peer's re-import fails that way, the shim replaces
+  the allocation: it copies the contents into a new one at the same
+  address and releases the old one, and the app's handle then stands for
+  the new one. Only an allocation mapped once, from offset 0, is replaced.
 - `hostNetwork`: such pods share the node's abstract socket names. If two of
   them run a process with the same pid, the second cannot bind its control
   socket, and its checkpoint is refused.
@@ -188,7 +210,12 @@ All results are with vLLM 0.20.0 at default flags on 4x GB300 with driver
 matched the output before the checkpoint byte for byte.
 
 In-place suspend and resume, Qwen2.5-7B-Instruct, TP=4: 3 out of 3 cycles
-passed. Each suspend took about 6.5 s, and each resume about 5.9 s.
+passed. Each suspend took about 6.5 s, and each resume about 5.9 s. The
+same passed in a pod with an IMEX channel (a ComputeDomain), with NCCL
+NVLS and FlashInfer's all-reduce fusion active, both by default and with
+`NVSNAP_GPUSHARE_FABRIC=1 NCCL_MNNVL_ENABLE=1`, where NCCL, PyTorch and
+FlashInfer share memory and multicast objects as fabric handles, as across
+nodes.
 
 Checkpoint on one node and restore on another, Qwen2.5-72B-Instruct, TP=4,
 with the store on a network block storage PVC and the node cache on local
@@ -214,7 +241,8 @@ compilation config's `pass_config`).
 The GPU tests in `tests/gpushare/` pass on GB300 (driver 610) and on RTX
 PRO 6000 (x86, driver 580). `test_multi_gpu` covers a single process driving
 two GPUs with peer access. `test_export_copies` covers an app that keeps the
-fds of its own exports. `test_ipc_release` and `test_cumem_release` are
+fds of its own exports, and `test_large_export` a shared 512 MiB
+allocation. `test_ipc_release` and `test_cumem_release` are
 probes of the driver without the shim. On both platforms, the driver cannot
 checkpoint or re-export memory shared through its own CUDA IPC, which is
 why the shim replaces it.

@@ -4,8 +4,8 @@
 # GPU tests for libnvsnap_gpushare.so / nvsnap-gpu-suspend (need a GPU node;
 # multi-process tests need 2+ GPUs). Each takes the nvsnap-gpu-suspend path:
 #   ./test_feature_restore ../../docker/agent/gpushare/nvsnap-gpu-suspend alloc
-# test_checkpoint_nccl (dlopens NCCL), test_multi_gpu, test_release_rollback and
-# test_export_copies run under
+# test_checkpoint_nccl (dlopens NCCL), test_multi_gpu, test_release_rollback,
+# test_export_copies and test_large_export run under
 #   LD_PRELOAD=.../libnvsnap_gpushare.so (see their headers).
 
 CC ?= gcc
@@ -13,7 +13,7 @@ CUDA_INC ?= /usr/local/cuda/include
 CUDA_STUBS ?= /usr/local/cuda/lib64/stubs
 CFLAGS ?= -O2 -Wall
 
-CUDA_TESTS = test_feature_restore test_cumem_release test_ipc_release test_ipc_share test_multi_gpu test_release_rollback test_export_copies
+CUDA_TESTS = test_feature_restore test_cumem_release test_ipc_release test_ipc_share test_multi_gpu test_release_rollback test_export_copies test_large_export
 
 all: $(CUDA_TESTS) test_checkpoint_nccl
 
