@@ -121,7 +121,8 @@ class Console:
             lines = [line.rstrip() for line in saved_log
                      if line.startswith(('Helm lint/render passed for', 'Configuration created:', 'Reusing configuration:',
                                          'Previous progress archived:', 'Recipe:', 'GPU:', 'Model nodes:', 'Context:', 'Routing node:', 'Run render,',
-                                         'Image archive:', 'Monitoring image archive:', 'Update recorded:')) or re.match(r'^(?:WARNING|Warning|warning)[: ]|^W[0-9]{4} ', line)]
+                                         'Image archive:', 'Monitoring image archive:', 'Update recorded:',
+                                         'Retuned:', 'The loaded model already uses')) or re.match(r'^(?:WARNING|Warning|warning)[: ]|^W[0-9]{4} ', line)]
         for line in lines:
             if re.match(r'^(?:WARNING|Warning|warning)[: ]|^W[0-9]{4} ', line):
                 print(line, file=self.terminal_error)
@@ -136,6 +137,7 @@ class Console:
             'export-images': ('Image archive:',),
             'export-monitoring-images': ('Monitoring image archive:',),
             'update': ('Update recorded:',),
+            'retune': ('Retuned:', 'The loaded model already uses'),
         }.get(phase, ())
         for line in lines:
             if line.startswith(prefixes):
