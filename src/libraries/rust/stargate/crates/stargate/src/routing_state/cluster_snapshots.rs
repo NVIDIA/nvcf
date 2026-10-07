@@ -175,6 +175,7 @@ impl ClusterRoutingGeneration {
         }
         let backend_count = active_backend_count as u128;
         let mut backend_stats = ModelStats::default();
+        let mut max_input_tps = Some(0.0_f64);
         let mut rtt_mean_nanos = 0_u128;
         let mut rtt_remainder_nanos = 0_u128;
 
@@ -182,6 +183,12 @@ impl ClusterRoutingGeneration {
             if valid_last_mean_input_tps(backend.stats.last_mean_input_tps) {
                 backend_stats.last_mean_input_tps += backend.stats.last_mean_input_tps;
             }
+            max_input_tps = match (max_input_tps, backend.stats.max_input_tps) {
+                (Some(maximum), Some(value)) if value > 0.0 && value.is_finite() => {
+                    Some(maximum.max(value))
+                }
+                _ => None,
+            };
             if valid_output_tps(backend.stats.output_tps) {
                 backend_stats.output_tps += backend.stats.output_tps;
             }
@@ -244,6 +251,7 @@ impl ClusterRoutingGeneration {
             (rtt_mean_nanos / 1_000_000_000) as u64,
             (rtt_mean_nanos % 1_000_000_000) as u32,
         );
+        backend_stats.max_input_tps = max_input_tps;
 
         Some((backend_stats, rtt, active_backend_count))
     }
