@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import pathlib
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -82,6 +83,45 @@ class AutomaticChartTests(unittest.TestCase):
         self.assertEqual(split, ','.join(map(str, self.config['profile']['tensorSplit'])))
         self.assertEqual(len(split.split(',')), self.config['profile']['nodes'])
         self.assertEqual(args[:len(self.config['recipe']['serverArgs'])], self.config['recipe']['serverArgs'])
+
+    def test_recipe_tuning_matches_server_arguments_and_catalog_workload(self):
+        spec = importlib.util.spec_from_file_location('gguf_tuning_sizing', ROOT / 'sizing.py')
+        sizing = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sizing)
+        profile = self.config['profile']
+        tuning = self.config['recipe']['tuning'][profile['hardware']['memoryMode']]
+        self.assertEqual(self.config['tuning'], tuning)
+        plan = sizing.memory_plan(dict(self.config['recipe'], lock=self.config['lock']),
+                                  {'unifiedMemory': True, 'memoryGiB': profile['hardware']['minHostMemoryGiB']},
+                                  profile['nodes'], tuning)
+        self.assertEqual(profile['minAvailableMemoryGiB'], plan['hostAvailableGiB'])
+        for role in profile['roles']:
+            self.assertEqual(role['resources']['requests']['memory'], str(plan['requestGiB']) + 'Gi')
+            self.assertEqual(role['resources']['limits']['memory'], str(plan['limitGiB']) + 'Gi')
+        model = object_named(self.objects, 'Deployment', 'gguf-test')['spec']['template']['spec']['containers'][0]
+        environment = {item['name']: item['value'] for item in model['env']}
+        args = json.loads(environment['SERVER_ARGS'])
+        for flag, value in zip(sizing.tuning_args(tuning)[::2], sizing.tuning_args(tuning)[1::2]):
+            self.assertEqual(args.count(flag), 1)
+            self.assertEqual(args[args.index(flag) + 1], value)
+        exported = next(recipe for recipe in json.loads((ROOT / 'index.json').read_text())['recipes'] if recipe['id'] == 'glm-5.3')
+        workload = next(p for p in exported['profiles'] if p['id'] == profile['id'])['workload']
+        self.assertEqual(tuning['contextPerSlot'], workload['defaultContextTokens'])
+        self.assertEqual(tuning['slots'], workload['defaultConcurrency'])
+        self.assertEqual(object_named(self.objects, 'InferenceEndpoint', 'gguf-test')['spec']['maxEngineConcurrency'], tuning['slots'])
+
+    def test_automatic_render_rejects_advertised_tuning_drift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            chart = pathlib.Path(directory) / 'gguf-backend'
+            shutil.copytree(CHART, chart)
+            source = chart / 'files/recipes/glm-5.3/recipe.json'
+            recipe = json.loads(source.read_text())
+            recipe['tuning']['unified']['contextPerSlot'] *= 2
+            source.write_text(json.dumps(recipe))
+            with patch(__name__ + '.CHART', chart):
+                result = render(check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('Automatic profile context and concurrency must match recipe tuning', result.stderr)
 
     def test_explicit_placement_holds_one_gpu_and_model_memory_on_each_node(self):
         for index, suffix in enumerate(('', '-rpc-n1')):

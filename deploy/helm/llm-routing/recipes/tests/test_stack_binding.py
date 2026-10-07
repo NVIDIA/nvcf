@@ -78,6 +78,54 @@ class StackBindingTests(unittest.TestCase):
         self.assertEqual(self.recipe.identity['recipe'], self.model['recipe'])
         self.assertEqual(self.recipe.identity['gpu'], self.model['gpu'])
 
+    def test_external_config_checks_resource_and_tuning_overrides_before_cluster_access(self):
+        changes = [({'resources': {'model': {'limits': {'nvidia.com/gpu': '2'}}}}, 'cannot set nvidia.com/gpu'),
+                   ({'resources': {'rpc': {'requests': {'memory': 'invalid'}}}}, 'quantity string'),
+                   ({'resources': {'model': {'requests': {'cpu': '13'}}}}, 'exceeds limit'),
+                   ({'tuning': {'slots': 0}}, 'positive integer')]
+        for override, message in changes:
+            with self.subTest(override=override), patch.object(spark, 'run') as run, patch.object(spark, 'output') as output, \
+                 self.assertRaisesRegex(RuntimeError, message):
+                spark.Recipe(dict(self.config, **override), self.work)
+            run.assert_not_called()
+            output.assert_not_called()
+
+    def test_external_retune_preserves_binding_and_updates_only_the_model_release(self):
+        self.attach()
+        previous = self.recipe.backend_values(register=True)
+        config = copy.deepcopy(self.config)
+        config['tuning'] = {'contextPerSlot': 4096, 'slots': 2}
+        config['resources'] = {'model': {'requests': {'cpu': '5'}}, 'rpc': {'limits': {'cpu': '9'}}}
+        recipe = spark.Recipe(config, self.work)
+        recipe.state.update(serve=True, registered=True, direct=True, gateway=True, runtimeSha256='a'*64)
+        binding = copy.deepcopy(recipe.state['stack'])
+        def inspect(command):
+            if command[0] != 'helm':
+                return self.output(command)
+            self.assertIn(recipe.backend, command)
+            return json.dumps({'info': {'status': 'deployed'}} if 'status' in command else previous)
+        with patch.object(spark.stack_binding, 'inspect_connection', return_value=self.inspection) as shared, \
+             patch.object(spark, 'output', side_effect=inspect), patch.object(spark, 'run') as run, redirect_stdout(io.StringIO()):
+            recipe.retune()
+        shared.assert_called_once_with(self.connection)
+        helm = [call.args[0] for call in run.call_args_list if call.args[0][0] == 'helm']
+        self.assertEqual(len(helm), 1)
+        self.assertEqual(helm[0][helm[0].index('--install')+1], recipe.backend)
+        values = json.loads((self.work/(recipe.backend+'-values.json')).read_text())
+        args = values['model']['args']
+        self.assertEqual(args[args.index('--ctx-size')+1], '8192')
+        self.assertEqual(args[args.index('--parallel')+1], '2')
+        self.assertEqual(values['model']['resources']['requests']['cpu'], '5')
+        self.assertEqual(values['rpc']['resources']['limits']['cpu'], '9')
+        for role in ('model', 'rpc'):
+            for kind in ('requests', 'limits'):
+                self.assertEqual(values[role]['resources'][kind]['nvidia.com/gpu'], 1)
+        self.assertEqual(recipe.state['stack'], binding)
+        self.assertEqual(recipe.identity['externalStack'], self.connection)
+        self.assertFalse(recipe.state['direct'])
+        self.assertFalse(recipe.state['gateway'])
+        self.assertTrue(values['model']['register'])
+
     def test_imported_stack_connection_schema_is_enforced_for_saved_model_config(self):
         for field in ('caSHA256', 'apiKeySHA256'):
             config = copy.deepcopy(self.config)

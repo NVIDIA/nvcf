@@ -236,16 +236,23 @@ Combine these phases with `python3 recipes/recipe.py --config /path/to/glm.json 
 
 The `recipes/recipe.py` tool coordinates the combined gateway/router chart, the Pylon Operator chart and a model backend chart. The backend builds llama.cpp, downloads and verifies the model files, serves the model on one or more GPU nodes, and creates an `InferenceEndpoint` for Pylon to register. Application images and charts use your checkout, including local edits.
 
-GGUF recipes live in folders under `recipes/`. The available definition is `glm-5.3`: GLM-5.3 `UD-IQ2_M`, 222 GiB of GGUF weights. Each folder holds the model lock, llama.cpp server arguments and memory rules. The tool derives placement and GPU-specific settings from the cluster. The separate `recipes.py` planner handles the SGLang catalog described in [Qwen catalog configuration](#qwen-catalog-configuration).
+GGUF recipes live in folders under `recipes/`. The available definition is `glm-5.3`: GLM-5.3 `UD-IQ2_M`, 222 GiB of GGUF weights. Each folder holds the model lock, llama.cpp server arguments, server tuning defaults and memory rules. The tool derives placement and GPU-specific settings from the cluster. The separate `recipes.py` planner handles the SGLang catalog described in [Qwen catalog configuration](#qwen-catalog-configuration).
 
 ## Placement
 
-The model runs on one node, or is split by layer across two nodes with llama.cpp RPC. `init` picks the smallest node count that fits the model in GPU memory:
+The model runs on one node, or is split by layer across two nodes with llama.cpp RPC. `init` picks the smallest node count that fits the model and its default context in GPU memory:
 
 - DGX Spark (GB10): CPU and GPU share about 122 GiB, so GLM-5.3 needs two nodes.
-- GB300: one GPU has about 268 GiB of its own memory, so GLM-5.3 fits on one node.
+- GB300: one GPU has its own memory, reported by `nvidia-smi` as about 250 GiB, with 249.75 GiB usable through CUDA. With the GB300 defaults of two 65,536-token requests, GLM-5.3 needs 242 GiB on one node: 236 GiB for its weights and KV cache, plus 6 GiB headroom. It fits on one node with about 7 GiB to spare.
 
 The gateway, router and operator run on a separate node when the cluster has one, and share the first model node otherwise. A cluster needs at least one GPU node per model node; two nodes are enough for either example.
+
+Tested configurations for the combined GGUF workflow:
+
+- Two DGX Spark nodes, model split across both. See [Recovery and limits](#recovery-and-limits) for load times.
+- Two GB300 workstations, model on one node (October 2026). `init` detected compute capability 10.3. `preflight` measured 249 GiB of free GPU memory. The model loaded in about 3 minutes from local disk, decoded at about 42 tokens per second at context 2048, and ran for more than 11 hours without restarts.
+  - `retune` to the GB300 defaults (two 65,536-token slots) reloaded the model in 2.5 minutes, and `verify-direct` and `verify-gateway` passed. The GPU used 231.4 GiB, below the 242 GiB the memory check budgets, up from 219.3 GiB at context 2048.
+  - A 33,367-token prompt took 133 seconds (about 250 tokens per second), and the answer decoded at about 32 tokens per second. A follow-up with the same prefix reused the cached prompt and started answering in 0.3 seconds.
 
 ## Prerequisites
 
@@ -272,7 +279,7 @@ Use your existing kubeconfig.
 
    Review the selected nodes and generated configuration. `init` discovers idle GPUs, storage and image preload settings for K3s. It runs a short GPU probe pod on candidate nodes in a temporary namespace, then deletes the namespace. The probe uses the runtime image, so the first run can take several minutes to pull it. The configuration is saved at the printed path in a private work directory.
 
-   To place the model yourself, edit `nodes.model` in the saved configuration. For example, list two GB300 nodes to split the model across them. `preflight` checks that the placement fits.
+   To place the model yourself, edit `nodes.model` in the saved configuration. For example, list two GB300 nodes to split the model across them. To change the context size or concurrent requests, edit `tuning` (see [Server tuning](#server-tuning)). `preflight` checks that the placement and context fit.
 
 2. Render the manifests and inventory the cluster.
 
@@ -317,7 +324,7 @@ Pinned `glm-5.3` runtime:
 
 - Model revision: `346b3591c7f28d1a23716f97a065ecf12ec14771`, with 238,577,585,701 bytes across six GGUF shards.
 - llama.cpp revision: `f872b591121761ac7b2af18283bd99bdc092a63a`.
-- Capacity: equal layer split across the model nodes, context 2048 and one request slot.
+- Capacity: equal layer split across the model nodes. Context size and concurrent requests depend on the GPU. See [Server tuning](#server-tuning).
 
 ## Verification
 
@@ -481,9 +488,10 @@ On two DGX Spark nodes, a cold load took about 26 minutes and recovery with cach
 
 Memory and runtime limits:
 
-- On GPUs that share memory with the CPU, such as GB10, monitor host `MemAvailable` when changing context size or adding workloads.
+- On GPUs that share memory with the CPU, such as GB10, monitor host `MemAvailable` when raising `tuning.contextPerSlot` or adding workloads.
+- On GPUs with their own memory, such as GB300, the model pod's cgroup memory can sit at its limit while the server process uses little memory. The difference is page cache from reading the model files, which the kernel reclaims under pressure. It is not a leak. On GB300 the pod stayed at its 64Gi limit for more than 11 hours with about 1.4 GiB resident, no swap, no memory-guard stops and no restarts.
 - The runtime stops below 1 GiB available memory or when the model process/container swaps.
-- `glm-5.3` uses two-bit quantization, context 2048, one request slot and TCP/RPC between split nodes.
+- `glm-5.3` uses two-bit quantization and TCP/RPC between split nodes. By default it serves one 2048-token request at a time on GB10, and two 65,536-token requests on GB300.
 - `glm-5.3` canary timing is 180 seconds for the timeout and 60 seconds for the interval.
 
 The model persistent volume claims (PVCs) remain after uninstall.
@@ -501,6 +509,53 @@ The `gpu` section describes the GPU on every model node:
 - `memoryGiB`: GPU memory, or host memory when `unifiedMemory` is `true`.
 - `unifiedMemory`: `true` when the GPU shares system memory, as on GB10.
 - `cudaArchitectures`: `null`, or a CMake architecture list that replaces the derived build target.
+
+### Server tuning
+
+`init` saves the recipe's llama.cpp tuning for the detected GPU memory type in the configuration. For `glm-5.3` on GB300:
+
+```json
+"tuning": {"contextPerSlot": 65536, "slots": 2, "batchSize": 2048, "ubatchSize": 512, "defaultMaxTokens": 8192, "threads": 8}
+```
+
+- `contextPerSlot`: tokens per request, prompt and output together. Use a multiple of 256.
+- `slots`: requests served at the same time. The Pylon canary sends a short request every 60 seconds; a second slot keeps it from waiting behind a long request.
+- `batchSize` and `ubatchSize`: prompt tokens processed per step. Larger values process long prompts faster and use more GPU memory. `ubatchSize` cannot exceed `batchSize`.
+- `defaultMaxTokens`: output limit for requests that do not set `max_tokens`. A request can set a larger limit.
+- `threads`: CPU threads for the model server.
+
+`glm-5.3` defaults:
+
+- GB10 and other GPUs that share memory with the CPU: one 2048-token slot, batch 128 and micro-batch 128, 512 default output tokens. These are the original Spark settings.
+- GB300 and other GPUs with their own memory: two 65,536-token slots, batch 2048 and micro-batch 512, 8192 default output tokens.
+
+Every slot reserves a KV cache for its full context. The recipe sets the cost per token in `kvCacheKiBPerToken`, 108 KiB for `glm-5.3`, so two 65,536-token slots use 13.5 GiB. `init`, `preflight` and `retune` include the KV cache in the memory check. When the context does not fit, the error reports the largest `contextPerSlot` that does.
+
+Before `load`, edit `tuning` and run `preflight` again. After `load`, edit `tuning`, then apply it and verify:
+
+```bash
+python3 recipe.py retune
+python3 recipe.py verify-direct
+python3 recipe.py verify-gateway
+```
+
+`retune` restarts the model server with the saved tuning and `resources`, and reuses the built runtime and downloaded model. RPC workers restart only when their memory limits change. The endpoint is unavailable while the model reloads. A loaded model holds its GPU memory, so `retune` checks the context against the free GPU memory that `preflight` measured. If the model does not come back, check the model pod logs, lower `tuning` and run `retune` again. It reapplies whenever the last Helm upgrade did not complete.
+
+### Pod resources
+
+The model server and RPC worker pods get CPU and memory from the recipe's memory rules. To change them, add a `resources` section to the saved configuration before `load`, or run `retune` after `load`:
+
+```json
+"resources": {
+  "model": {"requests": {"memory": "40Gi"}, "limits": {"memory": "96Gi", "cpu": "16"}},
+  "rpc": {"limits": {"memory": "120Gi"}}
+}
+```
+
+- `model` sets the model server pod and `rpc` sets each RPC worker pod while serving.
+- Only `cpu` and `memory` can be set, as strings: a number such as `8` or `0.5` with an optional suffix (`m`, `k`, `M`, `G`, `T`, `P`, `E`, `Ki`, `Mi`, `Gi`, `Ti`, `Pi` or `Ei`). This is a subset of Kubernetes quantities; exponents such as `1e6` and the `n` and `u` suffixes are rejected. CPU must be a whole number of millicores, such as `250m` or `1.5`. Memory cannot use the `m` suffix; use `Mi` or `M`. Each pod keeps one GPU.
+- Unset values keep their computed defaults. A request above its merged limit is rejected when the configuration is loaded, before any cluster command.
+- The `preflight` and `load` memory checks still use the recipe's memory rules, not these values.
 
 ### Runtime image mirror
 
@@ -534,7 +589,10 @@ To use existing certificates, complete these steps before running `stack`:
 
 Create a folder under `recipes/` with these files:
 
-- `recipe.json`: the name (matching the folder), release and endpoint names, llama.cpp revision, server arguments, runtime environment, storage sizes and memory rules. Copy `glm-5.3/recipe.json` as a starting point. Do not set `--device`, `--tensor-split` or `--rpc`; the tool derives them from `nodes.model`.
+- `recipe.json`: the name (matching the folder), release and endpoint names, llama.cpp revision, server arguments, tuning defaults, KV cache cost, runtime environment, storage sizes and memory rules. Copy `glm-5.3/recipe.json` as a starting point.
+  - Do not set `--device`, `--tensor-split` or `--rpc` in `serverArgs`; the tool derives them from `nodes.model`.
+  - Do not set `--ctx-size`, `--parallel`, `--batch-size`, `--ubatch-size`, `--predict` or `--threads`; set `tuning.unified` and `tuning.discrete` instead.
+  - Set `kvCacheKiBPerToken` to the KV cache size of one token across all layers, rounded up. For `glm-5.3`, llama.cpp caches 576 values per layer for attention and 128 for the sparse-attention indexer, at 2 bytes each over 78 layers: about 107 KiB.
 - `model.lock.json`: the pinned model files with sizes and SHA256 checksums.
 - `NOTICE`: the model license terms.
 

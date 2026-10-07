@@ -1,6 +1,8 @@
 {{/* SPDX-License-Identifier: Apache-2.0 */}}
 {{- if or (empty .Values.phase) (eq .Values.phase "deploy") }}
 {{- $config := include "gguf.automatic" . | fromJson }}
+{{- $tuning := $config.tuning }}
+{{- $tuningArgs := list "--ctx-size" (mul $tuning.contextPerSlot $tuning.slots | toString) "--parallel" ($tuning.slots | toString) "--batch-size" ($tuning.batchSize | toString) "--ubatch-size" ($tuning.ubatchSize | toString) "--predict" ($tuning.defaultMaxTokens | toString) "--threads" ($tuning.threads | toString) }}
 {{- $name := .Release.Name }}
 {{- $scripts := dict }}
 {{- range $path, $_ := .Files.Glob "files/*.py" }}{{ $_ := set $scripts (base $path) ($.Files.Get $path) }}{{ end }}
@@ -172,7 +174,7 @@ spec:
             - {name: FIRST_SHARD, value: {{ $config.recipe.firstShard | quote }}}
             - {name: SERVED_MODEL, value: {{ $config.recipe.servedName | quote }}}
             - {name: RPC_ENDPOINTS, value: {{ join "," $config.rpcEndpoints | quote }}}
-            - {name: SERVER_ARGS, value: {{ concat $config.recipe.serverArgs (list "--device" "CUDA0,RPC0" "--tensor-split" (join "," $config.profile.tensorSplit)) | toJson | quote }}}
+            - {name: SERVER_ARGS, value: {{ concat $config.recipe.serverArgs $tuningArgs (list "--device" "CUDA0,RPC0" "--tensor-split" (join "," $config.profile.tensorSplit)) | toJson | quote }}}
           ports: [{name: http, containerPort: 8000}]
           startupProbe:
             httpGet: {path: /health, port: http}
@@ -302,7 +304,7 @@ spec:
   service: {name: {{ $name }}, port: 8000}
   health: {path: /health}
   canary: {{ $config.recipe.canary | toJson }}
-  maxEngineConcurrency: 1
+  maxEngineConcurrency: {{ $tuning.slots }}
   gpu: {product: {{ index $config.profile.hardware.gpuProducts 0 | quote }}}
 {{- end }}
 {{- end }}

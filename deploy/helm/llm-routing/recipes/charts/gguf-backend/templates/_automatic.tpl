@@ -17,12 +17,14 @@
 {{- if and $v.artifacts.existingClaim (eq $v.artifacts.existingClaim $v.rpc.cache.existingClaim) }}{{ fail "Model and RPC caches require distinct PVCs" }}{{ end -}}
 {{- if and $v.reuseCaches (or (not $v.artifacts.existingClaim) (not $v.rpc.cache.existingClaim)) }}{{ fail "reuseCaches requires artifacts.existingClaim and rpc.cache.existingClaim" }}{{ end -}}
 {{- $recipe := .Files.Get (printf "%srecipe.json" $base) | fromJson -}}
+{{- $tuning := required "Recipe tuning must define the profile memory mode" (index $recipe.tuning $profile.hardware.memoryMode) -}}
+{{- if or (ne (int $profile.contextLength) (int $tuning.contextPerSlot)) (ne (int $profile.concurrency) (int $tuning.slots)) }}{{ fail "Automatic profile context and concurrency must match recipe tuning" }}{{ end -}}
 {{- $lock := .Files.Get (printf "%smodel.lock.json" $base) | fromJson -}}
 {{- $image := $metadata.runtimeImage -}}
 {{- if and $v.image (ne $v.image $image) }}{{ fail "Automatic runtime image is pinned by the recipe profile" }}{{ end -}}
 {{- $leaderClaim := default (printf "%s-artifacts" .Release.Name) $v.artifacts.existingClaim -}}
 {{- $workerClaim := default (printf "%s-rpc-cache-n1" .Release.Name) $v.rpc.cache.existingClaim -}}
-{{- dict "recipe" $recipe "lock" $lock "profile" $profile "image" $image "reuseCaches" $v.reuseCaches "claims" (list $leaderClaim $workerClaim) "runtimeURL" (printf "http://%s-artifacts:8080/runtime.tar.gz" .Release.Name) "rpcEndpoints" (list (printf "%s-rpc-n1:50052" .Release.Name)) | toJson -}}
+{{- dict "recipe" $recipe "tuning" $tuning "lock" $lock "profile" $profile "image" $image "reuseCaches" $v.reuseCaches "claims" (list $leaderClaim $workerClaim) "runtimeURL" (printf "http://%s-artifacts:8080/runtime.tar.gz" .Release.Name) "rpcEndpoints" (list (printf "%s-rpc-n1:50052" .Release.Name)) | toJson -}}
 {{- end -}}
 
 {{- define "gguf.nodeRole" -}}

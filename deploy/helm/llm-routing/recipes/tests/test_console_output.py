@@ -123,6 +123,16 @@ class ConsoleOutputTests(unittest.TestCase):
         self.assertIn('Helm lint/render passed for 8 configurations.', self.stdout.getvalue())
         self.assertNotIn('render passed.\n', self.stdout.getvalue())
 
+    def test_retune_shows_the_applied_tuning(self):
+        def action():
+            print('Release "llm-poc-glm" has been upgraded.')
+            print('Retuned: 65536 tokens per slot and 2 slots. Run verify-direct, then verify-gateway.')
+
+        with self.captured():
+            self.console.run('retune', self.work, action)
+        self.assertEqual(self.stdout.getvalue(), 'retune passed.\n'
+                         'Retuned: 65536 tokens per slot and 2 slots. Run verify-direct, then verify-gateway.\n')
+
     def test_init_shows_the_recipe_gpu_and_placement(self):
         config = json.loads((HERE/'config.example.json').read_text())
         config['context'] = 'console-test'
@@ -131,7 +141,8 @@ class ConsoleOutputTests(unittest.TestCase):
             self.console.run('init', work, lambda: tool.main(['--context', 'console-test', '--work-dir', str(work), 'init']))
         shown = self.stdout.getvalue()
         for line in ('Recipe: glm-5.3', 'GPU: NVIDIA GB10 (12.1, 121.6 GiB shared with the CPU)',
-                     'Model nodes: model-0, model-1', 'Routing node: control', 'Configuration created:'):
+                     'Model nodes: model-0, model-1', 'Routing node: control', 'Configuration created:',
+                     'Context: 2048 tokens per slot and 1 slot'):
             self.assertIn(line, shown)
 
     def cli_arguments(self):

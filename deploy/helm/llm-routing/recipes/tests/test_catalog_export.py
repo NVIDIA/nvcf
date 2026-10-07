@@ -47,6 +47,16 @@ class CommonCatalogTests(unittest.TestCase):
         self.assertEqual(profile["perNode"][0]["resources"]["cpuRequestMillicores"], 8000)
         self.assertEqual(profile["perNode"][0]["additionalWorkloads"][0]["resources"]["memoryRequestBytes"], 128 * 2**20)
 
+    def test_gguf_export_rejects_profile_tuning_drift(self):
+        original_read = catalog.read
+        def changed_read(path):
+            result = original_read(path)
+            if path == ROOT / 'glm-5.3/recipe.json':
+                result['tuning']['unified']['slots'] += 1
+            return result
+        with patch.object(catalog, 'read', side_effect=changed_read), self.assertRaisesRegex(ValueError, 'must match recipe tuning'):
+            catalog.gguf_recipes(ROOT)
+
     def test_changed_pins_invalidate_automatic_helm_validation(self):
         with self.assertRaisesRegex(ValueError, "pins changed"):
             catalog.helm_validation({"profile": "tested", "modelRevision": "old", "runtimeImage": "pinned"},

@@ -127,6 +127,9 @@ def gguf_recipes(root):
         lock = read(metadata_path.parent / metadata["lockFile"])
         profiles = []
         for profile in metadata["profiles"]:
+            tuning = recipe["tuning"][profile["hardware"]["memoryMode"]]
+            if (profile["contextLength"], profile["concurrency"]) != (tuning["contextPerSlot"], tuning["slots"]):
+                raise ValueError("Automatic profile context and concurrency must match recipe tuning: " + profile["id"])
             per_node = []
             for rank, role in enumerate(profile["roles"]):
                 serving = normalized_resources(role["resources"])

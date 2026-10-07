@@ -16,6 +16,10 @@ The automatic SGLang and GGUF charts use `recipe`, `profileName`, explicit `node
 
 `recipe.py` uses its containing checkout. Builds include local edits and record the current commit ID for debugging. Image updates and rollback require the routing chart fingerprint recorded at installation. Helm dependencies are built automatically. `--source-dir` selects another existing checkout.
 
+Recipe tuning defaults live in `recipe.json` under `tuning.unified` and `tuning.discrete`. Saved configuration overrides use `tuning` and `resources`. Derive placement and tuned llama.cpp arguments from those settings, and keep `serverArgs` for the remaining runtime flags. Automatic Helm profiles select defaults by `hardware.memoryMode`; their advertised context and concurrency must match.
+
+The recipe's `memory.discrete` host limits cover process memory and page cache. A serving pod at its cgroup limit with low resident memory can reflect reclaimable model-file cache.
+
 Keep `sizing.py` free of cluster access. Its supported placement includes one model node and a split across nodes, covered by `tests/test_topology.py`. `recipes.py` plans SGLang placements from read-only Kubernetes inventory and supports deployment bound to a verified `../stack.py` connection.
 
 ## Validation and safety
