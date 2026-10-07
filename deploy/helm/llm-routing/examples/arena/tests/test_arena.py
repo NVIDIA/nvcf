@@ -138,5 +138,159 @@ class GameFileTests(unittest.TestCase):
             arena.load(self.dir)
 
 
+class CommandTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='arena-')
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = pathlib.Path(self.tmp.name)/'game'
+        self.assertEqual(self.cli(None, 'new', str(self.dir), '--x', 'pi', '--o', 'codex')[0], 0)
+
+    def no_sleep(self, seconds):
+        self.fail('unexpected wait')
+
+    def cli(self, player, *argv, now=1000.0, clock=None, sleep=None, directory=None):
+        out = io.StringIO()
+        env = {} if player is None else {'ARENA_PLAYER': player}
+        code = arena.main(list(argv), directory=directory or self.dir, env=env, out=out,
+                          now=lambda: now, clock=clock or (lambda: 0.0), sleep=sleep or self.no_sleep)
+        return code, out.getvalue()
+
+    def test_status_matches_the_documented_format(self):
+        for player, column in zip('xoxoxoxo', [4, 4, 3, 5, 2, 1, 5, 4]):
+            self.assertEqual(self.cli(player, 'move', str(column))[0], 0)
+        self.assertEqual(self.cli('o', 'say', 'Column 4 is mine.'), (0, 'Message sent.\n'))
+        code, text = self.cli('x', 'status')
+        self.assertEqual(code, 0)
+        self.assertEqual(text, '\n'.join([
+            'Connect Four. You are X (pi). Opponent: O (codex).',
+            'Move 9. Your turn.',
+            '  1 2 3 4 5 6 7',
+            '  . . . . . . .',
+            '  . . . . . . .',
+            '  . . . . . . .',
+            '  . . . O . . .',
+            '  . . . O X . .',
+            '  O X X X O . .',
+            'Last move: O in column 4.',
+            'Open columns: 1 2 3 4 5 6 7',
+            'codex says: "Column 4 is mine."',
+            'Next: python3 arena.py move <column>',
+        ]) + '\n')
+        self.assertNotIn('says', self.cli('x', 'status')[1])
+
+    def test_the_waiting_player_is_told_to_wait(self):
+        self.cli('x', 'move', '4')
+        text = self.cli('x', 'status')[1]
+        self.assertIn('Move 2. O (codex) to move.', text)
+        self.assertTrue(text.endswith('Next: python3 arena.py wait\n'))
+
+    def test_bad_moves_are_rejected_counted_and_explained(self):
+        cases = [('o', ['4'], 'It is not your turn.'), ('x', ['9'], 'Column must be 1 to 7.'),
+                 ('x', ['abc'], 'Usage: python3 arena.py move <column>'), ('x', ['4.'], 'Usage:'),
+                 ('x', ['column', '4'], 'Usage:'), ('x', [], 'Usage:')]
+        for player, words, message in cases:
+            with self.subTest(words=words):
+                code, text = self.cli(player, 'move', *words)
+                self.assertEqual(code, 1)
+                self.assertTrue(text.startswith('Rejected: ' + message), text)
+                self.assertIn('Open columns:', text)
+        state = arena.load(self.dir)
+        self.assertEqual((state['illegal'], state['moves']), ({'x': 5, 'o': 1}, []))
+
+    def test_messages_may_be_unquoted_and_are_limited(self):
+        self.assertEqual(self.cli('x', 'say', 'Good', 'luck', 'codex')[0], 0)
+        self.assertEqual(arena.load(self.dir)['chat'][-1]['text'], 'Good luck codex')
+        code, text = self.cli('x', 'say', 'again')
+        self.assertEqual(code, 1)
+        self.assertTrue(text.startswith('Rejected: You already sent a message.'))
+
+    def test_wait_returns_at_once_on_your_turn(self):
+        code, text = self.cli('x', 'wait')
+        self.assertEqual(code, 0)
+        self.assertIn('Move 1. Your turn.', text)
+
+    def test_wait_returns_when_the_opponent_moves(self):
+        self.cli('x', 'move', '4')
+        code, text = self.cli('x', 'wait', sleep=lambda seconds: self.cli('o', 'move', '3'))
+        self.assertEqual(code, 0)
+        self.assertIn('Move 3. Your turn.', text)
+        self.assertIn('Last move: O in column 3.', text)
+
+    def test_wait_returns_when_the_opponent_sends_a_message(self):
+        self.cli('x', 'move', '4')
+        code, text = self.cli('x', 'wait', sleep=lambda seconds: self.cli('o', 'say', 'Nice opening.'))
+        self.assertIn('codex says: "Nice opening."', text)
+        self.assertTrue(text.endswith('Next: python3 arena.py wait\n'))
+
+    def test_wait_returns_when_the_game_ends(self):
+        for player, column in zip('xoxoxo', [1, 2, 1, 2, 1, 2]):
+            self.cli(player, 'move', str(column))
+        code, text = self.cli('o', 'wait', sleep=lambda seconds: self.cli('x', 'move', '1'))
+        self.assertIn('Game over. X (pi) wins with four in a row at (row 1, column 1), (row 2, column 1), '
+                      '(row 3, column 1), (row 4, column 1).', text)
+        self.assertTrue(text.endswith('The game is over. Stop.\n'))
+        self.assertNotIn('Open columns', text)
+
+    def test_wait_gives_up_after_the_timeout(self):
+        self.cli('x', 'move', '4')
+        ticks = iter([0.0, 60.0, 120.0])
+        code, text = self.cli('x', 'wait', '--timeout', '120', clock=lambda: next(ticks), sleep=lambda seconds: None)
+        self.assertEqual(code, 0)
+        self.assertTrue(text.endswith('Still O (codex) to move. Run python3 arena.py wait again.\n'))
+
+    def test_prompt_matches_the_documented_text(self):
+        self.assertEqual(self.cli('x', 'prompt'), (0, '\n'.join([
+            'You are playing Connect Four as X against another AI agent (codex, playing O).',
+            'The referee is `python3 arena.py` in this directory. Repeat until the game is over:',
+            '1. Run `python3 arena.py wait`.',
+            '2. When it says it is your turn, choose a column from "Open columns" and run',
+            '   `python3 arena.py move <column>`.',
+            'You may send one short message to your opponent per turn with',
+            '`python3 arena.py say "<text>"`. Use only these commands. Do not read or edit',
+            'arena.json or arena.py. When the referee says the game is over, report the result and stop.',
+        ]) + '\n'))
+
+    def test_new_copies_the_referee_and_prints_both_prompts(self):
+        target = pathlib.Path(self.tmp.name)/'second'
+        code, text = self.cli(None, 'new', str(target), '--x', 'pi', '--o', 'codex', '--first', 'o')
+        self.assertEqual(code, 0)
+        self.assertEqual((target/'arena.py').read_bytes(), (HERE/'arena.py').read_bytes())
+        state = arena.load(target)
+        self.assertEqual((state['names'], state['first'], state['moves']), (NAMES, 'o', []))
+        self.assertIn('Prompt for X (pi), launched with ARENA_PLAYER=x:', text)
+        self.assertIn('You are playing Connect Four as O against another AI agent (pi, playing X).', text)
+
+    def test_new_does_not_replace_a_game_without_force(self):
+        self.cli('x', 'move', '4')
+        code, text = self.cli(None, 'new', str(self.dir), '--x', 'pi', '--o', 'codex')
+        self.assertEqual((code, arena.load(self.dir)['moves'][0]['column']), (1, 4))
+        self.assertIn('Add --force', text)
+        self.assertEqual(self.cli(None, 'new', str(self.dir), '--x', 'pi', '--o', 'codex', '--force')[0], 0)
+        self.assertEqual(arena.load(self.dir)['moves'], [])
+
+    def test_new_from_the_copied_referee_replaces_the_game(self):
+        copy_spec = importlib.util.spec_from_file_location('arena_copy', self.dir/'arena.py')
+        copied = importlib.util.module_from_spec(copy_spec)
+        copy_spec.loader.exec_module(copied)
+        out = io.StringIO()
+        self.assertEqual(copied.main(['new', str(self.dir), '--x', 'pi', '--o', 'codex', '--force'], out=out), 0, out.getvalue())
+
+    def test_player_names_are_checked(self):
+        for names in (['--x', 'pi bot', '--o', 'codex'], ['--x', 'pi', '--o', 'pi']):
+            with self.subTest(names=names):
+                code, text = self.cli(None, 'new', str(pathlib.Path(self.tmp.name)/'bad'), *names)
+                self.assertEqual(code, 1)
+                self.assertTrue(text.startswith('error: '), text)
+
+    def test_player_identity_comes_from_the_environment(self):
+        self.assertEqual(self.cli(None, 'status'), (1, 'error: Set ARENA_PLAYER to x or o when you launch the agent.\n'))
+        self.assertIn('You are X (pi)', self.cli(' X ', 'status')[1])
+
+    def test_commands_outside_the_game_directory_are_explained(self):
+        code, text = self.cli('x', 'status', directory=pathlib.Path(self.tmp.name))
+        self.assertEqual(code, 1)
+        self.assertTrue(text.startswith('error: No game in '), text)
+
+
 if __name__ == '__main__':
     unittest.main()

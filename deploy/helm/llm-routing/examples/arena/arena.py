@@ -139,3 +139,176 @@ def locked(directory):
         state = load(directory)
         yield state
         save(directory, state)
+
+
+def label(state, player):
+    return player.upper() + ' (' + state['names'][player] + ')'
+
+
+def render_board(grid, show=None):
+    show = show or (lambda cell, row, column: cell.upper() if cell else '.')
+    lines = ['  ' + ' '.join(str(column) for column in range(1, COLUMNS + 1))]
+    for row, cells in enumerate(grid):
+        lines.append('  ' + ' '.join(show(cell, row, column) for column, cell in enumerate(cells)))
+    return lines
+
+
+def unseen(state, player):
+    return [m for m in state['chat'][state['seen'][player]:] if m['player'] != player]
+
+
+def view(state, player, timed_out=False):
+    """The player's status. Marks the opponent's messages as seen."""
+    grid = board(state['moves'])
+    opponent, current = other(player), turn(state)
+    lines = ['Connect Four. You are ' + label(state, player) + '. Opponent: ' + label(state, opponent) + '.']
+    if state['result'] == 'draw':
+        lines.append('Game over after ' + str(len(state['moves'])) + ' moves. It is a draw.')
+    elif state['result']:
+        cells = ', '.join('(row ' + str(r) + ', column ' + str(c) + ')' for r, c in state['winCells'])
+        lines.append('Game over. ' + label(state, state['result']) + ' wins with four in a row at ' + cells +
+                     '. Rows count from the bottom.')
+    elif current == player:
+        lines.append('Move ' + str(len(state['moves']) + 1) + '. Your turn.')
+    else:
+        lines.append('Move ' + str(len(state['moves']) + 1) + '. ' + label(state, opponent) + ' to move.')
+    lines += render_board(grid)
+    if state['moves']:
+        last = state['moves'][-1]
+        lines.append('Last move: ' + last['player'].upper() + ' in column ' + str(last['column']) + '.')
+    if not state['result']:
+        lines.append('Open columns: ' + ' '.join(str(column) for column in open_columns(grid)))
+    for message in unseen(state, player):
+        lines.append(state['names'][opponent] + ' says: "' + message['text'] + '"')
+    state['seen'][player] = len(state['chat'])
+    if state['result']:
+        lines.append('The game is over. Stop.')
+    elif current == player:
+        lines.append('Next: python3 arena.py move <column>')
+    elif timed_out:
+        lines.append('Still ' + label(state, opponent) + ' to move. Run python3 arena.py wait again.')
+    else:
+        lines.append('Next: python3 arena.py wait')
+    return '\n'.join(lines)
+
+
+def prompt(state, player):
+    opponent = other(player)
+    return '\n'.join([
+        'You are playing Connect Four as ' + player.upper() + ' against another AI agent (' +
+        state['names'][opponent] + ', playing ' + opponent.upper() + ').',
+        'The referee is `python3 arena.py` in this directory. Repeat until the game is over:',
+        '1. Run `python3 arena.py wait`.',
+        '2. When it says it is your turn, choose a column from "Open columns" and run',
+        '   `python3 arena.py move <column>`.',
+        'You may send one short message to your opponent per turn with',
+        '`python3 arena.py say "<text>"`. Use only these commands. Do not read or edit',
+        'arena.json or arena.py. When the referee says the game is over, report the result and stop.',
+    ])
+
+
+def wait(directory, player, timeout, clock, sleep):
+    """Block until it is the player's turn, the opponent writes, the game ends or the timeout passes."""
+    deadline = clock() + timeout
+    state = load(directory)
+    while not (state['result'] or turn(state) == player or unseen(state, player)) and clock() < deadline:
+        sleep(POLL_SECONDS)
+        state = load(directory)
+    with locked(directory) as state:
+        timed_out = not (state['result'] or turn(state) == player or unseen(state, player))
+        return view(state, player, timed_out)
+
+
+def new_game(target, names, first, force, now, out):
+    for name in names.values():
+        if not NAME.fullmatch(name):
+            raise ArenaError('Player names use letters, digits, - and _, up to 20 characters: ' + repr(name))
+    if names['x'] == names['o']:
+        raise ArenaError('Give the two players different names.')
+    target = pathlib.Path(target).expanduser().resolve()
+    if (target / STATE).exists() and not force:
+        raise ArenaError('A game already exists in ' + str(target) + '. Add --force to replace it.')
+    target.mkdir(parents=True, exist_ok=True)
+    source = pathlib.Path(__file__).resolve()
+    if source != (target / 'arena.py').resolve():
+        shutil.copyfile(source, target / 'arena.py')
+    state = new_state(names, first, now)
+    with open(target / LOCK, 'a') as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        save(target, state)
+    print('New game in ' + str(target), file=out)
+    for player in PLAYERS:
+        print('\nPrompt for ' + label(state, player) + ', launched with ARENA_PLAYER=' + player + ':\n' +
+              prompt(state, player), file=out)
+
+
+def player_from(env):
+    player = env.get('ARENA_PLAYER', '').strip().lower()
+    if player not in PLAYERS:
+        raise ArenaError('Set ARENA_PLAYER to x or o when you launch the agent.')
+    return player
+
+
+def parse_column(words):
+    return int(words[0]) if len(words) == 1 and re.fullmatch(r'[0-9]+', words[0]) else None
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(prog='arena.py', description=__doc__)
+    commands = parser.add_subparsers(dest='command', required=True)
+    commands.add_parser('status', help='show the board and whose turn it is')
+    commands.add_parser('move', help='drop a piece in a column').add_argument('column', nargs='*')
+    commands.add_parser('say', help='send your opponent one short message').add_argument('text', nargs='+')
+    wait_command = commands.add_parser('wait', help='block until it is your turn')
+    wait_command.add_argument('--timeout', type=float, default=120)
+    commands.add_parser('prompt', help='print the launch prompt for ARENA_PLAYER')
+    new = commands.add_parser('new', help='start a game in a directory')
+    new.add_argument('directory')
+    new.add_argument('--x', required=True, help='name of the player using X')
+    new.add_argument('--o', required=True, help='name of the player using O')
+    new.add_argument('--first', choices=PLAYERS, default='x')
+    new.add_argument('--force', action='store_true', help='replace an existing game')
+    return parser
+
+
+def run(args, directory, env, out, now, clock, sleep):
+    if args.command == 'new':
+        new_game(args.directory, {'x': args.x, 'o': args.o}, args.first, args.force, now(), out)
+        return 0
+    player = player_from(env)
+    if args.command == 'prompt':
+        print(prompt(load(directory), player), file=out)
+        return 0
+    if args.command == 'wait':
+        print(wait(directory, player, args.timeout, clock, sleep), file=out)
+        return 0
+    with locked(directory) as state:
+        error = None
+        if args.command == 'move':
+            column = parse_column(args.column)
+            if column is None:
+                error = 'Usage: python3 arena.py move <column>, with a column from 1 to 7.'
+            else:
+                error = apply_move(state, player, column, now())
+            if error:
+                state['illegal'][player] += 1
+        elif args.command == 'say':
+            error = post_message(state, player, ' '.join(args.text), now())
+        text = 'Message sent.' if args.command == 'say' and not error else view(state, player)
+    print(('Rejected: ' + error + '\n' if error else '') + text, file=out)
+    return 1 if error else 0
+
+
+def main(argv=None, directory=None, env=None, out=None, now=time.time, clock=time.monotonic, sleep=time.sleep):
+    args = build_parser().parse_args(argv)
+    out = out or sys.stdout
+    try:
+        return run(args, pathlib.Path(directory or os.getcwd()), os.environ if env is None else env,
+                   out, now, clock, sleep)
+    except ArenaError as error:
+        print('error: ' + str(error), file=out)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
