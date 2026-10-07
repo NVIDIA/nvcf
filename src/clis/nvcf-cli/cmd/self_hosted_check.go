@@ -384,6 +384,11 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 			return &ExitCodeError{Code: 130, Msg: "interrupted"}
 		}
 
+		// One inotify prober for every --wait poll: it keeps what it learned
+		// of each node, so a poll gets further than the one before.
+		inotifyProber := sync.OnceValue(func() selfhosted.NodeInotifyProber {
+			return newInotifyProberForSelfHosted(configuredProbeImage())
+		})
 		runOnce := func() []selfhosted.CheckResult {
 			// The first poll keeps the lookups the image resolution above made.
 			pollCtx := selfhosted.WithRegistryCredentials(ctx, creds)
@@ -396,7 +401,8 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 			}
 			if checkPre || checkAll || checkControlPlane || checkComputePlane {
 				results = append(results,
-					runPreflightByRole(pollCtx, cfg, sink, mode, clusterValidatorImage, unresolvedImage, ledger)...)
+					runPreflightByRole(pollCtx, cfg, sink, mode, clusterValidatorImage, unresolvedImage, ledger,
+						inotifyProber)...)
 			}
 			return results
 		}
@@ -996,9 +1002,11 @@ func selectCheckRenderer(w io.Writer, wait bool, onQuit func()) (progress.EventS
 // mode is the already-resolved kubectx.Mode (hoisted to the caller so image
 // resolution and timeout sizing share the same answer). clusterValidatorImage
 // is the already-resolved validator image (empty when not configured).
+// sharedInotifyProber returns the inotify prober every poll shares.
 func runPreflightByRole(
 	ctx context.Context, cfg selfhosted.PreflightConfig, sink progress.EventSink, mode kubectx.Mode,
 	clusterValidatorImage, unresolvedImage string, ledger *selfhosted.CleanupLedger,
+	sharedInotifyProber func() selfhosted.NodeInotifyProber,
 ) []selfhosted.CheckResult {
 	// LocalOnly: skip all cluster probes, and say so in a row for each.
 	if cfg.LocalOnly {
@@ -1032,7 +1040,7 @@ func runPreflightByRole(
 				Message: "node inotify limits skipped (--skip-inotify-check)",
 			})
 		} else {
-			inotifyProber = newInotifyProberForSelfHosted(configuredProbeImage())
+			inotifyProber = sharedInotifyProber()
 		}
 	}
 	computeSkips = append(computeSkips,

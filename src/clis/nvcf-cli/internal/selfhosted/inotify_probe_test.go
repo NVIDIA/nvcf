@@ -21,9 +21,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"path"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -50,7 +53,7 @@ func fakeNode(name string) *corev1.Node {
 
 func TestProbeAllNodes_EmptyCluster(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	results, err := probeAllNodes(context.Background(), client, "")
+	results, err := probeAllNodes(context.Background(), client, "", nil)
 	require.NoError(t, err)
 	assert.Empty(t, results, "no nodes → no per-node results")
 }
@@ -60,7 +63,7 @@ func TestProbeAllNodes_ListNodesError(t *testing.T) {
 	client.PrependReactor("list", "nodes", func(_ ktesting.Action) (bool, runtime.Object, error) {
 		return true, nil, fmt.Errorf("forbidden: nodes")
 	})
-	_, err := probeAllNodes(context.Background(), client, "")
+	_, err := probeAllNodes(context.Background(), client, "", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "listing nodes")
 	assert.Contains(t, err.Error(), "forbidden")
@@ -73,7 +76,7 @@ func TestProbeAllNodes_PodCreateErrorSurfacesPerNode(t *testing.T) {
 	client.PrependReactor("create", "pods", func(_ ktesting.Action) (bool, runtime.Object, error) {
 		return true, nil, fmt.Errorf("forbidden: pod create denied")
 	})
-	results, err := probeAllNodes(context.Background(), client, "")
+	results, err := probeAllNodes(context.Background(), client, "", nil)
 	require.NoError(t, err, "list succeeded so the overall probe should not return an error")
 	require.Len(t, results, 2)
 	for _, r := range results {
@@ -109,7 +112,7 @@ func TestProbeAllNodes_StallingPodsAreBoundedByTheProbeBudget(t *testing.T) {
 	})
 
 	start := time.Now()
-	results, err := probeAllNodes(context.Background(), client, "")
+	results, err := probeAllNodes(context.Background(), client, "", nil)
 	require.NoError(t, err)
 	assert.Less(t, time.Since(start), 5*time.Second, "the probe outlived its budget")
 	require.Len(t, results, probeConcurrency+extra)
@@ -222,7 +225,7 @@ func TestProbeAllNodes_ReclaimsOnlyItsOwnAndStalePods(t *testing.T) {
 	foreign := probePod("operator-pod", "deadrun", skew, 2*orphanValidatorRBACTTL)
 	client := probePodsClient(t, skew, live, stale, foreign)
 
-	_, err := probeAllNodes(context.Background(), client, "")
+	_, err := probeAllNodes(context.Background(), client, "", nil)
 	require.NoError(t, err)
 
 	pods, err := client.CoreV1().Pods(inotifyProbeNamespace).List(context.Background(), metav1.ListOptions{})
@@ -255,7 +258,7 @@ func TestProbeAllNodes_ReclaimsAPodWhoseCreateErrored(t *testing.T) {
 		return true, nil, context.DeadlineExceeded
 	})
 
-	results, err := probeAllNodes(context.Background(), client, "")
+	results, err := probeAllNodes(context.Background(), client, "", nil)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Error(t, results[0].Err)
@@ -325,7 +328,7 @@ func quotaClient(t *testing.T, retryErr error) (*fake.Clientset, *[]corev1.Resou
 // and limits, so the node is probed rather than reported as not probed.
 func TestProbeAllNodes_StatesResourcesWhenAQuotaRequiresThem(t *testing.T) {
 	client, creates := quotaClient(t, nil)
-	results, err := probeAllNodes(context.Background(), client, "")
+	results, err := probeAllNodes(context.Background(), client, "", nil)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	require.Len(t, *creates, 2, "one retry, with resources")
@@ -348,7 +351,7 @@ func TestProbeAllNodes_StatesResourcesWhenAQuotaRequiresThem(t *testing.T) {
 func TestProbeAllNodes_QuotaRetryIsOnceAndOnlyForMissingResources(t *testing.T) {
 	client, creates := quotaClient(t, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "p",
 		errors.New("exceeded quota: compute, requested: requests.cpu=50m, used: requests.cpu=4, limited: requests.cpu=4")))
-	results, err := probeAllNodes(context.Background(), client, "")
+	results, err := probeAllNodes(context.Background(), client, "", nil)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Len(t, *creates, 2)
@@ -362,9 +365,227 @@ func TestProbeAllNodes_QuotaRetryIsOnceAndOnlyForMissingResources(t *testing.T) 
 		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "p",
 			errors.New(`violates PodSecurity "restricted:latest": hostPath volumes`))
 	})
-	results, err = probeAllNodes(context.Background(), denied, "")
+	results, err = probeAllNodes(context.Background(), denied, "", nil)
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, 1, calls, "a refusal for any other reason is not retried")
 	assert.Contains(t, results[0].Err.Error(), "PodSecurity")
+}
+
+// probeCluster is a fake cluster of nodes node-00, node-01, and so on, for a
+// prober called several times, as the polls of one --wait call it. A pod that
+// finishes logs logs(node, call), served after delay; one that does not stays
+// pending, like a pod that cannot pull its image or a node that is NotReady.
+type probeCluster struct {
+	client kubernetes.Interface
+	mu     sync.Mutex
+	call   int
+	nodeOf map[string]string // probe pod -> node
+	// created is the node of each probe pod created, per call.
+	created [][]string
+}
+
+func newProbeCluster(
+	t *testing.T, nodes int, finishes bool, delay time.Duration, logs func(node string, call int) string,
+) *probeCluster {
+	t.Helper()
+	pc := &probeCluster{nodeOf: map[string]string{}}
+	var objs []runtime.Object
+	for i := 0; i < nodes; i++ {
+		n := fakeNode(fmt.Sprintf("node-%02d", i))
+		n.UID = types.UID("uid-" + n.Name)
+		objs = append(objs, n)
+	}
+	client := fake.NewSimpleClientset(objs...)
+	var seq atomic.Int32
+	client.PrependReactor("create", "pods", func(a ktesting.Action) (bool, runtime.Object, error) {
+		pod := a.(ktesting.CreateAction).GetObject().(*corev1.Pod)
+		pod.Name = fmt.Sprintf("%s%d", pod.GenerateName, seq.Add(1))
+		if finishes {
+			pod.Status.Phase = corev1.PodSucceeded
+		}
+		pc.mu.Lock()
+		pc.nodeOf[pod.Name] = pod.Spec.NodeName
+		pc.created[len(pc.created)-1] = append(pc.created[len(pc.created)-1], pod.Spec.NodeName)
+		pc.mu.Unlock()
+		return false, nil, nil
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(delay)
+		pc.mu.Lock()
+		node, call := pc.nodeOf[path.Base(path.Dir(r.URL.Path))], pc.call
+		pc.mu.Unlock()
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, logs(node, call))
+	}))
+	t.Cleanup(srv.Close)
+	logsFrom, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL, QPS: -1})
+	require.NoError(t, err)
+	pc.client = logsClient{Clientset: client, logs: logsFrom}
+	return pc
+}
+
+// probe is one call of prober, the prober's next poll.
+func (pc *probeCluster) probe(t *testing.T, prober NodeInotifyProber) []NodeInotifyLimits {
+	t.Helper()
+	pc.mu.Lock()
+	pc.call++
+	pc.created = append(pc.created, nil)
+	pc.mu.Unlock()
+	limits, err := prober(context.Background(), "test")
+	require.NoError(t, err)
+	return limits
+}
+
+func (pc *probeCluster) prober() NodeInotifyProber {
+	return newInotifyProber("", func(string) (kubernetes.Interface, error) { return pc.client, nil })
+}
+
+func withinLimitsLog(string, int) string { return "8192\n524288\n" }
+
+// shortenInotifyProbe sets the probe's budget and each node's own bound.
+func shortenInotifyProbe(t *testing.T, budget, perNode time.Duration) {
+	t.Helper()
+	prevBudget, prevNode := inotifyProbeBudget, perNodePodTimeout
+	inotifyProbeBudget, perNodePodTimeout = budget, perNode
+	t.Cleanup(func() { inotifyProbeBudget, perNodePodTimeout = prevBudget, prevNode })
+}
+
+// Nodes whose probe pods cannot finish hit their own bound, a failure of the
+// node a later poll cannot clear. On a cluster with more such nodes than one
+// wave, the budget ran out on the next wave the same way on every poll, so
+// --wait never ended. A node the budget stopped is probed first on the next
+// poll, where it hits its own bound too, and that poll is not transient.
+func TestInotifyProber_NodesThatCannotFinishStopKeepingTheWaitGoing(t *testing.T) {
+	shortenInotifyProbe(t, 600*time.Millisecond, 400*time.Millisecond)
+	const extra = 4
+	pc := newProbeCluster(t, probeConcurrency+extra, false, 0, withinLimitsLog)
+	prober := pc.prober()
+
+	first := pc.probe(t, prober)
+	require.Len(t, first, probeConcurrency+extra)
+	var cut []string
+	for _, l := range first {
+		require.Error(t, l.Err, l.NodeName)
+		if l.OutOfBudget {
+			cut = append(cut, l.NodeName)
+		}
+	}
+	assert.Len(t, cut, extra, "only the nodes the budget stopped may be reached later: %v", first)
+
+	second := pc.probe(t, prober)
+	require.Len(t, second, probeConcurrency+extra)
+	for _, l := range second {
+		require.Error(t, l.Err, l.NodeName)
+		assert.False(t, l.OutOfBudget, "%s: every node has now failed on its own", l.NodeName)
+	}
+	require.GreaterOrEqual(t, len(pc.created[1]), probeConcurrency)
+	assert.Subset(t, pc.created[1][:probeConcurrency], cut, "the nodes the budget stopped go in the first wave")
+
+	row := nodeInotifyCheck(func(context.Context, string) ([]NodeInotifyLimits, error) { return second, nil }, "").
+		Run(context.Background())
+	assert.Equal(t, SeverityWarning, row.Severity)
+	assert.False(t, row.Transient, "--wait has nothing left to wait for")
+}
+
+// A cluster with more nodes than one poll's budget reaches is measured over
+// several polls: a node found within the limits is not probed again, and the
+// nodes no poll has a result for go first. Before, every poll started over in
+// the same order, and on a large cluster never reached the tail.
+func TestInotifyProber_ReachesEveryNodeOfALargeClusterOverPolls(t *testing.T) {
+	shortenInotifyProbe(t, 500*time.Millisecond, 90*time.Second)
+	const nodes = 120
+	pc := newProbeCluster(t, nodes, true, 40*time.Millisecond, withinLimitsLog)
+	prober := pc.prober()
+
+	within := map[string]bool{}
+	for poll := 0; poll < 8 && len(within) < nodes; poll++ {
+		limits := pc.probe(t, prober)
+		require.Len(t, limits, nodes)
+		for _, node := range pc.created[poll] {
+			assert.False(t, within[node], "%s was within the limits on an earlier poll and was probed again", node)
+		}
+		for _, l := range limits {
+			if l.Err == nil && l.withinLimits() {
+				within[l.NodeName] = true
+			} else {
+				assert.True(t, l.OutOfBudget, "%s: %v", l.NodeName, l.Err)
+			}
+		}
+	}
+	assert.Len(t, within, nodes, "every node is measured within a few polls")
+	assert.Greater(t, len(pc.created), 1, "the cluster is larger than one poll reaches")
+}
+
+// A node below the limits is probed again on the next poll, so limits raised
+// while --wait polls are seen; its earlier reading is kept only while the
+// budget stops the new probe.
+func TestInotifyProber_ProbesANodeBelowTheLimitsAgain(t *testing.T) {
+	pc := newProbeCluster(t, 2, true, 0, func(node string, call int) string {
+		if node == "node-01" && call == 1 {
+			return "128\n524288\n"
+		}
+		return "8192\n524288\n"
+	})
+	prober := pc.prober()
+
+	first := pc.probe(t, prober)
+	require.Len(t, first, 2)
+	second := pc.probe(t, prober)
+	require.Len(t, second, 2)
+	assert.Equal(t, []string{"node-01"}, pc.created[1], "only the node below the limits is probed again")
+	for _, l := range second {
+		assert.True(t, l.withinLimits(), "%s: %+v", l.NodeName, l)
+	}
+}
+
+// How each way a probe ends carries over to the next poll: what it reports
+// now, and where the node goes in the next poll's order.
+func TestInotifyProbeMemory_CarriesEachOutcomeToTheNextPoll(t *testing.T) {
+	node := func(name string) corev1.Node {
+		return corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name, UID: types.UID("uid-" + name)}}
+	}
+	cut := errors.New("waiting for probe pod: context deadline exceeded")
+	notReached := errors.New("not probed")
+	pulled := errors.New("ErrImagePull")
+	within := NodeInotifyLimits{MaxUserInstances: 8192, MaxUserWatches: 524288}
+	below := NodeInotifyLimits{MaxUserInstances: 128, MaxUserWatches: 524288}
+	nodes := []corev1.Node{node("ok"), node("low"), node("own"), node("cut"), node("unreached"), node("new")}
+
+	mem := &inotifyProbeMemory{}
+	got := map[string]NodeInotifyLimits{}
+	settle := func(i int, res NodeInotifyLimits, stop probeStop) {
+		res.NodeName = nodes[i].Name
+		got[nodes[i].Name] = mem.settle(&nodes[i], res, stop)
+	}
+	settle(0, within, probeFinished)
+	settle(1, below, probeFinished)
+	settle(2, NodeInotifyLimits{Err: pulled}, probeFinished)
+	settle(3, NodeInotifyLimits{Err: cut}, probeStoppedPartWay)
+	settle(4, NodeInotifyLimits{Err: notReached}, probeNotStarted)
+	for name, out := range map[string]bool{"ok": false, "low": false, "own": false, "cut": true, "unreached": true} {
+		assert.Equal(t, out, got[name].OutOfBudget, name)
+	}
+
+	results := make([]NodeInotifyLimits, len(nodes))
+	order := mem.plan(nodes, results)
+	var names []string
+	for _, i := range order {
+		names = append(names, nodes[i].Name)
+	}
+	assert.Equal(t, []string{"cut", "unreached", "new", "low", "own"}, names,
+		"stopped part way first, then nodes never reached, then nodes a new probe may change")
+	assert.True(t, results[0].withinLimits(), "a node within the limits is kept, not probed again")
+
+	// Next poll: the budget stops every probe it makes.
+	settle(1, NodeInotifyLimits{Err: notReached}, probeNotStarted)
+	settle(2, NodeInotifyLimits{Err: cut}, probeStoppedPartWay)
+	settle(3, NodeInotifyLimits{Err: cut}, probeStoppedPartWay)
+	settle(4, NodeInotifyLimits{Err: notReached}, probeNotStarted)
+	assert.Equal(t, below.MaxUserInstances, got["low"].MaxUserInstances, "its earlier reading stands")
+	assert.Equal(t, pulled, got["own"].Err, "its earlier failure stands")
+	assert.False(t, got["low"].OutOfBudget)
+	assert.False(t, got["own"].OutOfBudget)
+	assert.False(t, got["cut"].OutOfBudget, "stopped part way again although it went first")
+	assert.True(t, got["unreached"].OutOfBudget, "still never reached")
 }

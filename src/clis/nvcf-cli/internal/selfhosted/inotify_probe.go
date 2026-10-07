@@ -63,10 +63,6 @@ const (
 	// and discarding all diagnostic info.
 	inotifyProbeShellCmd = "cat /host/proc/sys/fs/inotify/max_user_instances; cat /host/proc/sys/fs/inotify/max_user_watches"
 
-	// perNodePodTimeout caps the create+wait+logs sequence for one node.
-	// Image pull on a cold node can take ~30s; pod schedule + cat is sub-second.
-	perNodePodTimeout = 90 * time.Second
-
 	// podPollInterval is how often we poll pod status while waiting for the
 	// probe container to terminate.
 	podPollInterval = 1 * time.Second
@@ -108,8 +104,13 @@ const (
 //
 // image replaces the default busybox image, for clusters that pull from a
 // mirror; empty keeps the default.
+//
+// The prober remembers what it learned of each node across its calls, the
+// polls of one --wait: a node found within the limits is not probed again, and
+// the nodes no call has a result for are probed first, so each poll gets
+// further than the one before.
 func NewInotifyProber(image string) NodeInotifyProber {
-	return func(ctx context.Context, kubeContext string) ([]NodeInotifyLimits, error) {
+	return newInotifyProber(image, func(kubeContext string) (kubernetes.Interface, error) {
 		restCfg, err := loadKubeConfig(kubeContext)
 		if err != nil {
 			return nil, fmt.Errorf("building kubeconfig: %w", err)
@@ -129,9 +130,27 @@ func NewInotifyProber(image string) NodeInotifyProber {
 		if err != nil {
 			return nil, fmt.Errorf("building kubernetes client: %w", err)
 		}
-		return probeAllNodes(ctx, client, image)
+		return client, nil
+	})
+}
+
+// newInotifyProber is NewInotifyProber with the client for a kube context
+// from connect.
+func newInotifyProber(image string, connect func(kubeContext string) (kubernetes.Interface, error)) NodeInotifyProber {
+	mem := &inotifyProbeMemory{}
+	return func(ctx context.Context, kubeContext string) ([]NodeInotifyLimits, error) {
+		client, err := connect(kubeContext)
+		if err != nil {
+			return nil, err
+		}
+		return probeAllNodes(ctx, client, image, mem)
 	}
 }
+
+// perNodePodTimeout caps the create+wait+logs sequence for one node. Image
+// pull on a cold node can take ~30s; pod schedule + cat is sub-second. A var so
+// tests can shorten it.
+var perNodePodTimeout = 90 * time.Second
 
 // inotifyProbeBudget bounds the whole probe, inside the time the check sets
 // aside for the checks that run before the validator. A var so tests can
@@ -153,7 +172,15 @@ var probePodCleanupTimeout = 10 * time.Second
 // nodeInotifyCheck can always inspect partial results, and limit
 // violations on some nodes are never dropped when other nodes are
 // concurrently unreachable.
-func probeAllNodes(ctx context.Context, client kubernetes.Interface, image string) ([]NodeInotifyLimits, error) {
+//
+// mem holds what earlier calls learned of the nodes, and takes what this one
+// learns; nil starts from nothing.
+func probeAllNodes(
+	ctx context.Context, client kubernetes.Interface, image string, mem *inotifyProbeMemory,
+) ([]NodeInotifyLimits, error) {
+	if mem == nil {
+		mem = &inotifyProbeMemory{}
+	}
 	// Nodes are probed probeConcurrency at a time, so on a cluster whose
 	// probe pods stall each wave takes perNodePodTimeout: unbounded, the probe
 	// ran past the time the check sets aside for the checks before the
@@ -178,17 +205,16 @@ func probeAllNodes(ctx context.Context, client kubernetes.Interface, image strin
 	// delete runs. This reclaims those by the run's label on every return.
 	probeDeadline, _ := ctx.Deadline()
 	defer func() { run.reclaim(client, probeDeadline) }()
-	results := make([]NodeInotifyLimits, len(nodes.Items))
+	// Unschedulable nodes won't have control plane components deployed on them.
+	schedulable := slices.DeleteFunc(nodes.Items, func(n corev1.Node) bool { return n.Spec.Unschedulable })
+	results := make([]NodeInotifyLimits, len(schedulable))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(probeConcurrency)
-	for i, n := range nodes.Items {
-		// Unschedulable nodes won't have control plane components deployed on them.
-		if n.Spec.Unschedulable {
-			continue
-		}
-		i, nodeName := i, n.Name
+	for _, i := range mem.plan(schedulable, results) {
+		node := &schedulable[i]
 		eg.Go(func() error {
-			results[i] = probeOneNode(egCtx, client, run, nodeName, image)
+			res, stop := probeOneNode(egCtx, client, run, node.Name, image)
+			results[i] = mem.settle(node, res, stop)
 			// Per-node failures are encoded in results[i].Err; never
 			// propagate them as the errgroup's error, since that would
 			// cancel sibling probes still in flight.
@@ -196,25 +222,41 @@ func probeAllNodes(ctx context.Context, client kubernetes.Interface, image strin
 		})
 	}
 	_ = eg.Wait()
-	// Remove any results from skipped nodes.
-	results = slices.DeleteFunc(results, func(item NodeInotifyLimits) bool {
-		return item.Err == nil && item.NodeName == ""
-	})
 	return results, nil
 }
 
+// probeStop says whether the probe's budget stopped a node's probe.
+type probeStop int
+
+const (
+	// probeFinished is a probe that ran to its end: the node was measured, or
+	// failed on its own, such as an image it could not pull or its own bound.
+	probeFinished probeStop = iota
+	// probeNotStarted is a node the budget ran out before.
+	probeNotStarted
+	// probeStoppedPartWay is a node the budget ran out on while it was probed.
+	probeStoppedPartWay
+)
+
 // probeOneNode creates, waits on, and tears down a single probe pod, returning
-// the parsed limits or a per-node error.
+// the parsed limits or a per-node error, and whether the probe's budget,
+// rather than the node, stopped it.
 func probeOneNode(
 	ctx context.Context, client kubernetes.Interface, run *probeRun, nodeName, image string,
-) (res NodeInotifyLimits) {
-	res = NodeInotifyLimits{NodeName: nodeName}
-	// ctx is the whole probe's, so a failure once it ended is the budget's,
-	// not the node's.
-	defer func() { res.OutOfBudget = res.Err != nil && ctx.Err() != nil }()
+) (NodeInotifyLimits, probeStop) {
+	res := NodeInotifyLimits{NodeName: nodeName}
 	if ctx.Err() != nil {
 		res.Err = fmt.Errorf("not probed: the inotify probe's %s budget ran out", inotifyProbeBudget)
-		return res
+		return res, probeNotStarted
+	}
+	// ctx is the whole probe's, so a failure once it ended is the budget's,
+	// not the node's. It is told apart here, before the pod's cleanup.
+	failed := func(err error) (NodeInotifyLimits, probeStop) {
+		res.Err = err
+		if ctx.Err() != nil {
+			return res, probeStoppedPartWay
+		}
+		return res, probeFinished
 	}
 
 	pctx, cancel := context.WithTimeout(ctx, perNodePodTimeout)
@@ -222,30 +264,107 @@ func probeOneNode(
 
 	pod, err := createProbePod(pctx, client, nodeName, run.id, image)
 	if err != nil {
-		res.Err = fmt.Errorf("create probe pod on node %s: %w", nodeName, err)
-		return res
+		return failed(fmt.Errorf("create probe pod on node %s: %w", nodeName, err))
 	}
 	run.created(pod)
 	defer cleanupProbePod(client, pod)
 
 	if err := waitForPodTerminal(pctx, client, pod.Name); err != nil {
-		res.Err = fmt.Errorf("waiting for probe pod on node %s: %w", nodeName, err)
-		return res
+		return failed(fmt.Errorf("waiting for probe pod on node %s: %w", nodeName, err))
 	}
 
 	logs, err := fetchPodLogs(pctx, client, pod.Name)
 	if err != nil {
-		res.Err = fmt.Errorf("fetching probe logs from node %s: %w", nodeName, err)
-		return res
+		return failed(fmt.Errorf("fetching probe logs from node %s: %w", nodeName, err))
 	}
 
 	instances, watches, err := parseInotifyOutput(logs)
 	if err != nil {
 		res.Err = fmt.Errorf("parsing inotify output from node %s: %w", nodeName, err)
-		return res
+		return res, probeFinished
 	}
 	res.MaxUserInstances = instances
 	res.MaxUserWatches = watches
+	return res, probeFinished
+}
+
+// inotifyProbeMemory is what one prober learned of each node over its calls.
+type inotifyProbeMemory struct {
+	mu    sync.Mutex
+	nodes map[string]*nodeProbeRecord // by node name and UID
+}
+
+type nodeProbeRecord struct {
+	// last is the node's latest probe that ran to its end, if any.
+	last *NodeInotifyLimits
+	// stoppedPartWay is set once the budget ran out on a probe of the node.
+	stoppedPartWay bool
+}
+
+func nodeProbeKey(node *corev1.Node) string { return node.Name + "/" + string(node.UID) }
+
+// plan fills in results for the nodes an earlier call found within the
+// limits, which are not probed again, and returns the others in the order to
+// probe them: first the nodes no call has a result for, those the budget
+// stopped part way ahead of the rest, so they get a whole turn; then the nodes
+// whose last result was a failure or below the limits, which a new probe may
+// change.
+func (m *inotifyProbeMemory) plan(nodes []corev1.Node, results []NodeInotifyLimits) []int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var stopped, fresh, again []int
+	for i := range nodes {
+		rec := m.nodes[nodeProbeKey(&nodes[i])]
+		switch {
+		case rec == nil:
+			fresh = append(fresh, i)
+		case rec.last != nil && rec.last.withinLimits():
+			results[i] = *rec.last
+		case rec.last != nil:
+			again = append(again, i)
+		default:
+			stopped = append(stopped, i)
+		}
+	}
+	return slices.Concat(stopped, fresh, again)
+}
+
+// settle records how a node's probe ended and returns the node's result for
+// this call. Only a node without a result that the budget stopped is out of
+// budget: a later call, which probes such nodes first, may reach it. A node
+// that failed on its own, or the budget stopped part way a second time
+// although it went first, is not: a later call is unlikely to do better.
+func (m *inotifyProbeMemory) settle(node *corev1.Node, res NodeInotifyLimits, stop probeStop) NodeInotifyLimits {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.nodes == nil {
+		m.nodes = map[string]*nodeProbeRecord{}
+	}
+	key := nodeProbeKey(node)
+	rec := m.nodes[key]
+	if rec == nil {
+		rec = &nodeProbeRecord{}
+	}
+	switch {
+	case stop == probeFinished:
+		rec.last = &res
+	case rec.last != nil:
+		// The budget stopped a new probe of a node an earlier call has a
+		// result for: that result stands.
+		return *rec.last
+	case stop == probeNotStarted:
+		res.OutOfBudget = true
+		if !rec.stoppedPartWay {
+			// Nothing to record: the node is still one no call has reached.
+			return res
+		}
+	case !rec.stoppedPartWay:
+		res.OutOfBudget = true
+		rec.stoppedPartWay = true
+	default:
+		rec.last = &res
+	}
+	m.nodes[key] = rec
 	return res
 }
 

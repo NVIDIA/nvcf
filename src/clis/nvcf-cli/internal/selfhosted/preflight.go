@@ -650,8 +650,17 @@ type NodeInotifyLimits struct {
 	MaxUserWatches   int64
 	Err              error
 	// OutOfBudget marks an Err caused by the probe's budget running out
-	// before this node's probe finished. A later run may reach the node.
+	// before this node's probe finished, on a node no earlier probe has a
+	// result for. A later poll, which probes such nodes first, may reach it.
+	// A node that failed on its own, such as one whose probe pod could not
+	// pull its image or start in time, is not out of budget.
 	OutOfBudget bool
+}
+
+// withinLimits reports a node measured at or above NVCA's minimums.
+func (l NodeInotifyLimits) withinLimits() bool {
+	return l.Err == nil && l.MaxUserInstances >= minInotifyMaxUserInstances &&
+		l.MaxUserWatches >= minInotifyMaxUserWatches
 }
 
 // NodeInotifyProber returns one NodeInotifyLimits per cluster node, or a
@@ -695,7 +704,7 @@ func nodeInotifyCheck(prober NodeInotifyProber, kubeContext string) binaryCheckS
 					outOfBudget = outOfBudget || l.OutOfBudget
 					continue
 				}
-				if l.MaxUserInstances < minInotifyMaxUserInstances || l.MaxUserWatches < minInotifyMaxUserWatches {
+				if !l.withinLimits() {
 					failing = append(failing, fmt.Sprintf(
 						"%s (max_user_instances=%d/%d, max_user_watches=%d/%d)",
 						l.NodeName,
@@ -727,8 +736,8 @@ func nodeInotifyCheck(prober NodeInotifyProber, kubeContext string) binaryCheckS
 					len(probeErrs), strings.Join(probeErrs, "; "),
 				)
 				// A node the budget did not reach may be below the limits,
-				// so --wait polls again: a later run, on warm image caches,
-				// gets further.
+				// so --wait polls again: the next poll keeps the nodes found
+				// within the limits and probes the unreached ones first.
 				r.Transient = outOfBudget
 				return r
 			}

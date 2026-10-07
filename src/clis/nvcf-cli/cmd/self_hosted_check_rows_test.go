@@ -71,6 +71,9 @@ type checkRun struct {
 	inotify    []string
 	validators []validatorCall
 	sisHits    int64
+
+	// inotifyProbers counts the inotify probers built.
+	inotifyProbers int
 }
 
 func (r checkRun) code() int {
@@ -145,6 +148,9 @@ func runCheck(t *testing.T, stubs checkStubs, args ...string) checkRun {
 		}
 	}
 	newInotifyProberForSelfHosted = func(string) selfhosted.NodeInotifyProber {
+		mu.Lock()
+		run.inotifyProbers++
+		mu.Unlock()
 		return func(ctx context.Context, kubeContext string) ([]selfhosted.NodeInotifyLimits, error) {
 			mu.Lock()
 			run.inotify = append(run.inotify, kubeContext)
@@ -649,6 +655,8 @@ func TestCheck_WaitPollsOnNodesTheInotifyProbeDidNotReach(t *testing.T) {
 	assert.Equal(t, 0, run.code(), run.stderr)
 	assert.Equal(t, 2, calls, "the second poll reached every node")
 	assert.Equal(t, "ok", finalEvent(t, run.stderr)["verdict"])
+	assert.Equal(t, 1, run.inotifyProbers,
+		"every poll uses one prober, which keeps what the polls before learned of each node")
 }
 
 // Every flag set in both topologies: which roles run and where, what each
