@@ -275,7 +275,9 @@ if Pylons cannot be upgraded first.
 The top-level `default`, an algorithm name in `models` or `request_algorithms`,
 and the built-in defaults always use `max-input-tps`. For a mixed-version
 rollout, give each Pulsar entry in `models` and `request_algorithms` a detailed
-object that sets `last-mean-input-tps`.
+object that sets `last-mean-input-tps`. If `default` is `pulsar` or
+`pulsar-wait-and-widen`, also list every Pulsar-routed model under `models`, or
+move `default` to another algorithm.
 
 Retries walk the same ranking after excluding failed clusters. When
 `consider_kv_free_tokens` is enabled, a ranked candidate is skipped when it

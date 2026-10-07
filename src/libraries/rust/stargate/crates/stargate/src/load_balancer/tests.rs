@@ -3275,7 +3275,7 @@ fn pulsar_uses_last_mean_input_tps_as_weight() {
 }
 
 #[test]
-fn pulsar_can_use_generation_max_input_tps_as_weight() {
+fn pulsar_uses_generation_max_input_tps_as_weight_by_default() {
     let pulsar = PulsarLoadBalancer::new(seeded_pulsar_algorithm_config("seed-1"));
     let mut candidate = work_candidate("inst-a", 5, 123.0, 0);
     candidate.stats.max_input_tps = Some(456.0);

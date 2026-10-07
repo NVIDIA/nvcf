@@ -1090,7 +1090,7 @@ pub(super) struct ModelStatsSnapshotInputs {
 
 impl ModelMetricsState {
     // The maximum follows the published smoothed mean rather than raw samples,
-    // so a single outlier sample cannot set the weight for the whole generation.
+    // so the mean dilutes a single outlier sample before it can raise the weight.
     pub(super) fn publish_mean_input_tps(&mut self, input_tps: f64) {
         self.last_mean_input_tps = input_tps;
         self.max_input_tps = Some(

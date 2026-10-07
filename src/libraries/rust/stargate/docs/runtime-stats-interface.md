@@ -157,9 +157,9 @@ If request stats go stale, volatile output TPS is cleared. Sticky input TPS
 stays until a later valid sample replaces it.
 The maximum is the greatest `last_mean_input_tps` published for the current
 model generation, including a configured initial TPS. It follows the smoothed
-mean rather than individual samples, so one outlier sample cannot set it. Lower
-means do not reduce it, and generation replacement clears it. It is absent
-until the first mean is published.
+mean rather than individual samples, so the mean dilutes one outlier sample.
+Lower means do not reduce it, and generation replacement clears it. It is
+absent until the first mean is published.
 
 Pylon publishes `pylon_model_max_input_tps` when the maximum is known and removes
 the series when the model is removed or replaced with unknown maximum state.
