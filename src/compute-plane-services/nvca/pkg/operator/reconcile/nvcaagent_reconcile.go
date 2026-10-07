@@ -165,8 +165,6 @@ const (
 	//nolint:gosec
 	NGCServiceAPIKeySecretDataKey = NGCServiceAPIKeySecretName
 	//nolint:gosec
-	NGCServiceAPIKeyFileEnvVar = "NGC_SERVICE_API_KEY_FILE"
-	//nolint:gosec
 	NGCAPIKeySecretName    = "ngc-api-key"
 	NVCAVaultConfigmapName = "nvca-vault-agent"
 
@@ -207,6 +205,7 @@ const (
 	NVCAOTelCollectorOAuthClientSecretFileEnvVar = "NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_SECRET_FILE"
 	NVCAOTelCollectorOAuthTokenURLEnvVar         = "NVCA_OTEL_COLLECTOR_OAUTH_TOKEN_URL"
 	NVCAOTelCollectorAuthenticatorEnvVar         = "NVCA_OTEL_COLLECTOR_AUTHENTICATOR"
+	NVCAOTelCollectorBearerTokenFileEnvVar       = "NVCA_OTEL_COLLECTOR_BEARER_TOKEN_FILE"
 
 	// NVCA OTel collector memory limiter default percentages
 	NVCAOTelCollectorMemoryLimitPercentage = 85
@@ -2916,13 +2915,13 @@ func (bc *BackendK8sCache) getOTelCollectorContainerCommandArgsAndEnv(
 		fmt.Sprintf("--config=%s/config.yaml", NVCAOTelCollectorConfigMountPath),
 	}
 
-	fndsEndpoint := getFNDSEndpoint(nb.Spec.ClusterConfig.FNDService, bc.envType)
+	fndsEndpoint := getOTelCollectorFNDSEndpoint(nb, bc.envType)
 	authCfg := bc.getOTelCollectorAuthConfig(nb)
 
 	env := []corev1.EnvVar{
 		{
-			Name:  NGCServiceAPIKeyFileEnvVar,
-			Value: fmt.Sprintf("/var/run/secrets/%s/%s", NGCServiceAPIKeySecretName, NGCServiceAPIKeySecretDataKey),
+			Name:  NVCAOTelCollectorBearerTokenFileEnvVar,
+			Value: authCfg.bearerTokenFile,
 		},
 		{
 			Name:  NVCAOTelCollectorRequestsNamespaceEnvVar,
@@ -2969,19 +2968,24 @@ func (bc *BackendK8sCache) getOTelCollectorContainerCommandArgsAndEnv(
 }
 
 // getOTelCollectorVolumeMounts returns volume mounts for the OTel collector container.
-func (bc *BackendK8sCache) getOTelCollectorVolumeMounts() []corev1.VolumeMount {
-	return []corev1.VolumeMount{
+// In PSAT mode the token mount is added by applyPSATIdentity instead of the NGC
+// service API key.
+func (bc *BackendK8sCache) getOTelCollectorVolumeMounts(nb *nvidiaiov1.NVCFBackend) []corev1.VolumeMount {
+	mounts := []corev1.VolumeMount{
 		{
 			Name:      NVCAOTelCollectorConfigMapName,
 			MountPath: NVCAOTelCollectorConfigMountPath,
 			ReadOnly:  true,
 		},
-		{
+	}
+	if !useOTelCollectorPSAT(nb) {
+		mounts = append(mounts, corev1.VolumeMount{
 			Name:      NGCServiceAPIKeySecretName,
 			MountPath: fmt.Sprintf("/var/run/secrets/%s", NGCServiceAPIKeySecretName),
 			ReadOnly:  true,
-		},
+		})
 	}
+	return mounts
 }
 
 // getOTelCollectorContainer returns the OTel collector as a restartable init container.
@@ -3015,7 +3019,7 @@ func (bc *BackendK8sCache) getOTelCollectorContainer(nb *nvidiaiov1.NVCFBackend,
 					Protocol:      corev1.ProtocolTCP,
 				},
 			},
-			VolumeMounts: bc.getOTelCollectorVolumeMounts(),
+			VolumeMounts: bc.getOTelCollectorVolumeMounts(nb),
 			LivenessProbe: &corev1.Probe{
 				ProbeHandler: corev1.ProbeHandler{
 					HTTPGet: &corev1.HTTPGetAction{

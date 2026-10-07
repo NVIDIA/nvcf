@@ -74,8 +74,10 @@ collector_image="${operator_repository}:${operator_tag}"
 
 # Select the service API key branch from the same Go template that NVCA renders
 # into its collector ConfigMap. This leaves runtime env substitutions intact for
-# the collector's env provider to resolve below.
+# the collector's env provider to resolve below. The UsePSAT blocks only drop
+# statements in PSAT mode, so keeping their contents validates the superset.
 awk '
+  /^\{\{- (if not \.UsePSAT|end) \}\}$/ { next }
   /^\{\{ if \.UseOAuth2 \}\}$/ { in_auth = 1; include = 0; next }
   /^\{\{ else \}\}$/ && in_auth { include = 1; next }
   /^\{\{ end \}\}$/ && in_auth { in_auth = 0; include = 0; next }
@@ -87,7 +89,7 @@ awk '
 
 printf 'test-token\n' > "${token_file}"
 docker run --rm --pull=always \
-  --env NGC_SERVICE_API_KEY_FILE=/etc/otelcol/service-api-key \
+  --env NVCA_OTEL_COLLECTOR_BEARER_TOKEN_FILE=/etc/otelcol/service-api-key \
   --env NVCA_OTEL_COLLECTOR_MEMORY_LIMIT_PERCENTAGE=75 \
   --env NVCA_OTEL_COLLECTOR_SPIKE_LIMIT_PERCENTAGE=20 \
   --env NVCA_OTEL_COLLECTOR_HEALTH_CHECK_PORT=13133 \
