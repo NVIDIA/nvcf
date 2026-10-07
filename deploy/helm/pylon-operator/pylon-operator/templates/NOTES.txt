@@ -77,10 +77,15 @@ No trust bundle is configured, so transport pods use Pylon's default TLS trust
 for the router. When a private CA issues the router certificate, put the CA in
 key ca.crt of a ConfigMap in namespace {{ $ns }} and set trustBundle.configMap.
 {{- end }}
-{{- if not .Values.installCRDs }}
+{{- if ne (include "pylon-operator.manageCRDs" .) "true" }}
 
+{{- if eq (toString .Values.installCRDs) "auto" }}
+This release reuses the existing InferenceEndpoint CRD. Upgrade its owning
+release to apply CRD schema changes.
+{{- else }}
 installCRDs is false. Install the InferenceEndpoint CRD
 (inferenceendpoints.pylon.nvidia.com) before creating InferenceEndpoints.
+{{- end }}
 {{- end }}
 
 Publish a model

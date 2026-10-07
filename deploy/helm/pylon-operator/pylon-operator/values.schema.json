@@ -195,8 +195,11 @@
             }
         },
         "installCRDs": {
-            "type": "boolean",
-            "description": "Render the InferenceEndpoint CRD",
+            "oneOf": [
+                {"type": "boolean"},
+                {"type": "string", "enum": ["auto"]}
+            ],
+            "description": "Render the InferenceEndpoint CRD, or use auto to install it when missing and update it only when owned by this release",
             "default": true
         },
         "logLevel": {

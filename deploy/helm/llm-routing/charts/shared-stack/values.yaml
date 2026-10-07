@@ -41,8 +41,8 @@ operator:
   clusterId: llm-stack
   # Must contain exactly the Helm release namespace.
   watchNamespaces: []
-  # Reuse an installed CRD by default. Set true only for the first owner.
-  installCRDs: false
+  # Create missing CRDs, upgrade this release's CRDs, and reuse other owners' CRDs.
+  installCRDs: auto
   router:
     grpcAddress: http://llm-request-router:50071
   image:

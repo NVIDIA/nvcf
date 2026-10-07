@@ -39,6 +39,7 @@ class SharedHelmTests(unittest.TestCase):
             subprocess.run(['helm', 'dependency', 'build', '--skip-refresh', str(chart)], check=True, capture_output=True, text=True)
         cls.values = yaml.safe_load((cls.chart/'values.local.example.yaml').read_text())
         cls.values['operator']['watchNamespaces'] = ['test-models']
+        cls.values['operator'].pop('installCRDs', None)
 
     @classmethod
     def tearDownClass(cls):
@@ -102,10 +103,11 @@ class SharedHelmTests(unittest.TestCase):
     def test_empty_stack_is_gpu_and_model_free(self):
         resources = self.render()
         self.assertEqual(sum(item['kind'] == 'Deployment' for item in resources), 3)
-        forbidden = {'InferenceEndpoint', 'PersistentVolumeClaim', 'PersistentVolume', 'RuntimeClass', 'CustomResourceDefinition'}
+        forbidden = {'InferenceEndpoint', 'PersistentVolumeClaim', 'PersistentVolume', 'RuntimeClass'}
         self.assertFalse(forbidden & {item['kind'] for item in resources})
         for item in resources:
-            self.assertNotIn('nvidia.com/gpu', json.dumps(item))
+            if item['kind'] != 'CustomResourceDefinition':
+                self.assertNotIn('nvidia.com/gpu', json.dumps(item))
             if item['kind'] == 'Deployment':
                 pod = item['spec']['template']['spec']
                 self.assertNotIn('runtimeClassName', pod)
@@ -273,14 +275,47 @@ class SharedHelmTests(unittest.TestCase):
                               'spec': {'template': {'spec': {'containers': [{'name': 'operator', 'command': ['operator'] + args}]}}}}
                 self.render(chart=self.lookup_chart([{'apiVersion': 'apps/v1', 'kind': 'Deployment', 'items': [deployment]}]), fail=message)
 
-    def test_crd_is_explicitly_reused_or_installed(self):
-        self.render(api=False, fail='no served InferenceEndpoint API')
+    def test_default_auto_creates_one_kept_crd_without_existing_api(self):
+        resources = self.render(api=False)
+        crds = [item for item in resources if item['kind'] == 'CustomResourceDefinition']
+        self.assertEqual(len(crds), 1)
+        self.assertEqual(crds[0]['metadata']['name'], 'inferenceendpoints.pylon.nvidia.com')
+        self.assertEqual(crds[0]['metadata']['annotations']['helm.sh/resource-policy'], 'keep')
+
+    def test_explicit_false_requires_an_existing_api(self):
+        values = copy.deepcopy(self.values)
+        values['operator']['installCRDs'] = False
+        self.render(values, api=False, fail='no served InferenceEndpoint API')
+        resources = self.render(values)
+        self.assertFalse(any(item['kind'] == 'CustomResourceDefinition' for item in resources))
+
+    def test_explicit_true_creates_one_crd_without_existing_api(self):
         values = copy.deepcopy(self.values)
         values['operator']['installCRDs'] = True
         resources = self.render(values, api=False)
-        crds = [item for item in resources if item['kind'] == 'CustomResourceDefinition']
+        self.assertEqual(sum(item['kind'] == 'CustomResourceDefinition' for item in resources), 1)
+
+    def test_owned_crd_auto_upgrade_repairs_an_older_schema(self):
+        resources = self.installed()
+        crd = next(item for item in resources if item['kind'] == 'CustomResourceDefinition')
+        version = next(item for item in crd['spec']['versions'] if item['name'] == 'v1alpha1')
+        fields = version['schema']['openAPIV3Schema']['properties']['spec']['properties']
+        expected_fields = copy.deepcopy(fields)
+        fields.pop('health')
+        fields.pop('maxEngineConcurrency')
+        rendered = self.render(chart=self.lookup_chart(resources), upgrade=True)
+        crds = [item for item in rendered if item['kind'] == 'CustomResourceDefinition']
         self.assertEqual(len(crds), 1)
+        upgraded = next(item for item in crds[0]['spec']['versions'] if item['name'] == 'v1alpha1')
+        self.assertEqual(upgraded['schema']['openAPIV3Schema']['properties']['spec']['properties'], expected_fields)
         self.assertEqual(crds[0]['metadata']['annotations']['helm.sh/resource-policy'], 'keep')
+
+    def test_invalid_crd_management_modes_are_rejected(self):
+        for mode in ('always', 'false', 1):
+            with self.subTest(mode=mode):
+                values = copy.deepcopy(self.values)
+                values['operator']['installCRDs'] = mode
+                self.render(values, fail='installCRDs')
 
     def test_missing_or_placeholder_images_are_rejected(self):
         values = copy.deepcopy(self.values)
@@ -310,18 +345,42 @@ class SharedHelmTests(unittest.TestCase):
                      'metadata': {'name': 'external-caller', 'namespace': 'test-models'}, 'data': {}}
         self.render(values, chart=self.lookup_chart([malformed]), fail='missing api-key')
 
-    def test_foreign_crd_is_reused_without_rendering_or_adoption(self):
-        values = copy.deepcopy(self.values)
-        values['operator']['installCRDs'] = True
-        crd = next(item for item in self.render(values, api=False) if item['kind'] == 'CustomResourceDefinition')
+    def test_compatible_foreign_or_unowned_crd_is_reused_without_adoption(self):
+        original = next(item for item in self.render(api=False) if item['kind'] == 'CustomResourceDefinition')
+        for owner in (None, ('original-owner', 'original-namespace')):
+            with self.subTest(owner=owner):
+                crd = copy.deepcopy(original)
+                if owner:
+                    crd['metadata']['annotations'].update({'meta.helm.sh/release-name': owner[0],
+                                                            'meta.helm.sh/release-namespace': owner[1]})
+                chart = self.lookup_chart([crd])
+                rendered = self.render(chart=chart)
+                self.assertFalse(any(item['kind'] == 'CustomResourceDefinition' for item in rendered))
+                values = copy.deepcopy(self.values)
+                values['operator']['installCRDs'] = True
+                self.render(values, chart=chart, fail='not owned by this Helm release')
+
+    def test_auto_reuse_rejects_an_incompatible_foreign_schema(self):
+        crd = next(item for item in self.render(api=False) if item['kind'] == 'CustomResourceDefinition')
         crd['metadata']['annotations'].update({'meta.helm.sh/release-name': 'original-owner',
                                                 'meta.helm.sh/release-namespace': 'original-namespace'})
-        chart = self.lookup_chart([crd])
-        rendered = self.render(chart=chart)
-        self.assertFalse(any(item['kind'] == 'CustomResourceDefinition' for item in rendered))
-        self.render(values, chart=chart, fail='not owned by this Helm release')
-        crd['spec']['scope'] = 'Cluster'
+        version = next(item for item in crd['spec']['versions'] if item['name'] == 'v1alpha1')
+        version['schema']['openAPIV3Schema']['properties']['spec']['properties'].pop('health')
         self.render(chart=self.lookup_chart([crd]), fail='existing InferenceEndpoint CRD is incompatible')
+
+    def test_auto_management_rejects_crd_identity_changes_for_any_owner(self):
+        original = next(item for item in self.render(api=False) if item['kind'] == 'CustomResourceDefinition')
+        for owner in (('test-stack', 'test-models'), ('original-owner', 'original-namespace')):
+            for key, value in (('group', 'other.invalid'), ('scope', 'Cluster'), ('kind', 'OtherEndpoint')):
+                with self.subTest(owner=owner, key=key):
+                    crd = copy.deepcopy(original)
+                    crd['metadata']['annotations'].update({'meta.helm.sh/release-name': owner[0],
+                                                            'meta.helm.sh/release-namespace': owner[1]})
+                    if key == 'kind':
+                        crd['spec']['names'][key] = value
+                    else:
+                        crd['spec'][key] = value
+                    self.render(chart=self.lookup_chart([crd]), fail='existing InferenceEndpoint CRD is incompatible')
 
     def test_duplicate_secret_names_and_argument_overrides_are_rejected(self):
         values = copy.deepcopy(self.values)
@@ -338,7 +397,6 @@ class SharedHelmTests(unittest.TestCase):
 
     def test_strict_helm_lint(self):
         values = copy.deepcopy(self.values)
-        values['operator']['installCRDs'] = True
         values_path = self.root/'lint-values.json'
         values_path.write_text(json.dumps(values))
         result = subprocess.run(['helm', 'lint', str(self.chart), '--strict', '--namespace', 'test-models',

@@ -74,7 +74,7 @@ strip_leading_comments() {
 }
 
 render_crd() {
-    echo '{{- if .Values.installCRDs }}'
+    echo '{{- if eq (include "pylon-operator.manageCRDs" .) "true" }}'
     header "${crd_rel}"
     strip_leading_comments "${operator_dir}/${crd_rel}" | awk '
         # Top-level metadata: add chart labels and the keep policy. The keep

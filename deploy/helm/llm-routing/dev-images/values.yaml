@@ -4,7 +4,7 @@
       "llmApiGateway": {
         "image": {
           "repository": "localhost/llm-stack/gateway",
-          "tag": "dev-20261007212336-c0c86b",
+          "tag": "dev-20261007215000-790207",
           "pullPolicy": "Never"
         },
         "nodeSelector": {
@@ -17,7 +17,7 @@
       "llmRequestRouter": {
         "image": {
           "repository": "localhost/llm-stack/router",
-          "tag": "dev-20261007212336-c0c86b",
+          "tag": "dev-20261007215000-790207",
           "pullPolicy": "Never"
         },
         "nodeSelector": {
@@ -30,7 +30,7 @@
   "operator": {
     "image": {
       "repository": "localhost/llm-stack/operator",
-      "tag": "dev-20261007212336-c0c86b",
+      "tag": "dev-20261007215000-790207",
       "pullPolicy": "Never"
     },
     "nodeSelector": {
@@ -43,7 +43,7 @@
     "pylon": {
       "image": {
         "repository": "localhost/llm-stack/pylon",
-        "tag": "dev-20261007212336-c0c86b",
+        "tag": "dev-20261007215000-790207",
         "pullPolicy": "Never"
       }
     }

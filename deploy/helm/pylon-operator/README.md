@@ -13,7 +13,7 @@ the model with the LLM request router, and reports status.
 
 The chart installs:
 
-- the `InferenceEndpoint` CRD, when `installCRDs` is true
+- the `InferenceEndpoint` CRD, when `installCRDs` is `true` or `auto` selects this release
 - the operator Deployment, one replica with leader election
 - a ServiceAccount, a ClusterRole and ClusterRoleBinding for the reconciler,
   and a Role and RoleBinding for leader election Leases and Events in the
@@ -115,7 +115,7 @@ types, the `clusterId` and namespace formats and the durations.
 | `credential.key` | `cluster-token` | Secret key that holds the token. The operator reads only `cluster-token`, so any other value fails the render. |
 | `credential.generate` | `true` | Generate `<fullname>-cluster-credential` when `existingSecret` is empty. |
 | `trustBundle.configMap` | `""` | Existing ConfigMap in the release namespace whose `ca.crt` key holds the router CA bundle. Empty mounts none. `--trust-bundle-configmap`. |
-| `installCRDs` | `true` | Render the `InferenceEndpoint` CRD. |
+| `installCRDs` | `true` | Render the `InferenceEndpoint` CRD. Use `auto` to install it when missing and update it only when owned by this release, or `false` to skip it. |
 | `logLevel` | `info` | `--zap-log-level`. |
 | `extraArgs` | `[]` | Extra operator arguments, appended last. |
 | `serviceAccount.create` | `true` | Create the operator ServiceAccount. Its token is mounted. |
@@ -247,8 +247,15 @@ In both cases the CRD stays in the cluster and Helm stops managing it. Setting
 `installCRDs=true` again adopts it back into the release. To remove the CRD,
 delete it with `kubectl delete crd inferenceendpoints.pylon.nvidia.com`.
 
-Set `installCRDs=false` on first install only when another tool manages the
-CRD.
+With `installCRDs=auto`, the chart looks up the CRD during installation and upgrade:
+
+- If it is missing, this release installs and owns it.
+- If this release already owns it, Helm applies schema changes on upgrade.
+- If another release or tool owns it, this release reuses it. Upgrade the owning release or tool to change its schema.
+
+The lookup requires permission to read cluster CRDs. Offline `helm template` treats the CRD as missing. Use `--dry-run=server` to check the live ownership decision.
+
+Set `installCRDs=false` to skip CRD management explicitly.
 
 ## Development
 

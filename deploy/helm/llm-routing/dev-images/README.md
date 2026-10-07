@@ -11,16 +11,24 @@ Use Python 3.11+, Helm, kubectl and Docker with Buildx support. Docker needs acc
 Run from `deploy/helm/llm-routing`:
 
 ```bash
-python3 dev-images/build.py \
-  --context your-context --allow-containerd-import
+python3 dev-images/build.py --allow-containerd-import
 ```
 
-This command builds gateway, router, operator and Pylon from the checkout, including local edits. It uses fresh image tags, preloads compatible nodes and packages the shared stack and both model charts. After preparation succeeds, it updates `dev-images/values.yaml` and the packages in `dev-images/charts/`. It preserves the previous shared values if preparation fails.
+The script:
 
-Commit the updated `dev-images/values.yaml` and `dev-images/charts/` with the source changes so teammates receive a matching set. The script does not commit, push or upgrade Helm releases. Continue with the main installation guide to apply the new images.
+1. Builds gateway, router, operator and Pylon from the checkout, including local edits, with fresh image tags.
+2. Loads the images onto compatible nodes in the current kubeconfig context.
+3. Packages the shared stack and both model charts.
+4. Updates `dev-images/values.yaml` and `dev-images/charts/` after preparation succeeds. Failures preserve the previous shared artifacts.
 
-Each invocation keeps image archives, saved configuration and build evidence in a new directory outside the checkout. Use `--output-dir /path/to/builds` to choose its parent directory. The committed values contain image references, architecture and shared Helm configuration, without workstation paths or credentials.
+Build outputs and reuse:
 
-The values use `Never` pull policy. A replacement node or an evicted image must be preloaded before scheduling these workloads. Rebuilds add new image content to node caches and do not remove old images. Building does not restart running pods.
+- `dev-images/charts/` contains three Helm archives, `index.json`, model notices and `SHA256SUMS`.
+- Image archives, saved configuration and build evidence stay outside Git. Use `--output-dir` to choose their parent directory.
+- The committed values contain image references and shared Helm settings, without credentials or workstation paths.
+- Images use `Never` pull policy. Replacement nodes and evicted images need preloading again.
+- Rebuilding adds image content to node caches. It does not remove old images, restart pods or upgrade releases.
 
-The committed `dev-images/charts/` directory includes three Helm archives, `index.json`, model terms under `notices/`, and `SHA256SUMS`. See [advanced image distribution](../recipes/BUILDING.md) for registry images, saved-configuration retries and component rebuilds. Remove this temporary workflow when published images and charts replace it.
+Commit `dev-images/values.yaml` and `dev-images/charts/` together with the source changes, then follow the [installation guide](../README.md). The script does not commit or push.
+
+See [advanced image distribution](../recipes/BUILDING.md) for registry images, saved-configuration retries and component rebuilds. Remove this temporary workflow when published images and charts replace it.

@@ -4,7 +4,7 @@
 
 The [main guide](README.md) uses local chart archives and an explicit values file. Build these archives with [package-charts.sh](package-charts.sh). A chart source directory can also be installed after its local dependencies are built. Helm and kubectl use your current kubeconfig context. Use their `--kube-context` and `--context` flags for an explicit override.
 
-Use [shared-stack/values.local.example.yaml](charts/shared-stack/values.local.example.yaml) as a template for existing preloaded images. Replace the four image references with your node cache or registry references and set the operator watch namespace to the installation namespace. Set `operator.installCRDs: true` for the first CRD owner, or `false` to reuse an installed compatible CRD. Each shared stack watches its own namespace.
+Use [shared-stack/values.local.example.yaml](charts/shared-stack/values.local.example.yaml) as a template for existing preloaded images. Replace the four image references with your node cache or registry references and set the operator watch namespace to the installation namespace. The default `operator.installCRDs: auto` creates the InferenceEndpoint CRD when absent, updates it when this release owns it, and reuses a compatible CRD owned by another release. If another release owns an incompatible schema, upgrade that owner first. Set `true` to manage the CRD explicitly or `false` to reuse it without ownership. Each shared stack watches its own namespace.
 
 The shared chart generates the caller key in `llm-shared-caller-key` and the transport credential in `llm-shared-cluster-token`. Existing installations retain these Secrets and their CA during upgrades and reinstalls. For an existing caller credential, set `callerKey.existingSecret` to a Secret containing `api-key`. For an existing transport credential, set `clusterCredential.create: false` and `operator.credential.existingSecret` to a Secret containing `cluster-token`. Both Secrets must be in the release namespace. Keep generated credentials and site values in private storage.
 
@@ -157,7 +157,7 @@ The empty-stack check verifies empty discovery and registry responses, a 404 for
 
 Use `--config FILE` to supply an existing private configuration and `--work-dir DIR` to select a custom state directory. Put these optional overrides before the command. Installation saves the configuration for later commands. For a custom state location, continue passing the same `--work-dir DIR`.
 
-A custom configuration specifies the context, namespace, control node, cluster ID, release names and image references. Use `installCRDs: true` for the first operator in a cluster or `false` for a compatible existing CRD. The installer checks namespace and operator ownership before applying resources.
+A custom configuration specifies the context, namespace, control node, cluster ID, release names and image references. In this Python workflow, `installCRDs: true` manages the CRD and `false` reuses a compatible existing CRD. The installer checks namespace and operator ownership before applying resources.
 
 ### Install two independent models or precisions
 

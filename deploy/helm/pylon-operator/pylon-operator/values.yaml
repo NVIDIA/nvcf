@@ -89,7 +89,8 @@ trustBundle:
   # Passed as --trust-bundle-configmap.
   configMap: ""
 
-# Render the InferenceEndpoint CRD. The CRD carries
+# Render the InferenceEndpoint CRD. Use auto to install it when missing or
+# update it when owned by this release. The CRD carries
 # helm.sh/resource-policy: keep, so turning this off or uninstalling the
 # release leaves the CRD and every InferenceEndpoint in place.
 installCRDs: true

@@ -39,10 +39,11 @@
 {{- end -}}
 
 {{- $crd := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "inferenceendpoints.pylon.nvidia.com" -}}
-{{- if $operator.installCRDs -}}
+{{- $manageCRDs := eq (include "pylon-operator.manageCRDs" .Subcharts.operator) "true" -}}
+{{- if $manageCRDs -}}
 {{- if $crd -}}{{- include "llm-shared.owned" (dict "root" . "resource" $crd) -}}{{- end -}}
 {{- else if not (.Capabilities.APIVersions.Has "pylon.nvidia.com/v1alpha1") -}}
-{{- fail "shared-stack: no served InferenceEndpoint API; install its CRD once with operator.installCRDs=true, or supply --api-versions pylon.nvidia.com/v1alpha1 for offline rendering" -}}
+{{- fail "shared-stack: no served InferenceEndpoint API; operator.installCRDs=false requires an existing CRD; use auto to install it, or supply --api-versions pylon.nvidia.com/v1alpha1 for offline rendering" -}}
 {{- end -}}
 {{- if $crd -}}
 {{- $compatible := false -}}
@@ -52,8 +53,11 @@
 {{- $compatible = and (hasKey $fields "modelName") (hasKey $fields "service") (hasKey $fields "inferenceAPIFormat") (hasKey $fields "health") (hasKey $fields "maxEngineConcurrency") -}}
 {{- end -}}
 {{- end -}}
-{{- if not (and $compatible (eq $crd.spec.group "pylon.nvidia.com") (eq $crd.spec.scope "Namespaced") (eq $crd.spec.names.kind "InferenceEndpoint")) -}}
+{{- if not (and (eq $crd.spec.group "pylon.nvidia.com") (eq $crd.spec.scope "Namespaced") (eq $crd.spec.names.kind "InferenceEndpoint")) -}}
 {{- fail "shared-stack: existing InferenceEndpoint CRD is incompatible" -}}
+{{- end -}}
+{{- if and (not $manageCRDs) (not $compatible) -}}
+{{- fail "shared-stack: existing InferenceEndpoint CRD is incompatible; upgrade the release that owns it before installing this stack" -}}
 {{- end -}}
 {{- end -}}
 

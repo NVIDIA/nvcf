@@ -4,11 +4,11 @@ Install shared routing once, then install each model recipe with Helm and a smal
 
 ## Before you start
 
-Use Kubernetes with the NVIDIA device plugin, a GPU RuntimeClass and persistent storage on compatible model nodes. Install Helm and kubectl on your workstation, plus Python 3.11+ for the model access commands. Select available nodes using the hardware profiles in the [common recipe catalog](recipes/index.json). Profiles specify node count, GPUs per node, resource requests and workload limits.
+- Use Kubernetes with the NVIDIA device plugin, a GPU RuntimeClass and persistent storage. Choose available nodes from the [recipe catalog](recipes/index.json).
+- Install Helm, kubectl and Python 3.11+ on your workstation.
+- Select your kubeconfig context and run these commands from `deploy/helm/llm-routing` in one terminal. The examples use namespace `llm-stack`.
 
-The committed [development image values](dev-images/values.yaml) reference application images already preloaded on the shared Spark nodes. Use these values and the committed chart packages in `dev-images/charts/` for installation. Developers changing application code or charts can [prepare a new image and chart set](dev-images/README.md). A different cluster or replacement node needs the referenced images preloaded first.
-
-Run the following from `deploy/helm/llm-routing`, in the same terminal. Select your target kubeconfig context first. This example uses `llm-stack`. On a shared cluster, coordinate the target namespace and use it consistently in the values, Helm and client commands.
+The committed charts and [image values](dev-images/values.yaml) use images preloaded on the shared Spark nodes. [Prepare new images and charts](dev-images/README.md) only when sources change or another cluster needs them.
 
 ## 1. Install shared infrastructure
 
@@ -22,7 +22,7 @@ helm upgrade --install llm-stack dev-images/charts/llm-shared-stack-0.1.0.tgz \
   --values dev-images/values.yaml --wait --timeout 10m
 ```
 
-Helm installs the gateway, router and namespace-scoped operator with an empty model registry. A chart verification Job checks gateway TLS, model discovery, acceptance of the caller key and rejection of an invalid key before Helm reports success. The same checks run on upgrades with registered models. The chart generates the caller credential and TLS material on first installation and preserves them on upgrades. The committed values watch `llm-stack`. For another namespace, also pass `--set operator.clusterId=NAME --set 'operator.watchNamespaces[0]=NAME'`. For the first operator in a cluster, set `operator.installCRDs: true`. Other installations reuse that CRD.
+Helm installs the gateway, router and namespace-scoped operator with an empty model registry. A chart verification Job checks gateway TLS, model discovery, acceptance of the caller key and rejection of an invalid key before Helm reports success. The same checks run on upgrades with registered models. The chart generates the caller credential and TLS material on first installation and preserves them on upgrades. The committed values watch `llm-stack`. For another namespace, also pass `--set operator.clusterId=NAME --set 'operator.watchNamespaces[0]=NAME'`. Helm creates the InferenceEndpoint CRD when absent and reuses a compatible CRD from another installation. The release that owns the CRD updates it on upgrades.
 
 ## 2. Install a model
 

@@ -120,6 +120,24 @@ Pylon transport image, passed as --pylon-image.
 {{- end -}}
 
 {{/*
+Manage the CRD when explicitly enabled, or automatically when missing or
+already owned by this release. Other releases keep their existing ownership.
+*/}}
+{{- define "pylon-operator.manageCRDs" -}}
+{{- if eq (toString .Values.installCRDs) "auto" -}}
+{{- $crd := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "inferenceendpoints.pylon.nvidia.com" -}}
+{{- if not $crd -}}
+true
+{{- else -}}
+{{- $annotations := default (dict) $crd.metadata.annotations -}}
+{{- and (eq (index $annotations "meta.helm.sh/release-name") .Release.Name) (eq (index $annotations "meta.helm.sh/release-namespace") .Release.Namespace) -}}
+{{- end -}}
+{{- else -}}
+{{- .Values.installCRDs -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Validate the values the operator needs to start. Every missing required value
 is reported at once. Renders nothing.
 */}}
