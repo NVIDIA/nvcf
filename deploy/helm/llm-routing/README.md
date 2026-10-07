@@ -271,6 +271,22 @@ The `gpu` section describes the GPU on every model node:
 - `unifiedMemory`: `true` when the GPU shares system memory, as on GB10.
 - `cudaArchitectures`: `null`, or a CMake architecture list that replaces the derived build target.
 
+### Pod resources
+
+The model server and RPC worker pods get CPU and memory from the recipe's memory rules. To change them, add a `resources` section to the saved configuration before `load`:
+
+```json
+"resources": {
+  "model": {"requests": {"memory": "40Gi"}, "limits": {"memory": "96Gi", "cpu": "16"}},
+  "rpc": {"limits": {"memory": "120Gi"}}
+}
+```
+
+- `model` sets the model server pod and `rpc` sets each RPC worker pod while serving.
+- Only `cpu` and `memory` can be set, as Kubernetes quantity strings. Each pod keeps one GPU.
+- Unset values keep their computed defaults. A request above its merged limit is rejected.
+- The `preflight` and `load` memory checks still use the recipe's memory rules, not these values.
+
 ### Runtime image mirror
 
 To use a mirror of the pinned CUDA image, set `runtimeImage` in the saved configuration before running `preflight`.
