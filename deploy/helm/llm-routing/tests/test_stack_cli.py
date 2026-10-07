@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 import json
+import os
 import pathlib
 import tempfile
 import unittest
@@ -11,9 +12,13 @@ from test_stack import stack
 
 class InstallFlowTests(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        os.environ.pop('LLM_ROUTING_CONTEXT', None)
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.work = pathlib.Path(self.directory.name)
+        self.work = pathlib.Path(self.directory.name).resolve()
         self.config = {'context': 'cluster', 'namespace': 'models'}
         self.source = self.work/'source.json'
         self.source.write_text(json.dumps(self.config))
@@ -60,6 +65,6 @@ class InstallFlowTests(unittest.TestCase):
         self.instance.chat.assert_called_once_with('selected-model', 'hello', False, 18477)
 
     def test_missing_saved_config_fails_before_creating_stack(self):
-        with patch.object(stack, 'Stack') as constructor, self.assertRaisesRegex(ValueError, 'Provide --config'):
+        with patch.object(stack, 'Stack') as constructor, self.assertRaisesRegex(ValueError, 'Set --context'):
             stack.main(['--work-dir', str(self.work), 'install'])
         constructor.assert_not_called()

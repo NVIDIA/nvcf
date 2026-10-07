@@ -20,7 +20,9 @@ PHASE_TIMEOUTS = {'qualify': 660, 'download': 14520, 'serve': 7320}
 class Deployment:
     def __init__(self, args):
         self.args = args
-        self.work = pathlib.Path(args.work_dir).expanduser().resolve()
+        connection_path = pathlib.Path(args.stack_connection).expanduser().resolve()
+        self.work = (pathlib.Path(args.work_dir).expanduser().resolve() if args.work_dir else
+                     connection_path.parent / 'models' / ('deploy-' + uuid.uuid4().hex[:12]))
         recipes.require(not self.work.exists(), 'Use a new deployment work directory; existing progress is never overwritten.')
         recipes.require(not self.work.is_relative_to(recipes.HERE.parents[3]), 'Keep deployment artifacts outside the checkout.')
         self.stack = recipes.stack_api()

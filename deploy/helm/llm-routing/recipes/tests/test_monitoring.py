@@ -497,7 +497,7 @@ class MonitoringTests(unittest.TestCase):
 
     def test_remote_upload_accepts_monitoring_size_and_rejects_excess_or_corruption(self):
         import ast
-        tree = ast.parse((HERE/'recipe.py').read_text())
+        tree = ast.parse((HERE/'image_tools.py').read_text())
         upload = next(node.value.value for node in ast.walk(tree) if isinstance(node, ast.Assign)
                       and any(isinstance(t, ast.Name) and t.id == 'upload' for t in node.targets))
         archive_size = 1536 * 1024**2

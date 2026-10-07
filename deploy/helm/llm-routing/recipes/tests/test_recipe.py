@@ -210,7 +210,7 @@ class RecipeTests(unittest.TestCase):
             with self.subTest(error=type(error).__name__), patch.object(self.recipe, 'source_check'), \
                  patch.object(tool, 'run', side_effect=error) as run, self.assertRaises(tool.DockerUnavailableError) as result:
                 self.recipe.build_images('gateway')
-            self.assertEqual(str(result.exception), 'Start Docker, then rerun build-images.')
+            self.assertEqual(str(result.exception), 'Start Docker, then retry the image build.')
             run.assert_called_once_with(['docker', 'info'], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
 
     def test_docker_probe_uses_existing_environment_and_does_not_hide_build_failures(self):

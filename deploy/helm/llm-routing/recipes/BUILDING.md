@@ -1,40 +1,33 @@
 # Build application images
 
-Build gateway, router, Pylon and operator images for `linux/arm64` from your checkout, including local edits. Run these commands from `deploy/helm/llm-routing/recipes`.
-
-## Requirements
-
-- A running Docker engine with Buildx, ARM64 build capability and access to base images and build dependencies.
-- For registry distribution, set `images.prefix` and a fresh `images.tag` in the configuration. `images.repositories` overrides the repository for individual components.
-
-Router and Pylon builds use Cargo profile `integration`.
+Build gateway, router, Pylon and operator images from your checkout, including local edits. Router and Pylon builds use Cargo profile `integration`.
 
 ## Build for a new shared stack
 
-Create a private build configuration from the example. Choose a new directory for these build settings:
+Run from `deploy/helm/llm-routing`:
 
 ```bash
-export IMAGE_WORK="$HOME/.local/state/nvcf/llm-images"
-mkdir -p "$IMAGE_WORK"
-cp config.example.json "$IMAGE_WORK/config.json"
+export LLM_ROUTING_CONTEXT=YOUR_CONTEXT
+python3 stack.py install --build-images
 ```
 
-Set `images.prefix` to your registry path and `images.tag` to a fresh tag in that file. Build and push use only local sources and Docker. The example node and model settings can stay as supplied for these commands.
+This temporary development flag builds the images for the selected routing node's architecture, exports an archive and imports it onto compatible nodes before installing the shared stack. Docker must be running with Buildx support for the target architecture and access to base images and build dependencies. The command records fresh local tags and `Never` pull policy in the saved configuration.
 
-Authenticate Docker with registry write credentials, then build and push all four images:
+Import Jobs run in a separate image preparation namespace and mount the selected nodes' containerd sockets. Setup detects the K3s containerd socket. For another containerd installation, initialize the configuration with `stack.py init` and set `containerd.socketPath` and compatible image-loader client settings before installation. See [Shared stack settings](../ADVANCED.md#shared-stack-settings) for configuration paths.
+
+## Use registry images
+
+Configure `images.COMPONENT.repository`, `tag` and `pullPolicy` for `gateway`, `router`, `pylon` and `operator` in the shared configuration. Use published images for the target architecture and grant every node where Pylon can schedule registry pull access. Install with:
 
 ```bash
-python3 recipe.py --work-dir "$IMAGE_WORK" build-images
-python3 recipe.py --work-dir "$IMAGE_WORK" push-images
+python3 stack.py install
 ```
 
-In your private shared stack configuration, set each `images.COMPONENT.repository` to `PREFIX/COMPONENT` for `gateway`, `router`, `pylon` and `operator`. Set their `tag` to the build tag and `pullPolicy` to `IfNotPresent`. For example, `images.prefix` of `registry.example.com/team/llm-poc` builds the gateway at `registry.example.com/team/llm-poc/gateway:TAG`. If you set `images.repositories`, use those component overrides instead.
-
-The routing node and every node where Pylon can schedule need registry pull access and ARM64 support for these images. Continue with [Install the shared stack](../README.md#1-install-the-shared-stack).
+The bundled registry references are placeholders. When published images become the default, the main guide can use this command directly.
 
 ## Build for a combined installation
 
-These commands use the saved configuration from [Configure](../ADVANCED.md#configure). Add `--work-dir DIR` to every command when using a non-default installation directory.
+Run the commands below from `deploy/helm/llm-routing/recipes`. They use the saved configuration from [Configure](../ADVANCED.md#configure). Add `--work-dir DIR` to every command when using a non-default installation directory.
 
 1. Build all four images.
 

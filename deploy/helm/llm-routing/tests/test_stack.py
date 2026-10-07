@@ -28,7 +28,7 @@ class StackTests(unittest.TestCase):
         self.config = {'context': 'test-context', 'namespace': 'isolated-models', 'clusterId': 'isolated-cluster',
                        'stackRelease': 'test-stack', 'operatorRelease': 'test-operator',
                        'controlNode': 'cpu-node', 'caConfigMap': 'test-ca', 'installCRDs': False,
-                       'images': {name: {'repository': 'registry.example.com/test/' + name,
+                       'images': {name: {'repository': 'localhost/test/' + name,
                                         'tag': 'test-pinned', 'pullPolicy': 'Never'} for name in stack.COMPONENTS}}
         self.key_path = self.work/'existing-caller-key'
         self.key_path.write_text('test-key\n')
@@ -63,7 +63,7 @@ class StackTests(unittest.TestCase):
                                     'modelName', 'service', 'inferenceAPIFormat', 'health', 'maxEngineConcurrency')}}}}}}]}
         self.operator = self.resources['deployment/' + self.config['operatorRelease']]
         self.operator['spec']['template']['spec']['containers'][0]['args'] = [
-            '--pylon-image=registry.example.com/test/pylon:test-pinned',
+            '--pylon-image=localhost/test/pylon:test-pinned',
             '--cluster-id=' + self.config['clusterId'], '--watch-namespaces=' + self.config['namespace'],
             '--router-grpc-address=http://llm-request-router.' + self.config['namespace'] + '.svc.cluster.local:50071',
             '--trust-bundle-configmap=' + self.config['caConfigMap']]

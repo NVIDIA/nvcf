@@ -322,7 +322,7 @@ def main():
     deployment.add_argument('--model', action='append', required=True)
     deployment.add_argument('--storage-class', required=True)
     deployment.add_argument('--runtime-class', required=True)
-    deployment.add_argument('--work-dir', type=pathlib.Path, required=True)
+    deployment.add_argument('--work-dir', type=pathlib.Path, help='Defaults to a new deployment directory beside the stack connection.')
     deployment.add_argument('--reuse-caches', action='store_true', help='Reinstall using verified retained model cache claims and offline snapshots.')
     deployment.add_argument('--capabilities', type=pathlib.Path)
     deployment.add_argument('--requirements', type=pathlib.Path)

@@ -6,7 +6,27 @@ Start with the [main guide](README.md) for installation, model deployment, chat 
 
 The shared installer runs the gateway, router and operator on a Ready node using architecture-compatible application images. Model recipes supply their GPU, runtime and storage settings independently. The [image build guide](recipes/BUILDING.md) describes the source components and distribution options.
 
-Copy [stack.config.example.json](stack.config.example.json) outside the checkout. Set the context, a new namespace, control node, cluster ID, release names and image references. Use `installCRDs: true` for the first operator in a cluster. If a compatible InferenceEndpoint CRD already exists, set it to `false`. The installer rejects overlapping operator watches and never adopts an existing namespace or CRD from another release.
+`stack.py install` starts from [stack.config.example.json](stack.config.example.json) when a saved configuration is absent. Select the context with `--context` or `LLM_ROUTING_CONTEXT`. The default namespace is `llm-stack`; use `--namespace` to select another installation. Setup chooses a Ready routing node and detects a compatible existing InferenceEndpoint CRD.
+
+The default work directory is `${XDG_STATE_HOME:-$HOME/.local/state}/nvcf/llm-routing/stacks/<context-hash>/<namespace>`. It holds the private `config.json`, credentials, connection and evidence for that installation. Commands reuse it automatically. Print the saved locations with:
+
+```bash
+python3 stack.py paths
+python3 stack.py paths --field config
+python3 stack.py paths --field connection
+```
+
+For registry images, initialize and edit the generated configuration before installation:
+
+```bash
+python3 stack.py init
+${EDITOR:-vi} "$(python3 stack.py paths --field config)"
+python3 stack.py install
+```
+
+Set each component's image repository, immutable tag and pull policy. The bundled registry references are placeholders. During development, `install --build-images` supplies fresh local image references and builds and preloads them. It applies to a fresh shared stack. Keep image updates for an existing installation on its explicit upgrade path.
+
+An existing private configuration can still be supplied with `--config /path/to/stack.json`, and `--work-dir /path/to/stack-work` selects a custom state directory. Set the context, namespace, control node, cluster ID, release names and image references in that configuration. Use `installCRDs: true` for the first operator in a cluster or `false` for a compatible existing CRD. The installer checks namespace and operator ownership before applying resources.
 
 The normal `install` command includes gateway verification. Use these individual commands to inspect manifests or repeat verification:
 
@@ -93,7 +113,7 @@ python3 recipes/recipe.py --work-dir /path/to/glm-work verify-gateway
 
 In this mode, model rendering and Helm operations target its backend and chain-check releases. Use `stack.py` to manage shared infrastructure and credentials, and a separate work directory for monitoring.
 
-The main guide combines these phases into `recipe.py deploy`. If it stops, read the phase log and use the recovery command printed by the CLI. Continue the remaining phases above from the same work directory. The saved state records completed checkpoints.
+Combine these phases with `recipe.py --config /path/to/glm.json --work-dir /path/to/glm-work deploy --stack-connection /path/to/stack-work/connection.json`. If it stops, read the phase log and use the recovery command printed by the CLI. Continue the remaining phases above from the same work directory. The saved state records completed checkpoints.
 
 ## Combined GGUF recipe flow
 
@@ -446,6 +466,8 @@ git diff --check
 ```
 
 ## Qwen catalog configuration
+
+The deploy command creates a private directory for each attempt beside the stack connection, under `models/`, and prints its location. Set `--work-dir` to choose a new directory explicitly.
 
 Choose models and workload requirements. The planner chooses supported profiles and available GPU nodes, then renders an independent Helm release for each model. The shared gateway and Pylon Operator stay installed when a model is added or removed.
 

@@ -334,6 +334,22 @@ class DeployModelsTests(unittest.TestCase):
         self.assertFalse(any('phase=serve' in command for command in self.mutations()))
         self.verifier.assert_not_called()
 
+    def test_default_work_directory_keeps_each_attempt_beside_its_connection(self):
+        self.args.work_dir = None
+        first = deploy_models.Deployment(self.args)
+        second = deploy_models.Deployment(self.args)
+        self.assertEqual(first.work.parent, self.base / 'models')
+        self.assertNotEqual(first.work, second.work)
+        self.assertFalse(first.work.exists())
+        self.assertEqual(self.commands, [])
+
+    def test_cli_accepts_automatic_work_directory(self):
+        args = ['recipes.py', 'deploy', '--stack-connection', 'connection.json',
+                '--model', 'qwen3.8-27b', '--storage-class', 'local-path', '--runtime-class', 'nvidia']
+        with patch.object(sys, 'argv', args), patch.object(deploy_models, 'deploy') as deploy:
+            recipes.main()
+        self.assertIsNone(deploy.call_args.args[0].work_dir)
+
     def test_cli_reuse_caches_is_an_explicit_opt_in(self):
         args = ['recipes.py', 'deploy', '--stack-connection', 'connection.json', '--work-dir', 'new-work',
                 '--model', 'qwen3.8-27b', '--storage-class', 'local-path', '--runtime-class', 'nvidia']

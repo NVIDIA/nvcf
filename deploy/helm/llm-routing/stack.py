@@ -5,8 +5,12 @@
 import argparse
 import base64
 import contextlib
+import copy
+import datetime
+import importlib.util
 import hashlib
 import json
+import os
 import pathlib
 import re
 import secrets
@@ -66,6 +70,135 @@ def validate_config(config):
     if config.get('apiKeyFile'):
         require(pathlib.Path(config['apiKeyFile']).is_absolute(), 'apiKeyFile must be absolute.')
     return config
+
+
+def default_work_dir(context, namespace):
+    require(isinstance(context, str) and context.strip() and not context.startswith('-'),
+            'Set --context NAME or LLM_ROUTING_CONTEXT. The current kubectl context is not selected automatically.')
+    require(dns(namespace), 'Set a DNS label for namespace.')
+    root = pathlib.Path(os.environ['XDG_STATE_HOME']) if os.environ.get('XDG_STATE_HOME') else pathlib.Path.home()/'.local/state'
+    require(root.is_absolute(), 'XDG_STATE_HOME must be an absolute directory.')
+    scope = hashlib.sha256(context.encode()).hexdigest()[:20]
+    return (root/'nvcf/llm-routing/stacks'/scope/namespace).resolve()
+
+
+def cli_settings(args):
+    work = args.work_dir.expanduser().resolve() if args.work_dir else None
+    path = args.config.expanduser().resolve() if args.config else work/'config.json' if work else None
+    require(not args.config or path.is_file() or args.command == 'init', 'Provide an existing --config, or run init first.')
+    config = json.loads(path.read_text()) if path and path.is_file() else None
+    context = args.context or os.environ.get('LLM_ROUTING_CONTEXT') or (config.get('context') if config else None)
+    namespace = args.namespace or (config.get('namespace') if config else None) or 'llm-stack'
+    require(isinstance(context, str) and context.strip() and not context.startswith('-'),
+            'Set --context NAME or LLM_ROUTING_CONTEXT. The current kubectl context is not selected automatically.')
+    require(dns(namespace), 'Set a DNS label for namespace.')
+    work = work or default_work_dir(context, namespace)
+    require(not work.is_relative_to(REPO), 'Keep generated configuration, credentials and evidence outside the checkout.')
+    path = path or work/'config.json'
+    if config is None and path.is_file():
+        config = json.loads(path.read_text())
+    if config is not None:
+        require(config.get('context') == context, 'Selected context differs from the saved stack configuration.')
+        require(config.get('namespace') == namespace, 'Selected namespace differs from the saved stack configuration.')
+    return context, namespace, work, path, config
+
+
+def placeholder_images(config):
+    return [name for name in COMPONENTS if config.get('images', {}).get(name, {}).get('repository', '').split('/')[0]
+            in ('registry.example.com', 'example.com')]
+
+
+def ready_node(node):
+    conditions = {item['type']: item['status'] for item in node.get('status', {}).get('conditions', [])}
+    return conditions.get('Ready') == 'True' and not node.get('metadata', {}).get('deletionTimestamp')
+
+
+def discover_config(context, namespace, control_node=None, image_prefix=None, image_tag=None, build_images=False):
+    config = json.loads((HERE/'stack.config.example.json').read_text())
+    config.update(context=context, namespace=namespace, clusterId=namespace)
+    base = namespace if len(namespace) <= 40 else namespace[:35] + '-' + hashlib.sha256(namespace.encode()).hexdigest()[:8]
+    config.update(stackRelease=base, operatorRelease=base + '-operator', caConfigMap=base + '-ca')
+    nodes = get(config, 'nodes')['items']
+    def schedulable(node):
+        labels = node.get('metadata', {}).get('labels', {})
+        conditions = {item['type']: item['status'] for item in node.get('status', {}).get('conditions', [])}
+        return (ready_node(node) and labels.get('kubernetes.io/os') == 'linux' and labels.get('kubernetes.io/arch')
+                and not node.get('spec', {}).get('unschedulable')
+                and not any(conditions.get(name) == 'True' for name in ('MemoryPressure', 'DiskPressure', 'PIDPressure'))
+                and not any(taint.get('effect') in ('NoSchedule', 'NoExecute') for taint in node.get('spec', {}).get('taints', [])))
+    choices = sorted((node for node in nodes if schedulable(node)
+                      and (not control_node or node['metadata']['name'] == control_node)), key=lambda node: node['metadata']['name'])
+    require(choices, 'Choose a Ready, schedulable Linux routing node with --control-node.')
+    control = choices[0]
+    config['controlNode'] = control['metadata']['name']
+    architecture = control['metadata']['labels']['kubernetes.io/arch']
+    require(re.fullmatch('[a-z0-9_]+', architecture), 'Unsupported routing-node architecture label.')
+    config['imagePlatform'] = 'linux/' + architecture
+    targets = sorted((node for node in nodes if schedulable(node)
+                      and node['metadata'].get('labels', {}).get('kubernetes.io/arch') == architecture), key=lambda node: node['metadata']['name'])
+    require(all(node['metadata'].get('uid') for node in targets), 'Image target nodes must have stable UIDs.')
+    config['containerd'] = {'archiveNode': config['controlNode'], 'runAsUser': 1000,
+                           'nodeNames': [node['metadata']['name'] for node in targets],
+                           'nodeUIDs': {node['metadata']['name']: node['metadata']['uid'] for node in targets}}
+    if all(re.search(r'[+-]k3s\d*', node.get('status', {}).get('nodeInfo', {}).get('kubeletVersion', ''))
+           and node.get('status', {}).get('nodeInfo', {}).get('containerRuntimeVersion', '').startswith('containerd://') for node in targets):
+        config['containerd']['socketPath'] = '/run/k3s/containerd/containerd.sock'
+    crd = next((item for item in get(config, 'crds')['items'] if item['metadata']['name'] == CRD), None)
+    if crd:
+        check_crd(crd)
+    config['installCRDs'] = crd is None
+    if build_images or image_prefix:
+        prefix = image_prefix or 'localhost/' + namespace
+        require('/' in prefix and not prefix.endswith('/') and not any(character.isspace() for character in prefix),
+                'Set --image-prefix to a registry and repository path.')
+        tag = image_tag or 'dev-' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d%H%M%S') + '-' + secrets.token_hex(3)
+        config['images'] = {name: {'repository': prefix + '/' + name, 'tag': tag,
+                                   'pullPolicy': 'Never' if build_images else 'IfNotPresent'} for name in COMPONENTS}
+    elif image_tag:
+        for image in config['images'].values():
+            image['tag'] = image_tag
+    return validate_config(config)
+
+
+def initialize_config(path, config):
+    require(not path.is_relative_to(REPO), 'Keep generated configuration outside the checkout.')
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with path.open('x') as output:
+        path.chmod(0o600)
+        output.write(json.dumps(config, indent=2) + '\n')
+    print('Stack configuration: ' + str(path), flush=True)
+
+
+def local_build_config(config, work):
+    marker = work/'local-images.json'
+    saved = work/'config.json'
+    if marker.is_file():
+        previous = json.loads(marker.read_text())
+        require(previous.get('schemaVersion') == 1 and config in (previous.get('sourceConfig'), previous.get('config')),
+                'Local image build settings changed. Use the original saved configuration or a new stack directory.')
+        require(not saved.exists() or json.loads(saved.read_text()) in (previous['sourceConfig'], previous['config']),
+                'Work directory contains another saved configuration.')
+        return validate_config(copy.deepcopy(previous['config']))
+    require(not saved.exists() or json.loads(saved.read_text()) == config,
+            'Work directory contains another saved configuration.')
+    discovered = discover_config(config['context'], config['namespace'], config.get('controlNode'), build_images=True)
+    require(discovered['imagePlatform'] in ('linux/amd64', 'linux/arm64'), 'Local image builds support linux/amd64 and linux/arm64.')
+    require(not config.get('imagePlatform') or config['imagePlatform'] == discovered['imagePlatform'],
+            'Configured image platform differs from the routing node.')
+    build = copy.deepcopy(config)
+    build['images'] = discovered['images']
+    build['imagePlatform'] = discovered['imagePlatform']
+    build['containerd'] = {**discovered['containerd'], **config.get('containerd', {})}
+    validate_config(build)
+    save(marker, {'schemaVersion': 1, 'sourceConfig': config, 'config': build})
+    return build
+
+
+def prepare_images(config, work, allow_containerd_import):
+    spec = importlib.util.spec_from_file_location('llm_stack_images', HERE/'stack_images.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.prepare(config, work, allow_containerd_import=allow_containerd_import)
 
 
 def kube(config, *args):
@@ -306,6 +439,7 @@ class Stack:
 
     def install(self, reinstall=False):
         config = self.config
+        require(not placeholder_images(config), 'Configure real application images, or use install --build-images to build and preload them from this checkout.')
         checkpoint = self.work/'install.json'
         previous = None
         if reinstall:
@@ -447,12 +581,23 @@ class Stack:
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=pathlib.Path, help='Stack configuration. Later commands use the saved work-directory configuration.')
-    parser.add_argument('--work-dir', type=pathlib.Path, required=True)
+    parser.add_argument('--context', help='Explicit Kubernetes context; also accepts LLM_ROUTING_CONTEXT or a saved configuration.')
+    parser.add_argument('--namespace', help='Stack namespace; defaults to llm-stack for automatic setup.')
+    parser.add_argument('--work-dir', type=pathlib.Path, help='Private state directory; defaults to one directory per context and namespace.')
     commands = parser.add_subparsers(dest='command', required=True)
+    setup = commands.add_parser('init', help='Create a private configuration from the bundled example and read-only cluster discovery.')
+    setup.add_argument('--control-node', help='Choose the routing node instead of automatic selection.')
+    setup.add_argument('--image-prefix', help='Registry path for component images.')
+    setup.add_argument('--image-tag', help='Tag for component images.')
+    paths = commands.add_parser('paths', help='Print private stack paths without creating files.')
+    paths.add_argument('--field', choices=('work', 'config', 'connection'))
     commands.add_parser('render')
     install = commands.add_parser('install', help='Install shared infrastructure and verify the empty gateway.')
     install.add_argument('--port', type=int, default=18477)
-    install.add_argument('--reinstall', action='store_true', help='Reinstall a fully uninstalled stack in its original namespace, preserving retained credentials and caches.')
+    install.add_argument('--control-node', help='Routing node for first-time automatic setup.')
+    source = install.add_mutually_exclusive_group()
+    source.add_argument('--reinstall', action='store_true', help='Reinstall a fully uninstalled stack in its original namespace, preserving retained credentials and caches.')
+    source.add_argument('--build-images', action='store_true', help='For a fresh stack, build local application images and preload them into the cluster nodes before installing.')
     chat = commands.add_parser('chat')
     chat.add_argument('--model', required=True)
     chat.add_argument('--stream', action='store_true')
@@ -464,23 +609,53 @@ def main(argv=None):
     group.add_argument('--model', action='append')
     verify.add_argument('--port', type=int, default=18477)
     args = parser.parse_args(argv)
-    config_path = (args.config or args.work_dir/'config.json').expanduser()
-    require(config_path.is_file(), 'Provide --config for the first installation, or use its saved --work-dir.')
-    stack = Stack(json.loads(config_path.read_text()), args.work_dir)
+    context, namespace, work, config_path, config = cli_settings(args)
+    if args.command == 'paths':
+        paths = {'work': str(work), 'config': str(config_path), 'connection': str(work/'connection.json')}
+        print(paths[args.field] if args.field else json.dumps(paths, indent=2))
+        return
+    if args.command == 'init':
+        require(config is None and not config_path.exists() and not (work/'config.json').exists()
+                and not (work/'install.json').exists() and not (work/'connection.json').exists(),
+                'Stack setup already exists. Init never overwrites saved configuration or installation evidence.')
+        config = discover_config(context, namespace, args.control_node, args.image_prefix, args.image_tag)
+        initialize_config(config_path, config)
+        if config_path != work/'config.json':
+            initialize_config(work/'config.json', config)
+        print('Review the saved images and routing node, then run install.', flush=True)
+        return
+    if config is None:
+        require(args.command == 'install' and not args.reinstall,
+                'Provide --config, run init, or use install for first-time setup.')
+        require(not (work/'install.json').exists() and not (work/'connection.json').exists(),
+                'Saved installation evidence is missing its configuration. Use the original --config.')
+        config = discover_config(context, namespace, args.control_node)
+        initialize_config(config_path, config)
+    if args.command == 'install' and args.control_node:
+        require(args.control_node == config.get('controlNode'), 'Routing node differs from the saved stack configuration.')
+    if args.command == 'install' and args.build_images:
+        require(not (work/'install.json').exists() and not (work/'connection.json').exists(),
+                '--build-images is for a fresh stack. Existing installations retain their configured images and identity.')
+        require(not any(item['metadata']['name'] == namespace for item in get(config, 'namespaces')['items']),
+                '--build-images requires a fresh stack namespace.')
+        config = local_build_config(config, work)
+        save(work/'config.json', config)
+        prepare_images(config, work, allow_containerd_import=True)
+    instance = Stack(config, work)
     if args.command == 'verify':
         require(not args.model or (len(args.model) >= 2 and len(set(args.model)) == len(args.model)), 'Verify at least two distinct model IDs together.')
-        stack.verify(args.expect_empty, args.model, args.port)
+        instance.verify(args.expect_empty, args.model, args.port)
     elif args.command == 'chat':
-        stack.chat(args.model, args.prompt, args.stream, args.port)
+        instance.chat(args.model, args.prompt, args.stream, args.port)
     elif args.command == 'install':
         if args.reinstall:
-            stack.install(reinstall=True)
+            instance.install(reinstall=True)
         else:
-            stack.install()
-        save(stack.work/'config.json', stack.config)
-        stack.verify(True, None, args.port)
+            instance.install()
+        save(instance.work/'config.json', instance.config)
+        instance.verify(True, None, args.port)
     else:
-        getattr(stack, args.command)()
+        getattr(instance, args.command)()
 
 
 if __name__ == '__main__':

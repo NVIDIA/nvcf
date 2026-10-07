@@ -24,15 +24,14 @@ import time
 HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import gateway_access
+import image_tools
 import cluster_setup
 import monitoring
 import monitoring_setup
 import console_output
 import stack_binding
 import sizing
-COMPONENTS = {'gateway': 'src/invocation-plane-services/llm-api-gateway',
-              'router': 'src/libraries/rust/stargate', 'pylon': 'src/libraries/rust/stargate',
-              'operator': 'src/compute-plane-services/pylon-operator'}
+COMPONENTS = image_tools.COMPONENTS
 
 
 def require(condition, message):
@@ -151,8 +150,7 @@ class ContextSelectionError(RuntimeError):
     pass
 
 
-class DockerUnavailableError(RuntimeError):
-    pass
+DockerUnavailableError = image_tools.DockerUnavailableError
 
 
 def kubeconfig_context():
@@ -1011,32 +1009,15 @@ class Recipe:
     def build_images(self, component=None, tag=None):
         self.infrastructure_owner()
         self.source_check()
-        try:
-            run(['docker', 'info'], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=15)
-        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            raise DockerUnavailableError('Start Docker, then rerun build-images.') from None
-        for name in ([component] if component else self.components()):
-            command = ['docker', 'buildx', 'build', '--platform', 'linux/arm64', '--load', '--tag', self.image(name, tag)]
-            if name in ('router', 'pylon'):
-                command += ['--target', 'stargate-runtime' if name == 'router' else 'pylon-runtime', '--build-arg', 'CARGO_PROFILE=integration']
-            if name == 'operator':
-                command += ['-f', str(HERE/'operator.Dockerfile'), '--build-arg', 'SOURCE_REVISION='+self.checkout_revision()]
-            run(command+[str(self.source/COMPONENTS[name])])
+        images = {name: self.image(name, tag) for name in ([component] if component else self.components())}
+        image_tools.build_images(self.source, images, run=run, source_revision=self.checkout_revision,
+                                 operator_dockerfile=HERE/'operator.Dockerfile')
 
     def export_images(self, component=None, tag=None):
         self.infrastructure_owner()
         self.source_check()
         images = [self.image(name, tag) for name in ([component] if component else self.components())]
-        fd, temporary = tempfile.mkstemp(prefix='.arm64-images-', suffix='.tar', dir=self.work)
-        os.close(fd)
-        archive = self.work/'arm64-images.tar'
-        try:
-            run(['docker', 'save', '--output', temporary] + images)
-            os.chmod(temporary, 0o600)
-            os.replace(temporary, archive)
-        finally:
-            pathlib.Path(temporary).unlink(missing_ok=True)
-        print('Image archive:', archive)
+        image_tools.export_images(images, self.work/'arm64-images.tar', run=run)
 
     def components(self):
         return list(COMPONENTS)
@@ -1045,117 +1026,14 @@ class Recipe:
         self.infrastructure_owner()
         require(allow, 'Import requires --allow-containerd-import, which grants the Jobs access to node runtime sockets.')
         self.bound_cluster()
-        import tarfile
-        archive = pathlib.Path(archive).resolve(strict=True)
-        archive_limit = monitoring.MAX_ARCHIVE_BYTES if monitoring_only else 1024**3
-        require(archive.stat().st_size < archive_limit, 'The importer archive limit is '+str(archive_limit // 1024**3)+' GiB.')
-        with tarfile.open(archive) as tar:
-            manifest = json.load(tar.extractfile('manifest.json'))
-        tags = {value for entry in manifest for value in entry.get('RepoTags', [])}
-        expected = monitoring.image_list(self) if monitoring_only else [self.image(name, tag) for name in ([component] if component else self.components())]
-        for image in expected:
-            aliases = {image, image.removeprefix('docker.io/'), image.removeprefix('docker.io/library/')}
-            require(bool(tags & aliases), 'Archive is missing the configured image: '+image)
         cfg = self.c.get('containerd')
-        require(cfg, 'No image importer was discovered. Use registry distribution or configure containerd import settings.')
-        nodes = [self.c['nodes']['control']] if monitoring_only or component in ('gateway', 'router') else cfg.get('nodeNames', all_nodes(self.c))
-        with archive.open('rb') as stream:
-            archive_hash = hashlib.file_digest(stream, 'sha256').hexdigest()
-        release = self.c['releasePrefix']+'-images'
-        existing = json.loads(output(self.hm+['list', '--deployed', '--failed', '--pending', '--uninstalled',
-                                              '--superseded', '--uninstalling', '--filter', '^'+re.escape(release)+'$', '-o', 'json']))
-        require(all(item['chart'].startswith('pylon-image-loader-') for item in existing),
-                'The image import release belongs to another chart.')
-        prior_jobs = json.loads(output(self.kc+['get', 'jobs', '-o', 'json']))['items']
-        owned = [job for job in prior_jobs if job['metadata'].get('annotations', {}).get('meta.helm.sh/release-name') == release]
-        active = [job for job in owned if not any(c.get('type') in ('Complete', 'Failed') and c.get('status') == 'True'
-                                                  for c in job.get('status', {}).get('conditions', []))]
-        attempt_path = self.work/'image-import-attempt.json'
-        if active:
-            previous = json.loads(attempt_path.read_text()) if attempt_path.exists() else {}
-            require(previous.get('failed') and previous.get('release') == release
-                    and previous.get('context') == self.c['context'] and previous.get('namespace') == self.c['namespace']
-                    and all(previous.get('jobs', {}).get(job['metadata']['name']) == job['metadata']['uid'] for job in active),
-                    'Another image import is active. Wait for it to finish.')
-            status = json.loads(output(self.hm+['status', release, '-o', 'json']))
-            require(status.get('version') == previous.get('revision'), 'Image import revision changed. Do not replace another attempt.')
-        values = {'enabled': True, 'nodeNames': nodes, 'archiveNode': cfg.get('archiveNode', self.c['nodes']['control']),
-                  'archiveName': 'arm64-images.tar', 'archiveSha256': archive_hash,
-                  'archiveSizeLimit': str(archive_limit // 1024**3)+'Gi',
-                  'runAsUser': cfg.get('runAsUser', 1000), 'socketPath': cfg['socketPath']}
-        self.helm_apply(release, HERE/'charts/image-loader', values, wait=False)
-        status = json.loads(output(self.hm+['status', release, '-o', 'json']))
-        revision = status['version']
-        require(isinstance(revision, int) and revision > 0, 'Image import release has no valid revision.')
-        base = release+'-'+str(revision)
-        names = [base+'-server']+[base+'-'+node for node in nodes]
-        jobs = json.loads(output(self.kc+['get', 'jobs']+names+['-o', 'json']))['items']
-        job_uids = {}
-        for job in jobs:
-            metadata = job['metadata']
-            annotations = metadata.get('annotations', {})
-            require(annotations.get('meta.helm.sh/release-name') == release
-                    and annotations.get('meta.helm.sh/release-namespace') == self.c['namespace'],
-                    'Image import Job has different Helm ownership.')
-            job_uids[metadata['name']] = metadata['uid']
-        require(set(job_uids) == set(names), 'Image import Jobs differ from the installed revision.')
-        server = base+'-server'
-        try:
-            deadline = time.monotonic() + 180
-            while True:
-                pods = json.loads(output(self.kc+['get', 'pods', '-l', 'job-name='+server, '-o', 'json']))['items']
-                if pods:
-                    break
-                require(time.monotonic() < deadline, 'Archive server pod was not created within 180 seconds.')
-                time.sleep(2)
-            require(len(pods) == 1 and not pods[0]['metadata'].get('deletionTimestamp'), 'Expected one active archive server pod.')
-            pod = pods[0]
-            require(any(owner.get('kind') == 'Job' and owner.get('uid') == job_uids[server]
-                        for owner in pod['metadata'].get('ownerReferences', [])), 'Archive server pod has different Job ownership.')
-            pod_name = pod['metadata']['name']
-            run(self.kc+['wait', 'pod/'+pod_name, '--for=condition=Ready', '--timeout=180s'])
-            ready = json.loads(output(self.kc+['get', 'pod', pod_name, '-o', 'json']))
-            require(ready['metadata']['uid'] == pod['metadata']['uid'] and not ready['metadata'].get('deletionTimestamp')
-                    and ready.get('spec', {}).get('nodeName') == values['archiveNode'],
-                    'Archive server pod changed or has different placement.')
-            upload = """import hashlib, os, sys
-path, expected_hash, expected_size = sys.argv[1:]
-expected_size = int(expected_size)
-partial = path + '.upload'
-size = 0
-checksum = hashlib.sha256()
-try:
-    with open(partial, 'xb') as target:
-        os.chmod(partial, 0o600)
-        while chunk := sys.stdin.buffer.read(1024 * 1024):
-            size += len(chunk)
-            if size > expected_size:
-                raise RuntimeError('Uploaded archive exceeds its expected size')
-            checksum.update(chunk)
-            target.write(chunk)
-    if size != expected_size or checksum.hexdigest() != expected_hash:
-        raise RuntimeError('Uploaded archive size or SHA-256 differs')
-    os.replace(partial, path)
-finally:
-    if os.path.exists(partial):
-        os.unlink(partial)
-"""
-            print('Uploading image archive through Kubernetes:', archive.stat().st_size, 'bytes')
-            with archive.open('rb') as stream:
-                run(self.kc+['exec', '-i', pod['metadata']['name'], '-c', 'server', '--', 'python3', '-c', upload,
-                             '/images/arm64-images.tar', archive_hash, str(archive.stat().st_size)], stdin=stream, timeout=1200)
-            run(self.kc+['wait', '--for=condition=complete', '--timeout=15m']+['job/'+name for name in names])
-            completed = json.loads(output(self.kc+['get', 'jobs']+names+['-o', 'json']))['items']
-            require({job['metadata']['name']: job['metadata']['uid'] for job in completed} == job_uids,
-                    'Image import Jobs changed during verification.')
-        except BaseException:
-            save(attempt_path, {'failed': True, 'release': release, 'revision': revision, 'jobs': job_uids,
-                                'context': self.c['context'], 'namespace': self.c['namespace']})
-            raise
-        attempt_path.unlink(missing_ok=True)
-        save(self.work/'evidence/image-import.json', {'release': release, 'revision': revision,
-             'archiveSha256': archive_hash, 'nodeNames': nodes, 'jobs': job_uids})
-        print('Images imported on:', ', '.join(nodes))
+        nodes = [self.c['nodes']['control']] if monitoring_only or component in ('gateway', 'router') else (cfg or {}).get('nodeNames', all_nodes(self.c))
+        images = monitoring.image_list(self) if monitoring_only else [self.image(name, tag) for name in ([component] if component else self.components())]
+        image_tools.import_images(archive, images, context=self.c['context'], namespace=self.c['namespace'],
+                                  release=self.c['releasePrefix']+'-images', work=self.work, containerd=cfg,
+                                  node_names=nodes, control_node=self.c['nodes']['control'], helm_apply=self.helm_apply,
+                                  run=run, output=output, save=save, archive_name='arm64-images.tar',
+                                  archive_limit=monitoring.MAX_ARCHIVE_BYTES if monitoring_only else 1024**3)
 
     def update(self, component, tag):
         self.infrastructure_owner()

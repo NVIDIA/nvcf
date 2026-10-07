@@ -6,63 +6,55 @@ Recipe profiles define the hardware, precision and workload requirements. The pl
 
 ## Before you start
 
-Use an existing Kubernetes cluster with a Ready node for routing and suitable GPU nodes for your selected recipes. Model nodes need the NVIDIA device plugin, a GPU RuntimeClass and persistent storage. Install Python 3.11+, kubectl and Helm on your workstation.
-
-Create a private copy of [stack.config.example.json](stack.config.example.json). Set its Kubernetes context, namespace, routing node and application images for that node's architecture. The [image build guide](recipes/BUILDING.md) covers building and distributing the routing images. [Shared stack settings](ADVANCED.md#shared-stack-settings) explains existing CRDs and custom configuration.
+Use an existing Kubernetes cluster with a Ready node for routing and suitable GPU nodes for your selected recipes. Model nodes need the NVIDIA device plugin, a GPU RuntimeClass and persistent storage. Install Python 3.11+, kubectl, Helm and Docker with Buildx on your workstation.
 
 Run the commands below from `deploy/helm/llm-routing`.
 
 ## 1. Install the shared stack
 
-Choose a private directory for this installation's configuration and credentials:
+Select your Kubernetes context and install:
 
 ```bash
-export STACK_WORK="$HOME/.local/state/nvcf/llm-stack"
-python3 stack.py --config /path/to/stack.json --work-dir "$STACK_WORK" install
+export LLM_ROUTING_CONTEXT=YOUR_CONTEXT
+python3 stack.py install --build-images
 ```
 
-The command installs the gateway, router and operator, then verifies the empty registry and authentication. It saves the connection and configuration in `STACK_WORK` for the following commands.
+The command starts from the bundled configuration, selects a routing node, builds the application images for its architecture and preloads them onto compatible nodes. It installs the gateway, router and operator in `llm-stack`, then verifies the empty registry and authentication. Configuration, credentials and deployment evidence are saved automatically in a private directory for this context and namespace.
+
+`--build-images` is the temporary local build path. Once the configuration references published registry images, run `python3 stack.py install`. See [shared stack settings](ADVANCED.md#shared-stack-settings) for custom configuration and [image builds](recipes/BUILDING.md) for runtime requirements.
 
 ## 2. Choose and deploy models
 
-Choose recipes from the [catalog](recipes/catalog.json). The current Qwen options are:
+Choose Qwen models from the [catalog](recipes/catalog.json), or deploy GLM-5.3 `UD-IQ2_M` through the [independent GGUF recipe](ADVANCED.md#optional-independent-gguf-recipe). Both use the shared gateway.
+
+Available recipes:
 
 | Model | Precision | Validation |
 | --- | --- | --- |
+| GLM-5.3 | UD-IQ2_M | Combined flow tested. Independent deployment testing pending. |
 | Qwen3.8-27B | FP8 | Spark smoke tested |
 | Qwen3.8-27B | NVIDIA NVFP4 | Spark smoke tested |
-| Qwen3.8-Flash-Next | NVFP4 | Hardware qualification pending |
+| Qwen3.8-Flash-Next | NVFP4 | Live deployment testing pending |
 
 Validation applies to the listed hardware profile and tested workload. The included Qwen profiles currently target GB10. Additional hardware profiles can use the same deployment commands after their runtime and resource requirements are defined and qualified.
 
-Choose a Qwen or GGUF deployment below. For Qwen, this example deploys both tested precision variants:
+This example deploys both tested Qwen precision variants:
 
 ```bash
 python3 recipes/recipes.py deploy \
-  --stack-connection "$STACK_WORK/connection.json" \
-  --work-dir "$STACK_WORK/models" \
+  --stack-connection "$(python3 stack.py paths --field connection)" \
   --model qwen3.8-27b --model qwen3.8-27b-nvfp4 \
   --storage-class local-path --runtime-class nvidia
 ```
 
 Use the storage and runtime class names installed in your cluster. The command plans placement, qualifies the GPUs, downloads the pinned models, starts each release and verifies discovery, chat, streaming and authentication. Progress and log paths identify each phase. On success, the models are ready to call.
 
-For the GGUF alternative, copy [glm.config.example.json](recipes/glm.config.example.json) into a private configuration and select its model nodes and GPU settings. Deploy it through the same shared stack:
-
-```bash
-python3 recipes/recipe.py --config /path/to/glm.json \
-  --work-dir "$STACK_WORK/glm" deploy \
-  --stack-connection "$STACK_WORK/connection.json"
-```
-
-This command handles attachment, preparation, runtime build, qualification, download, serving, registration and verification. [Recipe settings](ADVANCED.md#optional-independent-gguf-recipe) explains the configuration.
-
 ## 3. Send a request
 
 Use a served model ID from the deployment output:
 
 ```bash
-python3 stack.py --work-dir "$STACK_WORK" chat \
+python3 stack.py chat \
   --model qwen3.8-27b 'What is 17 multiplied by 19? Give one short sentence.'
 ```
 
@@ -70,11 +62,11 @@ Change `--model` to `qwen3.8-27b-nvfp4` to call the other precision. Add `--stre
 
 ## 4. View monitoring
 
-Use the context and namespace from your stack configuration:
+Install monitoring for the shared stack and open its dashboard:
 
 ```bash
-python3 recipes/recipe.py --context YOUR_CONTEXT --namespace YOUR_NAMESPACE \
-  --work-dir "$STACK_WORK/monitoring" monitoring
+python3 recipes/recipe.py --context "$LLM_ROUTING_CONTEXT" --namespace llm-stack \
+  --work-dir "$(python3 stack.py paths --field work)/monitoring" monitoring
 ```
 
 Open <http://127.0.0.1:13000/d/llm-demo> to view the dashboard. Ctrl-C closes the local tunnel and leaves monitoring running.
