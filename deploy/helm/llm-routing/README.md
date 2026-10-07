@@ -22,7 +22,9 @@ The gateway, router and operator run on a separate node when the cluster has one
 Tested configurations:
 
 - Two DGX Spark nodes, model split across both. See [Recovery and limits](#recovery-and-limits) for load times.
-- Two GB300 workstations, model on one node (October 2026). `init` detected compute capability 10.3. `preflight` measured 249 GiB of free GPU memory against the 239 GiB required. The model loaded in about 3 minutes from local disk, decoded at about 42 tokens per second at context 2048, and ran for more than 11 hours without restarts.
+- Two GB300 workstations, model on one node (October 2026). `init` detected compute capability 10.3. `preflight` measured 249 GiB of free GPU memory. The model loaded in about 3 minutes from local disk, decoded at about 42 tokens per second at context 2048, and ran for more than 11 hours without restarts.
+  - `retune` to the GB300 defaults (two 65,536-token slots) reloaded the model in 2.5 minutes, and `verify-direct` and `verify-gateway` passed. The GPU used 231.4 GiB, below the 242 GiB the memory check budgets, up from 219.3 GiB at context 2048.
+  - A 33,367-token prompt took 133 seconds (about 250 tokens per second), and the answer decoded at about 32 tokens per second. A follow-up with the same prefix reused the cached prompt and started answering in 0.3 seconds.
 
 ## Prerequisites
 
