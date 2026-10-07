@@ -228,6 +228,7 @@ CODEX_CA_CERTIFICATE="$WORK/ca.crt" codex --profile glm
 - The first request processes the whole prompt, at about 250 tokens per second on GB300. Later requests reuse the cached prefix, so start each agent once before a demo.
 - Each slot serves one request at a time. Two agents working at once use both GB300 slots; the Pylon canary waits for the next free slot.
 - For scripted runs, close stdin: `pi -p "<task>" < /dev/null` or `codex exec --profile glm "<task>" < /dev/null`. `pi -p` reads piped stdin as part of the prompt and waits until it closes.
+- For two agents playing each other, see the [Connect Four arena](examples/arena/README.md).
 
 ## Maintenance
 
