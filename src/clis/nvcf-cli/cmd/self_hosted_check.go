@@ -182,6 +182,12 @@ func init() {
 }
 
 func runSelfHostedCheck(c *cobra.Command, _ []string) error {
+	// A reader of stdout or stderr that exits early, such as grep -m1, head or
+	// a jq that fails on a line, or one a signal to the process group ends,
+	// would otherwise have the next write kill the process mid-run, with the
+	// validator's cluster-wide RBAC in place. Every write discards its error.
+	// It stays ignored after return, for the error cobra prints afterwards.
+	signal.Ignore(syscall.SIGPIPE)
 	if !checkPre && !checkControlPlane && !checkComputePlane && !checkAll {
 		return fmt.Errorf("at least one of --pre, --control-plane, --compute-plane, or --all is required")
 	}
@@ -259,14 +265,10 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// interrupt ends the run on the first signal or the quit key. A second
 	// Ctrl-C then exits at once, through the default handler. SIGTERM and
 	// SIGHUP stay caught until return: CI follows its SIGINT with a SIGTERM a
-	// few seconds later. SIGPIPE is ignored before the run is cancelled, and
-	// stays ignored after return: a signal to the process group also ends a
-	// pipe reading stderr, and a write to it, in the teardown or in the error
-	// cobra prints afterwards, would otherwise kill the process.
+	// few seconds later.
 	var interruptOnce sync.Once
 	interrupt := func() {
 		interruptOnce.Do(func() {
-			signal.Ignore(syscall.SIGPIPE)
 			signal.Notify(held, syscall.SIGTERM, syscall.SIGHUP)
 			signal.Stop(caught)
 			cancelSig()

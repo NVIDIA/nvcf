@@ -714,6 +714,79 @@ func TestCheck_InterruptSurvivesTheEndOfItsStderrReader(t *testing.T) {
 	assert.Equal(t, 130, child.ProcessState.ExitCode(), "%v\n%s", waitErr, stdout.String())
 }
 
+// brokenPipeChild runs TestCheck_AnOutputReaderThatExitsEarlyDoesNotKillTheRun
+// as the child process. Its value is the stream the parent reads, stdout or
+// stderr, and the directory the two processes leave their markers in.
+const brokenPipeChild = "NVCF_CLI_TEST_BROKEN_PIPE_CHILD"
+
+// A reader that stops early, such as grep -m1, head or a jq that fails on a
+// line, closes its pipe while the run goes on, with no interrupt. Writing an
+// event to that pipe while a validator holds its cluster-wide RBAC must not
+// kill the process before the teardown has removed it, nor after it, before
+// the command returns.
+func TestCheck_AnOutputReaderThatExitsEarlyDoesNotKillTheRun(t *testing.T) {
+	const started = "validator started"
+	if spec := os.Getenv(brokenPipeChild); spec != "" {
+		stream, dir, _ := strings.Cut(spec, ":")
+		out := os.Stderr
+		if stream == "stdout" {
+			out = os.Stdout
+		}
+		err := executeCheck(t, time.Minute, func(
+			ctx context.Context, p selfhosted.ClusterValidatorParams,
+		) selfhosted.ClusterValidatorResult {
+			p.OnStart("run1")
+			fmt.Fprintln(out, started)
+			for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
+				if _, err := os.Stat(filepath.Join(dir, "reader-gone")); err == nil {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			// Another role's event, written while this run's objects exist.
+			fmt.Fprintln(out, `{"event":"check_started"}`)
+			time.Sleep(100 * time.Millisecond)
+			_ = os.WriteFile(filepath.Join(dir, "teardown"), nil, 0o600)
+			return selfhosted.ClusterValidatorResult{Err: ctx.Err(), Passed: ctx.Err() == nil, RunID: "run1",
+				Created: true, Logs: "Validator role: control-plane\nCluster is NVCF-Ready\n"}
+		}, os.Stderr)
+		_ = os.WriteFile(filepath.Join(dir, "return"), nil, 0o600)
+		os.Exit(ExitCodeFromError(err))
+	}
+
+	for _, stream := range []string{"stderr", "stdout"} {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		dir := t.TempDir()
+		r, w, err := os.Pipe()
+		require.NoError(t, err)
+		child := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+t.Name()+"$")
+		child.Env = append(os.Environ(), brokenPipeChild+"="+stream+":"+dir)
+		var other bytes.Buffer
+		child.Stdout, child.Stderr = &other, w
+		if stream == "stdout" {
+			child.Stdout, child.Stderr = w, &other
+		}
+		require.NoError(t, child.Start(), stream)
+		require.NoError(t, w.Close())
+
+		seen := false
+		for lines := bufio.NewScanner(r); !seen && lines.Scan(); {
+			seen = lines.Text() == started
+		}
+		require.NoError(t, r.Close())
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "reader-gone"), nil, 0o600))
+		waitErr := child.Wait()
+		cancel()
+		require.True(t, seen, "%s: the validator never started:\n%s", stream, other.String())
+		status, _ := child.ProcessState.Sys().(syscall.WaitStatus)
+		assert.False(t, status.Signaled(), "%s: killed by %v\n%s", stream, status.Signal(), other.String())
+		for marker, what := range map[string]string{"teardown": "its teardown", "return": "the command returned"} {
+			_, err = os.Stat(filepath.Join(dir, marker))
+			assert.NoError(t, err, "%s: the process died before %s: %v\n%s", stream, what, waitErr, other.String())
+		}
+	}
+}
+
 // terminalSink stands in for the --wait dashboard, which draws on the
 // alternate screen: what is written to the terminal before it closes is lost.
 type terminalSink struct {
