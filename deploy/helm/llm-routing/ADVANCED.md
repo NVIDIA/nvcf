@@ -91,28 +91,46 @@ Correct the values and rerun the original Helm command. Set `suspended: true` in
 
 ### Helm GLM recipe
 
-The GLM automatic profile uses two distinct GB10 nodes. Create `$LLM_WORK/glm.values.yaml`:
-
-```yaml
-recipe: glm-5.3
-profileName: gb10-x2
-nodes: [gpu-node-1, gpu-node-2]
-runtimeClassName: nvidia
-storageClassName: local-path
-sharedCAConfigMap: llm-gateway-stack-ca
-```
+The committed [GLM values](recipes/values/glm-5.3.yaml) select the automatic two-node GB10 profile. Replace `gpu-node-1` and `gpu-node-2` below with distinct available nodes. Override `runtimeClassName` and `storageClassName` if your cluster uses different names.
 
 Install it with the shared stack already running:
 
 ```bash
 helm upgrade --install glm dev-images/charts/pylon-gguf-backend-0.2.0.tgz \
   --kube-context "$LLM_CONTEXT" --namespace llm-stack \
-  --values "$LLM_WORK/glm.values.yaml" --wait --timeout 120m
+  --values recipes/values/glm-5.3.yaml \
+  --set 'nodes[0]=gpu-node-1' --set 'nodes[1]=gpu-node-2' \
+  --wait --timeout 120m
 ```
 
 Kubernetes checks placement, builds the pinned llama.cpp runtime, starts the worker RPC server and qualifies both GPUs. It then verifies or downloads the pinned GGUF cache and starts the model server. The served model ID is `GLM-5.3-UD-IQ2_M`. The common catalog lists its per-node resource and storage requirements. The current cached two-node Helm trial stopped at the host-memory guard during loading. Automatic serving validation remains open.
 
 To reuse existing GLM downloads and runtime artifacts, set `reuseCaches: true`, `artifacts.existingClaim` and `rpc.cache.existingClaim` to the retained claims. Supply their original nodes in leader/worker order. Runtime identity and complete model checksums are validated before serving.
+
+### Helm Flash-Next recipes
+
+The committed Flash-Next values use separate qualification, download and serving phases. Both profiles await live validation. Run these commands from `deploy/helm/llm-routing` after installing the shared stack.
+
+- [NVMe values](recipes/values/qwen3.8-flash-next-nvme.yaml) use one GB10 node. Verify that the node's Kubernetes ephemeral storage is on local NVMe before installing. The profile requests 56 GiB for offload and a separate 180 GiB model cache.
+- [Tensor-parallel values](recipes/values/qwen3.8-flash-next-tp2.yaml) use two GB10 nodes with a shared fabric of at least 200 Gbps. Override both `targets[].node`, `targets[].address` and `targets[].interface` entries with actual node names, fabric IPv4 addresses and interfaces.
+- Select idle GPUs and check host memory and disk capacity first. Direct Helm installation does not perform the Python planner's capability and free-capacity checks. The [planner](#plan-and-render) remains available for those checks.
+
+For the one-node NVMe profile, begin with qualification:
+
+```bash
+helm upgrade --install qwen-flash dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
+  --kube-context "$LLM_CONTEXT" --namespace llm-stack \
+  --values recipes/values/qwen3.8-flash-next-nvme.yaml \
+  --set 'targets[0].node=gpu-node-1' --set phase=qualify \
+  --wait --wait-for-jobs --timeout 120m
+```
+
+1. Replace the example node and any cluster-specific runtime or storage names before running the command. For the two-node profile, select its values file and supply all six node and fabric overrides listed above.
+2. Inspect the qualification Job logs and require `qualification_pass` on every rank. Resolve failures before proceeding.
+3. Repeat the same Helm command with `--set phase=download`. Proceed only after the download Jobs succeed.
+4. Repeat it with `--set phase=serve`, then wait for the `qwen-flash` endpoint to become Registered. Keep the same values file and site overrides in every phase.
+
+Use these phases for a fresh model release. Use [lifecycle operations](#lifecycle) for a running release.
 
 ## Existing Python workflows
 

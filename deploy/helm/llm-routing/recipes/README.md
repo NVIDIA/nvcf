@@ -4,9 +4,21 @@ Follow the [LLM routing guide](../README.md) to install shared infrastructure on
 
 The catalog contains seven model families and eight entries. `availability.deployable: true` identifies executable recipes, with validation recorded separately for each profile. Nemotron 5 Nano 12B, Nemotron 5 Super 49B and Qwen3.8-4B are unavailable because their exact public artifacts were not verified. DeepSeek V4 Flash is planned, with verified upstream checkpoint and runtime candidates under `upstreamCandidates`. These four entries have no served model ID or installable profile. [planned.json](planned.json) records the dated evidence and remaining gaps.
 
-- [SGLang chart](charts/sglang/values.example.yaml): automatic Qwen3.8-27B FP8 and NVFP4 installation on a selected compatible node.
-- [GGUF chart](charts/gguf-backend/values.yaml): automatic two-node GLM-5.3 UD-IQ2_M installation. See [GLM configuration](../ADVANCED.md#helm-glm-recipe).
-- [Build and package](BUILDING.md): development image preparation and local chart archives.
+## Committed values
+
+Select the values file for your model and hardware profile. Pass it directly with Helm `--values`, then override the example node names with `--set`. Runtime class `nvidia`, storage class `local-path` and shared CA `llm-gateway-stack-ca` are defaults you can override for your cluster. These profiles target Linux ARM64 GB10 nodes.
+
+| Recipe | Values file | Installation |
+| --- | --- | --- |
+| Qwen3.8-27B FP8 | [qwen3.8-27b.yaml](values/qwen3.8-27b.yaml) | [Automatic, one node](../README.md#2-install-a-model) |
+| Qwen3.8-27B NVIDIA NVFP4 | [qwen3.8-27b-nvfp4.yaml](values/qwen3.8-27b-nvfp4.yaml) | [Automatic, one node](../README.md#2-install-a-model) |
+| GLM-5.3 UD-IQ2_M | [glm-5.3.yaml](values/glm-5.3.yaml) | [Automatic, two nodes](../ADVANCED.md#helm-glm-recipe). Latest trial stopped at the host-memory guard. |
+| Qwen3.8-Flash-Next NVFP4, NVMe offload | [qwen3.8-flash-next-nvme.yaml](values/qwen3.8-flash-next-nvme.yaml) | [Phased, one node](../ADVANCED.md#helm-flash-next-recipes). Live validation pending. |
+| Qwen3.8-Flash-Next NVFP4, tensor parallel | [qwen3.8-flash-next-tp2.yaml](values/qwen3.8-flash-next-tp2.yaml) | [Phased, two nodes](../ADVANCED.md#helm-flash-next-recipes). Live validation pending. |
+
+Planned and unavailable catalog entries have no installable values file. Their missing artifacts or chart support must be resolved first.
+
+See [build and package](BUILDING.md) for development image preparation and local chart archives.
 
 The charts own model workloads, persistent caches and InferenceEndpoints. Shared routing and credentials belong to the shared infrastructure release. Kubernetes manages preparation, startup and readiness. Choose distinct available GPU nodes from a supported hardware profile.
 

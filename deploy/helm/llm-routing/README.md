@@ -26,14 +26,14 @@ Helm installs the gateway, router and namespace-scoped operator with an empty mo
 
 ## 2. Install a model
 
-Use the committed [Qwen values](recipes/charts/sglang/values.example.yaml). Replace `gpu-node-1` below with an available GB10 node. The defaults use runtime class `nvidia` and storage class `local-path`. If your cluster uses different names, add `--set runtimeClassName=NAME --set storageClassName=NAME` to the Helm command.
+Use the committed [recipe values](recipes/README.md#committed-values). Replace `gpu-node-1` below with an available GB10 node. The defaults use runtime class `nvidia` and storage class `local-path`. If your cluster uses different names, add `--set runtimeClassName=NAME --set storageClassName=NAME` to the Helm command.
 
 Install the FP8 recipe:
 
 ```bash
 helm upgrade --install qwen-fp8 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
   --kube-context "$LLM_CONTEXT" --namespace llm-stack \
-  --values recipes/charts/sglang/values.example.yaml --set 'nodes[0]=gpu-node-1' \
+  --values recipes/values/qwen3.8-27b.yaml --set 'nodes[0]=gpu-node-1' \
   --wait --timeout 120m &&
 kubectl --context "$LLM_CONTEXT" -n llm-stack wait \
   --for=condition=Registered inferenceendpoint/qwen-fp8 --timeout=5m
@@ -41,22 +41,22 @@ kubectl --context "$LLM_CONTEXT" -n llm-stack wait \
 
 Kubernetes checks placement, qualifies the GPU, prepares the pinned model cache and starts serving. First startup includes the model download. Subsequent startups validate and reuse the cache. Readiness gates healthy serving through the shared gateway. See [retained caches and recovery](ADVANCED.md#helm-cache-reuse-and-recovery) for an existing download.
 
-For a second precision on another available node, use the same values file with two overrides:
+For a second precision on another available node, use the NVFP4 values:
 
 ```bash
 helm upgrade --install qwen-nvfp4 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
   --kube-context "$LLM_CONTEXT" --namespace llm-stack \
-  --values recipes/charts/sglang/values.example.yaml \
-  --set recipe=qwen3.8-27b-nvfp4 --set 'nodes[0]=gpu-node-2' \
+  --values recipes/values/qwen3.8-27b-nvfp4.yaml \
+  --set 'nodes[0]=gpu-node-2' \
   --wait --timeout 120m
 ```
 
 | Recipe | Precision | Availability and validation |
 | --- | --- | --- |
-| Qwen3.8-27B | FP8 | One GB10. Cached Helm startup and inference tested. |
-| Qwen3.8-27B | NVIDIA NVFP4 | One GB10. Cached Helm startup, inference and model isolation tested. |
-| GLM-5.3 | UD-IQ2_M | Two GB10s. Combined runtime tested. [Automatic Helm startup](ADVANCED.md#helm-glm-recipe) stopped at the host-memory guard. |
-| Qwen3.8-Flash-Next | NVFP4 | One-node offload and two-node profiles. Live validation pending. [Advanced phased deployment](ADVANCED.md#qwen-catalog-configuration). |
+| [Qwen3.8-27B](recipes/values/qwen3.8-27b.yaml) | FP8 | One GB10. Cached Helm startup and inference tested. |
+| [Qwen3.8-27B](recipes/values/qwen3.8-27b-nvfp4.yaml) | NVIDIA NVFP4 | One GB10. Cached Helm startup, inference and model isolation tested. |
+| [GLM-5.3](recipes/values/glm-5.3.yaml) | UD-IQ2_M | Two GB10s. Combined runtime tested. [Automatic Helm startup](ADVANCED.md#helm-glm-recipe) stopped at the host-memory guard. |
+| Qwen3.8-Flash-Next | NVFP4 | [NVMe values](recipes/values/qwen3.8-flash-next-nvme.yaml) or [two-node values](recipes/values/qwen3.8-flash-next-tp2.yaml). Live validation pending. [Phased deployment](ADVANCED.md#helm-flash-next-recipes). |
 | Nemotron 5 Nano 12B | Unverified | Unavailable. Exact public model artifact not verified. |
 | Nemotron 5 Super 49B | Unverified | Unavailable. Exact public model artifact not verified. |
 | Qwen3.8-4B | Unverified | Unavailable. Exact public model artifact not verified. |
