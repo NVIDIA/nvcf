@@ -6,41 +6,36 @@ Install shared routing once, then install each model recipe with Helm and a smal
 
 Use Kubernetes with the NVIDIA device plugin, a GPU RuntimeClass and persistent storage on compatible model nodes. Install Helm and kubectl on your workstation, plus Python 3.11+ for the model access commands. Select available nodes using the hardware profiles in the [common recipe catalog](recipes/index.json). Profiles specify node count, GPUs per node, resource requests and workload limits.
 
-Until application images are published to a registry, each installer builds them from this checkout and preloads the cluster nodes. Start Docker with Buildx support and access to base images and build dependencies. The image helper supports ARM64 and AMD64 nodes with containerd. Its import Jobs need permission to mount the nodes' containerd sockets.
+The committed [development image values](dev-images/values.yaml) reference application images already preloaded on the shared Spark nodes. Use these values for installation. Only developers changing application code need to [build and preload new images](recipes/BUILDING.md#build-shared-stack-images). A different cluster or replacement node needs the referenced images preloaded first.
 
-Run the following from `deploy/helm/llm-routing`, in the same terminal. Select your target kubeconfig context first. This example uses `llm-stack`. Image preparation also supports an existing namespace. It updates the node image caches without upgrading installed releases. On a shared cluster, coordinate the target namespace and use it consistently in the build, Helm and client commands.
+Run the following from `deploy/helm/llm-routing`, in the same terminal. Select your target kubeconfig context first. This example uses `llm-stack`. On a shared cluster, coordinate the target namespace and use it consistently in the values, Helm and client commands.
 
-## 0. Build images and package charts
+## 0. Package charts
 
 ```bash
 export LLM_CONTEXT="$(kubectl config current-context)"
 export LLM_WORK="$HOME/.local/state/llm-routing/$LLM_CONTEXT/llm-stack"
-export LLM_IMAGES="$LLM_WORK/images"
-export LLM_CHARTS="$LLM_WORK/charts"
+mkdir -p "$LLM_WORK"
+export LLM_CHARTS="$(mktemp -d "$LLM_WORK/charts.XXXXXX")"
 
-python3 build-shared-images.py \
-  --context "$LLM_CONTEXT" --namespace llm-stack \
-  --output-dir "$LLM_IMAGES" --allow-containerd-import &&
 bash package-charts.sh --output-dir "$LLM_CHARTS"
 ```
 
-The helper builds gateway, router, operator and Pylon, preloads compatible nodes, and writes `$LLM_IMAGES/shared.values.yaml` for Helm.
-
-Build retries reuse the saved configuration and rebuild the same local image tags, including tags used by installed workloads. Running pods are not restarted. Packaging requires an unused output directory. See [building and distributing images](recipes/BUILDING.md) for registry images and component rebuilds.
+This packages the shared stack and model charts without building images. Each run uses a fresh chart output directory. The Helm command below uses the committed image references. See [building and distributing images](recipes/BUILDING.md) when those images need updating.
 
 ## 1. Install shared infrastructure
 
 ```bash
 helm upgrade --install llm-stack "$LLM_CHARTS/llm-shared-stack-0.1.0.tgz" \
   --kube-context "$LLM_CONTEXT" --namespace llm-stack --create-namespace \
-  --values "$LLM_IMAGES/shared.values.yaml" --wait --timeout 10m
+  --values dev-images/values.yaml --wait --timeout 10m
 ```
 
-Helm installs the gateway, router and namespace-scoped operator with an empty model registry. A chart verification Job checks gateway TLS, model discovery, acceptance of the caller key and rejection of an invalid key before Helm reports success. The same checks run on upgrades with registered models. The chart generates the caller credential and TLS material on first installation and preserves them on upgrades. `operator.watchNamespaces` in the values file must contain `llm-stack`. For the first operator in a cluster, set `operator.installCRDs: true`. Other installations reuse that CRD.
+Helm installs the gateway, router and namespace-scoped operator with an empty model registry. A chart verification Job checks gateway TLS, model discovery, acceptance of the caller key and rejection of an invalid key before Helm reports success. The same checks run on upgrades with registered models. The chart generates the caller credential and TLS material on first installation and preserves them on upgrades. The committed values watch `llm-stack`. For another namespace, also pass `--set operator.clusterId=NAME --set 'operator.watchNamespaces[0]=NAME'`. For the first operator in a cluster, set `operator.installCRDs: true`. Other installations reuse that CRD.
 
 ## 2. Install a model
 
-Create `$LLM_IMAGES/qwen.values.yaml` using an available node and your cluster's storage and runtime class names:
+Create `$LLM_WORK/qwen.values.yaml` using an available node and your cluster's storage and runtime class names:
 
 ```yaml
 recipe: qwen3.8-27b
@@ -55,7 +50,7 @@ Install the FP8 recipe:
 ```bash
 helm upgrade --install qwen-fp8 "$LLM_CHARTS/pylon-sglang-recipe-0.2.0.tgz" \
   --kube-context "$LLM_CONTEXT" --namespace llm-stack \
-  --values "$LLM_IMAGES/qwen.values.yaml" --wait --timeout 120m
+  --values "$LLM_WORK/qwen.values.yaml" --wait --timeout 120m
 kubectl --context "$LLM_CONTEXT" -n llm-stack wait \
   --for=condition=Registered inferenceendpoint/qwen-fp8 --timeout=5m
 ```
@@ -67,7 +62,7 @@ For a second precision on another available node, use the same values file with 
 ```bash
 helm upgrade --install qwen-nvfp4 "$LLM_CHARTS/pylon-sglang-recipe-0.2.0.tgz" \
   --kube-context "$LLM_CONTEXT" --namespace llm-stack \
-  --values "$LLM_IMAGES/qwen.values.yaml" --set recipe=qwen3.8-27b-nvfp4 --set 'nodes[0]=gpu-node-2' \
+  --values "$LLM_WORK/qwen.values.yaml" --set recipe=qwen3.8-27b-nvfp4 --set 'nodes[0]=gpu-node-2' \
   --wait --timeout 120m
 ```
 

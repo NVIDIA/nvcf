@@ -1,0 +1,51 @@
+{
+  "gatewayStack": {
+    "llm-api-gateway": {
+      "llmApiGateway": {
+        "image": {
+          "repository": "localhost/llm-stack/gateway",
+          "tag": "dev-20261007212336-c0c86b",
+          "pullPolicy": "Never"
+        },
+        "nodeSelector": {
+          "kubernetes.io/os": "linux",
+          "kubernetes.io/arch": "arm64"
+        }
+      }
+    },
+    "llm-request-router": {
+      "llmRequestRouter": {
+        "image": {
+          "repository": "localhost/llm-stack/router",
+          "tag": "dev-20261007212336-c0c86b",
+          "pullPolicy": "Never"
+        },
+        "nodeSelector": {
+          "kubernetes.io/os": "linux",
+          "kubernetes.io/arch": "arm64"
+        }
+      }
+    }
+  },
+  "operator": {
+    "image": {
+      "repository": "localhost/llm-stack/operator",
+      "tag": "dev-20261007212336-c0c86b",
+      "pullPolicy": "Never"
+    },
+    "nodeSelector": {
+      "kubernetes.io/os": "linux",
+      "kubernetes.io/arch": "arm64"
+    },
+    "watchNamespaces": [
+      "llm-stack"
+    ],
+    "pylon": {
+      "image": {
+        "repository": "localhost/llm-stack/pylon",
+        "tag": "dev-20261007212336-c0c86b",
+        "pullPolicy": "Never"
+      }
+    }
+  }
+}
