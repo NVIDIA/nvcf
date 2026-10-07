@@ -171,9 +171,21 @@ name. So:
   `NVSNAP_GPUSHARE_FABRIC=1` keeps fabric support, which multi-node NVLink
   needs; memory shared as fabric handles is then re-imported as fabric
   handles.
-- Scope: memory shared across nodes (multi-node NVLink) is not tracked, so
-  its checkpoint is refused. Exporters are found among the processes on the
-  same node, in the same pid namespace.
+- Multi-node NVLink: with `NVSNAP_GPUSHARE_FABRIC=1`, memory and multicast
+  objects shared across nodes are imported by fabric handle. Fabric handles
+  change across a restore, and a node must not release memory while another
+  node's kernels still read it. So `nvsnap-gpu-suspend --fabric-map DIR`
+  (on `suspend` and `resume`, on every node) coordinates the nodes through
+  whoever drives them, with files in `DIR`:
+  - Quiesce vote: each attempt, the tool writes `DIR/q`
+    (`<attempt> ok` or `<attempt> busy`) and waits for `DIR/d`. Once every
+    node has voted, the driver writes `<attempt> go` to every node if all
+    are quiesced, else `<attempt> retry`.
+  - Handle exchange: after `load`, the tool writes the node's new fabric
+    handles to `DIR/out` and waits for `DIR/in`, the `out` files of all
+    nodes concatenated, to re-import from at `remap`.
+- Scope: exporters on the same node are found among the processes in the
+  same pid namespace.
 - Large shared allocations: driver 610.57.04 will not export an allocation
   of 512 MiB or more that a restored process created before its
   checkpoint (`INVALID_VALUE`). FlashInfer's all-reduce workspace is such
@@ -231,6 +243,11 @@ The first checkpoint wrote 159 GiB to the store, and a second checkpoint of
 the same model wrote 20 GiB. A cold start of the same model, including a
 136 GB model download, took 363 s to the first token, or 242 s without the
 download.
+
+Across 2 nodes (4x GB300 each, one NVLink domain, an IMEX channel), 8
+ranks running a checked 256 MB NCCL all-reduce with `NCCL_MNNVL_ENABLE=1`
+(NVLS multicast across the nodes): in-place suspend and resume with
+`--fabric-map`, 3 out of 3 cycles passed, one after a retried vote.
 
 On 4x H100 with driver 580.126.16, Qwen2.5-7B-Instruct, TP=4 was dumped
 with CRIU, restored into a new pod and answered as before, with the three

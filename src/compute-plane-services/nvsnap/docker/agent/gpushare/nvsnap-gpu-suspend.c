@@ -255,7 +255,7 @@ static int visible_gpus(CUuuid *out, int max)
 
 #define MAX_GPUS 64
 static const char *gpu_map_file;
-static const char *store_dir, *ckpt_dir, *cache_dir;
+static const char *store_dir, *ckpt_dir, *cache_dir, *fabric_dir;
 
 static int do_restore(int pid)
 {
@@ -641,13 +641,56 @@ static int ctl_all_par(const int *pids, int n, const char *cmd)
  * GPU memory it saved ("load", all at once), then re-imports (and rejoins
  * its multicast groups) before any binds multicast memory, which blocks
  * until all devices have rejoined. "resume" reopens the launch gate. */
+static int fabric_exchange(const int *pids, int n, char *remap, size_t len);
+
 static int remap_all(const int *pids, int n)
 {
-    char load[512] = "load";
+    char load[512] = "load", remap[600] = "remap";
     if (cache_dir) snprintf(load, sizeof(load), "load %s", cache_dir);
+    if (fabric_dir) {  /* a previous cycle's lists */
+        char p[512];
+        snprintf(p, sizeof(p), "%s/in", fabric_dir);
+        unlink(p);
+        snprintf(p, sizeof(p), "%s/out", fabric_dir);
+        unlink(p);
+    }
     int r = ctl_all_par(pids, n, load);
-    if (r >= 0) r = ctl_all(pids, n, "remap");
+    if (r >= 0 && fabric_dir) r = fabric_exchange(pids, n, remap, sizeof(remap));
+    if (r >= 0) r = ctl_all(pids, n, remap);
     return r < 0 ? r : ctl_all(pids, n, "resume");
+}
+
+/* Multi-node NVLink: memory shared across nodes is imported by fabric
+ * handle, and fabric handles change across a restore. After "load", every
+ * process has exported its shared memory again: collect old -> new into
+ * DIR/out, then wait for DIR/in, the lists of all nodes merged by whoever
+ * drives the nodes, and pass it to "remap". */
+static int fabric_exchange(const int *pids, int n, char *remap, size_t len)
+{
+    char in[512], out[512], tmp[512], part[600], cmd[700], line[300];
+    snprintf(in, sizeof(in), "%s/in", fabric_dir);
+    snprintf(out, sizeof(out), "%s/out", fabric_dir);
+    snprintf(tmp, sizeof(tmp), "%s/out.tmp", fabric_dir);
+    FILE *o = fopen(tmp, "we");
+    if (!o) { fprintf(stderr, "%s: %s\n", tmp, strerror(errno)); return -1; }
+    int nh = 0;
+    for (int i = 0; i < n; i++) {
+        snprintf(part, sizeof(part), "%s/out.%d", fabric_dir, pids[i]);
+        snprintf(cmd, sizeof(cmd), "fabmap %s", part);
+        if (ctl(pids[i], cmd) < 0) { fclose(o); return -1; }
+        FILE *f = fopen(part, "re");
+        while (f && fgets(line, sizeof(line), f)) { fputs(line, o); nh++; }
+        if (f) fclose(f);
+        unlink(part);
+    }
+    if (fclose(o) != 0 || rename(tmp, out) != 0) { fprintf(stderr, "%s: %s\n", out, strerror(errno)); return -1; }
+    printf("fabric map: %d handle(s) in %s; waiting for %s\n", nh, out, in);
+    for (int t = 0; access(in, R_OK) != 0; t++) {
+        if (t >= 6000) { fprintf(stderr, "no %s after 600 s\n", in); return -1; }
+        usleep(100000);
+    }
+    snprintf(remap, len, "remap %s", in);
+    return 0;
 }
 
 /* ── suspend / resume ─────────────────────────────────────────────────── */
@@ -797,6 +840,38 @@ static void undo(const int *pids, int n, int locked, int shared)
     else fprintf(stderr, "suspend failed; rolled back, the workload runs as before\n");
 }
 
+/* Multi-node NVLink: a node that releases memory while another still runs
+ * kernels that read it crashes those kernels, and a node's in-flight
+ * collectives wait for the ranks other nodes hold. So each attempt to
+ * quiesce is a vote: write DIR/q ("<attempt> ok" or "<attempt> busy") and
+ * wait for DIR/d, written by whoever drives the nodes once every node has
+ * voted: "<attempt> go" if all are quiesced, else "<attempt> retry".
+ * Returns 1 for go, 0 for retry, -1 on timeout. */
+static int node_vote(int attempt, int quiesced)
+{
+    char q[512], tmp[520], d[512], line[64];
+    snprintf(q, sizeof(q), "%s/q", fabric_dir);
+    snprintf(tmp, sizeof(tmp), "%s/q.tmp", fabric_dir);
+    snprintf(d, sizeof(d), "%s/d", fabric_dir);
+    FILE *fp = fopen(tmp, "we");
+    if (!fp || fprintf(fp, "%d %s\n", attempt, quiesced ? "ok" : "busy") < 0 || fclose(fp) != 0 || rename(tmp, q) != 0) {
+        fprintf(stderr, "%s: %s\n", q, strerror(errno));
+        return -1;
+    }
+    for (int t = 0; t < 6000; t++) {
+        int a = -1;
+        char verdict[16] = "";
+        if ((fp = fopen(d, "re"))) {
+            if (fgets(line, sizeof(line), fp)) sscanf(line, "%d %15s", &a, verdict);
+            fclose(fp);
+        }
+        if (a == attempt) return !strcmp(verdict, "go");
+        usleep(100000);
+    }
+    fprintf(stderr, "no verdict in %s after 600 s\n", d);
+    return -1;
+}
+
 static int holder(const int *pids, int n, unsigned timeout_ms, int report_fd)
 {
     struct frozen *fz = calloc(n, sizeof(*fz));
@@ -811,11 +886,26 @@ static int holder(const int *pids, int n, unsigned timeout_ms, int report_fd)
      * release; only then does any process "release". Busy: GPU work waits on
      * work not launched yet (e.g. a peer's NCCL kernel) — reopen and retry. */
     int shared = 0;
+    if (fabric_dir) {  /* a previous suspend's votes */
+        snprintf(path, sizeof(path), "%s/q", fabric_dir);
+        unlink(path);
+        snprintf(path, sizeof(path), "%s/d", fabric_dir);
+        unlink(path);
+    }
     for (int tries = 0;; tries++) {
         int r = ctl_all(pids, n, "quiesce");
-        if (r >= 0) { shared = r > 0; break; }
-        ctl_all(pids, n, "resume");
-        if (r != -2 || tries * 250 >= (int)timeout_ms) goto out;
+        if (r < 0) ctl_all(pids, n, "resume");
+        if (r < 0 && r != -2) goto out;
+        if (fabric_dir) {  /* every node must be quiesced before any releases */
+            int v = node_vote(tries, r >= 0);
+            if (v < 0) { if (r >= 0) ctl_all(pids, n, "resume"); goto out; }
+            if (v == 1) { shared = r > 0; break; }
+            if (r >= 0) ctl_all(pids, n, "resume");
+        } else if (r >= 0) {
+            shared = r > 0;
+            break;
+        }
+        if (tries * 250 >= (int)timeout_ms) goto out;
         usleep(250000);
     }
     char release[600] = "release";
@@ -1219,6 +1309,8 @@ static void usage(const char *prog)
         "--store S --ckpt-dir C: (suspend) libnvsnap_gpushare processes save GPU memory\n"
         "         to chunk store S; C lists the chunks of this checkpoint\n"
         "--cache DIR: (suspend, resume) node-local cache of the chunk store\n"
+        "--fabric-map DIR: (suspend, resume) multi-node NVLink: after load, write the new\n"
+        "         fabric handles to DIR/out and wait for DIR/in, all nodes' out merged\n"
         "Cache:   cache-prefetch STORE CKPT-DIR CACHE | cache-gc CACHE MAX-GiB\n"
         "Multi-GPU: pass all ranks in one call, e.g.:\n"
         "  %s full-save 503 504 505 508\n", prog, prog);
@@ -1242,6 +1334,8 @@ int main(int argc, char **argv)
             ckpt_dir = argv[argi + 1];
         else if (strcmp(argv[argi], "--cache") == 0)
             cache_dir = argv[argi + 1];
+        else if (strcmp(argv[argi], "--fabric-map") == 0)
+            fabric_dir = argv[argi + 1];
         else
             break;
         argi += 2;

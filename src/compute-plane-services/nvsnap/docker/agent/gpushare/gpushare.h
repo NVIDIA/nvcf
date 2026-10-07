@@ -41,15 +41,19 @@ SPDX-License-Identifier: Apache-2.0
  * IMEX channel, as a fabric handle (identified by "whosefab", hex). An
  * export made before the memory is mapped (NCCL symmetric buffers) is
  * registered when mapped; importers look the exporter up again at
- * "quiesce". Exporters are found among the processes on this node; memory
- * shared across nodes (multi-node NVLink) is not tracked, and its
- * checkpoint is refused.
+ * "quiesce". Exporters are found among the processes on this node.
  *
- * A restored process may not use fabric handles (driver 610: NOT_PERMITTED),
- * so memory and multicast objects created for fabric handles also allow
- * POSIX fds, and are re-imported as fds. Driver 610 still refuses to export
- * fabric-capable memory after restore: pods with an IMEX channel do not
- * restore yet.
+ * A driver restore drops the IMEX channel subscription of libcuda's
+ * clients; "load" subscribes them again. Unless NVSNAP_GPUSHARE_FABRIC=1,
+ * fabric support is hidden from the workload, which then shares memory as
+ * POSIX fds. With it (multi-node NVLink), memory from other nodes is
+ * imported by fabric handle, and fabric handles change across a restore:
+ *   fabmap <file>  (after "load")  write the fabric handles this process
+ *            exported again at "load", old -> new.
+ *   remap <file>  re-import memory from other nodes by its new handle, from
+ *            the lists of all nodes merged into file.
+ * nvsnap-gpu-suspend --fabric-map DIR exchanges the lists and has the nodes
+ * vote, so that every node is quiesced before any releases.
  *
  * Multicast (NVLS) needs a driver that lets a restored process create and
  * join multicast objects: 610.57.04 on GB300 does, 580.173.02 does not.

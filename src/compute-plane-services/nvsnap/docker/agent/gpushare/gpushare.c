@@ -281,6 +281,13 @@ struct chunk { uint64_t h[2]; };  /* content hash; 0 = all zero, not stored */
 VEC(struct valloc, vallocs);
 VEC(struct exp, exps);
 VEC(struct fexp, fexps);
+/* Fabric handles change across a restore. At "load" the exporter exports
+ * again what it shared as fabric handles and lists old -> new ("fabmap");
+ * importers of memory exported on other nodes look theirs up in the list
+ * merged from all nodes ("remap <file>"). */
+struct fabmap { CUmemFabricHandle old, cur; };
+VEC(struct fabmap, pubs);   /* ours, since the last "release" */
+VEC(struct fabmap, fmap);   /* all nodes', from "remap <file>" */
 VEC(struct xreg, xregs);
 /* Page-locked host memory (see "Host memory"). */
 struct hreg { void *p; size_t size; unsigned flags; int owned; CUdeviceptr dptr; int down; /* unregistered by "release" */ };
@@ -300,6 +307,7 @@ struct mcobj {
     int ndev;
     int app_released, released, dead;    /* dead: app done with it */
     int fab;                             /* imported as a fabric handle */
+    CUmemFabricHandle fh;                /* from another node: its handle */
 };
 /* Memory this process bound to a multicast object. */
 struct mcbind {
@@ -344,6 +352,8 @@ static int lock_ctl(void)
     ts.tv_sec += 2;
     return pthread_mutex_timedlock(&mu, &ts);
 }
+
+static int fabric_hidden(void);
 
 static int find_imp(CUmemGenericAllocationHandle h)
 {
@@ -772,12 +782,15 @@ static void do_quiesce(char *reply, size_t n)
     else if (n_legacy)
         snprintf(reply, n, "err %d CUDA IPC import(s) of memory not allocated through "
                  "libnvsnap_gpushare (cuMemAlloc >= 2 MiB) cannot be restored", n_legacy);
+    /* Fabric imports with no exporter on this node: from another node (see
+     * struct fabmap), unless fabric support is hidden. */
+    int remote_ok = !fabric_hidden();
     for (int i = 0; !reply[0] && i < n_imps; i++)
-        if (!imps[i].peer && !imps[i].released && imp_live(i))
+        if (!imps[i].peer && !(imps[i].fab && remote_ok) && !imps[i].released && imp_live(i))
             snprintf(reply, n, "err import of handle %llu has no known exporter",
                      (unsigned long long)imps[i].app_h);
     for (int i = 0; !reply[0] && i < n_mcs; i++)
-        if (!mcs[i].dead && !mcs[i].creator && !mcs[i].peer && mc_live(i))
+        if (!mcs[i].dead && !mcs[i].creator && !mcs[i].peer && !(mcs[i].fab && remote_ok) && mc_live(i))
             snprintf(reply, n, "err multicast import of handle %llu has no known creator",
                      (unsigned long long)mcs[i].app_h);
     for (int i = 0; !reply[0] && i < n_mcbinds; i++) {
@@ -932,7 +945,7 @@ static void do_release(char *reply, size_t n, const char *args)
     }
     if (nv > 0) logf_("pointed %d fd(s) the app kept of its exports at /dev/null", nv);
     for (int i = 0; r == CUDA_SUCCESS && i < n_exps; i++) close(exps[i].fd);
-    if (r == CUDA_SUCCESS) n_exps = n_fexps = 0;
+    if (r == CUDA_SUCCESS) n_exps = n_pubs = 0;
     pop_ctx(dev);
     if (r == CUDA_SUCCESS)
         snprintf(reply, n, "ok released %d mapping(s), %d multicast object(s), %d host buffer(s), "
@@ -965,6 +978,21 @@ static void do_load(char *reply, size_t n, const char *cache_dir)
         nb += vallocs[i].size;
     }
     stage_put();
+    for (int i = 0; r == CUDA_SUCCESS && i < n_fexps; i++) {  /* see struct fabmap */
+        CUmemFabricHandle old = fexps[i].fh, nf;
+        int done = !fexps[i].id;
+        for (int k = 0; !done && k < n_pubs; k++) done = !memcmp(pubs[k].cur.data, old.data, sizeof(old.data));
+        if (done) continue;
+        CUresult e = export_id(fexps[i].id, 1, NULL, &nf);
+        if (e == CUDA_ERROR_NOT_FOUND) continue;  /* freed */
+        if ((r = e) != CUDA_SUCCESS) {
+            snprintf(reply, n, "err export fabric id %llu again: %s", fexps[i].id, errstr(r));
+            break;
+        }
+        PUSH(pubs, ((struct fabmap){ old, nf }));
+        for (int j = i; j < n_fexps; j++)
+            if (!memcmp(fexps[j].fh.data, old.data, sizeof(old.data))) fexps[j].fh = nf;
+    }
     if (r == CUDA_SUCCESS)
         snprintf(reply, n, "ok loaded %d allocation(s) (%zu MiB) in %.1fs: %zu MiB from cache, %zu MiB from store",
                  nl, nb >> 20, secs() - t0, st_hit >> 20, st_miss >> 20);
@@ -972,13 +1000,61 @@ static void do_load(char *reply, size_t n, const char *cache_dir)
     pthread_mutex_unlock(&mu);
 }
 
-static void do_remap(char *reply, size_t n)
+/* Write our fabric handles' old -> new list ("load") to path, as hex. */
+static void do_fabmap(char *reply, size_t n, const char *path)
+{
+    if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
+    FILE *fp = fopen(path, "we");
+    char a[2 * sizeof(((CUmemFabricHandle *)0)->data) + 1], b[sizeof(a)];
+    for (int i = 0; fp && i < n_pubs; i++) {
+        hex_encode(pubs[i].old.data, sizeof(pubs[i].old.data), a);
+        hex_encode(pubs[i].cur.data, sizeof(pubs[i].cur.data), b);
+        fprintf(fp, "%s %s\n", a, b);
+    }
+    if (!fp || fclose(fp)) snprintf(reply, n, "err write %.200s: %s", path, strerror(errno));
+    else snprintf(reply, n, "ok %d fabric handle(s)", n_pubs);
+    pthread_mutex_unlock(&mu);
+}
+
+/* Read the fabric handles of all nodes (mu held). */
+static int read_fabmap(const char *path, char *reply, size_t n)
+{
+    FILE *fp = fopen(path, "re");
+    char a[2 * sizeof(((CUmemFabricHandle *)0)->data) + 1], b[sizeof(a)];
+    if (!fp) { snprintf(reply, n, "err read %.200s: %s", path, strerror(errno)); return -1; }
+    n_fmap = 0;
+    while (fscanf(fp, "%128s %128s", a, b) == 2) {
+        struct fabmap m;
+        if (hex_decode(a, m.old.data, sizeof(m.old.data)) == 0 && hex_decode(b, m.cur.data, sizeof(m.cur.data)) == 0)
+            PUSH(fmap, m);
+    }
+    fclose(fp);
+    return 0;
+}
+
+/* Import again what was exported on another node, by its new fabric
+ * handle; fh becomes the new handle. */
+static CUresult remote_fetch(CUmemFabricHandle *fh, CUmemGenericAllocationHandle *h, char *rep, size_t n)
+{
+    for (int i = 0; i < n_fmap; i++)
+        if (!memcmp(fmap[i].old.data, fh->data, sizeof(fh->data))) {
+            snprintf(rep, n, "ok");
+            CUresult r = REAL(r_import, "cuMemImportFromShareableHandle")(h, &fmap[i].cur, CU_MEM_HANDLE_TYPE_FABRIC);
+            if (r == CUDA_SUCCESS) *fh = fmap[i].cur;
+            return r;
+        }
+    snprintf(rep, n, "err not in the fabric map of the other nodes");
+    return CUDA_ERROR_NOT_FOUND;
+}
+
+static void do_remap(char *reply, size_t n, const char *fabmap_path)
 {
     char rep[256] = "no reply";
     int nm = 0, ngone = 0, nh = 0;
     CUresult r = CUDA_SUCCESS;
     if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
     int dev = push_any_ctx();
+    if (fabmap_path && read_fabmap(fabmap_path, reply, n) < 0) goto out;
     for (int i = 0; i < n_vallocs; i++)
         if ((r = valloc_restore(&vallocs[i])) != CUDA_SUCCESS) {
             snprintf(reply, n, "err restore allocation %#llx+%zu: %s", (unsigned long long)vallocs[i].va,
@@ -1007,7 +1083,8 @@ static void do_remap(char *reply, size_t n)
         if (im->app_released && !mapped) { im->released = 0; continue; }  /* nothing to restore */
         CUmemGenericAllocationHandle h;
         const char *what = "import";
-        r = refetch(im->peer, im->key, im->fab, &h, rep, sizeof(rep));
+        r = im->peer > 0 ? refetch(im->peer, im->key, im->fab, &h, rep, sizeof(rep))
+                         : remote_fetch(&im->fh, &h, rep, sizeof(rep));
         if (r != CUDA_SUCCESS && !strncmp(rep, "err gone", 8)) {
             /* The exporter freed it: like CUDA IPC after the exporter's
              * cuMemFree, the memory is undefined. Keep the VA reserved
@@ -1076,7 +1153,8 @@ static void do_remap(char *reply, size_t n)
             continue;
         }
         CUmemGenericAllocationHandle h;
-        r = refetch(m->peer, m->key, m->fab, &h, rep, sizeof(rep));
+        r = m->peer > 0 ? refetch(m->peer, m->key, m->fab, &h, rep, sizeof(rep))
+                        : remote_fetch(&m->fh, &h, rep, sizeof(rep));
         if (r != CUDA_SUCCESS && strncmp(rep, "ok", 2)) {
             snprintf(reply, n, "err export of multicast id %llu from pid %d: %s", m->key, m->peer, rep);
             goto out;
@@ -1326,7 +1404,9 @@ static void serve(int s)
     else if (!strncmp(buf, "release ", 8)) { do_release(rep, sizeof(rep), buf + 8); msg_send(s, rep, -1); }
     else if (!strcmp(buf, "load")) { do_load(rep, sizeof(rep), NULL); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "load ", 5)) { do_load(rep, sizeof(rep), buf + 5); msg_send(s, rep, -1); }
-    else if (!strcmp(buf, "remap")) { do_remap(rep, sizeof(rep)); msg_send(s, rep, -1); }
+    else if (!strcmp(buf, "remap")) { do_remap(rep, sizeof(rep), NULL); msg_send(s, rep, -1); }
+    else if (!strncmp(buf, "remap ", 6)) { do_remap(rep, sizeof(rep), buf + 6); msg_send(s, rep, -1); }
+    else if (!strncmp(buf, "fabmap ", 7)) { do_fabmap(rep, sizeof(rep), buf + 7); msg_send(s, rep, -1); }
     else if (!strcmp(buf, "resume")) { do_resume(rep, sizeof(rep)); msg_send(s, rep, -1); }
     else if (!strncmp(buf, "export ", 7)) do_export(strtoull(buf + 7, NULL, 10), 0, s);
     else if (!strncmp(buf, "exportfab ", 10)) do_export(strtoull(buf + 10, NULL, 10), 1, s);
@@ -2202,10 +2282,26 @@ static CUresult w_mc_create(CUmemGenericAllocationHandle *h, const CUmulticastOb
     return r;
 }
 
+/* A fabric handle imported from another node is not known to be a
+ * multicast object until the app joins it: track it as one from then on
+ * (mu held). */
+static int imp_to_mc(CUmemGenericAllocationHandle h)
+{
+    int i = find_imp(h);
+    if (i < 0 || !imps[i].fab || imps[i].peer) return -1;
+    for (int j = 0; j < n_maps; j++)
+        if (maps[j].imp == i) return -1;
+    PUSH(mcs, ((struct mcobj){ .app_h = imps[i].app_h, .cur_h = imps[i].cur_h, .fab = 1, .fh = imps[i].fh }));
+    imps[i].app_h = imps[i].cur_h = 0;  /* no longer an import */
+    imps[i].app_released = 1;
+    return n_mcs - 1;
+}
+
 static CUresult w_mc_add(CUmemGenericAllocationHandle h, CUdevice dev)
 {
     pthread_mutex_lock(&mu);
     int m = find_mc(h);
+    if (m < 0) m = imp_to_mc(h);
     if (m >= 0) h = mcs[m].cur_h;
     CUresult r = REAL(r_mc_add, "cuMulticastAddDevice")(h, dev);
     if (r == CUDA_SUCCESS && m >= 0 && mcs[m].ndev < MAX_DEV) mcs[m].devs[mcs[m].ndev++] = dev;
@@ -2220,6 +2316,7 @@ static CUresult mc_bind(CUmemGenericAllocationHandle mch, size_t mcoff, CUmemGen
 {
     pthread_mutex_lock(&mu);
     int m = find_mc(mch);
+    if (m < 0) m = imp_to_mc(mch);
     if (m >= 0) mch = mcs[m].cur_h;
     if (memh) memh = own_h(memh);
     pthread_mutex_unlock(&mu);
