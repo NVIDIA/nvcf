@@ -10,6 +10,8 @@ use moka::sync::Cache;
 use prometheus::IntGauge;
 use prometheus::core::{Collector, Desc};
 use prometheus::proto::MetricFamily;
+use tokio::time::MissedTickBehavior;
+use tokio_util::sync::CancellationToken;
 
 use crate::metrics::StargateMetrics;
 use crate::routing_state::{RoutingTargetKey, StargateState};
@@ -66,6 +68,8 @@ impl Outcome {
 }
 
 pub(crate) const DYNAMIC_CONFIG_IDLE_EXPIRY: Duration = Duration::from_secs(15 * 60);
+// An idle entry is removed at most this long after its idle expiry.
+pub(crate) const DYNAMIC_CONFIG_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60);
 // A memory backstop well above the deployed (function, model) pairs one router serves.
 pub(crate) const DYNAMIC_CONFIG_MAX_ENTRIES: u64 = 16_384;
 
@@ -136,8 +140,25 @@ impl DynamicConfigCache {
         Ok((definition, outcome))
     }
 
-    /// Exports the entry count. Each scrape first runs the cache's pending tasks, which
-    /// is what expires idle entries once expression traffic stops.
+    /// Runs the cache's pending tasks every `interval` until `shutdown`. The sync cache has no
+    /// background housekeeper, so without this, idle entries and their load-balancer instances
+    /// stay until the next routing expression request.
+    pub(crate) async fn run_maintenance(
+        self: Arc<Self>,
+        interval: Duration,
+        shutdown: CancellationToken,
+    ) {
+        let mut ticks = tokio::time::interval(interval);
+        ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => return,
+                _ = ticks.tick() => self.entries.run_pending_tasks(),
+            }
+        }
+    }
+
+    /// Exports the entry count as of the last cache maintenance.
     pub(crate) fn register_entry_gauge(
         self: &Arc<Self>,
         metrics: &StargateMetrics,
@@ -172,7 +193,6 @@ impl Collector for EntryGauge {
 
     fn collect(&self) -> Vec<MetricFamily> {
         if let Some(cache) = self.cache.upgrade() {
-            cache.entries.run_pending_tasks();
             self.gauge
                 .set(i64::try_from(cache.entries.entry_count()).unwrap_or(i64::MAX));
         }
@@ -509,7 +529,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_metrics_scrape_reports_entries_and_drives_idle_expiry() {
+    async fn test_maintenance_expires_idle_entries_and_updates_entry_gauge() {
         let state = Arc::new(StargateState::new());
         let target = RoutingTargetKey::new(None, "model");
         let snapshot = register_target(&state, &target).await;
@@ -526,12 +546,20 @@ mod tests {
             .resolve(&target, EXPRESSION, || compile(EXPRESSION))
             .unwrap();
         let _instance = snapshot.load_balancers().load_balancer(&definition);
+        let shutdown = CancellationToken::new();
+        let maintenance = tokio::spawn(
+            Arc::clone(&cache).run_maintenance(Duration::from_millis(50), shutdown.clone()),
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(scraped_entry_gauge(&metrics), 1.0);
 
-        // After the idle window only the scrape touches the cache.
+        // After the idle window only the maintenance task touches the cache.
         tokio::time::sleep(Duration::from_secs(1)).await;
         assert_eq!(scraped_entry_gauge(&metrics), 0.0);
         assert_eq!(snapshot.load_balancers().instance_count(), 0);
+
+        shutdown.cancel();
+        maintenance.await.unwrap();
     }
 
     #[test]

@@ -375,6 +375,12 @@ impl StargateRuntime {
         dynamic_config
             .register_entry_gauge(&metrics)
             .context("failed to register routing expression cache metrics")?;
+        tasks
+            .task_tracker()
+            .spawn(Arc::clone(&dynamic_config).run_maintenance(
+                crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_MAINTENANCE_INTERVAL,
+                tasks.shutdown_signal(),
+            ));
 
         let proxy_router = make_router(ProxyAppState {
             dynamic_config,
