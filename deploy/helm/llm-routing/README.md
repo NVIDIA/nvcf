@@ -26,22 +26,15 @@ Helm installs the gateway, router and namespace-scoped operator with an empty mo
 
 ## 2. Install a model
 
-Create `$LLM_WORK/qwen.values.yaml` using an available node and your cluster's storage and runtime class names:
-
-```yaml
-recipe: qwen3.8-27b
-nodes: [gpu-node-1]
-runtimeClassName: nvidia
-storageClassName: local-path
-sharedCAConfigMap: llm-gateway-stack-ca
-```
+Use the committed [Qwen values](recipes/charts/sglang/values.example.yaml). Replace `gpu-node-1` below with an available GB10 node. The defaults use runtime class `nvidia` and storage class `local-path`. If your cluster uses different names, add `--set runtimeClassName=NAME --set storageClassName=NAME` to the Helm command.
 
 Install the FP8 recipe:
 
 ```bash
 helm upgrade --install qwen-fp8 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
   --kube-context "$LLM_CONTEXT" --namespace llm-stack \
-  --values "$LLM_WORK/qwen.values.yaml" --wait --timeout 120m
+  --values recipes/charts/sglang/values.example.yaml --set 'nodes[0]=gpu-node-1' \
+  --wait --timeout 120m &&
 kubectl --context "$LLM_CONTEXT" -n llm-stack wait \
   --for=condition=Registered inferenceendpoint/qwen-fp8 --timeout=5m
 ```
@@ -53,7 +46,8 @@ For a second precision on another available node, use the same values file with 
 ```bash
 helm upgrade --install qwen-nvfp4 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
   --kube-context "$LLM_CONTEXT" --namespace llm-stack \
-  --values "$LLM_WORK/qwen.values.yaml" --set recipe=qwen3.8-27b-nvfp4 --set 'nodes[0]=gpu-node-2' \
+  --values recipes/charts/sglang/values.example.yaml \
+  --set recipe=qwen3.8-27b-nvfp4 --set 'nodes[0]=gpu-node-2' \
   --wait --timeout 120m
 ```
 
