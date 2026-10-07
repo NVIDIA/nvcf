@@ -254,27 +254,32 @@ var (
 	validatorRBACInventory = filepath.Join("..", "..", "..", "..", "compute-plane-services", "nvca", "internal",
 		"clustervalidator", "rbac_inventory.yaml")
 	validatorRBACInventoryCopy = filepath.Join("testdata", "rbac_inventory.yaml")
+
+	validatorRBACInventoryNotCompared = fmt.Sprintf("%s is not reachable from this test, so %s was not "+
+		"compared with the validator's inventory: the RBAC tests ran against the copy alone",
+		validatorRBACInventory, validatorRBACInventoryCopy)
 )
 
 // readValidatorRBACInventory returns the inventory at src, or the copy when
-// src does not exist. When both exist they must be identical, so the copy
-// cannot drift from the validator.
-func readValidatorRBACInventory(src, copyPath string) ([]byte, error) {
+// src does not exist, and whether src was there to compare the copy with.
+// When both exist they must be identical, so the copy cannot drift from the
+// validator.
+func readValidatorRBACInventory(src, copyPath string) (raw []byte, compared bool, err error) {
 	cp, err := os.ReadFile(copyPath)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	raw, err := os.ReadFile(src)
+	raw, err = os.ReadFile(src)
 	if errors.Is(err, fs.ErrNotExist) {
-		return cp, nil
+		return cp, false, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if !bytes.Equal(raw, cp) {
-		return nil, fmt.Errorf("%s differs from %s: copy the validator's file over it", copyPath, src)
+		return nil, false, fmt.Errorf("%s differs from %s: copy the validator's file over it", copyPath, src)
 	}
-	return raw, nil
+	return raw, true, nil
 }
 
 // validatorInventoryRule is one rule of the validator's RBAC inventory.
@@ -374,6 +379,17 @@ func assertGrants(t *testing.T, want map[string][]string, rules []rbacv1.PolicyR
 	}
 }
 
+// Where the validator's file is absent, as under Bazel, the RBAC tests read
+// the copy alone. This test then reports SKIP with that reason instead of
+// passing as though the copy had been compared with the validator's file.
+func TestValidatorRBACInventoryCopy_IsComparedWithTheValidatorsFile(t *testing.T) {
+	_, compared, err := readValidatorRBACInventory(validatorRBACInventory, validatorRBACInventoryCopy)
+	require.NoError(t, err)
+	if !compared {
+		t.Skip(validatorRBACInventoryNotCompared)
+	}
+}
+
 // The copy is used only when the validator's file is absent, and must match
 // it when both exist, so the test cannot keep passing against a stale copy.
 func TestReadValidatorRBACInventory_CopyCannotDrift(t *testing.T) {
@@ -381,24 +397,26 @@ func TestReadValidatorRBACInventory_CopyCannotDrift(t *testing.T) {
 	src, cp := filepath.Join(dir, "src.yaml"), filepath.Join(dir, "copy.yaml")
 	require.NoError(t, os.WriteFile(cp, []byte("rules: []\n"), 0o600))
 
-	got, err := readValidatorRBACInventory(src, cp)
+	got, compared, err := readValidatorRBACInventory(src, cp)
 	require.NoError(t, err, "without the validator's file the copy is used")
 	assert.Equal(t, "rules: []\n", string(got))
+	assert.False(t, compared, "a copy read without the validator's file was not compared with it")
 
 	require.NoError(t, os.WriteFile(src, []byte("rules: []\n"), 0o600))
-	got, err = readValidatorRBACInventory(src, cp)
+	got, compared, err = readValidatorRBACInventory(src, cp)
 	require.NoError(t, err)
 	assert.Equal(t, "rules: []\n", string(got))
+	assert.True(t, compared)
 
 	require.NoError(t, os.WriteFile(src, []byte("rules: [{}]\n"), 0o600))
-	_, err = readValidatorRBACInventory(src, cp)
+	_, _, err = readValidatorRBACInventory(src, cp)
 	require.ErrorContains(t, err, "differs", "a copy that differs from the validator's file must fail")
 
-	_, err = readValidatorRBACInventory(dir, cp)
+	_, _, err = readValidatorRBACInventory(dir, cp)
 	require.Error(t, err, "a validator file that exists but cannot be read must not fall back to the copy")
 
 	require.NoError(t, os.Remove(cp))
-	_, err = readValidatorRBACInventory(src, cp)
+	_, _, err = readValidatorRBACInventory(src, cp)
 	require.Error(t, err, "the copy is required")
 }
 
@@ -409,8 +427,11 @@ func TestReadValidatorRBACInventory_CopyCannotDrift(t *testing.T) {
 // granted. The ConfigMap read is a namespaced Role limited to the names this
 // run's Job can be pointed at.
 func TestValidatorRBAC_MatchesTheValidatorsInventory(t *testing.T) {
-	raw, err := readValidatorRBACInventory(validatorRBACInventory, validatorRBACInventoryCopy)
+	raw, compared, err := readValidatorRBACInventory(validatorRBACInventory, validatorRBACInventoryCopy)
 	require.NoError(t, err)
+	if !compared {
+		t.Log(validatorRBACInventoryNotCompared)
+	}
 	var inventory struct {
 		Rules []validatorInventoryRule `json:"rules"`
 	}
