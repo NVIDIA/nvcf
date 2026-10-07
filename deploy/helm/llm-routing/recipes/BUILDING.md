@@ -14,9 +14,9 @@ The output contains three Helm archives, `index.json`, model terms under `notice
 
 Distribute the archives and catalog to the installer. Installation uses Helm and kubectl. Images must already be available in the configured registry or preloaded on every eligible node. Build and export development images with the commands below until registry images are published.
 
-## Build for a new shared stack
+## Build shared stack images
 
-Run this developer prerequisite from `deploy/helm/llm-routing` before the target namespace exists:
+Run this developer prerequisite from `deploy/helm/llm-routing`. The target namespace may already exist:
 
 ```bash
 python3 build-shared-images.py \
@@ -26,7 +26,7 @@ python3 build-shared-images.py \
 
 The command uses the selected kubeconfig context, builds and exports the four images, preloads every compatible node, and writes `$LLM_IMAGES/shared.values.yaml` for the [Helm installation](../README.md). Docker must be running with Buildx support for the selected architecture and access to base images and build dependencies. Use `--context NAME` to choose another context and `--control-node NODE` to select the build architecture. ARM64 and AMD64 are supported.
 
-The saved configuration keeps fresh image tags and node UIDs stable on retry. The emitted values select that architecture and use `Never` pull policy. Existing unrelated output files are preserved. This command prepares a fresh stack namespace. Existing combined installations can use the component rebuild commands below with their saved configuration.
+The saved configuration keeps fresh image tags and node UIDs stable on retry. The emitted values select that architecture and use `Never` pull policy. Existing unrelated output files are preserved. Rerunning the command rebuilds and preloads the same local tags, including tags used by installed workloads. It updates the node image caches without upgrading releases or restarting running pods. Existing combined installations can also use the component rebuild commands below with their saved configuration.
 
 Import Jobs run in a separate preparation namespace and mount the selected nodes' containerd sockets. Setup detects the K3s socket. For another containerd installation, set `config.containerd.socketPath` and compatible image-loader client settings in the saved `image-build-config.json`, then retry the command.
 

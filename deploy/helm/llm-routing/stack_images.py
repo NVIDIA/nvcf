@@ -127,24 +127,6 @@ class Preparation:
             require(node.get('status', {}).get('nodeInfo', {}).get('containerRuntimeVersion', '').startswith('containerd://'),
                     'Image preload requires containerd on node: ' + name)
 
-    def check_image_references(self):
-        resources = json.loads(self.output(['kubectl', '--context', self.context, 'get',
-            'pods,deployments,statefulsets,daemonsets,jobs,cronjobs', '-A', '-o', 'json']))['items']
-        def containers(value):
-            if isinstance(value, dict):
-                for key, child in value.items():
-                    if key in ('containers', 'initContainers', 'ephemeralContainers'):
-                        yield from child
-                    else:
-                        yield from containers(child)
-            elif isinstance(value, list):
-                for child in value:
-                    yield from containers(child)
-        references = set(self.images.values())
-        for resource in resources:
-            require(not any(container.get('image') in references for container in containers(resource.get('spec', {}))),
-                    'An image reference is already used by a cluster workload. Choose a new local tag before building: ' + resource['metadata']['name'])
-
     def namespace_info(self):
         value = self.output(['kubectl', '--context', self.context, 'get', 'namespace', self.namespace, '--ignore-not-found', '-o', 'json'])
         return json.loads(value) if value.strip() else None
@@ -207,7 +189,6 @@ class Preparation:
     def execute(self):
         try:
             self.check_nodes()
-            self.check_image_references()
             if self.state.get('namespaceUID'):
                 self.check_namespace()
             revision = self.output(['git', 'rev-parse', 'HEAD'], cwd=REPO).strip()

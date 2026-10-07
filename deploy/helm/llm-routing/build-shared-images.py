@@ -71,8 +71,6 @@ def prepare(args):
     stack.require(config.get('imagePlatform') in ('linux/arm64', 'linux/amd64'), 'Development builds support linux/arm64 and linux/amd64.')
     stack.require(all(image['repository'].startswith('localhost/') and image['pullPolicy'] == 'Never'
                       for image in config['images'].values()), 'Use the original generated localhost images with Never pull policy.')
-    stack.require(not any(item['metadata']['name'] == args.namespace for item in stack.get(config, 'namespaces')['items']),
-                  'Build images before creating the target stack namespace. Installed image tags are never rebuilt.')
     values = helm_values(config)
     if values_path.exists():
         stack.require(json.loads(values_path.read_text()) == values, 'Generated shared.values.yaml was changed. Preserve it and use a new output directory.')

@@ -164,12 +164,25 @@ class StackImageTests(unittest.TestCase):
             self.prepare()
         self.build.assert_not_called()
 
-    def test_existing_workload_image_tag_blocks_build(self):
-        self.resources = [{'metadata': {'name': 'live-router'}, 'spec': {'template': {'spec': {'containers': [
-            {'image': 'localhost/new-stack/router:dev-fixture'}]}}}}]
-        with self.assertRaisesRegex(ValueError, 'already used'):
-            self.prepare()
-        self.build.assert_not_called()
+    def test_rebuild_preloads_same_tags_used_by_existing_workloads(self):
+        self.resources = [{'metadata': {'name': 'live-router'}, 'spec': {'template': {'spec': {
+            'containers': [{'image': 'localhost/new-stack/router:dev-fixture'}]}}}}]
+        first = self.prepare()
+        original = copy.deepcopy(self.resources)
+        self.build.reset_mock()
+        self.importer.reset_mock()
+        second = self.prepare()
+        self.assertTrue(second['completed'])
+        self.assertEqual(first['identity']['images'], second['identity']['images'])
+        self.assertEqual(first['session'], second['session'])
+        self.build.assert_called_once()
+        self.importer.assert_called_once()
+        self.assertEqual(set(self.build.call_args.args[1].values()),
+                         set(self.importer.call_args.args[1]))
+        self.assertEqual(self.resources, original)
+        for command in self.commands:
+            if command[0] == 'helm':
+                self.assertEqual(command[command.index('-n') + 1], second['namespace'])
 
     def test_import_failure_keeps_owned_state_for_guarded_retry(self):
         self.fail_import = True

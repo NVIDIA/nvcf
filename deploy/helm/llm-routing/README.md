@@ -8,7 +8,7 @@ Use Kubernetes with the NVIDIA device plugin, a GPU RuntimeClass and persistent 
 
 Until application images are published to a registry, each installer builds them from this checkout and preloads the cluster nodes. Start Docker with Buildx support and access to base images and build dependencies. The image helper supports ARM64 and AMD64 nodes with containerd. Its import Jobs need permission to mount the nodes' containerd sockets.
 
-Run the following from `deploy/helm/llm-routing`, in the same terminal. Select your target kubeconfig context first. This example creates a new stack in `llm-stack`; that namespace must not already exist when building images. On a shared cluster, coordinate an unused namespace and use it consistently in the build, Helm and client commands.
+Run the following from `deploy/helm/llm-routing`, in the same terminal. Select your target kubeconfig context first. This example uses `llm-stack`. Image preparation also supports an existing namespace. It updates the node image caches without upgrading installed releases. On a shared cluster, coordinate the target namespace and use it consistently in the build, Helm and client commands.
 
 ## 0. Build images and package charts
 
@@ -20,13 +20,13 @@ export LLM_CHARTS="$LLM_WORK/charts"
 
 python3 build-shared-images.py \
   --context "$LLM_CONTEXT" --namespace llm-stack \
-  --output-dir "$LLM_IMAGES" --allow-containerd-import
+  --output-dir "$LLM_IMAGES" --allow-containerd-import &&
 bash package-charts.sh --output-dir "$LLM_CHARTS"
 ```
 
 The helper builds gateway, router, operator and Pylon, preloads compatible nodes, and writes `$LLM_IMAGES/shared.values.yaml` for Helm.
 
-Build retries reuse the saved configuration. Packaging requires an unused output directory. See [building and distributing images](recipes/BUILDING.md) for registry images and component rebuilds.
+Build retries reuse the saved configuration and rebuild the same local image tags, including tags used by installed workloads. Running pods are not restarted. Packaging requires an unused output directory. See [building and distributing images](recipes/BUILDING.md) for registry images and component rebuilds.
 
 ## 1. Install shared infrastructure
 

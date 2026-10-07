@@ -75,12 +75,12 @@ class DeveloperImagesTests(unittest.TestCase):
             images.main(self.args + ['--control-node', 'other-node'])
         self.prepare.assert_not_called()
 
-    def test_existing_stack_namespace_is_rejected_before_build_or_saved_config(self):
+    def test_existing_stack_namespace_allows_new_images_without_installing(self):
         self.get.return_value = {'items': [{'metadata': {'name': 'test-models'}}]}
-        with self.assertRaisesRegex(ValueError, 'before creating the target stack namespace'):
-            images.main(self.args)
-        self.assertFalse(self.output.exists())
-        self.prepare.assert_not_called()
+        path = images.main(self.args)
+        self.assertTrue(path.is_file())
+        self.prepare.assert_called_once_with(self.config, self.output, allow_containerd_import=True)
+        self.install.assert_not_called()
 
     def test_explicit_context_overrides_environment_and_skips_current_lookup(self):
         with patch.dict(os.environ, {'LLM_ROUTING_CONTEXT': 'other-context'}):
@@ -100,7 +100,6 @@ class DeveloperImagesTests(unittest.TestCase):
         self.current.assert_called_once_with(['kubectl', 'config', 'current-context'],
                                             text=True, stderr=subprocess.PIPE, timeout=30)
         self.discover.assert_called_once_with('test-context', 'test-models', None, build_images=True)
-        self.assertEqual(self.get.call_args.args[0]['context'], 'test-context')
         self.assertEqual(self.prepare.call_args.args[0]['context'], 'test-context')
         saved = json.loads((self.output/'image-build-config.json').read_text())
         self.assertEqual(saved['config']['context'], 'test-context')
