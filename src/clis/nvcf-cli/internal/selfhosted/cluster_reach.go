@@ -84,23 +84,26 @@ func connectCluster(
 	if err != nil {
 		return nil, &ClusterUnreachableError{Context: kubeContext, Err: fmt.Errorf("building kubernetes client: %w", err)}
 	}
-	err = firstClusterCall(ctx, client)
+	err = firstClusterCall(ctx, client, true)
 	switch {
 	case ctx.Err() != nil:
 		// The run's budget ended or it was interrupted: not the cluster's doing.
 	case apierrors.IsUnauthorized(err):
 		// A credential plugin replaces a cached token the server rejected on
 		// the next call.
-		err = firstClusterCall(ctx, client)
+		err = firstClusterCall(ctx, client, true)
 	case isServerError(err):
 		// client-go retries a server error only when it carries a
 		// Retry-After, and a load balancer in front of a rolling API server
 		// answers 502 or 503 without one. A connection dropped before the
 		// response, or part way through its body, client-go retries itself.
+		// This is one more round trip: after a Retry-After, client-go's own
+		// retries are spent, and running them again doubled the time before a
+		// cluster that keeps failing is called unreachable.
 		select {
 		case <-ctx.Done():
 		case <-time.After(firstCallRetryDelay):
-			err = firstClusterCall(ctx, client)
+			err = firstClusterCall(ctx, client, false)
 		}
 	}
 	if err != nil && ctx.Err() == nil {
@@ -116,10 +119,16 @@ func isServerError(err error) bool {
 }
 
 // firstClusterCall asks the server for its version, each round trip bounded
-// by clusterFirstCallTimeout.
-func firstClusterCall(ctx context.Context, client kubernetes.Interface) error {
+// by clusterFirstCallTimeout. retries leaves client-go its own retries, of a
+// dropped connection and of an answer with a Retry-After; without it the
+// call is a single round trip.
+func firstClusterCall(ctx context.Context, client kubernetes.Interface, retries bool) error {
 	ctx = context.WithValue(ctx, firstCallBound{}, clusterFirstCallTimeout)
-	return client.Discovery().RESTClient().Get().AbsPath("/version").Do(ctx).Error()
+	req := client.Discovery().RESTClient().Get().AbsPath("/version")
+	if !retries {
+		req = req.MaxRetries(0)
+	}
+	return req.Do(ctx).Error()
 }
 
 // firstCallBound is the context key for the bound firstClusterCall puts on

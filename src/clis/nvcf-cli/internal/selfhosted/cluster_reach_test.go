@@ -33,6 +33,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/client-go/kubernetes"
 )
 
 // writeKubeconfig points KUBECONFIG at a file with one context, "test", for
@@ -259,6 +260,35 @@ func TestConnectCluster_RetriesAServerErrorOnce(t *testing.T) {
 	}
 }
 
+// A server error with a Retry-After, client-go retries itself. The one more
+// try connectCluster makes after it is a single round trip: running
+// client-go's whole retry loop again doubled the time before a cluster that
+// keeps failing is called unreachable.
+func TestConnectCluster_RetryAfterRetriesIsOneMoreRoundTrip(t *testing.T) {
+	shortenFirstCallRetry(t)
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "0")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	writeKubeconfig(t, srv.URL)
+
+	restCfg, err := loadKubeConfig("test")
+	require.NoError(t, err)
+	client, err := kubernetes.NewForConfig(restCfg)
+	require.NoError(t, err)
+	require.Error(t, client.Discovery().RESTClient().Get().AbsPath("/version").Do(context.Background()).Error())
+	ownRetries := calls.Swap(0)
+	require.Greater(t, ownRetries, int32(1), "client-go retries an answer with a Retry-After")
+
+	_, err = connectCluster(context.Background(), "test")
+	var unreachable *ClusterUnreachableError
+	assert.True(t, errors.As(err, &unreachable), "%v", err)
+	assert.Equal(t, ownRetries+1, calls.Load())
+}
+
 // A connection dropped on the first call is tried again, whether it drops
 // before the response or part way through its body.
 func TestConnectCluster_RetriesADroppedConnection(t *testing.T) {
@@ -307,7 +337,8 @@ func TestConnectCluster_SlowReloginAfterADelayedRejectionBody(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 		http.NewResponseController(w).Flush()
 		time.Sleep(50 * time.Millisecond)
-		_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"Unauthorized","code":401}`))
+		_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure",` +
+			`"reason":"Unauthorized","code":401}`))
 	}))
 	t.Cleanup(srv.Close)
 	prev := clusterFirstCallTimeout
