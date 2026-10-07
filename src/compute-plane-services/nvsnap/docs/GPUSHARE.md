@@ -158,10 +158,17 @@ name. So:
   clients to be subscribed to an IMEX channel. libcuda subscribes once; a
   driver restore closes the channel fd and re-creates the clients without
   the subscription, and libcuda does not subscribe again, so fabric create,
-  import and multicast fail with `NOT_PERMITTED`. The shim watches
-  libcuda's ioctls for its clients and channel, and at `load` subscribes
-  the clients again (`NV0000_CTRL_CMD_CLIENT_SUBSCRIBE_TO_IMEX_CHANNEL`,
-  the call libcuda makes). Memory that was created fabric-capable still
+  import and multicast fail with `NOT_PERMITTED`, and the memory exports
+  the restore re-creates cannot be imported by other processes. The shim
+  watches libcuda's ioctls: it subscribes each root client the restore
+  creates as soon as it is created
+  (`NV0000_CTRL_CMD_CLIENT_SUBSCRIBE_TO_IMEX_CHANNEL`, the call libcuda
+  makes), and again at `load`. Imports from other nodes are signalled on an
+  OS event, a GPU device file libcuda opens once; the restore closes it and
+  libcuda then passes none, so the shim registers a device file of its own
+  for the import and has libcuda wait on it (`poll`/`ppoll` on fd -1), and
+  closes it at `release`. Memory shared as fabric handles is copied into a
+  new allocation at `load`, before it is exported again. Memory that was created fabric-capable still
   cannot be exported as a POSIX fd after a restore, and with an IMEX
   channel NCCL, PyTorch and FlashInfer create such memory even on one
   node. So by default the shim hides fabric support from the workload:
@@ -247,7 +254,14 @@ download.
 Across 2 nodes (4x GB300 each, one NVLink domain, an IMEX channel), 8
 ranks running a checked 256 MB NCCL all-reduce with `NCCL_MNNVL_ENABLE=1`
 (NVLS multicast across the nodes): in-place suspend and resume with
-`--fabric-map`, 3 out of 3 cycles passed, one after a retried vote.
+`--fabric-map`, 3 out of 3 cycles passed, one after a retried vote. vLLM
+with Qwen2.5-14B-Instruct, TP=8 across the 2 nodes (`--nnodes 2`,
+`NVSNAP_GPUSHARE_FABRIC=1 NCCL_MNNVL_ENABLE=1`): in-place suspend and
+resume, output identical to the baseline in 5 out of 6 cycles; in the
+other, the test's driver merged a stale `DIR/out` (written by the
+previous cycle), and resume succeeded when run again with the right
+lists. Whoever drives the nodes must remove `DIR/out` and `DIR/in` before
+`resume`.
 
 On 4x H100 with driver 580.126.16, Qwen2.5-7B-Instruct, TP=4 was dumped
 with CRIU, restored into a new pod and answered as before, with the three

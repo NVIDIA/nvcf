@@ -24,6 +24,7 @@ SPDX-License-Identifier: Apache-2.0
 #include <execinfo.h>
 #include <fcntl.h>
 #include <linux/kcmp.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -104,6 +105,13 @@ struct rm_control { uint32_t hClient, hObject, cmd, flags; uint64_t params; uint
 struct rm_alloc { uint32_t hRoot, hObjectParent, hObjectNew, hClass; uint64_t pAllocParms, pRights;
                   uint32_t paramsSize, flags, status; };
 struct rm_subscribe { uint64_t devDescriptor; uint32_t channel, pad; };
+struct rm_os_event { uint32_t hClient, hDevice, fd, status; };
+/* NV00F9_ALLOCATION_PARAMETERS (cl00f9.h): import of a fabric handle */
+struct rm_fabric_import { uint32_t imexChannel; uint8_t packet[32]; uint16_t index; uint32_t flags;
+                          uint64_t pOsEvent, id; };
+#define NV_ESC_ALLOC_OS_EVENT 206
+#define NV00F9_MEMORY_FABRIC_IMPORT_V2 0xf9
+#define NV_ERR_OBJECT_NOT_FOUND 0x57
 #define NV_ESC_RM_CONTROL 0x2A
 #define NV_ESC_RM_ALLOC 0x2B
 #define NV01_ROOT_CLIENT 0x41
@@ -116,6 +124,42 @@ static unsigned n_roots;
 static char imex_path[64];                      /* channel libcuda subscribed to */
 static pthread_mutex_t imex_mu = PTHREAD_MUTEX_INITIALIZER;
 static int (*real_ioctl)(int, unsigned long, ...);
+/* OS events the shim registered for imports after a restore, by client
+ * (see ioctl); closed at "release". */
+static struct { uint32_t h; int fd; } evs[16];
+static int n_evs;
+/* libcuda then waits on, and reads, the event fd it holds, which is -1:
+ * this thread's last import event stands in for it (ioctl, poll, ppoll). */
+static __thread int import_ev = -1;
+
+/* An OS event for client h: a GPU device file, like libcuda's (imex_mu). */
+static int import_event(uint32_t h)
+{
+    for (int i = 0; i < n_evs; i++)
+        if (evs[i].h == h) return evs[i].fd;
+    if (n_evs == (int)(sizeof(evs) / sizeof(evs[0]))) return -1;
+    char p[64], t[64] = "";
+    DIR *d = opendir("/proc/self/fd");
+    struct dirent *e;
+    while (d && !t[0] && (e = readdir(d))) {
+        snprintf(p, sizeof(p), "/proc/self/fd/%.20s", e->d_name);
+        ssize_t k = readlink(p, t, sizeof(t) - 1);
+        t[k > 0 ? k : 0] = 0;
+        if (strncmp(t, "/dev/nvidia", 11) || t[11] < '0' || t[11] > '9') t[0] = 0;
+    }
+    if (d) closedir(d);
+    int fd = t[0] ? open(t, O_RDWR | O_CLOEXEC) : -1;
+    struct rm_os_event ev = { h, 0, (uint32_t)fd, 0 };
+    if (fd >= 0 && (real_ioctl(fd, NV_IOC(NV_ESC_ALLOC_OS_EVENT, struct rm_os_event), &ev) != 0 || ev.status)) {
+        close(fd);
+        fd = -1;
+    }
+    if (fd >= 0) {
+        evs[n_evs].h = h;
+        evs[n_evs++].fd = fd;
+    }
+    return fd;
+}
 
 int ioctl(int fd, unsigned long req, ...)
 {
@@ -123,6 +167,7 @@ int ioctl(int fd, unsigned long req, ...)
     va_start(ap, req);
     void *arg = va_arg(ap, void *);
     va_end(ap);
+    if (fd == -1 && import_ev >= 0 && ((req >> 8) & 0xff) == 'F') fd = import_ev;
     if (!real_ioctl) {
         static pthread_once_t once = PTHREAD_ONCE_INIT;
         pthread_once(&once, init_real_dlsym);
@@ -132,10 +177,37 @@ int ioctl(int fd, unsigned long req, ...)
     if (r || !arg) return r;
     if (req == NV_IOC(NV_ESC_RM_ALLOC, struct rm_alloc)) {
         struct rm_alloc *a = arg;
+        /* Importing a fabric handle from another node is signalled on an OS
+         * event, a GPU device file libcuda opens once. A driver restore
+         * closes it, and libcuda then passes none (-1): the import fails
+         * with OBJECT_NOT_FOUND. Give it one of ours and retry. */
+        if (a->hClass == NV00F9_MEMORY_FABRIC_IMPORT_V2 && a->status == NV_ERR_OBJECT_NOT_FOUND && a->pAllocParms) {
+            struct rm_fabric_import *p = (void *)(uintptr_t)a->pAllocParms;
+            pthread_mutex_lock(&imex_mu);
+            int ev = import_event(a->hRoot);
+            pthread_mutex_unlock(&imex_mu);
+            if (ev >= 0) {
+                import_ev = ev;
+                p->pOsEvent = (uint64_t)ev;
+                a->status = 0;
+                if ((r = real_ioctl(fd, req, arg)) != 0) return r;
+            }
+        }
         if (!a->status && a->hClass == NV01_ROOT_CLIENT) {
             pthread_mutex_lock(&imex_mu);
             roots[n_roots % N_ROOTS].fd = fd;
             roots[n_roots++ % N_ROOTS].h = a->hObjectNew;
+            /* A root client libcuda's restore re-creates: subscribe it at
+             * once, before the restore re-creates its memory exports,
+             * which take the client's channel when created. */
+            if (imex_path[0]) {
+                int ch = open(imex_path, O_RDONLY | O_CLOEXEC);
+                struct rm_subscribe s = { (uint64_t)ch, (uint32_t)-1, 0 };
+                struct rm_control c = { a->hObjectNew, a->hObjectNew, CMD_SUBSCRIBE_IMEX, 0,
+                                        (uint64_t)(uintptr_t)&s, sizeof(s), 0 };
+                if (ch >= 0) real_ioctl(fd, NV_IOC(NV_ESC_RM_CONTROL, struct rm_control), &c);
+                if (ch >= 0) close(ch);
+            }
             pthread_mutex_unlock(&imex_mu);
         }
     } else if (req == NV_IOC(NV_ESC_RM_CONTROL, struct rm_control)) {
@@ -150,6 +222,40 @@ int ioctl(int fd, unsigned long req, ...)
             pthread_mutex_unlock(&imex_mu);
         }
     }
+    return r;
+}
+
+static int stand_in(struct pollfd *fds, nfds_t n)
+{
+    if (n != 1 || fds[0].fd != -1 || import_ev < 0) return 0;
+    fds[0].fd = import_ev;
+    fds[0].events = POLLIN;
+    return 1;
+}
+
+int poll(struct pollfd *fds, nfds_t n, int timeout)
+{
+    static int (*real)(struct pollfd *, nfds_t, int);
+    if (!real) {
+        static pthread_once_t once = PTHREAD_ONCE_INIT;
+        pthread_once(&once, init_real_dlsym);
+        real = (int (*)(struct pollfd *, nfds_t, int))real_dlsym(RTLD_NEXT, "poll");
+    }
+    int s = stand_in(fds, n), r = real(fds, n, timeout);
+    if (s) fds[0].fd = -1;
+    return r;
+}
+
+int ppoll(struct pollfd *fds, nfds_t n, const struct timespec *ts, const sigset_t *mask)
+{
+    static int (*real)(struct pollfd *, nfds_t, const struct timespec *, const sigset_t *);
+    if (!real) {
+        static pthread_once_t once = PTHREAD_ONCE_INIT;
+        pthread_once(&once, init_real_dlsym);
+        real = (int (*)(struct pollfd *, nfds_t, const struct timespec *, const sigset_t *))real_dlsym(RTLD_NEXT, "ppoll");
+    }
+    int s = stand_in(fds, n), r = real(fds, n, ts, mask);
+    if (s) fds[0].fd = -1;
     return r;
 }
 
@@ -946,6 +1052,12 @@ static void do_release(char *reply, size_t n, const char *args)
     if (nv > 0) logf_("pointed %d fd(s) the app kept of its exports at /dev/null", nv);
     for (int i = 0; r == CUDA_SUCCESS && i < n_exps; i++) close(exps[i].fd);
     if (r == CUDA_SUCCESS) n_exps = n_pubs = 0;
+    if (r == CUDA_SUCCESS) {  /* our import events (see ioctl): CRIU cannot dump them */
+        pthread_mutex_lock(&imex_mu);
+        for (int i = 0; i < n_evs; i++) close(evs[i].fd);
+        n_evs = 0;
+        pthread_mutex_unlock(&imex_mu);
+    }
     pop_ctx(dev);
     if (r == CUDA_SUCCESS)
         snprintf(reply, n, "ok released %d mapping(s), %d multicast object(s), %d host buffer(s), "
@@ -959,6 +1071,8 @@ static void do_release(char *reply, size_t n, const char *args)
 /* Re-create the saved allocations (each process at once; "remap" needs
  * them, and peers' re-imports of them, after this). */
 /* cache: this node's cache of the store, NULL for none. */
+static CUresult replace_alloc(int k);
+
 static void do_load(char *reply, size_t n, const char *cache_dir)
 {
     if (lock_ctl()) { snprintf(reply, n, "err busy (state lock)"); return; }
@@ -983,6 +1097,18 @@ static void do_load(char *reply, size_t n, const char *cache_dir)
         int done = !fexps[i].id;
         for (int k = 0; !done && k < n_pubs; k++) done = !memcmp(pubs[k].cur.data, old.data, sizeof(old.data));
         if (done) continue;
+        /* A fabric handle exported again for memory created before the
+         * checkpoint does not import (INVALID_VALUE): replace the memory
+         * first (see replace_alloc). Multicast objects are re-created. */
+        int k = -1;
+        for (int x = 0; !fexps[i].mc && k < 0 && x < n_xregs; x++)
+            if (xregs[x].id == fexps[i].id && !xregs[x].h)
+                for (int l = 0; k < 0 && l < n_lmaps; l++)
+                    if (lmaps[l].va == xregs[x].va) k = l;
+        if (k >= 0 && (r = replace_alloc(k)) != CUDA_SUCCESS) {
+            snprintf(reply, n, "err replace fabric id %llu: %s", fexps[i].id, errstr(r));
+            break;
+        }
         CUresult e = export_id(fexps[i].id, 1, NULL, &nf);
         if (e == CUDA_ERROR_NOT_FOUND) continue;  /* freed */
         if ((r = e) != CUDA_SUCCESS) {
@@ -1040,7 +1166,14 @@ static CUresult remote_fetch(CUmemFabricHandle *fh, CUmemGenericAllocationHandle
         if (!memcmp(fmap[i].old.data, fh->data, sizeof(fh->data))) {
             snprintf(rep, n, "ok");
             CUresult r = REAL(r_import, "cuMemImportFromShareableHandle")(h, &fmap[i].cur, CU_MEM_HANDLE_TYPE_FABRIC);
-            if (r == CUDA_SUCCESS) *fh = fmap[i].cur;
+            if (r == CUDA_SUCCESS) {
+                *fh = fmap[i].cur;
+            } else {
+                char o[2 * sizeof(fh->data) + 1], c[sizeof(o)];
+                hex_encode(fh->data, sizeof(fh->data), o);
+                hex_encode(fmap[i].cur.data, sizeof(fmap[i].cur.data), c);
+                logf_("import fabric handle %.40s (was %.40s): %s", c, o, errstr(r));
+            }
             return r;
         }
     snprintf(rep, n, "err not in the fabric map of the other nodes");
