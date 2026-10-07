@@ -26,16 +26,20 @@ python3 stack.py install
 
 Set each component's image repository, immutable tag and pull policy. The bundled registry references are placeholders. During development, `install --build-images` supplies fresh local image references and builds and preloads them. It applies to a fresh shared stack. Keep image updates for an existing installation on its explicit upgrade path.
 
-An existing private configuration can still be supplied with `--config /path/to/stack.json`, and `--work-dir /path/to/stack-work` selects a custom state directory. Set the context, namespace, control node, cluster ID, release names and image references in that configuration. Use `installCRDs: true` for the first operator in a cluster or `false` for a compatible existing CRD. The installer checks namespace and operator ownership before applying resources.
-
 The normal `install` command includes gateway verification. Use these individual commands to inspect manifests or repeat verification:
 
 ```bash
-python3 stack.py --config /path/to/stack.json --work-dir /path/to/stack-work render
-python3 stack.py --config /path/to/stack.json --work-dir /path/to/stack-work verify --expect-empty
+python3 stack.py render
+python3 stack.py verify --expect-empty
 ```
 
 The empty-stack check verifies empty discovery and registry responses, a 404 for an uninstalled model, and a 401 for an invalid caller key. Installation saves a private caller key, CA certificate and `connection.json`. The connection binds the namespace, node and shared resource identities. Model recipes reuse these credentials. The shared installer owns gateway and operator updates. Keep this work directory private and available throughout the installation's lifetime.
+
+### Custom configuration and state locations
+
+Use `--config FILE` to supply an existing private configuration and `--work-dir DIR` to select a custom state directory. Put these optional overrides before the command. Installation saves the configuration for later commands. For a custom state location, continue passing the same `--work-dir DIR`.
+
+A custom configuration specifies the context, namespace, control node, cluster ID, release names and image references. Use `installCRDs: true` for the first operator in a cluster or `false` for a compatible existing CRD. The installer checks namespace and operator ownership before applying resources.
 
 ### Install two independent models or precisions
 
@@ -44,11 +48,11 @@ Follow [Independent model recipes](#qwen-catalog-configuration) to select and in
 Verify both through the same address and caller credential:
 
 ```bash
-python3 stack.py --config /path/to/stack.json --work-dir /path/to/stack-work verify \
+python3 stack.py verify \
   --model qwen3.8-27b --model qwen3.8-27b-nvfp4
-python3 stack.py --config /path/to/stack.json --work-dir /path/to/stack-work chat \
+python3 stack.py chat \
   --model qwen3.8-27b 'What is 17 multiplied by 19? Give one short sentence.'
-python3 stack.py --config /path/to/stack.json --work-dir /path/to/stack-work chat \
+python3 stack.py chat \
   --model qwen3.8-27b-nvfp4 'What is 17 multiplied by 19? Give one short sentence.'
 ```
 
@@ -72,13 +76,12 @@ Remove model releases first so the operator can clean up their transports, then 
 )
 ```
 
-The model PVCs and retained credentials remain available. Reinstall the shared stack from its original work directory, then deploy the same models using a new model work directory for this attempt:
+The model PVCs and retained credentials remain available. Use the same context and namespace as the original installation. The shared installer resolves its saved state, and model deployment creates a new attempt directory automatically:
 
 ```bash
-python3 stack.py --work-dir "$STACK_WORK" install --reinstall
+python3 stack.py install --reinstall
 python3 recipes/recipes.py deploy \
-  --stack-connection "$STACK_WORK/connection.json" \
-  --work-dir "$STACK_WORK/reinstalled-models" \
+  --stack-connection "$(python3 stack.py paths --field connection)" \
   --model qwen3.8-27b --model qwen3.8-27b-nvfp4 \
   --storage-class local-path --runtime-class nvidia --reuse-caches
 ```
@@ -93,7 +96,7 @@ Copy [glm.config.example.json](recipes/glm.config.example.json) to a private fil
 
 ```bash
 python3 recipes/recipe.py --config /path/to/glm.json --work-dir /path/to/glm-work attach-stack \
-  --stack-connection /path/to/stack-work/connection.json
+  --stack-connection "$(python3 stack.py paths --field connection)"
 python3 recipes/recipe.py --work-dir /path/to/glm-work render
 python3 recipes/recipe.py --work-dir /path/to/glm-work inventory
 ```
@@ -113,7 +116,7 @@ python3 recipes/recipe.py --work-dir /path/to/glm-work verify-gateway
 
 In this mode, model rendering and Helm operations target its backend and chain-check releases. Use `stack.py` to manage shared infrastructure and credentials, and a separate work directory for monitoring.
 
-Combine these phases with `recipe.py --config /path/to/glm.json --work-dir /path/to/glm-work deploy --stack-connection /path/to/stack-work/connection.json`. If it stops, read the phase log and use the recovery command printed by the CLI. Continue the remaining phases above from the same work directory. The saved state records completed checkpoints.
+Combine these phases with `python3 recipes/recipe.py --config /path/to/glm.json --work-dir /path/to/glm-work deploy --stack-connection "$(python3 stack.py paths --field connection)"`. If it stops, read the phase log and use the recovery command printed by the CLI. Continue the remaining phases above from the same work directory. The saved state records completed checkpoints.
 
 ## Combined GGUF recipe flow
 
