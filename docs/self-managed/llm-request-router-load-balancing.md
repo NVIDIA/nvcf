@@ -211,8 +211,8 @@ Values without parameters use the same response for `unknown_method` and
   replaces the older one.
 - A new value starts with new load-balancer state, such as Pulsar rankings or
   the round-robin position.
-- An entry is removed after 15 idle minutes. Each router keeps at most 16384
-  entries.
+- An entry expires after 15 idle minutes. The router removes expired entries
+  during later cache operations. Each router keeps at most 16384 entries.
 
 ### Logs and traces
 
@@ -228,9 +228,10 @@ Values without parameters use the same response for `unknown_method` and
 
 A request router release without routing expression support reads the whole
 value as an algorithm name. It returns HTTP `400` for every value with
-parameters. Values without parameters keep working. Upgrade the request router
-before function owners add parameters. If an older router returns HTTP `400`,
-remove the parameters from the model `routingMethod`.
+parameters, and values without parameters keep working. The function API
+accepts parameters regardless of the router release. In that case, a model with
+parameters gets HTTP `400` on every request until the router is upgraded or
+the parameters are removed.
 
 ## Keep router headers trusted
 
@@ -371,12 +372,13 @@ algorithm or is present in `request_algorithms`.
 1. Invoke without changing the function routing method and confirm success.
 2. Update the function to a method present in `request_algorithms` and confirm
    success.
-3. Try a method accepted by `nvcf-cli` that is neither the configured
-   algorithm nor present in `request_algorithms`; confirm that Stargate returns
-   HTTP `400`.
-4. Update the function to the same method with a parameter, such as
-   `pulsar;seed=test`, and confirm success. Then set an unknown parameter and
-   confirm HTTP `400` with the `unknown_parameter` code.
+3. Update the function to a method that is neither the configured algorithm
+   nor present in `request_algorithms`. Invoke it and confirm that Stargate
+   returns HTTP `400`.
+4. Update the function to a method with a parameter that applies to it, such as
+   `pulsar;seed=test` for `pulsar`. Invoke it and confirm success. Then update it
+   with an unknown parameter, such as `pulsar;widen=2`. The update succeeds.
+   Invoke it and confirm HTTP `400` with the `unknown_parameter` code.
 5. For an affinity-aware method, repeat a supported multi-turn request with the
    same `prompt_cache_key` or the returned `x-multi-turn-session-id`.
 6. Exercise a failed or saturated backend and confirm selection and retry

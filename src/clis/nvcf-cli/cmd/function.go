@@ -595,7 +595,7 @@ func init() {
 	createCmd.Flags().StringVar(&createFlags.helmChartServiceName, "helm-chart-service", "", "Helm chart service name")
 	createCmd.Flags().StringSliceVar(&createFlags.secrets, "secrets", []string{}, "Secrets in name=value format (e.g., API_KEY=secret123,DB_PASSWORD=pass456)")
 	createCmd.Flags().StringSliceVar(&createFlags.models, "models", []string{}, "Model artifacts (format: name:version:uri)")
-	createCmd.Flags().StringArrayVar(&createFlags.llmModels, "llm-model", []string{}, "LLM model config (format: name=<model>,uris=<uri>|<uri>,routingMethod=<method>[;<param>=<value>...],tokenRateLimit=<limit>)")
+	createCmd.Flags().StringArrayVar(&createFlags.llmModels, "llm-model", []string{}, "LLM model config (format: name=<model>,uris=<uri>|<uri>,routingMethod=<method>[;<param>=<value>...],tokenRateLimit=<limit>; parameters: see LLM Request Router Load Balancing docs)")
 	createCmd.Flags().Uint32(llmDefaultPriorityFlag, 0, "Function-level default request priority (lower is higher; range: 0-4294967295)")
 	createCmd.Flags().StringArray(llmPerAccountPriorityFlag, []string{}, "Per-account request priority override (format: <nca-id>:<priority>; requires default priority; lower is higher; range: 0-4294967295; repeatable; supports up to 64 distinct NCA ID overrides)")
 	createCmd.Flags().StringSliceVar(&createFlags.resources, "resources", []string{}, "Resource artifacts (format: name:version:uri)")
@@ -640,7 +640,7 @@ func init() {
 	updateCmd.Flags().StringVar(&updateFlags.functionID, "function-id", "", "Function ID (required)")
 	updateCmd.Flags().StringVar(&updateFlags.versionID, "version-id", "", "Version ID (required)")
 	updateCmd.Flags().StringSliceVar(&updateFlags.tags, "tags", []string{}, "Function tags (comma-separated)")
-	updateCmd.Flags().StringArrayVar(&updateFlags.llmModelUpdates, "llm-model-update", []string{}, "LLM model update (format: name=<model>,routingMethod=<method>[;<param>=<value>...],tokenRateLimit=<limit>)")
+	updateCmd.Flags().StringArrayVar(&updateFlags.llmModelUpdates, "llm-model-update", []string{}, "LLM model update (format: name=<model>,routingMethod=<method>[;<param>=<value>...],tokenRateLimit=<limit>; parameters: see LLM Request Router Load Balancing docs)")
 	updateCmd.Flags().Uint32(llmDefaultPriorityFlag, 0, "Function-level default request priority (lower is higher; range: 0-4294967295; replaces existing priority config)")
 	updateCmd.Flags().StringArray(llmPerAccountPriorityFlag, []string{}, "Per-account request priority override (format: <nca-id>:<priority>; requires default priority; lower is higher; range: 0-4294967295; repeatable; supports up to 64 distinct NCA ID overrides)")
 }

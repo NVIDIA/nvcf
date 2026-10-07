@@ -186,7 +186,10 @@ func TestJSONRoutingMethodReachesAPIRequestVerbatim(t *testing.T) {
 				"inferenceUrl": "/v1/chat/completions",
 				"inferencePort": 8000,
 				"functionType": "LLM",
-				"models": [{"name": "dummy-model", "llmConfig": {"uris": ["/v1/chat/completions"], "routingMethod": `+string(encoded)+`}}]
+				"models": [{
+					"name": "dummy-model",
+					"llmConfig": {"uris": ["/v1/chat/completions"], "routingMethod": `+string(encoded)+`}
+				}]
 			}`), &createConfig); err != nil {
 				t.Fatalf("unmarshal create config: %v", err)
 			}
@@ -222,7 +225,8 @@ func TestParseLLMModelStringForwardsRoutingMethodVerbatim(t *testing.T) {
 		t.Run(routingMethod, func(t *testing.T) {
 			t.Parallel()
 
-			model, err := parseLLMModelString("name=dummy-model,uris=/v1/chat/completions,routingMethod=" + routingMethod + ",tokenRateLimit=1000-M")
+			spec := "name=dummy-model,uris=/v1/chat/completions,routingMethod=" + routingMethod + ",tokenRateLimit=1000-M"
+			model, err := parseLLMModelString(spec)
 			if err != nil {
 				t.Fatalf("parse llm model: %v", err)
 			}
