@@ -24,9 +24,9 @@ python3 build-shared-images.py \
 bash package-charts.sh --output-dir "$LLM_CHARTS"
 ```
 
-Continue only after both commands succeed. The image helper builds gateway, router, operator and Pylon, preloads every compatible node, and generates `$LLM_IMAGES/shared.values.yaml` with matching image tags, architecture and operator settings. No manual image-tag edits or another developer's saved files are needed. Keep this persistent directory outside the checkout; `/tmp` is not required.
+The helper builds gateway, router, operator and Pylon, preloads compatible nodes, and writes `$LLM_IMAGES/shared.values.yaml` for Helm.
 
-Retries before installation reuse the saved image configuration. Chart packaging requires a fresh output directory; reuse existing successful packages instead of packaging over them. For registry images or component rebuilds, see [building and distributing images](recipes/BUILDING.md).
+Build retries reuse the saved configuration. Packaging requires an unused output directory. See [building and distributing images](recipes/BUILDING.md) for registry images and component rebuilds.
 
 ## 1. Install shared infrastructure
 
