@@ -212,6 +212,78 @@ func TestRegistryCredentialCheck_NoAccessToTheChartScopeFailsBeforeInstall(t *te
 	}
 }
 
+// Before a local control-plane install the NGC key goes first, since up mints
+// the cluster's pull secrets from it, so settling never sends the docker
+// login. helm on this machine still pulls the stack's charts with it, so the
+// chart scope's row judges it anyway, and grades it as where the login goes
+// first: rejected (401) or with no access to the scope (403), it fails the
+// critical row. The key keeps serving tag discovery and the validator's pull
+// secret, a row for another scope never sends the login, and a login that
+// works, or none at all, leaves the row passing on the key.
+func TestRegistryCredentialCheck_KeyFirstStillJudgesTheChartScopesLogin(t *testing.T) {
+	const charts = "helm on this machine pulls the stack's charts from nvcr.io/orgb/team with the docker login, " +
+		"so the install cannot pull them"
+	for name, tc := range map[string]struct {
+		login   string
+		access  map[string][]string
+		message string
+	}{
+		"rejected login": {login: "rotated-out", access: map[string][]string{"key-pass": {""}},
+			message: "was rejected, and docker and helm on this machine still send it"},
+		"login with no access": {login: "login-pass",
+			access:  map[string][]string{"key-pass": {""}, "login-pass": {"nvidia"}},
+			message: "has no access to nvcr.io/orgb/team, so the run sends NGC_API_KEY for it"},
+		"login with access": {login: "login-pass",
+			access: map[string][]string{"key-pass": {""}, "login-pass": {"orgb"}}},
+		"no docker login": {access: map[string][]string{"key-pass": {""}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			withTempCacheDir(t)
+			ngc := newEntitledNGC(t, tc.access)
+			config := `{}`
+			if tc.login != "" {
+				config = inlineDockerConfig(t, "nvcr.io", "$oauthtoken", tc.login, "")
+			}
+			dockerHome(t, config)
+			t.Setenv("NGC_API_KEY", "key-pass")
+			ctx := WithRegistryCredentials(context.Background(), NewRegistryCredentials(true))
+
+			chartRow := RegistryEntry{Registry: "nvcr.io", RepoHint: "orgb/team", Critical: true, Charts: true}
+			r := registryCredentialCheck(probeRegistryCredential, chartRow, "nvcr.io/orgb/team", false, nil).Run(ctx)
+			if tc.message == "" {
+				assert.True(t, r.Passed, r.Message)
+				assert.Equal(t, SeverityInfo, r.Severity)
+			} else {
+				assert.False(t, r.Passed, r.Message)
+				assert.Equal(t, SeverityError, r.Severity)
+				assert.Error(t, r.Err)
+				assert.Contains(t, r.Message, tc.message)
+				assert.Contains(t, r.Message, "credentials from NGC_API_KEY valid")
+				assert.Contains(t, r.Message, charts)
+			}
+
+			other := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: true}
+			r = registryCredentialCheck(probeRegistryCredential, other, "nvcr.io", false, nil).Run(ctx)
+			assert.True(t, r.Passed, r.Message)
+			assert.Equal(t, "nvcr.io: credentials valid", r.Message)
+			got, ok := ResolveLatestValidatorTag(ctx, "nvcr.io/nvidia/cv")
+			require.True(t, ok)
+			assert.Equal(t, "nvcr.io/nvidia/cv:1.2.0", got)
+			assert.Equal(t, "key-pass", mintPullSecret(ctx, t, fake.NewSimpleClientset(), "nvcr.io/orgb/team/cv:1.0.0",
+				clusterValidatorControlPlaneRole), "the pull secret keeps the key, which up mints from")
+
+			sentLogin := 0
+			for _, p := range ngc.passwords() {
+				if p != "key-pass" {
+					sentLogin++
+				}
+			}
+			assert.Equal(t, map[bool]int{true: 1, false: 0}[tc.login != ""], sentLogin,
+				"only the chart scope's row sends the docker login")
+		})
+	}
+}
+
 // With the entitlements the other way round, each row passes on the
 // credential that reaches its org, whichever row runs first, and tag
 // discovery for the validator image uses the one that reaches the image.

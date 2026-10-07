@@ -1170,11 +1170,12 @@ func buildRegistryCredentialCategory(cfg PreflightConfig) categorySpec {
 // nvcr.io rejected even where the NGC key it gave way to works, before and
 // after install: docker and helm on this machine still send it. Before
 // install it also includes a docker login with no access to the scope helm
-// pulls the stack's charts from, though the key reaches it. After install a
-// refused NGC key is a warning only where the cluster's pull secrets are read
-// and none holds it. Everything else the probe can report, from an
-// unreachable registry to a missing local credential, is a warning or an
-// informational pass.
+// pulls the stack's charts from, though the key reaches it, and that scope's
+// docker login is judged even where the run sends the key first. After
+// install a refused NGC key is a warning only where the cluster's pull
+// secrets are read and none holds it. Everything else the probe can report,
+// from an unreachable registry to a missing local credential, is a warning or
+// an informational pass.
 func registryCredentialCheck(
 	checker RegistryCredentialChecker, entry RegistryEntry, label string, postInstall bool,
 	clusterSecrets ClusterPullSecretChecker,
@@ -1199,7 +1200,7 @@ func registryCredentialCheck(
 		worst:      severity,
 		Run: func(ctx context.Context) CheckResult {
 			r := CheckResult{ID: id, Severity: severity}
-			err := checker(ctx, entry.Registry, entry.RepoHint, entry.Critical)
+			err := checker(ctx, entry.Registry, entry.RepoHint, entry.Critical, entry.Charts && !postInstall)
 			if err == nil {
 				r.Passed = true
 				r.Severity = SeverityInfo

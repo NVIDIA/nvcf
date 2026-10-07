@@ -78,7 +78,9 @@ For `nvcr.io` the NGC API key is also read, from the first of
 `NGC_API_KEY` that is set. It goes ahead of the docker login only when the
 registry check's plane, below, is the control plane, checked before its
 install with the `local` environment, since `up` creates its pull secrets
-from it, and it is never sent to another registry. Elsewhere the key
+from it, and it is never sent to another registry. There the docker login is
+still sent for the row the stack's charts come from, below, and graded as
+elsewhere, since `helm` pulls the charts with it. Elsewhere the key
 is sent when there is no docker login, or for a repository where `nvcr.io`
 rejects the docker login (a 401) or gives it no access (a 403). This is
 decided once per repository, before tag discovery, the row and the

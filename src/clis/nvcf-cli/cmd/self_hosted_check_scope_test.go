@@ -490,7 +490,7 @@ func TestCheck_UnresolvedValidatorTagFailsTheRun(t *testing.T) {
 	var registries []string
 	prev := newRegistryCredentialCheckerForSelfHosted
 	newRegistryCredentialCheckerForSelfHosted = func() selfhosted.RegistryCredentialChecker {
-		return func(_ context.Context, registry, _ string, _ bool) error {
+		return func(_ context.Context, registry, _ string, _, _ bool) error {
 			mu.Lock()
 			defer mu.Unlock()
 			registries = append(registries, registry)
@@ -563,11 +563,11 @@ func TestCheck_WaitReadsCredentialsAgainEachPoll(t *testing.T) {
 	t.Cleanup(func() { newRegistryCredentialCheckerForSelfHosted = prevChecker })
 	probe := selfhosted.NewRegistryCredentialChecker()
 	newRegistryCredentialCheckerForSelfHosted = func() selfhosted.RegistryCredentialChecker {
-		return func(ctx context.Context, registry, repo string, critical bool) error {
+		return func(ctx context.Context, registry, repo string, critical, chartScope bool) error {
 			if registry != host {
 				return nil
 			}
-			return probe(ctx, registry, repo, critical)
+			return probe(ctx, registry, repo, critical, chartScope)
 		}
 	}
 

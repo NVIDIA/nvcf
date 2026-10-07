@@ -51,9 +51,12 @@ const (
 // registry is accepted. repoHint is the repository path used as the OAuth
 // scope; pass "" to probe without a specific scope. critical signals that
 // anonymous access is not enough: the install pulls private repositories.
+// chartScope marks, before install, the scope helm on this machine pulls the
+// stack's charts from with the docker login, which the probe then judges for
+// it even where the run sends the NGC key first.
 // Returns nil when a credential was sent and accepted, and otherwise a
 // registryProbeOutcome or a plain error for a probe the run's context ended.
-type RegistryCredentialChecker func(ctx context.Context, registry, repoHint string, critical bool) error
+type RegistryCredentialChecker func(ctx context.Context, registry, repoHint string, critical, chartScope bool) error
 
 // NewRegistryCredentialChecker returns a production RegistryCredentialChecker
 // backed by real HTTP calls.
@@ -126,7 +129,7 @@ func (o registryProbeOutcome) Error() string { return o.detail }
 // token endpoint to a request that carried it. Unreachable registries, token
 // services that fail or throttle, and realms the CLI refuses are retried where
 // that can help, then reported as advisory outcomes.
-func probeRegistryCredential(ctx context.Context, registry, repoHint string, critical bool) error {
+func probeRegistryCredential(ctx context.Context, registry, repoHint string, critical, chartScope bool) error {
 	// ECR uses AWS SigV4, not the OCI Bearer flow, so this probe cannot speak
 	// to it.
 	if isECRRegistry(registry) {
@@ -206,6 +209,9 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 	// Bearer token scoped to the actual repository (repoHint). A made-up
 	// repository name draws org-level 403s from NGC and GHCR.
 	settled := creds.lookupChallenged(pctx, registry, repoHint, wwwAuth)
+	if chartScope {
+		settled = creds.judgeLogin(pctx, registry, repoHint, wwwAuth, settled)
+	}
 	cred, hasCred, lookupErr := settled.cred, settled.ok, settled.err
 	var sent *registryCredential
 	if hasCred {

@@ -241,7 +241,7 @@ func registryProbes(t *testing.T, args ...string) map[string]bool {
 	got := map[string]bool{}
 	prev := newRegistryCredentialCheckerForSelfHosted
 	newRegistryCredentialCheckerForSelfHosted = func() selfhosted.RegistryCredentialChecker {
-		return func(_ context.Context, registry, repo string, critical bool) error {
+		return func(_ context.Context, registry, repo string, critical, _ bool) error {
 			mu.Lock()
 			defer mu.Unlock()
 			got[strings.TrimSuffix(registry+"/"+repo, "/")] = critical

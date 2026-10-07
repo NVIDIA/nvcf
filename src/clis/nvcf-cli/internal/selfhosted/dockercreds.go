@@ -74,7 +74,9 @@ type RegistryCredentials struct {
 	// nvcr.io. That is right only where up mints its pull secrets from the
 	// key; anywhere else the docker login is what docker and the cluster use,
 	// and the key is sent for a scope only when there is no login, or the
-	// registry rejects the login or gives it no access to that scope.
+	// registry rejects the login or gives it no access to that scope. Either
+	// way the row for the stack's chart scope judges the docker login, which
+	// helm pulls the charts with: see judgeLogin.
 	preferNGCKey bool
 
 	mu     sync.Mutex
@@ -279,6 +281,39 @@ func settleScope(
 		return keep, true
 	}
 	return keep, false
+}
+
+// judgeLogin returns settled with the docker login judged for repo where the
+// NGC key went first, so settling never sent the login: a 401 marks it
+// rejected and a 403 marks it without access to repo, as settleScope does.
+// The credential the run uses for repo stays the key. A scope helm on this
+// machine pulls the stack's charts from needs this: helm sends the docker
+// login whatever order the run sends credentials in. An answer that says
+// nothing about the login, or no docker login besides the key, leaves
+// settled as it was.
+func (rc *RegistryCredentials) judgeLogin(
+	ctx context.Context, registry, repo, challenge string, settled settledCredential,
+) settledCredential {
+	if !rc.preferNGCKey || !settled.ok || !settled.cred.ngcKey {
+		return settled
+	}
+	login, ok, _ := credsFromDockerConfig(ctx, registry)
+	if !ok || login.pass == settled.cred.pass {
+		return settled
+	}
+	jctx, cancel := context.WithTimeout(ctx, credentialSettleTimeout)
+	defer cancel()
+	_, err := exchangeBearerToken(jctx, newRegistryHTTPClient(credentialSettleTimeout), registry, repo, challenge,
+		&login)
+	var te *tokenExchangeError
+	switch {
+	case !errors.As(err, &te) || !te.credentialed:
+	case te.status == http.StatusUnauthorized:
+		settled.rejectedLogin = &login
+	case te.status == http.StatusForbidden:
+		settled.noAccessLogin = &login
+	}
+	return settled
 }
 
 func (rc *RegistryCredentials) resolve(ctx context.Context, registry string) credentialLookup {

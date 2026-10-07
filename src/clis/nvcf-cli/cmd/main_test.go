@@ -100,7 +100,7 @@ func TestMain(m *testing.M) {
 	}
 	// No outbound registry request.
 	newRegistryCredentialCheckerForSelfHosted = func() selfhosted.RegistryCredentialChecker {
-		return func(context.Context, string, string, bool) error { return nil }
+		return func(context.Context, string, string, bool, bool) error { return nil }
 	}
 	// No validator Job. A test that passes --cluster-validator-image would
 	// otherwise create RBAC, Secrets and Jobs in the current kube context and

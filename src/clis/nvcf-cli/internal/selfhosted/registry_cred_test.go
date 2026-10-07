@@ -59,7 +59,7 @@ func TestProbeRegistryCredential_PublicRegistry(t *testing.T) {
 
 	// Use the test server's host as the registry.
 	host := strings.TrimPrefix(srv.URL, "https://")
-	err := probeRegistryCredential(context.Background(), host, "", false)
+	err := probeRegistryCredential(context.Background(), host, "", false, false)
 	var outcome registryProbeOutcome
 	require.ErrorAs(t, err, &outcome)
 	assert.Equal(t, probeAnonymous, outcome.kind, "no credential was sent, so none is reported valid")
@@ -101,13 +101,13 @@ func TestProbeRegistryCredential_AuthSucceeds(t *testing.T) {
 	t.Cleanup(func() { http.DefaultTransport = origTransport })
 
 	host := strings.TrimPrefix(registrySrv.URL, "https://")
-	err := probeRegistryCredential(context.Background(), host, "", false)
+	err := probeRegistryCredential(context.Background(), host, "", false, false)
 	var outcome registryProbeOutcome
 	require.ErrorAs(t, err, &outcome, "an anonymous token is not a valid credential")
 	assert.Equal(t, probeAnonymous, outcome.kind)
 
 	dockerHome(t, inlineDockerConfig(t, host, "u", "p", ""))
-	err = probeRegistryCredential(context.Background(), host, "", false)
+	err = probeRegistryCredential(context.Background(), host, "", false, false)
 	assert.NoError(t, err, "a token issued for a credential that was sent is a valid credential")
 	r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: host}, host, false, nil).
 		Run(context.Background())
@@ -135,7 +135,7 @@ func TestProbeRegistryCredential_AuthFails(t *testing.T) {
 	t.Cleanup(func() { http.DefaultTransport = origTransport })
 
 	host := strings.TrimPrefix(registrySrv.URL, "https://")
-	err := probeRegistryCredential(context.Background(), host, "", false)
+	err := probeRegistryCredential(context.Background(), host, "", false, false)
 	assert.Error(t, err, "failed token exchange must return an error")
 }
 
@@ -143,7 +143,7 @@ func TestProbeRegistryCredential_ECRSkipped(t *testing.T) {
 	// ECR registries must get a clear "use AWS CLI" message rather than a
 	// confusing Bearer token failure.
 	err := probeRegistryCredential(context.Background(),
-		"123456789.dkr.ecr.us-east-1.amazonaws.com", "", false)
+		"123456789.dkr.ecr.us-east-1.amazonaws.com", "", false, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ECR", "ECR registries must produce a clear diagnostic")
 	assert.Contains(t, err.Error(), "AWS", "message must mention AWS")
@@ -279,7 +279,7 @@ func TestIsECRRegistry(t *testing.T) {
 // -- registryCredentialCheck binaryCheckSpec --
 
 func TestRegistryCredentialCheck_PassWhenNoError(t *testing.T) {
-	checker := func(_ context.Context, reg, _ string, _ bool) error { return nil }
+	checker := func(_ context.Context, reg, _ string, _, _ bool) error { return nil }
 	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "nvcr.io", Critical: true}, "nvcr.io", false, nil)
 	r := spec.Run(context.Background())
 	assert.True(t, r.Passed)
@@ -288,7 +288,7 @@ func TestRegistryCredentialCheck_PassWhenNoError(t *testing.T) {
 }
 
 func TestRegistryCredentialCheck_CriticalSeverityOnFailure(t *testing.T) {
-	checker := func(_ context.Context, reg, _ string, _ bool) error {
+	checker := func(_ context.Context, reg, _ string, _, _ bool) error {
 		return errorf("credentials rejected")
 	}
 	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "nvcr.io", Critical: true}, "nvcr.io", false, nil)
@@ -298,7 +298,7 @@ func TestRegistryCredentialCheck_CriticalSeverityOnFailure(t *testing.T) {
 }
 
 func TestRegistryCredentialCheck_WarningSeverityOnNonCriticalFailure(t *testing.T) {
-	checker := func(_ context.Context, reg, _ string, _ bool) error {
+	checker := func(_ context.Context, reg, _ string, _, _ bool) error {
 		return errorf("credentials rejected")
 	}
 	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "quay.io", Critical: false}, "quay.io", false, nil)
@@ -692,7 +692,7 @@ func TestProbeRegistryCredential_CriticalAnonymousIsNotVerified(t *testing.T) {
 	host := strings.TrimPrefix(srv.URL, "https://")
 	dockerHome(t, inlineDockerConfig(t, host, "u", "p", ""))
 
-	err := probeRegistryCredential(context.Background(), host, "", true)
+	err := probeRegistryCredential(context.Background(), host, "", true, false)
 	var outcome registryProbeOutcome
 	require.ErrorAs(t, err, &outcome)
 	assert.Equal(t, probeNotVerified, outcome.kind)
@@ -1000,7 +1000,7 @@ func TestProbeRegistryCredential_RetriesTransientFailures(t *testing.T) {
 		tokenStatus(http.StatusOK)(w)
 	})
 	dockerHome(t, inlineDockerConfig(t, reg.host, "u", "p", ""))
-	assert.NoError(t, probeRegistryCredential(context.Background(), reg.host, "", true))
+	assert.NoError(t, probeRegistryCredential(context.Background(), reg.host, "", true, false))
 	assert.Equal(t, 3, calls)
 }
 
@@ -1022,11 +1022,11 @@ func clusterHolding(holder string, err error, asked *[]string) ClusterPullSecret
 func TestRegistryCredentialCheck_RefusalAfterInstall(t *testing.T) {
 	key := registryCredential{user: "$oauthtoken", pass: "revoked", source: "NGC_API_KEY", ngcKey: true}
 	login := registryCredential{user: "$oauthtoken", pass: "rotated-out", source: "docker config"}
-	refusedKey := func(context.Context, string, string, bool) error {
+	refusedKey := func(context.Context, string, string, bool, bool) error {
 		return registryProbeOutcome{kind: probeRejected, detail: "credentials from NGC_API_KEY rejected",
 			refused: key, keyOnly: true}
 	}
-	refusedLogin := func(context.Context, string, string, bool) error {
+	refusedLogin := func(context.Context, string, string, bool, bool) error {
 		return registryProbeOutcome{kind: probeRejected, detail: "credentials from docker config rejected",
 			refused: login}
 	}
@@ -1071,7 +1071,7 @@ func TestRegistryCredentialCheck_RefusalAfterInstall(t *testing.T) {
 // secrets hold it, or that they could not be read, and never downgrades it.
 func TestRegistryCredentialCheck_ReplacedLoginAfterInstall(t *testing.T) {
 	login := registryCredential{user: "$oauthtoken", pass: "rotated-out", source: "docker config"}
-	replaced := func(context.Context, string, string, bool) error {
+	replaced := func(context.Context, string, string, bool, bool) error {
 		return registryProbeOutcome{kind: probeLoginRejected, refused: login,
 			detail: "the docker login from docker config was rejected; credentials from NGC_API_KEY valid"}
 	}
@@ -1212,7 +1212,7 @@ func TestEnumerateRegistries_ProbesTheStacksOrg(t *testing.T) {
 	assert.Equal(t, []string{"nvidia/nvcf-byoc/cluster-validator", "customerorg/team"}, scopes)
 
 	cat := buildRegistryCredentialCategory(PreflightConfig{Registries: got,
-		RegistryChecker: func(context.Context, string, string, bool) error { return nil }})
+		RegistryChecker: func(context.Context, string, string, bool, bool) error { return nil }})
 	var ids []string
 	for _, c := range cat.checks {
 		ids = append(ids, c.ID)

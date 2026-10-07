@@ -1003,7 +1003,7 @@ func TestRunPreflight_LocalChecksDoNotSpendTheClusterShare(t *testing.T) {
 	checkProbeShare, probePodCleanupTimeout = 400*time.Millisecond, 100*time.Millisecond
 	t.Cleanup(func() { localCheckShare, checkProbeShare, probePodCleanupTimeout = prevLocal, prevShare, prevCleanup })
 
-	hang := func(ctx context.Context, _, _ string, _ bool) error {
+	hang := func(ctx context.Context, _, _ string, _, _ bool) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}
@@ -1121,7 +1121,7 @@ func TestRunPreflight_RegistrySkipsPassAtInfo(t *testing.T) {
 			{Registry: "basic.example.com", Critical: true},
 			{Registry: "anon.example.com", Critical: true},
 		},
-		RegistryChecker: func(_ context.Context, registry, _ string, _ bool) error {
+		RegistryChecker: func(_ context.Context, registry, _ string, _, _ bool) error {
 			switch registry {
 			case "anon.example.com":
 				return registryProbeOutcome{kind: probeAnonymous, detail: "reachable anonymously"}
@@ -1200,7 +1200,7 @@ func TestRunPreflight_CutShortRowsKeepTheirWorstSeverity(t *testing.T) {
 	prevLocal := localCheckShare
 	localCheckShare = 200 * time.Millisecond
 	t.Cleanup(func() { localCheckShare = prevLocal })
-	hang := func(ctx context.Context, _, _ string, _ bool) error {
+	hang := func(ctx context.Context, _, _ string, _, _ bool) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}
@@ -1253,7 +1253,7 @@ func TestRunPreflight_CutShortRegistryAfterInstallKeepsItsWorst(t *testing.T) {
 	prevLocal := localCheckShare
 	localCheckShare = 200 * time.Millisecond
 	t.Cleanup(func() { localCheckShare = prevLocal })
-	hang := func(ctx context.Context, _, _ string, _ bool) error {
+	hang := func(ctx context.Context, _, _ string, _, _ bool) error {
 		<-ctx.Done()
 		return ctx.Err()
 	}
