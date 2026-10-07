@@ -574,10 +574,9 @@ mod tests {
 
         // Ranks 2 and 3 now miss the queue SLO. The next band opens only after
         // one widen interval.
-        let first_band_only = hybrid.decide_at(&hybrid_request, &candidates, Duration::ZERO);
-        assert!(
-            matches!(first_band_only, LoadBalancerDecision::Wait(delay) if delay <= Duration::from_secs(1)),
-            "expected a wait for the next band, got {first_band_only:?}"
+        assert_eq!(
+            hybrid.decide_at(&hybrid_request, &candidates, Duration::ZERO),
+            LoadBalancerDecision::Wait(Duration::from_secs(1))
         );
         let expanded_choice =
             hybrid.decide_at(&hybrid_request, &candidates, Duration::from_millis(1_000));
@@ -632,6 +631,10 @@ mod tests {
         let mut candidates = single_slot_candidates(5);
         let ranked = pulsar_ranked_indices("wait-seed", &target, affinity_key, 0, &candidates);
         candidates[ranked[0]].stats.num_running_queries = 1;
+        // Faster lower ranks would win any open-set selection that includes them.
+        for rank in [1, 2] {
+            candidates[ranked[rank]].rtt = Duration::from_millis(1);
+        }
         let hybrid = affinity_wait_config("wait-seed", |settings| {
             settings.cache_affinity_wait_ms = Some(300);
         });
@@ -654,13 +657,11 @@ mod tests {
             1
         );
         // After the wait, the affinity group is still checked before the open
-        // set, so a free primary wins over free lower ranks every time.
-        for _ in 0..32 {
-            assert_eq!(
-                selected_rank(hybrid.decide_at(&request, &candidates, Duration::from_millis(500))),
-                1
-            );
-        }
+        // set, so a free primary wins over faster free lower ranks.
+        assert_eq!(
+            selected_rank(hybrid.decide_at(&request, &candidates, Duration::from_millis(500))),
+            1
+        );
     }
 
     #[test]
@@ -720,6 +721,7 @@ mod tests {
         // Rank 3 has capacity but sits 495 ms behind rank 2's TTFT bucket.
         candidates[ranked[2]].rtt = Duration::from_millis(500);
         let hybrid = affinity_wait_config("bucket-seed", |settings| {
+            settings.band_widen_interval_ms = Some(0);
             settings.ttft_bucket_size_ms = Some(20);
             settings.next_bucket_unlock_factor = Some(0.25);
         });
