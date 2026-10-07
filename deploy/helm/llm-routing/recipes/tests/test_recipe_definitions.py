@@ -52,6 +52,30 @@ class RecipeDefinitionTests(unittest.TestCase):
                     self.assertRaisesRegex(RuntimeError, 'placement'):
                 tool.load_recipe('bad')
 
+    def test_recipe_arguments_must_not_set_tuned_values(self):
+        base = json.loads((HERE/'glm-5.3/recipe.json').read_text())['serverArgs']
+        for flag in ('--ctx-size', '-c', '--parallel', '-np', '--batch-size', '-ub', '--predict', '-n', '--threads', '-t'):
+            root = self.copy_recipe('bad', serverArgs=base + [flag, '1'])
+            with self.subTest(flag=flag), patch.object(tool, 'HERE', root), \
+                    self.assertRaisesRegex(RuntimeError, 'must not set tuned arguments'):
+                tool.load_recipe('bad')
+            shutil.rmtree(root)
+
+    def test_recipe_tuning_and_kv_cache_cost_are_validated(self):
+        tuning = json.loads((HERE/'glm-5.3/recipe.json').read_text())['tuning']
+        cases = [
+            ('tuning.discrete', {'tuning': dict(tuning, discrete=dict(tuning['discrete'], slots=0))}),
+            ('tuning.unified', {'tuning': {'discrete': tuning['discrete']}}),
+            ('kvCacheKiBPerToken', {'kvCacheKiBPerToken': 0}),
+            ('kvCacheKiBPerToken', {'kvCacheKiBPerToken': '108'}),
+        ]
+        for message, changes in cases:
+            root = self.copy_recipe('bad', **changes)
+            with self.subTest(message=message), patch.object(tool, 'HERE', root), \
+                    self.assertRaisesRegex(RuntimeError, message):
+                tool.load_recipe('bad')
+            shutil.rmtree(root)
+
     def test_recipe_name_must_match_its_folder(self):
         root = self.copy_recipe('renamed')
         definition = json.loads((root/'renamed/recipe.json').read_text())
