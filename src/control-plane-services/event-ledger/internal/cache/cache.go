@@ -45,6 +45,16 @@ const (
 	// eviction pass removes.
 	evictionFlushTimeout = 10 * time.Second
 
+	// evictionFlushAttempts is how many times the write of an evicted entry is
+	// tried before the entry is dropped.
+	evictionFlushAttempts = 4
+
+	// evictionRetryBaseDelay is the wait before the first retry. Each wait is twice
+	// the one before, so the waits for one entry total 700ms, which is how long a
+	// request that triggers an eviction can be held up per entry when the database
+	// is down.
+	evictionRetryBaseDelay = 100 * time.Millisecond
+
 	// wheelTick is how long the timing wheel spends on each slot. The wheel has one
 	// slot per tick of FlushInterval, so a flush is due when the wheel has made one
 	// full rotation.
@@ -282,7 +292,7 @@ const (
 // decide they are the newest. When the entry becomes pending, it schedules the
 // flush on the timing wheel. It does not write ev itself to the database, but
 // a miss can push the cache over MaxSize, and the pending entry evicted to make
-// room is written before processEvent returns.
+// room is written before processEvent returns, with retries if the write fails.
 func (handler *CachingDBHandler) processEvent(cachedKey key, ev event, now time.Time) outcome {
 	out, evicted := handler.recordEvent(cachedKey, ev, now)
 	handler.metrics.recordOutcome(out)
@@ -401,10 +411,16 @@ func (handler *CachingDBHandler) remove(node *list.Element, reason evictionReaso
 	}, true
 }
 
-// flushEvicted writes recs to the database. The entries are already gone from
-// the cache, so a failed write is logged and not retried. The write is made
-// without the lock held, and a newer event for the same key can reach the
-// database before it.
+// flushEvicted writes recs to the database, retrying a failed write with
+// exponential backoff. The entries are already gone from the cache, so an entry
+// whose writes all fail is dropped, and that is counted as a failed flush and
+// logged. The records share one timeout, so when the database is down or slow the
+// later records get fewer tries, and none once the timeout has ended.
+//
+// The write is made without the lock held, so a newer event for the same key can
+// reach the database before it, and a retry widens that window to the length of
+// the timeout. The database upsert must therefore apply an event only if it is
+// newer than the stored one.
 func (handler *CachingDBHandler) flushEvicted(recs []data_access.EventV3UpsertRecord) {
 	if len(recs) == 0 {
 		return
@@ -415,15 +431,60 @@ func (handler *CachingDBHandler) flushEvicted(recs []data_access.EventV3UpsertRe
 	defer cancel()
 	logger := logging.GetLogger(ctx)
 	for _, rec := range recs {
-		if err := handler.flush(ctx, rec); err != nil {
+		attempts, err := handler.flushWithRetry(ctx, rec)
+		if err != nil {
 			handler.metrics.recordFlush(flushFailed)
-			logger.ErrorContext(ctx, "failed to flush evicted cache entry",
+			message := "dropped an evicted cache entry that could not be written"
+			if attempts == 0 {
+				message = "dropped an evicted cache entry because the flush timeout ended before its write"
+			}
+			logger.ErrorContext(ctx, message,
 				zap.Error(err),
+				zap.Int("attempts", attempts),
 				zap.String("namespace", rec.Namespace),
 				zap.String("context", rec.Context),
 				zap.String("event_name", rec.EventName))
 			continue
 		}
 		handler.metrics.recordFlush(flushSucceeded)
+	}
+}
+
+// flushWithRetry writes rec up to evictionFlushAttempts times, waiting twice as
+// long after each failure. It returns how many writes it made, and the last error
+// if none succeeded. It makes no write once ctx has ended, since the write would
+// fail at once.
+func (handler *CachingDBHandler) flushWithRetry(ctx context.Context, rec data_access.EventV3UpsertRecord) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	for attempts := 1; ; attempts++ {
+		err := handler.flush(ctx, rec)
+		if err == nil || attempts == evictionFlushAttempts || ctx.Err() != nil {
+			return attempts, err
+		}
+		delay := evictionRetryBaseDelay << (attempts - 1)
+		logging.GetLogger(ctx).WarnContext(ctx, "failed to write an evicted cache entry, waiting to retry",
+			zap.Error(err),
+			zap.Int("attempt", attempts),
+			zap.Duration("retry_in", delay),
+			zap.String("namespace", rec.Namespace),
+			zap.String("context", rec.Context),
+			zap.String("event_name", rec.EventName))
+		if !waitOrDone(ctx, delay) {
+			return attempts, err
+		}
+	}
+}
+
+// waitOrDone waits for delay and reports false if ctx ended first.
+func waitOrDone(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }

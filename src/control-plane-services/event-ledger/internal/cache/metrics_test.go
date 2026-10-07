@@ -23,6 +23,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -218,16 +219,31 @@ func TestMetrics_FlushesAreCountedByResult(t *testing.T) {
 		requireCounter(t, reader, 0, flushesMetricName, failedFlush)
 	})
 
-	t.Run("a failed flush is counted and the entry is still evicted", func(t *testing.T) {
-		handler, flushed, reader := newMetricsHandler(t, evictionConfig(1))
-		flushed.err = errors.New("database unavailable")
-		makePending(handler, keyN(1), 1)
+	t.Run("a flush that fails every retry is counted once and the entry is still evicted", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			handler, flushed, reader := newMetricsHandler(t, evictionConfig(1))
+			flushed.err = errors.New("database unavailable")
+			makePending(handler, keyN(1), 1)
 
-		handler.processEvent(keyN(2), event{timestamp: at(10)}, at(10))
+			handler.processEvent(keyN(2), event{timestamp: at(10)}, at(10))
 
-		requireCounter(t, reader, 0, flushesMetricName, successfulFlush)
-		requireCounter(t, reader, 1, flushesMetricName, failedFlush)
-		requireCounter(t, reader, 1, evictionsMetricName, sizeEviction)
+			requireCounter(t, reader, 0, flushesMetricName, successfulFlush)
+			requireCounter(t, reader, 1, flushesMetricName, failedFlush)
+			requireCounter(t, reader, 1, evictionsMetricName, sizeEviction)
+		})
+	})
+
+	t.Run("a flush that succeeds on a retry counts as one success", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			handler, flushed, reader := newMetricsHandler(t, evictionConfig(1))
+			flushed.failFirst = 2
+			makePending(handler, keyN(1), 1)
+
+			handler.processEvent(keyN(2), event{timestamp: at(10)}, at(10))
+
+			requireCounter(t, reader, 1, flushesMetricName, successfulFlush)
+			requireCounter(t, reader, 0, flushesMetricName, failedFlush)
+		})
 	})
 
 	t.Run("evicting a clean entry flushes nothing", func(t *testing.T) {
