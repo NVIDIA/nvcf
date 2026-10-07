@@ -97,9 +97,10 @@
     },
     "queue_mismatch": {
       "enabled": true,
-      "min_delta_ms": 25,
-      "tolerance_factor": 1.25
-    }
+      "min_delta_ms": 10000,
+      "tolerance_factor": 4.0
+    },
+    "stats_update_coalesce_ms": 10.0
   },
   "stargate": {
     "max_request_retries": 2,
