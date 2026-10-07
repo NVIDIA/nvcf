@@ -360,8 +360,8 @@ fn batched_engine_explanation(config: &mock_engine::EngineConfig) -> String {
   step time: {} ms + {} ms per decoding sequence + {} ms per prefill token
   decode rate with {} sequences: about {:.0} tokens/s per sequence
   prefill capacity: about {:.0} tokens/s per worker, shared by concurrent prompts
-  KV cache: {} tokens per worker; requests go to the worker caching their x-cache-affinity-key,
-    otherwise to the least-loaded worker
+  KV cache: {} tokens per worker; requests go to the worker caching their x-cache-affinity-key
+    even when it is busier, otherwise to the least-loaded worker
   Pylon --max-engine-concurrency: num_gpu_workers x {}
   Step costs are estimates, not measurements.
 "#,

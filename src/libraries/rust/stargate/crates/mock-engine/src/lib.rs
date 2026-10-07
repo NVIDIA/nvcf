@@ -24,7 +24,7 @@
 //!
 //! Each worker has its own prefix cache keyed by the request's cache key.
 //! Requests are routed to the worker that caches the most tokens for their
-//! key, or to the least-loaded worker when none does.
+//! key regardless of its load, or to the least-loaded worker when none does.
 //!
 //! The engine has no clock. Callers pass the current time to every method and
 //! use [`Engine::next_event_time`] to know when to advance. MockDynamo drives

@@ -219,12 +219,16 @@ deployment:
   running sequence and spends the rest of `--max-batched-tokens` on chunked
   prefill, so concurrent prompts share prefill compute and slow decode.
 - Requests go to the worker caching the most tokens for their
-  `x-cache-affinity-key`, otherwise to the least-loaded worker.
+  `x-cache-affinity-key`, even when that worker is busier than the others.
+  Requests without a cached key go to the least-loaded worker.
 - A completed request's cache entry covers its prompt and its output. A later
   request with the same key reuses up to that many tokens. Matching is per
   key, not per token block.
 - `/kv-cache/stats` reports deployment totals for capacity and used tokens.
-  Its entry, hit, miss, and eviction counters report zero for this model.
+  Used tokens include cached prefixes and the memory reserved by running
+  requests. A request larger than a worker's capacity still runs alone, so
+  used can exceed capacity. Entry, hit, miss, and eviction counters report
+  zero for this model.
 - Stats stream pings advertise `max_engine_concurrency` as
   `num_gpu_workers * max_num_seqs`. When Pylon does not read the stats stream,
   set `--max-engine-concurrency` to the same value.
