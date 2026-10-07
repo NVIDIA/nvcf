@@ -151,17 +151,15 @@ successful requests and use Spark's histogram bucket lower bounds. Observed
 ranges are not confidence intervals. Production recommendations remain pending
 real-engine QA.
 
-Historical Python campaigns retain their original worktrees and artifacts. They
-cannot be resumed as native campaigns; use the retained historical controller
-when reconciling those records. Existing performance measurements are not a live
-validation of this Rust rewrite.
+Campaigns recorded by the earlier Python controller cannot be resumed as native
+campaigns, and their measurements are not a live validation of this Rust
+rewrite.
 
 ## Earlier deployment proposal
 
 The following sections retain the original planning context, including the
-five-region inventory and proposed gateway/collector components. Cluster status
-is a historical handoff snapshot. Verification examples use the current
-`STARGATE_BENCH` command configured above.
+example five-region inventory and proposed gateway/collector components.
+Verification examples use the current `STARGATE_BENCH` command configured above.
 
 ### Decision
 
@@ -179,7 +177,7 @@ Separate Helm releases are preferable to one umbrella chart because a Helm relea
 
 ### Goals
 
-- Deploy the five confirmed regions.
+- Deploy the five example regions.
 - Deploy one Stargate cluster and two MockDC clusters in each region.
 - Keep all regional configuration and image versions in Git.
 - Make rendering, diffing, deployment, verification, and rollback repeatable.
@@ -202,7 +200,7 @@ Separate Helm releases are preferable to one umbrella chart because a Helm relea
                                    ^
                                    | OTLP metrics
         +--------------------------+--------------------------+
-        | repeat once for each confirmed region listed below |
+        | repeat once for each example region listed below   |
         +--------------------------+--------------------------+
                                    |
    +---------------- Stargate EKS cluster --------------------+
@@ -228,7 +226,7 @@ Separate Helm releases are preferable to one umbrella chart because a Helm relea
    +-------------------------------+  +---------------------------+
 ```
 
-### Confirmed cluster inventory
+### Example cluster inventory
 
 | Region | Stargate cluster | Stargate nodes | MockDC clusters | Nodes per MockDC |
 |---|---|---|---|---|
@@ -238,7 +236,7 @@ Separate Helm releases are preferable to one umbrella chart because a Helm relea
 | `ap-northeast-1` | `stargate-an1` | 3 x `c7i.xlarge` | `mockdc-an1-a`, `mockdc-an1-b` | 2 x `t3.medium` |
 | `ap-southeast-2` | `stargate-as2` | 3 x `c7i.xlarge` | `mockdc-as2-a`, `mockdc-as2-b` | 2 x `t3.medium` |
 
-All 15 clusters were handed off as active on Kubernetes 1.34, with CS-Admin authentication configured through both an EKS access entry and the cluster authentication ConfigMap. Deployment preflight checks must verify this live state instead of relying on the handoff snapshot.
+The example environments expect 15 active clusters on Kubernetes 1.34, and the deploying identity needs cluster-admin access to each one, for example through an EKS access entry. Deployment preflight checks verify this live state before an apply.
 
 Use each MockDC Kubernetes cluster name as its logical MockDC cluster ID. This keeps one identifier per cluster and already guarantees that the two IDs in each region differ.
 
@@ -527,7 +525,7 @@ Requirements:
 
 ### Networking and TLS
 
-The cluster handoff must provide:
+Each cluster must provide:
 
 - Stable public NAT Gateway egress IPs for every MockDC subnet
 - AWS Load Balancer Controller
@@ -606,7 +604,7 @@ python3 deploy/stacks/stargate-dev/scripts/provision_dashboard.py
 Safety behavior:
 
 - Never use the current kube context implicitly.
-- Verify the configured cluster name, AWS account, AWS region, EKS cluster ARN, Kubernetes version, node shape, and CS-Admin access before an apply.
+- Verify the configured cluster name, AWS account, AWS region, EKS cluster ARN, Kubernetes version, node shape, and cluster-admin access before an apply.
 - Generate credentials only when explicitly initializing a new regional deployment, store the bundle with mode `0600`, and reuse it on every later apply.
 - Refuse to overwrite a credential bundle or apply credentials that differ from an existing in-cluster Secret.
 - Run static validation before applying.
