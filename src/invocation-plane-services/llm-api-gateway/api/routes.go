@@ -26,6 +26,14 @@ import (
 )
 
 func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
+	originalErrorHandler := e.HTTPErrorHandler
+	e.HTTPErrorHandler = func(err error, c echo.Context) {
+		if c.Request().URL.Path == messagesEndpointPath {
+			messagesHTTPErrorHandler(err, c)
+			return
+		}
+		originalErrorHandler(err, c)
+	}
 	e.GET("/healthz", func(c echo.Context) error {
 		return c.NoContent(http.StatusOK)
 	})
@@ -47,9 +55,14 @@ func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
 		return c.NoContent(http.StatusMethodNotAllowed)
 	})
 
-	group := e.Group("", rejectClientSuppliedPriority)
+	group := e.Group(
+		"",
+		rejectClientSuppliedPriority,
+		newInferenceWriteDeadlineMiddleware(handlers.inferenceWriteTimeout()),
+	)
 	handlers.AsOpenAIChatHandlers().RegisterRoutes(group)
 	handlers.AsResponsesHandlers().RegisterRoutes(group)
-	// proxy handlers only contain embedding route for now, but could be extended to other routes in the future
+	// Native proxy endpoints preserve the backend wire protocol.
 	handlers.AsOpenAIProxyHandlers().RegisterRoutes(group)
+	handlers.AsMessagesHandlers().RegisterRoutes(group)
 }

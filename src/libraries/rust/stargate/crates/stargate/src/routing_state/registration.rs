@@ -100,6 +100,10 @@ impl RegistrationGeneration {
         &self.identity.inference_server_url
     }
 
+    pub(crate) fn cluster_id(&self) -> &str {
+        &self.identity.cluster_id
+    }
+
     pub(crate) fn routing_key(&self) -> &Option<String> {
         &self.identity.routing_key
     }

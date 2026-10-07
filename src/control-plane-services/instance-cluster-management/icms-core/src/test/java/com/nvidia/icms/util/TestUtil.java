@@ -149,6 +149,8 @@ public class TestUtil {
 
     public static final String NGC_CLUSTER_MANAGEMENT_SCOPE = "cluster-management";
 
+    public static final String NGC_CLUSTER_MANAGEMENT_READ_SCOPE = "read:cluster-management";
+
     public static final String NGC_GPU_LISTING_SCOPE = "gpu_listing";
     public static final String NGC_REGION_LISTING_SCOPE = "regions_listing";
     public static final String NGC_CLUSTER_NAME_LISTING_SCOPE = "clusters_listing";
@@ -985,7 +987,6 @@ public class TestUtil {
                 .attributes(Set.of("SOC2Compliant"))
                 .gpus(Set.of(gpuRequestSchema))
                 .nvcaVersion("2.1.0")
-                .ssaClientId("dummy_auth_client_id")
                 .oAuthClientId("dummy_auth_client_id")
                 .clusterId(clusterId)
                 .clusterSource(ClusterSource.NGC_MANAGED.toString())

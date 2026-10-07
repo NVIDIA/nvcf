@@ -81,7 +81,7 @@ func (h *OpenAIProxyHandlers) forwardJSONRequest(
 	return writeProxyResponse(c, resp)
 }
 
-func (h *OpenAIProxyHandlers) requireFunctionRequestContext(
+func (h *Handlers) requireFunctionRequestContext(
 	c *GatewayContext,
 ) (*requestctx.RequestContext, error) {
 	if c == nil {
@@ -104,7 +104,19 @@ func (h *OpenAIProxyHandlers) dispatchProxyRequest(
 	contentLength int64,
 	inputTokens int,
 ) (*provider.ProxyResponse, error) {
-	if h.handlers.proxyProvider == nil {
+	return h.handlers.dispatchEstimatedProxyRequest(c, reqCtx, headers, body, contentLength, inputTokens, inputTokens)
+}
+
+func (h *Handlers) dispatchEstimatedProxyRequest(
+	c *GatewayContext,
+	reqCtx *requestctx.RequestContext,
+	headers http.Header,
+	body io.ReadCloser,
+	contentLength int64,
+	inputTokens int,
+	tokenEstimate int,
+) (*provider.ProxyResponse, error) {
+	if h.proxyProvider == nil {
 		return nil, echo.NewHTTPError(http.StatusNotImplemented, "proxy endpoint is not configured")
 	}
 
@@ -117,7 +129,7 @@ func (h *OpenAIProxyHandlers) dispatchProxyRequest(
 		headers.Del(echo.HeaderContentLength)
 	}
 
-	resp, err := h.handlers.proxyProvider.Proxy(
+	resp, err := h.proxyProvider.Proxy(
 		c.UserContext(),
 		reqCtx,
 		&provider.ProxyRequest{
@@ -126,8 +138,9 @@ func (h *OpenAIProxyHandlers) dispatchProxyRequest(
 			RawQuery:      c.Request().URL.RawQuery,
 			Header:        headers,
 			Body:          body,
+			ContentLength: contentLength,
 			InputTokens:   inputTokens,
-			TokenEstimate: inputTokens,
+			TokenEstimate: tokenEstimate,
 		},
 	)
 	if err != nil {
@@ -157,11 +170,25 @@ func writeProxyResponse(c *GatewayContext, resp *provider.ProxyResponse) error {
 }
 
 func copyProxyHeaders(dst http.Header, src http.Header) {
+	connectionHeaders := make(map[string]struct{})
+	for key, values := range src {
+		if !strings.EqualFold(key, "Connection") {
+			continue
+		}
+		for _, value := range values {
+			for _, name := range strings.Split(value, ",") {
+				connectionHeaders[http.CanonicalHeaderKey(strings.TrimSpace(name))] = struct{}{}
+			}
+		}
+	}
 	for key, values := range src {
 		if _, skip := hopByHopHeaders[http.CanonicalHeaderKey(key)]; skip {
 			continue
 		}
-		if strings.EqualFold(key, echo.HeaderContentLength) {
+		if _, skip := connectionHeaders[http.CanonicalHeaderKey(key)]; skip {
+			continue
+		}
+		if strings.EqualFold(key, echo.HeaderContentLength) || isInternalResponseHeader(key) {
 			continue
 		}
 		dst.Del(key)
@@ -169,4 +196,10 @@ func copyProxyHeaders(dst http.Header, src http.Header) {
 			dst.Add(key, value)
 		}
 	}
+}
+
+func isInternalResponseHeader(name string) bool {
+	name = strings.ToLower(name)
+	return strings.HasPrefix(name, "x-stargate-") ||
+		name == "x-inference-server-id" || name == "x-inference-server-url"
 }

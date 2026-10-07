@@ -21,6 +21,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -78,8 +79,32 @@ const (
 	metricSubsetFilterProcessorID        = "filter/metric_subset"
 	metricSubsetBatchProcessorID         = "batch/metric_subset"
 	workloadMetricsDropLabelsProcessorID = "resource/workload_metrics_drop_labels"
+	dropEmptyLabelsProcessorID           = "transform/drop_empty_labels"
 	defaultMetricSubsetPort              = 19091
 )
+
+// dropEmptyLabelsContexts are the OTTL contexts filtered for empty attribute
+// values before export.
+//
+// A Prometheus-compatible receiver rejects the whole write request when any
+// series carries a label with an empty value, and the remote-write exporter
+// classifies the resulting 4xx as permanent, so one empty attribute silently
+// drops every unrelated metric batched with it.
+//
+// resource covers server.port and url.scheme, which the Prometheus receiver's
+// CreateResource writes unconditionally (unlike server.address, which it guards
+// behind isDiscernibleHost): a scrape target whose instance label carries no
+// port yields server.port="".
+//
+// scope covers the otel_scope_* labels, which the translator's createAttributes
+// writes without an empty check. This is the only path the exporter does not
+// already guard.
+//
+// datapoint is deliberately excluded. The exporter's createAttributes drops
+// empty datapoint attribute values itself, and that statement would run once
+// per datapoint rather than once per resource, allocating a replacement map for
+// every point in every batch for no additional coverage.
+var dropEmptyLabelsContexts = []string{"resource", "scope"}
 
 var defaultWorkloadMetricsDropLabels = []string{
 	"metric_subset_enabled",
@@ -155,6 +180,60 @@ func getCredentialsPath() string {
 		return credentialPath
 	}
 	return "/etc/byoo-otel-collector/secrets"
+}
+
+// remoteWriteTLSCredentials builds the remote-write exporter's tls block from
+// the extracted secret files. The clientCert/clientKey pair and caFile are each
+// optional, but at least one must be usable. The secrets extractor writes a key
+// submitted as "" as an empty file, so an empty or whitespace-only file counts
+// as not provided instead of being passed to the collector.
+func remoteWriteTLSCredentials(credentialPath, telemetryName string) (map[string]string, error) {
+	secretsPathPrefix := filepath.Join(credentialPath, telemetryName)
+	certFile := secretsPathPrefix + "-clientCert"
+	keyFile := secretsPathPrefix + "-clientKey"
+	caFile := secretsPathPrefix + "-caFile"
+
+	hasCert, err := secretFileHasContent(certFile)
+	if err != nil {
+		return nil, err
+	}
+	hasKey, err := secretFileHasContent(keyFile)
+	if err != nil {
+		return nil, err
+	}
+	hasCA, err := secretFileHasContent(caFile)
+	if err != nil {
+		return nil, err
+	}
+
+	creds := map[string]string{}
+	switch {
+	case hasCert && hasKey:
+		creds["cert_file"] = certFile
+		creds["key_file"] = keyFile
+	case hasCert:
+		return nil, fmt.Errorf("metrics telemetry %q: clientCert is set but clientKey is empty or missing", telemetryName)
+	case hasKey:
+		return nil, fmt.Errorf("metrics telemetry %q: clientKey is set but clientCert is empty or missing", telemetryName)
+	}
+	if hasCA {
+		creds["ca_file"] = caFile
+	}
+	if len(creds) == 0 {
+		return nil, fmt.Errorf("metrics telemetry %q: TLS secret needs clientCert and clientKey, caFile, or both", telemetryName)
+	}
+	return creds, nil
+}
+
+func secretFileHasContent(path string) (bool, error) {
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to read secret file %s: %w", path, err)
+	}
+	return len(bytes.TrimSpace(content)) > 0, nil
 }
 
 func resolvedLogChunkingConfig(config LogChunkingConfig) (LogChunkingConfig, error) {
@@ -444,22 +523,14 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 		exporterName = fmt.Sprintf("%s-%s-metrics", config.Telemetries.Metrics.Provider, config.Telemetries.Metrics.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
 
-		secretsPathPrefix := filepath.Join(credentialPath, config.Telemetries.Metrics.Name)
-
-		exporterCredential = make(map[string]string)
-		if creds, ok := exporterCredential.(map[string]string); ok {
-			creds["cert_file"] = fmt.Sprintf("%s-clientCert", secretsPathPrefix)
-			creds["key_file"] = fmt.Sprintf("%s-clientKey", secretsPathPrefix)
-
-			ca_file := fmt.Sprintf("%s-caFile", secretsPathPrefix)
-			if _, err := os.Stat(ca_file); err == nil {
-				creds["ca_file"] = ca_file
-			}
+		tlsCredentials, err := remoteWriteTLSCredentials(credentialPath, config.Telemetries.Metrics.Name)
+		if err != nil {
+			return "", err
 		}
 
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
 			"endpoint": config.Telemetries.Metrics.Endpoint,
-			"tls":      exporterCredential,
+			"tls":      tlsCredentials,
 		}
 
 	case ProviderDatadog:
@@ -546,6 +617,30 @@ func addWorkloadMetricsDropLabelsProcessor(otelConfig *OpenTelemetryConfig, labe
 	return workloadMetricsDropLabelsProcessorID
 }
 
+// addDropEmptyLabelsProcessor removes attributes that carry an empty value
+// before the metrics reach the exporter, so they never become an empty
+// Prometheus label. See dropEmptyLabelsContexts for the contexts and why.
+//
+// The Filter lambda requires the ottl.functions.enableLambda feature gate,
+// which the wrapper passes to the collector; see otelCollectorFeatureGates.
+func addDropEmptyLabelsProcessor(otelConfig *OpenTelemetryConfig) string {
+	blocks := make([]map[string]interface{}, 0, len(dropEmptyLabelsContexts))
+	for _, ottlContext := range dropEmptyLabelsContexts {
+		blocks = append(blocks, map[string]interface{}{
+			"context": ottlContext,
+			"statements": []string{
+				fmt.Sprintf(`set(%s.attributes, Filter(%s.attributes, (_, v) => v != ""))`,
+					ottlContext, ottlContext),
+			},
+		})
+	}
+	otelConfig.Processors[dropEmptyLabelsProcessorID] = map[string]interface{}{
+		"error_mode":        "ignore",
+		"metric_statements": blocks,
+	}
+	return dropEmptyLabelsProcessorID
+}
+
 func addMetricSubsetExporter(otelConfig *OpenTelemetryConfig) {
 	otelConfig.Exporters[metricSubsetExporterID] = map[string]interface{}{
 		"endpoint":            fmt.Sprintf("${env:OTEL_POD_IP:-0.0.0.0}:%d", defaultMetricSubsetPort),
@@ -610,6 +705,7 @@ func addMetricSubsetPipeline(otelConfig *OpenTelemetryConfig, config MetricSubse
 		"memory_limiter",
 		metricSubsetFilterProcessorID,
 		"resource",
+		addDropEmptyLabelsProcessor(otelConfig),
 	}
 	if workloadMetricsDropLabelsProcessor != "" {
 		metricSubsetPipeline.Processors = append(metricSubsetPipeline.Processors, workloadMetricsDropLabelsProcessor)
@@ -898,7 +994,12 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		metricPipeline := otelConfig.Service.Pipelines["metrics"]
 		metricPipeline.Receivers = []string{"otlp", "prometheus"}
 		metricPipeline.Exporters = []string{exporterId}
-		metricPipeline.Processors = []string{"memory_limiter", "filter/metrics", "resource"}
+		metricPipeline.Processors = []string{
+			"memory_limiter",
+			"filter/metrics",
+			"resource",
+			addDropEmptyLabelsProcessor(otelConfig),
+		}
 		workloadMetricsDropLabelsProcessor := addWorkloadMetricsDropLabelsProcessor(otelConfig, tmplConfig.WorkloadMetrics.DropLabels)
 		if workloadMetricsDropLabelsProcessor != "" {
 			metricPipeline.Processors = append(metricPipeline.Processors, workloadMetricsDropLabelsProcessor)

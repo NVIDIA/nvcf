@@ -628,6 +628,7 @@ class IcmsClientTest {
         var tags = new HashSet<>(Arrays.asList(env.get("FUNCTION_TAGS").split(",")));
         assertThat(tags).containsAll(TEST_TAGS);
         assertThat(env.get("MAX_REQUEST_CONCURRENCY")).isEqualTo("9");
+        assertThat(params.get("LaunchSpecification.MaxRequestConcurrency")).isEqualTo("9");
         assertThat(env.get("SECRETS_ASSERTION_TOKEN")).isEqualTo("");
         assertThat(env.get("ESS_AGENT_CONTAINER")).isEqualTo(
                 "stg.nvcr.io/nv-cf/nvcf-core/ess-agent:0.0.4");

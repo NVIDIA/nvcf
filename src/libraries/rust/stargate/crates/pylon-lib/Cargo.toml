@@ -26,6 +26,9 @@ description = "Pylon backend sidecar library"
 [lints]
 workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 anyhow = { workspace = true }
 async-stream = { workspace = true }

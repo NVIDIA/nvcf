@@ -222,6 +222,9 @@ Examples:
   # Using saved function context (from create/deploy)
   nvcf-cli function invoke --request-body '{"input": "test"}'
 
+  # Vanity Gateway invocation (preserves exact host without function ID prefix)
+  nvcf-cli function invoke --vanity-host vanity.localhost --path /bdd/echo --request-body '{"input": "test"}'
+
   # Using JSON configuration file
   nvcf-cli function invoke --input-file invoke-config.json`,
 	RunE: runInvoke,
@@ -420,9 +423,11 @@ type DeleteConfig struct {
 
 // InvokeConfig represents the JSON configuration for invoke command
 type InvokeConfig struct {
-	FunctionID          string                 `json:"functionId"`
-	VersionID           string                 `json:"versionId"`
+	FunctionID          string                 `json:"functionId,omitempty"`
+	VersionID           string                 `json:"versionId,omitempty"`
 	InferenceURL        string                 `json:"inferenceUrl,omitempty"` // Function path, or OpenAI-compatible path for LLM functions.
+	Path                string                 `json:"path,omitempty"`         // Mapped request path for Vanity Gateway invocation.
+	VanityHost          string                 `json:"vanityHost,omitempty"`   // Exact Vanity Gateway host header.
 	ModelName           string                 `json:"modelName,omitempty"`    // OpenAI model name for LLM functions.
 	RequestBody         map[string]interface{} `json:"requestBody"`
 	Timeout             int                    `json:"timeout,omitempty"`
@@ -526,6 +531,8 @@ var invokeFlags struct {
 	functionID          string
 	versionID           string
 	inferenceURL        string
+	path                string
+	vanityHost          string
 	modelName           string
 	requestBody         string
 	timeout             int
@@ -588,7 +595,7 @@ func init() {
 	createCmd.Flags().StringVar(&createFlags.helmChartServiceName, "helm-chart-service", "", "Helm chart service name")
 	createCmd.Flags().StringSliceVar(&createFlags.secrets, "secrets", []string{}, "Secrets in name=value format (e.g., API_KEY=secret123,DB_PASSWORD=pass456)")
 	createCmd.Flags().StringSliceVar(&createFlags.models, "models", []string{}, "Model artifacts (format: name:version:uri)")
-	createCmd.Flags().StringArrayVar(&createFlags.llmModels, "llm-model", []string{}, "LLM model config (format: name=<model>,uris=<uri>|<uri>,routingMethod=<round_robin|power_of_two|wait_and_widen|pulsar_wait_and_widen|groq_multiregion|pulsar|random>,tokenRateLimit=<limit>)")
+	createCmd.Flags().StringArrayVar(&createFlags.llmModels, "llm-model", []string{}, "LLM model config (format: name=<model>,uris=<uri>|<uri>,routingMethod=<method>[;<param>=<value>...],tokenRateLimit=<limit>; parameters: see LLM Request Router Load Balancing docs)")
 	createCmd.Flags().Uint32(llmDefaultPriorityFlag, 0, "Function-level default request priority (lower is higher; range: 0-4294967295)")
 	createCmd.Flags().StringArray(llmPerAccountPriorityFlag, []string{}, "Per-account request priority override (format: <nca-id>:<priority>; requires default priority; lower is higher; range: 0-4294967295; repeatable; supports up to 64 distinct NCA ID overrides)")
 	createCmd.Flags().StringSliceVar(&createFlags.resources, "resources", []string{}, "Resource artifacts (format: name:version:uri)")
@@ -617,6 +624,8 @@ func init() {
 	invokeCmd.Flags().StringVar(&invokeFlags.functionID, "function-id", "", "Function ID (required)")
 	invokeCmd.Flags().StringVar(&invokeFlags.versionID, "version-id", "", "Version ID (required)")
 	invokeCmd.Flags().StringVar(&invokeFlags.inferenceURL, "inference-url", "", "Function path, or OpenAI-compatible path for LLM functions (required for LLM)")
+	invokeCmd.Flags().StringVar(&invokeFlags.path, "path", "", "Mapped request path for Vanity Gateway invocation (alternative to --inference-url)")
+	invokeCmd.Flags().StringVar(&invokeFlags.vanityHost, "vanity-host", "", "Exact Vanity Gateway host header (preserves host without prefixing function ID)")
 	invokeCmd.Flags().StringVar(&invokeFlags.modelName, "model-name", "", "OpenAI model name for LLM functions (required for LLM)")
 	invokeCmd.Flags().StringVar(&invokeFlags.requestBody, "request-body", "", "JSON request body (required)")
 	invokeCmd.Flags().IntVar(&invokeFlags.timeout, "timeout", 60, "Request timeout in seconds")
@@ -631,7 +640,7 @@ func init() {
 	updateCmd.Flags().StringVar(&updateFlags.functionID, "function-id", "", "Function ID (required)")
 	updateCmd.Flags().StringVar(&updateFlags.versionID, "version-id", "", "Version ID (required)")
 	updateCmd.Flags().StringSliceVar(&updateFlags.tags, "tags", []string{}, "Function tags (comma-separated)")
-	updateCmd.Flags().StringArrayVar(&updateFlags.llmModelUpdates, "llm-model-update", []string{}, "LLM model update (format: name=<model>,routingMethod=<round_robin|power_of_two|wait_and_widen|pulsar_wait_and_widen|groq_multiregion|pulsar|random>,tokenRateLimit=<limit>)")
+	updateCmd.Flags().StringArrayVar(&updateFlags.llmModelUpdates, "llm-model-update", []string{}, "LLM model update (format: name=<model>,routingMethod=<method>[;<param>=<value>...],tokenRateLimit=<limit>; parameters: see LLM Request Router Load Balancing docs)")
 	updateCmd.Flags().Uint32(llmDefaultPriorityFlag, 0, "Function-level default request priority (lower is higher; range: 0-4294967295; replaces existing priority config)")
 	updateCmd.Flags().StringArray(llmPerAccountPriorityFlag, []string{}, "Per-account request priority override (format: <nca-id>:<priority>; requires default priority; lower is higher; range: 0-4294967295; repeatable; supports up to 64 distinct NCA ID overrides)")
 }
@@ -687,10 +696,6 @@ func parseLLMModelString(s string) (ArtifactConfig, error) {
 		return ArtifactConfig{}, err
 	}
 
-	routingMethod, err := normalizeLLMRoutingMethod(fields["routingMethod"])
-	if err != nil {
-		return ArtifactConfig{}, err
-	}
 	if err := validateLLMTokenRateLimit(fields["tokenRateLimit"]); err != nil {
 		return ArtifactConfig{}, err
 	}
@@ -700,7 +705,7 @@ func parseLLMModelString(s string) (ArtifactConfig, error) {
 		LLMConfig: &LLMConfigInput{
 			URIs:           uris,
 			TokenRateLimit: optionalString(fields["tokenRateLimit"]),
-			RoutingMethod:  optionalString(routingMethod),
+			RoutingMethod:  optionalString(fields["routingMethod"]),
 		},
 	}, nil
 }
@@ -731,10 +736,6 @@ func parseLLMModelUpdateString(s string) (ModelUpdateConfig, error) {
 		return ModelUpdateConfig{}, fmt.Errorf("name is required")
 	}
 
-	routingMethod, err := normalizeLLMRoutingMethod(fields["routingMethod"])
-	if err != nil {
-		return ModelUpdateConfig{}, err
-	}
 	if err := validateLLMTokenRateLimit(fields["tokenRateLimit"]); err != nil {
 		return ModelUpdateConfig{}, err
 	}
@@ -743,7 +744,7 @@ func parseLLMModelUpdateString(s string) (ModelUpdateConfig, error) {
 		ModelName: name,
 		LLMConfig: &LLMConfigUpdateInput{
 			TokenRateLimit: optionalString(fields["tokenRateLimit"]),
-			RoutingMethod:  optionalString(routingMethod),
+			RoutingMethod:  optionalString(fields["routingMethod"]),
 		},
 	}
 	if update.LLMConfig.TokenRateLimit == nil && update.LLMConfig.RoutingMethod == nil {
@@ -834,37 +835,6 @@ func validateLLMTokenRateLimit(raw string) error {
 	return nil
 }
 
-func normalizeLLMRoutingMethod(value string) (string, error) {
-	if value == "" {
-		return "", nil
-	}
-
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "round_robin":
-		return "round_robin", nil
-	case "round-robin":
-		return "round_robin", nil
-	case "power_of_two":
-		return "power_of_two", nil
-	case "power-of-two":
-		return "power_of_two", nil
-	case "wait_and_widen", "wait-and-widen":
-		return "wait_and_widen", nil
-	case "pulsar_wait_and_widen", "pulsar-wait-and-widen":
-		return "pulsar_wait_and_widen", nil
-	case "groq_multiregion":
-		return "groq_multiregion", nil
-	case "groq-multiregion":
-		return "groq_multiregion", nil
-	case "pulsar":
-		return "pulsar", nil
-	case "random":
-		return "random", nil
-	default:
-		return "", fmt.Errorf("unsupported routingMethod %q (expected round_robin, power_of_two, wait_and_widen, pulsar_wait_and_widen, groq_multiregion, pulsar, or random)", value)
-	}
-}
-
 func optionalString(value string) *string {
 	if value == "" {
 		return nil
@@ -902,10 +872,6 @@ func llmConfigInputToClient(input *LLMConfigInput) (*client.LLMConfigDto, error)
 		return nil, err
 	}
 
-	routingMethod, err := normalizeLLMRoutingMethod(optionalStringValue(input.RoutingMethod))
-	if err != nil {
-		return nil, err
-	}
 	if err := validateLLMTokenRateLimit(optionalStringValue(input.TokenRateLimit)); err != nil {
 		return nil, err
 	}
@@ -913,7 +879,7 @@ func llmConfigInputToClient(input *LLMConfigInput) (*client.LLMConfigDto, error)
 	return &client.LLMConfigDto{
 		URIs:           input.URIs,
 		TokenRateLimit: input.TokenRateLimit,
-		RoutingMethod:  optionalString(routingMethod),
+		RoutingMethod:  optionalString(optionalStringValue(input.RoutingMethod)),
 	}, nil
 }
 
@@ -925,17 +891,13 @@ func modelUpdateConfigToClient(update ModelUpdateConfig) (client.ModelUpdateDto,
 		return client.ModelUpdateDto{}, fmt.Errorf("llmConfig is required")
 	}
 
-	routingMethod, err := normalizeLLMRoutingMethod(optionalStringValue(update.LLMConfig.RoutingMethod))
-	if err != nil {
-		return client.ModelUpdateDto{}, err
-	}
 	if err := validateLLMTokenRateLimit(optionalStringValue(update.LLMConfig.TokenRateLimit)); err != nil {
 		return client.ModelUpdateDto{}, err
 	}
 
 	llmConfig := &client.LLMConfigUpdateDto{
 		TokenRateLimit: update.LLMConfig.TokenRateLimit,
-		RoutingMethod:  optionalString(routingMethod),
+		RoutingMethod:  optionalString(optionalStringValue(update.LLMConfig.RoutingMethod)),
 	}
 	if llmConfig.TokenRateLimit == nil && llmConfig.RoutingMethod == nil {
 		return client.ModelUpdateDto{}, fmt.Errorf("at least one of routingMethod or tokenRateLimit is required")
@@ -1143,7 +1105,9 @@ func loadCreateConfigFile(config *CreateConfig) error {
 		return fmt.Errorf(errParseInputFileFmt, createFlags.inputFile, err)
 	}
 
-	fmt.Printf("Loaded configuration from %s\n", createFlags.inputFile)
+	if !IsJSONOutput() {
+		fmt.Printf("Loaded configuration from %s\n", createFlags.inputFile)
+	}
 	return nil
 }
 
@@ -1524,6 +1488,12 @@ func loadInvokeConfig(cmd *cobra.Command) (*InvokeConfig, error) {
 	if cmd.Flags().Changed("inference-url") {
 		config.InferenceURL = invokeFlags.inferenceURL
 	}
+	if cmd.Flags().Changed("path") {
+		config.Path = invokeFlags.path
+	}
+	if cmd.Flags().Changed("vanity-host") {
+		config.VanityHost = invokeFlags.vanityHost
+	}
 	if cmd.Flags().Changed("model-name") {
 		config.ModelName = invokeFlags.modelName
 	}
@@ -1652,14 +1622,16 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create function: %w", err)
 	}
+	if resp.Function.ID == "" || resp.Function.VersionID == "" {
+		return fmt.Errorf("function create response did not include a function ID and version ID")
+	}
 
 	SetCurrentFunction(resp.Function.ID, resp.Function.VersionID, resp.Function.Name)
 	if err := SaveStateForCurrentCommand(); err != nil {
 		logging.Warning("Failed to save function state: %v", err)
 	}
 
-	printCreateResult(resp, config, health, clientConfig.Demo)
-	return nil
+	return outputCreateResult(resp, config, health, clientConfig.Demo)
 }
 
 func validateCreateConfig(config *CreateConfig) error {
@@ -1907,14 +1879,7 @@ func createAPIBodyFormat(apiBodyFormat string) string {
 	return apiBodyFormat
 }
 
-func printCreateResult(resp *client.CreateFunctionResponse, config *CreateConfig, health *client.HealthDto, demo bool) {
-	logging.Success("Function created successfully!")
-	logging.Plain("Function ID: %s", resp.Function.ID)
-	logging.Plain("Version ID: %s", resp.Function.VersionID)
-	logging.Plain("Name: %s", resp.Function.Name)
-	logging.Plain("Status: %s", resp.Function.Status)
-	logging.Plain("Creation Time: %s", resp.Function.CreationTime)
-
+func outputCreateResult(resp *client.CreateFunctionResponse, config *CreateConfig, health *client.HealthDto, demo bool) error {
 	if demo {
 		if err := generateDemoFolder(resp.Function.ID, resp.Function.VersionID, config); err != nil {
 			logging.Warning("Failed to generate demo folder: %v", err)
@@ -1922,6 +1887,22 @@ func printCreateResult(resp *client.CreateFunctionResponse, config *CreateConfig
 			logging.Success("Demo folder '%s_demo' created with JSON stubs!", resp.Function.VersionID)
 		}
 	}
+
+	if IsJSONOutput() {
+		return OutputJSON(resp)
+	}
+
+	printCreateResult(resp, config, health)
+	return nil
+}
+
+func printCreateResult(resp *client.CreateFunctionResponse, config *CreateConfig, health *client.HealthDto) {
+	logging.Success("Function created successfully!")
+	logging.Plain("Function ID: %s", resp.Function.ID)
+	logging.Plain("Version ID: %s", resp.Function.VersionID)
+	logging.Plain("Name: %s", resp.Function.Name)
+	logging.Plain("Status: %s", resp.Function.Status)
+	logging.Plain("Creation Time: %s", resp.Function.CreationTime)
 
 	if health != nil {
 		logging.Plain("Health Configuration:")
@@ -2239,7 +2220,7 @@ func runInvoke(cmd *cobra.Command, args []string) error {
 	// Use saved function context if function ID/version not specified
 	currentState := GetCurrentState()
 	applySavedInvokeContext(config, currentState)
-	if err := validateInvokeConfig(config); err != nil {
+	if err := validateInvokeConfig(config, invokeFlags.useGRPC); err != nil {
 		return err
 	}
 
@@ -2282,12 +2263,31 @@ func isSavedAPIKeyExpired(currentState *state.State) bool {
 		time.Now().After(currentState.APIKeyExpiration)
 }
 
-func validateInvokeConfig(config *InvokeConfig) error {
+func validateInvokeConfig(config *InvokeConfig, useGRPC bool) error {
+	if config.VanityHost != "" {
+		if useGRPC {
+			return fmt.Errorf("--vanity-host is not supported with --grpc; Vanity Gateway invocation is REST-only")
+		}
+		reqPath := config.Path
+		if reqPath == "" {
+			reqPath = config.InferenceURL
+		}
+		if reqPath == "" {
+			return fmt.Errorf("path (or --inference-url) is required when using --vanity-host")
+		}
+		if config.RequestBody == nil {
+			return fmt.Errorf("request body is required (use --request-body or specify in JSON file)")
+		}
+		return nil
+	}
 	if config.FunctionID == "" {
 		return fmt.Errorf("function ID is required (use --function-id, specify in JSON file, or create a function first)")
 	}
 	if config.VersionID == "" {
 		return fmt.Errorf("version ID is required (use --version-id, specify in JSON file, or create a function first)")
+	}
+	if config.Path != "" {
+		return fmt.Errorf("--path is only supported with --vanity-host (use --inference-url otherwise)")
 	}
 	if config.RequestBody == nil {
 		return fmt.Errorf("request body is required (use --request-body or specify in JSON file)")
@@ -2296,7 +2296,11 @@ func validateInvokeConfig(config *InvokeConfig) error {
 }
 
 func invokeViaREST(ctx context.Context, nvcfClient *client.Client, config *InvokeConfig) error {
-	logging.Info("Using direct REST invocation for function %s (version %s)...", config.FunctionID, config.VersionID)
+	if config.VanityHost != "" {
+		logging.Info("Using Vanity Gateway invocation (host: %s)...", config.VanityHost)
+	} else {
+		logging.Info("Using direct REST invocation for function %s (version %s)...", config.FunctionID, config.VersionID)
+	}
 
 	// Invoke function via direct REST
 	resp, err := nvcfClient.InvokeFunctionWithOptions(
@@ -2314,11 +2318,13 @@ func invokeViaREST(ctx context.Context, nvcfClient *client.Client, config *Invok
 }
 
 func invokeOptionsFromConfig(config *InvokeConfig) *client.InvokeFunctionOptions {
-	if config.InferenceURL == "" && config.ModelName == "" && config.PollDurationSeconds <= 0 {
+	if config.InferenceURL == "" && config.Path == "" && config.VanityHost == "" && config.ModelName == "" && config.PollDurationSeconds <= 0 {
 		return nil
 	}
 	return &client.InvokeFunctionOptions{
 		InferenceURL:        config.InferenceURL,
+		Path:                config.Path,
+		VanityHost:          config.VanityHost,
 		ModelName:           config.ModelName,
 		PollDurationSeconds: config.PollDurationSeconds,
 	}

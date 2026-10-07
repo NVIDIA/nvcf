@@ -31,6 +31,8 @@ import (
 	translateutil "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"
 )
 
+// translateHelmChart converts a Helm function request into Kubernetes resources.
+//
 //nolint:gocyclo // complex function with many conditional branches
 func translateHelmChart(t CreationQueueMessage, tcfg TranslateConfig) (objs []metav1.Object, err error) {
 	// Fail if LLS is enabled for utils pod as a separate pod from the inference pod
@@ -351,7 +353,7 @@ func translateHelmChart(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 			VolumeMounts:    utilsContainerVolumeMounts,
 		}
 		// mutate startup / liveness / readiness probes
-		common.MutateUtilsProbes(&utilsContainer)
+		common.MutateUtilsContainer(&utilsContainer)
 		utilsPod.Spec.Containers = append(utilsPod.Spec.Containers, utilsContainer)
 	} else {
 		// llm functions don't have a utils container. they have a router client container instead.

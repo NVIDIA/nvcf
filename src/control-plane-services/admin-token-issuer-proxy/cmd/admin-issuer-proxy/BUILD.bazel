@@ -43,7 +43,7 @@ go_test(
 # path-format release tag and promotes it by digest.
 go_oci_image(
     name = "image",
-    base = "@distroless_go",
+    base = "@distroless_static",
     binary = ":admin-issuer-proxy",
     binary_path = "/usr/bin/admin-issuer-proxy",
     tags = ["admin-token-issuer-proxy"],

@@ -5,10 +5,10 @@ kind: ClusterRole
 metadata:
   name: dynamo-operator-dgdr-profiling
   labels:
-    helm.sh/chart: dynamo-operator-1.4.1
+    helm.sh/chart: dynamo-operator-1.4.2
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.1"
+    app.kubernetes.io/version: "1.4.2"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: dgdr-profiling
 rules:
@@ -42,10 +42,10 @@ kind: ClusterRoleBinding
 metadata:
   name: dynamo-operator-dgdr-profiling
   labels:
-    helm.sh/chart: dynamo-operator-1.4.1
+    helm.sh/chart: dynamo-operator-1.4.2
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.4.1"
+    app.kubernetes.io/version: "1.4.2"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: dgdr-profiling
 roleRef:

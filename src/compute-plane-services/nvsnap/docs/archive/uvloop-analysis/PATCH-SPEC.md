@@ -1,13 +1,16 @@
 # uvloop 0.21.0 CRIU Restore Patch Specification
 
 ## Version & Location
+
 - **uvloop**: 0.21.0
 - **Python**: 3.12  
 - **Container**: vllm/vllm-openai
 - **Path**: `/usr/local/lib/python3.12/dist-packages/uvloop/`
 
 ## Source Files Extracted
+
 All source files are in: `docs/uvloop-analysis/`
+
 - `process.pyx` - UVProcess class (crash location)
 - `handle.pyx` - UVHandle base class
 
@@ -15,7 +18,7 @@ All source files are in: `docs/uvloop-analysis/`
 
 ## Class Hierarchy
 
-```
+```text
 UVHandle (handle.pyx)
     └── UVProcess (process.pyx)
             └── UVProcessTransport (process.pyx)
@@ -40,6 +43,7 @@ def __cinit__(self):
 ## Where _handle is First Dereferenced
 
 ### 1. `_ensure_alive()` (handle.pyx:157-161)
+
 Called before any libuv operation. Checks `_closed` and `_inited` but doesn't validate `_handle` pointer.
 
 ```cython
@@ -49,6 +53,7 @@ cdef inline _ensure_alive(self):
 ```
 
 ### 2. `_is_alive()` (handle.pyx:135-155)  
+
 This is where UVLOOP_DEBUG validates `_handle.loop` and `_handle.data`:
 
 ```cython
@@ -66,6 +71,7 @@ cdef inline bint _is_alive(self):
 ```
 
 ### 3. `_close()` (handle.pyx:184-212)
+
 Dereferences `_handle` to call `uv_close()`:
 
 ```cython
@@ -81,6 +87,7 @@ cdef _close(self):
 ```
 
 ### 4. UVProcess._kill() (process.pyx:334-339)
+
 Calls into libuv with stale handle:
 
 ```cython
@@ -90,6 +97,7 @@ cdef _kill(self, int signum):
 ```
 
 ### 5. UVProcess._close_process_handle() (process.pyx:15-23)
+
 ```cython
 cdef _close_process_handle(self):
     if self._handle is NULL:
@@ -115,7 +123,7 @@ if getenv("NVSNAP_RESTORED") != NULL:
     _RESTORE_GEN = 1
 ```
 
-**Add `_gen` field to UVHandle.__cinit__ (line 14-20):**
+**Add `_gen` field to `UVHandle.__cinit__` (line 14-20):**
 
 ```cython
 def __cinit__(self):

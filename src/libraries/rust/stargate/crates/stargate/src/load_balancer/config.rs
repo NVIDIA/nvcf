@@ -68,6 +68,14 @@ pub enum LoadBalancerAlgorithm {
     PulsarWaitAndWiden,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum PulsarRendezvousWeight {
+    LastMeanInputTps,
+    #[default]
+    MaxInputTps,
+}
+
 impl LoadBalancerAlgorithm {
     pub const ALL: [Self; 6] = [
         Self::PowerOfN,
@@ -195,6 +203,16 @@ pub struct WaitAndWidenAlgorithmConfig {
     pub comparator: Option<ClusterComparator>,
     pub cache_affinity_virtual_nodes: Option<usize>,
     pub cache_affinity_backend_selection_count: Option<usize>,
+    pub cache_affinity_input_tokens_scale: Option<f64>,
+    /// Keep public buckets closed for this many milliseconds after request arrival.
+    /// Defaults to zero. Queue and TTFT selection still apply within the affinity group.
+    pub cache_affinity_wait_ms: Option<u64>,
+    /// Pulsar wait-and-widen only: time between ranking-band openings after
+    /// the affinity wait. Defaults to `cache_affinity_wait_ms`.
+    pub band_widen_interval_ms: Option<u64>,
+    /// Pulsar wait-and-widen only: `max_queued` for open-set selection after
+    /// the affinity wait. Defaults to `0`, so overflow needs a free engine slot.
+    pub fallback_max_queued: Option<u64>,
     pub max_queue_time_floor_ms: Option<u64>,
     pub max_queue_time_ceil_ms: Option<u64>,
     pub ttft_bucket_size_ms: Option<u64>,
@@ -203,6 +221,18 @@ pub struct WaitAndWidenAlgorithmConfig {
     pub max_queued: Option<u64>,
     pub ignore_queue_time: Option<bool>,
     pub ignore_input_processing_time: Option<bool>,
+}
+
+impl WaitAndWidenAlgorithmConfig {
+    pub(crate) fn validated_cache_affinity_input_tokens_scale(&self) -> Result<f64, String> {
+        let scale = self.cache_affinity_input_tokens_scale.unwrap_or(1.0);
+        if !(0.0..=1.0).contains(&scale) {
+            return Err(format!(
+                "cache_affinity_input_tokens_scale must be between 0.0 and 1.0, got {scale}"
+            ));
+        }
+        Ok(scale)
+    }
 }
 
 fn deserialize_present_comparator<'de, D>(
@@ -280,6 +310,7 @@ pub struct LoadBalancerAlgorithmConfig {
     pub max_input_work_seconds: Option<f64>,
     pub request_algorithms: HashMap<LoadBalancerAlgorithm, LoadBalancerModelConfig>,
     pub settings: LoadBalancerAlgorithmSettings,
+    pub(crate) rendezvous_weight: PulsarRendezvousWeight,
 }
 
 impl LoadBalancerAlgorithmConfig {
@@ -436,6 +467,7 @@ impl RawCommonAlgorithmConfig {
         self,
         settings: LoadBalancerAlgorithmSettings,
         consider_kv_free_tokens: Option<bool>,
+        rendezvous_weight: PulsarRendezvousWeight,
     ) -> Result<LoadBalancerAlgorithmConfig, String> {
         let algorithm = settings.algorithm();
         if !self.unsupported_fields.is_empty() {
@@ -458,6 +490,7 @@ impl RawCommonAlgorithmConfig {
             max_input_work_seconds: self.max_input_work_seconds,
             request_algorithms: self.request_algorithms,
             settings,
+            rendezvous_weight,
         })
     }
 }
@@ -493,6 +526,8 @@ enum RawLoadBalancerAlgorithmConfig {
     Pulsar {
         seed: Option<String>,
         consider_kv_free_tokens: Option<bool>,
+        #[serde(default)]
+        rendezvous_weight: PulsarRendezvousWeight,
         #[serde(flatten)]
         common: RawCommonAlgorithmConfig,
     },
@@ -501,6 +536,8 @@ enum RawLoadBalancerAlgorithmConfig {
         #[serde(flatten)]
         settings: WaitAndWidenAlgorithmConfig,
         consider_kv_free_tokens: Option<bool>,
+        #[serde(default)]
+        rendezvous_weight: PulsarRendezvousWeight,
         #[serde(flatten)]
         common: RawCommonAlgorithmConfig,
     },
@@ -513,47 +550,73 @@ impl RawLoadBalancerAlgorithmConfig {
         RawCommonAlgorithmConfig,
         LoadBalancerAlgorithmSettings,
         Option<bool>,
+        PulsarRendezvousWeight,
     ) {
         match self {
             Self::PowerOfN { settings, common } => (
                 common,
                 LoadBalancerAlgorithmSettings::PowerOfN(settings),
                 None,
+                PulsarRendezvousWeight::default(),
             ),
             Self::WaitAndWiden { settings, common } => (
                 common,
                 LoadBalancerAlgorithmSettings::WaitAndWiden(settings),
                 None,
+                PulsarRendezvousWeight::default(),
             ),
-            Self::RoundRobin(common) => (common, LoadBalancerAlgorithmSettings::RoundRobin, None),
-            Self::Random(common) => (common, LoadBalancerAlgorithmSettings::Random, None),
+            Self::RoundRobin(common) => (
+                common,
+                LoadBalancerAlgorithmSettings::RoundRobin,
+                None,
+                PulsarRendezvousWeight::default(),
+            ),
+            Self::Random(common) => (
+                common,
+                LoadBalancerAlgorithmSettings::Random,
+                None,
+                PulsarRendezvousWeight::default(),
+            ),
             Self::Pulsar {
                 seed,
                 consider_kv_free_tokens,
+                rendezvous_weight,
                 common,
             } => (
                 common,
                 LoadBalancerAlgorithmSettings::Pulsar(seed),
                 consider_kv_free_tokens,
+                rendezvous_weight,
             ),
             Self::PulsarWaitAndWiden {
                 settings,
                 consider_kv_free_tokens,
+                rendezvous_weight,
                 common,
             } => (
                 common,
                 LoadBalancerAlgorithmSettings::PulsarWaitAndWiden(settings),
                 consider_kv_free_tokens,
+                rendezvous_weight,
             ),
         }
     }
 
     fn into_config(self) -> Result<LoadBalancerAlgorithmConfig, String> {
-        let (common, settings, consider_kv_free_tokens) = self.normalized();
-        if let LoadBalancerAlgorithmSettings::PowerOfN(config) = &settings {
-            config.validated_sample_count()?;
+        let (common, settings, consider_kv_free_tokens, rendezvous_weight) = self.normalized();
+        match &settings {
+            LoadBalancerAlgorithmSettings::PowerOfN(config) => {
+                config.validated_sample_count()?;
+            }
+            LoadBalancerAlgorithmSettings::WaitAndWiden(config)
+            | LoadBalancerAlgorithmSettings::PulsarWaitAndWiden(config) => {
+                config.validated_cache_affinity_input_tokens_scale()?;
+            }
+            LoadBalancerAlgorithmSettings::RoundRobin
+            | LoadBalancerAlgorithmSettings::Random
+            | LoadBalancerAlgorithmSettings::Pulsar(_) => {}
         }
-        common.into_config(settings, consider_kv_free_tokens)
+        common.into_config(settings, consider_kv_free_tokens, rendezvous_weight)
     }
 }
 

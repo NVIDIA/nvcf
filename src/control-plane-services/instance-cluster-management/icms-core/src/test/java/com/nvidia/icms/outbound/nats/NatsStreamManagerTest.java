@@ -16,271 +16,211 @@
  */
 package com.nvidia.icms.outbound.nats;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.Mockito.any;
-import static org.mockito.Mockito.anyString;
-import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.mock;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
-import com.nvidia.icms.configuration.bean.NatsConfigurationProperties;
+import com.nvidia.icms.configuration.nats.NatsConfigurationProperties;
 import io.nats.client.Connection;
-import io.nats.client.ConsumerContext;
 import io.nats.client.JetStreamApiException;
 import io.nats.client.JetStreamManagement;
-import io.nats.client.StreamContext;
-import io.nats.client.api.ConsumerConfiguration;
+import io.nats.client.api.RetentionPolicy;
+import io.nats.client.api.StorageType;
 import io.nats.client.api.StreamConfiguration;
 import io.nats.client.api.StreamInfo;
 import io.nats.client.support.Status;
-import java.io.IOException;
 import java.time.Duration;
-import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.jupiter.MockitoExtension;
 
-/**
- * Unit tests for the NatsStreamManager class.
- * This class validates the behavior of stream and consumer management in NATS.
- */
+@ExtendWith(MockitoExtension.class)
 class NatsStreamManagerTest {
 
     @Mock
-    private NatsConnectionFactory natsConnectionFactory;
+    private Connection connection;
+    @Mock
+    private JetStreamManagement management;
     @Mock
     private NatsConfigurationProperties natsConfigurationProperties;
-    @Mock
-    private JetStreamManagement jetStreamManagement;
-    @Mock
-    private StreamContext streamContext;
-    @Mock
-    private ConsumerContext consumerContext;
-    @Mock
-    private Connection natsConnection;
+
     private NatsStreamManager natsStreamManager;
 
-    /**
-     * Sets up the test environment by initializing mocks and configuring default behavior.
-     */
     @BeforeEach
-    void setUp()
-            throws IOException, InterruptedException, JetStreamApiException {
-        MockitoAnnotations.openMocks(this);
-
-        when(natsConnectionFactory.createConnectionIfNeeded()).thenReturn(natsConnection);
-        when(natsConnectionFactory.createConnectionIfNeeded().jetStreamManagement()).thenReturn(
-                jetStreamManagement);
-        when(natsConnectionFactory.createConnectionIfNeeded()
-                     .getStreamContext(anyString())).thenReturn(streamContext);
-
-        when(natsConfigurationProperties.isCreateNatsStreams()).thenReturn(false);
-        natsStreamManager = new NatsStreamManager(natsConnectionFactory,
-                                                  natsConfigurationProperties,
-                                                  List.of(new CoreNatsStreamRegistrar()));
+    void setUp() throws Exception {
+        when(connection.jetStreamManagement()).thenReturn(management);
+        natsStreamManager = new NatsStreamManager(connection, natsConfigurationProperties);
     }
 
-    /**
-     * Validates that all required streams are created if they do not exist.
-     */
     @Test
-    void validateNatsStreams_createsAllStreamsIfNotExist()
-            throws IOException, JetStreamApiException {
-        // Mock
-        when(jetStreamManagement.getStreamInfo(anyString())).thenThrow(
-                streamNotFoundException());
-        when(jetStreamManagement.addStream(any(StreamConfiguration.class))).thenReturn(
-                mock(StreamInfo.class));
+    void validateNatsStreams_createsNvcaStreamsWithExistingConfiguration() throws Exception {
+        when(natsConfigurationProperties.getMessageTtl()).thenReturn(Duration.ofHours(24));
+        when(natsConfigurationProperties.getReplicas()).thenReturn(3);
+        when(management.getStreamInfo(any()))
+                .thenThrow(apiException(Status.NOT_FOUND_CODE));
 
-        // Act
         natsStreamManager.validateNatsStreams();
 
-        // Assert
-        verify(jetStreamManagement, times(2)).addStream(any(StreamConfiguration.class));
+        var captor = ArgumentCaptor.forClass(StreamConfiguration.class);
+        verify(management, times(2)).addStream(captor.capture());
+        var streams = captor.getAllValues();
+
+        assertStream(streams.get(0), NatsStreamManager.CREATE_NVCA_STREAM_NAME,
+                     "Create.NVCA.>");
+        assertStream(streams.get(1), NatsStreamManager.TERMINATE_NVCA_STREAM_NAME,
+                     "Terminate.NVCA.>");
+        assertEquals(3, streams.get(0).getReplicas());
+        assertEquals(3, streams.get(1).getReplicas());
     }
 
-    /**
-     * Tests successful creation of a stream.
-     */
     @Test
-    void createStream_createsStreamSuccessfully()
-            throws IOException, JetStreamApiException, InterruptedException {
-        // Mock
-        when(jetStreamManagement.addStream(any(StreamConfiguration.class))).thenReturn(
-                mock(StreamInfo.class));
+    void init_doesNothingWhenNatsIsDisabled() throws Exception {
+        when(natsConfigurationProperties.isEnabled()).thenReturn(false);
+
+        natsStreamManager.init();
+
+        verifyNoInteractions(management);
+    }
+
+    @Test
+    void init_doesNothingWhenStreamCreationIsDisabled() throws Exception {
+        when(natsConfigurationProperties.isEnabled()).thenReturn(true);
+        when(natsConfigurationProperties.isCreateNatsStreams()).thenReturn(false);
+
+        natsStreamManager.init();
+
+        verifyNoInteractions(management);
+    }
+
+    @Test
+    void init_createsBothStreams() throws Exception {
+        when(natsConfigurationProperties.isEnabled()).thenReturn(true);
+        when(natsConfigurationProperties.isCreateNatsStreams()).thenReturn(true);
         when(natsConfigurationProperties.getMessageTtl()).thenReturn(Duration.ofHours(24));
+        when(natsConfigurationProperties.getReplicas()).thenReturn(1);
+        when(management.getStreamInfo(any()))
+                .thenThrow(apiException(Status.NOT_FOUND_CODE));
 
-        // Act
-        StreamInfo streamInfo = natsStreamManager.createStream("TestStream", "Test.Subject");
+        natsStreamManager.init();
 
-        // Assert
-        assertNotNull(streamInfo);
-        verify(jetStreamManagement, times(1)).addStream(any(StreamConfiguration.class));
+        verify(management, times(2)).addStream(any());
     }
 
-    /**
-     * Tests exception handling during stream creation.
-     */
     @Test
-    void createStream_throwsExceptionOnFailure()
-            throws IOException, JetStreamApiException {
-        // Mock
-        when(jetStreamManagement.addStream(any(StreamConfiguration.class))).thenThrow(
-                new IOException("Stream creation failed"));
+    void createStream_doesNotModifyExistingStream() throws Exception {
+        var configuration = streamConfiguration();
+        var streamInfo = org.mockito.Mockito.mock(StreamInfo.class);
+        when(streamInfo.getConfiguration()).thenReturn(configuration);
+        when(management.getStreamInfo(configuration.getName())).thenReturn(streamInfo);
 
-        // Act & Assert
-        assertThrows(IOException.class,
-                     () -> natsStreamManager.createStream("TestStream", "Test.Subject"));
+        natsStreamManager.createStream(configuration);
+
+        verify(management, never()).addStream(configuration);
+        verify(management, never()).updateStream(any());
     }
 
-    /**
-     * Tests successful deletion of a stream.
-     */
     @Test
-    void deleteStream_deletesStreamSuccessfully()
-            throws IOException, JetStreamApiException, InterruptedException {
-        // Act
-        natsStreamManager.deleteStream("TestStream");
+    void createStream_raisesReplicasOfExistingStream() throws Exception {
+        var configuration = streamConfiguration(3);
+        var existing = StreamConfiguration.builder(streamConfiguration(1))
+                .maxBytes(1024)
+                .build();
+        var streamInfo = org.mockito.Mockito.mock(StreamInfo.class);
+        when(streamInfo.getConfiguration()).thenReturn(existing);
+        when(management.getStreamInfo(configuration.getName())).thenReturn(streamInfo);
 
-        // Assert
-        verify(jetStreamManagement, times(1)).deleteStream("TestStream");
+        natsStreamManager.createStream(configuration);
+
+        var captor = ArgumentCaptor.forClass(StreamConfiguration.class);
+        verify(management).updateStream(captor.capture());
+        assertEquals(3, captor.getValue().getReplicas());
+        assertEquals(1024, captor.getValue().getMaxBytes());
+        verify(management, never()).addStream(any());
     }
 
-    /**
-     * Tests exception handling during stream deletion.
-     */
     @Test
-    void deleteStream_throwsExceptionOnFailure()
-            throws IOException, JetStreamApiException {
-        // Mock
-        doThrow(new IOException("Stream deletion failed")).when(jetStreamManagement)
-                .deleteStream(anyString());
+    void createStream_doesNotLowerReplicasOfExistingStream() throws Exception {
+        var configuration = streamConfiguration(1);
+        var streamInfo = org.mockito.Mockito.mock(StreamInfo.class);
+        when(streamInfo.getConfiguration()).thenReturn(streamConfiguration(3));
+        when(management.getStreamInfo(configuration.getName())).thenReturn(streamInfo);
 
-        // Act & Assert
-        assertThrows(IOException.class, () -> natsStreamManager.deleteStream("TestStream"));
+        natsStreamManager.createStream(configuration);
+
+        verify(management, never()).updateStream(any());
     }
 
-    /**
-     * Tests retrieval of stream information if the stream exists.
-     */
     @Test
-    void getStream_returnsStreamInfoIfExists()
-            throws IOException, InterruptedException, JetStreamApiException {
-        // Mock
-        StreamInfo mockStreamInfo = mock(StreamInfo.class);
-        when(jetStreamManagement.getStreamInfo("TestStream")).thenReturn(mockStreamInfo);
+    void createStream_rejectsIncompatibleExistingStream() throws Exception {
+        var configuration = streamConfiguration();
+        var existing = StreamConfiguration.builder()
+                .name(configuration.getName())
+                .subjects("other.>")
+                .build();
+        var streamInfo = org.mockito.Mockito.mock(StreamInfo.class);
+        when(streamInfo.getConfiguration()).thenReturn(existing);
+        when(management.getStreamInfo(configuration.getName())).thenReturn(streamInfo);
 
-        // Act
-        StreamInfo streamInfo = natsStreamManager.getStream("TestStream");
-
-        // Assert
-        assertNotNull(streamInfo);
-        verify(jetStreamManagement, times(1)).getStreamInfo("TestStream");
+        assertThrows(IllegalStateException.class,
+                     () -> natsStreamManager.createStream(configuration));
+        verify(management, never()).addStream(configuration);
     }
 
-    /**
-     * Tests retrieval of stream information when the stream does not exist.
-     */
     @Test
-    void getStream_returnsNullIfStreamDoesNotExist()
-            throws IOException, InterruptedException, JetStreamApiException {
-        // Mock
-        when(jetStreamManagement.getStreamInfo("TestStream")).thenThrow(
-                streamNotFoundException());
+    void createStream_addsMissingStream() throws Exception {
+        var configuration = streamConfiguration();
+        when(management.getStreamInfo(configuration.getName()))
+                .thenThrow(apiException(Status.NOT_FOUND_CODE));
 
-        // Act
-        StreamInfo streamInfo = natsStreamManager.getStream("TestStream");
+        natsStreamManager.createStream(configuration);
 
-        // Assert
-        assertNull(streamInfo);
+        verify(management).addStream(configuration);
     }
 
-    /**
-     * Tests creation of a stream if it does not exist.
-     */
     @Test
-    void getOrCreateStream_createsStreamIfNotExists()
-            throws IOException, JetStreamApiException {
-        // Mock
-        when(jetStreamManagement.getStreamInfo("TestStream")).thenThrow(
-                streamNotFoundException());
-        when(jetStreamManagement.addStream(any(StreamConfiguration.class))).thenReturn(
-                mock(StreamInfo.class));
+    void createStream_propagatesLookupFailure() throws Exception {
+        var configuration = streamConfiguration();
+        when(management.getStreamInfo(configuration.getName()))
+                .thenThrow(apiException(500));
 
-        // Act
-        StreamInfo streamInfo = natsStreamManager.getOrCreateStream("TestStream", "Test.Subject");
-
-        // Assert
-        assertNotNull(streamInfo);
-        verify(jetStreamManagement, times(1)).addStream(any(StreamConfiguration.class));
+        assertThrows(JetStreamApiException.class,
+                     () -> natsStreamManager.createStream(configuration));
+        verify(management, never()).addStream(configuration);
     }
 
-    /**
-     * Tests retrieval of an existing stream without creating a new one.
-     */
-    @Test
-    void getOrCreateStream_returnsExistingStreamIfExists()
-            throws IOException, JetStreamApiException {
-        // Mock
-        StreamInfo mockStreamInfo = mock(StreamInfo.class);
-        when(jetStreamManagement.getStreamInfo("TestStream")).thenReturn(mockStreamInfo);
-
-        // Act
-        StreamInfo streamInfo = natsStreamManager.getOrCreateStream("TestStream", "Test.Subject");
-
-        // Assert
-        assertNotNull(streamInfo);
-        verify(jetStreamManagement, times(0)).addStream(any(StreamConfiguration.class));
+    private static void assertStream(
+            StreamConfiguration stream, String expectedName, String expectedSubject) {
+        assertEquals(expectedName, stream.getName());
+        assertEquals(java.util.List.of(expectedSubject), stream.getSubjects());
+        assertEquals(StorageType.Memory, stream.getStorageType());
+        assertEquals(RetentionPolicy.WorkQueue, stream.getRetentionPolicy());
+        assertEquals(1_000_000, stream.getMaxMsgs());
+        assertEquals(Duration.ofHours(24), stream.getMaxAge());
     }
 
-    /**
-     * Tests successful creation of a consumer.
-     */
-    @Test
-    void createConsumer_createsConsumerSuccessfully()
-            throws IOException, JetStreamApiException {
-        // Mock
-        when(streamContext.createOrUpdateConsumer(any(ConsumerConfiguration.class))).thenReturn(
-                consumerContext);
-
-        // Act
-        ConsumerContext result = natsStreamManager.createConsumer("TestStream", "TestConsumer",
-                                                                  "Test.Subject");
-
-        // Assert
-        assertNotNull(result);
-        verify(streamContext, times(1)).createOrUpdateConsumer(any(ConsumerConfiguration.class));
+    private static StreamConfiguration streamConfiguration() {
+        return streamConfiguration(1);
     }
 
-    /**
-     * Tests error handling during consumer creation.
-     */
-    @Test
-    void createConsumer_logsErrorOnFailure()
-            throws IOException, JetStreamApiException {
-        // Mock
-        when(streamContext.createOrUpdateConsumer(any(ConsumerConfiguration.class))).thenThrow(
-                new IOException("Consumer creation failed"));
-
-        // Act
-        ConsumerContext result = natsStreamManager.createConsumer("TestStream", "TestConsumer",
-                                                                  "Test.Subject");
-
-        // Assert
-        assertNull(result);
-        verify(streamContext, times(1)).createOrUpdateConsumer(any(ConsumerConfiguration.class));
+    private static StreamConfiguration streamConfiguration(int replicas) {
+        return StreamConfiguration.builder()
+                .name("stream")
+                .subjects("subject.>")
+                .replicas(replicas)
+                .build();
     }
 
-    /**
-     * Builds the error the JetStream API reports when a stream does not exist.
-     */
-    private static JetStreamApiException streamNotFoundException() {
-        Status notFound = new Status(Status.NOT_FOUND_CODE, "Stream not found");
-        return new JetStreamApiException(io.nats.client.api.Error.convert(notFound));
+    private static JetStreamApiException apiException(int statusCode) {
+        var status = new Status(statusCode, "test error");
+        var error = io.nats.client.api.Error.convert(status);
+        return new JetStreamApiException(error);
     }
 }

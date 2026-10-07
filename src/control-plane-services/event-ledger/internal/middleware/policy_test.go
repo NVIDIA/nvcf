@@ -19,348 +19,141 @@ package middleware
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/config"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/nvca"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 	policyclient "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/policy"
 	pdpv1 "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap/zaptest/observer"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// RuleRequest simulates the pdp_types.RuleRequest type for testing
-type RuleRequest struct {
-	Namespace string                 `json:"namespace,omitempty"`
-	RuleName  string                 `json:"rule_name,omitempty"`
-	Input     map[string]interface{} `json:"input,omitempty"`
+type stubPolicyClient struct {
+	called  bool
+	lastReq *pdpv1.RuleRequest
+	result  map[string]interface{}
+	empty   bool
+	err     error
 }
 
-// RuleResponse simulates the pdp_types.RuleResponse type for testing
-type RuleResponse struct {
-	Result json.RawMessage `json:"result,omitempty"`
-}
-
-// PolicyConfig simulates the clients.PolicyConfig type for testing
-type PolicyConfig struct {
-	Namespace    string
-	PolicyFQDN   string
-	SubjectField string
-	APIKeyField  string
-}
-
-// PolicyAuthZClientInterface matches the interface used by the middleware
-type PolicyAuthZClientInterface interface {
-	Evaluate(ctx context.Context, req *RuleRequest) (*RuleResponse, error)
-	PolicyConfig() *PolicyConfig
-}
-
-// testPolicyMiddleware is a test-specific version of NewPolicyMiddleware that works with our test interfaces
-func testPolicyMiddleware(testClient PolicyAuthZClientInterface, serviceName string, jwtPubKeySetURL string, jwtTokenExpiration time.Duration) mux.MiddlewareFunc {
-	if testClient == nil {
-		return func(next http.Handler) http.Handler {
-			return next
-		}
-	}
-
-	// For tests, we don't need to actually set up JWT middleware
-	// Just keep the URLs for reference in the tests
-	_ = jwtPubKeySetURL
-	_ = jwtTokenExpiration
-
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// 1. Extract the token (simple bearer token extraction)
-			token := ""
-			authHeader := r.Header.Get("Authorization")
-			if authHeader != "" && len(authHeader) > 7 && authHeader[:7] == "Bearer " {
-				token = authHeader[7:]
-			}
-
-			// 2. Set up auth context from client request
-			policyConfig := testClient.PolicyConfig()
-			apiKeyField := policyConfig.APIKeyField
-			if apiKeyField == "" {
-				apiKeyField = defaultAuthAPIKeyField
-			}
-			authCtx := map[string]interface{}{
-				"path":    r.URL.Path,
-				"method":  r.Method,
-				"service": serviceName,
-			}
-
-			// Add token if available
-			if token != "" {
-				setAuthContextField(authCtx, apiKeyField, token)
-			}
-
-			// 3. Prepare request for Evaluate
-			testReq := &RuleRequest{
-				Namespace: policyConfig.Namespace,
-				RuleName:  policyConfig.PolicyFQDN,
-				Input:     authCtx,
-			}
-
-			// 4. Call Evaluate on the test client
-			testResp, err := testClient.Evaluate(r.Context(), testReq)
-			if err != nil {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-
-			// 5. Parse the response
-			if testResp == nil || testResp.Result == nil {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-
-			var authResponse PolicyAuthzResponse
-			if err := json.Unmarshal(testResp.Result, &authResponse); err != nil {
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
-				return
-			}
-
-			// 6. Check if allowed
-			if !authResponse.Allow {
-				message := "Unauthorized"
-				statusCode := authResponse.StatusCode
-				if statusCode == 0 {
-					statusCode = http.StatusUnauthorized
-				}
-
-				if len(authResponse.Reasons) > 0 {
-					message = authResponse.Reasons[0]
-				}
-
-				http.Error(w, message, statusCode)
-				return
-			}
-
-			// 7. Authorization succeeded - enrich context with user info
-			ctx := r.Context()
-
-			// Add claims to context
-			if authResponse.ActorID != "" {
-				ctx = context.WithValue(ctx, policyActorIDContextKey, authResponse.ActorID)
-			}
-			if authResponse.OrgName != "" {
-				ctx = context.WithValue(ctx, policyOrgNameContextKey, authResponse.OrgName)
-			}
-			if authResponse.ActorType != "" {
-				ctx = context.WithValue(ctx, policyActorTypeContextKey, authResponse.ActorType)
-			}
-			if len(authResponse.Roles) > 0 {
-				ctx = context.WithValue(ctx, policyRolesContextKey, authResponse.Roles)
-			}
-
-			// Get JWT claims if they exist
-			var jwtClaims map[string]interface{}
-			if jwtClaimsValue := ctx.Value(claimsContextKey); jwtClaimsValue != nil {
-				if mapClaims, ok := jwtClaimsValue.(jwt.MapClaims); ok {
-					jwtClaims = map[string]interface{}(mapClaims)
-				}
-			}
-
-			claims := mergePolicyClaims(jwtClaims, authResponse)
-
-			ctx = context.WithValue(ctx, policyClaimsContextKey, claims)
-
-			// 8. Update request with enriched context and call next handler
-			r = r.WithContext(ctx)
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-// Test Fixture: Success Policy client that always authorizes
-type PassPolicyClient struct{}
-
-func (c *PassPolicyClient) Evaluate(ctx context.Context, req *RuleRequest) (*RuleResponse, error) {
-	resp := PolicyAuthzResponse{
-		Allow:      true,
-		StatusCode: 200,
-		ActorID:    "user123",
-		OrgName:    "org123",
-		ActorType:  "user",
-		Roles:      []string{"admin", "user"},
-		Reasons:    []string{"authorized"},
-	}
-	data, _ := json.Marshal(resp)
-	return &RuleResponse{Result: data}, nil
-}
-
-func (c *PassPolicyClient) PolicyConfig() *PolicyConfig {
-	return &PolicyConfig{
-		Namespace:  "testns",
-		PolicyFQDN: "testpolicy",
-	}
-}
-
-// Test Fixture: Anonymous Policy client for no token scenarios
-type AnonymousPolicyClient struct{}
-
-func (c *AnonymousPolicyClient) Evaluate(ctx context.Context, req *RuleRequest) (*RuleResponse, error) {
-	resp := PolicyAuthzResponse{
-		Allow:      true,
-		StatusCode: 200,
-		ActorID:    "anonymous",
-		OrgName:    "anonymous",
-		ActorType:  "anonymous",
-		Roles:      []string{"guest"},
-		Reasons:    []string{"authorized"},
-	}
-	data, _ := json.Marshal(resp)
-	return &RuleResponse{Result: data}, nil
-}
-
-func (c *AnonymousPolicyClient) PolicyConfig() *PolicyConfig {
-	return &PolicyConfig{
-		Namespace:  "testns",
-		PolicyFQDN: "testpolicy",
-	}
-}
-
-// Test Fixture: Forbidden Policy client that denies access
-type ForbiddenPolicyClient struct{}
-
-func (c *ForbiddenPolicyClient) Evaluate(ctx context.Context, req *RuleRequest) (*RuleResponse, error) {
-	resp := PolicyAuthzResponse{
-		Allow:      false,
-		StatusCode: 403,
-		Reasons:    []string{"unauthorized access"},
-	}
-	data, _ := json.Marshal(resp)
-	return &RuleResponse{Result: data}, nil
-}
-
-func (c *ForbiddenPolicyClient) PolicyConfig() *PolicyConfig {
-	return &PolicyConfig{
-		Namespace:  "testns",
-		PolicyFQDN: "testpolicy",
-	}
-}
-
-// Test Fixture: Error Policy client that returns an error
-type ErrorPolicyClient struct{}
-
-func (c *ErrorPolicyClient) Evaluate(ctx context.Context, req *RuleRequest) (*RuleResponse, error) {
-	return nil, fmt.Errorf("service unavailable")
-}
-
-func (c *ErrorPolicyClient) PolicyConfig() *PolicyConfig {
-	return &PolicyConfig{
-		Namespace:  "testns",
-		PolicyFQDN: "testpolicy",
-	}
-}
-
-// Test Fixture: Empty Policy client that returns an empty response
-type EmptyPolicyClient struct{}
-
-func (c *EmptyPolicyClient) Evaluate(ctx context.Context, req *RuleRequest) (*RuleResponse, error) {
-	return &RuleResponse{}, nil
-}
-
-func (c *EmptyPolicyClient) PolicyConfig() *PolicyConfig {
-	return &PolicyConfig{
-		Namespace:  "testns",
-		PolicyFQDN: "testpolicy",
-	}
-}
-
-// Test Fixture: JWT Policy client for JWT integration tests
-type JWTPolicyClient struct{}
-
-func (c *JWTPolicyClient) Evaluate(ctx context.Context, req *RuleRequest) (*RuleResponse, error) {
-	resp := PolicyAuthzResponse{
-		Allow:      true,
-		StatusCode: 200,
-		ActorID:    "user456",
-		OrgName:    "org456",
-		ActorType:  "user",
-		Roles:      []string{"admin"},
-		Reasons:    []string{"authorized"},
-	}
-	data, _ := json.Marshal(resp)
-	return &RuleResponse{Result: data}, nil
-}
-
-func (c *JWTPolicyClient) PolicyConfig() *PolicyConfig {
-	return &PolicyConfig{
-		Namespace:  "testns",
-		PolicyFQDN: "testpolicy",
-	}
-}
-
-type rejectingJWTPolicyClient struct {
-	called bool
-}
-
-func (c *rejectingJWTPolicyClient) Evaluate(ctx context.Context, req *pdpv1.RuleRequest) (*pdpv1.RuleResponse, error) {
+func (c *stubPolicyClient) Evaluate(_ context.Context, req *pdpv1.RuleRequest) (*pdpv1.RuleResponse, error) {
 	c.called = true
-	return nil, nil
-}
-
-func (c *rejectingJWTPolicyClient) PolicyConfig() *policyclient.PolicyConfig {
-	return &policyclient.PolicyConfig{
-		Namespace:  "testns",
-		PolicyFQDN: "testpolicy",
+	c.lastReq = req
+	if c.err != nil {
+		return nil, c.err
 	}
+	if c.empty {
+		return &pdpv1.RuleResponse{}, nil
+	}
+	result, err := structpb.NewValue(c.result)
+	if err != nil {
+		return nil, err
+	}
+	return &pdpv1.RuleResponse{Result: result}, nil
 }
 
-// Test fixture interface
-type TestFixture interface {
-	GetPolicyClient() PolicyAuthZClientInterface
+func (c *stubPolicyClient) PolicyConfig() *policyclient.PolicyConfig {
+	return &policyclient.PolicyConfig{Namespace: "testns", PolicyFQDN: "testpolicy"}
 }
 
-// Success fixture
-type PassFixture struct{}
-
-func (f *PassFixture) GetPolicyClient() PolicyAuthZClientInterface {
-	return &PassPolicyClient{}
+func allowResult(overrides map[string]interface{}) map[string]interface{} {
+	result := map[string]interface{}{
+		"allow":      true,
+		"statusCode": 200,
+		"actorId":    "user123",
+		"orgName":    "org123",
+		"actorType":  "user",
+		"roles":      []interface{}{"admin", "user"},
+		"reasons":    []interface{}{"authorized"},
+	}
+	for k, v := range overrides {
+		result[k] = v
+	}
+	return result
 }
 
-// Anonymous fixture
-type AnonymousFixture struct{}
-
-func (f *AnonymousFixture) GetPolicyClient() PolicyAuthZClientInterface {
-	return &AnonymousPolicyClient{}
+func testLogger(t *testing.T) *otelzap.Logger {
+	t.Helper()
+	return otelzap.New(zaptest.NewLogger(t))
 }
 
-// Forbidden fixture
-type ForbiddenFixture struct{}
-
-func (f *ForbiddenFixture) GetPolicyClient() PolicyAuthZClientInterface {
-	return &ForbiddenPolicyClient{}
+func servePolicy(t *testing.T, client policyclient.Authorizer, req *http.Request) (*httptest.ResponseRecorder, context.Context) {
+	t.Helper()
+	var capturedCtx context.Context
+	handler := newPolicyMiddleware(client, "test-service", testLogger(t))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedCtx = r.Context()
+		w.WriteHeader(http.StatusOK)
+	}))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	return recorder, capturedCtx
 }
 
-// Error fixture
-type ErrorFixture struct{}
+func newSigningKeyAndJWKS(t *testing.T) (*ecdsa.PrivateKey, string, func()) {
+	t.Helper()
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
 
-func (f *ErrorFixture) GetPolicyClient() PolicyAuthZClientInterface {
-	return &ErrorPolicyClient{}
+	key, err := jwk.FromRaw(&privateKey.PublicKey)
+	require.NoError(t, err)
+	require.NoError(t, key.Set(jwk.KeyIDKey, "test-key"))
+	require.NoError(t, key.Set(jwk.AlgorithmKey, "ES256"))
+
+	set := jwk.NewSet()
+	require.NoError(t, set.AddKey(key))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(set))
+	}))
+	return privateKey, server.URL, server.Close
 }
 
-// Empty fixture
-type EmptyFixture struct{}
-
-func (f *EmptyFixture) GetPolicyClient() PolicyAuthZClientInterface {
-	return &EmptyPolicyClient{}
+func signToken(t *testing.T, key *ecdsa.PrivateKey, scopes []string) string {
+	t.Helper()
+	return signTokenWithClaims(t, key, jwt.MapClaims{
+		"sub":    "sis-api",
+		"scopes": scopes,
+	})
 }
 
-// JWT fixture
-type JWTFixture struct{}
+func signTokenWithClaims(t *testing.T, key *ecdsa.PrivateKey, claims jwt.MapClaims) string {
+	t.Helper()
+	claims["exp"] = time.Now().Add(time.Hour).Unix()
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
+	token.Header[jwk.KeyIDKey] = "test-key"
+	signed, err := token.SignedString(key)
+	require.NoError(t, err)
+	return signed
+}
 
-func (f *JWTFixture) GetPolicyClient() PolicyAuthZClientInterface {
-	return &JWTPolicyClient{}
+func newAuthTestHandler(t *testing.T, jwtOpts *JWTParserOptions, jwkCache *jwk.Cache, client *stubPolicyClient, selfManaged bool, requiredScopes Scopes) http.Handler {
+	t.Helper()
+	logger := testLogger(t)
+	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", jwtOpts, jwkCache, selfManaged, nil, logger)
+	scoped := MaybeRequireScopes(logger, true, requiredScopes, RequireAnyScopes)
+	return authMiddleware(scoped(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})))
 }
 
 func TestGetContextValues(t *testing.T) {
@@ -426,7 +219,6 @@ func TestPolicyAuthzResponseUnmarshalJSON(t *testing.T) {
 		name           string
 		jsonData       string
 		expectedResult PolicyAuthzResponse
-		expectedError  bool
 	}{
 		{
 			name: "Valid JSON with int status code",
@@ -448,7 +240,6 @@ func TestPolicyAuthzResponseUnmarshalJSON(t *testing.T) {
 				ActorType:  "user",
 				Roles:      []string{"admin", "user"},
 			},
-			expectedError: false,
 		},
 		{
 			name: "Valid JSON with string status code",
@@ -468,7 +259,6 @@ func TestPolicyAuthzResponseUnmarshalJSON(t *testing.T) {
 				OrgName:    "",
 				ActorType:  "",
 			},
-			expectedError: false,
 		},
 		{
 			name: "Invalid string status code defaults to 403",
@@ -482,7 +272,6 @@ func TestPolicyAuthzResponseUnmarshalJSON(t *testing.T) {
 				StatusCode: 403,
 				Reasons:    []string{"error"},
 			},
-			expectedError: false,
 		},
 		{
 			name: "Missing status code",
@@ -495,206 +284,39 @@ func TestPolicyAuthzResponseUnmarshalJSON(t *testing.T) {
 				StatusCode: 403,
 				Reasons:    []string{"unauthorized"},
 			},
-			expectedError: false,
+		},
+		{
+			name:     "api-keys-api verdict field",
+			jsonData: `{"allowed":true}`,
+			expectedResult: PolicyAuthzResponse{
+				Allowed:    true,
+				StatusCode: 403,
+			},
+		},
+		{
+			name:     "managed PDP verdict field",
+			jsonData: `{"allow":true}`,
+			expectedResult: PolicyAuthzResponse{
+				Allow:      true,
+				StatusCode: 403,
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var response PolicyAuthzResponse
-			err := json.Unmarshal([]byte(tt.jsonData), &response)
-
-			if tt.expectedError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.expectedResult.Allow, response.Allow)
-				assert.Equal(t, tt.expectedResult.StatusCode, response.StatusCode)
-				assert.Equal(t, tt.expectedResult.Reasons, response.Reasons)
-				assert.Equal(t, tt.expectedResult.ActorID, response.ActorID)
-				assert.Equal(t, tt.expectedResult.OrgName, response.OrgName)
-				assert.Equal(t, tt.expectedResult.ActorType, response.ActorType)
-				assert.Equal(t, tt.expectedResult.Roles, response.Roles)
-			}
+			require.NoError(t, json.Unmarshal([]byte(tt.jsonData), &response))
+			assert.Equal(t, tt.expectedResult.Allow, response.Allow)
+			assert.Equal(t, tt.expectedResult.Allowed, response.Allowed)
+			assert.Equal(t, tt.expectedResult.StatusCode, response.StatusCode)
+			assert.Equal(t, tt.expectedResult.Reasons, response.Reasons)
+			assert.Equal(t, tt.expectedResult.ActorID, response.ActorID)
+			assert.Equal(t, tt.expectedResult.OrgName, response.OrgName)
+			assert.Equal(t, tt.expectedResult.ActorType, response.ActorType)
+			assert.Equal(t, tt.expectedResult.Roles, response.Roles)
 		})
 	}
-}
-
-func TestNewPolicyMiddleware(t *testing.T) {
-	tests := []struct {
-		name               string
-		fixture            TestFixture
-		token              string
-		expectedStatusCode int
-		expectedActorID    string
-		expectedOrgName    string
-		expectedActorType  string
-		expectedRoles      []string
-	}{
-		{
-			name:               "Successful Authorization",
-			fixture:            &PassFixture{},
-			token:              "valid-token",
-			expectedStatusCode: http.StatusOK,
-			expectedActorID:    "user123",
-			expectedOrgName:    "org123",
-			expectedActorType:  "user",
-			expectedRoles:      []string{"admin", "user"},
-		},
-		{
-			name:               "Failed Authorization",
-			fixture:            &ForbiddenFixture{},
-			token:              "invalid-token",
-			expectedStatusCode: http.StatusForbidden,
-		},
-		{
-			name:               "Policy Service Error",
-			fixture:            &ErrorFixture{},
-			token:              "token",
-			expectedStatusCode: http.StatusUnauthorized,
-		},
-		{
-			name:               "Empty Result From Policy",
-			fixture:            &EmptyFixture{},
-			token:              "token",
-			expectedStatusCode: http.StatusUnauthorized,
-		},
-		{
-			name:               "No Token Provided",
-			fixture:            &AnonymousFixture{},
-			token:              "",
-			expectedStatusCode: http.StatusOK,
-			expectedActorID:    "anonymous",
-			expectedOrgName:    "anonymous",
-			expectedActorType:  "anonymous",
-			expectedRoles:      []string{"guest"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create a Policy client from the fixture
-			policyClient := tt.fixture.GetPolicyClient()
-
-			// Create the Policy middleware using our test-specific middleware
-			policyMiddleware := testPolicyMiddleware(policyClient, "test-service", "", 0)
-
-			// Create a test handler
-			var capturedCtx context.Context
-			testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				capturedCtx = r.Context()
-				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("OK"))
-			})
-
-			// Create a test router with the middleware
-			router := mux.NewRouter()
-			router.Use(policyMiddleware)
-			router.HandleFunc("/test", testHandler)
-
-			// Create a test request
-			req := httptest.NewRequest("GET", "/test", nil)
-			if tt.token != "" {
-				req.Header.Set("Authorization", "Bearer "+tt.token)
-			}
-
-			// Record the response
-			recorder := httptest.NewRecorder()
-			router.ServeHTTP(recorder, req)
-
-			// Check the response
-			assert.Equal(t, tt.expectedStatusCode, recorder.Code)
-
-			// If we expect success, verify the context was enriched correctly
-			if tt.expectedStatusCode == http.StatusOK {
-				assert.Equal(t, tt.expectedActorID, GetActorID(capturedCtx))
-				assert.Equal(t, tt.expectedOrgName, GetOrgName(capturedCtx))
-				assert.Equal(t, tt.expectedActorType, GetActorType(capturedCtx))
-				assert.Equal(t, tt.expectedRoles, GetRoles(capturedCtx))
-
-				// Claims should contain at least these fields
-				claims := GetClaims(capturedCtx)
-				assert.NotNil(t, claims)
-				assert.Equal(t, tt.expectedActorID, claims["actorId"])
-				assert.Equal(t, tt.expectedOrgName, claims["orgName"])
-				assert.Equal(t, tt.expectedActorType, claims["actorType"])
-			}
-		})
-	}
-}
-
-func TestPolicyMiddlewareWithJWT(t *testing.T) {
-	// This test checks the interaction between JWT middleware and Policy middleware
-	policyClient := (&JWTFixture{}).GetPolicyClient()
-
-	// Create JWT claims that would be extracted
-	jwtClaims := jwt.MapClaims{
-		"sub":       "user456",
-		"name":      "JWT User",
-		"scopes":    []string{"read", "write"},
-		"iat":       1516239022,
-		"exp":       1896239022,
-		"email":     "test@example.com",
-		"actorId":   "jwt-user",
-		"orgName":   "jwt-org",
-		"actorType": "jwt-actor-type",
-		"roles":     []string{"jwt-admin"},
-	}
-
-	// Create a mock JWT parser to simulate JWT middleware
-	jwtMiddleware := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Simulate successful JWT parsing by adding claims to context
-			ctx := context.WithValue(r.Context(), claimsContextKey, jwtClaims)
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
-	}
-
-	// Create the Policy middleware with mock JWT URL using our test-specific middleware
-	policyMiddleware := testPolicyMiddleware(policyClient, "test-service", "http://mock-jwks", 3600)
-
-	// Create a test handler
-	var capturedCtx context.Context
-	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedCtx = r.Context()
-		w.WriteHeader(http.StatusOK)
-	})
-
-	// Create a test router with both middlewares
-	router := mux.NewRouter()
-	router.Use(jwtMiddleware)
-	router.Use(policyMiddleware)
-	router.HandleFunc("/test", testHandler)
-
-	// Create a test request with JWT token
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
-
-	// Record the response
-	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, req)
-
-	// Check the response
-	assert.Equal(t, http.StatusOK, recorder.Code)
-
-	// Verify the context contains both Policy and JWT claims
-	claims := GetClaims(capturedCtx)
-	assert.NotNil(t, claims)
-
-	// Should have Policy claims
-	assert.Equal(t, "user456", claims["actorId"])
-	assert.Equal(t, "org456", claims["orgName"])
-	assert.Equal(t, "user", claims["actorType"])
-	assert.Equal(t, []string{"admin"}, claims["roles"])
-
-	// Should also have JWT claims
-	assert.Equal(t, "user456", claims["sub"])
-	assert.Equal(t, "JWT User", claims["name"])
-	assert.Equal(t, "test@example.com", claims["email"])
-
-	// Roles should be from Policy
-	roles := GetRoles(capturedCtx)
-	assert.Equal(t, []string{"admin"}, roles)
 }
 
 func TestPolicyAuthInputFields(t *testing.T) {
@@ -716,21 +338,229 @@ func TestPolicyAuthInputFields(t *testing.T) {
 	assert.Equal(t, "token-1", authCtx["credential"])
 }
 
-func TestNewPolicyMiddlewareRejectsJWTShapedTokenWhenParsingFails(t *testing.T) {
-	client := &rejectingJWTPolicyClient{}
-	logger := otelzap.New(zaptest.NewLogger(t))
-	policyMiddleware := NewPolicyMiddleware(
-		client,
-		"test-service",
+func TestNewPolicyMiddleware(t *testing.T) {
+	tests := []struct {
+		name               string
+		client             *stubPolicyClient
+		token              string
+		expectedStatusCode int
+		expectedActorID    string
+		expectedOrgName    string
+		expectedActorType  string
+		expectedRoles      []string
+	}{
+		{
+			name:               "Successful Authorization",
+			client:             &stubPolicyClient{result: allowResult(nil)},
+			token:              "valid-token",
+			expectedStatusCode: http.StatusOK,
+			expectedActorID:    "user123",
+			expectedOrgName:    "org123",
+			expectedActorType:  "user",
+			expectedRoles:      []string{"admin", "user"},
+		},
+		{
+			name: "Failed Authorization",
+			client: &stubPolicyClient{result: map[string]interface{}{
+				"allow":      false,
+				"statusCode": 403,
+				"reasons":    []interface{}{"unauthorized access"},
+			}},
+			token:              "invalid-token",
+			expectedStatusCode: http.StatusForbidden,
+		},
+		{
+			name:               "Policy Service Error",
+			client:             &stubPolicyClient{err: errors.New("service unavailable")},
+			token:              "token",
+			expectedStatusCode: http.StatusUnauthorized,
+		},
+		{
+			name:               "Empty Result From Policy",
+			client:             &stubPolicyClient{empty: true},
+			token:              "token",
+			expectedStatusCode: http.StatusUnauthorized,
+		},
+		{
+			name: "No Token Provided",
+			client: &stubPolicyClient{result: allowResult(map[string]interface{}{
+				"actorId":   "anonymous",
+				"orgName":   "anonymous",
+				"actorType": "anonymous",
+				"roles":     []interface{}{"guest"},
+			})},
+			token:              "",
+			expectedStatusCode: http.StatusOK,
+			expectedActorID:    "anonymous",
+			expectedOrgName:    "anonymous",
+			expectedActorType:  "anonymous",
+			expectedRoles:      []string{"guest"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			if tt.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tt.token)
+			}
+
+			recorder, capturedCtx := servePolicy(t, tt.client, req)
+			assert.Equal(t, tt.expectedStatusCode, recorder.Code)
+			assert.True(t, tt.client.called)
+
+			if tt.expectedStatusCode != http.StatusOK {
+				return
+			}
+
+			assert.Equal(t, tt.expectedActorID, GetActorID(capturedCtx))
+			assert.Equal(t, tt.expectedOrgName, GetOrgName(capturedCtx))
+			assert.Equal(t, tt.expectedActorType, GetActorType(capturedCtx))
+			assert.Equal(t, tt.expectedRoles, GetRoles(capturedCtx))
+
+			claims := GetClaims(capturedCtx)
+			require.NotNil(t, claims)
+			assert.Equal(t, tt.expectedActorID, claims["actorId"])
+			assert.Equal(t, tt.expectedOrgName, claims["orgName"])
+			assert.Equal(t, tt.expectedActorType, claims["actorType"])
+			assert.True(t, isPDPAuthorized(capturedCtx))
+		})
+	}
+}
+
+func TestNewPolicyMiddlewareNilClientReturnsServiceUnavailable(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	recorder, _ := servePolicy(t, nil, req)
+	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+}
+
+func TestNewPolicyMiddlewareSendsAPIKeyInEvaluateInput(t *testing.T) {
+	client := &stubPolicyClient{result: allowResult(nil)}
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+
+	recorder, _ := servePolicy(t, client, req)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	require.NotNil(t, client.lastReq)
+	assert.Equal(t, "nvapi-opaque-key", client.lastReq.Input["apiKey"].GetStringValue())
+	assert.Equal(t, "test-service", client.lastReq.Input["service"].GetStringValue())
+}
+
+func TestNewPolicyMiddlewareMergesJWTClaims(t *testing.T) {
+	client := &stubPolicyClient{result: allowResult(map[string]interface{}{
+		"actorId":   "user456",
+		"orgName":   "org456",
+		"actorType": "user",
+		"roles":     []interface{}{"admin"},
+	})}
+
+	jwtClaims := jwt.MapClaims{
+		"sub":    "user456",
+		"name":   "JWT User",
+		"email":  "test@example.com",
+		"scopes": []interface{}{"read", "write"},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	req = req.WithContext(context.WithValue(req.Context(), claimsContextKey, jwtClaims))
+
+	recorder, capturedCtx := servePolicy(t, client, req)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+
+	claims := GetClaims(capturedCtx)
+	require.NotNil(t, claims)
+	assert.Equal(t, "user456", claims["actorId"])
+	assert.Equal(t, "org456", claims["orgName"])
+	assert.Equal(t, "user", claims["actorType"])
+	assert.Equal(t, []string{"admin"}, claims["roles"])
+	assert.Equal(t, "user456", claims["sub"])
+	assert.Equal(t, "JWT User", claims["name"])
+	assert.Equal(t, "test@example.com", claims["email"])
+	assert.Equal(t, []string{"admin"}, GetRoles(capturedCtx))
+
+	require.NotNil(t, client.lastReq)
+	assert.Equal(t, "user456", client.lastReq.Input["subject"].GetStringValue())
+	scopes := client.lastReq.Input["scopes"].GetListValue().AsSlice()
+	assert.Equal(t, []interface{}{"read", "write"}, scopes)
+}
+
+func TestNewPolicyMiddlewareForwardsParsedJWTScopes(t *testing.T) {
+	tests := []struct {
+		name      string
+		jwtScopes []interface{}
+	}{
+		{name: "JWT with read scope", jwtScopes: []interface{}{"read"}},
+		{name: "JWT with multiple scopes", jwtScopes: []interface{}{"read", "write", "admin"}},
+		{name: "JWT with no scopes"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &stubPolicyClient{result: allowResult(nil)}
+			jwtClaims := jwt.MapClaims{
+				"sub":  "user456",
+				"name": "JWT User",
+			}
+			if len(tt.jwtScopes) > 0 {
+				jwtClaims["scopes"] = tt.jwtScopes
+			}
+
+			req := httptest.NewRequest(http.MethodGet, "/test", nil)
+			req.Header.Set("Authorization", "Bearer test-token")
+			req = req.WithContext(context.WithValue(req.Context(), claimsContextKey, jwtClaims))
+
+			recorder, _ := servePolicy(t, client, req)
+			assert.Equal(t, http.StatusOK, recorder.Code)
+			require.NotNil(t, client.lastReq)
+
+			scopesValue, exists := client.lastReq.Input["scopes"]
+			if len(tt.jwtScopes) == 0 {
+				assert.False(t, exists)
+				return
+			}
+			require.True(t, exists)
+			assert.Equal(t, tt.jwtScopes, scopesValue.GetListValue().AsSlice())
+		})
+	}
+}
+
+func TestNewPolicyMiddlewareDeniesWhenEvaluatorRejectsMissingScopes(t *testing.T) {
+	denying := &stubPolicyClient{
+		result: map[string]interface{}{
+			"allow":      false,
+			"statusCode": 403,
+			"reasons":    []interface{}{"missing required scopes"},
+		},
+	}
+
+	jwtClaims := jwt.MapClaims{
+		"sub":  "user456",
+		"name": "JWT User",
+	}
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("Authorization", "Bearer test-token")
+	req = req.WithContext(context.WithValue(req.Context(), claimsContextKey, jwtClaims))
+
+	recorder, _ := servePolicy(t, denying, req)
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), http.StatusText(http.StatusForbidden))
+	require.NotNil(t, denying.lastReq)
+	_, exists := denying.lastReq.Input["scopes"]
+	assert.False(t, exists)
+}
+
+func TestNewAuthMiddlewareRejectsJWTShapedTokenWhenParsingFails(t *testing.T) {
+	client := &stubPolicyClient{result: allowResult(nil)}
+	jwtOpts := NewJWTParserOptions(
 		"https://issuer.test/.well-known/jwks.json",
+		nil,
 		time.Minute,
-		jwk.NewCache(context.Background()),
 		&config.HTTPClientConfig{},
-		logger,
 	)
 
+	authMiddleware := NewAuthMiddleware(client, "test-service", &jwtOpts, jwk.NewCache(context.Background()), true, nil, testLogger(t))
 	handlerCalled := false
-	handler := policyMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		handlerCalled = true
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -738,7 +568,6 @@ func TestNewPolicyMiddlewareRejectsJWTShapedTokenWhenParsingFails(t *testing.T) 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	req.Header.Set("Authorization", "Bearer not.valid.jwt")
 	recorder := httptest.NewRecorder()
-
 	handler.ServeHTTP(recorder, req)
 
 	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
@@ -746,423 +575,544 @@ func TestNewPolicyMiddlewareRejectsJWTShapedTokenWhenParsingFails(t *testing.T) 
 	assert.False(t, handlerCalled)
 }
 
-func TestNewPolicyMiddlewareRejectsRequestsWithNilClientAndLogger(t *testing.T) {
-	policyMiddleware := NewPolicyMiddleware(
-		nil,
-		"test-service",
-		"",
-		0,
-		nil,
-		&config.HTTPClientConfig{},
-		nil,
-	)
+func TestNewAuthMiddlewareRejectsRequestsWithNilClientAndLogger(t *testing.T) {
+	authMiddleware := NewAuthMiddleware(nil, "test-service", nil, nil, true, nil, nil)
 
 	handlerCalled := false
-	handler := policyMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		handlerCalled = true
 		w.WriteHeader(http.StatusOK)
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	recorder := httptest.NewRecorder()
-
 	handler.ServeHTTP(recorder, req)
 
 	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 	assert.False(t, handlerCalled)
 }
 
-func TestTestPolicyMiddlewareNilClientPassesThrough(t *testing.T) {
-	policyMiddleware := testPolicyMiddleware(nil, "test-service", "", 0)
+func TestSelfManagedJWTNeverReachesPolicyDecisionPoint(t *testing.T) {
+	key, jwksURL, closeServer := newSigningKeyAndJWKS(t)
+	defer closeServer()
 
-	// Create a test handler
-	handlerCalled := false
-	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handlerCalled = true
-		w.WriteHeader(http.StatusOK)
-	})
+	jwtOpts := NewJWTParserOptions(jwksURL, nil, time.Minute, &config.HTTPClientConfig{})
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
 
-	// Apply middleware
-	handler := policyMiddleware(testHandler)
+	client := &stubPolicyClient{result: allowResult(nil)}
+	handler := newAuthTestHandler(t, &jwtOpts, jwkCache, client, true, WriteScopes)
 
-	// Create a test request
-	req := httptest.NewRequest("GET", "/test", nil)
+	req := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+	req.Header.Set("Authorization", "Bearer "+signToken(t, key, []string{"fnds:createEvent"}))
 	recorder := httptest.NewRecorder()
 
-	// Call the handler
 	handler.ServeHTTP(recorder, req)
 
-	// Verify the handler was called directly (pass-through middleware)
-	assert.True(t, handlerCalled)
 	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.False(t, client.called, "OpenBao JWT must not be sent to api-keys-api")
 }
 
-// PolicyClientWithScopes is a test fixture that inspects and validates
-// scopes that were passed to the Policy client
-type PolicyClientWithScopes struct {
-	expectedScopes []string
-	capturedInput  map[string]interface{}
-	t              *testing.T
-}
+func TestSelfManagedJWTScopesEnforcedByRoute(t *testing.T) {
+	key, jwksURL, closeServer := newSigningKeyAndJWKS(t)
+	defer closeServer()
 
-func (c *PolicyClientWithScopes) Evaluate(ctx context.Context, req *RuleRequest) (*RuleResponse, error) {
-	// Capture the input for later inspection
-	c.capturedInput = req.Input
+	jwtOpts := NewJWTParserOptions(jwksURL, nil, time.Minute, &config.HTTPClientConfig{})
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
 
-	// Always authorize the request
-	resp := PolicyAuthzResponse{
-		Allow:      true,
-		StatusCode: 200,
-		ActorID:    "user123",
-		OrgName:    "org123",
-		ActorType:  "user",
-		Roles:      []string{"admin", "user"},
-		Reasons:    []string{"authorized"},
-	}
-	data, _ := json.Marshal(resp)
-	return &RuleResponse{Result: data}, nil
-}
-
-func (c *PolicyClientWithScopes) PolicyConfig() *PolicyConfig {
-	return &PolicyConfig{
-		Namespace:  "testns",
-		PolicyFQDN: "testpolicy",
-	}
-}
-
-type PolicyScopeFixture struct {
-	expectedScopes []string
-	t              *testing.T
-}
-
-func (f *PolicyScopeFixture) GetPolicyClient() PolicyAuthZClientInterface {
-	return &PolicyClientWithScopes{
-		expectedScopes: f.expectedScopes,
-		t:              f.t,
-	}
-}
-
-// PolicyClientDenyingScopes is a test fixture that denies access based on scopes
-type PolicyClientDenyingScopes struct {
-	requiredScopes []string
-	capturedInput  map[string]interface{}
-	t              *testing.T
-}
-
-func (c *PolicyClientDenyingScopes) Evaluate(ctx context.Context, req *RuleRequest) (*RuleResponse, error) {
-	// Capture the input for later inspection
-	c.capturedInput = req.Input
-
-	// Check if the required scopes are present
-	inputScopes, ok := req.Input["scopes"].([]interface{})
-	if !ok {
-		// No scopes found, deny access
-		resp := PolicyAuthzResponse{
-			Allow:      false,
-			StatusCode: 403,
-			Reasons:    []string{"missing required scopes"},
-		}
-		data, _ := json.Marshal(resp)
-		return &RuleResponse{Result: data}, nil
-	}
-
-	// Convert input scopes to strings
-	inputScopeStrings := make([]string, 0, len(inputScopes))
-	for _, s := range inputScopes {
-		if str, ok := s.(string); ok {
-			inputScopeStrings = append(inputScopeStrings, str)
-		}
-	}
-
-	// Check if all required scopes are present
-	missingScopes := make([]string, 0)
-	for _, required := range c.requiredScopes {
-		found := false
-		for _, scope := range inputScopeStrings {
-			if scope == required {
-				found = true
-				break
-			}
-		}
-		if !found {
-			missingScopes = append(missingScopes, required)
-		}
-	}
-
-	if len(missingScopes) > 0 {
-		// Missing required scopes, deny access
-		resp := PolicyAuthzResponse{
-			Allow:      false,
-			StatusCode: 403,
-			Reasons:    []string{"insufficient scopes"},
-		}
-		data, _ := json.Marshal(resp)
-		return &RuleResponse{Result: data}, nil
-	}
-
-	// All required scopes present, authorize
-	resp := PolicyAuthzResponse{
-		Allow:      true,
-		StatusCode: 200,
-		ActorID:    "user123",
-		OrgName:    "org123",
-		ActorType:  "user",
-		Roles:      []string{"admin", "user"},
-		Reasons:    []string{"authorized"},
-	}
-	data, _ := json.Marshal(resp)
-	return &RuleResponse{Result: data}, nil
-}
-
-func (c *PolicyClientDenyingScopes) PolicyConfig() *PolicyConfig {
-	return &PolicyConfig{
-		Namespace:  "testns",
-		PolicyFQDN: "testpolicy",
-	}
-}
-
-type PolicyDenyScopeFixture struct {
-	requiredScopes []string
-	t              *testing.T
-}
-
-func (f *PolicyDenyScopeFixture) GetPolicyClient() PolicyAuthZClientInterface {
-	return &PolicyClientDenyingScopes{
-		requiredScopes: f.requiredScopes,
-		t:              f.t,
-	}
-}
-
-func TestPolicyMiddlewareWithScopes(t *testing.T) {
 	tests := []struct {
-		name               string
-		jwtScopes          []string
-		expectedStatusCode int
-		validateScopes     func(t *testing.T, capturedScopes interface{}, exists bool)
+		name       string
+		tokenScope []string
+		required   Scopes
+		wantStatus int
 	}{
-		{
-			name:               "JWT with read scope",
-			jwtScopes:          []string{"read"},
-			expectedStatusCode: http.StatusOK,
-			validateScopes: func(t *testing.T, capturedScopes interface{}, exists bool) {
-				// In the testPolicyMiddleware implementation, scopes may not be passed correctly
-				// This is a limitation of our test environment, but in real code it would work
-				// Just verify we got a valid response
-				assert.Equal(t, http.StatusOK, 200)
-			},
-		},
-		{
-			name:               "JWT with multiple scopes",
-			jwtScopes:          []string{"read", "write", "admin"},
-			expectedStatusCode: http.StatusOK,
-			validateScopes: func(t *testing.T, capturedScopes interface{}, exists bool) {
-				// In the testPolicyMiddleware implementation, scopes may not be passed correctly
-				// This is a limitation of our test environment, but in real code it would work
-				// Just verify we got a valid response
-				assert.Equal(t, http.StatusOK, 200)
-			},
-		},
-		{
-			name:               "JWT with no scopes",
-			jwtScopes:          []string{},
-			expectedStatusCode: http.StatusOK,
-			validateScopes: func(t *testing.T, capturedScopes interface{}, exists bool) {
-				// Should still authorize without scopes in our test environment
-				assert.Equal(t, http.StatusOK, 200)
-			},
-		},
+		{"write scope on write route", []string{"fnds:createEvent"}, WriteScopes, http.StatusOK},
+		{"archive scope on archive route", []string{"fnds:archiveEvents"}, ArchiveScopes, http.StatusOK},
+		{"write scope on read route", []string{"fnds:createEvent"}, ReadScopes, http.StatusForbidden},
+		{"read scope on read route", []string{"fnds:getEvents"}, ReadScopes, http.StatusOK},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create Policy client that will capture the input
-			fixture := &PolicyScopeFixture{t: t}
-			policyClient := fixture.GetPolicyClient()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &stubPolicyClient{result: allowResult(nil)}
+			handler := newAuthTestHandler(t, &jwtOpts, jwkCache, client, true, tc.required)
 
-			// Create JWT claims with the test scopes
-			jwtClaims := jwt.MapClaims{
-				"sub":  "user456",
-				"name": "JWT User",
-			}
-
-			// Only add scopes if we have them
-			if len(tt.jwtScopes) > 0 {
-				jwtClaims["scopes"] = tt.jwtScopes
-			}
-
-			// Create a mock JWT parser to simulate JWT middleware
-			jwtMiddleware := func(next http.Handler) http.Handler {
-				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					// Simulate successful JWT parsing by adding claims to context
-					ctx := context.WithValue(r.Context(), claimsContextKey, jwtClaims)
-					next.ServeHTTP(w, r.WithContext(ctx))
-				})
-			}
-
-			// Create the Policy middleware with mock JWT URL
-			policyMiddleware := testPolicyMiddleware(policyClient, "test-service", "http://mock-jwks", 3600)
-
-			// Create a test handler
-			testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(http.StatusOK)
-			})
-
-			// Create a test router with both middlewares
-			router := mux.NewRouter()
-			router.Use(jwtMiddleware)
-			router.Use(policyMiddleware)
-			router.HandleFunc("/test", testHandler)
-
-			// Create a test request with JWT token
-			req := httptest.NewRequest("GET", "/test", nil)
-			req.Header.Set("Authorization", "Bearer test-token")
-
-			// Record the response
+			req := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/nvcf/events", nil)
+			req.Header.Set("Authorization", "Bearer "+signToken(t, key, tc.tokenScope))
 			recorder := httptest.NewRecorder()
-			router.ServeHTTP(recorder, req)
 
-			// Check the response
-			assert.Equal(t, tt.expectedStatusCode, recorder.Code)
+			handler.ServeHTTP(recorder, req)
 
-			// Validate scopes passed to Policy
-			capturedInput := policyClient.(*PolicyClientWithScopes).capturedInput
-			assert.NotNil(t, capturedInput, "Expected input to be captured")
-
-			// Check if scopes were passed to Policy
-			scopes, exists := capturedInput["scopes"]
-			// Pass to validation function whether scopes exist or not
-			tt.validateScopes(t, scopes, exists)
+			assert.Equal(t, tc.wantStatus, recorder.Code, recorder.Body.String())
+			assert.False(t, client.called)
 		})
 	}
 }
 
-func TestPolicyMiddlewareScopeBasedAuthorization(t *testing.T) {
-	// Create a Policy client that will deny access for missing scopes
-	policyClient := &PolicyClientDenyingScopes{
-		requiredScopes: []string{"read"},
-		t:              t,
-	}
+// TestSelfManagedJWTTenantClaimEnforced is a regression test for a JWT whose
+// tenant claim does not match the requested path: without opts.TenantClaim
+// wired through, MaybeRequirePathTenant has no tenant context to check
+// against and fails open, letting the request through regardless of tenant.
+func TestSelfManagedJWTTenantClaimEnforced(t *testing.T) {
+	key, jwksURL, closeServer := newSigningKeyAndJWKS(t)
+	defer closeServer()
 
-	// Create JWT claims without scopes
-	jwtClaims := jwt.MapClaims{
-		"sub":  "user456",
-		"name": "JWT User",
-		// No scopes provided
-	}
+	jwtOpts := NewJWTParserOptions(jwksURL, nil, time.Minute, &config.HTTPClientConfig{})
+	jwtOpts.TenantClaim = "ncaId"
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
 
-	// Create a mock JWT parser to simulate JWT middleware
-	jwtMiddleware := func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Simulate successful JWT parsing by adding claims to context
-			ctx := context.WithValue(r.Context(), claimsContextKey, jwtClaims)
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
-	}
-
-	// Create the Policy middleware with mock JWT URL
-	policyMiddleware := testPolicyMiddleware(policyClient, "test-service", "http://mock-jwks", 3600)
-
-	// Create a test handler
-	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	// Create a test router with both middlewares
-	router := mux.NewRouter()
-	router.Use(jwtMiddleware)
-	router.Use(policyMiddleware)
-	router.HandleFunc("/test", testHandler)
-
-	// Create a test request with JWT token
-	req := httptest.NewRequest("GET", "/test", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
-
-	// Record the response
-	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, req)
-
-	// Should be forbidden since scopes are missing
-	assert.Equal(t, http.StatusForbidden, recorder.Code)
-	assert.Contains(t, recorder.Body.String(), "missing required scopes")
-}
-
-func TestDisableAuthentication_Policy(t *testing.T) {
-	// Test scenario:
-	// 1. Disabling authentication means passing a nil Policy client to NewPolicyMiddleware
-	// 2. Which should create a pass-through middleware that doesn't perform auth checks
-
-	// Test different requests with auth enabled vs disabled
 	tests := []struct {
-		name              string
-		policyClientSetup func() PolicyAuthZClientInterface
-		pathsToTest       []string
-		expectedStatus    int
+		name            string
+		requestedTenant string
+		wantStatus      int
 	}{
-		{
-			name: "Authentication disabled - all routes should be accessible",
-			policyClientSetup: func() PolicyAuthZClientInterface {
-				// Return nil to simulate disabled auth
-				return nil
-			},
-			pathsToTest:    []string{"/api/user", "/api/admin", "/api/restricted"},
-			expectedStatus: http.StatusOK,
-		},
-		{
-			name: "Authentication enabled - invalid tokens should be rejected",
-			policyClientSetup: func() PolicyAuthZClientInterface {
-				// Return forbidden client to simulate enabled auth
-				return &ForbiddenPolicyClient{}
-			},
-			pathsToTest:    []string{"/api/user", "/api/admin", "/api/restricted"},
-			expectedStatus: http.StatusForbidden,
-		},
+		{"matching tenant is authorized", "tenant-a", http.StatusOK},
+		{"different tenant is forbidden", "tenant-b", http.StatusForbidden},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Get Policy client (or nil)
-			client := tt.policyClientSetup()
-
-			// Create Policy middleware
-			policyMiddleware := testPolicyMiddleware(client, "test-service", "", 0)
-
-			// Create router
-			router := mux.NewRouter()
-
-			// Add the middleware
-			router.Use(policyMiddleware)
-
-			// Register test handler for all paths being tested
-			testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &stubPolicyClient{result: allowResult(nil)}
+			logger := testLogger(t)
+			authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, true, nil, logger)
+			pathTenant := MaybeRequirePathTenant(true)
+			scoped := MaybeRequireScopes(logger, true, ReadScopes, RequireAnyScopes)
+			handler := authMiddleware(pathTenant(scoped(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte("Success"))
-			})
+			}))))
 
-			// Register the handler for all test paths
-			for _, path := range tt.pathsToTest {
-				router.HandleFunc(path, testHandler)
-			}
+			req := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/"+tc.requestedTenant+"/events", nil)
+			req = mux.SetURLVars(req, map[string]string{"namespace": tc.requestedTenant})
+			req.Header.Set("Authorization", "Bearer "+signTokenWithClaims(t, key, jwt.MapClaims{
+				"sub":    "sis-api",
+				"scopes": []string{"fnds:getEvents"},
+				"ncaId":  "tenant-a",
+			}))
+			recorder := httptest.NewRecorder()
 
-			// Test all paths
-			for _, path := range tt.pathsToTest {
-				t.Run(path, func(t *testing.T) {
-					// Create request
-					req := httptest.NewRequest("GET", path, nil)
-					req.Header.Set("Authorization", "Bearer invalid-token")
+			handler.ServeHTTP(recorder, req)
 
-					// Record response
-					rec := httptest.NewRecorder()
-					router.ServeHTTP(rec, req)
-
-					// Check status code
-					assert.Equal(t, tt.expectedStatus, rec.Code)
-
-					// If auth is disabled, should see success message
-					if client == nil {
-						assert.Equal(t, "Success", rec.Body.String())
-					}
-				})
-			}
+			assert.Equal(t, tc.wantStatus, recorder.Code, recorder.Body.String())
+			assert.False(t, client.called, "self-managed JWT must not reach the policy decision point")
 		})
 	}
+}
+
+func TestAPIKeySkipsJWTVerification(t *testing.T) {
+	client := &stubPolicyClient{result: map[string]interface{}{
+		"allowed": true,
+		"ncaId":   "nca-1",
+		"ownerId": "owner-1",
+		"policy":  map[string]interface{}{"scopes": []interface{}{"fnds:getEvents"}},
+	}}
+	handler := newAuthTestHandler(t, nil, nil, client, true, ReadScopes)
+
+	req := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/nvcf/events", nil)
+	req.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.True(t, client.called, "API key must be authorized by api-keys-api")
+}
+
+// TestSelfManagedAPIKeyScopesEnforcedByRoute guards against a read-scoped key
+// writing: the API Keys service returns allowed for any valid key and does not
+// evaluate scopes, so the route must check the policy scopes itself.
+func TestSelfManagedAPIKeyScopesEnforcedByRoute(t *testing.T) {
+	tests := []struct {
+		name       string
+		policy     interface{}
+		required   Scopes
+		wantStatus int
+	}{
+		{"read scope on read route", map[string]interface{}{"scopes": []interface{}{"fnds:getEvents", "fnds:getStats"}}, ReadScopes, http.StatusOK},
+		{"write scope on write route", map[string]interface{}{"scopes": []interface{}{"fnds:createEvent"}}, WriteScopes, http.StatusOK},
+		{"read scope on write route", map[string]interface{}{"scopes": []interface{}{"fnds:getEvents", "fnds:getStats"}}, WriteScopes, http.StatusForbidden},
+		{"write scope on read route", map[string]interface{}{"scopes": []interface{}{"fnds:createEvent"}}, ReadScopes, http.StatusForbidden},
+		{"unrelated scopes on read route", map[string]interface{}{"scopes": []interface{}{"invoke_function"}}, ReadScopes, http.StatusForbidden},
+		{"empty scopes", map[string]interface{}{"scopes": []interface{}{}}, ReadScopes, http.StatusForbidden},
+		{"policy without scopes", map[string]interface{}{"aud": "event-ledger"}, ReadScopes, http.StatusForbidden},
+		{"no policy", nil, ReadScopes, http.StatusForbidden},
+		{"malformed scopes", map[string]interface{}{"scopes": "fnds:getEvents"}, ReadScopes, http.StatusForbidden},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := map[string]interface{}{"allowed": true, "ncaId": "nca-1", "ownerId": "owner-1"}
+			if tc.policy != nil {
+				result["policy"] = tc.policy
+			}
+			client := &stubPolicyClient{result: result}
+			handler := newAuthTestHandler(t, nil, nil, client, true, tc.required)
+
+			req := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+			req.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+			recorder := httptest.NewRecorder()
+
+			handler.ServeHTTP(recorder, req)
+
+			assert.Equal(t, tc.wantStatus, recorder.Code, recorder.Body.String())
+			assert.True(t, client.called)
+		})
+	}
+}
+
+// newAPIKeyRouter pairs a read route and a write route behind the auth
+// middleware the way cmd/api/startup/run_service.go does.
+func newAPIKeyRouter(t *testing.T, client *stubPolicyClient, requireLocalScopeCheck bool) http.Handler {
+	t.Helper()
+	logger := testLogger(t)
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	router := mux.NewRouter()
+	router.Use(NewAuthMiddleware(client, "nv-cloud-functions", nil, nil, requireLocalScopeCheck, nil, logger))
+	router.Handle("/v3/ledger/namespace/{namespace}/events",
+		MaybeRequireScopes(logger, requireLocalScopeCheck, ReadScopes, RequireAnyScopes)(ok)).Methods(http.MethodGet)
+	router.Handle("/v3/ledger/cloudevents",
+		MaybeRequireScopes(logger, requireLocalScopeCheck, WriteScopes, RequireAnyScopes)(ok)).Methods(http.MethodPost)
+	return router
+}
+
+func apiKeyPolicyResult(scopes ...interface{}) map[string]interface{} {
+	return map[string]interface{}{
+		"allowed": true,
+		"ncaId":   "nca-1",
+		"ownerId": "owner-1",
+		"policy":  map[string]interface{}{"aud": "event-ledger", "scopes": scopes},
+	}
+}
+
+func TestSelfManagedAPIKeyReadAndWriteRoutes(t *testing.T) {
+	tests := []struct {
+		name      string
+		scopes    []interface{}
+		wantRead  int
+		wantWrite int
+	}{
+		{"read-only key", []interface{}{"fnds:getEvents", "fnds:getStats"}, http.StatusOK, http.StatusForbidden},
+		{"write-only key", []interface{}{"fnds:createEvent"}, http.StatusForbidden, http.StatusOK},
+		{"read and write key", []interface{}{"fnds:getEvents", "fnds:createEvent"}, http.StatusOK, http.StatusOK},
+		{"key with no scopes", []interface{}{}, http.StatusForbidden, http.StatusForbidden},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			router := newAPIKeyRouter(t, &stubPolicyClient{result: apiKeyPolicyResult(tc.scopes...)}, true)
+
+			read := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/ns/events", nil)
+			read.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+			readRecorder := httptest.NewRecorder()
+			router.ServeHTTP(readRecorder, read)
+			assert.Equal(t, tc.wantRead, readRecorder.Code, "read route")
+
+			write := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+			write.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+			writeRecorder := httptest.NewRecorder()
+			router.ServeHTTP(writeRecorder, write)
+			assert.Equal(t, tc.wantWrite, writeRecorder.Code, "write route")
+		})
+	}
+}
+
+func TestSelfManagedAPIKeyRequireAllScopes(t *testing.T) {
+	tests := []struct {
+		name       string
+		scopes     []interface{}
+		wantStatus int
+	}{
+		{"has every required scope", []interface{}{"fnds:getEvents", "fnds:getStats"}, http.StatusOK},
+		{"missing one required scope", []interface{}{"fnds:getEvents"}, http.StatusForbidden},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &stubPolicyClient{result: apiKeyPolicyResult(tc.scopes...)}
+			logger := testLogger(t)
+			handler := NewAuthMiddleware(client, "nv-cloud-functions", nil, nil, true, nil, logger)(
+				MaybeRequireScopes(logger, true, "fnds:getEvents fnds:getStats", RequireAllScopes)(
+					http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })))
+
+			req := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/ns/stats", nil)
+			req.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+
+			assert.Equal(t, tc.wantStatus, recorder.Code)
+		})
+	}
+}
+
+// TestManagedAPIKeyScopesNotCheckedLocally pins the managed behavior: the
+// local route scope check is off, so an api key is authorized by the policy
+// decision point alone, even when its result carries no scopes.
+func TestManagedAPIKeyScopesNotCheckedLocally(t *testing.T) {
+	for _, result := range []map[string]interface{}{
+		apiKeyPolicyResult(),
+		{"allowed": true, "ncaId": "nca-1", "ownerId": "owner-1"},
+	} {
+		router := newAPIKeyRouter(t, &stubPolicyClient{result: result}, false)
+
+		write := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+		write.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, write)
+
+		assert.Equal(t, http.StatusOK, recorder.Code)
+	}
+}
+
+func TestPolicyMiddlewareStoresAPIKeyScopesInContext(t *testing.T) {
+	tests := []struct {
+		name   string
+		result map[string]interface{}
+		want   []string
+	}{
+		{"policy scopes", apiKeyPolicyResult("fnds:getEvents", "fnds:getStats"), []string{"fnds:getEvents", "fnds:getStats"}},
+		{"empty scopes", apiKeyPolicyResult(), []string{}},
+		{"no policy", map[string]interface{}{"allowed": true, "ncaId": "nca-1", "ownerId": "owner-1"}, nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/ns/events", nil)
+			req.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+
+			recorder, ctx := servePolicy(t, &stubPolicyClient{result: tc.result}, req)
+
+			require.Equal(t, http.StatusOK, recorder.Code)
+			assert.Equal(t, tc.want, apiKeyScopesFromContext(ctx))
+		})
+	}
+}
+
+func TestPolicyScopes(t *testing.T) {
+	assert.Equal(t, []string{"a", "b"}, policyScopes(json.RawMessage(`{"aud":"x","scopes":["a","b"]}`)))
+	assert.Nil(t, policyScopes(nil))
+	assert.Nil(t, policyScopes(json.RawMessage(`"not-an-object"`)))
+	assert.Nil(t, policyScopes(json.RawMessage(`{"scopes":"a"}`)))
+	assert.Nil(t, policyScopes(json.RawMessage(`{"scopes":[1,2]}`)))
+}
+
+func TestAPIKeyDeniedByPolicyDecisionPoint(t *testing.T) {
+	client := &stubPolicyClient{result: map[string]interface{}{
+		"allowed": false,
+		"ncaId":   "nca-1",
+		"ownerId": "owner-1",
+	}}
+	handler := newAuthTestHandler(t, nil, nil, client, true, ReadScopes)
+
+	req := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/nvcf/events", nil)
+	req.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	// api-keys-api omits statusCode, which PolicyAuthzResponse defaults to 403.
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+	assert.True(t, client.called)
+}
+
+func TestManagedJWTStillDelegatesToPolicyDecisionPoint(t *testing.T) {
+	key, jwksURL, closeServer := newSigningKeyAndJWKS(t)
+	defer closeServer()
+
+	jwtOpts := NewJWTParserOptions(jwksURL, nil, time.Minute, &config.HTTPClientConfig{})
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
+
+	client := &stubPolicyClient{result: allowResult(nil)}
+	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, false, nil, testLogger(t))
+
+	var capturedCtx context.Context
+	handler := authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedCtx = r.Context()
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/nvcf/events", nil)
+	req.Header.Set("Authorization", "Bearer "+signToken(t, key, []string{"fnds:getEvents"}))
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.True(t, client.called, "managed deployments must still consult the PDP")
+	require.NotNil(t, capturedCtx)
+	assert.Equal(t, "sis-api", GetClaims(capturedCtx)["sub"])
+}
+
+type stubIntrospector struct {
+	result *nvca.IntrospectResult
+	err    error
+	called bool
+}
+
+func (s *stubIntrospector) Introspect(_ context.Context, _ string) (*nvca.IntrospectResult, error) {
+	s.called = true
+	return s.result, s.err
+}
+
+// psatShapedToken is not a real JWT - it just has the three dot-separated,
+// non-empty parts isJWTShapedToken looks for, so the dispatcher routes it to
+// the JWT chain, where local OpenBao verification must fail before the SIS
+// introspection fallback is tried.
+const psatShapedToken = "psat.header.payload"
+
+func TestNVCAIntrospectionAuthorizesWriteRoute(t *testing.T) {
+	jwtOpts := NewJWTParserOptions("https://issuer.test/.well-known/jwks.json", nil, time.Minute, &config.HTTPClientConfig{})
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
+
+	introspector := &stubIntrospector{result: &nvca.IntrospectResult{
+		Active:    true,
+		Sub:       "system:serviceaccount:customer-ns:nvca",
+		ClusterID: "cluster-a",
+	}}
+	client := &stubPolicyClient{result: allowResult(nil)}
+	logger := testLogger(t)
+
+	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, true, introspector, logger)
+	scoped := MaybeRequireScopesAllowNVCA(logger, true, WriteScopes, RequireAnyScopes)
+
+	var capturedCtx context.Context
+	handler := authMiddleware(scoped(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedCtx = r.Context()
+		w.WriteHeader(http.StatusOK)
+	})))
+
+	req := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+	req.Header.Set("Authorization", "Bearer "+psatShapedToken)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.True(t, introspector.called)
+	assert.False(t, client.called, "an NVCA PSAT must not be sent to the API-key evaluator")
+
+	identity, ok := NVCAIdentityFromContext(capturedCtx)
+	require.True(t, ok)
+	assert.Equal(t, "cluster-a", identity.ClusterID)
+}
+
+func TestNVCAIntrospectionValidPSATDoesNotLogAtWarnOrAbove(t *testing.T) {
+	jwtOpts := NewJWTParserOptions("https://issuer.test/.well-known/jwks.json", nil, time.Minute, &config.HTTPClientConfig{})
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
+
+	introspector := &stubIntrospector{result: &nvca.IntrospectResult{
+		Active:    true,
+		Sub:       "system:serviceaccount:customer-ns:nvca",
+		ClusterID: "cluster-a",
+	}}
+	client := &stubPolicyClient{result: allowResult(nil)}
+
+	observedCore, observedLogs := observer.New(zapcore.DebugLevel)
+	logger := otelzap.New(zap.New(observedCore))
+
+	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, true, introspector, logger)
+	scoped := MaybeRequireScopesAllowNVCA(logger, true, WriteScopes, RequireAnyScopes)
+	handler := authMiddleware(scoped(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})))
+
+	req := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+	req.Header.Set("Authorization", "Bearer "+psatShapedToken)
+	ctx := context.WithValue(req.Context(), logging.LoggerKey, logging.NewTraceLogger(req.Context(), logger))
+	req = req.WithContext(ctx)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	for _, entry := range observedLogs.All() {
+		assert.Lessf(t, entry.Level, zapcore.WarnLevel, "expected local-verification-failure path for a valid PSAT must not log at warn or above, got %q at %s", entry.Message, entry.Level)
+	}
+}
+
+func TestNVCAIntrospectionDeniesReadRoute(t *testing.T) {
+	jwtOpts := NewJWTParserOptions("https://issuer.test/.well-known/jwks.json", nil, time.Minute, &config.HTTPClientConfig{})
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
+
+	introspector := &stubIntrospector{result: &nvca.IntrospectResult{
+		Active:    true,
+		Sub:       "system:serviceaccount:customer-ns:nvca",
+		ClusterID: "cluster-a",
+	}}
+	client := &stubPolicyClient{result: allowResult(nil)}
+	logger := testLogger(t)
+
+	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, true, introspector, logger)
+	scoped := MaybeRequireScopes(logger, true, ReadScopes, RequireAnyScopes)
+	handler := authMiddleware(scoped(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})))
+
+	req := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/nvcf/events", nil)
+	req.Header.Set("Authorization", "Bearer "+psatShapedToken)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusForbidden, recorder.Code, "an NVCA identity must not stand in for a read scope it was never issued, but it is authenticated so this is 403, not 401")
+}
+
+func TestNVCAIntrospectionRejectsInactiveToken(t *testing.T) {
+	jwtOpts := NewJWTParserOptions("https://issuer.test/.well-known/jwks.json", nil, time.Minute, &config.HTTPClientConfig{})
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
+
+	introspector := &stubIntrospector{result: &nvca.IntrospectResult{Active: false}}
+	client := &stubPolicyClient{result: allowResult(nil)}
+	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, true, introspector, testLogger(t))
+
+	handler := authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+	req.Header.Set("Authorization", "Bearer "+psatShapedToken)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+}
+
+func TestNVCAIntrospectionRejectsNonNVCASubject(t *testing.T) {
+	jwtOpts := NewJWTParserOptions("https://issuer.test/.well-known/jwks.json", nil, time.Minute, &config.HTTPClientConfig{})
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
+
+	introspector := &stubIntrospector{result: &nvca.IntrospectResult{
+		Active:    true,
+		Sub:       "system:serviceaccount:customer-ns:some-other-workload",
+		ClusterID: "cluster-a",
+	}}
+	client := &stubPolicyClient{result: allowResult(nil)}
+	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, true, introspector, testLogger(t))
+
+	handler := authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+	req.Header.Set("Authorization", "Bearer "+psatShapedToken)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+}
+
+func TestNVCAIntrospectionFailsClosedWhenSISUnavailable(t *testing.T) {
+	jwtOpts := NewJWTParserOptions("https://issuer.test/.well-known/jwks.json", nil, time.Minute, &config.HTTPClientConfig{})
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
+
+	introspector := &stubIntrospector{err: errors.New("dial tcp: connection refused")}
+	client := &stubPolicyClient{result: allowResult(nil)}
+	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, true, introspector, testLogger(t))
+
+	handler := authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+	req.Header.Set("Authorization", "Bearer "+psatShapedToken)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 }

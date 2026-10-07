@@ -61,6 +61,8 @@ type Config struct {
 // instead of a hard failure.
 var ErrPKICertificateNotFound = errors.New("openbao: pki certificate not found")
 
+var errPKICertificateHTTPStatusMissing = errors.New("OpenBao PKI response missing HTTP status")
+
 const (
 	curlHTTPStatusMarker      = "__NVCF_HTTP_STATUS__:"
 	curlHTTPContentTypeMarker = "__NVCF_HTTP_CONTENT_TYPE__:"
@@ -436,7 +438,13 @@ func readPKICertificatePEM(
 	for attempt := 1; attempt <= attempts; attempt++ {
 		response, err := read(ctx)
 		if err != nil {
-			return "", fmt.Errorf("reading OpenBao PKI certificate: %w", err)
+			if !errors.Is(err, errPKICertificateHTTPStatusMissing) || attempt == attempts {
+				return "", fmt.Errorf("reading OpenBao PKI certificate: %w", err)
+			}
+			if err := waitForPKICertificateRetry(ctx, retryDelay); err != nil {
+				return "", err
+			}
+			continue
 		}
 		pem, err := rootCAPEMFromOpenBaoResponse(response.Body)
 		if response.StatusCode != http.StatusOK {
@@ -490,7 +498,7 @@ func pkiCertificateHTTPResponseFromOutput(output string) (pkiCertificateHTTPResp
 		}
 	}
 	if !statusFound {
-		return pkiCertificateHTTPResponse{}, fmt.Errorf("OpenBao PKI response missing HTTP status")
+		return pkiCertificateHTTPResponse{}, errPKICertificateHTTPStatusMissing
 	}
 	response.Body = strings.TrimSpace(strings.Join(bodyLines, "\n"))
 	return response, nil

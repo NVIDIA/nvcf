@@ -44,12 +44,15 @@ pub struct FunctionMetadata {
     pub functions: Vec<Uuid>,
     pub has_rate_limit: bool,
     pub sync_check: bool,
+    /// LLM functions are rejected by nvcf-service for classic invocation.
+    pub is_llm: bool,
 }
 
 #[derive(Debug)]
 pub struct ApiClient {
     pub subject: String,
     pub nca_id: String,
+    pub owner_nca_id: String,
 }
 
 pub const HEALTH_CACHE_TTL: u16 = 1;
@@ -82,6 +85,15 @@ impl ApiMock {
             // Include nca_id in error metadata (matching nvcf-service GrpcNcaIdException behavior)
             Self::status_with_nca_id(tonic::Code::NotFound, "function not found", &client.nca_id)
         })?;
+        if function_metadata.is_llm {
+            return Err(Self::status_with_nca_id(
+                tonic::Code::NotFound,
+                &format!(
+                    "Function id '{function_id}': LLM functions cannot be invoked through this endpoint. Use the LLM API instead."
+                ),
+                &client.nca_id,
+            ));
+        }
         let requested_function_version_id = request.function_version_id;
         Ok(Response::new(ClientInvokeResponse {
             function_id: function_id.into(),
@@ -107,6 +119,7 @@ impl ApiMock {
                 None => client.nca_id.clone(),
                 Some(nca_id) => nca_id,
             },
+            client_owner_nca_id: client.owner_nca_id.clone(),
         }))
     }
 

@@ -132,7 +132,10 @@ processors:
     logs:
       log_record:
         - resource.attributes["k8s.object.kind"] != "ICMSRequest"
-        - not(log.attributes["k8s.event.reason"] in ["InstanceCreation", "InstanceStatusUpdate", "InstanceTermination"])
+        - >-
+          log.attributes["k8s.event.reason"] != "InstanceCreation" and
+          log.attributes["k8s.event.reason"] != "InstanceStatusUpdate" and
+          log.attributes["k8s.event.reason"] != "InstanceTermination"
 
   # ICMS lane: lift nvcf.nvidia.io/* annotations stamped by NVCA (via AnnotatedEventf)
   # onto ICMSRequest Events into flat log.attributes so the FnDs exporter can read them.

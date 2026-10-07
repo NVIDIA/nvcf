@@ -102,7 +102,8 @@ public record UpdateFunctionRequest(
             String tokenRateLimit,
 
             @Nullable
-            @Schema(description = "Updated routing method for the model. " +
+            @Schema(description = "Updated routing method for the model, in the same format " +
+                    "as llmConfig.routingMethod on create. " +
                     "When omitted, the existing value is preserved.")
             String routingMethod) {
     }

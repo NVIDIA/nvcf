@@ -34,6 +34,16 @@ pub fn create_load_balancer_with_config(
         anyhow::bail!("comparator is not supported for pulsar-wait-and-widen");
     }
 
+    if config.algorithm() == LoadBalancerAlgorithm::WaitAndWiden
+        && config.wait_and_widen_settings().is_some_and(|settings| {
+            settings.band_widen_interval_ms.is_some() || settings.fallback_max_queued.is_some()
+        })
+    {
+        anyhow::bail!(
+            "band_widen_interval_ms and fallback_max_queued are supported only for pulsar-wait-and-widen"
+        );
+    }
+
     if config.considers_kv_free_tokens()
         && !matches!(
             config.algorithm(),
@@ -50,13 +60,13 @@ pub fn create_load_balancer_with_config(
             PowerOfNLoadBalancer::from_algorithm_config(config)?,
         )),
         LoadBalancerAlgorithm::WaitAndWiden => Ok(Arc::new(WaitAndWidenLoadBalancer::new(
-            WaitAndWidenConfig::from_algorithm_config(config),
+            WaitAndWidenConfig::from_algorithm_config(config)?,
         ))),
         LoadBalancerAlgorithm::RoundRobin => Ok(Arc::new(RoundRobinLoadBalancer::new())),
         LoadBalancerAlgorithm::Random => Ok(Arc::new(RandomLoadBalancer)),
         LoadBalancerAlgorithm::Pulsar => Ok(Arc::new(PulsarLoadBalancer::new(config.clone()))),
         LoadBalancerAlgorithm::PulsarWaitAndWiden => Ok(Arc::new(
-            PulsarWaitAndWidenLoadBalancer::new(config.clone()),
+            PulsarWaitAndWidenLoadBalancer::new(config.clone())?,
         )),
     }
 }

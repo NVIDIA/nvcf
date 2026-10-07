@@ -59,10 +59,15 @@ impl<'a> CandidateTtftAccumulator<'a> {
         self.max_queue_time_ms.is_some()
     }
 
-    pub(super) fn push_ttft(&mut self, candidate: &'a RoutedClusterSnapshot) {
+    pub(super) fn push_ttft(
+        &mut self,
+        candidate: &'a RoutedClusterSnapshot,
+        input_tokens_scale: f64,
+    ) {
         let ttft = ttft(
             candidate,
             self.input_tokens,
+            input_tokens_scale,
             self.priority,
             self.ignore_queue_time,
             self.ignore_input_processing_time,
@@ -131,7 +136,11 @@ pub(super) fn has_capacity(candidate: &RoutedClusterSnapshot, max_queued: u64) -
     if candidate.stats.max_engine_concurrency == 0 {
         return true;
     }
-    candidate.stats.num_running_queries < candidate.stats.max_engine_concurrency + max_queued
+    candidate.stats.num_running_queries
+        < candidate
+            .stats
+            .max_engine_concurrency
+            .saturating_add(max_queued)
 }
 
 fn within_queue_slo(ttft: &Ttft, max_queue_time_ms: Option<f64>) -> bool {

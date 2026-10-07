@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod lingering_close;
 mod server_tasks;
 
 use std::net::{SocketAddr, TcpListener, UdpSocket};
@@ -365,6 +366,13 @@ impl StargateRuntime {
         };
 
         let proxy_router = make_router(ProxyAppState {
+            dynamic_config: Arc::new(
+                crate::load_balancer::dynamic_config::DynamicConfigCache::new(
+                    service.state(),
+                    crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_IDLE_EXPIRY,
+                    crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_MAX_ENTRIES,
+                ),
+            ),
             state: service.state(),
             traffic: ProxyTrafficState {
                 shutdown: tasks.shutdown_signal(),
@@ -394,13 +402,7 @@ impl StargateRuntime {
             let warmup_config = self.config.warmup.clone();
             let shutdown = tasks.shutdown_signal();
             tasks.task_tracker().spawn(async move {
-                run_warmup_stabilization(
-                    warmup_state,
-                    warmup_config,
-                    ready_token,
-                    shutdown,
-                )
-                .await;
+                run_warmup_stabilization(warmup_state, warmup_config, ready_token, shutdown).await;
             });
         }
 

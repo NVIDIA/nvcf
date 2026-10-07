@@ -54,7 +54,7 @@ NVCF uses NATS JetStream as a durable request buffer, enabling true scale-to-zer
 
 Each GPU cluster runs its own NVCA instance. NATS JetStream subjects are scoped per cluster:
 
-```
+```text
 Creation stream:    Create.NVCA.*.{clusterID}.*.*
 Termination:        Terminate.NVCA.{clusterID}
 Consumer name:      {streamName}-{clusterID}   (durable, per cluster)

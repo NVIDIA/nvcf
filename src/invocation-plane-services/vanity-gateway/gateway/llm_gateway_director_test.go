@@ -21,15 +21,19 @@ import (
 	config "ai-api-gateway-service/gateway_config"
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const (
@@ -342,37 +346,59 @@ func TestBuildChiMux_HealthProbesUseUpstreamSpecificPaths(t *testing.T) {
 func TestOpenAIDirector_LLMModelShadowsToLLMGateway(t *testing.T) {
 	const shadowModel = "meta/llama-3.3-70b-next"
 
-	llmRequests := make(chan capturedRequest, 2)
-	llmBackend := captureServer(t, llmRequests, nil)
-	nvcfRequests := make(chan capturedRequest, 1)
-	nvcfBackend := captureServer(t, nvcfRequests, nil)
-
-	primary := llmModelEntry()
-	primary.ShadowModelNames = []string{shadowModel}
-	shadow := llmModelEntry()
-	shadow.ModelName = shadowModel
-
-	mappings := &config.GatewayConfig{}
-	mappings.OpenAI.Host = openAIHost
-	mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{
-		"llm":        primary,
-		"llm-shadow": shadow,
+	tests := []struct {
+		name      string
+		configure func(primary *config.ModelFunctionDetails)
+	}{
+		{
+			name: "legacy form",
+			configure: func(primary *config.ModelFunctionDetails) {
+				primary.ShadowModelNames = []string{shadowModel}
+			},
+		},
+		{
+			name: "per-target form",
+			configure: func(primary *config.ModelFunctionDetails) {
+				primary.Shadows = []config.ShadowConfig{{ModelName: shadowModel}}
+			},
+		},
 	}
-	require.NoError(t, mappings.Validate(), "shadow traffic must be valid on LLM models")
 
-	mux := openAIMux(t, mappings, nvcfBackend.URL, llmBackend.URL)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			llmRequests := make(chan capturedRequest, 2)
+			llmBackend := captureServer(t, llmRequests, nil)
+			nvcfRequests := make(chan capturedRequest, 1)
+			nvcfBackend := captureServer(t, nvcfRequests, nil)
 
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions",
-		`{"model":"`+publicModel+`","messages":[{"role":"user","content":"hi"}]}`))
-	require.Equal(t, http.StatusOK, rec.Code)
+			primary := llmModelEntry()
+			tc.configure(&primary)
+			shadow := llmModelEntry()
+			shadow.ModelName = shadowModel
 
-	// Both the primary and the shadow must reach the LLM Gateway, each rewritten
-	// to its own functionID/modelName. Order between them is not guaranteed.
-	got := []string{awaitRequest(t, llmRequests).body, awaitRequest(t, llmRequests).body}
-	assert.Contains(t, got[0]+got[1], `"model":"`+llmFunctionID+"/"+publicModel+`"`)
-	assert.Contains(t, got[0]+got[1], `"model":"`+llmFunctionID+"/"+shadowModel+`"`)
-	assert.Empty(t, nvcfRequests, "neither request may reach the invocation service")
+			mappings := &config.GatewayConfig{}
+			mappings.OpenAI.Host = openAIHost
+			mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{
+				"llm":        primary,
+				"llm-shadow": shadow,
+			}
+			require.NoError(t, mappings.Validate(), "shadow traffic must be valid on LLM models")
+
+			mux := openAIMux(t, mappings, nvcfBackend.URL, llmBackend.URL)
+
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions",
+				`{"model":"`+publicModel+`","messages":[{"role":"user","content":"hi"}]}`))
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			// Both the primary and the shadow must reach the LLM Gateway, each rewritten
+			// to its own functionID/modelName. Order between them is not guaranteed.
+			got := []string{awaitRequest(t, llmRequests).body, awaitRequest(t, llmRequests).body}
+			assert.Contains(t, got[0]+got[1], `"model":"`+llmFunctionID+"/"+publicModel+`"`)
+			assert.Contains(t, got[0]+got[1], `"model":"`+llmFunctionID+"/"+shadowModel+`"`)
+			assert.Empty(t, nvcfRequests, "neither request may reach the invocation service")
+		})
+	}
 }
 
 // A caller must not be able to aim NVCF routing headers at the LLM Gateway. The
@@ -610,7 +636,7 @@ func TestOpenAIDirector_LLMModelIsNotReachableOnUnmappedEndpoints(t *testing.T) 
 
 	mux := openAIMux(t, llmMappings(llmModelEntry()), "http://nvcf.invalid", llmBackend.URL)
 
-	for _, path := range []string{"/v1/responses", "/v1/embeddings", "/v1/completions"} {
+	for _, path := range []string{"/v1/responses", "/v1/embeddings", "/v1/completions", "/v1/messages"} {
 		t.Run(path, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, openAIRequest(t, path, `{"model":"`+publicModel+`","input":"hi"}`))
@@ -646,4 +672,160 @@ func TestOpenAIDirector_LLMModelForwardsNonRoutingHeaders(t *testing.T) {
 		"a caller value passes through; the gateway injects no default here")
 	assert.Equal(t, "5", received.headers.Get("X-Priority"),
 		"the gateway does not strip X-Priority; the LLM Gateway rejects it upstream")
+}
+
+// The LLM Gateway renders its 429 through echo as a bare message object, which
+// is neither of the two shapes the append helper originally recognized.
+func TestOpenAIDirector_LLMModelSurfacesTooManyRequestsMessage(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"message":"rate limit exceeded"}`))
+	}))
+	t.Cleanup(backend.Close)
+
+	entry := llmModelEntry()
+	entry.TooManyRequestsMessage = "Slow down please"
+	mux := openAIMux(t, llmMappings(entry), "http://nvcf.invalid", backend.URL)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions", `{"model":"`+publicModel+`"}`))
+
+	require.Equal(t, http.StatusTooManyRequests, rec.Code)
+	assert.Contains(t, rec.Body.String(), "Slow down please",
+		"the configured message must reach the caller on the LLM Gateway path")
+	assert.Contains(t, rec.Body.String(), "rate limit exceeded",
+		"the upstream message must be preserved")
+}
+
+func TestMessagesRoutingAndNativeToolLoop(t *testing.T) {
+	requests := make(chan capturedRequest, 4)
+	toolReply := `{"type":"message","role":"assistant","content":[{"type":"thinking","thinking":"checking","signature":"sig"},{"type":"tool_use","id":"tool-1","name":"weather","input":{"city":"Paris"}}],"stop_reason":"tool_use","usage":{"input_tokens":10,"output_tokens":5}}`
+	backend := captureServer(t, requests, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, toolReply)
+	})
+	mappings := &config.GatewayConfig{}
+	mappings.OpenAI.Host = openAIHost
+	mappings.AnthropicMessages = map[string]config.ModelFunctionDetails{"native": llmModelEntry()}
+	require.NoError(t, mappings.Validate())
+	mux := openAIMux(t, mappings, "http://nvcf.invalid", backend.URL)
+	bodies := []string{
+		`{"model":"` + publicModel + `","max_tokens":64,"system":"Be concise","messages":[{"role":"user","content":"weather?"}],"tools":[{"name":"weather","input_schema":{"type":"object"}}]}`,
+		`{"model":"` + publicModel + `","max_tokens":64,"messages":[{"role":"user","content":"weather?"},{"role":"assistant","content":[{"type":"thinking","thinking":"checking","signature":"sig"},{"type":"tool_use","id":"tool-1","name":"weather","input":{"city":"Paris"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"sunny"}]}]}`,
+	}
+	for _, body := range bodies {
+		req := openAIRequest(t, "/v1/messages?beta=tools", body)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("anthropic-version", "2023-06-01")
+		req.Header.Set("anthropic-beta", "tools-test")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		require.Equal(t, 200, rec.Code, rec.Body.String())
+		require.Equal(t, toolReply, rec.Body.String())
+		received := awaitRequest(t, requests)
+		require.Equal(t, "/v1/messages", received.path)
+		require.Equal(t, "2023-06-01", received.headers.Get("anthropic-version"))
+		require.Equal(t, "tools-test", received.headers.Get("anthropic-beta"))
+		expected := strings.Replace(body, `"model":"`+publicModel+`"`, `"model":"`+llmFunctionID+`/`+publicModel+`"`, 1)
+		require.JSONEq(t, expected, received.body)
+	}
+	// Messages-only models identify their supported endpoint in shared discovery.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Host = openAIHost
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, 200, rec.Code)
+	require.Contains(t, rec.Body.String(), publicModel)
+	require.Contains(t, rec.Body.String(), `"supported_endpoints":["/v1/messages"]`)
+}
+
+func TestMessagesShadowUsesSameNativeProtocol(t *testing.T) {
+	requests := make(chan capturedRequest, 2)
+	backend := captureServer(t, requests, nil)
+	primary := llmModelEntry()
+	primary.ShadowModelName = "native-shadow"
+	shadow := config.ModelFunctionDetails{ModelName: "native-shadow", FunctionID: "shadow-func", FunctionType: config.FunctionTypeLLM}
+	mappings := &config.GatewayConfig{}
+	mappings.OpenAI.Host = openAIHost
+	mappings.AnthropicMessages = map[string]config.ModelFunctionDetails{"primary": primary, "shadow": shadow}
+	require.NoError(t, mappings.Validate())
+	mux := openAIMux(t, mappings, "http://nvcf.invalid", backend.URL)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, openAIRequest(t, "/v1/messages", `{"model":"`+publicModel+`","max_tokens":64,"messages":[{"role":"user","content":"hello"}]}`))
+	require.Equal(t, 200, rec.Code)
+	first, second := awaitRequest(t, requests), awaitRequest(t, requests)
+	require.Equal(t, "/v1/messages", first.path)
+	require.Equal(t, "/v1/messages", second.path)
+	require.Contains(t, first.body+second.body, `"model":"shadow-func/native-shadow"`)
+	require.Contains(t, first.body+second.body, `"model":"`+llmFunctionID+`/`+publicModel+`"`)
+}
+
+func TestMessagesLocalErrorsUseNativeEnvelope(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+		kind       string
+	}{
+		{"malformed", `{`, 400, "invalid_request_error"},
+		{"invalid model type", `{"model":1}`, 400, "invalid_request_error"},
+		{"missing model", `{"messages":[{}]}`, 400, "invalid_request_error"},
+		{"unknown model", `{"model":"unknown"}`, 404, "not_found_error"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mappings := &config.GatewayConfig{}
+			mappings.OpenAI.Host = openAIHost
+			mappings.AnthropicMessages = map[string]config.ModelFunctionDetails{"native": llmModelEntry()}
+			mux := openAIMux(t, mappings, "http://nvcf.invalid", "http://llm.invalid")
+			rec := httptest.NewRecorder()
+			req := openAIRequest(t, "/v1/messages", tc.body)
+			req.Header.Set("Content-Type", "application/json")
+			mux.ServeHTTP(rec, req)
+			require.Equal(t, tc.status, rec.Code)
+			require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+			var payload struct {
+				Type  string `json:"type"`
+				Error struct {
+					Type    string `json:"type"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+			require.Equal(t, "error", payload.Type)
+			require.Equal(t, tc.kind, payload.Error.Type)
+			require.NotEmpty(t, payload.Error.Message)
+		})
+	}
+}
+
+func TestMessagesDiscoveryAndTraceProtocol(t *testing.T) {
+	tp, exp := newTestTracerProvider()
+	defer tp.Shutdown(context.Background())
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, `{}`) }))
+	defer backend.Close()
+	mappings := llmMappings(llmModelEntry())
+	mappings.AnthropicMessages = map[string]config.ModelFunctionDetails{"native": llmModelEntry()}
+	mux := openAIMux(t, mappings, "http://nvcf.invalid", backend.URL)
+	rec := httptest.NewRecorder()
+	req := openAIRequest(t, "/v1/messages", `{"model":"`+publicModel+`","messages":[{}],"max_tokens":64}`)
+	req.Header.Set("Content-Type", "application/json")
+	ctx, span := tp.Tracer("test").Start(req.Context(), "messages-test")
+	llm, err := NewLLMGatewayDirector(backend.URL, http.DefaultTransport)
+	require.NoError(t, err)
+	director, err := NewModelDirector(mappings, regexp.MustCompile("^$"), nil, llm, nil)
+	require.NoError(t, err)
+	director.ServeMessages(rec, req.WithContext(ctx))
+	span.End()
+	require.Equal(t, 200, rec.Code)
+	protocol, ok := spanAttr(exp.GetSpans()[0], attribute.Key("endpoint.type"))
+	require.True(t, ok)
+	require.Equal(t, "anthropic", protocol.AsString())
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Host = openAIHost
+	mux.ServeHTTP(rec, req)
+	var models ModelListResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &models))
+	require.Len(t, models.Data, 1)
+	require.Equal(t, []string{"/v1/chat/completions", "/v1/messages"}, models.Data[0].SupportedEndpoints)
 }

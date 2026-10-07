@@ -76,7 +76,7 @@ nvcf-cli self-hosted uninstall --no-apply --compute-plane --cluster-name=ncp-loc
 ```
 
 > **`up` vs `add-compute-plane`.** `up` always installs both planes — use it for the *first* install. `add-compute-plane` is the right subcommand any time the control plane is already running and you want to attach an Nth compute cluster.
-
+>
 > **`down` always with `--plan-only` first.** Show the user the `willUninstall.commands[]` array before running for real.
 
 ## Authentication
@@ -101,6 +101,7 @@ Token generation flow:
    `NVCF_BASE_HTTP_URL` / `API_KEYS_SERVICE_URL` / `NVCF_BASE_GRPC_URL` tell the CLI *where to send requests*. `API_HOST` / `API_KEYS_HOST` / `INVOKE_HOST` set the `Host:` header on those requests — needed when every NVCF service sits behind a single gateway that routes by hostname (Envoy Gateway HTTPRoute on `api.<ELB>`, `api-keys.<ELB>`, `invocation.<ELB>`, `llm.<ELB>`). Skip the three Host vars when the base URL already resolves to the right service.
 
    Env-var form:
+
    ```sh
    export NVCF_BASE_HTTP_URL=https://gw.example.com
    export API_KEYS_SERVICE_URL=https://gw.example.com
@@ -113,6 +114,7 @@ Token generation flow:
    ```
 
    Yaml form (`~/.nvcf-cli.yaml`):
+
    ```yaml
    base_http_url: https://gw.example.com
    api_keys_service_url: https://gw.example.com
@@ -182,7 +184,7 @@ LLM function type is independent of workload packaging. For a Helm-chart backed 
 
 Invocation uses the LLM route, for example `https://llm.invocation.<domain>/v1/chat/completions`. The OpenAI `model` value must be `<function-id>/<model-name>`; the function ID is the routing key and the model name is forwarded upstream.
 
-Update mutable per-model routing settings with `nvcf-cli function update --llm-model-update='name=<model>,routingMethod=<method>,tokenRateLimit=<limit>'`, or put the same fields under `modelUpdates[].llmConfig` in an update JSON file. See [reference/flags.md](reference/flags.md) for accepted routing methods. `tokenRateLimit` supports positive integer limits for `S`, `M`, `H`, `D`, and `W`; use JSON input for combined limits such as `1000-S,5000-M,100000-H,500000-D,1000000-W`. Do not include `uris` in model updates.
+Update mutable per-model routing settings with `nvcf-cli function update --llm-model-update='name=<model>,routingMethod=<method>,tokenRateLimit=<limit>'`, or put the same fields under `modelUpdates[].llmConfig` in an update JSON file. See [reference/flags.md](reference/flags.md) for the routing method format. `tokenRateLimit` supports positive integer limits for `S`, `M`, `H`, `D`, and `W`; use JSON input for combined limits such as `1000-S,5000-M,100000-H,500000-D,1000000-W`. Do not include `uris` in model updates.
 
 For `/v1/responses`, the gateway proxies the native Responses path upstream, relays SSE to streaming clients, and aggregates the terminal JSON response for non-streaming clients. For `/v1/embeddings`, input may be a string or string array, must be non-empty, and may contain at most 2048 entries.
 
@@ -210,6 +212,7 @@ For step-by-step playbooks, load the prompt that matches the user's intent:
 ## Safety rules — CRITICAL
 
 **NEVER do these without explicit user confirmation:**
+
 - `nvcf-cli self-hosted down` or `uninstall` in any form — destructive. **ALWAYS run with `--plan-only` (`down`) or `--no-apply` (`uninstall`) first** and show the user what would happen. State which compute plane(s) and whether persistent state would be wiped.
 - `nvcf-cli self-hosted down --remove-persistent` (or `uninstall --remove-persistent`) — deletes Cassandra rows, OpenBao seal keys, sr-default user data. **Loss is unrecoverable.** Confirm explicitly that this is what the user wants.
 - `nvcf-cli self-hosted uninstall --control-plane --force-with-registered-clusters` — orphans every registered compute plane (PSAT auth breaks immediately). State the consequence before passing this flag.
@@ -221,6 +224,7 @@ For step-by-step playbooks, load the prompt that matches the user's intent:
 - Any `--force` flag (`--force-with-registered-clusters`, `--confirm` in non-interactive contexts).
 
 **ALWAYS do these:**
+
 - Run `nvcf-cli self-hosted status` before assuming a cluster exists / is healthy.
 - Show the planned action (cluster name, function name, GPU type, cost if known) before creating.
 - Before creating or deploying a container or LLM function, confirm the exact function name and container image with the user. For LLM functions, also confirm the exact model name used in `models[].name` and OpenAI `model: "<function-id>/<model-name>"`. If any value is missing, ask the user instead of guessing or submitting example placeholders.
@@ -228,6 +232,7 @@ For step-by-step playbooks, load the prompt that matches the user's intent:
 - In CI / non-interactive contexts, use `--non-interactive --token=$JWT`. Never propose interactive `nvcf-cli init` when `$CI` is set.
 
 **NEVER paste these into chat / logs / feedback:**
+
 - Admin tokens (full JWT). Show the first 8 chars + `...` if you must reference one.
 - API keys (`nvapi-…`).
 - Contents of `~/.nvcf-cli.state` or any kubeconfig.

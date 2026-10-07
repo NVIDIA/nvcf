@@ -49,7 +49,7 @@ NVSNAP enables transparent checkpoint and restore of GPU-accelerated containers 
 
 ### Why GPU Checkpoint/Restore is Hard
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                     Traditional Process vs GPU Process                       │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -95,7 +95,7 @@ NVSNAP enables transparent checkpoint and restore of GPU-accelerated containers 
 
 ### System Components
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           NVSNAP System Architecture                          │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -149,7 +149,7 @@ NVSNAP enables transparent checkpoint and restore of GPU-accelerated containers 
 
 ### Checkpoint Flow
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           Checkpoint Flow                                    │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -205,7 +205,7 @@ NVSNAP enables transparent checkpoint and restore of GPU-accelerated containers 
 
 ### Restore Flow
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                            Restore Flow                                      │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -327,7 +327,7 @@ func (c *CUDAManager) Checkpoint(ctx context.Context, pid int) error {
 
 LD_PRELOAD library for generic quiescence and reinit:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        libnvsnap_intercept.so                                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -493,7 +493,8 @@ spec:
 #### Issue 1: Network Namespace Restore Failure
 
 **Symptom**:
-```
+
+```text
 Error (criu/net.c:1469): net: Unknown peer net namespace err:0
 ```
 
@@ -520,7 +521,8 @@ criuOpts.External = []string{fmt.Sprintf("net[%d]:extNetNs", netnsInode)}
 #### Issue 2: Missing Mount Targets
 
 **Symptom**:
-```
+
+```text
 Error (criu/mount.c:2540): mnt: Can't bind-mount at 
 /tmp/.criu.mntns.xxx/run/nvidia-container-devices/GPU-xxx: No such file or directory
 ```
@@ -551,7 +553,8 @@ func ensureExtMountTargets(extMnts []*criurpc.ExtMountMap) error {
 #### Issue 3: iptables-restore Not Found
 
 **Symptom**:
-```
+
+```text
 Error (criu/util.c:641): execvp("iptables-restore", ...) failed: No such file or directory
 ```
 
@@ -569,7 +572,8 @@ RUN printf '#include <stdlib.h>\nint main(){return 0;}\n' > /tmp/true.c && \
 #### Issue 4: io_uring SQPOLL Segfault
 
 **Symptom**:
-```
+
+```text
 CRIU segfaults at "Obtaining task auxv..." when checkpointing uvloop with io_uring
 ```
 
@@ -593,7 +597,8 @@ static void nvsnap_quiesce_io_uring(void) {
 #### Issue 5: uvloop Worker Process Crash
 
 **Symptom**:
-```
+
+```text
 RuntimeError('Engine process (pid 76) died.')
 vLLM GPU worker dies ~60s after restore
 ```
@@ -666,7 +671,7 @@ func (a *Agent) Checkpoint(...) {
 
 ### Current Restore Bottleneck
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    Current Restore Path (Slow)                               │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -689,7 +694,7 @@ func (a *Agent) Checkpoint(...) {
 
 ### GPU Direct Storage (GDS) Solution
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                    GDS Restore Path (Fast)                                   │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -742,7 +747,7 @@ int restore_gpu_memory_gds(const char* checkpoint_dir, CUdeviceptr gpu_ptr, size
 
 For larger deployments, integrate with NVIDIA's Magnum IO stack:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        Magnum IO Stack                                       │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -807,7 +812,7 @@ spec:
 
 ### Requirements for GDS
 
-1. **Hardware**: 
+1. **Hardware**:
    - NVIDIA Ampere or newer GPU
    - NVMe drives with GDS support
    - PCIe Gen4 x16 for full bandwidth
@@ -839,7 +844,8 @@ spec:
 ### Known Compatibility Considerations
 
 #### vLLM
-```
+
+```text
 Status: 🔄 In Progress
 
 Challenges:
@@ -854,7 +860,8 @@ Mitigations:
 ```
 
 #### SGLang
-```
+
+```text
 Status: 📋 Planned
 
 Expected Challenges:
@@ -869,7 +876,8 @@ Testing Plan:
 ```
 
 #### TensorRT-LLM
-```
+
+```text
 Status: 📋 Planned
 
 Expected Challenges:
@@ -884,7 +892,8 @@ Testing Plan:
 ```
 
 #### Text Generation Inference (TGI)
-```
+
+```text
 Status: 📋 Planned
 
 Expected Challenges:

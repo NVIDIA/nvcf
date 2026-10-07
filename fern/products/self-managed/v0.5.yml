@@ -1,0 +1,188 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+navigation:
+  - page: Overview
+    path: ../../../docs/v0.5/index.md
+
+  - section: Before You Deploy
+    skip-slug: true
+    contents:
+      - page: Infrastructure Sizing
+        path: ../../../docs/v0.5/infrastructure-sizing.md
+      - page: Manifest
+        path: ../../../docs/v0.5/manifest.md
+
+  - section: Deployment
+    skip-slug: true
+    contents:
+      - page: Installation Overview
+        path: ../../../docs/v0.5/installation.md
+      - page: Image Mirroring
+        path: ../../../docs/v0.5/image-mirroring.md
+      - page: Terraform Installation
+        path: ../../../docs/v0.5/terraform-installation.md
+      - page: Helmfile Installation
+        path: ../../../docs/v0.5/helmfile-installation.md
+      - section: Standalone Deployment
+        skip-slug: true
+        contents:
+          - page: Overview
+            path: ../../../docs/v0.5/standalone-deployment.md
+          - page: Prerequisites
+            path: ../../../docs/v0.5/standalone-prerequisites.md
+          - page: Infrastructure
+            path: ../../../docs/v0.5/standalone-infrastructure.md
+          - page: Core Services
+            path: ../../../docs/v0.5/standalone-core-services.md
+          - page: Gateway
+            path: ../../../docs/v0.5/standalone-gateway.md
+
+  - section: GPU Cluster Setup
+    skip-slug: true
+    contents:
+      - page: GPU Cluster Setup
+        path: ../../../docs/v0.5/cluster-management/index.md
+      - page: Self-Managed Clusters
+        path: ../../../docs/v0.5/cluster-management/self-managed.md
+
+  - section: Configuration
+    skip-slug: true
+    contents:
+      - page: Optional Enhancements
+        path: ../../../docs/v0.5/optional-enhancements.md
+      - page: Gateway Routing
+        path: ../../../docs/v0.5/gateway-routing.md
+      - page: Third-Party Registries
+        path: ../../../docs/v0.5/third-party-registries.md
+      - page: Cluster Configuration
+        path: ../../../docs/v0.5/cluster-management/configuration.md
+      - page: KAI Scheduler
+        path: ../../../docs/v0.5/cluster-management/kai-scheduler.md
+      - section: Low Latency Streaming
+        skip-slug: true
+        contents:
+          - page: LLS Installation
+            path: ../../../docs/v0.5/lls-installation.md
+      - section: NVCF Caches
+        skip-slug: true
+        contents:
+          - page: Container Cache
+            path: ../../../docs/v0.5/cluster-management/container-cache.md
+          - page: GXCache
+            path: ../../../docs/v0.5/cluster-management/gxcache.md
+      - section: Physical Simulation Caches
+        skip-slug: true
+        contents:
+          - page: Simulation Caches
+            path: ../../../docs/v0.5/caches.md
+          - section: DDCS
+            skip-slug: true
+            contents:
+              - link: DDCS
+                href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/
+              - link: DDCS Configuration
+                href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/configure.html
+              - link: DDCS Deployment
+                href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/deploy.html
+              - link: DDCS TLS
+                href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/tls.html
+          - section: UCC
+            skip-slug: true
+            contents:
+              - link: UCC
+                href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/
+              - link: UCC Configuration
+                href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/configure.html
+              - link: UCC Deployment
+                href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/deploy.html
+              - link: UCC TLS
+                href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/tls.html
+
+  - section: Observability
+    skip-slug: true
+    contents:
+      - page: Observability
+        path: ../../../docs/v0.5/observability.md
+      - page: Example Dashboards
+        path: ../../../docs/v0.5/example-dashboards.md
+      - section: Metrics
+        skip-slug: true
+        contents:
+          - page: Overview
+            path: ../../../docs/v0.5/metrics/metrics-index.md
+          - page: Cassandra
+            path: ../../../docs/v0.5/metrics/cassandra/metrics.md
+          - page: ESS
+            path: ../../../docs/v0.5/metrics/ess/metrics.md
+          - page: Init Container
+            path: ../../../docs/v0.5/metrics/init-container/metrics.md
+          - page: Invocation Service
+            path: ../../../docs/v0.5/metrics/invocation-service/metrics.md
+          - page: NVCF API
+            path: ../../../docs/v0.5/metrics/nvcf-api/metrics.md
+          - page: SIS/Spot
+            path: ../../../docs/v0.5/metrics/sis-spot/metrics.md
+          - page: State Metrics
+            path: ../../../docs/v0.5/metrics/state-metrics/metrics.md
+          - page: Utils Container
+            path: ../../../docs/v0.5/metrics/utils-container/metrics.md
+          - page: Vault/OpenBao
+            path: ../../../docs/v0.5/metrics/vault-openbao/metrics.md
+
+  - section: Operations
+    skip-slug: true
+    contents:
+      - page: Control Plane Operations
+        path: ../../../docs/v0.5/control-plane-operations.md
+      - page: Cluster Monitoring
+        path: ../../../docs/v0.5/cluster-management/monitoring.md
+      - page: Troubleshooting
+        path: ../../../docs/v0.5/troubleshooting.md
+
+  - section: Runbooks
+    skip-slug: true
+    contents:
+      - page: Runbooks
+        path: ../../../docs/v0.5/runbooks/index.md
+      - page: Key Rotation
+        path: ../../../docs/v0.5/runbooks/control-plane-key-rotation-mek.md
+      - section: Cache Runbooks
+        skip-slug: true
+        contents:
+          - page: Caches Overview
+            path: ../../../docs/v0.5/runbooks/caches.md
+          - link: DDCS Cache Misses
+            href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/cache-misses.html
+          - link: DDCS Client Sharding
+            href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/client-sharding.html
+          - link: DDCS Disk Exhaustion
+            href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/disk-exhaustion.html
+          - link: DDCS Network Bottlenecks
+            href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/network-bottlenecks.html
+          - link: DDCS RocksDB Corruption
+            href: https://docs.omniverse.nvidia.com/ovcaches/ddcs/5.0/runbooks/rocksdb-corruption.html
+          - link: UCC Connection Saturation
+            href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/runbooks/connection-saturation.html
+          - link: UCC Data Disk Bandwidth
+            href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/runbooks/data-disk-bandwidth.html
+          - link: UCC Metadata Cache Undersizing
+            href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/runbooks/metadata-cache-undersizing.html
+          - link: UCC Network Bandwidth Saturation
+            href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/runbooks/network-bandwidth-saturation.html
+          - link: UCC Upstream S3 Connections
+            href: https://docs.omniverse.nvidia.com/ovcaches/ucc/3.0/runbooks/upstream-s3-connections.html
+
+  - section: Reference
+    skip-slug: true
+    contents:
+      - page: Cluster Reference
+        path: ../../../docs/v0.5/cluster-management/reference.md
+
+  - section: Development
+    skip-slug: true
+    contents:
+      - page: Local Development
+        path: ../../../docs/v0.5/local-development.md
+      - page: Fake GPU Operator
+        path: ../../../docs/v0.5/fake-gpu-operator.md

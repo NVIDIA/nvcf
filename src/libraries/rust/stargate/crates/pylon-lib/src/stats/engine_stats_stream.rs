@@ -27,7 +27,9 @@ use serde::{Deserialize, Deserializer};
 use tokio::time::Instant as TokioInstant;
 use tokio_util::sync::CancellationToken;
 
-use super::collector::{RequestCounterUpdate, StatsAggregatorUpdate, StatsUpdateSource};
+use super::collector::{
+    EngineConcurrencyUpdate, RequestCounterUpdate, StatsAggregatorUpdate, StatsUpdateSource,
+};
 use super::metrics::PylonMetrics;
 use crate::PylonRuntimeState;
 use crate::generated_request_id::generated_request_generation;
@@ -122,13 +124,7 @@ pub fn start_engine_stats_stream(
 #[derive(Debug)]
 pub(crate) enum ParsedEngineStatsEvent {
     Stats(RequestCounterUpdate),
-    Ping(Option<EngineConcurrency>),
-}
-
-#[derive(Debug)]
-pub(crate) struct EngineConcurrency {
-    model_id: String,
-    max_engine_concurrency: Option<u64>,
+    Ping(Option<EngineConcurrencyUpdate>),
 }
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum EngineStatsParseError {
@@ -173,10 +169,13 @@ fn parse_ping_event(
         return Ok(ParsedEngineStatsEvent::Ping(None));
     };
     let model_id = required_nonempty_string(raw.model, "model")?;
-    Ok(ParsedEngineStatsEvent::Ping(Some(EngineConcurrency {
-        model_id,
-        max_engine_concurrency: (max_engine_concurrency > 0).then_some(max_engine_concurrency),
-    })))
+    Ok(ParsedEngineStatsEvent::Ping(Some(
+        EngineConcurrencyUpdate {
+            model_id,
+            generation: None,
+            max_engine_concurrency: (max_engine_concurrency > 0).then_some(max_engine_concurrency),
+        },
+    )))
 }
 fn engine_stats_event_type<'a>(
     raw: &'a mut RawEngineStatsEvent<'_>,
@@ -633,16 +632,17 @@ async fn emit_engine_stats_event(
             )
             .await
         }
-        ParsedEngineStatsEvent::Ping(Some(EngineConcurrency {
-            model_id,
-            max_engine_concurrency,
-        })) => {
+        ParsedEngineStatsEvent::Ping(Some(mut update)) => {
+            update.generation = config
+                .runtime_state
+                .as_ref()
+                .and_then(|runtime_state| runtime_state.current_generation(&update.model_id));
+            if config.runtime_state.is_some() && update.generation.is_none() {
+                return true;
+            }
             send_stats_update(
                 stats_update_tx,
-                StatsAggregatorUpdate::EngineConcurrency {
-                    model_id,
-                    max_engine_concurrency,
-                },
+                StatsAggregatorUpdate::EngineConcurrency(update),
                 stop,
             )
             .await
@@ -839,6 +839,44 @@ mod tests {
         };
         assert_eq!(concurrency.model_id, "llama");
         assert_eq!(concurrency.max_engine_concurrency, Some(25));
+    }
+
+    #[tokio::test]
+    async fn concurrency_pings_preserve_generation_and_zero_withdraws_the_limit() {
+        let runtime_state = PylonRuntimeState::new(
+            stargate_proto::pb::InferenceServerStatus::Active,
+            &["model-a".to_string()],
+        );
+        let generation = runtime_state.current_generation("model-a").unwrap();
+        let config = EngineStatsStreamConfig {
+            runtime_state: Some(runtime_state),
+            ..EngineStatsStreamConfig::default()
+        };
+        let processed = process_lines(&config, [
+            "{\"v\":1,\"type\":\"ping\",\"model\":\"model-a\",\"max_engine_concurrency\":25}\n".to_string(),
+            "{\"v\":1,\"type\":\"ping\",\"model\":\"model-a\",\"max_engine_concurrency\":0}\n".to_string(),
+            "{\"v\":1,\"type\":\"ping\",\"model\":\"unknown-model\",\"max_engine_concurrency\":25}\n".to_string(),
+        ]).await;
+        for expected in [Some(25), None] {
+            let StatsAggregatorUpdate::EngineConcurrency(update) =
+                processed.updates.try_recv().unwrap()
+            else {
+                panic!("expected concurrency update");
+            };
+            assert_eq!(update.model_id, "model-a");
+            assert_eq!(update.generation, Some(generation.clone()));
+            assert_eq!(update.max_engine_concurrency, expected);
+        }
+        assert!(processed.updates.try_recv().is_err());
+    }
+
+    #[test]
+    fn concurrency_ping_requires_a_model_and_unsigned_limit() {
+        assert!(parse(br#"{"v":1,"type":"ping","max_engine_concurrency":25}"#).is_err());
+        assert!(
+            parse(br#"{"v":1,"type":"ping","model":"model-a","max_engine_concurrency":-1}"#)
+                .is_err()
+        );
     }
 
     #[tokio::test]

@@ -45,6 +45,7 @@ rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
+sse-core = { workspace = true }
 stargate = { workspace = true }
 stargate-proto = { workspace = true }
 stargate-protocol = { workspace = true }

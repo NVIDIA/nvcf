@@ -116,12 +116,14 @@ If the placeholder doesn't have the mount at the expected path, log a warning an
 ## Edge cases & non-goals
 
 **Handled by design**:
+
 - Multiple mounts with overlapping paths (e.g., `/dev/shm` and `/dev/shm/sub`): tar handles them naturally; we snapshot the deepest mount last and extract in the same order.
 - `/dev/shm` files with `O_TMPFILE` / unlinked-but-open: not in the tar, but those FDs are restored by CRIU's regular VMA-and-FD machinery. Only NAMED files in the tmpfs need to travel.
 - Symlinks within the snapshot: tar preserves them.
 - Sparse files (CUDA mmaps, semaphore arenas): `--sparse` preserves holes.
 
 **Explicit non-goals for this PR**:
+
 - **Live updates between checkpoint and restore**: if the source pod is still running and writes to `/dev/shm` after we snapshot, those writes are lost. This is the same property as the rootfs upperdir mirror today.
 - **Mounts the placeholder doesn't have**: we don't synthesize new mounts in the placeholder; we replay into existing ones. If the source had a custom volumeMount the placeholder yaml lacks, the user gets a warning.
 - **Cross-node**: same restriction as today — checkpoint and restore on the same node. Cross-node is a separate problem (snapshot transport, image streaming).
@@ -140,7 +142,6 @@ If the placeholder doesn't have the mount at the expected path, log a warning an
 ## Open questions for review
 
 **All 6 questions resolved 2026-05-02. Ready for implementation.**
-
 
 1. ~~**Size cap on snapshots**~~: **DEFERRED 2026-05-02** — the allowlist approach makes accidental large snapshots impossible by default (only `/dev/shm` ships in v1, and that's bounded by NCCL segment sizes — typically <1 GB). Revisit if a future allowlist entry warrants per-mount size caps.
 

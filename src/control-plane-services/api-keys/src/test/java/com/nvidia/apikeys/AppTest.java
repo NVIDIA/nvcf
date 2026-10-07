@@ -27,7 +27,7 @@ class AppTest {
     @Test
     void main_shouldRequireProfile() {
         assertThat(assertThrows(RuntimeException.class, () -> App.main(new String[]{}))).hasMessage(
-                "Required properties not configured: [spring.profiles.active]. "
+                "Required properties not configured: [spring.application.version, spring.profiles.active]. "
                         + "Please set these properties in application.yaml or environment variables.");
     }
 }

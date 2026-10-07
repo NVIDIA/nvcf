@@ -14,7 +14,7 @@
 # limitations under the License.
 
 collectorName: nvcf-observability
-image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.129.1
+image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.160.0
 imagePullSecrets: []
 
 targetAllocatorRbac:

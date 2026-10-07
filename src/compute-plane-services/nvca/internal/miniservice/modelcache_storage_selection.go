@@ -111,7 +111,11 @@ func validatePersistedModelCacheStorageRequest(
 		existing.Spec.Type != nvcav2beta1.ModelCacheRequest {
 		return conflict("name or type does not match")
 	}
-	if backend != nvcastorage.HelmCacheBackendNVMesh {
+	switch backend {
+	case nvcastorage.HelmCacheBackendNVMesh, nvcastorage.HelmCacheBackendSharedFS, nvcastorage.HelmCacheBackendSamba:
+		// The backends that create a model cache StorageRequest; keep in step
+		// with makeStorageRequests.
+	default:
 		return conflict(fmt.Sprintf("backend %q does not create a StorageRequest", backend))
 	}
 	if existing.Spec.ModelCache == nil {
