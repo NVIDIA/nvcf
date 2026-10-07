@@ -56,7 +56,7 @@ func (h *OpenAIProxyHandlers) Translations(ec echo.Context) error {
 
 func (h *OpenAIProxyHandlers) handleAudioToTextProxy(ec echo.Context, translation bool) error {
 	c := must.As[*GatewayContext](ec)
-	reqCtx, err := h.requireFunctionRequestContext(c)
+	reqCtx, err := h.handlers.requireFunctionRequestContext(c)
 	if err != nil {
 		return err
 	}
@@ -169,7 +169,7 @@ func (h *OpenAIProxyHandlers) handleAudioToTextProxy(ec echo.Context, translatio
 
 func (h *OpenAIProxyHandlers) SpeechToSpeech(ec echo.Context) error {
 	c := must.As[*GatewayContext](ec)
-	reqCtx, err := h.requireFunctionRequestContext(c)
+	reqCtx, err := h.handlers.requireFunctionRequestContext(c)
 	if err != nil {
 		return err
 	}

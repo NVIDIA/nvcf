@@ -148,6 +148,12 @@ eventLedger:
       # fetches these public keys to verify their inbound requests.
       jwk-set-url: "http://openbao-server.vault-system.svc.cluster.local:8200/v1/services/event-ledger/jwt/jwks"
       cache-refresh-interval: 900
+      # Verifies NVCA PSAT through SIS.
+      introspection:
+        enabled: true
+        url: "http://api.sis.svc.cluster.local:8080/v1/nvca/tokens/introspect"
+        timeout-seconds: 10
+        cache-ttl-seconds: 300
       policy:
         namespace: "event-ledger"
         policy-fqdn: "apikey.allow"

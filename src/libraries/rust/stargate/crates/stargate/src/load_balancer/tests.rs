@@ -3482,6 +3482,22 @@ fn wait_and_widen_without_affinity_is_unavailable_when_no_bucket_has_capacity() 
 }
 
 #[test]
+fn wait_and_widen_max_queued_at_u64_max_admits_full_candidates() {
+    let lb = WaitAndWidenLoadBalancer::new(wait_and_widen_config(
+        &wait_and_widen_algorithm_config(|settings| settings.max_queued = Some(u64::MAX)),
+    ));
+    let target = target();
+    let request = request(&target, None, Some(4_000));
+    let candidates = [saturation_candidate("full", 20_000.0, 4)];
+
+    assert!(
+        lb.decide_at(&request, &candidates, Duration::ZERO)
+            .selected()
+            .is_some()
+    );
+}
+
+#[test]
 fn wait_and_widen_without_affinity_prefers_a_fast_bucket_with_capacity() {
     let lb = WaitAndWidenLoadBalancer::new(wait_and_widen_config(
         &wait_and_widen_algorithm_config(|_| {}),

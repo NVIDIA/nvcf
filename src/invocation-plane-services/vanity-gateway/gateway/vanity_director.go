@@ -105,6 +105,10 @@ func writeProxyError(writer http.ResponseWriter, request *http.Request, err erro
 			zap.String(string(middleware.GatewayProxyOutcomeMetricAttribute), string(middleware.GatewayProxyOutcomeClientCanceled)),
 			zap.Error(err),
 		)
+		if request.URL.Path == "/v1/messages" {
+			writeAnthropicError(writer, statusClientClosedRequest, "client closed the request")
+			return
+		}
 		writer.Header().Set("Content-Type", "application/problem+json")
 		writer.WriteHeader(statusClientClosedRequest)
 		_ = json.NewEncoder(writer).Encode(ProblemDetails{
@@ -124,6 +128,10 @@ func writeBadGatewayProblem(writer http.ResponseWriter, request *http.Request, e
 		zap.String(string(middleware.GatewayProxyOutcomeMetricAttribute), string(middleware.GatewayProxyOutcomeProxyError)),
 		zap.Error(err),
 	)
+	if request.URL.Path == "/v1/messages" {
+		writeAnthropicError(writer, http.StatusBadGateway, "upstream request failed")
+		return
+	}
 	writer.Header().Set("Content-Type", "application/problem+json")
 	writer.WriteHeader(http.StatusBadGateway)
 	_ = json.NewEncoder(writer).Encode(ProblemDetails{
@@ -132,6 +140,31 @@ func writeBadGatewayProblem(writer http.ResponseWriter, request *http.Request, e
 		Status: http.StatusBadGateway,
 		Detail: "Upstream request failed.",
 	})
+}
+
+// Messages gateway errors use the native envelope. Upstream responses retain
+// their original body, status, and headers.
+func writeAnthropicError(writer http.ResponseWriter, status int, message string) {
+	kind := "api_error"
+	switch status {
+	case 400, 405, 422:
+		kind = "invalid_request_error"
+	case 401:
+		kind = "authentication_error"
+	case 403:
+		kind = "permission_error"
+	case 404, 410:
+		kind = "not_found_error"
+	case 413:
+		kind = "request_too_large"
+	case 429:
+		kind = "rate_limit_error"
+	case 529:
+		kind = "overloaded_error"
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(status)
+	_ = json.NewEncoder(writer).Encode(map[string]any{"type": "error", "error": map[string]string{"type": kind, "message": message}})
 }
 
 type VanityDirector struct {
