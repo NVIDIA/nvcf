@@ -19,6 +19,7 @@ package selfhosted
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -31,8 +32,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
@@ -288,4 +291,80 @@ func TestProbeRun_ReclaimEndsWithinTheCleanupRoom(t *testing.T) {
 	run.reclaim(client, start.Add(-probePodCleanupTimeout))
 	assert.Less(t, time.Since(start), probePodCleanupTimeout,
 		"the per-node deletes used the room after the deadline, so the reclaim gets none")
+}
+
+// quotaClient serves one node in a namespace whose ResourceQuota on cpu and
+// memory rejects a pod that does not state them, as the admission plugin
+// words it. Admitted pods finish at once; every create is recorded.
+func quotaClient(t *testing.T, retryErr error) (*fake.Clientset, *[]corev1.ResourceRequirements) {
+	t.Helper()
+	client := fake.NewSimpleClientset(fakeNode("node-a"))
+	var creates []corev1.ResourceRequirements
+	var n atomic.Int32
+	client.PrependReactor("create", "pods", func(a ktesting.Action) (bool, runtime.Object, error) {
+		pod := a.(ktesting.CreateAction).GetObject().(*corev1.Pod)
+		res := pod.Spec.Containers[0].Resources
+		creates = append(creates, res)
+		if len(res.Requests) == 0 && len(res.Limits) == 0 {
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, pod.GenerateName,
+				errors.New("failed quota: compute: must specify limits.cpu for: probe; limits.memory for: probe; "+
+					"requests.cpu for: probe; requests.memory for: probe"))
+		}
+		if retryErr != nil {
+			return true, nil, retryErr
+		}
+		pod.Name = fmt.Sprintf("%s%d", pod.GenerateName, n.Add(1))
+		pod.Status.Phase = corev1.PodSucceeded
+		return false, nil, nil
+	})
+	return client, &creates
+}
+
+// A namespace whose quota requires requests and limits rejects the probe pod,
+// which states none. The pod is created once more with small, equal requests
+// and limits, so the node is probed rather than reported as not probed.
+func TestProbeAllNodes_StatesResourcesWhenAQuotaRequiresThem(t *testing.T) {
+	client, creates := quotaClient(t, nil)
+	results, err := probeAllNodes(context.Background(), client, "")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Len(t, *creates, 2, "one retry, with resources")
+	retry := (*creates)[1]
+	for _, name := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory} {
+		req, lim := retry.Requests[name], retry.Limits[name]
+		assert.False(t, req.IsZero(), name)
+		assert.Zero(t, req.Cmp(lim), "%s: equal requests and limits", name)
+	}
+	if results[0].Err != nil {
+		assert.NotContains(t, results[0].Err.Error(), "create probe pod", "the retry was admitted")
+	}
+	pods, err := client.CoreV1().Pods(inotifyProbeNamespace).List(context.Background(), metav1.ListOptions{})
+	require.NoError(t, err)
+	assert.Empty(t, pods.Items, "the retried pod is removed like any other")
+}
+
+// The retry happens once, and only for a quota that requires resources: its
+// own rejection is the node's error, and any other refusal is not retried.
+func TestProbeAllNodes_QuotaRetryIsOnceAndOnlyForMissingResources(t *testing.T) {
+	client, creates := quotaClient(t, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "p",
+		errors.New("exceeded quota: compute, requested: requests.cpu=50m, used: requests.cpu=4, limited: requests.cpu=4")))
+	results, err := probeAllNodes(context.Background(), client, "")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Len(t, *creates, 2)
+	require.Error(t, results[0].Err)
+	assert.Contains(t, results[0].Err.Error(), "exceeded quota")
+
+	denied := fake.NewSimpleClientset(fakeNode("node-a"))
+	calls := 0
+	denied.PrependReactor("create", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		calls++
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "p",
+			errors.New(`violates PodSecurity "restricted:latest": hostPath volumes`))
+	})
+	results, err = probeAllNodes(context.Background(), denied, "")
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, 1, calls, "a refusal for any other reason is not retried")
+	assert.Contains(t, results[0].Err.Error(), "PodSecurity")
 }

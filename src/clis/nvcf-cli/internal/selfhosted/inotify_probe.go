@@ -30,6 +30,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
@@ -219,8 +220,7 @@ func probeOneNode(
 	pctx, cancel := context.WithTimeout(ctx, perNodePodTimeout)
 	defer cancel()
 
-	pod, err := client.CoreV1().Pods(inotifyProbeNamespace).Create(pctx, buildInotifyProbePod(nodeName, run.id, image),
-		metav1.CreateOptions{})
+	pod, err := createProbePod(pctx, client, nodeName, run.id, image)
 	if err != nil {
 		res.Err = fmt.Errorf("create probe pod on node %s: %w", nodeName, err)
 		return res
@@ -247,6 +247,42 @@ func probeOneNode(
 	res.MaxUserInstances = instances
 	res.MaxUserWatches = watches
 	return res
+}
+
+// createProbePod creates the probe pod for nodeName. A ResourceQuota on cpu or
+// memory in the namespace rejects a pod that states no requests or limits for
+// them, so on that rejection the pod is created once more with small ones.
+func createProbePod(
+	ctx context.Context, client kubernetes.Interface, nodeName, runID, image string,
+) (*corev1.Pod, error) {
+	pods := client.CoreV1().Pods(inotifyProbeNamespace)
+	pod := buildInotifyProbePod(nodeName, runID, image)
+	created, err := pods.Create(ctx, pod, metav1.CreateOptions{})
+	if !quotaRequiresResources(err) {
+		return created, err
+	}
+	// A quota may cover limits as well as requests. Equal values keep the pod
+	// Guaranteed.
+	pod.Spec.Containers[0].Resources = corev1.ResourceRequirements{
+		Requests: inotifyProbeQuotaResources(),
+		Limits:   inotifyProbeQuotaResources(),
+	}
+	return pods.Create(ctx, pod, metav1.CreateOptions{})
+}
+
+// quotaRequiresResources reports a create a ResourceQuota refused because the
+// pod states no request or limit for a resource the quota covers.
+func quotaRequiresResources(err error) bool {
+	return apierrors.IsForbidden(err) && strings.Contains(err.Error(), "must specify")
+}
+
+// inotifyProbeQuotaResources are the probe container's requests, and its
+// limits, in a namespace whose quota requires them.
+func inotifyProbeQuotaResources() corev1.ResourceList {
+	return corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("50m"),
+		corev1.ResourceMemory: resource.MustParse("32Mi"),
+	}
 }
 
 // inotifyProbeLabels are the labels on every probe pod of one run: the
@@ -296,6 +332,7 @@ func buildInotifyProbePod(nodeName, runID, image string) *corev1.Pod {
 				// any request has it rejected OutOfcpu or OutOfmemory on a
 				// fully requested node, the busiest ones. No limits either:
 				// a limit without a request sets the request to it.
+				// createProbePod adds both where a quota requires them.
 				SecurityContext: &corev1.SecurityContext{
 					RunAsNonRoot:             &runAsNonRoot,
 					ReadOnlyRootFilesystem:   &readOnlyRoot,
