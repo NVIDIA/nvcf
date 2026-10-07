@@ -79,7 +79,7 @@ public class MonitorQueuedTasksRoutine {
             "Unexpected exception: {}";
 
     private static final String MESG_NO_ICMS_INSTANCES_FOR_TASK =
-            "Task id '{}': No corresponding ICMS request-id(s) found after grace period";
+            "Task id '{}': No corresponding ICMS request-id(s) found after grace period; {}";
     private static final String NO_HEALTH_INFORMATION_AVAILABLE =
             "No health information available";
 
@@ -226,8 +226,7 @@ public class MonitorQueuedTasksRoutine {
         var gpuSpec = taskEntity.getGpuSpec();
         var errorMessage = getNoInstanceProvisionedErrorMessage(gpuSpec);
         var healthDto = getHealthDto(gpuSpec, errorMessage);
-        log.info(MESG_NO_ICMS_INSTANCES_FOR_TASK, taskId);
-        log.info(MESG_TASK_HEALTH, taskId, errorMessage);
+        log.info(MESG_NO_ICMS_INSTANCES_FOR_TASK, taskId, errorMessage);
 
         taskService.updateTask(taskId, TaskStatus.ERRORED, healthDto);
         taskErrorMetricsService.recordTaskError(ncaId);
