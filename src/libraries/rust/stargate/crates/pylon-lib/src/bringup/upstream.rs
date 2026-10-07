@@ -165,13 +165,18 @@ pub(super) async fn send_canary_request(
         DEFAULT_MAX_SSE_BUFFER_BYTES,
         false,
     );
+    let threshold = u64::from(canary_max_generation_threshold);
     let mut output_tokens = OutputTokenParser::new();
-    let mut observed_tokens = 0_u64;
+    let mut estimated_tokens = 0_u64;
+    let mut exact_tokens = None;
+    let runaway = |tokens: u64| BringupError::RunawayGeneration {
+        tokens: u32::try_from(tokens).unwrap_or(u32::MAX),
+    };
     let mut completed = false;
     while let Some(message) = messages.next().await {
         let message = message.map_err(canary_stream_error)?;
         if let Some(generated_output) = message.facts.generated_output {
-            observed_tokens = output_tokens
+            estimated_tokens = output_tokens
                 .observe_generated_characters(generated_output.characters)
                 .displayed_tokens;
         }
@@ -181,26 +186,32 @@ pub(super) async fn send_canary_request(
             .and_then(|usage| usage.output_tokens)
             && output_tokens.observe_exact_output_tokens(tokens) == ExactOutputUpdate::Applied
         {
-            observed_tokens = tokens;
-        }
-        if observed_tokens > u64::from(canary_max_generation_threshold) {
-            return Err(BringupError::RunawayGeneration {
-                tokens: u32::try_from(observed_tokens).unwrap_or(u32::MAX),
-            });
+            exact_tokens = Some(tokens);
         }
         match message.facts.terminal {
-            Some(RelayOutcome::Complete) => {
+            Some(RelayOutcome::Complete) if message.facts.done_sentinel => {
                 completed = true;
                 break;
             }
             Some(RelayOutcome::Failed) => break,
-            None => {}
+            Some(RelayOutcome::Complete) | None => {}
+        }
+        if let Some(tokens) = exact_tokens
+            && tokens > threshold
+        {
+            return Err(runaway(tokens));
         }
     }
+    // A character estimate can overshoot a response that stopped at the cap,
+    // so it is judged only when a completed stream reports no exact usage.
+    let observed_tokens = exact_tokens.unwrap_or(estimated_tokens);
     if !completed || observed_tokens == 0 {
         return Err(BringupError::InvalidResponse(
             "canary stream must contain output and end with [DONE]".to_string(),
         ));
+    }
+    if observed_tokens > threshold {
+        return Err(runaway(observed_tokens));
     }
     Ok(())
 }

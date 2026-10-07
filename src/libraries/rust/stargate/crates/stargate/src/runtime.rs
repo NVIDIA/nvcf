@@ -407,13 +407,7 @@ impl StargateRuntime {
             let warmup_config = self.config.warmup.clone();
             let shutdown = tasks.shutdown_signal();
             tasks.task_tracker().spawn(async move {
-                run_warmup_stabilization(
-                    warmup_state,
-                    warmup_config,
-                    ready_token,
-                    shutdown,
-                )
-                .await;
+                run_warmup_stabilization(warmup_state, warmup_config, ready_token, shutdown).await;
             });
         }
 

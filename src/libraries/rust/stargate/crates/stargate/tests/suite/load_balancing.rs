@@ -1445,6 +1445,7 @@ async fn pulsar_routes_same_affinity_key_consistently() {
         backend.set_stats(CurrentModelStats {
             output_tps: 0.0,
             last_mean_input_tps: *last_mean_input_tps,
+            max_input_tps: Some(*last_mean_input_tps),
             max_output_tps: 1000.0,
             queue_size: 0,
             queued_input_size: 0,
