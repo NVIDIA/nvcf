@@ -283,7 +283,7 @@ The model server and RPC worker pods get CPU and memory from the recipe's memory
 ```
 
 - `model` sets the model server pod and `rpc` sets each RPC worker pod while serving.
-- Only `cpu` and `memory` can be set, as Kubernetes quantity strings. CPU must be a whole number of millicores, such as `250m` or `1.5`. Memory cannot use the `m` suffix; use `Mi` or `M`. Each pod keeps one GPU.
+- Only `cpu` and `memory` can be set, as strings: a number such as `8` or `0.5` with an optional suffix (`m`, `k`, `M`, `G`, `T`, `P`, `E`, `Ki`, `Mi`, `Gi`, `Ti`, `Pi` or `Ei`). This is a subset of Kubernetes quantities; exponents such as `1e6` and the `n` and `u` suffixes are rejected. CPU must be a whole number of millicores, such as `250m` or `1.5`. Memory cannot use the `m` suffix; use `Mi` or `M`. Each pod keeps one GPU.
 - Unset values keep their computed defaults. A request above its merged limit is rejected when the configuration is loaded, before any cluster command.
 - The `preflight` and `load` memory checks still use the recipe's memory rules, not these values.
 
