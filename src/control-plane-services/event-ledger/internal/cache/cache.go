@@ -41,8 +41,8 @@ const (
 	// inactivity TTL, so an entry outlives its scheduled flush.
 	inactiveTTLBufferPercent = 10
 
-	// evictionFlushTimeout bounds the database writes made for the entries one
-	// eviction pass removes.
+	// evictionFlushTimeout bounds the database writes, with their retries, made for
+	// the entries one eviction pass removes, or for one cache miss.
 	evictionFlushTimeout = 10 * time.Second
 
 	// evictionFlushAttempts is how many times the write of an evicted entry is
@@ -274,7 +274,7 @@ type outcome int
 
 const (
 	// outcomeMiss means no entry existed. The event was stored as clean, so the
-	// caller must write it to the database now.
+	// caller must write it to the database now, with writeMiss.
 	outcomeMiss outcome = iota
 	// outcomeBecamePending means a newer event replaced a clean entry. A flush
 	// has been scheduled on the timing wheel.
@@ -308,22 +308,42 @@ func (handler *CachingDBHandler) recordEvent(cachedKey key, ev event, now time.T
 
 	cachedEntry, ok := handler.entries[cachedKey]
 	if !ok {
-		cachedEntry = &cached{entry: entry{
-			timestamp:   ev.timestamp,
-			source:      ev.source,
-			details:     ev.details,
-			lastWritten: now,
-			lastUpdated: now,
-		}}
-		cachedEntry.recencyNode = handler.recency.PushFront(cachedKey)
-		handler.entries[cachedKey] = cachedEntry
-		// Cache miss causes an immediate flush to the database. This will be implemented in a later PR
+		// A miss is written at once by the caller, which is why the entry starts clean.
+		handler.addEntry(cachedKey, ev, now, false)
 		return outcomeMiss, handler.evictOverflow()
 	}
 	if !ev.timestamp.After(cachedEntry.timestamp) {
 		return outcomeStale, nil
 	}
+	if handler.replaceEntry(cachedKey, cachedEntry, ev, now) {
+		return outcomeAlreadyPending, nil
+	}
+	return outcomeBecamePending, nil
+}
 
+// addEntry stores ev as a new entry for cachedKey, at the front of the recency
+// list. The caller holds entriesMu.
+func (handler *CachingDBHandler) addEntry(cachedKey key, ev event, now time.Time, pending bool) {
+	cachedEntry := &cached{entry: entry{
+		timestamp:   ev.timestamp,
+		source:      ev.source,
+		details:     ev.details,
+		pending:     pending,
+		lastUpdated: now,
+	}}
+	if !pending {
+		cachedEntry.lastWritten = now
+	}
+	cachedEntry.recencyNode = handler.recency.PushFront(cachedKey)
+	handler.entries[cachedKey] = cachedEntry
+	if pending {
+		handler.scheduleFlush(cachedKey)
+	}
+}
+
+// replaceEntry makes ev the latest event of an existing entry and marks it
+// pending, and reports whether it already was. The caller holds entriesMu.
+func (handler *CachingDBHandler) replaceEntry(cachedKey key, cachedEntry *cached, ev event, now time.Time) bool {
 	wasPending := cachedEntry.pending
 	cachedEntry.timestamp = ev.timestamp
 	cachedEntry.source = ev.source
@@ -331,14 +351,18 @@ func (handler *CachingDBHandler) recordEvent(cachedKey key, ev event, now time.T
 	cachedEntry.pending = true
 	cachedEntry.lastUpdated = now
 	handler.recency.MoveToFront(cachedEntry.recencyNode)
-	if wasPending {
-		return outcomeAlreadyPending, nil
+	if !wasPending {
+		handler.scheduleFlush(cachedKey)
 	}
-	// Scheduled while entriesMu is held, as eviction unschedules under it, so a key
-	// is in the wheel only while its entry is pending. Scheduling after the lock was
-	// released could race with an eviction and leave a pending entry unscheduled.
+	return wasPending
+}
+
+// scheduleFlush is called while entriesMu is held, as eviction unschedules under
+// it, so a key is in the wheel only while its entry is pending. Scheduling after
+// the lock was released could race with an eviction and leave a pending entry
+// unscheduled.
+func (handler *CachingDBHandler) scheduleFlush(cachedKey key) {
 	handler.wheel.schedule(cachedKey, handler.cfg.FlushInterval)
-	return outcomeBecamePending, nil
 }
 
 // evictOverflow removes the least recently updated entries until the cache fits
@@ -401,6 +425,10 @@ func (handler *CachingDBHandler) remove(node *list.Element, reason evictionReaso
 	if !cachedEntry.pending {
 		return data_access.EventV3UpsertRecord{}, false
 	}
+	return recordOf(cachedKey, cachedEntry.entry), true
+}
+
+func recordOf(cachedKey key, cachedEntry entry) data_access.EventV3UpsertRecord {
 	return data_access.EventV3UpsertRecord{
 		Namespace: cachedKey.namespace,
 		Context:   cachedKey.context,
@@ -408,7 +436,7 @@ func (handler *CachingDBHandler) remove(node *list.Element, reason evictionReaso
 		Source:    cachedEntry.source,
 		Details:   cachedEntry.details,
 		Timestamp: cachedEntry.timestamp,
-	}, true
+	}
 }
 
 // flushEvicted writes recs to the database, retrying a failed write with
@@ -487,4 +515,46 @@ func waitOrDone(ctx context.Context, delay time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
+}
+
+// writeMiss writes the event of a cache miss, which the cache stored as clean, so
+// a failed write that is not dealt with would hide the event: a redelivery with
+// the same timestamp is discarded as stale. The write is retried like an
+// eviction write. If every try fails, the event is kept as a pending entry and
+// scheduled for a later flush, so it is written even if the source never sends it
+// again, and the write error is returned for the caller to report.
+func (handler *CachingDBHandler) writeMiss(ctx context.Context, cachedKey key, ev event) error {
+	ctx, cancel := context.WithTimeout(ctx, evictionFlushTimeout)
+	defer cancel()
+	attempts, err := handler.flushWithRetry(ctx, recordOf(cachedKey, entry{timestamp: ev.timestamp, source: ev.source, details: ev.details}))
+	if err == nil {
+		return nil
+	}
+	handler.flushEvicted(handler.keepPending(cachedKey, ev, time.Now()))
+	logging.GetLogger(ctx).WarnContext(ctx, "kept a cache miss for a later flush after its write failed",
+		zap.Int("attempts", attempts),
+		zap.String("namespace", cachedKey.namespace),
+		zap.String("context", cachedKey.context),
+		zap.String("event_name", cachedKey.eventName))
+	return err
+}
+
+// keepPending makes ev the pending entry for cachedKey and schedules its flush,
+// unless a newer event is already stored, which is pending or is written by its
+// own caller. The entry may be gone, evicted while the write was in flight, so it
+// is created again, and the pending entries that makes room by evicting are
+// returned for the caller to write once the lock is released.
+func (handler *CachingDBHandler) keepPending(cachedKey key, ev event, now time.Time) []data_access.EventV3UpsertRecord {
+	handler.entriesMu.Lock()
+	defer handler.entriesMu.Unlock()
+
+	cachedEntry, exists := handler.entries[cachedKey]
+	if !exists {
+		handler.addEntry(cachedKey, ev, now, true)
+		return handler.evictOverflow()
+	}
+	if !ev.timestamp.Before(cachedEntry.timestamp) {
+		handler.replaceEntry(cachedKey, cachedEntry, ev, now)
+	}
+	return nil
 }

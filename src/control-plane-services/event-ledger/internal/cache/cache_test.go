@@ -841,6 +841,153 @@ func TestFlushWithRetry_ReportsHowManyWritesItMade(t *testing.T) {
 	}
 }
 
+func TestWriteMiss_SuccessLeavesTheEntryClean(t *testing.T) {
+	handler, recorder := newTestHandlerWith(t, evictionConfig(10))
+	handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+
+	err := handler.writeMiss(context.Background(), keyN(1), event{timestamp: at(1)})
+
+	require.NoError(t, err)
+	assert.Len(t, recorder.records(), 1)
+	cachedEntry, _ := handler.lookup(keyN(1))
+	assert.False(t, cachedEntry.pending)
+	_, scheduled := scheduledSlot(handler, keyN(1))
+	assert.False(t, scheduled)
+}
+
+func TestWriteMiss_RetriesBeforeGivingUp(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		handler, recorder := newTestHandlerWith(t, evictionConfig(10))
+		recorder.failFirst = 2
+		handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+
+		err := handler.writeMiss(context.Background(), keyN(1), event{timestamp: at(1)})
+
+		require.NoError(t, err)
+		assert.Len(t, recorder.records(), 3)
+		cachedEntry, _ := handler.lookup(keyN(1))
+		assert.False(t, cachedEntry.pending, "a write that succeeded on a retry needs no flush")
+	})
+}
+
+func TestWriteMiss_FailureKeepsTheEventPendingAndScheduled(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		handler, recorder := newTestHandlerWith(t, evictionConfig(10))
+		recorder.err = errors.New("database unavailable")
+		probe := installLockProbe(handler)
+		handler.processEvent(keyN(1), event{timestamp: at(1), source: "src"}, at(1))
+
+		err := handler.writeMiss(context.Background(), keyN(1), event{timestamp: at(1), source: "src"})
+
+		require.ErrorIs(t, err, recorder.err)
+		assert.Len(t, recorder.records(), evictionFlushAttempts)
+		cachedEntry, ok := handler.lookup(keyN(1))
+		require.True(t, ok)
+		assert.True(t, cachedEntry.pending)
+		assert.EqualValues(t, 1, probe.scheduleCalls.Load(), "the flush is scheduled once")
+		assert.False(t, probe.calledWithoutLock.Load(), "the wheel must be called with the cache lock held")
+		assertConsistent(t, handler)
+	})
+}
+
+func TestWriteMiss_FailureStillKeepsTheEventWhenTheContextHasEnded(t *testing.T) {
+	handler, recorder := newTestHandlerWith(t, evictionConfig(10))
+	handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := handler.writeMiss(ctx, keyN(1), event{timestamp: at(1)})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, recorder.records(), "no write is made once the context has ended")
+	cachedEntry, _ := handler.lookup(keyN(1))
+	assert.True(t, cachedEntry.pending)
+}
+
+func TestWriteMiss_FailureCreatesAgainAnEntryEvictedMeanwhile(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		handler, recorder := newTestHandlerWith(t, evictionConfig(1))
+		recorder.err = errors.New("database unavailable")
+		handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+		handler.processEvent(keyN(2), event{timestamp: at(2)}, at(2))
+		requireKeys(t, handler, []int{2}, []int{1})
+		recorder.mu.Lock()
+		recorder.recs = nil
+		recorder.mu.Unlock()
+
+		err := handler.writeMiss(context.Background(), keyN(1), event{timestamp: at(1)})
+
+		require.Error(t, err)
+		cachedEntry, ok := handler.lookup(keyN(1))
+		require.True(t, ok, "the event is not lost because its clean entry was evicted")
+		assert.True(t, cachedEntry.pending)
+		_, scheduled := scheduledSlot(handler, keyN(1))
+		assert.True(t, scheduled)
+		assertConsistent(t, handler)
+	})
+}
+
+func TestWriteMiss_FailureWritesThePendingEntryItEvictsToMakeRoom(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		written := map[string]int{}
+		flush := func(_ context.Context, rec data_access.EventV3UpsertRecord) error {
+			written[rec.EventName]++
+			if rec.EventName == keyN(1).eventName {
+				return errors.New("database unavailable")
+			}
+			return nil
+		}
+		handler, err := NewCachingDBHandler(&fakeDB{}, evictionConfig(1), flush, discardMeter())
+		require.NoError(t, err)
+		handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+		makePending(handler, keyN(2), 2)
+		written = map[string]int{}
+
+		require.Error(t, handler.writeMiss(context.Background(), keyN(1), event{timestamp: at(1)}))
+
+		assert.Equal(t, 1, written[keyN(2).eventName], "the entry pushed out was written")
+		requireKeys(t, handler, []int{1}, []int{2})
+		assertConsistent(t, handler)
+	})
+}
+
+func TestKeepPending_IgnoresAnOlderEventThanTheStoredOne(t *testing.T) {
+	handler := newTestHandler(t)
+	makePending(handler, keyN(1), 1)
+
+	evicted := handler.keepPending(keyN(1), event{timestamp: at(1), source: "old"}, at(10))
+
+	assert.Empty(t, evicted)
+	cachedEntry, _ := handler.lookup(keyN(1))
+	assert.Equal(t, at(2), cachedEntry.timestamp)
+	assert.Empty(t, cachedEntry.source)
+}
+
+func TestKeepPending_ReplacesAnOlderStoredEntry(t *testing.T) {
+	handler := newTestHandler(t)
+	handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+
+	handler.keepPending(keyN(1), event{timestamp: at(5), source: "new"}, at(10))
+
+	cachedEntry, _ := handler.lookup(keyN(1))
+	assert.Equal(t, at(5), cachedEntry.timestamp)
+	assert.Equal(t, "new", cachedEntry.source)
+	assert.True(t, cachedEntry.pending)
+	_, scheduled := scheduledSlot(handler, keyN(1))
+	assert.True(t, scheduled)
+}
+
+func TestKeepPending_DoesNotScheduleAnEntryTwice(t *testing.T) {
+	handler := newTestHandler(t)
+	probe := installLockProbe(handler)
+	makePending(handler, keyN(1), 1)
+	scheduledBefore := probe.scheduleCalls.Load()
+
+	handler.keepPending(keyN(1), event{timestamp: at(2)}, at(10))
+
+	assert.Equal(t, scheduledBefore, probe.scheduleCalls.Load())
+}
+
 func TestEvictInactive_RetriesAFailedWrite(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		handler, recorder := newTestHandlerWith(t, evictionConfig(10))
