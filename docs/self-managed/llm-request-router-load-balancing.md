@@ -126,6 +126,28 @@ the default. The algorithm must be available to the model, as for a value
 without parameters. A value without parameters, such as `pulsar`, routes as
 before.
 
+With `nvcf-cli`, put the whole model spec in single quotes. Without quotes,
+the shell ends the command at the first `;` and the CLI sends the algorithm
+name without its parameters:
+
+```sh
+nvcf-cli function update --function-id=<function-id> --version-id=<version-id> \
+  --llm-model-update='name=my-model,routingMethod=pulsar;seed=stable-a'
+```
+
+In an update JSON file, set the same value under `modelUpdates[].llmConfig`:
+
+```json
+{
+  "modelUpdates": [
+    {
+      "modelName": "my-model",
+      "llmConfig": { "routingMethod": "pulsar;seed=stable-a" }
+    }
+  ]
+}
+```
+
 ### Format
 
 The value is an RFC 8941 Item with Parameters, with these rules:
