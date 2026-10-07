@@ -242,6 +242,8 @@ fn prepare_proxy_request(
         },
     );
 
+    // Counted only once every request check below has passed.
+    let mut accepted_expression = None;
     let lb_resolution = if let Some(raw) = &request_inputs.routing_expression {
         let (definition, outcome) = app
             .dynamic_config
@@ -249,12 +251,7 @@ fn prepare_proxy_request(
                 RoutingExpression::parse(raw)?.compile(&app.lb_router, model_id)
             })
             .map_err(|error| reject_invalid_routing_algorithm(target, &error))?;
-        app.metrics
-            .routing_expressions_total(
-                &definition.config().algorithm().to_string(),
-                outcome.as_str(),
-            )
-            .inc();
+        accepted_expression = Some((definition.config().algorithm(), outcome));
         if outcome != Outcome::Hit {
             info!(
                 routing_key = ?target.routing_key,
@@ -287,6 +284,11 @@ fn prepare_proxy_request(
     let retry_deadline = retry_budget_deadline(&parts.headers, &app.retry, request_start)?;
     let replay_body =
         ReplayableRequestBody::new(&parts.headers, body, app.retry.max_replay_body_bytes)?;
+    if let Some((algorithm, outcome)) = accepted_expression {
+        app.metrics
+            .routing_expressions_total(&algorithm.to_string(), outcome.as_str())
+            .inc();
+    }
 
     Ok(PreparedProxyRequest {
         request_inputs,
@@ -458,6 +460,11 @@ mod test_support {
         ] {
             let _ = try_prepare_with_routing_method(&app, header);
         }
+        // Compiles, then fails request validation without an affinity key: not counted.
+        assert!(
+            try_prepare_with_routing_method(&app, "pulsar;require_cache_affinity_key=true")
+                .is_err()
+        );
 
         let series = routing_expression_series(&app);
         let counted = series
