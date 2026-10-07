@@ -25,7 +25,7 @@ rust_binary(
 )
 
 rust_test(
-    name = "stargate_routing_sim_test",
+    name = "stargate-routing-sim_test",
     crate = ":stargate-routing-sim",
     deps = _WORKSPACE_DEPS + all_crate_deps(normal_dev = True),
 )

@@ -33,9 +33,10 @@ use crate::time::{Micros, micros_from_ms};
 pub struct Backend {
     pub id: String,
     pub region: usize,
+    pub gpu_workers: usize,
     engine: Engine,
     /// Pylon's limit: the deployment's workers times sequences per worker.
-    max_engine_concurrency: u64,
+    pub max_engine_concurrency: u64,
     /// Time of the scheduled engine wake event, if any.
     pub wake_at: Option<Micros>,
     input_phase_requests: u64,
@@ -72,6 +73,7 @@ impl Backend {
         Ok(Self {
             id,
             region,
+            gpu_workers: engine.num_gpu_workers,
             engine: Engine::new(engine, false).map_err(anyhow::Error::msg)?,
             max_engine_concurrency,
             wake_at: None,
@@ -181,7 +183,7 @@ impl Backend {
         window: usize,
         duration_floor_ms: f64,
     ) {
-        if window == 0 || first_output <= submitted {
+        if first_output <= submitted {
             return;
         }
         let estimate = &mut self.input_tps;

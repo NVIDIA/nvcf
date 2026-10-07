@@ -20,6 +20,7 @@ mod sim;
 mod time;
 mod workload;
 
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -42,7 +43,7 @@ struct Cli {
     output: Option<PathBuf>,
     /// Parallel worker threads. Defaults to available parallelism.
     #[arg(long)]
-    jobs: Option<usize>,
+    jobs: Option<NonZeroUsize>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -68,10 +69,9 @@ fn main() -> anyhow::Result<()> {
     }
     let jobs = cli
         .jobs
-        .or_else(|| std::thread::available_parallelism().ok().map(Into::into))
-        .unwrap_or(1)
-        .min(specs.len())
-        .max(1);
+        .or_else(|| std::thread::available_parallelism().ok())
+        .map_or(1, NonZeroUsize::get)
+        .min(specs.len());
     let next = AtomicUsize::new(0);
     let results: Mutex<Vec<Option<anyhow::Result<RunSummary>>>> =
         Mutex::new(specs.iter().map(|_| None).collect());
@@ -83,7 +83,12 @@ fn main() -> anyhow::Result<()> {
                     let Some(spec) = specs.get(index) else {
                         break;
                     };
-                    let summary = sim::run(spec);
+                    let summary = sim::run(spec).with_context(|| {
+                        format!(
+                            "policy {} at {} rps with seed {}",
+                            spec.policy.name, spec.rate_rps, spec.seed
+                        )
+                    });
                     results.lock().expect("results lock")[index] = Some(summary);
                 }
             });
@@ -115,7 +120,7 @@ fn print_table(name: &str, summaries: &[RunSummary]) {
         "thruput",
         "slo%",
         "noRte",
-        "429",
+        "rtyEx",
         "tmout",
         "ttft50",
         "ttft99",

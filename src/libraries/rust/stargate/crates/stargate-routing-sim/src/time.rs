@@ -26,8 +26,9 @@ pub fn micros_from_ms(milliseconds: f64) -> Micros {
     micros_from_secs(milliseconds / 1000.0)
 }
 
+/// Rounds up: a nonzero load-balancer wait must not read as an expired one.
 pub fn micros_from_duration(duration: Duration) -> Micros {
-    Micros::try_from(duration.as_micros()).unwrap_or(Micros::MAX)
+    Micros::try_from(duration.as_nanos().div_ceil(1000)).unwrap_or(Micros::MAX)
 }
 
 pub fn ms(micros: Micros) -> f64 {

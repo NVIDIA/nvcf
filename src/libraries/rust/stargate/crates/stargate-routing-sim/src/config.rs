@@ -211,10 +211,12 @@ impl SimConfig {
         if regions == 0 {
             bail!("topology needs at least one region");
         }
-        if self.topology.rtt_ms.len() != regions
-            || self.topology.rtt_ms.iter().any(|row| row.len() != regions)
-        {
+        let rtt = &self.topology.rtt_ms;
+        if rtt.len() != regions || rtt.iter().any(|row| row.len() != regions) {
             bail!("rtt_ms must be a {regions}x{regions} matrix");
+        }
+        if (0..regions).any(|a| (0..a).any(|b| rtt[a][b] != rtt[b][a])) {
+            bail!("rtt_ms must be symmetric");
         }
         if self
             .topology
@@ -237,6 +239,9 @@ impl SimConfig {
                 if fixed.sessions == 0 {
                     bail!("fixed workload needs at least one session");
                 }
+                if !fixed.session_zipf_s.is_finite() {
+                    bail!("fixed workload session_zipf_s must be finite");
+                }
                 if fixed.input_tokens_min == 0 || fixed.input_tokens_min > fixed.input_tokens_max {
                     bail!("fixed workload input token range is invalid");
                 }
@@ -251,9 +256,10 @@ impl SimConfig {
                 {
                     bail!("growing workload ranges are invalid");
                 }
-                if growing.system_prompt_tokens
-                    + growing.user_tokens_max
-                    + growing.output_tokens_max
+                if growing
+                    .system_prompt_tokens
+                    .saturating_add(growing.user_tokens_max)
+                    .saturating_add(growing.output_tokens_max)
                     > growing.max_context_tokens
                 {
                     bail!("growing workload first turn can exceed max_context_tokens");
@@ -275,6 +281,58 @@ impl SimConfig {
         self.engine.validate().map_err(anyhow::Error::msg)?;
         if !(self.pylon.heartbeat_ms.is_finite() && self.pylon.heartbeat_ms > 0.0) {
             bail!("pylon.heartbeat_ms must be positive");
+        }
+        // A non-positive rate turns every queue estimate into the unknown
+        // sentinel, which production Pylon would not reject on.
+        let input_tps_valid = match self.pylon.input_tps {
+            InputTpsModel::Constant { mean, max } => {
+                mean.is_finite() && mean > 0.0 && max.is_finite() && max >= mean
+            }
+            InputTpsModel::FallbackWindow {
+                initial, window, ..
+            } => initial.is_finite() && initial > 0.0 && window > 0,
+        };
+        if !input_tps_valid {
+            bail!("pylon.input_tps needs positive rates, max >= mean, and a positive window");
+        }
+        if self.client.timeout_ms == 0 {
+            bail!("client.timeout_ms must be positive");
+        }
+        if !(self.workload.measure_s.is_finite() && self.workload.measure_s > 0.0) {
+            bail!("workload.measure_s must be positive");
+        }
+        // Virtual-time conversion would clamp negative or NaN delays to zero.
+        let mut delays = vec![
+            ("workload.warmup_s", self.workload.warmup_s),
+            (
+                "topology.intra_region_rtt_ms",
+                self.topology.intra_region_rtt_ms,
+            ),
+            (
+                "topology.stats_relay_delay_ms",
+                self.topology.stats_relay_delay_ms,
+            ),
+        ];
+        delays.extend(
+            self.topology
+                .rtt_ms
+                .iter()
+                .flatten()
+                .map(|rtt| ("topology.rtt_ms", *rtt)),
+        );
+        if let Some(coalesce_ms) = self.pylon.stats_update_coalesce_ms {
+            delays.push(("pylon.stats_update_coalesce_ms", coalesce_ms));
+        }
+        if let InputTpsModel::FallbackWindow {
+            duration_floor_ms, ..
+        } = self.pylon.input_tps
+        {
+            delays.push(("pylon.input_tps.duration_floor_ms", duration_floor_ms));
+        }
+        for (name, value) in delays {
+            if !(value.is_finite() && value >= 0.0) {
+                bail!("{name} must be finite and non-negative");
+            }
         }
         if self
             .workload

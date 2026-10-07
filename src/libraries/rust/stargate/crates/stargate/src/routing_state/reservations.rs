@@ -88,15 +88,18 @@ pub(super) fn apply_pending_cluster_reservations(
         .iter()
         .filter(|pending| pending.is_active())
     {
-        // Pending reservations are advisory routing stats; saturate rather than wrap.
-        stats.queue_size = stats.queue_size.saturating_add(1);
-        stats.queued_input_size = stats.queued_input_size.saturating_add(pending.input_tokens);
-        stats.num_running_queries = stats.num_running_queries.saturating_add(1);
-        stats.total_query_input_size = stats
-            .total_query_input_size
-            .saturating_add(pending.input_tokens);
-        update_reserved_priority_queue_time(stats, pending.input_tokens, pending.priority);
+        apply_reservation(stats, pending.input_tokens, pending.priority);
     }
+}
+
+/// Counts one routed request that the backend's stats do not yet include.
+pub fn apply_reservation(stats: &mut ModelStats, input_tokens: u64, priority: u32) {
+    // Pending reservations are advisory routing stats; saturate rather than wrap.
+    stats.queue_size = stats.queue_size.saturating_add(1);
+    stats.queued_input_size = stats.queued_input_size.saturating_add(input_tokens);
+    stats.num_running_queries = stats.num_running_queries.saturating_add(1);
+    stats.total_query_input_size = stats.total_query_input_size.saturating_add(input_tokens);
+    update_reserved_priority_queue_time(stats, input_tokens, priority);
 }
 
 #[cfg(test)]

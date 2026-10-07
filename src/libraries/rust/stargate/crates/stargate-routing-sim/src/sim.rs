@@ -36,9 +36,10 @@ use rand::{Rng, SeedableRng};
 use stargate::load_balancer::{
     LoadBalancer, LoadBalancerDecision, LoadBalancerRequest, create_load_balancer_with_config,
 };
-use stargate::routing::{RoutedClusterSnapshot, RoutingTargetKey};
+use stargate::routing::{
+    RoutedClusterSnapshot, RoutingTargetKey, apply_reservation, queue_time_estimate_ms_for_priority,
+};
 use stargate_proto::pb::{InferenceServerStatus, ModelStats};
-use stargate_protocol::common::{has_available_engine_slot, queue_time_delta_ms};
 
 use crate::backend::Backend;
 use crate::config::{PolicyConfig, SimConfig};
@@ -139,6 +140,8 @@ struct RequestState {
     plan: PlannedRequest,
     cache_affinity_key: String,
     excluded: HashSet<String>,
+    /// The Stargate reservation for the in-flight dispatch.
+    reservation: Option<u64>,
     record: RequestRecord,
     engine: EngineState,
     resolved: bool,
@@ -167,18 +170,15 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
     let mut backends = Vec::new();
     let mut stargates = Vec::new();
     let mut stargate_weights = Vec::new();
-    let mut backend_engines = Vec::new();
     for (region_index, region) in config.topology.regions.iter().enumerate() {
         for backend_index in 0..region.backends {
-            let engine = config.backend_engine(region, backend_index);
             backends.push(Backend::new(
                 format!("{}-backend-{backend_index}", region.name),
                 region_index,
                 region.backend_speed,
-                engine.clone(),
+                config.backend_engine(region, backend_index),
                 &config.pylon,
             )?);
-            backend_engines.push(engine);
         }
         for _ in 0..region.stargates {
             stargates.push(StargateView {
@@ -199,16 +199,14 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
         stargate.reservations = backends.iter().map(|_| Vec::new()).collect();
     }
 
-    let workload = plan(
+    let mut workload = plan(
         &config.workload,
         &stargate_weights,
         spec.rate_rps,
         spec.seed,
     );
-    let requests = workload
-        .requests
-        .iter()
-        .cloned()
+    let requests = std::mem::take(&mut workload.requests)
+        .into_iter()
         .map(|plan| request_state(plan, &stargates))
         .collect::<Vec<_>>();
 
@@ -252,12 +250,7 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
         &records,
         measure_start,
         measure_end,
-        &simulation
-            .backends
-            .iter()
-            .map(|backend| backend.id.clone())
-            .collect::<Vec<_>>(),
-        &backend_engines,
+        &simulation.backends,
         started.elapsed(),
     ))
 }
@@ -266,15 +259,15 @@ fn request_state(plan: PlannedRequest, stargates: &[StargateView]) -> RequestSta
     RequestState {
         cache_affinity_key: format!("session-{}", plan.session),
         record: RequestRecord {
+            arrival: plan.arrival,
+            input_tokens: plan.input_tokens,
+            stargate_region: stargates[plan.stargate].region,
             attempt: plan.attempt,
-            ..RequestRecord::new(
-                plan.arrival,
-                plan.input_tokens,
-                stargates[plan.stargate].region,
-            )
+            ..RequestRecord::default()
         },
         plan,
         excluded: HashSet::new(),
+        reservation: None,
         engine: EngineState::NotAdmitted,
         resolved: false,
     }
@@ -369,27 +362,28 @@ impl Simulation<'_> {
         }
     }
 
-    fn candidates(&self, stargate: usize) -> (Vec<RoutedClusterSnapshot>, Vec<usize>) {
+    /// One candidate per backend, in backend order, as `stargate` sees it.
+    fn candidates(&self, stargate: usize) -> Vec<RoutedClusterSnapshot> {
         let view = &self.stargates[stargate];
-        let mut candidates = Vec::with_capacity(self.backends.len());
-        let mut backend_indices = Vec::with_capacity(self.backends.len());
         let now = Instant::now();
-        for (backend_index, backend) in self.backends.iter().enumerate() {
-            let mut stats = ModelStats::clone(&view.stats[backend_index]);
-            for reservation in &view.reservations[backend_index] {
-                apply_reservation(&mut stats, reservation.input_tokens);
-            }
-            candidates.push(RoutedClusterSnapshot {
-                cluster_id: backend.id.clone(),
-                stats,
-                rtt: Duration::from_secs_f64(self.rtt_ms(view.region, backend.region) / 1000.0),
-                snapshot_updated_at: now,
-                status: InferenceServerStatus::Active,
-                active_backend_count: 1,
-            });
-            backend_indices.push(backend_index);
-        }
-        (candidates, backend_indices)
+        self.backends
+            .iter()
+            .enumerate()
+            .map(|(index, backend)| {
+                let mut stats = ModelStats::clone(&view.stats[index]);
+                for reservation in &view.reservations[index] {
+                    apply_reservation(&mut stats, reservation.input_tokens, 0);
+                }
+                RoutedClusterSnapshot {
+                    cluster_id: backend.id.clone(),
+                    stats,
+                    rtt: Duration::from_secs_f64(self.rtt_ms(view.region, backend.region) / 1000.0),
+                    snapshot_updated_at: now,
+                    status: InferenceServerStatus::Active,
+                    active_backend_count: 1,
+                }
+            })
+            .collect()
     }
 
     fn route_attempt(&mut self, request: usize) {
@@ -398,7 +392,7 @@ impl Simulation<'_> {
         }
         let stargate = self.requests[request].plan.stargate;
         let arrival = self.requests[request].plan.arrival;
-        let (candidates, backend_indices) = self.candidates(stargate);
+        let candidates = self.candidates(stargate);
         let state = &self.requests[request];
         let excluded = &state.excluded;
         let eligible = candidates
@@ -432,10 +426,10 @@ impl Simulation<'_> {
 
         match decision {
             LoadBalancerDecision::Selected(choice) => {
-                let backend = backend_indices[choice.candidate_index];
+                let backend = choice.candidate_index;
                 self.requests[request].record.rank_depth = choice.rank_depth;
                 let expected_queue_ms =
-                    expected_queue_ms(&candidates[choice.candidate_index].stats);
+                    queue_time_estimate_ms_for_priority(&candidates[backend].stats, 0);
                 self.dispatch(request, backend, expected_queue_ms);
             }
             LoadBalancerDecision::Wait(remaining) => {
@@ -485,10 +479,10 @@ impl Simulation<'_> {
             input_tokens: self.requests[request].plan.input_tokens,
         };
         self.stargates[stargate].reservations[backend].push(reservation);
-        let record = &mut self.requests[request].record;
-        record.dispatched_at = Some(self.now);
-        record.backend = Some(backend);
-        record.reservation = Some(self.next_reservation);
+        let state = &mut self.requests[request];
+        state.reservation = Some(self.next_reservation);
+        state.record.dispatched_at = Some(self.now);
+        state.record.backend = Some(backend);
         let delay = self.one_way(
             self.stargates[stargate].region,
             self.backends[backend].region,
@@ -514,7 +508,6 @@ impl Simulation<'_> {
         );
         if self.backends[backend].rejects(expected_queue_ms, &self.config.pylon.queue_mismatch) {
             let reservation = self.requests[request]
-                .record
                 .reservation
                 .expect("dispatched request has a reservation");
             self.schedule(
@@ -634,10 +627,10 @@ impl Simulation<'_> {
             self.stargates[stargate].region,
         );
         self.requests[request].record.completed_at = Some(at + return_delay);
-        if !self.requests[request].resolved {
-            self.resolve(request, |_| {});
-            self.schedule_next_turn(request, at + return_delay);
-        }
+        // A client timeout cancels engine work, so a completing request is
+        // still unresolved.
+        self.resolve(request, |_| {});
+        self.schedule_next_turn(request, at + return_delay);
         self.stats_changed(backend);
     }
 
@@ -684,7 +677,7 @@ impl Simulation<'_> {
         if start >= self.workload.measure_end {
             return;
         }
-        // A pending turn keeps the run alive until it starts.
+        // A pending turn keeps the run alive; its request inherits the count.
         self.unresolved += 1;
         self.schedule(
             start.saturating_sub(self.now),
@@ -697,14 +690,12 @@ impl Simulation<'_> {
     }
 
     fn next_turn(&mut self, session: u32, turn: u32, attempt: u32) {
-        self.unresolved -= 1;
         let plan = self
             .workload
             .turn_request(session, turn, attempt, self.now)
             .expect("scheduled turns exist in the plan");
         let request = self.requests.len();
         self.requests.push(request_state(plan, &self.stargates));
-        self.unresolved += 1;
         self.schedule_arrival(request);
     }
 
@@ -772,40 +763,6 @@ impl Simulation<'_> {
         mark(&mut state.record);
         self.unresolved -= 1;
     }
-}
-
-/// Mirrors `apply_pending_cluster_reservations` for a priority-0 request.
-fn apply_reservation(stats: &mut ModelStats, input_tokens: u64) {
-    stats.queue_size = stats.queue_size.saturating_add(1);
-    stats.queued_input_size = stats.queued_input_size.saturating_add(input_tokens);
-    stats.num_running_queries = stats.num_running_queries.saturating_add(1);
-    stats.total_query_input_size = stats.total_query_input_size.saturating_add(input_tokens);
-    if stats.queue_time_estimate_ms_by_priority.is_empty() {
-        return;
-    }
-    match queue_time_delta_ms(input_tokens, stats.last_mean_input_tps) {
-        Some(delta_ms) => {
-            for estimate in stats.queue_time_estimate_ms_by_priority.values_mut() {
-                *estimate = estimate.saturating_add(delta_ms);
-            }
-        }
-        None => stats.queue_time_estimate_ms_by_priority.clear(),
-    }
-}
-
-/// Mirrors `queue_time_estimate_ms_for_priority` for priority 0.
-fn expected_queue_ms(stats: &ModelStats) -> Option<u64> {
-    if has_available_engine_slot(stats.num_running_queries, stats.max_engine_concurrency) {
-        return Some(0);
-    }
-    if !stats.queue_time_estimate_ms_by_priority.is_empty() {
-        return stats
-            .queue_time_estimate_ms_by_priority
-            .get(&0)
-            .copied()
-            .or(Some(0));
-    }
-    queue_time_delta_ms(stats.queued_input_size, stats.last_mean_input_tps)
 }
 
 #[cfg(test)]
@@ -945,14 +902,34 @@ mod tests {
     }
 
     #[test]
+    fn affinity_waits_without_max_wait_widen_instead_of_failing() {
+        let mut config = config(serde_json::json!({
+            "rates_rps": [1.0], "warmup_s": 1.0, "measure_s": 4.0,
+            "fixed": {
+                "sessions": 20, "input_tokens_min": 500, "input_tokens_max": 4000,
+                "output_tokens": 64
+            }
+        }));
+        config.client.max_wait_ms = None;
+        config
+            .policies
+            .retain(|policy| policy.name == "pulsar-wait-and-widen");
+        let summary = &run_policies(&config, 20.0)[0];
+        assert_eq!(summary.failed_no_route, 0);
+        assert!(summary.off_primary_fraction > 0.0);
+    }
+
+    #[test]
     fn configs_that_would_hang_or_misroute_are_rejected() {
         let valid = config(serde_json::json!({
             "rates_rps": [1.0], "warmup_s": 0.0, "measure_s": 1.0,
             "fixed": {"sessions": 1, "input_tokens_min": 1, "input_tokens_max": 1, "output_tokens": 1}
         }));
         type Breakage = (&'static str, fn(&mut SimConfig));
-        let breakages: [Breakage; 4] = [
+        let breakages: [Breakage; 6] = [
             ("heartbeat_ms", |config| config.pylon.heartbeat_ms = 0.0),
+            ("measure_s", |config| config.workload.measure_s = 0.0),
+            ("rtt_ms", |config| config.topology.rtt_ms[0][1] = f64::NAN),
             ("rates_rps", |config| config.workload.rates_rps = vec![-1.0]),
             ("traffic_weight", |config| {
                 for region in &mut config.topology.regions {

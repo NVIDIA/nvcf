@@ -38,8 +38,15 @@ same JSON shape as Stargate per-model load-balancer config.
 ## Fidelity limits
 
 - Engine step costs are estimates until calibrated against a real engine.
-- Load balancers use an unseeded thread RNG internally, so runs with the same
+- Load balancers use an unseeded thread RNG internally and read a small amount
+  of real-clock jitter through the request receive time, so runs with the same
   seed are not bit-for-bit reproducible. Use several seeds.
+- Offered requests and SLO attainment count every attempt, including
+  growing-session retries. A retry's TTFT starts at the retry.
+- Arrivals stop at the end of the measurement window. Requests that arrived in
+  the window run to completion.
+- A request succeeds when the engine completes it, even if the client timeout
+  fires during the final one-way trip back to the Stargate.
 - One backend per routed cluster. Shared-engine cluster aggregation and
   sibling-backend retries are not modeled.
 - `max_input_work_seconds` admission, `consider_kv_free_tokens`, priorities,

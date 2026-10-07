@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+use crate::backend::Backend;
 use crate::sim::RunSpec;
 use crate::time::{Micros, micros_from_ms, ms};
 
@@ -30,7 +31,6 @@ pub struct RequestRecord {
     pub mismatch_rejections: u32,
     pub dispatched_at: Option<Micros>,
     pub backend_received_at: Option<Micros>,
-    pub reservation: Option<u64>,
     pub backend: Option<usize>,
     /// Ranking depth of the final selection; 1 is the primary candidate.
     pub rank_depth: usize,
@@ -48,17 +48,23 @@ pub struct RequestRecord {
 }
 
 impl RequestRecord {
-    pub fn new(arrival: Micros, input_tokens: u64, stargate_region: usize) -> Self {
-        Self {
-            arrival,
-            input_tokens,
-            stargate_region,
-            ..Default::default()
-        }
-    }
-
     fn succeeded(&self) -> bool {
         self.completed_at.is_some() && !self.timed_out
+    }
+
+    fn ttft(&self) -> Micros {
+        self.first_token_at
+            .expect("successful request has a first token")
+            - self.arrival
+    }
+
+    /// Backend arrival to first token at the backend.
+    fn backend_ttft(&self) -> Micros {
+        self.backend_first_token_at
+            .expect("successful request has a backend first token")
+            - self
+                .backend_received_at
+                .expect("successful request reached its backend")
     }
 }
 
@@ -114,6 +120,7 @@ pub struct BackendSummary {
     pub reused_input_token_fraction: f64,
 }
 
+/// Nearest-rank percentiles; all zero when there are no samples.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct Percentiles {
     pub p50: f64,
@@ -139,24 +146,33 @@ impl Percentiles {
     }
 }
 
+fn ratio(numerator: f64, denominator: f64) -> f64 {
+    if denominator == 0.0 {
+        0.0
+    } else {
+        numerator / denominator
+    }
+}
+
+/// Fraction of input tokens served from the prefix cache.
+fn reused_fraction(records: &[&RequestRecord]) -> f64 {
+    let reused: u64 = records
+        .iter()
+        .map(|record| record.reused_input_tokens)
+        .sum();
+    let input: u64 = records.iter().map(|record| record.input_tokens).sum();
+    ratio(reused as f64, input as f64)
+}
+
 pub fn summarize(
     spec: &RunSpec<'_>,
     records: &[RequestRecord],
     measure_start: Micros,
     measure_end: Micros,
-    backend_ids: &[String],
-    backend_engines: &[mock_engine::EngineConfig],
+    backends: &[Backend],
     wall_clock: Duration,
 ) -> RunSummary {
     let config = spec.config;
-    let backend_regions: Vec<usize> = config
-        .topology
-        .regions
-        .iter()
-        .enumerate()
-        .flat_map(|(region, spec)| std::iter::repeat_n(region, spec.backends))
-        .collect();
-    debug_assert_eq!(backend_regions.len(), backend_ids.len());
     let measured: Vec<&RequestRecord> = records
         .iter()
         .filter(|record| (measure_start..measure_end).contains(&record.arrival))
@@ -166,40 +182,25 @@ pub fn summarize(
         .copied()
         .filter(|record| record.succeeded())
         .collect();
-    let ttft = |record: &RequestRecord| {
-        record
-            .first_token_at
-            .expect("successful request has a first token")
-            - record.arrival
-    };
-    let ttft_slo = micros_from_ms(config.client.ttft_slo_ms as f64);
-    let good = succeeded
-        .iter()
-        .filter(|record| ttft(record) <= ttft_slo)
-        .count();
-    let measure_seconds = (measure_end - measure_start) as f64 / 1_000_000.0;
-    let reused: u64 = succeeded
-        .iter()
-        .map(|record| record.reused_input_tokens)
-        .sum();
-    let input: u64 = succeeded.iter().map(|record| record.input_tokens).sum();
-    let mut per_backend = vec![0usize; backend_ids.len()];
+    let mut served: Vec<Vec<&RequestRecord>> = vec![Vec::new(); backends.len()];
     let mut cross_region = 0usize;
     for record in &succeeded {
         let backend = record.backend.expect("successful request has a backend");
-        per_backend[backend] += 1;
-        if record.stargate_region != backend_regions[backend] {
+        served[backend].push(record);
+        if backends[backend].region != record.stargate_region {
             cross_region += 1;
         }
     }
-    let mean_backend = succeeded.len() as f64 / backend_ids.len().max(1) as f64;
-    let ratio = |numerator: usize, denominator: usize| {
-        if denominator == 0 {
-            0.0
-        } else {
-            numerator as f64 / denominator as f64
-        }
+    let ttft_slo = micros_from_ms(config.client.ttft_slo_ms as f64);
+    let good = succeeded
+        .iter()
+        .filter(|record| record.ttft() <= ttft_slo)
+        .count();
+    let measure_seconds = (measure_end - measure_start) as f64 / 1_000_000.0;
+    let count = |predicate: fn(&RequestRecord) -> bool| {
+        measured.iter().filter(|record| predicate(record)).count()
     };
+    let mean_backend = succeeded.len() as f64 / backends.len() as f64;
 
     RunSummary {
         policy: spec.policy.name.clone(),
@@ -208,21 +209,15 @@ pub fn summarize(
         offered: measured.len(),
         succeeded: succeeded.len(),
         good,
-        failed_no_route: measured.iter().filter(|record| record.no_route).count(),
-        failed_retries_exhausted: measured
-            .iter()
-            .filter(|record| record.retries_exhausted)
-            .count(),
-        failed_timeout: measured.iter().filter(|record| record.timed_out).count(),
-        retried_requests: measured.iter().filter(|record| record.attempt > 0).count(),
-        abandoned_sessions: measured
-            .iter()
-            .filter(|record| record.abandoned_session)
-            .count(),
+        failed_no_route: count(|record| record.no_route),
+        failed_retries_exhausted: count(|record| record.retries_exhausted),
+        failed_timeout: count(|record| record.timed_out),
+        retried_requests: count(|record| record.attempt > 0),
+        abandoned_sessions: count(|record| record.abandoned_session),
         goodput_rps: good as f64 / measure_seconds,
         throughput_rps: succeeded.len() as f64 / measure_seconds,
-        slo_attainment: ratio(good, measured.len()),
-        ttft_ms: Percentiles::from_ms(succeeded.iter().map(|record| ms(ttft(record))).collect()),
+        slo_attainment: ratio(good as f64, measured.len() as f64),
+        ttft_ms: Percentiles::from_ms(succeeded.iter().map(|record| ms(record.ttft())).collect()),
         input_tokens: Percentiles::from_ms(
             measured
                 .iter()
@@ -249,89 +244,78 @@ pub fn summarize(
         backend_ttft_ms: Percentiles::from_ms(
             succeeded
                 .iter()
-                .filter_map(|record| {
-                    Some(ms(
-                        record.backend_first_token_at? - record.backend_received_at?
-                    ))
-                })
+                .map(|record| ms(record.backend_ttft()))
                 .collect(),
         ),
         cache_hit_rate: ratio(
             succeeded
                 .iter()
                 .filter(|record| record.reused_input_tokens > 0)
-                .count(),
-            succeeded.len(),
+                .count() as f64,
+            succeeded.len() as f64,
         ),
-        reused_input_token_fraction: if input == 0 {
-            0.0
-        } else {
-            reused as f64 / input as f64
-        },
+        reused_input_token_fraction: reused_fraction(&succeeded),
         mismatch_rejections: measured
             .iter()
             .map(|record| u64::from(record.mismatch_rejections))
             .sum(),
-        mean_route_attempts: if measured.is_empty() {
-            0.0
-        } else {
+        mean_route_attempts: ratio(
             measured
                 .iter()
                 .map(|record| f64::from(record.route_attempts))
-                .sum::<f64>()
-                / measured.len() as f64
-        },
-        cross_region_fraction: ratio(cross_region, succeeded.len()),
+                .sum(),
+            measured.len() as f64,
+        ),
+        cross_region_fraction: ratio(cross_region as f64, succeeded.len() as f64),
         off_primary_fraction: ratio(
             succeeded
                 .iter()
                 .filter(|record| record.rank_depth > 1)
-                .count(),
-            succeeded.len(),
+                .count() as f64,
+            succeeded.len() as f64,
         ),
-        backends: backend_ids
+        backend_load_peak_to_mean: ratio(
+            served.iter().map(Vec::len).max().unwrap_or_default() as f64,
+            mean_backend,
+        ),
+        backends: backends
             .iter()
-            .zip(backend_engines)
-            .enumerate()
-            .map(|(index, (id, engine))| {
-                let served: Vec<&RequestRecord> = succeeded
-                    .iter()
-                    .copied()
-                    .filter(|record| record.backend == Some(index))
-                    .collect();
-                let input: u64 = served.iter().map(|record| record.input_tokens).sum();
-                let reused: u64 = served.iter().map(|record| record.reused_input_tokens).sum();
-                BackendSummary {
-                    id: id.clone(),
-                    gpu_workers: engine.num_gpu_workers,
-                    max_engine_concurrency: engine.max_concurrency(),
-                    succeeded: served.len(),
-                    ttft_ms: Percentiles::from_ms(
-                        served.iter().map(|record| ms(ttft(record))).collect(),
-                    ),
-                    backend_ttft_ms: Percentiles::from_ms(
-                        served
-                            .iter()
-                            .filter_map(|record| {
-                                Some(ms(
-                                    record.backend_first_token_at? - record.backend_received_at?
-                                ))
-                            })
-                            .collect(),
-                    ),
-                    reused_input_token_fraction: if input == 0 {
-                        0.0
-                    } else {
-                        reused as f64 / input as f64
-                    },
-                }
+            .zip(&served)
+            .map(|(backend, served)| BackendSummary {
+                id: backend.id.clone(),
+                gpu_workers: backend.gpu_workers,
+                max_engine_concurrency: backend.max_engine_concurrency,
+                succeeded: served.len(),
+                ttft_ms: Percentiles::from_ms(
+                    served.iter().map(|record| ms(record.ttft())).collect(),
+                ),
+                backend_ttft_ms: Percentiles::from_ms(
+                    served
+                        .iter()
+                        .map(|record| ms(record.backend_ttft()))
+                        .collect(),
+                ),
+                reused_input_token_fraction: reused_fraction(served),
             })
             .collect(),
-        backend_load_peak_to_mean: if mean_backend > 0.0 {
-            per_backend.iter().copied().max().unwrap_or_default() as f64 / mean_backend
-        } else {
-            0.0
-        },
         wall_clock_ms: wall_clock.as_secs_f64() * 1000.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn percentiles_use_nearest_rank_and_zero_for_no_samples() {
+        let percentiles = Percentiles::from_ms((1..=100).rev().map(f64::from).collect());
+        assert_eq!(
+            (percentiles.p50, percentiles.p90, percentiles.p99),
+            (50.0, 90.0, 99.0)
+        );
+        let single = Percentiles::from_ms(vec![7.0]);
+        assert_eq!((single.p50, single.p99), (7.0, 7.0));
+        let empty = Percentiles::from_ms(Vec::new());
+        assert_eq!((empty.p50, empty.p99), (0.0, 0.0));
     }
 }
