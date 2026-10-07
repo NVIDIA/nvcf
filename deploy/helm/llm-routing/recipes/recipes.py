@@ -155,7 +155,7 @@ def valid_name(value):
 
 
 def plan(snapshot, capabilities, model_ids, namespace, storage_class, runtime_class,
-         context_length=8192, concurrency=1, allow_offload=True, preference='fewest-nodes', requirements=None):
+         context_length=8192, concurrency=1, allow_offload=True, preference='fewest-nodes', requirements=None, placements=None):
     catalog = json.loads((HERE / 'catalog.json').read_text())
     models = {m['id']: m for m in catalog['models']}
     require(model_ids and len(set(model_ids)) == len(model_ids), 'Select each model once.')
@@ -170,6 +170,8 @@ def plan(snapshot, capabilities, model_ids, namespace, storage_class, runtime_cl
     require(storage and storage.get('volumeBindingMode') == 'WaitForFirstConsumer',
             'Use a StorageClass with WaitForFirstConsumer to bind storage to selected nodes.')
     require(not storage.get('allowedTopologies'), 'StorageClass allowedTopologies requires a topology-aware profile; use an unrestricted class.')
+    placements = placements or {}
+    require(set(placements) <= set(model_ids), 'Cache placement contains an unselected model.')
     capabilities = capabilities.get('nodes', {})
     candidates, rejected = capacity(snapshot)
     require(len(candidates) == len({n['uid'] for n in candidates}), 'Duplicate node identities in inventory.')
@@ -216,6 +218,11 @@ def plan(snapshot, capabilities, model_ids, namespace, storage_class, runtime_cl
                         continue
                 eligible.append(n)
             for group in itertools.combinations(eligible, profile['nodes']):
+                if model_id in placements:
+                    ordered = placements[model_id]
+                    if len(ordered) != len(group) or set(ordered) != {n['name'] for n in group}:
+                        continue
+                    group = tuple(next(n for n in group if n['name'] == name) for name in ordered)
                 if len({gpu_product(n['node']['metadata']['labels']['nvidia.com/gpu.product']) for n in group}) != 1:
                     continue
                 if profile.get('fabric'):
@@ -316,6 +323,7 @@ def main():
     deployment.add_argument('--storage-class', required=True)
     deployment.add_argument('--runtime-class', required=True)
     deployment.add_argument('--work-dir', type=pathlib.Path, required=True)
+    deployment.add_argument('--reuse-caches', action='store_true', help='Reinstall using verified retained model cache claims and offline snapshots.')
     deployment.add_argument('--capabilities', type=pathlib.Path)
     deployment.add_argument('--requirements', type=pathlib.Path)
     deployment.add_argument('--context-length', type=int, default=8192)

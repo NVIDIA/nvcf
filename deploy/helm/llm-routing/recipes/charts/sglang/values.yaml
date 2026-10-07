@@ -2,6 +2,7 @@
 # Generate these values with recipes.py plan. No default model is deployed.
 phase: qualify
 suspended: false
+reuseCaches: false
 model: {}
 image: ""
 imagePullPolicy: IfNotPresent

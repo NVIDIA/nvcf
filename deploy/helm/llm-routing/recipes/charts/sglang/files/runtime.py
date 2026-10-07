@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Qualify, cache, and supervise one rank of a pinned SGLang recipe."""
 import datetime
+import hashlib
 import http.server
 import json
 import math
@@ -164,20 +165,124 @@ def supervise(argv, config, state_dir=pathlib.Path('/tmp'), cgroup=pathlib.Path(
         stop(child)
 
 
+def completed_checkpoint(model, cache):
+    complete = cache / (model['revision'] + '.complete')
+    if not complete.is_file():
+        raise RuntimeError('Cache reuse requires a completed download marker for this pinned checkpoint')
+    content = complete.read_text().strip()
+    # Earlier releases recorded the repository, with the revision in the filename.
+    if content == model['repository']:
+        return complete
+    try:
+        identity = json.loads(content)
+    except ValueError:
+        identity = None
+    expected = {'model': model['id'], 'repository': model['repository'], 'revision': model['revision']}
+    if not isinstance(identity, dict) or any(identity.get(key) != value for key, value in expected.items()):
+        raise RuntimeError('Cached completion marker does not match the model, repository and revision')
+    return complete
+
+
+def reuse_snapshot(model, cache=pathlib.Path('/cache')):
+    """Validate retained Hugging Face files directly; never import a download client."""
+    complete = completed_checkpoint(model, cache)
+    repository = cache / 'huggingface' / 'hub' / ('models--' + model['repository'].replace('/', '--'))
+    snapshot = repository / 'snapshots' / model['revision']
+    if not repository.resolve().is_relative_to(cache.resolve()) or not snapshot.is_dir() or not snapshot.resolve().is_relative_to(repository.resolve()):
+        raise RuntimeError('Pinned model snapshot is missing from the retained cache')
+    checked = set()
+    for path in snapshot.rglob('*'):
+        if path.is_dir():
+            continue
+        resolved = path.resolve()
+        if not path.is_file() or not resolved.is_relative_to(repository.resolve()):
+            raise RuntimeError('Cached snapshot has a missing file or invalid link: ' + path.name)
+        # Hub blobs use SHA256 for LFS files and Git blob SHA1 for other files.
+        if resolved not in checked and len(resolved.name) in (40, 64) and all(c in '0123456789abcdef' for c in resolved.name):
+            digest = hashlib.sha256() if len(resolved.name) == 64 else hashlib.sha1(usedforsecurity=False)
+            if len(resolved.name) == 40:
+                digest.update(('blob ' + str(path.stat().st_size) + '\0').encode())
+            with path.open('rb') as stream:
+                for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
+                    digest.update(chunk)
+            if digest.hexdigest() != resolved.name:
+                raise RuntimeError('Cached model blob checksum differs: ' + path.name)
+            checked.add(resolved)
+    def read_json(name):
+        try:
+            value = json.loads((snapshot / name).read_text())
+        except (OSError, ValueError) as error:
+            raise RuntimeError('Missing or invalid cached model file: ' + name) from error
+        if not isinstance(value, dict) or not value:
+            raise RuntimeError('Empty or invalid cached model file: ' + name)
+        return value
+    read_json('config.json')
+    read_json('tokenizer_config.json')
+    if (snapshot / 'tokenizer.json').is_file():
+        read_json('tokenizer.json')
+    elif not (snapshot / 'tokenizer.model').is_file() or (snapshot / 'tokenizer.model').stat().st_size == 0:
+        raise RuntimeError('Cached tokenizer files are missing')
+    index = snapshot / 'model.safetensors.index.json'
+    weight_map = read_json(index.name).get('weight_map') if index.exists() else None
+    if index.exists() and (not isinstance(weight_map, dict) or not weight_map or not all(isinstance(name, str) for name in weight_map.values())):
+        raise RuntimeError('Cached weight index is empty or invalid')
+    weights = set(weight_map.values()) if weight_map else {path.name for path in snapshot.glob('*.safetensors')}
+    if not weight_map and weights != {'model.safetensors'}:
+        raise RuntimeError('Cached sharded model requires its complete weight index')
+    if not weights or any(not isinstance(name, str) or pathlib.PurePath(name).name != name or not name.endswith('.safetensors') for name in weights):
+        raise RuntimeError('Cached model weights are missing or invalid')
+    for name in weights:
+        path = snapshot / name
+        try:
+            size = path.stat().st_size
+            with path.open('rb') as stream:
+                length = int.from_bytes(stream.read(8), 'little')
+                if not 0 < length <= min(size - 8, 64 * 1024 * 1024):
+                    raise ValueError('Invalid safetensors header length')
+                header = json.loads(stream.read(length))
+            offsets = [value['data_offsets'] for key, value in header.items() if key != '__metadata__']
+            if not offsets or any(not isinstance(pair, list) or len(pair) != 2 or
+                    any(type(value) is not int for value in pair) or not 0 <= pair[0] <= pair[1] <= size - 8 - length for pair in offsets):
+                raise ValueError('Invalid tensor offsets')
+            if max(pair[1] for pair in offsets) != size - 8 - length:
+                raise ValueError('Truncated or unexpected tensor data')
+            if weight_map and any(tensor not in header for tensor, shard in weight_map.items() if shard == name):
+                raise ValueError('Weight index refers to missing tensors')
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+            raise RuntimeError('Missing or corrupt cached weight shard: ' + name) from error
+    complete.write_text(json.dumps({'model': model['id'], 'repository': model['repository'], 'revision': model['revision']}) + '\n')
+    return snapshot
+
+
+def download(config, cache=pathlib.Path('/cache')):
+    profile, model = config['profile'], config['model']
+    reuse = config.get('reuseCaches', False)
+    if type(reuse) is not bool:
+        raise RuntimeError('reuseCaches must be a boolean')
+    if reuse:
+        reuse_snapshot(model, cache)
+        log('download_pass', model=model['id'], revision=model['revision'], reused=True)
+        return 0
+    from huggingface_hub import snapshot_download
+    complete = cache / (model['revision'] + '.complete')
+    if not complete.exists() and shutil.disk_usage(cache).free < profile['minFreeDiskGiB'] * GIB:
+        raise RuntimeError('Insufficient cache disk space for the model checkpoint')
+    snapshot_download(repo_id=model['repository'], revision=model['revision'])
+    complete.write_text(model['repository'] + '\n')
+    log('download_pass', model=model['id'], revision=model['revision'])
+    return 0
+
+
 def main():
     config = json.loads(pathlib.Path('/recipe/config.json').read_text())
     phase, rank = sys.argv[1], int(sys.argv[2])
     profile, model = config['profile'], config['model']
     log('phase_start', phase=phase, rank=rank, model=model['id'], revision=model['revision'])
+    reuse = config.get('reuseCaches', False)
+    if type(reuse) is not bool:
+        raise RuntimeError('reuseCaches must be a boolean')
     if phase == 'download':
-        from huggingface_hub import snapshot_download
-        complete = pathlib.Path('/cache') / (model['revision'] + '.complete')
-        if not complete.exists() and shutil.disk_usage('/cache').free < profile['minFreeDiskGiB'] * GIB:
-            raise RuntimeError('Insufficient cache disk space for the model checkpoint')
-        snapshot_download(repo_id=model['repository'], revision=model['revision'])
-        complete.write_text(model['repository'] + '\n')
-        log('download_pass', model=model['id'], revision=model['revision'])
-        return 0
+        return download(config)
     if host_memory() < profile['memoryGiB'] * GIB:
         raise RuntimeError('Insufficient host MemAvailable for this profile; capacity may have changed since planning')
     if phase == 'qualify':
@@ -188,9 +293,7 @@ def main():
     import torch
     check_hardware(config, torch.cuda)
     from huggingface_hub import snapshot_download
-    complete = pathlib.Path('/cache') / (model['revision'] + '.complete')
-    if not complete.exists() or complete.read_text().strip() != model['repository']:
-        raise RuntimeError('The download phase has not completed for this pinned checkpoint')
+    completed_checkpoint(model, pathlib.Path('/cache'))
     model_path = snapshot_download(repo_id=model['repository'], revision=model['revision'], local_files_only=True)
     if profile['offload']:
         # This mount is this pod's disposable emptyDir, never the retained model cache.

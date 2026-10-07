@@ -91,7 +91,13 @@ class StackTests(unittest.TestCase):
             return {'items': [self.resources['namespace/' + self.config['namespace']]] if self.namespace_exists else []}
         if kind == 'crds':
             return {'items': [copy.deepcopy(self.crd)] if self.crd_exists else []}
+        if kind.startswith('pods,deployments,'):
+            return {'items': copy.deepcopy(self.reinstall_resources)}
+        if kind in ('clusterroles', 'clusterrolebindings'):
+            return {'items': copy.deepcopy(self.reinstall_rbac.get(kind, []))}
         if kind == 'secret':
+            if hasattr(self, 'retained_secrets'):
+                return copy.deepcopy(self.retained_secrets[name])
             self.assertEqual(name, self.config['operatorRelease'] + '-cluster-credential')
             return {'data': {'cluster-token': base64.b64encode(b'test-cluster-token').decode()}}
         return copy.deepcopy(self.resources[kind + '/' + name])
@@ -104,8 +110,19 @@ class StackTests(unittest.TestCase):
         if command[1:4] == ['dependency', 'build', '--skip-refresh']:
             return ''
         self.assertEqual(command[:5], ['helm', '--kube-context', self.config['context'], '-n', self.config['namespace']])
-        self.assertEqual(command[5:7], ['upgrade', '--install'])
-        self.applied.append((command[7], json.loads(pathlib.Path(command[command.index('-f') + 1]).read_text())))
+        if command[5] == 'list':
+            self.assertEqual(command[6:], ['--deployed', '--failed', '--pending', '--superseded',
+                                           '--uninstalled', '--uninstalling', '-o', 'json'])
+            return json.dumps(self.reinstall_releases)
+        if command[5] == 'install':
+            release = command[6]
+            for key, owner in stack.connection_resources(self.connection).items():
+                if owner == release:
+                    self.resources[key]['metadata']['uid'] += '-reinstalled'
+        else:
+            self.assertEqual(command[5:7], ['upgrade', '--install'])
+            release = command[7]
+        self.applied.append((release, json.loads(pathlib.Path(command[command.index('-f') + 1]).read_text())))
         self.namespace_exists = True
         self.crd_exists = True
         return ''
@@ -327,6 +344,149 @@ class StackTests(unittest.TestCase):
         self.install()
         self.assertEqual((self.work/'api-key').read_bytes(), original_key)
         self.assertTrue((self.work/'connection.json').is_file())
+
+    def uninstalled_stack(self):
+        self.config['apiKeyFile'] = str(self.key_path)
+        self.namespace_exists = True
+        self.watchers = [self.other_operator]
+        self.reinstall_releases = []
+        self.reinstall_rbac = {}
+        self.retained_secrets = {}
+        for name, owner, data in (
+                (self.config['caConfigMap'], self.config['stackRelease'], {'tls.crt': self.ca, 'tls.key': 'test-private-ca'}),
+                (self.config['operatorRelease'] + '-cluster-credential', self.config['operatorRelease'],
+                 {'cluster-token': 'test-cluster-token'})):
+            self.retained_secrets[name] = {'kind': 'Secret', 'metadata': {'name': name, 'uid': name + '-retained',
+                'namespace': self.config['namespace'], 'annotations': {'meta.helm.sh/release-name': owner,
+                'meta.helm.sh/release-namespace': self.config['namespace']}},
+                'data': {key: base64.b64encode(value.encode()).decode() for key, value in data.items()}}
+        self.reinstall_resources = list(self.retained_secrets.values()) + [
+            {'kind': 'ConfigMap', 'metadata': {'name': 'kube-root-ca.crt'}},
+            {'kind': 'ServiceAccount', 'metadata': {'name': 'default'}}]
+        checkpoint = {'config': self.config, 'controlNodeUID': self.node['metadata']['uid'],
+                      'namespaceUID': self.resources['namespace/' + self.config['namespace']]['metadata']['uid']}
+        stack.save(self.work/'install.json', checkpoint)
+        stack.save(self.work/'connection.json', self.connection)
+        stack.save(self.work/'config.json', self.config)
+        stack.save(self.work/(self.config['stackRelease'] + '-values.json'), stack.stack_values(
+            self.config, hashlib.sha256(b'test-cluster-token').hexdigest(), self.connection['apiKeySHA256']))
+        stack.save(self.work/(self.config['operatorRelease'] + '-values.json'), stack.operator_values(self.config))
+
+    def assert_reinstall_rejected(self, message):
+        original = (self.work/'connection.json').read_bytes()
+        with self.cluster(), self.assertRaisesRegex(ValueError, message):
+            self.instance.install(reinstall=True)
+        self.assertEqual(self.applied, [])
+        self.assertEqual((self.work/'connection.json').read_bytes(), original)
+        self.assertEqual(list(self.work.glob('before-reinstall-*')), [])
+        self.assertTrue(all('install' not in command and 'upgrade' not in command for command in self.commands))
+
+    def test_explicit_reinstall_reuses_credentials_and_archives_original_identity(self):
+        self.uninstalled_stack()
+        before = {name: (self.work/name).read_bytes() for name in ('install.json', 'connection.json')}
+        secrets_before = copy.deepcopy(self.retained_secrets)
+        with self.cluster():
+            self.instance.install(reinstall=True)
+        archives = list(self.work.glob('before-reinstall-*'))
+        self.assertEqual(len(archives), 1)
+        self.assertEqual(archives[0].stat().st_mode & 0o777, 0o700)
+        for name, data in before.items():
+            self.assertEqual((archives[0]/name).read_bytes(), data)
+            self.assertEqual((archives[0]/name).stat().st_mode & 0o777, 0o600)
+        current = stack.load_connection(self.work/'connection.json')
+        for key, owner in stack.connection_resources(current).items():
+            self.assertEqual(current['resources'][key], self.connection['resources'][key] + ('-reinstalled' if owner else ''))
+        for field in ('caSHA256', 'apiKeySHA256', 'apiKeyFile', 'controlNodeUID'):
+            self.assertEqual(current[field], self.connection[field])
+        self.assertEqual(self.retained_secrets, secrets_before)
+        self.assertEqual(self.key_path.read_text(), 'test-key\n')
+        writes = [command for command in self.commands if command[0] == 'helm' and command[5:6] == ['install']]
+        self.assertEqual([command[6] for command in writes], [self.config['operatorRelease'], self.config['stackRelease']])
+        self.assertFalse(any(command[0] == 'kubectl' and any(action in command for action in ('delete', 'apply', 'patch'))
+                             for command in self.commands))
+
+    def test_reinstall_requires_both_original_evidence_files_before_cluster_access(self):
+        self.uninstalled_stack()
+        for name in ('connection.json', 'install.json'):
+            saved = (self.work/name).read_bytes()
+            (self.work/name).unlink()
+            with self.subTest(name=name), patch.object(stack, 'get') as get, patch.object(stack, 'run') as run, \
+                 self.assertRaisesRegex(ValueError, 'original install checkpoint and saved connection'):
+                self.instance.install(reinstall=True)
+            get.assert_not_called()
+            run.assert_not_called()
+            (self.work/name).write_bytes(saved)
+
+    def test_reinstall_rejects_changed_config_or_saved_connection(self):
+        self.uninstalled_stack()
+        with patch.dict(self.config, clusterId='another-cluster'):
+            self.assert_reinstall_rejected('checkpoint differs')
+        changed = dict(self.connection, clusterId='another-cluster')
+        stack.save(self.work/'connection.json', changed)
+        self.assert_reinstall_rejected('config differs')
+
+    def test_reinstall_rejects_replaced_namespace_node_or_crd(self):
+        self.uninstalled_stack()
+        for metadata in (self.resources['namespace/' + self.config['namespace']]['metadata'],
+                         self.node['metadata'], self.crd['metadata']):
+            with self.subTest(name=metadata['name']), patch.dict(metadata, uid='replaced'):
+                self.assert_reinstall_rejected('Namespace was replaced|checkpoint differs|original shared CRD')
+        with patch.dict(self.resources['namespace/' + self.config['namespace']]['metadata'], deletionTimestamp='now'):
+            self.assert_reinstall_rejected('namespace is terminating')
+
+    def test_reinstall_rejects_any_retained_release_status(self):
+        self.uninstalled_stack()
+        for name in (self.config['stackRelease'], self.config['operatorRelease'], 'existing-model'):
+            for status in ('deployed', 'failed', 'pending-install', 'uninstalling', 'uninstalled'):
+                self.reinstall_releases = [{'name': name, 'status': status}]
+                with self.subTest(name=name, status=status):
+                    self.assert_reinstall_rejected('Uninstall all releases')
+
+    def test_reinstall_rejects_workloads_endpoints_and_other_shared_objects(self):
+        self.uninstalled_stack()
+        for kind in ('Pod', 'Deployment', 'ReplicaSet', 'StatefulSet', 'DaemonSet', 'Job', 'CronJob',
+                     'ReplicationController', 'Service', 'InferenceEndpoint', 'ConfigMap', 'Secret',
+                     'ServiceAccount', 'Role', 'RoleBinding'):
+            self.reinstall_resources.append({'kind': kind, 'metadata': {'name': 'leftover'}})
+            with self.subTest(kind=kind):
+                self.assert_reinstall_rejected('Remaining resource')
+            self.reinstall_resources.pop()
+        for kind in ('clusterroles', 'clusterrolebindings'):
+            self.reinstall_rbac[kind] = [{'metadata': {'name': self.config['operatorRelease']}}]
+            with self.subTest(kind=kind):
+                self.assert_reinstall_rejected('Remaining operator RBAC')
+            self.reinstall_rbac.clear()
+
+    def test_reinstall_requires_original_owned_credentials_and_installed_values(self):
+        self.uninstalled_stack()
+        for secret in self.retained_secrets.values():
+            with patch.dict(secret['metadata']['annotations'], {'meta.helm.sh/release-name': 'foreign-owner'}):
+                self.assert_reinstall_rejected('Unexpected Helm owner')
+            with patch.dict(secret['metadata'], deletionTimestamp='now'):
+                self.assert_reinstall_rejected('credential is terminating')
+        for name, key, message in ((self.config['caConfigMap'], 'tls.crt', 'Retained CA'),
+                (self.config['operatorRelease'] + '-cluster-credential', 'cluster-token', 'operator credential')):
+            with patch.dict(self.retained_secrets[name]['data'], {key: base64.b64encode(b'changed').decode()}):
+                self.assert_reinstall_rejected(message)
+        self.key_path.write_text('changed-key')
+        self.assert_reinstall_rejected('caller credential')
+        self.key_path.write_text('test-key\n')
+        (self.work/(self.config['stackRelease'] + '-values.json')).unlink()
+        self.assert_reinstall_rejected('original installed stack values')
+
+    def test_reinstall_failure_preserves_old_connection_and_archive(self):
+        self.uninstalled_stack()
+        original = (self.work/'connection.json').read_bytes()
+        def fail_gateway(command):
+            if command[0] == 'helm' and command[5:7] == ['install', self.config['stackRelease']]:
+                raise ValueError('gateway readiness timed out')
+            return self.command(command)
+        with patch.object(stack, 'get', side_effect=self.get), patch.object(stack, 'run', side_effect=fail_gateway), \
+             contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'gateway readiness timed out'):
+            self.instance.install(reinstall=True)
+        self.assertEqual((self.work/'connection.json').read_bytes(), original)
+        self.assertEqual((next(self.work.glob('before-reinstall-*'))/'connection.json').read_bytes(), original)
+        self.assertEqual([name for name, _ in self.applied], [self.config['operatorRelease']])
 
     def gateway_opener(self, models=None, registry=None, valid_status=404, invalid_status=401):
         def open_request(request, timeout):

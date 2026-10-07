@@ -36,7 +36,7 @@ class DeployModelsTests(unittest.TestCase):
         self.args = argparse.Namespace(work_dir=self.base / 'deployment', stack_connection=self.base / 'connection.json',
             model=['qwen3.8-27b', 'qwen3.8-27b-nvfp4'], storage_class='local-path', runtime_class='nvidia',
             capabilities=None, requirements=None, context_length=8192, concurrency=1,
-            no_nvme_offload=False, preference='fewest-nodes')
+            no_nvme_offload=False, preference='fewest-nodes', reuse_caches=False)
         self.inventory = snapshot(2)
         self.commands = []
         self.values = {}
@@ -47,6 +47,8 @@ class DeployModelsTests(unittest.TestCase):
         self.bad_marker = False
         self.bad_download = False
         self.missing_rank = False
+        self.volumes = {}
+        self.bad_reuse_marker = False
         for target, value in [('stack_api', self.stack), ('inventory', self.inventory), ('check_plan', {'passed': True})]:
             patcher = patch.object(recipes, target, return_value=value)
             patcher.start()
@@ -76,6 +78,8 @@ class DeployModelsTests(unittest.TestCase):
                 return json.dumps(self.values[command[7]])
         if command[0] == 'kubectl':
             if command[5] == 'get':
+                if command[6] == 'pv':
+                    return json.dumps(self.volumes[command[7]])
                 items = copy.deepcopy(self.existing_resources)
                 if self.phase in ('qualify', 'download'):
                     for release in deployment.result['releases']:
@@ -100,7 +104,8 @@ class DeployModelsTests(unittest.TestCase):
                 release = next(r for r in deployment.result['releases'] if job.startswith(r['name'] + '-' + self.phase))
                 return json.dumps({'event': 'invalid' if self.bad_marker else ('qualification_pass' if self.phase == 'qualify' else 'download_pass'),
                                    'model': release['model'], 'revision': 'wrong' if self.bad_download else release['values']['model']['revision'],
-                                   'rank': int(job.rsplit('-', 1)[1]), 'nodes': len(release['nodes'])})
+                                   'rank': int(job.rsplit('-', 1)[1]), 'nodes': len(release['nodes']),
+                                   'reused': self.args.reuse_caches and not self.bad_reuse_marker})
         raise AssertionError('Unexpected command: ' + str(command))
 
     def deploy(self):
@@ -214,6 +219,128 @@ class DeployModelsTests(unittest.TestCase):
             self.deploy()
         self.assertFalse(any('phase=serve' in command for command in self.mutations()))
         self.verifier.assert_not_called()
+
+    def retained_fixture(self):
+        self.args.reuse_caches = True
+        self.existing_resources = []
+        self.volumes = {}
+        for node in self.inventory['nodes']:
+            node['metadata']['labels']['kubernetes.io/hostname'] = node['metadata']['name']
+        models = {model['id']: model for model in json.loads((HERE/'catalog.json').read_text())['models']}
+        for index, model in enumerate(self.args.model):
+            release = model.replace('.', '-')
+            node = self.inventory['nodes'][1-index]['metadata']['name']
+            name, uid, volume = release+'-cache-0', 'cache-uid-'+str(index), 'retained-volume-'+str(index)
+            size = str(models[model]['profiles'][0]['cacheGiB'])+'Gi'
+            self.existing_resources.append({'kind': 'PersistentVolumeClaim',
+                'metadata': {'name': name, 'uid': uid, 'namespace': self.connection['namespace'],
+                    'labels': {'app.kubernetes.io/managed-by': 'Helm'},
+                    'annotations': {'meta.helm.sh/release-name': release, 'meta.helm.sh/release-namespace': self.connection['namespace'],
+                                    'helm.sh/resource-policy': 'keep', 'volume.kubernetes.io/selected-node': node}},
+                'spec': {'storageClassName': self.args.storage_class, 'volumeName': volume, 'accessModes': ['ReadWriteOnce'],
+                         'resources': {'requests': {'storage': size}}},
+                'status': {'phase': 'Bound', 'capacity': {'storage': size}}})
+            self.volumes[volume] = {'kind': 'PersistentVolume', 'metadata': {'name': volume, 'uid': volume+'-uid'},
+                'spec': {'storageClassName': self.args.storage_class, 'capacity': {'storage': size},
+                         'claimRef': {'name': name, 'namespace': self.connection['namespace'], 'uid': uid},
+                         'nodeAffinity': {'required': {'nodeSelectorTerms': [{'matchExpressions': [
+                             {'key': 'kubernetes.io/hostname', 'operator': 'In', 'values': [node]}]}]}}},
+                'status': {'phase': 'Bound'}}
+
+    def test_reuse_caches_pins_each_precision_to_its_retained_volume_node(self):
+        self.retained_fixture()
+        self.assertTrue(self.deploy()['passed'])
+        result = json.loads((self.args.work_dir/'plan.json').read_text())
+        self.assertEqual([release['nodes'] for release in result['releases']], [['spark-1'], ['spark-0']])
+        self.assertTrue(all(release['values']['reuseCaches'] is True for release in result['releases']))
+        bindings = json.loads((self.args.work_dir/'retained-caches.json').read_text())
+        for claim in self.existing_resources:
+            self.assertEqual(bindings[claim['metadata']['name']]['uid'], claim['metadata']['uid'])
+        self.assertTrue(all('reuseCaches' in values and values['reuseCaches'] for values in self.values.values()))
+        self.assertTrue(all(c[5] in ('get', 'logs') for c in self.commands if c[0] == 'kubectl'))
+
+    def test_reuse_requires_every_requested_cache_before_any_model_mutation(self):
+        self.retained_fixture()
+        self.existing_resources.pop()
+        with self.assertRaisesRegex(ValueError, 'every rank starting at zero'):
+            self.deploy()
+        self.assertEqual(self.mutations(), [])
+
+    def test_reuse_rejects_wrong_claim_ownership_binding_capacity_or_affinity(self):
+        cases = [
+            ('owner', lambda pvc, pv: pvc['metadata']['annotations'].update({'meta.helm.sh/release-name': 'other'}), 'ownership'),
+            ('namespace', lambda pvc, pv: pvc['metadata'].update(namespace='other'), 'ownership'),
+            ('pending', lambda pvc, pv: pvc['status'].update(phase='Pending'), 'must be Bound'),
+            ('class', lambda pvc, pv: pvc['spec'].update(storageClassName='other'), 'storage class'),
+            ('binding', lambda pvc, pv: pv['spec']['claimRef'].update(uid='other'), 'PV binding'),
+            ('capacity', lambda pvc, pv: pv['spec']['capacity'].update(storage='1Gi'), 'capacity'),
+            ('profile-size', lambda pvc, pv: pvc['spec']['resources']['requests'].update(storage='1Gi'), 'requested capacity'),
+            ('affinity', lambda pvc, pv: pv['spec']['nodeAffinity']['required']['nodeSelectorTerms'][0]['matchExpressions'][0].update(values=['spark-0', 'spark-1']), 'unambiguous'),
+            ('annotation', lambda pvc, pv: pvc['metadata']['annotations'].update({'volume.kubernetes.io/selected-node': 'spark-0'}), 'selected-node'),
+        ]
+        for name, mutate, message in cases:
+            with self.subTest(case=name):
+                self.args.work_dir = self.base/name
+                self.retained_fixture()
+                claim = self.existing_resources[0]
+                mutate(claim, self.volumes[claim['spec']['volumeName']])
+                with self.assertRaisesRegex(ValueError, message):
+                    self.deploy()
+                self.assertEqual(self.mutations(), [])
+
+    def test_reuse_does_not_move_a_cache_to_another_idle_node(self):
+        self.args.model = self.args.model[:1]
+        self.retained_fixture()
+        self.inventory['pods'] = [{'metadata': {'name': 'busy-cache-node'}, 'spec': {'nodeName': 'spark-1',
+            'containers': [{'resources': {'requests': {'nvidia.com/gpu': '1'}}}]}, 'status': {'phase': 'Running'}}]
+        with self.assertRaisesRegex(ValueError, 'No placement fits'):
+            self.deploy()
+        self.assertEqual(self.mutations(), [])
+
+    def test_reuse_rejects_other_leftover_resources_owned_by_the_model_release(self):
+        self.retained_fixture()
+        self.existing_resources.append({'kind': 'ConfigMap', 'metadata': {'name': 'unrecognized-model-resource',
+            'annotations': {'meta.helm.sh/release-name': 'qwen3-8-27b'}}})
+        with self.assertRaisesRegex(ValueError, 'explicit recovery'):
+            self.deploy()
+        self.assertEqual(self.mutations(), [])
+
+    def test_reuse_detects_replaced_claim_volume_or_node_before_phase_mutation(self):
+        for kind in ('claim', 'volume', 'node'):
+            with self.subTest(kind=kind):
+                self.args.work_dir = self.base/kind
+                self.retained_fixture()
+                deployment = deploy_models.Deployment(self.args)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    deployment.prepare()
+                claim = self.existing_resources[0]
+                volume = self.volumes[claim['spec']['volumeName']]
+                if kind == 'claim':
+                    claim['metadata']['uid'] = 'replacement-claim'
+                    volume['spec']['claimRef']['uid'] = 'replacement-claim'
+                elif kind == 'volume':
+                    volume['metadata']['uid'] = 'replacement-volume'
+                else:
+                    self.inventory['nodes'][1]['metadata']['uid'] = 'replacement-node'
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaisesRegex(ValueError, 'identity changed'):
+                    deployment.apply('qualify')
+                self.assertEqual(self.mutations(), [])
+
+    def test_reuse_requires_explicit_offline_download_proof_before_serving(self):
+        self.retained_fixture()
+        self.bad_reuse_marker = True
+        with self.assertRaisesRegex(ValueError, 'download_pass'):
+            self.deploy()
+        self.assertFalse(any('phase=serve' in command for command in self.mutations()))
+        self.verifier.assert_not_called()
+
+    def test_cli_reuse_caches_is_an_explicit_opt_in(self):
+        args = ['recipes.py', 'deploy', '--stack-connection', 'connection.json', '--work-dir', 'new-work',
+                '--model', 'qwen3.8-27b', '--storage-class', 'local-path', '--runtime-class', 'nvidia']
+        for options, expected in (([], False), (['--reuse-caches'], True)):
+            with patch.object(sys, 'argv', args+options), patch.object(deploy_models, 'deploy') as deploy:
+                recipes.main()
+            self.assertIs(deploy.call_args.args[0].reuse_caches, expected)
 
     def test_cli_dispatch_preserves_requested_models_and_options(self):
         args = ['recipes.py', 'deploy', '--stack-connection', 'connection.json', '--work-dir', 'new-work',

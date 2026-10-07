@@ -244,10 +244,75 @@ class Stack:
             save(self.work/'render'/(release + '.yaml'), run(self.hm + ['template', release, chart, '-f', path]))
         print('Rendered shared gateway, router and operator resources.')
 
-    def install(self):
+    def prepare_reinstall(self, connection, state, namespace, crd):
+        config = self.config
+        fields = ('context', 'namespace', 'clusterId', 'stackRelease', 'operatorRelease', 'controlNode', 'caConfigMap')
+        require(all(connection[key] == config[key] for key in fields), 'Reinstall config differs from its saved connection.')
+        require(connection['controlNodeUID'] == state['controlNodeUID'], 'Reinstall routing node differs from its saved connection.')
+        require(namespace is not None and namespace['metadata']['uid'] == state.get('namespaceUID')
+                == connection['resources']['namespace/' + config['namespace']], 'Reinstall requires the original namespace.')
+        require(not namespace['metadata'].get('deletionTimestamp'), 'Reinstall namespace is terminating.')
+        require(crd is not None and crd['metadata']['uid'] == connection['resources']['customresourcedefinition/' + CRD],
+                'Reinstall requires the original shared CRD.')
+        check_crd(crd)
+        key_path = pathlib.Path(config['apiKeyFile']) if config.get('apiKeyFile') else self.work/'api-key'
+        require(str(key_path.resolve()) == connection['apiKeyFile'], 'Reinstall caller-key path differs from its saved connection.')
+        require(key_path.is_file() and hashlib.sha256(key_path.read_text().strip().encode()).hexdigest()
+                == connection['apiKeySHA256'], 'Reinstall caller credential is missing or changed.')
+        releases = json.loads(run(self.hm + ['list', '--deployed', '--failed', '--pending', '--superseded',
+                                             '--uninstalled', '--uninstalling', '-o', 'json']))
+        require(not releases, 'Uninstall all releases in the saved namespace before --reinstall.')
+        retained_names = {config['caConfigMap'], config['operatorRelease'] + '-cluster-credential'}
+        kinds = 'pods,deployments,replicasets,statefulsets,daemonsets,jobs,cronjobs,replicationcontrollers,services,inferenceendpoints,configmaps,secrets,serviceaccounts,roles,rolebindings'
+        resources = get(config, kinds)['items']
+        retained = {}
+        for resource in resources:
+            kind, metadata = resource['kind'], resource['metadata']
+            name = metadata['name']
+            if kind == 'Secret' and name in retained_names:
+                require(not metadata.get('deletionTimestamp'), 'Retained credential is terminating: ' + name)
+                retained[name] = resource
+            else:
+                require((kind, name) in (('ConfigMap', 'kube-root-ca.crt'), ('ServiceAccount', 'default')),
+                        'Remaining resource blocks reinstall: ' + kind + '/' + name)
+        for kind in ('clusterroles', 'clusterrolebindings'):
+            require(not any(item['metadata']['name'] == config['operatorRelease'] for item in get(config, kind)['items']),
+                    'Remaining operator RBAC blocks reinstall: ' + kind)
+        require(set(retained) == retained_names, 'Reinstall requires the retained CA and operator credential Secrets.')
+        ca = retained[config['caConfigMap']]
+        credential = retained[config['operatorRelease'] + '-cluster-credential']
+        ownership(ca, config['stackRelease'], config['namespace'])
+        ownership(credential, config['operatorRelease'], config['namespace'])
+        require(ca.get('data', {}).get('tls.key') and hashlib.sha256(base64.b64decode(ca['data']['tls.crt'])).hexdigest()
+                == connection['caSHA256'], 'Retained CA is missing or changed.')
+        values_path = self.work/(config['stackRelease'] + '-values.json')
+        require(values_path.is_file(), 'Reinstall requires the original installed stack values.')
+        token = base64.b64decode(credential.get('data', {}).get('cluster-token', ''))
+        token_hash = hashlib.sha256(token).hexdigest()
+        require(token and json.loads(values_path.read_text()).get('clusterCredential', {}).get('sha256') == token_hash,
+                'Retained operator credential is missing or changed.')
+        archive = self.work/('before-reinstall-' + str(time.time_ns()))
+        archive.mkdir(mode=0o700)
+        for name in ('connection.json', 'install.json', 'config.json', 'ca.crt', 'empty-verification.json',
+                     config['stackRelease'] + '-values.json', config['operatorRelease'] + '-values.json'):
+            source = self.work/name
+            if source.is_file():
+                save(archive/name, source.read_text())
+        identity = {'caSecretUID': ca['metadata']['uid'], 'credentialUID': credential['metadata']['uid'],
+                    'tokenSHA256': token_hash}
+        save(archive/'retained-identity.json', identity)
+        print('Previous installation evidence: ' + str(archive), flush=True)
+        return identity
+
+    def install(self, reinstall=False):
         config = self.config
         checkpoint = self.work/'install.json'
-        if (self.work/'connection.json').exists():
+        previous = None
+        if reinstall:
+            require(checkpoint.is_file() and (self.work/'connection.json').is_file(),
+                    '--reinstall requires the original install checkpoint and saved connection.')
+            previous = load_connection(self.work/'connection.json')
+        if (self.work/'connection.json').exists() and not reinstall:
             require(json.loads(checkpoint.read_text())['config'] == config, 'Use the original stack config for this work directory.')
             inspect_connection(load_connection(self.work/'connection.json'))
             print('Shared stack already installed and verified.')
@@ -278,6 +343,7 @@ class Stack:
         else:
             require(namespace is None, 'Use a new namespace for a new stack. Existing installations are never adopted.')
             save(checkpoint, state)
+        retained = self.prepare_reinstall(previous, state, namespace, crd) if reinstall else None
         operator, stack = chart_paths()
         run(['helm', 'dependency', 'build', '--skip-refresh', stack])
         key_path = pathlib.Path(config['apiKeyFile']) if config.get('apiKeyFile') else self.work/'api-key'
@@ -290,7 +356,8 @@ class Stack:
             path = self.work/(release + '-values.json')
             save(path, values)
             print('Installing ' + release, flush=True)
-            run(self.hm + ['upgrade', '--install', release, chart, '--create-namespace', '-f', path, '--wait', '--timeout', '5m'])
+            action = ['install'] if reinstall else ['upgrade', '--install']
+            run(self.hm + action + [release, chart, '--create-namespace', '-f', path, '--wait', '--timeout', '5m'])
         try:
             apply(config['operatorRelease'], operator, operator_values(config))
         finally:
@@ -299,6 +366,9 @@ class Stack:
             save(checkpoint, state)
         secret = get(config, 'secret', config['operatorRelease'] + '-cluster-credential')
         token_hash = hashlib.sha256(base64.b64decode(secret['data']['cluster-token'])).hexdigest()
+        if retained:
+            require(secret['metadata']['uid'] == retained['credentialUID'] and token_hash == retained['tokenSHA256'],
+                    'Operator credential changed during reinstall.')
         apply(config['stackRelease'], stack, stack_values(config, token_hash, hashlib.sha256(key.encode()).hexdigest()))
         connection = {key: config[key] for key in ('context', 'namespace', 'clusterId', 'stackRelease', 'operatorRelease', 'controlNode', 'caConfigMap')}
         connection.update(schemaVersion=1, kind='llm-stack-connection', controlNodeUID=control['metadata']['uid'],
@@ -307,6 +377,13 @@ class Stack:
         ca = get(config, 'configmap', config['caConfigMap'])['data']['ca.crt']
         connection['caSHA256'] = hashlib.sha256(ca.encode()).hexdigest()
         inspect_connection(connection)
+        if previous:
+            require(connection['caSHA256'] == previous['caSHA256'], 'CA changed during reinstall.')
+            require(get(config, 'secret', config['caConfigMap'])['metadata']['uid'] == retained['caSecretUID'],
+                    'CA Secret was replaced during reinstall.')
+            require(all(connection['resources'][key] != previous['resources'][key]
+                        for key, release in connection_resources(connection).items() if release),
+                    'Reinstall must create new shared resources.')
         save(self.work/'ca.crt', ca)
         save(self.work/'connection.json', connection)
         print('Shared stack installed. Connection: ' + str(self.work/'connection.json'))
@@ -375,6 +452,7 @@ def main(argv=None):
     commands.add_parser('render')
     install = commands.add_parser('install', help='Install shared infrastructure and verify the empty gateway.')
     install.add_argument('--port', type=int, default=18477)
+    install.add_argument('--reinstall', action='store_true', help='Reinstall a fully uninstalled stack in its original namespace, preserving retained credentials and caches.')
     chat = commands.add_parser('chat')
     chat.add_argument('--model', required=True)
     chat.add_argument('--stream', action='store_true')
@@ -395,7 +473,10 @@ def main(argv=None):
     elif args.command == 'chat':
         stack.chat(args.model, args.prompt, args.stream, args.port)
     elif args.command == 'install':
-        stack.install()
+        if args.reinstall:
+            stack.install(reinstall=True)
+        else:
+            stack.install()
         save(stack.work/'config.json', stack.config)
         stack.verify(True, None, args.port)
     else:

@@ -34,6 +34,39 @@ python3 stack.py --config /path/to/stack.json --work-dir /path/to/stack-work cha
 
 Add `--stream` for streaming chat. The shared CLI requires an explicit model ID. The verification checks discovery, healthy registry entries, real chat, streaming with token usage and rejection of an invalid key. Then test a controlled stop or upgrade of one recipe and verify that the other keeps serving. Preserve both model caches for recovery.
 
+### Reinstall with retained model caches
+
+Keep the original shared-stack work directory, namespace and model PVCs. The work directory binds the reinstall to the original namespace, node and credentials. This procedure interrupts the selected installation. Use the release names, context and namespace from that installation's saved configuration.
+
+Remove model releases first so the operator can clean up their transports, then remove the shared releases:
+
+```bash
+(
+  set -eu
+  : "${CONTEXT:?Set the saved context}" "${NAMESPACE:?Set the saved namespace}" \
+    "${STACK_RELEASE:?Set the saved stack release}" "${OPERATOR_RELEASE:?Set the saved operator release}"
+  for release in qwen3-8-27b qwen3-8-27b-nvfp4 "$STACK_RELEASE" "$OPERATOR_RELEASE"; do
+    helm --kube-context "$CONTEXT" --namespace "$NAMESPACE" uninstall "$release" \
+      --cascade foreground --wait --timeout 5m
+  done
+)
+```
+
+The model PVCs and retained credentials remain available. Reinstall the shared stack from its original work directory, then deploy the same models using a new model work directory for this attempt:
+
+```bash
+python3 stack.py --work-dir "$STACK_WORK" install --reinstall
+python3 recipes/recipes.py deploy \
+  --stack-connection "$STACK_WORK/connection.json" \
+  --work-dir "$STACK_WORK/reinstalled-models" \
+  --model qwen3.8-27b --model qwen3.8-27b-nvfp4 \
+  --storage-class local-path --runtime-class nvidia --reuse-caches
+```
+
+`--reinstall` verifies that the previous releases are removed and that the retained namespace, routing node and credentials match the saved installation. It archives the earlier connection evidence and records the new resource identities.
+
+`--reuse-caches` validates each retained PVC and volume binding and places the model on its cache's node. The cache phase checks the exact pinned checkpoint entirely locally. An incomplete or mismatched cache stops deployment with a reason. Successful reuse preserves the downloaded weights and proceeds through qualification, serving and gateway verification.
+
 ### Optional independent GGUF recipe
 
 Copy [glm.config.example.json](recipes/glm.config.example.json) to a private file. Select the recipe, release prefix, `nodes.model` placement, `gpu` sizing, runtime image, RuntimeClass and storage class. Attach it to the shared connection:
@@ -472,7 +505,7 @@ The main guide's `recipes.py deploy` command combines planning, rendering, quali
 
 The command stops at a failed phase and keeps its releases, caches, plan, logs and rendered values in the chosen work directory. Read `failure.json` and the named log before recovery. Use the saved values with the [individual phase commands](#deploy-and-verify) to resolve and repeat the failed phase, then continue the remaining phases. Keep serving releases in the serving phase. Use [lifecycle operations](#lifecycle) for changes to running models.
 
-Each new automated deployment requires a new work directory and unused release names. Reusing retained caches or an existing release follows the explicit phase and lifecycle procedures below.
+Each automated deployment requires a new work directory and absent model releases. Use `--reuse-caches` for a [reinstall with retained model caches](#reinstall-with-retained-model-caches). Changes to an existing release follow the explicit phase and lifecycle procedures below.
 
 ### Plan and render
 

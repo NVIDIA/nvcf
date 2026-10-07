@@ -33,6 +33,12 @@ class InstallFlowTests(unittest.TestCase):
             stack.main(self.arguments)
         self.assertEqual(events, ['installed', 'verified'])
 
+    def test_reinstall_is_explicit_and_still_verifies_empty_gateway(self):
+        with patch.object(stack, 'Stack', return_value=self.instance):
+            stack.main(self.arguments + ['--reinstall'])
+        self.instance.install.assert_called_once_with(reinstall=True)
+        self.instance.verify.assert_called_once_with(True, None, 18477)
+
     def test_install_failure_does_not_report_or_run_gateway_verification(self):
         self.instance.install.side_effect = ValueError('installation failed')
         with patch.object(stack, 'Stack', return_value=self.instance), self.assertRaisesRegex(ValueError, 'installation failed'):
