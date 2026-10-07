@@ -34,7 +34,31 @@ python3 llm.py --context my-cluster --namespace llm-other chat \
   --model qwen3.8-27b 'Say hello in one short sentence.'
 ```
 
-The helper retrieves the installed CA and caller credential for each command. Its local connection and temporary files last only for that command. For legacy installations, `--ca-configmap NAME` and `--api-key-file FILE` select the existing CA and caller key. Image preparation remains in the [image build guide](recipes/BUILDING.md).
+The `models` and `chat` commands retrieve the installed CA and caller credential for each call. Their local connection and temporary files last only for that command. The `plan` command reads Kubernetes inventory and never opens a gateway connection. For legacy installations, `--ca-configmap NAME` and `--api-key-file FILE` select the existing CA and caller key. Image preparation remains in the [image build guide](recipes/BUILDING.md).
+
+### Model capacity check
+
+Run from `deploy/helm/llm-routing`. Check one model against cluster allocations before copying its printed Helm command:
+
+```bash
+python3 llm.py --context "$LLM_CONTEXT" --namespace llm-stack plan \
+  --model qwen3.8-27b --runtime-class nvidia --storage-class local-path
+```
+
+The report includes profile requirements, allocatable/reserved/free GPU and host memory, workload owners across namespaces, and per-node blockers. Pending GPU pods are reported with their requested node affinity and scheduler message. A pending GPU workload blocks a new placement until it is resolved. Existing model endpoints in the selected namespace are reported with readiness and inspection commands instead of a fresh installation command. Stopped releases without endpoints and retained caches are not discovered. Resume or reuse their original release, chart and cache placement. Printed commands use `helm install`, so an existing release name fails instead of upgrading another deployment.
+
+Options:
+
+- `--profile NAME` restricts the check to one catalog hardware profile.
+- `--context-length TOKENS --concurrency COUNT` checks a requested workload against the recipe's supported envelope. SGLang commands include these overrides. GGUF profiles use fixed recipe tuning and reject workload overrides.
+- `--capabilities FILE` supplies verified per-node NVMe, device-memory or fabric facts. Start from [capabilities.example.json](recipes/capabilities.example.json), replace example addresses and names, and save it outside the checkout.
+- `--runtime-class NAME --storage-class NAME --shared-ca-configmap NAME` sets the installation's site values. The check requires the RuntimeClass and a StorageClass with `WaitForFirstConsumer` and unrestricted topology. It does not verify the CA or gateway connection.
+- `--release NAME` changes the name of a new release. It does not adopt or replace an existing deployment.
+- `--json` prints the same report as JSON for other tools. Exit status is `0` when a new placement fits and `2` when blocked, unsupported or already deployed.
+
+The report checks GPU, CPU and memory reservations, hardware compatibility, node readiness, resource pressure and exclusive GPU requirements. NVMe offload also checks reserved ephemeral storage and the supplied local-NVMe fact. Distributed profiles require compatible fabric facts. Kubernetes still schedules the pods; this read-only snapshot is not a reservation. It does not measure physical free disk, live host memory, image availability, retained-cache placement or runtime health. Resolve storage shortages separately using the [cache cleanup procedure](#remove-downloaded-model-files).
+
+For Flash-Next, the printed Helm command starts qualification only. Continue its [download and serve phases](#helm-flash-next-recipes). For GLM, the scheduling check does not close the documented automatic-startup validation gap. The existing [plan and render workflow](#plan-and-render) remains available for saved inventory, multiple simultaneous models and verified stack connections.
 
 ### Gateway access for SDKs and curl
 

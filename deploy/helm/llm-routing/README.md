@@ -26,30 +26,36 @@ Helm installs the gateway, router and namespace-scoped operator with an empty mo
 
 ## 2. Install a model
 
-Use the committed [recipe values](recipes/README.md#committed-values). Replace `gpu-node-1` below with an available GB10 node. The defaults use runtime class `nvidia` and storage class `local-path`. If your cluster uses different names, add `--set runtimeClassName=NAME --set storageClassName=NAME` to the Helm command.
-
-Install the FP8 recipe:
+Check whether your selected model fits before installing it:
 
 ```bash
-helm upgrade --install qwen-fp8 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
-  --kube-context "$LLM_CONTEXT" --namespace llm-stack \
-  --values recipes/values/qwen3.8-27b.yaml --set 'nodes[0]=gpu-node-1' \
-  --wait --timeout 120m &&
+python3 llm.py plan --model qwen3.8-27b
+```
+
+The command uses your current context and namespace `llm-stack`. It reads cluster allocations without changing workloads or fetching gateway credentials:
+
+- If the model fits, it prints a Helm install command using the committed [recipe values](recipes/README.md#committed-values) and actual available node names. Run that printed command.
+- If it does not fit, it shows the model requirements, each node's reserved and available GPU and memory capacity, and the workloads using those resources. [Stop or uninstall](#4-stop-or-uninstall-a-model) a model you no longer need, then rerun the check. Nothing is stopped automatically.
+- If the model already has an endpoint in this namespace, it shows its readiness and inspection commands. Recover or resume that release instead of creating a duplicate. Stopped releases without endpoints and retained caches are not discovered; resume or reuse their original release and cache instead of installing another copy.
+
+The check uses Kubernetes resource reservations, not momentary GPU utilization. It does not reserve the selected nodes or verify physical disk space, downloads or runtime startup. Recheck if cluster usage changes. The defaults use runtime class `nvidia` and storage class `local-path`. See [capacity-check options](ADVANCED.md#model-capacity-check) for another context, namespace, storage class or hardware profile. When writing a Helm command manually, replace every example node name with an actual available node. Never pass the `gpu-node-1` or `gpu-node-2` placeholders unchanged.
+
+After the printed FP8 installation command succeeds, wait for registration:
+
+```bash
 kubectl --context "$LLM_CONTEXT" -n llm-stack wait \
   --for=condition=Registered inferenceendpoint/qwen-fp8 --timeout=5m
 ```
 
 Kubernetes checks placement, qualifies the GPU, prepares the pinned model cache and starts serving. First startup includes the model download. Subsequent startups validate and reuse the cache. Readiness gates healthy serving through the shared gateway. See [retained caches and recovery](ADVANCED.md#helm-cache-reuse-and-recovery) for an existing download.
 
-For a second precision on another available node, use the NVFP4 values:
+Installing a second precision is optional. Check capacity for NVFP4, then run its printed Helm command if it fits:
 
 ```bash
-helm upgrade --install qwen-nvfp4 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
-  --kube-context "$LLM_CONTEXT" --namespace llm-stack \
-  --values recipes/values/qwen3.8-27b-nvfp4.yaml \
-  --set 'nodes[0]=gpu-node-2' \
-  --wait --timeout 120m
+python3 llm.py plan --model qwen3.8-27b-nvfp4
 ```
+
+Each recipe reserves its own GPU. Running both precisions on one-GPU nodes requires two available nodes.
 
 | Recipe | Precision | Availability and validation |
 | --- | --- | --- |
@@ -78,7 +84,7 @@ python3 llm.py chat --model qwen3.8-27b-nvfp4 --stream \
   'Explain what a GPU does in two sentences.'
 ```
 
-Each command retrieves the gateway CA and caller key, opens a temporary local connection, and cleans up its local connection files when it finishes. Use [connection overrides](ADVANCED.md#shared-cli-connection-options) for another context, namespace or an older installation.
+The `models` and `chat` commands retrieve the gateway CA and caller key, open a temporary local connection, and clean up their local connection files when they finish. Use [connection overrides](ADVANCED.md#shared-cli-connection-options) for another context, namespace or an older installation.
 
 ## 4. Stop or uninstall a model
 
