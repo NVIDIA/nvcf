@@ -65,6 +65,7 @@ go_test(
         "info_test.go",
         "llm_gateway_director_test.go",
         "openai_director_test.go",
+        "processing_test.go",
         "shadow_metrics_test.go",
         "shadow_test.go",
         "shadow_tracing_test.go",
@@ -74,6 +75,8 @@ go_test(
     embed = [":gateway"],
     deps = [
         "//src/invocation-plane-services/vanity-gateway/gateway_config",
+        "//src/invocation-plane-services/vanity-gateway/middleware",
+        "@com_github_go_chi_chi_v5//:chi",
         "@com_github_carlmjohnson_versioninfo//:versioninfo",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_goccy_go_json//:go-json",

@@ -61,11 +61,28 @@ var spanNameFormatter = otelhttp.WithSpanNameFormatter(func(operation string, r 
 
 func ServerTelemetryMiddleware(opts ...otelhttp.Option) func(http.Handler) http.Handler {
 	options := append(defaultHTTPServerOptions(), opts...)
-	return otelhttp.NewMiddleware(serverOperationName, options...)
+	telemetry := otelhttp.NewMiddleware(serverOperationName, options...)
+	return func(next http.Handler) http.Handler {
+		return processingMiddleware(telemetry(next))
+	}
 }
 
 func TracedRoundTripper(rt http.RoundTripper) http.RoundTripper {
-	return otelhttp.NewTransport(rt, spanNameFormatter)
+	traced := otelhttp.NewTransport(rt, spanNameFormatter, otelhttp.WithMetricAttributesFn(shadowMetricAttributes))
+	return dispatchRoundTripper{traced}
+}
+
+type dispatchRoundTripper struct{ http.RoundTripper }
+
+func (rt dispatchRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	if state := processingFromContext(r.Context()); state != nil {
+		outcome := "dispatched"
+		if r.Context().Err() != nil {
+			outcome = string(GatewayProxyOutcomeClientCanceled)
+		}
+		state.record(r.Context(), outcome)
+	}
+	return rt.RoundTripper.RoundTrip(r)
 }
 
 func defaultHTTPServerOptions() []otelhttp.Option {
@@ -104,6 +121,9 @@ func AddGatewayProxyOutcomeMetricAttribute(ctx context.Context, outcome GatewayP
 	switch outcome {
 	case GatewayProxyOutcomeClientCanceled, GatewayProxyOutcomeProxyError,
 		GatewayProxyOutcomeRejected, GatewayProxyOutcomeUpstreamStatus:
+		if state := processingFromContext(ctx); state != nil {
+			state.outcome = string(outcome)
+		}
 		addRequestMetricAttributes(ctx, GatewayProxyOutcomeMetricAttribute.String(string(outcome)))
 	}
 }

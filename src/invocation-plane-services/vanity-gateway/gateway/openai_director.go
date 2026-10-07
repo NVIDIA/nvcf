@@ -95,6 +95,7 @@ type OpenAIError struct {
 }
 
 type FunctionInfo struct {
+	publicModelName        string
 	functionId             string
 	functionVersionId      string
 	pathOverride           *string
@@ -251,7 +252,12 @@ func buildModelMapping(
 			pathOverride = &entry.OutgoingPathOverride
 		}
 		initializeShadowDropMetrics(shadowModelNames(entry.Shadows))
+		publicModelName := ""
+		if !privateModelMatcher.MatchString(modelName) {
+			publicModelName = modelName
+		}
 		modelNameToNVCFUrl[modelName] = FunctionInfo{
+			publicModelName:        publicModelName,
 			functionId:             entry.FunctionId,
 			functionVersionId:      entry.FunctionVersionId,
 			pathOverride:           pathOverride,
@@ -728,6 +734,7 @@ func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, re
 		}
 		return resolvedOpenAIRequest{}, true
 	}
+	middleware.SetPreUpstreamModel(request.Context(), nvcfUrl.publicModelName)
 	middleware.AddOpenAIRequestMetricAttributes(request.Context(), body.Model, nvcfUrl.functionId)
 
 	statusHandled := false
