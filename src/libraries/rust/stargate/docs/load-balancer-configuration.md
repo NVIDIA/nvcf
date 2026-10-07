@@ -470,7 +470,7 @@ The trusted gateway can then set:
 x-routing-method: pulsar
 ```
 
-Header values are trimmed, converted to lowercase, and normalized from
+Method-only header values are trimmed, converted to lowercase, and normalized from
 underscores to hyphens. For example, `pulsar_wait_and_widen` selects
 `pulsar-wait-and-widen`.
 
@@ -483,6 +483,32 @@ configured algorithm is always available as an override without a
 Treat routing headers as trusted internal metadata. A gateway should derive or
 validate them instead of forwarding public caller values.
 
+### Routing expressions
+
+Append parameters to a configured method to override its fields for a request:
+
+```text
+x-routing-method: pulsar;seed=stable-a;consider_kv_free_tokens=true
+```
+
+Parameter names are the configuration fields above and must apply to the
+selected algorithm. Omitted fields keep their configured values. The value is
+an RFC 8941 Item with Parameters, at most 1024 bytes and 32 parameters, with
+every parameter written as `key=value` and no commas. Quote a number that needs
+more than three fractional digits, such as `next_bucket_unlock_factor="0.0625"`.
+An expression may set `cache_affinity_virtual_nodes` to at most 1024.
+
+An invalid header returns HTTP `400` before backend selection, with
+`x-stargate-error-code: <class>` and body
+`{"error":"<message>","code":"<class>"}`. The message names the rejected
+parameter or value.
+
+Each routing key and model keeps the configurations and load balancers for its
+two most recent expressions, compared by bytes, so values that alternate while
+an update propagates reuse them. A third expression replaces the older one.
+Entries expire after 15 idle minutes, and each router process keeps at most
+16384.
+
 ## Load-balancer request headers
 
 These proxy headers affect load-balancer behavior:
@@ -491,7 +517,7 @@ These proxy headers affect load-balancer behavior:
 | --- | --- | --- |
 | `x-model` | required | Exact model ID used for model configuration lookup. |
 | `x-routing-key` | optional | Authenticated routing scope. It participates in affinity hashes. |
-| `x-routing-method` | optional | Preconfigured request algorithm. |
+| `x-routing-method` | optional | Preconfigured request algorithm, optionally with expression parameters. |
 | `x-cache-affinity-key` | optional or config-required | Opaque stable prefix or session identity. Blank means absent. |
 | `x-input-tokens` | required `u64` | Input-token estimate used by TTFT, admission, and optional KV feasibility. |
 | `x-priority` | optional `u32`, default `0` | Chooses the nearest published queue estimate at or below this priority. |
