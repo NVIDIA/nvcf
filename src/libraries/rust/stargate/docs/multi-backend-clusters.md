@@ -89,7 +89,9 @@ Cluster latest-wins fields:
   data makes the cluster ineligible for default Pulsar ranking.
 - Because the mean is summed and the maximum is not, a shared cluster weighs
   less against single-Pylon clusters under maximum weighting than under mean
-  weighting when each Pylon measures only its share of the engine's traffic.
+  weighting. This applies to per-Pylon `--initial-input-tps` contributions and
+  to observed rates when each Pylon measures only its share of the engine's
+  traffic.
 
 `RoutedClusterSnapshot.rtt` is the unweighted arithmetic mean of the latest
 forwarded `/health` RTT publication from every current active backend in the
