@@ -92,10 +92,13 @@ gateway does not wrap it in a second NVCF envelope.
 | `/v1/embeddings` | Supports embeddings requests with string or string array input. |
 | `/v1/messages` | Preserves native Anthropic Messages JSON responses and server-sent events, including tool and thinking content blocks. |
 
-`nvcf-cli` accepts `round_robin`, `power_of_two`, `groq_multiregion`,
-`pulsar`, or `random` for `llmConfig.routingMethod`.
+`llmConfig.routingMethod` is a routing algorithm name, optionally followed by
+tuning parameters, such as `pulsar;seed=stable-a;consider_kv_free_tokens=true`.
+`nvcf-cli` forwards the value unchanged. The function API checks its format,
+and the request router checks the algorithm and parameters on each request.
 
-For the mapping to Stargate algorithms and the request-router allowlist, see
+For the mapping to Stargate algorithms, the request-router allowlist, and the
+tuning parameters, see
 [LLM Request Router Load Balancing](../self-managed/llm-request-router-load-balancing.md).
 
 `llmConfig.tokenRateLimit` applies a per-model token limit. Use one or more comma-separated limits in `<value>-<unit>` format, where `<value>` is a positive integer and `<unit>` is one of `S` (seconds), `M` (minutes), `H` (hours), `D` (days), or `W` (weeks). A single limit is one token budget over one time window, such as `1000-S`. A combined limit is multiple token budgets over distinct time windows, such as `1000-S,5000-M,100000-H,500000-D,1000000-W`; do not repeat a unit in the same value.

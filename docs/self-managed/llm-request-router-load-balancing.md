@@ -94,9 +94,9 @@ Algorithm availability is enforced at separate layers:
 | Layer | Input contract |
 | --- | --- |
 | `lb-config.json` | Canonical Stargate algorithm names: `power-of-two`, `wait-and-widen`, `round-robin`, `random`, `pulsar`, and `pulsar-wait-and-widen`. Legacy `groq-multiregion` and `pulsar-multiregion` aliases remain accepted for existing deployments. |
-| Function model `llmConfig.routingMethod` | The same algorithm names, with underscores accepted in place of hyphens. Legacy aliases remain accepted for existing functions. |
-| LLM API Gateway | Nonblank routing method from authenticated model metadata, trimmed and forwarded as `x-routing-method` without algorithm validation. |
-| Stargate `x-routing-method` | Case-insensitive algorithm name with hyphens or underscores. It must match the effective algorithm or a model or top-level `request_algorithms` entry. Otherwise, Stargate returns HTTP `400`. |
+| Function model `llmConfig.routingMethod` | The same algorithm names, with underscores accepted in place of hyphens, optionally followed by tuning parameters. Legacy aliases remain accepted for existing functions. The function API checks only the format. |
+| LLM API Gateway | Removes any caller-supplied `x-routing-method`, then forwards the nonblank routing method from authenticated model metadata, trimmed, without algorithm validation. |
+| Stargate `x-routing-method` | Case-insensitive algorithm name with hyphens or underscores, optionally followed by tuning parameters. The algorithm must match the effective algorithm or a model or top-level `request_algorithms` entry. Otherwise, Stargate returns HTTP `400`. |
 
 For example, when a configuration is set and `power-of-two` is the effective
 algorithm, `wait_and_widen` requires a `wait-and-widen` entry in
@@ -107,6 +107,130 @@ Use `wait-and-widen` and `pulsar-wait-and-widen` in new function metadata,
 `lb-config.json` files, request-algorithm maps, and deployment manifests.
 Existing `groq-multiregion` and `pulsar-multiregion` values continue to work
 through the Stargate and control-plane compatibility aliases.
+
+## Tune a model with a routing expression
+
+A function owner can tune the selected algorithm for one model. Set
+`llmConfig.routingMethod` to the algorithm name followed by `;name=value`
+parameters:
+
+```text
+pulsar;seed=stable-a;consider_kv_free_tokens=true
+wait-and-widen;n=3;max_queue_time_floor_ms=200;max_queue_time_ceil_ms=2000
+```
+
+The parameters override the router configuration of that algorithm for that
+model only. Omitted parameters keep the `lb-config.json` values: the model
+entry when its algorithm matches, else the `request_algorithms` entry, else
+the default. The algorithm must be available to the model, as for a value
+without parameters. A value without parameters, such as `pulsar`, routes as
+before.
+
+### Format
+
+The value is an RFC 8941 Item with Parameters, with these rules:
+
+- At most 1024 bytes and 32 parameters.
+- No commas anywhere.
+- Each parameter is `name=value`. A name starts with a lowercase letter, uses
+  lowercase letters, digits, and underscores, and appears once.
+- A space is allowed after `;`, not around `=`.
+- A value is an integer, a decimal with at most three fractional digits, a
+  token, or a quoted string. Write booleans as `true` or `false`, not `?1` or
+  `?0`. A semicolon is not allowed inside a quoted string.
+- A quoted string is read as the parameter type. Quote a number that needs more
+  than three fractional digits, such as `next_bucket_unlock_factor="0.0625"`.
+  A quoted number must be a plain decimal number, without an exponent, `inf`,
+  or `NaN`.
+
+The function API checks this format on create and update and returns HTTP
+`400` for a malformed value. It stores an accepted value as written, apart from
+leading and trailing spaces. The router checks parameter names and values on
+each request.
+
+### Parameters
+
+Each parameter overrides the `lb-config.json` field with the same name. For
+field behavior and built-in defaults, see the
+[Stargate load balancer configuration](https://github.com/NVIDIA/nvcf/blob/main/src/libraries/rust/stargate/docs/load-balancer-configuration.md).
+
+| Parameter | Type | Algorithms | Accepted values |
+| --- | --- | --- | --- |
+| `require_cache_affinity_key` | boolean | all | `true`, `false` |
+| `require_input_tokens` | boolean | all | `true`, `false` |
+| `max_input_work_seconds` | number | all | Greater than 0 |
+| `sample_count` | integer | `power-of-two` | 1 to 64 |
+| `comparator` | token | `power-of-two`, `wait-and-widen` | `ttft`, `queue-time`, `input-work-seconds`, `utilization`, `num-requests-queued` |
+| `seed` | token or string | `pulsar`, `wait-and-widen`, `pulsar-wait-and-widen` | Any |
+| `consider_kv_free_tokens` | boolean | `pulsar`, `pulsar-wait-and-widen` | `true`, `false` |
+| `n` | integer | `wait-and-widen`, `pulsar-wait-and-widen` | Greater than 0 |
+| `max_queued` | integer | `wait-and-widen`, `pulsar-wait-and-widen` | 0 or greater |
+| `max_queue_time_floor_ms` | integer | `wait-and-widen`, `pulsar-wait-and-widen` | 0 or greater. The effective configuration must also set `max_queue_time_ceil_ms`. |
+| `max_queue_time_ceil_ms` | integer | `wait-and-widen`, `pulsar-wait-and-widen` | 0 or greater. The effective configuration must also set `max_queue_time_floor_ms`. |
+| `ttft_bucket_size_ms` | integer | `wait-and-widen`, `pulsar-wait-and-widen` | Greater than 0 |
+| `next_bucket_unlock_factor` | number | `wait-and-widen`, `pulsar-wait-and-widen` | Any finite number |
+| `ignore_queue_time` | boolean | `wait-and-widen`, `pulsar-wait-and-widen` | `true`, `false` |
+| `ignore_input_processing_time` | boolean | `wait-and-widen`, `pulsar-wait-and-widen` | `true`, `false` |
+| `cache_affinity_virtual_nodes` | integer | `wait-and-widen` | 1 to 1024 |
+| `cache_affinity_backend_selection_count` | integer | `wait-and-widen` | Greater than 0 |
+| `cache_affinity_input_tokens_scale` | number | `wait-and-widen` | 0.0 to 1.0 |
+| `cache_affinity_wait_ms` | integer | `wait-and-widen` | 0 or greater |
+
+`round-robin` and `random` accept only the parameters for all algorithms.
+
+### Rejections
+
+Stargate rejects an invalid value with HTTP `400` before backend selection. The
+response has the body `{"error":"<message>","code":"<code>"}` and the header
+`x-stargate-error-code: <code>`. The message names the rejected parameter or
+value.
+
+| Code | Cause |
+| --- | --- |
+| `malformed_expression` | The value breaks a format rule. |
+| `unknown_method` | The algorithm name is not a Stargate algorithm, or the value is blank. |
+| `unavailable` | The algorithm is not configured for the model. |
+| `unknown_parameter` | The parameter name is not a tuning field. |
+| `not_applicable` | The parameter does not apply to the selected algorithm. |
+| `invalid_value` | The value has the wrong type or is out of range. |
+| `inert_value` | The value would have no effect, such as `n=0`. |
+| `inert_combination` | Only one of `max_queue_time_floor_ms` and `max_queue_time_ceil_ms` is set after the override. |
+
+Values without parameters use the same response for `unknown_method` and
+`unavailable`.
+
+### How updates apply
+
+- An update needs no router restart or ConfigMap change.
+- The LLM API Gateway caches function metadata for up to 60 seconds. An update
+  reaches the router within that time, and until then requests can carry the
+  old or the new value.
+- For each routing key and model, each router keeps the configurations of the
+  two most recent values, compared byte for byte. Both values reuse their
+  configuration and load-balancer state while an update spreads. A third value
+  replaces the older one.
+- A new value starts with new load-balancer state, such as Pulsar rankings or
+  the round-robin position.
+- An entry is removed after 15 idle minutes. Each router keeps at most 16384
+  entries.
+
+### Logs and traces
+
+- The span field `routing.requested_algorithm` carries the header value as
+  received on every request.
+- When the router builds or replaces a configuration, it writes the info log
+  `routing expression configuration built` with the algorithm, outcome, and
+  value.
+- Each rejected request writes the warn log `invalid routing algorithm header`
+  with the code and message.
+
+### Routers without expression support
+
+A request router release without routing expression support reads the whole
+value as an algorithm name. It returns HTTP `400` for every value with
+parameters. Values without parameters keep working. Upgrade the request router
+before function owners add parameters. If an older router returns HTTP `400`,
+remove the parameters from the model `routingMethod`.
 
 ## Keep router headers trusted
 
@@ -171,8 +295,9 @@ for the model backend. Enable `require_cache_affinity_key` only when the
 gateway supplies a key for every endpoint served by the model.
 
 Stargate returns HTTP `400` for a blank, unknown, or configured-but-unavailable
-`x-routing-method`. It also returns HTTP `400` when a required router header is
-missing or a numeric header is invalid.
+`x-routing-method`, and for an invalid routing expression. The response carries
+the code described in [Rejections](#rejections). It also returns HTTP `400`
+when a required router header is missing or a numeric header is invalid.
 
 ## Apply and roll out
 
@@ -249,9 +374,12 @@ algorithm or is present in `request_algorithms`.
 3. Try a method accepted by `nvcf-cli` that is neither the configured
    algorithm nor present in `request_algorithms`; confirm that Stargate returns
    HTTP `400`.
-4. For an affinity-aware method, repeat a supported multi-turn request with the
+4. Update the function to the same method with a parameter, such as
+   `pulsar;seed=test`, and confirm success. Then set an unknown parameter and
+   confirm HTTP `400` with the `unknown_parameter` code.
+5. For an affinity-aware method, repeat a supported multi-turn request with the
    same `prompt_cache_key` or the returned `x-multi-turn-session-id`.
-5. Exercise a failed or saturated backend and confirm selection and retry
+6. Exercise a failed or saturated backend and confirm selection and retry
    counters change.
 
 ## Observe the request router
@@ -268,7 +396,7 @@ metric names, labels, and scrape configuration.
 | Symptom | Check |
 | --- | --- |
 | Pod does not start after a configuration change | Inspect request-router logs for file read, JSON parse, unknown field, or algorithm factory errors. |
-| HTTP `400` before backend selection | Compare the function `routingMethod` with the configured algorithm and `request_algorithms`. Check required and numeric gateway headers. |
+| HTTP `400` before backend selection | Read the `code` in the response body or the `x-stargate-error-code` header; see [Rejections](#rejections). Compare the function `routingMethod` with the configured algorithm and `request_algorithms`. Check required and numeric gateway headers. |
 | HTTP `400` for affinity-aware routing | Confirm the gateway generated a nonblank affinity key when `require_cache_affinity_key` is enabled. |
 | HTTP `503` with no eligible candidates | Confirm pylons are registered and publish the capacity, queue, and optional KV-cache statistics required by the algorithm. |
 | New ConfigMap value has no effect | Confirm the pod creation time. Restart the selected Deployment or StatefulSet because Stargate does not reload the file. |
