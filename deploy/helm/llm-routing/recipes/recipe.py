@@ -387,6 +387,8 @@ class Recipe:
         self.targets = [] if monitoring_only else [{'id': 'n'+str(index), 'node': node} for index, node in enumerate(config['nodes']['model'])]
         self.workers = self.targets[1:]
         self.plan = None if monitoring_only else sizing.memory_plan(self.definition, config['gpu'], len(self.targets))
+        # Serving pod resources, merged and checked here so a bad override fails before any cluster command.
+        self.resources = None if monitoring_only else self.serving_resources()
         releases = config.get('releases', {})
         self.backend = None if monitoring_only else releases.get('model', config['releasePrefix'] + '-' + self.definition['releaseName'])
         self.operator = releases.get('operator', config['releasePrefix'] + '-operator')
@@ -459,14 +461,18 @@ class Recipe:
         run(['helm', 'dependency', 'build', '--skip-refresh', self.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack'])
         print('Using source checkout:', self.source)
 
-    def backend_values(self, phase='serve', register=False, render=False):
-        d, plan, gpu = self.definition, self.plan, self.c['gpu']
+    def serving_resources(self):
+        memory = {'requests': str(self.plan['requestGiB'])+'Gi', 'limits': str(self.plan['limitGiB'])+'Gi'}
         overrides = self.c.get('resources', {})
-        memory = {'requests': str(plan['requestGiB'])+'Gi', 'limits': str(plan['limitGiB'])+'Gi'}
+        return {role: with_overrides({'requests': {'cpu': request, 'memory': memory['requests'], 'nvidia.com/gpu': 1},
+                                      'limits': {'cpu': limit, 'memory': memory['limits'], 'nvidia.com/gpu': 1}},
+                                     role, overrides.get(role))
+                for role, request, limit in (('model', '4', '12'), ('rpc', '2', '8'))}
+
+    def backend_values(self, phase='serve', register=False, render=False):
+        d, gpu = self.definition, self.c['gpu']
         if phase == 'serve':
-            rpc_resources = with_overrides({'requests': {'cpu': '2', 'memory': memory['requests'], 'nvidia.com/gpu': 1},
-                                            'limits': {'cpu': '8', 'memory': memory['limits'], 'nvidia.com/gpu': 1}},
-                                           'rpc', overrides.get('rpc'))
+            rpc_resources = copy.deepcopy(self.resources['rpc'])
         else:
             rpc_resources = {'requests': {'cpu': '2', 'memory': '2Gi', 'nvidia.com/gpu': 1},
                              'limits': {'cpu': '8', 'memory': '8Gi', 'nvidia.com/gpu': 1}}
@@ -481,9 +487,7 @@ class Recipe:
             'model': {'lock': d['lock'], 'servedName': d['servedName'], 'firstShard': d['firstShard'],
                       'endpointName': d['endpointName'], 'register': register, 'canary': dict(d['canary']),
                       'args': d['serverArgs'] + sizing.placement_args(len(self.targets)),
-                      'resources': with_overrides({'requests': {'cpu': '4', 'memory': memory['requests'], 'nvidia.com/gpu': 1},
-                                                   'limits': {'cpu': '12', 'memory': memory['limits'], 'nvidia.com/gpu': 1}},
-                                                  'model', overrides.get('model'))},
+                      'resources': copy.deepcopy(self.resources['model'])},
             'rpc': {'resources': rpc_resources,
                     'cache': {'enabled': phase == 'serve' and bool(self.workers), 'size': d['rpcCacheSize'],
                               'storageClassName': self.c['storageClass']}},

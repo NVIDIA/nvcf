@@ -5,8 +5,10 @@ import copy
 import importlib.util
 import json
 import pathlib
+import re
 import tempfile
 import unittest
+from unittest.mock import patch
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('recipe_resources', HERE/'recipe.py')
@@ -76,10 +78,21 @@ class ResourceOverrideTests(unittest.TestCase):
             with self.subTest(cpu=cpu):
                 tool.validate(dict(self.config, resources={'model': {'limits': {'cpu': cpu}}}))
 
-    def test_request_above_the_merged_limit_is_rejected(self):
-        for resources in ({'model': {'limits': {'memory': '100000Mi'}}}, {'rpc': {'limits': {'cpu': '1'}}}):
-            with self.subTest(resources=resources), self.assertRaisesRegex(RuntimeError, 'exceeds limit'):
-                self.values(dict(self.config, resources=resources))
+    def test_request_above_the_merged_limit_fails_before_any_cluster_command(self):
+        cases = [
+            ({'rpc': {'limits': {'cpu': '1'}}}, 'resources.rpc: cpu request 2 exceeds limit 1.'),
+            ({'model': {'limits': {'memory': '100000Mi'}}}, 'resources.model: memory request 110Gi exceeds limit 100000Mi.'),
+        ]
+        for resources, message in cases:
+            with self.subTest(resources=resources), patch.object(tool, 'output') as output, patch.object(tool, 'run') as run, \
+                    patch.object(tool.subprocess, 'run') as subprocess_run, \
+                    patch.object(tool.subprocess, 'check_output') as check_output, \
+                    self.assertRaisesRegex(RuntimeError, re.escape(message)):
+                tool.Recipe(dict(self.config, resources=resources), self.tmp.name)
+            for command in (output, run, subprocess_run, check_output):
+                command.assert_not_called()
+
+    def test_request_below_the_merged_limit_is_accepted(self):
         values = self.values(dict(self.config, resources={'model': {'requests': {'cpu': '500m'}, 'limits': {'memory': '120000Mi'}}}))
         self.assertEqual(values['model']['resources']['requests']['cpu'], '500m')
 
