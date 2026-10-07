@@ -285,6 +285,10 @@ const DefaultWriterPullSecret = "nvsnap-agent-pull" //nolint:gosec // secret nam
 
 // Agent is the NVSNAP node agent
 type Agent struct {
+	// capturing holds the container IDs with a checkpoint in progress: two
+	// captures of one workload would each suspend it and both fail.
+	capturing sync.Map
+
 	config     Config
 	log        *logrus.Logger
 	runtime    runtime.Runtime

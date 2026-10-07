@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
@@ -185,6 +186,9 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// default "/var/lib/nvsnap/bundle" (matches the agent
 		// DaemonSet's nvsnap-bundle-stage initContainer destination).
 		HostBundleRoot: a.config.Webhook.HostBundleRoot,
+		// gpushare: per-pod chunk stores live on the node-local checkpoint
+		// disk, next to the checkpoints they are collected into.
+		GPUShareHostRoot: filepath.Join(a.checkpointHostRoot(), GPUSharePodStoresSubdir),
 		// nvsnap#202: restore-prep strategy. When "init-container",
 		// the webhook emits a nvsnap-mount-prep init container instead
 		// of doing the OverlayFS mount syscalls during admission.

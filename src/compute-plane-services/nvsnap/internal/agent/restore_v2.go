@@ -131,26 +131,25 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	// Same execution shape as dumpV2: minimal env, PATH covers the bundle
 	// (cuda_plugin execs cuda-checkpoint and CRIU network-lock execs
 	// iptables-restore from PATH), no LD_LIBRARY_PATH.
-	args := []string{
-		"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
-		v2BinDirInContainer + "/criu", "restore",
-		"-D", imgsInContainer,
-		"-o", "restore.log", "-v4",
-		"--shell-job", "--tcp-established", "--ext-unix-sk", "--link-remap",
-		"--libdir", v2BinDirInContainer,
-		// Match the dump: unlock TCP in-process via libnftables (workload
-		// images ship no iptables binary).
-		"--network-lock", "nftables",
-		// Never restore cgroup membership: the dumped paths are the SOURCE
-		// pod's kubepods slice, which kubelet has already torn down.
-		// Recreating it puts the restored tree into an orphaned pod cgroup
-		// that kubelet housekeeping SIGKILLs (instantly on quick retries,
-		// ~90s in otherwise — killing the target mid GPU-resume, which
-		// surfaced as CUDA "OS call failed"). Same setting the legacy
-		// engine uses (ManageCgroups: ignore).
-		"--manage-cgroups=ignore",
-		"--restore-detached",
+	gs := metadata.GPUShare
+	if gs != nil {
+		// The restored processes re-map the shim from the path they had and
+		// load their GPU memory from the store path they saved to; the
+		// placeholder has to provide both (its manifest mounts them).
+		if gs.LibPath != "" && !fileExists(filepath.Join(root, strings.TrimPrefix(gs.LibPath, "/"))) {
+			return nil, fmt.Errorf("gpushare: placeholder has no %s; mount the node bundle there", gs.LibPath)
+		}
+		if !fileExists(filepath.Join(root, strings.TrimPrefix(gs.StorePath, "/"), "chunks")) {
+			return nil, fmt.Errorf("gpushare: placeholder has no chunk store at %s; mount the checkpoint's %s directory there",
+				gs.StorePath, GPUShareCheckpointSubdir)
+		}
+		if !fileExists(filepath.Join(root, strings.TrimPrefix(v2BinDirInContainer, "/"), gpushareToolName)) {
+			if serr := a.stageV2Bundle(root, log); serr != nil {
+				return nil, fmt.Errorf("gpushare: stage %s into placeholder: %w", gpushareToolName, serr)
+			}
+		}
 	}
+	args := restoreV2Args(hostPID, imgsInContainer, gs != nil, gs != nil && bundledSupportsDirectImageIO())
 	rctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	_, criuSpan := tracing.Tracer().Start(ctx, "restore.criu")
@@ -201,6 +200,18 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		return nil, fmt.Errorf("criu-v2 restore: %w (output: %s; restore.log tail: %s)", err, strings.TrimSpace(string(out)), tail)
 	}
 	criuSpan.End()
+
+	if gs != nil {
+		_, gsSpan := tracing.Tracer().Start(ctx, "restore.gpushare_resume")
+		gpuMap := gs.StorePath + "/" + gpushareGPUMapFile
+		if err := gpushareResume(ctx, hostPID, gs.PIDs, gpuMap, log); err != nil {
+			gsSpan.RecordError(err)
+			gsSpan.SetStatus(codes.Error, "gpushare resume failed")
+			gsSpan.End()
+			return nil, fmt.Errorf("gpushare resume: %w", err)
+		}
+		gsSpan.End()
+	}
 
 	duration := time.Since(startTime).Seconds()
 	log.WithField("duration", fmt.Sprintf("%.2fs", duration)).Info("criu-v2: restore completed")
@@ -429,4 +440,34 @@ func cancelWhenRestoreFailed(ctx context.Context, logPath string, grace time.Dur
 			return
 		}
 	}
+}
+
+// restoreV2Args builds the nsenter + criu restore argv. A gpushare restore
+// omits the CUDA plugin: nvsnap-gpu-suspend restores the GPU state after
+// CRIU. directIO reads the pages image with O_DIRECT.
+func restoreV2Args(hostPID int, imgsInContainer string, gpushare, directIO bool) []string {
+	args := []string{
+		"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
+		v2BinDirInContainer + "/criu", "restore",
+		"-D", imgsInContainer,
+		"-o", "restore.log", "-v4",
+		"--shell-job", "--tcp-established", "--ext-unix-sk", "--link-remap",
+	}
+	if !gpushare {
+		args = append(args, "--libdir", v2BinDirInContainer)
+	}
+	args = append(args,
+		// Match the dump: unlock TCP in-process via libnftables (workload
+		// images ship no iptables binary).
+		"--network-lock", "nftables",
+		// Never restore cgroup membership: the dumped paths are the SOURCE
+		// pod's kubepods slice, which kubelet has already torn down; the
+		// restored tree would land in an orphaned cgroup kubelet kills.
+		"--manage-cgroups=ignore",
+		"--restore-detached",
+	)
+	if directIO {
+		args = append(args, "--image-io-mode", "direct")
+	}
+	return args
 }

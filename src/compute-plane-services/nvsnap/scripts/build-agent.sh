@@ -326,7 +326,8 @@ build_app() {
     # cuda-checkpoint wrapper only: the real binary is built from source in
     # the BASE image (Dockerfile.base cuda-cli-builder stage); Dockerfile.app
     # just re-overlays the wrapper at /criu-bundle/cuda-checkpoint.
-    cp "${PROJECT_ROOT}/docker/agent/cuda-checkpoint-wrapper.sh" "${BUILD_CTX}/"
+    mkdir -p "${BUILD_CTX}/docker/agent"
+    cp "${PROJECT_ROOT}/docker/agent/cuda-checkpoint-wrapper.sh" "${BUILD_CTX}/docker/agent/"
 
     # Support NO_CACHE=1 environment variable to force rebuild
     local cache_flag=""

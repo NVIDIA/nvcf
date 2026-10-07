@@ -8,7 +8,7 @@
 # Prerequisites: Build base image first with Dockerfile.base
 # Build: docker build -t nvsnap-agent:v0.x.x -f Dockerfile.app .
 
-ARG BASE_IMAGE=nvcr.io/0651155215864979/ncp-dev/nvsnap-agent-base:v0.0.19
+ARG BASE_IMAGE=nvcr.io/0651155215864979/ncp-dev/nvsnap-agent-base:v0.0.24
 
 # ============================================================================
 # Stage 1: Build Go binaries
@@ -55,8 +55,10 @@ COPY scripts/restore-bundle-init.sh /criu-bundle/restore-bundle-init.sh
 RUN chmod +x /criu-bundle/restore-bundle-init.sh
 
 # cuda-checkpoint wrapper: resolves the host driver library path and strips
-# any preload from the environment before exec'ing the real binary.
-COPY cuda-checkpoint-wrapper.sh /criu-bundle/cuda-checkpoint
+# any preload from the environment before exec'ing the real binary. Paths are
+# relative to the nvsnap root, so the image also builds with that directory as
+# the context and no staging step.
+COPY docker/agent/cuda-checkpoint-wrapper.sh /criu-bundle/cuda-checkpoint
 RUN chmod +x /criu-bundle/cuda-checkpoint
 
 # Create symlinks

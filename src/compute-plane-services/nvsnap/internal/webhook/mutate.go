@@ -353,6 +353,10 @@ type Mutator struct {
 	// config value can't safely span all three.
 	HostBundleRoot string
 
+	// GPUShareHostRoot is the node directory holding per-pod gpushare chunk
+	// stores (gpushare.go). Empty = DefaultGPUShareHostRoot.
+	GPUShareHostRoot string
+
 	// Composer translates a pod spec to a checkpointstore.HashInput when
 	// the annotation value is "auto". Required for "auto" handling; if
 	// nil and the annotation is "auto", Mutate fails open (returns nil,
@@ -489,6 +493,9 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	// Patches accumulated by the model-volume and cachedir branches below,
 	// merged ahead of the restore-from patches.
 	var injectPatches []PatchOp
+	// gpushare placement is independent of every other decision below and
+	// rides along with whichever patches they return.
+	injectPatches = append(injectPatches, m.gpusharePatches(pod)...)
 
 	raw, ok := pod.Annotations[RestoreFromAnnotation]
 	if !ok || raw == "" {

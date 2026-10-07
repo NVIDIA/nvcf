@@ -111,6 +111,11 @@ func (a *Agent) stageV2Bundle(root string, log *logrus.Entry) error {
 		resolveCRIUPluginDir(a.config.CRIUPath, log) + "/cuda_plugin.so": "cuda_plugin.so",
 		filepath.Join(bundleDir, "cuda-checkpoint.real"):                 "cuda-checkpoint",
 	}
+	// gpushare's driver tool, when the bundle carries it (base images before
+	// gpushare do not; only a gpushare capture needs it).
+	if tool := filepath.Join(bundleDir, gpushareToolName); fileExists(tool) {
+		stage[tool] = gpushareToolName
+	}
 	for src, name := range stage {
 		if err := copyFileExec(src, filepath.Join(stageDir, name)); err != nil {
 			return fmt.Errorf("stage %s: %w", name, err)
@@ -138,7 +143,7 @@ func (a *Agent) stageV2Bundle(root string, log *logrus.Entry) error {
 
 // dumpV2 stages the bundle and runs CRIU dump inside the container's
 // namespaces. On success the image files have been moved into checkpointDir.
-func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, leaveRunning bool, log *logrus.Entry) error {
+func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, leaveRunning bool, log *logrus.Entry) (*GPUShareInfo, error) {
 	hostPID := int(containerInfo.PID)
 	procBase := "/proc"
 	if _, err := os.Stat("/host/proc"); err == nil {
@@ -148,20 +153,20 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 
 	// 1. Stage the bundle into the container rootfs.
 	if err := a.stageV2Bundle(root, log); err != nil {
-		return err
+		return nil, err
 	}
 
 	// 2. Fresh in-container images dir.
 	imgsDir := filepath.Join(root, strings.TrimPrefix(v2ImagesDirInContainer, "/"))
 	_ = os.RemoveAll(imgsDir)
 	if err := os.MkdirAll(imgsDir, 0o755); err != nil {
-		return fmt.Errorf("images dir: %w", err)
+		return nil, fmt.Errorf("images dir: %w", err)
 	}
 
 	// 3. NVIDIA device externals from the container's /dev view.
 	externals, err := nvidiaDevExternals(filepath.Join(root, "dev"))
 	if err != nil {
-		return fmt.Errorf("device externals: %w", err)
+		return nil, fmt.Errorf("device externals: %w", err)
 	}
 
 	// 4. Dump target: CRIU's -t is resolved in the entered pid namespace.
@@ -192,13 +197,38 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}
 	nsPID, err := nsPidOf(procBase, targetHostPID)
 	if err != nil {
-		return fmt.Errorf("resolve ns pid of %d: %w", targetHostPID, err)
+		return nil, fmt.Errorf("resolve ns pid of %d: %w", targetHostPID, err)
 	}
 	log.WithFields(logrus.Fields{
 		"targetHostPID": targetHostPID,
 		"nsPID":         nsPID,
 		"externals":     len(externals),
 	}).Info("criu-v2: dumping in-namespace")
+
+	// gpushare: when the workload runs under libnvsnap_gpushare.so, its GPU
+	// state is saved by nvsnap-gpu-suspend before the dump and CRIU dumps the
+	// CPU side only, without the CUDA plugin.
+	gsPIDs, gsLib, gsOn, gsErr := gpushareTargets(procBase, targetHostPID)
+	if gsErr != nil {
+		return nil, gsErr
+	}
+	var gsInfo *GPUShareInfo
+	var gpuMap string
+	if gsOn {
+		if !fileExists(filepath.Join(root, strings.TrimPrefix(GPUShareStoreInContainer, "/"))) {
+			return nil, fmt.Errorf("gpushare: the workload loads %s but has no chunk store at %s "+
+				"(the webhook mounts one into pods annotated %s=true)", gpushareLibName, GPUShareStoreInContainer, "nvsnap.io/gpushare")
+		}
+		if !fileExists(filepath.Join(root, strings.TrimPrefix(v2BinDirInContainer, "/"), gpushareToolName)) {
+			return nil, fmt.Errorf("gpushare: %s is not in the agent bundle; the agent base image predates gpushare", gpushareToolName)
+		}
+		gm, err := gpushareSuspend(ctx, hostPID, gsPIDs, log)
+		if err != nil {
+			return nil, fmt.Errorf("gpushare suspend: %w", err)
+		}
+		gpuMap = gm
+		gsInfo = &GPUShareInfo{PIDs: gsPIDs, StorePath: GPUShareStoreInContainer, LibPath: gsLib}
+	}
 
 	// 5. nsenter into the container's mnt/pid/net/ipc/uts namespaces and
 	// dump. Environment is deliberately minimal: PATH covers the staged bundle
@@ -210,85 +240,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	// -r/-w: root and cwd must follow the entered mount namespace — without
 	// them nsenter keeps the agent's root and the staged bundle path
 	// resolves against the wrong filesystem ("No such file or directory").
-	args := []string{
-		"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
-		v2BinDirInContainer + "/criu", "dump",
-		"-t", strconv.Itoa(nsPID),
-		"-D", v2ImagesDirInContainer,
-		"-o", "dump.log", "-v4",
-		"--shell-job", "--tcp-established", "--ext-unix-sk",
-		"--link-remap", "--ghost-links", "--ghost-limit", "1073741824",
-		"--libdir", v2BinDirInContainer,
-		// The kubelet readiness probe leaves half-open connections in the
-		// listen backlog at dump time; skip them like the legacy engine
-		// does (the probe just retries after restore).
-		"--skip-in-flight",
-		// TCP locking must not shell out to iptables: workload images
-		// don't ship it (netfilter.c sh -c "iptables ..." exited 127).
-		// The bundled criu links libnftables, so lock in-process.
-		"--network-lock", "nftables",
-		// Don't serialize cgroup membership: restore must not resurrect
-		// the source pod's (deleted) kubepods cgroup — see restore_v2.go.
-		"--manage-cgroups=ignore",
-		// CRIU's default 10s task timeout fires while the CUDA plugin is
-		// still interrogating the tree (the no-CUDA resource_tracker query
-		// alone can eat the window); the alarm EINTRs the plugin's
-		// --get-restore-tid read for the real GPU proc, which then gets
-		// misclassified and fails CHECKPOINT_DEVICES ("Failed to track").
-		// Same value the legacy engine uses for vLLM.
-		"--timeout", "1200",
-		// Serialize POSIX/BSD file locks instead of refusing to dump when any
-		// task holds one:
-		//   Error (criu/file-lock.c:110): Some file locks are hold by dumping
-		//                                 tasks! You can try --file-locks
-		// Inference servers take these routinely -- NIM's guided decoding holds
-		// two advisory read locks on its outlines SQLite cache (cache.db and
-		// cache.db-shm), and any library using Python filelock (HF hub, torch
-		// inductor) does the same. Without this a single lock anywhere in the
-		// tree is an unconditional dump failure, so the flag is on by default
-		// rather than opt-in: CRIU only serializes locks that exist, making it
-		// a no-op for workloads that hold none.
-		//
-		// CRIU makes this opt-in because it cannot verify that every holder of
-		// a lock is inside the dumped tree. Here that holds structurally: we
-		// dump the GPU leader's whole session inside the container's own mount
-		// namespace, so a lock on the container rootfs has no possible holder
-		// outside the tree. The residual risk is a lock on a volume shared with
-		// another pod; our read fan-out mounts per-capture volumes ReadOnlyMany,
-		// which cannot carry an exclusive lock.
-		"--file-locks",
-	}
-	// Optional LZ4 page compression (upstream CRIU #2895), OFF by default.
-	// Measured ~1.0x on the dominant cost — the cuda-checkpoint GPU-memory
-	// image, which the CUDA plugin writes outside CRIU's compressible pagemap,
-	// so --compress only touches sparse CPU-side pages. Not worth the dump-time
-	// CPU by default. Opt in per node via NVSNAP_CRIU_V2_COMPRESS:
-	//   "page"          per-page LZ4
-	//   "block[:SIZE]"  block LZ4 (SIZE default 256K, max 4M); "region" is
-	//                   the same thing under the flag's earlier name
-	//   "" / "off"      no compression (default)
-	// Upstream CRIU renamed --compress-region to --compress-block when it
-	// unified the two modes; the bundled binary decides which spelling the
-	// dump gets (see criuCompressBlockFlag).
-	switch mode := os.Getenv("NVSNAP_CRIU_V2_COMPRESS"); {
-	case mode == "page":
-		args = append(args, "--compress")
-	case mode == "region" || mode == "region:" || mode == "block" || mode == "block:":
-		args = append(args, bundledCompressBlockFlag(), "256K")
-	case strings.HasPrefix(mode, "region:"):
-		args = append(args, bundledCompressBlockFlag(), strings.TrimPrefix(mode, "region:"))
-	case strings.HasPrefix(mode, "block:"):
-		args = append(args, bundledCompressBlockFlag(), strings.TrimPrefix(mode, "block:"))
-	default: // "" / "off": no compression
-	}
-	if leaveRunning {
-		args = append(args, "--leave-running")
-	}
-	for _, e := range externals {
-		args = append(args, "--external", e)
-	}
-	// The exact argv is the first thing needed to reproduce a dump failure by
-	// hand, and it is otherwise unrecoverable after the fact.
+	args := dumpV2Args(hostPID, nsPID, externals, leaveRunning, gsOn, gsOn && bundledSupportsDirectImageIO(), os.Getenv("NVSNAP_CRIU_V2_COMPRESS"))
 	log.WithField("argv", "nsenter "+strings.Join(args, " ")).Info("criu-v2: dump argv")
 	dctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
@@ -339,6 +291,14 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		_ = os.RemoveAll(imgsHost)
 	}
 
+	if runErr != nil && gsOn {
+		// CRIU puts a failed dump's tasks back as they were: stopped, GPU
+		// state checkpointed. Bring the workload back rather than leave it
+		// frozen; the capture still fails.
+		if rerr := gpushareResume(ctx, hostPID, gsPIDs, "", log); rerr != nil {
+			log.WithError(rerr).Error("gpushare: resuming the source after a failed dump failed; the workload stays suspended")
+		}
+	}
 	if runErr != nil {
 		tail := tailOfFile(filepath.Join(checkpointDir, "dump.log"), 6)
 		if strings.TrimSpace(tail) == "" {
@@ -352,16 +312,26 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 			// Join rather than format moveErr with %v: a caller inspecting
 			// this with errors.Is/As needs to reach both the dump failure and
 			// the harvest failure, not just the first one.
-			return fmt.Errorf("criu-v2 dump (output: %s; dump.log tail: %s): %w",
+			return nil, fmt.Errorf("criu-v2 dump (output: %s; dump.log tail: %s): %w",
 				strings.TrimSpace(string(out)), tail, errors.Join(runErr, moveErr))
 		}
-		return fmt.Errorf("criu-v2 dump: %w (output: %s; dump.log tail: %s)", runErr, strings.TrimSpace(string(out)), tail)
+		return nil, fmt.Errorf("criu-v2 dump: %w (output: %s; dump.log tail: %s)", runErr, strings.TrimSpace(string(out)), tail)
 	}
 	if moveErr != nil {
-		return fmt.Errorf("criu-v2: move images: %w", moveErr)
+		return nil, fmt.Errorf("criu-v2: move images: %w", moveErr)
+	}
+	if gsOn {
+		if leaveRunning {
+			if err := gpushareResume(ctx, hostPID, gsPIDs, "", log); err != nil {
+				return nil, fmt.Errorf("gpushare: resume the source after the dump: %w", err)
+			}
+		}
+		if err := a.gpushareCollectStore(containerInfo, root, checkpointDir, gpuMap); err != nil {
+			return nil, err
+		}
 	}
 	log.Info("criu-v2: dump complete, images moved to checkpoint dir")
-	return nil
+	return gsInfo, nil
 }
 
 // gpuDevPatterns are the character devices a GPU workload may hold open that
@@ -532,4 +502,110 @@ func bundledCompressBlockFlag() string {
 		bundledCompressFlag = criuCompressBlockFlag(string(out))
 	})
 	return bundledCompressFlag
+}
+
+// dumpV2Args builds the nsenter + criu dump argv. A gpushare dump omits the
+// CUDA plugin: nvsnap-gpu-suspend has already checkpointed the GPU state.
+// directIO writes the pages image with O_DIRECT (--image-io-mode direct).
+func dumpV2Args(hostPID, nsPID int, externals []string, leaveRunning, gpushare, directIO bool, compress string) []string {
+	args := []string{
+		"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
+		v2BinDirInContainer + "/criu", "dump",
+		"-t", strconv.Itoa(nsPID),
+		"-D", v2ImagesDirInContainer,
+		"-o", "dump.log", "-v4",
+		"--shell-job", "--tcp-established", "--ext-unix-sk",
+		"--link-remap", "--ghost-links", "--ghost-limit", "1073741824",
+	}
+	if !gpushare {
+		args = append(args, "--libdir", v2BinDirInContainer)
+	}
+	args = append(args,
+		// The kubelet readiness probe leaves half-open connections in the
+		// listen backlog at dump time; skip them (the probe just retries).
+		"--skip-in-flight",
+		// TCP locking must not shell out to iptables: workload images don't
+		// ship it.
+		"--network-lock", "nftables",
+		"--manage-cgroups=ignore",
+		"--timeout", "1200",
+		"--file-locks",
+	)
+	if directIO {
+		args = append(args, "--image-io-mode", "direct")
+	}
+	switch mode := compress; {
+	case mode == "page":
+		args = append(args, "--compress")
+	case mode == "region" || mode == "region:" || mode == "block" || mode == "block:":
+		args = append(args, bundledCompressBlockFlag(), "256K")
+	case strings.HasPrefix(mode, "region:"):
+		args = append(args, bundledCompressBlockFlag(), strings.TrimPrefix(mode, "region:"))
+	case strings.HasPrefix(mode, "block:"):
+		args = append(args, bundledCompressBlockFlag(), strings.TrimPrefix(mode, "block:"))
+	default: // "" / "off": no compression
+	}
+	if leaveRunning {
+		args = append(args, "--leave-running")
+	}
+	for _, e := range externals {
+		args = append(args, "--external", e)
+	}
+	return args
+}
+
+var (
+	bundledDirectIOOnce sync.Once
+	bundledDirectIO     bool
+)
+
+// bundledSupportsDirectImageIO reports whether the bundled CRIU accepts
+// --image-io-mode (direct I/O for the pages image; base v0.0.22 and later).
+func bundledSupportsDirectImageIO() bool {
+	bundledDirectIOOnce.Do(func() {
+		out, _ := exec.Command(v2BinDirInContainer+"/criu", "--help").CombinedOutput()
+		bundledDirectIO = criuSupportsDirectImageIO(string(out))
+	})
+	return bundledDirectIO
+}
+
+func criuSupportsDirectImageIO(help string) bool {
+	return strings.Contains(help, "--image-io-mode")
+}
+
+// gpushareCollectStore moves the workload's chunk store into the checkpoint
+// (checkpointDir/gpushare). Entries are moved, not the directory: the
+// workload's mount still points at that directory, and a later capture of
+// the same pod must start empty rather than write into this checkpoint.
+func (a *Agent) gpushareCollectStore(containerInfo *containerd.ContainerInfo, root, checkpointDir, gpuMap string) error {
+	dst := filepath.Join(checkpointDir, GPUShareCheckpointSubdir)
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return fmt.Errorf("gpushare: %w", err)
+	}
+	// The pod's store as the agent sees it: same filesystem as the
+	// checkpoint dir, so each entry moves by rename. Fall back to the
+	// container's view (a copy across mounts) when the pod uid is unknown.
+	src := ""
+	if uid := containerInfo.Labels["io.kubernetes.pod.uid"]; uid != "" {
+		src = filepath.Join(a.config.CheckpointDir, GPUSharePodStoresSubdir, uid)
+	}
+	if src == "" || !fileExists(src) {
+		src = filepath.Join(root, strings.TrimPrefix(GPUShareStoreInContainer, "/"))
+	}
+	if err := moveDirContents(src, dst); err != nil {
+		return fmt.Errorf("gpushare: move chunk store %s to the checkpoint: %w", src, err)
+	}
+	// The GPU map goes in from the agent's side, into the checkpoint it owns:
+	// the agent cannot create files inside a container's mounts through
+	// /proc/<pid>/root. Restore finds it at <store>/gpus because the
+	// placeholder mounts this directory at the store path.
+	if err := os.WriteFile(filepath.Join(dst, gpushareGPUMapFile), []byte(gpuMap), 0o644); err != nil { //nolint:gosec // GPU UUIDs, read back by the restore tool
+		return fmt.Errorf("gpushare: write GPU map: %w", err)
+	}
+	return nil
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }

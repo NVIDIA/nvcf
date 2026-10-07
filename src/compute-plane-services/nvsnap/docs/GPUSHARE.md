@@ -139,6 +139,61 @@ name. So:
   process fill it with `cache-prefetch`, mount it read-only in workloads,
   and pass `--cache` to `resume` only.
 
+## Use through nvsnap
+
+Annotate the pod `nvsnap.io/gpushare: "true"`. nvsnap then does the steps in
+Usage itself, around its criu-v2 capture and restore.
+
+```mermaid
+flowchart LR
+  A[admission: webhook] -->|shim in LD_PRELOAD, bundle at /nvsnap, per-pod store| B[workload runs]
+  B --> C[capture: agent]
+  C -->|nvsnap-gpu-suspend suspend, stop| D[plain CRIU dump]
+  D -->|store moved into the checkpoint| E[node-local checkpoint]
+  E --> F[restore: placeholder]
+  F -->|CRIU restore, then resume --gpu-map| G[serving]
+```
+
+At admission, the webhook changes every container that requests GPUs:
+
+- mounts the node bundle (staged by the agent DaemonSet) read-only at
+  `/nvsnap` and appends `/nvsnap/libnvsnap_gpushare.so` to `LD_PRELOAD`,
+  keeping any value the pod sets;
+- mounts a per-pod directory of the node's checkpoint disk at
+  `/nvsnap-gpushare` (the chunk store), using the pod uid as the
+  subdirectory so pods never see each other's saved memory.
+
+At capture, the agent finds the processes of the dumped session that load the
+shim, runs `nvsnap-gpu-suspend gpus`, `suspend` and `stop` inside the pod's
+namespaces, and dumps with CRIU without the CUDA plugin and with
+`--image-io-mode direct`. It then moves the chunk store into the checkpoint
+(`<checkpoint>/gpushare`) and records the pids, the store path and the shim
+path in the checkpoint metadata. A process that uses the GPU without the shim
+fails the capture. Multi-GPU captures are accepted when the shim is loaded.
+
+At restore, the placeholder must mount the bundle at the shim's path and the
+checkpoint's `gpushare` directory at `/nvsnap-gpushare`. The agent's
+generated placeholder and the e2e templates do both. The agent runs CRIU,
+then `nvsnap-gpu-suspend resume` with the checkpoint's GPU map, limited to the
+GPUs the placeholder was allocated (`NVIDIA_VISIBLE_DEVICES`).
+
+Limits of the integration:
+
+- An `LD_PRELOAD` set from a ConfigMap or Secret reference cannot be extended
+  at admission; that container is left without the shim.
+- An `LD_PRELOAD` set only by the image (Dockerfile `ENV`) is not visible at
+  admission and is replaced by the shim.
+- One capture per workload at a time; a second request is refused.
+- Per-pod store directories are emptied when a capture collects them, not
+  deleted when the pod goes away.
+- `<checkpoint root>/gpushare-pods/` holds the stores of running pods. A
+  cleanup of the checkpoint root must keep it: deleting a pod's directory
+  leaves its store mount pointing at an unlinked directory, and that pod's
+  next capture fails with "No such file or directory".
+- Only processes that load the shim and use the GPU are suspended. The API
+  server and helper processes inherit the preload but hold no CUDA state;
+  CRIU dumps them as they are.
+
 ## Requirements and limits
 
 - Driver: 610 or later (validated: 610.57.04). Driver 580 cannot restore
