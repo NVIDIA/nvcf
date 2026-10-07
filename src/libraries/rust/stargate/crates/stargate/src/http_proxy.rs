@@ -248,7 +248,19 @@ fn prepare_proxy_request(
             .resolve(target, raw, || {
                 RoutingExpression::parse(raw)?.compile(&app.lb_router, model_id)
             })
-            .map_err(|error| reject_invalid_routing_algorithm(target, &error))?;
+            .map_err(|error| {
+                app.metrics
+                    .routing_expressions_total("", error.class, "")
+                    .inc();
+                reject_invalid_routing_algorithm(target, &error)
+            })?;
+        app.metrics
+            .routing_expressions_total(
+                &definition.config().algorithm().to_string(),
+                "accepted",
+                outcome.as_str(),
+            )
+            .inc();
         if outcome != Outcome::Hit {
             info!(
                 routing_key = ?target.routing_key,
@@ -381,6 +393,13 @@ mod test_support {
         app: &ProxyAppState,
         header: &str,
     ) -> super::PreparedProxyRequest {
+        try_prepare_with_routing_method(app, header).unwrap()
+    }
+
+    fn try_prepare_with_routing_method(
+        app: &ProxyAppState,
+        header: &str,
+    ) -> Result<super::PreparedProxyRequest, super::ProxyRequestError> {
         let request = axum::http::Request::builder()
             .uri("/v1/chat/completions")
             .header("x-model", "model")
@@ -397,7 +416,103 @@ mod test_support {
             super::OpenAiProxyEndpoint::CHAT_COMPLETIONS,
             std::time::Instant::now(),
         )
-        .unwrap()
+    }
+
+    // (algorithm, outcome, cache, count) for every exported routing expression series.
+    fn routing_expression_series(app: &ProxyAppState) -> Vec<(String, String, String, u64)> {
+        let mut series = app
+            .metrics
+            .registry()
+            .gather()
+            .iter()
+            .filter(|family| family.name() == "stargate_routing_expressions_total")
+            .flat_map(|family| family.get_metric())
+            .map(|metric| {
+                let label = |name: &str| {
+                    metric
+                        .get_label()
+                        .iter()
+                        .find(|label| label.name() == name)
+                        .map_or_else(String::new, |label| label.value().to_owned())
+                };
+                (
+                    label("algorithm"),
+                    label("outcome"),
+                    label("cache"),
+                    metric.get_counter().value() as u64,
+                )
+            })
+            .collect::<Vec<_>>();
+        series.sort();
+        series
+    }
+
+    #[tokio::test]
+    async fn routing_expression_metrics_count_outcomes_with_bounded_labels() {
+        let app = test_proxy_app_state_with_lb_config(LoadBalancerConfig::permissive_default());
+        let long_seed = format!("pulsar;seed=\"{}\"", "owner".repeat(150));
+        for header in [
+            "pulsar;seed=stable-a",
+            "pulsar;seed=stable-a",
+            "pulsar;seed=stable-b",
+            r#"pulsar;seed="free text from an owner""#,
+            long_seed.as_str(),
+            "wait-and-widen;n=2",
+            "pulsar;widen=2",
+            "pulsar;seed",
+            "fastest;seed=x",
+        ] {
+            let _ = try_prepare_with_routing_method(&app, header);
+        }
+
+        let series = routing_expression_series(&app);
+        let counted = series
+            .iter()
+            .filter(|(_, _, _, count)| *count > 0)
+            .map(|(algorithm, outcome, cache, count)| {
+                (algorithm.as_str(), outcome.as_str(), cache.as_str(), *count)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            counted,
+            [
+                ("", "malformed_expression", "", 1),
+                ("", "unknown_method", "", 1),
+                ("", "unknown_parameter", "", 1),
+                ("pulsar", "accepted", "build", 1),
+                ("pulsar", "accepted", "hit", 1),
+                ("pulsar", "accepted", "rebuild", 3),
+                // One target, so a new algorithm replaces the entry.
+                ("wait-and-widen", "accepted", "rebuild", 1),
+            ]
+        );
+
+        let algorithms = [
+            "",
+            "power-of-n",
+            "wait-and-widen",
+            "round-robin",
+            "random",
+            "pulsar",
+            "pulsar-wait-and-widen",
+        ];
+        let outcomes = [
+            "accepted",
+            "malformed_expression",
+            "unknown_method",
+            "unknown_parameter",
+            "not_applicable",
+            "invalid_value",
+            "inert_combination",
+            "inert_value",
+            "unavailable",
+        ];
+        let caches = ["", "hit", "build", "rebuild"];
+        for (algorithm, outcome, cache, _) in &series {
+            assert!(algorithms.contains(&algorithm.as_str()), "{algorithm}");
+            assert!(outcomes.contains(&outcome.as_str()), "{outcome}");
+            assert!(caches.contains(&cache.as_str()), "{cache}");
+        }
     }
 
     #[tokio::test]

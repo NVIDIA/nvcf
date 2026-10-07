@@ -15,6 +15,18 @@ use super::{
 // The affinity ring allocates candidates times this value; static config stays operator-trusted.
 const MAX_EXPRESSION_VIRTUAL_NODES: usize = 1024;
 
+/// Every `RejectionError::class`; metrics pre-initialize one series per class.
+pub(crate) const REJECTION_CLASSES: [&str; 8] = [
+    "malformed_expression",
+    "unknown_method",
+    "unknown_parameter",
+    "not_applicable",
+    "invalid_value",
+    "inert_combination",
+    "inert_value",
+    "unavailable",
+];
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub(crate) struct RejectionError {

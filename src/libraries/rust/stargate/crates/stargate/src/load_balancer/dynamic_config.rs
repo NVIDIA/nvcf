@@ -1,13 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use moka::notification::RemovalCause;
 use moka::ops::compute::{CompResult, Op};
 use moka::sync::Cache;
+use prometheus::IntGauge;
+use prometheus::core::{Collector, Desc};
+use prometheus::proto::MetricFamily;
 
+use crate::metrics::StargateMetrics;
 use crate::routing_state::{RoutingTargetKey, StargateState};
 
 use super::expression::RejectionError;
@@ -50,6 +54,8 @@ pub(crate) enum Outcome {
 }
 
 impl Outcome {
+    pub(crate) const ALL: [Self; 3] = [Self::Hit, Self::Build, Self::Rebuild];
+
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Hit => "hit",
@@ -130,9 +136,47 @@ impl DynamicConfigCache {
         Ok((definition, outcome))
     }
 
+    /// Exports the entry count. Each scrape first runs the cache's pending tasks, which
+    /// is what expires idle entries once expression traffic stops.
+    pub(crate) fn register_entry_gauge(
+        self: &Arc<Self>,
+        metrics: &StargateMetrics,
+    ) -> anyhow::Result<()> {
+        let gauge = IntGauge::new(
+            format!("{}routing_expression_cache_entries", metrics.prefix()),
+            "Routing targets that hold a dynamic routing expression configuration",
+        )?;
+        metrics.registry().register(Box::new(EntryGauge {
+            // The cache owns routing state, which owns the metrics; a strong reference would cycle.
+            cache: Arc::downgrade(self),
+            gauge,
+        }))?;
+        Ok(())
+    }
+
     #[cfg(test)]
     fn run_pending_tasks(&self) {
         self.entries.run_pending_tasks();
+    }
+}
+
+struct EntryGauge {
+    cache: Weak<DynamicConfigCache>,
+    gauge: IntGauge,
+}
+
+impl Collector for EntryGauge {
+    fn desc(&self) -> Vec<&Desc> {
+        self.gauge.desc()
+    }
+
+    fn collect(&self) -> Vec<MetricFamily> {
+        if let Some(cache) = self.cache.upgrade() {
+            cache.entries.run_pending_tasks();
+            self.gauge
+                .set(i64::try_from(cache.entries.entry_count()).unwrap_or(i64::MAX));
+        }
+        self.gauge.collect()
     }
 }
 
@@ -449,6 +493,44 @@ mod tests {
         assert_eq!(outcome, Outcome::Build);
         assert_ne!(first, second);
         let _in_flight = snapshot.load_balancers().load_balancer(&first);
+        assert_eq!(snapshot.load_balancers().instance_count(), 0);
+    }
+
+    fn scraped_entry_gauge(metrics: &StargateMetrics) -> f64 {
+        metrics
+            .registry()
+            .gather()
+            .iter()
+            .find(|family| family.name() == "stargate_routing_expression_cache_entries")
+            .expect("entry gauge should be registered")
+            .get_metric()[0]
+            .get_gauge()
+            .value()
+    }
+
+    #[tokio::test]
+    async fn test_metrics_scrape_reports_entries_and_drives_idle_expiry() {
+        let state = Arc::new(StargateState::new());
+        let target = RoutingTargetKey::new(None, "model");
+        let snapshot = register_target(&state, &target).await;
+        let cache = Arc::new(DynamicConfigCache::new(
+            state,
+            Duration::from_millis(500),
+            DYNAMIC_CONFIG_MAX_ENTRIES,
+        ));
+        let metrics = StargateMetrics::new().unwrap();
+        cache.register_entry_gauge(&metrics).unwrap();
+        assert_eq!(scraped_entry_gauge(&metrics), 0.0);
+
+        let (definition, _) = cache
+            .resolve(&target, EXPRESSION, || compile(EXPRESSION))
+            .unwrap();
+        let _instance = snapshot.load_balancers().load_balancer(&definition);
+        assert_eq!(scraped_entry_gauge(&metrics), 1.0);
+
+        // After the idle window only the scrape touches the cache.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(scraped_entry_gauge(&metrics), 0.0);
         assert_eq!(snapshot.load_balancers().instance_count(), 0);
     }
 

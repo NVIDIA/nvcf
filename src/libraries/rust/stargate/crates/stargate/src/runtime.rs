@@ -365,14 +365,19 @@ impl StargateRuntime {
             (ReadinessState::warming_up(token.clone()), Some(token))
         };
 
-        let proxy_router = make_router(ProxyAppState {
-            dynamic_config: Arc::new(
-                crate::load_balancer::dynamic_config::DynamicConfigCache::new(
-                    service.state(),
-                    crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_IDLE_EXPIRY,
-                    crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_MAX_ENTRIES,
-                ),
+        let dynamic_config = Arc::new(
+            crate::load_balancer::dynamic_config::DynamicConfigCache::new(
+                service.state(),
+                crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_IDLE_EXPIRY,
+                crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_MAX_ENTRIES,
             ),
+        );
+        dynamic_config
+            .register_entry_gauge(&metrics)
+            .context("failed to register routing expression cache metrics")?;
+
+        let proxy_router = make_router(ProxyAppState {
+            dynamic_config,
             state: service.state(),
             traffic: ProxyTrafficState {
                 shutdown: tasks.shutdown_signal(),

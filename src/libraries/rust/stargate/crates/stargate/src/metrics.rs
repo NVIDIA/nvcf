@@ -40,6 +40,7 @@ macro_rules! define_stargate_metrics {
         /// Per-process metrics with a private [`Registry`] that isolates parallel runtimes.
         #[derive(Debug)]
         pub struct StargateMetrics {
+            prefix: String,
             registry: Arc<Registry>,
             tls_identity: Arc<stargate_tls::TlsIdentityStatus>,
             $($counter: IntCounterVec,)*
@@ -82,6 +83,7 @@ macro_rules! define_stargate_metrics {
                     )?;
                 )*
                 Ok(Self {
+                    prefix: prefix.to_owned(),
                     registry,
                     tls_identity: stargate_tls::TlsIdentityStatus::new(),
                     $($counter,)*
@@ -106,6 +108,7 @@ define_stargate_metrics! {
         quic_connection_evictions_total("quic_connection_evictions_total", "Total number of QUIC connection pool evictions", ["inference_server_id", "reason"]);
         quic_hot_path_reconnect_total("quic_hot_path_reconnect_total", "Total number of direct QUIC reconnects attempted on the proxy hot path", ["inference_server_id", "result"]);
         tls_reloads_total("tls_reloads_total", "TLS material reload attempts by material type and result", ["material_type", "result"]);
+        routing_expressions_total("routing_expressions_total", "Routing expression resolutions by algorithm, outcome (accepted or rejection class), and cache result", ["algorithm", "outcome", "cache"]);
     }
     histograms {
         proxy_replay_buffer_bytes("proxy_replay_buffer_bytes", "Bytes currently retained for proxied request body replay", ["model"], [0.0, 1024.0, 4096.0, 16_384.0, 65_536.0, 262_144.0, 1_048_576.0, 4_194_304.0, 16_777_216.0, 67_108_864.0]);
@@ -152,6 +155,16 @@ impl StargateMetrics {
                 .with_label_values(&[stargate_tls::SERVER_IDENTITY_MATERIAL, outcome.as_str()])
                 .inc_by(0);
         }
+        for algorithm in crate::load_balancer::LoadBalancerAlgorithm::ALL {
+            for cache in crate::load_balancer::dynamic_config::Outcome::ALL {
+                metrics
+                    .routing_expressions_total(&algorithm.to_string(), "accepted", cache.as_str())
+                    .inc_by(0);
+            }
+        }
+        for class in crate::load_balancer::expression::REJECTION_CLASSES {
+            metrics.routing_expressions_total("", class, "").inc_by(0);
+        }
         Ok(metrics)
     }
 
@@ -183,6 +196,11 @@ impl StargateMetrics {
         self.registry.clone()
     }
 
+    /// Metric name prefix, for collectors registered after construction.
+    pub(crate) fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
     // One row is one public accessor signature and its ordered Prometheus labels.
     #[rustfmt::skip]
     metric_accessors! {
@@ -197,6 +215,7 @@ impl StargateMetrics {
         GenericCounter<AtomicU64>, quic_connection_evictions_total(inference_server_id: &str, reason: &str) => [inference_server_id, reason];
         GenericCounter<AtomicU64>, quic_hot_path_reconnect_total(inference_server_id: &str, result: &str) => [inference_server_id, result];
         GenericCounter<AtomicU64>, tls_reloads_total(outcome: stargate_tls::TlsReloadOutcome) => [stargate_tls::SERVER_IDENTITY_MATERIAL, outcome.as_str()];
+        GenericCounter<AtomicU64>, routing_expressions_total(algorithm: &str, outcome: &str, cache: &str) => [algorithm, outcome, cache];
         Histogram, proxy_replay_buffer_bytes(model: &str) => [model];
         Histogram, proxy_duration_seconds(routing_key: Option<&str>, model: &str, inference_server_id: &str) => [routing_key.unwrap_or(""), model, inference_server_id];
         Histogram, routing_duration_seconds(routing_key: Option<&str>, model: &str) => [routing_key.unwrap_or(""), model];

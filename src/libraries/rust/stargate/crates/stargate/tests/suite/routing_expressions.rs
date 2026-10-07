@@ -124,6 +124,15 @@ async fn routing_expressions_proxy_valid_values_and_reject_before_selection() {
         );
     }
 
+    // Every valid header above targets one model, so one cache entry holds them.
+    let entries = metrics
+        .registry()
+        .gather()
+        .iter()
+        .find(|family| family.name() == "stargate_routing_expression_cache_entries")
+        .map(|family| family.get_metric()[0].get_gauge().value());
+    assert_eq!(entries, Some(1.0));
+
     let before = selections(&metrics, None);
     for (header, class) in [
         ("pulsar;seed", "malformed_expression"),

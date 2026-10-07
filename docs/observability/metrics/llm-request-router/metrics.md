@@ -14,8 +14,9 @@ The self-managed stack maps
 ## Label Boundaries
 
 Use bounded labels only. Keep `routing_key`, `model`, `inference_server_id`,
-`algorithm`, `selection`, `status`, `result`, and `reason` to bounded service
-dimensions. Do not add request IDs, session IDs, function IDs, organization
+`algorithm`, `selection`, `status`, `result`, `reason`, `outcome`, and `cache`
+to bounded service dimensions. Routing expression content never becomes a
+label value. Do not add request IDs, session IDs, function IDs, organization
 IDs, project IDs, raw URLs, raw prompts, authorization values, or other
 unbounded request fields as metric labels.
 
@@ -28,6 +29,8 @@ unbounded request fields as metric labels.
 | `stargate_proxy_retries_total` | Counter | `llm-request-router:9090/metrics` | `routing_key`, `model`, `reason` | Total proxy retries by retry reason. |
 | `stargate_routing_selections_total` | Counter | `llm-request-router:9090/metrics` | `routing_key`, `model`, `algorithm`, `selection` | Primary and ranked fallback cluster choices used for upstream attempts. |
 | `stargate_routing_kv_free_token_fallback_selections_total` | Counter | `llm-request-router:9090/metrics` | `routing_key`, `model`, `algorithm` | Routes selected after a higher-ranked candidate failed the KV free-token check. |
+| `stargate_routing_expressions_total` | Counter | `llm-request-router:9090/metrics` | `algorithm`, `outcome`, `cache` | Routing expressions resolved from `x-routing-method`. `outcome` is `accepted` or the rejection class returned in the `400` body. `cache` is `hit`, `build`, or `rebuild` for accepted values and empty for rejections, which also leave `algorithm` empty. |
+| `stargate_routing_expression_cache_entries` | Gauge | `llm-request-router:9090/metrics` | none | Routing targets that hold a routing expression configuration, up to 16384 per process. Each scrape also removes entries idle for 15 minutes. |
 | `stargate_proxy_retry_exhausted_total` | Counter | `llm-request-router:9090/metrics` | `routing_key`, `model`, `reason` | Total requests that exhausted retry options. |
 | `stargate_admission_rejections_total` | Counter | `llm-request-router:9090/metrics` | `routing_key`, `model`, `reason` | Requests rejected before an upstream attempt: `input_work_limit_exceeded` and `input_work_capacity_unavailable` from input-work admission, `routing_capacity_unavailable` when every eligible backend lacks capacity. These return `503` with `overloaded_error`. |
 | `stargate_quic_connection_evictions_total` | Counter | `llm-request-router:9090/metrics` | `inference_server_id`, `reason` | Total QUIC pool evictions by backend and reason. |
