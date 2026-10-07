@@ -1428,18 +1428,20 @@ func ensureClusterValidatorConfig(
 // buildControlPlaneValidatorConfig assembles the network-check ConfigMap YAML.
 // The reachability endpoints are the registries the install pulls from, as
 // EnumerateRegistries resolved them for the local credential check, and all of
-// them are non-critical. The validator dials them from a pod with no proxy
-// support, but nodes pull through the container runtime, often via an
-// HTTPS_PROXY or a registry mirror that pods cannot use: a failed in-pod dial
-// is worth a warning, not proof that the nodes cannot pull. With no
-// registries the section is omitted.
+// them are non-critical. A registry only the stack's charts come from is left
+// out: helm pulls the charts on the operator's machine, not in the cluster.
+// The validator dials them from a pod with no proxy support, but nodes pull
+// through the container runtime, often via an HTTPS_PROXY or a registry
+// mirror that pods cannot use: a failed in-pod dial is worth a warning, not
+// proof that the nodes cannot pull. With no registries the section is
+// omitted.
 func buildControlPlaneValidatorConfig(registries []RegistryEntry) string {
 	var b strings.Builder
 	listed := map[string]bool{}
 	for _, reg := range registries {
 		host, port := parseRegistryHostPort(reg.Registry)
 		// A registry probed for two repository scopes is one endpoint.
-		if host == "" || listed[reg.Registry] {
+		if host == "" || listed[reg.Registry] || reg.ChartsOnly {
 			continue
 		}
 		listed[reg.Registry] = true

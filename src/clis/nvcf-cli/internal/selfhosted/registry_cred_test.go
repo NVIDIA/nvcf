@@ -545,21 +545,31 @@ global:
 }
 
 // helm pulls the stack's charts from global.helm.sources with the docker
-// login. The stack's row is marked as that scope only where the OCI chart
-// source folds to the same host and scope as the images, the validator
-// image's row included when it names the same scope. An HTTPS chart
-// repository carries credentials of its own, and a chart source elsewhere is
-// not the row's scope.
+// login. Where the OCI chart source folds to a scope already listed, the
+// stack's images' or the validator image's, that row is marked. On any other
+// scope, another org, another host, or an org with no team, it gets a row of
+// its own, critical for an NGC registry like the stack's images. The
+// control-plane validator does not dial a registry only the charts come from,
+// since helm pulls them on this machine. An HTTPS chart repository carries
+// credentials of its own and gets no row.
 func TestEnumerateRegistries_MarksTheScopeHelmPullsTheChartsFrom(t *testing.T) {
 	dir := t.TempDir()
 	values := filepath.Join(dir, "base.yaml")
-	charts := func(body, image string) []RegistryEntry {
+	stackWith := func(body string) StackValues {
 		t.Helper()
 		require.NoError(t, writeFile(values, []byte("global:\n  image:\n    registry: nvcr.io/orgb\n"+
 			"    repository: team\n"+body+"certManager:\n  enabled: false\n")))
-		return EnumerateRegistries(image, LoadStackValues([]string{values}), nil)
+		return LoadStackValues([]string{values})
 	}
-	const sameScope = "  helm:\n    sources:\n      registry: nvcr.io\n      repository: orgb/team\n"
+	charts := func(body, image string) []RegistryEntry {
+		t.Helper()
+		return EnumerateRegistries(image, stackWith(body), nil)
+	}
+	source := func(registry, repository string) string {
+		return "  helm:\n    sources:\n      registry: " + registry + "\n      repository: " + repository + "\n"
+	}
+	sameScope := source("nvcr.io", "orgb/team")
+	images := RegistryEntry{Registry: "nvcr.io", RepoHint: "orgb/team", Critical: true}
 
 	got := charts(sameScope, "")
 	require.Len(t, got, 1)
@@ -574,16 +584,60 @@ func TestEnumerateRegistries_MarksTheScopeHelmPullsTheChartsFrom(t *testing.T) {
 	require.Len(t, got, 1, "the validator image names the stack's scope")
 	assert.True(t, got[0].Charts)
 
+	got = charts(source("nvcr.io", "nvidia/cv"), "nvcr.io/nvidia/cv:1.0.0")
+	require.Len(t, got, 2, "the chart source names the validator image's scope")
+	assert.True(t, got[0].Charts)
+	assert.False(t, got[0].ChartsOnly)
+
+	for name, tc := range map[string]struct {
+		body string
+		want RegistryEntry
+		ids  []string
+	}{
+		"another org": {body: source("nvcr.io", "orgc/team"),
+			want: RegistryEntry{Registry: "nvcr.io", RepoHint: "orgc/team", Critical: true,
+				Charts: true, ChartsOnly: true},
+			ids: []string{"registry-cred-nvcr.io", "registry-cred-nvcr.io/orgc/team"}},
+		"another host": {body: source("harbor.example.com", "orgb/team"),
+			want: RegistryEntry{Registry: "harbor.example.com", RepoHint: "orgb/team", Charts: true, ChartsOnly: true},
+			ids:  []string{"registry-cred-nvcr.io", "registry-cred-harbor.example.com"}},
+		"an org with no team": {body: source("nvcr.io", "orgb"),
+			want: RegistryEntry{Registry: "nvcr.io", Critical: true, Charts: true, ChartsOnly: true},
+			ids:  []string{"registry-cred-nvcr.io/orgb/team", "registry-cred-nvcr.io"}},
+	} {
+		got = charts(tc.body, "")
+		require.Len(t, got, 2, name)
+		assert.Equal(t, images, got[0], name)
+		assert.Equal(t, tc.want, got[1], name)
+
+		cat := buildRegistryCredentialCategory(PreflightConfig{Registries: got,
+			RegistryChecker: func(context.Context, string, string, bool, bool) error { return nil }})
+		var ids []string
+		for _, c := range cat.checks {
+			ids = append(ids, c.ID)
+		}
+		assert.Equal(t, tc.ids, ids, name)
+
+		cfg := buildControlPlaneValidatorConfig(got)
+		assert.Equal(t, 1, strings.Count(cfg, "host: "), name)
+		assert.Contains(t, cfg, `host: "nvcr.io"`, name)
+	}
+
+	got = EnumerateRegistries("", stackWith(source("harbor.example.com", "orgb/team")),
+		[]RegistryEntry{{Registry: "harbor.example.com"}})
+	require.Len(t, got, 2)
+	assert.True(t, got[1].Charts)
+	assert.False(t, got[1].ChartsOnly, "an extra names the chart registry for the in-pod probe")
+	assert.Contains(t, buildControlPlaneValidatorConfig(got), `host: "harbor.example.com"`)
+
 	for name, body := range map[string]string{
 		"https chart repository": "  helm:\n    sources:\n      url: https://helm.example.com/nvcf\n" +
-			"      registry: nvcr.io\n      repository: orgb/team\n",
-		"another org":     "  helm:\n    sources:\n      registry: nvcr.io\n      repository: orgc/team\n",
-		"another host":    "  helm:\n    sources:\n      registry: harbor.example.com\n      repository: orgb/team\n",
+			"      registry: nvcr.io\n      repository: orgc/team\n",
 		"no chart source": "",
 	} {
 		got = charts(body, "")
 		require.Len(t, got, 1, name)
-		assert.False(t, got[0].Charts, name)
+		assert.Equal(t, images, got[0], name)
 	}
 }
 

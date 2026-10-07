@@ -1145,19 +1145,26 @@ func clusterValidatorDetail(kubeContext string, result ClusterValidatorResult) s
 // buildRegistryCredentialCategory returns the registry-credentials category
 // that probes each configured registry for reachability and valid credentials.
 // A registry listed twice, for two repository scopes, gets one row per scope.
+// Its row with no scope, else its first, is labeled by the registry alone, and
+// each other row adds its scope. A chart source of one segment can list the
+// row with no scope after a scoped one.
 func buildRegistryCredentialCategory(cfg PreflightConfig) categorySpec {
 	cat := categorySpec{
 		name:   CategoryRegistryCredentials,
 		role:   RoleLocalOnly, // runs regardless of cluster role
 		checks: make([]binaryCheckSpec, 0, len(cfg.Registries)),
 	}
-	seen := map[string]bool{}
-	for _, reg := range cfg.Registries {
+	bare := map[string]int{}
+	for i, reg := range cfg.Registries {
+		if j, ok := bare[reg.Registry]; !ok || (reg.RepoHint == "" && cfg.Registries[j].RepoHint != "") {
+			bare[reg.Registry] = i
+		}
+	}
+	for i, reg := range cfg.Registries {
 		label := reg.Registry
-		if seen[label] {
+		if bare[reg.Registry] != i {
 			label += "/" + reg.RepoHint
 		}
-		seen[reg.Registry] = true
 		cat.checks = append(cat.checks, registryCredentialCheck(cfg.RegistryChecker, reg, label,
 			cfg.RegistryPostInstall, cfg.RegistryClusterSecrets))
 	}

@@ -419,9 +419,11 @@ type RegistryEntry struct {
 	// it, and every other registry, is a warning at most.
 	Critical bool
 	// Charts marks the scope helm on this machine pulls the stack's charts
-	// from, with the docker login: the stack's OCI chart source, where it is
-	// the scope the stack's images come from.
+	// from, with the docker login: the stack's OCI chart source.
 	Charts bool
+	// ChartsOnly marks a Charts entry no other source named. The clusters
+	// pull nothing from it, so the control-plane validator does not dial it.
+	ChartsOnly bool
 }
 
 // ParseRegistryExtra parses one --cluster-validator-registries entry,
@@ -674,10 +676,10 @@ func digAny(m map[string]any, keys ...string) any {
 
 // EnumerateRegistries builds the list of registries to credential-check from
 // the validator image ref, the stack values (global.image.registry and
-// repository, and quay.io for the cert-manager ACME solver), and the
-// operator-supplied extras. stack is empty when the values that describe the
-// install could not be read; then only the image and the extras name
-// registries, and nvcr.io is a non-critical guess.
+// repository, the OCI chart source, and quay.io for the cert-manager ACME
+// solver), and the operator-supplied extras. stack is empty when the values
+// that describe the install could not be read; then only the image and the
+// extras name registries, and nvcr.io is a non-critical guess.
 func EnumerateRegistries(imageRef string, stack StackValues, extras []RegistryEntry) []RegistryEntry {
 	var out []RegistryEntry
 
@@ -685,7 +687,9 @@ func EnumerateRegistries(imageRef string, stack StackValues, extras []RegistryEn
 	// counts as having named a registry once its value passed validation. A
 	// registry already listed is listed again only for a scope not yet probed:
 	// the validator image's org and the stack's org can differ on one registry.
-	add := func(registry, repoHint string, critical bool) *RegistryEntry {
+	// An entry for any scope probes the registry, unless exact asks for that
+	// scope alone. An entry another source also names is not chart-only.
+	add := func(registry, repoHint string, critical, exact bool) *RegistryEntry {
 		registry = strings.TrimSpace(registry)
 		if registry == "" {
 			return nil
@@ -698,7 +702,8 @@ func EnumerateRegistries(imageRef string, stack StackValues, extras []RegistryEn
 			return nil
 		}
 		for i, e := range out {
-			if e.Registry == registry && (e.RepoHint == repoHint || repoHint == "") {
+			if e.Registry == registry && (e.RepoHint == repoHint || (repoHint == "" && !exact)) {
+				out[i].ChartsOnly = false
 				return &out[i]
 			}
 		}
@@ -716,7 +721,7 @@ func EnumerateRegistries(imageRef string, stack StackValues, extras []RegistryEn
 	// contacts this registry at pull time (ImagePullPolicy is IfNotPresent).
 	imageNamedRegistry := false
 	if reg, repo, _, ok := parseImageRef(imageRef); ok {
-		imageNamedRegistry = add(reg, repo, isNGCRegistry(reg)) != nil
+		imageNamedRegistry = add(reg, repo, isNGCRegistry(reg), false) != nil
 	}
 
 	// Source 2: global.image.registry and global.image.repository from the
@@ -725,21 +730,28 @@ func EnumerateRegistries(imageRef string, stack StackValues, extras []RegistryEn
 	// is caught even when the validator image comes from another org. The
 	// stack renders registry + "/" + repository, so "harbor.corp.example/nvcf"
 	// is a valid registry: probe its host and fold the path into the scope.
-	//
-	// Helm on this machine pulls the stack's charts from global.helm.sources
-	// with the docker login. Where that is the same scope, the entry is marked,
-	// since a docker login with no access to it fails the install.
 	stackNamedRegistry := false
 	if host, scope := stackScope(stack.ImageRegistry, stack.ImageRepository); host != "" {
 		// If it's an NGC registry, mark critical; customer mirrors are non-critical.
-		if e := add(host, scope, isNGCRegistry(host)); e != nil {
-			stackNamedRegistry = true
-			chartHost, chartScope := stackScope(stack.ChartRegistry, stack.ChartRepository)
-			e.Charts = e.Charts || (e.RepoHint == scope && chartHost == host && chartScope == scope)
+		stackNamedRegistry = add(host, scope, isNGCRegistry(host), false) != nil
+	}
+
+	// Source 3: the stack's OCI chart source, global.helm.sources.registry and
+	// repository, folded into a host and scope the same way. helm on this
+	// machine pulls the stack's charts from it with the docker login, so a
+	// login it rejects, or one with no access to that scope, fails the
+	// install. It marks the entry already listed for that scope, and is
+	// otherwise listed on its own, critical for an NGC registry like the
+	// stack's images.
+	if host, scope := stackScope(stack.ChartRegistry, stack.ChartRepository); host != "" {
+		listed := len(out)
+		if e := add(host, scope, isNGCRegistry(host), true); e != nil {
+			e.Charts = true
+			e.ChartsOnly = len(out) > listed
 		}
 	}
 
-	// Source 3: cert-manager's ACME solver. global.yaml.gotmpl moves the
+	// Source 4: cert-manager's ACME solver. global.yaml.gotmpl moves the
 	// controller images to the mirror, but the solver keeps the chart's
 	// quay.io/jetstack default unless certManager.acmesolver.image is set, so
 	// a mirrored site still pulls it from quay.io at its first HTTP-01 order.
@@ -747,13 +759,13 @@ func EnumerateRegistries(imageRef string, stack StackValues, extras []RegistryEn
 	// solver somewhere else. Without stack values, probe it as a guess.
 	if acme := stack.ACMESolverRepository; !stack.Found ||
 		(stack.CertManagerEnabled && (acme == "" || strings.HasPrefix(acme, certManagerRegistry+"/"))) {
-		add(certManagerRegistry, "", false)
+		add(certManagerRegistry, "", false, false)
 	}
 
-	// Source 4: operator-supplied extras (--cluster-validator-registries),
+	// Source 5: operator-supplied extras (--cluster-validator-registries),
 	// parsed by ParseRegistryExtra.
 	for _, e := range extras {
-		add(e.Registry, e.RepoHint, false)
+		add(e.Registry, e.RepoHint, false, false)
 	}
 
 	// Fallback for "no source named a registry at all": no validator image is
@@ -770,7 +782,7 @@ func EnumerateRegistries(imageRef string, stack StackValues, extras []RegistryEn
 	// Non-critical, unlike an NGC registry a source actually named. A guess
 	// must not hard-fail the run, and this category has no opt-out flag.
 	if !imageNamedRegistry && !stackNamedRegistry {
-		add(ngcRegistry, "", false)
+		add(ngcRegistry, "", false, false)
 	}
 
 	return out

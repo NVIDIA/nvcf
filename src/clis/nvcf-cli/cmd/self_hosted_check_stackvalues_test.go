@@ -481,3 +481,47 @@ func TestCheck_ControlPlaneValidatorKeepsItsStacksRegistries(t *testing.T) {
 	assert.Contains(t, cpRegistries, "cp-mirror.example.com")
 	assert.NotContains(t, cpRegistries, "gpu-mirror.example.com")
 }
+
+// A chart source on another org than the stack's images gets a row of its
+// own, critical like theirs. Before install, here a local control-plane
+// install where the NGC key goes first, that row alone is probed as the scope
+// helm pulls the charts from with the docker login. After install no row is.
+func TestCheck_ChartSourceOnAnotherOrgGetsItsOwnRow(t *testing.T) {
+	t.Setenv("HELMFILE_ENV", "")
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	stack := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stack, "environments"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stack, "environments", "local.yaml"),
+		[]byte("global:\n  image:\n    registry: nvcr.io\n    repository: acme/nvcf\n"+
+			"  helm:\n    sources:\n      registry: nvcr.io\n      repository: acme/charts\n"+
+			"certManager:\n  enabled: false\n"), 0o644))
+	type probe struct{ critical, chartScope bool }
+	probed := func(args ...string) map[string]probe {
+		resetCheckFlags(t)
+		var mu sync.Mutex
+		got := map[string]probe{}
+		prev := newRegistryCredentialCheckerForSelfHosted
+		newRegistryCredentialCheckerForSelfHosted = func() selfhosted.RegistryCredentialChecker {
+			return func(_ context.Context, registry, repo string, critical, chartScope bool) error {
+				mu.Lock()
+				defer mu.Unlock()
+				got[registry+"/"+repo] = probe{critical, chartScope}
+				return nil
+			}
+		}
+		t.Cleanup(func() { newRegistryCredentialCheckerForSelfHosted = prev })
+		rootCmd.SetErr(&bytes.Buffer{})
+		rootCmd.SetOut(&bytes.Buffer{})
+		rootCmd.SetArgs(append([]string{"self-hosted", "check", "--json", "--skip-cluster-validation",
+			"--env", "local", "--control-plane-stack", stack}, args...))
+		_ = rootCmd.Execute()
+		mu.Lock()
+		defer mu.Unlock()
+		return got
+	}
+
+	assert.Equal(t, map[string]probe{"nvcr.io/acme/nvcf": {critical: true},
+		"nvcr.io/acme/charts": {critical: true, chartScope: true}}, probed("--pre"))
+	assert.Equal(t, map[string]probe{"nvcr.io/acme/nvcf": {critical: true},
+		"nvcr.io/acme/charts": {critical: true}}, probed("--control-plane"))
+}

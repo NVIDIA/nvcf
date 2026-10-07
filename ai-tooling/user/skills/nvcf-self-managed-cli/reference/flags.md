@@ -59,7 +59,7 @@ and deleting test namespaces an earlier validator run left behind.
 | Flag | Purpose | Default |
 |---|---|---|
 | `--cluster-validator-image REF` | Validator image. Resolution order: flag, `NVCF_CLI_CLUSTER_VALIDATOR_IMAGE`, config key `cluster_validator_image`. A ref with no tag discovers the latest stable tag from the registry. If no tag can be discovered, the validator does not run and its row fails the check, saying to pin a tag; `--wait` tries again on every poll. Unset everywhere, the validator does not run and each role's `cluster-validator` row is a warning, so the verdict is `warnings` | - |
-| `--cluster-validator-registries host[:port][/path],...` | Extra registries to check: their credentials from this machine, and their reachability from a pod of the control-plane validator. A path scopes the credential check, as in `harbor.example.com/nvcf`. They are added to the registries the install pulls from: the validator image's registry, the stack's `global.image.registry` and `global.image.repository`, and `quay.io` for the cert-manager ACME solver unless the stack leaves cert-manager out or sets `certManager.acmesolver.image`. `nvcr.io` is probed, as a warning only, when neither the image nor the stack names a registry. The in-pod probes are warnings only, since the pod has no proxy. A malformed entry fails the command. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES`; config key `cluster_validator_registries`, a list of strings in this form | - |
+| `--cluster-validator-registries host[:port][/path],...` | Extra registries to check: their credentials from this machine, and their reachability from a pod of the control-plane validator. A path scopes the credential check, as in `harbor.example.com/nvcf`. They are added to the registries the install pulls from: the validator image's registry, the stack's `global.image.registry` and `global.image.repository`, its OCI chart source, and `quay.io` for the cert-manager ACME solver unless the stack leaves cert-manager out or sets `certManager.acmesolver.image`. `nvcr.io` is probed, as a warning only, when neither the image nor the stack names a registry. The in-pod probes leave out a registry only the charts come from, since `helm` pulls them on this machine, and are warnings only, since the pod has no proxy. A malformed entry fails the command. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES`; config key `cluster_validator_registries`, a list of strings in this form | - |
 | `--cluster-validator-probe-image REF` | Image for the node inotify probe and the control-plane validator's node-to-node overlay probe. Needs `sh` and a busybox-style `nc`. Set a mirror for air-gapped clusters. Env: `NVCF_CLI_CLUSTER_VALIDATOR_PROBE_IMAGE`; config key `cluster_validator_probe_image` | `busybox:1.36` from Docker Hub |
 | `--cluster-validator-external-components NAME,...` | Stack dependencies that run outside the stack, or not at all, so the validator does not look for them in the cluster: a subset of `nats`, `openbao` and `cassandra`. An unknown name fails the command. Repeatable or comma-separated. Falls back to `NVCF_EXTERNAL_COMPONENTS`, then to the components whose `<name>.enabled` the stack's environment file sets to anything but `true`. Env: `NVCF_CLI_CLUSTER_VALIDATOR_EXTERNAL_COMPONENTS`; config key `cluster_validator_external_components`, a list of names | from the stack |
 | `--cluster-validator-tolerations key[=value][:effect],...` | Tolerations added to the validator Job, beside the control-plane ones it always carries, for clusters whose nodes use other taints. Effect is `NoSchedule`, `PreferNoSchedule` or `NoExecute`. A malformed entry fails the command. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_TOLERATIONS`; config key `cluster_validator_tolerations`, a list of strings in this form, not Kubernetes toleration objects | - |
@@ -93,10 +93,12 @@ waits counts on the next poll.
 The probe asks for pull access to the validator image's repository and to the
 stack's image path: any path in `global.image.registry`, then
 `global.image.repository`. A stack path of one segment, such as an org with no
-team, is not sent as the scope, since `nvcr.io` refuses it. When the stack's
-OCI chart source, `global.helm.sources.registry` and `.repository`, is that
-same path, its row is also the one `helm` on this machine pulls the stack's
-charts from, with the docker login.
+team, is not sent as the scope, since `nvcr.io` refuses it. The stack's OCI
+chart source, `global.helm.sources.registry` and `.repository`, read the same
+way, is the row `helm` on this machine pulls the stack's charts from, with the
+docker login: the image row when it is the same path, else a row of its own,
+critical for an NVIDIA registry like the image row. An HTTPS chart source,
+`global.helm.sources.url`, has credentials of its own and gets no row.
 
 The registry check belongs to one plane, whose stack names the registries
 and whose install state grades them: a plane the run checks before its
