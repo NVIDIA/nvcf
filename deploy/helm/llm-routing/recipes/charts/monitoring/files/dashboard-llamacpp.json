@@ -1,0 +1,119 @@
+[
+  {
+    "id": 18,
+    "title": "llama.cpp backend scrape health",
+    "type": "timeseries",
+    "description": "Enabled only for configured llama.cpp metric targets. Series retain their backend component and pod labels.",
+    "datasource": {
+      "type": "prometheus",
+      "uid": "demo-metrics"
+    },
+    "gridPos": {
+      "x": 12,
+      "y": 64,
+      "w": 12,
+      "h": 8
+    },
+    "fieldConfig": {
+      "defaults": {
+        "unit": "short",
+        "noValue": "No data",
+        "custom": {
+          "spanNulls": false
+        }
+      },
+      "overrides": []
+    },
+    "targets": [
+      {
+        "refId": "A",
+        "expr": "up{monitoring_release=\"$release\",namespace=~\"${namespace}\",backend_runtime=\"llama.cpp\"} and (time() - timestamp(up{monitoring_release=\"$release\",namespace=~\"${namespace}\",backend_runtime=\"llama.cpp\"}) < 45)",
+        "legendFormat": "{{component}} / {{pod}}"
+      }
+    ],
+    "options": {
+      "legend": {
+        "displayMode": "list",
+        "placement": "bottom"
+      }
+    }
+  },
+  {
+    "id": 19,
+    "title": "llama.cpp backend requests processing and queued",
+    "type": "timeseries",
+    "description": "Enabled only for configured llama.cpp metric targets. Series retain their backend component and pod labels.",
+    "datasource": {
+      "type": "prometheus",
+      "uid": "demo-metrics"
+    },
+    "gridPos": {
+      "x": 0,
+      "y": 72,
+      "w": 12,
+      "h": 8
+    },
+    "fieldConfig": {
+      "defaults": {
+        "unit": "short",
+        "noValue": "No data",
+        "custom": {
+          "spanNulls": false
+        }
+      },
+      "overrides": []
+    },
+    "targets": [
+      {
+        "refId": "A",
+        "expr": "{__name__=~\"llamacpp[:_](requests_processing|requests_deferred)\",monitoring_release=\"$release\",namespace=~\"${namespace}\",backend_runtime=\"llama.cpp\"}",
+        "legendFormat": "{{component}} / {{pod}} {{__name__}}"
+      }
+    ],
+    "options": {
+      "legend": {
+        "displayMode": "list",
+        "placement": "bottom"
+      }
+    }
+  },
+  {
+    "id": 20,
+    "title": "llama.cpp backend completion tokens / second",
+    "type": "timeseries",
+    "description": "Enabled only for configured llama.cpp metric targets. Series retain their backend component and pod labels.",
+    "datasource": {
+      "type": "prometheus",
+      "uid": "demo-metrics"
+    },
+    "gridPos": {
+      "x": 12,
+      "y": 72,
+      "w": 12,
+      "h": 8
+    },
+    "fieldConfig": {
+      "defaults": {
+        "unit": "tps",
+        "noValue": "No data",
+        "custom": {
+          "spanNulls": false
+        }
+      },
+      "overrides": []
+    },
+    "targets": [
+      {
+        "refId": "A",
+        "expr": "sum by (component, pod) (rate({__name__=~\"llamacpp[:_]tokens_predicted_total\",monitoring_release=\"$release\",namespace=~\"${namespace}\",backend_runtime=\"llama.cpp\"}[$__rate_interval]))",
+        "legendFormat": "{{component}} / {{pod}} {{__name__}}"
+      }
+    ],
+    "options": {
+      "legend": {
+        "displayMode": "list",
+        "placement": "bottom"
+      }
+    }
+  }
+]

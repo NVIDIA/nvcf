@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+{{- if .Values.enabled }}
+{{- $dashboard := .Files.Get "files/dashboard.json" | fromJson }}
+{{- $llamaCpp := false }}
+{{- range .Values.targets }}
+{{- if eq (default "" .runtime) "llama.cpp" }}
+{{- $llamaCpp = true }}
+{{- end }}
+{{- end }}
+{{- if $llamaCpp }}
+{{- $panels := $dashboard.panels }}
+{{- range (.Files.Get "files/dashboard-llamacpp.json" | fromJsonArray) }}
+{{- $panels = append $panels . }}
+{{- end }}
+{{- $_ := set $dashboard "panels" $panels }}
+{{- end }}
+{{- if .Values.grafana.adminPassword }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.grafana.adminSecret }}
+type: Opaque
+stringData:
+  admin-user: admin
+  admin-password: {{ .Values.grafana.adminPassword | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-grafana
+data:
+  datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Demo metrics
+        uid: demo-metrics
+        type: prometheus
+        access: proxy
+        url: http://{{ .Release.Name }}-victoria-metrics:8428
+        isDefault: true
+        editable: false
+        jsonData:
+          timeInterval: {{ .Values.scrapeInterval | quote }}
+  dashboard.yaml: |
+    apiVersion: 1
+    providers:
+      - name: demo
+        type: file
+        disableDeletion: true
+        allowUiUpdates: false
+        options:
+          path: /var/lib/grafana/dashboards
+  dashboard.json: |
+{{ $dashboard | toPrettyJson | indent 4 }}
+{{- end }}

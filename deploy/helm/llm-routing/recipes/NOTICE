@@ -13,3 +13,13 @@ SGLang: Apache-2.0, https://github.com/sgl-project/sglang . The container image 
 Local test dependencies: PyYAML (MIT, https://pyyaml.org/) and jsonschema (MIT, https://github.com/python-jsonschema/jsonschema). They are used for YAML and CRD schema validation only.
 
 NVIDIA container images retain their upstream terms. Access to a public image reference does not grant credentials or image redistribution rights. No third-party runtime binaries, images or model weights are embedded in this tool.
+
+The monitoring profile runs these external images:
+
+- OpenTelemetry Collector Contrib 0.160.0, Apache-2.0: https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/v0.160.0.
+- VictoriaMetrics 1.153.0 community edition, Apache-2.0: https://github.com/VictoriaMetrics/VictoriaMetrics/tree/v1.153.0.
+- Grafana OSS 13.2.3, AGPL-3.0: https://github.com/grafana/grafana/tree/v13.2.3. AGPL-3.0 is outside this repository's license allowlist. Downstream product use and redistribution require license review. This recipe does not establish that approval.
+
+Images are fetched separately and retain their upstream licenses and notices. The repository contains deployment configuration and an original dashboard, not third-party binaries or modified Grafana code. Offline image redistribution must retain the applicable upstream materials.
+
+Monitoring chart tests use PyYAML 6.0.3, MIT: https://github.com/yaml/pyyaml/tree/6.0.3. It is a development dependency only.

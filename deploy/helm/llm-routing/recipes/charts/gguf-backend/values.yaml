@@ -4,7 +4,7 @@ phase: preflight
 suspended: false
 image: ""
 runtimeClassName: nvidia
-# targets[0] is the leader that runs the model server; later targets run RPC workers.
+# Target 0 runs the model server. Later targets run RPC workers.
 targets: []
 gpu:
   product: ""

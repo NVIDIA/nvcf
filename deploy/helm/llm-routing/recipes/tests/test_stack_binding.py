@@ -289,7 +289,9 @@ class StackBindingTests(unittest.TestCase):
         actions = [lambda: self.recipe.deploy_stack(), lambda: self.recipe.update('gateway', 'next'),
                    lambda: self.recipe.rollback(self.root/'result.json'), lambda: self.recipe.reinitialize(self.work/'config.json'),
                    lambda: self.recipe.attach_existing(), lambda: self.recipe.build_images(), lambda: self.recipe.export_images(),
-                   lambda: self.recipe.import_images(self.root/'archive.tar', True), lambda: self.recipe.cleanup_key(18443)]
+                   lambda: self.recipe.import_images(self.root/'archive.tar', True), lambda: self.recipe.cleanup_key(18443),
+                   lambda: self.recipe.attach_monitoring(),
+                   lambda: self.recipe.import_images(self.root/'archive.tar', True, monitoring_only=True)]
         for action in actions:
             with self.subTest(action=action), patch.object(spark, 'run') as run, patch.object(spark, 'output') as output, \
                  self.assertRaisesRegex(RuntimeError, 'externally managed infrastructure'):
@@ -315,6 +317,41 @@ class StackBindingTests(unittest.TestCase):
         for call in run.call_args_list:
             self.assertEqual(call.args[0][:3], ['helm', 'lint', HERE/'charts/gguf-backend'])
         self.assertEqual(len(list((self.work/'render').glob('glm-*.yaml'))), 6)
+
+    def test_enabled_monitoring_does_not_expand_external_model_render_scope(self):
+        self.recipe.c['monitoring'] = {'enabled': True}
+        with patch.object(spark.monitoring, 'chart_values') as monitor, patch.object(spark, 'run') as run, \
+             patch.object(spark, 'output', return_value='kind: List\nitems: []\n'), redirect_stdout(io.StringIO()):
+            self.recipe.render()
+        monitor.assert_not_called()
+        self.assertEqual(run.call_count, 6)
+        for call in run.call_args_list:
+            self.assertEqual(call.args[0][:3], ['helm', 'lint', HERE/'charts/gguf-backend'])
+        self.assertFalse((self.work/'render/monitoring-values.json').exists())
+
+    def test_monitoring_constructor_rejects_external_model_before_creating_workdir(self):
+        work = self.root/'new-monitor'
+        with patch.object(spark.monitoring_setup, 'validate') as validate, \
+             self.assertRaisesRegex(RuntimeError, 'separate monitoring work directory'):
+            spark.Recipe(self.config, work, monitoring_only=True)
+        validate.assert_not_called()
+        self.assertFalse(work.exists())
+
+    def test_monitoring_commands_preserve_external_model_state_and_config(self):
+        self.attach()
+        before = {path.name: path.read_bytes() for path in self.work.iterdir()}
+        for phase in ('attach-monitoring', 'monitoring', 'dashboard', 'verify-monitoring', 'uninstall-monitoring',
+                      'monitoring-images', 'export-monitoring-images', 'import-monitoring-images', 'cleanup-key'):
+            with self.subTest(phase=phase), patch.object(spark.monitoring_setup, 'attach') as attach, \
+                 patch.object(spark.monitoring, 'Monitoring') as monitor, \
+                 patch.object(spark, 'run') as run, patch.object(spark, 'output') as output, \
+                 self.assertRaisesRegex(RuntimeError, 'externally managed infrastructure'):
+                spark.main(['--work-dir', str(self.work), phase])
+            attach.assert_not_called()
+            monitor.assert_not_called()
+            run.assert_not_called()
+            output.assert_not_called()
+            self.assertEqual({path.name: path.read_bytes() for path in self.work.iterdir()}, before)
 
     def test_independent_registration_owns_only_model_release(self):
         self.recipe.state = {'serve': True, 'direct': True, 'stack': {'apiKeyFile': str(self.key)}}

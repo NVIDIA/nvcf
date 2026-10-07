@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: v2
+name: llm-demo-monitoring
+description: Local metrics collection and dashboards for the LLM routing demo
+type: application
+version: 0.1.0

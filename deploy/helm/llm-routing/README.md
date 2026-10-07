@@ -61,7 +61,7 @@ python3 recipes/recipe.py --work-dir /path/to/glm-work register
 python3 recipes/recipe.py --work-dir /path/to/glm-work verify-gateway
 ```
 
-In this mode, model rendering and Helm operations target only its backend and chain-check releases. The `stack`, infrastructure image build/import/update/rollback, credential mutation and existing-install adoption commands are rejected. Shared infrastructure stays under `stack.py` ownership.
+In this mode, model rendering and Helm operations target only its backend and chain-check releases. The `stack`, infrastructure image build/import/update/rollback, credential mutation and existing-install adoption commands are rejected. Shared infrastructure stays under `stack.py` ownership. Use a separate work directory for shared monitoring commands.
 
 ## Combined GGUF recipe flow
 
@@ -180,6 +180,18 @@ python3 recipe.py chat --model qwen3.8-27b 'What is 17 multiplied by 19? Give on
 
 Add `--stream` to either command for streaming output.
 
+## Monitoring
+
+From `deploy/helm/llm-routing/recipes`, install monitoring and view the dashboard:
+
+```bash
+python3 recipe.py monitoring
+```
+
+Open `http://127.0.0.1:13000/d/llm-demo`. Viewing requires no login. Ctrl-C closes the tunnel and leaves monitoring running. Use `--port` to change the local port.
+
+See [advanced monitoring configuration](recipes/MONITORING.md) for settings, dashboard access, verification and uninstall.
+
 ## Maintenance
 
 ### Update only gateway or router
@@ -233,6 +245,8 @@ Add `--namespace <namespace>` to attachment when the cluster has multiple instal
 Continue with [Update only gateway or router](#update-only-gateway-or-router).
 
 ### Uninstall
+
+If monitoring is installed, [remove it first](recipes/MONITORING.md#uninstall).
 
 Run the entire block, including parentheses, from `deploy/helm/llm-routing/recipes` in the same configured terminal used for installation. The context lookup uses the recipe's normal selection. If you passed `--context`, `--config` or `--work-dir` during installation, pass the same options before `context` in the lookup below.
 
@@ -390,7 +404,7 @@ python3 recipe.py verify-gateway
 From `deploy/helm/llm-routing`, run shared-infrastructure, recipe/client and runtime chart tests. Render checks use private work directories and do not change a live cluster.
 
 ```bash
-python3 -m pip install -r recipes/tests/requirements.txt
+python3 -m pip install -r recipes/tests/requirements.txt -r recipes/tests/requirements-monitoring.txt
 python3 -m unittest discover -s tests -v
 python3 -m unittest discover -s recipes/tests -v
 python3 -m unittest discover -s recipes/charts/gguf-backend/tests -v
