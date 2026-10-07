@@ -20,6 +20,7 @@ package com.nvidia.boot.core;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -90,5 +91,40 @@ class NvBootCoreIntegrationTest {
                 .andExpect(header().string("Access-Control-Allow-Methods", "GET"))
                 .andExpect(header().string("Access-Control-Allow-Credentials", "true"))
                 .andExpect(header().string("Access-Control-Max-Age", "86400"));
+    }
+
+    @Test
+    void infoEndpointReturnsBuildInfo() throws Exception {
+        mockMvc.perform(get("/info"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.service").value("test-app"))
+                .andExpect(jsonPath("$.version").value("1.0.0"));
+    }
+
+    @Test
+    void infoEndpointRejectsOptions() throws Exception {
+        mockMvc.perform(options("/info"))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(header().string("Allow", "GET"));
+    }
+
+    @Test
+    void infoEndpointRejectsPostWithoutAdvertisingOptions() throws Exception {
+        mockMvc.perform(post("/info"))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(result -> assertThat(result.getResponse().getHeader("Allow"))
+                        .contains("GET")
+                        .doesNotContain("OPTIONS"));
+    }
+
+    @Test
+    void corsPreflightOnInfoSucceeds() throws Exception {
+        var origin = "https://example.com";
+        mockMvc.perform(options("/info")
+                        .header("Origin", origin)
+                        .header("Access-Control-Request-Method", "GET"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", origin))
+                .andExpect(header().string("Access-Control-Allow-Methods", "GET"));
     }
 }

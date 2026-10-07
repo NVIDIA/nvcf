@@ -170,6 +170,16 @@ impl RoutingLifecycle {
         }
     }
 
+    pub(super) fn forget_load_balancer_instance(
+        &self,
+        target: &RoutingTargetKey,
+        definition: &crate::load_balancer::LoadBalancerDefinition,
+    ) {
+        self.targets.read_sync(target, |_key, state| {
+            state.load_balancers.forget(definition);
+        });
+    }
+
     pub(super) async fn target_state(
         &self,
         target: &RoutingTargetKey,
