@@ -16,8 +16,8 @@
 //! Runs the shared `mock-engine` model in real time.
 //!
 //! One task owns the engine. Handlers submit requests and receive that
-//! request's engine events over a channel. Dropping a handle before the
-//! request completes cancels it, as a client disconnect frees engine capacity.
+//! request's engine events over a channel. Dropping a handle cancels its
+//! request, as a client disconnect frees engine capacity.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -50,7 +50,6 @@ pub(crate) struct EngineRequest {
     id: RequestId,
     events: mpsc::UnboundedReceiver<EngineEvent>,
     commands: mpsc::UnboundedSender<Command>,
-    completed: bool,
 }
 
 impl EngineDriver {
@@ -95,7 +94,6 @@ impl EngineDriver {
             id,
             events,
             commands: self.commands.clone(),
-            completed: false,
         }
     }
 
@@ -113,41 +111,23 @@ impl EngineDriver {
 impl EngineRequest {
     /// Waits for prefill to finish and returns the reused input tokens.
     pub(crate) async fn first_token(&mut self) -> u64 {
-        loop {
-            match self.next_event().await {
-                EngineEvent::FirstToken {
-                    reused_input_tokens,
-                    ..
-                } => return reused_input_tokens,
-                EngineEvent::Completed { .. } => {
-                    unreachable!("a request produces its first token before completing")
-                }
-                EngineEvent::Token { .. } => {}
-            }
+        match self.next_event().await {
+            EngineEvent::FirstToken {
+                reused_input_tokens,
+                ..
+            } => reused_input_tokens,
+            event => unreachable!("a request's first event is its first token, got {event:?}"),
         }
     }
 
     /// Waits for the next output token after the first.
     pub(crate) async fn next_token(&mut self) {
-        loop {
-            match self.next_event().await {
-                EngineEvent::Token { .. } => return,
-                EngineEvent::Completed { .. } => {
-                    self.completed = true;
-                    return;
-                }
-                EngineEvent::FirstToken { .. } => {}
-            }
-        }
+        while !matches!(self.next_event().await, EngineEvent::Token { .. }) {}
     }
 
     /// Waits until the request leaves the engine.
     pub(crate) async fn completion(&mut self) {
-        while !self.completed {
-            if let EngineEvent::Completed { .. } = self.next_event().await {
-                self.completed = true;
-            }
-        }
+        while !matches!(self.next_event().await, EngineEvent::Completed { .. }) {}
     }
 
     async fn next_event(&mut self) -> EngineEvent {
@@ -160,9 +140,8 @@ impl EngineRequest {
 
 impl Drop for EngineRequest {
     fn drop(&mut self) {
-        if !self.completed {
-            let _ = self.commands.send(Command::Cancel(self.id));
-        }
+        // Cancelling a completed request is a no-op, and IDs are never reused.
+        let _ = self.commands.send(Command::Cancel(self.id));
     }
 }
 

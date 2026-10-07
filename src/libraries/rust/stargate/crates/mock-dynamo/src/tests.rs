@@ -1387,7 +1387,7 @@ async fn batched_engine_reuses_cached_prefixes_across_requests() {
     };
     let app = Router::new()
         .route("/v1/chat/completions", post(chat_completions))
-        .with_state(state);
+        .with_state(state.clone());
     let (addr, _server) = spawn_test_app(app).await;
     let body = serde_json::json!({"model": "dummy-model", "messages": []}).to_string();
     let send = || {
@@ -1417,6 +1417,13 @@ async fn batched_engine_reuses_cached_prefixes_across_requests() {
     assert!(warm.contains("x-kv-cache-hit: true"), "{warm}");
     assert!(warm.contains("x-kv-cache-reused-input-tokens: 2000"));
     assert!(started.elapsed() < cold_elapsed / 2);
+
+    // The cached entry holds the prompt and its three output tokens.
+    let Json(stats) = kv_cache_stats(State(state)).await;
+    assert_eq!(
+        (stats.kv_cache_used_tokens, stats.kv_cache_capacity_tokens),
+        (2003, 100_000)
+    );
 
     let streamed = json_response(
         addr,
