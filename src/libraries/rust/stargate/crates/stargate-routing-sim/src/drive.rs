@@ -184,6 +184,9 @@ pub async fn drive(args: DriveArgs) -> anyhow::Result<()> {
         .filter(|request| stargate_regions[request.stargate] == region_index)
     {
         tokio::time::sleep_until(start + Duration::from_micros(request.arrival)).await;
+        if driver.records.is_closed() {
+            break;
+        }
         driver.spawn_request(request.clone());
     }
     driver.tracker.close();
@@ -265,6 +268,11 @@ impl Driver {
         let driver = Arc::clone(self);
         self.tracker.spawn(async move {
             tokio::time::sleep_until(driver.start + Duration::from_micros(request.arrival)).await;
+            // The record writer failed; stop sending load that cannot be
+            // recorded. `drive` returns the writer's error.
+            if driver.records.is_closed() {
+                return;
+            }
             let mut record = driver.send(&request).await;
             let now = driver.now();
             if record.succeeded() {

@@ -177,6 +177,9 @@ fn summarize_fleet(
         let raw =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         for (line, text) in raw.lines().enumerate() {
+            if text.trim().is_empty() {
+                continue;
+            }
             records.push(
                 serde_json::from_str(text)
                     .with_context(|| format!("{}:{}", path.display(), line + 1))?,
