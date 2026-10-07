@@ -32,6 +32,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, bail};
 use futures::StreamExt;
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
@@ -123,14 +124,16 @@ pub async fn drive(args: DriveArgs) -> anyhow::Result<()> {
     if !matches!(endpoint.scheme(), "http" | "https") {
         bail!("endpoint {} must use http or https", args.endpoint);
     }
-    reqwest::header::HeaderValue::from_str(&format!("{}-{}", args.run_label, args.region))
+    HeaderValue::from_str(&format!("{}-{}", args.run_label, args.region))
         .context("run label and region must be valid header values")?;
+    let client = reqwest::Client::builder()
+        .default_headers(run_headers(&args)?)
+        .timeout(Duration::from_millis(args.config.client.timeout_ms))
+        .build()
+        .context("building HTTP client")?;
     let stargates = args.config.stargates();
     let weights: Vec<f64> = stargates.iter().map(|(_, weight)| *weight).collect();
     let plan = plan(&args.config.workload, &weights, args.rate_rps, args.seed);
-    let client = reqwest::Client::builder()
-        .build()
-        .context("building HTTP client")?;
     let stargate_regions: Vec<usize> = stargates.iter().map(|(region, _)| *region).collect();
     let initial: Vec<PlannedRequest> = plan
         .requests
@@ -164,14 +167,44 @@ pub async fn drive(args: DriveArgs) -> anyhow::Result<()> {
         args,
     });
     for request in initial {
-        let at = request.arrival;
-        driver.spawn_request(request, at);
+        driver.spawn_request(request);
     }
     driver.tracker.close();
     driver.tracker.wait().await;
     drop(driver);
     writer.await.context("record writer panicked")??;
     Ok(())
+}
+
+/// Headers shared by every request of the run. Building them up front rejects
+/// invalid values before the run starts instead of failing every request.
+fn run_headers(args: &DriveArgs) -> anyhow::Result<HeaderMap> {
+    let config = &args.config;
+    let mut headers = HeaderMap::new();
+    let mut insert = |name: &'static str, value: String| -> anyhow::Result<()> {
+        let value =
+            HeaderValue::try_from(value).with_context(|| format!("invalid {name} header value"))?;
+        headers.insert(name, value);
+        Ok(())
+    };
+    insert("x-model", config.stargate.model_id.clone())?;
+    insert("x-routing-key", config.stargate.routing_key.clone())?;
+    if let Some(slo_ms) = config.client.request_slo_ms {
+        insert("x-request-slo-ms", slo_ms.to_string())?;
+    }
+    if let Some(wait_ms) = config.client.max_wait_ms {
+        insert("x-max-wait-ms", wait_ms.to_string())?;
+    }
+    if let Some(method) = &args.routing_method {
+        insert("x-routing-method", method.clone())?;
+    }
+    if let Some(api_key) = &args.api_key {
+        let mut value = HeaderValue::try_from(format!("Bearer {api_key}"))
+            .context("API key must be a valid header value")?;
+        value.set_sensitive(true);
+        headers.insert(AUTHORIZATION, value);
+    }
+    Ok(headers)
 }
 
 async fn wait_for_start(start_at_unix_ms: u64) -> anyhow::Result<Instant> {
@@ -201,24 +234,22 @@ impl Driver {
         u64::try_from(self.start.elapsed().as_micros()).unwrap_or(Micros::MAX)
     }
 
-    /// Runs `request` at `at` and, for growing sessions, its follow-ups.
-    fn spawn_request(self: &Arc<Self>, request: PlannedRequest, at: Micros) {
-        if at >= self.plan.measure_end {
+    /// Runs `request` at its arrival and, for growing sessions, its
+    /// follow-ups.
+    fn spawn_request(self: &Arc<Self>, request: PlannedRequest) {
+        if request.arrival >= self.plan.measure_end {
             return;
         }
         let driver = Arc::clone(self);
         self.tracker.spawn(async move {
-            tokio::time::sleep_until(driver.start + Duration::from_micros(at)).await;
-            let mut record = driver.send(&request, at).await;
-            let succeeded = record.succeeded();
+            tokio::time::sleep_until(driver.start + Duration::from_micros(request.arrival)).await;
+            let mut record = driver.send(&request).await;
             let now = driver.now();
-            if succeeded {
-                driver.records.send(record).ok();
+            if record.succeeded() {
                 driver.schedule_next_turn(&request, now);
-                return;
+            } else {
+                driver.fail(&request, &mut record, now);
             }
-            let retry = driver.schedule_retry(&request, now);
-            record.abandoned_session = !retry && driver.args.config.workload.growing.is_some();
             driver.records.send(record).ok();
         });
     }
@@ -234,39 +265,40 @@ impl Driver {
         else {
             return;
         };
-        let start = responded_at + think;
-        if let Some(next) = self.plan.turn_request(request.session, turn, 0, start) {
-            self.spawn_request(next, start);
-        }
+        let next = self
+            .plan
+            .turn_request(request.session, turn, 0, responded_at + think)
+            .expect("the next turn exists in the plan");
+        self.spawn_request(next);
     }
 
-    /// Retries a failed growing-session turn with backoff. Returns false when
-    /// nothing is retried: for fixed sessions, or when the session is
-    /// abandoned.
-    fn schedule_retry(self: &Arc<Self>, request: &PlannedRequest, failed_at: Micros) -> bool {
+    /// Retries a failed growing-session turn with backoff, or marks the
+    /// session abandoned after its last allowed attempt.
+    fn fail(
+        self: &Arc<Self>,
+        request: &PlannedRequest,
+        record: &mut FleetRecord,
+        failed_at: Micros,
+    ) {
         let Some(growing) = &self.args.config.workload.growing else {
-            return false;
+            return;
         };
         let attempt = request.attempt + 1;
         if attempt >= growing.max_turn_attempts {
-            return false;
+            record.abandoned_session = true;
+            return;
         }
         let start = failed_at + micros_from_secs(growing.retry_backoff_s * f64::from(attempt));
-        match self
+        let retry = self
             .plan
             .turn_request(request.session, request.turn, attempt, start)
-        {
-            Some(retry) => {
-                self.spawn_request(retry, start);
-                true
-            }
-            None => false,
-        }
+            .expect("a failed turn exists in the plan");
+        self.spawn_request(retry);
     }
 
-    async fn send(&self, request: &PlannedRequest, at: Micros) -> FleetRecord {
+    async fn send(&self, request: &PlannedRequest) -> FleetRecord {
         let args = &self.args;
-        let config = &args.config;
+        let at = request.arrival;
         // Fixed sessions repeat session, turn, and attempt, so a sequence
         // number keeps IDs unique; Pylon tracks live requests by ID.
         let request_id = format!(
@@ -297,18 +329,15 @@ impl Driver {
             abandoned_session: false,
         };
         let body = serde_json::json!({
-            "model": config.stargate.model_id,
+            "model": args.config.stargate.model_id,
             "messages": [{"role": "user", "content": "x"}],
             "stream": true,
             "max_tokens": request.output_tokens,
         });
-        let mut builder = self
+        let builder = self
             .client
             .post(format!("{}/v1/chat/completions", args.endpoint))
-            .timeout(Duration::from_millis(config.client.timeout_ms))
             .header("x-request-id", &request_id)
-            .header("x-model", &config.stargate.model_id)
-            .header("x-routing-key", &config.stargate.routing_key)
             .header("x-input-tokens", request.input_tokens)
             .header("x-output-tokens", request.output_tokens)
             .header(
@@ -316,18 +345,6 @@ impl Driver {
                 format!("{}-session-{}", args.run_label, request.session),
             )
             .json(&body);
-        if let Some(slo_ms) = config.client.request_slo_ms {
-            builder = builder.header("x-request-slo-ms", slo_ms);
-        }
-        if let Some(wait_ms) = config.client.max_wait_ms {
-            builder = builder.header("x-max-wait-ms", wait_ms);
-        }
-        if let Some(method) = &args.routing_method {
-            builder = builder.header("x-routing-method", method);
-        }
-        if let Some(api_key) = &args.api_key {
-            builder = builder.bearer_auth(api_key);
-        }
 
         let response = match builder.send().await {
             Ok(response) => response,
@@ -349,8 +366,10 @@ impl Driver {
         record.reused_input_tokens =
             header("x-kv-cache-reused-input-tokens").and_then(|value| value.parse().ok());
         if !status.is_success() {
-            record.error =
-                Some(header("x-stargate-error-code").unwrap_or_else(|| format!("http-{status}")));
+            record.error = Some(
+                header("x-stargate-error-code")
+                    .unwrap_or_else(|| format!("http-{}", status.as_u16())),
+            );
             // Read the short error body so the connection returns to the pool.
             let _ = response.bytes().await;
             return record;
@@ -455,25 +474,29 @@ mod tests {
 
     #[tokio::test]
     async fn drive_rejects_invalid_arguments_before_starting() {
-        let args = |rate_rps: f64, endpoint: &str| DriveArgs {
+        let args = |rate_rps: f64, endpoint: &str, routing_method: &str| DriveArgs {
             config: config(),
             endpoint: endpoint.to_string(),
             region: "a".to_string(),
             rate_rps,
             seed: 1,
-            routing_method: None,
+            routing_method: Some(routing_method.to_string()),
             run_label: "run-1".to_string(),
             start_at_unix_ms: u64::MAX,
             records: PathBuf::from("/nonexistent/records.jsonl"),
             api_key: None,
         };
-        for (rate_rps, endpoint, message) in [
-            (-1.0, "http://127.0.0.1:1", "rate"),
-            (f64::NAN, "http://127.0.0.1:1", "rate"),
-            (10.0, "router:8000", "http"),
-            (10.0, "not a url", "endpoint"),
+        let endpoint = "http://127.0.0.1:1";
+        for (rate_rps, endpoint, routing_method, message) in [
+            (-1.0, endpoint, "round-robin", "rate"),
+            (f64::NAN, endpoint, "round-robin", "rate"),
+            (10.0, "router:8000", "round-robin", "http"),
+            (10.0, "not a url", "round-robin", "endpoint"),
+            (10.0, endpoint, "round\nrobin", "x-routing-method"),
         ] {
-            let error = drive(args(rate_rps, endpoint)).await.expect_err(endpoint);
+            let error = drive(args(rate_rps, endpoint, routing_method))
+                .await
+                .expect_err(message);
             assert!(error.to_string().contains(message), "{error}");
         }
     }

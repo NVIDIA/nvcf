@@ -92,13 +92,16 @@ enum Command {
     },
     /// Summarize fleet driver records from every region of one or more runs.
     SummarizeFleet {
+        /// Simulation config (JSON) that defined the driven workload.
         #[arg(long)]
         config: PathBuf,
+        /// Record files written by `drive`.
         #[arg(long, required = true, num_args = 1..)]
         records: Vec<PathBuf>,
         /// JSON object mapping backend cluster IDs to GPU worker counts.
         #[arg(long)]
         backend_gpus: Option<PathBuf>,
+        /// Write the summaries to this JSON file instead of stdout.
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -142,15 +145,23 @@ fn main() -> anyhow::Result<()> {
             records,
             backend_gpus,
             output,
-        } => summarize_fleet(&load_config(&config)?, &records, backend_gpus, output),
+        } => summarize_fleet(
+            &load_config(&config)?,
+            &records,
+            backend_gpus.as_deref(),
+            output,
+        ),
     }
 }
 
-fn load_config(path: &Path) -> anyhow::Result<SimConfig> {
+fn read_json<T: serde::de::DeserializeOwned>(path: &Path) -> anyhow::Result<T> {
     let raw =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let config: SimConfig =
-        serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+    serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
+}
+
+fn load_config(path: &Path) -> anyhow::Result<SimConfig> {
+    let config: SimConfig = read_json(path)?;
     config.validate()?;
     Ok(config)
 }
@@ -158,7 +169,7 @@ fn load_config(path: &Path) -> anyhow::Result<SimConfig> {
 fn summarize_fleet(
     config: &SimConfig,
     paths: &[PathBuf],
-    backend_gpus: Option<PathBuf>,
+    backend_gpus: Option<&Path>,
     output: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     let mut records: Vec<FleetRecord> = Vec::new();
@@ -172,13 +183,7 @@ fn summarize_fleet(
             );
         }
     }
-    let gpus: HashMap<String, usize> = match backend_gpus {
-        Some(path) => serde_json::from_str(
-            &std::fs::read_to_string(&path)
-                .with_context(|| format!("reading {}", path.display()))?,
-        )?,
-        None => HashMap::new(),
-    };
+    let gpus: HashMap<String, usize> = backend_gpus.map(read_json).transpose()?.unwrap_or_default();
     let window = fleet::Window::new(
         config.workload.warmup_s,
         config.workload.measure_s,

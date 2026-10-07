@@ -83,9 +83,8 @@ pub fn summarize(
             runs.entry(&record.run).or_default().push(record);
         }
     }
-    let seconds = (window.end - window.start) as f64 / 1_000_000.0;
     runs.into_iter()
-        .map(|(run, measured)| summarize_run(run, &measured, window, seconds, backend_gpus))
+        .map(|(run, measured)| summarize_run(run, &measured, window, backend_gpus))
         .collect()
 }
 
@@ -93,15 +92,15 @@ fn summarize_run(
     run: &str,
     measured: &[&FleetRecord],
     window: &Window,
-    seconds: f64,
     backend_gpus: &HashMap<String, usize>,
 ) -> FleetSummary {
+    let seconds = (window.end - window.start) as f64 / 1_000_000.0;
     let succeeded: Vec<&FleetRecord> = measured
         .iter()
         .copied()
         .filter(|record| record.succeeded())
         .collect();
-    let ttft = |record: &FleetRecord| record.ttft_us.unwrap_or(Micros::MAX);
+    let ttft = |record: &FleetRecord| record.ttft_us.expect("successful record has a TTFT");
     let good = succeeded
         .iter()
         .filter(|record| ttft(record) <= window.ttft_slo)
@@ -145,7 +144,7 @@ fn summarize_run(
         e2e_ms: Percentiles::from_ms(
             succeeded
                 .iter()
-                .filter_map(|record| record.e2e_us.map(ms))
+                .map(|record| ms(record.e2e_us.expect("successful record has an E2E")))
                 .collect(),
         ),
         input_tokens: Percentiles::from_ms(
