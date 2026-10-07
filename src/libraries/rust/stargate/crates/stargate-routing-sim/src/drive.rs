@@ -433,9 +433,10 @@ impl Driver {
                 }
                 if event.data.trim() == "[DONE]" {
                     record.e2e_us = Some(self.now().saturating_sub(at));
-                    // Read the end of the body so the connection returns to
-                    // the pool.
-                    while let Some(Ok(_)) = body.next().await {}
+                    // Read the end of the body in the background so the
+                    // connection returns to the pool without delaying the
+                    // session's next turn.
+                    tokio::spawn(async move { while let Some(Ok(_)) = body.next().await {} });
                     return record;
                 }
             }
