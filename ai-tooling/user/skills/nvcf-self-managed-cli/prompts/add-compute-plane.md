@@ -39,9 +39,10 @@ User has a working NVCF control plane (running somewhere) and wants to register 
    resources, GPU Operator, SMB CSI driver) when `cluster_validator_image` is
    set. It grades this machine's registry credentials as `compute-plane
    install` uses them: `helm` on this machine pulls the compute-plane charts
-   with the docker login, so a docker login `nvcr.io` rejects fails the gate
-   even when `NGC_API_KEY` works. A missing `helm`, `helmfile` or `kubectl`
-   fails it too. SIS reachability is not probed before install.
+   with the docker login, so a docker login `nvcr.io` rejects, or one with no
+   access to the org the charts come from, fails the gate even when
+   `NGC_API_KEY` works. A missing `helm`, `helmfile` or `kubectl` fails it
+   too. SIS reachability is not probed before install.
 
    Without a context for the control-plane cluster, check the new cluster
    alone with `--compute-plane`. `check` takes both context flags or neither
@@ -61,10 +62,11 @@ User has a working NVCF control plane (running somewhere) and wants to register 
 
    That runs the same checks on the new cluster, and SIS reachability at
    `--icms-url`, but checks the compute plane as installed: a missing tool
-   only warns, and a docker login `nvcr.io` rejects fails the gate only when
-   `NGC_API_KEY` does not work in its place. Treat a `registry-credentials`
-   row that says the docker login was rejected as blocking, and renew that
-   login before the install.
+   only warns. A docker login `nvcr.io` rejects still fails the gate, but one
+   with no access to the org the compute-plane charts come from passes where
+   `NGC_API_KEY` reaches it. Treat a `registry-credentials` row that says the
+   docker login has no access as blocking, and log in with a credential that
+   has access before the install.
 
    If the gate fails, show the user the `check_completed` events with
    `passed: false` and `severity: "error"`, and address them before

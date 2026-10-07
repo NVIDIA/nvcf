@@ -91,7 +91,10 @@ waits counts on the next poll.
 The probe asks for pull access to the validator image's repository and to the
 stack's image path: any path in `global.image.registry`, then
 `global.image.repository`. A stack path of one segment, such as an org with no
-team, is not sent as the scope, since `nvcr.io` refuses it.
+team, is not sent as the scope, since `nvcr.io` refuses it. When the stack's
+OCI chart source, `global.helm.sources.registry` and `.repository`, is that
+same path, its row is also the one `helm` on this machine pulls the stack's
+charts from, with the docker login.
 
 The registry check belongs to one plane, whose stack names the registries
 and whose install state grades them: a plane the run checks before its
@@ -101,18 +104,22 @@ install, which this machine installs next (the control plane for a bare
 else the compute plane.
 
 Only a credential the registry rejects fails the run, and only for an NVIDIA
-registry the image or the stack names. Before install that includes a docker
-login `nvcr.io` rejects even when the NGC key works in its place, since
-`helm` on this machine pulls the stack's charts with the docker login. The
-key is still used for tag discovery and the validator's pull secret, and the
-row names both. After install a rejected docker login still fails. A rejected
-NGC key is a warning only when `check` reads the pull secrets of the clusters
-it visits, in the namespaces the validator copies pull secrets from, and
-none of them holds that key; when one does, or they cannot all be read, it is
-an error. A docker login the NGC key replaced passes after install only when
-none of those pull secrets holds it: when one does it is an error, and when
-they cannot all be read a warning. A registry this machine cannot reach, a
-token service that fails, and a missing local credential are warnings. A
+registry the image or the stack names. That includes a docker login
+`nvcr.io` rejects even when the NGC key works in its place, before and after
+install, since `docker` and `helm` on this machine still send it. The key is
+still used for tag discovery and the validator's pull secret, and the row
+names both. After install the row also says whether one of the pull secrets
+below holds that docker login. Before install, a docker login with no access
+to the row the stack's charts come from fails it too, although the NGC key
+reaches it, since `helm` pulls the charts with the docker login. That is
+reported as no access, not as a rejected login. Elsewhere, and after install,
+a docker login with no access passes where the NGC key reaches the
+repository. A rejected NGC key is a warning after install only when `check`
+reads the pull secrets of the clusters it visits, in the namespaces the
+validator copies pull secrets from, and none of them holds that key; when
+one does, or they cannot all be read, it is an error. A registry this machine
+cannot reach, a token service that fails, and a missing local credential are
+warnings. A
 registry the probe cannot speak to, such as ECR or one using Basic auth, is
 skipped with a command to check it by hand. A registry that lets this
 machine in anonymously is reported as such, not as valid credentials.

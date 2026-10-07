@@ -544,6 +544,49 @@ global:
 	assert.Equal(t, "nvcf/org", got[0].RepoHint)
 }
 
+// helm pulls the stack's charts from global.helm.sources with the docker
+// login. The stack's row is marked as that scope only where the OCI chart
+// source folds to the same host and scope as the images, the validator
+// image's row included when it names the same scope. An HTTPS chart
+// repository carries credentials of its own, and a chart source elsewhere is
+// not the row's scope.
+func TestEnumerateRegistries_MarksTheScopeHelmPullsTheChartsFrom(t *testing.T) {
+	dir := t.TempDir()
+	values := filepath.Join(dir, "base.yaml")
+	charts := func(body, image string) []RegistryEntry {
+		t.Helper()
+		require.NoError(t, writeFile(values, []byte("global:\n  image:\n    registry: nvcr.io/orgb\n"+
+			"    repository: team\n"+body+"certManager:\n  enabled: false\n")))
+		return EnumerateRegistries(image, LoadStackValues([]string{values}), nil)
+	}
+	const sameScope = "  helm:\n    sources:\n      registry: nvcr.io\n      repository: orgb/team\n"
+
+	got := charts(sameScope, "")
+	require.Len(t, got, 1)
+	assert.Equal(t, RegistryEntry{Registry: "nvcr.io", RepoHint: "orgb/team", Critical: true, Charts: true}, got[0])
+
+	got = charts(sameScope, "nvcr.io/nvidia/cv:1.0.0")
+	require.Len(t, got, 2)
+	assert.False(t, got[0].Charts, "the validator image's org holds no charts")
+	assert.True(t, got[1].Charts)
+
+	got = charts(sameScope, "nvcr.io/orgb/team:1.0.0")
+	require.Len(t, got, 1, "the validator image names the stack's scope")
+	assert.True(t, got[0].Charts)
+
+	for name, body := range map[string]string{
+		"https chart repository": "  helm:\n    sources:\n      url: https://helm.example.com/nvcf\n" +
+			"      registry: nvcr.io\n      repository: orgb/team\n",
+		"another org":     "  helm:\n    sources:\n      registry: nvcr.io\n      repository: orgc/team\n",
+		"another host":    "  helm:\n    sources:\n      registry: harbor.example.com\n      repository: orgb/team\n",
+		"no chart source": "",
+	} {
+		got = charts(body, "")
+		require.Len(t, got, 1, name)
+		assert.False(t, got[0].Charts, name)
+	}
+}
+
 // An org with no team is no repository: nvcr.io answers that scope with 400
 // "malformed token scope", which could only be graded unverifiable. The
 // stack's row sends no scope then, so a revoked key still fails the run.
@@ -1023,34 +1066,38 @@ func TestRegistryCredentialCheck_RefusalAfterInstall(t *testing.T) {
 	assert.Equal(t, []string{"$oauthtoken:revoked"}, asked, "the refused key is what is looked for")
 }
 
-// A docker login the NGC key replaced passes after install only where the
-// cluster's pull secrets were read and none holds it: one that does means the
-// cluster cannot pull either, and unread ones leave that unknown.
+// After install a docker login the NGC key replaced still fails: docker and
+// helm on this machine send it. The row also says whether the cluster's pull
+// secrets hold it, or that they could not be read, and never downgrades it.
 func TestRegistryCredentialCheck_ReplacedLoginAfterInstall(t *testing.T) {
 	login := registryCredential{user: "$oauthtoken", pass: "rotated-out", source: "docker config"}
 	replaced := func(context.Context, string, string, bool) error {
 		return registryProbeOutcome{kind: probeLoginRejected, refused: login,
 			detail: "the docker login from docker config was rejected; credentials from NGC_API_KEY valid"}
 	}
-	entry := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: true}
 	for name, tc := range map[string]struct {
 		cluster ClusterPullSecretChecker
-		passed  bool
-		want    Severity
 		message string
 	}{
-		"held by no pull secret": {clusterHolding("", nil, nil), true, SeverityInfo, "NGC_API_KEY valid"},
-		"held by a pull secret": {clusterHolding("nvcf/nvcr-pull-secret", nil, nil), false, SeverityError,
+		"held by no pull secret": {clusterHolding("", nil, nil), "credentials from NGC_API_KEY valid"},
+		"held by a pull secret": {clusterHolding("nvcf/nvcr-pull-secret", nil, nil),
 			"the cluster's pull secret nvcf/nvcr-pull-secret holds that docker login"},
-		"pull secrets unreadable": {clusterHolding("", errors.New("forbidden"), nil), false, SeverityWarning,
+		"pull secrets unreadable": {clusterHolding("", errors.New("forbidden"), nil),
 			"could not check whether the cluster's pull secrets hold that docker login: forbidden"},
 	} {
-		r := registryCredentialCheck(replaced, entry, "nvcr.io", true, tc.cluster).Run(context.Background())
-		assert.Equal(t, tc.passed, r.Passed, name)
-		assert.Equal(t, tc.want, r.Severity, name+": "+r.Message)
-		assert.Contains(t, r.Message, tc.message, name)
+		for _, critical := range []bool{true, false} {
+			entry := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: critical}
+			r := registryCredentialCheck(replaced, entry, "nvcr.io", true, tc.cluster).Run(context.Background())
+			assert.False(t, r.Passed, name)
+			assert.Error(t, r.Err, name)
+			assert.Equal(t, map[bool]Severity{true: SeverityError, false: SeverityWarning}[critical], r.Severity,
+				name+": "+r.Message)
+			assert.Contains(t, r.Message, tc.message, name)
+			assert.NotContains(t, r.Message, "affects only this machine", name)
+		}
 	}
 	var asked []string
+	entry := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: true}
 	registryCredentialCheck(replaced, entry, "nvcr.io", true, clusterHolding("", nil, &asked)).
 		Run(context.Background())
 	assert.Equal(t, []string{"$oauthtoken:rotated-out"}, asked)
@@ -1059,8 +1106,8 @@ func TestRegistryCredentialCheck_ReplacedLoginAfterInstall(t *testing.T) {
 // Where the docker login goes first for nvcr.io and nvcr.io rejects it, the
 // NGC key is sent before the row is graded. The run then moves to the key,
 // so the validator's pull secret is minted from the credential the row found
-// accepted, and the row says how to renew the login docker still sends.
-// After install that passes where no cluster pull secret holds the login.
+// accepted, and the row says how to renew the login docker still sends. The
+// row still fails after install, where no cluster pull secret holds the login.
 func TestProbeRegistryCredential_RejectedLoginGivesWayToTheNGCKey(t *testing.T) {
 	ngc := newFakeNGC(t, "good-key")
 	dockerHome(t, inlineDockerConfig(t, "nvcr.io", "$oauthtoken", "rotated-out", ""))
@@ -1071,9 +1118,9 @@ func TestProbeRegistryCredential_RejectedLoginGivesWayToTheNGCKey(t *testing.T) 
 	var asked []string
 	r := registryCredentialCheck(probeRegistryCredential, entry, "nvcr.io", true, clusterHolding("", nil, &asked)).
 		Run(ctx)
-	assert.True(t, r.Passed, r.Message)
+	assert.False(t, r.Passed, r.Message)
 	assert.Equal(t, []string{"$oauthtoken:rotated-out"}, asked, "the cluster is searched for the rejected login")
-	assert.Equal(t, SeverityInfo, r.Severity)
+	assert.Equal(t, SeverityError, r.Severity)
 	assert.Contains(t, r.Message, "credentials from NGC_API_KEY valid")
 	assert.Contains(t, r.Message, "the docker login from docker config")
 	assert.Contains(t, r.Message, "docker and helm on this machine still send it; "+
@@ -1088,9 +1135,10 @@ func TestProbeRegistryCredential_RejectedLoginGivesWayToTheNGCKey(t *testing.T) 
 }
 
 // Before install a docker login nvcr.io rejects fails a critical row even
-// though the NGC key works: helm on this machine pulls the stack's charts
-// with the docker login. The key still serves tag discovery and the
-// validator's pull secret, and the row names both credentials.
+// though the NGC key works. The key still serves tag discovery and the
+// validator's pull secret, and the row names both credentials. On the scope
+// helm pulls the stack's charts from, the row says the install cannot pull
+// them; on another it makes no such claim.
 func TestRegistryCredentialCheck_BeforeInstallGradesTheRejectedLogin(t *testing.T) {
 	withTempCacheDir(t)
 	newFakeNGC(t, "good-key")
@@ -1098,15 +1146,23 @@ func TestRegistryCredentialCheck_BeforeInstallGradesTheRejectedLogin(t *testing.
 	t.Setenv("NGC_API_KEY", "good-key")
 	ctx := WithRegistryCredentials(context.Background(), NewRegistryCredentials(false))
 
+	const charts = "helm on this machine pulls the stack's charts from nvcr.io/nvidia/cv with the docker login, " +
+		"so the install cannot pull them until it is renewed"
 	for _, critical := range []bool{true, false} {
-		entry := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: critical}
-		r := registryCredentialCheck(probeRegistryCredential, entry, "nvcr.io", false, nil).Run(ctx)
-		assert.False(t, r.Passed, r.Message)
-		assert.Equal(t, map[bool]Severity{true: SeverityError, false: SeverityWarning}[critical], r.Severity)
-		assert.Contains(t, r.Message, "nvcr.io: the docker login from docker config")
-		assert.Contains(t, r.Message, "renew it with: docker login nvcr.io --username '$oauthtoken'")
-		assert.Contains(t, r.Message, "credentials from NGC_API_KEY valid, and the run uses them in its place")
-		assert.Contains(t, r.Message, "helm on this machine pulls the stack's charts with the docker login")
+		for _, stackCharts := range []bool{true, false} {
+			entry := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: critical, Charts: stackCharts}
+			r := registryCredentialCheck(probeRegistryCredential, entry, "nvcr.io", false, nil).Run(ctx)
+			assert.False(t, r.Passed, r.Message)
+			assert.Equal(t, map[bool]Severity{true: SeverityError, false: SeverityWarning}[critical], r.Severity)
+			assert.Contains(t, r.Message, "nvcr.io: the docker login from docker config")
+			assert.Contains(t, r.Message, "renew it with: docker login nvcr.io --username '$oauthtoken'")
+			assert.Contains(t, r.Message, "credentials from NGC_API_KEY valid, and the run uses them in its place")
+			if stackCharts {
+				assert.Contains(t, r.Message, charts)
+			} else {
+				assert.NotContains(t, r.Message, "charts")
+			}
+		}
 	}
 
 	got, ok := ResolveLatestValidatorTag(ctx, "nvcr.io/nvidia/cv")

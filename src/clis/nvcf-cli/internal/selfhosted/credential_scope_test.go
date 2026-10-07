@@ -155,10 +155,9 @@ func TestResolveValidatorPullSecret_BothRolesMintTheAcceptedCredential(t *testin
 	assert.Equal(t, 1, sentLogin, "the scope is settled once, with the other role waiting on it")
 }
 
-// A docker login with no access to the stack's org gives way to the NGC key
-// for that org alone. The validator's pull secret keeps the login, which
-// reaches the validator's org, and the 403 is never reported as a rejected
-// login.
+// A docker login with no access to an org gives way to the NGC key for that
+// org alone. The validator's pull secret keeps the login, which reaches the
+// validator's org, and the 403 is never reported as a rejected login.
 func TestRegistryCredentials_NoAccessMovesOnlyThatScope(t *testing.T) {
 	newEntitledNGC(t, map[string][]string{"login-pass": {"nvidia"}, "key-pass": {"orgb"}})
 	dockerHome(t, inlineDockerConfig(t, "nvcr.io", "$oauthtoken", "login-pass", ""))
@@ -174,6 +173,43 @@ func TestRegistryCredentials_NoAccessMovesOnlyThatScope(t *testing.T) {
 
 	assert.Equal(t, "login-pass", mintPullSecret(ctx, t, fake.NewSimpleClientset(), "nvcr.io/nvidia/cv:1.0.0",
 		clusterValidatorComputePlaneRole), "the validator's org is the login's")
+}
+
+// Before install, a docker login with no access to the scope helm pulls the
+// stack's charts from fails that row, though the NGC key reaches it: helm on
+// this machine pulls the charts with the docker login. It is reported as no
+// access, never as a rejected login. After install, and on a scope that holds
+// no charts, the key serving the scope is enough.
+func TestRegistryCredentialCheck_NoAccessToTheChartScopeFailsBeforeInstall(t *testing.T) {
+	newEntitledNGC(t, map[string][]string{"login-pass": {"nvidia"}, "key-pass": {"orgb"}})
+	dockerHome(t, inlineDockerConfig(t, "nvcr.io", "$oauthtoken", "login-pass", ""))
+	t.Setenv("NGC_API_KEY", "key-pass")
+
+	for name, tc := range map[string]struct {
+		charts, postInstall, passed bool
+	}{
+		"chart scope, before install":     {charts: true},
+		"chart scope, after install":      {charts: true, postInstall: true, passed: true},
+		"no charts there, before install": {passed: true},
+	} {
+		ctx := WithRegistryCredentials(context.Background(), NewRegistryCredentials(false))
+		entry := RegistryEntry{Registry: "nvcr.io", RepoHint: "orgb/team", Critical: true, Charts: tc.charts}
+		r := registryCredentialCheck(probeRegistryCredential, entry, "nvcr.io/orgb/team", tc.postInstall,
+			clusterHolding("", nil, nil)).Run(ctx)
+		assert.Equal(t, tc.passed, r.Passed, name+": "+r.Message)
+		assert.Contains(t, r.Message, "has no access to nvcr.io/orgb/team", name)
+		assert.NotContains(t, r.Message, "rejected", name)
+		if tc.passed {
+			assert.Equal(t, SeverityInfo, r.Severity, name)
+			continue
+		}
+		assert.Equal(t, SeverityError, r.Severity, name)
+		assert.Error(t, r.Err, name)
+		assert.Contains(t, r.Message, "helm on this machine pulls the stack's charts from nvcr.io/orgb/team "+
+			"with the docker login, so the install cannot pull them", name)
+		assert.Equal(t, "login-pass", mintPullSecret(ctx, t, fake.NewSimpleClientset(), "nvcr.io/nvidia/cv:1.0.0",
+			clusterValidatorComputePlaneRole), "the validator's org keeps the login")
+	}
 }
 
 // With the entitlements the other way round, each row passes on the

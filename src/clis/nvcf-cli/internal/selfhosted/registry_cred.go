@@ -88,17 +88,20 @@ const (
 	probeRejected
 	// probeLoginRejected: the registry rejected the docker login and
 	// accepted the NGC key sent in its place. The run uses the key, but
-	// docker and helm on this machine still send the login, so before an
-	// install it fails like a rejected credential.
+	// docker and helm on this machine still send the login, so it fails like
+	// a rejected credential.
 	probeLoginRejected
 	// probeOtherCredential: the docker login has no access to the scope, and
 	// the registry accepted the NGC key for it, which the run uses there.
+	// Before install it fails for the scope helm pulls the stack's charts
+	// from with the docker login.
 	probeOtherCredential
 )
 
 // registryProbeOutcome is the result of a probe that did not verify a
-// credential, or verified one only after the registry rejected another. Only
-// probeRejected, and probeLoginRejected before install, can fail a run.
+// credential, or verified one only after the registry rejected another or
+// gave it no access. Only probeRejected, probeLoginRejected, and before
+// install probeOtherCredential for the stack's chart scope, can fail a run.
 type registryProbeOutcome struct {
 	kind   registryProbeKind
 	detail string
@@ -409,6 +412,10 @@ type RegistryEntry struct {
 	// the stack. A credential it rejects fails the run; everything else about
 	// it, and every other registry, is a warning at most.
 	Critical bool
+	// Charts marks the scope helm on this machine pulls the stack's charts
+	// from, with the docker login: the stack's OCI chart source, where it is
+	// the scope the stack's images come from.
+	Charts bool
 }
 
 // ParseRegistryExtra parses one --cluster-validator-registries entry,
@@ -445,6 +452,11 @@ type StackValues struct {
 	// ImageRepository is global.image.repository, the NGC org and team or
 	// mirror path every stack image is pulled from.
 	ImageRepository string
+	// ChartRegistry and ChartRepository are global.helm.sources.registry and
+	// .repository, the OCI repository helm pulls the stack's charts from with
+	// the docker login. Both are empty when global.helm.sources.url names an
+	// HTTPS chart repository instead, which has credentials of its own.
+	ChartRegistry, ChartRepository string
 	// CertManagerEnabled is certManager.enabled, the cert-manager release's
 	// condition.
 	CertManagerEnabled bool
@@ -471,10 +483,17 @@ type StackValues struct {
 // malformed files are skipped.
 func LoadStackValues(files []string) StackValues {
 	merged, found := loadValuesFiles(files)
+	var chartRegistry, chartRepository string
+	if digString(merged, "global", "helm", "sources", "url") == "" {
+		chartRegistry = digString(merged, "global", "helm", "sources", "registry")
+		chartRepository = strings.Trim(digString(merged, "global", "helm", "sources", "repository"), "/")
+	}
 	return StackValues{
 		Found:                 found,
 		ImageRegistry:         digString(merged, "global", "image", "registry"),
 		ImageRepository:       strings.Trim(digString(merged, "global", "image", "repository"), "/"),
+		ChartRegistry:         chartRegistry,
+		ChartRepository:       chartRepository,
 		CertManagerEnabled:    releaseCondition(merged, "certManager", "enabled"),
 		ACMESolverRepository:  digString(merged, "certManager", "acmesolver", "image", "repository"),
 		EnvoyGatewayNamespace: digString(merged, "ingress", "gatewayApi", "controllerNamespace"),
@@ -656,29 +675,29 @@ func digAny(m map[string]any, keys ...string) any {
 func EnumerateRegistries(imageRef string, stack StackValues, extras []RegistryEntry) []RegistryEntry {
 	var out []RegistryEntry
 
-	// add reports whether the registry is in the list, so a source only counts
-	// as having named a registry once its value passed validation. A registry
-	// already listed is listed again only for a scope not yet probed: the
-	// validator image's org and the stack's org can differ on one registry.
-	add := func(registry, repoHint string, critical bool) bool {
+	// add returns the entry that lists the registry, or nil, so a source only
+	// counts as having named a registry once its value passed validation. A
+	// registry already listed is listed again only for a scope not yet probed:
+	// the validator image's org and the stack's org can differ on one registry.
+	add := func(registry, repoHint string, critical bool) *RegistryEntry {
 		registry = strings.TrimSpace(registry)
 		if registry == "" {
-			return false
+			return nil
 		}
 		// Every source goes through the same host validation. The probe builds
 		// "https://" + registry + "/v2/", so a value carrying "/" or "@" moves
 		// the host: global.image.registry set to "nvcr.io@attacker.example.com"
 		// would otherwise aim an outbound request wherever that names.
 		if host, _ := parseRegistryHostPort(registry); host == "" {
-			return false
+			return nil
 		}
-		for _, e := range out {
+		for i, e := range out {
 			if e.Registry == registry && (e.RepoHint == repoHint || repoHint == "") {
-				return true
+				return &out[i]
 			}
 		}
 		out = append(out, RegistryEntry{Registry: registry, RepoHint: repoHint, Critical: critical})
-		return true
+		return &out[len(out)-1]
 	}
 
 	// Source 1: base registry from the configured validator image.
@@ -691,7 +710,7 @@ func EnumerateRegistries(imageRef string, stack StackValues, extras []RegistryEn
 	// contacts this registry at pull time (ImagePullPolicy is IfNotPresent).
 	imageNamedRegistry := false
 	if reg, repo, _, ok := parseImageRef(imageRef); ok {
-		imageNamedRegistry = add(reg, repo, isNGCRegistry(reg))
+		imageNamedRegistry = add(reg, repo, isNGCRegistry(reg)) != nil
 	}
 
 	// Source 2: global.image.registry and global.image.repository from the
@@ -700,18 +719,18 @@ func EnumerateRegistries(imageRef string, stack StackValues, extras []RegistryEn
 	// is caught even when the validator image comes from another org. The
 	// stack renders registry + "/" + repository, so "harbor.corp.example/nvcf"
 	// is a valid registry: probe its host and fold the path into the scope.
+	//
+	// Helm on this machine pulls the stack's charts from global.helm.sources
+	// with the docker login. Where that is the same scope, the entry is marked,
+	// since a docker login with no access to it fails the install.
 	stackNamedRegistry := false
-	if host, path, _ := strings.Cut(stack.ImageRegistry, "/"); host != "" {
-		scope := strings.Trim(strings.Join([]string{strings.Trim(path, "/"), stack.ImageRepository}, "/"), "/")
-		// One segment is an org with no team, which is no repository, and
-		// nvcr.io answers that scope with 400 "malformed token scope": a
-		// probe that could then only report it unverifiable, a revoked key
-		// included. With no scope the token endpoint still judges the key.
-		if !strings.Contains(scope, "/") {
-			scope = ""
-		}
+	if host, scope := stackScope(stack.ImageRegistry, stack.ImageRepository); host != "" {
 		// If it's an NGC registry, mark critical; customer mirrors are non-critical.
-		stackNamedRegistry = add(host, scope, isNGCRegistry(host))
+		if e := add(host, scope, isNGCRegistry(host)); e != nil {
+			stackNamedRegistry = true
+			chartHost, chartScope := stackScope(stack.ChartRegistry, stack.ChartRepository)
+			e.Charts = e.Charts || (e.RepoHint == scope && chartHost == host && chartScope == scope)
+		}
 	}
 
 	// Source 3: cert-manager's ACME solver. global.yaml.gotmpl moves the
@@ -749,4 +768,24 @@ func EnumerateRegistries(imageRef string, stack StackValues, extras []RegistryEn
 	}
 
 	return out
+}
+
+// stackScope splits a stack's registry and repository, which the stack
+// renders as registry + "/" + repository, into the host to probe and the
+// scope to probe it for: "harbor.corp.example/nvcf" is a valid registry, so
+// its path is folded into the scope.
+func stackScope(registry, repository string) (host, scope string) {
+	host, path, _ := strings.Cut(registry, "/")
+	if host == "" {
+		return "", ""
+	}
+	scope = strings.Trim(strings.Join([]string{strings.Trim(path, "/"), repository}, "/"), "/")
+	// One segment is an org with no team, which is no repository, and nvcr.io
+	// answers that scope with 400 "malformed token scope": a probe that could
+	// then only report it unverifiable, a revoked key included. With no scope
+	// the token endpoint still judges the key.
+	if !strings.Contains(scope, "/") {
+		scope = ""
+	}
+	return host, scope
 }

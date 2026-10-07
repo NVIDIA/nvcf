@@ -1166,14 +1166,15 @@ func buildRegistryCredentialCategory(cfg PreflightConfig) categorySpec {
 
 // registryCredentialCheck returns a binaryCheckSpec that probes one registry.
 // Only a credential the registry refused can fail: at error severity for a
-// critical registry, at warning for any other. Before install that includes a
-// docker login nvcr.io rejected even where the NGC key it gave way to works:
-// helm on this machine pulls the stack's charts with the docker login. After
-// install a refused docker login still fails, while a refused NGC key is a
-// warning only where the cluster's pull secrets are read and none holds it,
-// and a docker login the key replaced passes only where none holds that
-// login. Everything else the probe can report, from an unreachable registry
-// to a missing local credential, is a warning or an informational pass.
+// critical registry, at warning for any other. That includes a docker login
+// nvcr.io rejected even where the NGC key it gave way to works, before and
+// after install: docker and helm on this machine still send it. Before
+// install it also includes a docker login with no access to the scope helm
+// pulls the stack's charts from, though the key reaches it. After install a
+// refused NGC key is a warning only where the cluster's pull secrets are read
+// and none holds it. Everything else the probe can report, from an
+// unreachable registry to a missing local credential, is a warning or an
+// informational pass.
 func registryCredentialCheck(
 	checker RegistryCredentialChecker, entry RegistryEntry, label string, postInstall bool,
 	clusterSecrets ClusterPullSecretChecker,
@@ -1190,6 +1191,8 @@ func registryCredentialCheck(
 		}
 		return clusterSecrets(ctx, entry.Registry, entry.RepoHint, cred.user, cred.pass)
 	}
+	charts := "; helm on this machine pulls the stack's charts from " + scopeLabel(entry.Registry, entry.RepoHint) +
+		" with the docker login, so the install cannot pull them"
 	return binaryCheckSpec{
 		ID:         id,
 		HumanLabel: fmt.Sprintf("checking credentials for %s...", label),
@@ -1216,7 +1219,15 @@ func registryCredentialCheck(
 				r.Passed = true
 				r.Severity = SeverityInfo
 				r.Message = label + ": skipped (" + outcome.detail + ")"
-			case probeAnonymous, probeNotVerified, probeOtherCredential:
+			case probeOtherCredential:
+				if !postInstall && entry.Charts {
+					r.Err = err
+					r.Message += charts + "; log in with a credential that has pull access to it"
+					break
+				}
+				r.Passed = true
+				r.Severity = SeverityInfo
+			case probeAnonymous, probeNotVerified:
 				r.Passed = true
 				r.Severity = SeverityInfo
 			case probeNoCredential, probeUnverifiable:
@@ -1225,8 +1236,9 @@ func registryCredentialCheck(
 			case probeLoginRejected:
 				r.Err = err
 				if !postInstall {
-					r.Message += "; before install this fails the check, since helm on this machine pulls the " +
-						"stack's charts with the docker login"
+					if entry.Charts {
+						r.Message += charts + " until it is renewed"
+					}
 					break
 				}
 				switch holder, cmpErr := heldBy(ctx, outcome.refused); {
@@ -1234,13 +1246,8 @@ func registryCredentialCheck(
 					r.Message += "; the cluster's pull secret " + holder + " holds that docker login, " +
 						"so the cluster cannot pull with it either"
 				case cmpErr != nil:
-					r.Severity = SeverityWarning
 					r.Message += "; could not check whether the cluster's pull secrets hold that docker login: " +
 						cmpErr.Error()
-				default:
-					r.Passed = true
-					r.Severity = SeverityInfo
-					r.Err = nil
 				}
 			case probeRejected:
 				r.Err = err

@@ -53,9 +53,10 @@ nvcf-cli init --api-url=https://api.nvcf.example.com
 # KUBECONFIG for this command only, a kubeconfig holding just the compute
 # cluster's context. The current context of your kubeconfig stays as it was.
 # --compute-plane checks the compute plane as installed, so a docker login
-# nvcr.io rejects fails only when NGC_API_KEY does not work in its place:
-# treat a registry-credentials row that says the docker login was rejected
-# as blocking, since compute-plane install pulls its charts with that login.
+# with no access to the org of the compute-plane charts passes where
+# NGC_API_KEY reaches it: treat a registry-credentials row that says the
+# docker login has no access as blocking, since compute-plane install pulls
+# its charts with that login. A docker login nvcr.io rejects fails either way.
 # With a control-plane context, check --pre --control-plane checks the new
 # compute plane as not yet installed instead; see prompts/add-compute-plane.md.
 KC=$(mktemp)
