@@ -7,6 +7,7 @@ import base64
 import contextlib
 import copy
 import datetime
+import decimal
 import hashlib
 import http.client
 import json
@@ -94,6 +95,51 @@ def load_recipe(name):
     return definition
 
 
+# Optional pod resource overrides: resources.<model|rpc>.<requests|limits>.<cpu|memory>.
+RESOURCE_ROLES = ('model', 'rpc')
+RESOURCE_KINDS = ('requests', 'limits')
+RESOURCE_NAMES = ('cpu', 'memory')
+QUANTITY = re.compile(r'([0-9]+(?:\.[0-9]+)?)(m|k|Ki|Mi|Gi|Ti|Pi|Ei|M|G|T|P|E)?')
+QUANTITY_UNITS = {None: 1, 'm': decimal.Decimal('0.001'),
+                  'k': 10**3, 'M': 10**6, 'G': 10**9, 'T': 10**12, 'P': 10**15, 'E': 10**18,
+                  'Ki': 2**10, 'Mi': 2**20, 'Gi': 2**30, 'Ti': 2**40, 'Pi': 2**50, 'Ei': 2**60}
+
+
+def quantity(value):
+    match = QUANTITY.fullmatch(str(value))
+    return decimal.Decimal(match[1]) * QUANTITY_UNITS[match[2]]
+
+
+def check_resources(resources):
+    require(isinstance(resources, dict) and set(resources) <= set(RESOURCE_ROLES),
+            'resources may set only model and rpc.')
+    for role, spec in resources.items():
+        require(isinstance(spec, dict), 'resources.'+role+' must be an object.')
+        require(set(spec) <= set(RESOURCE_KINDS), 'resources.'+role+' may set only requests and limits.')
+        for kind, values in spec.items():
+            require(isinstance(values, dict), 'resources.'+role+'.'+kind+' must be an object.')
+            for name, value in values.items():
+                require(name != 'nvidia.com/gpu', 'resources.'+role+'.'+kind+' cannot set nvidia.com/gpu. Each model pod uses one GPU.')
+                require(name in RESOURCE_NAMES, 'resources.'+role+'.'+kind+' may set only cpu and memory.')
+                field = 'resources.'+role+'.'+kind+'.'+name
+                require(isinstance(value, str) and QUANTITY.fullmatch(value) is not None,
+                        field+' must be a Kubernetes quantity string, such as "64Gi" or "8".')
+                if name == 'cpu':
+                    require(quantity(value) * 1000 % 1 == 0, field+' cannot be finer than 1m.')
+                else:
+                    require(QUANTITY.fullmatch(value)[2] != 'm', field+' cannot use m, which means thousandths of a byte. Use Mi or M.')
+
+
+def with_overrides(resources, role, override):
+    merged = copy.deepcopy(resources)
+    for kind, values in (override or {}).items():
+        merged[kind].update(values)
+    for name in RESOURCE_NAMES:
+        require(quantity(merged['requests'][name]) <= quantity(merged['limits'][name]),
+                'resources.'+role+': '+name+' request '+merged['requests'][name]+' exceeds limit '+merged['limits'][name]+'.')
+    return merged
+
+
 def validate(c):
     load_recipe(recipe_name(c))
     for key in ('context', 'namespace', 'releasePrefix', 'clusterId', 'storageClass', 'runtimeClass'):
@@ -119,6 +165,8 @@ def validate(c):
     require(c.get('caConfigMap'), 'caConfigMap is required for verified QUIC and client TLS.')
     require(not c.get('retainedModels'), 'Verification targets the recipe model. Remove retainedModels from the configuration.')
     require(not c.get('testFixture'), 'The recipe deploys its own model. Remove testFixture from the configuration.')
+    if 'resources' in c:
+        check_resources(c['resources'])
     monitoring.settings(c)
 
 
@@ -339,6 +387,8 @@ class Recipe:
         self.targets = [] if monitoring_only else [{'id': 'n'+str(index), 'node': node} for index, node in enumerate(config['nodes']['model'])]
         self.workers = self.targets[1:]
         self.plan = None if monitoring_only else sizing.memory_plan(self.definition, config['gpu'], len(self.targets))
+        # Serving pod resources, merged and checked here so a bad override fails before any cluster command.
+        self.resources = None if monitoring_only else self.serving_resources()
         releases = config.get('releases', {})
         self.backend = None if monitoring_only else releases.get('model', config['releasePrefix'] + '-' + self.definition['releaseName'])
         self.operator = releases.get('operator', config['releasePrefix'] + '-operator')
@@ -411,12 +461,18 @@ class Recipe:
         run(['helm', 'dependency', 'build', '--skip-refresh', self.source/'deploy/helm/llm-gateway-stack/llm-gateway-stack'])
         print('Using source checkout:', self.source)
 
+    def serving_resources(self):
+        memory = {'requests': str(self.plan['requestGiB'])+'Gi', 'limits': str(self.plan['limitGiB'])+'Gi'}
+        overrides = self.c.get('resources', {})
+        return {role: with_overrides({'requests': {'cpu': request, 'memory': memory['requests'], 'nvidia.com/gpu': 1},
+                                      'limits': {'cpu': limit, 'memory': memory['limits'], 'nvidia.com/gpu': 1}},
+                                     role, overrides.get(role))
+                for role, request, limit in (('model', '4', '12'), ('rpc', '2', '8'))}
+
     def backend_values(self, phase='serve', register=False, render=False):
-        d, plan, gpu = self.definition, self.plan, self.c['gpu']
-        memory = {'requests': str(plan['requestGiB'])+'Gi', 'limits': str(plan['limitGiB'])+'Gi'}
+        d, gpu = self.definition, self.c['gpu']
         if phase == 'serve':
-            rpc_resources = {'requests': {'cpu': '2', 'memory': memory['requests'], 'nvidia.com/gpu': 1},
-                             'limits': {'cpu': '8', 'memory': memory['limits'], 'nvidia.com/gpu': 1}}
+            rpc_resources = copy.deepcopy(self.resources['rpc'])
         else:
             rpc_resources = {'requests': {'cpu': '2', 'memory': '2Gi', 'nvidia.com/gpu': 1},
                              'limits': {'cpu': '8', 'memory': '8Gi', 'nvidia.com/gpu': 1}}
@@ -431,8 +487,7 @@ class Recipe:
             'model': {'lock': d['lock'], 'servedName': d['servedName'], 'firstShard': d['firstShard'],
                       'endpointName': d['endpointName'], 'register': register, 'canary': dict(d['canary']),
                       'args': d['serverArgs'] + sizing.placement_args(len(self.targets)),
-                      'resources': {'requests': {'cpu': '4', 'memory': memory['requests'], 'nvidia.com/gpu': 1},
-                                    'limits': {'cpu': '12', 'memory': memory['limits'], 'nvidia.com/gpu': 1}}},
+                      'resources': copy.deepcopy(self.resources['model'])},
             'rpc': {'resources': rpc_resources,
                     'cache': {'enabled': phase == 'serve' and bool(self.workers), 'size': d['rpcCacheSize'],
                               'storageClassName': self.c['storageClass']}},
