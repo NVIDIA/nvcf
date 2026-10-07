@@ -194,9 +194,11 @@ field behavior and built-in defaults, see the
 | `ignore_queue_time` | boolean | `wait-and-widen`, `pulsar-wait-and-widen` | `true`, `false` |
 | `ignore_input_processing_time` | boolean | `wait-and-widen`, `pulsar-wait-and-widen` | `true`, `false` |
 | `cache_affinity_virtual_nodes` | integer | `wait-and-widen` | 1 to 1024 |
-| `cache_affinity_backend_selection_count` | integer | `wait-and-widen` | Greater than 0 |
-| `cache_affinity_input_tokens_scale` | number | `wait-and-widen` | 0.0 to 1.0 |
-| `cache_affinity_wait_ms` | integer | `wait-and-widen` | 0 or greater |
+| `cache_affinity_backend_selection_count` | integer | `wait-and-widen`, `pulsar-wait-and-widen` | Greater than 0 |
+| `cache_affinity_input_tokens_scale` | number | `wait-and-widen`, `pulsar-wait-and-widen` | 0.0 to 1.0 |
+| `cache_affinity_wait_ms` | integer | `wait-and-widen`, `pulsar-wait-and-widen` | 0 or greater |
+| `band_widen_interval_ms` | integer | `pulsar-wait-and-widen` | 0 or greater |
+| `fallback_max_queued` | integer | `pulsar-wait-and-widen` | 0 or greater |
 
 `round-robin` and `random` accept only the parameters for all algorithms.
 
