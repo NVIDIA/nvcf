@@ -139,18 +139,21 @@ Tested in October 2026 with Pi 1.0.4 and Codex 0.161.0 against `glm-5.3` on one 
 
 ### Open the gateway
 
-From `deploy/helm/llm-routing/recipes`, find the work directory, then keep a port-forward running in its own terminal. `stack` saved `ca.crt` and `api-key` in the work directory. Use the namespace from your configuration; `llm-routing-poc` is the default.
+From `deploy/helm/llm-routing/recipes`, find the work directory, then keep a port-forward running in its own terminal. Use the namespace from your configuration; `llm-routing-poc` is the default.
 
 ```bash
 python3 recipe.py paths
 kubectl --context "$(python3 recipe.py context)" -n llm-routing-poc port-forward svc/llm-api-gateway 18443:8080 --address 127.0.0.1
 ```
 
-In the terminal where you run the agent, set the work directory from the `workDir` value printed by `paths`:
+`stack` saved the gateway CA as `ca.crt` in the work directory. It saved the caller API key there as `api-key`, unless the configuration sets `apiKeyFile`; then the key is in that file. A work directory created with `attach-existing` has `ca.crt` but no `api-key`; use the key file from the work directory that ran `stack`.
+
+In the terminal where you run the agent, set the work directory from the `workDir` value printed by `paths`, and the key file:
 
 ```bash
 WORK=/path/printed/as/workDir
-export GLM_API_KEY="$(cat "$WORK/api-key")"
+KEY_FILE="$WORK/api-key"
+export GLM_API_KEY="$(cat "$KEY_FILE")"
 ```
 
 The gateway certificate covers `127.0.0.1`, so the agents connect to `https://127.0.0.1:18443/v1` and trust `$WORK/ca.crt`.
