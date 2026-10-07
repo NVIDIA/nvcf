@@ -131,6 +131,100 @@ Open `http://127.0.0.1:13000/d/llm-demo`. Viewing requires no login. Ctrl-C clos
 
 See [advanced monitoring configuration](recipes/MONITORING.md) for settings, dashboard access, verification and uninstall.
 
+## Connect a coding agent
+
+Coding agents such as [Pi](https://github.com/badlogic/pi-mono) and [Codex](https://github.com/openai/codex) can use the model through the gateway. They need a large context: their first request is 1,500 to 6,500 tokens before any file contents. Use the GB300 defaults or a similar `tuning.contextPerSlot` (see [Server tuning](#server-tuning)). The GB10 default of 2048 tokens is too small.
+
+Tested in October 2026 with Pi 1.0.4 and Codex 0.161.0 against `glm-5.3` on one GB300 with two 65,536-token slots. Each agent found and fixed a one-line bug by running a test, editing the file and running the test again, using tool calls through the gateway. Pi took 7 seconds and Codex 33 seconds.
+
+### Open the gateway
+
+From `deploy/helm/llm-routing/recipes`, find the work directory, then keep a port-forward running in its own terminal. `stack` saved `ca.crt` and `api-key` in the work directory. Use the namespace from your configuration; `llm-routing-poc` is the default.
+
+```bash
+python3 recipe.py paths
+kubectl --context "$(python3 recipe.py context)" -n llm-routing-poc port-forward svc/llm-api-gateway 18443:8080 --address 127.0.0.1
+```
+
+In the terminal where you run the agent, set the work directory from the `workDir` value printed by `paths`:
+
+```bash
+WORK=/path/printed/as/workDir
+export GLM_API_KEY="$(cat "$WORK/api-key")"
+```
+
+The gateway certificate covers `127.0.0.1`, so the agents connect to `https://127.0.0.1:18443/v1` and trust `$WORK/ca.crt`.
+
+### Pi
+
+Pi uses the chat completions API. Install it and add the model:
+
+```bash
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+mkdir -p ~/.pi/agent
+cat > ~/.pi/agent/models.json <<'EOF'
+{"providers": {"llm-routing": {
+  "baseUrl": "https://127.0.0.1:18443/v1", "api": "openai-completions", "apiKey": "$GLM_API_KEY",
+  "compat": {"supportsStore": false, "supportsDeveloperRole": false, "supportsReasoningEffort": false,
+             "supportsUsageInStreaming": true, "supportsStrictMode": false, "maxTokensField": "max_tokens"},
+  "models": [{"id": "GLM-5.3-UD-IQ2_M", "name": "GLM-5.3", "reasoning": false,
+              "input": ["text"], "contextWindow": 65536, "maxTokens": 8192}]}}}
+EOF
+echo '{"defaultProvider": "llm-routing", "defaultModel": "GLM-5.3-UD-IQ2_M"}' > ~/.pi/agent/settings.json
+NODE_EXTRA_CA_CERTS="$WORK/ca.crt" pi
+```
+
+- Set `contextWindow` to `tuning.contextPerSlot`. Pi sizes `max_tokens` from it and compacts the conversation before it fills.
+- If `~/.pi/agent` already has these files, merge the provider into them instead.
+
+### Codex
+
+Codex supports only the Responses API, which the gateway passes through to llama.cpp. Do not use `codex --oss`; it targets Ollama or LM Studio and cannot send the API key. Install Codex and add a profile:
+
+```bash
+npm install -g @openai/codex
+mkdir -p ~/.codex
+cat > ~/.codex/glm.config.toml <<'EOF'
+model = "GLM-5.3-UD-IQ2_M"
+model_provider = "llm-routing"
+model_context_window = 65536
+model_auto_compact_token_limit = 56000
+web_search = "disabled"
+include_apps_instructions = false
+show_raw_agent_reasoning = true
+
+[model_providers.llm-routing]
+name = "LLM routing gateway"
+base_url = "https://127.0.0.1:18443/v1"
+env_key = "GLM_API_KEY"
+wire_api = "responses"
+stream_idle_timeout_ms = 600000
+
+[features]
+multi_agent = false
+goals = false
+view_image = false
+apps = false
+
+[tools]
+experimental_request_user_input = { enabled = false }
+
+[skills]
+include_instructions = false
+EOF
+CODEX_CA_CERTIFICATE="$WORK/ca.crt" codex --profile glm
+```
+
+- Set `model_context_window` to `tuning.contextPerSlot`. Without it, Codex assumes a much larger context and requests fail when the conversation grows.
+- The `[features]`, `[tools]` and `[skills]` settings remove tools the model cannot use and keep the first request near 4,500 tokens instead of 6,600.
+- Codex never sets an output limit, so `tuning.defaultMaxTokens` caps each reply, including reasoning.
+
+### Tips
+
+- The first request processes the whole prompt, at about 250 tokens per second on GB300. Later requests reuse the cached prefix, so start each agent once before a demo.
+- Each slot serves one request at a time. Two agents working at once use both GB300 slots; the Pylon canary waits for the next free slot.
+- For scripted runs, close stdin: `pi -p "<task>" < /dev/null` or `codex exec --profile glm "<task>" < /dev/null`. `pi -p` reads piped stdin as part of the prompt and waits until it closes.
+
 ## Maintenance
 
 ### Update only gateway or router
