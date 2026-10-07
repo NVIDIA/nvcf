@@ -127,16 +127,11 @@ pub enum EngineEvent {
     FirstToken {
         id: RequestId,
         at: Micros,
-        worker: usize,
         reused_input_tokens: u64,
     },
     /// One more output token was produced. Emitted only when token events are
-    /// enabled; `generated` counts the first token.
-    Token {
-        id: RequestId,
-        at: Micros,
-        generated: u64,
-    },
+    /// enabled.
+    Token { id: RequestId, at: Micros },
     /// The last output token was produced and the sequence left the worker.
     Completed { id: RequestId, at: Micros },
 }
@@ -236,7 +231,6 @@ impl Engine {
             };
             let finished = self.workers[worker].finish_step(
                 step_end,
-                worker,
                 self.emit_token_events,
                 &mut self.pending_events,
             );

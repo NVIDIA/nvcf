@@ -175,7 +175,6 @@ impl Worker {
     pub(crate) fn finish_step(
         &mut self,
         at: Micros,
-        worker: usize,
         emit_token_events: bool,
         events: &mut Vec<EngineEvent>,
     ) -> Vec<RequestId> {
@@ -206,7 +205,6 @@ impl Worker {
                     events.push(EngineEvent::FirstToken {
                         id,
                         at,
-                        worker,
                         reused_input_tokens: reused,
                     });
                     1
@@ -215,7 +213,7 @@ impl Worker {
                     let generated = generated + 1;
                     sequence.phase = Phase::Decoding { generated };
                     if emit_token_events {
-                        events.push(EngineEvent::Token { id, at, generated });
+                        events.push(EngineEvent::Token { id, at });
                     }
                     generated
                 }
