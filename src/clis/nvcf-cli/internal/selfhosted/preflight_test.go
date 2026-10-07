@@ -1246,9 +1246,10 @@ func TestRunPreflight_CutShortRowsKeepTheirWorstSeverity(t *testing.T) {
 	}
 }
 
-// After install a critical registry's rejection only warns, so a cut-short or
-// not-run row for it warns too and cannot fail the run.
-func TestRunPreflight_CutShortCriticalRegistryAfterInstallWarns(t *testing.T) {
+// After install a critical registry can still fail, on a refused docker
+// login or a refused key the cluster holds too, so a cut-short or not-run row
+// for it keeps error severity, while a non-critical one warns.
+func TestRunPreflight_CutShortRegistryAfterInstallKeepsItsWorst(t *testing.T) {
 	prevLocal := localCheckShare
 	localCheckShare = 200 * time.Millisecond
 	t.Cleanup(func() { localCheckShare = prevLocal })
@@ -1258,7 +1259,7 @@ func TestRunPreflight_CutShortCriticalRegistryAfterInstallWarns(t *testing.T) {
 	}
 	res := RunPreflightForRole(context.Background(), PreflightConfig{
 		Registries: []RegistryEntry{
-			{Registry: "nvcr.io", Critical: true}, {Registry: "harbor.example.com", Critical: true},
+			{Registry: "nvcr.io", Critical: true}, {Registry: "harbor.example.com"},
 		},
 		RegistryChecker:     hang,
 		RegistryPostInstall: true,
@@ -1266,8 +1267,9 @@ func TestRunPreflight_CutShortCriticalRegistryAfterInstallWarns(t *testing.T) {
 	require.Len(t, res, 2)
 	for _, r := range res {
 		assert.True(t, r.CutShort, r.ID)
-		assert.Equal(t, SeverityWarning, r.Severity, r.ID+": "+r.Message)
 	}
+	assert.Equal(t, SeverityError, res[0].Severity, res[0].Message)
+	assert.Equal(t, SeverityWarning, res[1].Severity, res[1].Message)
 }
 
 // Each term of the validator's run ceiling counts as often as one run can

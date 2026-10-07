@@ -4,7 +4,9 @@ User has a working NVCF control plane (running somewhere) and wants to register 
 
 ## Prerequisites the user must have
 
-- **kubectl context for the new compute plane** in their `KUBECONFIG`.
+- **kubectl context for the new compute plane** in their `KUBECONFIG`, and
+  ideally one for the control-plane cluster too, for the pre-flight in
+  step 2.
 - **Public ICMS URL** of the existing control plane (e.g. `https://icms.nvcf.example.com`).
 - **Admin JWT** for the control plane's account, OR ability to mint one via `nvcf-cli init` against the control plane's public api endpoint. (Admin tokens come from the API Keys service via the public api gateway — kubectl access to the control plane is NOT required to obtain one.)
 - The control plane's profile file, which `nvcf-cli self-hosted control-plane profile export` writes on a machine that can reach the control-plane cluster. It carries the control plane's endpoints and trust for registration. The command writes it to the stack's `out/` directory and prints that path; the steps below expect it copied to `control-plane-profile.yaml` in the working directory.
@@ -18,27 +20,53 @@ User has a working NVCF control plane (running somewhere) and wants to register 
    - `--icms-url=<https://icms.nvcf.example.com>` — control plane's public ICMS URL
    - GPU type? (default `H100`, but ask)
 
-2. Pre-flight just the compute plane. `check` takes both context flags or
-   neither, so point the current context at the new GPU cluster and select
-   only the compute plane:
+2. Pre-flight the new compute plane as not yet installed. With a kubectl
+   context for the control-plane cluster as well, `check --pre
+   --control-plane` checks the control plane as installed and the new
+   compute plane as not yet installed:
 
    ```sh
-   kubectl config use-context "$CTX"
-   nvcf-cli self-hosted check --compute-plane \
-     --icms-url=$ICMS \
+   nvcf-cli self-hosted check --pre --control-plane \
+     --control-plane-context="$CP_CTX" --compute-plane-context="$CTX" \
+     --env="$CP_ENV" \
      --json 2>&1 >/dev/null | grep '^{' > check.jsonl
    jq -se 'any(.[]; .event == "final" and .success)' check.jsonl
    ```
 
-   This checks this machine's registry credentials and the compute cluster
-   only: leftover NVCF namespaces, node inotify limits, SIS reachability at
-   `--icms-url`, and the compute-plane cluster-validator (GPU resources, GPU
-   Operator, SMB CSI driver) when `cluster_validator_image` is set. `--pre`
-   would also run the control-plane checks against this cluster, so leave it
-   off. A missing `helm`, `helmfile` or `kubectl` is a warning here, although
-   `compute-plane install` needs them. If the gate fails, show the user the
-   `check_completed` events with `passed: false` and `severity: "error"`, and
-   address them before proceeding.
+   `$CP_ENV` is the `--env` the control plane was installed with. This checks
+   the control-plane cluster, and the new cluster: leftover NVCF namespaces,
+   node inotify limits, and the compute-plane cluster-validator (GPU
+   resources, GPU Operator, SMB CSI driver) when `cluster_validator_image` is
+   set. It grades this machine's registry credentials as `compute-plane
+   install` uses them: `helm` on this machine pulls the compute-plane charts
+   with the docker login, so a docker login `nvcr.io` rejects fails the gate
+   even when `NGC_API_KEY` works. A missing `helm`, `helmfile` or `kubectl`
+   fails it too. SIS reachability is not probed before install.
+
+   Without a context for the control-plane cluster, check the new cluster
+   alone with `--compute-plane`, through a kubeconfig whose current context
+   is the new cluster:
+
+   ```sh
+   KCFG=$(mktemp)
+   kubectl config view --minify --flatten --context="$CTX" > "$KCFG"
+   KUBECONFIG="$KCFG" nvcf-cli self-hosted check --compute-plane \
+     --icms-url=$ICMS \
+     --json 2>&1 >/dev/null | grep '^{' > check.jsonl
+   rm -f "$KCFG"
+   jq -se 'any(.[]; .event == "final" and .success)' check.jsonl
+   ```
+
+   That runs the same checks on the new cluster, and SIS reachability at
+   `--icms-url`, but checks the compute plane as installed: a missing tool
+   only warns, and a docker login `nvcr.io` rejects fails the gate only when
+   `NGC_API_KEY` does not work in its place. Treat a `registry-credentials`
+   row that says the docker login was rejected as blocking, and renew that
+   login before the install.
+
+   If the gate fails, show the user the `check_completed` events with
+   `passed: false` and `severity: "error"`, and address them before
+   proceeding.
 
 3. Register the cluster, then install its compute plane from the values
    file registration writes. Both commands name the new cluster's context

@@ -22,6 +22,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -620,4 +623,86 @@ func TestPullSecret_PreservedRunIsMarkedOnBothPaths(t *testing.T) {
 			assert.Equal(t, preserve, s.Labels[clusterValidatorPreserveLabel] == "true", "%s, preserve=%v", path, preserve)
 		}
 	}
+}
+
+// A refused credential is looked for in the pull secrets the validator would
+// copy from. A match names the Secret, a validator run's own Secret is not
+// the cluster's, and a namespace that cannot be listed leaves the answer
+// unknown unless another Secret already holds the credential.
+func TestClusterPullSecretHolding(t *testing.T) {
+	refused := dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "revoked")
+	another := dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "another")
+	minted := dockerConfigSecret(validatorPullSecretRunName(clusterValidatorComputePlaneRole, "abc"),
+		clusterValidatorNamespace, refused)
+	minted.Labels = clusterValidatorRunLabels(clusterValidatorComputePlaneRole, "abc", false)
+	forbidList := func(namespace string) ktesting.ReactionFunc {
+		return func(action ktesting.Action) (bool, runtime.Object, error) {
+			if action.GetNamespace() != namespace {
+				return false, nil, nil
+			}
+			return true, nil, apierrors.NewForbidden(corev1.Resource("secrets"), "", errors.New("no list"))
+		}
+	}
+	holding := func(client *fake.Clientset) (string, error) {
+		return clusterPullSecretHolding(context.Background(), client, "nvcr.io", "nvidia/cv", "$oauthtoken", "revoked")
+	}
+
+	client := fake.NewSimpleClientset(dockerConfigSecret("nvcr-pull-secret", "nvcf", refused))
+	holder, err := holding(client)
+	require.NoError(t, err)
+	assert.Equal(t, "nvcf/nvcr-pull-secret", holder)
+
+	client = fake.NewSimpleClientset(minted, dockerConfigSecret("nvcr-pull-secret", "nvcf", another))
+	holder, err = holding(client)
+	require.NoError(t, err)
+	assert.Empty(t, holder, "the validator's own Secret and another key are not a match")
+
+	client = fake.NewSimpleClientset(dockerConfigSecret("nvcr-pull-secret", "nvcf", another))
+	client.PrependReactor("list", "secrets", forbidList("ess"))
+	holder, err = holding(client)
+	assert.Empty(t, holder)
+	assert.ErrorContains(t, err, "list Secrets in ess")
+
+	client = fake.NewSimpleClientset(dockerConfigSecret("nvcr-pull-secret", "nvcf", refused))
+	client.PrependReactor("list", "secrets", forbidList(clusterValidatorNamespace))
+	holder, err = holding(client)
+	require.NoError(t, err, "a match answers the question whatever else could not be read")
+	assert.Equal(t, "nvcf/nvcr-pull-secret", holder)
+}
+
+// The checker reads each context's cluster, and a cluster it cannot reach
+// leaves the answer unknown.
+func TestNewClusterPullSecretChecker_ReadsTheContextsCluster(t *testing.T) {
+	stored := dockerConfigSecret("nvcr-pull-secret", "nvcf", dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "revoked"))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/version":
+			_, _ = w.Write([]byte(`{"major":"1","minor":"30","gitVersion":"v1.30.0"}`))
+		case r.URL.Path == "/api/v1/namespaces/nvcf/secrets":
+			_ = json.NewEncoder(w).Encode(corev1.SecretList{
+				TypeMeta: metav1.TypeMeta{Kind: "SecretList", APIVersion: "v1"}, Items: []corev1.Secret{*stored}})
+		case strings.HasSuffix(r.URL.Path, "/secrets"):
+			_, _ = w.Write([]byte(`{"kind":"SecretList","apiVersion":"v1","items":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeKubeconfig(t, srv.URL)
+	check := NewClusterPullSecretChecker([]string{"test"})
+	ctx := context.Background()
+
+	holder, err := check(ctx, "nvcr.io", "nvidia/cv", "$oauthtoken", "revoked")
+	require.NoError(t, err)
+	assert.Equal(t, "nvcf/nvcr-pull-secret in context test", holder)
+	holder, err = check(ctx, "nvcr.io", "nvidia/cv", "$oauthtoken", "another")
+	require.NoError(t, err)
+	assert.Empty(t, holder)
+
+	srv.Close()
+	holder, err = check(ctx, "nvcr.io", "nvidia/cv", "$oauthtoken", "revoked")
+	assert.Empty(t, holder)
+	var unreachable *ClusterUnreachableError
+	assert.ErrorAs(t, err, &unreachable)
 }

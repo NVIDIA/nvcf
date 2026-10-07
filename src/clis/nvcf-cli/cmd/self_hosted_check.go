@@ -85,6 +85,9 @@ var newRegistryCredentialCheckerForSelfHosted = func() selfhosted.RegistryCreden
 	return selfhosted.NewRegistryCredentialChecker()
 }
 
+// Test seam.
+var newClusterPullSecretCheckerForSelfHosted = selfhosted.NewClusterPullSecretChecker
+
 var checkWriterIsTTY = isWriterTTY
 
 var selfHostedCheckCmd = &cobra.Command{
@@ -304,16 +307,22 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		}
 	}
 
+	registryPostInstall := !registryTarget().beforeInstall
+	var registryClusterSecrets selfhosted.ClusterPullSecretChecker
+	if registryChecker != nil && registryPostInstall {
+		registryClusterSecrets = newClusterPullSecretCheckerForSelfHosted(visitedKubeContexts(mode))
+	}
 	cfg := selfhosted.PreflightConfig{
 		LocalOnly: localOnly,
 		Tools:     checkPreflightTools(),
 		// The tools are what `up` runs; checking an installed stack does
 		// not use them.
-		ToolsAdvisory:       !checkPre,
-		Registries:          credEntries,
-		RegistryChecker:     registryChecker,
-		RegistryPostInstall: checkScopeIsPostInstall(),
-		Interrupted:         interrupted,
+		ToolsAdvisory:          !checkPre,
+		Registries:             credEntries,
+		RegistryChecker:        registryChecker,
+		RegistryPostInstall:    registryPostInstall,
+		RegistryClusterSecrets: registryClusterSecrets,
+		Interrupted:            interrupted,
 	}
 
 	// A quit key in the dashboard cancels the run the way a signal does.
@@ -524,18 +533,47 @@ func validatorStackValues() selfhosted.StackValues {
 }
 
 // registryStackValues returns the stack values the registry credential check
-// reads: the control-plane stack's, or the compute-plane stack's on a run
-// that does not visit the control plane. Empty when they cannot be read.
+// reads, from registryTarget's stack. Empty when they cannot be read.
 func registryStackValues() selfhosted.StackValues {
-	target := controlPlaneStackTarget()
-	if !controlPlaneIsVisited() {
-		target = computePlaneStackTarget()
-	}
-	files, ok := stackValuesForRun(target)
+	files, ok := stackValuesForRun(registryTarget())
 	if !ok {
 		return selfhosted.StackValues{}
 	}
 	return selfhosted.LoadStackValues(files)
+}
+
+// registryTarget is the plane the registry credential check belongs to: the
+// stack its registries come from, and the install state it is graded by. That
+// is a visited plane checked before its install, whose install this machine
+// runs next, with helm pulling the stack's charts on its credentials; else
+// the control plane when visited, else the compute plane.
+func registryTarget() stackTarget {
+	cp, gpu := controlPlaneStackTarget(), computePlaneStackTarget()
+	switch {
+	case controlPlaneIsVisited() && cp.beforeInstall:
+		return cp
+	case computePlaneIsVisited() && gpu.beforeInstall:
+		return gpu
+	case controlPlaneIsVisited():
+		return cp
+	}
+	return gpu
+}
+
+// visitedKubeContexts returns the kubeconfig context of each plane the run
+// visits: the current context, "", for one cluster.
+func visitedKubeContexts(mode kubectx.Mode) []string {
+	if mode != kubectx.ModeSplit {
+		return []string{""}
+	}
+	var out []string
+	if controlPlaneIsVisited() {
+		out = append(out, selfHostedControlPlaneContext)
+	}
+	if computePlaneIsVisited() {
+		out = append(out, selfHostedComputePlaneContext)
+	}
+	return out
 }
 
 // stackTarget is one stack check can read values from.
@@ -699,16 +737,11 @@ func resolveStackEnv() string {
 
 // preferNGCKey reports whether the NGC API key goes ahead of the docker login
 // for nvcr.io: only where up mints its pull secrets from the key, before a
-// local install. Anywhere else the docker login is what docker uses, and the
-// key is sent only when there is none or nvcr.io rejects it.
+// local install of the registry check's plane. Anywhere else the docker login
+// is what docker uses, and the key is sent only for a scope where there is no
+// login or nvcr.io refuses it.
 func preferNGCKey() bool {
-	return !checkScopeIsPostInstall() && strings.EqualFold(resolveStackEnv(), "local")
-}
-
-// checkScopeIsPostInstall reports whether the run checks an installed stack:
-// any scope but a bare --pre, matching VALIDATOR_POST_INSTALL.
-func checkScopeIsPostInstall() bool {
-	return !checkPre || checkAll || checkControlPlane || checkComputePlane
+	return registryTarget().beforeInstall && strings.EqualFold(resolveStackEnv(), "local")
 }
 
 // localStackDir returns src when it points at a readable local directory.
@@ -998,8 +1031,18 @@ func runPreflightByRole(
 	gpuStackDir, gpuStackEnv := namespaceGateStack(computePlaneStackTarget())
 
 	// The control-plane validator probes the hosts the local credential check
-	// probes, extras included, each as a warning only.
+	// probes, extras included, each as a warning only, but from the
+	// control-plane stack where that check reads the compute plane's.
 	registries := cfg.Registries
+	if len(registries) > 0 && registryTarget().name != controlPlaneStackTarget().name {
+		cpStack := selfhosted.StackValues{}
+		if files, ok := stackValuesForRun(controlPlaneStackTarget()); ok {
+			cpStack = selfhosted.LoadStackValues(files)
+		}
+		// Validated before the run starts.
+		extras, _ := configuredValidatorRegistries()
+		registries = selfhosted.EnumerateRegistries(cmp.Or(clusterValidatorImage, unresolvedImage), cpStack, extras)
+	}
 	validatorEnv := clusterValidatorJobEnv(validatorStackValues())
 	// Validated before the run starts.
 	validatorTolerations, _ := configuredValidatorTolerations()

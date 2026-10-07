@@ -267,10 +267,16 @@ type PreflightConfig struct {
 	// an interrupted run reports no rows for checks it never finished.
 	Interrupted func() bool
 
-	// RegistryPostInstall marks a run that checks an installed stack. The
-	// cluster then pulls with its own pull secrets, so a credential of this
-	// machine's that a registry rejects is a warning rather than an error.
+	// RegistryPostInstall marks a run whose registries belong to a plane it
+	// checks as installed. The cluster then pulls with its own pull secrets,
+	// so an NGC key a registry rejects is a warning where
+	// RegistryClusterSecrets shows that no pull secret holds it, and a docker
+	// login the NGC key replaced passes where none holds the login.
 	RegistryPostInstall bool
+	// RegistryClusterSecrets looks for a refused credential in the pull
+	// secrets of the clusters a post-install run checks. Nil leaves that
+	// unknown.
+	RegistryClusterSecrets ClusterPullSecretChecker
 }
 
 // DefaultTools returns the kubectl/helmfile/helm specs with version floors
@@ -1143,36 +1149,42 @@ func buildRegistryCredentialCategory(cfg PreflightConfig) categorySpec {
 			label += "/" + reg.RepoHint
 		}
 		seen[reg.Registry] = true
-		cat.checks = append(cat.checks, registryCredentialCheck(cfg.RegistryChecker, reg, label, cfg.RegistryPostInstall))
+		cat.checks = append(cat.checks, registryCredentialCheck(cfg.RegistryChecker, reg, label,
+			cfg.RegistryPostInstall, cfg.RegistryClusterSecrets))
 	}
 	return cat
 }
 
 // registryCredentialCheck returns a binaryCheckSpec that probes one registry.
-// Only a credential the registry rejected can fail: at error severity for a
+// Only a credential the registry refused can fail: at error severity for a
 // critical registry, at warning for any other. Before install that includes a
 // docker login nvcr.io rejected even where the NGC key it gave way to works:
-// helm on this machine pulls the stack's charts with the docker login. A
-// rejection on a post-install run is a warning: it is this machine's
-// credential, and the cluster pulls with its own pull secret. Everything else
-// the probe can report, from an unreachable registry to a missing local
-// credential, is a warning or an informational pass.
+// helm on this machine pulls the stack's charts with the docker login. After
+// install a refused docker login still fails, while a refused NGC key is a
+// warning only where the cluster's pull secrets are read and none holds it,
+// and a docker login the key replaced passes only where none holds that
+// login. Everything else the probe can report, from an unreachable registry
+// to a missing local credential, is a warning or an informational pass.
 func registryCredentialCheck(
 	checker RegistryCredentialChecker, entry RegistryEntry, label string, postInstall bool,
+	clusterSecrets ClusterPullSecretChecker,
 ) binaryCheckSpec {
 	id := "registry-cred-" + label
 	severity := SeverityWarning
 	if entry.Critical {
 		severity = SeverityError
 	}
-	worst := severity
-	if postInstall {
-		worst = SeverityWarning
+	// heldBy looks for cred in the cluster's pull secrets.
+	heldBy := func(ctx context.Context, cred registryCredential) (string, error) {
+		if clusterSecrets == nil {
+			return "", errors.New("no cluster to read them from")
+		}
+		return clusterSecrets(ctx, entry.Registry, entry.RepoHint, cred.user, cred.pass)
 	}
 	return binaryCheckSpec{
 		ID:         id,
 		HumanLabel: fmt.Sprintf("checking credentials for %s...", label),
-		worst:      worst,
+		worst:      severity,
 		Run: func(ctx context.Context) CheckResult {
 			r := CheckResult{ID: id, Severity: severity}
 			err := checker(ctx, entry.Registry, entry.RepoHint, entry.Critical)
@@ -1198,23 +1210,45 @@ func registryCredentialCheck(
 			case probeAnonymous, probeNotVerified, probeOtherCredential:
 				r.Passed = true
 				r.Severity = SeverityInfo
-			case probeLoginRejected:
-				if postInstall {
-					r.Passed = true
-					r.Severity = SeverityInfo
-					break
-				}
-				r.Err = err
-				r.Message += "; before install this fails the check, since helm on this machine pulls the " +
-					"stack's charts with the docker login"
 			case probeNoCredential, probeUnverifiable:
 				r.Severity = SeverityWarning
 				r.Err = err
+			case probeLoginRejected:
+				r.Err = err
+				if !postInstall {
+					r.Message += "; before install this fails the check, since helm on this machine pulls the " +
+						"stack's charts with the docker login"
+					break
+				}
+				switch holder, cmpErr := heldBy(ctx, outcome.refused); {
+				case holder != "":
+					r.Message += "; the cluster's pull secret " + holder + " holds that docker login, " +
+						"so the cluster cannot pull with it either"
+				case cmpErr != nil:
+					r.Severity = SeverityWarning
+					r.Message += "; could not check whether the cluster's pull secrets hold that docker login: " +
+						cmpErr.Error()
+				default:
+					r.Passed = true
+					r.Severity = SeverityInfo
+					r.Err = nil
+				}
 			case probeRejected:
 				r.Err = err
-				if postInstall {
+				if !postInstall || !outcome.keyOnly {
+					break
+				}
+				switch holder, cmpErr := heldBy(ctx, outcome.refused); {
+				case holder != "":
+					r.Message += "; the cluster's pull secret " + holder + " holds the same key, " +
+						"so the cluster cannot pull with it either"
+				case cmpErr != nil:
+					r.Message += "; could not check whether the cluster's pull secrets hold the same key: " +
+						cmpErr.Error()
+				default:
 					r.Severity = SeverityWarning
-					r.Message += "; the cluster pulls with its own pull secret, so this affects only this machine"
+					r.Message += "; no pull secret the cluster holds for " + entry.Registry +
+						" uses it, so this affects only this machine"
 				}
 			}
 			return r

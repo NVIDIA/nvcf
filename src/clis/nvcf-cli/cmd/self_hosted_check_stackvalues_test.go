@@ -352,27 +352,131 @@ func TestCheck_MalformedValidatorRegistryFailsTheCommand(t *testing.T) {
 	assert.Contains(t, got, "harbor.example.com:5000/nvcf", "a path is the probe's scope")
 }
 
-// The NGC key is checked ahead of the docker login only before a local
-// install, where up mints its pull secrets from it; every other scope checks
-// an installed stack, where a rejected credential is only this machine's.
-func TestCheckScope_NGCKeyOrderAndPostInstall(t *testing.T) {
+// One plane decides how the registry rows are read and graded: a plane the
+// run checks before its install, since this machine installs it next, else
+// the control plane when visited. The NGC key goes first only before a local
+// install of that plane, where up mints its pull secrets from it.
+func TestCheckScope_RegistryPlaneDecidesKeyOrderAndGrading(t *testing.T) {
 	t.Setenv("HELMFILE_ENV", "")
 	for _, tc := range []struct {
 		name                       string
 		pre, cp, gpu, all, prodEnv bool
 		prefer, postInstall        bool
+		plane                      string
 	}{
-		{name: "bare --pre", pre: true, prefer: true},
-		{name: "--pre --env prod", pre: true, prodEnv: true},
-		{name: "--pre --control-plane", pre: true, cp: true, postInstall: true},
-		{name: "--control-plane", cp: true, postInstall: true},
-		{name: "--compute-plane", gpu: true, postInstall: true},
-		{name: "--pre --all", pre: true, all: true, postInstall: true},
+		{name: "bare --pre", pre: true, prefer: true, plane: "self-managed"},
+		{name: "--pre --env prod", pre: true, prodEnv: true, plane: "self-managed"},
+		{name: "--pre --compute-plane", pre: true, gpu: true, prefer: true, plane: "self-managed"},
+		{name: "--pre --control-plane", pre: true, cp: true, prefer: true, plane: "nvcf-compute-plane"},
+		{name: "--pre --control-plane --env prod", pre: true, cp: true, prodEnv: true, plane: "nvcf-compute-plane"},
+		{name: "--pre --control-plane --compute-plane", pre: true, cp: true, gpu: true, postInstall: true,
+			plane: "self-managed"},
+		{name: "--control-plane", cp: true, postInstall: true, plane: "self-managed"},
+		{name: "--compute-plane", gpu: true, postInstall: true, plane: "nvcf-compute-plane"},
+		{name: "--pre --all", pre: true, all: true, postInstall: true, plane: "self-managed"},
 	} {
 		resetCheckFlags(t)
 		checkPre, checkControlPlane, checkComputePlane, checkAll = tc.pre, tc.cp, tc.gpu, tc.all
 		withEnvFlag(t, map[bool]string{true: "prod", false: "local"}[tc.prodEnv], tc.prodEnv)
 		assert.Equal(t, tc.prefer, preferNGCKey(), tc.name)
-		assert.Equal(t, tc.postInstall, checkScopeIsPostInstall(), tc.name)
+		assert.Equal(t, tc.postInstall, !registryTarget().beforeInstall, tc.name)
+		assert.Equal(t, tc.plane, registryTarget().name, tc.name)
 	}
+}
+
+// registryGrading runs check with args and returns the registries the local
+// credential check probed, and the kubeconfig contexts whose pull secrets a
+// refused credential would be looked for in: nil before install.
+func registryGrading(t *testing.T, args ...string) (map[string]bool, []string) {
+	t.Helper()
+	var contexts []string
+	prev := newClusterPullSecretCheckerForSelfHosted
+	newClusterPullSecretCheckerForSelfHosted = func(kubeContexts []string) selfhosted.ClusterPullSecretChecker {
+		contexts = append([]string{}, kubeContexts...)
+		return prev(kubeContexts)
+	}
+	t.Cleanup(func() { newClusterPullSecretCheckerForSelfHosted = prev })
+	return registryProbes(t, args...), contexts
+}
+
+// --pre --compute-plane checks the control plane before its install, so the
+// registry rows come from the control-plane stack read with up's default
+// environment and are graded as before install, with no cluster to compare
+// against. --pre --control-plane does the same with the compute-plane stack,
+// the one compute-plane install pulls from next. A run that checks installed
+// planes compares against the pull secrets of each cluster it visits.
+func TestCheck_RegistryRowsAreReadAndGradedByOnePlane(t *testing.T) {
+	t.Setenv("HELMFILE_ENV", "")
+	t.Setenv("NVCF_CLI_DEFAULT_CONTROL_PLANE_STACK", "")
+	t.Setenv("NVCF_CLI_DEFAULT_COMPUTE_PLANE_STACK", "")
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	stackNaming := func(repository string) string {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "environments"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "environments", "local.yaml"),
+			[]byte("global:\n  image:\n    registry: nvcr.io\n    repository: "+repository+
+				"\ncertManager:\n  enabled: false\n"), 0o644))
+		return dir
+	}
+	cpStack, gpuStack := stackNaming("acme/cp"), stackNaming("acme/gpu")
+
+	got, contexts := registryGrading(t, "--pre", "--compute-plane",
+		"--control-plane-stack", cpStack, "--compute-plane-stack", gpuStack)
+	assert.Equal(t, map[string]bool{"nvcr.io/acme/cp": true}, got)
+	assert.Nil(t, contexts, "graded as before install")
+
+	got, contexts = registryGrading(t, "--pre", "--control-plane",
+		"--control-plane-stack", cpStack, "--compute-plane-stack", gpuStack)
+	assert.Equal(t, map[string]bool{"nvcr.io/acme/gpu": true}, got)
+	assert.Nil(t, contexts, "graded as before install")
+
+	_, contexts = registryGrading(t, "--control-plane", "--control-plane-stack", cpStack)
+	assert.Equal(t, []string{""}, contexts, "one cluster, the current context")
+
+	_, contexts = registryGrading(t, "--all", "--control-plane-context", "cp-ctx",
+		"--compute-plane-context", "gpu-ctx", "--icms-url", "https://icms.example.com")
+	assert.Equal(t, []string{"cp-ctx", "gpu-ctx"}, contexts)
+}
+
+// Where the local check reads the compute-plane stack, --pre --control-plane,
+// the control-plane validator still probes the control-plane stack's
+// registries from its cluster.
+func TestCheck_ControlPlaneValidatorKeepsItsStacksRegistries(t *testing.T) {
+	resetCheckFlags(t)
+	t.Setenv("HELMFILE_ENV", "")
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	stackNaming := func(registry string) string {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "environments"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "environments", "local.yaml"),
+			[]byte("global:\n  image:\n    registry: "+registry+"\n    repository: acme/nvcf\n"+
+				"certManager:\n  enabled: false\n"), 0o644))
+		return dir
+	}
+	var mu sync.Mutex
+	var cpRegistries []string
+	prev := newClusterValidatorForSelfHosted
+	newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
+		return func(_ context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+			mu.Lock()
+			defer mu.Unlock()
+			if p.Role == "control-plane" {
+				for _, r := range p.Registries {
+					cpRegistries = append(cpRegistries, r.Registry)
+				}
+			}
+			return selfhosted.ClusterValidatorResult{Passed: true}
+		}
+	}
+	t.Cleanup(func() { newClusterValidatorForSelfHosted = prev })
+
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--pre", "--control-plane", "--json", "--env", "local",
+		"--cluster-validator-image", "nvcr.io/nvidia/cv:1.0.0",
+		"--control-plane-stack", stackNaming("cp-mirror.example.com"),
+		"--compute-plane-stack", stackNaming("gpu-mirror.example.com")})
+	_ = rootCmd.Execute()
+	assert.Contains(t, cpRegistries, "cp-mirror.example.com")
+	assert.NotContains(t, cpRegistries, "gpu-mirror.example.com")
 }

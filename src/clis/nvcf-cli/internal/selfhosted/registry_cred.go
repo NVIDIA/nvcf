@@ -102,6 +102,15 @@ const (
 type registryProbeOutcome struct {
 	kind   registryProbeKind
 	detail string
+	// refused is the credential a probeRejected or probeLoginRejected is
+	// about: the one the registry refused, or the docker login it rejected
+	// before it accepted the NGC key. A run that checks an installed stack
+	// looks for it in the cluster's pull secrets.
+	refused registryCredential
+	// keyOnly marks a probeRejected of the NGC key with no docker login
+	// rejected for the scope: the one refusal that may be this machine's
+	// alone once the stack is installed.
+	keyOnly bool
 }
 
 func (o registryProbeOutcome) Error() string { return o.detail }
@@ -209,8 +218,8 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 		case !hasCred:
 			return anonymousOutcome(registry, critical, lookupErr)
 		case note != "":
-			return registryProbeOutcome{kind: probeLoginRejected, detail: note[2:] + "; credentials from " +
-				cred.source + " valid, and the run uses them in its place"}
+			return registryProbeOutcome{kind: probeLoginRejected, refused: *settled.rejectedLogin,
+				detail: note[2:] + "; credentials from " + cred.source + " valid, and the run uses them in its place"}
 		case settled.noAccessLogin != nil:
 			return registryProbeOutcome{kind: probeOtherCredential, detail: fmt.Sprintf(
 				"credentials from %s valid; the docker login from %s has no access to %s, so the run sends %s for it",
@@ -233,10 +242,12 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 		if settled.fallbackFailure != "" {
 			detail += "; " + settled.fallbackFailure
 		}
-		return registryProbeOutcome{kind: probeRejected, detail: detail + note}
+		return registryProbeOutcome{kind: probeRejected, detail: detail + note, refused: cred,
+			keyOnly: cred.ngcKey && settled.rejectedLogin == nil}
 	case te.rejected():
 		return registryProbeOutcome{kind: probeRejected, detail: fmt.Sprintf("credentials from %s rejected: %s; %s%s",
-			cred.source, te.msg, rejectedHint(registry, cred), note)}
+			cred.source, te.msg, rejectedHint(registry, cred), note), refused: cred,
+			keyOnly: cred.ngcKey && settled.rejectedLogin == nil}
 	case !hasCred && (te.status == http.StatusUnauthorized || te.status == http.StatusForbidden):
 		// Anonymous access refused: the registry needs a credential this
 		// machine does not have.

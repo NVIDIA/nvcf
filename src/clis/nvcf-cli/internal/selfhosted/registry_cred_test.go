@@ -19,6 +19,7 @@ package selfhosted
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -63,7 +64,7 @@ func TestProbeRegistryCredential_PublicRegistry(t *testing.T) {
 	require.ErrorAs(t, err, &outcome)
 	assert.Equal(t, probeAnonymous, outcome.kind, "no credential was sent, so none is reported valid")
 
-	r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: host}, host, false).
+	r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: host}, host, false, nil).
 		Run(context.Background())
 	assert.True(t, r.Passed)
 	assert.Equal(t, SeverityInfo, r.Severity)
@@ -108,7 +109,7 @@ func TestProbeRegistryCredential_AuthSucceeds(t *testing.T) {
 	dockerHome(t, inlineDockerConfig(t, host, "u", "p", ""))
 	err = probeRegistryCredential(context.Background(), host, "", false)
 	assert.NoError(t, err, "a token issued for a credential that was sent is a valid credential")
-	r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: host}, host, false).
+	r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: host}, host, false, nil).
 		Run(context.Background())
 	assert.Contains(t, r.Message, "credentials valid")
 }
@@ -279,7 +280,7 @@ func TestIsECRRegistry(t *testing.T) {
 
 func TestRegistryCredentialCheck_PassWhenNoError(t *testing.T) {
 	checker := func(_ context.Context, reg, _ string, _ bool) error { return nil }
-	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "nvcr.io", Critical: true}, "nvcr.io", false)
+	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "nvcr.io", Critical: true}, "nvcr.io", false, nil)
 	r := spec.Run(context.Background())
 	assert.True(t, r.Passed)
 	assert.Equal(t, SeverityInfo, r.Severity)
@@ -290,7 +291,7 @@ func TestRegistryCredentialCheck_CriticalSeverityOnFailure(t *testing.T) {
 	checker := func(_ context.Context, reg, _ string, _ bool) error {
 		return errorf("credentials rejected")
 	}
-	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "nvcr.io", Critical: true}, "nvcr.io", false)
+	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "nvcr.io", Critical: true}, "nvcr.io", false, nil)
 	r := spec.Run(context.Background())
 	assert.False(t, r.Passed)
 	assert.Equal(t, SeverityError, r.Severity, "critical registry failure must be error severity")
@@ -300,7 +301,7 @@ func TestRegistryCredentialCheck_WarningSeverityOnNonCriticalFailure(t *testing.
 	checker := func(_ context.Context, reg, _ string, _ bool) error {
 		return errorf("credentials rejected")
 	}
-	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "quay.io", Critical: false}, "quay.io", false)
+	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "quay.io", Critical: false}, "quay.io", false, nil)
 	r := spec.Run(context.Background())
 	assert.False(t, r.Passed)
 	assert.Equal(t, SeverityWarning, r.Severity, "non-critical registry failure must be warning severity")
@@ -556,7 +557,7 @@ func TestEnumerateRegistries_OrgOnlyStackRepositoryIsNoScope(t *testing.T) {
 	dockerHome(t, `{}`)
 	t.Setenv("NGC_API_KEY", "revoked-key")
 	ctx := WithRegistryCredentials(context.Background(), NewRegistryCredentials(true))
-	r := registryCredentialCheck(probeRegistryCredential, got[0], "nvcr.io", false).Run(ctx)
+	r := registryCredentialCheck(probeRegistryCredential, got[0], "nvcr.io", false, nil).Run(ctx)
 	assert.False(t, r.Passed)
 	assert.Equal(t, SeverityError, r.Severity, r.Message)
 	assert.Contains(t, r.Message, "credentials from NGC_API_KEY rejected")
@@ -653,7 +654,8 @@ func TestProbeRegistryCredential_CriticalAnonymousIsNotVerified(t *testing.T) {
 	require.ErrorAs(t, err, &outcome)
 	assert.Equal(t, probeNotVerified, outcome.kind)
 
-	r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: host, Critical: true}, host, false).
+	r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: host, Critical: true}, host,
+		false, nil).
 		Run(context.Background())
 	assert.True(t, r.Passed)
 	assert.NotContains(t, r.Message, "credentials valid")
@@ -896,7 +898,7 @@ func TestRegistryCredentialCheck_Grading(t *testing.T) {
 				dockerHome(t, `{}`)
 			}
 			r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: reg.host, Critical: true},
-				reg.host, false).Run(context.Background())
+				reg.host, false, nil).Run(context.Background())
 			assert.Equal(t, tc.want.passed, r.Passed, r.Message)
 			assert.Equal(t, tc.want.severity, r.Severity, r.Message)
 			assert.Contains(t, r.Message, tc.want.message)
@@ -905,7 +907,8 @@ func TestRegistryCredentialCheck_Grading(t *testing.T) {
 
 	t.Run("ECR", func(t *testing.T) {
 		const ecr = "123456789012.dkr.ecr.us-west-2.amazonaws.com"
-		r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: ecr, Critical: true}, ecr, false).
+		r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: ecr, Critical: true}, ecr,
+			false, nil).
 			Run(context.Background())
 		assert.True(t, r.Passed)
 		assert.Equal(t, SeverityInfo, r.Severity)
@@ -918,7 +921,8 @@ func TestRegistryCredentialCheck_Grading(t *testing.T) {
 		require.NoError(t, err)
 		host := ln.Addr().String()
 		require.NoError(t, ln.Close())
-		r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: host, Critical: true}, host, false).
+		r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: host, Critical: true}, host,
+			false, nil).
 			Run(context.Background())
 		assert.False(t, r.Passed)
 		assert.Equal(t, SeverityWarning, r.Severity, "a workstation that cannot reach a registry does not block")
@@ -928,7 +932,7 @@ func TestRegistryCredentialCheck_Grading(t *testing.T) {
 	t.Run("non-critical rejection", func(t *testing.T) {
 		reg := newFakeRegistry(t, bearerChallenge, tokenStatus(http.StatusUnauthorized))
 		dockerHome(t, inlineDockerConfig(t, reg.host, "u", "p", ""))
-		r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: reg.host}, reg.host, false).
+		r := registryCredentialCheck(probeRegistryCredential, RegistryEntry{Registry: reg.host}, reg.host, false, nil).
 			Run(context.Background())
 		assert.False(t, r.Passed)
 		assert.Equal(t, SeverityWarning, r.Severity)
@@ -957,42 +961,106 @@ func TestProbeRegistryCredential_RetriesTransientFailures(t *testing.T) {
 	assert.Equal(t, 3, calls)
 }
 
-// A rejected credential on a run that checks an installed stack is a
-// warning, whether it is the NGC API key or a docker login: the cluster pulls
-// with its own pull secret. Before install a rejection on a critical registry
-// is an error.
-func TestRegistryCredentialCheck_RejectedAfterInstall(t *testing.T) {
-	rejectedKey := func(context.Context, string, string, bool) error {
-		return registryProbeOutcome{kind: probeRejected, detail: "credentials from NGC_API_KEY rejected"}
+// clusterHolding is a ClusterPullSecretChecker that answers holder and err,
+// and records each credential it was asked about.
+func clusterHolding(holder string, err error, asked *[]string) ClusterPullSecretChecker {
+	return func(_ context.Context, _, _, user, secret string) (string, error) {
+		if asked != nil {
+			*asked = append(*asked, user+":"+secret)
+		}
+		return holder, err
 	}
-	rejectedLogin := func(context.Context, string, string, bool) error {
-		return registryProbeOutcome{kind: probeRejected, detail: "credentials from docker config rejected"}
+}
+
+// After install only a refused NGC key, with no docker login refused beside
+// it, can be this machine's alone, and only where the cluster's pull secrets
+// were read and none holds it. A refused docker login stays an error, as
+// does a key the cluster also holds or that could not be looked for.
+func TestRegistryCredentialCheck_RefusalAfterInstall(t *testing.T) {
+	key := registryCredential{user: "$oauthtoken", pass: "revoked", source: "NGC_API_KEY", ngcKey: true}
+	login := registryCredential{user: "$oauthtoken", pass: "rotated-out", source: "docker config"}
+	refusedKey := func(context.Context, string, string, bool) error {
+		return registryProbeOutcome{kind: probeRejected, detail: "credentials from NGC_API_KEY rejected",
+			refused: key, keyOnly: true}
 	}
-	entry := RegistryEntry{Registry: "nvcr.io", Critical: true}
-	for _, tc := range []struct {
+	refusedLogin := func(context.Context, string, string, bool) error {
+		return registryProbeOutcome{kind: probeRejected, detail: "credentials from docker config rejected",
+			refused: login}
+	}
+	entry := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: true}
+	for name, tc := range map[string]struct {
 		checker     RegistryCredentialChecker
 		postInstall bool
+		cluster     ClusterPullSecretChecker
 		want        Severity
+		message     string
 	}{
-		{rejectedKey, true, SeverityWarning},
-		{rejectedKey, false, SeverityError},
-		{rejectedLogin, true, SeverityWarning},
-		{rejectedLogin, false, SeverityError},
+		"key, before install": {refusedKey, false, nil, SeverityError, "credentials from NGC_API_KEY rejected"},
+		"key, no pull secret holds it": {refusedKey, true, clusterHolding("", nil, nil), SeverityWarning,
+			"no pull secret the cluster holds for nvcr.io uses it, so this affects only this machine"},
+		"key, a pull secret holds it": {refusedKey, true, clusterHolding("nvcf/nvcr-pull-secret", nil, nil),
+			SeverityError, "the cluster's pull secret nvcf/nvcr-pull-secret holds the same key"},
+		"key, pull secrets unreadable": {refusedKey, true, clusterHolding("", errors.New("forbidden"), nil),
+			SeverityError, "could not check whether the cluster's pull secrets hold the same key: forbidden"},
+		"key, no cluster to read":      {refusedKey, true, nil, SeverityError, "could not check whether"},
+		"docker login, before install": {refusedLogin, false, nil, SeverityError, "rejected"},
+		"docker login, after install": {refusedLogin, true, clusterHolding("", nil, nil), SeverityError,
+			"credentials from docker config rejected"},
 	} {
-		r := registryCredentialCheck(tc.checker, entry, "nvcr.io", tc.postInstall).Run(context.Background())
-		assert.False(t, r.Passed)
-		assert.Equal(t, tc.want, r.Severity, "postInstall=%v", tc.postInstall)
-		if tc.postInstall {
-			assert.Contains(t, r.Message, "affects only this machine")
+		r := registryCredentialCheck(tc.checker, entry, "nvcr.io", tc.postInstall, tc.cluster).
+			Run(context.Background())
+		assert.False(t, r.Passed, name)
+		assert.Equal(t, tc.want, r.Severity, name+": "+r.Message)
+		assert.Contains(t, r.Message, tc.message, name)
+		if tc.want == SeverityError {
+			assert.NotContains(t, r.Message, "affects only this machine", name)
 		}
 	}
+
+	var asked []string
+	registryCredentialCheck(refusedKey, entry, "nvcr.io", true, clusterHolding("", nil, &asked)).
+		Run(context.Background())
+	assert.Equal(t, []string{"$oauthtoken:revoked"}, asked, "the refused key is what is looked for")
+}
+
+// A docker login the NGC key replaced passes after install only where the
+// cluster's pull secrets were read and none holds it: one that does means the
+// cluster cannot pull either, and unread ones leave that unknown.
+func TestRegistryCredentialCheck_ReplacedLoginAfterInstall(t *testing.T) {
+	login := registryCredential{user: "$oauthtoken", pass: "rotated-out", source: "docker config"}
+	replaced := func(context.Context, string, string, bool) error {
+		return registryProbeOutcome{kind: probeLoginRejected, refused: login,
+			detail: "the docker login from docker config was rejected; credentials from NGC_API_KEY valid"}
+	}
+	entry := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: true}
+	for name, tc := range map[string]struct {
+		cluster ClusterPullSecretChecker
+		passed  bool
+		want    Severity
+		message string
+	}{
+		"held by no pull secret": {clusterHolding("", nil, nil), true, SeverityInfo, "NGC_API_KEY valid"},
+		"held by a pull secret": {clusterHolding("nvcf/nvcr-pull-secret", nil, nil), false, SeverityError,
+			"the cluster's pull secret nvcf/nvcr-pull-secret holds that docker login"},
+		"pull secrets unreadable": {clusterHolding("", errors.New("forbidden"), nil), false, SeverityWarning,
+			"could not check whether the cluster's pull secrets hold that docker login: forbidden"},
+	} {
+		r := registryCredentialCheck(replaced, entry, "nvcr.io", true, tc.cluster).Run(context.Background())
+		assert.Equal(t, tc.passed, r.Passed, name)
+		assert.Equal(t, tc.want, r.Severity, name+": "+r.Message)
+		assert.Contains(t, r.Message, tc.message, name)
+	}
+	var asked []string
+	registryCredentialCheck(replaced, entry, "nvcr.io", true, clusterHolding("", nil, &asked)).
+		Run(context.Background())
+	assert.Equal(t, []string{"$oauthtoken:rotated-out"}, asked)
 }
 
 // Where the docker login goes first for nvcr.io and nvcr.io rejects it, the
 // NGC key is sent before the row is graded. The run then moves to the key,
 // so the validator's pull secret is minted from the credential the row found
 // accepted, and the row says how to renew the login docker still sends.
-// After install that passes.
+// After install that passes where no cluster pull secret holds the login.
 func TestProbeRegistryCredential_RejectedLoginGivesWayToTheNGCKey(t *testing.T) {
 	ngc := newFakeNGC(t, "good-key")
 	dockerHome(t, inlineDockerConfig(t, "nvcr.io", "$oauthtoken", "rotated-out", ""))
@@ -1000,8 +1068,11 @@ func TestProbeRegistryCredential_RejectedLoginGivesWayToTheNGCKey(t *testing.T) 
 	entry := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: true}
 	rc := NewRegistryCredentials(false)
 	ctx := WithRegistryCredentials(context.Background(), rc)
-	r := registryCredentialCheck(probeRegistryCredential, entry, "nvcr.io", true).Run(ctx)
+	var asked []string
+	r := registryCredentialCheck(probeRegistryCredential, entry, "nvcr.io", true, clusterHolding("", nil, &asked)).
+		Run(ctx)
 	assert.True(t, r.Passed, r.Message)
+	assert.Equal(t, []string{"$oauthtoken:rotated-out"}, asked, "the cluster is searched for the rejected login")
 	assert.Equal(t, SeverityInfo, r.Severity)
 	assert.Contains(t, r.Message, "credentials from NGC_API_KEY valid")
 	assert.Contains(t, r.Message, "the docker login from docker config")
@@ -1029,7 +1100,7 @@ func TestRegistryCredentialCheck_BeforeInstallGradesTheRejectedLogin(t *testing.
 
 	for _, critical := range []bool{true, false} {
 		entry := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: critical}
-		r := registryCredentialCheck(probeRegistryCredential, entry, "nvcr.io", false).Run(ctx)
+		r := registryCredentialCheck(probeRegistryCredential, entry, "nvcr.io", false, nil).Run(ctx)
 		assert.False(t, r.Passed, r.Message)
 		assert.Equal(t, map[bool]Severity{true: SeverityError, false: SeverityWarning}[critical], r.Severity)
 		assert.Contains(t, r.Message, "nvcr.io: the docker login from docker config")
@@ -1046,18 +1117,20 @@ func TestRegistryCredentialCheck_BeforeInstallGradesTheRejectedLogin(t *testing.
 		clusterValidatorComputePlaneRole), "the validator's pull secret carries the key")
 }
 
-// When nvcr.io rejects the key too, the row is graded on the key: an error
-// before install, a warning after it, naming both credentials.
+// When nvcr.io rejects the key too, the row is graded on the key, naming both
+// credentials. A docker login was rejected as well, so it is an error after
+// install too.
 func TestProbeRegistryCredential_RejectedLoginAndKey(t *testing.T) {
 	ngc := newFakeNGC(t, "nothing-matches")
 	dockerHome(t, inlineDockerConfig(t, "nvcr.io", "$oauthtoken", "rotated-out", ""))
 	t.Setenv("NGC_API_KEY", "revoked-key")
 	entry := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: true}
-	for postInstall, want := range map[bool]Severity{true: SeverityWarning, false: SeverityError} {
+	for _, postInstall := range []bool{true, false} {
 		ctx := WithRegistryCredentials(context.Background(), NewRegistryCredentials(false))
-		r := registryCredentialCheck(probeRegistryCredential, entry, "nvcr.io", postInstall).Run(ctx)
+		r := registryCredentialCheck(probeRegistryCredential, entry, "nvcr.io", postInstall,
+			clusterHolding("", nil, nil)).Run(ctx)
 		assert.False(t, r.Passed)
-		assert.Equal(t, want, r.Severity, "postInstall=%v", postInstall)
+		assert.Equal(t, SeverityError, r.Severity, "postInstall=%v", postInstall)
 		assert.Contains(t, r.Message, "credentials from NGC_API_KEY rejected")
 		assert.Contains(t, r.Message, "generate a new NGC API key")
 		assert.Contains(t, r.Message, "the docker login from docker config")

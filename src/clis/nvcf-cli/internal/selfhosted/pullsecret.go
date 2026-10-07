@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -204,9 +205,28 @@ func resolveValidatorPullSecret(
 func findClusterPullSecret(
 	ctx context.Context, client kubernetes.Interface, registry, repo string,
 ) (*corev1.Secret, []byte) {
+	var found *corev1.Secret
+	var foundCfg []byte
+	_ = scanClusterPullSecrets(ctx, client, registry, repo, func(s *corev1.Secret, cfg []byte) bool {
+		found, foundCfg = s, cfg
+		return true
+	})
+	return found, foundCfg
+}
+
+// scanClusterPullSecrets calls visit, in validatorPullSecretSearchNamespaces
+// order, with each docker-registry Secret holding credentials for registry
+// and a dockerconfigjson of that entry alone, until visit returns true. The
+// error names the namespaces that could not be listed.
+func scanClusterPullSecrets(
+	ctx context.Context, client kubernetes.Interface, registry, repo string,
+	visit func(s *corev1.Secret, cfg []byte) bool,
+) error {
+	var errs []error
 	for _, ns := range validatorPullSecretSearchNamespaces {
 		secrets, err := listDockerConfigSecrets(ctx, client, ns)
 		if err != nil {
+			errs = append(errs, fmt.Errorf("list Secrets in %s: %w", ns, err))
 			continue
 		}
 		for i := range secrets {
@@ -222,12 +242,78 @@ func findClusterPullSecret(
 			if s.Namespace == clusterValidatorNamespace && isAnyValidatorSecret(s) {
 				continue
 			}
-			if cfg, ok := filterDockerConfig(s.Data[corev1.DockerConfigJsonKey], registry, repo); ok {
-				return s, cfg
+			if cfg, ok := filterDockerConfig(s.Data[corev1.DockerConfigJsonKey], registry, repo); ok && visit(s, cfg) {
+				return nil
 			}
 		}
 	}
-	return nil, nil
+	return errors.Join(errs...)
+}
+
+// ClusterPullSecretChecker returns the pull secret, in a cluster of a plane
+// the run checks as installed, that holds user and secret for repo on
+// registry, or "" when none does. err reports a cluster whose pull secrets
+// could not all be read, so the answer is not known.
+type ClusterPullSecretChecker func(ctx context.Context, registry, repo, user, secret string) (string, error)
+
+// clusterPullSecretCheckTimeout bounds one ClusterPullSecretChecker call
+// across its clusters. A var so tests can shorten it.
+var clusterPullSecretCheckTimeout = 30 * time.Second
+
+// NewClusterPullSecretChecker returns a ClusterPullSecretChecker that reads
+// the pull secrets findClusterPullSecret reads, in the cluster behind each of
+// kubeContexts, "" naming the current context.
+func NewClusterPullSecretChecker(kubeContexts []string) ClusterPullSecretChecker {
+	return func(ctx context.Context, registry, repo, user, secret string) (string, error) {
+		ctx, cancel := context.WithTimeout(ctx, clusterPullSecretCheckTimeout)
+		defer cancel()
+		var errs []error
+		for _, kubeContext := range kubeContexts {
+			client, err := connectCluster(ctx, kubeContext)
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			holder, err := clusterPullSecretHolding(ctx, client, registry, repo, user, secret)
+			if holder != "" {
+				if kubeContext != "" {
+					holder += " in context " + kubeContext
+				}
+				return holder, nil
+			}
+			if err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return "", errors.Join(errs...)
+	}
+}
+
+// clusterPullSecretHolding returns the namespace/name of a pull secret in
+// client's cluster whose entry for registry holds user and secret.
+func clusterPullSecretHolding(
+	ctx context.Context, client kubernetes.Interface, registry, repo, user, secret string,
+) (string, error) {
+	holder := ""
+	err := scanClusterPullSecrets(ctx, client, registry, repo, func(s *corev1.Secret, cfg []byte) bool {
+		var doc struct {
+			Auths map[string]dockerConfigAuth `json:"auths"`
+		}
+		if json.Unmarshal(cfg, &doc) != nil {
+			return false
+		}
+		for _, entry := range doc.Auths {
+			if u, p, ok := decodeDockerConfigAuth(entry); ok && u == user && p == secret {
+				holder = s.Namespace + "/" + s.Name
+				return true
+			}
+		}
+		return false
+	})
+	if holder != "" {
+		return holder, nil
+	}
+	return "", err
 }
 
 // listDockerConfigSecrets lists namespace's docker-registry Secrets, so the

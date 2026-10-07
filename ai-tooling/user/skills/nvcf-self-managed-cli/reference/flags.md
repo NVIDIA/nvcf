@@ -75,9 +75,10 @@ credential, the one `docker` would use: `$DOCKER_CONFIG/config.json`, or
 `~/.docker/config.json`, through any `credsStore` or `credHelpers` helper.
 For `nvcr.io` the NGC API key is also read, from the first of
 `NGC_IMAGE_PULL_API_KEY`, `NVCF_NGCR_API_KEY`, `NVCF_NGC_API_KEY` and
-`NGC_API_KEY` that is set. It goes ahead of the docker login only for a
-bare `--pre` run with the `local` environment, since `up` creates its pull
-secrets from it, and it is never sent to another registry. Elsewhere the key
+`NGC_API_KEY` that is set. It goes ahead of the docker login only when the
+registry check's plane, below, is checked before its install with the
+`local` environment, since `up` creates its pull secrets from it, and it is
+never sent to another registry. Elsewhere the key
 is sent when there is no docker login, or for a repository where `nvcr.io`
 rejects the docker login (a 401) or gives it no access (a 403). This is
 decided once per repository, before tag discovery, the row and the
@@ -92,18 +93,29 @@ stack's image path: any path in `global.image.registry`, then
 `global.image.repository`. A stack path of one segment, such as an org with no
 team, is not sent as the scope, since `nvcr.io` refuses it.
 
+The registry check belongs to one plane, whose stack names the registries
+and whose install state grades them: a plane the run checks before its
+install, which this machine installs next (the control plane for a bare
+`--pre` and for `--pre --compute-plane`, the compute plane for
+`--pre --control-plane`), else the control plane when the run visits it,
+else the compute plane.
+
 Only a credential the registry rejects fails the run, and only for an NVIDIA
 registry the image or the stack names. Before install that includes a docker
 login `nvcr.io` rejects even when the NGC key works in its place, since
 `helm` on this machine pulls the stack's charts with the docker login. The
 key is still used for tag discovery and the validator's pull secret, and the
-row names both. After install a rejected credential is a warning, since the
-cluster pulls with its own pull secret. A registry this
-machine cannot reach, a token service that fails, and a missing local
-credential are warnings. A registry the probe cannot speak to, such as ECR or
-one using Basic auth, is skipped with a command to check it by hand. A
-registry that lets this machine in anonymously is reported as such, not as
-valid credentials.
+row names both. After install a rejected docker login still fails. A rejected
+NGC key is a warning only when `check` reads the pull secrets of the clusters
+it visits, in the namespaces the validator copies pull secrets from, and
+none of them holds that key; when one does, or they cannot all be read, it is
+an error. A docker login the NGC key replaced passes after install only when
+none of those pull secrets holds it: when one does it is an error, and when
+they cannot all be read a warning. A registry this machine cannot reach, a
+token service that fails, and a missing local credential are warnings. A
+registry the probe cannot speak to, such as ECR or one using Basic auth, is
+skipped with a command to check it by hand. A registry that lets this
+machine in anonymously is reported as such, not as valid credentials.
 
 ### Settings read from the stack
 
@@ -128,12 +140,13 @@ when they describe the install:
 - `environments/<env>.yaml` is read, layered over `base.yaml`. `base.yaml`
   alone is not used.
 - The file comes from the stack the install used: `--control-plane-stack`
-  (`--compute-plane-stack` for a compute-plane-only run), else the CLI's
-  built-in stack. A local directory is read directly, and an `oci://` stack
-  from the copy an earlier command extracted into the CLI cache. A git stack,
-  `file://` included, is not read, since the install cloned its committed
-  state. A CLI with no built-in stack and no stack flag reads the stack
-  checkout above the working directory.
+  (`--compute-plane-stack` for the registries when the registry check
+  belongs to the compute plane), else the CLI's built-in stack. A local
+  directory is read directly, and an `oci://` stack from the copy an earlier
+  command extracted into the CLI cache. A git stack, `file://` included, is
+  not read, since the install cloned its committed state. A CLI with no
+  built-in stack and no stack flag reads the stack checkout above the
+  working directory.
 
 Otherwise nothing from the stack is forwarded: the validator finds the
 Gateways from the routes, and `nvcr.io` is probed as a warning only.

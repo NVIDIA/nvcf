@@ -166,7 +166,7 @@ func TestRegistryCredentials_NoAccessMovesOnlyThatScope(t *testing.T) {
 	ctx := WithRegistryCredentials(context.Background(), NewRegistryCredentials(false))
 
 	stack := RegistryEntry{Registry: "nvcr.io", RepoHint: "orgb/team", Critical: true}
-	r := registryCredentialCheck(probeRegistryCredential, stack, "nvcr.io/orgb/team", false).Run(ctx)
+	r := registryCredentialCheck(probeRegistryCredential, stack, "nvcr.io/orgb/team", false, nil).Run(ctx)
 	assert.True(t, r.Passed, r.Message)
 	assert.Equal(t, SeverityInfo, r.Severity)
 	assert.Contains(t, r.Message, "has no access to nvcr.io/orgb/team, so the run sends NGC_API_KEY for it")
@@ -193,7 +193,7 @@ func TestRegistryCredentials_EachScopeKeepsTheCredentialThatReachesIt(t *testing
 		{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: true},
 		{Registry: "nvcr.io", RepoHint: "orgb/team", Critical: true},
 	} {
-		r := registryCredentialCheck(probeRegistryCredential, e, e.Registry+"/"+e.RepoHint, false).Run(ctx)
+		r := registryCredentialCheck(probeRegistryCredential, e, e.Registry+"/"+e.RepoHint, false, nil).Run(ctx)
 		assert.True(t, r.Passed, r.Message)
 		assert.NotContains(t, r.Message, "rejected")
 		assert.NotContains(t, r.Message, "generate a new NGC API key")
@@ -219,4 +219,41 @@ func TestRegistryCredentials_AnUnjudgedScopeIsSettledAgain(t *testing.T) {
 	got = rc.lookup(context.Background(), "nvcr.io", "nvidia/cv")
 	assert.Equal(t, "good-key", got.cred.pass)
 	require.NotNil(t, got.rejectedLogin)
+}
+
+// After install a refused credential is no longer called this machine's
+// alone without looking. An NGC key the cluster's pull secret also holds, as
+// up mints it for the local environment, and a docker login, which the
+// cluster's pull secret is often made from, are errors. Only a key the
+// cluster's pull secrets do not hold warns.
+func TestRegistryCredentialCheck_AfterInstallLooksInTheCluster(t *testing.T) {
+	newFakeNGC(t, "nothing-matches")
+	entry := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: true}
+	inCluster := func(pass string) ClusterPullSecretChecker {
+		client := fake.NewSimpleClientset(dockerConfigSecret("nvcr-pull-secret", "nvcf",
+			mustDockerConfigJSON(t, "nvcr.io", "$oauthtoken", pass)))
+		return func(ctx context.Context, registry, repo, user, secret string) (string, error) {
+			return clusterPullSecretHolding(ctx, client, registry, repo, user, secret)
+		}
+	}
+	grade := func(cluster ClusterPullSecretChecker) CheckResult {
+		ctx := WithRegistryCredentials(context.Background(), NewRegistryCredentials(false))
+		return registryCredentialCheck(probeRegistryCredential, entry, "nvcr.io", true, cluster).Run(ctx)
+	}
+
+	dockerHome(t, `{}`)
+	t.Setenv("NGC_API_KEY", "revoked-key")
+	r := grade(inCluster("revoked-key"))
+	assert.Equal(t, SeverityError, r.Severity, r.Message)
+	assert.Contains(t, r.Message, "the cluster's pull secret nvcf/nvcr-pull-secret holds the same key")
+	r = grade(inCluster("current-key"))
+	assert.Equal(t, SeverityWarning, r.Severity, r.Message)
+	assert.Contains(t, r.Message, "affects only this machine")
+
+	dockerHome(t, inlineDockerConfig(t, "nvcr.io", "$oauthtoken", "rotated-out", ""))
+	t.Setenv("NGC_API_KEY", "")
+	r = grade(inCluster("current-key"))
+	assert.False(t, r.Passed)
+	assert.Equal(t, SeverityError, r.Severity, r.Message)
+	assert.NotContains(t, r.Message, "affects only this machine")
 }
