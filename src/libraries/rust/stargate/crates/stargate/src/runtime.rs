@@ -366,6 +366,13 @@ impl StargateRuntime {
         };
 
         let proxy_router = make_router(ProxyAppState {
+            dynamic_config: Arc::new(
+                crate::load_balancer::dynamic_config::DynamicConfigCache::new(
+                    service.state(),
+                    crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_IDLE_EXPIRY,
+                    crate::load_balancer::dynamic_config::DYNAMIC_CONFIG_MAX_ENTRIES,
+                ),
+            ),
             state: service.state(),
             traffic: ProxyTrafficState {
                 shutdown: tasks.shutdown_signal(),

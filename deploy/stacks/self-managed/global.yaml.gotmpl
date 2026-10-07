@@ -1099,6 +1099,15 @@ nvctApi:
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
 
+eventLedger:
+  {{- if .Values.global.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+  {{- end }}
+  image:
+    registry: {{ .Values.global.image.registry }}
+    repository: {{ .Values.global.image.repository }}
+
 grpcproxy:
   fullnameOverride: grpc-proxy
   {{- if $haEnabled }}
@@ -1346,6 +1355,15 @@ sis:
     MANAGEMENT_METRICS_ENABLE_ALL: {{ .Values.global.observability.metrics.enabled | quote }}
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
+    {{- end }}
+    {{- if dig "addons" "eventLedger" "enabled" false .Values }}
+    # Send function deployment stage events to the event-ledger addon.
+    # Connection details (base URL, static Vault-signed token) are baseline
+    # config in application-ncp.yaml; only the enable flags are conditional
+    # here, since they're the only part that's unsafe when event-ledger isn't
+    # deployed.
+    ICMS_FNDS_MESSAGES_ENABLED: "true"
+    ICMS_FNDS_MESSAGES_V3_ENABLED: "true"
     {{- end }}
     {{- with include "nvcf.natsStreamReplicas" .Values }}
     ICMS_NATS_REPLICAS: {{ . | quote }}

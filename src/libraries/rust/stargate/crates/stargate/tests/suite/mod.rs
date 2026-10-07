@@ -26,5 +26,6 @@ mod proxy_contract;
 mod quic_forwarding;
 mod registration;
 mod reverse_tunnel;
+mod routing_expressions;
 mod routing_key;
 mod stats_discovery;
