@@ -65,6 +65,7 @@ enum Event {
     BackendReceive {
         request: usize,
         backend: usize,
+        reservation: u64,
         expected_queue_ms: Option<u64>,
     },
     MismatchRejected {
@@ -140,8 +141,6 @@ struct RequestState {
     plan: PlannedRequest,
     cache_affinity_key: String,
     excluded: HashSet<String>,
-    /// The Stargate reservation for the in-flight dispatch.
-    reservation: Option<u64>,
     record: RequestRecord,
     engine: EngineState,
     resolved: bool,
@@ -267,7 +266,6 @@ fn request_state(plan: PlannedRequest, stargates: &[StargateView]) -> RequestSta
         },
         plan,
         excluded: HashSet::new(),
-        reservation: None,
         engine: EngineState::NotAdmitted,
         resolved: false,
     }
@@ -311,8 +309,9 @@ impl Simulation<'_> {
             Event::BackendReceive {
                 request,
                 backend,
+                reservation,
                 expected_queue_ms,
-            } => self.backend_receive(request, backend, expected_queue_ms),
+            } => self.backend_receive(request, backend, reservation, expected_queue_ms),
             Event::MismatchRejected {
                 request,
                 backend,
@@ -390,38 +389,36 @@ impl Simulation<'_> {
         if self.requests[request].resolved {
             return;
         }
+        if self.requests[request].excluded.len() == self.backends.len() {
+            // Queue-mismatch reroutes excluded every cluster; the proxy
+            // reports this as exhausted retries.
+            self.fail(request, |record| record.retries_exhausted = true);
+            return;
+        }
         let stargate = self.requests[request].plan.stargate;
         let arrival = self.requests[request].plan.arrival;
         let candidates = self.candidates(stargate);
         let state = &self.requests[request];
         let excluded = &state.excluded;
-        let eligible = candidates
-            .iter()
-            .filter(|candidate| !excluded.contains(&candidate.cluster_id))
-            .count();
-        let decision = if eligible == 0 {
-            LoadBalancerDecision::Unavailable
-        } else {
-            let elapsed = Duration::from_micros(self.now - arrival);
-            // Load balancers read elapsed time through `received_at.elapsed()`.
-            // Backdating the real clock by the virtual elapsed time makes that
-            // read return virtual time, give or take the call's own runtime.
-            let received_at = Instant::now()
-                .checked_sub(elapsed)
-                .expect("virtual elapsed time fits within the process clock");
-            let lb_request = LoadBalancerRequest {
-                routing_target: &self.target,
-                cache_affinity_key: Some(&state.cache_affinity_key),
-                input_tokens: Some(state.plan.input_tokens),
-                priority: 0,
-                received_at,
-                request_slo: self.config.client.request_slo_ms.map(Duration::from_millis),
-                excluded_cluster_ids: (!excluded.is_empty()).then_some(excluded),
-            };
-            self.stargates[stargate]
-                .load_balancer
-                .decide(&lb_request, &candidates)
+        let elapsed = Duration::from_micros(self.now - arrival);
+        // Load balancers read elapsed time through `received_at.elapsed()`.
+        // Backdating the real clock by the virtual elapsed time makes that
+        // read return virtual time, give or take the call's own runtime.
+        let received_at = Instant::now()
+            .checked_sub(elapsed)
+            .expect("virtual elapsed time fits within the process clock");
+        let lb_request = LoadBalancerRequest {
+            routing_target: &self.target,
+            cache_affinity_key: Some(&state.cache_affinity_key),
+            input_tokens: Some(state.plan.input_tokens),
+            priority: 0,
+            received_at,
+            request_slo: self.config.client.request_slo_ms.map(Duration::from_millis),
+            excluded_cluster_ids: (!excluded.is_empty()).then_some(excluded),
         };
+        let decision = self.stargates[stargate]
+            .load_balancer
+            .decide(&lb_request, &candidates);
         self.requests[request].record.route_attempts += 1;
 
         match decision {
@@ -440,10 +437,10 @@ impl Simulation<'_> {
                 if delay > 0 {
                     self.schedule(delay, Event::RouteAttempt(request));
                 } else {
-                    self.no_routing_choice(request, eligible);
+                    self.no_routing_choice(request);
                 }
             }
-            LoadBalancerDecision::Unavailable => self.no_routing_choice(request, eligible),
+            LoadBalancerDecision::Unavailable => self.no_routing_choice(request),
         }
     }
 
@@ -454,13 +451,13 @@ impl Simulation<'_> {
             .map(|wait_ms| micros_from_ms(wait_ms as f64).min(ROUTING_RETRY_MAX_WAIT))
     }
 
-    fn no_routing_choice(&mut self, request: usize, eligible: usize) {
+    fn no_routing_choice(&mut self, request: usize) {
         let arrival = self.requests[request].plan.arrival;
         let remaining = self
             .max_wait()
             .map(|max_wait| (arrival + max_wait).saturating_sub(self.now))
             .unwrap_or_default();
-        if eligible > 0 && remaining > 0 {
+        if remaining > 0 {
             let sleep_ms = self
                 .rng
                 .random_range(ROUTING_RETRY_SLEEP_MIN_MS..ROUTING_RETRY_SLEEP_MAX_MS);
@@ -479,10 +476,9 @@ impl Simulation<'_> {
             input_tokens: self.requests[request].plan.input_tokens,
         };
         self.stargates[stargate].reservations[backend].push(reservation);
-        let state = &mut self.requests[request];
-        state.reservation = Some(self.next_reservation);
-        state.record.dispatched_at = Some(self.now);
-        state.record.backend = Some(backend);
+        let record = &mut self.requests[request].record;
+        record.dispatched_at = Some(self.now);
+        record.backend = Some(backend);
         let delay = self.one_way(
             self.stargates[stargate].region,
             self.backends[backend].region,
@@ -492,12 +488,19 @@ impl Simulation<'_> {
             Event::BackendReceive {
                 request,
                 backend,
+                reservation: self.next_reservation,
                 expected_queue_ms,
             },
         );
     }
 
-    fn backend_receive(&mut self, request: usize, backend: usize, expected_queue_ms: Option<u64>) {
+    fn backend_receive(
+        &mut self,
+        request: usize,
+        backend: usize,
+        reservation: u64,
+        expected_queue_ms: Option<u64>,
+    ) {
         if self.requests[request].resolved {
             return;
         }
@@ -507,9 +510,6 @@ impl Simulation<'_> {
             self.stargates[stargate].region,
         );
         if self.backends[backend].rejects(expected_queue_ms, &self.config.pylon.queue_mismatch) {
-            let reservation = self.requests[request]
-                .reservation
-                .expect("dispatched request has a reservation");
             self.schedule(
                 return_delay,
                 Event::MismatchRejected {
@@ -758,7 +758,8 @@ impl Simulation<'_> {
 
     fn resolve(&mut self, request: usize, mark: impl FnOnce(&mut RequestRecord)) {
         let state = &mut self.requests[request];
-        debug_assert!(!state.resolved);
+        // A double resolve would wrap `unresolved` and spin forever on heartbeats.
+        assert!(!state.resolved, "request {request} resolved twice");
         state.resolved = true;
         mark(&mut state.record);
         self.unresolved -= 1;
@@ -920,6 +921,25 @@ mod tests {
     }
 
     #[test]
+    fn mismatch_rejections_exclude_the_only_backend_and_exhaust_retries() {
+        let mut config = config(serde_json::json!({
+            "rates_rps": [1.0], "warmup_s": 1.0, "measure_s": 4.0,
+            "fixed": {
+                "sessions": 20, "input_tokens_min": 2000, "input_tokens_max": 4000,
+                "output_tokens": 64
+            }
+        }));
+        config.topology.regions[0].backends = 1;
+        config.topology.regions[1].backends = 0;
+        config.policies.retain(|policy| policy.name == "power-of-n");
+        config.validate().expect("single-backend config is valid");
+        let summary = &run_policies(&config, 60.0)[0];
+        assert!(summary.mismatch_rejections > 0);
+        assert!(summary.failed_retries_exhausted > 0);
+        assert_eq!(summary.failed_no_route, 0);
+    }
+
+    #[test]
     fn configs_that_would_hang_or_misroute_are_rejected() {
         let valid = config(serde_json::json!({
             "rates_rps": [1.0], "warmup_s": 0.0, "measure_s": 1.0,
@@ -927,7 +947,7 @@ mod tests {
         }));
         type Breakage = (&'static str, fn(&mut SimConfig));
         let breakages: [Breakage; 6] = [
-            ("heartbeat_ms", |config| config.pylon.heartbeat_ms = 0.0),
+            ("heartbeat_ms", |config| config.pylon.heartbeat_ms = 0.0004),
             ("measure_s", |config| config.workload.measure_s = 0.0),
             ("rtt_ms", |config| config.topology.rtt_ms[0][1] = f64::NAN),
             ("rates_rps", |config| config.workload.rates_rps = vec![-1.0]),

@@ -34,3 +34,16 @@ pub fn micros_from_duration(duration: Duration) -> Micros {
 pub fn ms(micros: Micros) -> f64 {
     micros as f64 / 1000.0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durations_round_up_to_whole_micros() {
+        assert_eq!(micros_from_duration(Duration::ZERO), 0);
+        assert_eq!(micros_from_duration(Duration::from_nanos(1)), 1);
+        assert_eq!(micros_from_duration(Duration::from_nanos(1_001)), 2);
+        assert_eq!(micros_from_duration(Duration::MAX), Micros::MAX);
+    }
+}

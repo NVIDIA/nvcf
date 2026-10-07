@@ -238,7 +238,12 @@ pub fn summarize(
         routing_delay_ms: Percentiles::from_ms(
             succeeded
                 .iter()
-                .filter_map(|record| record.dispatched_at.map(|at| ms(at - record.arrival)))
+                .map(|record| {
+                    ms(record
+                        .dispatched_at
+                        .expect("successful request was dispatched")
+                        - record.arrival)
+                })
                 .collect(),
         ),
         backend_ttft_ms: Percentiles::from_ms(

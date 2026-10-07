@@ -18,6 +18,8 @@ use mock_engine::EngineConfig;
 use serde::Deserialize;
 use stargate::load_balancer::LoadBalancerAlgorithmConfig;
 
+use crate::time::micros_from_ms;
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SimConfig {
@@ -37,7 +39,8 @@ pub struct SimConfig {
 #[serde(deny_unknown_fields)]
 pub struct TopologyConfig {
     pub regions: Vec<RegionConfig>,
-    /// Symmetric inter-region round-trip times in milliseconds, indexed by region.
+    /// Symmetric inter-region round-trip times in milliseconds, indexed by
+    /// region. The diagonal is unused; see `intra_region_rtt_ms`.
     pub rtt_ms: Vec<Vec<f64>>,
     pub intra_region_rtt_ms: f64,
     /// Extra one-way delay for Pylon stats to reach each Stargate through relays.
@@ -279,8 +282,9 @@ impl SimConfig {
             bail!("seeds, rates_rps and policies must be non-empty");
         }
         self.engine.validate().map_err(anyhow::Error::msg)?;
-        if !(self.pylon.heartbeat_ms.is_finite() && self.pylon.heartbeat_ms > 0.0) {
-            bail!("pylon.heartbeat_ms must be positive");
+        // A heartbeat that rounds to zero microseconds reschedules itself forever.
+        if !(self.pylon.heartbeat_ms.is_finite() && micros_from_ms(self.pylon.heartbeat_ms) > 0) {
+            bail!("pylon.heartbeat_ms must be at least one microsecond");
         }
         // A non-positive rate turns every queue estimate into the unknown
         // sentinel, which production Pylon would not reject on.
