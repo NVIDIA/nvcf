@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -262,30 +263,74 @@ var clusterPullSecretCheckTimeout = 30 * time.Second
 
 // NewClusterPullSecretChecker returns a ClusterPullSecretChecker that reads
 // the pull secrets findClusterPullSecret reads, in the cluster behind each of
-// kubeContexts, "" naming the current context.
+// kubeContexts, "" naming the current context. It is meant for one poll: it
+// connects to each cluster once, keeping a cluster it cannot reach as such,
+// and answers a question it was asked before from what it found then, so the
+// registry rows, which run one after another in one share of the run's time,
+// do not each wait on the same clusters.
 func NewClusterPullSecretChecker(kubeContexts []string) ClusterPullSecretChecker {
+	type connection struct {
+		client kubernetes.Interface
+		err    error
+	}
+	type answer struct {
+		holder string
+		err    error
+	}
+	// connMu is held across a connection, so a cluster is connected to once.
+	var connMu, answersMu sync.Mutex
+	connections := map[string]connection{}
+	answers := map[[4]string]answer{}
+	connect := func(ctx context.Context, kubeContext string) (kubernetes.Interface, error) {
+		connMu.Lock()
+		defer connMu.Unlock()
+		if c, ok := connections[kubeContext]; ok {
+			return c.client, c.err
+		}
+		client, err := connectCluster(ctx, kubeContext)
+		if ctx.Err() == nil {
+			connections[kubeContext] = connection{client, err}
+		}
+		return client, err
+	}
 	return func(ctx context.Context, registry, repo, user, secret string) (string, error) {
+		key := [4]string{registry, repo, user, secret}
+		answersMu.Lock()
+		a, ok := answers[key]
+		answersMu.Unlock()
+		if ok {
+			return a.holder, a.err
+		}
 		ctx, cancel := context.WithTimeout(ctx, clusterPullSecretCheckTimeout)
 		defer cancel()
-		var errs []error
-		for _, kubeContext := range kubeContexts {
-			client, err := connectCluster(ctx, kubeContext)
-			if err != nil {
-				errs = append(errs, err)
-				continue
-			}
-			holder, err := clusterPullSecretHolding(ctx, client, registry, repo, user, secret)
-			if holder != "" {
-				if kubeContext != "" {
-					holder += " in context " + kubeContext
+		holder, err := func() (string, error) {
+			var errs []error
+			for _, kubeContext := range kubeContexts {
+				client, err := connect(ctx, kubeContext)
+				if err != nil {
+					errs = append(errs, err)
+					continue
 				}
-				return holder, nil
+				holder, err := clusterPullSecretHolding(ctx, client, registry, repo, user, secret)
+				if holder != "" {
+					if kubeContext != "" {
+						holder += " in context " + kubeContext
+					}
+					return holder, nil
+				}
+				if err != nil {
+					errs = append(errs, err)
+				}
 			}
-			if err != nil {
-				errs = append(errs, err)
-			}
+			return "", errors.Join(errs...)
+		}()
+		// An answer the call's bound or the run's end cut off is no answer.
+		if ctx.Err() == nil {
+			answersMu.Lock()
+			answers[key] = answer{holder, err}
+			answersMu.Unlock()
 		}
-		return "", errors.Join(errs...)
+		return holder, err
 	}
 }
 

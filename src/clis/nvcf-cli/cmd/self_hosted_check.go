@@ -316,21 +316,16 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	}
 
 	registryPostInstall := !registryTarget().beforeInstall
-	var registryClusterSecrets selfhosted.ClusterPullSecretChecker
-	if registryChecker != nil && registryPostInstall {
-		registryClusterSecrets = newClusterPullSecretCheckerForSelfHosted(visitedKubeContexts(mode))
-	}
 	cfg := selfhosted.PreflightConfig{
 		LocalOnly: localOnly,
 		Tools:     checkPreflightTools(),
 		// The tools are what `up` runs; checking an installed stack does
 		// not use them.
-		ToolsAdvisory:          !checkPre,
-		Registries:             credEntries,
-		RegistryChecker:        registryChecker,
-		RegistryPostInstall:    registryPostInstall,
-		RegistryClusterSecrets: registryClusterSecrets,
-		Interrupted:            interrupted,
+		ToolsAdvisory:       !checkPre,
+		Registries:          credEntries,
+		RegistryChecker:     registryChecker,
+		RegistryPostInstall: registryPostInstall,
+		Interrupted:         interrupted,
 	}
 
 	// A quit key in the dashboard cancels the run the way a signal does.
@@ -399,9 +394,15 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 				// chance to run the validator.
 				clusterValidatorImage, unresolvedImage = resolveClusterValidatorImage(pollCtx)
 			}
+			pollCfg := cfg
+			if registryChecker != nil && registryPostInstall {
+				// One per poll: it keeps what it read of the clusters for
+				// the poll's registry rows, and a later poll reads again.
+				pollCfg.RegistryClusterSecrets = newClusterPullSecretCheckerForSelfHosted(visitedKubeContexts(mode))
+			}
 			if checkPre || checkAll || checkControlPlane || checkComputePlane {
 				results = append(results,
-					runPreflightByRole(pollCtx, cfg, sink, mode, clusterValidatorImage, unresolvedImage, ledger,
+					runPreflightByRole(pollCtx, pollCfg, sink, mode, clusterValidatorImage, unresolvedImage, ledger,
 						inotifyProber)...)
 			}
 			return results

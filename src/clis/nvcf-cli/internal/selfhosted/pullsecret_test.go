@@ -25,7 +25,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -670,25 +672,38 @@ func TestClusterPullSecretHolding(t *testing.T) {
 	assert.Equal(t, "nvcf/nvcr-pull-secret", holder)
 }
 
-// The checker reads each context's cluster, and a cluster it cannot reach
-// leaves the answer unknown.
-func TestNewClusterPullSecretChecker_ReadsTheContextsCluster(t *testing.T) {
-	stored := dockerConfigSecret("nvcr-pull-secret", "nvcf", dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "revoked"))
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+// pullSecretServer serves a cluster whose nvcf namespace holds stored, and
+// counts the /version calls a connection makes and the Secret lists a scan
+// makes.
+func pullSecretServer(t *testing.T, stored *corev1.Secret) (srv *httptest.Server, versions, lists *atomic.Int32) {
+	t.Helper()
+	versions, lists = &atomic.Int32{}, &atomic.Int32{}
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.URL.Path == "/version":
+			versions.Add(1)
 			_, _ = w.Write([]byte(`{"major":"1","minor":"30","gitVersion":"v1.30.0"}`))
 		case r.URL.Path == "/api/v1/namespaces/nvcf/secrets":
+			lists.Add(1)
 			_ = json.NewEncoder(w).Encode(corev1.SecretList{
 				TypeMeta: metav1.TypeMeta{Kind: "SecretList", APIVersion: "v1"}, Items: []corev1.Secret{*stored}})
 		case strings.HasSuffix(r.URL.Path, "/secrets"):
+			lists.Add(1)
 			_, _ = w.Write([]byte(`{"kind":"SecretList","apiVersion":"v1","items":[]}`))
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	t.Cleanup(srv.Close)
+	return srv, versions, lists
+}
+
+// The checker reads each context's cluster, and a cluster it cannot reach
+// leaves the answer unknown.
+func TestNewClusterPullSecretChecker_ReadsTheContextsCluster(t *testing.T) {
+	stored := dockerConfigSecret("nvcr-pull-secret", "nvcf", dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "revoked"))
+	srv, _, _ := pullSecretServer(t, stored)
 	writeKubeconfig(t, srv.URL)
 	check := NewClusterPullSecretChecker([]string{"test"})
 	ctx := context.Background()
@@ -701,8 +716,65 @@ func TestNewClusterPullSecretChecker_ReadsTheContextsCluster(t *testing.T) {
 	assert.Empty(t, holder)
 
 	srv.Close()
-	holder, err = check(ctx, "nvcr.io", "nvidia/cv", "$oauthtoken", "revoked")
+	holder, err = NewClusterPullSecretChecker([]string{"test"})(ctx, "nvcr.io", "nvidia/cv", "$oauthtoken", "revoked")
 	assert.Empty(t, holder)
 	var unreachable *ClusterUnreachableError
 	assert.ErrorAs(t, err, &unreachable)
+}
+
+// The registry rows run one after another in one share of the run's time,
+// and each refused one asks the checker. Within one checker, a poll's, each
+// cluster is connected to once, and a question asked before is answered from
+// what was read then; a cluster it could not reach is not tried again. A new
+// checker, the next poll's, reads the clusters again.
+func TestNewClusterPullSecretChecker_ReadsEachClusterOncePerPoll(t *testing.T) {
+	stored := dockerConfigSecret("nvcr-pull-secret", "nvcf", dockerConfigBlob(t, "nvcr.io", "$oauthtoken", "revoked"))
+	srv, versions, lists := pullSecretServer(t, stored)
+	writeKubeconfig(t, srv.URL)
+	ctx := context.Background()
+
+	check := NewClusterPullSecretChecker([]string{"test"})
+	var scan int32
+	for i := range 3 {
+		holder, err := check(ctx, "nvcr.io", "nvidia/cv", "$oauthtoken", "revoked")
+		require.NoError(t, err)
+		assert.Equal(t, "nvcf/nvcr-pull-secret in context test", holder)
+		if i == 0 {
+			scan = lists.Load()
+			require.Positive(t, scan)
+		}
+	}
+	assert.EqualValues(t, 1, versions.Load(), "one connection")
+	assert.Equal(t, scan, lists.Load(), "a question asked before is not scanned for again")
+	_, err := check(ctx, "nvcr.io", "nvidia/cv", "$oauthtoken", "another")
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, versions.Load(), "the connection is reused for another question")
+	assert.Greater(t, lists.Load(), scan, "another question is a new scan")
+
+	_, err = NewClusterPullSecretChecker([]string{"test"})(ctx, "nvcr.io", "nvidia/cv", "$oauthtoken", "revoked")
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, versions.Load(), "the next poll connects again")
+
+	prev := clusterFirstCallTimeout
+	clusterFirstCallTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { clusterFirstCallTimeout = prev })
+	var silentCalls atomic.Int32
+	silent := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		silentCalls.Add(1)
+		<-r.Context().Done()
+	}))
+	t.Cleanup(silent.Close)
+	writeKubeconfig(t, silent.URL)
+	check = NewClusterPullSecretChecker([]string{"test"})
+	var waited int32
+	for i, pass := range []string{"revoked", "another"} {
+		_, err = check(ctx, "nvcr.io", "nvidia/cv", "$oauthtoken", pass)
+		var unreachable *ClusterUnreachableError
+		assert.ErrorAs(t, err, &unreachable, pass)
+		if i == 0 {
+			waited = silentCalls.Load()
+			require.Positive(t, waited)
+		}
+	}
+	assert.Equal(t, waited, silentCalls.Load(), "a cluster found unreachable is not waited on again within the poll")
 }

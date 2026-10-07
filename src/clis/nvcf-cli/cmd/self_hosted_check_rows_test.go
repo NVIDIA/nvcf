@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -480,6 +481,42 @@ func TestCheck_WaitEndsOnAWarningCutShortTwiceInARow(t *testing.T) {
 		assert.Greater(t, *calls, 2, name)
 		assert.Equal(t, "timeout", finalEvent(t, run.stderr)["verdict"], name)
 	}
+}
+
+// The comparison with the clusters' pull secrets keeps what it read for one
+// poll's registry rows, which run one after another in one share. Each --wait
+// poll gets a new one, so a pull secret fixed while the run waits counts on
+// the next poll.
+func TestCheck_EachPollComparesWithFreshPullSecrets(t *testing.T) {
+	refused := []selfhosted.CheckResult{{Category: selfhosted.CategoryRegistryCredentials,
+		ID: "registry-cred-nvcr.io", Severity: selfhosted.SeverityError, Message: "nvcr.io: rejected"}}
+	passed := []selfhosted.CheckResult{{Category: selfhosted.CategoryRegistryCredentials,
+		ID: "registry-cred-nvcr.io", Passed: true, Severity: selfhosted.SeverityInfo}}
+	calls := stubRolePolls(t, refused, passed)
+	polled := checkRunRole
+	var asked []string
+	checkRunRole = func(ctx context.Context, cfg selfhosted.PreflightConfig, role selfhosted.Role,
+		rc selfhosted.RoleConfig, sink progress.EventSink) []selfhosted.CheckResult {
+		require.NotNil(t, cfg.RegistryClusterSecrets, "an installed plane's rows compare with its clusters")
+		holder, _ := cfg.RegistryClusterSecrets(ctx, "nvcr.io", "", "$oauthtoken", "rotated-out")
+		asked = append(asked, holder)
+		return polled(ctx, cfg, role, rc, sink)
+	}
+	prev := newClusterPullSecretCheckerForSelfHosted
+	made := 0
+	newClusterPullSecretCheckerForSelfHosted = func([]string) selfhosted.ClusterPullSecretChecker {
+		made++
+		n := made
+		return func(context.Context, string, string, string, string) (string, error) {
+			return fmt.Sprintf("checker %d", n), nil
+		}
+	}
+	t.Cleanup(func() { newClusterPullSecretCheckerForSelfHosted = prev })
+
+	run := runCheck(t, checkStubs{}, "--control-plane", "--skip-cluster-validation", "--wait", "10s")
+	assert.Equal(t, 0, run.code(), run.stderr)
+	assert.Equal(t, 2, *calls)
+	assert.Equal(t, []string{"checker 1", "checker 2"}, asked)
 }
 
 // A cluster that cannot be contacted at all fails the run, with or without a
