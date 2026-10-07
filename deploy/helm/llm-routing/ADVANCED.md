@@ -10,15 +10,19 @@ The shared chart generates the caller key in `llm-shared-caller-key` and the tra
 
 TLS customization uses `gatewayStack.tls` and the child chart listener TLS values. See [shared-stack/values.yaml](charts/shared-stack/values.yaml) and the [gateway chart](../llm-gateway-stack/llm-gateway-stack/values.yaml). Model values reference the same CA ConfigMap through `sharedCAConfigMap`.
 
-### Direct Helm installation
+### Shared Helm installation and verification
 
-`llm.py install` runs the shared Helm installation and verifies local gateway access. To run Helm directly:
+The shared chart runs a verification Job after installation and upgrade. It uses the installed CA to check gateway TLS and the `/v1/models` response, then checks that an unknown model returns HTTP 401 with an invalid key and HTTP 404 with the valid key. An empty registry is valid on first installation. Existing models remain valid on upgrades. A failed check makes the Helm command fail:
 
 ```bash
 helm upgrade --install llm-stack "$LLM_CHARTS/llm-shared-stack-0.1.0.tgz" \
   --namespace llm-stack --create-namespace \
   --values /tmp/llm-images/shared.values.yaml --wait --timeout 10m
 ```
+
+The Job retries temporary connection and gateway availability failures for up to 120 seconds. TLS certificate and authentication failures stop verification immediately. Successful verification Jobs are removed. Failed Jobs and their logs remain available until the next install or upgrade.
+
+The verification image must be pullable or preloaded on eligible nodes. See [verification image distribution](recipes/BUILDING.md#verification-image) for its default and offline settings.
 
 ### Shared CLI connection options
 

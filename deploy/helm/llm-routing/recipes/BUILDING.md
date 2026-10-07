@@ -33,6 +33,22 @@ Import Jobs run in a separate preparation namespace and mount the selected nodes
 
 Set the chart's four image repositories, tags and `IfNotPresent` pull policies in a private values file. The gateway and router fields are under `gatewayStack`, and the operator and Pylon fields are under `operator`. Use the [shared values example](../charts/shared-stack/values.local.example.yaml) for the field names. Every eligible node must be able to pull the images for its architecture. Use locally built images until registry images are published.
 
+## Verification image
+
+The shared chart's installation and upgrade checks use `python:3.12-alpine` with `IfNotPresent` pull policy. Distribute this image alongside the four application images. The image-loader server uses the same default image.
+
+For an offline installation, preload the image for each eligible node's architecture and set `verification.image.pullPolicy: Never`. For a registry mirror, set these values in `shared.values.yaml`:
+
+```yaml
+verification:
+  image:
+    repository: registry.example.com/mirrors/python
+    tag: 3.12-alpine
+    pullPolicy: IfNotPresent
+```
+
+Add `verification.imagePullSecrets` with Kubernetes Secret references when the mirror requires credentials. The verification Job uses the installed gateway CA and caller key. Its checks support both an empty registry and an existing stack with models.
+
 ## Build for a combined installation
 
 Run the commands below from `deploy/helm/llm-routing/recipes`. They use the saved configuration from [Configure](../ADVANCED.md#configure). Add `--work-dir DIR` to every command when using a non-default installation directory.

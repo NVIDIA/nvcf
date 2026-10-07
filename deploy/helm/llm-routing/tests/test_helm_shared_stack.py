@@ -5,9 +5,11 @@ import copy
 import hashlib
 import json
 import pathlib
+import py_compile
 import re
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
@@ -100,7 +102,7 @@ class SharedHelmTests(unittest.TestCase):
     def test_empty_stack_is_gpu_and_model_free(self):
         resources = self.render()
         self.assertEqual(sum(item['kind'] == 'Deployment' for item in resources), 3)
-        forbidden = {'InferenceEndpoint', 'PersistentVolumeClaim', 'PersistentVolume', 'RuntimeClass', 'CustomResourceDefinition', 'Job'}
+        forbidden = {'InferenceEndpoint', 'PersistentVolumeClaim', 'PersistentVolume', 'RuntimeClass', 'CustomResourceDefinition'}
         self.assertFalse(forbidden & {item['kind'] for item in resources})
         for item in resources:
             self.assertNotIn('nvidia.com/gpu', json.dumps(item))
@@ -111,6 +113,54 @@ class SharedHelmTests(unittest.TestCase):
         operator = next(item for item in resources if item['kind'] == 'Deployment' and any(
             '--watch-namespaces=test-models' in container.get('args', []) for container in item['spec']['template']['spec']['containers']))
         self.assertEqual(operator['metadata']['namespace'], 'test-models')
+
+    def test_gateway_verification_hook_has_bounded_cpu_only_execution(self):
+        resources = self.render()
+        jobs = [item for item in resources if item['kind'] == 'Job']
+        self.assertEqual(len(jobs), 1)
+        job = jobs[0]
+        annotations = job['metadata']['annotations']
+        self.assertEqual(annotations['helm.sh/hook'], 'post-install,post-upgrade')
+        self.assertEqual(set(annotations['helm.sh/hook-delete-policy'].split(',')), {'before-hook-creation', 'hook-succeeded'})
+        self.assertEqual(job['spec']['backoffLimit'], 0)
+        self.assertLessEqual(job['spec']['activeDeadlineSeconds'], 180)
+        self.assertNotIn('ttlSecondsAfterFinished', job['spec'])
+        pod = job['spec']['template']['spec']
+        self.assertFalse(pod['automountServiceAccountToken'])
+        self.assertNotIn('serviceAccountName', pod)
+        self.assertNotIn('runtimeClassName', pod)
+        self.assertNotIn('nvidia.com/gpu', json.dumps(pod))
+        self.assertEqual(pod['restartPolicy'], 'Never')
+        self.assertTrue(pod['securityContext']['runAsNonRoot'])
+        container = pod['containers'][0]
+        self.assertTrue(container['securityContext']['readOnlyRootFilesystem'])
+        self.assertEqual(container['securityContext']['capabilities']['drop'], ['ALL'])
+        self.assertEqual({volume['name'] for volume in pod['volumes']}, {'checks', 'ca', 'caller'})
+        self.assertTrue(all(mount['readOnly'] for mount in container['volumeMounts']))
+        script = next(item for item in resources if item['kind'] == 'ConfigMap' and item['metadata']['name'] == job['metadata']['name'])
+        self.assertEqual(script['data']['verify-gateway.py'].strip(), (self.chart/'verify-gateway.py').read_text().strip())
+        self.assertNotIn('helm.sh/hook', script['metadata'].get('annotations', {}))
+
+    def test_verification_uses_selected_credentials_service_and_image(self):
+        values = copy.deepcopy(self.values)
+        values['callerKey'] = {'secretName': 'selected-caller'}
+        values['gatewayStack']['tls'] = {'selfSigned': {'caName': 'selected-ca'}}
+        gateway = values['gatewayStack']['llm-api-gateway']['llmApiGateway']
+        gateway.update({'fullnameOverride': 'selected-gateway', 'service': {'port': 8443},
+                        'nodeSelector': {'kubernetes.io/arch': 'amd64'}})
+        values['operator']['trustBundle'] = {'configMap': 'selected-ca'}
+        values['verification'] = {'image': {'repository': 'localhost/verifier', 'tag': 'test', 'pullPolicy': 'Never'},
+                                  'imagePullSecrets': [{'name': 'pull-access'}], 'nodeSelector': {'kubernetes.io/hostname': 'verification-node'}}
+        job = next(item for item in self.render(values) if item['kind'] == 'Job')
+        pod = job['spec']['template']['spec']
+        self.assertEqual(pod['nodeSelector'], {'kubernetes.io/hostname': 'verification-node'})
+        self.assertEqual(pod['imagePullSecrets'], [{'name': 'pull-access'}])
+        self.assertEqual(pod['containers'][0]['image'], 'localhost/verifier:test')
+        self.assertEqual(pod['containers'][0]['imagePullPolicy'], 'Never')
+        self.assertEqual(pod['containers'][0]['env'], [{'name': 'GATEWAY_URL', 'value': 'https://selected-gateway.test-models.svc:8443'}])
+        volumes = {item['name']: item for item in pod['volumes']}
+        self.assertEqual(volumes['ca']['configMap']['name'], 'selected-ca')
+        self.assertEqual(volumes['caller']['secret']['secretName'], 'selected-caller')
 
     def test_generated_credentials_match_both_auth_files(self):
         secrets = {item['metadata']['name']: item for item in self.render() if item['kind'] == 'Secret'}
@@ -165,6 +215,9 @@ class SharedHelmTests(unittest.TestCase):
         names = {item['metadata']['name'] for item in result if item['kind'] == 'Secret'}
         self.assertNotIn('external-caller', names)
         self.assertNotIn('external-transport', names)
+        job = next(item for item in result if item['kind'] == 'Job')
+        caller = next(volume for volume in job['spec']['template']['spec']['volumes'] if volume['name'] == 'caller')
+        self.assertEqual(caller['secret']['secretName'], 'external-caller')
         keys = next(item for item in result if item['metadata']['name'] == 'llm-gateway-stack-api-keys')
         self.assertEqual(json.loads(decode(keys, 'api-keys.json'))['keys'][0]['sha256'], hashlib.sha256(b'owned-outside-chart').hexdigest())
 
@@ -291,6 +344,24 @@ class SharedHelmTests(unittest.TestCase):
         result = subprocess.run(['helm', 'lint', str(self.chart), '--strict', '--namespace', 'test-models',
                                  '-f', str(values_path)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_packaged_verifier_excludes_generated_bytecode(self):
+        chart = self.root/'bytecode-chart'
+        shutil.copytree(self.chart, chart)
+        source = chart/'verify-gateway.py'
+        py_compile.compile(str(source), doraise=True)
+        py_compile.compile(str(source), cfile=str(source.with_suffix('.pyc')), doraise=True)
+        self.assertTrue(list(chart.rglob('*.pyc')))
+        destination = self.root/'bytecode-package'
+        destination.mkdir()
+        result = subprocess.run(['helm', 'package', str(chart), '--destination', str(destination)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with tarfile.open(next(destination.glob('*.tgz'))) as archive:
+            names = archive.getnames()
+            self.assertFalse(any('__pycache__' in name.split('/') or name.endswith('.pyc') for name in names))
+            verifier_path = next(name for name in names if name.endswith('/verify-gateway.py'))
+            self.assertEqual(archive.extractfile(verifier_path).read(), source.read_bytes())
 
     def test_packaged_chart_contains_all_dependencies(self):
         package = self.root/'packages'

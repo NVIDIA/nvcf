@@ -49,59 +49,20 @@ class ContextTests(IsolatedTest):
         command.assert_called_once_with(['kubectl', 'config', 'current-context'])
         gateway.assert_called_once_with('captured-context', 'llm-stack', None, None)
 
-    def test_missing_or_failed_context_stops_before_install_or_gateway(self):
+    def test_missing_or_failed_context_stops_before_gateway(self):
         for result in ('\n', RuntimeError('kubectl context failed')):
             with self.subTest(result=result), patch.object(llm, 'run') as command, \
-                    patch.object(llm, 'install') as install, patch.object(llm, 'gateway') as gateway:
+                    patch.object(llm, 'gateway') as gateway:
                 if isinstance(result, Exception):
                     command.side_effect = result
                 else:
                     command.return_value = result
                 with self.assertRaisesRegex((ValueError, RuntimeError), '[Cc]ontext'):
-                    llm.main(['install', '--chart', 'stack.tgz', '--values', 'site.yaml'])
-                install.assert_not_called()
+                    llm.main(['models'])
                 gateway.assert_not_called()
 
 
 class CommandTests(IsolatedTest):
-    def test_install_failure_does_not_verify_or_report_ready(self):
-        with patch.object(llm, 'run', side_effect=RuntimeError('helm install failed')), \
-                patch.object(llm, 'gateway') as gateway, \
-                self.assertRaisesRegex(RuntimeError, 'helm install failed'):
-            llm.main(['--context', 'target', 'install', '--chart', 'stack.tgz', '--values', 'site.yaml'])
-        gateway.assert_not_called()
-        self.assertNotIn('ready', self.output.getvalue().lower())
-
-    def test_install_pins_context_preserves_values_order_and_verifies_after_helm(self):
-        events = []
-        client = MagicMock()
-        listing = {'object': 'list', 'data': []}
-
-        @contextlib.contextmanager
-        def gateway(*args):
-            self.assertEqual(args, ('target', 'custom-models', 'custom-ca', Path('caller-key')))
-            events.append('gateway-open')
-            try:
-                yield client
-            finally:
-                events.append('gateway-close')
-
-        with patch.object(llm, 'run', side_effect=lambda *args, **kwargs: events.append('helm')) as run, \
-                patch.object(llm, 'gateway', gateway), \
-                patch.object(llm, 'model_list', side_effect=lambda c: events.append('models') or listing), \
-                patch.object(llm, 'verify_caller', side_effect=lambda c: events.append('auth')):
-            result = llm.main(['--context', 'target', '--namespace', 'custom-models', '--ca-configmap', 'custom-ca',
-                              '--api-key-file', 'caller-key', 'install', '--release', 'custom-stack', '--chart', 'stack.tgz',
-                              '--values', 'base.yaml', '--values', 'override.yaml'])
-        self.assertEqual(result, listing)
-        self.assertEqual(events, ['helm', 'gateway-open', 'models', 'auth', 'gateway-close'])
-        command = [str(arg) for arg in run.call_args.args[0]]
-        self.assertEqual(command[:5], ['helm', '--kube-context', 'target', '--namespace', 'custom-models'])
-        self.assertEqual(command[5:9], ['upgrade', '--install', 'custom-stack', 'stack.tgz'])
-        self.assertEqual(command[-4:], ['--values', 'base.yaml', '--values', 'override.yaml'])
-        self.assertIn('--wait', command)
-        self.assertIn('Gateway access verified', self.output.getvalue())
-
     def test_chat_passes_model_and_prompt_as_literals_and_streams(self):
         model = 'provider/model;$(example)'
         prompt = 'Say hello; do not interpret shell syntax.'
@@ -289,42 +250,6 @@ class ForwardTests(IsolatedTest):
         self.assertFalse(any(path.exists() or path.parent.exists() for path in paths))
         self.assertNotIn(secret, str(popen.call_args) + self.output.getvalue() + self.errors.getvalue())
         process.terminate.assert_called_once()
-
-
-class AuthenticationTests(IsolatedTest):
-    def client(self, statuses):
-        client = MagicMock()
-        pairs = [(MagicMock(), MagicMock(status=status)) for status in statuses]
-        client.request.side_effect = pairs
-        return client, pairs
-
-    def test_unknown_model_proves_invalid_key_rejected_and_caller_accepted(self):
-        client, pairs = self.client([401, 404])
-        llm.verify_caller(client)
-        self.assertEqual(client.request.call_count, 2)
-        for connection, response in pairs:
-            response.read.assert_called_once()
-            connection.close.assert_called_once()
-        requests = client.request.call_args_list
-        self.assertEqual(requests[0].args[:2], requests[1].args[:2])
-        self.assertEqual(requests[0].args[0], '/v1/chat/completions')
-        self.assertNotEqual(requests[0].kwargs['key'], 'configured')
-        self.assertEqual(requests[1].kwargs['key'], 'configured')
-        self.assertTrue(requests[0].args[1]['model'].startswith('connection-check-'))
-
-    def test_invalid_key_acceptance_is_a_failed_verification(self):
-        client, pairs = self.client([404])
-        with self.assertRaisesRegex(RuntimeError, 'verification|auth'):
-            llm.verify_caller(client)
-        self.assertEqual(client.request.call_count, 1)
-        pairs[0][0].close.assert_called_once()
-
-    def test_rejected_real_caller_is_a_failed_verification(self):
-        client, pairs = self.client([401, 401])
-        with self.assertRaisesRegex(RuntimeError, 'verification|auth'):
-            llm.verify_caller(client)
-        for connection, _ in pairs:
-            connection.close.assert_called_once()
 
 
 if __name__ == '__main__':

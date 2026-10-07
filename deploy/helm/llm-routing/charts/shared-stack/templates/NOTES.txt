@@ -1,10 +1,10 @@
 Shared routing infrastructure is installed in {{ .Release.Namespace }}.
-The model registry stays empty until a model recipe is installed.
+Helm verifies gateway TLS, model discovery and caller authentication.
+Model recipes register independently with this shared stack.
 
-Read the caller key from Secret {{ default .Values.callerKey.secretName .Values.callerKey.existingSecret }} (field api-key).
-Read the public CA from ConfigMap {{ .Values.operator.trustBundle.configMap }} (field ca.crt).
-Gateway Service: {{ include "llm-gateway-stack.gatewayName" .Subcharts.gatewayStack }}:8080 (HTTPS).
-Use an explicit kubectl --context for access and port forwarding.
+Use llm.py models to discover models and llm.py chat to call one.
+See deploy/helm/llm-routing/README.md for commands.
+Gateway Service: {{ include "llm-gateway-stack.gatewayName" .Subcharts.gatewayStack }}:{{ (index .Values.gatewayStack "llm-api-gateway" "llmApiGateway").service.port }} (HTTPS).
 
 The caller key, cluster token and CA are retained on uninstall. Store private
 values and any Helm render output containing credentials outside the checkout.

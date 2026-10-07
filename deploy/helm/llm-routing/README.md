@@ -4,7 +4,7 @@ Install shared routing once, then install each model recipe with Helm and a smal
 
 ## Before you start
 
-Use Kubernetes with the NVIDIA device plugin, a GPU RuntimeClass and persistent storage on compatible model nodes. Install Python 3.11+, Helm and kubectl on your workstation. Select available nodes using the hardware profiles in the [common recipe catalog](recipes/index.json). Profiles specify node count, GPUs per node, resource requests and workload limits.
+Use Kubernetes with the NVIDIA device plugin, a GPU RuntimeClass and persistent storage on compatible model nodes. Install Helm and kubectl on your workstation, plus Python 3.11+ for the model access commands. Select available nodes using the hardware profiles in the [common recipe catalog](recipes/index.json). Profiles specify node count, GPUs per node, resource requests and workload limits.
 
 Obtain the local chart packages and a `shared.values.yaml` with application image references for your node architecture. These examples use `/tmp/llm-chart-packages` for packages and `/tmp/llm-images` for private site values. During development, [build and preload the images and package the charts](recipes/BUILDING.md). The image preparation command generates this values file. Published image references can use the same Helm installation flow.
 
@@ -17,11 +17,12 @@ export LLM_CHARTS=/tmp/llm-chart-packages
 ## 1. Install shared infrastructure
 
 ```bash
-python3 llm.py install --chart "$LLM_CHARTS/llm-shared-stack-0.1.0.tgz" \
-  --values /tmp/llm-images/shared.values.yaml
+helm upgrade --install llm-stack "$LLM_CHARTS/llm-shared-stack-0.1.0.tgz" \
+  --namespace llm-stack --create-namespace \
+  --values /tmp/llm-images/shared.values.yaml --wait --timeout 10m
 ```
 
-The helper runs Helm to install the gateway, router and namespace-scoped operator with an empty model registry. It verifies local gateway access using the installed CA and caller key. The chart generates the caller credential and TLS material on first installation and preserves them on upgrades. `operator.watchNamespaces` in the values file must contain `llm-stack`. For the first operator in a cluster, set `operator.installCRDs: true`. Other installations reuse that CRD.
+Helm installs the gateway, router and namespace-scoped operator with an empty model registry. A chart verification Job checks gateway TLS, model discovery, acceptance of the caller key and rejection of an invalid key before Helm reports success. The same checks run on upgrades with registered models. The chart generates the caller credential and TLS material on first installation and preserves them on upgrades. `operator.watchNamespaces` in the values file must contain `llm-stack`. For the first operator in a cluster, set `operator.installCRDs: true`. Other installations reuse that CRD.
 
 ## 2. Install a model
 

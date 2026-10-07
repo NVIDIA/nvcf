@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-License-Identifier: Apache-2.0
-"""Install shared Helm infrastructure and call models using the current kube context."""
+"""Discover and call models through an installed gateway using the current kube context."""
 import argparse
 import base64
 import contextlib
@@ -15,7 +15,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import uuid
 
 HERE = pathlib.Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location('llm_gateway_client', HERE / 'recipes/client.py')
@@ -120,35 +119,6 @@ def model_list(client):
     return listing
 
 
-def verify_caller(client):
-    # The gateway rejects an invalid key before looking up the requested model.
-    payload = {'model': 'connection-check-' + uuid.uuid4().hex,
-               'messages': [{'role': 'user', 'content': 'Check gateway access.'}]}
-    for key, expected in [('invalid-connection-check', 401), ('configured', 404)]:
-        connection, response = client.request('/v1/chat/completions', payload, key=key)
-        try:
-            response.read()
-            if response.status != expected:
-                raise RuntimeError('Gateway caller verification failed with HTTP ' + str(response.status))
-        finally:
-            connection.close()
-
-
-def install(args, context):
-    command = ['helm', '--kube-context', context, '--namespace', args.namespace,
-               'upgrade', '--install', args.release, args.chart, '--create-namespace', '--wait', '--timeout', '10m']
-    for path in args.values:
-        command.extend(['--values', path])
-    print(f'Installing shared infrastructure in {context}/{args.namespace}...', flush=True)
-    run(command, timeout=900)
-    print('Checking gateway access...', flush=True)
-    with gateway(context, args.namespace, args.ca_configmap, args.api_key_file) as client:
-        listing = model_list(client)
-        verify_caller(client)
-    print(f'Shared infrastructure ready. Gateway access verified. {len(listing["data"])} model(s) registered.')
-    return listing
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--context', help='Override the current kubectl context.')
@@ -156,10 +126,6 @@ def main(argv=None):
     parser.add_argument('--ca-configmap', help='CA ConfigMap for an existing legacy stack.')
     parser.add_argument('--api-key-file', type=pathlib.Path, help='Caller key file for an existing legacy stack.')
     commands = parser.add_subparsers(dest='command', required=True)
-    setup = commands.add_parser('install', help='Install or upgrade the shared Helm chart and verify gateway access.')
-    setup.add_argument('--chart', type=pathlib.Path, required=True, help='Shared chart package or prepared source directory.')
-    setup.add_argument('--release', default='llm-stack')
-    setup.add_argument('--values', type=pathlib.Path, action='append', required=True)
     commands.add_parser('models', help='List models through the gateway.')
     chat = commands.add_parser('chat', help='Chat with a model through the gateway.')
     chat.add_argument('--model', required=True)
@@ -171,8 +137,6 @@ def main(argv=None):
     if args.command == 'chat' and (not args.model.strip() or not args.prompt.strip()):
         parser.error('Choose a served model and provide a nonempty prompt.')
     context = selected_context(args.context)
-    if args.command == 'install':
-        return install(args, context)
     with gateway(context, args.namespace, args.ca_configmap, args.api_key_file) as client:
         if args.command == 'models':
             listing = model_list(client)

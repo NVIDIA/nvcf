@@ -2,7 +2,7 @@
 
 This directory installs model-neutral LLM routing infrastructure and independent model recipes. Read `README.md`, `ADVANCED.md` and `recipes/AGENTS.md`. Keep the shared Helm installation and `llm.py` access commands in `README.md`. Keep configuration, individual phases, existing Python workflows and recovery in `ADVANCED.md`.
 
-`charts/shared-stack` owns the shared Helm lifecycle. Model charts own their preparation, cache, serving and endpoint resources. Keep GPU, model pins, RuntimeClass and model storage requirements in recipe-owned metadata. `llm.py` wraps the shared Helm install and gateway access using the current kube context. Keep its credentials and port forwards scoped to each command. `stack.py` supplies the existing verified-connection and development image workflow. Preserve its supported commands when extending Helm installation.
+`charts/shared-stack` owns the shared Helm lifecycle and post-install/post-upgrade gateway verification. Keep TLS, model discovery and caller-key authentication checks in the chart. Model charts own their preparation, cache, serving and endpoint resources. Keep GPU, model pins, RuntimeClass and model storage requirements in recipe-owned metadata. `llm.py` supplies model discovery and chat using the current kube context. Keep its credentials and port forwards scoped to each command. `stack.py` supplies the existing verified-connection and development image workflow. Preserve its supported commands when extending Helm installation.
 
 Edit runtime code in its owning source directories in the current checkout. Builds include local edits. Commit IDs are informational. Python image updates compare routing chart contents with the fingerprint recorded in the installed stack.
 
