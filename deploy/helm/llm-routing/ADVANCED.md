@@ -10,6 +10,59 @@ The shared chart generates the caller key in `llm-shared-caller-key` and the tra
 
 TLS customization uses `gatewayStack.tls` and the child chart listener TLS values. See [shared-stack/values.yaml](charts/shared-stack/values.yaml) and the [gateway chart](../llm-gateway-stack/llm-gateway-stack/values.yaml). Model values reference the same CA ConfigMap through `sharedCAConfigMap`.
 
+### Direct Helm installation
+
+`llm.py install` runs the shared Helm installation and verifies local gateway access. To run Helm directly:
+
+```bash
+helm upgrade --install llm-stack "$LLM_CHARTS/llm-shared-stack-0.1.0.tgz" \
+  --namespace llm-stack --create-namespace \
+  --values /tmp/llm-images/shared.values.yaml --wait --timeout 10m
+```
+
+### Shared CLI connection options
+
+`llm.py` uses the current kubeconfig context and namespace `llm-stack`. Put global overrides before the command:
+
+```bash
+python3 llm.py --context my-cluster --namespace llm-other models
+python3 llm.py --context my-cluster --namespace llm-other chat \
+  --model qwen3.8-27b 'Say hello in one short sentence.'
+```
+
+The helper retrieves the installed CA and caller credential for each command. Its local connection and temporary files last only for that command. For legacy installations, `--ca-configmap NAME` and `--api-key-file FILE` select the existing CA and caller key. Image preparation remains in the [image build guide](recipes/BUILDING.md).
+
+### Gateway access for SDKs and curl
+
+For an SDK or raw HTTP client, keep a gateway connection open and provide its CA and caller key. Install curl for the examples below.
+
+Forward the gateway in one terminal:
+
+```bash
+kubectl -n llm-stack port-forward svc/llm-api-gateway 18443:8080
+```
+
+In another terminal, retrieve the gateway CA and caller key, then list models:
+
+```bash
+kubectl -n llm-stack get configmap llm-gateway-stack-ca \
+  -o 'jsonpath={.data.ca\.crt}' > /tmp/llm-images/gateway-ca.crt
+API_KEY=$(kubectl -n llm-stack get secret llm-shared-caller-key \
+  -o 'go-template={{index .data "api-key" | base64decode}}')
+curl --fail-with-body --cacert /tmp/llm-images/gateway-ca.crt -H "Authorization: Bearer $API_KEY" \
+  https://localhost:18443/v1/models
+```
+
+Send a chat request:
+
+```bash
+curl --fail-with-body --cacert /tmp/llm-images/gateway-ca.crt -H "Authorization: Bearer $API_KEY" \
+  -H 'Content-Type: application/json' https://localhost:18443/v1/chat/completions \
+  -d '{"model":"qwen3.8-27b","messages":[{"role":"user","content":"What is 17 multiplied by 19? Give one short sentence."}]}'
+```
+
+Change `model` to `qwen3.8-27b-nvfp4` to call the other precision. Add `"stream":true` for streaming.
+
 ### Helm cache reuse and recovery
 
 To install a Qwen release against an existing complete cache in the same namespace, add these values:

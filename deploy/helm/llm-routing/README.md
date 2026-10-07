@@ -4,11 +4,11 @@ Install shared routing once, then install each model recipe with Helm and a smal
 
 ## Before you start
 
-Use Kubernetes with the NVIDIA device plugin, a GPU RuntimeClass and persistent storage on compatible model nodes. Install Helm, kubectl and curl on your workstation. Select available nodes using the hardware profiles in the [common recipe catalog](recipes/index.json). Profiles specify node count, GPUs per node, resource requests and workload limits.
+Use Kubernetes with the NVIDIA device plugin, a GPU RuntimeClass and persistent storage on compatible model nodes. Install Python 3.11+, Helm and kubectl on your workstation. Select available nodes using the hardware profiles in the [common recipe catalog](recipes/index.json). Profiles specify node count, GPUs per node, resource requests and workload limits.
 
 Obtain the local chart packages and a `shared.values.yaml` with application image references for your node architecture. These examples use `/tmp/llm-chart-packages` for packages and `/tmp/llm-images` for private site values. During development, [build and preload the images and package the charts](recipes/BUILDING.md). The image preparation command generates this values file. Published image references can use the same Helm installation flow.
 
-Run these examples from `deploy/helm/llm-routing`. Helm and kubectl use your current kubeconfig context:
+Run these examples from `deploy/helm/llm-routing`. Commands use your current kubeconfig context and the `llm-stack` namespace:
 
 ```bash
 export LLM_CHARTS=/tmp/llm-chart-packages
@@ -17,12 +17,11 @@ export LLM_CHARTS=/tmp/llm-chart-packages
 ## 1. Install shared infrastructure
 
 ```bash
-helm upgrade --install llm-stack "$LLM_CHARTS/llm-shared-stack-0.1.0.tgz" \
-  --namespace llm-stack --create-namespace \
-  --values /tmp/llm-images/shared.values.yaml --wait --timeout 10m
+python3 llm.py install --chart "$LLM_CHARTS/llm-shared-stack-0.1.0.tgz" \
+  --values /tmp/llm-images/shared.values.yaml
 ```
 
-This installs the gateway, router and namespace-scoped operator with an empty model registry. The chart generates the caller credential and TLS material on first installation and preserves them on upgrades. `operator.watchNamespaces` in the values file must contain `llm-stack`. For the first operator in a cluster, set `operator.installCRDs: true`. Other installations reuse that CRD.
+The helper runs Helm to install the gateway, router and namespace-scoped operator with an empty model registry. It verifies local gateway access using the installed CA and caller key. The chart generates the caller credential and TLS material on first installation and preserves them on upgrades. `operator.watchNamespaces` in the values file must contain `llm-stack`. For the first operator in a cluster, set `operator.installCRDs: true`. Other installations reuse that CRD.
 
 ## 2. Install a model
 
@@ -74,31 +73,16 @@ The listed tests used short prompts. The catalog records validation for each har
 
 ## 3. Discover and call models
 
-Forward the gateway in one terminal:
+List the registered models and call each precision:
 
 ```bash
-kubectl -n llm-stack port-forward svc/llm-api-gateway 18443:8080
+python3 llm.py models
+python3 llm.py chat --model qwen3.8-27b \
+  'What is 17 multiplied by 19? Give one short sentence.'
+python3 llm.py chat --model qwen3.8-27b-nvfp4 --stream \
+  'Explain what a GPU does in two sentences.'
 ```
 
-In another terminal, retrieve the gateway CA and caller key, then list models:
-
-```bash
-kubectl -n llm-stack get configmap llm-gateway-stack-ca \
-  -o 'jsonpath={.data.ca\.crt}' > /tmp/llm-images/gateway-ca.crt
-API_KEY=$(kubectl -n llm-stack get secret llm-shared-caller-key \
-  -o 'go-template={{index .data "api-key" | base64decode}}')
-curl --fail-with-body --cacert /tmp/llm-images/gateway-ca.crt -H "Authorization: Bearer $API_KEY" \
-  https://localhost:18443/v1/models
-```
-
-Send a chat request:
-
-```bash
-curl --fail-with-body --cacert /tmp/llm-images/gateway-ca.crt -H "Authorization: Bearer $API_KEY" \
-  -H 'Content-Type: application/json' https://localhost:18443/v1/chat/completions \
-  -d '{"model":"qwen3.8-27b","messages":[{"role":"user","content":"What is 17 multiplied by 19? Give one short sentence."}]}'
-```
-
-Change `model` to `qwen3.8-27b-nvfp4` to call the other precision. Add `"stream":true` for streaming.
+Each command retrieves the gateway CA and caller key, opens a temporary local connection, and cleans up its local connection files when it finishes. Use [connection overrides](ADVANCED.md#shared-cli-connection-options) for another context, namespace or an older installation.
 
 [Advanced deployment and configuration](ADVANCED.md) covers credentials, recovery, GLM, monitoring and the existing Python workflows. The common catalog is ready for API consumers. The [recipe API and UI integration](https://github.com/NVIDIA/nvcf/issues/2337) is tracked separately.
