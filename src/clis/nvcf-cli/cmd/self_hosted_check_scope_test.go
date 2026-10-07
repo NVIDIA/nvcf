@@ -29,6 +29,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -124,7 +125,8 @@ func TestCheck_StaleNamespaceGatesFollowTheInstallsStack(t *testing.T) {
 }
 
 // The env toggles are booleans, so a config that spells one out as "false"
-// or "0" leaves its check on. Any other value fails the command naming it.
+// or "0" leaves its check on. They read the words CI does too, yes and on
+// among them, in any case. Any other value fails the command naming it.
 func TestCheck_EnvTogglesAreBooleans(t *testing.T) {
 	t.Setenv(envLocalOnly, "false")
 	ns, _ := runCheckRecording(t, "--control-plane")
@@ -135,20 +137,32 @@ func TestCheck_EnvTogglesAreBooleans(t *testing.T) {
 	t.Setenv(envLocalOnly, "")
 
 	resetCheckFlags(t)
-	for value, on := range map[string]bool{"0": false, "false": false, "": false, "1": true, "TRUE": true} {
-		t.Setenv(envSkipClusterValidation, value)
-		t.Setenv(envSkipInotify, value)
+	for value, on := range map[string]bool{
+		"0": false, "false": false, "": false, "no": false, "N": false, " Off ": false, "n": false,
+		"1": true, "TRUE": true, "yes": true, "Y": true, " on ": true, "y": true,
+	} {
+		for _, name := range []string{envLocalOnly, envSkipClusterValidation, envSkipInotify} {
+			t.Setenv(name, value)
+			got, err := envToggle(name)
+			require.NoError(t, err, "%s=%q", name, value)
+			assert.Equal(t, on, got, "%s=%q", name, value)
+		}
 		assert.Equal(t, on, clusterValidationSkipped(), value)
 		assert.Equal(t, on, inotifyCheckSkipped(), value)
 	}
+	t.Setenv(envLocalOnly, "")
+	t.Setenv(envSkipClusterValidation, "")
+
+	t.Setenv(envSkipInotify, "yes")
+	run := runCheck(t, checkStubs{}, "--pre", "--local-only")
+	assert.Equal(t, 0, run.code(), "%v\n%s", run.err, run.stderr)
 
 	t.Setenv(envSkipInotify, "maybe")
-	rootCmd.SetErr(&bytes.Buffer{})
-	rootCmd.SetOut(&bytes.Buffer{})
-	rootCmd.SetArgs([]string{"self-hosted", "check", "--pre", "--json"})
-	err := rootCmd.Execute()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `NVCF_CLI_SELFHOSTED_SKIP_INOTIFY="maybe": expected true or false`)
+	run = runCheck(t, checkStubs{}, "--pre")
+	assert.Equal(t, 1, run.code())
+	require.Error(t, run.err)
+	assert.Contains(t, run.err.Error(), `NVCF_CLI_SELFHOSTED_SKIP_INOTIFY="maybe": expected true or false`)
+	assert.NotContains(t, run.stderr, `"event"`, "rejected before any work")
 }
 
 // A bare --pre skips SIS, which is not up before install; an explicit --all or
@@ -841,6 +855,9 @@ func TestCheck_InterruptNoteIsPrintedAfterTheDashboardCloses(t *testing.T) {
 // the same teardown as Ctrl-C, instead of killing the process with the run's
 // cluster-wide RBAC and NGC-key Secret in place.
 func TestCheck_SIGHUPGoesThroughTheTeardown(t *testing.T) {
+	if signal.Ignored(syscall.SIGHUP) {
+		t.Skip("the test process started with SIGHUP ignored, as under nohup, and the run keeps it ignored")
+	}
 	err, stderr := runCheckWithBudget(t, time.Minute, func(ctx context.Context) selfhosted.ClusterValidatorResult {
 		require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGHUP))
 		<-ctx.Done()
@@ -850,6 +867,51 @@ func TestCheck_SIGHUPGoesThroughTheTeardown(t *testing.T) {
 	require.ErrorAs(t, err, &exitErr)
 	assert.Equal(t, 130, exitErr.Code)
 	assert.Equal(t, true, finalEvent(t, stderr)["cancelled"])
+}
+
+// ignoredSignalsChild runs TestCheck_SignalsIgnoredAtStartStayIgnored as the
+// child process, started with SIGHUP and SIGINT ignored.
+const ignoredSignalsChild = "NVCF_CLI_TEST_IGNORED_SIGNALS_CHILD"
+
+// nohup starts the command with SIGHUP ignored, and a shell without job
+// control starts a background job with SIGINT ignored. The run keeps them
+// ignored: a dropped SSH session must not cancel a check started with nohup.
+func TestCheck_SignalsIgnoredAtStartStayIgnored(t *testing.T) {
+	const finished = "validator finished"
+	if os.Getenv(ignoredSignalsChild) != "" {
+		if !signal.Ignored(syscall.SIGHUP) || !signal.Ignored(syscall.SIGINT) {
+			fmt.Println("the child was not started with SIGHUP and SIGINT ignored")
+			os.Exit(3)
+		}
+		err := executeCheck(t, time.Minute, func(
+			ctx context.Context, p selfhosted.ClusterValidatorParams,
+		) selfhosted.ClusterValidatorResult {
+			_ = syscall.Kill(os.Getpid(), syscall.SIGHUP)
+			_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
+			select {
+			case <-ctx.Done():
+				return selfhosted.ClusterValidatorResult{Err: ctx.Err()}
+			case <-time.After(300 * time.Millisecond):
+			}
+			fmt.Println(finished)
+			return selfhosted.ClusterValidatorResult{Passed: true,
+				Logs: "Validator role: control-plane\nCluster is NVCF-Ready\n"}
+		}, os.Stderr)
+		os.Exit(ExitCodeFromError(err))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	child := exec.CommandContext(ctx, "/bin/sh", "-c", `trap "" HUP INT; exec "$0" "$@"`,
+		os.Args[0], "-test.run=^"+t.Name()+"$")
+	child.Env = append(os.Environ(), ignoredSignalsChild+"=1")
+	var stdout, stderr bytes.Buffer
+	child.Stdout, child.Stderr = &stdout, &stderr
+	waitErr := child.Run()
+	require.NotEqual(t, 3, child.ProcessState.ExitCode(), stdout.String())
+	assert.Equal(t, 0, child.ProcessState.ExitCode(), "%v\n%s%s", waitErr, stdout.String(), stderr.String())
+	assert.Contains(t, stdout.String(), finished)
+	assert.NotEqual(t, true, finalEvent(t, stderr.String())["cancelled"])
 }
 
 // Every exit that leaves objects behind says how to remove them: in the row,

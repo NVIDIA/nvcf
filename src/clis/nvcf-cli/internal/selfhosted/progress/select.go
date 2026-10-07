@@ -229,10 +229,19 @@ func detectTerminalSize(w io.Writer) *Size {
 // Aligns with how GitHub Actions, GitLab CI, CircleCI, etc. set CI=true.
 // Falsy values (false, 0, no, empty) leave the matrix free to fall through.
 func isTruthy(v string) bool {
+	on, _ := ParseToggle(v)
+	return on
+}
+
+// ParseToggle reads a boolean environment value, in any case and with
+// surrounding space: true, 1, yes, y and on are on; false, 0, no, n and off
+// are off. ok is false for any other value, the empty one included.
+func ParseToggle(v string) (on, ok bool) {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "true", "1", "yes", "y", "on":
-		return true
-	default:
-		return false
+		return true, true
+	case "false", "0", "no", "n", "off":
+		return false, true
 	}
+	return false, false
 }

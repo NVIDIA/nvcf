@@ -26,7 +26,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -254,11 +253,18 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// session) so an interrupted run unwinds through its deferred cleanup.
 	// Without this the process exits on the signal and the validator's
 	// cluster-wide ClusterRole, bound to a ServiceAccount in default, stays
-	// behind until a later check's orphan sweep.
+	// behind until a later check's orphan sweep. A signal the process started
+	// with ignored stays ignored: nohup ignores SIGHUP so that the run outlives
+	// the session, and a shell without job control starts a background job
+	// with SIGINT ignored.
 	sigCtx, cancelSig := context.WithCancel(runCtx)
 	defer cancelSig()
+	// Read before Notify: a signal relayed to a channel no longer reads as
+	// ignored.
+	caughtSignals := notIgnored(os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	heldSignals := notIgnored(syscall.SIGTERM, syscall.SIGHUP)
 	caught := make(chan os.Signal, 1)
-	signal.Notify(caught, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	notifyOn(caught, caughtSignals)
 	defer signal.Stop(caught)
 	held := make(chan os.Signal, 1)
 	defer signal.Stop(held)
@@ -269,7 +275,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	var interruptOnce sync.Once
 	interrupt := func() {
 		interruptOnce.Do(func() {
-			signal.Notify(held, syscall.SIGTERM, syscall.SIGHUP)
+			notifyOn(held, heldSignals)
 			signal.Stop(caught)
 			cancelSig()
 		})
@@ -491,6 +497,25 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	maybeShowClusterValidatorLogs(errOut, lastResults)
 	printKeptValidatorObjects(errOut, ledger.Outstanding())
 	return runErr
+}
+
+// notIgnored returns the signals in sigs that the process does not ignore.
+func notIgnored(sigs ...os.Signal) []os.Signal {
+	var out []os.Signal
+	for _, sig := range sigs {
+		if !signal.Ignored(sig) {
+			out = append(out, sig)
+		}
+	}
+	return out
+}
+
+// notifyOn relays sigs to ch. With none it relays nothing, where
+// signal.Notify with no signals relays every one.
+func notifyOn(ch chan<- os.Signal, sigs []os.Signal) {
+	if len(sigs) > 0 {
+		signal.Notify(ch, sigs...)
+	}
 }
 
 // printInterruptCleanup says, as soon as a run is interrupted, how to remove
@@ -1481,17 +1506,17 @@ const (
 	envSkipInotify           = "NVCF_CLI_SELFHOSTED_SKIP_INOTIFY"
 )
 
-// envToggle reads a boolean env toggle: unset or empty is off, and a value
-// strconv.ParseBool reads says which, so "false" and "0" are off. Any other
-// value is an error naming it.
+// envToggle reads a boolean env toggle: unset or empty is off, and a word
+// progress.ParseToggle reads says which, so "false", "0" and "no" are off.
+// Any other value is an error naming it.
 func envToggle(name string) (bool, error) {
 	raw := strings.TrimSpace(os.Getenv(name))
 	if raw == "" {
 		return false, nil
 	}
-	on, err := strconv.ParseBool(raw)
-	if err != nil {
-		return false, fmt.Errorf("%s=%q: expected true or false", name, raw)
+	on, ok := progress.ParseToggle(raw)
+	if !ok {
+		return false, fmt.Errorf("%s=%q: expected true or false (or 1/0, yes/no, y/n, on/off)", name, raw)
 	}
 	return on, nil
 }
