@@ -2,32 +2,9 @@
 
 Normal installations use the committed [development image values](../dev-images/values.yaml) and the images already preloaded on the shared Spark nodes. Build gateway, router, Pylon and operator images only when application code changes or another cluster needs images. Builds include local edits. Router and Pylon builds use Cargo profile `integration`.
 
-## Package charts for distribution
+## Prepare images and charts
 
-Use the output variables from the [installation guide](../README.md#0-package-charts). From `deploy/helm/llm-routing`, package shared infrastructure and both model charts with their recipe catalog:
-
-```bash
-bash package-charts.sh --output-dir "$LLM_CHARTS"
-```
-
-The output contains three Helm archives, `index.json`, model terms under `notices/`, and `SHA256SUMS`. Development packaging needs Helm and Python 3. The command builds local dependencies in a temporary directory and preserves source files and existing output files. Choose a fresh output directory for another build.
-
-Distribute the archives, catalog and matching `dev-images/values.yaml` to the installer. Installation uses Helm and kubectl. Images must already be available in the configured registry or preloaded on every eligible node. The temporary `dev-images` workflow can be removed when registry images are published.
-
-## Build shared stack images
-
-Run from `deploy/helm/llm-routing` when a new application image set is needed:
-
-```bash
-python3 dev-images/build.py \
-  --context "$LLM_CONTEXT" --allow-containerd-import
-```
-
-The script builds and exports all four images with fresh tags, then preloads every compatible node. Only after all imports succeed does it replace `dev-images/values.yaml`. A failed build or import preserves the previous values file. Commit and push the updated values with the source changes so teammates use the same image references. The script does not commit, push or upgrade Helm releases.
-
-Each invocation uses a new work directory outside the checkout. Use `--output-dir /path/to/builds` to choose its parent directory. Archives, saved configuration and build evidence remain there. The committed values contain the image references, architecture and shared Helm configuration, without workstation paths or credentials.
-
-Docker must be running with Buildx support for the selected architecture and access to base images and build dependencies. ARM64 and AMD64 are supported. The values use `Never` pull policy, so a replacement node or an evicted image must be preloaded before scheduling these workloads. Rebuilds add new image content to node caches and do not remove old images. Building does not restart running pods. Apply the new references with the shared Helm upgrade command in the installation guide.
+Use the [temporary development preparation workflow](../dev-images/README.md) to build and preload all four images, package the charts and update the shared values with one command. Normal installers use the prepared artifacts from the main installation guide.
 
 The existing `build-shared-images.py` helper remains available for custom workflows and retries using a saved configuration. It writes `shared.values.yaml` in its own `--output-dir` and does not update the committed file. The target namespace may already exist. Reusing that helper's output directory rebuilds its saved tags.
 

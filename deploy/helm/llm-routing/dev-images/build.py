@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-License-Identifier: Apache-2.0
-"""Build a new local image set and publish its shared Helm values after preload."""
+"""Build and preload images, package charts, and publish shared Helm inputs."""
 import argparse
 import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 
 HERE = Path(__file__).resolve().parent
 VALUES = HERE / 'values.yaml'
+CHARTS = HERE / 'charts'
 spec = importlib.util.spec_from_file_location('shared_image_builder', HERE.parent / 'build-shared-images.py')
 images = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(images)
@@ -57,6 +59,34 @@ def publish_values(source, target):
             temporary.unlink(missing_ok=True)
 
 
+def publish_preparation(source, charts_source):
+    """Publish the chart bundle and restore it if updating shared values fails."""
+    images.stack.require(not CHARTS.is_symlink(), 'Shared charts must not be a symlink.')
+    images.stack.require(not CHARTS.exists() or CHARTS.is_dir(), 'Shared charts must be a directory.')
+    staged = Path(tempfile.mkdtemp(prefix='.charts-', dir=CHARTS.parent))
+    backup = None
+    try:
+        shutil.copytree(charts_source, staged, dirs_exist_ok=True)
+        if CHARTS.exists():
+            backup = Path(tempfile.mkdtemp(prefix='.charts-old-', dir=CHARTS.parent))
+            backup.rmdir()
+            os.replace(CHARTS, backup)
+        try:
+            os.replace(staged, CHARTS)
+            publish_values(source, VALUES)
+        except BaseException:
+            if CHARTS.exists():
+                shutil.rmtree(CHARTS)
+            if backup and backup.exists():
+                os.replace(backup, CHARTS)
+            raise
+    finally:
+        if staged.exists():
+            shutil.rmtree(staged)
+        if backup and backup.exists():
+            shutil.rmtree(backup)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--context', help='Override the current kubectl context.')
@@ -68,6 +98,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     images.stack.require(args.allow_containerd_import, 'Use --allow-containerd-import to build and preload images.')
     images.stack.require(not VALUES.is_symlink(), 'Shared values must not be a symlink.')
+    images.stack.require(not CHARTS.is_symlink(), 'Shared charts must not be a symlink.')
     state = Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state'))
     output = (args.output_dir or state / 'llm-routing/image-builds').expanduser().resolve()
     images.stack.require(not output.is_relative_to(images.stack.REPO), 'Keep image archives and build state outside the checkout.')
@@ -79,9 +110,12 @@ def main(argv=None):
             command.extend([name, value])
     print('Build state: ' + str(work), flush=True)
     source = images.main(command)
-    publish_values(source, VALUES)
+    charts = work / 'charts'
+    subprocess.run(['bash', str(HERE.parent / 'package-charts.sh'), '--output-dir', str(charts)], check=True)
+    publish_preparation(source, charts)
     print('Updated shared Helm values: ' + str(VALUES), flush=True)
-    print('Commit this values file to share the preloaded image references.', flush=True)
+    print('Updated chart packages: ' + str(CHARTS), flush=True)
+    print('Commit dev-images/values.yaml and dev-images/charts together to share this preparation.', flush=True)
     return VALUES
 
 

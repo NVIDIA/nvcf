@@ -6,27 +6,18 @@ Install shared routing once, then install each model recipe with Helm and a smal
 
 Use Kubernetes with the NVIDIA device plugin, a GPU RuntimeClass and persistent storage on compatible model nodes. Install Helm and kubectl on your workstation, plus Python 3.11+ for the model access commands. Select available nodes using the hardware profiles in the [common recipe catalog](recipes/index.json). Profiles specify node count, GPUs per node, resource requests and workload limits.
 
-The committed [development image values](dev-images/values.yaml) reference application images already preloaded on the shared Spark nodes. Use these values for installation. Only developers changing application code need to [build and preload new images](recipes/BUILDING.md#build-shared-stack-images). A different cluster or replacement node needs the referenced images preloaded first.
+The committed [development image values](dev-images/values.yaml) reference application images already preloaded on the shared Spark nodes. Use these values and the committed chart packages in `dev-images/charts/` for installation. Developers changing application code or charts can [prepare a new image and chart set](dev-images/README.md). A different cluster or replacement node needs the referenced images preloaded first.
 
 Run the following from `deploy/helm/llm-routing`, in the same terminal. Select your target kubeconfig context first. This example uses `llm-stack`. On a shared cluster, coordinate the target namespace and use it consistently in the values, Helm and client commands.
 
-## 0. Package charts
+## 1. Install shared infrastructure
 
 ```bash
 export LLM_CONTEXT="$(kubectl config current-context)"
 export LLM_WORK="$HOME/.local/state/llm-routing/$LLM_CONTEXT/llm-stack"
 mkdir -p "$LLM_WORK"
-export LLM_CHARTS="$(mktemp -d "$LLM_WORK/charts.XXXXXX")"
 
-bash package-charts.sh --output-dir "$LLM_CHARTS"
-```
-
-This packages the shared stack and model charts without building images. Each run uses a fresh chart output directory. The Helm command below uses the committed image references. See [building and distributing images](recipes/BUILDING.md) when those images need updating.
-
-## 1. Install shared infrastructure
-
-```bash
-helm upgrade --install llm-stack "$LLM_CHARTS/llm-shared-stack-0.1.0.tgz" \
+helm upgrade --install llm-stack dev-images/charts/llm-shared-stack-0.1.0.tgz \
   --kube-context "$LLM_CONTEXT" --namespace llm-stack --create-namespace \
   --values dev-images/values.yaml --wait --timeout 10m
 ```
@@ -48,7 +39,7 @@ sharedCAConfigMap: llm-gateway-stack-ca
 Install the FP8 recipe:
 
 ```bash
-helm upgrade --install qwen-fp8 "$LLM_CHARTS/pylon-sglang-recipe-0.2.0.tgz" \
+helm upgrade --install qwen-fp8 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
   --kube-context "$LLM_CONTEXT" --namespace llm-stack \
   --values "$LLM_WORK/qwen.values.yaml" --wait --timeout 120m
 kubectl --context "$LLM_CONTEXT" -n llm-stack wait \
@@ -60,7 +51,7 @@ Kubernetes checks placement, qualifies the GPU, prepares the pinned model cache 
 For a second precision on another available node, use the same values file with two overrides:
 
 ```bash
-helm upgrade --install qwen-nvfp4 "$LLM_CHARTS/pylon-sglang-recipe-0.2.0.tgz" \
+helm upgrade --install qwen-nvfp4 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
   --kube-context "$LLM_CONTEXT" --namespace llm-stack \
   --values "$LLM_WORK/qwen.values.yaml" --set recipe=qwen3.8-27b-nvfp4 --set 'nodes[0]=gpu-node-2' \
   --wait --timeout 120m

@@ -12,10 +12,10 @@ TLS customization uses `gatewayStack.tls` and the child chart listener TLS value
 
 ### Shared Helm installation and verification
 
-Use the output variables from the [installation guide](README.md#0-package-charts). The shared chart runs a verification Job after installation and upgrade. It uses the installed CA to check gateway TLS and the `/v1/models` response, then checks that an unknown model returns HTTP 401 with an invalid key and HTTP 404 with the valid key. An empty registry is valid on first installation. Existing models remain valid on upgrades. A failed check makes the Helm command fail:
+Use the output variables from the [installation guide](README.md#1-install-shared-infrastructure). The shared chart runs a verification Job after installation and upgrade. It uses the installed CA to check gateway TLS and the `/v1/models` response, then checks that an unknown model returns HTTP 401 with an invalid key and HTTP 404 with the valid key. An empty registry is valid on first installation. Existing models remain valid on upgrades. A failed check makes the Helm command fail:
 
 ```bash
-helm upgrade --install llm-stack "$LLM_CHARTS/llm-shared-stack-0.1.0.tgz" \
+helm upgrade --install llm-stack dev-images/charts/llm-shared-stack-0.1.0.tgz \
   --kube-context "$LLM_CONTEXT" --namespace llm-stack --create-namespace \
   --values dev-images/values.yaml --wait --timeout 10m
 ```
@@ -105,7 +105,7 @@ sharedCAConfigMap: llm-gateway-stack-ca
 Install it with the shared stack already running:
 
 ```bash
-helm upgrade --install glm "$LLM_CHARTS/pylon-gguf-backend-0.2.0.tgz" \
+helm upgrade --install glm dev-images/charts/pylon-gguf-backend-0.2.0.tgz \
   --kube-context "$LLM_CONTEXT" --namespace llm-stack \
   --values "$LLM_WORK/glm.values.yaml" --wait --timeout 120m
 ```

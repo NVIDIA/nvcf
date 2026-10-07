@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -22,6 +23,9 @@ class SharedDevImagesTests(unittest.TestCase):
         self.values = self.work/'values.yaml'
         self.previous = '{"previous": "published image set"}\n'
         self.values.write_text(self.previous)
+        self.charts = self.work/'charts'
+        self.charts.mkdir()
+        (self.charts/'previous-chart.tgz').write_bytes(b'previous chart bundle')
         self.output = self.work/'builds'
         self.args = ['--context', 'test-context', '--namespace', 'test-models',
                      '--control-node', 'cpu-node', '--output-dir', str(self.output),
@@ -42,7 +46,9 @@ class SharedDevImagesTests(unittest.TestCase):
         self.generated['callerKey'] = {'existingSecret': 'private-caller'}
         self.generated['gatewayStack']['tls'] = {'caFile': '/private/ca.pem'}
         self.enterContext(patch.object(builder, 'VALUES', self.values))
+        self.enterContext(patch.object(builder, 'CHARTS', self.charts))
         self.build = self.enterContext(patch.object(builder.images, 'main', side_effect=self.build_values))
+        self.package = self.enterContext(patch.object(builder.subprocess, 'run', side_effect=self.package_charts))
         self.enterContext(patch('builtins.print'))
 
     @staticmethod
@@ -56,15 +62,25 @@ class SharedDevImagesTests(unittest.TestCase):
         generated.write_text(json.dumps(self.generated))
         return generated
 
+    def package_charts(self, args, **kwargs):
+        output = Path(args[args.index('--output-dir') + 1])
+        output.mkdir(parents=True)
+        (output/'test-chart.tgz').write_bytes(b'prepared chart bundle')
+
     def test_success_publishes_only_shared_images_and_placement(self):
         result = builder.main(self.args)
         self.assertEqual(result, self.values)
         self.assertEqual(json.loads(self.values.read_text()), self.expected)
+        self.assertEqual((self.charts/'test-chart.tgz').read_bytes(), b'prepared chart bundle')
+        self.assertFalse((self.charts/'previous-chart.tgz').exists())
         args = self.build.call_args.args[0]
         for option, expected in [('--context', 'test-context'), ('--namespace', 'test-models'),
                                  ('--control-node', 'cpu-node')]:
             self.assertEqual(args[args.index(option) + 1], expected)
         self.assertIn('--allow-containerd-import', args)
+        output = Path(args[args.index('--output-dir') + 1])
+        self.package.assert_called_once_with(
+            ['bash', str(HERE/'package-charts.sh'), '--output-dir', str(output/'charts')], check=True)
 
     def test_each_build_gets_a_fresh_external_directory(self):
         builder.main(self.args)
@@ -87,12 +103,37 @@ class SharedDevImagesTests(unittest.TestCase):
         self.build.side_effect = ValueError('image import failed')
         with self.assertRaisesRegex(ValueError, 'image import failed'):
             builder.main(self.args)
+        self.package.assert_not_called()
         self.assertEqual(self.values.read_text(), self.previous)
+
+    def test_failed_chart_packaging_preserves_published_values(self):
+        self.package.side_effect = subprocess.CalledProcessError(1, 'package-charts.sh')
+        with self.assertRaises(subprocess.CalledProcessError):
+            builder.main(self.args)
+        self.build.assert_called_once()
+        self.package.assert_called_once()
+        self.assertEqual(self.values.read_text(), self.previous)
+
+    def test_values_publication_failure_restores_previous_chart_bundle(self):
+        publish = builder.publish_values
+
+        def fail_final_publication(source, target):
+            if target == self.values:
+                raise OSError('simulated values publication failure')
+            return publish(source, target)
+
+        with patch.object(builder, 'publish_values', side_effect=fail_final_publication):
+            with self.assertRaisesRegex(OSError, 'simulated values publication failure'):
+                builder.main(self.args)
+        self.assertEqual(self.values.read_text(), self.previous)
+        self.assertEqual((self.charts/'previous-chart.tgz').read_bytes(), b'previous chart bundle')
+        self.assertFalse((self.charts/'test-chart.tgz').exists())
 
     def test_import_authorization_is_required_before_build_or_local_output(self):
         with self.assertRaisesRegex(ValueError, '--allow-containerd-import'):
             builder.main(self.args[:-1])
         self.build.assert_not_called()
+        self.package.assert_not_called()
         self.assertFalse(self.output.exists())
         self.assertEqual(self.values.read_text(), self.previous)
 
@@ -102,6 +143,7 @@ class SharedDevImagesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             builder.main(args)
         self.build.assert_not_called()
+        self.package.assert_not_called()
         self.assertFalse((HERE/'unexpected-build-output').exists())
         self.assertEqual(self.values.read_text(), self.previous)
 
@@ -113,6 +155,7 @@ class SharedDevImagesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             builder.main(self.args)
         self.build.assert_not_called()
+        self.package.assert_not_called()
         self.assertEqual(private.read_text(), self.previous)
         self.assertTrue(self.values.is_symlink())
 
