@@ -79,7 +79,7 @@ func newCacheMetrics(meter metric.Meter, entryCount func() int64) (*cacheMetrics
 		return nil, fmt.Errorf("cache: failed to create %s: %w", hitsMetricName, err)
 	}
 	misses, err := meter.Int64Counter(missesMetricName,
-		metric.WithDescription("Events with no entry in the cache, which are written to the database immediately"))
+		metric.WithDescription("Events with no entry in the cache, which are stored as written and left for the caller to write to the database"))
 	if err != nil {
 		return nil, fmt.Errorf("cache: failed to create %s: %w", missesMetricName, err)
 	}
@@ -89,7 +89,7 @@ func newCacheMetrics(meter metric.Meter, entryCount func() int64) (*cacheMetrics
 		return nil, fmt.Errorf("cache: failed to create %s: %w", evictionsMetricName, err)
 	}
 	flushes, err := meter.Int64Counter(flushesMetricName,
-		metric.WithDescription("Flushes of evicted pending entries to the database, by result"))
+		metric.WithDescription("Flushes of evicted pending entries to the database, by result. A failure means every retry failed and the entry was dropped"))
 	if err != nil {
 		return nil, fmt.Errorf("cache: failed to create %s: %w", flushesMetricName, err)
 	}

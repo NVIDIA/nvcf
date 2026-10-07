@@ -25,6 +25,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -59,12 +60,18 @@ type flushRecorder struct {
 	mu   sync.Mutex
 	recs []data_access.EventV3UpsertRecord
 	err  error
+	// failFirst makes that many of the first calls, counted across all keys, fail
+	// whatever err is.
+	failFirst int
 }
 
 func (r *flushRecorder) flush(_ context.Context, rec data_access.EventV3UpsertRecord) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.recs = append(r.recs, rec)
+	if len(r.recs) <= r.failFirst {
+		return errors.New("database unavailable")
+	}
 	return r.err
 }
 
@@ -660,17 +667,191 @@ func TestProcessEvent_EvictedCleanEntryIsNotFlushed(t *testing.T) {
 }
 
 func TestProcessEvent_FailedEvictionFlushStillEvicts(t *testing.T) {
-	h, rec := newTestHandlerWith(t, evictionConfig(1))
-	rec.err = errors.New("database unavailable")
-	h.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
-	h.processEvent(keyN(1), event{timestamp: at(2)}, at(2))
+	synctest.Test(t, func(t *testing.T) {
+		handler, recorder := newTestHandlerWith(t, evictionConfig(1))
+		recorder.err = errors.New("database unavailable")
+		makePending(handler, keyN(1), 1)
 
-	got := h.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+		got := handler.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
 
-	assert.Equal(t, outcomeMiss, got)
-	assert.Len(t, rec.records(), 1)
-	requireKeys(t, h, []int{2}, []int{1})
-	assertConsistent(t, h)
+		assert.Equal(t, outcomeMiss, got)
+		assert.Len(t, recorder.records(), evictionFlushAttempts)
+		requireKeys(t, handler, []int{2}, []int{1})
+		assertConsistent(t, handler)
+	})
+}
+
+func TestFlushEvicted_RetriesWithDoublingDelays(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var attemptTimes []time.Time
+		flush := func(context.Context, data_access.EventV3UpsertRecord) error {
+			attemptTimes = append(attemptTimes, time.Now())
+			return errors.New("database unavailable")
+		}
+		handler, err := NewCachingDBHandler(&fakeDB{}, evictionConfig(1), flush, discardMeter())
+		require.NoError(t, err)
+		makePending(handler, keyN(1), 1)
+		start := time.Now()
+
+		handler.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+
+		var offsets []time.Duration
+		for _, attemptTime := range attemptTimes {
+			offsets = append(offsets, attemptTime.Sub(start))
+		}
+		assert.Equal(t, []time.Duration{
+			0,
+			100 * time.Millisecond,
+			300 * time.Millisecond,
+			700 * time.Millisecond,
+		}, offsets)
+	})
+}
+
+func TestFlushEvicted_StopsRetryingOnceAWriteSucceeds(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var calls int
+		flush := func(context.Context, data_access.EventV3UpsertRecord) error {
+			calls++
+			if calls < 3 {
+				return errors.New("database unavailable")
+			}
+			return nil
+		}
+		handler, err := NewCachingDBHandler(&fakeDB{}, evictionConfig(1), flush, discardMeter())
+		require.NoError(t, err)
+		makePending(handler, keyN(1), 1)
+
+		handler.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+
+		assert.Equal(t, 3, calls)
+	})
+}
+
+func TestFlushEvicted_StopsRetryingWhenTheTimeoutEndsDuringTheFlush(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var calls int
+		flush := func(ctx context.Context, _ data_access.EventV3UpsertRecord) error {
+			calls++
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		handler, err := NewCachingDBHandler(&fakeDB{}, evictionConfig(1), flush, discardMeter())
+		require.NoError(t, err)
+		makePending(handler, keyN(1), 1)
+
+		handler.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+
+		assert.Equal(t, 1, calls, "a retry after the deadline would fail at once")
+	})
+}
+
+func TestFlushEvicted_StopsRetryingWhenTheTimeoutEndsDuringAWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var calls int
+		flush := func(context.Context, data_access.EventV3UpsertRecord) error {
+			calls++
+			time.Sleep(evictionFlushTimeout - evictionRetryBaseDelay/2)
+			return errors.New("database unavailable")
+		}
+		handler, err := NewCachingDBHandler(&fakeDB{}, evictionConfig(1), flush, discardMeter())
+		require.NoError(t, err)
+		makePending(handler, keyN(1), 1)
+
+		handler.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+
+		assert.Equal(t, 1, calls, "the wait would have ended after the timeout")
+	})
+}
+
+func TestFlushEvicted_AFailingRecordDoesNotStopTheNextOne(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		written := map[string]int{}
+		flush := func(_ context.Context, rec data_access.EventV3UpsertRecord) error {
+			written[rec.EventName]++
+			if rec.EventName == keyN(1).eventName {
+				return errors.New("database unavailable")
+			}
+			return nil
+		}
+		handler, err := NewCachingDBHandler(&fakeDB{}, evictionConfig(1), flush, discardMeter())
+		require.NoError(t, err)
+
+		handler.flushEvicted([]data_access.EventV3UpsertRecord{
+			{Namespace: "ns", Context: "ctx", EventName: keyN(1).eventName, Timestamp: at(1)},
+			{Namespace: "ns", Context: "ctx", EventName: keyN(2).eventName, Timestamp: at(2)},
+		})
+
+		assert.Equal(t, evictionFlushAttempts, written[keyN(1).eventName])
+		assert.Equal(t, 1, written[keyN(2).eventName])
+	})
+}
+
+func TestFlushEvicted_RecordsAfterTheTimeoutAreNotWritten(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		written := map[string]int{}
+		flush := func(ctx context.Context, rec data_access.EventV3UpsertRecord) error {
+			written[rec.EventName]++
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		handler, err := NewCachingDBHandler(&fakeDB{}, evictionConfig(1), flush, discardMeter())
+		require.NoError(t, err)
+
+		handler.flushEvicted([]data_access.EventV3UpsertRecord{
+			{Namespace: "ns", Context: "ctx", EventName: keyN(1).eventName, Timestamp: at(1)},
+			{Namespace: "ns", Context: "ctx", EventName: keyN(2).eventName, Timestamp: at(2)},
+		})
+
+		assert.Equal(t, 1, written[keyN(1).eventName])
+		assert.Zero(t, written[keyN(2).eventName])
+	})
+}
+
+func TestFlushWithRetry_ReportsHowManyWritesItMade(t *testing.T) {
+	tests := []struct {
+		name         string
+		failFirst    int
+		endTimeout   bool
+		wantAttempts int
+		wantErr      bool
+	}{
+		{name: "first write succeeds", wantAttempts: 1},
+		{name: "third write succeeds", failFirst: 2, wantAttempts: 3},
+		{name: "every write fails", failFirst: evictionFlushAttempts, wantAttempts: evictionFlushAttempts, wantErr: true},
+		{name: "timeout already ended", endTimeout: true, wantAttempts: 0, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				handler, recorder := newTestHandlerWith(t, evictionConfig(1))
+				recorder.failFirst = tt.failFirst
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				if tt.endTimeout {
+					cancel()
+				}
+
+				attempts, err := handler.flushWithRetry(ctx, data_access.EventV3UpsertRecord{EventName: "evt-1"})
+
+				assert.Equal(t, tt.wantAttempts, attempts)
+				assert.Equal(t, tt.wantErr, err != nil)
+			})
+		})
+	}
+}
+
+func TestEvictInactive_RetriesAFailedWrite(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		handler, recorder := newTestHandlerWith(t, evictionConfig(10))
+		recorder.failFirst = 2
+		makePending(handler, keyN(1), 1)
+
+		evicted := handler.evictInactive(at(1000))
+
+		assert.Equal(t, 1, evicted)
+		assert.Len(t, recorder.records(), 3)
+	})
 }
 
 func TestProcessEvent_EvictionFlushRunsWithoutTheLock(t *testing.T) {
