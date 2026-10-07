@@ -90,6 +90,7 @@ go_test(
         "checkpoint_plan_a_test.go",
         "fsstore_test.go",
         "l2_integration_test.go",
+        "l2_integration_unqualified_test.go",
         "l2_promote_async_test.go",
         "l2_writer_test.go",
         "nim_backend_test.go",

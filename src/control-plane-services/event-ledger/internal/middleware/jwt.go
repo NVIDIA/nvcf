@@ -312,8 +312,21 @@ func requireScopes(requiredScopes Scopes, scopeRequirement ScopeRequirement, all
 
 			claims, ok := r.Context().Value(claimsContextKey).(jwt.MapClaims)
 			if !ok {
-				// API keys carry no scopes.
+				// The API Keys service only authenticates the key and returns its policy; it
+				// does not evaluate scopes, so the route enforces them here.
 				if isPDPAuthorized(parentCtx) {
+					keyScopes := apiKeyScopesFromContext(parentCtx)
+					allowed := hasAnyRequiredScope(keyScopes, requiredScopes)
+					if scopeRequirement == RequireAllScopes {
+						allowed = hasAllRequiredScopes(keyScopes, requiredScopes)
+					}
+					if !allowed {
+						logger.WarnContext(traceCtx, ErrInsufficientPermissions)
+						status := http.StatusForbidden
+						api_error.GenerateErrorResponse(traceCtx, errType, "Forbidden", r.URL.Path, status, errors.New(ErrInsufficientPermissions), w)
+						logging.LogHTTPResponse(traceCtx, logger, status, w.Header())
+						return
+					}
 					next.ServeHTTP(w, r)
 					return
 				}
