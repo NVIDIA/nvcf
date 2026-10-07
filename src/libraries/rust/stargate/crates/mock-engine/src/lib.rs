@@ -117,7 +117,8 @@ pub struct RequestSpec {
     /// Prefix-cache key. Requests without a key never reuse cached tokens.
     pub cache_key: Option<u64>,
     pub input_tokens: u64,
-    /// Total output tokens including the first. At least 1.
+    /// Total output tokens including the first. Zero is treated as one,
+    /// since prefill always produces a token.
     pub output_tokens: u64,
 }
 
