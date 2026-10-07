@@ -235,6 +235,19 @@ class MonitoringTests(unittest.TestCase):
         self.config['monitoring']['networkPolicy'] = policy
         self.assertEqual(monitoring.chart_values(self.recipe)['networkPolicy'], policy)
 
+    def test_grafana_root_url_is_optional_and_validated(self):
+        self.assertEqual(monitoring.chart_values(self.recipe)['grafana']['rootURL'], '')
+        for root_url in ('/grafana/', 'grafana.example.com/', 'https://grafana.example.com/grafana',
+                         'https://example.com/a b/', 5):
+            with self.subTest(root_url=root_url):
+                self.config['monitoring']['grafanaRootURL'] = root_url
+                with self.assertRaises(RuntimeError):
+                    monitoring.chart_values(self.recipe)
+        for root_url in ('%(protocol)s://%(domain)s:%(http_port)s/grafana/', 'http://spark.example/grafana/'):
+            with self.subTest(root_url=root_url):
+                self.config['monitoring']['grafanaRootURL'] = root_url
+                self.assertEqual(monitoring.chart_values(self.recipe)['grafana']['rootURL'], root_url)
+
     def test_install_only_changes_monitoring_and_preserves_model_state(self):
         self.recipe.state.update(serve=True, runtimeSha256='a'*64, attachedExisting=True)
         self.output.side_effect = ['{}', '[]', '']

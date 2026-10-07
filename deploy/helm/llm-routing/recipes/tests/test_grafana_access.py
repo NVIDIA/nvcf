@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+import copy
 import json
 import pathlib
 import shutil
@@ -28,6 +29,7 @@ class GrafanaAccessTests(unittest.TestCase):
         recipe = tool.Recipe(json.loads((HERE/'config.example.json').read_text()), cls.tmp.name)
         values = monitoring.chart_values(recipe)
         values['grafana']['adminPassword'] = 'test-only-admin-password'
+        cls.values, cls.work = values, recipe.work
         path = recipe.work/'grafana-access-values.json'
         path.write_text(json.dumps(values))
         rendered = subprocess.check_output(['helm', 'template', 'access-test', str(monitoring.CHART), '-f', str(path)], text=True)
@@ -48,6 +50,20 @@ class GrafanaAccessTests(unittest.TestCase):
             self.assertNotIn('value', self.env[setting])
             self.assertEqual(self.env[setting]['valueFrom']['secretKeyRef'], {'name': secret['metadata']['name'], 'key': key})
         self.assertEqual(secret['stringData'], {'admin-user': 'admin', 'admin-password': 'test-only-admin-password'})
+
+    def test_root_url_is_unset_by_default(self):
+        self.assertNotIn('GF_SERVER_ROOT_URL', self.env)
+
+    def test_root_url_reaches_grafana(self):
+        values = copy.deepcopy(self.values)
+        values['grafana']['rootURL'] = '%(protocol)s://%(domain)s:%(http_port)s/grafana/'
+        path = self.work/'grafana-root-url-values.json'
+        path.write_text(json.dumps(values))
+        rendered = subprocess.check_output(['helm', 'template', 'access-test', str(monitoring.CHART), '-f', str(path)], text=True)
+        grafana = next(doc for doc in yaml.safe_load_all(rendered)
+                       if doc and doc['kind'] == 'Deployment' and doc['metadata']['name'] == 'access-test-grafana')
+        env = {entry['name']: entry for entry in grafana['spec']['template']['spec']['containers'][0]['env']}
+        self.assertEqual(env['GF_SERVER_ROOT_URL']['value'], '%(protocol)s://%(domain)s:%(http_port)s/grafana/')
 
 
 if __name__ == '__main__':
