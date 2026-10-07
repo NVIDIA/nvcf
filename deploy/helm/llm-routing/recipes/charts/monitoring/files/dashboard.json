@@ -1,0 +1,740 @@
+{
+  "uid": "llm-demo",
+  "title": "LLM routing demo",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "timezone": "browser",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "tags": [
+    "llm",
+    "demo"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "release",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "demo-metrics"
+        },
+        "query": "label_values(up, monitoring_release)",
+        "refresh": 1
+      },
+      {
+        "name": "namespace",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "demo-metrics"
+        },
+        "query": "label_values(up{monitoring_release=\"$release\"}, namespace)",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "name": "model",
+        "type": "query",
+        "description": "Filters gateway and router metrics. Pylon, operator and backend metrics follow the namespace filter.",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "demo-metrics"
+        },
+        "query": "label_values({__name__=~\"llm_api_gateway_http_requests_total|stargate_active_inference_servers\",monitoring_release=\"$release\",namespace=~\"$namespace\",model!=\"\"}, model)",
+        "refresh": 2,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Scrape health (1 = reachable, 0 = failed)",
+      "type": "timeseries",
+      "description": "A missing series is unknown. Samples older than 45 seconds are hidden.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up{monitoring_release=\"$release\",namespace=~\"${namespace}\"} and (time() - timestamp(up{monitoring_release=\"$release\",namespace=~\"${namespace}\"}) < 45)",
+          "legendFormat": "{{component}} / {{pod}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Scrape sample age",
+      "type": "timeseries",
+      "description": "Increasing age means collection stopped. This is separate from endpoint health.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - timestamp(up{monitoring_release=\"$release\",namespace=~\"${namespace}\"})",
+          "legendFormat": "{{component}} / {{pod}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Gateway requests",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (model, status) (rate(llm_api_gateway_http_requests_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\"}[$__rate_interval]))",
+          "legendFormat": "{{model}} HTTP {{status}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Gateway errors including rejected requests",
+      "type": "timeseries",
+      "description": "Includes requests rejected before a model was resolved.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status) (rate(llm_api_gateway_http_requests_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",status=~\"4..|5..\"}[$__rate_interval]))",
+          "legendFormat": "HTTP {{status}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Gateway request latency p95",
+      "type": "timeseries",
+      "description": "Includes the full response duration.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(llm_api_gateway_http_request_duration_seconds_bucket{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\"}[$__rate_interval])))",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Time to first token p95",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(llm_api_gateway_stream_first_token_seconds_bucket{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\"}[$__rate_interval])))",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Prompt and completion tokens / second",
+      "type": "timeseries",
+      "description": "Gateway usage counters are reported when usage arrives, usually at completion. This is aggregate token throughput, not per-request decoding speed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "tps",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (model, token_type, stream) (rate(llm_api_gateway_llm_tokens_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\",token_type=~\"prompt|completion\"}[$__rate_interval]))",
+          "legendFormat": "{{model}} {{token_type}} stream={{stream}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Tokens in selected interval",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (model, token_type, stream) (increase(llm_api_gateway_llm_tokens_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\",token_type=~\"prompt|completion\"}[$__range]))",
+          "legendFormat": "{{model}} {{token_type}} stream={{stream}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "title": "Router active inference servers",
+      "type": "timeseries",
+      "description": "Router availability can differ from the operator registration condition.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "stargate_active_inference_servers{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\"} and (time() - timestamp(stargate_active_inference_servers{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\"}) < 45)",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Router requests",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (model, status) (rate(stargate_requests_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\"}[$__rate_interval]))",
+          "legendFormat": "{{model}} {{status}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "Router selection latency p95",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(stargate_routing_duration_seconds_bucket{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\"}[$__rate_interval])))",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "Router upstream first byte p95",
+      "type": "timeseries",
+      "description": "Time to the upstream first byte, not full response latency.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 40,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, model) (rate(stargate_proxy_duration_seconds_bucket{monitoring_release=\"$release\",namespace=~\"${namespace}\",model=~\"${model}\"}[$__rate_interval])))",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "title": "Pylon registration streams",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "pylon_registration_stream_connected{monitoring_release=\"$release\",namespace=~\"${namespace}\"} and (time() - timestamp(pylon_registration_stream_connected{monitoring_release=\"$release\",namespace=~\"${namespace}\"}) < 45)",
+          "legendFormat": "{{pod}} / {{router}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "title": "Pylon reverse tunnels",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "pylon_reverse_tunnel_connected{monitoring_release=\"$release\",namespace=~\"${namespace}\"} and (time() - timestamp(pylon_reverse_tunnel_connected{monitoring_release=\"$release\",namespace=~\"${namespace}\"}) < 45)",
+          "legendFormat": "{{pod}} / {{router}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "title": "Operator endpoint conditions",
+      "type": "timeseries",
+      "description": "Counts across endpoints. Registered does not imply healthy or routable.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 56,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "nvcf_pylon_operator_endpoints{monitoring_release=\"$release\",namespace=~\"${namespace}\"} and (time() - timestamp(nvcf_pylon_operator_endpoints{monitoring_release=\"$release\",namespace=~\"${namespace}\"}) < 45)",
+          "legendFormat": "{{condition}} {{status}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 16,
+      "title": "Operator registration by endpoint",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 56,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "nvcf_pylon_operator_registered{monitoring_release=\"$release\",namespace=~\"${namespace}\"} and (time() - timestamp(nvcf_pylon_operator_registered{monitoring_release=\"$release\",namespace=~\"${namespace}\"}) < 45)",
+          "legendFormat": "{{endpoint}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 17,
+      "title": "Operator probe and scrape failures",
+      "type": "timeseries",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 64,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (__name__, reason) (rate({__name__=~\"nvcf_pylon_operator_(probe|scrape)_failures_total\",monitoring_release=\"$release\",namespace=~\"${namespace}\"}[$__rate_interval]))",
+          "legendFormat": "{{__name__}} {{reason}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    }
+  ]
+}

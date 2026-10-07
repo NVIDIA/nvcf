@@ -1,0 +1,58 @@
+{
+  "enabled": false,
+  "nodeSelector": {},
+  "imagePullPolicy": "IfNotPresent",
+  "imagePullSecrets": [],
+  "scrapeInterval": "15s",
+  "scrapeTimeout": "10s",
+  "namespaces": [],
+  "targets": [],
+  "networkPolicy": {
+    "enabled": false,
+    "apiServerCIDRs": []
+  },
+  "collector": {
+    "image": "ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.160.0",
+    "resources": {
+      "requests": {
+        "cpu": "100m",
+        "memory": "128Mi"
+      },
+      "limits": {
+        "memory": "512Mi"
+      }
+    }
+  },
+  "victoriaMetrics": {
+    "image": "victoriametrics/victoria-metrics:v1.153.0",
+    "retentionPeriod": "3d",
+    "resources": {
+      "requests": {
+        "cpu": "100m",
+        "memory": "256Mi"
+      },
+      "limits": {
+        "memory": "768Mi"
+      }
+    },
+    "storage": {
+      "enabled": true,
+      "storageClass": "",
+      "size": "5Gi"
+    }
+  },
+  "grafana": {
+    "image": "grafana/grafana:13.2.3",
+    "adminSecret": "",
+    "resources": {
+      "requests": {
+        "cpu": "100m",
+        "memory": "512Mi"
+      },
+      "limits": {
+        "memory": "1Gi"
+      }
+    },
+    "adminPassword": ""
+  }
+}

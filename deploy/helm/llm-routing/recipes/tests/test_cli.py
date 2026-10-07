@@ -202,6 +202,211 @@ class CliTests(unittest.TestCase):
         discover.assert_not_called()
         attach.assert_called_once()
 
+    def monitoring_config(self):
+        config = copy.deepcopy(self.config)
+        config.pop('runtimeClass')
+        config['nodes'] = {'control': config['nodes']['control']}
+        config['images'] = {'pullPolicy': 'IfNotPresent'}
+        config['releases'].pop('model')
+        return config
+
+    def bind_monitoring(self, recipe):
+        recipe.stamp('attachedMonitoring')
+        recipe.stamp('inventory', {'nodes': {recipe.c['nodes']['control']: 'control-uid'}})
+        recipe.stamp('stack', {'apiKeyFile': None})
+
+    def test_monitoring_discovers_attaches_installs_and_opens_dashboard(self):
+        config = self.monitoring_config()
+        calls = []
+        def attach(recipe):
+            self.assertFalse((self.work/'config.json').exists())
+            self.bind_monitoring(recipe)
+            calls.append('attach')
+        def install(monitor):
+            self.assertEqual(json.loads((self.work/'config.json').read_text()), config)
+            self.assertTrue(monitor.recipe.state['inventory'])
+            self.assertIsNone(monitor.recipe.backend)
+            calls.append('install')
+        def dashboard(monitor, port):
+            self.assertEqual(port, 13000)
+            self.assertEqual(json.loads((self.work/'config.json').read_text()), config)
+            calls.append('dashboard')
+        with patch.object(tool.monitoring_setup, 'discover_config', return_value=config) as discover, \
+             patch.object(tool.Recipe, 'attach_monitoring', attach), \
+             patch.object(tool.monitoring.Monitoring, 'install', autospec=True, side_effect=install), \
+             patch.object(tool.monitoring.Monitoring, 'dashboard', autospec=True, side_effect=dashboard), \
+             patch.object(tool, 'discover_config') as model_discover, \
+             patch.object(tool.Recipe, 'prepare') as prepare, redirect_stdout(io.StringIO()):
+            tool.main(['monitoring'])
+        self.assertEqual(calls, ['attach', 'install', 'dashboard'])
+        discover.assert_called_once_with('team-context', None, tool.output)
+        model_discover.assert_not_called()
+        prepare.assert_not_called()
+        self.assertEqual((self.work/'config.json').stat().st_mode & 0o777, 0o600)
+
+    def test_dashboard_discovers_and_attaches_without_installing(self):
+        path = self.root/'dashboard'/'config.json'
+        with patch.object(tool.monitoring_setup, 'discover_config', return_value=self.monitoring_config()) as discover, \
+             patch.object(tool.Recipe, 'attach_monitoring', autospec=True, side_effect=self.bind_monitoring), \
+             patch.object(tool.monitoring.Monitoring, 'dashboard') as dashboard, \
+             patch.object(tool.monitoring.Monitoring, 'install') as install, redirect_stdout(io.StringIO()):
+            tool.main(['--config', str(path), 'dashboard'])
+        discover.assert_called_once_with('team-context', None, tool.output)
+        dashboard.assert_called_once_with(13000, admin=False)
+        install.assert_not_called()
+        self.assertEqual(json.loads(path.read_text()), self.monitoring_config())
+
+    def test_monitoring_reuses_owner_state_and_enables_only_monitoring_settings(self):
+        self.config['monitoring'].update(enabled=False, retentionPeriod='7d')
+        self.write_config()
+        recipe = tool.Recipe(self.config, self.work)
+        original = {'identity': recipe.identity, 'inventory': {'nodes': {'control': 'uid'}},
+                    'stack': {'apiKeyFile': 'owner-key'}, 'serve': {'release': 'test-glm'},
+                    'artifacts': {'ready': True}, 'qualification': {'passed': True}}
+        tool.save(self.work/'state.json', original)
+        tool.save(self.work/'api-key', 'existing-owner-key')
+        def install(monitor):
+            self.assertEqual(monitor.recipe.state, original)
+            self.assertTrue(monitor.recipe.c['monitoring']['enabled'])
+            self.assertFalse(json.loads((self.work/'config.json').read_text())['monitoring']['enabled'])
+        with patch.object(tool.monitoring_setup, 'discover_config') as discover, \
+             patch.object(tool.Recipe, 'attach_monitoring') as attach, \
+             patch.object(tool.monitoring.Monitoring, 'install', autospec=True, side_effect=install), \
+             patch.object(tool.monitoring.Monitoring, 'dashboard') as dashboard:
+            tool.main(['monitoring', '--port', '13001'])
+        dashboard.assert_called_once_with(13001)
+        discover.assert_not_called()
+        attach.assert_not_called()
+        expected = copy.deepcopy(self.config)
+        expected['monitoring']['enabled'] = True
+        self.assertEqual(json.loads((self.work/'config.json').read_text()), expected)
+        self.assertEqual(json.loads((self.work/'state.json').read_text()), original)
+        self.assertEqual((self.work/'api-key').read_text(), 'existing-owner-key')
+
+    def test_existing_config_without_monitoring_or_state_attaches_before_install(self):
+        self.config.pop('monitoring')
+        self.write_config()
+        with patch.object(tool.monitoring_setup, 'discover_config') as discover, \
+             patch.object(tool.Recipe, 'attach_monitoring', autospec=True, side_effect=self.bind_monitoring), \
+             patch.object(tool.monitoring.Monitoring, 'install') as install, \
+             patch.object(tool.monitoring.Monitoring, 'dashboard') as dashboard:
+            tool.main(['monitoring'])
+        discover.assert_not_called()
+        install.assert_called_once()
+        dashboard.assert_called_once_with(13000)
+        self.assertEqual(json.loads((self.work/'config.json').read_text()), dict(self.config, monitoring={'enabled': True}))
+
+    def test_failed_monitoring_install_preserves_saved_disabled_setting(self):
+        self.config['monitoring']['enabled'] = False
+        self.write_config()
+        before = (self.work/'config.json').read_bytes()
+        with patch.object(tool.Recipe, 'attach_monitoring', autospec=True, side_effect=self.bind_monitoring), \
+             patch.object(tool.monitoring.Monitoring, 'install', side_effect=RuntimeError('Wrong Helm owner')), \
+             patch.object(tool.monitoring.Monitoring, 'dashboard') as dashboard, \
+             self.assertRaisesRegex(RuntimeError, 'Wrong Helm owner'):
+            tool.main(['monitoring'])
+        dashboard.assert_not_called()
+        self.assertEqual((self.work/'config.json').read_bytes(), before)
+
+    def test_failed_dashboard_keeps_completed_monitoring_installation(self):
+        self.config['monitoring']['enabled'] = False
+        self.write_config()
+        def install(monitor):
+            monitor.recipe.stamp('monitoring', {'release': monitor.release})
+        def dashboard(monitor, port):
+            self.assertTrue(json.loads((self.work/'config.json').read_text())['monitoring']['enabled'])
+            self.assertEqual(monitor.recipe.state['monitoring']['release'], monitor.release)
+            raise OSError('Address already in use')
+        with patch.object(tool.Recipe, 'attach_monitoring', autospec=True, side_effect=self.bind_monitoring), \
+             patch.object(tool.monitoring.Monitoring, 'install', autospec=True, side_effect=install) as install_call, \
+             patch.object(tool.monitoring.Monitoring, 'dashboard', autospec=True, side_effect=dashboard), \
+             self.assertRaisesRegex(OSError, 'Address already in use'):
+            tool.main(['monitoring'])
+        install_call.assert_called_once()
+        self.assertIn('monitoring', json.loads((self.work/'state.json').read_text()))
+
+    def test_failed_fresh_attachment_does_not_save_configuration_or_install(self):
+        with patch.object(tool.monitoring_setup, 'discover_config', return_value=self.monitoring_config()), \
+             patch.object(tool.Recipe, 'attach_monitoring', side_effect=RuntimeError('Foreign routing release')), \
+             patch.object(tool.monitoring.Monitoring, 'install') as install, \
+             self.assertRaisesRegex(RuntimeError, 'Foreign routing release'):
+            tool.main(['monitoring'])
+        install.assert_not_called()
+        self.assertFalse((self.work/'config.json').exists())
+        self.assertFalse((self.work/'state.json').exists())
+
+    def test_dashboard_reuses_bound_state_and_supports_optional_admin_and_port(self):
+        self.config['monitoring']['enabled'] = False
+        self.write_config()
+        recipe = tool.Recipe(self.config, self.work)
+        self.bind_monitoring(recipe)
+        before = (self.work/'config.json').read_bytes(), (self.work/'state.json').read_bytes()
+        for arguments, port, admin in [(['dashboard'], 13000, False),
+                                       (['dashboard', '--admin'], 13000, True),
+                                       (['dashboard', '--admin', '--port', '13001'], 13001, True)]:
+            with self.subTest(arguments=arguments), patch.object(tool.Recipe, 'attach_monitoring') as attach, \
+                 patch.object(tool.monitoring.Monitoring, 'dashboard') as dashboard, \
+                 patch.object(tool.monitoring.Monitoring, 'install') as install:
+                tool.main(arguments)
+            attach.assert_not_called()
+            install.assert_not_called()
+            dashboard.assert_called_once_with(port, admin=admin)
+        self.assertEqual(((self.work/'config.json').read_bytes(), (self.work/'state.json').read_bytes()), before)
+
+    def test_uninstall_monitoring_uses_saved_configuration_without_attachment_or_dashboard(self):
+        self.config['monitoring']['enabled'] = False
+        self.write_config()
+        with patch.object(tool.monitoring_setup, 'discover_config') as discover, \
+             patch.object(tool.Recipe, 'attach_monitoring') as attach, \
+             patch.object(tool.monitoring, 'Monitoring') as monitor:
+            tool.main(['uninstall-monitoring'])
+        monitor.return_value.uninstall.assert_called_once_with()
+        monitor.return_value.install.assert_not_called()
+        monitor.return_value.dashboard.assert_not_called()
+        discover.assert_not_called()
+        attach.assert_not_called()
+        self.assertEqual(json.loads((self.work/'config.json').read_text()), self.config)
+
+    def test_uninstall_requires_saved_configuration_before_discovery(self):
+        with patch.object(tool.monitoring_setup, 'discover_config') as discover, \
+             patch.object(tool.monitoring, 'Monitoring') as monitor, \
+             self.assertRaises(RuntimeError):
+            tool.main(['uninstall-monitoring'])
+        discover.assert_not_called()
+        monitor.assert_not_called()
+        self.assertFalse(self.work.exists())
+
+    def test_admin_flag_is_rejected_before_file_or_context_discovery(self):
+        for phase in ('paths', 'monitoring', 'attach-monitoring', 'verify-gateway'):
+            with self.subTest(phase=phase), patch.dict(os.environ, {'SPARK_CONTEXT': ''}), \
+                 patch.object(tool, 'cli_settings') as settings, patch.object(tool, 'output') as output, \
+                 self.assertRaisesRegex(RuntimeError, '--admin is supported only for dashboard'):
+                tool.main([phase, '--admin'])
+            settings.assert_not_called()
+            output.assert_not_called()
+        self.assertFalse(self.work.exists())
+
+    def test_monitoring_commands_reject_orphan_state_before_discovery(self):
+        tool.save(self.work/'state.json', {'identity': 'original'})
+        for phase in ('monitoring', 'dashboard'):
+            with self.subTest(phase=phase), patch.object(tool.monitoring_setup, 'discover_config') as discover, \
+                 self.assertRaisesRegex(RuntimeError, 'missing its configuration'):
+                tool.main([phase])
+            discover.assert_not_called()
+        self.assertEqual(json.loads((self.work/'state.json').read_text()), {'identity': 'original'})
+
+    def test_monitoring_preserves_concurrent_configuration_change(self):
+        self.config['monitoring']['enabled'] = False
+        self.write_config()
+        edited = dict(self.config, apiKeyFile='updated-key-path')
+        with patch.object(tool.Recipe, 'attach_monitoring', autospec=True, side_effect=self.bind_monitoring), \
+             patch.object(tool.monitoring.Monitoring, 'install', side_effect=lambda: self.write_config(edited)), \
+             patch.object(tool.monitoring.Monitoring, 'dashboard') as dashboard, \
+             self.assertRaisesRegex(RuntimeError, 'Configuration changed during monitoring installation'):
+            tool.main(['monitoring'])
+        dashboard.assert_not_called()
+        self.assertEqual(json.loads((self.work/'config.json').read_text()), edited)
+
     def test_unavailable_docker_reports_one_actionable_line_without_traceback(self):
         self.write_config()
         with patch.object(tool.Recipe, 'source_check'), \

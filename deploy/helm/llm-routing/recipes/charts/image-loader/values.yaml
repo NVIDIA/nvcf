@@ -5,6 +5,7 @@ nodeNames: []
 archiveNode: ""
 archiveName: arm64-images.tar
 archiveSha256: ""
+archiveSizeLimit: 1Gi
 serverImage: python:3.12-alpine
 clientImage: rancher/k3s:v1.36.4-k3s1
 socketPath: /run/k3s/containerd/containerd.sock
