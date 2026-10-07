@@ -38,6 +38,10 @@ import (
 
 // newEntitledNGC accepts each password in access for the repositories under
 // the orgs listed for it; "" stands for every repository.
+// unavailableToken, listed as a password's org, has the fake token service
+// answer that password 503.
+const unavailableToken = "!unavailable"
+
 func newEntitledNGC(t *testing.T, access map[string][]string) *fakeNGC {
 	t.Helper()
 	f := &fakeNGC{}
@@ -61,6 +65,10 @@ func newEntitledNGC(t *testing.T, access map[string][]string) *fakeNGC {
 				return
 			}
 			orgs, known := access[pass]
+			if slices.Contains(orgs, unavailableToken) {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
 			if !known {
 				w.WriteHeader(http.StatusUnauthorized)
 				return
@@ -225,11 +233,18 @@ func TestRegistryCredentialCheck_KeyFirstStillJudgesTheChartScopesLogin(t *testi
 		"so the install cannot pull them"
 	for name, tc := range map[string]struct {
 		login   string
+		config  string
 		access  map[string][]string
 		message string
+		warning bool
 	}{
 		"rejected login": {login: "rotated-out", access: map[string][]string{"key-pass": {""}},
 			message: "was rejected, and docker and helm on this machine still send it"},
+		"login the registry gave no answer for": {login: "login-pass",
+			access:  map[string][]string{"key-pass": {""}, "login-pass": {unavailableToken}},
+			message: "could not verify the docker login helm on this machine pulls the charts from", warning: true},
+		"unreadable docker config": {config: "{", access: map[string][]string{"key-pass": {""}},
+			message: "could not verify the docker login helm on this machine pulls the charts from", warning: true},
 		"login with no access": {login: "login-pass",
 			access:  map[string][]string{"key-pass": {""}, "login-pass": {"nvidia"}},
 			message: "has no access to nvcr.io/orgb/team, so the run sends NGC_API_KEY for it"},
@@ -241,7 +256,10 @@ func TestRegistryCredentialCheck_KeyFirstStillJudgesTheChartScopesLogin(t *testi
 			withTempCacheDir(t)
 			ngc := newEntitledNGC(t, tc.access)
 			config := `{}`
-			if tc.login != "" {
+			switch {
+			case tc.config != "":
+				config = tc.config
+			case tc.login != "":
 				config = inlineDockerConfig(t, "nvcr.io", "$oauthtoken", tc.login, "")
 			}
 			dockerHome(t, config)
@@ -250,16 +268,38 @@ func TestRegistryCredentialCheck_KeyFirstStillJudgesTheChartScopesLogin(t *testi
 
 			chartRow := RegistryEntry{Registry: "nvcr.io", RepoHint: "orgb/team", Critical: true, Charts: true}
 			r := registryCredentialCheck(probeRegistryCredential, chartRow, "nvcr.io/orgb/team", false, nil).Run(ctx)
-			if tc.message == "" {
+			switch {
+			case tc.message == "":
 				assert.True(t, r.Passed, r.Message)
 				assert.Equal(t, SeverityInfo, r.Severity)
-			} else {
+			case tc.warning:
+				assert.False(t, r.Passed, r.Message)
+				assert.Equal(t, SeverityWarning, r.Severity, "the login could not be judged, which is no pass")
+				assert.Contains(t, r.Message, tc.message)
+				assert.Contains(t, r.Message, "credentials from NGC_API_KEY valid")
+			default:
 				assert.False(t, r.Passed, r.Message)
 				assert.Equal(t, SeverityError, r.Severity)
 				assert.Error(t, r.Err)
 				assert.Contains(t, r.Message, tc.message)
 				assert.Contains(t, r.Message, "credentials from NGC_API_KEY valid")
 				assert.Contains(t, r.Message, charts)
+			}
+
+			loginSends := func() int {
+				n := 0
+				for _, p := range ngc.passwords() {
+					if p != "key-pass" {
+						n++
+					}
+				}
+				return n
+			}
+			byChartRow := loginSends()
+			if tc.login == "" {
+				assert.Zero(t, byChartRow)
+			} else if !tc.warning {
+				assert.Equal(t, 1, byChartRow, "the chart row sends the docker login once")
 			}
 
 			other := RegistryEntry{Registry: "nvcr.io", RepoHint: "nvidia/cv", Critical: true}
@@ -272,14 +312,7 @@ func TestRegistryCredentialCheck_KeyFirstStillJudgesTheChartScopesLogin(t *testi
 			assert.Equal(t, "key-pass", mintPullSecret(ctx, t, fake.NewSimpleClientset(), "nvcr.io/orgb/team/cv:1.0.0",
 				clusterValidatorControlPlaneRole), "the pull secret keeps the key, which up mints from")
 
-			sentLogin := 0
-			for _, p := range ngc.passwords() {
-				if p != "key-pass" {
-					sentLogin++
-				}
-			}
-			assert.Equal(t, map[bool]int{true: 1, false: 0}[tc.login != ""], sentLogin,
-				"only the chart scope's row sends the docker login")
+			assert.Equal(t, byChartRow, loginSends(), "only the chart scope's row sends the docker login")
 		})
 	}
 }

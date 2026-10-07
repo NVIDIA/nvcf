@@ -233,6 +233,10 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string, cri
 			return registryProbeOutcome{kind: probeOtherCredential, detail: fmt.Sprintf(
 				"credentials from %s valid; the docker login from %s has no access to %s, so the run sends %s for it",
 				cred.source, settled.noAccessLogin.source, scopeLabel(registry, repoHint), cred.source)}
+		case settled.loginUnjudged != "":
+			return registryProbeOutcome{kind: probeUnverifiable, detail: fmt.Sprintf(
+				"credentials from %s valid; could not verify the docker login helm on this machine pulls the "+
+					"charts from %s with: %s", cred.source, scopeLabel(registry, repoHint), settled.loginUnjudged)}
 		}
 		return nil
 	}

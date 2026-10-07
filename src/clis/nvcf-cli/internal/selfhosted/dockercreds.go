@@ -122,6 +122,10 @@ type settledCredential struct {
 	// fallbackFailure says why the NGC key, tried for a scope the docker
 	// login had no access to, did not take its place.
 	fallbackFailure string
+	// loginUnjudged says why judgeLogin could not judge the docker login
+	// helm pulls the charts with: its config could not be read, or the
+	// registry gave no answer about it.
+	loginUnjudged string
 }
 
 // NewRegistryCredentials returns a per-run credential resolver.
@@ -288,30 +292,36 @@ func settleScope(
 // rejected and a 403 marks it without access to repo, as settleScope does.
 // The credential the run uses for repo stays the key. A scope helm on this
 // machine pulls the stack's charts from needs this: helm sends the docker
-// login whatever order the run sends credentials in. An answer that says
-// nothing about the login, or no docker login besides the key, leaves
-// settled as it was.
+// login whatever order the run sends credentials in. No docker login besides
+// the key leaves settled as it was; a docker config that cannot be read, or
+// an answer that says nothing about the login, sets loginUnjudged.
 func (rc *RegistryCredentials) judgeLogin(
 	ctx context.Context, registry, repo, challenge string, settled settledCredential,
 ) settledCredential {
 	if !rc.preferNGCKey || !settled.ok || !settled.cred.ngcKey {
 		return settled
 	}
-	login, ok, _ := credsFromDockerConfig(ctx, registry)
+	login, ok, err := credsFromDockerConfig(ctx, registry)
+	if err != nil {
+		settled.loginUnjudged = err.Error()
+		return settled
+	}
 	if !ok || login.pass == settled.cred.pass {
 		return settled
 	}
 	jctx, cancel := context.WithTimeout(ctx, credentialSettleTimeout)
 	defer cancel()
-	_, err := exchangeBearerToken(jctx, newRegistryHTTPClient(credentialSettleTimeout), registry, repo, challenge,
+	_, err = exchangeBearerToken(jctx, newRegistryHTTPClient(credentialSettleTimeout), registry, repo, challenge,
 		&login)
 	var te *tokenExchangeError
 	switch {
-	case !errors.As(err, &te) || !te.credentialed:
-	case te.status == http.StatusUnauthorized:
+	case err == nil:
+	case errors.As(err, &te) && te.rejected() && te.status == http.StatusUnauthorized:
 		settled.rejectedLogin = &login
-	case te.status == http.StatusForbidden:
+	case errors.As(err, &te) && te.rejected():
 		settled.noAccessLogin = &login
+	default:
+		settled.loginUnjudged = err.Error()
 	}
 	return settled
 }
