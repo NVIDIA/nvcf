@@ -25,6 +25,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -34,6 +35,7 @@ const (
 	openAIModelNameAttribute           attribute.Key = "openai_model_name"
 	functionIDAttribute                attribute.Key = "function_id"
 	GatewayProxyOutcomeMetricAttribute attribute.Key = "gateway_proxy_outcome"
+	GatewayProxyOutcomeSpanAttribute   attribute.Key = "gateway.proxy.outcome"
 )
 
 type GatewayProxyOutcome string
@@ -41,7 +43,17 @@ type GatewayProxyOutcome string
 const (
 	GatewayProxyOutcomeClientCanceled GatewayProxyOutcome = "client_canceled"
 	GatewayProxyOutcomeProxyError     GatewayProxyOutcome = "gateway_proxy_error"
+	// GatewayProxyOutcomeRejected marks a response the gateway wrote itself with
+	// no dependency involved (offline, end of life, validation, not found).
+	GatewayProxyOutcomeRejected GatewayProxyOutcome = "gateway_rejected"
+	// GatewayProxyOutcomeUpstreamStatus marks a non-2xx response passed through
+	// from the upstream service.
+	GatewayProxyOutcomeUpstreamStatus GatewayProxyOutcome = "upstream_status"
 )
+
+// ErrorSourceHeader is added to non-2xx responses so clients and support can
+// tell where the status came from. Its value is a GatewayProxyOutcome.
+const ErrorSourceHeader = "NVCF-Error-Source"
 
 var spanNameFormatter = otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
 	return r.URL.Path
@@ -90,9 +102,17 @@ func AddFunctionIDMetricAttribute(ctx context.Context, functionID string) {
 
 func AddGatewayProxyOutcomeMetricAttribute(ctx context.Context, outcome GatewayProxyOutcome) {
 	switch outcome {
-	case GatewayProxyOutcomeClientCanceled, GatewayProxyOutcomeProxyError:
+	case GatewayProxyOutcomeClientCanceled, GatewayProxyOutcomeProxyError,
+		GatewayProxyOutcomeRejected, GatewayProxyOutcomeUpstreamStatus:
 		addRequestMetricAttributes(ctx, GatewayProxyOutcomeMetricAttribute.String(string(outcome)))
 	}
+}
+
+// RecordGatewayProxyOutcome sets the outcome on the inbound server request
+// metric and on the active server span so traces match metrics.
+func RecordGatewayProxyOutcome(ctx context.Context, outcome GatewayProxyOutcome) {
+	AddGatewayProxyOutcomeMetricAttribute(ctx, outcome)
+	trace.SpanFromContext(ctx).SetAttributes(GatewayProxyOutcomeSpanAttribute.String(string(outcome)))
 }
 
 func addRequestMetricAttributes(ctx context.Context, attrs ...attribute.KeyValue) {
