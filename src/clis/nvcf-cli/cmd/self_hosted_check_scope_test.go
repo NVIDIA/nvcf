@@ -909,9 +909,11 @@ func TestCheck_SignalsIgnoredAtStartStayIgnored(t *testing.T) {
 	child.Stdout, child.Stderr = &stdout, &stderr
 	waitErr := child.Run()
 	require.NotEqual(t, 3, child.ProcessState.ExitCode(), stdout.String())
-	assert.Equal(t, 0, child.ProcessState.ExitCode(), "%v\n%s%s", waitErr, stdout.String(), stderr.String())
+	assert.NotEqual(t, 130, child.ProcessState.ExitCode(), "%v\n%s%s", waitErr, stdout.String(), stderr.String())
 	assert.Contains(t, stdout.String(), finished)
-	assert.NotEqual(t, true, finalEvent(t, stderr.String())["cancelled"])
+	final := finalEvent(t, stderr.String())
+	assert.Nil(t, final["cancelled"])
+	assert.Equal(t, "ok", final["verdict"], stderr.String())
 }
 
 // Every exit that leaves objects behind says how to remove them: in the row,
