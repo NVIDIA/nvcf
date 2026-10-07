@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+phase: preflight
+suspended: false
+image: ""
+runtimeClassName: nvidia
+# targets[0] is the leader that runs the model server; later targets run RPC workers.
+targets: []
+gpu:
+  product: ""
+artifacts:
+  storageClassName: local-path
+  size: 400Gi
+build:
+  revision: ""
+  cudaArchitectures: ""
+  parallel: 8
+runtime:
+  sha256: ""
+  env:
+    GGML_CUDA_DISABLE_GRAPHS: "1"
+    GGML_RPC_NO_RDMA: "1"
+rpc:
+  replicas: 1
+  cache:
+    enabled: false
+    storageClassName: local-path
+    size: 160Gi
+  resources:
+    requests: {cpu: '2', memory: 2Gi, nvidia.com/gpu: 1}
+    limits: {cpu: '8', memory: 8Gi, nvidia.com/gpu: 1}
+qualification:
+  attempt: 1
+model:
+  replicas: 1
+  lock: {}
+  servedName: ""
+  firstShard: ""
+  endpointName: ""
+  register: false
+  canary: {}
+  args: []
+  resources:
+    requests: {cpu: '4', memory: 110Gi, nvidia.com/gpu: 1}
+    limits: {cpu: '12', memory: 114Gi, nvidia.com/gpu: 1}
+chain:
+  runtimeRelease: ""
+  artifactClaim: ""
+  attempt: 1

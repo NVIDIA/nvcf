@@ -1,0 +1,108 @@
+{{/* SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. */}}
+{{/* SPDX-License-Identifier: Apache-2.0 */}}
+{{- if eq .Values.phase "serve" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-serve
+data:
+  runtime_guard.py: |
+{{ .Files.Get "files/runtime_guard.py" | indent 4 }}
+  serve.py: |
+{{ .Files.Get "files/serve.py" | indent 4 }}
+  model-lock.json: |
+{{ required "model.lock is required" .Values.model.lock | toPrettyJson | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  replicas: {{ if .Values.suspended }}0{{ else }}{{ .Values.model.replicas }}{{ end }}
+  progressDeadlineSeconds: 3660
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: model-server}
+  template:
+    metadata:
+      annotations:
+        checksum/runtime: {{ .Values.runtime.sha256 | quote }}
+        checksum/startup: {{ .Files.Get "files/serve.py" | sha256sum | quote }}
+        checksum/guard: {{ .Files.Get "files/runtime_guard.py" | sha256sum | quote }}
+      labels: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: model-server}
+    spec:
+      automountServiceAccountToken: false
+      runtimeClassName: {{ .Values.runtimeClassName }}
+      nodeSelector:
+        kubernetes.io/hostname: {{ (index .Values.targets 0).node | quote }}
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: llama
+          image: {{ .Values.image | quote }}
+          command: [python3, -u, /checks/serve.py]
+          env:
+            - {name: HOME, value: /tmp}
+            - {name: PYTHONDONTWRITEBYTECODE, value: '1'}
+            - {name: FIRST_SHARD, value: {{ required "model.firstShard is required" .Values.model.firstShard | quote }}}
+            - {name: SERVED_MODEL, value: {{ required "model.servedName is required" .Values.model.servedName | quote }}}
+            - {name: RPC_ENDPOINTS, value: "{{ range $i, $target := rest .Values.targets }}{{ if $i }},{{ end }}{{ $.Release.Name }}-rpc-{{ $target.id }}:50052{{ end }}"}
+            - {name: SERVER_ARGS, value: {{ toJson .Values.model.args | quote }}}
+{{- range $name, $value := .Values.runtime.env }}
+            - {name: {{ $name }}, value: {{ $value | quote }}}
+{{- end }}
+          ports: [{name: http, containerPort: 8000}]
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            failureThreshold: 360
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 5
+          resources: {{ toJson .Values.model.resources }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: artifacts, mountPath: /artifacts, readOnly: true}
+            - {name: checks, mountPath: /checks, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim: {claimName: {{ .Release.Name }}-artifacts}
+        - name: checks
+          configMap: {name: {{ .Release.Name }}-serve}
+        - name: tmp
+          emptyDir: {sizeLimit: 2Gi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: model-server}
+  ports: [{name: http, port: 8000, targetPort: http}]
+{{- if .Values.model.register }}
+---
+apiVersion: pylon.nvidia.com/v1alpha1
+kind: InferenceEndpoint
+metadata:
+  name: {{ required "model.endpointName is required" .Values.model.endpointName }}
+spec:
+  modelName: {{ .Values.model.servedName | quote }}
+  inferenceAPIFormat: {type: chat}
+  service: {name: {{ .Release.Name }}, port: 8000}
+  health: {path: /health}
+{{- with .Values.model.canary }}
+  canary: {{ toJson . }}
+{{- end }}
+  maxEngineConcurrency: 1
+  gpu: {product: {{ required "gpu.product is required" .Values.gpu.product | quote }}}
+{{- end }}
+{{- end }}

@@ -317,7 +317,7 @@ class Stack:
         live = inspect_connection(connection)
         save(self.work/'ca.crt', live['ca'])
         with self.forward(port) as url:
-            command = [sys.executable, str(HERE/'spark/client.py'), '--mode', 'chat', '--url', url.removesuffix('/v1'),
+            command = [sys.executable, str(HERE/'recipes/client.py'), '--mode', 'chat', '--url', url.removesuffix('/v1'),
                        '--model', model, '--ca-file', str(self.work/'ca.crt'), '--api-key-file', connection['apiKeyFile']]
             if stream:
                 command.append('--stream')

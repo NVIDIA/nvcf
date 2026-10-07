@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import copy
 import json
+import importlib.util
 import pathlib
 import subprocess
 import tempfile
@@ -15,10 +16,16 @@ class SuspensionTests(unittest.TestCase):
     def cases(self):
         for release in all_profile_releases():
             yield release['model'] + '-' + release['profile'], ROOT/'charts/sglang', dict(release['values'], phase='serve')
-        values = json.loads((ROOT.parent/'spark/backend.defaults.json').read_text())
-        values['runtime']['sha256'] = 'a'*64
-        values['model']['register'] = True
-        yield 'glm', ROOT.parent/'spark/charts/gguf-backend', values
+        spec = importlib.util.spec_from_file_location('gguf_suspension_recipe', ROOT/'recipe.py')
+        tool = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tool)
+        for count in (1, 2):
+            config = json.loads((ROOT/'config.example.json').read_text())
+            config['nodes']['model'] = config['nodes']['model'][:count]
+            config['gpu']['memoryGiB'] = 512
+            with tempfile.TemporaryDirectory() as directory:
+                values = tool.Recipe(config, directory).backend_values('serve', register=True, render=True)
+            yield 'gguf-' + str(count), ROOT/'charts/gguf-backend', values
 
     def render(self, chart, values, accepted=True):
         with tempfile.TemporaryDirectory() as directory:
@@ -62,13 +69,13 @@ class SuspensionTests(unittest.TestCase):
                 endpoints = [key for key in active if key[0] == 'InferenceEndpoint']
                 self.assertEqual(len(endpoints), 1)
                 self.assertEqual(active[endpoints[0]], suspended[endpoints[0]])
-                if name == 'glm':
-                    self.assertEqual(len(gpu_deployments), 2)
+                if name.startswith('gguf-'):
+                    self.assertEqual(len(gpu_deployments), len(values['targets']))
                     self.assertEqual(suspended[('Deployment', 'suspend-test-artifacts')]['spec']['replicas'], 1)
 
     def test_suspend_requires_serve_phase(self):
         for name, chart, values in self.cases():
-            phases = ('preflight', 'build', 'qualify', 'chain', 'download') if name == 'glm' else ('qualify', 'download')
+            phases = ('preflight', 'build', 'qualify', 'chain', 'download') if name.startswith('gguf-') else ('qualify', 'download')
             for phase in phases:
                 with self.subTest(profile=name, phase=phase):
                     error = self.render(chart, dict(values, phase=phase, suspended=True), accepted=False)
