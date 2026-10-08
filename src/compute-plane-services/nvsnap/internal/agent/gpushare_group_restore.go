@@ -40,6 +40,9 @@ type GroupRestoreMember struct {
 	CheckpointID         string `json:"checkpointId"`
 	PlaceholderNamespace string `json:"placeholderNamespace"`
 	PlaceholderPodName   string `json:"placeholderPodName"`
+	// PlaceholderContainerName and ReservePIDs as in RestoreRequest.
+	PlaceholderContainerName string `json:"placeholderContainerName,omitempty"`
+	ReservePIDs              bool   `json:"reservePids,omitempty"`
 }
 
 // GroupRestoreRequest restores every checkpoint of one instance.
@@ -200,11 +203,13 @@ func (a *Agent) groupRestore(ctx context.Context, req GroupRestoreRequest, log *
 		go func(i int, m GroupRestoreMember) {
 			defer wg.Done()
 			r, err := postRestore(ctx, fabricHTTPClient, bases[i], RestoreRequest{
-				CheckpointID:          m.CheckpointID,
-				PlaceholderNamespace:  m.PlaceholderNamespace,
-				PlaceholderPodName:    m.PlaceholderPodName,
-				GPUShareFabricSession: res.Session,
-				InetAddrMap:           addrMap,
+				CheckpointID:             m.CheckpointID,
+				PlaceholderNamespace:     m.PlaceholderNamespace,
+				PlaceholderPodName:       m.PlaceholderPodName,
+				PlaceholderContainerName: m.PlaceholderContainerName,
+				ReservePIDs:              m.ReservePIDs,
+				GPUShareFabricSession:    res.Session,
+				InetAddrMap:              addrMap,
 			})
 			mu.Lock()
 			defer mu.Unlock()

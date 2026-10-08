@@ -376,6 +376,10 @@ type Mutator struct {
 	// GPUShareByDefault puts every GPU pod under the gpushare library
 	// unless it is annotated nvsnap.io/gpushare: "false" (CRIU clusters).
 	GPUShareByDefault bool
+	// CRIUGroups returns the complete group capture recorded under a
+	// configuration key (criu_group.go). Nil: multi-pod instances are not
+	// restored with CRIU.
+	CRIUGroups func(ctx context.Context, key string) (CRIUGroup, bool)
 
 	// EnsureLocal makes the capture's bytes available to the local
 	// Backend BEFORE Backend.Mount is called. Without this, a webhook
@@ -514,6 +518,11 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 		// the label-driven capture inject below keeps its behaviour. An
 		// error is logged and admits the pod unchanged: the election is
 		// an optimisation, never a gate.
+		// A rank of an instance whose group capture exists becomes its
+		// restore placeholder; that carries the model volume too.
+		if gp := m.criuGroupRestorePatches(ctx, pod); gp != nil {
+			return gp, nil
+		}
 		if vp, err := m.modelVolumePatches(ctx, pod); err != nil {
 			m.logger().WithError(err).WithField("pod", election.PodIdentity(pod)).
 				Warn("model volume decision failed; admitting pod unchanged")

@@ -159,6 +159,10 @@ type RestoreRequest struct {
 	// PlaceholderContainerName picks the container in a multi-container
 	// placeholder pod; empty takes the first one.
 	PlaceholderContainerName string `json:"placeholderContainerName,omitempty"`
+	// ReservePIDs raises the placeholder's next pid above the dumped range
+	// before the restore. Needed for a placeholder the webhook made from
+	// the workload's own pod: it is not privileged, so it cannot do it.
+	ReservePIDs bool `json:"reservePids,omitempty"`
 }
 
 // RestoreResult is the result of a restore operation
@@ -373,6 +377,11 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 			"placeholderPid": placeholderInfo.PID,
 		})
 		log.Info("Found placeholder container")
+		if req.ReservePIDs {
+			if out, err := exec.CommandContext(ctx, "nsenter", criuReservePIDArgs(int(placeholderInfo.PID))...).CombinedOutput(); err != nil { //nolint:gosec // fixed command; the pid comes from the runtime
+				return nil, fmt.Errorf("reserve the pid range: %w (%s)", err, strings.TrimSpace(string(out)))
+			}
+		}
 
 		// Run CRIU inside the placeholder's mount namespace. The helper
 		// subcommand grafts the criu bundle + checkpoints dir into the

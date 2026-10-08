@@ -19,6 +19,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strconv"
@@ -321,4 +323,12 @@ const catalogFormatVersion = 1
 // remain as separate filterable fields in metadata.json.
 func buildCheckpointID(catalog CatalogInfo, t time.Time) string {
 	return fmt.Sprintf("%s__%s", catalog.ShortHash, t.Format("20060102-150405"))
+}
+
+// setGroupRank makes the identity that of one rank of a group checkpoint:
+// the instance's configuration hash and the rank's place in the group.
+func (c *CatalogInfo) setGroupRank(index, size int) {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|group-rank|%d/%d", c.Hash, index, size)))
+	c.Hash = hex.EncodeToString(sum[:])
+	c.ShortHash = checkpointstore.ShortHash(c.Hash)
 }

@@ -426,6 +426,16 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 		attribute.String("nvsnap.container", req.ContainerName),
 	)
 
+	// One dump of a pod at a time: NVCA and the instance capture may both
+	// ask for the same pod.
+	if req.PodName != "" {
+		podKey := req.Namespace + "/" + req.PodName
+		if _, busy := a.checkpointing.LoadOrStore(podKey, struct{}{}); busy {
+			return nil, fmt.Errorf("%s is already being checkpointed", podKey)
+		}
+		defer a.checkpointing.Delete(podKey)
+	}
+
 	startTime := time.Now()
 	identifier := req.PodName
 	if identifier == "" {
@@ -608,6 +618,13 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	catalogCtx, catalogCancel := context.WithTimeout(ctx, 5*time.Second)
 	catalog := a.CollectCatalogInfo(catalogCtx, req.Namespace, req.PodName, req.ContainerName, a.config.NodeName, "")
 	catalogCancel()
+	if req.GPUShareGroupSize > 0 {
+		// The ranks of one instance share its configuration, so they share
+		// its hash. Each rank's checkpoint needs its own identity: the
+		// catalog keeps one checkpoint per hash, and a restore of another
+		// rank would fetch this one.
+		catalog.setGroupRank(req.GPUShareGroupIndex, req.GPUShareGroupSize)
+	}
 
 	checkpointID := buildCheckpointID(catalog, time.Now())
 	checkpointDir := filepath.Join(a.config.CheckpointDir, checkpointID)

@@ -14,9 +14,7 @@ package agent
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -113,6 +111,11 @@ func (a *Agent) criuRestorer() *criuAutoRestorer {
 }
 
 func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
+	c.considerGroupCapture(ctx, pod)
+	if isGroupPlaceholder(pod) {
+		c.considerGroupRestore(ctx, pod)
+		return
+	}
 	id, container, ready := criuRestoreTarget(pod)
 	if !ready {
 		return
@@ -130,18 +133,12 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod, id, container s
 	defer cancel()
 	t0 := time.Now()
 	err := func() error {
-		info, err := a.runtime.FindContainerByPod(rctx, ns, pod, container)
-		if err != nil {
-			return fmt.Errorf("find container: %w", err)
-		}
-		if out, err := exec.CommandContext(rctx, "nsenter", criuReservePIDArgs(int(info.PID))...).CombinedOutput(); err != nil { //nolint:gosec // fixed command; the pid comes from the runtime
-			return fmt.Errorf("reserve the pid range: %w (%s)", err, strings.TrimSpace(string(out)))
-		}
-		_, err = a.Restore(rctx, RestoreRequest{
+		_, err := a.Restore(rctx, RestoreRequest{
 			CheckpointID:             id,
 			PlaceholderNamespace:     ns,
 			PlaceholderPodName:       pod,
 			PlaceholderContainerName: container,
+			ReservePIDs:              true,
 		})
 		return err
 	}()

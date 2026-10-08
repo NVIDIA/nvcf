@@ -297,6 +297,8 @@ type Agent struct {
 	// is the cluster's capture method (criu_auto_restore.go).
 	criuRestore     *criuAutoRestorer
 	criuRestoreOnce sync.Once
+	// checkpointing holds the pods being checkpointed (namespace/pod).
+	checkpointing sync.Map
 
 	config     Config
 	log        *logrus.Logger
