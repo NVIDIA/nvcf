@@ -252,7 +252,7 @@ transition.
 {{- if $agent }}
 {{- $_ := set $config "agent" $agent -}}
 {{- end -}}
-{{- /* worker.download renders under workload.workerInitDownload; zero fields are omitted so worker-init keeps its defaults. */ -}}
+{{- /* worker.download renders under workload.workerInitDownload. The chart defaults equal worker-init's built-in values; a field set to 0 is omitted so the image's default applies. */ -}}
 {{- $download := dict -}}
 {{- with $worker.download }}
 {{- if .concurrentDownloads }}

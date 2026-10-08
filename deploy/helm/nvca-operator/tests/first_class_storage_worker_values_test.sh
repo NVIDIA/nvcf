@@ -105,7 +105,14 @@ assert_key_absent "${default_manifest}" '.agent' "forceSelfDestruct" "forceSelfD
 assert_absent "${default_manifest}" '.agent.csiVolumeMountOptions' "csiVolumeMountOptions should be unset by default"
 assert_absent "${default_manifest}" '.agent.credRenewInterval' "credRenewInterval should be unset by default"
 assert_absent "${default_manifest}" '.agent.heartbeatInterval' "heartbeatInterval should be unset by default"
-assert_absent "${default_manifest}" '.workload' "worker.download should emit no workload section by default so worker-init keeps its defaults"
+# worker.download defaults are worker-init's own built-in values, stated
+# explicitly so the effective download rate is visible in the chart.
+assert_equal "5" "$(agent_config_value "${default_manifest}" '.workload.workerInitDownload.concurrentDownloads')" "default worker-init concurrent downloads must match worker-init's built-in 5"
+assert_equal "4" "$(agent_config_value "${default_manifest}" '.workload.workerInitDownload.concurrentChunks')" "default worker-init concurrent chunks must match worker-init's built-in 4"
+assert_equal "16777216" "$(agent_config_value "${default_manifest}" '.workload.workerInitDownload.chunkSizeBytes')" "default worker-init chunk size must match worker-init's built-in 16 MiB"
+# Zeroing every field defers entirely to the image: no workload section.
+render "${tmp_dir}/zero-download-manifest.yaml" --set worker.download.concurrentDownloads=0 --set worker.download.concurrentChunks=0 --set worker.download.chunkSizeBytes=0
+assert_absent "${tmp_dir}/zero-download-manifest.yaml" '.workload' "all-zero worker.download must emit no workload section"
 
 cat > "${explicit_values}" <<'EOF'
 storage:
@@ -168,10 +175,11 @@ assert_equal "5m" "$(agent_config_value "${explicit_manifest}" '.agent.icmsReque
 assert_equal "4" "$(agent_config_value "${explicit_manifest}" '.workload.workerInitDownload.concurrentDownloads')" "unexpected worker-init concurrent downloads"
 assert_equal "16" "$(agent_config_value "${explicit_manifest}" '.workload.workerInitDownload.concurrentChunks')" "unexpected worker-init concurrent chunks"
 assert_equal "536870912" "$(agent_config_value "${explicit_manifest}" '.workload.workerInitDownload.chunkSizeBytes')" "unexpected worker-init chunk size"
-# A partially set download block emits only the set fields.
-render "${tmp_dir}/partial-download-manifest.yaml" --set worker.download.chunkSizeBytes=1048576
+# A field set to 0 is omitted while the others keep rendering.
+render "${tmp_dir}/partial-download-manifest.yaml" --set worker.download.chunkSizeBytes=1048576 --set worker.download.concurrentDownloads=0
 assert_equal "1048576" "$(agent_config_value "${tmp_dir}/partial-download-manifest.yaml" '.workload.workerInitDownload.chunkSizeBytes')" "unexpected partial worker-init chunk size"
-assert_key_absent "${tmp_dir}/partial-download-manifest.yaml" '.workload.workerInitDownload' "concurrentDownloads" "unset worker.download.concurrentDownloads must not be emitted"
+assert_equal "4" "$(agent_config_value "${tmp_dir}/partial-download-manifest.yaml" '.workload.workerInitDownload.concurrentChunks')" "untouched default must still render"
+assert_key_absent "${tmp_dir}/partial-download-manifest.yaml" '.workload.workerInitDownload' "concurrentDownloads" "worker.download.concurrentDownloads=0 must not be emitted"
 # The schema mirrors NVCA's validation so a bad chunk size fails at render
 # time instead of at agent startup: 0 or 1 MiB to 4 GiB inclusive.
 for bad in 4096 1048575 4294967297; do
