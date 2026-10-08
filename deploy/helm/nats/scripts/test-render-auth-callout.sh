@@ -59,6 +59,12 @@ assert_not_contains() {
 
 default_render="$tmpdir/default.yaml"
 render > "$default_render"
+test "$(yq -r 'select(.kind == "StatefulSet") | .spec.template.spec.securityContext.runAsUser' "$default_render")" = 1000
+test "$(yq -r 'select(.kind == "StatefulSet") | .spec.template.spec.securityContext.fsGroup' "$default_render")" = 1000
+for container in nats reloader; do
+  test "$(yq -r "select(.kind == \"StatefulSet\") | .spec.template.spec.containers[] | select(.name == \"$container\") | .securityContext.runAsNonRoot" "$default_render")" = true
+  test "$(yq -r "select(.kind == \"StatefulSet\") | .spec.template.spec.containers[] | select(.name == \"$container\") | .securityContext.runAsUser" "$default_render")" = 1000
+done
 reloader_image="$(yq -r '.nats.reloader.image.registry + "/" + .nats.reloader.image.repository + ":" + .nats.reloader.image.tag' "$chart_dir/values.yaml")"
 assert_contains "$default_render" "image: $reloader_image"
 assert_contains "$default_render" "# Source: helm-nvcf-nats/templates/nats-auth-callout-nkeys-secret.yaml"
