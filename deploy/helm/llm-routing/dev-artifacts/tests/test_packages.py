@@ -85,7 +85,14 @@ class ChartPackageTests(unittest.TestCase):
                 self.assertTrue((self.output/chart['archive']).is_file())
                 self.assertEqual(chart['localPath'], chart['archive'])
                 guide = profile['deployment']['guide'].split('#', 1)[0]
-                self.assertEqual((self.output/guide).read_bytes(), (self.source/pathlib.Path(guide).name).read_bytes())
+                expected = (self.source/pathlib.Path(guide).name).read_text()
+                actual = (self.output/guide).read_text()
+                if pathlib.Path(guide).name == 'ADVANCED.md':
+                    introduction = expected.split('## Add a recipe\n\n', 1)[1].split('Install Helm', 1)[0]
+                    self.assertIn('](../../../ai-tooling/', introduction)
+                    expected = expected.replace(introduction, 'Run the steps below manually. ')
+                    self.assertNotIn('../../../ai-tooling/', actual)
+                self.assertEqual(actual, expected)
         sums = (self.output/'SHA256SUMS').read_text().splitlines()
         self.assertEqual(len(sums), 7)
         self.assertEqual({recipe['licenseNotice'] for recipe in index['recipes']}, {None, 'NOTICE'})
