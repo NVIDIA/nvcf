@@ -469,6 +469,19 @@ func withMiniServiceMapper() clusterMapper {
 	}
 }
 
+// withFNDServiceMapper maps only the service URL. Enabling the agent's own FnDS
+// publishing stays with the UseFunctionDeploymentStages feature flag.
+func withFNDServiceMapper() clusterMapper {
+	return func(_ context.Context, _ nvidiaiov1.EnvType, src *clusterDTO, dest *Cluster) error {
+		if src.FNDService != nil && src.FNDService.ServiceURL != "" {
+			dest.NVCFBackend.Spec.ClusterConfig.FNDService = &nvidiaiov1.FNDServiceConfig{
+				ServiceURL: src.FNDService.ServiceURL,
+			}
+		}
+		return nil
+	}
+}
+
 func withOTelCollectorMapper() clusterMapper {
 	return func(_ context.Context, _ nvidiaiov1.EnvType, src *clusterDTO, dest *Cluster) error {
 		var cfg *nvidiaiov1.OTelCollectorConfig

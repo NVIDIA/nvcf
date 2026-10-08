@@ -6,15 +6,16 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 
 | Command | Purpose | Output | Notes |
 |---|---|---|---|
-| `self-hosted check --pre [flags]` | Pre-flight validation (no admin creds) | streaming events | Per-role with `--control-plane-context` / `--compute-plane-context`; `--local-only` skips kubectl |
-| `self-hosted check --control-plane [--wait DUR]` | Every CP release healthy | streaming events | Polls until pass or `--wait` elapses |
-| `self-hosted check --compute-plane --cluster-name=X [--wait DUR]` | Per-cluster worker state | streaming events | NVCA + operator + JWKS-fingerprint match |
-| `self-hosted check --all [--wait DUR]` | Fan-out over all of the above | streaming events | |
+| `self-hosted check --pre [flags]` | Pre-flight before install (no admin creds): local tools, registry credentials, and both planes' cluster checks | streaming events on stderr | Split clusters need both `--control-plane-context` and `--compute-plane-context`; `--local-only` makes no cluster or registry contact |
+| `self-hosted check --control-plane [--wait DUR]` | Installed control plane: leftover namespaces and the control-plane cluster-validator | streaming events on stderr | `--wait` polls until pass or DUR elapses |
+| `self-hosted check --compute-plane [--wait DUR]` | Installed compute plane: leftover namespaces, node inotify limits, SIS reachability, and the compute-plane cluster-validator | streaming events on stderr | SIS is probed only at a configured `--icms-url`. Without context flags it checks the current context |
+| `self-hosted check --all [--wait DUR]` | Both of the above | streaming events on stderr | Gate on the `final` event; see [exit-codes.md](exit-codes.md) |
 | `self-hosted install --control-plane` | Render control-plane manifests | YAML on stdout | Pipe to `kubectl apply -f -` |
 | `self-hosted install --compute-plane --cluster-name=X` | Register cluster + render compute manifests | YAML on stdout | One invocation per GPU cluster |
-| `self-hosted up --cluster-name=X` | One-shot first install (both planes) | (empty) stdout, progress on stderr | Always installs both planes; for compute-only use `add-compute-plane` |
+| `self-hosted up --cluster-name=X` | One-shot first install (both planes) | (empty) stdout, progress on stderr | Always installs both planes; for compute-only use `compute-plane register` and `compute-plane install` |
 | `self-hosted up --plan-only --cluster-name=X` | Dry-run preview | JSONL on stderr | Agent-friendly, no cluster changes |
-| `self-hosted add-compute-plane --cluster-name=X --compute-plane-context=Y --icms-url=URL --token=$JWT` | Add a compute plane to an existing control plane | progress on stderr | For 2nd, 3rd, … GPU cluster after the first install. CP not touched. |
+| `self-hosted compute-plane register --control-plane-profile=P --cluster-name=X --kube-context=Y [--output=V]` | Register a compute cluster with an existing control plane and write its NVCA operator values | summary on stdout | For the 2nd, 3rd, ... GPU cluster after the first install. CP not touched |
+| `self-hosted compute-plane install --values=V --kube-context=Y` | Install a compute plane from the values `compute-plane register` wrote | progress on stderr | Run after `compute-plane register`. Installs V whatever its name, never another values file beside it |
 | `self-hosted status [--cluster-name=X] [--watch]` | Snapshot cluster health | TTY/plain/JSONL | `--watch` for live re-render |
 | `self-hosted uninstall --compute-plane --cluster-name=X` | Per-plane primitive: `helmfile destroy` on one compute plane (no ICMS unregister, no drain) | progress | Just the helm releases on that compute plane |
 | `self-hosted uninstall --control-plane [--force-with-registered-clusters]` | Per-plane primitive: `helmfile destroy` on the control plane | progress | Refuses if compute planes still registered unless `--force-with-registered-clusters` |
@@ -40,7 +41,7 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 | `function list` / `function list-ids` | List functions / IDs only | |
 | `function get --function-id=ID --version-id=VID` | Function metadata | |
 | `function update --function-id=ID --version-id=VID --tags=TAG[,TAG]` | Update function tags | |
-| `function update --function-id=ID --version-id=VID --llm-model-update=SPEC` | Update LLM model routing config | `SPEC` uses `name=<model>,routingMethod=<method>,tokenRateLimit=<limit>`; accepted methods are listed in [flags.md](flags.md) |
+| `function update --function-id=ID --version-id=VID --llm-model-update=SPEC` | Update LLM model routing config | `SPEC` uses `name=<model>,routingMethod=<method>,tokenRateLimit=<limit>`; the routing method format is in [flags.md](flags.md) |
 | `function deploy create --input-file=FILE` | Schedule a deployment | Blocks until ACTIVE (default 900s) |
 | `function deploy get --function-id=ID --version-id=VID [--json]` | Deployment status | `functionStatus: ACTIVE\|DEPLOYING\|ERROR\|FAILED` |
 | `function deploy update --input-file=FILE` | Modify a deployment in place | |

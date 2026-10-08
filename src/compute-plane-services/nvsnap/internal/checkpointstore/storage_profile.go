@@ -69,6 +69,35 @@ type StorageProfile struct {
 	// (RO mount of a possibly-dirty log). Empty ⇒ inherit the primary PV's
 	// options unchanged (fine for NFS-like backends: EFS, Filestore).
 	MountOptions []string `json:"mountOptions,omitempty"`
+	// Prewarm controls the nvsnap-prewarm init container the webhook adds
+	// to a cachedir restore: a parallel sequential read of the whole rox
+	// tree so the engine's weight load hits page cache. nil (absent) means
+	// on. Whether it helps is a property of the volume, not the model: on
+	// Hyperdisk ML the engine's per-fault mmap reads leave a high-throughput
+	// volume idle and the sweep wins; on a volume a single reader already
+	// saturates (NVMesh, measured 70B TP=4: 247 s vs 257 s) it is neutral.
+	// A pod's own NVSNAP_PREWARM=0/1 overrides this either way.
+	Prewarm *bool `json:"prewarm,omitempty"`
+	// PrewarmParallelism is the number of concurrent readers in the sweep.
+	// 0 means DefaultPrewarmParallelism.
+	PrewarmParallelism int `json:"prewarmParallelism,omitempty"`
+}
+
+// DefaultPrewarmParallelism is the reader count when a profile does not set
+// one; matches the retired Go prewarmer.
+const DefaultPrewarmParallelism = 6
+
+// PrewarmEnabled reports the profile's prewarm default (on when unset).
+func (p StorageProfile) PrewarmEnabled() bool {
+	return p.Prewarm == nil || *p.Prewarm
+}
+
+// PrewarmWorkers returns the reader count, defaulted and clamped to >= 1.
+func (p StorageProfile) PrewarmWorkers() int {
+	if p.PrewarmParallelism < 1 {
+		return DefaultPrewarmParallelism
+	}
+	return p.PrewarmParallelism
 }
 
 // builtinProfiles is the compiled-in provider table. Keyed by
@@ -91,7 +120,11 @@ var builtinProfiles = map[string]StorageProfile{
 // overlaying `overlay` (from the ConfigMap) on the built-in table.
 // Lookup order: provisioner/type then bare provisioner, ConfigMap before
 // built-in at each. Returns (profile, matchedKey, true) on a hit, or
-// (_, "", false) when nothing matches (caller disables L2).
+// (_, "", false) when nothing matches. A miss means the provisioner has
+// qualified nothing, so the caller must disable L2 rather than assume a
+// shape. This comment used to say the caller disabled L2 while the caller
+// in fact fell back to snapshot-clone ROX -- which is how an unqualified
+// driver came to be promoted on assumed capability (nvsnap#2099).
 func ResolveStorageProfile(provisioner, volType string, overlay map[string]StorageProfile) (StorageProfile, string, bool) {
 	try := func(key string) (StorageProfile, bool) {
 		if p, ok := overlay[key]; ok {

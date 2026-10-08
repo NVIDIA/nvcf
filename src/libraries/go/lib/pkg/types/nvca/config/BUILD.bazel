@@ -45,6 +45,7 @@ go_test(
         "transport_tls_installer_image_test.go",
         "types_additional_test.go",
         "types_test.go",
+        "workerinit_download_test.go",
     ],
     embed = [":config"],
     deps = [

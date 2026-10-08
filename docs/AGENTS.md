@@ -10,38 +10,56 @@ external workspace index.
 
 ## Layout
 
-- `docs/user/`: top-of-tree customer-facing documentation published as `dev`.
-- `docs/v*/` and `docs/cp-*/`: frozen versioned documentation. Do not edit these trees unless the user explicitly asks for a historical docs fix.
-- `docs/ngc-managed/`: legacy NGC-managed (BYOC) platform documentation. Separate from the self-hosted docs in `docs/user/`.
-- `docs/dev/`: developer and local workflow documentation.
-- `docs/version-catalog/main.yaml`: source of truth for generated artifact versions in top-of-tree docs.
-- `fern/versions/dev.yml`: source of truth for top-of-tree docs navigation.
-- `fern/versions/<version>.yml`: source of truth for versioned docs navigation.
+The published site has one docs edition menu and six tabs: Overview,
+Self-Managed, Compute Plane, Observability, Manifest, and Release Notes.
+An edition records one qualified combination; stack artifact versions remain
+independent.
 
-## Navigation
+- `docs/overview/`: shared customer guides, compatibility matrix, manifest,
+  images, and samples. These belong to the selected edition. Manifest and Image
+  Mirroring share the Manifest tab; compatibility and upgrade guides use Release Notes.
+- `docs/self-managed/`, `docs/compute-plane/`, `docs/observability/`: current
+  stack sources, published under Development from `main`.
+- `docs/dev/`: contributor guides. Only pages reached through navigation or
+  a navigated symlink are published.
+- `docs/ngc-managed/`: legacy platform guides reached through Overview.
+- `docs/<stack>-<version>/` and `docs/v*/`: frozen archives. Do not edit these
+  trees without explicit authorization for a historical docs fix.
+- `docs/version-catalog/main.yaml`: current artifact and development edition
+  metadata. `docs/edition-manifest.json` is generated from it.
+- `fern/docs.yml`: canonical edition selector, site settings, and redirects.
+- `fern/editions.yml`: exact release-branch commits used by the canonical site.
+- `fern/navigation.yml`: six-tab navigation for current and prepared editions.
+- `fern/changelog/`: native, dated release-note entries.
+- `fern/products/`: retained navigation for frozen historical routes.
 
-Prefer the Fern navigation files and the filesystem over static route tables.
+## Navigation and links
 
-1. For top-of-tree docs, start with `fern/versions/dev.yml`.
-2. For pinned release docs, use the matching file under `fern/versions/`.
-3. Confirm the mapped `path:` exists before answering.
-4. If a nav item uses `href:`, treat it as an external page. Do not invent a local file.
-5. If Fern nav does not answer the question, search with `rg`:
+For current pages, start with `fern/navigation.yml`. Stable editions build
+from their own `docs/releases/X.Y.Z` branch; inspect that branch's navigation
+and source when answering a version-specific question. Historical product
+routes use the matching file under `fern/products/`.
+
+Confirm each `path:` exists. Treat `href:` as an external destination.
+Use explicit page slugs, and keep section `skip-slug` behavior intact.
+When adding, moving, or removing a current page, update `fern/navigation.yml`.
+Point edition navigation directly at shared source files, not symlink aliases.
+Fern can render a symlinked page while failing to resolve links to that page.
+
+Use relative source-file links between current pages, including cross-tab
+links, so the selected edition is retained. Use absolute product/version
+URLs only when intentionally linking to a frozen historical version. Preserve
+anchors and downloads. Do not rewrite frozen sources to current destinations.
 
 ```bash
-rg -n "<term>" docs/user docs/dev docs/v* docs/cp-*
-```
-
-Useful file listing commands:
-
-```bash
-rg --files docs/user docs/dev
-rg --files docs/v* docs/cp-*
+rg -n "<term>" docs/overview docs/self-managed docs/compute-plane docs/observability docs/dev
 ```
 
 ## Editing
 
-Use `docs/user/` for top-of-tree customer docs and `docs/dev/` for developer workflows. The default published docs route points to the latest stable version, not `docs/user/`.
+Edit the owning current source tree for customer changes and `docs/dev/` for
+contributor guides. Changes on `main` update Development. Released docs branches
+are immutable; corrections require a new patch edition.
 
 ### Artifact manifest
 
@@ -49,7 +67,7 @@ For the maintainer workflow, including automatic stack releases, public
 publication updates, and new artifact registration, see
 [`tools/docs-version-sync/README.md`](../tools/docs-version-sync/README.md).
 
-The generated tables in `docs/user/manifest.md` use catalog artifacts and
+The generated tables in `docs/overview/manifest.md` use catalog artifacts and
 `manifest.entries` from `docs/version-catalog/main.yaml`. For each entry, set
 its deployment plane, kind, requirement, public-safe description, and public
 GitHub or upstream source links. Use `artifact_id` for catalog artifacts and
@@ -102,11 +120,11 @@ exact public locations in `publications` and mark unavailable versions in
 `version` so charts, images, and resources with the same name remain distinct.
 Version overrides also require `name` and `type`.
 
-After QA qualifies an exact three-stack combination, use
-`--qualification-version` with all three explicit stack version flags. Generate
-the docs, then run `tools/scripts/cut-docs-version.sh`. The versioned catalog
-snapshot and Fern dropdown record the docs version and all three stack
-versions.
+Release a docs edition only after the complete three-stack combination is
+qualified. Use `edition prepare` with exact stack versions and a reviewed
+source commit, then protect and register `docs/releases/X.Y.Z`. Do not cut
+per-stack documentation folders or docs release tags. See
+[the edition release and rollback workflow](dev/docs-editions.md).
 
 Generated blocks are marked with comments such as:
 
@@ -126,9 +144,47 @@ docker run --rm -it \
   -v "$(pwd):/workspace" \
   -w /workspace \
   -p 3000:3000 \
-  node:20-alpine \
-  sh -c "npm install -g fern-api && fern docs dev"
+  node:24-alpine \
+  sh -c "apk add --no-cache bash git && tools/ci/run-fern docs dev"
 ```
+
+Preview an alternate site configuration without changing the working tree:
+
+```bash
+DOCS_PREVIEW_ID=nvcf-candidate DOCS_PREVIEW_SKIP_COMMENT=1 \
+  DOCS_PREVIEW_CONFIG=fern/candidate.yml tools/ci/preview-docs
+```
+
+The optional override must exist directly under `fern/` and is used as supplied.
+The helper always stages `docs/` and `fern/` in a temporary clone with the
+original Git remote for branch refs.
+CI and local helpers use the pin in `fern/fern.config.json`; CI uses the
+Node version in `fern/.node-version`.
+
+Without an override, the helper uses Go to derive a Development-first preview
+from `fern/docs.yml` and normalize current cross-tab links. A prepared release
+branch uses its local default instead. Keep explicit page slugs in
+`fern/navigation.yml`. Run `edition preview` and `edition links` only in a
+disposable clone, never against frozen documentation trees.
+
+Check the staged candidate without publishing a preview:
+
+```bash
+tools/ci/preview-docs --check
+```
+
+Native release notes live in `fern/changelog/YYYY-MM-DD.mdx`. Keep full release
+notes in Releases and procedures in the Upgrade Notes sidebar. Use one `##`
+release heading per entry, lower-level section headings, and frontmatter tags
+for filtering. Record stack artifact versions separately from the docs edition.
+Retained standalone notes are historical compatibility sources; author current
+release notes in the changelog.
+
+See `tools/docs-version-sync/README.md` for edition preparation and registration.
+Release branches use their own path-based default navigation, with hidden legacy
+versions retained for historical links. Only the canonical registry owns the
+published edition history. Hosted previews are required to test remote refs;
+local Fern development previews show working-tree versions only.
 
 ## Validation
 
@@ -142,6 +198,23 @@ Run full docs validation before finishing docs changes:
 
 ```bash
 ./tools/ci/check-docs
+```
+
+The required `docs` PR check validates canonical and Development links with
+Fern, then checks public HTTP links in every added or modified `.md` and `.mdx`
+file under `docs/` and `fern/`. The same check runs in the merge queue. Failed
+links fail the required check. Previews and publication also use Fern's strict
+broken-link validation.
+
+External checks use checksum-pinned Lychee 0.24.2. Results appear in the `docs`
+job log and its `docs-link-report` artifact. There is no recurring audit. Code
+examples are excluded; exact NGC login-page exceptions are documented in
+`tools/ci/docs-links.toml`. Do not suppress whole domains or all 401/403 errors.
+
+Run the external check against a base ref:
+
+```bash
+./tools/ci/check-doc-links origin/main /tmp/docs-link-report.md
 ```
 
 For pure routing or AGENTS.md-only changes, `git diff --check` plus targeted `rg` checks are usually sufficient.

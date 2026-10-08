@@ -419,6 +419,12 @@ icms:
     DUMMY_GPU_4: dgpu4
     DUMMY_GPU_5: dgpu5
 
+  gpu-gating:
+    "DummyGatedNcaId1aBcDeF":
+      DUMMY_GPU_1:
+        - dummy_gpu_1.large
+        - dummy_gpu_1.xlarge
+
   nats:
     enabled: false
     nats-url: nats://localhost:4222

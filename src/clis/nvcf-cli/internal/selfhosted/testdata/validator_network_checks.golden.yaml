@@ -1,0 +1,25 @@
+reachability:
+  endpoints:
+    - name: "nvcr.io"
+      host: "nvcr.io"
+      port: 443
+      protocol: tcp+tls
+      critical: false
+    - name: "harbor.example.com:8443"
+      host: "harbor.example.com"
+      port: 8443
+      protocol: tcp+tls
+      critical: false
+    - name: "[fd00::1]:5000"
+      host: "fd00::1"
+      port: 5000
+      protocol: tcp+tls
+      critical: false
+enforcement:
+  # Disabled for preflight. VALIDATOR_PREFLIGHT only suppresses the summary
+  # write, so enforcement would still run: it creates netpol-validation
+  # namespaces, server and client pods and NetworkPolicies, and pulls
+  # busybox from Docker Hub. Doing that on a virgin or air-gapped cluster,
+  # before anything is installed and with no flag to turn it off, is not
+  # something a read-only readiness check should do.
+  enabled: false

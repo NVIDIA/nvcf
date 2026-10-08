@@ -11,10 +11,12 @@ test:
 	@tests/llm-servicemonitor-defaults.sh
 	@tests/gateway-routes-local-chart.sh
 	@tests/gateway-routes-enable-wiring.sh
+	@tests/gateway-routes-hostname-policy-wiring.sh
 	@tests/gateway-routes-default-ownership.sh
 	@tests/grpc-proxy-nats-endpoint.sh
 	@tests/llm-pki-openbao-migration.sh
 	@tests/api-keys-startup-probe.sh
+	@tests/upgrade-receipt-wiring.sh
 	@tests/cassandra-openbao-credential-wiring.sh
 	@tests/llm-pki-release.sh
 	@tests/check-llm-pki-issuer.sh
@@ -25,13 +27,17 @@ test:
 	@tests/sidecar-registry-wiring.sh
 	@tests/api-env-wiring.sh
 	@tests/apikeys-env-wiring.sh
+	@tests/notary-env-wiring.sh
 	@tests/ess-base-url-wiring.sh
+	@tests/nvct-remote-config-wiring.sh
 	@tests/icms-condition-wiring.sh
 	@tests/nats-placement-tags.sh
 	@tests/nats-tls-wiring.sh
 	@tests/nats-auth-callout-wiring.sh
 	@tests/notary-image-repository.sh
 	@tests/nvcf-ui-migrations-image-tag.sh
+	@tests/ha-value-wiring.sh
+	@tests/ha-chart-render.sh
 
 test-published-charts:
 	@: "$${NVCF_PUBLISHED_CHART_REGISTRY:?NVCF_PUBLISHED_CHART_REGISTRY is required}"
@@ -39,4 +45,5 @@ test-published-charts:
 	@tests/llm-router-published-chart.sh
 	@tests/gateway-routes-published-chart.sh
 	@tests/openbao-published-chart.sh
+	@tests/state-metrics-chart-contract.sh
 	@tests/cassandra-autoscaler-published-compatibility.sh

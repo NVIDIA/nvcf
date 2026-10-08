@@ -32,7 +32,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{collections::HashMap, net::SocketAddr};
 
-use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
+use axum::{http::StatusCode, response::IntoResponse};
 use rand::Rng;
 use rs_autoscaler::tracing_init;
 use tokio::signal;
@@ -101,11 +101,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Start the probe server immediately so liveness probes respond while waiting for dependencies.
     // Liveness always returns 200; readiness returns 503 until Cassandra/TimeseriesDb are healthy.
     const PROBE_PORT: u16 = 8181;
-    let health_app = Router::new()
-        .route("/admin/health/liveness", get(routes::get_liveness))
-        .route("/admin/health/readiness", get(routes::get_readiness))
-        .route("/health", get(routes::get_health))
-        .with_state(health.clone());
+    // /info is served here too, so build metadata stays readable while the
+    // service is still waiting on Cassandra.
+    let health_app = routes::health_router(health.clone());
     let probe_addr = SocketAddr::from(([0, 0, 0, 0], PROBE_PORT));
     let probe_listener = tokio::net::TcpListener::bind(probe_addr).await?;
     tracing::info!("Probe server listening on {}", probe_addr);
@@ -337,12 +335,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // Main app
-    let app = Router::new()
-        .route("/health", get(routes::get_health))
-        .route("/admin/health/liveness", get(routes::get_liveness))
-        .route("/admin/health/readiness", get(routes::get_readiness))
-        .with_state(health.clone())
-        .fallback(handler_404);
+    let app = routes::health_router(health.clone()).fallback(handler_404);
     let addr = config
         .server
         .listen_addr()

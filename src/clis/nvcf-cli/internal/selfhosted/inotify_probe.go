@@ -18,25 +18,29 @@ limitations under the License.
 package selfhosted
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 )
 
 const (
-	// inotifyProbeImage is the image used by the per-node probe pod. Pinned
-	// to match the documented inotify-tuner DaemonSet so customers do not need
-	// to mirror an extra image.
+	// inotifyProbeImage is the per-node probe pod's image when no probe
+	// image is configured. Pinned to match the documented inotify-tuner
+	// DaemonSet so customers do not need to mirror an extra image.
 	inotifyProbeImage = "busybox:1.36"
 
 	// inotifyProbeNamespace is where probe pods are created. "default" exists
@@ -46,16 +50,19 @@ const (
 	// inotifyProbeContainer is the container name inside the probe pod.
 	inotifyProbeContainer = "probe"
 
+	// inotifyProbeAppLabel names the probe's pods apart from the validator's.
+	inotifyProbeAppLabel = "nvcf-inotify-probe"
+
+	// inotifyProbeRole is the role the probe's pods are labelled with: only
+	// the compute-plane checks run it.
+	inotifyProbeRole = clusterValidatorComputePlaneRole
+
 	// inotifyProbeShellCmd reads both sysctls. Each cat runs independently
 	// so a missing /proc entry on one path doesn't drop the other value;
 	// the surviving integer reaches the parser, which errors clearly with
 	// "expected two integers, got <stdout>" rather than failing the pod
 	// and discarding all diagnostic info.
 	inotifyProbeShellCmd = "cat /host/proc/sys/fs/inotify/max_user_instances; cat /host/proc/sys/fs/inotify/max_user_watches"
-
-	// perNodePodTimeout caps the create+wait+logs sequence for one node.
-	// Image pull on a cold node can take ~30s; pod schedule + cat is sub-second.
-	perNodePodTimeout = 90 * time.Second
 
 	// podPollInterval is how often we poll pod status while waiting for the
 	// probe container to terminate.
@@ -95,8 +102,16 @@ const (
 // PSA-restricted clusters where pod create is denied for unprivileged
 // users, customers may need to apply the documented node-inotify-tuner
 // DaemonSet manually before this probe will succeed.
-func NewInotifyProber() NodeInotifyProber {
-	return func(ctx context.Context, kubeContext string) ([]NodeInotifyLimits, error) {
+//
+// image replaces the default busybox image, for clusters that pull from a
+// mirror; empty keeps the default.
+//
+// The prober remembers what it learned of each node across its calls, the
+// polls of one --wait: a node found within the limits is not probed again, and
+// the nodes no call has a result for are probed first, so each poll gets
+// further than the one before.
+func NewInotifyProber(image string) NodeInotifyProber {
+	return newInotifyProber(image, func(kubeContext string) (kubernetes.Interface, error) {
 		restCfg, err := loadKubeConfig(kubeContext)
 		if err != nil {
 			return nil, fmt.Errorf("building kubeconfig: %w", err)
@@ -116,9 +131,36 @@ func NewInotifyProber() NodeInotifyProber {
 		if err != nil {
 			return nil, fmt.Errorf("building kubernetes client: %w", err)
 		}
-		return probeAllNodes(ctx, client)
+		return client, nil
+	})
+}
+
+// newInotifyProber is NewInotifyProber with the client for a kube context
+// from connect.
+func newInotifyProber(image string, connect func(kubeContext string) (kubernetes.Interface, error)) NodeInotifyProber {
+	mem := &inotifyProbeMemory{}
+	return func(ctx context.Context, kubeContext string) ([]NodeInotifyLimits, error) {
+		client, err := connect(kubeContext)
+		if err != nil {
+			return nil, err
+		}
+		return probeAllNodes(ctx, client, image, mem)
 	}
 }
+
+// perNodePodTimeout caps the create+wait+logs sequence for one node. Image
+// pull on a cold node can take ~30s; pod schedule + cat is sub-second. A var so
+// tests can shorten it.
+var perNodePodTimeout = 90 * time.Second
+
+// inotifyProbeBudget bounds the whole probe, inside the time the check sets
+// aside for the checks that run before the validator. A var so tests can
+// shorten it.
+var inotifyProbeBudget = 100 * time.Second
+
+// probePodCleanupTimeout bounds the deletion of a probe pod, which runs after
+// the probe's own deadline. The probe share leaves room for it.
+var probePodCleanupTimeout = 10 * time.Second
 
 // probeAllNodes is the testable core: it takes a kubernetes.Interface so
 // callers can inject fake.NewSimpleClientset. It probes nodes in parallel
@@ -131,7 +173,22 @@ func NewInotifyProber() NodeInotifyProber {
 // nodeInotifyCheck can always inspect partial results, and limit
 // violations on some nodes are never dropped when other nodes are
 // concurrently unreachable.
-func probeAllNodes(ctx context.Context, client kubernetes.Interface) ([]NodeInotifyLimits, error) {
+//
+// mem holds what earlier calls learned of the nodes, and takes what this one
+// learns; nil starts from nothing.
+func probeAllNodes(
+	ctx context.Context, client kubernetes.Interface, image string, mem *inotifyProbeMemory,
+) ([]NodeInotifyLimits, error) {
+	if mem == nil {
+		mem = &inotifyProbeMemory{}
+	}
+	// Nodes are probed probeConcurrency at a time, so on a cluster whose
+	// probe pods stall each wave takes perNodePodTimeout: unbounded, the probe
+	// ran past the time the check sets aside for the checks before the
+	// validator, and cut the validator short. A node not reached in time is
+	// reported as not probed.
+	ctx, cancel := context.WithTimeout(ctx, inotifyProbeBudget)
+	defer cancel()
 	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("listing nodes: %w", err)
@@ -139,17 +196,34 @@ func probeAllNodes(ctx context.Context, client kubernetes.Interface) ([]NodeInot
 	if len(nodes.Items) == 0 {
 		return nil, nil
 	}
-	results := make([]NodeInotifyLimits, len(nodes.Items))
+	runID, err := newValidatorRunID()
+	if err != nil {
+		return nil, err
+	}
+	run := &probeRun{id: runID}
+	// Each pod is deleted once its node is probed, but a Create the budget or
+	// an interrupt cut off may still have been applied, and then no per-node
+	// delete runs. This reclaims those by the run's label on every return.
+	probeDeadline, _ := ctx.Deadline()
+	defer func() { run.reclaim(client, probeDeadline) }()
+	// Unschedulable nodes won't have control plane components deployed on them.
+	schedulable := slices.DeleteFunc(nodes.Items, func(n corev1.Node) bool { return n.Spec.Unschedulable })
+	results := make([]NodeInotifyLimits, len(schedulable))
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.SetLimit(probeConcurrency)
-	for i, n := range nodes.Items {
-		// Unschedulable nodes won't have control plane components deployed on them.
-		if n.Spec.Unschedulable {
+	for _, i := range mem.plan(schedulable, results) {
+		node := &schedulable[i]
+		// No pod runs on a node that is not Ready, so its probe would only
+		// wait out its bound, and a wave of such nodes the probe's budget.
+		if why := nodeNotReady(node); why != "" {
+			results[i] = mem.settle(node, NodeInotifyLimits{NodeName: node.Name,
+				Err: fmt.Errorf("node %s is not Ready (%s), so no probe pod can run there", node.Name, why)},
+				probeFinished)
 			continue
 		}
-		i, nodeName := i, n.Name
 		eg.Go(func() error {
-			results[i] = probeOneNode(egCtx, client, nodeName)
+			res, stop := probeOneNode(egCtx, client, run, node.Name, image)
+			results[i] = mem.settle(node, res, stop)
 			// Per-node failures are encoded in results[i].Err; never
 			// propagate them as the errgroup's error, since that would
 			// cancel sibling probes still in flight.
@@ -157,64 +231,226 @@ func probeAllNodes(ctx context.Context, client kubernetes.Interface) ([]NodeInot
 		})
 	}
 	_ = eg.Wait()
-	// Remove any results from skipped nodes.
-	results = slices.DeleteFunc(results, func(item NodeInotifyLimits) bool {
-		return item.Err == nil && item.NodeName == ""
-	})
 	return results, nil
 }
 
+// nodeNotReady returns why node's Ready condition is not True, or "" when it
+// is, or when the node reports no Ready condition.
+func nodeNotReady(node *corev1.Node) string {
+	for _, c := range node.Status.Conditions {
+		if c.Type == corev1.NodeReady && c.Status != corev1.ConditionTrue {
+			return strings.TrimSpace(cmp.Or(c.Reason, "Ready="+string(c.Status)))
+		}
+	}
+	return ""
+}
+
+// probeStop says whether the probe's budget stopped a node's probe.
+type probeStop int
+
+const (
+	// probeFinished is a probe that ran to its end: the node was measured, or
+	// failed on its own, such as an image it could not pull or its own bound.
+	probeFinished probeStop = iota
+	// probeNotStarted is a node the budget ran out before.
+	probeNotStarted
+	// probeStoppedPartWay is a node the budget ran out on while it was probed.
+	probeStoppedPartWay
+)
+
 // probeOneNode creates, waits on, and tears down a single probe pod, returning
-// the parsed limits or a per-node error.
-func probeOneNode(ctx context.Context, client kubernetes.Interface, nodeName string) NodeInotifyLimits {
+// the parsed limits or a per-node error, and whether the probe's budget,
+// rather than the node, stopped it.
+func probeOneNode(
+	ctx context.Context, client kubernetes.Interface, run *probeRun, nodeName, image string,
+) (NodeInotifyLimits, probeStop) {
 	res := NodeInotifyLimits{NodeName: nodeName}
+	if ctx.Err() != nil {
+		res.Err = fmt.Errorf("not probed: the inotify probe's %s budget ran out", inotifyProbeBudget)
+		return res, probeNotStarted
+	}
+	// ctx is the whole probe's, so a failure once it ended is the budget's,
+	// not the node's. It is told apart here, before the pod's cleanup.
+	failed := func(err error) (NodeInotifyLimits, probeStop) {
+		res.Err = err
+		if ctx.Err() != nil {
+			return res, probeStoppedPartWay
+		}
+		return res, probeFinished
+	}
 
 	pctx, cancel := context.WithTimeout(ctx, perNodePodTimeout)
 	defer cancel()
 
-	pod, err := client.CoreV1().Pods(inotifyProbeNamespace).Create(pctx, buildInotifyProbePod(nodeName), metav1.CreateOptions{})
+	pod, err := createProbePod(pctx, client, nodeName, run.id, image)
 	if err != nil {
-		res.Err = fmt.Errorf("create probe pod on node %s: %w", nodeName, err)
-		return res
+		return failed(fmt.Errorf("create probe pod on node %s: %w", nodeName, err))
 	}
-	defer cleanupProbePod(client, pod.Name)
+	run.created(pod)
+	defer cleanupProbePod(client, pod)
 
 	if err := waitForPodTerminal(pctx, client, pod.Name); err != nil {
-		res.Err = fmt.Errorf("waiting for probe pod on node %s: %w", nodeName, err)
-		return res
+		return failed(fmt.Errorf("waiting for probe pod on node %s: %w", nodeName, err))
 	}
 
 	logs, err := fetchPodLogs(pctx, client, pod.Name)
 	if err != nil {
-		res.Err = fmt.Errorf("fetching probe logs from node %s: %w", nodeName, err)
-		return res
+		return failed(fmt.Errorf("fetching probe logs from node %s: %w", nodeName, err))
 	}
 
 	instances, watches, err := parseInotifyOutput(logs)
 	if err != nil {
 		res.Err = fmt.Errorf("parsing inotify output from node %s: %w", nodeName, err)
-		return res
+		return res, probeFinished
 	}
 	res.MaxUserInstances = instances
 	res.MaxUserWatches = watches
+	return res, probeFinished
+}
+
+// inotifyProbeMemory is what one prober learned of each node over its calls.
+type inotifyProbeMemory struct {
+	mu    sync.Mutex
+	nodes map[string]*nodeProbeRecord // by node name and UID
+}
+
+type nodeProbeRecord struct {
+	// last is the node's latest probe that ran to its end, if any.
+	last *NodeInotifyLimits
+	// stoppedPartWay is set once the budget ran out on a probe of the node.
+	stoppedPartWay bool
+}
+
+func nodeProbeKey(node *corev1.Node) string { return node.Name + "/" + string(node.UID) }
+
+// plan fills in results for the nodes an earlier call found within the
+// limits, which are not probed again, and returns the others in the order to
+// probe them: first the nodes no call has a result for, those the budget
+// stopped part way ahead of the rest, so they get a whole turn; then the nodes
+// whose last result was a failure or below the limits, which a new probe may
+// change.
+func (m *inotifyProbeMemory) plan(nodes []corev1.Node, results []NodeInotifyLimits) []int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var stopped, fresh, again []int
+	for i := range nodes {
+		rec := m.nodes[nodeProbeKey(&nodes[i])]
+		switch {
+		case rec == nil:
+			fresh = append(fresh, i)
+		case rec.last != nil && rec.last.withinLimits():
+			results[i] = *rec.last
+		case rec.last != nil:
+			again = append(again, i)
+		default:
+			stopped = append(stopped, i)
+		}
+	}
+	return slices.Concat(stopped, fresh, again)
+}
+
+// settle records how a node's probe ended and returns the node's result for
+// this call. Only a node without a result that the budget stopped is out of
+// budget: a later call, which probes such nodes first, may reach it. A node
+// that failed on its own, or the budget stopped part way a second time
+// although it went first, is not: a later call is unlikely to do better.
+func (m *inotifyProbeMemory) settle(node *corev1.Node, res NodeInotifyLimits, stop probeStop) NodeInotifyLimits {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.nodes == nil {
+		m.nodes = map[string]*nodeProbeRecord{}
+	}
+	key := nodeProbeKey(node)
+	rec := m.nodes[key]
+	if rec == nil {
+		rec = &nodeProbeRecord{}
+	}
+	switch {
+	case stop == probeFinished:
+		rec.last = &res
+	case rec.last != nil:
+		// The budget stopped a new probe of a node an earlier call has a
+		// result for: that result stands.
+		return *rec.last
+	case stop == probeNotStarted:
+		res.OutOfBudget = true
+		if !rec.stoppedPartWay {
+			// Nothing to record: the node is still one no call has reached.
+			return res
+		}
+	case !rec.stoppedPartWay:
+		res.OutOfBudget = true
+		rec.stoppedPartWay = true
+	default:
+		rec.last = &res
+	}
+	m.nodes[key] = rec
 	return res
+}
+
+// createProbePod creates the probe pod for nodeName. A ResourceQuota on cpu or
+// memory in the namespace rejects a pod that states no requests or limits for
+// them, so on that rejection the pod is created once more with small ones.
+func createProbePod(
+	ctx context.Context, client kubernetes.Interface, nodeName, runID, image string,
+) (*corev1.Pod, error) {
+	pods := client.CoreV1().Pods(inotifyProbeNamespace)
+	pod := buildInotifyProbePod(nodeName, runID, image)
+	created, err := pods.Create(ctx, pod, metav1.CreateOptions{})
+	if !quotaRequiresResources(err) {
+		return created, err
+	}
+	// A quota may cover limits as well as requests. Equal values keep the pod
+	// Guaranteed.
+	pod.Spec.Containers[0].Resources = corev1.ResourceRequirements{
+		Requests: inotifyProbeQuotaResources(),
+		Limits:   inotifyProbeQuotaResources(),
+	}
+	return pods.Create(ctx, pod, metav1.CreateOptions{})
+}
+
+// quotaRequiresResources reports a create a ResourceQuota refused because the
+// pod states no request or limit for a resource the quota covers.
+func quotaRequiresResources(err error) bool {
+	return apierrors.IsForbidden(err) && strings.Contains(err.Error(), "must specify")
+}
+
+// inotifyProbeQuotaResources are the probe container's requests, and its
+// limits, in a namespace whose quota requires them.
+func inotifyProbeQuotaResources() corev1.ResourceList {
+	return corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("50m"),
+		corev1.ResourceMemory: resource.MustParse("32Mi"),
+	}
+}
+
+// inotifyProbeLabels are the labels on every probe pod of one run: the
+// validator's managed labels under the probe's own name, the role, and the
+// run ID. With an empty runID they select every run's probe pods.
+func inotifyProbeLabels(runID string) map[string]string {
+	l := clusterValidatorRunLabels(inotifyProbeRole, runID, false)
+	l["app.kubernetes.io/name"] = inotifyProbeAppLabel
+	return l
 }
 
 // buildInotifyProbePod constructs a Pod that runs once on the named node and
 // prints the two inotify sysctls to stdout. The container is unprivileged
 // and runs in the default PID namespace: /proc/sys/fs/inotify/max_user_*
 // are kernel-wide sysctls and are world-readable through the host's procfs
-// via the read-only /host hostPath mount.
-func buildInotifyProbePod(nodeName string) *corev1.Pod {
+// via the read-only /host hostPath mount, so the container also runs as a
+// non-root user with no capabilities. An empty image selects the default.
+func buildInotifyProbePod(nodeName, runID, image string) *corev1.Pod {
+	if image == "" {
+		image = inotifyProbeImage
+	}
 	hostPathDir := corev1.HostPathDirectory
+	nobody := int64(65534)
+	runAsNonRoot, readOnlyRoot, allowPrivEsc := true, true, false
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: "nvcf-inotify-probe-",
+			GenerateName: inotifyProbeAppLabel + "-",
 			Namespace:    inotifyProbeNamespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/name":       "nvcf-inotify-probe",
-				"app.kubernetes.io/managed-by": "nvcf-cli",
-			},
+			Labels:       inotifyProbeLabels(runID),
 		},
 		Spec: corev1.PodSpec{
 			NodeName:      nodeName,
@@ -222,10 +458,27 @@ func buildInotifyProbePod(nodeName string) *corev1.Pod {
 			Tolerations: []corev1.Toleration{
 				{Operator: corev1.TolerationOpExists},
 			},
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsUser:  &nobody,
+				RunAsGroup: &nobody,
+			},
 			Containers: []corev1.Container{{
 				Name:    inotifyProbeContainer,
-				Image:   inotifyProbeImage,
+				Image:   image,
 				Command: []string{"sh", "-c", inotifyProbeShellCmd},
+				// No requests: the pod is pinned with NodeName, so the
+				// kubelet admits it against the node's free capacity, and
+				// any request has it rejected OutOfcpu or OutOfmemory on a
+				// fully requested node, the busiest ones. No limits either:
+				// a limit without a request sets the request to it.
+				// createProbePod adds both where a quota requires them.
+				SecurityContext: &corev1.SecurityContext{
+					RunAsNonRoot:             &runAsNonRoot,
+					ReadOnlyRootFilesystem:   &readOnlyRoot,
+					AllowPrivilegeEscalation: &allowPrivEsc,
+					Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+					SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+				},
 				VolumeMounts: []corev1.VolumeMount{{
 					Name:      "host",
 					MountPath: "/host",
@@ -244,7 +497,9 @@ func buildInotifyProbePod(nodeName string) *corev1.Pod {
 
 // waitForPodTerminal polls the pod until its phase is Succeeded or Failed.
 // The probe container is `cat`, so success is the normal exit path; Failed
-// surfaces image-pull errors, scheduling rejections, etc.
+// surfaces scheduling rejections and the like. A container that cannot start,
+// such as one whose image cannot be pulled, leaves the pod Pending, so that
+// ends the wait too rather than running out the node's bound.
 func waitForPodTerminal(ctx context.Context, client kubernetes.Interface, podName string) error {
 	ticker := time.NewTicker(podPollInterval)
 	defer ticker.Stop()
@@ -259,12 +514,31 @@ func waitForPodTerminal(ctx context.Context, client kubernetes.Interface, podNam
 		case corev1.PodFailed:
 			return fmt.Errorf("probe pod %s failed: %s", podName, podFailureMessage(pod))
 		}
+		if containerCannotStart(pod) {
+			return fmt.Errorf("probe pod %s cannot start: %s", podName, podFailureMessage(pod))
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
 		}
 	}
+}
+
+// containerCannotStart reports a container the kubelet is waiting on for a
+// reason it does not get past by itself: an image it cannot pull, or a
+// container it cannot configure.
+func containerCannotStart(pod *corev1.Pod) bool {
+	for _, cs := range pod.Status.ContainerStatuses {
+		if w := cs.State.Waiting; w != nil {
+			switch w.Reason {
+			case "ErrImagePull", "ImagePullBackOff", "ErrImageNeverPull", "InvalidImageName",
+				"CreateContainerConfigError":
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // podFailureMessage extracts a useful single-line failure reason from a
@@ -308,20 +582,81 @@ func fetchPodLogs(ctx context.Context, client kubernetes.Interface, podName stri
 	return string(b), nil
 }
 
-// cleanupProbePod best-effort deletes the probe pod. Uses a background
-// context so the pod is cleaned up even when the caller's context was
-// canceled mid-probe.
-func cleanupProbePod(client kubernetes.Interface, podName string) {
-	delCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+// cleanupProbePod best-effort deletes the probe pod this run created, pinned
+// to its UID. Uses a background context so the pod is cleaned up even when
+// the caller's context was canceled mid-probe.
+func cleanupProbePod(client kubernetes.Interface, pod *corev1.Pod) {
+	delCtx, cancel := context.WithTimeout(context.Background(), probePodCleanupTimeout)
 	defer cancel()
+	deleteProbePod(delCtx, client, pod)
+}
+
+// deleteProbePod deletes one probe pod at once, pinned to its UID. Errors are
+// swallowed: the caller already has its result, and a leaked probe pod is
+// preferable to an error that masks the real check outcome.
+func deleteProbePod(ctx context.Context, client kubernetes.Interface, pod *corev1.Pod) {
+	opts := deleteExactly(pod)
 	grace := podDeleteGrace
-	err := client.CoreV1().Pods(inotifyProbeNamespace).Delete(delCtx, podName, metav1.DeleteOptions{
-		GracePeriodSeconds: &grace,
-	})
+	opts.GracePeriodSeconds = &grace
+	err := client.CoreV1().Pods(inotifyProbeNamespace).Delete(ctx, pod.Name, opts)
 	if err != nil && !apierrors.IsNotFound(err) {
-		// Swallow; the caller already has its result and a leaked probe pod
-		// is preferable to an error that masks the real check outcome.
 		_ = err
+	}
+}
+
+// probeRun is one probe's identity and what it learned of the apiserver's
+// clock from the pods it created.
+type probeRun struct {
+	id string
+	mu sync.Mutex
+	// serverNow is the latest creationTimestamp among this run's pods.
+	serverNow time.Time
+}
+
+func (r *probeRun) created(pod *corev1.Pod) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ts := pod.CreationTimestamp.Time; ts.After(r.serverNow) {
+		r.serverNow = ts
+	}
+}
+
+// reclaim deletes, on a fresh bounded context, every probe pod still carrying
+// this run's ID, and every other run's probe pod older than
+// orphanValidatorRBACTTL on the apiserver's clock: a run killed outright, or
+// interrupted twice, leaves pods that mount the host's root and tolerate
+// every taint, and nothing else removes them. Another run's younger pods may
+// belong to a probe still in progress, so they are kept.
+//
+// It ends within probePodCleanupTimeout of the probe's deadline, the room the
+// probe share leaves for the cleanup after it, which the per-node deletes may
+// already have used.
+func (r *probeRun) reclaim(client kubernetes.Interface, probeDeadline time.Time) {
+	start := time.Now()
+	if !probeDeadline.IsZero() && probeDeadline.Before(start) {
+		start = probeDeadline
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), start.Add(probePodCleanupTimeout))
+	defer cancel()
+	pods, err := client.CoreV1().Pods(inotifyProbeNamespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labels.SelectorFromSet(inotifyProbeLabels("")).String(),
+	})
+	if err != nil {
+		return
+	}
+	r.mu.Lock()
+	now := r.serverNow
+	r.mu.Unlock()
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if !strings.HasPrefix(pod.Name, inotifyProbeAppLabel+"-") {
+			continue
+		}
+		mine := pod.Labels[clusterValidatorRunLabel] == r.id
+		stale := !now.IsZero() && pod.CreationTimestamp.Time.Before(now.Add(-orphanValidatorRBACTTL))
+		if mine || stale {
+			deleteProbePod(ctx, client, pod)
+		}
 	}
 }
 

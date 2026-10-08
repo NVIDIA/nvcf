@@ -77,7 +77,37 @@ func stackKeyForPlane(plane string) (string, error) {
 	}
 }
 
-func releaseSetFromInventories(inventories map[string]resolvedStackInventory, documentationVersion string, status ReleaseSetStatus) (ReleaseSetMetadata, error) {
+// preserveQualifiedDocumentation keeps a stack's frozen documentation version
+// across a refresh while the released version is unchanged. A new release
+// falls back to development documentation until that exact version is frozen.
+func preserveQualifiedDocumentation(refreshed *ReleaseSetMetadata, base ReleaseSetMetadata) error {
+	if base == (ReleaseSetMetadata{}) {
+		return nil
+	}
+	for _, stack := range releaseSetStackNames {
+		previous, err := base.Stacks.byName(stack)
+		if err != nil {
+			return err
+		}
+		if previous.Status != ReleaseSetQualified {
+			continue
+		}
+		current, err := refreshed.Stacks.byName(stack)
+		if err != nil {
+			return err
+		}
+		if current.Version != previous.DocumentationVersion {
+			continue
+		}
+		current.DocumentationVersion = previous.DocumentationVersion
+		current.Status = ReleaseSetQualified
+	}
+	return nil
+}
+
+// releaseSetFromInventories records the current release of each stack as
+// development documentation. Freezing a stack version marks that stack qualified.
+func releaseSetFromInventories(inventories map[string]resolvedStackInventory) (ReleaseSetMetadata, error) {
 	metadata := func(key string) (StackReleaseMetadata, error) {
 		spec, err := stackInventorySpecByKey(key)
 		if err != nil {
@@ -88,10 +118,12 @@ func releaseSetFromInventories(inventories map[string]resolvedStackInventory, do
 			return StackReleaseMetadata{}, fmt.Errorf("%s inventory is required for release set metadata", key)
 		}
 		return StackReleaseMetadata{
-			Version:        inventory.Source.Version,
-			SourceTag:      inventory.Source.Tag,
-			SourceCommit:   inventory.Source.Commit,
-			InventoryAsset: spec.AssetName,
+			Version:              inventory.Source.Version,
+			SourceTag:            inventory.Source.Tag,
+			SourceCommit:         inventory.Source.Commit,
+			InventoryAsset:       spec.AssetName,
+			DocumentationVersion: "dev",
+			Status:               ReleaseSetDevelopment,
 		}, nil
 	}
 	controlPlane, err := metadata(selfManagedStackKey)
@@ -107,16 +139,10 @@ func releaseSetFromInventories(inventories map[string]resolvedStackInventory, do
 		return ReleaseSetMetadata{}, err
 	}
 	return ReleaseSetMetadata{
-		DocumentationVersion: documentationVersion,
-		Status:               status,
 		Stacks: ReleaseSetStacks{
 			ControlPlane:  controlPlane,
 			ComputePlane:  computePlane,
 			Observability: observability,
 		},
 	}, nil
-}
-
-func (releaseSet ReleaseSetMetadata) sameStackReleases(other ReleaseSetMetadata) bool {
-	return releaseSet.Stacks == other.Stacks
 }

@@ -60,20 +60,27 @@ releases:
 
   # --- NVCF Services ---
   - name: api-keys
-    version: 1.8.0
+    version: 1.9.0
     namespace: api-keys
     inherit:
       - template: service
 
   - name: sis
-    version: 2.4.0
+    {{- $sisChartPath := dig "sis" "chartPath" "" .Values }}
+    chart: {{ $sisChartPath | default "nvcf/helm-nvcf-sis" | quote }}
+    {{- if not $sisChartPath }}
+    version: 2.6.0
+    {{- end }}
     namespace: sis
-    inherit:
-      - template: service
     condition: icms.enabled
+    values:
+      - ../global.yaml.gotmpl
+      - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
+    labels:
+      release-group: services
 
   - name: api
-    version: 1.27.1
+    version: 1.28.0
     namespace: nvcf
     inherit:
       - template: service
@@ -94,7 +101,7 @@ releases:
       - nvcf/reval
 
   - name: nvct-api
-    version: 1.6.0
+    version: 1.7.0
     namespace: nvcf
     inherit:
       - template: service
@@ -114,7 +121,7 @@ releases:
       - nvcf/api
 
   - name: invocation-service
-    version: 1.6.1
+    version: 1.7.0
     namespace: nvcf
     inherit:
       - template: service
@@ -122,7 +129,7 @@ releases:
       - nvcf/api
 
   - name: grpc-proxy
-    version: 1.7.4
+    version: 1.8.0
     namespace: nvcf
     inherit:
       - template: service
@@ -131,7 +138,7 @@ releases:
 
   - name: ratelimiter
     chart: nvcf/helm-nvcf-rate-limiter
-    version: 1.2.1
+    version: 1.3.0
     namespace: nvcf
     condition: rateLimiter.enabled
     values:
@@ -142,20 +149,20 @@ releases:
       - nvcf/api
 
   - name: ess-api
-    version: 1.8.2
+    version: 1.9.0
     namespace: ess
     inherit:
       - template: service
 
   - name: notary-service
-    version: 1.6.0
+    version: 1.7.0
     namespace: nvcf
     inherit:
       - template: service
 
   - name: admin-issuer-proxy
     chart: nvcf/helm-admin-token-issuer-proxy
-    version: 1.5.3
+    version: 1.6.0
     namespace: api-keys
     values:
       - ../global.yaml.gotmpl
@@ -187,7 +194,7 @@ releases:
 
   - name: reval
     chart: nvcf/helm-reval
-    version: 1.4.1
+    version: 1.5.0
     namespace: nvcf
     values:
       - ../global.yaml.gotmpl
@@ -196,7 +203,7 @@ releases:
 
   - name: nats-auth-callout-service
     chart: nvcf/helm-nvcf-nats-auth-callout-service
-    version: 1.2.1
+    version: 1.3.0
     namespace: nats-system
     values:
       - ../global.yaml.gotmpl
@@ -232,7 +239,7 @@ releases:
     {{- $llmRequestRouterChartPath := dig "addons" "llm" "requestRouter" "chartPath" "" .Values }}
     chart: {{ $llmRequestRouterChartPath | default "nvcf/helm-nvcf-llm-request-router" | quote }}
     {{- if not $llmRequestRouterChartPath }}
-    version: 1.14.1
+    version: 1.15.0
     {{- end }}
     namespace: nvcf
     condition: addons.llm.enabled
@@ -245,7 +252,7 @@ releases:
 
   - name: llm-api-gateway
     chart: nvcf/helm-nvcf-llm-api-gateway
-    version: 1.4.3
+    version: 1.5.0
     namespace: nvcf
     condition: addons.llm.enabled
     values:
@@ -276,12 +283,22 @@ releases:
     labels:
       release-group: services
 
+  - name: event-ledger
+    chart: nvcf/helm-nvcf-event-ledger
+    version: 0.5.0
+    namespace: nvcf
+    condition: addons.eventLedger.enabled
+    values:
+      - ../global.yaml.gotmpl
+    labels:
+      release-group: services
+
   # --- Gateway API Ingress ---
   - name: ingress
     {{- $gatewayRoutesChartPath := dig "ingress" "gatewayApi" "chartPath" "" .Values }}
     chart: {{ $gatewayRoutesChartPath | default "nvcf/nvcf-gateway-routes" | quote }}
     {{- if not $gatewayRoutesChartPath }}
-    version: 1.18.2
+    version: 1.18.3
     {{- end }}
     needs:
       - nvcf/notary-service

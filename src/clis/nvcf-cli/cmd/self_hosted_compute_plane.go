@@ -108,6 +108,11 @@ func runSelfHostedComputePlaneInstall(c *cobra.Command, _ []string) error {
 		return fmt.Errorf("cluster name is required: set clusterName in the values file or pass --cluster-name")
 	}
 	ncaID := firstNonEmpty(metadata.NCAID, computePlaneInstallNCAID)
+	outputDir, cleanup, err := registrationValuesDir(valuesPath, clusterName)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 
 	resolved, err := selfhosted.ResolveStack(c.Context(), selfhosted.StackOptions{
 		Source:        selfHostedComputePlaneStack,
@@ -132,8 +137,37 @@ func runSelfHostedComputePlaneInstall(c *cobra.Command, _ []string) error {
 		Stdout:          c.OutOrStdout(),
 		Stderr:          c.ErrOrStderr(),
 		Ctx:             c.Context(),
-		ExtraEnv:        computePlaneInstallEnv(clusterName, ncaID, filepath.Dir(valuesPath)),
+		ExtraEnv:        computePlaneInstallEnv(clusterName, ncaID, outputDir),
 	})
+}
+
+// registrationValuesDir returns the OUTPUT_DIR from which the compute-plane
+// helmfile reads $OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml. A values
+// file under any other name, or for another cluster name, is copied under
+// that name into a private directory, so the install reads the file it was
+// given and never a stale file beside it. cleanup removes the copy.
+func registrationValuesDir(valuesPath, clusterName string) (dir string, cleanup func(), err error) {
+	name := clusterName + "-register-values.yaml"
+	if filepath.Base(valuesPath) == name {
+		return filepath.Dir(valuesPath), func() {}, nil
+	}
+	if filepath.Base(name) != name {
+		return "", nil, fmt.Errorf("cluster name %q cannot name the registration values file", clusterName)
+	}
+	body, err := os.ReadFile(valuesPath)
+	if err != nil {
+		return "", nil, fmt.Errorf("reading values file: %w", err)
+	}
+	dir, err = os.MkdirTemp("", "nvcf-compute-plane-values-")
+	if err != nil {
+		return "", nil, fmt.Errorf("staging values file: %w", err)
+	}
+	cleanup = func() { _ = os.RemoveAll(dir) }
+	if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("staging values file: %w", err)
+	}
+	return dir, cleanup, nil
 }
 
 type nvcaValuesMetadata struct {
@@ -239,8 +273,8 @@ func computePlaneInstallEnv(clusterName, ncaID, outputDir string) []string {
 		"CLUSTER_NAME=" + clusterName,
 		"NCA_ID=" + ncaID,
 		// The worker helmfile resolves the registration values at
-		// $OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml via requiredEnv, so
-		// point it at the directory holding the --values file.
+		// $OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml via requiredEnv;
+		// registrationValuesDir puts the --values file there.
 		"OUTPUT_DIR=" + outputDir,
 	}
 }

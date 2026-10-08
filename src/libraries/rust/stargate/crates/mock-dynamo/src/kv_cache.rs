@@ -30,6 +30,32 @@ pub(crate) struct KvCacheStats {
     pub(crate) kv_cache_evicted_tokens: u64,
 }
 
+impl KvCacheStats {
+    /// Deployment totals for the batched engine. Entry, hit, miss, and
+    /// eviction counters are not tracked by that model and report zero.
+    pub(crate) fn from_engine_workers(model: &str, workers: &[mock_engine::WorkerStats]) -> Self {
+        let capacity: u64 = workers
+            .iter()
+            .map(|worker| worker.kv_cache_capacity_tokens)
+            .sum();
+        let used: u64 = workers
+            .iter()
+            .map(|worker| worker.kv_cache_used_tokens)
+            .sum();
+        Self {
+            model: model.to_string(),
+            kv_cache_capacity_tokens: capacity,
+            kv_cache_used_tokens: used,
+            kv_cache_free_tokens: capacity.saturating_sub(used),
+            kv_cache_entries: 0,
+            kv_cache_hit_count: 0,
+            kv_cache_miss_count: 0,
+            kv_cache_eviction_count: 0,
+            kv_cache_evicted_tokens: 0,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct KvCacheState {
     capacity_tokens: u64,

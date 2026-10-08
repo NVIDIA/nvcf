@@ -46,6 +46,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/data_access"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/interfaces"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/middleware"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/nvca"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/tracing"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/policy"
@@ -294,7 +295,25 @@ func runService(cfg config.Config) error {
 				opts.Issuer = cfg.Auth.Issuer
 				opts.Audience = cfg.Auth.Audience
 				opts.TenantClaim = cfg.Auth.TenantClaim
+				opts.RequireExpiration = true
 				jwtOpts = &opts
+			}
+
+			var introspector nvca.Introspector
+			if cfg.Auth.Introspection.Enabled {
+				introspectionCfg := cfg.Auth.Introspection.WithDefaults()
+				logger.Warn("nvca psat introspection enabled", zap.String("url", introspectionCfg.URL))
+
+				introspectionClient, err := nvca.NewClient(
+					introspectionCfg.URL,
+					time.Duration(introspectionCfg.TimeoutSeconds)*time.Second,
+					time.Duration(introspectionCfg.CacheTTLSeconds)*time.Second,
+				)
+				if err != nil {
+					logger.Error("failed to create nvca introspection client", zap.Error(err))
+					return fmt.Errorf("failed to create nvca introspection client: %w", err)
+				}
+				introspector = introspectionClient
 			}
 
 			requireLocalScopeCheck = cfg.SelfManaged
@@ -304,7 +323,7 @@ func runService(cfg config.Config) error {
 				"nv-cloud-functions",
 				jwtOpts,
 				jwkCache,
-				cfg.SelfManaged,
+				introspector,
 				logger,
 			))
 		default:
@@ -447,12 +466,12 @@ func runService(cfg config.Config) error {
 	}
 
 	authRouter.Handle("/v3/ledger/k8s-events",
-		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.WriteScopes, middleware.RequireAnyScopes)(wrapper(http.HandlerFunc(server.PostK8sEventV3))),
+		middleware.MaybeRequireScopesAllowNVCA(logger, requireLocalScopeCheck, middleware.WriteScopes, middleware.RequireAnyScopes)(wrapper(http.HandlerFunc(server.PostK8sEventV3))),
 	).Methods("POST", "OPTIONS")
 
 	// CloudEvents receiver endpoint
 	authRouter.Handle("/v3/ledger/cloudevents",
-		middleware.MaybeRequireScopes(logger, requireLocalScopeCheck, middleware.WriteScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.PostCloudEventV3)),
+		middleware.MaybeRequireScopesAllowNVCA(logger, requireLocalScopeCheck, middleware.WriteScopes, middleware.RequireAnyScopes)(http.HandlerFunc(server.PostCloudEventV3)),
 	).Methods("POST", "OPTIONS")
 
 	// V3 Stats endpoint - retrieve aggregated stats for a namespace

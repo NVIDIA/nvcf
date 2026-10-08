@@ -66,6 +66,9 @@ func (h *ResponsesHandlers) CreateResponse(ec echo.Context) error {
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
+	if err := rejectAmbiguousMembers(body, openairesponses.CreateRequest{}); err != nil {
+		return err
+	}
 
 	var request openairesponses.CreateRequest
 	if err := c.Bind(&request); err != nil {
@@ -227,6 +230,7 @@ func (h *ResponsesHandlers) dispatchNativeResponsesRequest(
 			RawQuery:      c.Request().URL.RawQuery,
 			Header:        headers,
 			Body:          io.NopCloser(bytes.NewReader(body)),
+			ContentLength: int64(len(body)),
 			InputTokens:   request.InputTokens,
 			TokenEstimate: request.InputTokens + request.MaxOutputTokens,
 		},
@@ -335,13 +339,21 @@ func (h *ResponsesHandlers) aggregateNativeResponsesStream(
 	h.recordNativeResponsesProviderTime(c, start, false)
 	h.finalizeNativeResponsesUsage(c, request, terminalResponse, false)
 	setMultiTurnSessionResponseHeader(c)
-	return c.JSON(http.StatusOK, terminalResponse)
+	return c.JSONBlob(http.StatusOK, terminalResponse.body)
+}
+
+// nativeResponsesTerminal is the response object carried by a terminal
+// Responses stream event. The body is kept as upstream sent it so unary
+// clients see the same fields as streaming clients.
+type nativeResponsesTerminal struct {
+	body  json.RawMessage
+	usage *openairesponses.ResponseUsage
 }
 
 func consumeNativeResponsesSSE(
 	reader io.Reader,
 	writer io.Writer,
-) (*openairesponses.Response, error) {
+) (*nativeResponsesTerminal, error) {
 	if reader == nil {
 		return nil, nil
 	}
@@ -349,7 +361,7 @@ func consumeNativeResponsesSSE(
 	lineReader := bufio.NewReader(reader)
 	var (
 		eventBlock       bytes.Buffer
-		terminalResponse *openairesponses.Response
+		terminalResponse *nativeResponsesTerminal
 	)
 
 	for {
@@ -392,7 +404,7 @@ func isSSEBlankLine(line []byte) bool {
 	return len(bytes.TrimSpace(line)) == 0
 }
 
-func parseNativeResponsesSSEBlock(block []byte) *openairesponses.Response {
+func parseNativeResponsesSSEBlock(block []byte) *nativeResponsesTerminal {
 	var (
 		eventType string
 		dataLines []string
@@ -419,8 +431,8 @@ func parseNativeResponsesSSEBlock(block []byte) *openairesponses.Response {
 	}
 
 	var event struct {
-		Type     string                    `json:"type"`
-		Response *openairesponses.Response `json:"response"`
+		Type     string          `json:"type"`
+		Response json.RawMessage `json:"response"`
 	}
 	if err := json.Unmarshal([]byte(data), &event); err != nil {
 		return nil
@@ -433,20 +445,36 @@ func parseNativeResponsesSSEBlock(block []byte) *openairesponses.Response {
 	case openairesponses.EventTypeResponseCompleted,
 		openairesponses.EventTypeResponseFailed,
 		openairesponses.EventTypeResponseIncomplete:
-		return event.Response
 	default:
 		return nil
 	}
+	if trimmed := bytes.TrimSpace(event.Response); len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil
+	}
+
+	// Decode only usage so output item types the adapter does not know
+	// cannot hide the terminal response.
+	var response struct {
+		Usage *openairesponses.ResponseUsage `json:"usage"`
+	}
+	terminal := &nativeResponsesTerminal{body: event.Response}
+	if err := json.Unmarshal(event.Response, &response); err == nil {
+		terminal.usage = response.Usage
+	}
+	return terminal
 }
 
 func (h *ResponsesHandlers) finalizeNativeResponsesUsage(
 	c *GatewayContext,
 	request *provider.NormalizedRequest,
-	response *openairesponses.Response,
+	response *nativeResponsesTerminal,
 	stream bool,
 ) {
 	ctx := c.UserContext()
-	usage := chatUsageFromResponses(response)
+	var usage *models.ChatCompletionUsage
+	if response != nil {
+		usage = chatUsageFromResponses(response.usage)
+	}
 	if usageHasTokenCounts(usage) {
 		h.handlers.observability.recordLLMUsage(
 			ctx,
@@ -476,15 +504,15 @@ func (h *ResponsesHandlers) recordNativeResponsesProviderTime(
 	)
 }
 
-func chatUsageFromResponses(response *openairesponses.Response) *models.ChatCompletionUsage {
-	if response == nil || response.Usage == nil {
+func chatUsageFromResponses(usage *openairesponses.ResponseUsage) *models.ChatCompletionUsage {
+	if usage == nil {
 		return nil
 	}
 
 	return &models.ChatCompletionUsage{
-		PromptTokens:     responsesUsageTokenCount(response.Usage.InputTokens),
-		CompletionTokens: responsesUsageTokenCount(response.Usage.OutputTokens),
-		TotalTokens:      responsesUsageTokenCount(response.Usage.TotalTokens),
+		PromptTokens:     responsesUsageTokenCount(usage.InputTokens),
+		CompletionTokens: responsesUsageTokenCount(usage.OutputTokens),
+		TotalTokens:      responsesUsageTokenCount(usage.TotalTokens),
 	}
 }
 

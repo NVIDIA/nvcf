@@ -1507,6 +1507,17 @@ func kubectxFor(phaseNum int) string {
 	}
 }
 
+type registerValuesWriteRequest struct {
+	StackPath      string
+	ClusterName    string
+	NCAID          string
+	Region         string
+	IdentitySource string
+	ClusterID      string
+	ClusterGroupID string
+	Endpoints      registerEndpointValues
+}
+
 // writeRegisterValuesYAML persists the helm values handoff file the worker-layer
 // helmfile expects at <stack>/out/<cluster>-register-values.yaml. Schema mirrors
 // `printRegistrationOutput` (cmd/cluster_registration.go, fixed in `ff9aaf7`):
@@ -1519,17 +1530,6 @@ func kubectxFor(phaseNum int) string {
 // The pre-`ff9aaf7` shape (nested `selfManaged.clusterId`, lowercase-d) left
 // the chart's `.Values.clusterID` empty → cluster-dto.yaml rendered with empty
 // IDs → operator failed to fetch backend identity. (Iter #12 from dev-VM E2E.)
-type registerValuesWriteRequest struct {
-	StackPath      string
-	ClusterName    string
-	NCAID          string
-	Region         string
-	IdentitySource string
-	ClusterID      string
-	ClusterGroupID string
-	Endpoints      registerEndpointValues
-}
-
 func writeRegisterValuesYAML(req registerValuesWriteRequest) error {
 	outDir := filepath.Join(req.StackPath, "out")
 	if err := os.MkdirAll(outDir, 0o755); err != nil {

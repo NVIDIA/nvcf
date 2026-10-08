@@ -49,16 +49,19 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	nvcaoperatorerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/errors"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile/clustermgmt"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -98,6 +101,8 @@ const (
 	nvcfBackendHelmManagedConfigMapName    = "nvcfbackend-helm-managed"
 	nvcfBackendSelfManagedConfigMapName    = "nvcfbackend-self-managed"
 	nvcfBackendChartDefaultsConfigMapName  = "nvcfbackend-chart-defaults"
+
+	agentContainerName = "agent"
 
 	//nolint:gosec // G101: This is a ConfigMap name, not a credential
 	nvcfCustomAnnotationsConfigMapName = "nvca-namespace-pod-annotations"
@@ -156,13 +161,10 @@ const (
 	//nolint:gosec
 	NGCServiceAPIKeySecretDataKey = NGCServiceAPIKeySecretName
 	//nolint:gosec
-	NGCServiceAPIKeyFileEnvVar = "NGC_SERVICE_API_KEY_FILE"
-	//nolint:gosec
 	NGCAPIKeySecretName    = "ngc-api-key"
 	NVCAVaultConfigmapName = "nvca-vault-agent"
 
-	NVCAInternalPersistentStorageConfigJSONBase64Key = "NVCA_INTERNAL_PERSISTENT_STORAGE_CONFIG_JSON_BASE64"
-	NVCASharedStorageonfigJSONBase64Key              = "NVCA_SHARED_STORAGE_CONFIG_JSON_BASE64"
+	NVCASharedStorageonfigJSONBase64Key = "NVCA_SHARED_STORAGE_CONFIG_JSON_BASE64"
 
 	// default params for nvca deployment
 	DefaultLogLevel              = "info"
@@ -199,6 +201,7 @@ const (
 	NVCAOTelCollectorOAuthClientSecretFileEnvVar = "NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_SECRET_FILE"
 	NVCAOTelCollectorOAuthTokenURLEnvVar         = "NVCA_OTEL_COLLECTOR_OAUTH_TOKEN_URL"
 	NVCAOTelCollectorAuthenticatorEnvVar         = "NVCA_OTEL_COLLECTOR_AUTHENTICATOR"
+	NVCAOTelCollectorBearerTokenFileEnvVar       = "NVCA_OTEL_COLLECTOR_BEARER_TOKEN_FILE"
 
 	// NVCA OTel collector memory limiter default percentages
 	NVCAOTelCollectorMemoryLimitPercentage = 85
@@ -236,14 +239,56 @@ func makeWorkloadNamespaceLabelSelectors(icmsInstanceTypes ...string) map[string
 
 func boolPtr(b bool) *bool { return &b }
 
-func (bc *BackendK8sCache) setupRequestsNamespace(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
-	requestsNamespace := getRequestsNamespace(nb)
+// effectiveRequestsNamespace returns the requests namespace the agent will use.
+// The agent-config-merge override (Helm worker.requestsNamespace) takes
+// precedence over the NVCFBackend value when the agent config is encoded, so
+// the operator must prepare the same namespace.
+func effectiveRequestsNamespace(nb *nvidiaiov1.NVCFBackend, mergeCfg nvcaconfig.Config) string {
+	if mergeCfg.Agent.RequestsNamespace != "" {
+		return mergeCfg.Agent.RequestsNamespace
+	}
+	return getRequestsNamespace(nb)
+}
 
+func (bc *BackendK8sCache) getEffectiveRequestsNamespace(ctx context.Context, nb *nvidiaiov1.NVCFBackend) (string, error) {
+	mergeCfg, _, err := bc.getAgentConfigToMerge(ctx)
+	if err != nil {
+		return "", fmt.Errorf("get agent config to merge: %w", err)
+	}
+	return effectiveRequestsNamespace(nb, mergeCfg), nil
+}
+
+// reservedRequestsNamespaces are cluster namespaces the operator must never
+// label, harden, or delete as a requests namespace.
+var reservedRequestsNamespaces = sets.New("default", "kube-system", "kube-public", "kube-node-lease")
+
+func validateRequestsNamespaceConfig(mergeCfg nvcaconfig.Config) error {
+	ns := mergeCfg.Agent.RequestsNamespace
+	if ns == "" {
+		return nil
+	}
+	if errs := validation.IsDNS1123Label(ns); len(errs) > 0 {
+		return &invalidAgentConfigError{err: fmt.Errorf(
+			"worker.requestsNamespace %q is not a valid namespace name: %s", ns, strings.Join(errs, "; "))}
+	}
+	if reservedRequestsNamespaces.Has(ns) {
+		return &invalidAgentConfigError{err: fmt.Errorf(
+			"worker.requestsNamespace %q is a reserved Kubernetes namespace; choose a dedicated namespace", ns)}
+	}
+	return nil
+}
+
+func (bc *BackendK8sCache) setupRequestsNamespace(ctx context.Context, requestsNamespace string) error {
 	labels := map[string]string{
 		// This namespace will be reconciled by the ICMSRequest controller in NVCA
 		// so must be managed by it.
 		ManagedbyLabelKey:                   nvcaoptypes.NVCAModuleName,
 		nvcatypes.WorkloadInstanceTypeLabel: WorkloadInstanceTypeValuePodSpec,
+	}
+
+	// set the label for gxcache if enabled
+	if bc.enableGXCache {
+		labels[clustermgmt.ShaderCacheLabelKey] = strconv.FormatBool(true)
 	}
 
 	reqNSObj := &corev1.Namespace{
@@ -253,22 +298,21 @@ func (bc *BackendK8sCache) setupRequestsNamespace(ctx context.Context, nb *nvidi
 		},
 	}
 
-	// set the labels for gxcache if enabled
-	if bc.enableGXCache {
-		if _, ok := reqNSObj.Labels[clustermgmt.ShaderCacheLabelKey]; !ok {
-			if reqNSObj.Labels == nil {
-				reqNSObj.Labels = make(map[string]string)
-			}
-			reqNSObj.Labels[clustermgmt.ShaderCacheLabelKey] = strconv.FormatBool(true)
-		}
-	} else {
-		if _, ok := reqNSObj.Labels[clustermgmt.ShaderCacheLabelKey]; !ok {
-			delete(reqNSObj.Labels, clustermgmt.ShaderCacheLabelKey)
-		}
+	// Only a namespace the operator creates is marked as operator-created, so
+	// uninstall never deletes a pre-existing namespace the user pointed NVCA at.
+	_, err := bc.clients.K8s.CoreV1().Namespaces().Get(ctx, requestsNamespace, metav1.GetOptions{})
+	switch {
+	case k8serr.IsNotFound(err):
+		reqNSObj.Annotations = map[string]string{nvcaoptypes.CreatedByOperatorAnnotation: "true"}
+	case err != nil:
+		return fmt.Errorf("failed to get namespace %v: %w", requestsNamespace, err)
 	}
 
-	if err := bc.createOrUpdateNamespace(ctx, reqNSObj); err != nil {
-		return fmt.Errorf("failed to setup namespace %v", reqNSObj.Name)
+	// The GXCache label is NVCA-owned but conditional, so name it explicitly: reconciliation drops it from the
+	// namespace once the feature is turned off, while leaving metadata owned by other controllers alone.
+	ownedKeys := namespaceOwnedKeys{labels: []string{clustermgmt.ShaderCacheLabelKey}}
+	if err := bc.createOrUpdateNamespace(ctx, reqNSObj, ownedKeys); err != nil {
+		return fmt.Errorf("failed to setup namespace %v: %w", reqNSObj.Name, err)
 	}
 
 	defaultSA := &corev1.ServiceAccount{
@@ -280,7 +324,7 @@ func (bc *BackendK8sCache) setupRequestsNamespace(ctx context.Context, nb *nvidi
 	}
 
 	if err := bc.createOrUpdateServiceAccount(ctx, defaultSA); err != nil {
-		return fmt.Errorf("failed to update ServiceAccount %s/%s, error: %v", defaultSA.Namespace, defaultSA.Name, err)
+		return fmt.Errorf("failed to update ServiceAccount %s/%s, error: %w", defaultSA.Namespace, defaultSA.Name, err)
 	}
 
 	return nil
@@ -297,7 +341,7 @@ func (bc *BackendK8sCache) setupSystemNamespace(ctx context.Context, nb *nvidiai
 		},
 	}
 
-	if err := bc.createOrUpdateNamespace(ctx, sysNSObj); err != nil {
+	if err := bc.createOrUpdateNamespace(ctx, sysNSObj, namespaceOwnedKeys{}); err != nil {
 		return fmt.Errorf("failed to setup namespace %s: %v", sysNSObj.Name, err)
 	}
 
@@ -511,15 +555,32 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 		return fmt.Errorf("failed to setup system namespace for NVCFBackend %v/%v, err: %w",
 			nb.Namespace, nb.Name, err)
 	}
-	err = bc.setupRequestsNamespace(ctx, nb)
+	requestsNamespace, err := bc.getEffectiveRequestsNamespace(ctx, nb)
 	if err != nil {
-		return fmt.Errorf("failed to setup requests namespace for NVCFBackend %v/%v, err: %w",
+		return fmt.Errorf("failed to resolve requests namespace for NVCFBackend %v/%v, err: %w",
 			nb.Namespace, nb.Name, err)
+	}
+	if err := bc.setupRequestsNamespace(ctx, requestsNamespace); err != nil {
+		return requestsNamespaceSetupError(requestsNamespace, err)
 	}
 
 	err = bc.setupImagePullSecrets(ctx, nb)
 	if err != nil {
 		return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", NVCAImagePullSecretName,
+			nb.Namespace, nb.Name, err)
+	}
+
+	// RBAC must be set up before the agent config ConfigMap is written. The
+	// ConfigMap is the source of truth for rollout change-detection
+	// (newAgentConfigChangedCheck), which compares it against the live
+	// cluster object rather than NVCFBackend status. If the ConfigMap were
+	// written first and a later step such as RBAC then failed, the
+	// ConfigMap would already match the desired state, so subsequent
+	// periodic syncs would see "no change" and never retry RBAC or the
+	// agent Deployment rollout.
+	err = bc.setupNVCARBAC(ctx, nb)
+	if err != nil {
+		return fmt.Errorf("failed to setup RBAC for NVCFBackend %v/%v, err: %w",
 			nb.Namespace, nb.Name, err)
 	}
 
@@ -579,6 +640,12 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 			nb.Namespace, nb.Name, err)
 	}
 
+	err = bc.setupStorageCapabilityCatalogConfigMap(ctx, nb)
+	if err != nil {
+		return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", nvcastorage.StorageCapabilityConfigMapName,
+			nb.Namespace, nb.Name, err)
+	}
+
 	err = bc.setupGPUProfilingConfigMap(ctx, nb)
 	if err != nil {
 		return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", nvcfGPUProfilingConfigMapName,
@@ -588,12 +655,6 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 	err = bc.setupVaultConfigmap(ctx, nb)
 	if err != nil {
 		return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", NVCAVaultConfigmapName,
-			nb.Namespace, nb.Name, err)
-	}
-
-	err = bc.setupNVCARBAC(ctx, nb)
-	if err != nil {
-		return fmt.Errorf("failed to setup RBAC for NVCFBackend %v/%v, err: %w",
 			nb.Namespace, nb.Name, err)
 	}
 
@@ -612,7 +673,7 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 			nb.Namespace, nb.Name, err)
 	}
 
-	err = bc.setupNVCADeployment(ctx, nb)
+	err = bc.setupNVCADeployment(ctx, nb, requestsNamespace)
 	if err != nil {
 		return fmt.Errorf("failed to setup NVCA deployment for NVCFBackend %v/%v, err: %w",
 			nb.Namespace, nb.Name, err)
@@ -1003,6 +1064,37 @@ func (bc *BackendK8sCache) mirrorConfigMap(ctx context.Context, nb *nvidiaiov1.N
 	return bc.createOrUpdateConfigMap(ctx, &cmTemplate)
 }
 
+// setupStorageCapabilityCatalogConfigMap mirrors the chart-created
+// nvcf-storage-capabilities ConfigMap into the agent's system namespace, where
+// the agent and the storage controller read it. The chart renders it into the
+// operator's release namespace; without this copy the agent never sees it. An
+// absent source is skipped with a warning rather than failing the reconcile:
+// the agent falls back to the catalog compiled into it until the chart that
+// ships the ConfigMap has converged.
+func (bc *BackendK8sCache) setupStorageCapabilityCatalogConfigMap(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
+	log := core.GetLogger(ctx)
+	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get(
+		ctx, nvcastorage.StorageCapabilityConfigMapName, metav1.GetOptions{})
+	if err != nil {
+		if k8serr.IsNotFound(err) {
+			log.Warnf("%v/%v configmap not found, not mirroring the storage capability catalog into %v",
+				NVCAOperatorNamespace, nvcastorage.StorageCapabilityConfigMapName, getSystemNamespace(nb))
+			return nil
+		}
+		return err
+	}
+	cmTemplate := corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        nvcastorage.StorageCapabilityConfigMapName,
+			Namespace:   getSystemNamespace(nb),
+			Annotations: getNBAnnotations(nb),
+			Labels:      getAppLabels(),
+		},
+		Data: srcCM.Data,
+	}
+	return bc.createOrUpdateConfigMap(ctx, &cmTemplate)
+}
+
 // setupGPUProfilingConfigMap mirrors the chart-created nvca-gpu-profiling-config ConfigMap
 // into the agent's system namespace, where NVCA reads it live. Unlike mirrorConfigMap it is
 // optional: an absent source is skipped (profiling stays off) rather than failing reconcile.
@@ -1311,6 +1403,9 @@ func (bc *BackendK8sCache) newAgentConfigConfigMap(
 	if err != nil {
 		return nil, fmt.Errorf("get agent config to merge: %w", err)
 	}
+	if err := validateMergedAgentConfig(nb, mergeCfg); err != nil {
+		return nil, err
+	}
 	cb, err := encodeAgentConfig(cfg, mergeCfg, nb.Spec.AgentConfig.NATSURL, agentHostOverrideConfig(nb, bc.envType))
 	if err != nil {
 		return nil, fmt.Errorf("encode config: %w", err)
@@ -1327,6 +1422,34 @@ func (bc *BackendK8sCache) newAgentConfigConfigMap(
 			agentConfigFile: string(cb),
 		},
 	}, nil
+}
+
+// requestsNamespaceSetupError wraps a failure to prepare the requests namespace. The agent is not rolled out, so a
+// non-transient failure is reported as configuration that was not applied; transient failures are retried quietly.
+func requestsNamespaceSetupError(requestsNamespace string, err error) error {
+	wrapped := fmt.Errorf("worker.requestsNamespace %q could not be prepared: %w", requestsNamespace, err)
+	if k8sutil.IsTransientK8sError(err) {
+		return wrapped
+	}
+	return &agentConfigNotAppliedError{err: wrapped}
+}
+
+// validateMergedAgentConfig rejects agent-config-merge values that would make a
+// new agent fail at startup, so the operator keeps the running agent instead
+// of rolling out a configuration it knows is broken.
+func validateMergedAgentConfig(nb *nvidiaiov1.NVCFBackend, mergeCfg nvcaconfig.Config) error {
+	if err := validateGPUDiscoveryConfig(nb, mergeCfg); err != nil {
+		return err
+	}
+	return validateRequestsNamespaceConfig(mergeCfg)
+}
+
+func validateGPUDiscoveryConfig(nb *nvidiaiov1.NVCFBackend, mergeCfg nvcaconfig.Config) error {
+	if nb.Spec.ClusterConfig.GPUDiscovery.Dynamic != nil && mergeCfg.Agent.StaticGPUCapacity != 0 {
+		return &invalidAgentConfigError{err: fmt.Errorf(
+			"worker.staticGPUCapacity requires static GPU discovery; remove the override for a dynamic-discovery cluster")}
+	}
+	return nil
 }
 
 type agentHostOverrides struct {
@@ -1468,6 +1591,46 @@ func validateAgentConfigToMerge(cfg nvcaconfig.Config) error {
 	return transporttls.ValidateConfig(transporttls.NormalizeConfig(*cfg.Workload.TransportTLS))
 }
 
+type invalidAgentConfigError struct {
+	err error
+}
+
+func (e *invalidAgentConfigError) Error() string {
+	return e.err.Error()
+}
+
+func (e *invalidAgentConfigError) Unwrap() error {
+	return e.err
+}
+
+func isInvalidAgentConfigError(err error) bool {
+	var target *invalidAgentConfigError
+	return errors.As(err, &target)
+}
+
+// agentConfigNotAppliedError marks a valid configuration the operator could not apply. The previous agent keeps
+// running, so the NVCFBackend must not keep reporting healthy as if the new configuration were in effect.
+type agentConfigNotAppliedError struct {
+	err error
+}
+
+func (e *agentConfigNotAppliedError) Error() string {
+	return e.err.Error()
+}
+
+func (e *agentConfigNotAppliedError) Unwrap() error {
+	return e.err
+}
+
+func isAgentConfigNotAppliedError(err error) bool {
+	var target *agentConfigNotAppliedError
+	return errors.As(err, &target)
+}
+
+func isResourceQuantityDecodeError(err error) bool {
+	return strings.Contains(err.Error(), "decode resource ")
+}
+
 func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
 	log := core.GetLogger(ctx)
 	cm, err := bc.clients.K8s.CoreV1().ConfigMaps(bc.operatorNamespace).Get(ctx, agentConfigMergeConfigMapName, metav1.GetOptions{})
@@ -1485,8 +1648,11 @@ func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaco
 	data := cm.Data[agentConfigFile]
 	cfg, err := nvcaconfig.DecodeConfig([]byte(data))
 	if err != nil {
-		return nvcaconfig.Config{}, false,
-			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err))
+		wrappedErr := fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err)
+		if isResourceQuantityDecodeError(err) {
+			return nvcaconfig.Config{}, false, &invalidAgentConfigError{err: wrappedErr}
+		}
+		return nvcaconfig.Config{}, false, nvcaoperatorerrors.FatalError(wrappedErr)
 	}
 	if bc.shouldWarnForLegacyFirstClassConfig(cm) {
 		log.WithFields(logrus.Fields{
@@ -1897,7 +2063,11 @@ func (bc *BackendK8sCache) getEffectiveK8sNetworkCIDRs(nb *nvidiaiov1.NVCFBacken
 	return bc.k8sClusterNetworkCIDRs
 }
 
-func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nvidiaiov1.NVCFBackend) error {
+func (bc *BackendK8sCache) setupNVCADeployment(
+	ctx context.Context,
+	original *nvidiaiov1.NVCFBackend,
+	requestsNamespace string,
+) error {
 	// TODO: Remove bart-system namespace at the end of the Setup
 	log := core.GetLogger(ctx)
 	deployName := nvcaoptypes.NVCAModuleName
@@ -1939,7 +2109,7 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 	}
 
 	nvcaContainer := corev1.Container{
-		Name:            "agent",
+		Name:            agentContainerName,
 		Image:           bc.getNVCAImagePathFromConfig(nb),
 		ImagePullPolicy: getImagePullPolicyFromConfig(nb.Spec.NVCAImageConfig),
 		Args:            []string{"/usr/bin/nvca", "--config", agentConfigFilePath},
@@ -2000,6 +2170,14 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 	nvcaContainer.Env = append(nvcaContainer.Env, corev1.EnvVar{
 		Name:  clustervalidator.SummaryConfigMapNamespaceEnv,
 		Value: bc.operatorNamespace,
+	})
+	// Only where the validator runs does the agent publish its metrics
+	// baseline; elsewhere a last_run of 0 would read as a validator that
+	// never ran, forever. Always set, so the agent can tell a disabled
+	// validator from an operator that predates the setting.
+	nvcaContainer.Env = append(nvcaContainer.Env, corev1.EnvVar{
+		Name:  clustervalidator.EnabledEnv,
+		Value: strconv.FormatBool(bc.clusterValidatorEnabled),
 	})
 
 	// Add OAuth authentication environment variables.
@@ -2152,7 +2330,7 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 
 	volumes = append(volumes, bc.getOTelCollectorVolume(nb)...)
 	containers := []corev1.Container{nvcaContainer, webhooksContainer}
-	initContainers := append([]corev1.Container{}, bc.getOTelCollectorContainer(nb)...)
+	initContainers := append([]corev1.Container{}, bc.getOTelCollectorContainer(nb, requestsNamespace)...)
 
 	replicas := int32(1)
 	deployment := &appsv1.Deployment{
@@ -2623,26 +2801,6 @@ func completeInternalPersistentStorageConfig(ctx context.Context, nb *nvidiaiov1
 	return dto, nil
 }
 
-// returns a string of the internal persistent storage configuration base64 encoded
-func getInternalPersistentStorageConfig(ctx context.Context, nb *nvidiaiov1.NVCFBackend) (string, error) {
-	log := core.GetLogger(ctx)
-	dto, err := completeInternalPersistentStorageConfig(ctx, nb)
-	if err != nil {
-		return "", err
-	}
-	if dto == nil || !dto.Enabled {
-		return "", nil
-	}
-
-	buff := &bytes.Buffer{}
-	if err := json.NewEncoder(buff).Encode(dto); err != nil {
-		log.WithError(err).Error("failed to encode the persistent storage configuration")
-		return "", err
-	}
-
-	return base64.StdEncoding.EncodeToString(buff.Bytes()), nil
-}
-
 func getSharedStorageConfig(ctx context.Context, nb *nvidiaiov1.NVCFBackend) (string, error) {
 	// if empty return empty string
 	if nb.Spec.FeatureGate.SharedStorage == nil ||
@@ -2730,23 +2888,26 @@ func (bc *BackendK8sCache) getOTelCollectorImagePath(nb *nvidiaiov1.NVCFBackend)
 }
 
 // getOTelCollectorContainerCommandArgsAndEnv returns command, args, and env vars for the OTel Collector container.
-func (bc *BackendK8sCache) getOTelCollectorContainerCommandArgsAndEnv(nb *nvidiaiov1.NVCFBackend) ([]string, []string, []corev1.EnvVar) {
+func (bc *BackendK8sCache) getOTelCollectorContainerCommandArgsAndEnv(
+	nb *nvidiaiov1.NVCFBackend,
+	requestsNamespace string,
+) ([]string, []string, []corev1.EnvVar) {
 	command := []string{"/otelcol-contrib"}
 	args := []string{
 		fmt.Sprintf("--config=%s/config.yaml", NVCAOTelCollectorConfigMountPath),
 	}
 
-	fndsEndpoint := getFNDSEndpoint(nb.Spec.ClusterConfig.FNDService, bc.envType)
+	fndsEndpoint := getOTelCollectorFNDSEndpoint(nb, bc.envType)
 	authCfg := bc.getOTelCollectorAuthConfig(nb)
 
 	env := []corev1.EnvVar{
 		{
-			Name:  NGCServiceAPIKeyFileEnvVar,
-			Value: fmt.Sprintf("/var/run/secrets/%s/%s", NGCServiceAPIKeySecretName, NGCServiceAPIKeySecretDataKey),
+			Name:  NVCAOTelCollectorBearerTokenFileEnvVar,
+			Value: authCfg.bearerTokenFile,
 		},
 		{
 			Name:  NVCAOTelCollectorRequestsNamespaceEnvVar,
-			Value: getRequestsNamespace(nb),
+			Value: requestsNamespace,
 		},
 		{
 			Name:  NVCAOTelCollectorFNDSEndpointEnvVar,
@@ -2789,28 +2950,33 @@ func (bc *BackendK8sCache) getOTelCollectorContainerCommandArgsAndEnv(nb *nvidia
 }
 
 // getOTelCollectorVolumeMounts returns volume mounts for the OTel collector container.
-func (bc *BackendK8sCache) getOTelCollectorVolumeMounts() []corev1.VolumeMount {
-	return []corev1.VolumeMount{
+// In PSAT mode the token mount is added by applyPSATIdentity instead of the NGC
+// service API key.
+func (bc *BackendK8sCache) getOTelCollectorVolumeMounts(nb *nvidiaiov1.NVCFBackend) []corev1.VolumeMount {
+	mounts := []corev1.VolumeMount{
 		{
 			Name:      NVCAOTelCollectorConfigMapName,
 			MountPath: NVCAOTelCollectorConfigMountPath,
 			ReadOnly:  true,
 		},
-		{
+	}
+	if !useOTelCollectorPSAT(nb) {
+		mounts = append(mounts, corev1.VolumeMount{
 			Name:      NGCServiceAPIKeySecretName,
 			MountPath: fmt.Sprintf("/var/run/secrets/%s", NGCServiceAPIKeySecretName),
 			ReadOnly:  true,
-		},
+		})
 	}
+	return mounts
 }
 
 // getOTelCollectorContainer returns the OTel collector as a restartable init container.
 // Using restartPolicy: Always (Kubernetes 1.28+) allows the init container to run continuously
-func (bc *BackendK8sCache) getOTelCollectorContainer(nb *nvidiaiov1.NVCFBackend) []corev1.Container {
+func (bc *BackendK8sCache) getOTelCollectorContainer(nb *nvidiaiov1.NVCFBackend, requestsNamespace string) []corev1.Container {
 	if !bc.isOTelCollectorEnabled(nb) {
 		return nil
 	}
-	command, args, env := bc.getOTelCollectorContainerCommandArgsAndEnv(nb)
+	command, args, env := bc.getOTelCollectorContainerCommandArgsAndEnv(nb, requestsNamespace)
 	restartPolicyAlways := corev1.ContainerRestartPolicyAlways
 	return []corev1.Container{
 		{
@@ -2835,7 +3001,7 @@ func (bc *BackendK8sCache) getOTelCollectorContainer(nb *nvidiaiov1.NVCFBackend)
 					Protocol:      corev1.ProtocolTCP,
 				},
 			},
-			VolumeMounts: bc.getOTelCollectorVolumeMounts(),
+			VolumeMounts: bc.getOTelCollectorVolumeMounts(nb),
 			LivenessProbe: &corev1.Probe{
 				ProbeHandler: corev1.ProbeHandler{
 					HTTPGet: &corev1.HTTPGetAction{

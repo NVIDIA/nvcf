@@ -8,7 +8,6 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.nvidia.boot.exceptions.BadRequestException;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -16,36 +15,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 class LlmConfigValidatorTest {
 
     private static final String MODEL = "meta/llama-3.1-8b-instruct";
-
-    @ParameterizedTest
-    @ValueSource(strings = {
-        "power-of-two", "wait-and-widen", "round-robin", "random", "pulsar",
-        "pulsar-wait-and-widen", "groq-multiregion", "pulsar-multiregion",
-        // Router normalizes case and '_' to '-', so these are accepted too.
-        "Power-Of-Two", "power_of_two", "wait_and_widen", "pulsar_wait_and_widen",
-        "groq_multiregion", "pulsar_multiregion", "  pulsar  "
-    })
-    void validRoutingMethodsAccepted(String routingMethod) {
-        assertThatCode(() -> LlmConfigValidator.validateRoutingMethod(MODEL, routingMethod))
-                .doesNotThrowAnyException();
-    }
-
-    @ParameterizedTest
-    @NullAndEmptySource
-    @ValueSource(strings = {"   "})
-    void blankRoutingMethodAccepted(String routingMethod) {
-        assertThatCode(() -> LlmConfigValidator.validateRoutingMethod(MODEL, routingMethod))
-                .doesNotThrowAnyException();
-    }
-
-    @ParameterizedTest
-    @ValueSource(strings = {"weighted", "sticky", "not-a-method", "round robin", "power-of-3"})
-    void invalidRoutingMethodsRejected(String routingMethod) {
-        assertThatThrownBy(() -> LlmConfigValidator.validateRoutingMethod(MODEL, routingMethod))
-                .isInstanceOf(BadRequestException.class)
-                .hasMessageContaining("routingMethod")
-                .hasMessageContaining(MODEL);
-    }
 
     @ParameterizedTest
     @ValueSource(strings = {"100000-S", "10-M", "5-H", "1-D", "2-W", "10-M,5-S", "10-M, 5-S"})

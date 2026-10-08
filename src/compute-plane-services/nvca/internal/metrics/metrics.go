@@ -320,6 +320,9 @@ type Metrics struct {
 	// clusterValidatorMu.
 	clusterValidatorLastEmitted *clusterValidatorEmittedSet
 	clusterValidatorMu          sync.Mutex
+	// clusterValidatorEnabled gates the cluster-validator baseline; see
+	// WithClusterValidatorEnabled.
+	clusterValidatorEnabled bool
 
 	// Workload result metrics
 	WorkloadResultTotal *prometheus.CounterVec
@@ -420,6 +423,16 @@ func WithKataRuntimeIsolationEnabled(enabled bool) DefaultMetricsOption {
 			}
 			m.KataRuntimeIsolationEnabled.WithLabelValues(m.WithDefaultLabelValues()...).Set(val)
 		}
+	}
+}
+
+// WithClusterValidatorEnabled publishes the cluster-validator baseline (every
+// fixed gauge at 0 until the first summary) when the validator runs on this
+// cluster, at startup and after a reset. Without it the validator's series
+// appear only with a summary.
+func WithClusterValidatorEnabled(enabled bool) DefaultMetricsOption {
+	return func(m *Metrics) {
+		m.clusterValidatorEnabled = enabled
 	}
 }
 
@@ -770,13 +783,16 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 	// reconcile fires from a real ConfigMap update.
 	m.ClusterValidatorReady = promFactory.NewGaugeVec(prometheus.GaugeOpts{
 		Name: ClusterValidatorReadyMetricName,
-		Help: "Cluster-validator overall verdict (1=NVCF-Ready, 0=NVCF-Not-Ready). " +
-			"Driven by the most recent run's verdictReady field.",
+		Help: "Cluster-validator overall verdict from the latest run's verdictReady field " +
+			"(1=NVCF-Ready, possibly with warnings; 0=NVCF-Not-Ready, including a critical check " +
+			"that could not be observed). 0 before the first run.",
 	}, withDefaultLabels())
 	m.ClusterValidatorCheckStatus = promFactory.NewGaugeVec(prometheus.GaugeOpts{
 		Name: ClusterValidatorCheckStatusMetricName,
-		Help: "Per-check status from the latest cluster-validator run " +
-			"(1=passed, 0=failed/skipped). The set of check names is fixed; see CheckKey* constants.",
+		Help: "Per-check status from the latest cluster-validator run (1=passed, possibly with a " +
+			"warning; 0=failed). A check is absent when its role or configuration does not run it, " +
+			"when it could not be observed, or when it does not apply. Every known check is 0 " +
+			"before the first run.",
 	}, withDefaultLabels(ClusterValidatorCheckLabel))
 	m.ClusterValidatorEndpointReachable = promFactory.NewGaugeVec(prometheus.GaugeOpts{
 		Name: ClusterValidatorEndpointReachableMetricName,
@@ -801,7 +817,7 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 	))
 	m.ClusterValidatorLastRunTimestamp = promFactory.NewGaugeVec(prometheus.GaugeOpts{
 		Name: ClusterValidatorLastRunTimestampMetricName,
-		Help: "Unix timestamp (seconds) of the latest cluster-validator run. " +
+		Help: "Unix timestamp (seconds) of the latest cluster-validator run; 0 before the first run. " +
 			"Operators alert on staleness via `time() - <metric> > <threshold>`.",
 	}, withDefaultLabels())
 	m.ClusterValidatorLastRunDuration = promFactory.NewGaugeVec(prometheus.GaugeOpts{
@@ -812,7 +828,11 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 	// Initialize the fixed-cardinality cluster-validator gauges to 0 so they
 	// appear on the first Prometheus scrape — same "absent metric" pattern as
 	// KataRuntimeIsolationEnabled. Each run updates these series in place.
-	m.emitClusterValidatorBaseline()
+	// Only where the validator runs: elsewhere the baseline would read as a
+	// validator that never ran, and a "never ran" alert would fire forever.
+	if m.clusterValidatorEnabled {
+		m.emitClusterValidatorBaseline()
+	}
 
 	// Workload result metric (uses default labels)
 	m.WorkloadResultTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
@@ -1310,6 +1330,16 @@ func clusterValidatorCheckKeys() []string {
 		"gpu_operator",
 		"configurable_netpol",
 		"netpol_enforcement",
+		// Control-plane-specific keys (only populated when VALIDATOR_ROLE=control-plane).
+		"default_storage_class",
+		"gateway_api_crds",
+		"envoy_gateway",
+		"gateway_routes",
+		"external_lb",
+		"node_to_node",
+		// Control-plane HA readiness keys.
+		"tier1_deployments",
+		"tier2_statefulsets",
 	}
 }
 
@@ -1467,12 +1497,11 @@ func (m *Metrics) SetClusterValidatorSummary(s *ClusterValidatorSummary) {
 	m.clusterValidatorLastEmitted = current
 }
 
-// ResetClusterValidatorMetrics drops every emitted cluster-validator
-// series and resets the cluster-level gauges to zero. Called by the agent when
-// it observes the explicit cluster-validator-metrics-reset ConfigMap — an
-// operator-initiated one-shot signal to clear the metrics to baseline.
-// Deleting the summary ConfigMap does NOT trigger this: last-known-good is
-// preserved on delete.
+// ResetClusterValidatorMetrics drops every emitted cluster-validator series and,
+// where the validator is enabled, restores the init-to-zero baseline. Called by
+// the agent when it observes the explicit cluster-validator-metrics-reset
+// ConfigMap, an operator-initiated one-shot signal. Deleting the summary
+// ConfigMap does NOT trigger this: last-known-good is preserved on delete.
 func (m *Metrics) ResetClusterValidatorMetrics() {
 	if m == nil {
 		return
@@ -1481,10 +1510,13 @@ func (m *Metrics) ResetClusterValidatorMetrics() {
 	defer m.clusterValidatorMu.Unlock()
 
 	m.pruneClusterValidatorEmitted()
+	m.clusterValidatorLastEmitted = nil
 
-	// Re-emit the init-to-zero baseline so /metrics doesn't go quiet on the
-	// cluster-validator gauges.
-	m.emitClusterValidatorBaseline()
+	// Without the validator a baseline last_run of 0 would read as a
+	// validator that never ran, so a reset there leaves no series at all.
+	if m.clusterValidatorEnabled {
+		m.emitClusterValidatorBaseline()
+	}
 }
 
 // pruneClusterValidatorEmitted deletes every series recorded in

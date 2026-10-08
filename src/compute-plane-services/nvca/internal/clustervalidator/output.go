@@ -25,7 +25,7 @@ import (
 
 const (
 	iconCheck = "✓"
-	iconCross = "✗"
+	iconCross = FailIcon
 	iconWarn  = "⚠"
 	iconInfo  = "ℹ"
 

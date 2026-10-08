@@ -35,12 +35,17 @@ global:
   nvcaOperator:
     imageTag: "3.10.0"
     selfManaged:
+      # The chart ships no tag for this image, only the stack knows which samba
+      # build pairs with the operator it is pinning, so supply the whole
+      # reference here alongside the repository below.
+      sharedStorage:
+        imageTag: "1.0.5"
       nvcaVersion: "3.10.0"
       otelCollector:
         # Self-hosted registries do not always mirror this optional image.
         # Enable it only after publishing the collector in global.image.
         enabled: false
-        imageTag: "0.157.0-nv-0.2.1"
+        imageTag: "0.160.0-nv-0.2.5"
       # ICMS (SIS) service URL: required; set per environment.
       icmsServiceURL: ""
       icmsServiceHostHeaderOverride: ""
@@ -50,6 +55,10 @@ global:
       # NATS URL: required; set per environment.
       natsURL: ""
       natsHostOverride: ""
+      # Event Ledger URL for the OTel collector. Leave empty when the control
+      # plane shares this cluster; the collector then uses the in-cluster
+      # Event Ledger Service.
+      eventLedgerServiceURL: ""
       # Feature gates enabled on this cluster. Extra gates set here are added on
       # top of a default set that the helmfile template always appends (see
       # nvca-operator.featureGateValues in helmfile.d/02-nvca.yaml.gotmpl). To

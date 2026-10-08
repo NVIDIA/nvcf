@@ -20,10 +20,14 @@ package operator
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -51,8 +55,10 @@ import (
 	fakek8sclient "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/record"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	fakenvcaopclient "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake"
@@ -63,6 +69,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile/clustermgmt"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 )
 
 var (
@@ -532,6 +539,23 @@ func mockKubeClientsForIntegrationTests() *kubeclients.KubeClients {
 	}
 }
 
+// testStorageCapabilityCatalog is the shipped catalog shape, enough for the
+// sync tests to prove the mirror carries the data through unchanged.
+const testStorageCapabilityCatalog = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
+kind: StorageCapabilityCatalog
+drivers:
+  - name: nvmesh-csi.excelero.com
+    provider: nvmesh
+    encryptionSupported: true
+    accessModes:
+      - ReadWriteOnce
+      - ReadOnlyMany
+    readerMountOptions:
+      - ro
+      - norecovery
+      - nouuid
+`
+
 func mockKubeClients() *kubeclients.KubeClients {
 	scheme := newTestScheme()
 	k8sClient := fakek8sclient.NewSimpleClientset(
@@ -542,6 +566,15 @@ func mockKubeClients() *kubeclients.KubeClients {
 				Namespace: NVCAOperatorNamespace,
 			},
 			Data: map[string]string{},
+		},
+		// Rendered by the chart into the operator namespace; the sync must
+		// mirror it into the agent namespace, where NVCA reads it.
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      nvcastorage.StorageCapabilityConfigMapName,
+				Namespace: NVCAOperatorNamespace,
+			},
+			Data: map[string]string{nvcastorage.StorageCapabilityConfigMapKey: testStorageCapabilityCatalog},
 		},
 	)
 	discClient := k8sClient.Discovery().(*fakediscovery.FakeDiscovery)
@@ -719,6 +752,10 @@ func TestBackendK8sSyncMinimal(t *testing.T) {
 
 		_, err = bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcfCustomAnnotationsConfigMapName, metav1.GetOptions{})
 		require.NoError(ct, err)
+
+		catalogCM, err := bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcastorage.StorageCapabilityConfigMapName, metav1.GetOptions{})
+		require.NoError(ct, err, "the storage capability catalog must be mirrored into the agent namespace")
+		require.Equal(ct, testStorageCapabilityCatalog, catalogCM.Data[nvcastorage.StorageCapabilityConfigMapKey])
 
 		_, err = bc.clients.K8s.CoreV1().Secrets(getSystemNamespace(nb)).Get(ctx, NGCServiceAPIKeySecretName, metav1.GetOptions{})
 		require.NoError(ct, err)
@@ -924,6 +961,10 @@ func TestBackendK8sSyncMinimalExternal(t *testing.T) {
 
 		_, err = bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcfCustomAnnotationsConfigMapName, metav1.GetOptions{})
 		require.NoError(ct, err)
+
+		catalogCM, err := bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcastorage.StorageCapabilityConfigMapName, metav1.GetOptions{})
+		require.NoError(ct, err, "the storage capability catalog must be mirrored into the agent namespace")
+		require.Equal(ct, testStorageCapabilityCatalog, catalogCM.Data[nvcastorage.StorageCapabilityConfigMapKey])
 
 		nbObj, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(agentOpts.SystemNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
 		require.NoError(ct, err)
@@ -1140,6 +1181,14 @@ func TestBackendK8sSyncAllFeatures(t *testing.T) {
 
 		_, err = bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcfCustomAnnotationsConfigMapName, metav1.GetOptions{})
 		if !assert.NoError(ct, err) {
+			return
+		}
+
+		catalogCM, err := bc.clients.K8s.CoreV1().ConfigMaps(getSystemNamespace(nb)).Get(ctx, nvcastorage.StorageCapabilityConfigMapName, metav1.GetOptions{})
+		if !assert.NoError(ct, err, "the storage capability catalog must be mirrored into the agent namespace") {
+			return
+		}
+		if !assert.Equal(ct, testStorageCapabilityCatalog, catalogCM.Data[nvcastorage.StorageCapabilityConfigMapKey]) {
 			return
 		}
 
@@ -1834,6 +1883,132 @@ func Test_shouldUpdateNVCFStatus(t *testing.T) {
 	}
 }
 
+func TestReportUnappliedAgentConfig(t *testing.T) {
+	forbidden := k8serrors.NewForbidden(corev1.Resource("serviceaccounts"), "default",
+		errors.New("namespace team-x is being terminated"))
+	tests := []struct {
+		name          string
+		err           error
+		wantUnhealthy bool
+	}{
+		{name: "no error", err: nil},
+		{name: "unrelated sync error", err: errors.New("fetch NGC service key")},
+		{
+			name:          "invalid configuration",
+			err:           fmt.Errorf("sync: %w", &invalidAgentConfigError{err: errors.New(`worker.requestsNamespace "Team_X" is invalid`)}),
+			wantUnhealthy: true,
+		},
+		{
+			name:          "requests namespace could not be prepared",
+			err:           fmt.Errorf("sync: %w", requestsNamespaceSetupError("team-x", forbidden)),
+			wantUnhealthy: true,
+		},
+		{
+			name: "transient requests namespace failure",
+			err: fmt.Errorf("sync: %w", requestsNamespaceSetupError("team-x",
+				k8serrors.NewServiceUnavailable("apiserver unavailable"))),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			nb := &nvidiaiov1.NVCFBackend{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-backend", Namespace: NVCAOperatorNamespace},
+				Status:     nvidiaiov1.NVCFBackendStatus{AgentStatus: nvidiaiov1.AgentStatusHealthy},
+			}
+			recorder := record.NewFakeRecorder(1)
+			bc := &BackendK8sCache{
+				clients:           &kubeclients.KubeClients{NVCAOP: fakenvcaopclient.NewSimpleClientset(nb)},
+				operatorNamespace: NVCAOperatorNamespace,
+				eventRecorder:     recorder,
+			}
+
+			err := bc.reportUnappliedAgentConfig(ctx, nb, tt.err)
+			assert.Equal(t, tt.err, err, "the sync error must be returned unchanged")
+
+			got, getErr := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+			require.NoError(t, getErr)
+			if !tt.wantUnhealthy {
+				assert.Equal(t, nvidiaiov1.AgentStatusHealthy, got.Status.AgentStatus)
+				assert.Empty(t, recorder.Events)
+				return
+			}
+			assert.Equal(t, nvidiaiov1.AgentStatusUnhealthy, got.Status.AgentStatus)
+			event := <-recorder.Events
+			assert.Contains(t, event, "requested agent configuration was not applied")
+			assert.Contains(t, event, "worker.requestsNamespace")
+		})
+	}
+}
+
+func TestRequestsNamespaceSetupError(t *testing.T) {
+	tests := []struct {
+		name           string
+		err            error
+		wantNotApplied bool
+	}{
+		{
+			name:           "forbidden",
+			err:            k8serrors.NewForbidden(corev1.Resource("namespaces"), "team-x", errors.New("denied")),
+			wantNotApplied: true,
+		},
+		{
+			name: "forbidden wrapped by the ServiceAccount helper",
+			err: fmt.Errorf("failed to update ServiceAccount team-x/default, error: %w",
+				k8serrors.NewForbidden(corev1.Resource("serviceaccounts"), "default", errors.New("being terminated"))),
+			wantNotApplied: true,
+		},
+		{name: "service unavailable", err: k8serrors.NewServiceUnavailable("apiserver unavailable")},
+		{name: "conflict", err: k8serrors.NewConflict(corev1.Resource("namespaces"), "team-x", errors.New("changed"))},
+		{name: "timeout", err: k8serrors.NewTimeoutError("slow", 1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := requestsNamespaceSetupError("team-x", tt.err)
+			assert.ErrorIs(t, err, tt.err)
+			assert.ErrorContains(t, err, `worker.requestsNamespace "team-x" could not be prepared`)
+			assert.Equal(t, tt.wantNotApplied, isAgentConfigNotAppliedError(err))
+			assert.False(t, isInvalidAgentConfigError(err))
+		})
+	}
+}
+
+func TestMarkNVCFBackendUnhealthy(t *testing.T) {
+	ctx := newTestContext()
+	nb := &nvidiaiov1.NVCFBackend{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-backend",
+			Namespace: NVCAOperatorNamespace,
+		},
+		Status: nvidiaiov1.NVCFBackendStatus{
+			AgentStatus: nvidiaiov1.AgentStatusHealthy,
+		},
+	}
+	bc := &BackendK8sCache{
+		clients: &kubeclients.KubeClients{
+			NVCAOP: fakenvcaopclient.NewSimpleClientset(nb),
+		},
+		operatorNamespace: NVCAOperatorNamespace,
+		eventRecorder:     record.NewFakeRecorder(1),
+	}
+	cause := errors.New(`worker.requestsNamespace "Team_X" is not a valid namespace name`)
+
+	require.NoError(t, bc.markNVCFBackendUnhealthy(ctx, nb, cause))
+	event := <-bc.eventRecorder.(*record.FakeRecorder).Events
+	assert.Contains(t, event, cause.Error())
+	got, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, nvidiaiov1.AgentStatusUnhealthy, got.Status.AgentStatus)
+	require.NotNil(t, got.Status.LastUpdatedAgentStatus)
+	lastUpdated := got.Status.LastUpdatedAgentStatus.DeepCopy()
+
+	// Repeated failures should not churn status updates or health events.
+	require.NoError(t, bc.markNVCFBackendUnhealthy(ctx, got, cause))
+	got, err = bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.True(t, got.Status.LastUpdatedAgentStatus.Equal(lastUpdated))
+}
+
 func TestSyncNVCFBackendHealth(t *testing.T) {
 	ctx := newTestContext()
 
@@ -1978,6 +2153,86 @@ func TestSyncNVCFBackendHealth(t *testing.T) {
 	require.Equal(t, nvcaResponse.K8sVersion, gotNB.Status.KubernetesVersion)
 	require.Equal(t, nvcaResponse.GPUUsage, gotNB.Status.GPUUsage)
 	lastStatus = gotNB.Status.LastUpdatedAgentStatus
+}
+
+func TestSyncNVCFBackendHealthKeepsInvalidAgentConfigUnhealthy(t *testing.T) {
+	tests := []struct {
+		name        string
+		mergeConfig string
+		dynamicGPU  bool
+	}{
+		{
+			name:        "static GPU capacity on a dynamic-discovery backend",
+			mergeConfig: "agent:\n  staticGPUCapacity: 5\n",
+			dynamicGPU:  true,
+		},
+		{
+			name:        "invalid requests namespace",
+			mergeConfig: "agent:\n  requestsNamespace: Team_X\n",
+		},
+		{
+			name:        "reserved requests namespace",
+			mergeConfig: "agent:\n  requestsNamespace: kube-system\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				require.NoError(t, json.NewEncoder(w).Encode(nvcfBackendHealthResponse{
+					Status: nvidiaiov1.AgentStatusHealthy,
+				}))
+			}))
+			t.Cleanup(server.Close)
+			previousHealthzURL := makeNVCAHealthzURL
+			makeNVCAHealthzURL = func(*nvidiaiov1.NVCFBackend) (string, error) {
+				return server.URL, nil
+			}
+			t.Cleanup(func() { makeNVCAHealthzURL = previousHealthzURL })
+
+			nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
+			nb.Name = "backend"
+			nb.Namespace = NVCAOperatorNamespace
+			if tt.dynamicGPU {
+				nb.Spec.ClusterConfig.GPUDiscovery.Dynamic = &nvidiaiov1.DynamicGPUDiscoveryConfig{}
+			}
+			nb.Status.AgentStatus = nvidiaiov1.AgentStatusUnhealthy
+			dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+				Name: nvcaoptypes.NVCAModuleName, Namespace: getSystemNamespace(nb),
+			}}
+			dep.Status.ReadyReplicas = 1
+			mergeCM := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: agentConfigMergeConfigMapName, Namespace: NVCAOperatorNamespace},
+				Data:       map[string]string{agentConfigFile: tt.mergeConfig},
+			}
+			recorder := record.NewFakeRecorder(0)
+			recorder.Events = nil
+			bc := &BackendK8sCache{
+				clients: &kubeclients.KubeClients{
+					NVCAOP: fakenvcaopclient.NewSimpleClientset(nb),
+					K8s:    fakek8sclient.NewSimpleClientset(dep, mergeCM),
+				},
+				httpClient:        server.Client(),
+				operatorNamespace: NVCAOperatorNamespace,
+				eventRecorder:     recorder,
+			}
+
+			// The running agent is healthy, but it is the previous replica kept
+			// alive because the configuration was rejected.
+			require.NoError(t, bc.SyncNVCFBackendHealth(ctx, nb))
+			got, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, nvidiaiov1.AgentStatusUnhealthy, got.Status.AgentStatus)
+
+			mergeCM.Data[agentConfigFile] = "agent:\n  logLevel: info\n"
+			_, err = bc.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Update(ctx, mergeCM, metav1.UpdateOptions{})
+			require.NoError(t, err)
+			require.NoError(t, bc.SyncNVCFBackendHealth(ctx, got))
+			got, err = bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+			require.NoError(t, err)
+			assert.Equal(t, nvidiaiov1.AgentStatusHealthy, got.Status.AgentStatus)
+		})
+	}
 }
 
 type PatchedOSExit struct {
@@ -2954,6 +3209,114 @@ func TestCreateOrUpdateNVCFBackend(t *testing.T) {
 	require.NoError(t, err)
 	// Bar from override replaces Baz from spec (override behavior for non-maintenance features)
 	assert.ElementsMatch(t, []string{"CordonMaintenance", "GXCache"}, cfg.Agent.FeatureFlags)
+}
+
+// Enabling or disabling the cluster-validator restarts only the operator, and
+// its start-up sync is not forced, so the setting itself must roll the agent:
+// otherwise the agent keeps publishing, or keeps omitting, the validator
+// metrics. A sync with nothing changed leaves the agent alone.
+func TestSyncNVCFBackend_ClusterValidatorToggleRollsTheAgent(t *testing.T) {
+	eventRecorder := record.NewFakeRecorder(0)
+	eventRecorder.Events = nil
+	c := &BackendK8sCache{
+		clients:              mockKubeClients(),
+		operatorNamespace:    NVCAOperatorNamespace,
+		eventRecorder:        eventRecorder,
+		ngcServiceKeyFetcher: &mockTokenFetcher{token: "randomkey"},
+		now:                  time.Now,
+	}
+	ctx := newTestContext()
+	nb := getTestNVCFBackendAllFeatures()
+	nb.Spec.Overrides = nil
+	require.NoError(t, c.CreateOrUpdateNVCFBackend(ctx, nb))
+
+	k8s := c.clients.K8s.(*fakek8sclient.Clientset)
+	agentUpdates := func() int {
+		n := 0
+		for _, a := range k8s.Actions() {
+			if a.GetVerb() == "update" && a.GetResource().Resource == "deployments" &&
+				a.(k8stesting.UpdateAction).GetObject().(*appsv1.Deployment).Name == nvcaoptypes.NVCAModuleName {
+				n++
+			}
+		}
+		return n
+	}
+	agentSetting := func() string {
+		dep, err := k8s.AppsV1().Deployments(getSystemNamespace(nb)).Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
+		require.NoError(t, err)
+		for _, ctr := range dep.Spec.Template.Spec.Containers {
+			for _, env := range ctr.Env {
+				if ctr.Name == agentContainerName && env.Name == clustervalidator.EnabledEnv {
+					return env.Value
+				}
+			}
+		}
+		return ""
+	}
+
+	require.NoError(t, c.syncNVCFBackend(ctx, nb, false))
+	require.Equal(t, "false", agentSetting())
+
+	for _, enabled := range []bool{true, false} {
+		c.clusterValidatorEnabled = enabled
+		before := agentUpdates()
+		require.NoError(t, c.syncNVCFBackend(ctx, nb, false))
+		assert.Equal(t, strconv.FormatBool(enabled), agentSetting())
+		assert.Equal(t, before+1, agentUpdates(), "enabled=%t rolls the agent once", enabled)
+
+		require.NoError(t, c.syncNVCFBackend(ctx, nb, false))
+		assert.Equal(t, before+1, agentUpdates(), "enabled=%t unchanged leaves the agent alone", enabled)
+	}
+}
+
+// An agent an older operator wrote has no cluster-validator setting. With the
+// validator disabled that means the same as false, so the first sync after
+// the operator upgrade leaves the agent running; enabling the validator still
+// rolls it once.
+func TestSyncNVCFBackend_AgentWithoutValidatorSettingStaysWhileDisabled(t *testing.T) {
+	eventRecorder := record.NewFakeRecorder(0)
+	eventRecorder.Events = nil
+	c := &BackendK8sCache{
+		clients:              mockKubeClients(),
+		operatorNamespace:    NVCAOperatorNamespace,
+		eventRecorder:        eventRecorder,
+		ngcServiceKeyFetcher: &mockTokenFetcher{token: "randomkey"},
+		now:                  time.Now,
+	}
+	ctx := newTestContext()
+	nb := getTestNVCFBackendAllFeatures()
+	nb.Spec.Overrides = nil
+	require.NoError(t, c.CreateOrUpdateNVCFBackend(ctx, nb))
+	require.NoError(t, c.syncNVCFBackend(ctx, nb, false))
+
+	k8s := c.clients.K8s.(*fakek8sclient.Clientset)
+	deployments := k8s.AppsV1().Deployments(getSystemNamespace(nb))
+	dep, err := deployments.Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
+	require.NoError(t, err)
+	for i := range dep.Spec.Template.Spec.Containers {
+		ctr := &dep.Spec.Template.Spec.Containers[i]
+		ctr.Env = slices.DeleteFunc(ctr.Env, func(e corev1.EnvVar) bool { return e.Name == clustervalidator.EnabledEnv })
+	}
+	_, err = deployments.Update(ctx, dep, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	agentUpdates := func() int {
+		n := 0
+		for _, a := range k8s.Actions() {
+			if a.GetVerb() == "update" && a.GetResource().Resource == "deployments" &&
+				a.(k8stesting.UpdateAction).GetObject().(*appsv1.Deployment).Name == nvcaoptypes.NVCAModuleName {
+				n++
+			}
+		}
+		return n
+	}
+	before := agentUpdates()
+
+	require.NoError(t, c.syncNVCFBackend(ctx, nb, false))
+	assert.Equal(t, before, agentUpdates(), "a disabled validator does not roll an agent without the setting")
+
+	c.clusterValidatorEnabled = true
+	require.NoError(t, c.syncNVCFBackend(ctx, nb, false))
+	assert.Equal(t, before+1, agentUpdates(), "enabling it rolls the agent once")
 }
 
 func TestCreateOrUpdateNVCFBackend_PropagatesNVCAOTELConfig(t *testing.T) {

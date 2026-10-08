@@ -40,6 +40,7 @@ macro_rules! define_stargate_metrics {
         /// Per-process metrics with a private [`Registry`] that isolates parallel runtimes.
         #[derive(Debug)]
         pub struct StargateMetrics {
+            prefix: String,
             registry: Arc<Registry>,
             tls_identity: Arc<stargate_tls::TlsIdentityStatus>,
             $($counter: IntCounterVec,)*
@@ -82,6 +83,7 @@ macro_rules! define_stargate_metrics {
                     )?;
                 )*
                 Ok(Self {
+                    prefix: prefix.to_owned(),
                     registry,
                     tls_identity: stargate_tls::TlsIdentityStatus::new(),
                     $($counter,)*
@@ -101,10 +103,12 @@ define_stargate_metrics! {
         routing_selections_total("routing_selections_total", "Total number of primary and ranked fallback cluster choices used for upstream attempts", ["routing_key", "model", "algorithm", "selection"]);
         routing_kv_free_token_fallback_selections_total("routing_kv_free_token_fallback_selections_total", "Total number of selected routes reached after a higher-ranked candidate was skipped by KV free-token eligibility", ["routing_key", "model", "algorithm"]);
         proxy_retry_exhausted_total("proxy_retry_exhausted_total", "Total number of proxy requests that exhausted retry options", ["routing_key", "model", "reason"]);
+        proxy_ambiguous_delivery_total("proxy_ambiguous_delivery_total", "Total number of proxy requests stopped because delivery may have occurred", []);
         admission_rejections_total("admission_rejections_total", "Total number of requests rejected by local admission control", ["routing_key", "model", "reason"]);
         quic_connection_evictions_total("quic_connection_evictions_total", "Total number of QUIC connection pool evictions", ["inference_server_id", "reason"]);
         quic_hot_path_reconnect_total("quic_hot_path_reconnect_total", "Total number of direct QUIC reconnects attempted on the proxy hot path", ["inference_server_id", "result"]);
         tls_reloads_total("tls_reloads_total", "TLS material reload attempts by material type and result", ["material_type", "result"]);
+        routing_expressions_total("routing_expressions_total", "Accepted routing expressions by algorithm and cache result", ["algorithm", "cache"]);
     }
     histograms {
         proxy_replay_buffer_bytes("proxy_replay_buffer_bytes", "Bytes currently retained for proxied request body replay", ["model"], [0.0, 1024.0, 4096.0, 16_384.0, 65_536.0, 262_144.0, 1_048_576.0, 4_194_304.0, 16_777_216.0, 67_108_864.0]);
@@ -130,7 +134,7 @@ macro_rules! metric_accessors {
         $(
             #[inline]
             pub fn $name(&self, $($arg: $arg_type),*) -> $return_type {
-                self.$name.with_label_values(&[$($label),*])
+                self.$name.with_label_values::<&str>(&[$($label),*])
             }
         )*
     };
@@ -143,11 +147,20 @@ impl StargateMetrics {
 
     pub fn new_with_prefix(prefix: &str) -> anyhow::Result<Arc<Self>> {
         let metrics = Arc::new(Self::register(prefix)?);
+        metrics.requests_total(None, "", "", "404").inc_by(0);
+        metrics.proxy_ambiguous_delivery_total().inc_by(0);
         for outcome in stargate_tls::TlsReloadOutcome::ALL {
             metrics
                 .tls_reloads_total
                 .with_label_values(&[stargate_tls::SERVER_IDENTITY_MATERIAL, outcome.as_str()])
                 .inc_by(0);
+        }
+        for algorithm in crate::load_balancer::LoadBalancerAlgorithm::ALL {
+            for cache in crate::load_balancer::dynamic_config::Outcome::ALL {
+                metrics
+                    .routing_expressions_total(&algorithm.to_string(), cache.as_str())
+                    .inc_by(0);
+            }
         }
         Ok(metrics)
     }
@@ -180,6 +193,11 @@ impl StargateMetrics {
         self.registry.clone()
     }
 
+    /// Metric name prefix, for collectors registered after construction.
+    pub(crate) fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
     // One row is one public accessor signature and its ordered Prometheus labels.
     #[rustfmt::skip]
     metric_accessors! {
@@ -189,10 +207,12 @@ impl StargateMetrics {
         GenericCounter<AtomicU64>, routing_selections_total(routing_key: Option<&str>, model: &str, algorithm: &str, selection: &str) => [routing_key.unwrap_or(""), model, algorithm, selection];
         GenericCounter<AtomicU64>, routing_kv_free_token_fallback_selections_total(routing_key: Option<&str>, model: &str, algorithm: &str) => [routing_key.unwrap_or(""), model, algorithm];
         GenericCounter<AtomicU64>, proxy_retry_exhausted_total(routing_key: Option<&str>, model: &str, reason: &str) => [routing_key.unwrap_or(""), model, reason];
+        GenericCounter<AtomicU64>, proxy_ambiguous_delivery_total() => [];
         GenericCounter<AtomicU64>, admission_rejections_total(routing_key: Option<&str>, model: &str, reason: &str) => [routing_key.unwrap_or(""), model, reason];
         GenericCounter<AtomicU64>, quic_connection_evictions_total(inference_server_id: &str, reason: &str) => [inference_server_id, reason];
         GenericCounter<AtomicU64>, quic_hot_path_reconnect_total(inference_server_id: &str, result: &str) => [inference_server_id, result];
         GenericCounter<AtomicU64>, tls_reloads_total(outcome: stargate_tls::TlsReloadOutcome) => [stargate_tls::SERVER_IDENTITY_MATERIAL, outcome.as_str()];
+        GenericCounter<AtomicU64>, routing_expressions_total(algorithm: &str, cache: &str) => [algorithm, cache];
         Histogram, proxy_replay_buffer_bytes(model: &str) => [model];
         Histogram, proxy_duration_seconds(routing_key: Option<&str>, model: &str, inference_server_id: &str) => [routing_key.unwrap_or(""), model, inference_server_id];
         Histogram, routing_duration_seconds(routing_key: Option<&str>, model: &str) => [routing_key.unwrap_or(""), model];
@@ -321,6 +341,8 @@ mod tests {
     #[test]
     fn default_metrics_prefix_keeps_stargate_metric_names() {
         let metrics = StargateMetrics::new().expect("metrics should initialize");
+        let initial = metrics.gather_text().expect("metrics should encode");
+        assert!(initial.contains("stargate_proxy_ambiguous_delivery_total 0\n"));
 
         metrics
             .requests_total(None, "model-a", "server-a", "200")
@@ -331,6 +353,44 @@ mod tests {
             body.contains("stargate_requests_total"),
             "default stargate requests counter missing:\n{body}"
         );
+    }
+
+    #[test]
+    fn routing_expression_series_start_at_zero() {
+        let metrics = StargateMetrics::new().expect("metrics should initialize");
+        let mut series = metrics
+            .registry
+            .gather()
+            .iter()
+            .filter(|family| family.name() == "stargate_routing_expressions_total")
+            .flat_map(|family| family.get_metric())
+            .map(|metric| {
+                assert_eq!(metric.get_counter().value(), 0.0);
+                metric
+                    .get_label()
+                    .iter()
+                    .map(|label| label.value().to_owned())
+                    .collect::<Vec<_>>()
+                    .join("|")
+            })
+            .collect::<Vec<_>>();
+        series.sort();
+
+        let mut expected = Vec::new();
+        for algorithm in [
+            "power-of-n",
+            "wait-and-widen",
+            "round-robin",
+            "random",
+            "pulsar",
+            "pulsar-wait-and-widen",
+        ] {
+            for cache in ["hit", "build", "rebuild"] {
+                expected.push(format!("{algorithm}|{cache}"));
+            }
+        }
+        expected.sort();
+        assert_eq!(series, expected);
     }
 
     #[test]

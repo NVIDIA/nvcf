@@ -23,6 +23,7 @@ render() {
   shift
 
   helm template nvca-operator "${repo_root}/nvca-operator" \
+    --set-string "ngcConfig.serviceKey=test-service-key" \
     --namespace nvca-operator \
     --values "${repo_root}/nvca-operator/values.yaml" \
     --values "${repo_root}/values.release-sbom.yaml" \
@@ -104,6 +105,14 @@ assert_key_absent "${default_manifest}" '.agent' "forceSelfDestruct" "forceSelfD
 assert_absent "${default_manifest}" '.agent.csiVolumeMountOptions' "csiVolumeMountOptions should be unset by default"
 assert_absent "${default_manifest}" '.agent.credRenewInterval' "credRenewInterval should be unset by default"
 assert_absent "${default_manifest}" '.agent.heartbeatInterval' "heartbeatInterval should be unset by default"
+# worker.download defaults are worker-init's own built-in values, stated
+# explicitly so the effective download rate is visible in the chart.
+assert_equal "5" "$(agent_config_value "${default_manifest}" '.workload.workerInitDownload.concurrentDownloads')" "default worker-init concurrent downloads must match worker-init's built-in 5"
+assert_equal "4" "$(agent_config_value "${default_manifest}" '.workload.workerInitDownload.concurrentChunks')" "default worker-init concurrent chunks must match worker-init's built-in 4"
+assert_equal "16777216" "$(agent_config_value "${default_manifest}" '.workload.workerInitDownload.chunkSizeBytes')" "default worker-init chunk size must match worker-init's built-in 16 MiB"
+# Zeroing every field defers entirely to the image: no workload section.
+render "${tmp_dir}/zero-download-manifest.yaml" --set worker.download.concurrentDownloads=0 --set worker.download.concurrentChunks=0 --set worker.download.chunkSizeBytes=0
+assert_absent "${tmp_dir}/zero-download-manifest.yaml" '.workload' "all-zero worker.download must emit no workload section"
 
 cat > "${explicit_values}" <<'EOF'
 storage:
@@ -122,7 +131,7 @@ storage:
   internalPersistentStorage:
     storageClassName: standard
     hardResourceQuota:
-      storage: 50Gi
+      requests.storage: 50Gi
 worker:
   minHealthcheckRefreshWait: "30s"
   staticGPUCapacity: 8
@@ -139,6 +148,10 @@ worker:
     credRenewInterval: "45m"
     heartbeatInterval: "5m"
     icmsRequestAckRetryTimeout: "5m"
+  download:
+    concurrentDownloads: 4
+    concurrentChunks: 16
+    chunkSizeBytes: 536870912
 EOF
 render "${explicit_manifest}" --values "${explicit_values}"
 assert_equal "nvcr.io/nvidia/smb:1.0" "$(agent_config_value "${explicit_manifest}" '.agent.sharedStorage.server.image')" "unexpected shared-storage server image"
@@ -147,7 +160,7 @@ assert_equal "fast-ssd" "$(agent_config_value "${explicit_manifest}" '.agent.sha
 assert_equal "noatime" "$(agent_config_value "${explicit_manifest}" '.agent.sharedStorage.taskData.pvMountOptions[0]')" "unexpected shared-storage task data mount options"
 assert_equal "200Gi" "$(agent_config_value "${explicit_manifest}" '.agent.sharedStorage.taskData.storageCapacity')" "unexpected shared-storage task data storage capacity"
 assert_equal "standard" "$(agent_config_value "${explicit_manifest}" '.agent.internalPersistentStorage.storageClassName')" "unexpected IPS storage class"
-assert_equal "50Gi" "$(agent_config_value "${explicit_manifest}" '.agent.internalPersistentStorage.hardResourceQuota.storage')" "unexpected IPS hard resource quota"
+assert_equal "50Gi" "$(agent_config_value "${explicit_manifest}" '.agent.internalPersistentStorage.hardResourceQuota."requests.storage"')" "unexpected IPS hard resource quota"
 assert_equal "30s" "$(agent_config_value "${explicit_manifest}" '.agent.minHealthcheckRefreshWait')" "unexpected healthcheck refresh wait"
 assert_equal "8" "$(agent_config_value "${explicit_manifest}" '.agent.staticGPUCapacity')" "unexpected static GPU capacity"
 assert_equal "k8s" "$(agent_config_value "${explicit_manifest}" '.agent.computeBackend')" "unexpected compute backend"
@@ -159,6 +172,40 @@ assert_equal "ro" "$(agent_config_value "${explicit_manifest}" '.agent.csiVolume
 assert_equal "45m" "$(agent_config_value "${explicit_manifest}" '.agent.credRenewInterval')" "unexpected cred renew interval"
 assert_equal "5m" "$(agent_config_value "${explicit_manifest}" '.agent.heartbeatInterval')" "unexpected heartbeat interval"
 assert_equal "5m" "$(agent_config_value "${explicit_manifest}" '.agent.icmsRequestAckRetryTimeout')" "unexpected ICMS request ack retry timeout"
+assert_equal "4" "$(agent_config_value "${explicit_manifest}" '.workload.workerInitDownload.concurrentDownloads')" "unexpected worker-init concurrent downloads"
+assert_equal "16" "$(agent_config_value "${explicit_manifest}" '.workload.workerInitDownload.concurrentChunks')" "unexpected worker-init concurrent chunks"
+assert_equal "536870912" "$(agent_config_value "${explicit_manifest}" '.workload.workerInitDownload.chunkSizeBytes')" "unexpected worker-init chunk size"
+# A field set to 0 is omitted while the others keep rendering.
+render "${tmp_dir}/partial-download-manifest.yaml" --set worker.download.chunkSizeBytes=1048576 --set worker.download.concurrentDownloads=0
+assert_equal "1048576" "$(agent_config_value "${tmp_dir}/partial-download-manifest.yaml" '.workload.workerInitDownload.chunkSizeBytes')" "unexpected partial worker-init chunk size"
+assert_equal "4" "$(agent_config_value "${tmp_dir}/partial-download-manifest.yaml" '.workload.workerInitDownload.concurrentChunks')" "untouched default must still render"
+assert_key_absent "${tmp_dir}/partial-download-manifest.yaml" '.workload.workerInitDownload' "concurrentDownloads" "worker.download.concurrentDownloads=0 must not be emitted"
+# The schema mirrors NVCA's validation so a bad chunk size fails at render
+# time instead of at agent startup: 0 or 1 MiB to 4 GiB inclusive.
+for bad in 4096 1048575 4294967297; do
+  if render "${tmp_dir}/bad-chunk-manifest.yaml" --set "worker.download.chunkSizeBytes=${bad}" 2>"${tmp_dir}/bad-chunk-error.log"; then
+    echo "worker.download.chunkSizeBytes=${bad}: expected helm template to fail schema validation, but it succeeded" >&2
+    exit 1
+  fi
+done
+render "${tmp_dir}/edge-chunk-manifest.yaml" --set worker.download.chunkSizeBytes=4294967296
+assert_equal "4294967296" "$(agent_config_value "${tmp_dir}/edge-chunk-manifest.yaml" '.workload.workerInitDownload.chunkSizeBytes')" "4 GiB chunk size must be accepted"
+if render "${tmp_dir}/bad-conc-manifest.yaml" --set worker.download.concurrentChunks=257 2>/dev/null; then
+  echo "worker.download.concurrentChunks=257: expected helm template to fail schema validation, but it succeeded" >&2
+  exit 1
+fi
+
+if render "${tmp_dir}/invalid-ips-manifest.yaml" \
+  --set-string 'storage.internalPersistentStorage.hardResourceQuota.requests\.storage=7Gi' \
+  2>"${tmp_dir}/invalid-ips-error.log"; then
+  echo "IPS quota without storage class: expected helm template to fail, but it succeeded" >&2
+  exit 1
+fi
+if ! grep -q "storage.internalPersistentStorage.storageClassName is required" "${tmp_dir}/invalid-ips-error.log"; then
+  echo "IPS quota without storage class: helm template failed for an unexpected reason:" >&2
+  cat "${tmp_dir}/invalid-ips-error.log" >&2
+  exit 1
+fi
 
 yq eval '
   .agentConfig.mergeConfig = "agent:\n  computeBackend: legacy-backend\n  sharedStorage:\n    server:\n      image: legacy-image\ncluster:\n  validationPolicy:\n    name: Unrestricted\n    allowedExtraKubernetesTypes:\n      - group: nvidia.com\n        kind: DynamoGraphDeployment\n        resource: dynamographdeployments\n        version: v1alpha1" |
@@ -166,6 +213,7 @@ yq eval '
 ' "${repo_root}/nvca-operator/values.yaml" > "${legacy_values}"
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
   --namespace nvca-operator \
   --values "${legacy_values}" \
   --values "${repo_root}/values.release-sbom.yaml" \

@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
+	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 )
 
 const (
@@ -99,18 +100,23 @@ func TestGetOTelCollectorConfigData(t *testing.T) {
 		unexpectedExtension    string
 		expectedPlaceholders   []string
 		unexpectedPlaceholders []string
+		// expectClusterID reports whether the lanes set cluster_id. Under PSAT,
+		// Event Ledger fills it from the verified identity instead.
+		expectClusterID bool
 	}{
 		{
 			name:                  "service API key authentication",
 			nb:                    &nvidiaiov1.NVCFBackend{},
 			expectedAuthenticator: NVCAOTelCollectorAuthenticatorBearerTokenAuth,
 			unexpectedExtension:   NVCAOTelCollectorAuthenticatorOAuth2Client,
-			expectedPlaceholders:  []string{"${env:NGC_SERVICE_API_KEY_FILE}"},
+			expectedPlaceholders:  []string{"${env:NVCA_OTEL_COLLECTOR_BEARER_TOKEN_FILE}"},
 			unexpectedPlaceholders: []string{
+				"${env:NGC_SERVICE_API_KEY_FILE}",
 				"${env:NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_ID}",
 				"${env:NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_SECRET_FILE}",
 				"${env:NVCA_OTEL_COLLECTOR_OAUTH_TOKEN_URL}",
 			},
+			expectClusterID: true,
 		},
 		{
 			name: "OAuth authentication",
@@ -124,7 +130,27 @@ func TestGetOTelCollectorConfigData(t *testing.T) {
 				"${env:NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_SECRET_FILE}",
 				"${env:NVCA_OTEL_COLLECTOR_OAUTH_TOKEN_URL}",
 			},
-			unexpectedPlaceholders: []string{"${env:NGC_SERVICE_API_KEY_FILE}"},
+			unexpectedPlaceholders: []string{
+				"${env:NGC_SERVICE_API_KEY_FILE}",
+				"${env:NVCA_OTEL_COLLECTOR_BEARER_TOKEN_FILE}",
+			},
+			expectClusterID: true,
+		},
+		{
+			name: "self-hosted PSAT authentication ignores configured OAuth client",
+			nb: &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{
+				NVCFBackendSpecT: selfHostedOTelAuthSpec(otelAuthSpec(true, "client-id", "", "", "", "")),
+			}},
+			expectedAuthenticator: NVCAOTelCollectorAuthenticatorBearerTokenAuth,
+			unexpectedExtension:   NVCAOTelCollectorAuthenticatorOAuth2Client,
+			expectedPlaceholders:  []string{"${env:NVCA_OTEL_COLLECTOR_BEARER_TOKEN_FILE}"},
+			unexpectedPlaceholders: []string{
+				"${env:NGC_SERVICE_API_KEY_FILE}",
+				"${env:NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_ID}",
+				"${env:NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_SECRET_FILE}",
+				"${env:NVCA_OTEL_COLLECTOR_OAUTH_TOKEN_URL}",
+			},
+			expectClusterID: false,
 		},
 	}
 
@@ -162,8 +188,32 @@ func TestGetOTelCollectorConfigData(t *testing.T) {
 			// Assert receiver/pipeline and Pod-lane semantics structurally.
 			assertClusterWideK8sObjects(t, config)
 			assertPodLaneTransforms(t, config)
-			assertICMSLane(t, config)
+			assertICMSLane(t, config, tt.expectClusterID)
+			assertClusterIDStatements(t, config, tt.expectClusterID)
 		})
+	}
+}
+
+// assertClusterIDStatements asserts whether the Pod and ICMS lanes set
+// cluster_id. Both lanes source it from the cluster name, which Event Ledger
+// rejects when it differs from the PSAT's verified cluster ID.
+func assertClusterIDStatements(t *testing.T, config string, expectClusterID bool) {
+	t.Helper()
+	var full map[string]any
+	require.NoError(t, yaml.Unmarshal([]byte(config), &full))
+	processors := full["processors"].(map[string]any)
+
+	for _, name := range []string{"transform", "transform/lift-icms-annotations"} {
+		var stmts []string
+		for _, s := range processors[name].(map[string]any)["log_statements"].([]any) {
+			stmts = append(stmts, s.(string))
+		}
+		idx := indexOfContaining(stmts, `set(log.attributes["cluster_id"]`)
+		if expectClusterID {
+			assert.GreaterOrEqual(t, idx, 0, "%s must set cluster_id", name)
+		} else {
+			assert.Equal(t, -1, idx, "%s must leave cluster_id for Event Ledger to fill", name)
+		}
 	}
 }
 
@@ -225,9 +275,14 @@ func assertPodLaneTransforms(t *testing.T, config string) {
 	require.GreaterOrEqual(t, fvIdx, 0, "function_version_id namespace statement missing")
 	require.GreaterOrEqual(t, taskIdx, 0, "task_id namespace override missing")
 	assert.Less(t, fvIdx, taskIdx, "task_id override must run after the function_version_id default")
-	assert.GreaterOrEqual(t, indexOfContaining(stmts,
-		`Concat(["Pod", resource.attributes["k8s.container.name"], log.attributes["k8s.event.reason"]]`), 0,
-		"container-scoped event_name branch missing")
+	dropIdx := indexOfContaining(stmts, `delete_key(resource.attributes, "k8s.container.name")`)
+	containerEventIdx := indexOfContaining(stmts,
+		`Concat(["Pod", resource.attributes["k8s.container.name"], log.attributes["k8s.event.reason"]]`)
+	require.GreaterOrEqual(t, dropIdx, 0, "Pod-level events must drop the k8sattributes default container")
+	assert.GreaterOrEqual(t, indexOfContaining(stmts, `delete_key(resource.attributes, "container.image.name")`), 0)
+	assert.GreaterOrEqual(t, indexOfContaining(stmts, `delete_key(resource.attributes, "container.image.tag")`), 0)
+	require.GreaterOrEqual(t, containerEventIdx, 0, "container-scoped event_name branch missing")
+	assert.Less(t, dropIdx, containerEventIdx, "default container must be dropped before event_name is built")
 	assert.GreaterOrEqual(t, indexOfContaining(stmts,
 		`Concat(["Pod", log.attributes["k8s.event.reason"]]`), 0,
 		"pod-scoped event_name branch missing")
@@ -237,7 +292,7 @@ func assertPodLaneTransforms(t *testing.T, config string) {
 // is declared alongside the Pod lane, filter/icms-events keeps only ICMSRequest Events,
 // transform/lift-icms-annotations lifts all nvcf.nvidia.io/* annotations, and
 // transform/synth-icms-event-name builds both event_name variants.
-func assertICMSLane(t *testing.T, config string) {
+func assertICMSLane(t *testing.T, config string, expectClusterID bool) {
 	t.Helper()
 	var full map[string]any
 	require.NoError(t, yaml.Unmarshal([]byte(config), &full))
@@ -262,12 +317,11 @@ func assertICMSLane(t *testing.T, config string) {
 	for _, s := range liftProc["log_statements"].([]any) {
 		liftStmts = append(liftStmts, s.(string))
 	}
-	for _, key := range []string{
+	liftKeys := []string{
 		"nvcf.nvidia.io/icms-request-id",
 		"nvcf.nvidia.io/function-version-id",
 		"nvcf.nvidia.io/task-id",
 		"nvcf.nvidia.io/instance-id",
-		"nvcf.nvidia.io/cluster-id",
 		"nvcf.nvidia.io/nca-id",
 		"nvcf.nvidia.io/function-id",
 		"nvcf.nvidia.io/instance-state",
@@ -275,7 +329,11 @@ func assertICMSLane(t *testing.T, config string) {
 		"nvcf.nvidia.io/termination-cause",
 		"nvcf.nvidia.io/region",
 		"nvcf.nvidia.io/status",
-	} {
+	}
+	if expectClusterID {
+		liftKeys = append(liftKeys, "nvcf.nvidia.io/cluster-id")
+	}
+	for _, key := range liftKeys {
 		assert.GreaterOrEqual(t, indexOfContaining(liftStmts, key), 0,
 			"lift-icms-annotations must reference annotation %q", key)
 	}
@@ -377,87 +435,125 @@ func otelAuthSpec(vaultEnabled bool, clientID, prodTokenURL, stageTokenURL, vers
 	return spec
 }
 
+// selfHostedOTelAuthSpec marks spec as a self-hosted cluster.
+func selfHostedOTelAuthSpec(spec nvidiaiov1.NVCFBackendSpecT) nvidiaiov1.NVCFBackendSpecT {
+	spec.ClusterSource = nvcaoptypes.ClusterSourceSelfHosted
+	return spec
+}
+
 func TestGetOTelCollectorAuthConfig(t *testing.T) {
+	ngcServiceAPIKeyFile := "/var/run/secrets/ngc-service-api-key/ngc-service-api-key"
 	tests := []struct {
-		name                  string
-		nb                    *nvidiaiov1.NVCFBackend
-		envType               nvidiaiov1.EnvType
-		expectedClientID      string
-		expectedSecretFile    string
-		expectedTokenURL      string
-		expectedAuthenticator string
+		name                    string
+		nb                      *nvidiaiov1.NVCFBackend
+		envType                 nvidiaiov1.EnvType
+		expectedClientID        string
+		expectedSecretFile      string
+		expectedTokenURL        string
+		expectedAuthenticator   string
+		expectedBearerTokenFile string
 	}{
 		{
-			name:                  "Vault enabled, prod, clientID set → OAuth2, oauth file",
-			nb:                    &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: otelAuthSpec(true, "cid-prod", otelCollectorTokenURLProd, otelCollectorTokenURLStage, "", "")}},
-			envType:               nvidiaiov1.EnvTypeProd,
-			expectedClientID:      "cid-prod",
-			expectedSecretFile:    "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
-			expectedTokenURL:      otelCollectorTokenURLProd,
-			expectedAuthenticator: NVCAOTelCollectorAuthenticatorOAuth2Client,
+			name:                    "Vault enabled, prod, clientID set -> OAuth2, oauth file",
+			nb:                      &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: otelAuthSpec(true, "cid-prod", otelCollectorTokenURLProd, otelCollectorTokenURLStage, "", "")}},
+			envType:                 nvidiaiov1.EnvTypeProd,
+			expectedClientID:        "cid-prod",
+			expectedSecretFile:      "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
+			expectedTokenURL:        otelCollectorTokenURLProd,
+			expectedAuthenticator:   NVCAOTelCollectorAuthenticatorOAuth2Client,
+			expectedBearerTokenFile: ngcServiceAPIKeyFile,
 		},
 		{
-			name:                  "Vault enabled, stage, clientID set → OAuth2, stage URL",
-			nb:                    &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: otelAuthSpec(true, "cid-stage", otelCollectorTokenURLProd, otelCollectorTokenURLStage, "", "")}},
-			envType:               nvidiaiov1.EnvTypeStage,
-			expectedClientID:      "cid-stage",
-			expectedSecretFile:    "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
-			expectedTokenURL:      otelCollectorTokenURLStage,
-			expectedAuthenticator: NVCAOTelCollectorAuthenticatorOAuth2Client,
+			name:                    "Vault enabled, stage, clientID set -> OAuth2, stage URL",
+			nb:                      &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: otelAuthSpec(true, "cid-stage", otelCollectorTokenURLProd, otelCollectorTokenURLStage, "", "")}},
+			envType:                 nvidiaiov1.EnvTypeStage,
+			expectedClientID:        "cid-stage",
+			expectedSecretFile:      "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
+			expectedTokenURL:        otelCollectorTokenURLStage,
+			expectedAuthenticator:   NVCAOTelCollectorAuthenticatorOAuth2Client,
+			expectedBearerTokenFile: ngcServiceAPIKeyFile,
 		},
 		{
-			name:                  "Vault enabled, custom SecretFilePath",
-			nb:                    &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: otelAuthSpec(true, "cid", otelCollectorTokenURLProd, otelCollectorTokenURLStage, "", "/custom/vault/path")}},
-			envType:               nvidiaiov1.EnvTypeProd,
-			expectedClientID:      "cid",
-			expectedSecretFile:    "/custom/vault/path/oauth-client-secrets.env",
-			expectedTokenURL:      otelCollectorTokenURLProd,
-			expectedAuthenticator: NVCAOTelCollectorAuthenticatorOAuth2Client,
+			name:                    "Vault enabled, custom SecretFilePath",
+			nb:                      &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: otelAuthSpec(true, "cid", otelCollectorTokenURLProd, otelCollectorTokenURLStage, "", "/custom/vault/path")}},
+			envType:                 nvidiaiov1.EnvTypeProd,
+			expectedClientID:        "cid",
+			expectedSecretFile:      "/custom/vault/path/oauth-client-secrets.env",
+			expectedTokenURL:        otelCollectorTokenURLProd,
+			expectedAuthenticator:   NVCAOTelCollectorAuthenticatorOAuth2Client,
+			expectedBearerTokenFile: ngcServiceAPIKeyFile,
 		},
 		{
-			name:                  "Vault enabled, version 2.51+ → oauth-client-secrets.env",
-			nb:                    &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: otelAuthSpec(true, "oauth-cid", otelCollectorTokenURLProd, otelCollectorTokenURLStage, "2.53.0", "")}},
-			envType:               nvidiaiov1.EnvTypeProd,
-			expectedClientID:      "oauth-cid",
-			expectedSecretFile:    "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
-			expectedTokenURL:      otelCollectorTokenURLProd,
-			expectedAuthenticator: NVCAOTelCollectorAuthenticatorOAuth2Client,
+			name:                    "Vault enabled, version 2.51+ -> oauth-client-secrets.env",
+			nb:                      &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: otelAuthSpec(true, "oauth-cid", otelCollectorTokenURLProd, otelCollectorTokenURLStage, "2.53.0", "")}},
+			envType:                 nvidiaiov1.EnvTypeProd,
+			expectedClientID:        "oauth-cid",
+			expectedSecretFile:      "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
+			expectedTokenURL:        otelCollectorTokenURLProd,
+			expectedAuthenticator:   NVCAOTelCollectorAuthenticatorOAuth2Client,
+			expectedBearerTokenFile: ngcServiceAPIKeyFile,
 		},
 		{
-			name:                  "Vault enabled, version 2.50 → oauth-client-secrets.env",
-			nb:                    &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: otelAuthSpec(true, "oauth-cid", otelCollectorTokenURLProd, otelCollectorTokenURLStage, "2.50.0", "")}},
-			envType:               nvidiaiov1.EnvTypeProd,
-			expectedClientID:      "oauth-cid",
-			expectedSecretFile:    "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
-			expectedTokenURL:      otelCollectorTokenURLProd,
-			expectedAuthenticator: NVCAOTelCollectorAuthenticatorOAuth2Client,
+			name:                    "Vault enabled, version 2.50 -> oauth-client-secrets.env",
+			nb:                      &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: otelAuthSpec(true, "oauth-cid", otelCollectorTokenURLProd, otelCollectorTokenURLStage, "2.50.0", "")}},
+			envType:                 nvidiaiov1.EnvTypeProd,
+			expectedClientID:        "oauth-cid",
+			expectedSecretFile:      "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
+			expectedTokenURL:        otelCollectorTokenURLProd,
+			expectedAuthenticator:   NVCAOTelCollectorAuthenticatorOAuth2Client,
+			expectedBearerTokenFile: ngcServiceAPIKeyFile,
 		},
 		{
-			name:                  "Vault disabled → bearer, empty OAuth client ID",
-			nb:                    &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: otelAuthSpec(false, "", otelCollectorTokenURLProd, otelCollectorTokenURLStage, "", "")}},
-			envType:               nvidiaiov1.EnvTypeProd,
-			expectedClientID:      "",
-			expectedSecretFile:    "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
-			expectedTokenURL:      "",
-			expectedAuthenticator: NVCAOTelCollectorAuthenticatorBearerTokenAuth,
+			name:                    "Vault disabled -> bearer, empty OAuth client ID",
+			nb:                      &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: otelAuthSpec(false, "", otelCollectorTokenURLProd, otelCollectorTokenURLStage, "", "")}},
+			envType:                 nvidiaiov1.EnvTypeProd,
+			expectedClientID:        "",
+			expectedSecretFile:      "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
+			expectedTokenURL:        "",
+			expectedAuthenticator:   NVCAOTelCollectorAuthenticatorBearerTokenAuth,
+			expectedBearerTokenFile: ngcServiceAPIKeyFile,
 		},
 		{
-			name:                  "Vault absent → bearer, empty OAuth client ID, stage URL",
-			nb:                    &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{}}},
-			envType:               nvidiaiov1.EnvTypeStage,
-			expectedClientID:      "",
-			expectedSecretFile:    "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
-			expectedTokenURL:      "",
-			expectedAuthenticator: NVCAOTelCollectorAuthenticatorBearerTokenAuth,
+			name:                    "Vault absent -> bearer, empty OAuth client ID, stage URL",
+			nb:                      &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{}}},
+			envType:                 nvidiaiov1.EnvTypeStage,
+			expectedClientID:        "",
+			expectedSecretFile:      "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
+			expectedTokenURL:        "",
+			expectedAuthenticator:   NVCAOTelCollectorAuthenticatorBearerTokenAuth,
+			expectedBearerTokenFile: ngcServiceAPIKeyFile,
 		},
 		{
-			name:                  "Vault enabled, empty ClientID → fallback to bearer auth with empty OAuth client ID",
-			nb:                    &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: otelAuthSpec(true, "", otelCollectorTokenURLProd, otelCollectorTokenURLStage, "2.53.0", "")}},
-			envType:               nvidiaiov1.EnvTypeProd,
-			expectedClientID:      "",
-			expectedSecretFile:    "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
-			expectedTokenURL:      "",
-			expectedAuthenticator: NVCAOTelCollectorAuthenticatorBearerTokenAuth,
+			name:                    "Vault enabled, empty ClientID -> fallback to bearer auth with empty OAuth client ID",
+			nb:                      &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: otelAuthSpec(true, "", otelCollectorTokenURLProd, otelCollectorTokenURLStage, "2.53.0", "")}},
+			envType:                 nvidiaiov1.EnvTypeProd,
+			expectedClientID:        "",
+			expectedSecretFile:      "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
+			expectedTokenURL:        "",
+			expectedAuthenticator:   NVCAOTelCollectorAuthenticatorBearerTokenAuth,
+			expectedBearerTokenFile: ngcServiceAPIKeyFile,
+		},
+		{
+			name: "Self-hosted, Vault enabled, clientID set -> bearer with PSAT, OAuth ignored",
+			nb: &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: selfHostedOTelAuthSpec(
+				otelAuthSpec(true, "cid", otelCollectorTokenURLProd, otelCollectorTokenURLStage, "", ""))}},
+			envType:                 nvidiaiov1.EnvTypeProd,
+			expectedClientID:        "",
+			expectedSecretFile:      "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
+			expectedTokenURL:        "",
+			expectedAuthenticator:   NVCAOTelCollectorAuthenticatorBearerTokenAuth,
+			expectedBearerTokenFile: "/var/run/secrets/tokens/token",
+		},
+		{
+			name: "Self-hosted, Vault absent -> bearer with PSAT",
+			nb: &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: selfHostedOTelAuthSpec(
+				nvidiaiov1.NVCFBackendSpecT{})}},
+			envType:                 nvidiaiov1.EnvTypeProd,
+			expectedClientID:        "",
+			expectedSecretFile:      "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
+			expectedTokenURL:        "",
+			expectedAuthenticator:   NVCAOTelCollectorAuthenticatorBearerTokenAuth,
+			expectedBearerTokenFile: "/var/run/secrets/tokens/token",
 		},
 	}
 
@@ -469,6 +565,68 @@ func TestGetOTelCollectorAuthConfig(t *testing.T) {
 			assert.Equal(t, tt.expectedSecretFile, result.clientSecretFile)
 			assert.Equal(t, tt.expectedTokenURL, result.tokenURL)
 			assert.Equal(t, tt.expectedAuthenticator, result.authenticator)
+			assert.Equal(t, tt.expectedBearerTokenFile, result.bearerTokenFile)
+		})
+	}
+}
+
+func TestGetOTelCollectorFNDSEndpoint(t *testing.T) {
+	tests := []struct {
+		name     string
+		spec     nvidiaiov1.NVCFBackendSpecT
+		envType  nvidiaiov1.EnvType
+		expected string
+	}{
+		{
+			name:     "managed cluster without URL uses the hosted default",
+			spec:     nvidiaiov1.NVCFBackendSpecT{},
+			envType:  nvidiaiov1.EnvTypeProd,
+			expected: nvidiaiov1.FunctionDeploymentStagesServiceURLProd,
+		},
+		{
+			name: "managed cluster with URL uses it",
+			spec: nvidiaiov1.NVCFBackendSpecT{ClusterConfig: nvidiaiov1.ClusterConfig{
+				FNDService: &nvidiaiov1.FNDServiceConfig{ServiceURL: "https://custom-fnds.example.com"},
+			}},
+			envType:  nvidiaiov1.EnvTypeProd,
+			expected: "https://custom-fnds.example.com",
+		},
+		{
+			name:     "self-hosted cluster without URL uses the colocated Event Ledger",
+			spec:     selfHostedOTelAuthSpec(nvidiaiov1.NVCFBackendSpecT{}),
+			envType:  nvidiaiov1.EnvTypeStage,
+			expected: "http://event-ledger.nvcf.svc.cluster.local:8080",
+		},
+		{
+			name: "self-hosted cluster with empty URL uses the colocated Event Ledger",
+			spec: selfHostedOTelAuthSpec(nvidiaiov1.NVCFBackendSpecT{ClusterConfig: nvidiaiov1.ClusterConfig{
+				FNDService: &nvidiaiov1.FNDServiceConfig{},
+			}}),
+			envType:  nvidiaiov1.EnvTypeProd,
+			expected: "http://event-ledger.nvcf.svc.cluster.local:8080",
+		},
+		{
+			name: "self-hosted cluster with URL uses it",
+			spec: selfHostedOTelAuthSpec(nvidiaiov1.NVCFBackendSpecT{ClusterConfig: nvidiaiov1.ClusterConfig{
+				FNDService: &nvidiaiov1.FNDServiceConfig{ServiceURL: "https://events.example.test"},
+			}}),
+			envType:  nvidiaiov1.EnvTypeProd,
+			expected: "https://events.example.test",
+		},
+		{
+			name: "configured URL loses its trailing slash",
+			spec: selfHostedOTelAuthSpec(nvidiaiov1.NVCFBackendSpecT{ClusterConfig: nvidiaiov1.ClusterConfig{
+				FNDService: &nvidiaiov1.FNDServiceConfig{ServiceURL: "https://events.example.test/"},
+			}}),
+			envType:  nvidiaiov1.EnvTypeProd,
+			expected: "https://events.example.test",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nb := &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: tt.spec}}
+			assert.Equal(t, tt.expected, getOTelCollectorFNDSEndpoint(nb, tt.envType))
 		})
 	}
 }

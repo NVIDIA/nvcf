@@ -17,44 +17,14 @@ limitations under the License.
 
 package k8sutil
 
-import (
-	"context"
-	"errors"
-	"net"
-
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-)
+import "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8serr"
 
 // IsTransientK8sError returns true for Kubernetes API errors that are expected
-// to resolve on retry without human intervention. Use this to decide whether to
-// return a requeue (nil error) vs surfacing the error as a reconcile failure.
-//
-// Transient errors include: timeouts, rate limiting (429), service unavailable (503),
-// internal server errors (500), conflicts (409), network-level errors, and context
-// cancellation/deadline exceeded.
-//
-// Non-transient errors that should be surfaced as reconcile failures include:
-// Forbidden (403), Unauthorized (401), Invalid (422), Gone (410), etc.
+// to resolve on retry without human intervention: k8serr.IsTransient, which
+// holds the classification so callers that must stay small need not import
+// this package.
 func IsTransientK8sError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	// API server transient responses
-	if apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) ||
-		apierrors.IsTooManyRequests(err) || apierrors.IsServiceUnavailable(err) ||
-		apierrors.IsInternalError(err) || apierrors.IsConflict(err) {
-		return true
-	}
-
-	// Network-level transient errors (connection refused, reset, DNS, timeout, etc.)
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return true
-	}
-
-	// Context cancellation / deadline exceeded
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+	return k8serr.IsTransient(err)
 }
 
 // AnyNonTransientK8sError returns the first non-transient error from the slice,

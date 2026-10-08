@@ -155,6 +155,7 @@ public class ByocMessageGenerator {
                 .attributes(instanceRequest.getAttributes())
                 .deploymentId(instanceRequest.getDeploymentId())
                 .gpuSpecificationId(instanceRequest.getGpuSpecificationId())
+                .maxRequestConcurrency(instanceRequest.getMaxRequestConcurrency())
                 .build();
     }
 
@@ -183,4 +184,4 @@ public class ByocMessageGenerator {
                 .gpuSpecificationId(instanceRequest.getGpuSpecificationId())
                 .build();
     }
-} 
+}

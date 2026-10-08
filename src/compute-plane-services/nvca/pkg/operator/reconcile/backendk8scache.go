@@ -62,6 +62,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/metrics"
 	nvcaopotel "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/otel"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 )
 
 const (
@@ -172,6 +173,10 @@ type BackendK8sCache struct {
 
 	// identitySource controls the identity mechanism: auto, psat, or spire.
 	identitySource string
+
+	// clusterValidatorEnabled is passed to the agent, which publishes the
+	// cluster-validator metrics baseline only where the validator runs.
+	clusterValidatorEnabled bool
 
 	// gracefulShutdown is set to true when the operator is shutting down gracefully.
 	// When true, the reconciliation loop will skip cleanup of NVCFBackend resources
@@ -385,20 +390,25 @@ func (b *BackendK8sCacheBuilder) WithIdentitySource(identitySource string) *Back
 	return &next
 }
 
+func (b *BackendK8sCacheBuilder) WithClusterValidatorEnabled(enabled bool) *BackendK8sCacheBuilder {
+	next := *b
+	next.clusterValidatorEnabled = enabled
+	return &next
+}
+
 func (b *BackendK8sCacheBuilder) WithClusterSource(clusterSource nvcaoptypes.ClusterSource) *BackendK8sCacheBuilder {
 	next := *b
 	next.clusterSource = clusterSource
 	return &next
 }
 
-func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <-chan *core.Event, error) {
-	log := core.GetLogger(ctx)
-	resyncPeriod := b.resyncPeriod
-
+// newCache builds the cache from the builder's settings without starting any
+// informers.
+func (b *BackendK8sCacheBuilder) newCache() *BackendK8sCache {
 	eventBroadcaster := record.NewBroadcaster()
 
 	c := &BackendK8sCache{
-		resyncPeriod:         resyncPeriod,
+		resyncPeriod:         b.resyncPeriod,
 		clients:              b.clients,
 		eventBroadcaster:     eventBroadcaster,
 		eventRecorder:        eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "nvca-operator"}),
@@ -438,11 +448,18 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		taskEnvOverridesB64:                b.taskEnvOverridesB64,
 		identitySource:                     b.identitySource,
 		clusterSource:                      b.clusterSource,
+		clusterValidatorEnabled:            b.clusterValidatorEnabled,
 	}
 
 	if c.operatorNamespace == "" {
 		c.operatorNamespace = NVCAOperatorNamespace
 	}
+	return c
+}
+
+func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <-chan *core.Event, error) {
+	log := core.GetLogger(ctx)
+	c := b.newCache()
 
 	out := make(chan *core.Event)
 
@@ -581,7 +598,8 @@ func configMapUpdateForcesNVCAReconcile(name string) bool {
 		nvcfGPUProfilingConfigMapName,
 		nvcfBackendChartDefaultsConfigMapName,
 		agentConfigMergeConfigMapName,
-		nvcaOperatorConfigMapName:
+		nvcaOperatorConfigMapName,
+		nvcastorage.StorageCapabilityConfigMapName:
 		return true
 	default:
 		return false
@@ -949,6 +967,22 @@ func (bc *BackendK8sCache) SyncNVCFBackendHealth(ctx context.Context, nb *nvidia
 	} else {
 		evType = corev1.EventTypeWarning
 	}
+	// A healthy agent may still be the previous replica kept alive because the
+	// operator refused to roll out an invalid configuration. Keep reporting
+	// Unhealthy until the configuration is corrected.
+	if nvcaHealthResp.Status == nvidiaiov1.AgentStatusHealthy {
+		mergeCfg, _, configErr := bc.getRawAgentConfigToMerge(ctx)
+		if configErr == nil {
+			configErr = validateMergedAgentConfig(nb, mergeCfg)
+		}
+		if isInvalidAgentConfigError(configErr) {
+			log.WithError(configErr).Warn("NVCA agent configuration is invalid")
+			nvcaHealthResp.Status = nvidiaiov1.AgentStatusUnhealthy
+			evType = corev1.EventTypeWarning
+		} else if configErr != nil {
+			log.WithError(configErr).Warn("Could not check agent configuration during health sync")
+		}
+	}
 
 	if shouldUpdateNVCFStatus(nb.Status, nvcaHealthResp) {
 		bc.eventRecorder.Eventf(nb, evType,
@@ -1055,13 +1089,66 @@ func (bc *BackendK8sCache) SyncNVCFCurrentBackend(ctx context.Context, forceRoll
 }
 
 func (bc *BackendK8sCache) SyncNVCFBackend(ctx context.Context, nb *nvidiaiov1.NVCFBackend, forceRollout bool) error {
-	return cmnotel.InvokeWithSpan(ctx, bc.tracer,
+	err := cmnotel.InvokeWithSpan(ctx, bc.tracer,
 		"nvca-operator.BackendK8sCache.SyncNVCFBackend",
 		func(ctx context.Context) error {
 			return bc.syncNVCFBackend(ctx, nb, forceRollout)
 		},
 		oteltrace.WithSpanKind(oteltrace.SpanKindInternal),
 		oteltrace.WithAttributes(nvcaopotel.GetOTelAttributesFromNVCFBackend(nb)...))
+	return bc.reportUnappliedAgentConfig(ctx, nb, err)
+}
+
+// reportUnappliedAgentConfig marks the NVCFBackend unhealthy when a sync left the requested agent configuration
+// unapplied, either because it is invalid or because a dependency could not be prepared. The previous agent keeps
+// running in both cases, so its health alone would otherwise suggest the new configuration is in effect.
+func (bc *BackendK8sCache) reportUnappliedAgentConfig(ctx context.Context, nb *nvidiaiov1.NVCFBackend, err error) error {
+	if err == nil || !(isInvalidAgentConfigError(err) || isAgentConfigNotAppliedError(err)) {
+		return err
+	}
+
+	if statusErr := bc.markNVCFBackendUnhealthy(ctx, nb, err); statusErr != nil {
+		core.GetLogger(ctx).WithError(statusErr).Errorf(
+			"failed to mark NVCFBackend %v/%v unhealthy after the agent configuration was not applied",
+			nb.Namespace, nb.Name,
+		)
+	}
+	return err
+}
+
+func (bc *BackendK8sCache) markNVCFBackendUnhealthy(ctx context.Context, nb *nvidiaiov1.NVCFBackend, cause error) error {
+	if !nb.ObjectMeta.DeletionTimestamp.IsZero() {
+		return nil
+	}
+
+	updated := false
+	retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		nbLatest, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(bc.operatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to get latest version of backend: %w", err)
+		}
+		if nbLatest.Status.AgentStatus == nvidiaiov1.AgentStatusUnhealthy {
+			return nil
+		}
+
+		nbLatest.Status.AgentStatus = nvidiaiov1.AgentStatusUnhealthy
+		nbLatest.Status.LastUpdatedAgentStatus = &metav1.Time{Time: core.GetCurrentTime(ctx)}
+		if _, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(bc.operatorNamespace).UpdateStatus(ctx, nbLatest, metav1.UpdateOptions{}); err != nil {
+			return err
+		}
+		updated = true
+		return nil
+	})
+	if retryErr != nil {
+		return fmt.Errorf("failed to update health status for %v/%v: %w", nb.Namespace, nb.Name, retryErr)
+	}
+	if updated && bc.eventRecorder != nil {
+		bc.eventRecorder.Eventf(nb, corev1.EventTypeWarning,
+			string(nvcaoptypes.EventCategoryHealth),
+			"%v health changed to '%v' because the requested agent configuration was not applied: %v",
+			AgentName, nvidiaiov1.AgentStatusUnhealthy, cause)
+	}
+	return nil
 }
 
 func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.NVCFBackend, forceRollout bool) error {
@@ -1184,6 +1271,8 @@ func (bc *BackendK8sCache) syncNVCFBackend(ctx context.Context, nb *nvidiaiov1.N
 		hasAgentDeploymentConfigChanged(ctx, effectiveConfigForComparison.DeploymentConfig, nbMerged.Status),
 		hasAgentWorkerConfigOptionsChanged(ctx, effectiveConfigForComparison.NVCFWorkerConfig, nbMerged.Status),
 		hasEnvOverridesChangedCheck(ctx, bc.functionEnvOverridesB64, bc.taskEnvOverridesB64, nbMerged.Status),
+		hasClusterValidatorEnabledChangedCheck(ctx, bc.clusterValidatorEnabled,
+			bc.clients.K8s.AppsV1().Deployments(getSystemNamespace(nbMerged)).Get),
 	}
 
 	// Only check NGC service API key for NGC-managed clusters (or empty, which defaults to NGC-managed)

@@ -23,37 +23,35 @@ Use this skill from `deploy/helm/nvca-operator`.
 
 ## Values Flow
 
+Two install paths, and only one of them renders values from a stack.
+
 ```text
-src/compute-plane-services/nvca/deployments/nvca-operator/   source chart
-  -> scripts/ci_vendor_nvca_operator_chart                   applies self-managed defaults
-  -> nvca-operator/values.yaml                               vendored chart values
-  -> scripts/render_values_from_stack_env.sh                 stack-aware generated values
-  -> make install or make install-from-stack                 optional additional overrides
+nvca-operator/values.yaml                        the chart's own defaults
+  -> make install values=<path>                  the values file, used directly
+
+stack environment
+  -> scripts/render_values_from_stack_env.sh     stack-aware generated values
+  -> make install-from-stack                     the generated values
 ```
+
+Either accepts `additional_values=<path>` for further overrides.
 
 ## Permanent Defaults
 
-For defaults that every self-managed deployment should receive, edit
-`scripts/ci_vendor_nvca_operator_chart` and re-vendor:
+Edit `nvca-operator/values.yaml` directly. There is one chart and no vendoring
+step, so that file is the source of truth.
 
-```bash
-make vendor-chart
-git diff nvca-operator/values.yaml
-```
+Only defaults that suit every consumer belong there. Values tied to one
+deployment are supplied by whoever installs the chart:
 
-The vendoring script already applies defaults such as:
+- the compute-plane stack sets them under
+  `deploy/stacks/nvcf-compute-plane/`, including `nameOverride`,
+  `fullnameOverride` and `selfManaged.nvcaVersion`
+- an ngc-managed install passes `ngcConfig.serviceKey` and the `helmManaged.*`
+  values on the command line
 
-- `ngcConfig.clusterSource = "self-managed"`
-- `ngcConfig.serviceKey = "dummy-api-key"`
-- `image.tag` remains empty so templates use the published chart version
-- `selfManaged.nvcaVersion = "$NVCA_VERSION"`
-- `generateImagePullSecret = false`
-- `selfManaged.sharedStorage.imageTag = "$NVCA_SHARED_STORAGE_IMAGE_TAG"`
-- `nameOverride = "nvca-operator"`
-- `fullnameOverride = "nvca-operator"`
-
-Do not edit `nvca-operator/values.yaml` directly for a permanent default. The
-next vendor run will overwrite it.
+`image.tag` ships empty so templates fall back to `appVersion`, which the
+release stamps at packaging time.
 
 ## Deploy-time Overrides
 
@@ -69,19 +67,6 @@ make install-from-stack \
 Use deploy-time overrides for secrets, credentials, cluster-specific IDs, and
 temporary validation changes.
 
-## Adding .env Inputs
-
-For version-like values that the vendoring script needs, add a variable to
-`.env`, require it in `scripts/ci_vendor_nvca_operator_chart`, and re-vendor:
-
-```bash
-MY_NEW_CONFIG=some-value
-```
-
-```bash
-update_yaml_key ".myConfig = \"${MY_NEW_CONFIG:?MY_NEW_CONFIG is not set}\"" "${TARGET_DIR}/values.yaml"
-```
-
 ## Validation
 
 ```bash
@@ -95,7 +80,30 @@ tools/ci/validate-helm-chart deploy/helm/nvca-operator/nvca-operator \
 ## Gotchas
 
 - Install-time values are layered after generated stack-aware values.
+- Use `clusterValidator.role: control-plane` only in a single-cluster
+  topology, where the NVCF control plane runs in the same cluster. On a
+  compute-only cluster every run is Not-Ready.
+- With `clusterValidator.role: control-plane`, set
+  `clusterValidator.gatewayNames` to every stack Gateway as `namespace/name`.
+  Unset, the validator finds Gateways from route labels, and those can never
+  fail Tier-1. `make render-values-from-stack` fills it in.
+- List stack quorum components that run outside the cluster (`nats`,
+  `openbao`, `cassandra`) in `clusterValidator.externalComponents`, or Tier-2
+  reports them missing after install. `make render-values-from-stack` lists
+  each one the stack environment disables.
+- `make render-values-from-stack` rewrites `gatewayNames`, `storageClass` and
+  `externalComponents` from the stack on every render, empty included. Set a
+  different value with `additional_values`, not on the release.
+- The node-to-node probe pods have no image pull secrets. On a registry other
+  than NGC (`nvcr.io` or a subdomain), `make render-values-from-stack` points
+  an unset `clusterValidator.nodeToNodeProbeImage` at `busybox:1.36` under the
+  stack's repository, unless `networkChecks.enforcement.testImage` is set. The
+  default an earlier render wrote follows a registry change; any other probe
+  image already set is kept. Pass `NODE_TO_NODE_PROBE_IMAGE` to choose another
+  image.
 - Use `yq` carefully for nested keys and quoted strings.
-- Keep `Chart.yaml` name/version changes in the vendoring script when they are
-  part of the self-managed packaging contract.
+- `Chart.yaml` name stays in git and must match the subproject's service_name;
+  the release refuses to publish when they differ. Only the version is set at
+  packaging time, and `appVersion` is stamped from the nvca release the chart
+  installs.
 - Never commit real service keys or rendered secret material.

@@ -745,8 +745,8 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		// Labels must be added for podInstanceNamespace if gxcache is enabled
 		if c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.GXCache) {
 			if err := ensureGXCacheNamespaceLabels(ctx, c.clients.K8s.CoreV1().Namespaces(), c.podInstanceNamespace); err != nil {
-				log.WithError(err).Error("failed to apply label to nvcf-backend namespace for GXCache enablement")
-				return nil, nil, err
+				return nil, nil, fmt.Errorf("apply GXCache label to requests namespace %q (worker.requestsNamespace): %w",
+					c.podInstanceNamespace, err)
 			}
 		}
 
@@ -1702,6 +1702,17 @@ func getCurrentK8sVersion(ctx context.Context, serverVersionClient discovery.Ser
 		return "", fmt.Errorf("failed to query the running k8s version, error: %w", err)
 	}
 	return ver.GitVersion, nil
+}
+
+func resolveK8sVersion(
+	ctx context.Context,
+	override string,
+	serverVersionClient discovery.ServerVersionInterface,
+) (string, error) {
+	if override != "" {
+		return override, nil
+	}
+	return getCurrentK8sVersion(ctx, serverVersionClient)
 }
 
 // TODO: Revisit to include this info in a new API from NVCA Operator to ICMS (via NGC API)

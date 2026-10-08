@@ -59,6 +59,7 @@ func (t *invokeRequestCaptureTransport) RoundTrip(req *http.Request) (*http.Resp
 type updateRequestCaptureTransport struct {
 	req          *http.Request
 	body         []byte
+	statusCode   int
 	responseBody string
 }
 
@@ -75,8 +76,12 @@ func (t *updateRequestCaptureTransport) RoundTrip(req *http.Request) (*http.Resp
 	if responseBody == "" {
 		responseBody = `{"ok":true}`
 	}
+	statusCode := t.statusCode
+	if statusCode == 0 {
+		statusCode = http.StatusOK
+	}
 	return &http.Response{
-		StatusCode: http.StatusOK,
+		StatusCode: statusCode,
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(responseBody)),
 		Request:    req,
@@ -585,6 +590,42 @@ func TestInvokeFunctionFallsBackToExplicitPathWhenDetailsLookupFails(t *testing.
 	assertInvocationBodyFieldAbsent(t, capture.invocationBody, "model")
 	if got := logOutput.String(); !strings.Contains(got, "WARNING: model-name ignored") {
 		t.Fatalf("log output = %q, want model-name ignored warning", got)
+	}
+}
+
+func TestFunctionWritesSurfaceRoutingMethodRejectionUnchanged(t *testing.T) {
+	routingMethod := "pulsar;seed=x,y"
+	rejection := `{"detail":"Model 'dummy-model': routingMethod must not contain commas"}`
+	newClient := func() *Client {
+		return &Client{
+			config:  &Config{Token: "token"},
+			baseURL: "https://api.example.com",
+			httpClient: &http.Client{Transport: &updateRequestCaptureTransport{
+				statusCode:   http.StatusBadRequest,
+				responseBody: rejection,
+			}},
+		}
+	}
+	llmConfig := &LLMConfigDto{URIs: []string{"/v1/chat/completions"}, RoutingMethod: &routingMethod}
+	want := "API error 400: " + rejection
+
+	_, err := newClient().CreateFunction(context.Background(), &CreateFunctionRequest{
+		Name:         "verbatim-test",
+		InferenceURL: "/v1/chat/completions",
+		Models:       []ArtifactDto{{Name: "dummy-model", LLMConfig: llmConfig}},
+	})
+	if err == nil || err.Error() != want {
+		t.Fatalf("create error = %v, want %q", err, want)
+	}
+
+	err = newClient().UpdateFunctionMetadata(context.Background(), "func-123", "ver-456", &UpdateFunctionMetadataRequest{
+		ModelUpdates: []ModelUpdateDto{{
+			ModelName: "dummy-model",
+			LLMConfig: &LLMConfigUpdateDto{RoutingMethod: &routingMethod},
+		}},
+	})
+	if err == nil || err.Error() != want {
+		t.Fatalf("update error = %v, want %q", err, want)
 	}
 }
 

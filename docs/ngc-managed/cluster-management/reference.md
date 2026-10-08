@@ -85,7 +85,7 @@ These parameters apply to all deployment modes.
  priorityClassName: ""           # K8s PriorityClassName for eviction preference
  k8sVersionOverride: ""          # Override K8s version NVCA registers with
  enableGXCache: true             # Enable GXCache support
- ddcsIPAllowList: ""             # Comma-separated CIDRs for DDCS access control
+ ddcsIPAllowList: ""             # Comma-separated CIDRs for OVDC access control (legacy key name)
  nvcaHelmRepositoryPrefix: ""    # Restrict Helm repos to specific org/team
 ```
 

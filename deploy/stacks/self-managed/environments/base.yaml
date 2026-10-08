@@ -79,8 +79,9 @@ global:
     invocationServiceURL: ""
     # gRPC proxy worker CONNECT endpoint advertised by the proxy.
     grpcProxyWorkerConnectURL: ""
-    # Optional LLM request-router address override advertised to LLM worker
-    # sidecars. Empty uses llm-request-router.nvcf.svc.cluster.local:50071.
+    # Pylon discovery endpoint. Empty uses
+    # llm-request-router-backend-router.nvcf.svc.cluster.local:50071 when backend
+    # routing is enabled, otherwise llm-request-router.nvcf.svc.cluster.local:50071.
     llmRequestRouterAddress: ""
 
   nodeSelectors:
@@ -192,8 +193,12 @@ api:
 
 # NVCT API in-cluster ESS base URL, mirroring api.essBaseURL. Empty defaults to
 # global.workerEndpoints.essServiceURL; NVCT_ESS_WORKER_BASE_URL stays on it.
+# Remote config is passed to the NVCT API chart and overrides its packaged
+# application profile, mirroring api.remoteConfig.
 nvctApi:
   essBaseURL: ""
+  remoteConfig:
+    configData: {}
 
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog. The API chart defaults to
@@ -401,6 +406,8 @@ addons:
         # enabled: defaults to addons.llm.enabled
         # replicaCount defaults to the request-router chart value.
         # replicaCount: 2
+        # service:
+        #   grpcPort: 50071
         # Addresses workers dial to reach the router. Both default to the
         # backend-router Service in-cluster, which is correct when workers run
         # alongside the control plane. Set both to externally reachable
@@ -485,6 +492,11 @@ addons:
       #   registry: ""
       #   repository: ""
       #   tag: ""
+
+  # Event Ledger addon: records deployment stage events from NVCA and SIS.
+  # When enabled, deploys the event-ledger service backed by Cassandra.
+  eventLedger:
+    enabled: true
 
   # Vanity Gateway addon for optional vanity and OpenAI-compatible invocation routes.
   # Disabled by default; enabling this deploys the vanity-gateway service and its
@@ -717,3 +729,16 @@ grpcproxy:
   # an external compute-worker endpoint.
   natsServiceURL: ""
   workerConnectBaseURL: ""
+
+# Control-plane high availability.
+# global.yaml.gotmpl maps mode onto chart values (replicaCount, affinity, zone
+# spread, PDB, update strategy).
+#   none      keep chart/env defaults (single-node, local, CI).
+#   preferred HA sizing; soft placement (schedules even if capacity is short).
+#   enforced  HA sizing; hard placement (Pending rather than co-locating).
+# preferred/enforced need >= 3 nodes (>= 3 zones for zone spread).
+# Optional overrides: global.affinity / global.topologySpreadConstraints.
+# Default preferred (real multi-node); set none for single-node / local / CI.
+# JetStream stream replicas follow the NATS server count (capped at 3).
+highAvailability:
+  mode: preferred

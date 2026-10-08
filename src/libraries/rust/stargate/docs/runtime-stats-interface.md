@@ -24,6 +24,22 @@ CLI concurrency fallback ----------> pylon -> registration -> stargate routing
 The stream reports request counters. `/kv-cache/stats` is optional machine
 state.
 
+## Registration Updates
+
+Pylon publishes its registration, including model stats, to every Stargate in
+two cases:
+
+- When advertised stats or status change, for example when a request is
+  admitted, produces its first output, or completes. Updates are coalesced so
+  each registration stream sends at most one change-driven update per
+  `--stats-update-coalesce-ms` (default `10`).
+- As a heartbeat when nothing has been sent for `--min-update-interval-ms`
+  (default `1000`). Stargate uses this interval for registration liveness.
+
+Stargate routes on the most recent update plus its own pending reservations.
+Change-driven updates keep that view within the coalescing window and network
+delay of the backend's actual load, instead of up to one heartbeat behind.
+
 ## Stream Events
 
 Each non-empty line is JSON with `v: 1` and `type`.
@@ -124,6 +140,7 @@ Use it only when the runtime has reliable KV state.
 Pylon publishes:
 
 - sticky completed-request input throughput: `last_mean_input_tps`
+- generation maximum input throughput: optional `max_input_tps`
 - volatile generation throughput: `output_tps` and `max_output_tps`
 - request phase counts and queue sizes
 - effective maximum engine concurrency
@@ -138,13 +155,28 @@ counter-derived output window.
 
 If request stats go stale, volatile output TPS is cleared. Sticky input TPS
 stays until a later valid sample replaces it.
+The maximum is the greatest `last_mean_input_tps` published for the current
+model generation, including a configured initial TPS. It follows the smoothed
+mean rather than individual samples, so the mean dilutes one outlier sample.
+Lower means do not reduce it, and generation replacement clears it. It is
+absent until the first mean is published.
+
+Pylon publishes `pylon_model_max_input_tps` when the maximum is known and removes
+the series when the model is removed or replaced with unknown maximum state.
+The additive protobuf field preserves older messages as an absent maximum.
 
 Shared clusters sum backend-local live load and union labels. Effective input
 capacity is:
 
 ```text
-sum(active_runtime_reports)
+mean input capacity = sum(active runtime mean reports)
+maximum input capacity = max(active generation peak reports)
 ```
+
+Maximum capacity is available only when every active backend in the shared
+engine cluster reports a valid maximum. Historical per-observer peaks are not
+additive. Pulsar uses maximum capacity by default; queue estimates still use
+mean capacity.
 
 Before registration, Pylon initializes each model generation from exactly one
 source. `--initial-input-tps` installs the configured value. Local calibration
@@ -176,3 +208,34 @@ does not inflate that gauge.
 chat/Responses/embeddings endpoints, and `/kv-cache/stats`. Use
 `pylon --engine-stats-stream=off` when a test intentionally exercises OpenAI
 fallback.
+
+With `--profile h100-llama-3.1-8b`, `mock-dynamo` uses the batched engine model
+from the `mock-engine` crate by default. The model represents one Dynamo
+deployment:
+
+- `--num-gpu-workers N` sets the number of inference workers. Each worker has
+  its own scheduler and KV cache.
+- Each worker runs iteration-level steps. A step decodes one token for every
+  running sequence and spends the rest of `--max-batched-tokens` on chunked
+  prefill, so concurrent prompts share prefill compute and slow decode.
+- Requests go to the worker caching the most tokens for their
+  `x-cache-affinity-key`, even when that worker is busier than the others.
+  Requests without a cached key go to the least-loaded worker. A key is
+  cached only after its first prefill finishes, so concurrent first requests
+  for one key can land on different workers.
+- A completed request's cache entry covers its prompt and its output. A later
+  request with the same key reuses up to that many tokens. Matching is per
+  key, not per token block.
+- `/kv-cache/stats` reports deployment totals for capacity and used tokens.
+  Used tokens include cached prefixes and the memory reserved by running
+  requests. A request larger than a worker's capacity still runs alone, so
+  used can exceed capacity. Entry, hit, miss, and eviction counters report
+  zero for this model.
+- Stats stream pings advertise `max_engine_concurrency` as
+  `num_gpu_workers * max_num_seqs`. When Pylon does not read the stats stream,
+  set `--max-engine-concurrency` to the same value.
+
+`--explain-profile h100-llama-3.1-8b` prints the step costs. They are estimates
+until calibrated against a real engine. `--engine-model legacy` restores the
+earlier model, where each request has fixed, independent prefill and decode
+delays.

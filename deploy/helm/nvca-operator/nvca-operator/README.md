@@ -62,11 +62,11 @@ This release does not wire the catalog into backend selection. Runtime use requi
 | `storage.sharedStorage.taskData.mountOptions` | Mount options for the provisioned task data PV.                                                                                                                                                   | `[]`                       |
 | `storage.sharedStorage.taskData.storageCapacity` | Capacity of the provisioned task data volume. Leave unset to keep the agent's built-in default.                                                                                                | `""`                       |
 | `storage.internalPersistentStorage.storageClassName` | Storage class for the Internal Persistent Storage (IPS) PVC.                                                                                                                               | `""`                       |
-| `storage.internalPersistentStorage.hardResourceQuota` | Hard storage quota for the IPS PVC, keyed by resource name (e.g. storage).                                                                                                                | `{}`                       |
+| `storage.internalPersistentStorage.hardResourceQuota` | Hard storage quota for the IPS PVC. Set `requests.storage`; it defaults to 500Gi when omitted.                                                                                           | `{}`                       |
 | `worker.minHealthcheckRefreshWait`        | Minimum wait between internal healthchecker refresh calls. Leave unset to keep the agent's built-in default.                                                                                         | `""`                       |
 | `worker.staticGPUCapacity`                | Static override of GPU capacity used for registration. Zero disables the override.                                                                                                                   | `0`                        |
 | `worker.computeBackend`                   | Selects the compute backend. Leave unset to keep the agent's built-in default.                                                                                                                        | `""`                       |
-| `worker.requestsNamespace`                | Namespace NVCA creates request-scoped resources in. Leave unset to keep the agent's built-in default.                                                                                                | `""`                       |
+| `worker.requestsNamespace`                | Namespace NVCA creates request-scoped resources in. The operator creates it if missing and deletes it on uninstall only if it created it. Leave unset to keep the agent's built-in default.          | `""`                       |
 | `worker.namespaceLabels`                  | Labels applied to namespaces NVCA creates.                                                                                                                                                            | `{}`                       |
 | `worker.featureFlags`                     | Feature flags enabled on the NVCA agent.                                                                                                                                                              | `[]`                       |
 | `worker.skipSelfDestruct`                 | Skip self-destruct even if ICMS sends SELF_DESTRUCT.                                                                                                                                                  | `false`                    |
@@ -80,6 +80,9 @@ This release does not wire the catalog into backend selection. Runtime use requi
 | `worker.timeouts.periodicInstanceStatusInterval` | Interval between periodic instance status reports. Leave unset to keep the agent's built-in default.                                                                                          | `""`                       |
 | `worker.timeouts.icmsRequestAckInterval`  | Interval between ICMS request acknowledgement polls. Leave unset to keep the agent's built-in default.                                                                                               | `""`                       |
 | `worker.timeouts.icmsRequestAckRetryTimeout` | Timeout for retrying ICMS request acknowledgement. Leave unset to keep the agent's built-in default.                                                                                              | `""`                       |
+| `worker.download.concurrentDownloads`     | Artifacts worker-init fetches at once (WORKER_CONCURRENT_DOWNLOADS). Applies to worker pods, model-cache writer Jobs, and Helm model-cache-init. The default is worker-init's built-in value; 0 omits the variable and defers to the image. | `5`                        |
+| `worker.download.concurrentChunks`        | Ranged GETs per artifact (WORKER_CONCURRENT_CHUNKS). Total streams are concurrentDownloads times concurrentChunks. The default is worker-init's built-in value; 0 omits the variable and defers to the image. | `4`                        |
+| `worker.download.chunkSizeBytes`          | Bytes per ranged GET (WORKER_CHUNK_SIZE), 1 MiB to 4 GiB. The default is worker-init's built-in 16 MiB; 0 omits the variable and defers to the image.                                           | `16777216`                 |
 | `agentConfig.mergeConfig`                 | Merge fields into the generated NVCA config. Deprecated for BYOO, storage, and worker settings; use `byoo`/`storage`/`worker` instead.                                                             | `""`                       |
 | `operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.name` | Secret containing the workload transport trust bundle; empty disables the source. Example: `nvcf-trust`. | `""` |
 | `operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.key` | Secret data key containing certificate-only PEM. | `ca.crt` |
@@ -141,7 +144,7 @@ This release does not wire the catalog into backend selection. Runtime use requi
 | Name                                | Description                                                                                                                                                                                                     | Value                        |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
 | `ngcConfig.username`                | Username for the registry authentication                                                                                                                                                                        | `$oauthtoken`                |
-| `ngcConfig.serviceKey`              | ServiceKey (password) for authentication. If unset, a Secret with name set to ngcConfig.serviceKeySecretName is expected to exist in the cluster in the release namespace.                                      | `""`                         |
+| `ngcConfig.serviceKey`              | ServiceKey (password) for authentication. It defaults to empty, so an install must set it while generateImagePullSecret is true: the generated pull secret is built from this value and the render fails with "NGC service key is required to create a pull secret" without it. To pull with pre-existing Secrets instead, set generateImagePullSecret=false and list them in imagePullSecrets; the workloads get no pull secret at all if that list is empty. imagePullSecretName must stay non-empty either way, because the chart validates it, though it is only used when generation is on. Setting ngcConfig.clusterSource=self-managed does not exempt an install; only disabling generation does, which is what the compute-plane stack supplies. This is a different Secret from ngcConfig.serviceKeySecretName, which the Deployment mounts for the agent. | `""`                         |
 | `ngcConfig.serviceKeySecretName`    | Secret containing NGC ServiceKey (password) for authentication (default: ngc-service-key). If the ngcConfig.serviceKey is not set, the secret with this name must be created manually in the release namespace. | `ngc-service-key`            |
 | `ngcConfig.serviceKeySecretKeyName` | Key in the secret ngcConfig.serviceKeySecretName containing the NGC ServiceKey (password).                                                                                                                      | `ngcServiceKey`              |
 | `ngcConfig.apiURL`                  | NGC API URL for requesting auth tokens                                                                                                                                                                          | `https://api.ngc.nvidia.com` |
@@ -190,12 +193,13 @@ This release does not wire the catalog into backend selection. Runtime use requi
 | `selfManaged.otelCollector.enabled`           | Enable OTel collector sidecar for self-managed clusters                                                                                                                              | `false`                                    |
 | `selfManaged.otelCollector.imageRepository`   | (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.               | `""`                                       |
 | `selfManaged.otelCollector.imageTag`          | (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.                                                                                         | `0.160.0-nv-0.2.5`                        |
-| `selfManaged.icmsServiceURL`                  | URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.                                                                 | `http://icms.example.invalid:8080`        |
+| `selfManaged.icmsServiceURL`                  | (REQUIRED for self-managed clusters) URL of the ICMS service. Set the endpoint generated during cluster registration.                                                                 | `""`        |
 | `selfManaged.icmsServiceHostHeaderOverride`                 | Optional Host header override for selfManaged.icmsServiceURL.                                                                                                                       | `""`                                      |
-| `selfManaged.revalServiceURL`                 | URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.                                                                | `http://reval.example.invalid:8080`       |
+| `selfManaged.revalServiceURL`                 | (REQUIRED for self-managed clusters) URL of the ReVal service. Set the endpoint generated during cluster registration.                                                                | `""`       |
 | `selfManaged.revalServiceHostHeaderOverride`                | Optional Host header override for selfManaged.revalServiceURL.                                                                                                                      | `""`                                      |
-| `selfManaged.natsURL`                         | URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.                                                                 | `nats://nats.example.invalid:4222`        |
+| `selfManaged.natsURL`                         | (REQUIRED for self-managed clusters) URL of the NATS service. Set the endpoint generated during cluster registration.                                                                 | `""`        |
 | `selfManaged.natsHostOverride`                        | Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.                                                                                            | `""`                                      |
+| `selfManaged.eventLedgerServiceURL`           | (Optional) URL of the Event Ledger service that the OTel collector exports to. Defaults to the in-cluster Event Ledger Service when empty.                                            | `""`                                       |
 
 ### Node Selector Configuration
 
@@ -230,10 +234,18 @@ This release does not wire the catalog into backend selection. Runtime use requi
 
 | Name                                                  | Description                                                                       | Value                                  |
 | ----------------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------- |
-| `clusterValidator.enabled`                            | Enable the cluster-validator CronJob and init container                            | `false`                                |
+| `clusterValidator.enabled`                            | Enable the cluster-validator: the operator's init container, the CronJob and, under role `control-plane`, the validator Jobs the operator starts when the validator spec changes | `false`                                |
 | `clusterValidator.image.repository`                   | Cluster Validator container registry path, without tag                            | `""`                                   |
 | `clusterValidator.image.tag`                          | Cluster Validator container image tag                                             | `v2.0.0`                               |
 | `clusterValidator.image.pullPolicy`                   | K8s ImagePullPolicy for cluster-validator                                         | `IfNotPresent`                         |
+| `clusterValidator.role`                               | Check set the CronJob runs: `control-plane`, or `compute-plane` or empty for the GPU checks. Use `control-plane` only in a single-cluster topology, where the NVCF control plane runs in this cluster; on a compute-only cluster every run is Not-Ready. The init container always runs `compute-plane` | `""`                                   |
+| `clusterValidator.openBaoNamespace`                   | Namespace holding OpenBao when it is not `vault-system`                           | `""`                                   |
+| `clusterValidator.envoyGatewayNamespace`              | Namespace holding Envoy Gateway when it is not `envoy-gateway-system`             | `""`                                   |
+| `clusterValidator.gatewayNames`                       | Every NVCF Gateway as `namespace/name`; set it for role `control-plane` (`make render-values-from-stack` fills it in). Only named Gateways can fail Tier-1, and a Gateway left out is not assessed | `[]` (discovered from NVCF routes)     |
+| `clusterValidator.storageClass`                       | The stack's `global.storageClass`; when set, that class must exist instead of a default class | `""`                                   |
+| `clusterValidator.externalComponents`                 | Quorum components (`nats`, `openbao`, `cassandra`) the stack runs outside the cluster, so Tier-2 does not report them missing after install (`make render-values-from-stack` lists each one the stack disables) | `[]`                                   |
+| `clusterValidator.nodeToNodeProbeImage`               | Overlay probe image; needs `sh` and busybox-style `nc`, pullable without `imagePullSecrets`. `make render-values-from-stack` sets `busybox:1.36` under the stack's repository on a registry other than NGC (`nvcr.io` or a subdomain), and leaves it empty on NGC, which has no busybox | `""` (`networkChecks.enforcement.testImage` if set, else `busybox:1.36`) |
+| `clusterValidator.tolerations`                        | Extra tolerations for the validator Job pods. The pods also carry the control-plane tolerations and the operator's `tolerations` and `nodeSelector` | `[]`                                   |
 | `clusterValidator.schedule`                           | CronJob schedule (cron expression)                                                | `0 */3 * * *`                          |
 | `clusterValidator.configMapName`                      | ConfigMap name for user-defined network checks                                    | `cluster-validator-network-checks`     |
 | `clusterValidator.networkChecks`                      | Network check configuration (creates the ConfigMap automatically when set)        | `{}`                                   |
@@ -247,3 +259,28 @@ This release does not wire the catalog into backend selection. Runtime use requi
 | `clusterValidator.resources.limits.memory`            | Memory limit for the cluster-validator container                                  | `128Mi`                                |
 | `clusterValidator.resources.requests.cpu`             | CPU request for the cluster-validator container                                   | `100m`                                 |
 | `clusterValidator.resources.requests.memory`          | Memory request for the cluster-validator container                                | `64Mi`                                 |
+
+With `clusterValidator.enabled`, the validator runs in three ways:
+
+- The operator's init container runs the `compute-plane` checks at every
+  operator start. It fails the start only when a critical check ran and
+  failed.
+- The CronJob runs the `clusterValidator.role` checks on
+  `clusterValidator.schedule` and writes the summary that the agent publishes
+  as metrics.
+- Under role `control-plane` the init container writes no summary. The
+  operator instead starts a Job from the CronJob whenever the newest run did
+  not use the current validator spec: at install, and after each upgrade or
+  rollback that changes the Job spec or `networkChecks`. The install does not
+  wait for the run.
+- A change to the schedule, the Job spec or `networkChecks` alone does not
+  restart the operator. The init container uses `enabled`, `image`,
+  `configMapName`, `resources` and `role`, so changing any of them restarts
+  the operator.
+- Changing `enabled` also restarts the NVCA agent once, since the agent
+  publishes the validator metrics only while the validator is enabled. Where
+  the agent Deployment uses the Recreate strategy (the `GracefulNoGPU`
+  feature flag), that is a full stop and start. While the operator rolls out
+  the change, its old and new pods can run side by side for a short time and
+  each set the agent to its own value, so the agent may restart more than
+  once.

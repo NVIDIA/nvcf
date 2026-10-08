@@ -719,6 +719,12 @@ Registry credentials allow NVCF to pull container images from private registries
   --registry "docker.io" \
   --username "myusername" \
   --password "mypassword"
+
+# Add registry credentials securely using a secret file (or '-' for standard input)
+./nvcf-cli registry-credential add \
+  --hostname "docker.io" \
+  --secret-file "/path/to/secret.b64" \
+  --artifact-type CONTAINER
 ```
 
 #### Method C: Using curl directly
@@ -861,10 +867,14 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
 }
 ```
 
-For LLM models, `llmConfig.routingMethod` accepts the API/auth spellings
-`round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`. The
-CLI validates these values before sending the create request.
-Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`.
+For LLM models, `llmConfig.routingMethod` is a routing algorithm name,
+optionally followed by `;name=value` tuning parameters, such as
+`pulsar;seed=stable-a`. The CLI sends the value unchanged; the API checks it
+and the CLI prints the API error.
+Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`,
+and native Anthropic `/v1/messages`. Messages requires a compatible gateway,
+Stargate, and Pylon build and a backend that serves that protocol. Published
+stack releases must qualify and include those builds before use.
 
 ### 5. List Functions
 
@@ -1021,7 +1031,7 @@ curl -sS -X POST "https://llm.invocation.${INVOCATION_DOMAIN}/v1/embeddings" \
   -d "{\"model\":\"${FUNCTION_ID}/${MODEL_NAME}\",\"input\":\"NVCF embeddings check\"}"
 ```
 
-For LLM Gateway endpoint behavior, routing, and session stickiness details, see [LLM Gateway](../../../docs/user/llm-gateway.md).
+For LLM Gateway endpoint behavior, routing, and session stickiness details, see [LLM Gateway](../../../docs/overview/llm-gateway.md).
 
 #### Sample Invocation JSON (`examples/invoke-function.json`)
 

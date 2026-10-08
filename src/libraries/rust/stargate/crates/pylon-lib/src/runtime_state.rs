@@ -19,12 +19,13 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use stargate_proto::pb::{InferenceServerModelRegistration, InferenceServerStatus, ModelStats};
+use tokio::sync::watch;
 
 use crate::queue_admission::{
     LiveRequestState, PylonQueueMismatchRetryConfig, QueueAdmissionDecision, QueueModelSnapshot,
     QueueTrackedRequestGuard,
 };
-use crate::request_observer::{RequestObservation, RequiredTunnelHeaders};
+use crate::request_observer::{RequestObservation, RequestObservationState, RequiredTunnelHeaders};
 use crate::stats::PylonMetrics;
 use reqwest::header::HeaderMap;
 
@@ -32,6 +33,8 @@ use reqwest::header::HeaderMap;
 pub struct CurrentModelStats {
     // Sticky runtime-observed mean input TPS for this backend.
     pub last_mean_input_tps: f64,
+    // Greatest last_mean_input_tps of this model generation. None until the first mean.
+    pub max_input_tps: Option<f64>,
     // Token/sec output rate for streaming generation endpoints. Embeddings item
     // cardinality is observed separately and is not exported through this field.
     pub output_tps: f64,
@@ -85,10 +88,32 @@ impl ModelGeneration {
 #[derive(Clone, Debug, Default)]
 pub struct PylonRuntimeState {
     advertised: Arc<Mutex<AdvertisedRuntimeState>>,
+    registration_changes: RegistrationChanges,
     live_requests: LiveRequestState,
     output_token_calibration_enabled: bool,
     metrics: Option<Arc<PylonMetrics>>,
     observation_tx: Option<flume::Sender<RequestObservationEvent>>,
+}
+
+/// Version counter for advertised registration content.
+#[derive(Clone, Debug)]
+struct RegistrationChanges(Arc<watch::Sender<u64>>);
+
+impl Default for RegistrationChanges {
+    fn default() -> Self {
+        Self(Arc::new(watch::Sender::new(0)))
+    }
+}
+
+impl RegistrationChanges {
+    fn notify(&self) {
+        self.0
+            .send_modify(|version| *version = version.wrapping_add(1));
+    }
+
+    fn subscribe(&self) -> watch::Receiver<u64> {
+        self.0.subscribe()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -130,6 +155,7 @@ struct AdvertisedRuntimeState {
     base_status: InferenceServerStatus,
     require_admitted_generation: bool,
     models: HashMap<String, RuntimeModelState>,
+    last_upstream_progress_at: Option<Instant>,
 }
 
 impl AdvertisedRuntimeState {
@@ -151,6 +177,7 @@ struct RuntimeModelState {
     generation: u64,
     stats: CurrentModelStats,
     publication: ModelPublication,
+    last_progress_at: Option<Instant>,
 }
 
 #[derive(Debug, Default)]
@@ -188,7 +215,9 @@ impl PylonRuntimeState {
                 base_status: initial_status,
                 require_admitted_generation: true,
                 models,
+                last_upstream_progress_at: None,
             })),
+            registration_changes: RegistrationChanges::default(),
             live_requests: LiveRequestState::default(),
             output_token_calibration_enabled: false,
             metrics: None,
@@ -220,6 +249,14 @@ impl PylonRuntimeState {
 
     pub fn set_status(&self, status: InferenceServerStatus) {
         self.advertised.lock().base_status = status;
+        self.registration_changes.notify();
+    }
+
+    /// Receives a new version whenever advertised status or model stats
+    /// change, so registration streams can publish without waiting for the
+    /// next heartbeat.
+    pub(crate) fn subscribe_registration_changes(&self) -> watch::Receiver<u64> {
+        self.registration_changes.subscribe()
     }
 
     pub(crate) fn model_ids(&self) -> Vec<String> {
@@ -247,6 +284,8 @@ impl PylonRuntimeState {
                 ..RuntimeModelState::default()
             },
         );
+        drop(advertised);
+        self.registration_changes.notify();
         true
     }
 
@@ -286,6 +325,8 @@ impl PylonRuntimeState {
         model.publication = ModelPublication::Admitted {
             bringup_ready: true,
         };
+        drop(advertised);
+        self.registration_changes.notify();
         true
     }
 
@@ -307,6 +348,8 @@ impl PylonRuntimeState {
             .remove(generation.model_id())
             .expect("validated generation should still exist");
         self.live_requests.retire_generation(generation);
+        drop(advertised);
+        self.registration_changes.notify();
         Some(retired.stats)
     }
 
@@ -325,6 +368,7 @@ impl PylonRuntimeState {
             model.stats = stats;
             model.stats.clone()
         };
+        self.registration_changes.notify();
         if let Some(metrics) = &self.metrics {
             metrics.observe_model_stats(generation.model_id(), &observed_stats);
         }
@@ -355,6 +399,8 @@ impl PylonRuntimeState {
                 bringup_ready: ready,
             };
         }
+        drop(advertised);
+        self.registration_changes.notify();
     }
 
     pub(crate) fn set_generation_bringup_ready(
@@ -370,7 +416,32 @@ impl PylonRuntimeState {
             return false;
         };
         *bringup_ready = ready;
+        drop(advertised);
+        self.registration_changes.notify();
         true
+    }
+
+    /// Returns whether an observed request for this generation produced
+    /// output or completed successfully at or after `since`.
+    pub(crate) fn generation_progressed_since(
+        &self,
+        generation: &ModelGeneration,
+        since: Instant,
+    ) -> bool {
+        self.advertised
+            .lock()
+            .current(generation)
+            .and_then(|model| model.last_progress_at)
+            .is_some_and(|progressed_at| progressed_at >= since)
+    }
+
+    /// Returns whether any observed request on this Pylon's upstream produced
+    /// output or completed successfully at or after `since`.
+    pub(crate) fn upstream_progressed_since(&self, since: Instant) -> bool {
+        self.advertised
+            .lock()
+            .last_upstream_progress_at
+            .is_some_and(|progressed_at| progressed_at >= since)
     }
 
     #[cfg(test)]
@@ -398,6 +469,7 @@ impl PylonRuntimeState {
                 let registration = InferenceServerModelRegistration {
                     stats: Some(ModelStats {
                         last_mean_input_tps: stats.last_mean_input_tps,
+                        max_input_tps: stats.max_input_tps,
                         output_tps: stats.output_tps,
                         max_output_tps: stats.max_output_tps,
                         queue_size: stats.queue_size,
@@ -522,7 +594,7 @@ impl PylonRuntimeState {
         // Held across the queue transition below: retire_generation() purges
         // live-request state under this lock, so releasing it after the
         // currency check would let a retired generation reinsert queue state.
-        let advertised = self.advertised.lock();
+        let mut advertised = self.advertised.lock();
         if let Some(owner) = event.generation.as_ref() {
             let current_generation = advertised
                 .models
@@ -537,6 +609,13 @@ impl PylonRuntimeState {
                     "dropping request observation from a retired model generation"
                 );
                 return event;
+            }
+        }
+        if observation_shows_upstream_progress(&event.observation) {
+            let now = Instant::now();
+            advertised.last_upstream_progress_at = Some(now);
+            if let Some(model) = advertised.models.get_mut(&event.observation.model_id) {
+                model.last_progress_at = Some(now);
             }
         }
         let mut live_observation = event.observation.clone();
@@ -659,6 +738,21 @@ impl RequestObservationEvent {
     }
 }
 
+/// Generated output with a 2xx or not-yet-known status, or a 2xx completion,
+/// shows that the upstream is serving requests.
+fn observation_shows_upstream_progress(observation: &RequestObservation) -> bool {
+    let success_status = |status: u16| (200..300).contains(&status);
+    match observation.state {
+        RequestObservationState::OutputGeneration => {
+            observation.upstream_status.is_none_or(success_status)
+        }
+        RequestObservationState::Complete => {
+            observation.upstream_status.is_some_and(success_status)
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn gated_model_status(
     base_status: InferenceServerStatus,
     bringup_ready: bool,
@@ -672,7 +766,7 @@ pub(crate) fn gated_model_status(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use stargate_proto::pb::InferenceServerStatus;
 
@@ -747,6 +841,72 @@ mod tests {
             time_to_first_token: None,
             total_duration: Duration::ZERO,
         }
+    }
+
+    #[test]
+    fn only_output_or_successful_completion_counts_as_upstream_progress() {
+        let runtime_state =
+            PylonRuntimeState::new(InferenceServerStatus::Active, &["model-a".to_string()]);
+        let generation = runtime_state.current_generation("model-a").unwrap();
+        let observe = |request_id: &str, state, upstream_status| {
+            let mut observation = observation(request_id, "model-a", None);
+            observation.state = state;
+            observation.upstream_status = upstream_status;
+            let since = Instant::now();
+            runtime_state.observe_request_for_test(observation);
+            (
+                runtime_state.generation_progressed_since(&generation, since),
+                runtime_state.upstream_progressed_since(since),
+            )
+        };
+
+        for (state, upstream_status) in [
+            (RequestObservationState::Queued, None),
+            (RequestObservationState::UpstreamConnecting, None),
+            (RequestObservationState::InputProcessing, Some(200)),
+            (RequestObservationState::OutputGeneration, Some(503)),
+            (RequestObservationState::Complete, Some(503)),
+            (RequestObservationState::Failed, Some(200)),
+            (RequestObservationState::Cancelled, Some(200)),
+        ] {
+            assert_eq!(
+                observe("req-no-progress", state, upstream_status),
+                (false, false),
+                "{state:?} with status {upstream_status:?} should not count as progress"
+            );
+        }
+        assert_eq!(
+            observe(
+                "req-output",
+                RequestObservationState::OutputGeneration,
+                Some(200)
+            ),
+            (true, true)
+        );
+        assert_eq!(
+            observe("req-complete", RequestObservationState::Complete, Some(200)),
+            (true, true)
+        );
+    }
+
+    #[test]
+    fn retired_generation_progress_does_not_carry_to_its_replacement() {
+        let runtime_state =
+            PylonRuntimeState::new(InferenceServerStatus::Active, &["model-a".to_string()]);
+        let first = runtime_state.current_generation("model-a").unwrap();
+        let since = Instant::now();
+        let mut progress = observation("req-first", "model-a", None);
+        progress.state = RequestObservationState::OutputGeneration;
+        runtime_state.observe_request_for_test(progress);
+        assert!(runtime_state.generation_progressed_since(&first, since));
+
+        runtime_state.retire_generation(&first);
+        let replacement = ModelGeneration::new("model-a", first.sequence() + 1);
+        assert!(runtime_state.begin_generation(replacement.clone()));
+
+        assert!(!runtime_state.generation_progressed_since(&first, since));
+        assert!(!runtime_state.generation_progressed_since(&replacement, since));
+        assert!(runtime_state.upstream_progressed_since(since));
     }
 
     #[test]

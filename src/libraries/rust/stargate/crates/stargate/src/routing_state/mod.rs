@@ -40,6 +40,7 @@ pub(crate) use keys::RegistrationIdentity;
 pub(crate) use registration::test_registration_generation;
 pub(crate) use registration::{RegistrationGeneration, RunningRegistration};
 pub(crate) use reservations::RoutingReservation;
+pub use reservations::apply_reservation;
 
 #[cfg(test)]
 use snapshots::RoutingTargetState;
@@ -51,6 +52,15 @@ pub struct StargateState {
 }
 
 impl StargateState {
+    pub(crate) fn forget_load_balancer_instance(
+        &self,
+        target: &RoutingTargetKey,
+        definition: &crate::load_balancer::LoadBalancerDefinition,
+    ) {
+        self.routing
+            .forget_load_balancer_instance(target, definition);
+    }
+
     pub fn new() -> Self {
         Self::default()
     }

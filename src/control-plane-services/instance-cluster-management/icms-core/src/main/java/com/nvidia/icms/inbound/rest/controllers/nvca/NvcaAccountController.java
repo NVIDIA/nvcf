@@ -135,7 +135,7 @@ public class NvcaAccountController {
     }
 
     @GetMapping("{ncaId}/clusters")
-    @PreAuthorize("hasAuthority('cluster-management')")
+    @PreAuthorize("hasAuthority('cluster-management') or hasAuthority('read:cluster-management')")
     @Operation(summary = "Get NVCA Clusters",
             description = "API to get the cluster details for given NcaId",
             responses = {
@@ -161,9 +161,19 @@ public class NvcaAccountController {
 
             @Schema(description = "If includeAuthorizedClusters=true then this param will be considered else ignored")
             @RequestParam(name = "includeNonByocInAuthorizedClusters", required = false)
-            Boolean includeNonByocInAuthorizedClusters) {
-        return clusterManagementService.getClusters(ncaId, includeAuthorizedClusters,
-                                                    includeNonByocInAuthorizedClusters);
+            Boolean includeNonByocInAuthorizedClusters,
+
+            @Schema(description = "Deprecated alias for includeNonByocInAuthorizedClusters",
+                    deprecated = true)
+            @RequestParam(name = "includeGfnInAuthorizedClusters", required = false)
+            Boolean includeGfnInAuthorizedClusters) {
+        // Honour the legacy param name only when the current one is absent, and keep passing null
+        // through untouched when neither is supplied so behaviour is unchanged for existing callers.
+        Boolean includeNonByoc = includeNonByocInAuthorizedClusters;
+        if (includeNonByoc == null && includeGfnInAuthorizedClusters != null) {
+            includeNonByoc = includeGfnInAuthorizedClusters;
+        }
+        return clusterManagementService.getClusters(ncaId, includeAuthorizedClusters, includeNonByoc);
     }
 
     @DeleteMapping("{ncaId}/clusters/{clusterId}")

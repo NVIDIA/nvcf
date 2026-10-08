@@ -124,7 +124,7 @@ utils:
 ## @param storage.sharedStorage.taskData.mountOptions Mount options for the provisioned task data PV.
 ## @param storage.sharedStorage.taskData.storageCapacity Capacity of the provisioned task data volume. Leave unset to keep the agent's built-in default.
 ## @param storage.internalPersistentStorage.storageClassName Storage class for the Internal Persistent Storage (IPS) PVC.
-## @param storage.internalPersistentStorage.hardResourceQuota Hard storage quota for the IPS PVC, keyed by resource name (e.g. storage).
+## @param storage.internalPersistentStorage.hardResourceQuota Hard storage quota for the IPS PVC. Set requests.storage; it defaults to 500Gi when omitted.
 storage:
   sharedStorage:
     server:
@@ -141,7 +141,7 @@ storage:
 ## @param worker.minHealthcheckRefreshWait Minimum wait between internal healthchecker refresh calls. Leave unset to keep the agent's built-in default.
 ## @param worker.staticGPUCapacity Static override of GPU capacity used for registration. Zero disables the override.
 ## @param worker.computeBackend Selects the compute backend. Leave unset to keep the agent's built-in default.
-## @param worker.requestsNamespace Namespace NVCA creates request-scoped resources in. Leave unset to keep the agent's built-in default.
+## @param worker.requestsNamespace Namespace NVCA creates request-scoped resources in. The operator creates it if missing and deletes it on uninstall only if it created it. Leave unset to keep the agent's built-in default.
 ## @param worker.namespaceLabels Labels applied to namespaces NVCA creates.
 ## @param worker.featureFlags Feature flags enabled on the NVCA agent.
 ## @param worker.skipSelfDestruct Skip self-destruct even if ICMS sends SELF_DESTRUCT.
@@ -155,6 +155,9 @@ storage:
 ## @param worker.timeouts.periodicInstanceStatusInterval Interval between periodic instance status reports. Leave unset to keep the agent's built-in default.
 ## @param worker.timeouts.icmsRequestAckInterval Interval between ICMS request acknowledgement polls. Leave unset to keep the agent's built-in default.
 ## @param worker.timeouts.icmsRequestAckRetryTimeout Timeout for retrying ICMS request acknowledgement. Leave unset to keep the agent's built-in default.
+## @param worker.download.concurrentDownloads Artifacts worker-init fetches at once (WORKER_CONCURRENT_DOWNLOADS). Applies to worker pods, model-cache writer Jobs, and Helm model-cache-init. The default is worker-init's built-in value; 0 omits the variable and defers to the image.
+## @param worker.download.concurrentChunks Ranged GETs per artifact (WORKER_CONCURRENT_CHUNKS). Total streams are concurrentDownloads times concurrentChunks. The default is worker-init's built-in value; 0 omits the variable and defers to the image.
+## @param worker.download.chunkSizeBytes Bytes per ranged GET (WORKER_CHUNK_SIZE), 1 MiB to 4 GiB. The default is worker-init's built-in 16 MiB; 0 omits the variable and defers to the image.
 worker:
   minHealthcheckRefreshWait: ""
   staticGPUCapacity: 0
@@ -174,6 +177,18 @@ worker:
     periodicInstanceStatusInterval: ""
     icmsRequestAckInterval: ""
     icmsRequestAckRetryTimeout: ""
+  # Worker-init artifact downloader tuning. NVCA folds these into the launch
+  # environment of every container that runs worker-init. The defaults are
+  # worker-init's own built-in values (configs/configs.go: 5 files, 4 chunks,
+  # 16 MiB), stated here so the effective rate is visible in the chart. The
+  # NGC CLI profile is concurrentDownloads 4, concurrentChunks 16,
+  # chunkSizeBytes 536870912. Setting a field to 0 omits its variable and
+  # defers to the image. An explicit agent.functionEnvOverrides or
+  # taskEnvOverrides entry for the same variable wins.
+  download:
+    concurrentDownloads: 5
+    concurrentChunks: 4
+    chunkSizeBytes: 16777216
 ## @param agentConfig.mergeConfig Merge fields into the generated NVCA config. Must be a string.
 ## @description agentConfig.mergeConfig is deprecated for BYOO, storage, and worker settings. Use the top-level byoo/storage/worker values instead.
 agentConfig:
@@ -337,7 +352,7 @@ webhook:
 ## @section NGC Configuration
 
 ## @param ngcConfig.username Username for the registry authentication
-## @param ngcConfig.serviceKey ServiceKey (password) for authentication. If unset, a Secret with name set to ngcConfig.serviceKeySecretName is expected to exist in the cluster in the release namespace.
+## @param ngcConfig.serviceKey ServiceKey (password) for authentication. It defaults to empty, so an install must set it while generateImagePullSecret is true: the generated pull secret is built from this value and the render fails with "NGC service key is required to create a pull secret" without it. To pull with pre-existing Secrets instead, set generateImagePullSecret=false and list them in imagePullSecrets; the workloads get no pull secret at all if that list is empty. imagePullSecretName must stay non-empty either way, because the chart validates it, though it is only used when generation is on. Setting ngcConfig.clusterSource=self-managed does not exempt an install; only disabling generation does, which is what the compute-plane stack supplies. This is a different Secret from ngcConfig.serviceKeySecretName, which the Deployment mounts for the agent.
 ## @param ngcConfig.serviceKeySecretName Secret containing NGC ServiceKey (password) for authentication (default: ngc-service-key). If the ngcConfig.serviceKey is not set, the secret with this name must be created manually in the release namespace.
 ## @param ngcConfig.serviceKeySecretKeyName Key in the secret ngcConfig.serviceKeySecretName containing the NGC ServiceKey (password).
 ## @param ngcConfig.apiURL NGC API URL for requesting auth tokens
@@ -347,7 +362,7 @@ webhook:
 ##     - "self-managed": Cluster configuration managed by the self-hosted compute plane
 ngcConfig:
   username: '$oauthtoken'
-  serviceKey: "dummy-api-key"
+  serviceKey: ""
   serviceKeySecretName: "ngc-service-key"
   serviceKeySecretKeyName: "ngcServiceKey"
   apiURL: https://api.ngc.nvidia.com
@@ -403,7 +418,7 @@ helmManaged:
 ## All values below are under the 'selfManaged:' key, e.g. 'selfManaged.nvcaVersion'
 selfManaged:
   ## @param selfManaged.nvcaVersion (REQUIRED) Version of the NVCFBackend to use
-  nvcaVersion: "3.10.0"
+  nvcaVersion: ""
   ## @param selfManaged.featureGateValues (Optional) List of feature gates to enable. Defaults to ["DynamicGPUDiscovery"] if not specified.
   featureGateValues: ["DynamicGPUDiscovery"]
   ## @param selfManaged.gpuManualInstanceConfigB64 (Optional) Base64 encoded GPU manual instance configuration. Leave blank if not required.
@@ -424,20 +439,22 @@ selfManaged:
     enabled: false
     imageRepository: ""
     imageTag: 0.160.0-nv-0.2.5
-  ## @param selfManaged.icmsServiceURL URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.
-  icmsServiceURL: "http://icms.example.invalid:8080"
+  ## @param selfManaged.icmsServiceURL (REQUIRED for self-managed clusters) URL of the ICMS service. Set the endpoint generated during cluster registration.
+  icmsServiceURL: ""
   ## @param selfManaged.icmsServiceHostHeaderOverride Optional Host header override for selfManaged.icmsServiceURL.
   icmsServiceHostHeaderOverride: ""
-  ## @param selfManaged.revalServiceURL URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.
-  revalServiceURL: "http://reval.example.invalid:8080"
+  ## @param selfManaged.revalServiceURL (REQUIRED for self-managed clusters) URL of the ReVal service. Set the endpoint generated during cluster registration.
+  revalServiceURL: ""
   ## @param selfManaged.revalServiceHostHeaderOverride Optional Host header override for selfManaged.revalServiceURL.
   revalServiceHostHeaderOverride: ""
-  ## @param selfManaged.natsURL URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.
-  natsURL: "nats://nats.example.invalid:4222"
+  ## @param selfManaged.natsURL (REQUIRED for self-managed clusters) URL of the NATS service. Set the endpoint generated during cluster registration.
+  natsURL: ""
   ## @param selfManaged.natsHostOverride Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.
   natsHostOverride: ""
+  ## @param selfManaged.eventLedgerServiceURL (Optional) URL of the Event Ledger service that the OTel collector exports to. Defaults to the in-cluster Event Ledger Service when empty.
+  eventLedgerServiceURL: ""
   sharedStorage:
-    imageTag: 1.0.5
+    imageTag: ""
 ## @section Node Selector Configuration
 ## @param nodeSelector.key Node-selector Label key
 ## @param nodeSelector.value Node-selector Label value
@@ -493,10 +510,18 @@ networkPolicy:
     extraEgress: []
 ## @section Cluster Validator Configuration
 
-## @param clusterValidator.enabled Enable the cluster-validator CronJob and init container
+## @param clusterValidator.enabled Enable the cluster-validator: the operator's init container, the CronJob and, under role control-plane, the validator Jobs the operator starts when the validator spec changes
 ## @param clusterValidator.image.repository Cluster Validator container registry path, without tag
 ## @param clusterValidator.image.tag Cluster Validator container image tag
 ## @param clusterValidator.image.pullPolicy K8s ImagePullPolicy for cluster-validator
+## @param clusterValidator.role Check set the CronJob runs: "control-plane" for gateway, storage, overlay and HA checks; "compute-plane" or "" for the compute-plane GPU checks. Use "control-plane" only in a single-cluster topology, where the NVCF control plane runs in this cluster; on a compute-only cluster every run is Not-Ready. Case-insensitive; other values fail schema validation
+## @param clusterValidator.openBaoNamespace Namespace holding OpenBao, when it is not vault-system; without it the Tier-2 quorum check skips its StatefulSet
+## @param clusterValidator.envoyGatewayNamespace Namespace holding Envoy Gateway, when it is not envoy-gateway-system
+## @param clusterValidator.gatewayNames Every NVCF Gateway as "namespace/name" (the stack's ingress.gatewayApi.gateways); replaces discovery from the NVCF routes for the Envoy, LoadBalancer and Tier-1 checks. Only named Gateways can fail Tier-1, and a Gateway left out is not assessed
+## @param clusterValidator.externalComponents Stack quorum components (nats, openbao, cassandra) that run outside this cluster, so Tier-2 does not report them missing after install
+## @param clusterValidator.storageClass StorageClass the stack binds its PVCs to (global.storageClass); when set, it must exist and no default StorageClass is required
+## @param clusterValidator.nodeToNodeProbeImage Image for the node-to-node overlay probe; must provide sh and busybox-style nc and be pullable without imagePullSecrets. When empty, networkChecks.enforcement.testImage if set, else busybox:1.36 from Docker Hub. make render-values-from-stack sets it to busybox:1.36 under the stack's repository on a registry other than NGC (nvcr.io or a subdomain), and leaves it empty on NGC, which has no busybox
+## @param clusterValidator.tolerations Extra tolerations for the validator Job pods. The pods also carry the control-plane tolerations and the operator's tolerations and nodeSelector
 ## @param clusterValidator.schedule CronJob schedule (cron expression)
 ## @param clusterValidator.configMapName ConfigMap name for user-defined network checks (reachability + network policy validation)
 ## @param clusterValidator.resources.limits.cpu CPU limit for the cluster-validator container
@@ -505,7 +530,75 @@ networkPolicy:
 ## @param clusterValidator.resources.requests.memory Memory request for the cluster-validator container
 ## @param clusterValidator.networkChecks [object] Network check configuration (creates the ConfigMap automatically when set)
 clusterValidator:
+  # Changing enabled restarts the operator and, once, the NVCA agent, which
+  # publishes the validator metrics only while the validator is enabled. Where
+  # the agent Deployment uses the Recreate strategy (the GracefulNoGPU feature
+  # flag), that is a full stop and start. While the operator rolls out the
+  # change, its old and new pods can run side by side for a short time and
+  # each set the agent to its own value, so the agent may restart more than
+  # once.
   enabled: false
+  # Which check set the CronJob runs. "control-plane" runs the gateway,
+  # StorageClass, node-to-node overlay and Tier-1/Tier-2 HA checks and skips
+  # the GPU checks. "compute-plane" or "" runs the compute-plane set. The
+  # schema rejects any other value, so a typo cannot fall back silently.
+  # Use "control-plane" only in a single-cluster topology, where the NVCF
+  # control plane runs in the cluster this chart is installed in: on a
+  # compute-only cluster every run is Not-Ready.
+  # The operator's init container always runs the compute-plane set, GPU
+  # checks included, and fails the operator's start only on a critical check
+  # that ran and failed. Under "control-plane" it publishes no summary.
+  # Instead, the operator starts a run from the CronJob whenever the newest
+  # one did not use the current validator spec: at install, and after each
+  # upgrade or rollback that changes the Job spec or networkChecks. A change
+  # to the schedule, the Job spec or networkChecks alone does not restart the
+  # operator, and the install does not wait for the run. The init container
+  # uses enabled, image, configMapName, resources and role, so changing any of
+  # them restarts the operator.
+  role: ""
+  # Set when OpenBao or Envoy Gateway are installed outside their default
+  # namespaces, so the control-plane checks look in the right place.
+  openBaoNamespace: ""
+  envoyGatewayNamespace: ""
+  # Set this for role control-plane: list every NVCF Gateway (the stack's
+  # ingress.gatewayApi.gateways), each as namespace/name.
+  # make render-values-from-stack fills it in from the stack environment.
+  # Unset, the Envoy, LoadBalancer and Tier-1 checks find the NVCF Gateways
+  # from the parentRefs of routes labelled by the NVCF routes chart. Anyone
+  # who can create a route can set that label, so a Gateway found that way
+  # can leave Tier-1 unknown but never fail it. A Gateway left out is not
+  # assessed (one the NVCF routes attach to is reported), and a bare name is
+  # ignored because it could match another team's Gateway. After install,
+  # each listed Gateway must exist with a GatewayClass that exists. The
+  # LoadBalancer check needs an address on each one exposed through a
+  # LoadBalancer, and reports no value when all are exposed by NodePort or
+  # ClusterIP. Tier-1 needs each one Envoy Gateway runs to have a fully Ready
+  # proxy and, after install, the Envoy Gateway controller that runs them to
+  # be fully Ready: the one in envoyGatewayNamespace when set, else one in the
+  # namespace of their proxies. Other Envoy Gateway controllers are not judged.
+  gatewayNames: []
+  # Quorum components the stack runs outside this cluster: any of nats,
+  # openbao and cassandra. After install the Tier-2 check reports a known
+  # quorum component it cannot find, unless it is listed here.
+  # make render-values-from-stack lists each one the stack disables.
+  externalComponents: []
+  # The stack's global.storageClass, when it sets one. The stack passes it to
+  # every PVC, so the StorageClass check requires that class to exist instead
+  # of a default class.
+  storageClass: ""
+  # Set for air-gapped or registry-mirrored clusters. When empty, the probe
+  # uses networkChecks.enforcement.testImage if that is set, and otherwise
+  # pulls busybox:1.36 from Docker Hub, so on a cluster that cannot reach it
+  # the overlay row reports UNKNOWN. The probe runs in a fresh namespace with
+  # no imagePullSecrets, so the image must be pullable anonymously or through
+  # node-level registry credentials. It is pulled only when a node lacks it.
+  nodeToNodeProbeImage: ""
+  # Added to the tolerations the validator Job always carries: the
+  # control-plane ones, and the operator's own tolerations, which go with the
+  # operator's nodeSelector that the Job also uses. Set it for clusters whose
+  # nodes use other taints. A validator that cannot be scheduled never writes
+  # a summary.
+  tolerations: []
   image:
     repository: ""
     tag: "" # defaults to .Chart.AppVersion (same as nvca-operator)
@@ -573,5 +666,5 @@ clusterValidator:
     limits:
       cpu: 200m
       memory: 128Mi
-nameOverride: nvca-operator
-fullnameOverride: nvca-operator
+nameOverride: ""
+fullnameOverride: ""
