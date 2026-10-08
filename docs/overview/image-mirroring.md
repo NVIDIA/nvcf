@@ -127,23 +127,41 @@ helm search repo nvcf/helm-nvcf-vanity-gateway --versions --devel
 
 Other Repository-based Helm Charts (Non-OCI)
 
-The GPU Operator and the Omniverse DDCS, UCC, storage-service, and
+The GPU Operator and the Omniverse OVDC, OVCC, storage-service, and
 discovery-service charts are also available from traditional Helm repositories
-rather than OCI registries. Pull them directly from the public NVIDIA NGC
-Catalog.
+rather than OCI registries. Use the chart versions and repositories selected
+for your release. The public repository below applies to published artifacts;
+for prerelease artifacts, use the repository and credentials supplied with
+that release.
+
+OVDC uses chart `ovderivedcache`; OVCC uses chart `ovcontentcache`. See the
+[OVDC deployment guide](https://docs.omniverse.nvidia.com/ovcaches/ovderivedcache/latest/deploy.html)
+and [OVCC deployment guide](https://docs.omniverse.nvidia.com/ovcaches/ovcontentcache/latest/deploy.html).
+Use an `NGC_API_KEY` with access to the `nvidia/omniverse` chart repository.
+The examples use OVDC chart/image 6.0.1 and OVCC chart 4.0.4 with image
+`usd-content-cache:3.0.2`. Chart and image versions are independent. Retain
+`image.tag: "3.0.2"` in the OVCC Helm values; chart 4.0.4 defaults to image 3.0.1.
+
+Use a scoped, short-lived key. Helm stores repository credentials in
+`~/.config/helm/repositories.yaml` by default, even with `--password-stdin`.
+If `omniverse` was added only for this task, run `helm repo remove omniverse`
+after the final chart pull. Keep an existing entry used by other workflows.
 
 ```bash
 # Add the NVIDIA Helm repository
 helm repo add nvidia https://helm.ngc.nvidia.com/nvidia --force-update
-helm repo add omniverse https://helm.ngc.nvidia.com/nvidia/omniverse --force-update
+printf '%s\n' "${NGC_API_KEY}" |
+  helm repo add omniverse https://helm.ngc.nvidia.com/nvidia/omniverse --force-update \
+    --username '$oauthtoken' --password-stdin
 
 # Update repositories
 helm repo update
 
 # Pull charts (downloads as .tgz files)
+OVDC_CHART_VERSION="${OVDC_CHART_VERSION:-6.0.1}"
 helm pull nvidia/gpu-operator --version 25.3.1
-helm pull omniverse/ddcs --version 5.0.0
-helm pull omniverse/usd-content-cache --version 3.0.3
+helm pull omniverse/ovderivedcache --version "${OVDC_CHART_VERSION}"
+helm pull omniverse/ovcontentcache --version 4.0.4
 helm pull omniverse/storage-service --version 1.0.2
 helm pull omniverse/discovery-service --version 2.3.8
 ```
@@ -151,7 +169,8 @@ helm pull omniverse/discovery-service --version 2.3.8
 <Note>
 Public NVCF charts, the GPU Operator and related components
 (gpu-operator-validator, k8s-device-plugin), plus the Omniverse
-DDCS/UCC/storage charts, are available from public NVIDIA Helm repositories.
+OVDC/OVCC/storage charts, are available from public NVIDIA Helm repositories
+for published versions. Check the selected release's availability before mirroring.
 You can either:
 
 - Pull directly from the public repository at runtime (simplest approach)
@@ -165,23 +184,29 @@ To push repository-based Helm charts to Amazon ECR (which requires OCI format), 
 
 ```bash
 # Pull the chart from the traditional repository
-helm repo add omniverse https://helm.ngc.nvidia.com/nvidia/omniverse --force-update
+# Select the version and repository for your release, as described above.
+OVDC_CHART_VERSION="${OVDC_CHART_VERSION:-6.0.1}"
+printf '%s\n' "${NGC_API_KEY}" |
+  helm repo add omniverse https://helm.ngc.nvidia.com/nvidia/omniverse --force-update \
+    --username '$oauthtoken' --password-stdin
 helm repo update
-helm pull omniverse/ddcs --version 5.0.0
+helm pull omniverse/ovderivedcache --version "${OVDC_CHART_VERSION}"
 
 # Login to ECR
 aws ecr get-login-password --region us-east-1 | \
   helm registry login --username AWS --password-stdin <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com
 
 # Create ECR repository for the chart (include your repository prefix)
-aws ecr create-repository --repository-name nvcf-self-hosted/ddcs --region us-east-1
+aws ecr create-repository --repository-name nvcf-self-hosted/charts/ovderivedcache --region us-east-1
 
 # Push the .tgz file as an OCI artifact (include repository prefix)
-helm push ddcs-5.0.0.tgz oci://<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/nvcf-self-hosted
+helm push "ovderivedcache-${OVDC_CHART_VERSION}.tgz" oci://<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/nvcf-self-hosted/charts
 ```
 
 <Tip>
-ECR will properly track both container images and Helm charts under the same repository name and version, so you can use consistent naming for both. The repository prefix (e.g., `nvcf-self-hosted`) must match your `global.image.repository` environment configuration.
+The example stores the chart in `nvcf-self-hosted/charts/ovderivedcache`,
+separate from the image at `nvcf-self-hosted/ovderivedcache`, so their tags
+cannot collide. Configure the chart and image repositories separately.
 
 </Tip>
 

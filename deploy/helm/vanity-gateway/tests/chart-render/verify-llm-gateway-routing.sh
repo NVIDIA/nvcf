@@ -62,6 +62,7 @@ assert_renders() {
 }
 
 LLM="            functionType: LLM"
+MESSAGES_LLM="          functionType: LLM"
 
 write_values "" chatCompletions "${LLM}"
 assert_rejected "/vanityGateway/config/llmGatewayEndpoint" "an LLM model requires an endpoint"
@@ -115,6 +116,45 @@ write_values "${ENDPOINT}" chatCompletions "${LLM}
               - acme/a-model-next
             shadowPercentage: 50"
 assert_renders "shadow traffic renders on an LLM model"
+
+write_messages_values() {
+  local endpoint="$1" extra="$2"
+  cat > "${VALUES}" <<EOF
+vanityGateway:
+  image:
+    registry: example.com
+    repository: foo/bar
+  config:
+    llmGatewayEndpoint: "${endpoint}"
+  mappingConfig:
+    v2config:
+      openai:
+        host: api.example.com
+      anthropicMessages:
+        a_model:
+          modelName: acme/a-model
+          functionID: 00000000-0000-0000-0000-000000000001
+${extra}
+EOF
+}
+
+write_messages_values "" "${MESSAGES_LLM}"
+assert_rejected "/vanityGateway/config/llmGatewayEndpoint" "an LLM Messages model requires an endpoint"
+
+write_messages_values "${ENDPOINT}" "${MESSAGES_LLM}"
+assert_renders "an LLM Messages model with an endpoint renders"
+
+write_messages_values "" ""
+assert_renders "a Messages model without functionType renders with an empty endpoint"
+
+write_messages_values "${ENDPOINT}" "${MESSAGES_LLM}
+          customHeaders:
+            X-Priority: \"5\""
+assert_rejected "anthropicMessages/a_model/customHeaders" "an X-Priority custom header is rejected on an LLM Messages model"
+
+write_messages_values "${ENDPOINT}" "${MESSAGES_LLM}
+          sessionTimeout: 900"
+assert_rejected "anthropicMessages/a_model/sessionTimeout" "sessionTimeout is rejected on an LLM Messages model"
 
 # The proxy preserves the caller path and the transport only speaks http(s).
 for bad in "ftp://llm-gateway:8080" "http://llm-gateway:8080/v1"; do

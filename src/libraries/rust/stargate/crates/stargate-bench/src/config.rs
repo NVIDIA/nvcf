@@ -337,16 +337,10 @@ fn validate_profile(profile: &BackendProfile) -> anyhow::Result<()> {
         profile.service_time_ms.decode_tokens_per_s > 0,
         "backend decode_tokens_per_s must be > 0"
     );
-    if let Some(prefill_tokens_per_s) = profile.service_time_ms.prefill_tokens_per_s {
-        ensure!(
-            prefill_tokens_per_s > 0.0 && prefill_tokens_per_s.is_finite(),
-            "backend prefill_tokens_per_s must be finite and > 0 when set"
-        );
-    }
     ensure!(
-        profile.registration.last_mean_input_tps > 0.0
-            && profile.registration.last_mean_input_tps.is_finite(),
-        "backend registration.last_mean_input_tps must be finite and > 0"
+        profile.service_time_ms.prefill_tokens_per_s > 0.0
+            && profile.service_time_ms.prefill_tokens_per_s.is_finite(),
+        "backend prefill_tokens_per_s must be finite and > 0"
     );
     Ok(())
 }
@@ -387,7 +381,6 @@ config_struct!(BackendProfile {
     #[serde(default)]
     pub kv_cache_capacity_tokens: u64,
     pub service_time_ms: ServiceTimeConfig,
-    pub registration: RegistrationConfig,
 });
 
 fn default_backend_name() -> String {
@@ -405,11 +398,7 @@ config_struct!(ServiceTimeConfig {
     pub decode_tokens_per_s: u64,
     #[serde(default)]
     pub decode_jitter_ms: u64,
-    pub prefill_tokens_per_s: Option<f64>,
-});
-
-config_struct!(RegistrationConfig {
-    pub last_mean_input_tps: f64,
+    pub prefill_tokens_per_s: f64,
 });
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -569,10 +558,7 @@ mod tests {
                 ttft_jitter_ms: 0,
                 decode_tokens_per_s: 100,
                 decode_jitter_ms: 0,
-                prefill_tokens_per_s: None,
-            },
-            registration: RegistrationConfig {
-                last_mean_input_tps: 100.0,
+                prefill_tokens_per_s: 100.0,
             },
         }
     }
@@ -683,7 +669,7 @@ mod tests {
         ] {
             remove_yaml_field(&mut yaml["backends"]["profile"], key);
         }
-        for key in ["ttft_jitter_ms", "decode_jitter_ms", "prefill_tokens_per_s"] {
+        for key in ["ttft_jitter_ms", "decode_jitter_ms"] {
             remove_yaml_field(&mut yaml["backends"]["profile"]["service_time_ms"], key);
         }
 
@@ -704,10 +690,6 @@ mod tests {
         assert_eq!(config.backends.profile.kv_cache_capacity_tokens, 0);
         assert_eq!(config.backends.profile.service_time_ms.ttft_jitter_ms, 0);
         assert_eq!(config.backends.profile.service_time_ms.decode_jitter_ms, 0);
-        assert_eq!(
-            config.backends.profile.service_time_ms.prefill_tokens_per_s,
-            None
-        );
     }
 
     #[test]
@@ -865,13 +847,10 @@ action: pause_backend
     }
 
     #[test]
-    fn rejects_invalid_registered_input_throughput() {
+    fn rejects_invalid_prefill_throughput() {
         let mut profile = profile("invalid-throughput");
-        profile.registration.last_mean_input_tps = 0.0;
-        assert_validation_error(
-            validate_profile(&profile),
-            "registration.last_mean_input_tps",
-        );
+        profile.service_time_ms.prefill_tokens_per_s = 0.0;
+        assert_validation_error(validate_profile(&profile), "prefill_tokens_per_s");
     }
 
     #[test]
