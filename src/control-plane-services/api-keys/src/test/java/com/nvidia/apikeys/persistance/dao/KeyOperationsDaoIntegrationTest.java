@@ -18,7 +18,6 @@
 package com.nvidia.apikeys.persistance.dao;
 
 import static com.nvidia.apikeys.TestData.TEST_TIME;
-import static com.nvidia.apikeys.utils.TestUtils.assertThrowsExceptionWithDetails;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -29,7 +28,6 @@ import com.nvidia.apikeys.config.exceptions.CassandraException;
 import com.nvidia.apikeys.persistance.models.KeyOperationModel;
 import com.nvidia.apikeys.utils.TestClock;
 import com.nvidia.apikeys.vo.KeyOperationStatus;
-import com.nvidia.boot.exceptions.NotFoundException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -95,14 +93,17 @@ class KeyOperationsDaoIntegrationTest {
 
         Instant later = TEST_TIME.plus(Duration.ofMinutes(5));
         TestClock.setBaseClock(TestClock.fixed(later, ZoneId.systemDefault()));
-        dao.update(created.toBuilder()
-                           .operationStatus(KeyOperationStatus.RUNNING)
-                           .matchedCount(10L)
-                           .completedCount(4L)
-                           .failedCount(1L)
-                           .selectionState("keys_by_owner_and_account_and_service")
-                           .pagingState("opaque-paging-state")
-                           .build());
+        assertThat(dao.update(created.toBuilder()
+                                      .operationStatus(KeyOperationStatus.RUNNING)
+                                      .matchedCount(10L)
+                                      .completedCount(4L)
+                                      .failedCount(1L)
+                                      .selectionState("keys_by_owner_and_account_and_service")
+                                      .pagingState("opaque-paging-state")
+                                      .build()))
+                .get()
+                .extracting(KeyOperationModel::getUpdatedAt)
+                .isEqualTo(later);
 
         assertThat(dao.get(created.getOperationId()))
                 .get()
@@ -164,7 +165,8 @@ class KeyOperationsDaoIntegrationTest {
         KeyOperationModel running = dao.update(dao.create(operation().build()).toBuilder()
                                                        .operationStatus(KeyOperationStatus.RUNNING)
                                                        .pagingState("opaque-paging-state")
-                                                       .build());
+                                                       .build())
+                .orElseThrow();
 
         dao.update(running.toBuilder()
                            .operationStatus(KeyOperationStatus.COMPLETED)
@@ -214,9 +216,7 @@ class KeyOperationsDaoIntegrationTest {
                 .operationStatus(KeyOperationStatus.RUNNING)
                 .build();
 
-        assertThrowsExceptionWithDetails(
-                NotFoundException.class, () -> dao.update(unknown),
-                "Key operation not found: " + operationId);
+        assertThat(dao.update(unknown)).isEmpty();
         assertThat(dao.get(operationId)).isEmpty();
     }
 

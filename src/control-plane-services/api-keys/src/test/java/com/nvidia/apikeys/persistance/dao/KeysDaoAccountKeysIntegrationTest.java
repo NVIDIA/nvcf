@@ -20,7 +20,6 @@ package com.nvidia.apikeys.persistance.dao;
 import static com.nvidia.apikeys.TestData.TEST_TIME;
 import static com.nvidia.apikeys.config.IntegrationTestConfiguration.KEY_SPACE;
 import static com.nvidia.apikeys.vo.KeyOwnerType.USER;
-import static com.nvidia.apikeys.utils.TestUtils.assertThrowsExceptionWithDetails;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -35,7 +34,6 @@ import com.nvidia.apikeys.vo.KeyOwnerStatus;
 import com.nvidia.apikeys.vo.KeyOwnerVo;
 import com.nvidia.apikeys.vo.KeyStatus;
 import com.nvidia.apikeys.vo.KeyVo;
-import com.nvidia.boot.exceptions.BadRequestException;
 import java.time.Duration;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -265,12 +263,12 @@ class KeysDaoAccountKeysIntegrationTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"not-hex", "0xzz", "0xdeadbeef"})
-    void invalidCursorIsBadRequest(String cursor) {
+    void invalidCursorIsRejected(String cursor) {
         dao.saveAccountKey(key(NCA_1, OWNER_1, SERVICE_A, "key-1"));
 
-        assertThrowsExceptionWithDetails(
-                BadRequestException.class, () -> dao.listKeysByAccount(NCA_1, 10, cursor),
-                "Invalid cursor: '" + cursor + "'");
+        assertThatThrownBy(() -> dao.listKeysByAccount(NCA_1, 10, cursor))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Invalid cursor: '" + cursor + "'");
     }
 
     @Test

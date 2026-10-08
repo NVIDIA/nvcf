@@ -36,7 +36,6 @@ import com.nvidia.apikeys.vo.KeyOwnerType;
 import com.nvidia.apikeys.vo.KeyOwnerVo;
 import com.nvidia.apikeys.vo.KeyVo;
 import com.nvidia.apikeys.vo.SavedKeyVo;
-import com.nvidia.boot.exceptions.BadRequestException;
 import com.nvidia.boot.exceptions.UnprocessableEntityException;
 import java.time.Clock;
 import java.util.List;
@@ -45,7 +44,6 @@ import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Stream;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.cassandra.core.CassandraBatchOperations;
 import org.springframework.data.cassandra.core.CassandraTemplate;
 import org.springframework.data.cassandra.core.WriteResult;
@@ -62,7 +60,6 @@ import org.springframework.stereotype.Service;
  * <p>Legacy keys are indexed per user in keys_by_owner_and_service. Keys issued for a specific
  * account are indexed in keys_by_owner_and_account_and_service and use the account key methods.
  */
-@Slf4j
 @Service
 @RequiredArgsConstructor
 public class KeysDao {
@@ -278,7 +275,7 @@ public class KeysDao {
             Function<Pageable, Slice<KeysByOwnerAndAccountAndServiceModel>> query,
             int limit, String cursor) {
         if (limit < 1) {
-            throw new BadRequestException(MESG_INVALID_LIMIT.formatted(limit));
+            throw new IllegalArgumentException(MESG_INVALID_LIMIT.formatted(limit));
         }
         Slice<KeysByOwnerAndAccountAndServiceModel> pagedResult;
         try {
@@ -289,9 +286,7 @@ public class KeysDao {
             if (cursor == null) {
                 throw e;
             }
-            var mesg = MESG_INVALID_CURSOR.formatted(cursor);
-            log.error(mesg);
-            throw new BadRequestException(mesg, e);
+            throw new IllegalArgumentException(MESG_INVALID_CURSOR.formatted(cursor), e);
         }
 
         var keys = pagedResult.getContent().stream()

@@ -21,7 +21,6 @@ import com.nvidia.apikeys.config.exceptions.CassandraException;
 import com.nvidia.apikeys.persistance.models.KeyOperationModel;
 import com.nvidia.apikeys.persistance.repositories.KeyOperationRepository;
 import com.nvidia.apikeys.vo.KeyOperationStatus;
-import com.nvidia.boot.exceptions.NotFoundException;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
@@ -76,16 +75,17 @@ public class KeyOperationsDao {
 
     /**
      * Writes progress for an existing operation and refreshes updated_at. Never creates a row.
+     * Returns empty when the operation does not exist.
      */
-    public KeyOperationModel update(KeyOperationModel operation) {
+    public Optional<KeyOperationModel> update(KeyOperationModel operation) {
         KeyOperationModel model = operation.toBuilder()
                 .updatedAt(clock.instant())
                 .build();
 
         if (!cassandraTemplate.update(model, IF_EXISTS).wasApplied()) {
-            throw new NotFoundException("Key operation not found: " + model.getOperationId());
+            return Optional.empty();
         }
-        return model;
+        return Optional.of(model);
     }
 
     private static Long zeroIfNull(Long value) {

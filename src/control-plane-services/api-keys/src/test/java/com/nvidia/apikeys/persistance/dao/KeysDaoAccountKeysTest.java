@@ -37,7 +37,6 @@ import com.nvidia.apikeys.persistance.repositories.KeysByOwnerAndAccountAndServi
 import com.nvidia.apikeys.persistance.repositories.KeyRepository;
 import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
 import com.nvidia.apikeys.vo.KeyVo;
-import com.nvidia.boot.exceptions.BadRequestException;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -190,27 +189,28 @@ class KeysDaoAccountKeysTest {
     }
 
     @Test
-    void queryFailureWithCursorIsReportedAsBadCursor() {
+    void queryFailureWithCursorIsReportedAsInvalidCursor() {
         when(repository.findByNcaIdAndIssuerServiceId(eq("nca-1"), eq("service-a"),
                                                       any(Pageable.class)))
                 .thenThrow(new IllegalStateException("bad paging state"));
 
-        assertThrowsExceptionWithDetails(
-                BadRequestException.class,
-                () -> dao.listKeysByAccountAndService("nca-1", "service-a", 10, "0x00"),
-                "Invalid cursor: '0x00'");
+        assertThatThrownBy(
+                () -> dao.listKeysByAccountAndService("nca-1", "service-a", 10, "0x00"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Invalid cursor: '0x00'")
+                .hasCauseInstanceOf(IllegalStateException.class);
     }
 
     @ParameterizedTest
     @ValueSource(ints = {0, -1})
-    void limitBelowOneIsBadRequestEvenWithCursor(int limit) {
-        assertThrowsExceptionWithDetails(
-                BadRequestException.class, () -> dao.listKeysByAccount("nca-1", limit, null),
-                "Invalid limit: '" + limit + "'");
-        assertThrowsExceptionWithDetails(
-                BadRequestException.class,
-                () -> dao.listKeysByAccountAndService("nca-1", "service-a", limit, "0x00"),
-                "Invalid limit: '" + limit + "'");
+    void limitBelowOneIsRejectedEvenWithCursor(int limit) {
+        assertThatThrownBy(() -> dao.listKeysByAccount("nca-1", limit, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Invalid limit: '" + limit + "'");
+        assertThatThrownBy(
+                () -> dao.listKeysByAccountAndService("nca-1", "service-a", limit, "0x00"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Invalid limit: '" + limit + "'");
         verifyNoInteractions(repository);
     }
 }
