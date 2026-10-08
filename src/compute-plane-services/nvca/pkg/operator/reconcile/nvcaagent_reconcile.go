@@ -1051,7 +1051,7 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 func (bc *BackendK8sCache) mirrorConfigMap(ctx context.Context, nb *nvidiaiov1.NVCFBackend, srcName string) error {
 	log := core.GetLogger(ctx)
 
-	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get(ctx, srcName, metav1.GetOptions{})
+	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(bc.chartNamespace()).Get(ctx, srcName, metav1.GetOptions{})
 	if err != nil {
 		log.Errorf("failed to get source configmap %v", srcName)
 		return err
@@ -1076,12 +1076,12 @@ func (bc *BackendK8sCache) mirrorConfigMap(ctx context.Context, nb *nvidiaiov1.N
 // ships the ConfigMap has converged.
 func (bc *BackendK8sCache) setupStorageCapabilityCatalogConfigMap(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
 	log := core.GetLogger(ctx)
-	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get(
+	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(bc.chartNamespace()).Get(
 		ctx, nvcastorage.StorageCapabilityConfigMapName, metav1.GetOptions{})
 	if err != nil {
 		if k8serr.IsNotFound(err) {
 			log.Warnf("%v/%v configmap not found, not mirroring the storage capability catalog into %v",
-				NVCAOperatorNamespace, nvcastorage.StorageCapabilityConfigMapName, getSystemNamespace(nb))
+				bc.chartNamespace(), nvcastorage.StorageCapabilityConfigMapName, getSystemNamespace(nb))
 			return nil
 		}
 		return err
@@ -1104,7 +1104,7 @@ func (bc *BackendK8sCache) setupStorageCapabilityCatalogConfigMap(ctx context.Co
 func (bc *BackendK8sCache) setupGPUProfilingConfigMap(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
 	log := core.GetLogger(ctx)
 
-	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get(ctx, nvcfGPUProfilingConfigMapName, metav1.GetOptions{})
+	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(bc.chartNamespace()).Get(ctx, nvcfGPUProfilingConfigMapName, metav1.GetOptions{})
 	if err != nil {
 		if k8serr.IsNotFound(err) {
 			log.Debugf("%v configmap not found, skipping GPU profiling config mirror", nvcfGPUProfilingConfigMapName)
@@ -1981,11 +1981,7 @@ func (bc *BackendK8sCache) getEffectiveAgentConfig(ctx context.Context, nb *nvid
 
 	var configMapGetter func(ctx context.Context, name string, opts metav1.GetOptions) (*corev1.ConfigMap, error)
 	if bc.clients != nil && bc.clients.K8s != nil {
-		namespace := bc.operatorNamespace
-		if namespace == "" {
-			namespace = NVCAOperatorNamespace
-		}
-		configMapGetter = bc.clients.K8s.CoreV1().ConfigMaps(namespace).Get
+		configMapGetter = bc.clients.K8s.CoreV1().ConfigMaps(bc.chartNamespace()).Get
 	}
 
 	chartDefaults, found, err := bc.getChartDefaultAgentConfig(ctx, configMapGetter)

@@ -75,6 +75,30 @@ func TestSetupStorageCapabilityCatalogConfigMap(t *testing.T) {
 		assert.Equal(t, src.Data, mirrored.Data, "an edit to the chart ConfigMap must reach the agent copy")
 	})
 
+	t.Run("source is read from the configured operator namespace", func(t *testing.T) {
+		ctx := newTestContext()
+		clients := mockKubeClientsForIntegrationTests()
+		const chartNS = "some-other-ns"
+		bc := &BackendK8sCache{clients: clients, operatorNamespace: chartNS}
+
+		src := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      nvcastorage.StorageCapabilityConfigMapName,
+				Namespace: chartNS,
+			},
+			Data: map[string]string{nvcastorage.StorageCapabilityConfigMapKey: "apiVersion: storage.nvcf.nvidia.com/v1alpha1"},
+		}
+		_, err := clients.K8s.CoreV1().ConfigMaps(chartNS).Create(ctx, src, metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		require.NoError(t, bc.setupStorageCapabilityCatalogConfigMap(ctx, nb))
+
+		mirrored, err := clients.K8s.CoreV1().ConfigMaps(agentNamespace).Get(
+			ctx, nvcastorage.StorageCapabilityConfigMapName, metav1.GetOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, src.Data, mirrored.Data)
+	})
+
 	t.Run("absent source is skipped and an existing agent copy is kept", func(t *testing.T) {
 		ctx := newTestContext()
 		clients := mockKubeClientsForIntegrationTests()
