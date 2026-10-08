@@ -298,3 +298,33 @@ func TestGPUSharePatches_FabricAnnotation(t *testing.T) {
 		t.Errorf("the pod's own %s was overridden: %+v", gpushareFabricEnv, e)
 	}
 }
+
+// Debug variables land on the GPU containers of the matching pods only,
+// next to the gpushare library, and never override the pod's own values.
+func TestDebugEnv(t *testing.T) {
+	m := &Mutator{GPUShareByDefault: true, DebugEnv: []DebugEnv{{
+		Label: "function-id", Values: []string{"fn-a"},
+		Env: map[string]string{"NVSNAP_GPUSHARE_DEBUG": "1", "NCCL_DEBUG": "INFO"},
+	}}}
+	pod := gpushareTestPod(false, []corev1.EnvVar{{Name: "NCCL_DEBUG", Value: "WARN"}})
+	pod.Labels = map[string]string{"function-id": "fn-a"}
+	got := applyPatches(t, pod, mergePatchPlan(append(m.gpusharePatches(context.Background(), pod), m.debugEnvPatches(pod)...)))
+	engine := got.Spec.Containers[1]
+	if e := envOf(engine, "NVSNAP_GPUSHARE_DEBUG"); e == nil || e.Value != "1" {
+		t.Error("debug variable not set")
+	}
+	if e := envOf(engine, "NCCL_DEBUG"); e == nil || e.Value != "WARN" {
+		t.Error("the pod's own value was overridden")
+	}
+	if envOf(engine, "LD_PRELOAD") == nil {
+		t.Error("gpushare library lost next to the debug variables")
+	}
+	if envOf(got.Spec.Containers[0], "NVSNAP_GPUSHARE_DEBUG") != nil {
+		t.Error("debug variable set on a container without GPUs")
+	}
+	other := gpushareTestPod(false, nil)
+	other.Labels = map[string]string{"function-id": "fn-b"}
+	if p := m.debugEnvPatches(other); p != nil {
+		t.Error("non-matching pod patched")
+	}
+}

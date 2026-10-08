@@ -19,8 +19,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
@@ -201,6 +203,12 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		MountPrepInitImage:  cfg.MountPrepInitImage,
 		AgentHostPort:       cfg.AgentHostPort,
 		AgentBaseURL:        cfg.AgentBaseURL,
+	}
+	if raw := os.Getenv("NVSNAP_WEBHOOK_DEBUG_ENV"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &mut.DebugEnv); err != nil {
+			a.log.WithError(err).Warn("webhook: NVSNAP_WEBHOOK_DEBUG_ENV is not a valid debug env list; ignoring it")
+			mut.DebugEnv = nil
+		}
 	}
 	if a.kubeClient != nil {
 		// A checkpoint that failed to restore starts its next pods fresh.

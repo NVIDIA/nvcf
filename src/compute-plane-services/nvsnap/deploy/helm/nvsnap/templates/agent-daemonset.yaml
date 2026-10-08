@@ -266,6 +266,10 @@ spec:
             {{- end }}
             - name: NVSNAP_DEFAULT_CAPTURE_PATH
               value: {{ $method | quote }}
+            {{- with .Values.webhook.debugEnv }}
+            - name: NVSNAP_WEBHOOK_DEBUG_ENV
+              value: {{ toJson . | quote }}
+            {{- end }}
             {{- with .Values.agent.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

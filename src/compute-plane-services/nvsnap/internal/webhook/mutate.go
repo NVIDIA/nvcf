@@ -380,6 +380,9 @@ type Mutator struct {
 	// configuration key (criu_group.go). Nil: multi-pod instances are not
 	// restored with CRIU.
 	CRIUGroups func(ctx context.Context, key string) (CRIUGroup, bool)
+	// DebugEnv sets debug variables on the GPU containers of matching
+	// pods (debug_env.go).
+	DebugEnv []DebugEnv
 
 	// EnsureLocal makes the capture's bytes available to the local
 	// Backend BEFORE Backend.Mount is called. Without this, a webhook
@@ -510,6 +513,7 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	// gpushare placement is independent of every other decision below and
 	// rides along with whichever patches they return.
 	injectPatches = append(injectPatches, m.gpusharePatches(ctx, pod)...)
+	injectPatches = append(injectPatches, m.debugEnvPatches(pod)...)
 
 	raw, ok := pod.Annotations[RestoreFromAnnotation]
 	if !ok || raw == "" {
@@ -547,8 +551,9 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 			m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).
 				WithField("patches", len(injectPatches)).
 				Info("inject only")
+			return mergePatchPlan(injectPatches), nil
 		}
-		return injectPatches, nil
+		return nil, nil
 	}
 
 	span.SetAttributes(attribute.Bool("nvsnap.restore", true))
