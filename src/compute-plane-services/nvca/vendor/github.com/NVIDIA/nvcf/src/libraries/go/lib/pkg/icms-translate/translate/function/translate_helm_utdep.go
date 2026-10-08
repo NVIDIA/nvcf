@@ -288,10 +288,11 @@ func translateHelmChartUtilsDeploy(t CreationQueueMessage, tcfg TranslateConfig)
 		Image:           initContainerImage,
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Env:             common.SortEnvs(initEnvs),
-		SecurityContext: common.NewInfraContainerSecurityContext(),
+		SecurityContext: common.NewWorkerInitContainerSecurityContext(),
 		VolumeMounts:    initContainerVolumeMounts,
 	}
 	utilsPod.Spec.InitContainers = append(utilsPod.Spec.InitContainers, initContainer)
+	common.EnsureWorkerInitFSGroup(&utilsPod.Spec)
 
 	// The ESS init container needs to be added after the init container,
 	// since the init container creates config.hcl.

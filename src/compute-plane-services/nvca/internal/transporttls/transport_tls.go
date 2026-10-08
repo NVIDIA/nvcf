@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/trustbundle"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
@@ -255,6 +256,7 @@ func upsertInstallContainer(
 	resources corev1.ResourceRequirements,
 	cfg nvcaconfig.TransportTLSConfig,
 ) {
+	common.EnsureWorkerInitFSGroup(podSpec)
 	upsertContainer(&podSpec.InitContainers, corev1.Container{
 		Name:            InstallContainerName,
 		Image:           image,
@@ -271,10 +273,7 @@ func upsertInstallContainer(
 			{Name: TrustBundleVolumeName, MountPath: TrustBundleMountPath, ReadOnly: true},
 			{Name: MergedCertsVolumeName, MountPath: MergedCertsMountPath},
 		},
-		SecurityContext: &corev1.SecurityContext{
-			RunAsUser:    ptr.To[int64](0),
-			RunAsNonRoot: ptr.To(false),
-		},
+		SecurityContext: common.NewWorkerInitContainerSecurityContext(),
 	})
 }
 
