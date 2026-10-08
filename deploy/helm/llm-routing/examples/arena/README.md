@@ -6,7 +6,7 @@ Two coding agents play Connect Four against each other through a referee CLI, an
 
 ## Requirements
 
-- A model with at least two slots of 16,384 tokens or more. The GB300 defaults (two 65,536-token slots) work; see [Server tuning](../../README.md#server-tuning).
+- A model with at least two slots of 32,768 tokens. A full game takes Codex to about 27,000 tokens. The game was tested with the GB300 defaults of two 65,536-token slots; see [Server tuning](../../README.md#server-tuning). With smaller slots, set `model_context_window` and `model_auto_compact_token_limit` in the Codex profile to match.
 - Pi and Codex set up as in [Connect a coding agent](../../README.md#connect-a-coding-agent), with the gateway port-forward running and `WORK` and `GLM_API_KEY` set in each agent terminal.
 - Python 3 on the machine running the agents.
 
@@ -31,7 +31,7 @@ Pi plays X:
 ```bash
 cd ~/connect-four
 export ARENA_PLAYER=x
-NODE_EXTRA_CA_CERTS="$WORK/ca.crt" pi --no-skills "$(python3 arena.py prompt)"
+P="$(python3 arena.py prompt)" && NODE_EXTRA_CA_CERTS="$WORK/ca.crt" pi --no-skills "$P"
 ```
 
 Codex plays O. Approvals are off so it does not stop mid-game:
@@ -39,16 +39,25 @@ Codex plays O. Approvals are off so it does not stop mid-game:
 ```bash
 cd ~/connect-four
 export ARENA_PLAYER=o
-CODEX_CA_CERTIFICATE="$WORK/ca.crt" codex --profile glm --sandbox workspace-write --ask-for-approval never "$(python3 arena.py prompt)"
+P="$(python3 arena.py prompt)" && CODEX_CA_CERTIFICATE="$WORK/ca.crt" codex --profile glm --sandbox workspace-write --ask-for-approval never "$P"
 ```
 
 The audience sees the board, whose turn it is, each player's average seconds per move, illegal attempts and the last eight messages. A game takes up to 42 moves, about 5 to 10 minutes on GB300.
 
-To run without the agents' terminal interfaces, close stdin as the coding agent section describes:
+Each launch stops if `prompt` fails, for example when `ARENA_PLAYER` is not set or the terminal is not in the game directory.
+
+To run without the agents' terminal interfaces, use the same two terminals and close stdin, as the coding agent section describes. Each command runs until the game ends.
 
 ```bash
-ARENA_PLAYER=x NODE_EXTRA_CA_CERTS="$WORK/ca.crt" pi --no-skills -p "$(ARENA_PLAYER=x python3 arena.py prompt)" < /dev/null
-ARENA_PLAYER=o CODEX_CA_CERTIFICATE="$WORK/ca.crt" codex exec --profile glm --skip-git-repo-check --sandbox workspace-write "$(ARENA_PLAYER=o python3 arena.py prompt)" < /dev/null
+cd ~/connect-four
+export ARENA_PLAYER=x
+P="$(python3 arena.py prompt)" && NODE_EXTRA_CA_CERTS="$WORK/ca.crt" pi --no-skills -p "$P" < /dev/null
+```
+
+```bash
+cd ~/connect-four
+export ARENA_PLAYER=o
+P="$(python3 arena.py prompt)" && CODEX_CA_CERTIFICATE="$WORK/ca.crt" codex exec --profile glm --skip-git-repo-check --sandbox workspace-write "$P" < /dev/null
 ```
 
 ## Commands

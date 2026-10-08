@@ -92,6 +92,9 @@ class RulesTests(unittest.TestCase):
         self.assertEqual(arena.post_message(state, 'x', 'a' * 201, 1000.0), 'Messages are limited to 200 characters.')
         self.assertIsNone(arena.post_message(state, 'x', 'line one\nline two', 1000.0))
         self.assertEqual(state['chat'][-1]['text'], 'line one line two')
+        play(state, [4, 4])
+        self.assertIsNone(arena.post_message(state, 'x', 'clear\x1b[2J me\x08 now', 1001.0))
+        self.assertEqual(state['chat'][-1]['text'], 'clear[2J me now')
         play(state, [1, 2, 1, 2, 1, 2, 1])
         self.assertEqual(arena.post_message(state, 'o', 'gg', 2000.0), 'The game is over.')
 
@@ -136,6 +139,17 @@ class GameFileTests(unittest.TestCase):
         (self.dir/'arena.json').write_text('[]')
         with self.assertRaisesRegex(arena.ArenaError, 'not an arena game'):
             arena.load(self.dir)
+        damaged = [{'version': 1},
+                   dict(arena.new_state(NAMES, 'x', 1000.0), moves=[{'player': 'x', 'column': 9, 'time': 1.0}]),
+                   dict(arena.new_state(NAMES, 'x', 1000.0), moves=[{'player': 'z', 'column': 1, 'time': 1.0}]),
+                   dict(arena.new_state(NAMES, 'x', 1000.0), moves=[{'player': 'x', 'column': 1, 'time': 1.0}] * 7),
+                   dict(arena.new_state(NAMES, 'x', 1000.0), chat=[{'player': 'x'}]),
+                   dict(arena.new_state(NAMES, 'x', 1000.0), result='y')]
+        for state in damaged:
+            with self.subTest(state=state):
+                (self.dir/'arena.json').write_text(json.dumps(state))
+                with self.assertRaisesRegex(arena.ArenaError, 'not an arena game'):
+                    arena.load(self.dir)
 
 
 class CommandTests(unittest.TestCase):
@@ -301,12 +315,18 @@ class SpectatorTests(unittest.TestCase):
         text = arena.spectator(state, color=False)
         self.assertIn('Connect Four: X (pi) vs O (codex)', text)
         self.assertIn('Move 4. O (codex) to move.', text)
-        self.assertIn('Seconds per move: pi 1.5, codex 1.0', text)
+        self.assertIn('Seconds per move: pi 1.0, codex 1.0', text)
         self.assertIn('Illegal attempts: pi 0, codex 2', text)
         self.assertNotIn('  codex: msg 1\n', text)
         self.assertIn('  codex: msg 2\n', text)
         self.assertTrue(text.endswith('  codex: msg 9'))
         self.assertNotIn('\033', text)
+
+    def test_the_first_move_of_the_game_is_not_timed(self):
+        state = play(arena.new_state(NAMES, 'x', 1000.0), [4], start=1120.0)
+        play(state, [4], start=1125.0)
+        play(state, [3], start=1130.0)
+        self.assertIn('Seconds per move: pi 5.0, codex 5.0', arena.spectator(state, color=False))
 
     def test_winning_cells_are_marked(self):
         state = play(arena.new_state(NAMES, 'x', 1000.0), [1, 2, 1, 2, 1, 2, 1])
@@ -328,6 +348,16 @@ class SpectatorTests(unittest.TestCase):
             self.assertEqual(arena.main(['watch', '--no-color'], directory=directory, env={}, out=out, sleep=finish), 0)
             self.assertIn('Move 7. X (pi) to move.', out.getvalue())
             self.assertIn('Game over. X (pi) wins.', out.getvalue())
+
+    def test_ctrl_c_stops_watch_without_a_traceback(self):
+        with tempfile.TemporaryDirectory(prefix='arena-') as tmp:
+            directory = pathlib.Path(tmp)
+            arena.save(directory, arena.new_state(NAMES, 'x', 1000.0))
+
+            def interrupt(seconds):
+                raise KeyboardInterrupt
+
+            self.assertEqual(arena.main(['watch', '--no-color'], directory=directory, env={}, out=io.StringIO(), sleep=interrupt), 130)
 
 
 if __name__ == '__main__':

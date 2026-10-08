@@ -95,7 +95,8 @@ def apply_move(state, player, column, now):
 
 def post_message(state, player, text, now):
     """Add a chat message, or return why it is not allowed."""
-    text = ' '.join(str(text).split())
+    # Control characters could clear or rewrite the other player's and the audience's terminals.
+    text = ' '.join(''.join(ch for ch in str(text) if ch.isprintable() or ch.isspace()).split())
     if state['result']:
         return 'The game is over.'
     if not text:
@@ -109,6 +110,24 @@ def post_message(state, player, text, now):
     return None
 
 
+def well_formed(state):
+    """True when the game file has the shape this referee writes, so later code cannot fail on it."""
+    try:
+        heights = [0] * COLUMNS
+        for move in state['moves']:
+            if move['player'] not in PLAYERS or not 1 <= move['column'] <= COLUMNS or not isinstance(move['time'], (int, float)):
+                return False
+            heights[move['column'] - 1] += 1
+        return (state['version'] == 1 and all(isinstance(state['names'][p], str) for p in PLAYERS)
+                and state['first'] in PLAYERS and max(heights) <= ROWS and state['result'] in (None, 'x', 'o', 'draw')
+                and all(m['player'] in PLAYERS and isinstance(m['text'], str) and isinstance(m['afterOpponentMoves'], int)
+                        for m in state['chat'])
+                and all(isinstance(state[key][p], int) for key in ('seen', 'illegal') for p in PLAYERS)
+                and isinstance(state['winCells'], list) and isinstance(state['started'], (int, float)))
+    except (KeyError, TypeError):
+        return False
+
+
 def load(directory):
     path = pathlib.Path(directory) / STATE
     if not path.exists():
@@ -117,7 +136,7 @@ def load(directory):
         state = json.loads(path.read_text())
     except ValueError:
         raise ArenaError(STATE + ' is not valid JSON. Start a new game with: python3 arena.py new DIR --force') from None
-    if not isinstance(state, dict) or state.get('version') != 1:
+    if not isinstance(state, dict) or not well_formed(state):
         raise ArenaError(STATE + ' is not an arena game. Start a new game with: python3 arena.py new DIR --force')
     return state
 
@@ -278,9 +297,11 @@ def spectator(state, color=True):
     if state['moves']:
         last = state['moves'][-1]
         lines.append('Last move: ' + last['player'].upper() + ' in column ' + str(last['column']) + '.')
-    seconds, previous = {'x': [], 'o': []}, state['started']
+    # Time each move from the opponent's move; the game's first move has none.
+    seconds, previous = {'x': [], 'o': []}, None
     for move in state['moves']:
-        seconds[move['player']].append(move['time'] - previous)
+        if previous is not None:
+            seconds[move['player']].append(move['time'] - previous)
         previous = move['time']
     lines.append('Seconds per move: ' + ', '.join(
         names[p] + ' ' + (format(sum(seconds[p]) / len(seconds[p]), '.1f') if seconds[p] else '-') for p in PLAYERS))
@@ -366,6 +387,8 @@ def main(argv=None, directory=None, env=None, out=None, now=time.time, clock=tim
     except ArenaError as error:
         print('error: ' + str(error), file=out)
         return 1
+    except KeyboardInterrupt:
+        return 130
 
 
 if __name__ == '__main__':
