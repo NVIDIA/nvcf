@@ -142,7 +142,8 @@ test("serves the recipe catalog, and its pages, through the BFF", async ({
 	expect((await catalog.json()).recipes).toHaveLength(8);
 
 	await page.goto("/recipes");
-	await expect(page.getByText("7 recipes")).toBeVisible();
+	// One card per model: the 8 builds are 7 models.
+	await expect(page.getByRole("heading", { level: 2 })).toHaveCount(7);
 	await expectNoSeriousA11yViolations(page);
 
 	await page.goto("/recipes/qwen3.8-27b");
