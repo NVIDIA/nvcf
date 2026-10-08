@@ -28,6 +28,14 @@ import {
 const FLASH_TP2 =
 	"/recipes/qwen3.8-flash-next?config=qwen3.8-flash-next%2Fspark-nvfp4-tp2";
 
+/**
+ * How many recipes match, as announced to screen readers; the page doesn't
+ * show it. The shell's gateway status is a status region too.
+ */
+function recipeCount(page: Page) {
+	return page.getByRole("status").filter({ hasText: "recipe" });
+}
+
 /** Goes to the recipes from the app bar: the nav, or below sm its drawer. */
 async function openRecipesFromNav(page: Page, testInfo: TestInfo) {
 	if (testInfo.project.name === "mobile") {
@@ -58,7 +66,7 @@ test.describe("model deployment recipes", () => {
 		await page
 			.getByRole("searchbox", { name: "Search recipes" })
 			.fill("qwen3.8-27b");
-		await expect(page.getByText("1 of 7 recipes")).toBeVisible();
+		await expect(recipeCount(page)).toHaveText("1 of 7 recipes");
 		await expect(page).toHaveURL(/[?&]q=qwen3\.8-27b/);
 		await page.getByRole("link", { name: /Qwen3\.8-27B/ }).click();
 
@@ -82,7 +90,7 @@ test.describe("model deployment recipes", () => {
 		await page.getByRole("combobox", { name: "Filter by hardware" }).click();
 		await page.getByRole("option", { name: "DGX Station" }).click();
 
-		await expect(page.getByText("1 of 7 recipes")).toBeVisible();
+		await expect(recipeCount(page)).toHaveText("1 of 7 recipes");
 		await expect(page).toHaveURL(/hardware=DGX(\+|%20)Station/);
 		await expect(
 			page.getByRole("heading", { level: 2, name: "Nemotron 5 Super 49B" }),
@@ -91,9 +99,9 @@ test.describe("model deployment recipes", () => {
 
 	test("opens deep links, and keeps them on refresh", async ({ page }) => {
 		await page.goto("/recipes?hardware=DGX%20Station");
-		await expect(page.getByText("1 of 7 recipes")).toBeVisible();
+		await expect(recipeCount(page)).toHaveText("1 of 7 recipes");
 		await page.reload();
-		await expect(page.getByText("1 of 7 recipes")).toBeVisible();
+		await expect(recipeCount(page)).toHaveText("1 of 7 recipes");
 
 		await page.goto(FLASH_TP2);
 		const tp2 = page.getByRole("radio", { name: /DGX Spark × 2/ });
@@ -116,9 +124,33 @@ test.describe("model deployment recipes", () => {
 		await expect(page).toHaveURL(/\/registry\?model=qwen%2Fqwen3\.8-27b$/);
 	});
 
+	test("puts every card's status badge under its name", async ({ page }) => {
+		await page.goto("/recipes");
+		// Deployed markers come from the registry, which may load last.
+		await expect(
+			page.getByText("Deployed", { exact: true }).first(),
+		).toBeVisible();
+
+		const cards = page
+			.getByRole("link")
+			.filter({ has: page.getByRole("heading", { level: 2 }) });
+		let badges = 0;
+		for (const card of await cards.all()) {
+			const badge = card.getByText(/^(Not available|Deployed(, unhealthy)?)$/);
+			if ((await badge.count()) === 0) continue;
+			const name = await card.getByRole("heading", { level: 2 }).boundingBox();
+			const status = await badge.boundingBox();
+			if (!name || !status) throw new Error("a card has no layout box");
+			expect(status.y).toBeGreaterThanOrEqual(name.y + name.height - 1);
+			expect(status.x).toBeCloseTo(name.x, 0);
+			badges += 1;
+		}
+		expect(badges).toBeGreaterThan(1);
+	});
+
 	test("fits the viewport and passes axe", async ({ page }) => {
 		await page.goto("/recipes");
-		await expect(page.getByText("7 recipes")).toBeVisible();
+		await expect(recipeCount(page)).toHaveText("7 recipes");
 		await expectNoHorizontalOverflow(page);
 		await expectNoSeriousA11yViolations(page);
 
@@ -137,7 +169,7 @@ test.describe("model deployment recipes", () => {
 			page.getByRole("heading", { name: "No recipes match" }),
 		).toBeVisible();
 		await page.getByRole("button", { name: "Clear search" }).click();
-		await expect(page.getByText("7 recipes")).toBeVisible();
+		await expect(recipeCount(page)).toHaveText("7 recipes");
 		await expect(page).toHaveURL(/\/recipes$/);
 	});
 

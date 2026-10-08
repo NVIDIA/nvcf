@@ -49,6 +49,19 @@ function cardNames() {
 		.map((heading) => heading.textContent);
 }
 
+/**
+ * Waits until the page tells screen readers how many recipes match. The count
+ * isn't shown; it is only announced. The shell's gateway status is a status
+ * region too, so this looks for the text among them.
+ */
+async function expectAnnounced(text: string) {
+	await waitFor(() =>
+		expect(
+			screen.getAllByRole("status").map((status) => status.textContent),
+		).toContain(text),
+	);
+}
+
 describe("RecipesList", () => {
 	it("shows one card per model, deployable models first", async () => {
 		renderRecipes();
@@ -59,7 +72,7 @@ describe("RecipesList", () => {
 				name: "Model deployment recipes",
 			}),
 		).toBeInTheDocument();
-		expect(await screen.findByText("7 recipes")).toBeInTheDocument();
+		await expectAnnounced("7 recipes");
 		expect(cardNames()).toEqual([
 			"GLM-5.3",
 			"Nemotron 5 Super 49B",
@@ -84,7 +97,8 @@ describe("RecipesList", () => {
 		const deepseek = await card("DeepSeek V4 Flash");
 		expect(deepseek).toHaveTextContent("Not available");
 		expect(deepseek).toHaveTextContent("No validated hardware yet");
-		expect(deepseek).toHaveTextContent("Planned · checked 2026-10-07");
+		// The badge says it all: no status line, and no date it was checked.
+		expect(deepseek).not.toHaveTextContent(/planned|unavailable|checked/i);
 
 		expect(await card("Qwen3.8-4B")).toHaveTextContent(
 			"No description in the catalog",
@@ -111,7 +125,7 @@ describe("RecipesList", () => {
 		renderRecipes();
 
 		expect(await card("Qwen3.8-27B")).not.toHaveTextContent("Deployed");
-		expect(screen.getByText("7 recipes")).toBeInTheDocument();
+		await expectAnnounced("7 recipes");
 	});
 
 	it("narrows by search at once, and keeps the search in the URL", async () => {
@@ -123,7 +137,7 @@ describe("RecipesList", () => {
 			"flash",
 		);
 
-		expect(screen.getByText("2 of 7 recipes")).toBeInTheDocument();
+		await expectAnnounced("2 of 7 recipes");
 		expect(cardNames()).toEqual(["Qwen3.8-Flash-Next", "DeepSeek V4 Flash"]);
 		await waitFor(() =>
 			expect(router.state.location.search).toEqual({ q: "flash" }),
@@ -133,7 +147,7 @@ describe("RecipesList", () => {
 	it("opens a shared link with its search and hardware filter applied", async () => {
 		renderRecipes("/recipes?q=nemotron&hardware=DGX%20Station");
 
-		expect(await screen.findByText("1 of 7 recipes")).toBeInTheDocument();
+		await expectAnnounced("1 of 7 recipes");
 		expect(cardNames()).toEqual(["Nemotron 5 Super 49B"]);
 		expect(
 			screen.getByRole("searchbox", { name: "Search recipes" }),
@@ -143,7 +157,7 @@ describe("RecipesList", () => {
 	it("ignores an unknown hardware filter in the URL", async () => {
 		renderRecipes("/recipes?hardware=Laptop");
 
-		expect(await screen.findByText("7 recipes")).toBeInTheDocument();
+		await expectAnnounced("7 recipes");
 	});
 
 	it("says when nothing matches, and resets the search", async () => {
@@ -156,7 +170,7 @@ describe("RecipesList", () => {
 		expect(screen.getByText("Nothing matches “zzz”.")).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Clear search" }));
 
-		expect(await screen.findByText("7 recipes")).toBeInTheDocument();
+		await expectAnnounced("7 recipes");
 		expect(
 			screen.getByRole("searchbox", { name: "Search recipes" }),
 		).toHaveValue("");
@@ -177,7 +191,7 @@ describe("RecipesList", () => {
 			await screen.findByText("No recipe supports DGX Station yet."),
 		).toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Show all hardware" }));
-		expect(await screen.findByText("1 recipe")).toBeInTheDocument();
+		await expectAnnounced("1 recipe");
 	});
 
 	it("names both resets when a search and a filter are applied", async () => {
@@ -214,7 +228,7 @@ describe("RecipesList", () => {
 		server.resetHandlers();
 		await user.click(screen.getByRole("button", { name: "Try again" }));
 
-		expect(await screen.findByText("7 recipes")).toBeInTheDocument();
+		await expectAnnounced("7 recipes");
 	});
 
 	it("shows other failures as a route error", async () => {
