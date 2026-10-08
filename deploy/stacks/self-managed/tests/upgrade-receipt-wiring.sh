@@ -21,6 +21,8 @@ rendered="$(cd "$stack_dir" && HELMFILE_ENV=base helmfile \
 fail() { echo "FAIL: $1" >&2; exit 1; }
 
 grep -q 'kind: Job' <<<"$rendered" || fail "no Job rendered"
+test "$(yq -r 'select(.kind == "Job") | .spec.template.spec.containers[0].securityContext.runAsNonRoot' <<<"$rendered")" = true \
+  || fail "receipt must run as non-root"
 grep -q '"helm.sh/hook": post-install,post-upgrade' <<<"$rendered" \
   || fail "receipt must run on both install and upgrade, after the release it describes"
 grep -q "value: \"${expected_version}\"" <<<"$rendered" \
