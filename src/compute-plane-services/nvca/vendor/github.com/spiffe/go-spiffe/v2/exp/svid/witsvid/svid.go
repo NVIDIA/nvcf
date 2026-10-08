@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Package witsvid provides support for WIT-SVIDs (Workload Identity Token SVIDs),
 // an experimental SPIFFE credential type based on the IETF WIMSE WIT specification.
 // WIT-SVIDs bind a public key to the workload identity via the cnf.jwk claim and

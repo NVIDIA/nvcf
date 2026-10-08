@@ -19,6 +19,7 @@ package progress
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"testing"
 
@@ -205,4 +206,34 @@ func TestSelectRenderer_BoundaryConditions(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, RendererTTYFull, kind)
+}
+
+// Both TTY layouts read the terminal in raw mode, where Ctrl-C is a key press
+// and OnQuit is the only way it reaches the command.
+func TestSelectRenderer_TTYLayoutsCarryOnQuit(t *testing.T) {
+	prev := newTTYRenderer
+	t.Cleanup(func() { newTTYRenderer = prev })
+	var got ModelOpts
+	newTTYRenderer = func(stderr io.Writer, opts ModelOpts) *TTYRenderer {
+		got = opts
+		return prev(stderr, opts)
+	}
+	for size, want := range map[Size]RendererKind{
+		{Cols: 80, Rows: 24}:  RendererTTYCompact,
+		{Cols: 200, Rows: 60}: RendererTTYFull,
+	} {
+		got = ModelOpts{}
+		quits := 0
+		_, kind, err := SelectRenderer(os.Stderr, RenderOpts{
+			TerminalSize: &size,
+			Env:          map[string]string{"TERM": "xterm-256color"},
+			Mode:         ModeCheck,
+			OnQuit:       func() { quits++ },
+		})
+		require.NoError(t, err)
+		require.Equal(t, want, kind)
+		require.NotNil(t, got.OnQuit, "%s drops OnQuit", kind)
+		got.OnQuit()
+		assert.Equal(t, 1, quits, "%s must call the caller's OnQuit", kind)
+	}
 }

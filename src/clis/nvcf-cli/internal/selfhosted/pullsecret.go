@@ -21,9 +21,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -32,16 +33,62 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// deleteExactly pins a delete to the object that was inspected. The ownership
+// guards read an object and then delete it by name, and in that window another
+// actor can relabel it, or delete and recreate it under the same name. Without
+// preconditions the delete lands on whatever holds the name by then; with them
+// the apiserver rejects it as a conflict instead.
+func deleteExactly(o metav1.Object) metav1.DeleteOptions {
+	// UID only. UID already pins identity, which is the whole goal: a
+	// delete-and-recreate under the same name changes it. ResourceVersion
+	// additionally pins the object's version, so any concurrent write turns
+	// the delete into a 409 that every sweep then swallows. That bites hardest
+	// on a Job, whose .status the Job controller mutates continuously.
+	uid := o.GetUID()
+	return metav1.DeleteOptions{
+		Preconditions: &metav1.Preconditions{UID: &uid},
+	}
+}
+
 const (
 	// Project-specific name so the auto-created / mirrored pull secret
 	// can never collide with the conventional `nvcr-pull-secret` that
 	// operators or the install flow may already manage in 'default'.
-	// Pairs with isManagedByValidatorCLI label guard for defense-in-depth.
-	validatorPullSecretName        = "nvcf-preflight-pull-secret"
-	validatorPullSecretScanTimeout = 10 * time.Second
+	//
+	// The name is suffixed per role by validatorPullSecretRoleName: ModeSplit
+	// runs both validators concurrently, and the two kubecontexts can resolve
+	// to the same cluster. One shared Secret means the role that finishes first
+	// deletes it while the other Job is still pulling, which the kubelet
+	// reports as FailedToRetrieveImagePullSecret.
+	validatorPullSecretName = "nvcf-preflight-pull-secret"
 )
 
-// Mirrors the chain used by ensureLocalImagePullSecrets in cmd/self_hosted_up.go.
+// validatorPullSecretRoleName returns the managed pull-secret name for a role.
+// A Secret cannot be co-owned, so each role needs its own rather than a shared
+// object with a role label.
+func validatorPullSecretRoleName(role string) string {
+	if role == "" {
+		return validatorPullSecretName
+	}
+	return validatorPullSecretName + "-" + role
+}
+
+// validatorPullSecretRunName is the name this run mints under. It carries the
+// run's unguessable suffix because the managed labels are three public
+// constants: with a predictable name, anyone able to create a Secret in this
+// namespace could pre-create it wearing those labels, pass the ownership check,
+// and have the NGC credential written into an object they control. Same
+// reasoning as the per-run RBAC names.
+func validatorPullSecretRunName(role, runID string) string {
+	base := validatorPullSecretRoleName(role)
+	if runID == "" {
+		return base
+	}
+	return base + "-" + runID
+}
+
+// The NGC API key's environment variables, in the order
+// ensureLocalImagePullSecrets in cmd/self_hosted_up.go reads them.
 var ngcAPIKeyEnvNames = []string{
 	"NGC_IMAGE_PULL_API_KEY",
 	"NVCF_NGCR_API_KEY",
@@ -67,141 +114,318 @@ var validatorPullSecretSearchNamespaces = []string{
 	"nvcf-backend",
 }
 
+// validatorPullSecretListTimeout bounds one namespace's List in the scan, so
+// a slow namespace cannot starve the rest; validatorPullSecretWriteTimeout
+// bounds the Create of the Secret this run attaches, which gets its own time
+// rather than whatever the scan left.
+var (
+	validatorPullSecretListTimeout  = 5 * time.Second
+	validatorPullSecretWriteTimeout = 10 * time.Second
+)
+
 // resolveValidatorPullSecret picks the imagePullSecret name to attach to the
 // validator Job. Precedence:
 //
 //  1. provided != "" -> use as-is (--cluster-validator-pull-secret flag).
-//  2. Cluster scan -> mirror a matching secret into the validator namespace.
-//  3. NGC env var -> mint a secret in the validator namespace.
-//  4. "" -> kubelet will surface ImagePullBackOff if the image is private.
+//  2. Cluster scan -> adopt an operator's Secret in the validator namespace,
+//     or copy the matching registry's entry of one found elsewhere.
+//  3. This machine's credential for the image's registry, the one the local
+//     credential check probed -> mint a Secret for this run. The NGC key
+//     goes only to nvcr.io.
+//  4. "" -> the image is pulled without a secret.
 //
-// Only hard mirror/create failures propagate; read-side failures fall through
-// to the next layer.
+// note says what the run copied or created, for the operator to see. err is
+// a copy or create that failed; read-side failures fall through to the next
+// layer.
+//
+// A Secret this run mints or mirrors is recorded in created, the only record
+// its cleanup trusts.
 func resolveValidatorPullSecret(
 	ctx context.Context,
 	client kubernetes.Interface,
-	provided, image string,
-) (string, error) {
+	provided, image, role, runID string,
+	preserve bool,
+	created runObjects,
+) (name, note string, err error) {
 	if provided != "" {
-		return provided, nil
+		return provided, "", nil
 	}
-	registry := parseRegistryFromImage(image)
-	if registry == "" {
-		return "", nil
-	}
-
-	scanCtx, cancel := context.WithTimeout(ctx, validatorPullSecretScanTimeout)
-	defer cancel()
-
-	if name, err := scanAndMirrorPullSecret(scanCtx, client, registry); err != nil {
-		return "", err
-	} else if name != "" {
-		return name, nil
+	registry, repo, _, ok := parseImageRef(image)
+	if !ok {
+		return "", "", nil
 	}
 
-	if name, err := autoCreatePullSecretFromEnv(scanCtx, client, registry); err != nil {
-		return "", err
-	} else if name != "" {
-		return name, nil
+	runName := validatorPullSecretRunName(role, runID)
+	write := func(cfg []byte) error {
+		wctx, cancel := context.WithTimeout(ctx, validatorPullSecretWriteTimeout)
+		defer cancel()
+		return writeDockerConfigSecret(wctx, client, clusterValidatorNamespace, runName, role, runID, cfg, preserve,
+			created)
 	}
 
-	return "", nil
+	if src, cfg := findClusterPullSecret(ctx, client, registry, repo); src != nil {
+		if src.Namespace == clusterValidatorNamespace {
+			return src.Name, "", nil
+		}
+		// Mirror under the validator's run-scoped name rather than the source
+		// secret's name, which could collide with an unrelated Secret in the
+		// destination namespace.
+		if err := write(cfg); err != nil {
+			return "", "", fmt.Errorf("copy pull secret %s/%s to %s/%s: %w",
+				src.Namespace, src.Name, clusterValidatorNamespace, runName, err)
+		}
+		return runName, fmt.Sprintf("copied the pull credential for %s from %s/%s into %s/%s for this run",
+			registry, src.Namespace, src.Name, clusterValidatorNamespace, runName), nil
+	}
+
+	settled := registryCredentialsFrom(ctx).lookup(ctx, registry, repo)
+	cred := settled.cred
+	if !settled.ok {
+		if settled.err != nil {
+			return "", "", fmt.Errorf("no pull secret for %s in the cluster, and reading this machine's "+
+				"credential failed: %w", registry, settled.err)
+		}
+		return "", "", nil
+	}
+	cfg, err := buildDockerConfigJSON(dockerConfigKey(registry), cred.user, cred.pass)
+	if err != nil {
+		return "", "", fmt.Errorf("encode dockerconfigjson for %s: %w", registry, err)
+	}
+	if err := write(cfg); err != nil {
+		return "", "", fmt.Errorf("create pull secret %s/%s: %w", clusterValidatorNamespace, runName, err)
+	}
+	return runName, fmt.Sprintf("created pull secret %s/%s for %s from %s for this run",
+		clusterValidatorNamespace, runName, registry, cred.source), nil
 }
 
-// Returns "" for Docker Hub shorthand (no host segment), since the scan
-// needs an auths.<host> key to match against.
-func parseRegistryFromImage(image string) string {
-	image = strings.TrimSpace(image)
-	if image == "" {
-		return ""
-	}
-	slash := strings.Index(image, "/")
-	if slash <= 0 {
-		return ""
-	}
-	head := image[:slash]
-	if !strings.ContainsAny(head, ".:") && head != "localhost" {
-		return ""
-	}
-	return head
+// findClusterPullSecret walks validatorPullSecretSearchNamespaces and returns
+// the first docker-registry Secret with credentials for registry, with a
+// dockerconfigjson holding only that registry's entry. An operator's Secret
+// in the validator namespace is returned to be used as is; one this CLI
+// minted for another run is skipped (see isAnyValidatorSecret).
+func findClusterPullSecret(
+	ctx context.Context, client kubernetes.Interface, registry, repo string,
+) (*corev1.Secret, []byte) {
+	var found *corev1.Secret
+	var foundCfg []byte
+	_ = scanClusterPullSecrets(ctx, client, registry, repo, func(s *corev1.Secret, cfg []byte) bool {
+		found, foundCfg = s, cfg
+		return true
+	})
+	return found, foundCfg
 }
 
-// Walks validatorPullSecretSearchNamespaces and returns the first
-// docker-registry secret whose dockerconfigjson has an auths entry for
-// registry. Mirrors the body into clusterValidatorNamespace when the match
-// lives elsewhere, so the Job can reference the secret without cross-namespace
-// lookups.
-func scanAndMirrorPullSecret(ctx context.Context, client kubernetes.Interface, registry string) (string, error) {
+// scanClusterPullSecrets calls visit, in validatorPullSecretSearchNamespaces
+// order, with each docker-registry Secret holding credentials for registry
+// and a dockerconfigjson of that entry alone, until visit returns true. The
+// error names the namespaces that could not be listed.
+func scanClusterPullSecrets(
+	ctx context.Context, client kubernetes.Interface, registry, repo string,
+	visit func(s *corev1.Secret, cfg []byte) bool,
+) error {
+	var errs []error
 	for _, ns := range validatorPullSecretSearchNamespaces {
-		// Filter client-side rather than via FieldSelector: server-side
-		// type= selector on Secrets is only honored from k8s 1.27 onward.
-		secrets, err := client.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{})
+		secrets, err := listDockerConfigSecrets(ctx, client, ns)
 		if err != nil {
+			errs = append(errs, fmt.Errorf("list Secrets in %s: %w", ns, err))
 			continue
 		}
-		for _, s := range secrets.Items {
+		for i := range secrets {
+			s := &secrets[i]
 			if s.Type != corev1.SecretTypeDockerConfigJson {
 				continue
 			}
-			cfg, ok := s.Data[corev1.DockerConfigJsonKey]
-			if !ok || !dockerConfigHasRegistry(cfg, registry) {
+			// Adopt only an operator-supplied Secret (no managed labels, so
+			// no sweep touches it). Never one another run minted: adopting
+			// one reuses a possibly stale credential, can outlive this run,
+			// and can be deleted by its own run's sweep mid-pull, which the
+			// kubelet reports as FailedToRetrieveImagePullSecret.
+			if s.Namespace == clusterValidatorNamespace && isAnyValidatorSecret(s) {
 				continue
 			}
-			if s.Namespace == clusterValidatorNamespace {
-				return s.Name, nil
+			if cfg, ok := filterDockerConfig(s.Data[corev1.DockerConfigJsonKey], registry, repo); ok && visit(s, cfg) {
+				return nil
 			}
-			// Mirror under the validator's well-known name rather than the
-			// source secret's name. Using the source name risks colliding
-			// with an unrelated operator/chart secret of the same name in
-			// the destination namespace, and writeDockerConfigSecret's
-			// delete-and-recreate path would otherwise destroy that
-			// secret on type mismatch.
-			if err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, validatorPullSecretName, cfg); err != nil {
-				return "", fmt.Errorf("mirror pull secret %s/%s to %s/%s: %w",
-					s.Namespace, s.Name, clusterValidatorNamespace, validatorPullSecretName, err)
-			}
-			return validatorPullSecretName, nil
 		}
 	}
-	return "", nil
+	return errors.Join(errs...)
 }
 
-func dockerConfigHasRegistry(cfg []byte, registry string) bool {
+// ClusterPullSecretChecker returns the pull secret, in a cluster of a plane
+// the run checks as installed, that holds user and secret for repo on
+// registry, or "" when none does. err reports a cluster whose pull secrets
+// could not all be read, so the answer is not known.
+type ClusterPullSecretChecker func(ctx context.Context, registry, repo, user, secret string) (string, error)
+
+// clusterPullSecretCheckTimeout bounds one ClusterPullSecretChecker call
+// across its clusters. A var so tests can shorten it.
+var clusterPullSecretCheckTimeout = 30 * time.Second
+
+// NewClusterPullSecretChecker returns a ClusterPullSecretChecker that reads
+// the pull secrets findClusterPullSecret reads, in the cluster behind each of
+// kubeContexts, "" naming the current context. It is meant for one poll: it
+// connects to each cluster once, keeping a cluster it cannot reach as such,
+// and answers a question it was asked before from what it found then, so the
+// registry rows, which run one after another in one share of the run's time,
+// do not each wait on the same clusters.
+func NewClusterPullSecretChecker(kubeContexts []string) ClusterPullSecretChecker {
+	type connection struct {
+		client kubernetes.Interface
+		err    error
+	}
+	type answer struct {
+		holder string
+		err    error
+	}
+	// connMu is held across a connection, so a cluster is connected to once.
+	var connMu, answersMu sync.Mutex
+	connections := map[string]connection{}
+	answers := map[[4]string]answer{}
+	connect := func(ctx context.Context, kubeContext string) (kubernetes.Interface, error) {
+		connMu.Lock()
+		defer connMu.Unlock()
+		if c, ok := connections[kubeContext]; ok {
+			return c.client, c.err
+		}
+		client, err := connectCluster(ctx, kubeContext)
+		if ctx.Err() == nil {
+			connections[kubeContext] = connection{client, err}
+		}
+		return client, err
+	}
+	return func(ctx context.Context, registry, repo, user, secret string) (string, error) {
+		key := [4]string{registry, repo, user, secret}
+		answersMu.Lock()
+		a, ok := answers[key]
+		answersMu.Unlock()
+		if ok {
+			return a.holder, a.err
+		}
+		ctx, cancel := context.WithTimeout(ctx, clusterPullSecretCheckTimeout)
+		defer cancel()
+		holder, err := func() (string, error) {
+			var errs []error
+			for _, kubeContext := range kubeContexts {
+				client, err := connect(ctx, kubeContext)
+				if err != nil {
+					errs = append(errs, err)
+					continue
+				}
+				holder, err := clusterPullSecretHolding(ctx, client, registry, repo, user, secret)
+				if holder != "" {
+					if kubeContext != "" {
+						holder += " in context " + kubeContext
+					}
+					return holder, nil
+				}
+				if err != nil {
+					errs = append(errs, err)
+				}
+			}
+			return "", errors.Join(errs...)
+		}()
+		// An answer the call's bound or the run's end cut off is no answer.
+		if ctx.Err() == nil {
+			answersMu.Lock()
+			answers[key] = answer{holder, err}
+			answersMu.Unlock()
+		}
+		return holder, err
+	}
+}
+
+// clusterPullSecretHolding returns the namespace/name of a pull secret in
+// client's cluster whose entry for registry holds user and secret.
+func clusterPullSecretHolding(
+	ctx context.Context, client kubernetes.Interface, registry, repo, user, secret string,
+) (string, error) {
+	holder := ""
+	err := scanClusterPullSecrets(ctx, client, registry, repo, func(s *corev1.Secret, cfg []byte) bool {
+		var doc struct {
+			Auths map[string]dockerConfigAuth `json:"auths"`
+		}
+		if json.Unmarshal(cfg, &doc) != nil {
+			return false
+		}
+		for _, entry := range doc.Auths {
+			if u, p, ok := decodeDockerConfigAuth(entry); ok && u == user && p == secret {
+				holder = s.Namespace + "/" + s.Name
+				return true
+			}
+		}
+		return false
+	})
+	if holder != "" {
+		return holder, nil
+	}
+	return "", err
+}
+
+// listDockerConfigSecrets lists namespace's docker-registry Secrets, so the
+// scan does not fetch every other Secret's key material. A server that
+// refuses the type field selector is asked for everything instead, and the
+// caller filters.
+func listDockerConfigSecrets(
+	ctx context.Context, client kubernetes.Interface, namespace string,
+) ([]corev1.Secret, error) {
+	lctx, cancel := context.WithTimeout(ctx, validatorPullSecretListTimeout)
+	defer cancel()
+	list, err := client.CoreV1().Secrets(namespace).List(lctx, metav1.ListOptions{
+		FieldSelector: "type=" + string(corev1.SecretTypeDockerConfigJson),
+	})
+	if apierrors.IsBadRequest(err) {
+		list, err = client.CoreV1().Secrets(namespace).List(lctx, metav1.ListOptions{})
+	}
+	if err != nil {
+		return nil, err
+	}
+	return list.Items, nil
+}
+
+// filterDockerConfig returns a dockerconfigjson holding only cfg's entry for
+// registry, and whether it has one. A copy carries no other registry's
+// credential. Keys match the way the kubelet matches them: scheme and a
+// /v1/ or /v2/ prefix ignored, and a key with a path only for repositories
+// under it.
+func filterDockerConfig(cfg []byte, registry, repo string) ([]byte, bool) {
 	var doc struct {
 		Auths map[string]json.RawMessage `json:"auths"`
 	}
 	if err := json.Unmarshal(cfg, &doc); err != nil {
-		return false
+		return nil, false
 	}
-	_, ok := doc.Auths[registry]
-	return ok
-}
-
-func autoCreatePullSecretFromEnv(ctx context.Context, client kubernetes.Interface, registry string) (string, error) {
-	apiKey := firstNonEmptyEnv(ngcAPIKeyEnvNames...)
-	if apiKey == "" {
-		return "", nil
-	}
-	cfg, err := buildDockerConfigJSON(registry, "$oauthtoken", apiKey)
-	if err != nil {
-		return "", fmt.Errorf("encode dockerconfigjson for %s: %w", registry, err)
-	}
-	if err := writeDockerConfigSecret(ctx, client, clusterValidatorNamespace, validatorPullSecretName, cfg); err != nil {
-		return "", fmt.Errorf("auto-create pull secret %s/%s: %w",
-			clusterValidatorNamespace, validatorPullSecretName, err)
-	}
-	return validatorPullSecretName, nil
-}
-
-// Mirrors cmd/self_hosted_up.go's firstNonEmptyEnv; kept local to avoid an
-// internal->cmd import.
-func firstNonEmptyEnv(names ...string) string {
-	for _, name := range names {
-		if v := os.Getenv(name); v != "" {
-			return v
+	key, ok := "", false
+	if _, exact := doc.Auths[dockerConfigKey(registry)]; exact {
+		key, ok = dockerConfigKey(registry), true
+	} else {
+		for k := range doc.Auths {
+			if dockerConfigKeyMatches(k, registry, repo) && (!ok || k < key) {
+				key, ok = k, true
+			}
 		}
 	}
-	return ""
+	if !ok {
+		return nil, false
+	}
+	out, err := json.Marshal(map[string]any{"auths": map[string]json.RawMessage{key: doc.Auths[key]}})
+	return out, err == nil
+}
+
+// dockerConfigKeyMatches reports whether a dockerconfigjson auths key covers
+// an image in repo on registry, as the kubelet reads the key.
+func dockerConfigKeyMatches(key, registry, repo string) bool {
+	rest := strings.TrimPrefix(strings.TrimPrefix(key, "https://"), "http://")
+	host, path, _ := strings.Cut(rest, "/")
+	if !sameDockerHost(host, registry) {
+		return false
+	}
+	path = strings.TrimSuffix(path, "/")
+	if p, ok := strings.CutPrefix(path, "v1"); ok && (p == "" || strings.HasPrefix(p, "/")) {
+		path = strings.TrimPrefix(p, "/")
+	} else if p, ok := strings.CutPrefix(path, "v2"); ok && (p == "" || strings.HasPrefix(p, "/")) {
+		path = strings.TrimPrefix(p, "/")
+	}
+	return path == "" || repo == path || strings.HasPrefix(repo, path+"/")
 }
 
 // Mirrors cmd/self_hosted_up.go's dockerConfigJSON.
@@ -218,96 +442,85 @@ func buildDockerConfigJSON(registry, username, password string) ([]byte, error) 
 	})
 }
 
-// Mirrors cmd/self_hosted_up.go's ensureDockerConfigSecret. Attaches the
-// CLI's managed-by labels so a future cleanup path can identify resources
-// to remove.
-func writeDockerConfigSecret(ctx context.Context, client kubernetes.Interface, namespace, name string, dockerConfig []byte) error {
-	labels := clusterValidatorLabels()
-	secrets := client.CoreV1().Secrets(namespace)
+// writeDockerConfigSecret creates the pull Secret this run will reference from
+// a .dockerconfigjson body, and records it in created.
+//
+// Create-only. The name carries this run's unguessable suffix, so nothing this
+// CLI created can already hold it and any collision is another object.
+// Adopting one would write the NGC credential into something we do not own,
+// which label-based ownership cannot prevent: the managed labels are three
+// public constants anyone can copy onto a Secret they pre-create under a
+// predictable name.
+//
+// The Secret is the legacy kubernetes.io/dockercfg type, which the kubelet
+// pulls with just as well. Released CLIs adopt any kubernetes.io/dockerconfigjson
+// Secret in the namespace whose registry matches, whatever its labels, so with
+// that type they would reuse this run's NGC key and lose it mid-pull when this
+// run's cleanup deletes it.
+func writeDockerConfigSecret(
+	ctx context.Context, client kubernetes.Interface, namespace, name, role, runID string, dockerConfig []byte,
+	preserve bool, created runObjects,
+) error {
+	dockercfg, err := dockerCfgFromConfigJSON(dockerConfig)
+	if err != nil {
+		return fmt.Errorf("convert docker config: %w", err)
+	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
-			Labels:    labels,
+			Labels:    clusterValidatorRunLabels(role, runID, preserve),
 		},
-		Type: corev1.SecretTypeDockerConfigJson,
-		Data: map[string][]byte{corev1.DockerConfigJsonKey: dockerConfig},
+		Type: corev1.SecretTypeDockercfg,
+		Data: map[string][]byte{corev1.DockerConfigKey: dockercfg},
 	}
-	current, err := secrets.Get(ctx, name, metav1.GetOptions{})
-	switch {
-	case err == nil && current.Type == corev1.SecretTypeDockerConfigJson:
-		if current.Data == nil {
-			current.Data = map[string][]byte{}
-		}
-		current.Data[corev1.DockerConfigJsonKey] = dockerConfig
-		if current.Labels == nil {
-			current.Labels = map[string]string{}
-		}
-		for k, v := range labels {
-			current.Labels[k] = v
-		}
-		if _, err := secrets.Update(ctx, current, metav1.UpdateOptions{}); err != nil {
-			return fmt.Errorf("update: %w", err)
-		}
-		return nil
-	case err == nil:
-		// Secret.Type is immutable; can't Update across a type change.
-		// Guard the delete: only replace secrets we previously managed.
-		// Without this, an operator-owned secret with a colliding name
-		// (e.g. an Opaque secret in 'default' sharing the validator's
-		// pull-secret name) would be silently destroyed.
-		if !isManagedByValidatorCLI(current) {
+	got, err := client.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{})
+	if err != nil {
+		if apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf(
-				"refusing to replace %s/%s (type=%s) which is not managed by nvcf-cli; "+
-					"pass --cluster-validator-pull-secret to choose an explicit secret name",
-				namespace, name, current.Type)
+				"refusing to overwrite existing secret %s/%s: this run generated that name, so "+
+					"another object already holds it; pass --cluster-validator-pull-secret to "+
+					"choose an explicit secret name",
+				namespace, name)
 		}
-		if err := secrets.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("delete incompatible secret type %s: %w", current.Type, err)
-		}
-	case !apierrors.IsNotFound(err):
-		return fmt.Errorf("get: %w", err)
+		return fmt.Errorf("create: %w", err)
 	}
-	if _, err := secrets.Create(ctx, secret, metav1.CreateOptions{}); err != nil {
-		if !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("create: %w", err)
-		}
-		// Lost a delete->create race: another actor recreated the secret
-		// in the narrow window between our Delete and Create. Refetch and
-		// overwrite with our content so the caller still gets the
-		// credentials it asked for.
-		current, getErr := secrets.Get(ctx, name, metav1.GetOptions{})
-		if getErr != nil {
-			return fmt.Errorf("get after create race: %w", getErr)
-		}
-		if current.Type != corev1.SecretTypeDockerConfigJson {
-			return fmt.Errorf("create race left secret %s/%s with type %s, want %s",
-				namespace, name, current.Type, corev1.SecretTypeDockerConfigJson)
-		}
-		if current.Data == nil {
-			current.Data = map[string][]byte{}
-		}
-		current.Data[corev1.DockerConfigJsonKey] = dockerConfig
-		if current.Labels == nil {
-			current.Labels = map[string]string{}
-		}
-		for k, v := range labels {
-			current.Labels[k] = v
-		}
-		if _, err := secrets.Update(ctx, current, metav1.UpdateOptions{}); err != nil {
-			return fmt.Errorf("update after create race: %w", err)
-		}
-	}
+	created.add(kindSecret, got)
 	return nil
 }
 
-// isManagedByValidatorCLI reports whether the secret carries the labels
-// writeDockerConfigSecret stamps on every secret it creates. Used to
-// gate the delete-then-recreate branch so we never destroy an operator-
-// or chart-owned secret that happens to share a name with one of ours.
-func isManagedByValidatorCLI(s *corev1.Secret) bool {
+// dockerCfgFromConfigJSON turns a .dockerconfigjson body into a .dockercfg
+// one: the same per-registry entries without the "auths" wrapper.
+func dockerCfgFromConfigJSON(cfg []byte) ([]byte, error) {
+	var doc struct {
+		Auths map[string]json.RawMessage `json:"auths"`
+	}
+	if err := json.Unmarshal(cfg, &doc); err != nil {
+		return nil, err
+	}
+	if len(doc.Auths) == 0 {
+		return nil, fmt.Errorf("no auths entries")
+	}
+	return json.Marshal(doc.Auths)
+}
+
+// isAnyValidatorSecret reports whether a Secret was minted by any version of
+// this CLI's validator, including released ones that label with
+// managed-by=nvcf-cli and use the bare nvcf-preflight-pull-secret name. Such a
+// Secret belongs to another run: its CLI deletes it on exit, possibly while
+// this run's pod is still pulling, and a stale one would be reused forever.
+func isAnyValidatorSecret(s *corev1.Secret) bool {
+	return hasValidatorManagedLabels(s.Labels) ||
+		s.Labels["app.kubernetes.io/name"] == clusterValidatorAppLabel ||
+		strings.HasPrefix(s.Name, validatorPullSecretName)
+}
+
+// hasValidatorManagedLabels reports whether an object carries the labels this
+// CLI stamps on everything it creates. It is the ownership test for every
+// resource the validator writes to or deletes by name, not just Secrets.
+func hasValidatorManagedLabels(labels map[string]string) bool {
 	for k, v := range clusterValidatorLabels() {
-		if s.Labels[k] != v {
+		if labels[k] != v {
 			return false
 		}
 	}

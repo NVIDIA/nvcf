@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // We enable 64 bit LE platforms:
 
 //go:build (amd64 || arm64 || ppc64le || riscv64) && !nounsafe && !purego && !appengine

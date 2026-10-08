@@ -465,11 +465,12 @@ func (r *JSONLRenderer) toWire(e Event, ts string) any {
 		if ev.Verdict != "" {
 			out.Verdict = ev.Verdict
 			out.TotalChecks = ev.TotalChecks
-			passed := ev.PassedCount
-			failed := ev.FailedCount
+			passed, failed, warned := ev.PassedCount, ev.FailedCount, ev.WarningCount
 			out.PassedCount = &passed
 			out.FailedCount = &failed
+			out.WarningCount = &warned
 		}
+		out.Cleanup = ev.Cleanup
 		return out
 	case Snapshot:
 		out := wireSnapshot{
@@ -535,24 +536,28 @@ func (r *JSONLRenderer) toWire(e Event, ts string) any {
 		}
 	case CheckCompleted:
 		return wireCheckCompleted{
-			Event:    "check_completed",
-			TS:       ts,
-			Category: ev.Category,
-			ID:       ev.ID,
-			Passed:   ev.Passed,
-			Severity: ev.Severity,
-			Message:  ev.Message,
-			Detail:   ev.Detail,
-			HintURL:  ev.HintURL,
+			Event:     "check_completed",
+			TS:        ts,
+			Category:  ev.Category,
+			ID:        ev.ID,
+			Passed:    ev.Passed,
+			Severity:  string(ev.Severity),
+			Message:   ev.Message,
+			Detail:    ev.Detail,
+			Transient: ev.Transient,
+			CutShort:  ev.CutShort,
+			HintURL:   ev.HintURL,
+			Cleanup:   ev.Cleanup,
 		}
 	case CategoryCompleted:
 		return wireCategoryCompleted{
-			Event:       "category_completed",
-			TS:          ts,
-			Category:    ev.Category,
-			PassedCount: ev.PassedCount,
-			FailedCount: ev.FailedCount,
-			DurationSec: ev.DurationSec,
+			Event:        "category_completed",
+			TS:           ts,
+			Category:     ev.Category,
+			PassedCount:  ev.PassedCount,
+			FailedCount:  ev.FailedCount,
+			WarningCount: ev.WarningCount,
+			DurationSec:  ev.DurationSec,
 		}
 	}
 	return nil
@@ -650,7 +655,7 @@ type wireLastProgress struct {
 //   - PlanOnly: omitempty — omit when false; include when true (plan-only short-circuit).
 //   - DurationSec: NO omitempty — 0 is a valid value for very fast installs.
 //   - DroppedProgressEvents: NO omitempty — consumers need the backpressure count.
-//   - Verdict/TotalChecks/PassedCount/FailedCount: omitempty — check-mode only (M+8.11).
+//   - Verdict/TotalChecks/PassedCount/FailedCount/WarningCount: omitempty, check-mode only (M+8.11).
 type wireFinal struct {
 	Event                 string `json:"event"`
 	TS                    string `json:"ts"`
@@ -670,8 +675,11 @@ type wireFinal struct {
 	// downstream tooling that asserts the field is always present on a
 	// check-typed Final. Nil on non-check Final keeps install/up/down
 	// goldens unchanged.
-	PassedCount *int `json:"passedCount,omitempty"`
-	FailedCount *int `json:"failedCount,omitempty"`
+	PassedCount  *int `json:"passedCount,omitempty"`
+	FailedCount  *int `json:"failedCount,omitempty"`
+	WarningCount *int `json:"warningCount,omitempty"`
+	// Cleanup lists the commands that remove what a check left in the cluster.
+	Cleanup []string `json:"cleanup,omitempty"`
 }
 
 // Wire structs for status + check event types (M+8.3).
@@ -710,7 +718,7 @@ type wireClusterRow struct {
 	Event             string `json:"event"`
 	TS                string `json:"ts"`
 	Name              string `json:"name"`
-	Context           string `json:"context,omitempty"`   // M+9: omitted when unknown
+	Context           string `json:"context,omitempty"` // M+9: omitted when unknown
 	GPU               string `json:"gpu"`
 	GPUCount          int    `json:"gpuCount"`
 	ActiveDeployments int    `json:"activeDeployments"`
@@ -747,15 +755,22 @@ type wireCheckCompleted struct {
 	Message  string `json:"message,omitempty"`
 	Detail   string `json:"detail,omitempty"`
 	HintURL  string `json:"hintURL,omitempty"`
+	// Transient is set on a warning --wait keeps polling on.
+	Transient bool `json:"transient,omitempty"`
+	// CutShort is set on a check the time budget stopped before it finished.
+	CutShort bool `json:"cutShort,omitempty"`
+	// Cleanup is the command that removes what the check left in the cluster.
+	Cleanup string `json:"cleanup,omitempty"`
 }
 
 type wireCategoryCompleted struct {
-	Event       string  `json:"event"`
-	TS          string  `json:"ts"`
-	Category    string  `json:"category"`
-	PassedCount int     `json:"passedCount"`
-	FailedCount int     `json:"failedCount"`
-	DurationSec float64 `json:"durationSec"`
+	Event        string  `json:"event"`
+	TS           string  `json:"ts"`
+	Category     string  `json:"category"`
+	PassedCount  int     `json:"passedCount"`
+	FailedCount  int     `json:"failedCount"`
+	WarningCount int     `json:"warningCount"`
+	DurationSec  float64 `json:"durationSec"`
 }
 
 // Wire structs for composed status snapshot (Plan Deviation #19 / §6.5.4).
@@ -766,12 +781,12 @@ type wireCategoryCompleted struct {
 // mode. It carries the Snapshot identity plus all ComponentHealth, ClusterRow,
 // and RecentEvent sub-objects inlined.
 type wireSnapshotComposed struct {
-	Event           string               `json:"event"`
-	TS              string               `json:"ts"`
-	Cluster         string               `json:"cluster"`
-	Verdict         string               `json:"verdict"`
-	ReconcileAgeSec int                  `json:"reconcileAgeSec"`
-	Identity        wireSnapshotIdentity `json:"identity"`
+	Event           string                `json:"event"`
+	TS              string                `json:"ts"`
+	Cluster         string                `json:"cluster"`
+	Verdict         string                `json:"verdict"`
+	ReconcileAgeSec int                   `json:"reconcileAgeSec"`
+	Identity        wireSnapshotIdentity  `json:"identity"`
 	Components      []wireComponentInline `json:"components,omitempty"`
 	ComputeClusters []wireClusterInline   `json:"computeClusters,omitempty"`
 	Events          []wireEventInline     `json:"events,omitempty"`
@@ -781,7 +796,7 @@ type wireSnapshotComposed struct {
 type wireComponentInline struct {
 	Name      string `json:"name"`
 	Cluster   string `json:"cluster,omitempty"`
-	Role      string `json:"role,omitempty"`    // M+9: omitted in single-cluster mode
+	Role      string `json:"role,omitempty"` // M+9: omitted in single-cluster mode
 	Ready     int    `json:"ready"`
 	Total     int    `json:"total"`
 	UptimeSec int    `json:"uptimeSec"`
@@ -792,7 +807,7 @@ type wireComponentInline struct {
 // wireClusterInline is a ClusterRow without event/ts fields.
 type wireClusterInline struct {
 	Name              string `json:"name"`
-	Context           string `json:"context,omitempty"`   // M+9: omitted when unknown
+	Context           string `json:"context,omitempty"` // M+9: omitted when unknown
 	GPU               string `json:"gpu"`
 	GPUCount          int    `json:"gpuCount"`
 	ActiveDeployments int    `json:"activeDeployments"`
