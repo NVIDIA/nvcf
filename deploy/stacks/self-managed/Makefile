@@ -35,6 +35,7 @@ test:
 	@tests/nats-auth-callout-wiring.sh
 	@tests/notary-image-repository.sh
 	@tests/nvcf-ui-migrations-image-tag.sh
+	@tests/nonroot-ui-migrations.sh
 	@tests/ha-value-wiring.sh
 	@tests/ha-chart-render.sh
 
