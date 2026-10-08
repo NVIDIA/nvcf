@@ -248,6 +248,32 @@ class MonitoringTests(unittest.TestCase):
                 self.config['monitoring']['grafanaRootURL'] = root_url
                 self.assertEqual(monitoring.chart_values(self.recipe)['grafana']['rootURL'], root_url)
 
+    def test_grafana_ingress_is_optional_and_validated(self):
+        self.assertFalse(monitoring.chart_values(self.recipe)['grafana']['ingress']['enabled'])
+        self.assertEqual(monitoring.grafana_path(self.recipe), '')
+        self.config['monitoring']['grafanaIngress'] = {'className': 'traefik'}
+        self.assertEqual(monitoring.chart_values(self.recipe)['grafana']['ingress'],
+                         {'enabled': True, 'className': 'traefik', 'host': '', 'path': '/grafana'})
+        self.assertEqual(monitoring.grafana_path(self.recipe), '/grafana')
+        self.config['monitoring']['grafanaIngress'] = {'host': 'demo.example.com', 'path': '/metrics/grafana'}
+        self.assertEqual(monitoring.grafana_path(self.recipe), '/metrics/grafana')
+        for ingress in ([], {'tls': True}, {'path': '/grafana/'}, {'path': 'grafana'}, {'path': '/'},
+                        {'className': 'Traefik'}, {'host': 'https://demo.example.com'}, {'enabled': False}):
+            with self.subTest(ingress=ingress):
+                self.config['monitoring']['grafanaIngress'] = ingress
+                with self.assertRaises(RuntimeError):
+                    monitoring.chart_values(self.recipe)
+
+    def test_grafana_root_url_must_match_its_ingress_path(self):
+        self.config['monitoring']['grafanaIngress'] = {}
+        self.config['monitoring']['grafanaRootURL'] = 'https://demo.example.com/grafana/'
+        self.assertEqual(monitoring.chart_values(self.recipe)['grafana']['rootURL'], 'https://demo.example.com/grafana/')
+        for root_url in ('https://demo.example.com/', 'https://demo.example.com/other/grafana/'):
+            with self.subTest(root_url=root_url):
+                self.config['monitoring']['grafanaRootURL'] = root_url
+                with self.assertRaises(RuntimeError):
+                    monitoring.chart_values(self.recipe)
+
     def test_install_only_changes_monitoring_and_preserves_model_state(self):
         self.recipe.state.update(serve=True, runtimeSha256='a'*64, attachedExisting=True)
         self.output.side_effect = ['{}', '[]', '']
@@ -596,7 +622,7 @@ class MonitoringTests(unittest.TestCase):
              patch.object(monitoring.time, 'sleep', side_effect=KeyboardInterrupt), contextlib.redirect_stdout(stream):
             console.run('dashboard', self.recipe.work, lambda: self.monitor.dashboard(13000, admin=True))
         self.output.assert_called_once_with(self.recipe.kc+['get', 'secret', self.monitor.release+'-grafana-admin', '-o', 'json'])
-        login.assert_called_once_with(13000, ('admin', 'current-password'), proc)
+        login.assert_called_once_with(13000, ('admin', 'current-password'), proc, prefix='')
         self.assertIn('http://127.0.0.1:13000/d/llm-demo', stream.getvalue())
         self.assertIn('Signed in as admin.', stream.getvalue())
         self.assertNotIn('current-password', stream.getvalue())

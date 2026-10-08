@@ -35,7 +35,7 @@ def settings(config):
     options = config.get('monitoring', {})
     require(isinstance(options, dict), 'monitoring must be an object.')
     require(isinstance(options.get('enabled', False), bool), 'monitoring.enabled must be boolean.')
-    allowed = {'enabled', 'images', 'imagePullPolicy', 'retentionPeriod', 'storageSize', 'namespaces', 'extraTargets', 'networkPolicy', 'grafanaRootURL', 'model'}
+    allowed = {'enabled', 'images', 'imagePullPolicy', 'retentionPeriod', 'storageSize', 'namespaces', 'extraTargets', 'networkPolicy', 'grafanaRootURL', 'grafanaIngress', 'model'}
     require(not set(options) - allowed, 'Unknown monitoring setting: ' + ', '.join(sorted(set(options) - allowed)))
     if 'model' in options:
         require(isinstance(options['model'], str) and bool(options['model'].strip()), 'monitoring.model must be a nonempty model ID.')
@@ -108,8 +108,26 @@ def chart_values(recipe):
     require(isinstance(root_url, str) and (root_url == '' or re.fullmatch(r'(https?|%\(protocol\)s)://\S+/', root_url) is not None),
             'grafanaRootURL must be a URL ending in /, such as %(protocol)s://%(domain)s:%(http_port)s/grafana/')
     values['grafana']['rootURL'] = root_url
+    ingress = options.get('grafanaIngress')
+    if ingress is not None:
+        require(isinstance(ingress, dict) and set(ingress) <= {'className', 'host', 'path'}, 'Invalid monitoring grafanaIngress.')
+        ingress = dict(values['grafana']['ingress'], **ingress, enabled=True)
+        name = r'([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?'
+        require(isinstance(ingress['className'], str) and re.fullmatch(name, ingress['className']), 'grafanaIngress.className must name an IngressClass.')
+        require(isinstance(ingress['host'], str) and re.fullmatch(name, ingress['host']), 'grafanaIngress.host must be a DNS name, or omitted to match every host.')
+        require(isinstance(ingress['path'], str) and re.fullmatch(r'(/[A-Za-z0-9._~-]+)+', ingress['path']),
+                'grafanaIngress.path must be a path such as /grafana, without a trailing /.')
+        require(root_url == '' or re.fullmatch(r'(https?|%\(protocol\)s)://[^/\s]+'+re.escape(ingress['path'])+'/', root_url),
+                'grafanaRootURL must end in the grafanaIngress path, such as %(protocol)s://%(domain)s:%(http_port)s'+ingress['path']+'/')
+        values['grafana']['ingress'] = ingress
     values['grafana']['adminSecret'] = recipe.c['releasePrefix']+'-monitoring-grafana-admin'
     return values
+
+
+def grafana_path(recipe):
+    """Where Grafana serves its pages: under its ingress path when it has one, else at the root."""
+    ingress = chart_values(recipe)['grafana']['ingress']
+    return ingress['path'] if ingress['enabled'] else ''
 
 
 def image_list(recipe):
@@ -311,11 +329,12 @@ class Monitoring:
     def dashboard(self, port, admin=False):
         self.recipe.bound_cluster()
         credentials = self.admin_credentials() if admin else None
+        prefix = grafana_path(self.recipe)
         with self.forward('grafana', port, 3000) as proc:
             try:
                 if credentials:
-                    dashboard_login.open_dashboard(port, credentials, proc)
-                print('Dashboard: http://127.0.0.1:'+str(port)+'/d/llm-demo', flush=True)
+                    dashboard_login.open_dashboard(port, credentials, proc, prefix=prefix)
+                print('Dashboard: http://127.0.0.1:'+str(port)+prefix+'/d/llm-demo', flush=True)
                 print('Signed in as admin.' if admin else 'No login required for viewing.', flush=True)
                 print('Press Ctrl-C to close the tunnel.', flush=True)
                 while True:
@@ -404,7 +423,7 @@ class Monitoring:
                         time.sleep(2)
                     report['traffic'] = {'model': selected, 'requests': requests, 'before': before, 'after': after}
         with self.forward('grafana', port+2, 3000):
-            request = urllib.request.Request('http://127.0.0.1:'+str(port+2)+'/api/dashboards/uid/llm-demo')
+            request = urllib.request.Request('http://127.0.0.1:'+str(port+2)+grafana_path(self.recipe)+'/api/dashboards/uid/llm-demo')
             with urllib.request.urlopen(request, timeout=20) as response:
                 dashboard = json.load(response)
             require(dashboard.get('dashboard', {}).get('panels'), 'Grafana demo dashboard is missing or empty.')

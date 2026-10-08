@@ -11,9 +11,9 @@ import time
 import webbrowser
 
 
-def open_dashboard(port, credentials, process, timeout=120):
+def open_dashboard(port, credentials, process, timeout=120, prefix=''):
     path = '/' + secrets.token_urlsafe(32)
-    destination = 'http://127.0.0.1:' + str(port) + '/d/llm-demo'
+    destination = 'http://127.0.0.1:' + str(port) + prefix + '/d/llm-demo'
     deadline = time.monotonic() + timeout
 
     class LoginHandler(http.server.BaseHTTPRequestHandler):
@@ -33,7 +33,7 @@ def open_dashboard(port, credentials, process, timeout=120):
             try:
                 with contextlib.closing(http.client.HTTPConnection('127.0.0.1', port, timeout=15)) as connection:
                     body = json.dumps({'user': credentials[0], 'password': credentials[1]})
-                    connection.request('POST', '/login', body, {'Content-Type': 'application/json'})
+                    connection.request('POST', prefix + '/login', body, {'Content-Type': 'application/json'})
                     response = connection.getresponse()
                     if response.status != 200:
                         raise RuntimeError('Login failed')

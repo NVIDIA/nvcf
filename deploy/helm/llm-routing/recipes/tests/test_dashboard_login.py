@@ -34,7 +34,7 @@ class DashboardLoginTests(unittest.TestCase):
             return SimpleNamespace(status=response.status, headers=response.getheaders(), body=response.read())
 
     def run_login(self, action=None, *, status=200, cookies=None, browser_result=True,
-                  browser_error=False, timeout=2, process=None):
+                  browser_error=False, timeout=2, process=None, prefix=''):
         cookies = self.cookies if cookies is None else cookies
         result = SimpleNamespace(url=None, requests=[], error=None, output='', port=None)
         threads, failures = [], []
@@ -80,7 +80,8 @@ class DashboardLoginTests(unittest.TestCase):
                         contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
                     try:
                         dashboard_login.open_dashboard(result.port, self.credentials,
-                                                       process or Mock(poll=Mock(return_value=None)), timeout=timeout)
+                                                       process or Mock(poll=Mock(return_value=None)), timeout=timeout,
+                                                       prefix=prefix)
                     except RuntimeError as error:
                         result.error = error
                 for thread in threads:
@@ -121,6 +122,15 @@ class DashboardLoginTests(unittest.TestCase):
         self.assertEqual(result.output, '')
         self.assert_closed(result.url)
         self.assert_private(result)
+
+    def test_grafana_under_a_path_gets_the_login_and_the_redirect_under_it(self):
+        responses = []
+        result = self.run_login(lambda url: responses.append(self.request(url)), prefix='/grafana')
+        self.assertIsNone(result.error)
+        self.assertEqual([path for path, _, _ in result.requests], ['/grafana/login'])
+        response, = responses
+        self.assertEqual(response.status, 303)
+        self.assertEqual(dict(response.headers)['Location'], 'http://127.0.0.1:' + str(result.port) + '/grafana/d/llm-demo')
 
     def test_invalid_host_path_and_query_cannot_consume_sign_in(self):
         def visit(url):

@@ -65,6 +65,29 @@ class GrafanaAccessTests(unittest.TestCase):
         env = {entry['name']: entry for entry in grafana['spec']['template']['spec']['containers'][0]['env']}
         self.assertEqual(env['GF_SERVER_ROOT_URL']['value'], '%(protocol)s://%(domain)s:%(http_port)s/grafana/')
 
+    def test_no_ingress_by_default(self):
+        self.assertFalse(any(doc['kind'] == 'Ingress' for doc in self.docs))
+        self.assertNotIn('GF_SERVER_SERVE_FROM_SUB_PATH', self.env)
+
+    def test_ingress_serves_grafana_under_its_path(self):
+        values = copy.deepcopy(self.values)
+        values['grafana']['ingress'].update(enabled=True, className='traefik')
+        path = self.work/'grafana-ingress-values.json'
+        path.write_text(json.dumps(values))
+        rendered = subprocess.check_output(['helm', 'template', 'access-test', str(monitoring.CHART), '-f', str(path)], text=True)
+        docs = [doc for doc in yaml.safe_load_all(rendered) if doc]
+        ingress = next(doc for doc in docs if doc['kind'] == 'Ingress')
+        self.assertEqual(ingress['spec']['ingressClassName'], 'traefik')
+        self.assertEqual(ingress['spec']['rules'], [{'http': {'paths': [{
+            'path': '/grafana', 'pathType': 'Prefix',
+            'backend': {'service': {'name': 'access-test-grafana', 'port': {'name': 'http'}}}}]}}])
+        grafana = next(doc for doc in docs if doc['kind'] == 'Deployment' and doc['metadata']['name'] == 'access-test-grafana')
+        container = grafana['spec']['template']['spec']['containers'][0]
+        env = {entry['name']: entry for entry in container['env']}
+        self.assertEqual(env['GF_SERVER_ROOT_URL']['value'], '%(protocol)s://%(domain)s:%(http_port)s/grafana/')
+        self.assertEqual(env['GF_SERVER_SERVE_FROM_SUB_PATH']['value'], 'true')
+        self.assertEqual(container['readinessProbe']['httpGet']['path'], '/grafana/api/health')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -18,7 +18,8 @@ Edit `monitoring` in the saved configuration, then run `python3 recipe.py monito
 | `images` | [Chart defaults](charts/monitoring/values.yaml) | Override `collector`, `victoriaMetrics` or `grafana` with versioned images |
 | `networkPolicy.enabled` | `false` | Restrict monitoring egress. Requires an enforcing network plugin. |
 | `networkPolicy.apiServerCIDRs` | `[]` | API Service and endpoint IPs as `/32` or `/128` CIDRs when restricting egress |
-| `grafanaRootURL` | Grafana's default | Public URL when a reverse proxy serves Grafana under a path it strips, such as `%(protocol)s://%(domain)s:%(http_port)s/grafana/`. The `dashboard` tunnel can't render pages while it's set, so open the dashboard through that proxy. |
+| `grafanaRootURL` | Grafana's default | Public URL when a reverse proxy serves Grafana under a path it strips, such as `%(protocol)s://%(domain)s:%(http_port)s/grafana/`. The `dashboard` tunnel can't render pages while it's set, so open the dashboard through that proxy. With `grafanaIngress`, it defaults to the ingress path, a value you set must end in that path, and the tunnel keeps working. |
+| `grafanaIngress` | None | Serve Grafana through an Ingress, such as `{"className": "traefik"}`. Optional `className`, `host` (every host when omitted) and `path` (`/grafana`). Grafana serves its pages under that path itself, so the ingress controller needs no rewrite, and `dashboard` opens the same path through its tunnel. |
 
 Monitoring runs on `nodes.control` using the installation's storage class. Resource defaults and image versions are in [values.yaml](charts/monitoring/values.yaml). Setting `enabled=false` skips future automatic installation. To remove an installed release, use [Uninstall](#uninstall).
 

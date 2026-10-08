@@ -54,6 +54,12 @@
       }
     },
     "adminPassword": "",
-    "rootURL": ""
+    "rootURL": "",
+    "ingress": {
+      "enabled": false,
+      "className": "",
+      "host": "",
+      "path": "/grafana"
+    }
   }
 }
