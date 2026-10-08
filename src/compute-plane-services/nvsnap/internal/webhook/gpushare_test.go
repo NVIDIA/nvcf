@@ -95,7 +95,11 @@ func applyPatches(t *testing.T, pod *corev1.Pod, ops []PatchOp) *corev1.Pod {
 		if uerr := json.Unmarshal(vraw, &v); uerr != nil {
 			t.Fatal(uerr)
 		}
-		doc = patchInto(t, doc, strings.Split(strings.TrimPrefix(op.Path, "/"), "/"), op.Op, v)
+		parts := strings.Split(strings.TrimPrefix(op.Path, "/"), "/")
+		for i := range parts { // RFC 6901: "~1" is "/", "~0" is "~"
+			parts[i] = strings.ReplaceAll(strings.ReplaceAll(parts[i], "~1", "/"), "~0", "~")
+		}
+		doc = patchInto(t, doc, parts, op.Op, v)
 	}
 	out, err := json.Marshal(doc)
 	if err != nil {

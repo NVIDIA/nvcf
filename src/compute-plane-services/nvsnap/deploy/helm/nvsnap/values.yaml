@@ -333,6 +333,12 @@ agent:
       # reserve node memory. Set NVSNAP_PREWARM=0 to disable prewarm.
       memory: "96Gi"
 
+  # How workloads are captured and restored: "cachedir" (the engine's
+  # caches and model, restored into a fresh start) or "criu" (the whole
+  # process, restored in place of a fresh start). Applies to every capture
+  # on the cluster, including NVCA functions.
+  captureMethod: cachedir
+
   # Extra env injected verbatim into the agent container. The chart
   # auto-wires OTEL_EXPORTER_OTLP_ENDPOINT when .Values.jaeger.enabled
   # is true (see daemonset.yaml); use this block for custom OTel

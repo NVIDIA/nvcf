@@ -155,6 +155,10 @@ type RestoreRequest struct {
 	// driver reports every pod restored.
 	GPUShareFabricSession string `json:"gpushareFabricSession,omitempty"`
 	InetAddrMap           string `json:"inetAddrMap,omitempty"`
+
+	// PlaceholderContainerName picks the container in a multi-container
+	// placeholder pod; empty takes the first one.
+	PlaceholderContainerName string `json:"placeholderContainerName,omitempty"`
 }
 
 // RestoreResult is the result of a restore operation
@@ -360,7 +364,7 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 	if req.PlaceholderPodName != "" && req.PlaceholderNamespace != "" {
 		log.Info("Looking for placeholder container to restore into")
 		var findErr error
-		placeholderInfo, findErr = a.runtime.FindContainerByPod(ctx, req.PlaceholderNamespace, req.PlaceholderPodName, "")
+		placeholderInfo, findErr = a.runtime.FindContainerByPod(ctx, req.PlaceholderNamespace, req.PlaceholderPodName, req.PlaceholderContainerName)
 		if findErr != nil {
 			return nil, fmt.Errorf("failed to find placeholder container: %w", findErr)
 		}

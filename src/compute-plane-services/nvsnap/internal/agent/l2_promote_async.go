@@ -71,6 +71,8 @@ type l2PromoteInput struct {
 	HostDumpDir string            // source dir on the host (translated from checkpointDir)
 	PodMeta     map[string]string // SourcePodMeta for Manifest
 	CapturedAt  time.Time
+	// NodeName holds the checkpoint locally; a CRIU restore prefers it.
+	NodeName string
 }
 
 // runL2PromoteAsync runs the per-capture-PVC promote in a background
@@ -127,6 +129,12 @@ func runL2PromoteAsync(backend checkpointstore.Backend, log *logrus.Entry, in l2
 			Hash:          in.Hash,
 			CapturedAt:    in.CapturedAt,
 			SourcePodMeta: in.PodMeta,
+			// The restore side dispatches on the method: a CRIU capture
+			// restores into its pod as a placeholder (webhook criu_restore.go).
+			CaptureMethod: "criu",
+		}
+		if in.NodeName != "" {
+			manifest.CapturedOnNodes = []string{in.NodeName}
 		}
 
 		start := time.Now()

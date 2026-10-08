@@ -293,6 +293,11 @@ type Agent struct {
 	// directory on this node (see gpushare_fabric.go).
 	fabricSessions sync.Map
 
+	// criuRestore restores CRIU checkpoints into placeholder pods when CRIU
+	// is the cluster's capture method (criu_auto_restore.go).
+	criuRestore     *criuAutoRestorer
+	criuRestoreOnce sync.Once
+
 	config     Config
 	log        *logrus.Logger
 	runtime    runtime.Runtime
@@ -679,6 +684,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	// + cache data + injected pod fragments stay consistent.
 	if err := a.startWebhook(ctx, a.config.Webhook, backend); err != nil {
 		a.log.WithError(err).Error("agent admission webhook failed to start; continuing without it")
+	}
+	if err := a.startCRIUAutoRestore(ctx); err != nil {
+		a.log.WithError(err).Error("CRIU auto-restore failed to start; CRIU captures will not restore into new pods")
 	}
 	if a.modelVolume != nil {
 		// Completes writer volumes and binds them into pending readers on

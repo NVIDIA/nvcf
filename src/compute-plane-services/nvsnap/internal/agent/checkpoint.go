@@ -990,6 +990,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 			runL2PromoteAsync(a.l2Backend, log, l2PromoteInput{
 				Hash:        catalog.Hash,
 				HostDumpDir: hostDumpPath,
+				NodeName:    a.config.NodeName,
 				PodMeta: map[string]string{
 					"namespace":     req.Namespace,
 					"pod":           req.PodName,

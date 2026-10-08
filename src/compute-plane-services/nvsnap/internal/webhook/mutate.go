@@ -367,6 +367,13 @@ type Mutator struct {
 	// into. Most nvsnap workloads are single-container (0).
 	MainContainer int
 
+	// CheckpointHostRoot is the node directory holding CRIU checkpoints;
+	// a CRIU restore pod mounts it at /checkpoints.
+	CheckpointHostRoot string
+	// CRIURestoreBlocked reports a checkpoint that failed to restore; its
+	// pods start fresh instead. Nil: none is blocked.
+	CRIURestoreBlocked func(ctx context.Context, checkpointID string) bool
+
 	// EnsureLocal makes the capture's bytes available to the local
 	// Backend BEFORE Backend.Mount is called. Without this, a webhook
 	// call that lands on a node which doesn't have the capture cached
@@ -545,6 +552,19 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 		return nil, nil
 	}
 	span.SetAttributes(attribute.String("nvsnap.hash", hash))
+
+	// A CRIU capture: the pod becomes the placeholder the agent restores
+	// the captured process into.
+	plog := m.logger().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "hash": checkpointstore.ShortHash(hash)})
+	if id, cman := m.criuRestoreFor(ctx, pod, hash, plog); id != "" {
+		cp, err := m.criuRestorePatches(pod, id, cman)
+		if err != nil {
+			plog.WithError(err).Warn("CRIU restore: cannot prepare the pod; cold start")
+			return injectPatches, nil
+		}
+		plog.WithField("checkpoint", id).Info("CRIU restore: pod admitted as the restore placeholder")
+		return mergePatchPlan(append(injectPatches, cp...)), nil
+	}
 
 	// Resolve the manifest so the L2 dispatch can branch on the capture
 	// TYPE, not merely on "does a rox PVC exist". A rootfs capture
