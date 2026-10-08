@@ -1,0 +1,13 @@
+# Only sources reach the build: dependencies are installed and outputs built
+# inside it, from the lockfiles.
+.git
+.claude
+**/node_modules
+ui/dist
+ui/coverage
+ui/test-results
+ui/playwright-report
+backend/bin
+backend/static
+helm
+*.md

@@ -1,0 +1,392 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+openapi: 3.1.0
+info:
+  title: NVCF Gateway UI BFF
+  version: 0.1.0
+
+servers:
+  - url: /
+
+# The UI has no login (POR), so the BFF's own routes take no credentials.
+security: []
+
+tags:
+  - name: Config
+    description: Deployment settings the UI reads at runtime.
+  - name: Recipes
+    description: The catalog of model deployment recipes (Helm charts) the cluster can install.
+
+paths:
+  /api/v1/recipes:
+    get:
+      operationId: getRecipes
+      tags: [Recipes]
+      summary: Get the recipe catalog
+      description: >-
+        The recipe charts' published catalog (`index.json`, schema version 1, from
+        `deploy/helm/llm-routing/recipes` in NVIDIA/nvcf), served as read from a file
+        the operator mounts from a ConfigMap. The BFF reads the file again when it
+        changes, so updating the ConfigMap adds recipes without a restart. Fields the
+        UI doesn't read pass through undocumented.
+      responses:
+        "200":
+          description: The catalog.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecipeCatalog"
+        "503":
+          description: No catalog is mounted, or none has been valid since the BFF started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BffError"
+              example:
+                message: Recipe catalog unavailable
+        default:
+          $ref: "#/components/responses/BffErrorResponse"
+
+
+  /api/v1/config:
+    get:
+      operationId: getConfig
+      tags: [Config]
+      summary: Get the UI's runtime configuration
+      description: >-
+        Values the operator sets on the BFF's deployment. A field is omitted when
+        it isn't configured, and the UI degrades without it.
+      responses:
+        "200":
+          description: The configuration.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Config"
+              example:
+                gatewayUrl: https://llm-gateway.example.com
+                grafanaUrl: https://grafana.example.com/d/llm-demo
+        default:
+          $ref: "#/components/responses/BffErrorResponse"
+
+components:
+  responses:
+    BffErrorResponse:
+      description: BFF error, in the same `{message}` shape as the gateway's relayed errors.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/BffError"
+          example:
+            message: Not Found
+
+  schemas:
+    Config:
+      type: object
+      additionalProperties: false
+      properties:
+        gatewayUrl:
+          type: string
+          format: uri
+          description: >-
+            Public base URL of the LLM API Gateway, without `/v1`. The UI shows it and
+            builds its `curl` snippets from it. Omitted, the snippets use a `$GW_URL`
+            placeholder.
+        grafanaUrl:
+          type: string
+          anyOf:
+            - format: uri
+            - pattern: "^/([^/]|$)"
+          description: >-
+            Grafana dashboard URL: absolute, or a path starting with `/` for a Grafana
+            behind the same ingress as the UI. The UI adds `var-model` to filter it to
+            one model. Omitted, the UI shows no Grafana link.
+
+    RecipeCatalog:
+      type: object
+      required: [schemaVersion, recipes]
+      properties:
+        schemaVersion:
+          type: integer
+          const: 1
+        recipes:
+          type: array
+          description: One entry per model build. Builds of the same model share a `name`.
+          items:
+            $ref: "#/components/schemas/Recipe"
+
+    Recipe:
+      type: object
+      required: [id, name, availability, profiles]
+      properties:
+        id:
+          type: string
+          description: The build's catalog id, also the chart's `recipe` value, e.g. `qwen3.8-27b-nvfp4`.
+        name:
+          type: string
+          description: Display name of the model, e.g. `Qwen3.8-27B`.
+        description:
+          type: string
+          description: >-
+            One line about the model for its card. Not in the upstream export; the
+            operator's ConfigMap may add it.
+        servedModelId:
+          type: [string, "null"]
+          description: >-
+            The model name the endpoint registers with the gateway, as listed by
+            `GET /v1/registry`. Null when the build can't be deployed.
+        availability:
+          $ref: "#/components/schemas/RecipeAvailability"
+        precision:
+          type: [string, "null"]
+          description: Weight precision, e.g. `FP8`, `NVFP4`, `UD-IQ2_M`.
+        license:
+          type: [string, "null"]
+        model:
+          anyOf:
+            - $ref: "#/components/schemas/RecipeModelArtifact"
+            - type: "null"
+        runtime:
+          anyOf:
+            - $ref: "#/components/schemas/RecipeRuntime"
+            - type: "null"
+        profiles:
+          type: array
+          description: Hardware configurations the build is packaged for. Empty when it can't be deployed.
+          items:
+            $ref: "#/components/schemas/RecipeProfile"
+
+    RecipeAvailability:
+      type: object
+      required: [status, deployable]
+      properties:
+        status:
+          type: string
+          description: "`available`, `planned` or `unavailable`."
+        deployable:
+          type: boolean
+        reason:
+          type: string
+          description: Why the build can't be deployed yet.
+        checkedAt:
+          type: string
+          format: date
+
+    RecipeModelArtifact:
+      type: object
+      required: [repository]
+      properties:
+        repository:
+          type: string
+          description: Hugging Face repository of the weights, e.g. `Qwen/Qwen3.8-27B-FP8`.
+        revision:
+          type: string
+
+    RecipeRuntime:
+      type: object
+      required: [backend, version]
+      properties:
+        backend:
+          type: string
+          description: Serving engine, e.g. `sglang` or `llama.cpp`.
+        version:
+          type: string
+          description: >-
+            Engine and version, e.g. `SGLang v0.5.19`, or `llama.cpp f872b59` for a
+            runtime built from source. The upstream export gives source builds a
+            `revision` instead; helm/recipes/catalog.jq turns it into this field.
+        image:
+          type: string
+
+    RecipeProfile:
+      type: object
+      required: [id, hardware, modelNodeCount, gpusPerNode, perNode, validation, deployment]
+      properties:
+        id:
+          type: string
+          description: The chart's `profileName` value, e.g. `spark-fp8`.
+        hardware:
+          $ref: "#/components/schemas/RecipeHardware"
+        modelNodeCount:
+          type: integer
+          minimum: 1
+        gpusPerNode:
+          type: integer
+          minimum: 1
+        perNode:
+          type: array
+          items:
+            $ref: "#/components/schemas/RecipeNodeRole"
+        fabric:
+          description: Node-to-node network the profile needs, for multi-node tensor parallelism.
+          anyOf:
+            - $ref: "#/components/schemas/RecipeFabric"
+            - type: "null"
+        workload:
+          $ref: "#/components/schemas/RecipeWorkload"
+        validation:
+          $ref: "#/components/schemas/RecipeValidation"
+        deployment:
+          $ref: "#/components/schemas/RecipeDeployment"
+
+    RecipeHardware:
+      type: object
+      required: [gpuProducts, gpuCount]
+      properties:
+        gpuProducts:
+          type: array
+          description: >-
+            GPU products the profile runs on, as GPU Feature Discovery labels them
+            (`nvidia.com/gpu.product`), e.g. `NVIDIA-GB10`.
+          items:
+            type: string
+        gpuCount:
+          type: integer
+          description: GPUs the whole profile uses, across its nodes.
+        architecture:
+          type: string
+        memoryMode:
+          type: string
+          description: "`unified` on GB10, where host and GPU share one memory pool."
+
+    RecipeNodeRole:
+      type: object
+      required: [rank, role, resources]
+      properties:
+        rank:
+          type: integer
+        role:
+          type: string
+        resources:
+          type: object
+          required: [memoryRequestBytes]
+          properties:
+            memoryRequestBytes:
+              type: integer
+              description: Memory the model pod reserves on this node.
+            gpuRequest:
+              type: integer
+        storage:
+          type: object
+          properties:
+            claimRequestBytes:
+              type: integer
+              description: Model cache the node needs.
+            offloadMedium:
+              type: string
+              description: "`local-nvme` when the profile offloads to a local NVMe drive."
+
+    RecipeFabric:
+      type: object
+      properties:
+        minimumGbps:
+          type: number
+
+    RecipeWorkload:
+      type: object
+      properties:
+        defaultContextTokens:
+          type: integer
+        defaultConcurrency:
+          type: integer
+        maximumContextTokens:
+          type: integer
+        maximumConcurrency:
+          type: integer
+
+    RecipeValidation:
+      type: object
+      required: [runtimeStatus]
+      properties:
+        runtimeStatus:
+          type: string
+          description: >-
+            How far the runtime was validated on this hardware: `hardware-validated`,
+            `smoke-tested`, `pending`, ...
+        workload:
+          anyOf:
+            - $ref: "#/components/schemas/RecipeValidationRun"
+            - type: "null"
+        automaticHelmStatus:
+          type: string
+          description: Outcome of installing the chart in one `helm install`, e.g. `smoke-tested` or `failed`.
+        automaticHelmWorkload:
+          anyOf:
+            - $ref: "#/components/schemas/RecipeValidationRun"
+            - type: "null"
+
+    RecipeValidationRun:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        contextLength:
+          type: integer
+        concurrency:
+          type: integer
+        reason:
+          type: string
+          description: Why the run stopped, when it failed.
+
+    RecipeDeployment:
+      type: object
+      required: [chart, lifecycle, values, requiredSiteValues]
+      properties:
+        chart:
+          $ref: "#/components/schemas/RecipeChart"
+        lifecycle:
+          type: string
+          description: "`automatic` when one `helm install` qualifies, downloads and serves."
+        values:
+          type: object
+          required: [recipe, profileName]
+          properties:
+            recipe:
+              type: string
+            profileName:
+              type: string
+        requiredSiteValues:
+          type: array
+          description: >-
+            Chart values the cluster must supply, e.g. `nodes`, `runtimeClassName`,
+            `storageClassName`, `sharedCAConfigMap`, `nodeCapabilities`.
+          items:
+            type: string
+
+    RecipeChart:
+      type: object
+      required: [name, version]
+      properties:
+        name:
+          type: string
+          description: Chart name, e.g. `pylon-sglang-recipe`.
+        version:
+          type: string
+        repository:
+          type: string
+          pattern: "^oci://"
+          description: >-
+            OCI repository the chart is published to, without the chart name, e.g.
+            `oci://nvcr.io/org`. Not in the upstream export, which packages charts
+            locally; the operator's ConfigMap adds it per recipe.
+
+    BffError:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string

@@ -1,0 +1,60 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.4.5/schema.json",
+	"root": true,
+	"vcs": {
+		"enabled": false,
+		"clientKind": "git",
+		"useIgnoreFile": false
+	},
+	"files": {
+		"ignoreUnknown": false,
+		"includes": [
+			"**/src/**/*",
+			"**/e2e/**/*",
+			"**/index.html",
+			"**/vite.config.ts",
+			"**/vitest.setup.ts",
+			"**/orval.config.ts",
+			"**/playwright.config.ts",
+			"**/scripts/**/*",
+			"!**/src/styles.css"
+		]
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"indentWidth": 2
+	},
+	"assist": {
+		"actions": {
+			"source": { "organizeImports": "on", "useSortedAttributes": "on" }
+		}
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"correctness": {
+				"noUnusedVariables": {
+					"options": {
+						"ignoreRestSiblings": true
+					},
+					"level": "error"
+				},
+				"noUnusedImports": "error"
+			}
+		}
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double",
+			"indentWidth": 2
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["**/src/generated/**"],
+			"linter": { "enabled": false }
+		}
+	]
+}

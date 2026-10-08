@@ -1,0 +1,586 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+openapi: 3.1.0
+info:
+  title: LLM API Gateway
+  version: 0.1.0
+
+servers:
+  - url: /
+
+tags:
+  - name: Registry
+    description: What the router has registered, with health per model and per cluster.
+  - name: Models
+    description: OpenAI-compatible model listing. Lists only models that can take traffic now.
+  - name: Chat
+    description: OpenAI-compatible chat completions, routed by bare model name.
+
+paths:
+  /v1/registry:
+    get:
+      operationId: getRegistry
+      tags: [Registry]
+      summary: List registered models with health and per-cluster server counts
+      description: |
+        Every model advertised by an open registration, routable or not.
+
+        - `health` is `Healthy` when any cluster has `healthyServers` above 0.
+        - Server counts are Pylon replicas, not capacity.
+        - Readable without a key when the gateway runs with `PUBLIC_READ_ENDPOINTS=true`
+      security:
+        - {}
+        - bearerAuth: []
+      parameters:
+        - name: model
+          in: query
+          required: false
+          description: >-
+            Exact model name to filter on. An empty value returns `400`. A model
+            that isn't registered returns `200` with an empty `models` list.
+          schema:
+            type: string
+            minLength: 1
+          example: GLM-5.3-UD-IQ2_M
+      responses:
+        "200":
+          description: Registered models, sorted by `model`; clusters sorted by `clusterId`.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Registry"
+              examples:
+                healthy:
+                  summary: One healthy model
+                  value:
+                    generatedAt: "2026-10-06T07:16:09Z"
+                    models:
+                      - model: GLM-5.3-UD-IQ2_M
+                        health: Healthy
+                        clusters:
+                          - clusterId: spark-cluster
+                            registeredServers: 1
+                            healthyServers: 1
+                unhealthy:
+                  summary: Registered but not routable
+                  value:
+                    generatedAt: "2026-10-06T07:16:09Z"
+                    models:
+                      - model: qwen/qwen3-8b
+                        health: Unhealthy
+                        clusters:
+                          - clusterId: spark-cluster
+                            registeredServers: 1
+                            healthyServers: 0
+                empty:
+                  summary: Nothing registered (fresh install or gateway restart)
+                  value:
+                    generatedAt: "2026-10-06T07:16:09Z"
+                    models: []
+        default:
+          $ref: "#/components/responses/GatewayErrorResponse"
+
+  /v1/models:
+    get:
+      operationId: listModels
+      tags: [Models]
+      summary: List the models that can take traffic now
+      description: >-
+        OpenAI list format. Only models with a healthy server appear, so a model is
+        listed here exactly when `/v1/registry` reports it `Healthy`. `created` is when
+        this gateway process first saw the model, and resets on restart.
+      security:
+        - {}
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Routable models, sorted by `id`.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelList"
+              example:
+                object: list
+                data:
+                  - id: GLM-5.3-UD-IQ2_M
+                    object: model
+                    created: 1791240539
+                    owned_by: inference-endpoints
+        default:
+          $ref: "#/components/responses/GatewayErrorResponse"
+
+  /v1/models/{id}:
+    get:
+      operationId: retrieveModel
+      tags: [Models]
+      summary: Retrieve one routable model
+      description: >-
+        Model names may contain `/`. The gateway takes everything after
+        `/v1/models/` in the decoded path as the id, so both raw and percent-encoded
+        slashes work. Generated clients don't encode path parameters, so the UI
+        should look up a single model with `GET /v1/registry?model=` instead.
+      security:
+        - {}
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The model name exactly as clients send it.
+          schema:
+            type: string
+          example: GLM-5.3-UD-IQ2_M
+      responses:
+        "200":
+          description: The model.
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Model"
+              example:
+                id: GLM-5.3-UD-IQ2_M
+                object: model
+                created: 1791240539
+                owned_by: inference-endpoints
+        default:
+          $ref: "#/components/responses/GatewayErrorResponse"
+
+  /v1/chat/completions:
+    post:
+      operationId: createChatCompletion
+      tags: [Chat]
+      summary: Create a chat completion, optionally streamed
+      description: |
+        Routed by bare model name to a healthy registered endpoint.
+
+        Unknown request fields are forwarded to the backend unchanged. The demo relies on
+        this for model-specific settings such as GLM's `chat_template_kwargs`.
+
+        With `stream: true`, the response is `text/event-stream`:
+        - Each event is `data: <ChatCompletionChunk JSON>`, and the stream ends with `data: [DONE]`.
+        - With `stream_options.include_usage`, the last chunk carries `usage` and empty `choices`.
+        - Reasoning models stream `delta.reasoning_content` separately from `delta.content`.
+        - A failure after streaming has started ends the stream without `[DONE]`, so treat
+          a missing `[DONE]` as an error.
+        - Long generations aren't cut off. `NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT` (60 s) only
+          drops a client that stops reading for that long.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCompletionRequest"
+            examples:
+              streaming:
+                summary: Streaming request as sent by the recipe client (GLM settings)
+                value:
+                  model: GLM-5.3-UD-IQ2_M
+                  messages:
+                    - role: user
+                      content: What is 17 multiplied by 19? Give one short sentence.
+                  max_tokens: 512
+                  temperature: 0
+                  seed: 7
+                  stream: true
+                  stream_options:
+                    include_usage: true
+                  reasoning_effort: low
+                  chat_template_kwargs:
+                    clear_thinking: true
+      responses:
+        "200":
+          description: >-
+            A chat completion (`application/json`) or, with `stream: true`, a stream of
+            `ChatCompletionChunk` events (`text/event-stream`).
+          headers:
+            X-Request-Id:
+              $ref: "#/components/headers/RequestId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCompletion"
+            text/event-stream:
+              schema:
+                type: string
+                description: >-
+                  Server-sent events. Each `data:` line holds a `ChatCompletionChunk`,
+                  and the stream ends with `data: [DONE]`.
+              example: |
+                data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1791245000,"model":"GLM-5.3-UD-IQ2_M","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"17 × 19 = 323."},"finish_reason":null}]}
+
+                data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1791245000,"model":"GLM-5.3-UD-IQ2_M","choices":[{"index":0,"delta":{"content":"17 multiplied by 19 equals 323."},"finish_reason":"stop"}]}
+
+                data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1791245000,"model":"GLM-5.3-UD-IQ2_M","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":18,"total_tokens":38}}
+
+                data: [DONE]
+        default:
+          $ref: "#/components/responses/GatewayErrorResponse"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: >-
+        Static caller key. The gateway compares its SHA-256 against the mounted key file,
+        which it reloads every 30 s. The BFF adds this header; the browser never holds a key.
+
+  headers:
+    RequestId:
+      description: Request id the gateway assigns to every response.
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    GatewayErrorResponse:
+      description: Gateway error.
+      headers:
+        X-Request-Id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/GatewayError"
+          examples:
+            invalid_model_filter:
+              summary: 400, empty registry filter
+              value:
+                error:
+                  code: invalid_model_filter
+                  message: The model filter must not be empty
+                  param: model
+                  type: invalid_request_error
+            invalid_api_key:
+              summary: 401, missing or invalid key
+              value:
+                error:
+                  code: invalid_api_key
+                  message: Missing or invalid API key
+                  param: ""
+                  type: invalid_request_error
+            model_not_found:
+              summary: 404, model not listed
+              value:
+                error:
+                  code: model_not_found
+                  message: The model 'does-not-exist' does not exist
+                  param: model
+                  type: invalid_request_error
+            model_listing_unavailable:
+              summary: 502, router listing failed
+              value:
+                error:
+                  code: model_listing_unavailable
+                  message: The model listing is temporarily unavailable
+                  param: ""
+                  type: server_error
+            overloaded_error:
+              summary: 529, every server busy
+              value:
+                error:
+                  code: overloaded_error
+                  message: Inference capacity is temporarily unavailable.
+                  param: ""
+                  type: overloaded_error
+            relayed_message:
+              summary: Relayed router error, 413, or unknown route ({message} shape)
+              value:
+                message: Request Entity Too Large
+
+  schemas:
+    Registry:
+      type: object
+      required: [generatedAt, models]
+      properties:
+        generatedAt:
+          type: string
+          format: date-time
+          description: When the router listing this response is built from was refreshed.
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/RegistryModel"
+
+    RegistryModel:
+      type: object
+      required: [model, health, clusters]
+      properties:
+        model:
+          type: string
+          description: The model name exactly as clients send it. May contain `/`.
+        health:
+          $ref: "#/components/schemas/RegistryHealth"
+        clusters:
+          type: array
+          items:
+            $ref: "#/components/schemas/RegistryCluster"
+
+    RegistryHealth:
+      type: string
+      enum: [Healthy, Unhealthy]
+      description: "`Healthy` when any cluster has a routable server; otherwise `Unhealthy`."
+
+    RegistryCluster:
+      type: object
+      required: [clusterId, registeredServers, healthyServers]
+      properties:
+        clusterId:
+          type: string
+          description: Authenticated cluster identity (the Pylon Operator's `--cluster-id`).
+        registeredServers:
+          type: integer
+          format: int32
+          minimum: 0
+          description: Pylon replicas from this cluster with an open registration for the model.
+        healthyServers:
+          type: integer
+          format: int32
+          minimum: 0
+          description: The subset of those replicas that is routable now.
+
+    Model:
+      type: object
+      required: [id, object, created, owned_by]
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          const: model
+        created:
+          type: integer
+          format: int64
+          description: Unix seconds when this gateway process first saw the model; resets on restart.
+        owned_by:
+          type: string
+          examples: [inference-endpoints]
+
+    ModelList:
+      type: object
+      required: [object, data]
+      properties:
+        object:
+          type: string
+          const: list
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Model"
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      description: OpenAI-style error object, for errors the gateway raises itself.
+      properties:
+        error:
+          type: object
+          required: [message]
+          properties:
+            code:
+              type: string
+              description: >-
+                Seen: `invalid_api_key`, `model_not_found`, `invalid_model_filter`,
+                `model_listing_unavailable`, `overloaded_error`.
+            message:
+              type: string
+            param:
+              type: string
+            type:
+              type: string
+
+    MessageError:
+      type: object
+      required: [message]
+      description: Echo's default error body, for errors relayed from the router, body-read failures and `413`.
+      properties:
+        message:
+          type: string
+
+    GatewayError:
+      oneOf:
+        - $ref: "#/components/schemas/ErrorResponse"
+        - $ref: "#/components/schemas/MessageError"
+
+    ChatCompletionRequest:
+      type: object
+      required: [model, messages]
+      additionalProperties: true
+      description: >-
+        The fields the demo sends. Anything else is forwarded to the backend unchanged.
+      properties:
+        model:
+          type: string
+          description: Bare model name, exactly as listed by `/v1/models`.
+        messages:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+        stream:
+          type: boolean
+          default: false
+        stream_options:
+          type: object
+          properties:
+            include_usage:
+              type: boolean
+              description: Send a final chunk with `usage` and empty `choices`.
+        max_tokens:
+          type: integer
+          minimum: 1
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+        seed:
+          type: integer
+        stop:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+        reasoning_effort:
+          type: string
+          description: Reasoning budget hint (`low`, `medium`, `high`); honoured by reasoning models such as GLM.
+        chat_template_kwargs:
+          type: object
+          additionalProperties: true
+          description: >-
+            Backend-specific chat template options, forwarded as-is. GLM in the demo:
+            `{"clear_thinking": true}`.
+
+    ChatMessage:
+      type: object
+      required: [role, content]
+      additionalProperties: true
+      properties:
+        role:
+          type: string
+          enum: [system, developer, user, assistant, tool]
+        content:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+                additionalProperties: true
+        name:
+          type: string
+
+    ChatCompletion:
+      type: object
+      required: [id, object, created, model, choices]
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          const: chat.completion
+        created:
+          type: integer
+          format: int64
+        model:
+          type: string
+          description: The model name from the request.
+        choices:
+          type: array
+          items:
+            type: object
+            required: [index, message]
+            properties:
+              index:
+                type: integer
+              message:
+                type: object
+                properties:
+                  role:
+                    type: string
+                  content:
+                    type: [string, "null"]
+                  reasoning_content:
+                    type: [string, "null"]
+                    description: Reasoning text from reasoning models, apart from the answer.
+              finish_reason:
+                type: [string, "null"]
+        usage:
+          $ref: "#/components/schemas/CompletionUsage"
+
+    ChatCompletionChunk:
+      type: object
+      required: [id, object, created, model, choices]
+      description: One `data:` event of a streamed chat completion.
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          const: chat.completion.chunk
+        created:
+          type: integer
+          format: int64
+        model:
+          type: string
+        choices:
+          type: array
+          description: Empty on the final usage chunk.
+          items:
+            type: object
+            required: [index, delta]
+            properties:
+              index:
+                type: integer
+              delta:
+                type: object
+                properties:
+                  role:
+                    type: string
+                  content:
+                    type: [string, "null"]
+                  reasoning_content:
+                    type: [string, "null"]
+                    description: Streamed reasoning; render apart from `content`.
+              finish_reason:
+                type: [string, "null"]
+        usage:
+          oneOf:
+            - $ref: "#/components/schemas/CompletionUsage"
+            - type: "null"
+
+    CompletionUsage:
+      type: object
+      required: [prompt_tokens, completion_tokens, total_tokens]
+      additionalProperties: true
+      properties:
+        prompt_tokens:
+          type: integer
+        completion_tokens:
+          type: integer
+        total_tokens:
+          type: integer
+
