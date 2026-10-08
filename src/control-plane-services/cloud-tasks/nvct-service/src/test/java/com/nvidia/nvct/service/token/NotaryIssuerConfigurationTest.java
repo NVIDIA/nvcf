@@ -132,6 +132,10 @@ class NotaryIssuerConfigurationTest {
     private static StandardEnvironment environment(Map<String, Object> overrides) throws IOException {
         var environment = new StandardEnvironment();
         var sources = environment.getPropertySources();
+        // The shipped YAML is the subject here, so drop the JVM and OS sources
+        // StandardEnvironment ranks ahead of it.
+        sources.remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME);
+        sources.remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME);
         if (!overrides.isEmpty()) {
             sources.addFirst(new MapPropertySource("operator", overrides));
         }
