@@ -1,12 +1,12 @@
 # Run models through a shared gateway
 
-Install shared routing once, then install each model recipe with Helm. Each model has its own release and persistent cache. Applications select a model through the same gateway address and caller credential.
+Install the shared routing release `llm-stack` in namespace `llm-stack`, then install each model recipe with Helm. Each model has its own release and persistent cache. Applications select a model through the same gateway address and caller credential.
 
 ## Before you start
 
 - Use Kubernetes with the NVIDIA device plugin, a GPU RuntimeClass and persistent storage. Choose available nodes from the [recipe catalog](recipes/index.json).
 - Install Helm, kubectl and Python 3.11+ on your workstation.
-- Run these commands from `deploy/helm/llm-routing` in one terminal. The examples use namespace `llm-stack`.
+- Run these commands from `deploy/helm/llm-routing` in one terminal. The supported release and namespace are both `llm-stack`.
 
 The committed charts and [image values](dev-images/values.yaml) use images preloaded on the shared Spark nodes. [Prepare new images and charts](dev-images/README.md) only when sources change or another cluster needs them.
 
@@ -22,9 +22,17 @@ helm upgrade --install llm-stack dev-images/charts/llm-shared-stack-0.1.0.tgz \
   --values dev-images/values.yaml --wait --timeout 10m
 ```
 
-Helm installs the gateway, router and namespace-scoped operator with an empty model registry. A chart verification Job checks gateway TLS, model discovery, acceptance of the caller key and rejection of an invalid key before Helm reports success. The same checks run on upgrades with registered models. The chart generates the caller credential and TLS material on first installation and preserves them on upgrades. The committed values watch `llm-stack`. For another namespace, also pass `--set operator.clusterId=NAME --set 'operator.watchNamespaces[0]=NAME'`. Helm creates the InferenceEndpoint CRD when absent and reuses a compatible CRD from another installation. The release that owns the CRD updates it on upgrades.
+Helm installs the gateway, router and namespace-scoped operator with an empty model registry. A chart verification Job checks gateway TLS, model discovery, acceptance of the caller key and rejection of an invalid key before Helm reports success. The same checks run on upgrades with registered models. The chart generates the caller credential and TLS material on first installation and preserves them on upgrades. The operator watches `llm-stack`. The operator chart defaults `installCRDs` to `true`, so the shared release owns the templated InferenceEndpoint CRD and updates its schema on upgrades. For an externally managed CRD, set `operator.installCRDs=false`. The CRD is retained on uninstall.
 
 ## 2. Install a model
+
+List known recipe IDs, precisions, hardware profiles and validation status:
+
+```bash
+python3 llm.py recipes
+```
+
+This reads the local catalog, including recipes that are not installed. Use `--json` for the complete catalog. Choose a recipe and profile from this table before checking capacity.
 
 Check current GPU allocation and downloaded model caches. Add `--json` for JSON output.
 
@@ -75,7 +83,7 @@ Both models use the same gateway and caller credential. Each keeps its own Helm 
 | [Qwen3.8-27B](recipes/values/qwen3.8-27b.yaml) | FP8 | One GB10. Cached Helm startup and inference tested. |
 | [Qwen3.8-27B](recipes/values/qwen3.8-27b-nvfp4.yaml) | NVIDIA NVFP4 | One GB10. Cached Helm startup, inference and model isolation tested. |
 | [GLM-5.3](recipes/values/glm-5.3.yaml) | UD-IQ2_M | Two GB10s. Combined runtime tested. [Automatic Helm startup](ADVANCED.md#helm-glm-recipe) stopped at the host-memory guard. |
-| Qwen3.8-Flash-Next | NVFP4 | [NVMe values](recipes/values/qwen3.8-flash-next-nvme.yaml) or [two-node values](recipes/values/qwen3.8-flash-next-tp2.yaml). Live validation pending. [Phased deployment](ADVANCED.md#helm-flash-next-recipes). |
+| Qwen3.8-Flash-Next | NVFP4 | Automatic [one-node NVMe](recipes/values/qwen3.8-flash-next-nvme.yaml) startup and short-prompt inference tested at context 8,192 and concurrency 1. [Two-node tensor parallel](recipes/values/qwen3.8-flash-next-tp2.yaml) validation pending. [Installation](ADVANCED.md#helm-flash-next-recipes). |
 | Nemotron 5 Nano 12B | Unverified | Unavailable. Exact public model artifact not verified. |
 | Nemotron 5 Super 49B | Unverified | Unavailable. Exact public model artifact not verified. |
 | Qwen3.8-4B | Unverified | Unavailable. Exact public model artifact not verified. |
@@ -84,6 +92,8 @@ Both models use the same gateway and caller credential. Each keeps its own Helm 
 The catalog covers seven model families and eight entries, including two Qwen3.8-27B precisions. Deploy entries with `availability.deployable: true`. Planned and unavailable entries have no deployment profiles. Their dated primary sources and upstream candidates are recorded in the catalog.
 
 The listed tests used short prompts. The catalog records validation for each hardware profile and workload separately. Additional hardware profiles use the same installation interface after qualification.
+
+Flash-Next uses recipe `qwen3.8-flash-next`. Select `spark-nvfp4-nvme` for one node with local NVMe offload or `spark-nvfp4-tp2` for two nodes with a suitable interconnect. Its [installation guide](ADVANCED.md#helm-flash-next-recipes) shows how to supply verified node capabilities and print the Helm command for that placement.
 
 ## 3. Discover and call models
 
@@ -97,7 +107,7 @@ python3 llm.py chat --model qwen3.8-27b-nvfp4 --stream \
   'Explain what a GPU does in two sentences.'
 ```
 
-The `models` and `chat` commands retrieve the gateway CA and caller key, open a temporary local connection, and clean up their local connection files when they finish. Use [connection overrides](ADVANCED.md#shared-cli-connection-options) for another context, namespace or an older installation.
+The `models` and `chat` commands retrieve the gateway CA and caller key, open a temporary local connection, and clean up their local connection files when they finish. Use [connection overrides](ADVANCED.md#shared-cli-connection-options) for another context or an existing caller credential.
 
 ## 4. Stop or uninstall a model
 
@@ -145,4 +155,4 @@ This removes the model's workloads, endpoint and Helm release. Its persistent vo
 
 Follow the [complete removal procedure](ADVANCED.md#remove-downloaded-model-files) to record cache ownership, uninstall the release, then remove its storage. There is no combined uninstall-and-delete command. Delete only this model's dedicated cache claims after checking ownership and use. External or shared claims stay untouched. Physical disk reclamation depends on the volume's reclaim policy and storage provisioner.
 
-[Advanced deployment and configuration](ADVANCED.md) covers credentials, recovery, GLM, monitoring and the existing Python workflows. The common catalog is ready for API consumers. The [recipe API and UI integration](https://github.com/NVIDIA/nvcf/issues/2337) is tracked separately.
+[Advanced deployment and configuration](ADVANCED.md) covers shared-stack upgrades and uninstall, credentials, model recovery, GLM and monitoring.

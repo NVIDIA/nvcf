@@ -12,12 +12,12 @@ import unittest
 from unittest.mock import Mock, patch
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('test_shared_stack_images', HERE / 'stack_images.py')
+spec = importlib.util.spec_from_file_location('test_shared_stack_images', HERE / 'dev-images/image_preload.py')
 images = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(images)
 
 
-class StackImageTests(unittest.TestCase):
+class ImagePreloadTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -218,7 +218,7 @@ class StackImageTests(unittest.TestCase):
             self.prepare()
 
     def test_adapter_has_no_model_recipe_imports(self):
-        text = (HERE / 'stack_images.py').read_text()
+        text = (HERE / 'dev-images/image_preload.py').read_text()
         self.assertNotIn('import recipe', text)
         self.assertNotIn('Recipe(', text)
         self.assertNotIn('glm', text.lower())

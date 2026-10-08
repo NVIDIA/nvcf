@@ -29,6 +29,8 @@ Build outputs and reuse:
 - Images use `Never` pull policy. Replacement nodes and evicted images need preloading again.
 - Rebuilding adds image content to node caches. It does not remove old images, restart pods or upgrade releases.
 
+To retry a failed preparation, pass `--resume-from BUILD_DIR` using the printed build-state directory, with the same context and namespace and `--allow-containerd-import`. The helper reuses its private image configuration and node identities, then stages chart packages again.
+
 Commit `dev-images/values.yaml` and `dev-images/charts/` together with the source changes, then follow the [installation guide](../README.md). The script does not commit or push.
 
-See [advanced image distribution](../recipes/BUILDING.md) for registry images, saved-configuration retries and component rebuilds. Remove this temporary workflow when published images and charts replace it.
+See [image distribution](../recipes/BUILDING.md) for registry references and verification image settings. Remove this temporary workflow when published images and charts replace it.

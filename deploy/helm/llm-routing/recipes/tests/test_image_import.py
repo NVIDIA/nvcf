@@ -18,12 +18,17 @@ import tarfile
 import tempfile
 import unittest
 from contextlib import ExitStack, redirect_stdout
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('image_import_recipe', HERE/'recipe.py')
+spec = importlib.util.spec_from_file_location('tested_image_import', HERE.parent/'dev-images/image_tools.py')
 tool = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tool)
+
+
+def save(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value))
 
 
 class ImageImportTests(unittest.TestCase):
@@ -31,25 +36,30 @@ class ImageImportTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = pathlib.Path(self.tmp.name)
-        self.config = json.loads((HERE/'config.example.json').read_text())
-        self.recipe = tool.Recipe(self.config, self.root/'work')
+        self.config = {'context': 'image-import-test', 'namespace': 'image-test',
+                       'controlNode': 'routing-node', 'containerd': {'socketPath': '/run/k3s/containerd/containerd.sock'}}
+        self.work = self.root/'work'
+        self.work.mkdir()
+        self.image = 'localhost/test/gateway:edited'
+        self.kc = ['kubectl', '--context', self.config['context'], '-n', self.config['namespace']]
+        self.hm = ['helm', '--kube-context', self.config['context'], '-n', self.config['namespace']]
         self.archive = self.root/'images.tar'
-        manifest = json.dumps([{'RepoTags': [self.recipe.image('gateway', 'edited')]}]).encode()
+        manifest = json.dumps([{'RepoTags': [self.image]}]).encode()
         with tarfile.open(self.archive, 'w') as tar:
             info = tarfile.TarInfo('manifest.json')
             info.size = len(manifest)
             tar.addfile(info, io.BytesIO(manifest))
-        self.release = self.config['releasePrefix']+'-images'
+        self.release = 'image-loader'
         self.base = self.release+'-2'
         self.server = self.base+'-server'
-        self.nodes = [self.config['nodes']['control']]
+        self.nodes = [self.config['controlNode']]
         self.names = [self.server]+[self.base+'-'+node for node in self.nodes]
         self.jobs = [{'metadata': {'name': name, 'uid': name+'-uid', 'annotations': {
             'meta.helm.sh/release-name': self.release, 'meta.helm.sh/release-namespace': self.config['namespace']}}}
             for name in self.names]
         self.pod = {'metadata': {'name': self.server+'-pod', 'uid': 'pod-uid',
                                'ownerReferences': [{'kind': 'Job', 'uid': self.server+'-uid'}]},
-                    'spec': {'nodeName': self.config['nodes']['control']}}
+                    'spec': {'nodeName': self.config['controlNode']}}
         self.existing = []
         self.prior_jobs = []
         self.commands = []
@@ -65,12 +75,12 @@ class ImageImportTests(unittest.TestCase):
     def output(self, command, **kwargs):
         self.calls.append(command)
         if command[0] == 'helm':
-            action = command[len(self.recipe.hm):]
+            action = command[len(self.hm):]
             if action[0] == 'list':
                 return json.dumps(self.existing)
             if action[0] == 'status':
                 return '{"version": 2}'
-        action = command[len(self.recipe.kc):]
+        action = command[len(self.kc):]
         if action == ['get', 'jobs', '-o', 'json']:
             return json.dumps({'items': self.prior_jobs})
         if action[:2] == ['get', 'jobs']:
@@ -90,7 +100,7 @@ class ImageImportTests(unittest.TestCase):
 
     def execute(self, command, **kwargs):
         self.commands.append(command)
-        action = command[len(self.recipe.kc):]
+        action = command[len(self.kc):]
         if action[0] == 'exec':
             self.assertTrue(kwargs['timeout'] > 0)
             self.assertIn('-i', action)
@@ -110,13 +120,14 @@ class ImageImportTests(unittest.TestCase):
 
     def invoke(self):
         with ExitStack() as stack:
-            stack.enter_context(patch.object(self.recipe, 'bound_cluster'))
-            helm = stack.enter_context(patch.object(self.recipe, 'helm_apply', side_effect=lambda *args, **kwargs: self.helm_calls.append((args, kwargs))))
-            stack.enter_context(patch.object(tool, 'output', side_effect=self.output))
-            stack.enter_context(patch.object(tool, 'run', side_effect=self.execute))
+            helm = Mock(side_effect=lambda *args, **kwargs: self.helm_calls.append((args, kwargs)))
             stack.enter_context(patch.object(tool.time, 'sleep'))
             stack.enter_context(redirect_stdout(io.StringIO()))
-            self.recipe.import_images(self.archive, True, 'gateway', 'edited')
+            tool.import_images(self.archive, [self.image], context=self.config['context'],
+                               namespace=self.config['namespace'], release=self.release, work=self.work,
+                               containerd=self.config['containerd'], node_names=self.nodes,
+                               control_node=self.config['controlNode'], helm_apply=helm, run=self.execute,
+                               output=self.output, save=save)
             return helm.call_args
 
     def test_gateway_archive_upload_targets_control_node_without_private_host_path(self):
@@ -130,7 +141,7 @@ class ImageImportTests(unittest.TestCase):
         self.assertEqual(self.destination.read_bytes(), self.archive.read_bytes())
         self.assertEqual(self.destination.stat().st_mode & 0o777, 0o600)
         self.assertFalse(pathlib.Path(str(self.destination)+'.upload').exists())
-        self.assertTrue((self.recipe.work/'evidence/image-import.json').exists())
+        self.assertTrue((self.work/'evidence/image-import.json').exists())
         for command in self.commands+self.calls:
             if command[0] == 'kubectl':
                 self.assertEqual(command[1:3], ['--context', self.config['context']])
@@ -143,7 +154,7 @@ class ImageImportTests(unittest.TestCase):
         self.assertNotIn('--all', command)
         for flag in ('--deployed', '--failed', '--pending', '--uninstalled', '--superseded', '--uninstalling'):
             self.assertIn(flag, command)
-        # --help parses flags without reading the cluster or changing resources.
+        # --help validates command flags locally.
         subprocess.run(command+['--help'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
         subprocess.run(['helm', 'get', 'values', 'test-release', '--all', '--help'],
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
@@ -151,7 +162,7 @@ class ImageImportTests(unittest.TestCase):
     def test_socket_settings_do_not_require_archive_directory_or_personal_uid(self):
         self.config['containerd'] = {'socketPath': '/run/k3s/containerd/containerd.sock'}
         call = self.invoke()
-        self.assertEqual(call.args[2]['archiveNode'], self.config['nodes']['control'])
+        self.assertEqual(call.args[2]['archiveNode'], self.config['controlNode'])
         self.assertEqual(call.args[2]['runAsUser'], 1000)
 
     def test_waits_for_server_pod_creation_before_readiness_and_upload(self):
@@ -182,10 +193,10 @@ class ImageImportTests(unittest.TestCase):
 
     def test_failed_own_attempt_can_retry_without_waiting_for_job_deadline(self):
         self.prior_jobs = copy.deepcopy(self.jobs)
-        tool.save(self.recipe.work/'image-import-attempt.json', self.failed_attempt())
+        save(self.work/'image-import-attempt.json', self.failed_attempt())
         self.invoke()
         self.assertEqual(len(self.helm_calls), 1)
-        self.assertFalse((self.recipe.work/'image-import-attempt.json').exists())
+        self.assertFalse((self.work/'image-import-attempt.json').exists())
 
     def test_retry_refuses_different_revision_job_uid_context_or_namespace(self):
         self.prior_jobs = copy.deepcopy(self.jobs)
@@ -193,7 +204,7 @@ class ImageImportTests(unittest.TestCase):
             with self.subTest(field=field):
                 previous = self.failed_attempt()
                 previous[field] = {} if field == 'jobs' else 'different'
-                tool.save(self.recipe.work/'image-import-attempt.json', previous)
+                save(self.work/'image-import-attempt.json', previous)
                 with self.assertRaisesRegex(RuntimeError, 'Another image import|revision changed'):
                     self.invoke()
                 self.assertEqual(self.helm_calls, [])
@@ -203,7 +214,7 @@ class ImageImportTests(unittest.TestCase):
         self.upload_data = b'bad data'
         with self.assertRaises(subprocess.CalledProcessError):
             self.invoke()
-        self.assertEqual(json.loads((self.recipe.work/'image-import-attempt.json').read_text()), self.failed_attempt())
+        self.assertEqual(json.loads((self.work/'image-import-attempt.json').read_text()), self.failed_attempt())
 
     def test_finished_prior_import_does_not_block_new_upload(self):
         self.prior_jobs = copy.deepcopy(self.jobs)
@@ -240,7 +251,7 @@ class ImageImportTests(unittest.TestCase):
                     self.invoke()
                 self.assertFalse(self.destination.exists())
                 self.assertFalse(pathlib.Path(str(self.destination)+'.upload').exists())
-                self.assertFalse((self.recipe.work/'evidence/image-import.json').exists())
+                self.assertFalse((self.work/'evidence/image-import.json').exists())
                 self.assertFalse(any('--for=condition=complete' in cmd for cmd in self.commands))
                 self.commands.clear()
 
@@ -256,13 +267,13 @@ class ImageImportTests(unittest.TestCase):
         self.wait_failure = True
         with self.assertRaisesRegex(RuntimeError, 'import failed'):
             self.invoke()
-        self.assertFalse((self.recipe.work/'evidence/image-import.json').exists())
+        self.assertFalse((self.work/'evidence/image-import.json').exists())
         self.wait_failure = False
         self.replace_after_upload = True
         self.jobs_reads = 0
         with self.assertRaisesRegex(RuntimeError, 'Jobs changed'):
             self.invoke()
-        self.assertFalse((self.recipe.work/'evidence/image-import.json').exists())
+        self.assertFalse((self.work/'evidence/image-import.json').exists())
 
 
 @unittest.skipUnless(shutil.which('helm'), 'Helm is required to render the image-loader chart')

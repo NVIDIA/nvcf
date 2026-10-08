@@ -4,7 +4,9 @@
 import datetime
 import fcntl
 import hashlib
+import http.client
 import http.server
+import ipaddress
 import json
 import math
 import os
@@ -13,11 +15,13 @@ import platform
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import threading
 import time
 import urllib.request
+import uuid
 
 GIB = 1024 ** 3
 
@@ -93,6 +97,149 @@ def qualify(config, rank):
             dist.destroy_process_group()
 
 
+def nvme_device(device, sys_block=pathlib.Path('/sys/dev/block'), seen=None):
+    """Resolve partitions/device-mapper parents and require local PCI NVMe controllers."""
+    seen = set() if seen is None else seen
+    if device in seen:
+        return False
+    seen.add(device)
+    path = sys_block / device
+    if not path.exists():
+        return False
+    resolved = path.resolve()
+    for parent in (resolved, *resolved.parents):
+        if parent.name.startswith('nvme') and parent.name[4:].isdigit():
+            try:
+                return (parent / 'transport').read_text().strip() == 'pcie'
+            except OSError:
+                return False
+    slaves = list((resolved / 'slaves').iterdir()) if (resolved / 'slaves').is_dir() else []
+    return bool(slaves) and all(nvme_device((child / 'dev').read_text().strip(), sys_block, seen.copy()) for child in slaves)
+
+
+def prepare_offload(config, directory=pathlib.Path('/ple')):
+    if not config['profile']['offload']:
+        return
+    device = directory.stat().st_dev
+    if not nvme_device(f'{os.major(device)}:{os.minor(device)}'):
+        raise RuntimeError('NVMe offload requires /ple to be backed by a verified local NVMe device')
+    # This is the chart's disposable emptyDir, never the retained checkpoint cache.
+    for path in directory.iterdir():
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    if shutil.disk_usage(directory).free < config['profile']['offloadGiB'] * GIB:
+        raise RuntimeError('Insufficient free NVMe space for the profile offload reservation')
+
+
+def check_fabric(config, rank, net=pathlib.Path('/sys/class/net')):
+    targets, profile = config['targets'], config['profile']
+    if len(targets) != 2 or targets[0].get('fabric') != targets[1].get('fabric') or not targets[0].get('fabric'):
+        raise RuntimeError('TP2 requires two targets on the same verified fabric')
+    addresses = [ipaddress.ip_address(target['address']) for target in targets]
+    if len(set(addresses)) != 2 or any(address.version != 4 or address.is_unspecified or address.is_loopback or address.is_multicast or address.is_link_local for address in addresses):
+        raise RuntimeError('TP2 requires distinct usable IPv4 fabric addresses')
+    target = targets[rank]
+    interface = target['interface']
+    if len(interface.encode()) > 15 or '/' in interface or interface in ('', '.', '..'):
+        raise RuntimeError('Invalid fabric interface name')
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        # SIOCGIFADDR returns the IPv4 address assigned to this local interface.
+        result = fcntl.ioctl(sock.fileno(), 0x8915, struct.pack('256s', interface.encode()))
+    if socket.inet_ntoa(result[20:24]) != target['address']:
+        raise RuntimeError('Configured fabric address does not belong to the selected interface')
+    if (net / interface / 'operstate').read_text().strip() != 'up':
+        raise RuntimeError('The selected fabric interface is not up')
+    speed = int((net / interface / 'speed').read_text().strip())
+    if speed < profile['minFabricGbps'] * 1000:
+        raise RuntimeError('The selected fabric link is below the profile bandwidth minimum')
+
+
+class StartupBarrier:
+    """Pair fresh rank processes before NCCL and serving, without Kubernetes write access."""
+    def __init__(self, config, rank):
+        self.config, self.rank = config, rank
+        identity = {key: config[key] for key in ('release', 'generation', 'model', 'profile', 'targets', 'contextLength', 'concurrency', 'ports')}
+        self.state = {'identity': hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest(),
+                      'rank': rank, 'attempt': uuid.uuid4().hex, 'peer': None, 'phase': 'preparing'}
+        self.peer_attempt = None
+        self.last_peer = time.monotonic()
+        self.server = None
+        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def start(self):
+        state = self.state
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path not in ('/status', '/started'):
+                    self.send_error(404)
+                    return
+                body = json.dumps(state.copy()).encode()
+                self.send_response(200 if self.path == '/status' or state['phase'] == 'serving' else 503)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *_):
+                pass
+        self.server = http.server.ThreadingHTTPServer((self.config['targets'][self.rank]['address'], self.config['ports']['bootstrap']), Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.state['phase'] = 'stopped'
+        if self.server:
+            self.server.shutdown()
+            self.server.server_close()
+
+    def peer(self):
+        url = f"http://{self.config['targets'][1-self.rank]['address']}:{self.config['ports']['bootstrap']}/status"
+        try:
+            with self.opener.open(url, timeout=2) as response:
+                value = json.load(response)
+        except (OSError, ValueError, http.client.IncompleteRead):
+            return None
+        if not isinstance(value, dict) or value.get('identity') != self.state['identity'] or value.get('rank') != 1-self.rank:
+            return None
+        attempt = value.get('attempt')
+        if not isinstance(attempt, str) or len(attempt) != 32 or any(c not in '0123456789abcdef' for c in attempt):
+            return None
+        if self.peer_attempt and (attempt != self.peer_attempt or value.get('peer') not in (None, self.state['attempt'])):
+            raise RuntimeError('TP2 peer restarted or belongs to a different startup attempt')
+        return value
+
+    def wait(self, phases, timeout=600):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            value = self.peer()
+            if value and value.get('phase') in phases:
+                self.last_peer = time.monotonic()
+                return value
+            time.sleep(1)
+        raise RuntimeError('Timed out waiting for the matching TP2 peer startup phase')
+
+    def pair(self):
+        self.state['phase'] = 'ready'
+        # Cache preparation may finish hours apart. Do not begin a short NCCL timeout yet.
+        value = self.wait(('ready', 'paired'), timeout=14400)
+        if value.get('peer') not in (None, self.state['attempt']):
+            raise RuntimeError('TP2 peer is already paired with another startup attempt')
+        self.peer_attempt = value['attempt']
+        self.state.update(peer=self.peer_attempt, phase='paired')
+        self.wait(('paired', 'qualified', 'serving'))
+
+    def qualified(self):
+        self.state['phase'] = 'qualified'
+        self.wait(('qualified', 'serving'))
+
+    def guard(self):
+        value = self.peer()
+        if value and value.get('phase') in ('qualified', 'serving') and value.get('peer') == self.state['attempt']:
+            self.last_peer = time.monotonic()
+        elif time.monotonic() - self.last_peer > 30:
+            raise RuntimeError('TP2 peer stopped responding; stopping this rank')
+
+
 def wait_worker(config):
     url = f"http://{config['targets'][1]['address']}:{config['ports']['bootstrap']}/started"
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -139,7 +286,7 @@ def stop(child):
         child.wait()
 
 
-def supervise(argv, config, state_dir=pathlib.Path('/tmp'), cgroup=pathlib.Path('/sys/fs/cgroup')):
+def supervise(argv, config, state_dir=pathlib.Path('/tmp'), cgroup=pathlib.Path('/sys/fs/cgroup'), peer_guard=None):
     latch = state_dir / 'recipe-memory-stop.json'
     if latch.exists():
         raise RuntimeError('Memory guard previously stopped this pod. Inspect the cause before replacing the pod.')
@@ -153,6 +300,8 @@ def supervise(argv, config, state_dir=pathlib.Path('/tmp'), cgroup=pathlib.Path(
     signal.signal(signal.SIGINT, terminate)
     try:
         while child.poll() is None:
+            if peer_guard:
+                peer_guard()
             available, swapped = host_memory(), int(swap.read_text())
             if available < 4 * GIB or swapped:
                 failure = {'model': config['model']['id'], 'availableBytes': available, 'swapBytes': swapped}
@@ -302,8 +451,9 @@ def prepare_checkpoint(config, cache):
 
 
 def automatic(config, rank, cache=pathlib.Path('/cache')):
-    if config['profile']['nodes'] != 1 or rank != 0:
-        raise RuntimeError('Automatic startup supports the pinned single-node profiles')
+    world = config['profile']['nodes']
+    if world not in (1, 2) or rank not in range(world):
+        raise RuntimeError('Automatic startup requires one or two valid profile ranks')
     with (cache / '.recipe.lock').open('a') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -311,14 +461,36 @@ def automatic(config, rank, cache=pathlib.Path('/cache')):
             raise RuntimeError('Another model process is using this cache claim') from None
         if host_memory() < config['profile']['memoryGiB'] * GIB:
             raise RuntimeError('Insufficient host MemAvailable for the pinned profile')
-        qualify(config, rank)
-        import torch
-        torch.cuda.empty_cache()
-        model_path = prepare_checkpoint(config, cache)
-        os.environ['HF_HUB_OFFLINE'] = '1'
-        os.environ['TRANSFORMERS_OFFLINE'] = '1'
-        log('serve_start', model=config['model']['id'], revision=config['model']['revision'])
-        return supervise(command(config, model_path, rank), config)
+        barrier = None
+        try:
+            if world == 2:
+                check_fabric(config, rank)
+                import torch
+                check_hardware(config, torch.cuda)
+                barrier = StartupBarrier(config, rank)
+                barrier.start()
+                model_path = prepare_checkpoint(config, cache)
+                barrier.pair()
+            qualify(config, rank)
+            import torch
+            torch.cuda.empty_cache()
+            if barrier:
+                barrier.qualified()
+            else:
+                model_path = prepare_checkpoint(config, cache)
+            prepare_offload(config)
+            if host_memory() < config['profile']['memoryGiB'] * GIB:
+                raise RuntimeError('Insufficient host MemAvailable after checkpoint preparation')
+            os.environ['HF_HUB_OFFLINE'] = '1'
+            os.environ['TRANSFORMERS_OFFLINE'] = '1'
+            log('serve_start', model=config['model']['id'], revision=config['model']['revision'], rank=rank)
+            if barrier:
+                barrier.state['phase'] = 'serving'
+                return supervise(command(config, model_path, rank), config, peer_guard=barrier.guard)
+            return supervise(command(config, model_path, rank), config)
+        finally:
+            if barrier:
+                barrier.close()
 
 
 def main():

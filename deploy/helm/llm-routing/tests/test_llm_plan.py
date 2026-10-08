@@ -15,7 +15,7 @@ HERE = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('llm_plan_tested', HERE / 'llm.py')
 llm = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(llm)
-recipes, capacity = llm.planning_modules()
+capacity = llm.planning_modules()
 import model_storage
 
 
@@ -43,7 +43,7 @@ class PlanTests(unittest.TestCase):
     def plan(self, data=None, *args, model='qwen3.8-27b', namespace='llm-stack'):
         data = data if data is not None else snapshot()
         before = copy.deepcopy(data)
-        with patch.object(recipes, 'inventory', return_value=data) as inventory:
+        with patch.object(capacity, 'inventory', return_value=data) as inventory:
             report = llm.main(['--context', 'test-cluster', '--namespace', namespace, 'plan', '--model', model, *args])
         inventory.assert_called_once_with('test-cluster')
         self.assertEqual(data, before)
@@ -77,7 +77,7 @@ class PlanTests(unittest.TestCase):
                 self.assertIn('--all-namespaces', command)
             return {'items': data[resource_keys[resource]]}
         with patch.object(llm, 'run', return_value='captured-cluster\n') as current, \
-                patch.object(recipes, 'command_json', side_effect=inventory_command):
+                patch.object(capacity, 'command_json', side_effect=inventory_command):
             llm.main(['plan', '--model', 'qwen3.8-27b'])
         current.assert_called_once_with(['kubectl', 'config', 'current-context'])
         self.assertEqual(len(calls), 5)
@@ -123,11 +123,19 @@ class PlanTests(unittest.TestCase):
         self.assertIn('Requested nodes: placeholder-node', self.output.getvalue())
         self.assertIn('No nodes match node affinity.', self.output.getvalue())
 
-    def test_planned_recipe_reports_unsupported_without_install_command(self):
-        report = self.plan(None, '--verbose', model='deepseek-v4-flash')
-        self.assertEqual(report['status'], 'unsupported')
-        self.assertIsNone(report['deployment'])
-        self.assertIn('NO DEPLOYABLE RECIPE', self.output.getvalue())
+    def test_planned_and_unavailable_recipes_never_suggest_installation(self):
+        catalog = json.loads((HERE / 'recipes/index.json').read_text())
+        for recipe in catalog['recipes']:
+            if recipe['availability']['deployable']:
+                continue
+            with self.subTest(recipe=recipe['id']):
+                self.output.truncate(0)
+                self.output.seek(0)
+                report = self.plan(None, '--verbose', model=recipe['id'])
+                self.assertEqual(recipe['profiles'], [])
+                self.assertEqual(report['status'], 'unsupported')
+                self.assertIsNone(report['deployment'])
+                self.assertIn('NO DEPLOYABLE RECIPE', self.output.getvalue())
 
     def test_endpoint_identity_is_namespace_scoped(self):
         data = snapshot()
@@ -144,7 +152,7 @@ class PlanTests(unittest.TestCase):
                 self.assertEqual(report['status'], 'blocked')
                 self.assertIsNone(report['deployment'])
 
-    def test_flash_command_qualifies_and_overrides_all_target_addresses(self):
+    def test_flash_tp2_command_deploys_automatically_with_verified_fabric(self):
         facts = {'nodes': {f'available-{index}': {'fabric': 'pair', 'gbps': 200, 'address': f'192.0.2.{index+1}',
                                                 'interface': 'enp1s0'} for index in range(2)}}
         with tempfile.TemporaryDirectory() as directory:
@@ -154,17 +162,48 @@ class PlanTests(unittest.TestCase):
                                '--context-length', '32768', model='qwen3.8-flash-next')
         self.assertEqual(report['status'], 'fits')
         command = shlex.split(report['deployment']['command'])
-        self.assertIn('recipes/values/qwen3.8-flash-next-tp2.yaml', command)
-        self.assertIn('targets[1].node=available-1', command)
-        self.assertIn('targets[1].address=192.0.2.2', command)
-        self.assertIn('targets[1].interface=enp1s0', command)
-        self.assertIn('phase=qualify', command)
-        self.assertIn('--wait-for-jobs', command)
+        self.assertEqual(command[:3], ['helm', 'install', 'qwen-flash'])
+        self.assertNotIn('--values', command)
+        self.assertIn('recipe=qwen3.8-flash-next', command)
+        self.assertIn('profileName=spark-nvfp4-tp2', command)
+        self.assertIn('nodes[0]=available-0', command)
+        self.assertIn('nodes[1]=available-1', command)
+        option = command[command.index('--set-json') + 1]
+        name, value = option.split('=', 1)
+        self.assertEqual(name, 'nodeCapabilities')
+        self.assertEqual(json.loads(value), {node: {'fabric': entry['fabric'], 'address': entry['address'],
+            'interface': entry['interface'], 'linkGbps': entry['gbps']} for node, entry in facts['nodes'].items()})
+        self.assertNotIn('phase=qualify', command)
+        self.assertNotIn('--wait-for-jobs', command)
         self.assertIn('contextLength=32768', command)
-        self.assertIn('qualification only', self.output.getvalue())
+        self.assertEqual(report['deployment']['phase'], 'deploy')
+        self.assertNotIn('qualification only', self.output.getvalue())
+
+    def test_flash_nvme_command_includes_only_selected_verified_capability(self):
+        facts = {'available-0': {'localNvme': True, 'unrelated': 'ignore'},
+                 'unused-node': {'localNvme': True}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'capabilities.json'
+            path.write_text(json.dumps(facts))
+            report = self.plan(None, '--verbose', '--profile', 'spark-nvfp4-nvme', '--capabilities', str(path),
+                               model='qwen3.8-flash-next')
+        self.assertEqual(report['status'], 'fits')
+        command = shlex.split(report['deployment']['command'])
+        self.assertNotIn('--values', command)
+        self.assertIn('nodes[0]=available-0', command)
+        option = command[command.index('--set-json') + 1]
+        self.assertEqual(json.loads(option.split('=', 1)[1]), {'available-0': {'localNvme': True}})
+        self.assertEqual(report['deployment']['phase'], 'deploy')
+
+    def test_flash_requires_verified_nvme_or_fabric_before_suggesting_installation(self):
+        for profile in ('spark-nvfp4-nvme', 'spark-nvfp4-tp2'):
+            with self.subTest(profile=profile):
+                report = self.plan(snapshot(2), '--profile', profile, model='qwen3.8-flash-next')
+                self.assertEqual(report['status'], 'blocked')
+                self.assertIsNone(report['deployment'])
 
     def test_glm_workload_overrides_are_rejected_instead_of_ignored(self):
-        with patch.object(recipes, 'inventory') as inventory, self.assertRaisesRegex(ValueError, 'fixed recipe tuning'):
+        with patch.object(capacity, 'inventory') as inventory, self.assertRaisesRegex(ValueError, 'fixed recipe tuning'):
             llm.main(['--context', 'test-cluster', 'plan', '--model', 'glm-5.3', '--context-length', '1024'])
         inventory.assert_not_called()
 
@@ -226,13 +265,13 @@ class PlanTests(unittest.TestCase):
 
     def test_invalid_inputs_stop_before_inventory(self):
         for args in (['--concurrency', '0'], ['--release', 'bad,name'], ['--storage-class', 'other,inject=true']):
-            with self.subTest(args=args), patch.object(recipes, 'inventory') as inventory, self.assertRaises(SystemExit):
+            with self.subTest(args=args), patch.object(capacity, 'inventory') as inventory, self.assertRaises(SystemExit):
                 llm.main(['--context', 'test-cluster', 'plan', '--model', 'qwen3.8-27b', *args])
             inventory.assert_not_called()
 
     def test_generated_command_shell_quotes_context(self):
         context = 'cluster; echo unwanted'
-        with patch.object(recipes, 'inventory', return_value=snapshot()):
+        with patch.object(capacity, 'inventory', return_value=snapshot()):
             report = llm.main(['--context', context, 'plan', '--model', 'qwen3.8-27b'])
         command = shlex.split(report['deployment']['command'])
         self.assertEqual(command[command.index('--kube-context')+1], context)

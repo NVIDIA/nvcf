@@ -26,11 +26,12 @@ class HelmSGLangTests(unittest.TestCase):
         return {'recipe': recipe, 'nodes': ['gpu-node-1'], 'storageClassName': 'local-path',
                 'runtimeClassName': 'nvidia', 'sharedCAConfigMap': 'routing-ca'}
 
-    def render(self, values, success=True):
+    def render(self, values, success=True, release='test-model', upgrade=False):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory)/'values.json'
             path.write_text(json.dumps(values))
-            result = subprocess.run(['helm', 'template', 'test-model', str(CHART), '--namespace', 'test-stack', '-f', str(path)],
+            command = ['helm', 'template', release, str(CHART), '--namespace', 'test-stack', '-f', str(path)]
+            result = subprocess.run(command + (['--is-upgrade'] if upgrade else []),
                                     capture_output=True, text=True)
         if not success:
             self.assertNotEqual(result.returncode, 0)
@@ -44,14 +45,14 @@ class HelmSGLangTests(unittest.TestCase):
     def test_bundled_profiles_match_catalog_pins_and_workload_envelopes(self):
         bundled = json.loads((CHART/'files/profiles.json').read_text())
         catalog = {model['id']: model for model in json.loads((ROOT/'catalog.json').read_text())['models']}
-        self.assertEqual(set(bundled), {'qwen3.8-27b', 'qwen3.8-27b-nvfp4'})
+        self.assertEqual(set(bundled), {'qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'qwen3.8-flash-next'})
         for name, model in bundled.items():
             for field in ('id', 'repository', 'revision', 'image', 'profiles'):
                 self.assertEqual(model[field], catalog[name][field])
 
     def test_small_values_install_both_pinned_profiles_with_automatic_startup(self):
         pins = json.loads((CHART/'files/profiles.json').read_text())
-        for name in pins:
+        for name in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4'):
             with self.subTest(recipe=name):
                 docs = self.render(self.values(name))
                 config = self.configuration(docs)
@@ -105,7 +106,7 @@ class HelmSGLangTests(unittest.TestCase):
 
     def test_invalid_selection_and_missing_explicit_placement_fail_render(self):
         cases = [({'nodes': []}, 'one explicit node'), ({'nodes': ['a', 'b']}, 'one explicit node'),
-                 ({'nodes': ['bad/name']}, 'Kubernetes node name'), ({'recipe': 'qwen3.8-flash-next'}, 'Automatic mode supports'),
+                 ({'nodes': ['bad/name']}, 'Kubernetes node name'), ({'recipe': 'missing-model'}, 'bundled recipe'),
                  ({'profileName': 'spark-nvfp4'}, 'does not belong'), ({'sharedCAConfigMap': ''}, 'sharedCAConfigMap is required'),
                  ({'contextLength': 100000}, 'Workload exceeds'), ({'reuseCaches': 'true'}, 'must be a boolean'),
                  ({'mode': 'phased'}, 'explicit phase'), ({'cache': {'existingClaim': '../claim'}}, 'PVC name')]
@@ -121,6 +122,12 @@ class HelmSGLangTests(unittest.TestCase):
         self.assertEqual(role['rules'], [{'apiGroups': [''], 'resources': ['persistentvolumeclaims'], 'resourceNames': ['test-model-cache-0'], 'verbs': ['get']}])
         self.assertFalse(any(doc['kind'] == 'Secret' for doc in docs))
         self.assertEqual([doc['metadata']['name'] for doc in docs if doc['kind'] == 'ConfigMap'], ['test-model-runtime'])
+
+    def test_model_install_and_upgrade_cannot_replace_shared_release(self):
+        for upgrade in (False, True):
+            with self.subTest(upgrade=upgrade):
+                error = self.render(self.values(), success=False, release='llm-stack', upgrade=upgrade)
+                self.assertIn('llm-stack is reserved for the shared stack', error)
 
     def test_retained_claim_is_mounted_without_ownership_or_network_downloads(self):
         values = dict(self.values(), reuseCaches=True, cache={'existingClaim': 'previous-model-cache'})

@@ -10,9 +10,9 @@ import re
 import subprocess
 import uuid
 
-HERE = pathlib.Path(__file__).resolve().parent
+HERE = pathlib.Path(__file__).resolve().parent.parent
 REPO = HERE.parents[2]
-spec = importlib.util.spec_from_file_location('routing_image_tools', HERE / 'recipes/image_tools.py')
+spec = importlib.util.spec_from_file_location('routing_image_tools', HERE / 'dev-images/image_tools.py')
 image_tools = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(image_tools)
 

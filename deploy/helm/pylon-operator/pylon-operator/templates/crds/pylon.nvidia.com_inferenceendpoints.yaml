@@ -1,4 +1,4 @@
-{{- if eq (include "pylon-operator.manageCRDs" .) "true" }}
+{{- if .Values.installCRDs }}
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #

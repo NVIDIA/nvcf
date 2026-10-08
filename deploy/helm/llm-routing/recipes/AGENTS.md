@@ -1,6 +1,6 @@
 # LLM model recipes
 
-Read `../README.md` for the Helm installation path and `../ADVANCED.md` for configuration, recovery and existing Python workflows. `../charts/shared-stack` owns shared infrastructure. Model operations own their resources and reference the installed shared CA. They must preserve shared gateway, operator and credential resources.
+Read `../README.md` for the Helm installation path and `../ADVANCED.md` for configuration, recovery and verification. `../charts/shared-stack` owns the `llm-stack` shared release in namespace `llm-stack`. Model operations own their resources and reference the installed shared CA. They must preserve shared gateway, operator and credential resources.
 
 ## Metadata and chart ownership
 
@@ -10,17 +10,15 @@ Read `../README.md` for the Helm installation path and `../ADVANCED.md` for conf
 
 `export_catalog.py` generates the common `index.json` from these sources. Regenerate the index after changing metadata or chart versions, then run `python3 export_catalog.py --check`. Resource metadata must reflect effective pod scheduling, serving, preparation and auxiliary workloads separately. Unified GPU memory shares the host memory pool.
 
-The automatic SGLang and GGUF charts use `recipe`, `profileName`, explicit `nodes`, `storageClassName`, `runtimeClassName` and `sharedCAConfigMap`. Keep model preparation and startup inside Kubernetes. Preserve explicit legacy phases. Retain model PVCs and mount externally supplied claims without adopting them. `reuseCaches` requires complete pinned artifacts and performs local verification before serving.
+The automatic SGLang and GGUF charts use `recipe`, `profileName`, explicit `nodes`, `storageClassName`, `runtimeClassName` and `sharedCAConfigMap`. Keep model preparation and startup inside Kubernetes. Keep supported installation and recovery on the automatic Helm lifecycle. Retain model PVCs and mount externally supplied claims without adopting them. `reuseCaches` requires complete pinned artifacts and performs local verification before serving.
 
-## Existing Python workflows
+## Local helpers
 
-`recipe.py` uses its containing checkout. Builds include local edits and record the current commit ID for debugging. Image updates and rollback require the routing chart fingerprint recorded at installation. Helm dependencies are built automatically. `--source-dir` selects another existing checkout.
+Keep `sizing.py` free of cluster access. Its supported placement includes one model node and a split across nodes, covered by `tests/test_sizing.py`. `../llm.py` reads live inventory for planning and reads installed shared-stack credentials for discovery and chat. Advanced verification helpers must work with the Helm-installed stack without a saved connection file.
 
-Recipe tuning defaults live in `recipe.json` under `tuning.unified` and `tuning.discrete`. Saved configuration overrides use `tuning` and `resources`. Derive placement and tuned llama.cpp arguments from those settings, and keep `serverArgs` for the remaining runtime flags. Automatic Helm profiles select defaults by `hardware.memoryMode`; their advertised context and concurrency must match.
+Recipe tuning defaults live in `recipe.json` under `tuning.unified` and `tuning.discrete`. Automatic Helm profiles select defaults by `hardware.memoryMode`; their advertised context and concurrency must match. Keep derived placement, tuned llama.cpp arguments and resource reservations covered by tests.
 
 The recipe's `memory.discrete` host limits cover process memory and page cache. A serving pod at its cgroup limit with low resident memory can reflect reclaimable model-file cache.
-
-Keep `sizing.py` free of cluster access. Its supported placement includes one model node and a split across nodes, covered by `tests/test_topology.py`. `recipes.py` plans SGLang placements from read-only Kubernetes inventory and supports deployment bound to a verified `../stack.py` connection.
 
 ## Validation and safety
 

@@ -1,11 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Read-only scheduling capacity for model profiles from the common catalog."""
 import copy
+import datetime as dt
+import decimal
+import json
+import math
+import subprocess
 import ipaddress
 import itertools
 import re
 
-from recipes import gpu_product, positive_number, quantity, requests
 
 GIB = 1024 ** 3
 RESOURCES = ('nvidia.com/gpu', 'cpu', 'memory', 'ephemeral-storage')
@@ -14,6 +18,65 @@ LIMITATIONS = [
     'CPU and memory availability uses Kubernetes reservations, not live utilization or host MemAvailable.',
     'Physical disk space, storage provisioning, cache placement, model download and runtime startup are not verified.',
 ]
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def quantity(value):
+    match = re.fullmatch(r'([0-9]+(?:\.[0-9]+)?)([EPTGMK]i|[EPTGMk]|m|u|n)?', str(value))
+    require(match, 'Unsupported Kubernetes quantity: ' + str(value))
+    number, suffix = match.groups()
+    scale = {'': 1, 'm': .001, 'u': .000001, 'n': .000000001}
+    for i, unit in enumerate('KMGTPE', 1):
+        scale[unit + 'i'] = 1024 ** i
+        scale[unit if unit != 'K' else 'k'] = 1000 ** i
+    return decimal.Decimal(number) * decimal.Decimal(str(scale[suffix or '']))
+
+
+def requests(pod, resource):
+    spec = pod['spec']
+    def amount(c):
+        res = c.get('resources', {})
+        return quantity(res.get('requests', {}).get(resource, res.get('limits', {}).get(resource, 0)))
+    regular = sum(amount(c) for c in spec.get('containers', []))
+    sidecars = 0
+    init_peak = 0
+    for c in spec.get('initContainers', []):
+        if c.get('restartPolicy') == 'Always':
+            sidecars += amount(c)
+            init_peak = max(init_peak, sidecars)
+        else:
+            init_peak = max(init_peak, sidecars + amount(c))
+    return max(regular + sidecars, init_peak, quantity(spec.get('resources', {}).get('requests', {}).get(resource, 0))) + quantity(spec.get('overhead', {}).get(resource, 0))
+
+
+def command_json(command):
+    return json.loads(subprocess.check_output(command, text=True, timeout=60))
+
+
+def inventory(context):
+    require(isinstance(context, str) and context.strip() and not context.startswith('-'),
+            'An explicit Kubernetes context is required.')
+    result = {'schemaVersion': 1, 'context': context, 'capturedAt': dt.datetime.now(dt.timezone.utc).isoformat()}
+    for key, resource in [('nodes', 'nodes'), ('pods', 'pods'), ('endpoints', 'inferenceendpoints.pylon.nvidia.com'),
+                          ('storageClasses', 'storageclasses'), ('runtimeClasses', 'runtimeclasses')]:
+        command = ['kubectl', '--context', context, 'get', resource, '-o', 'json']
+        if key in ('pods', 'endpoints'):
+            command += ['--all-namespaces']
+        result[key] = command_json(command)['items']
+    return result
+
+
+def gpu_product(value):
+    return re.sub(r'\s+', '-', value.strip())
+
+
+def positive_number(value):
+    return type(value) in (int, float) and math.isfinite(value) and value > 0
+
 
 
 def number(value):

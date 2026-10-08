@@ -17,6 +17,12 @@
 {{- if not $hardware.cudaDeviceNames }}{{ fail "profile.hardware.cudaDeviceNames is required" }}{{ end -}}
 {{- $gpuProduct := required "gpu.product is required" $v.gpu.product -}}
 {{- $root := . -}}
+{{- $claims := list -}}
+{{- range $rank, $target := $v.targets -}}
+{{- $existing := "" -}}
+{{- if $v.automatic }}{{ $existing = index $v.existingClaims $rank }}{{ end -}}
+{{- $claims = append $claims (default (printf "%s-cache-%d" $root.Release.Name $rank) $existing) -}}
+{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -27,10 +33,16 @@ data:
   placement.py: |
 {{ .Files.Get "files/placement.py" | indent 4 }}
   config.json: |
-{{- $config := dict "automatic" $v.automatic "namespace" .Release.Namespace "sharedCAConfigMap" $v.sharedCAConfigMap "storageClassName" $v.storageClassName "claimName" (default (printf "%s-cache-0" .Release.Name) $v.cache.existingClaim) -}}
+{{- $config := dict "automatic" $v.automatic "namespace" .Release.Namespace "sharedCAConfigMap" $v.sharedCAConfigMap "storageClassName" $v.storageClassName "claimName" (index $claims 0) "claimNames" $claims "release" (printf "%s/%s" .Release.Namespace .Release.Name) "generation" .Release.Revision -}}
 {{ merge $config (dict "model" $v.model "profile" $v.profile "targets" $v.targets "contextLength" $v.contextLength "concurrency" $v.concurrency "ports" $v.ports "reuseCaches" $v.reuseCaches) | toPrettyJson | nindent 4 }}
+{{- if and $v.automatic (gt (len $v.targets) 1) }}
 {{- range $rank, $target := $v.targets }}
-{{- if not (and $v.automatic $v.cache.existingClaim) }}
+  placement-{{ $rank }}.json: |
+{{ mergeOverwrite (deepCopy $config) (dict "targets" (list $target) "claimName" (index $claims $rank)) | toPrettyJson | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- range $rank, $target := $v.targets }}
+{{- if not (and $v.automatic (index $v.existingClaims $rank)) }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -80,6 +92,9 @@ spec:
         checksum/placement: {{ $root.Files.Get "files/placement.py" | sha256sum }}
         checksum/runtime: {{ $root.Files.Get "files/runtime.py" | sha256sum }}
         checksum/config: {{ omit $v "suspended" | toJson | sha256sum }}
+{{- if and $v.automatic (gt (len $v.targets) 1) }}
+        recipe-generation: {{ $root.Release.Revision | quote }}
+{{- end }}
     spec:
       automountServiceAccountToken: false
 {{- if $v.automatic }}
@@ -88,7 +103,7 @@ spec:
         - name: placement-check
           image: {{ $v.image | quote }}
           imagePullPolicy: {{ $v.imagePullPolicy }}
-          command: [python3, -u, /recipe/placement.py]
+          command: [python3, -u, /recipe/placement.py{{ if gt (len $v.targets) 1 }}, /recipe/placement-{{ $rank }}.json{{ end }}]
           env:
             - {name: PYTHONDONTWRITEBYTECODE, value: '1'}
             - name: POD_NODE_NAME
@@ -143,7 +158,7 @@ spec:
                 secretKeyRef: {name: {{ $v.hfTokenSecret | quote }}, key: token}
 {{- end }}
 {{- if eq (len $v.targets) 2 }}
-            - {name: NCCL_SOCKET_IFNAME, value: {{ required "target.interface is required for TP2" $target.interface | quote }}}
+            - {name: NCCL_SOCKET_IFNAME, value: {{ if $v.automatic }}{{ printf "=%s" $target.interface | quote }}{{ else }}{{ required "target.interface is required for TP2" $target.interface | quote }}{{ end }}}
             - {name: GLOO_SOCKET_IFNAME, value: {{ $target.interface | quote }}}
             - {name: NCCL_IB_DISABLE, value: '1'}
             - {name: TORCH_NCCL_ASYNC_ERROR_HANDLING, value: '1'}
@@ -161,7 +176,7 @@ spec:
 {{- if eq $rank 0 }}
             httpGet: {path: /health, port: http}
 {{- else }}
-            httpGet: {path: /started, port: bootstrap}
+            httpGet: {path: /started, port: bootstrap{{ if $v.automatic }}, host: {{ $target.address | quote }}{{ end }}}
 {{- end }}
             periodSeconds: 10
             timeoutSeconds: 5
@@ -170,7 +185,7 @@ spec:
 {{- if eq $rank 0 }}
             httpGet: {path: /health, port: http}
 {{- else }}
-            httpGet: {path: /started, port: bootstrap}
+            httpGet: {path: /started, port: bootstrap{{ if $v.automatic }}, host: {{ $target.address | quote }}{{ end }}}
 {{- end }}
             periodSeconds: 5
             timeoutSeconds: 5
@@ -218,7 +233,7 @@ spec:
         - name: recipe
           configMap: {name: {{ $root.Release.Name }}-runtime}
         - name: cache
-          persistentVolumeClaim: {claimName: {{ if and $v.automatic $v.cache.existingClaim }}{{ $v.cache.existingClaim | quote }}{{ else }}{{ $root.Release.Name }}-cache-{{ $rank }}{{ end }}}
+          persistentVolumeClaim: {claimName: {{ index $claims $rank | quote }}}
         - name: shm
           emptyDir: {medium: Memory, sizeLimit: 8Gi}
         - name: tmp

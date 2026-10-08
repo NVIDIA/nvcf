@@ -33,7 +33,7 @@ class SharedDevImagesTests(unittest.TestCase):
         selector = {'kubernetes.io/os': 'linux', 'kubernetes.io/arch': 'arm64'}
         self.expected = {'gatewayStack': {}, 'operator': {
             'image': self.image('operator'), 'pylon': {'image': self.image('pylon')},
-            'nodeSelector': selector, 'watchNamespaces': ['llm-stack']}}
+            'nodeSelector': selector}}
         for name, chart, field in [('gateway', 'llm-api-gateway', 'llmApiGateway'),
                                    ('router', 'llm-request-router', 'llmRequestRouter')]:
             self.expected['gatewayStack'][chart] = {field: {
@@ -47,7 +47,7 @@ class SharedDevImagesTests(unittest.TestCase):
         self.generated['gatewayStack']['tls'] = {'caFile': '/private/ca.pem'}
         self.enterContext(patch.object(builder, 'VALUES', self.values))
         self.enterContext(patch.object(builder, 'CHARTS', self.charts))
-        self.build = self.enterContext(patch.object(builder.images, 'main', side_effect=self.build_values))
+        self.build = self.enterContext(patch.object(builder.images, 'prepare', side_effect=self.build_values))
         self.package = self.enterContext(patch.object(builder.subprocess, 'run', side_effect=self.package_charts))
         self.enterContext(patch('builtins.print'))
 
@@ -56,7 +56,7 @@ class SharedDevImagesTests(unittest.TestCase):
         return {'repository': 'localhost/shared/' + name, 'tag': 'dev-example', 'pullPolicy': 'Never'}
 
     def build_values(self, args):
-        output = Path(args[args.index('--output-dir') + 1])
+        output = args.output_dir
         output.mkdir(parents=True, exist_ok=True)
         generated = output/'shared.values.yaml'
         generated.write_text(json.dumps(self.generated))
@@ -64,7 +64,7 @@ class SharedDevImagesTests(unittest.TestCase):
 
     def package_charts(self, args, **kwargs):
         output = Path(args[args.index('--output-dir') + 1])
-        output.mkdir(parents=True)
+        output.mkdir(parents=True, exist_ok=True)
         (output/'test-chart.tgz').write_bytes(b'prepared chart bundle')
 
     def test_success_publishes_only_shared_images_and_placement(self):
@@ -74,30 +74,50 @@ class SharedDevImagesTests(unittest.TestCase):
         self.assertEqual((self.charts/'test-chart.tgz').read_bytes(), b'prepared chart bundle')
         self.assertFalse((self.charts/'previous-chart.tgz').exists())
         args = self.build.call_args.args[0]
-        for option, expected in [('--context', 'test-context'), ('--namespace', 'test-models'),
-                                 ('--control-node', 'cpu-node')]:
-            self.assertEqual(args[args.index(option) + 1], expected)
-        self.assertIn('--allow-containerd-import', args)
-        output = Path(args[args.index('--output-dir') + 1])
-        self.package.assert_called_once_with(
-            ['bash', str(HERE/'package-charts.sh'), '--output-dir', str(output/'charts')], check=True)
+        self.assertEqual(args.context, 'test-context')
+        self.assertEqual(args.namespace, 'test-models')
+        self.assertEqual(args.control_node, 'cpu-node')
+        self.assertTrue(args.allow_containerd_import)
+        output = args.output_dir
+        package_args = self.package.call_args.args[0]
+        self.assertEqual(package_args[:3], ['bash', str(HERE/'package-charts.sh'), '--output-dir'])
+        self.assertEqual(Path(package_args[-1]).parent, output)
+        self.assertTrue(Path(package_args[-1]).name.startswith('charts-'))
 
     def test_each_build_gets_a_fresh_external_directory(self):
         builder.main(self.args)
         builder.main(self.args)
-        outputs = [Path(call.args[0][call.args[0].index('--output-dir') + 1])
-                   for call in self.build.call_args_list]
+        outputs = [call.args[0].output_dir for call in self.build.call_args_list]
         self.assertNotEqual(outputs[0], outputs[1])
         for output in outputs:
             self.assertEqual(output.parent, self.output)
             self.assertTrue(output.is_dir())
 
+    def test_resume_reuses_bound_build_directory_and_fresh_chart_output(self):
+        work = self.work/'existing-build'
+        work.mkdir()
+        (work/'image-build-config.json').write_text('{}')
+        args = ['--context', 'test-context', '--namespace', 'test-models',
+                '--resume-from', str(work), '--allow-containerd-import']
+        builder.main(args)
+        builder.main(args)
+        self.assertEqual([call.args[0].output_dir for call in self.build.call_args_list], [work, work])
+        packages = [Path(call.args[0][-1]) for call in self.package.call_args_list]
+        self.assertNotEqual(packages[0], packages[1])
+        self.assertTrue(all(path.parent == work for path in packages))
+
+    def test_resume_requires_existing_external_build_before_preparation(self):
+        with self.assertRaisesRegex(ValueError, 'existing image build'):
+            builder.main(['--resume-from', str(self.work/'missing'), '--allow-containerd-import'])
+        self.build.assert_not_called()
+        self.package.assert_not_called()
+
     def test_default_namespace_is_forwarded_without_forcing_a_context(self):
         builder.main(['--output-dir', str(self.output), '--allow-containerd-import'])
         args = self.build.call_args.args[0]
-        self.assertEqual(args[args.index('--namespace') + 1], 'llm-stack')
-        self.assertNotIn('--context', args)
-        self.assertNotIn('--control-node', args)
+        self.assertEqual(args.namespace, 'llm-stack')
+        self.assertIsNone(args.context)
+        self.assertIsNone(args.control_node)
 
     def test_failed_build_preserves_published_values(self):
         self.build.side_effect = ValueError('image import failed')

@@ -5,9 +5,13 @@ mode: automatic
 recipe: qwen3.8-27b
 profileName: ""
 nodes: []
+# Site-verified facts keyed by selected node. Runtime checks the device/link again.
+nodeCapabilities: {}
 sharedCAConfigMap: llm-gateway-stack-ca
 cache:
   existingClaim: ""
+  # Optional per-rank retained PVCs for TP2. Empty entries create new claims.
+  existingClaims: []
 phase: deploy
 suspended: false
 # Automatic startup always checks existing files first. True requires a complete offline cache.

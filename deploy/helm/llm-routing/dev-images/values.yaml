@@ -37,9 +37,6 @@
       "kubernetes.io/os": "linux",
       "kubernetes.io/arch": "arm64"
     },
-    "watchNamespaces": [
-      "llm-stack"
-    ],
     "pylon": {
       "image": {
         "repository": "localhost/llm-stack/pylon",

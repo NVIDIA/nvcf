@@ -198,13 +198,6 @@ no_crd_manifest="${tmp_dir}/no-crd.yaml"
 render "${no_crd_manifest}" --set installCRDs=false
 [ "$(count_kind "${no_crd_manifest}" CustomResourceDefinition)" = "0" ] || fail "installCRDs=false must not render the CRD"
 
-# Offline auto mode has no cluster CRD and must prepare the first install.
-auto_crd_manifest="${tmp_dir}/auto-crd.yaml"
-render "${auto_crd_manifest}" --set installCRDs=auto
-[ "$(count_kind "${auto_crd_manifest}" CustomResourceDefinition "${crd_name}")" = "1" ] ||
-  fail "installCRDs=auto must render the CRD when it is absent"
-assert_render_fails "installCRDs" --values "${ci_values}" --set installCRDs=invalid
-
 # RBAC: ClusterRole from config/rbac/role.yaml, bound cluster-wide; leader
 # election Role in the release namespace.
 [ "$(count_kind "${default_manifest}" ClusterRole "${release}")" = "1" ] || fail "missing ClusterRole"

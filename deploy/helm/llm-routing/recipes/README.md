@@ -6,15 +6,15 @@ The catalog contains seven model families and eight entries. `availability.deplo
 
 ## Committed values
 
-Automatic recipes need only the recipe and node placement: the charts supply the model pins, runtime class `nvidia`, storage class `local-path` and shared CA `llm-gateway-stack-ca`. The files below are optional examples for overriding these defaults with Helm `--values`. Replace their example nodes with your selected nodes. Flash-Next still uses its phased values file. These profiles target Linux ARM64 GB10 nodes.
+Automatic recipes select pinned model and runtime settings from the chart. Supply the recipe and node placement, plus a profile and verified node capabilities for Flash-Next. The defaults are runtime class `nvidia`, storage class `local-path` and shared CA `llm-gateway-stack-ca`. The files below are optional Helm `--values` examples. Replace their nodes and capability facts with your own. These profiles target Linux ARM64 GB10 nodes.
 
 | Recipe | Values file | Installation |
 | --- | --- | --- |
 | Qwen3.8-27B FP8 | [qwen3.8-27b.yaml](values/qwen3.8-27b.yaml) | [Automatic, one node](../README.md#2-install-a-model) |
 | Qwen3.8-27B NVIDIA NVFP4 | [qwen3.8-27b-nvfp4.yaml](values/qwen3.8-27b-nvfp4.yaml) | [Automatic, one node](../README.md#2-install-a-model) |
 | GLM-5.3 UD-IQ2_M | [glm-5.3.yaml](values/glm-5.3.yaml) | [Automatic, two nodes](../ADVANCED.md#helm-glm-recipe). Latest trial stopped at the host-memory guard. |
-| Qwen3.8-Flash-Next NVFP4, NVMe offload | [qwen3.8-flash-next-nvme.yaml](values/qwen3.8-flash-next-nvme.yaml) | [Phased, one node](../ADVANCED.md#helm-flash-next-recipes). Live validation pending. |
-| Qwen3.8-Flash-Next NVFP4, tensor parallel | [qwen3.8-flash-next-tp2.yaml](values/qwen3.8-flash-next-tp2.yaml) | [Phased, two nodes](../ADVANCED.md#helm-flash-next-recipes). Live validation pending. |
+| Qwen3.8-Flash-Next NVFP4, NVMe offload | [qwen3.8-flash-next-nvme.yaml](values/qwen3.8-flash-next-nvme.yaml) | [Automatic, one node](../ADVANCED.md#helm-flash-next-recipes). Startup and short-prompt gateway checks passed at context 8,192 and concurrency 1. |
+| Qwen3.8-Flash-Next NVFP4, tensor parallel | [qwen3.8-flash-next-tp2.yaml](values/qwen3.8-flash-next-tp2.yaml) | [Automatic, two nodes](../ADVANCED.md#helm-flash-next-recipes). Live validation pending. |
 
 Planned and unavailable catalog entries have no installable values file. Their missing artifacts or chart support must be resolved first.
 
@@ -35,4 +35,4 @@ Resolve each deployment's `chart.localPath` and `guide` relative to its containi
 
 Chart packages include the same pinned metadata. Tests check synchronization. The common index records runtime smoke tests separately from automatic Helm lifecycle validation and points to local archives until publication is configured.
 
-The existing `recipe.py`, `recipes.py` and `sizing.py` workflows remain available for advanced placement planning, combined installations and phased operation. See [Advanced deployment and configuration](../ADVANCED.md).
+Use `../llm.py` for recipe discovery, placement planning, model discovery and chat. Use the [independent model lifecycle](../ADVANCED.md#independent-model-lifecycle) to upgrade, verify, stop, resume, remove and reinstall each recipe through its Helm release. See [Advanced deployment and configuration](../ADVANCED.md) for verification and recovery.

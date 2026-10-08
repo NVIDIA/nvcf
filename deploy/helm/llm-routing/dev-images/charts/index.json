@@ -679,10 +679,46 @@
             "maximumConcurrency": 8
           },
           "validation": {
-            "runtimeStatus": "pending",
-            "workload": null,
-            "automaticHelmStatus": "unavailable",
-            "automaticHelmWorkload": null
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-07",
+              "profile": "spark-nvfp4-nvme",
+              "modelRevision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+              "runtimeImage": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-07",
+              "profile": "spark-nvfp4-nvme",
+              "modelRevision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+              "runtimeImage": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "status": "smoke-tested",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "local-pcie-nvme",
+                "embedding-offload",
+                "readiness",
+                "registration",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication"
+              ]
+            }
           },
           "deployment": {
             "chart": {
@@ -692,10 +728,19 @@
               "archive": "pylon-sglang-recipe-0.2.0.tgz",
               "publication": "local"
             },
-            "lifecycle": "legacy-phased",
-            "values": null,
-            "requiredSiteValues": [],
-            "guide": "guides/ADVANCED.md#qwen-catalog-configuration"
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.8-flash-next",
+              "profileName": "spark-nvfp4-nvme"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap",
+              "nodeCapabilities"
+            ],
+            "guide": "guides/ADVANCED.md#helm-flash-next-recipes"
           }
         },
         {
@@ -761,7 +806,7 @@
           "validation": {
             "runtimeStatus": "pending",
             "workload": null,
-            "automaticHelmStatus": "unavailable",
+            "automaticHelmStatus": "pending",
             "automaticHelmWorkload": null
           },
           "deployment": {
@@ -772,10 +817,19 @@
               "archive": "pylon-sglang-recipe-0.2.0.tgz",
               "publication": "local"
             },
-            "lifecycle": "legacy-phased",
-            "values": null,
-            "requiredSiteValues": [],
-            "guide": "guides/ADVANCED.md#qwen-catalog-configuration"
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.8-flash-next",
+              "profileName": "spark-nvfp4-tp2"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap",
+              "nodeCapabilities"
+            ],
+            "guide": "guides/ADVANCED.md#helm-flash-next-recipes"
           }
         }
       ]

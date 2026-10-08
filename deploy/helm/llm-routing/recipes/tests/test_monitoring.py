@@ -1,6 +1,7 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+"""Read-only Helm discovery, verification and monitoring chart behavior."""
 import base64
+import contextlib
 import copy
 import json
 import pathlib
@@ -10,91 +11,113 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import MagicMock, Mock, mock_open, patch
+from unittest.mock import Mock, patch
+
+import yaml
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 import monitoring
-import recipe as tool
-try:
-    import yaml
-except ImportError:
-    yaml = None
+
+
+def installation():
+    values = {'operator': {'watchNamespaces': ['llm-stack']},
+              'gatewayStack': {'llm-api-gateway': {'llmApiGateway': {'metrics': {'enabled': True, 'port': 9464}}}}}
+    deployments = []
+    for name in ('llm-api-gateway', 'llm-request-router', 'operator'):
+        labels = {'app.kubernetes.io/name': name, 'app.kubernetes.io/instance': 'llm-stack'}
+        deployments.append({'metadata': {'name': name, 'labels': labels,
+                                        'annotations': {'meta.helm.sh/release-name': 'llm-stack', 'meta.helm.sh/release-namespace': 'llm-stack'}},
+                            'spec': {'selector': {'matchLabels': labels}}})
+    return [values, {'items': deployments}]
+
+
+def monitoring_values():
+    with patch.object(monitoring.llm, 'run', side_effect=[json.dumps(x) for x in installation()]):
+        return monitoring.chart_values('test-context', 'llm-stack')
 
 
 class MonitoringTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.config = json.loads((HERE/'config.example.json').read_text())
-        self.recipe = tool.Recipe(self.config, self.tmp.name)
-        self.recipe.bound_cluster = Mock()
-        self.recipe.helm_apply = Mock()
-        self.output = Mock(return_value='[]')
-        self.monitor = monitoring.Monitoring(self.recipe, Mock(), self.output, tool.save)
+        self.monitor = monitoring.Monitoring.__new__(monitoring.Monitoring)
+        self.monitor.context, self.monitor.namespace, self.monitor.release = 'test-context', 'llm-stack', 'llm-monitoring'
+        self.monitor.work = pathlib.Path(self.tmp.name)
+        self.monitor.values = monitoring_values()
+        self.monitor.kc = monitoring.llm.kube('test-context', 'llm-stack')
+        self.monitor.output = self.output = Mock()
+        self.monitor.ca_configmap, self.monitor.api_key_file = None, None
 
-    def test_old_and_explicitly_disabled_configs_do_not_enable_monitoring(self):
-        for c in ({}, {'monitoring': {'enabled': False}}):
-            self.assertFalse(monitoring.enabled(c))
-        self.config['monitoring']['enabled'] = False
-        self.assertNotIn('metrics', self.recipe.stack_values('a'*64, 'b'*64)['llm-api-gateway']['llmApiGateway'])
-        with self.assertRaisesRegex(RuntimeError, 'enabled=true'):
-            self.monitor.install()
-        self.recipe.bound_cluster.assert_not_called()
-        self.recipe.helm_apply.assert_not_called()
+    def test_values_discover_one_shared_release_and_unique_component_selectors(self):
+        fixture = installation()
+        with patch.object(monitoring.llm, 'run', side_effect=[json.dumps(x) for x in fixture]) as run:
+            values = monitoring.chart_values('test-context', 'llm-stack')
+        self.assertEqual(values['namespaces'], ['llm-stack'])
+        self.assertEqual(len(values['targets']), 4)
+        for target, deployment in zip(values['targets'], fixture[1]['items']):
+            selector = dict(pair.split('=', 1) for pair in target['selector'].split(','))
+            matches = [d for d in fixture[1]['items'] if all(d['metadata']['labels'].get(k) == v for k, v in selector.items())]
+            self.assertEqual(matches, [deployment])
+        self.assertEqual(values['grafana']['adminPassword'], '')
+        for call in run.call_args_list:
+            command = call.args[0]
+            self.assertFalse(set(command) & {'upgrade', 'install', 'apply', 'patch', 'delete'})
+            self.assertIn('test-context', command)
 
-    def test_bad_config_does_not_silently_ignore_unknown_or_unsafe_values(self):
-        for options in ({'enabled': 'true'}, {'enable': True}, {'images': {'grafana': 'grafana/grafana:latest'}},
-                        {'namespaces': ['*']}, {'extraTargets': [{'name': 'pylon'}]}, {'imagePullPolicy': 'Sometimes'},
-                        {'model': ''}, {'model': ' '}, {'model': 4}, {'model': None}):
-            with self.subTest(options=options):
-                self.config['monitoring'] = options
-                with self.assertRaises(RuntimeError):
-                    monitoring.chart_values(self.recipe)
+    def test_missing_shared_release_or_wrong_namespace_is_rejected(self):
+        with patch.object(monitoring.llm, 'run', side_effect=RuntimeError('release not found')), self.assertRaisesRegex(RuntimeError, 'release not found'):
+            monitoring.shared_stack('test-context', 'llm-stack')
+        values = installation()[0]
+        values['operator']['watchNamespaces'] = ['other']
+        with patch.object(monitoring.llm, 'run', return_value=json.dumps(values)), self.assertRaisesRegex(RuntimeError, 'watch the selected namespace'):
+            monitoring.shared_stack('test-context', 'llm-stack')
 
-    def test_actual_release_names_and_images_propagate(self):
-        self.recipe.stack = 'custom-stack'
-        self.recipe.operator = 'custom-operator'
-        self.config['monitoring'].update(images={'grafana': 'mirror.example/grafana:13.2.3'}, namespaces=[self.config['namespace'], 'other-models'])
-        values = monitoring.chart_values(self.recipe)
-        self.assertEqual(values['grafana']['image'], 'mirror.example/grafana:13.2.3')
-        selectors = {t['name']: t['selector'] for t in values['targets']}
-        self.assertIn('instance=custom-stack', selectors['gateway'])
-        self.assertIn('instance=custom-operator', selectors['operator'])
-        self.assertEqual(set(selectors), {'gateway', 'router', 'operator', 'pylon'})
-        self.assertEqual(values['nodeSelector'], {'kubernetes.io/hostname': self.config['nodes']['control']})
+    def test_missing_component_or_foreign_owner_is_rejected(self):
+        for mutate in ('missing', 'foreign'):
+            fixture = installation()
+            if mutate == 'missing':
+                fixture[1]['items'].pop()
+            else:
+                fixture[1]['items'][2]['metadata']['annotations']['meta.helm.sh/release-name'] = 'old-operator'
+            with patch.object(monitoring.llm, 'run', side_effect=[json.dumps(x) for x in fixture]), self.assertRaisesRegex(RuntimeError, 'Pylon|pylon-operator'):
+                monitoring.shared_stack('test-context', 'llm-stack')
 
-    def test_retention_accepts_explicit_supported_units_and_preserves_default(self):
-        self.assertEqual(monitoring.chart_values(self.recipe)['victoriaMetrics']['retentionPeriod'], '3d')
-        for retention in ('24h', '48h', '1d', '3d', '1w', '1M', '1y'):
-            with self.subTest(retention=retention):
-                self.config['monitoring']['retentionPeriod'] = retention
-                self.assertEqual(monitoring.chart_values(self.recipe)['victoriaMetrics']['retentionPeriod'], retention)
+    def test_custom_gateway_metrics_port_comes_from_shared_values(self):
+        for enabled, port, expected in ((True, 9500, 9500), (False, 9500, 9464)):
+            fixture = installation()
+            fixture[0]['gatewayStack']['llm-api-gateway']['llmApiGateway']['metrics'] = {'enabled': enabled, 'port': port}
+            with patch.object(monitoring.llm, 'run', side_effect=[json.dumps(x) for x in fixture]):
+                self.assertEqual(monitoring.chart_values('test-context', 'llm-stack')['targets'][0]['port'], expected)
 
-    def test_invalid_retention_fails_before_any_helm_operation(self):
-        for retention in ('1m', '12h', '23h', '0d', '-1d', '1', '1D', '1.5d', '', None, 24, True, {}):
-            with self.subTest(retention=retention):
-                self.config['monitoring']['retentionPeriod'] = retention
-                with self.assertRaisesRegex(RuntimeError, 'retention of at least 24h'):
-                    self.monitor.install()
-                self.recipe.helm_apply.assert_not_called()
-                self.output.assert_not_called()
+    def test_traffic_reuses_scoped_gateway_client_without_issuing_credentials(self):
+        monitor = monitoring.Monitoring.__new__(monitoring.Monitoring)
+        monitor.context, monitor.namespace = 'test-context', 'llm-stack'
+        monitor.ca_configmap, monitor.api_key_file = None, None
+        client = Mock()
+        with patch.object(monitoring.llm, 'gateway', return_value=contextlib.nullcontext(client)) as gateway, \
+             patch.object(monitoring, 'select_model', return_value='model-a') as select:
+            with monitor.traffic_client('model-a') as actual:
+                self.assertEqual(actual, (client, 'model-a'))
+        gateway.assert_called_once_with('test-context', 'llm-stack', None, None)
+        select.assert_called_once_with(client, 'model-a')
 
-    def test_monitoring_image_policy_is_independent_of_application_images(self):
-        default = json.loads((monitoring.CHART/'values.yaml').read_text())['imagePullPolicy']
-        for policy in ('Never', 'Always'):
-            self.config['images']['pullPolicy'] = policy
-            self.assertEqual(monitoring.chart_values(self.recipe)['imagePullPolicy'], default)
-        self.config['monitoring']['imagePullPolicy'] = 'Never'
-        self.assertEqual(monitoring.chart_values(self.recipe)['imagePullPolicy'], 'Never')
+    def test_model_selection_rejects_missing_and_empty_registries(self):
+        for listing, requested in (({'object': 'list', 'data': []}, None),
+                                   ({'object': 'list', 'data': [{'id': 'model-a'}]}, 'absent')):
+            with patch.object(monitoring, 'gateway_response', return_value=json.dumps(listing).encode()), self.assertRaises(RuntimeError):
+                monitoring.select_model(Mock(), requested)
 
-    def test_optional_runtime_targets_do_not_assume_a_model_or_backend(self):
-        target = {'name': 'custom-runtime', 'selector': 'app=model-engine', 'portName': 'metrics', 'runtime': 'llama.cpp'}
-        self.config['monitoring']['extraTargets'] = [target]
-        self.assertEqual(monitoring.chart_values(self.recipe)['targets'][-1], target)
-        self.config['monitoring']['extraTargets'][0]['runtime'] = 'unrecognized'
-        with self.assertRaises(RuntimeError):
-            monitoring.chart_values(self.recipe)
+    def test_scrape_validation_rejects_missing_stale_and_unhealthy_targets(self):
+        series = [{'metric': {'component': 'gateway', 'namespace': 'llm-stack', 'pod': 'gateway-0'}, 'value': [1, '1']}]
+        self.assertTrue(monitoring.validate_scrapes({'status': 'success', 'data': {'result': series}}, {'gateway'})['passed'])
+        cases = [([], {'gateway'}, set()), (series, {'router'}, set()),
+                 (series, {'gateway'}, {('gateway', 'llm-stack', 'other-pod')}),
+                 ([dict(series[0], value=[1, '0'])], {'gateway'}, set())]
+        for result, expected, pods in cases:
+            with self.subTest(result=result, expected=expected), self.assertRaises(RuntimeError):
+                monitoring.validate_scrapes({'status': 'success', 'data': {'result': result}}, expected, pods)
+
 
     def test_model_discovery_is_generic_deterministic_and_preserves_ids(self):
         client = Mock()
@@ -166,229 +189,6 @@ class MonitoringTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'verified HTTPS'):
             monitoring.gateway_response(client, '/v1/models')
 
-    def test_traffic_client_model_override_and_temporary_key_cleanup(self):
-        import contextlib
-        self.recipe.state['stack'] = {'release': self.recipe.stack}
-        self.config['monitoring']['model'] = 'configured-model'
-        self.recipe.forward = Mock(side_effect=lambda *args: contextlib.nullcontext())
-        temporary = Mock(side_effect=lambda *args: contextlib.nullcontext('private-key-file'))
-        with patch.object(monitoring.gateway_access, 'temporary_gateway_key', temporary), \
-             patch.object(monitoring, 'Client') as client_class, \
-             patch.object(monitoring, 'select_model', side_effect=lambda client, model: model) as select:
-            for override, expected in [(None, 'configured-model'), ('override-model', 'override-model')]:
-                with self.monitor.traffic_client(18001, override) as (client, selected):
-                    self.assertIs(client, client_class.return_value)
-                    self.assertEqual(selected, expected)
-                select.assert_called_with(client, expected)
-            client_class.assert_called_with('https://127.0.0.1:18001', self.recipe.work/'ca.crt', 'private-key-file')
-        temporary.assert_called_with(self.recipe, 'https://127.0.0.1:18001')
-        closed = []
-        @contextlib.contextmanager
-        def key(*args):
-            try:
-                yield 'private-key-file'
-            finally:
-                closed.append(True)
-        with patch.object(monitoring.gateway_access, 'temporary_gateway_key', side_effect=key), \
-             patch.object(monitoring, 'Client'), patch.object(monitoring, 'select_model', side_effect=RuntimeError('missing model')):
-            with self.assertRaisesRegex(RuntimeError, 'missing model'):
-                with self.monitor.traffic_client(18001):
-                    self.fail('Invalid discovery must not start traffic.')
-        self.assertEqual(closed, [True])
-
-    def test_configured_caller_key_overrides_checkpoint_without_invalid_path_fallback(self):
-        import contextlib
-        configured = self.recipe.work/'configured-caller-key'
-        configured.write_text('private-new-key')
-        self.config['apiKeyFile'] = str(configured)
-        self.recipe.state['stack'] = {'apiKeyFile': 'stale-checkpoint-key'}
-        checkpoint = copy.deepcopy(self.recipe.state)
-        self.recipe.forward = Mock(side_effect=lambda *args: contextlib.nullcontext())
-        with patch.object(monitoring.gateway_access, 'temporary_gateway_key') as temporary, \
-             patch.object(monitoring, 'Client') as client_class, \
-             patch.object(monitoring, 'select_model', return_value='available-model'):
-            with self.monitor.traffic_client(18001):
-                pass
-            client_class.assert_called_once_with('https://127.0.0.1:18001', self.recipe.work/'ca.crt', str(configured.resolve()))
-            self.assertEqual(self.recipe.state, checkpoint)
-            client_class.reset_mock()
-            self.config['apiKeyFile'] = str(self.recipe.work/'missing-caller-key')
-            with self.assertRaises(FileNotFoundError):
-                with self.monitor.traffic_client(18001):
-                    self.fail('Missing explicit credentials must not fall back to the checkpoint.')
-            self.config['apiKeyFile'] = ''
-            with self.assertRaisesRegex(RuntimeError, 'apiKeyFile'):
-                with self.monitor.traffic_client(18001):
-                    self.fail('Invalid explicit credentials must not fall back to the checkpoint.')
-            client_class.assert_not_called()
-            temporary.assert_not_called()
-        self.assertEqual(self.recipe.state, checkpoint)
-
-    def test_network_policy_requires_explicit_api_hosts(self):
-        for policy in ({'enabled': True}, {'enabled': 'true'}, {'apiServerCIDRs': ['0.0.0.0/0']},
-                       {'apiServerCIDRs': ['not-an-ip/32']}, {'apiServerCIDRs': '10.0.0.1/32'}, {'unknown': True}):
-            with self.subTest(policy=policy):
-                self.config['monitoring']['networkPolicy'] = policy
-                with self.assertRaises(RuntimeError):
-                    monitoring.chart_values(self.recipe)
-        policy = {'enabled': True, 'apiServerCIDRs': ['10.0.0.1/32', 'fd00::1/128']}
-        self.config['monitoring']['networkPolicy'] = policy
-        self.assertEqual(monitoring.chart_values(self.recipe)['networkPolicy'], policy)
-
-    def test_install_only_changes_monitoring_and_preserves_model_state(self):
-        self.recipe.state.update(serve=True, runtimeSha256='a'*64, attachedExisting=True)
-        self.output.side_effect = ['{}', '[]', '']
-        self.monitor.install()
-        self.recipe.bound_cluster.assert_called_once()
-        release, chart, values = self.recipe.helm_apply.call_args.args
-        self.assertEqual(release, self.monitor.release)
-        self.assertEqual(chart, monitoring.CHART)
-        self.assertTrue(self.recipe.state['serve'])
-        self.assertEqual(self.recipe.state['runtimeSha256'], 'a'*64)
-        self.assertTrue(values['grafana']['adminPassword'])
-        self.assertFalse((self.recipe.work/'grafana-admin-password').exists())
-
-    def test_install_discovers_gateway_metrics_port_without_changing_the_stack(self):
-        for metrics, expected in [({}, 9464), ({'enabled': False, 'port': 9465}, 9464),
-                                  ({'enabled': True, 'port': 9465}, 9465)]:
-            with self.subTest(metrics=metrics):
-                stack = {'llm-api-gateway': {'llmApiGateway': {'metrics': metrics}}}
-                self.output.reset_mock()
-                self.output.side_effect = [json.dumps(stack), '[]', '']
-                self.recipe.helm_apply.reset_mock()
-                self.monitor.install()
-                self.assertEqual(self.output.call_args_list[0].args[0],
-                                 self.recipe.hm+['get', 'values', self.recipe.stack, '--all', '-o', 'json'])
-                self.recipe.helm_apply.assert_called_once()
-                release, chart, values = self.recipe.helm_apply.call_args.args
-                self.assertEqual((release, chart), (self.monitor.release, monitoring.CHART))
-                targets = [t for t in values['targets'] if t['name'] == 'gateway']
-                self.assertEqual(len(targets), 1)
-                self.assertEqual((targets[0]['portName'], targets[0]['port']), ('http', expected))
-
-    def test_install_rejects_invalid_enabled_gateway_port_before_upgrade(self):
-        for port in (0, -1, 65536, True, '9465', None):
-            with self.subTest(port=port):
-                stack = {'llm-api-gateway': {'llmApiGateway': {'metrics': {'enabled': True, 'port': port}}}}
-                self.output.return_value = json.dumps(stack)
-                with self.assertRaisesRegex(RuntimeError, 'Gateway metrics port'):
-                    self.monitor.install()
-                self.recipe.helm_apply.assert_not_called()
-
-    def test_reinstall_recovers_original_password_and_rejects_foreign_secrets(self):
-        secret = {'metadata': {'annotations': {'meta.helm.sh/release-name': self.monitor.release,
-                  'meta.helm.sh/release-namespace': self.config['namespace']}}, 'data': {'admin-password': base64.b64encode(b'original-password').decode()}}
-        self.output.side_effect = ['{}', json.dumps([{'chart': 'llm-demo-monitoring-0.1.0'}]), json.dumps(secret)]
-        self.monitor.install()
-        self.assertEqual(self.recipe.helm_apply.call_args.args[2]['grafana']['adminPassword'], 'original-password')
-        self.recipe.helm_apply.reset_mock()
-        secret['metadata']['annotations']['meta.helm.sh/release-name'] = 'other'
-        self.output.side_effect = ['{}', '[]', json.dumps(secret)]
-        with self.assertRaisesRegex(RuntimeError, 'another installation'):
-            self.monitor.install()
-        self.recipe.helm_apply.assert_not_called()
-
-    def test_missing_credentials_on_existing_release_fail_before_upgrade(self):
-        self.output.side_effect = ['{}', json.dumps([{'chart': 'llm-demo-monitoring-0.1.0'}]), '']
-        with self.assertRaisesRegex(RuntimeError, 'lost its credential'):
-            self.monitor.install()
-        self.recipe.helm_apply.assert_not_called()
-
-    def test_failed_cluster_binding_prevents_writes(self):
-        self.recipe.bound_cluster.side_effect = RuntimeError('Wrong cluster')
-        with self.assertRaisesRegex(RuntimeError, 'Wrong cluster'):
-            self.monitor.install()
-        self.output.assert_not_called()
-        self.recipe.helm_apply.assert_not_called()
-
-    def test_uninstall_uses_saved_identity_and_preserves_other_state_and_files(self):
-        self.config.update(context='custom-context', namespace='custom-namespace', releasePrefix='custom')
-        self.config['monitoring']['enabled'] = False
-        self.recipe = tool.Recipe(self.config, self.tmp.name, monitoring_only=True)
-        self.recipe.bound_cluster = Mock()
-        monitor = monitoring.Monitoring(self.recipe, Mock(), self.output, tool.save)
-        self.recipe.stamp('serve', {'release': 'keep-model'})
-        before = copy.deepcopy(self.recipe.state)
-        self.recipe.stamp('monitoring', {'release': monitor.release})
-        tool.save(self.recipe.work/'api-key', 'keep-key')
-        config = copy.deepcopy(self.config)
-        self.output.return_value = json.dumps([{'chart': 'llm-demo-monitoring-0.1.0'}])
-        monitor.uninstall()
-        self.recipe.bound_cluster.assert_called_once()
-        self.output.assert_called_once_with(self.recipe.hm+['list', '--deployed', '--failed', '--pending', '--uninstalled', '--superseded', '--uninstalling', '--filter', r'^custom\-monitoring$', '-o', 'json'])
-        monitor.run.assert_called_once_with(['helm', '--kube-context', 'custom-context', '-n', 'custom-namespace',
-                                             'uninstall', 'custom-monitoring', '--ignore-not-found', '--wait', '--timeout', '3m'])
-        self.assertEqual(json.loads(self.recipe.state_path.read_text()), before)
-        self.assertEqual(self.recipe.state, before)
-        self.assertEqual(self.config, config)
-        self.assertEqual((self.recipe.work/'api-key').read_text(), 'keep-key')
-
-    def test_uninstall_absent_release_clears_only_checkpoint_and_is_repeatable(self):
-        self.recipe.stamp('serve', True)
-        before = copy.deepcopy(self.recipe.state)
-        self.recipe.stamp('monitoring', {'release': self.monitor.release})
-        self.output.return_value = '[]'
-        self.monitor.uninstall()
-        self.monitor.uninstall()
-        self.monitor.run.assert_not_called()
-        self.assertEqual(json.loads(self.recipe.state_path.read_text()), before)
-
-    def test_uninstall_works_without_monitoring_checkpoint_or_credentials(self):
-        self.recipe.stamp('serve', True)
-        before = self.recipe.state_path.read_bytes()
-        self.output.return_value = json.dumps([{'chart': 'llm-demo-monitoring-0.1.0'}])
-        self.monitor.uninstall()
-        self.monitor.run.assert_called_once()
-        self.assertEqual(self.recipe.state_path.read_bytes(), before)
-
-    def test_uninstall_failures_preserve_checkpoint(self):
-        self.recipe.stamp('monitoring', {'release': self.monitor.release})
-        before = self.recipe.state_path.read_bytes()
-        for problem in ('cluster', 'lookup', 'chart', 'helm'):
-            with self.subTest(problem=problem):
-                self.recipe.bound_cluster.reset_mock(side_effect=True)
-                self.output.reset_mock(side_effect=True)
-                self.monitor.run.reset_mock(side_effect=True)
-                self.output.return_value = json.dumps([{'chart': 'llm-demo-monitoring-0.1.0'}])
-                if problem == 'cluster':
-                    self.recipe.bound_cluster.side_effect = RuntimeError('Wrong cluster')
-                elif problem == 'lookup':
-                    self.output.side_effect = RuntimeError('Helm lookup failed')
-                elif problem == 'chart':
-                    self.output.return_value = json.dumps([{'chart': 'unrelated-chart-0.1.0'}])
-                else:
-                    self.monitor.run.side_effect = RuntimeError('Helm uninstall failed')
-                with self.assertRaises(RuntimeError):
-                    self.monitor.uninstall()
-                if problem == 'cluster':
-                    self.output.assert_not_called()
-                if problem != 'helm':
-                    self.monitor.run.assert_not_called()
-                self.assertEqual(self.recipe.state_path.read_bytes(), before)
-                self.assertEqual(self.recipe.state, json.loads(before))
-
-    def test_uninstall_preserves_concurrent_local_progress(self):
-        self.recipe.stamp('monitoring', {'release': self.monitor.release})
-        updated = dict(self.recipe.state, serve={'release': 'new-progress'})
-        self.output.return_value = json.dumps([{'chart': 'llm-demo-monitoring-0.1.0'}])
-        self.monitor.run.side_effect = lambda command: tool.save(self.recipe.state_path, updated)
-        with self.assertRaisesRegex(RuntimeError, 'Monitoring was removed, but local progress changed'):
-            self.monitor.uninstall()
-        self.assertEqual(json.loads(self.recipe.state_path.read_text()), updated)
-
-    def test_metrics_verification_rejects_missing_failed_or_stale_components(self):
-        result = {'status': 'success', 'data': {'result': [
-            {'metric': {'component': 'gateway', 'pod': 'gateway-a'}, 'value': [0, '1']},
-            {'metric': {'component': 'pylon', 'pod': 'pylon-a'}, 'value': [0, '1']}]}}
-        self.assertTrue(monitoring.validate_scrapes(result, {'gateway', 'pylon'})['passed'])
-        with self.assertRaisesRegex(RuntimeError, 'Missing or stale'):
-            monitoring.validate_scrapes(result, {'gateway', 'operator'})
-        result['data']['result'].append({'metric': {'component': 'pylon', 'pod': 'pylon-b'}, 'value': [0, '0']})
-        with self.assertRaisesRegex(RuntimeError, 'Failed scrape'):
-            monitoring.validate_scrapes(result, {'gateway', 'pylon'})
-        with self.assertRaisesRegex(RuntimeError, 'query failed'):
-            monitoring.validate_scrapes({'status': 'error'}, {'gateway'})
-
     def test_verifier_detects_missing_pylon_replica(self):
         result = {'status': 'success', 'data': {'result': [
             {'metric': {'component': 'pylon', 'namespace': 'models', 'pod': 'pylon-a'}, 'value': [0, '1']}]}}
@@ -399,8 +199,7 @@ class MonitoringTests(unittest.TestCase):
         import contextlib
         import io
         self.output.return_value = '{"items": []}'
-        self.recipe.verify = Mock()
-        components = {'gateway', 'router', 'operator', 'pylon', 'backend',
+        components = {'gateway', 'router', 'operator', 'pylon',
                       'monitoring-storage', 'monitoring-grafana', 'monitoring-collector'}
         responses = [
             {'status': 'success', 'data': {'result': []}},
@@ -411,14 +210,12 @@ class MonitoringTests(unittest.TestCase):
              patch.object(monitoring.urllib.request, 'urlopen', side_effect=[io.StringIO(json.dumps(r)) for r in responses]) as request, \
              patch.object(monitoring.time, 'monotonic', side_effect=[0, 0]), \
              patch.object(monitoring.time, 'sleep') as sleep:
-            self.monitor.verify(18000)
+            report = self.monitor.verify(18000)
 
         self.assertEqual(request.call_count, 3)
         self.assertFalse(request.call_args.args[0].has_header('Authorization'))
-        self.assertFalse((self.recipe.work/'grafana-admin-password').exists())
+        self.assertFalse((self.monitor.work/'grafana-admin-password').exists())
         sleep.assert_called_once_with(2)
-        self.recipe.verify.assert_not_called()
-        report = json.loads((self.recipe.work/'evidence/monitoring.json').read_text())
         self.assertTrue(report['passed'])
         self.assertEqual(report['dashboardUid'], 'llm-demo')
         self.assertTrue(report['anonymousViewer'])
@@ -428,8 +225,7 @@ class MonitoringTests(unittest.TestCase):
         import contextlib
         import io
         self.output.return_value = '{"items": []}'
-        self.recipe.verify = Mock()
-        components = {'gateway', 'router', 'operator', 'pylon', 'backend',
+        components = {'gateway', 'router', 'operator', 'pylon',
                       'monitoring-storage', 'monitoring-grafana', 'monitoring-collector'}
         missing = {'status': 'success', 'data': {'result': []}}
         failed = {'status': 'success', 'data': {'result': [
@@ -445,107 +241,6 @@ class MonitoringTests(unittest.TestCase):
         self.assertEqual(request.call_count, 3)
         self.assertEqual([call.args for call in sleep.call_args_list], [(2,), (1,)])
         forward.assert_called_once_with('victoria-metrics', 18000, 8428)
-        self.recipe.verify.assert_not_called()
-        report = json.loads((self.recipe.work/'evidence/monitoring.json').read_text())
-        self.assertFalse(report['passed'])
-        self.assertIn('startedAt', report)
-
-    def test_image_export_checks_archive_architecture_with_both_docker_clis(self):
-        import io
-        import tarfile
-        archive = self.recipe.work/'metrics.tar'
-        images = monitoring.image_list(self.recipe)
-        for platform_flag in (True, False):
-            for architecture in ('arm64', 'amd64'):
-                with self.subTest(platform_flag=platform_flag, architecture=architecture):
-                    self.monitor.run.reset_mock()
-                    self.output.return_value = '--platform' if platform_flag else 'Usage: docker save'
-                    with tarfile.open(archive, 'w') as tar:
-                        for name, data in {'manifest.json': [{'Config': 'image.json', 'RepoTags': images}],
-                                           'image.json': {'architecture': architecture, 'os': 'linux'}}.items():
-                            raw = json.dumps(data).encode()
-                            info = tarfile.TarInfo(name)
-                            info.size = len(raw)
-                            tar.addfile(info, io.BytesIO(raw))
-                    if architecture == 'arm64':
-                        self.monitor.export_images(archive)
-                    else:
-                        with self.assertRaisesRegex(RuntimeError, 'non-ARM64'):
-                            self.monitor.export_images(archive)
-                    calls = [call.args[0] for call in self.monitor.run.call_args_list]
-                    self.assertEqual(calls[:-1], [['docker','pull','--platform','linux/arm64',image] for image in images])
-                    command = ['docker','save'] + (['--platform','linux/arm64'] if platform_flag else [])
-                    self.assertEqual(calls[-1], command+['-o',archive]+images)
-
-    def test_monitoring_import_validates_images_and_targets_only_control_node(self):
-        import io
-        import tarfile
-        archive = self.recipe.work/'images.tar'
-        manifest = json.dumps([{'RepoTags': monitoring.image_list(self.recipe)}]).encode()
-        with tarfile.open(archive, 'w') as tar:
-            info = tarfile.TarInfo('manifest.json')
-            info.size = len(manifest)
-            tar.addfile(info, io.BytesIO(manifest))
-        # Stop at the first apply so the test cannot operate a runtime socket.
-        self.recipe.helm_apply.side_effect = RuntimeError('captured import')
-        with patch.object(tool, 'output', side_effect=['[]', '{"items": []}']), self.assertRaisesRegex(RuntimeError, 'captured import'):
-            self.recipe.import_images(archive, True, monitoring_only=True)
-        values = self.recipe.helm_apply.call_args.args[2]
-        self.assertEqual(values['nodeNames'], [self.config['nodes']['control']])
-        self.assertEqual(values['archiveSizeLimit'], '2Gi')
-        self.assertEqual(len(values['archiveSha256']), 64)
-
-    def test_remote_upload_accepts_monitoring_size_and_rejects_excess_or_corruption(self):
-        import ast
-        tree = ast.parse((HERE/'image_tools.py').read_text())
-        upload = next(node.value.value for node in ast.walk(tree) if isinstance(node, ast.Assign)
-                      and any(isinstance(t, ast.Name) and t.id == 'upload' for t in node.targets))
-        archive_size = 1536 * 1024**2
-        for received, digest, error in [(archive_size, 'valid', None),
-                                        (archive_size + 1, 'valid', 'exceeds'),
-                                        (archive_size - 1, 'valid', 'differs'),
-                                        (archive_size, 'corrupt', 'differs')]:
-            with self.subTest(received=received, digest=digest):
-                chunk = MagicMock()
-                chunk.__len__.return_value = received
-                stdin = Mock()
-                stdin.buffer.read.side_effect = [chunk, b'']
-                checksum = Mock()
-                checksum.hexdigest.return_value = digest
-                with patch('sys.argv', ['upload', '/images/test.tar', 'valid', str(archive_size)]), \
-                     patch('sys.stdin', stdin), patch('builtins.open', mock_open()), \
-                     patch('hashlib.sha256', return_value=checksum), patch('os.chmod'), \
-                     patch('os.path.exists', return_value=True), patch('os.unlink') as unlink, \
-                     patch('os.replace') as replace:
-                    if error:
-                        with self.assertRaisesRegex(RuntimeError, error):
-                            exec(upload, {})
-                        replace.assert_not_called()
-                    else:
-                        exec(upload, {})
-                        replace.assert_called_once_with('/images/test.tar.upload', '/images/test.tar')
-                    unlink.assert_called_once_with('/images/test.tar.upload')
-
-    def test_verifier_rejects_anonymous_edit_or_admin_permissions(self):
-        import contextlib
-        import io
-        self.output.return_value = '{"items": []}'
-        components = {'gateway', 'router', 'operator', 'pylon', 'monitoring-storage', 'monitoring-grafana', 'monitoring-collector'}
-        scrapes = {'status': 'success', 'data': {'result': [
-            {'metric': {'component': component}, 'value': [0, '1']} for component in components]}}
-        for permission in ('canEdit', 'canSave', 'canAdmin', 'missing'):
-            meta = dict.fromkeys(('canEdit', 'canSave', 'canAdmin'), False)
-            if permission == 'missing':
-                meta = {}
-            else:
-                meta[permission] = True
-            dashboard = {'dashboard': {'uid': 'llm-demo', 'panels': [{'id': 1}]}, 'meta': meta}
-            with self.subTest(permission=permission), \
-                 patch.object(self.monitor, 'forward', side_effect=lambda *args: contextlib.nullcontext()), \
-                 patch.object(monitoring.urllib.request, 'urlopen', side_effect=[io.StringIO(json.dumps(r)) for r in (scrapes, dashboard)]), \
-                 self.assertRaisesRegex(RuntimeError, 'Viewer permissions'):
-                self.monitor.verify(18000)
-            self.assertFalse(json.loads((self.recipe.work/'evidence/monitoring.json').read_text())['passed'])
 
     def test_dashboard_viewer_does_not_read_or_display_credentials(self):
         import contextlib
@@ -565,56 +260,9 @@ class MonitoringTests(unittest.TestCase):
 
     def admin_secret(self):
         return {'metadata': {'annotations': {'meta.helm.sh/release-name': self.monitor.release,
-                 'meta.helm.sh/release-namespace': self.config['namespace']}},
+                 'meta.helm.sh/release-namespace': self.monitor.namespace}},
                 'data': {key: base64.b64encode(value.encode()).decode()
                          for key, value in [('admin-user', 'admin'), ('admin-password', 'current-password')]}}
-
-    def test_admin_access_reads_current_owned_secret_and_keeps_credentials_out_of_logs(self):
-        import contextlib
-        import io
-        import console_output
-        stream = io.StringIO()
-        proc = Mock()
-        proc.poll.return_value = None
-        self.output.return_value = json.dumps(self.admin_secret())
-        console = console_output.Console()
-        with patch.object(self.monitor, 'forward', return_value=contextlib.nullcontext(proc)), \
-             patch.object(monitoring.dashboard_login, 'open_dashboard') as login, \
-             patch.object(monitoring.time, 'sleep', side_effect=KeyboardInterrupt), contextlib.redirect_stdout(stream):
-            console.run('dashboard', self.recipe.work, lambda: self.monitor.dashboard(13000, admin=True))
-        self.output.assert_called_once_with(self.recipe.kc+['get', 'secret', self.monitor.release+'-grafana-admin', '-o', 'json'])
-        login.assert_called_once_with(13000, ('admin', 'current-password'), proc)
-        self.assertIn('http://127.0.0.1:13000/d/llm-demo', stream.getvalue())
-        self.assertIn('Signed in as admin.', stream.getvalue())
-        self.assertNotIn('current-password', stream.getvalue())
-        self.assertNotIn('Password:', stream.getvalue())
-        self.assertIsNone(console.log_path)
-        self.assertFalse((self.recipe.work/'grafana-admin-password').exists())
-
-    def test_failed_or_interrupted_admin_login_closes_the_tunnel(self):
-        import contextlib
-        import io
-        self.output.return_value = json.dumps(self.admin_secret())
-        for error in (RuntimeError('Grafana admin sign-in failed'), KeyboardInterrupt()):
-            with self.subTest(error=type(error).__name__):
-                closed = Mock()
-                @contextlib.contextmanager
-                def forward(*args):
-                    try:
-                        yield Mock()
-                    finally:
-                        closed()
-                stream = io.StringIO()
-                with patch.object(self.monitor, 'forward', side_effect=forward), \
-                     patch.object(monitoring.dashboard_login, 'open_dashboard', side_effect=error), \
-                     contextlib.redirect_stdout(stream):
-                    if isinstance(error, RuntimeError):
-                        with self.assertRaisesRegex(RuntimeError, 'sign-in failed'):
-                            self.monitor.dashboard(13000, admin=True)
-                    else:
-                        self.monitor.dashboard(13000, admin=True)
-                closed.assert_called_once_with()
-                self.assertEqual(stream.getvalue(), '')
 
     def test_admin_access_rejects_foreign_or_malformed_credentials_before_tunneling(self):
         import contextlib
@@ -681,7 +329,6 @@ class MonitoringTests(unittest.TestCase):
                     self.assertEqual(model, selected)
                     traffic_sent = stream
                     return {'stream': stream, 'status': 200}
-                self.recipe.verify = Mock()
                 components = {'gateway','router','operator','pylon','monitoring-storage','monitoring-grafana','monitoring-collector'}
                 def response(request, timeout):
                     url = request if isinstance(request, str) else request.full_url
@@ -703,32 +350,16 @@ class MonitoringTests(unittest.TestCase):
                      patch.object(monitoring.urllib.request, 'urlopen', side_effect=response), \
                      patch.object(monitoring.time, 'monotonic', side_effect=[0, 0, 100]):
                     if stalled_metric is None:
-                        self.monitor.verify(18000, traffic=True)
+                        report = self.monitor.verify(18000, traffic=True)
                     else:
                         with self.assertRaisesRegex(RuntimeError, 'did not increase'):
-                            self.monitor.verify(18000, traffic=True)
-                report = json.loads((self.recipe.work/'evidence/monitoring.json').read_text())
-                self.assertEqual(report['passed'], stalled_metric is None)
+                            report = self.monitor.verify(18000, traffic=True)
                 if stalled_metric is None:
                     self.assertEqual(report['traffic']['before'], dict.fromkeys(metrics, 1))
                     self.assertEqual(report['traffic']['after'], dict.fromkeys(metrics, 2))
                     self.assertEqual(report['traffic']['model'], selected)
                     self.assertEqual(report['dashboardUid'], 'llm-demo')
-                self.assertNotIn('private-test-password', json.dumps(report))
-                self.recipe.verify.assert_not_called()
                 self.assertEqual([call.args[2] for call in completion.call_args_list], [False, True])
-
-    def test_enabled_stack_installs_monitoring_after_routing(self):
-        calls = []
-        self.recipe.helm_apply.side_effect = lambda release, *args: calls.append(release)
-        responses = [json.dumps({'data': {'cluster-token': base64.b64encode(b'worker').decode()}}),
-                     json.dumps({'data': {'ca.crt': 'CA'}})]
-        with patch.object(self.recipe, 'prepare'), patch.object(tool, 'output', side_effect=responses), \
-             patch.object(monitoring.Monitoring, 'install', side_effect=lambda: calls.append('monitoring')), \
-             patch.object(monitoring.Monitoring, 'dashboard') as dashboard:
-            self.recipe.deploy_stack()
-        dashboard.assert_not_called()
-        self.assertEqual(calls, [self.recipe.operator, self.recipe.stack, 'monitoring'])
 
 
 @unittest.skipUnless(yaml and shutil.which('helm'), 'Install requirements-monitoring.txt and Helm for chart tests')
@@ -737,10 +368,41 @@ class MonitoringChartTests(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls.tmp.cleanup)
-        cls.recipe = tool.Recipe(json.loads((HERE/'config.example.json').read_text()), cls.tmp.name)
-        cls.recipe.render()
-        cls.docs = [d for d in yaml.safe_load_all((cls.recipe.work/'render/monitoring.yaml').read_text()) if d]
+        cls.work = pathlib.Path(cls.tmp.name)
+        cls.values = monitoring_values()
+        cls.values['nodeSelector'] = {'kubernetes.io/hostname': 'control-node'}
+        path = cls.work/'values.json'
+        path.write_text(json.dumps(cls.values))
+        rendered = subprocess.check_output(['helm', 'template', 'llm-monitoring', str(monitoring.CHART), '-n', 'llm-stack', '-f', str(path)], text=True)
+        cls.docs = [d for d in yaml.safe_load_all(rendered) if d]
         cls.config = yaml.safe_load(next(d for d in cls.docs if d['kind']=='ConfigMap' and d['metadata']['name'].endswith('-collector'))['data']['config.yaml'])
+
+    def test_discovered_selectors_match_the_rendered_shared_stack(self):
+        import importlib.util
+        path = HERE.parent/'tests/test_helm_shared_stack.py'
+        spec = importlib.util.spec_from_file_location('monitoring_shared_fixture', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        fixture = module.SharedHelmTests
+        fixture.setUpClass()
+        try:
+            resources = fixture().installed()
+            deployments = [d for d in resources if d['kind'] == 'Deployment']
+            values = {'operator': {'watchNamespaces': ['test-models']},
+                      'gatewayStack': {'llm-api-gateway': {'llmApiGateway': {'metrics': {'enabled': True}}}}}
+            for deployment in deployments:
+                deployment['metadata']['annotations']['meta.helm.sh/release-name'] = 'llm-stack'
+            reads = [values, {'items': deployments}]
+            with patch.object(monitoring.llm, 'run', side_effect=[json.dumps(v) for v in reads]):
+                generated = monitoring.chart_values('test-context', 'test-models')
+            for target in generated['targets'][:3]:
+                labels = dict(pair.split('=', 1) for pair in target['selector'].split(','))
+                selected = [d for d in deployments if all(d['spec']['template']['metadata']['labels'].get(k) == v for k, v in labels.items())]
+                self.assertEqual(len(selected), 1, target)
+                ports = [p for c in selected[0]['spec']['template']['spec']['containers'] for p in c.get('ports', []) if p['name'] == target['portName']]
+                self.assertEqual(len(ports), 1)
+        finally:
+            fixture.tearDownClass()
 
     def test_disabled_chart_creates_no_resources(self):
         result = subprocess.check_output(['helm', 'template', 'disabled', str(monitoring.CHART)], text=True)
@@ -748,9 +410,9 @@ class MonitoringChartTests(unittest.TestCase):
 
     def test_optional_egress_policy_selects_only_monitoring_and_allows_cluster_access(self):
         self.assertFalse(any(d['kind']=='NetworkPolicy' for d in self.docs))
-        values = monitoring.chart_values(self.recipe)
+        values = copy.deepcopy(self.values)
         values['networkPolicy'] = {'enabled': True, 'apiServerCIDRs': ['10.0.0.1/32']}
-        path = self.recipe.work/'restricted.json'
+        path = self.work/'restricted.json'
         path.write_text(json.dumps(values))
         rendered = subprocess.check_output(['helm', 'template', 'restricted', str(monitoring.CHART), '-f', str(path)], text=True)
         policy = next(d for d in yaml.safe_load_all(rendered) if d and d['kind']=='NetworkPolicy')['spec']
@@ -760,57 +422,10 @@ class MonitoringChartTests(unittest.TestCase):
                          {'to': [{'ipBlock': {'cidr': '10.0.0.1/32'}}],
                           'ports': [{'protocol': 'TCP', 'port': 443}, {'protocol': 'TCP', 'port': 6443}]}])
 
-    def test_scrapes_select_actual_rendered_workloads_once(self):
-        values = monitoring.chart_values(self.recipe)
-        workloads = []
-        for name in ('stack', 'operator'):
-            workloads.extend(d for d in yaml.safe_load_all((self.recipe.work/'render'/(name+'.yaml')).read_text()) if d and d['kind']=='Deployment')
-        for t in values['targets']:
-            if t['name']=='pylon':
-                continue
-            labels = dict(pair.split('=', 1) for pair in t['selector'].split(','))
-            selected = [d for d in workloads if all(d['spec']['template']['metadata']['labels'].get(k)==v for k,v in labels.items())]
-            self.assertEqual(len(selected), 1, t)
-            ports = [p for c in selected[0]['spec']['template']['spec']['containers'] for p in c.get('ports', []) if p['name']==t['portName']]
-            self.assertEqual(len(ports), 1, t)
-
-    def test_gateway_scrape_matches_default_custom_and_undeclared_metrics_ports(self):
-        gateway_chart = HERE.parent.parent/'llm-api-gateway/llm-api-gateway'
-        for enabled, port in ((True, 9464), (True, 9465), (False, 9465)):
-            with self.subTest(enabled=enabled, port=port):
-                metrics = {'enabled': enabled, 'port': port}
-                gateway_values = {'llmApiGateway': {'metrics': metrics, 'image': {'repository': 'example/gateway', 'tag': 'test'}}}
-                path = self.recipe.work/'gateway-port.json'
-                path.write_text(json.dumps(gateway_values))
-                rendered = subprocess.check_output(['helm', 'template', self.recipe.stack, str(gateway_chart), '-f', str(path)], text=True)
-                gateway_docs = [d for d in yaml.safe_load_all(rendered) if d]
-                pod = next(d for d in gateway_docs if d['kind'] == 'Deployment')['spec']['template']['spec']
-                environment_name = pod['containers'][0]['envFrom'][0]['configMapRef']['name']
-                environment = next(d for d in gateway_docs if d['kind'] == 'ConfigMap' and d['metadata']['name'] == environment_name)['data']
-                expected_port = int(environment.get('METRICS_PORT', 9464))
-                output = Mock(side_effect=[json.dumps({'llm-api-gateway': gateway_values}), '[]', ''])
-                monitor = monitoring.Monitoring(self.recipe, Mock(), output, Mock())
-                with patch.object(self.recipe, 'bound_cluster'), patch.object(self.recipe, 'stamp'), \
-                     patch.object(self.recipe, 'helm_apply') as apply:
-                    monitor.install()
-                path.write_text(json.dumps(apply.call_args.args[2]))
-                rendered = subprocess.check_output(['helm', 'template', monitor.release, str(monitoring.CHART), '-f', str(path)], text=True)
-                docs = [d for d in yaml.safe_load_all(rendered) if d]
-                config = yaml.safe_load(next(d for d in docs if d['kind'] == 'ConfigMap' and d['metadata']['name'].endswith('-collector'))['data']['config.yaml'])
-                jobs = [j for j in config['receivers']['prometheus']['config']['scrape_configs'] if j['job_name'] == 'gateway']
-                self.assertEqual(len(jobs), 1)
-                rules = jobs[0]['relabel_configs']
-                port_filter = next(r for r in rules if r['source_labels'] == ['__meta_kubernetes_pod_container_port_name'])
-                selected = [p for c in pod['containers'] for p in c['ports'] if re.fullmatch(port_filter['regex'], p['name'])]
-                self.assertEqual(len(selected), 1)
-                rewrite = next(r for r in rules if r.get('target_label') == '__address__')
-                self.assertEqual(rewrite['replacement'], '$${1}:'+str(expected_port))
-                self.assertEqual(any(p['name'] == 'metrics' for c in pod['containers'] for p in c['ports']), enabled)
-
     def test_collection_has_scoped_read_only_rbac_and_no_cluster_role(self):
         self.assertFalse(any(d['kind'].startswith('ClusterRole') for d in self.docs))
         roles = [d for d in self.docs if d['kind']=='Role']
-        self.assertEqual([d['metadata']['namespace'] for d in roles], [self.recipe.c['namespace']])
+        self.assertEqual([d['metadata']['namespace'] for d in roles], ['llm-stack'])
         self.assertEqual(roles[0]['rules'], [{'apiGroups': [''], 'resources': ['pods'], 'verbs': ['get','list','watch']}])
 
     def test_metrics_pipeline_and_discovery_include_all_components(self):
@@ -820,7 +435,7 @@ class MonitoringChartTests(unittest.TestCase):
         jobs = config['receivers']['prometheus']['config']['scrape_configs']
         self.assertEqual({j['job_name'] for j in jobs}, {'gateway','router','operator','pylon','monitoring-storage','monitoring-grafana','monitoring-collector'})
         for job in jobs[:4]:
-            self.assertEqual(job['kubernetes_sd_configs'][0]['namespaces']['names'], [self.recipe.c['namespace']])
+            self.assertEqual(job['kubernetes_sd_configs'][0]['namespaces']['names'], ['llm-stack'])
             self.assertEqual(job['relabel_configs'][1]['action'], 'keep')
         self.assertEqual(jobs[0]['relabel_configs'][2]['replacement'], '$${1}:9464')
 
@@ -828,7 +443,7 @@ class MonitoringChartTests(unittest.TestCase):
         for doc in self.docs:
             if doc['kind']=='Deployment':
                 pod = doc['spec']['template']['spec']
-                self.assertEqual(pod['nodeSelector']['kubernetes.io/hostname'], self.recipe.c['nodes']['control'])
+                self.assertEqual(pod['nodeSelector']['kubernetes.io/hostname'], 'control-node')
                 self.assertTrue(pod['securityContext']['runAsNonRoot'])
                 self.assertTrue(pod['containers'][0]['resources']['limits']['memory'])
             if doc['kind']=='Service':
@@ -865,12 +480,12 @@ class MonitoringChartTests(unittest.TestCase):
     def test_runtime_panels_and_labels_require_explicit_supported_target(self):
         for runtime in (None, 'llama.cpp'):
             with self.subTest(runtime=runtime):
-                values = monitoring.chart_values(self.recipe)
+                values = copy.deepcopy(self.values)
                 target = {'name': 'custom-runtime', 'selector': 'app=external-backend', 'portName': 'metrics'}
                 if runtime:
                     target['runtime'] = runtime
                 values['targets'].append(target)
-                path = self.recipe.work/'runtime-target.json'
+                path = self.work/'runtime-target.json'
                 path.write_text(json.dumps(values))
                 rendered = subprocess.check_output(['helm', 'template', 'optional-runtime', str(monitoring.CHART), '-f', str(path)], text=True)
                 docs = [d for d in yaml.safe_load_all(rendered) if d]

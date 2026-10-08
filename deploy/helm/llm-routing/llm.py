@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-License-Identifier: Apache-2.0
-"""Check model capacity, discover models and chat using the current kube context."""
+"""List local recipes, check model capacity, discover deployed models and chat."""
 import argparse
 import base64
 import contextlib
@@ -56,7 +56,7 @@ def access_material(context, namespace, ca_configmap=None, api_key_file=None):
                              'get', 'values', release, '--all', '--output', 'json']))
     ca_name = ca_configmap or values.get('operator', {}).get('trustBundle', {}).get('configMap')
     if not ca_name:
-        raise ValueError('This installation needs --ca-configmap NAME. See ADVANCED.md for existing stacks.')
+        raise ValueError('This installation needs --ca-configmap NAME. See ADVANCED.md for connection options.')
     ca = read_json(context, namespace, 'configmap', ca_name)['data']['ca.crt']
     if api_key_file:
         key = pathlib.Path(api_key_file).expanduser().read_text().strip()
@@ -64,7 +64,7 @@ def access_material(context, namespace, ca_configmap=None, api_key_file=None):
         caller = values.get('callerKey', {})
         secret_name = caller.get('existingSecret') or caller.get('secretName')
         if not secret_name:
-            raise ValueError('This installation needs --api-key-file PATH. See ADVANCED.md for existing stacks.')
+            raise ValueError('This installation needs --api-key-file PATH. See ADVANCED.md for connection options.')
         secret = read_json(context, namespace, 'secret', secret_name)
         key = base64.b64decode(secret['data']['api-key'], validate=True).decode().strip()
     if not ca.strip() or not key:
@@ -125,9 +125,8 @@ def planning_modules():
     recipe_path = str(HERE / 'recipes')
     if recipe_path not in sys.path:
         sys.path.insert(0, recipe_path)
-    import recipes
     import model_capacity
-    return recipes, model_capacity
+    return model_capacity
 
 
 def deployment_command(report, catalog, context, namespace, args, capabilities):
@@ -137,48 +136,54 @@ def deployment_command(report, catalog, context, namespace, args, capabilities):
     names = {'qwen3.8-27b': 'qwen-fp8', 'qwen3.8-27b-nvfp4': 'qwen-nvfp4',
              'glm-5.3': 'glm', 'qwen3.8-flash-next': 'qwen-flash'}
     release = args.release or names.get(model['id'], model['id'].replace('.', '-'))
-    values = model['id']
-    if deployment['lifecycle'] == 'legacy-phased':
-        values += '-nvme' if profile['id'].endswith('-nvme') else '-tp2'
+    if deployment['lifecycle'] != 'automatic':
+        raise ValueError('The selected profile does not support automatic Helm installation.')
     command = ['helm', 'install', release,
                'dev-images/charts/' + deployment['chart']['archive'],
                '--kube-context', context, '--namespace', namespace]
-    if deployment['lifecycle'] == 'legacy-phased':
-        command += ['--values', 'recipes/values/' + values + '.yaml']
     settings = {'recipe': model['id'], 'profileName': profile['id'], 'runtimeClassName': args.runtime_class,
                 'storageClassName': args.storage_class, 'sharedCAConfigMap': args.shared_ca_configmap}
-    phased = deployment['lifecycle'] == 'legacy-phased'
     for index, node in enumerate(report['chosenNodes']):
-        settings[f'targets[{index}].node' if phased else f'nodes[{index}]'] = node
-        if phased and profile.get('fabric'):
-            for field in ('address', 'interface'):
-                settings[f'targets[{index}].{field}'] = capabilities.get('nodes', capabilities)[node][field]
+        settings[f'nodes[{index}]'] = node
     for key, value in settings.items():
         command += ['--set-string', f'{key}={value}']
+    if model['runtime']['backend'] == 'sglang':
+        offload = any(role.get('storage', {}).get('offloadMedium') == 'local-nvme' for role in profile['perNode'])
+        node_capabilities = {}
+        facts = capabilities.get('nodes', capabilities)
+        for node in report['chosenNodes']:
+            selected = {}
+            if offload:
+                selected['localNvme'] = facts[node]['localNvme']
+            if profile.get('fabric'):
+                selected.update({field: facts[node][field] for field in ('fabric', 'address', 'interface')})
+                selected['linkGbps'] = facts[node]['gbps']
+            if selected:
+                node_capabilities[node] = selected
+        if node_capabilities:
+            command += ['--set-json', 'nodeCapabilities=' + json.dumps(node_capabilities, separators=(',', ':'))]
     if model['runtime']['backend'] == 'sglang':
         for key, value in [('contextLength', args.context_length), ('concurrency', args.concurrency)]:
             if value is not None:
                 command += ['--set', f'{key}={value}']
-    if phased:
-        command += ['--set', 'phase=qualify', '--wait-for-jobs']
     command += ['--wait', '--timeout', '120m']
-    return {'release': release, 'phase': 'qualify' if phased else 'deploy',
-            'command': shlex.join(command), 'guide': 'ADVANCED.md#helm-flash-next-recipes' if phased else 'README.md#2-install-a-model'}
+    return {'release': release, 'phase': 'deploy', 'command': shlex.join(command),
+            'guide': deployment['guide'].removeprefix('../')}
 
 
 def capacity_plan(context, args):
-    recipes, analyzer = planning_modules()
+    analyzer = planning_modules()
     catalog = json.loads((HERE / 'recipes/index.json').read_text())
     capabilities = json.loads(args.capabilities.read_text()) if args.capabilities else {}
     if not isinstance(capabilities, dict):
         raise ValueError('Capabilities must be a JSON object.')
     model = next((model for model in catalog['recipes'] if model['id'] == args.model), None)
     if model is None:
-        raise ValueError('Unknown model: ' + args.model + '. Choose a recipe from recipes/index.json.')
+        raise ValueError('Unknown model: ' + args.model + '. Run llm.py recipes to list local recipe IDs.')
     if model.get('runtime', {}) and model['runtime']['backend'] == 'llama.cpp' and any(
             value is not None for value in (args.context_length, args.concurrency)):
         raise ValueError('GGUF profiles use fixed recipe tuning. Omit --context-length and --concurrency.')
-    snapshot = recipes.inventory(context)
+    snapshot = analyzer.inventory(context)
     report = analyzer.analyze(snapshot, catalog, args.model, capabilities=capabilities,
                               profile_id=args.profile, context_length=args.context_length,
                               concurrency=args.concurrency)
@@ -304,6 +309,24 @@ def print_table(headers, rows):
         print(line(row))
 
 
+def print_recipe_catalog(catalog):
+    rows = []
+    for recipe in catalog['recipes']:
+        profiles = recipe.get('profiles', [])
+        if not recipe['availability']['deployable'] or not profiles:
+            rows.append([recipe['id'], recipe.get('precision') or '-', '-', '-', '-',
+                         recipe['availability']['status']])
+            continue
+        for profile in profiles:
+            lifecycle = profile['deployment']['lifecycle']
+            validation_key = 'automaticHelmStatus' if lifecycle == 'automatic' else 'runtimeStatus'
+            validation = profile.get('validation', {}).get(validation_key, 'pending')
+            rows.append([recipe['id'], recipe.get('precision') or '-', profile['id'],
+                         profile['modelNodeCount'], lifecycle, validation])
+    print_table(['RECIPE', 'PRECISION', 'PROFILE', 'NODES', 'LIFECYCLE', 'VALIDATION'], rows)
+    print('Use a RECIPE with plan --model. Validation records prior tests. Plan checks current cluster capacity.')
+
+
 def print_model_list(listing):
     if not listing['data']:
         print('No models available.')
@@ -371,9 +394,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--context', help='Override the current kubectl context.')
     parser.add_argument('--namespace', default='llm-stack', help='Shared stack namespace (default: llm-stack).')
-    parser.add_argument('--ca-configmap', help='CA ConfigMap for an existing legacy stack.')
-    parser.add_argument('--api-key-file', type=pathlib.Path, help='Caller key file for an existing legacy stack.')
+    parser.add_argument('--ca-configmap', help='CA ConfigMap for gateway trust.')
+    parser.add_argument('--api-key-file', type=pathlib.Path, help='Caller key file for gateway requests.')
     commands = parser.add_subparsers(dest='command', required=True)
+    recipe_list = commands.add_parser('recipes', help='List local recipes and hardware profiles without cluster access.')
+    recipe_list.add_argument('--json', action='store_true', help='Print the complete local recipe catalog as JSON.')
     models = commands.add_parser('models', help='List models through the gateway.')
     models.add_argument('--json', action='store_true', help='Print the complete model list as JSON.')
     chat = commands.add_parser('chat', help='Chat with a model through the gateway.')
@@ -381,7 +406,7 @@ def main(argv=None):
     chat.add_argument('--stream', action='store_true')
     chat.add_argument('prompt')
     plan = commands.add_parser('plan', help='Check recipe capacity and show placement or current allocations, without changes.')
-    plan.add_argument('--model', required=True, help='Recipe ID from recipes/index.json.')
+    plan.add_argument('--model', required=True, help='Recipe ID shown by llm.py recipes.')
     plan.add_argument('--profile', help='Select one hardware profile instead of considering every supported profile.')
     plan.add_argument('--capabilities', type=pathlib.Path, help='Private JSON file with verified NVMe, device-memory or fabric facts.')
     plan.add_argument('--context-length', type=int)
@@ -393,6 +418,13 @@ def main(argv=None):
     plan.add_argument('--verbose', action='store_true', help='Show deployment checks, per-pod allocations and an install command when eligible.')
     plan.add_argument('--json', action='store_true', help='Print the complete capacity report as JSON.')
     args = parser.parse_args(argv)
+    if args.command == 'recipes':
+        catalog = json.loads((HERE / 'recipes/index.json').read_text())
+        if args.json:
+            print(json.dumps(catalog, indent=2))
+        else:
+            print_recipe_catalog(catalog)
+        return catalog
     if not re.fullmatch(r'[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?', args.namespace):
         parser.error('--namespace must be a Kubernetes namespace name.')
     if args.command == 'chat' and (not args.model.strip() or not args.prompt.strip()):

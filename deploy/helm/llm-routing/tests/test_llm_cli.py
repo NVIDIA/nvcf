@@ -27,6 +27,50 @@ class IsolatedTest(unittest.TestCase):
         self.errors = self.enterContext(contextlib.redirect_stderr(io.StringIO()))
 
 
+class RecipeCatalogTests(IsolatedTest):
+    def setUp(self):
+        super().setUp()
+        for name in ('selected_context', 'gateway', 'access_material', 'planning_modules'):
+            self.enterContext(patch.object(llm, name, side_effect=AssertionError('Local recipes must not access ' + name)))
+
+    def test_local_catalog_lists_profiles_and_recorded_validation_without_cluster_access(self):
+        catalog = llm.main(['recipes'])
+        output = self.output.getvalue()
+        self.assertEqual(output.splitlines()[0].split(), ['RECIPE', 'PRECISION', 'PROFILE', 'NODES', 'LIFECYCLE', 'VALIDATION'])
+        for recipe in catalog['recipes']:
+            with self.subTest(recipe=recipe['id']):
+                rows = [line for line in output.splitlines() if line.startswith(recipe['id'] + ' ')]
+                self.assertEqual(len(rows), max(1, len(recipe['profiles'])))
+                if recipe['availability']['deployable']:
+                    for profile, row in zip(recipe['profiles'], rows):
+                        self.assertIn(profile['id'], row)
+                        self.assertIn(profile['deployment']['lifecycle'], row)
+                        validation_key = 'automaticHelmStatus' if profile['deployment']['lifecycle'] == 'automatic' else 'runtimeStatus'
+                        self.assertIn(profile['validation'][validation_key], row)
+                else:
+                    self.assertIn(recipe['availability']['status'], rows[0])
+        self.assertIn('qwen3.8-flash-next', output)
+        self.assertIn('plan --model', output)
+
+    def test_local_catalog_json_preserves_complete_metadata(self):
+        expected = json.loads((HERE / 'recipes/index.json').read_text())
+        result = llm.main(['recipes', '--json'])
+        self.assertEqual(result, expected)
+        self.assertEqual(json.loads(self.output.getvalue()), expected)
+
+    def test_recipe_status_does_not_promote_pending_or_failed_profiles(self):
+        def profile(name, validation):
+            return {'id': name, 'modelNodeCount': 2, 'deployment': {'lifecycle': 'automatic'},
+                    'validation': {'automaticHelmStatus': validation, 'runtimeStatus': 'hardware-validated'}}
+        llm.print_recipe_catalog({'recipes': [{'id': 'test-recipe', 'precision': 'FP8',
+            'availability': {'deployable': True, 'status': 'available'},
+            'profiles': [profile('pending-profile', 'pending'), profile('failed-profile', 'failed')]}]})
+        output = self.output.getvalue()
+        self.assertIn('pending', next(line for line in output.splitlines() if 'pending-profile' in line))
+        self.assertIn('failed', next(line for line in output.splitlines() if 'failed-profile' in line))
+        self.assertNotIn('hardware-validated', output)
+
+
 class ContextTests(IsolatedTest):
     def test_explicit_context_skips_current_context_read(self):
         with patch.object(llm, 'run') as command:

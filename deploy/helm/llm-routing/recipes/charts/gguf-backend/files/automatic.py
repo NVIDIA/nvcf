@@ -159,6 +159,8 @@ def wait_endpoints(endpoints, timeout=600):
 
 def qualify(config, root=ROOT):
     verify_runtime(config, root / 'runtime', root / 'runtime.tar.gz')
+    require((root / 'build').is_dir(),
+            'Distributed qualification requires the original pinned build artifacts in /artifacts/build')
     endpoint = '127.0.0.1:50052'
     endpoints = [endpoint, *config['rpcEndpoints']]
     child = subprocess.Popen([str(root / 'runtime/ggml-rpc-server'), '--host', '127.0.0.1',
@@ -167,10 +169,9 @@ def qualify(config, root=ROOT):
         wait_endpoints(endpoints)
         subprocess.run([str(root / 'runtime/test-rpc-multi-server'), *endpoints], check=True, timeout=120)
         subprocess.run([str(root / 'runtime/rpc-gpu-check'), *endpoints], check=True, timeout=180)
-        # Existing dependent-graph check uses the pinned build objects and stops on remote fallback.
-        if (root / 'build').is_dir():
-            env = dict(os.environ, RPC_ENDPOINTS=','.join(endpoints), LLAMA_REVISION=config['recipe']['llamaCppRevision'])
-            subprocess.run([sys.executable, '-u', str(CHECKS / 'chain-check.py')], env=env, check=True, timeout=240)
+        # The dependent-graph check uses the pinned build objects and stops on remote fallback.
+        env = dict(os.environ, RPC_ENDPOINTS=','.join(endpoints), LLAMA_REVISION=config['recipe']['llamaCppRevision'])
+        subprocess.run([sys.executable, '-u', str(CHECKS / 'chain-check.py')], env=env, check=True, timeout=240)
         emit('distributed_qualification_pass', gpus=len(endpoints))
     finally:
         child.terminate()

@@ -14,7 +14,7 @@ metadata:
 rules:
   - apiGroups: ['']
     resources: [nodes]
-    resourceNames: [{{ index $v.nodes 0 | quote }}]
+    resourceNames: {{ $v.nodes | toJson }}
     verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -32,7 +32,10 @@ metadata:
 rules:
   - apiGroups: ['']
     resources: [persistentvolumeclaims]
-    resourceNames: [{{ default (printf "%s-cache-0" .Release.Name) $v.cache.existingClaim | quote }}]
+    resourceNames:
+{{- range $rank, $node := $v.nodes }}
+      - {{ default (printf "%s-cache-%d" $.Release.Name $rank) (index $v.existingClaims $rank) | quote }}
+{{- end }}
     verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

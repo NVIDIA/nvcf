@@ -26,11 +26,12 @@ def values(**overrides):
     return dict(recipe='glm-5.3', nodes=['model-0', 'model-1'], sharedCAConfigMap='stack-ca', **overrides)
 
 
-def render(config=None, check=True):
+def render(config=None, check=True, release='gguf-test', upgrade=False):
     with tempfile.TemporaryDirectory() as directory:
         path = pathlib.Path(directory) / 'values.json'
         path.write_text(json.dumps(config if config is not None else values()))
-        result = subprocess.run(['helm', 'template', 'gguf-test', str(CHART), '--namespace', 'demo', '-f', str(path)],
+        command = ['helm', 'template', release, str(CHART), '--namespace', 'demo', '-f', str(path)]
+        result = subprocess.run(command + (['--is-upgrade'] if upgrade else []),
                                 capture_output=True, text=True)
     if check:
         if result.returncode:
@@ -172,6 +173,13 @@ class AutomaticChartTests(unittest.TestCase):
             pod = object_named(objects, 'Deployment', 'gguf-test' + suffix)['spec']['template']['spec']
             self.assertEqual(next(v for v in pod['volumes'] if v['name'] == 'cache')['persistentVolumeClaim']['claimName'], config['claims'][index])
 
+    def test_model_install_and_upgrade_cannot_replace_shared_release(self):
+        for upgrade in (False, True):
+            with self.subTest(upgrade=upgrade):
+                result = render(check=False, release='llm-stack', upgrade=upgrade)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('llm-stack is reserved for the shared stack', result.stderr)
+
     def test_invalid_recipe_or_topology_fails_during_render(self):
         cases = [dict(recipe='unsupported'), dict(nodes=['a']), dict(nodes=['a', 'a']), dict(nodes=['a', 'b', 'c']),
                  dict(nodes=['a', 'INVALID']), dict(sharedCAConfigMap=''), dict(profileName='not-this-profile'),
@@ -237,6 +245,7 @@ class RuntimeTests(unittest.TestCase):
                        'reuseCaches': True, 'rpcEndpoints': ['worker:50052']}
         self.runtime = self.root / 'runtime'
         self.runtime.mkdir()
+        (self.root / 'build').mkdir()
         binaries = {}
         for name in auto.BINARIES:
             (self.runtime / name).write_bytes(name.encode())
@@ -441,13 +450,41 @@ class RuntimeTests(unittest.TestCase):
         child.wait.assert_called_once_with(timeout=15)
         download.assert_not_called()
 
+    def test_missing_build_artifacts_cannot_skip_chain_qualification(self):
+        (self.root / 'build').rmdir()
+        cached = {path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}
+        with patch.object(auto.subprocess, 'Popen') as start, patch.object(auto.subprocess, 'run') as run, \
+                self.assertRaisesRegex(RuntimeError, 'requires the original pinned build artifacts'):
+            auto.qualify(self.config, self.root)
+        start.assert_not_called()
+        run.assert_not_called()
+        auto.emit.assert_not_called()
+        self.assertEqual(cached, {path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()})
+
+    def test_failed_chain_check_releases_gpu_without_qualification_success(self):
+        child = MagicMock()
+        with patch.object(auto.subprocess, 'Popen', return_value=child), patch.object(auto, 'wait_endpoints'), \
+                patch.object(auto.subprocess, 'run', side_effect=[None, None, subprocess.CalledProcessError(1, 'chain-check')]) as run, \
+                self.assertRaises(subprocess.CalledProcessError):
+            auto.qualify(self.config, self.root)
+        self.assertEqual(pathlib.Path(run.call_args.args[0][-1]).name, 'chain-check.py')
+        child.terminate.assert_called_once()
+        child.wait.assert_called_once_with(timeout=15)
+        auto.emit.assert_not_called()
+
     def test_distributed_checks_finish_and_local_gpu_is_released_before_model_starts(self):
         child = MagicMock()
         with patch.object(auto.subprocess, 'Popen', return_value=child), patch.object(auto, 'wait_endpoints'), \
                 patch.object(auto.subprocess, 'run') as run:
             auto.qualify(self.config, self.root)
-        self.assertEqual([pathlib.Path(call.args[0][0]).name for call in run.call_args_list], ['test-rpc-multi-server', 'rpc-gpu-check'])
-        self.assertTrue(all(call.args[0][-2:] == ['127.0.0.1:50052', 'worker:50052'] for call in run.call_args_list))
+        self.assertEqual([pathlib.Path(call.args[0][0]).name for call in run.call_args_list[:2]], ['test-rpc-multi-server', 'rpc-gpu-check'])
+        self.assertTrue(all(call.args[0][-2:] == ['127.0.0.1:50052', 'worker:50052'] for call in run.call_args_list[:2]))
+        self.assertEqual(run.call_count, 3)
+        chain = run.call_args_list[2]
+        self.assertEqual(chain.args[0], [auto.sys.executable, '-u', str(auto.CHECKS / 'chain-check.py')])
+        self.assertEqual(chain.kwargs['env']['RPC_ENDPOINTS'], '127.0.0.1:50052,worker:50052')
+        self.assertEqual(chain.kwargs['env']['LLAMA_REVISION'], self.config['recipe']['llamaCppRevision'])
+        auto.emit.assert_called_once_with('distributed_qualification_pass', gpus=2)
         child.terminate.assert_called_once()
         child.wait.assert_called_once()
 

@@ -114,7 +114,7 @@ def import_images(archive, images, *, context, namespace, release, work, contain
     for name in ('clientImage', 'serverImage'):
         if cfg.get(name):
             values[name] = cfg[name]
-    helm_apply(release, HERE/'charts/image-loader', values, wait=False)
+    helm_apply(release, HERE.parent/'recipes/charts/image-loader', values, wait=False)
     status = json.loads(output(hm+['status', release, '-o', 'json']))
     revision = status['version']
     require(isinstance(revision, int) and revision > 0, 'Image import release has no valid revision.')

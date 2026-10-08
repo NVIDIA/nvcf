@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent/'dev-images'))
 import image_tools
 import test_image_import as import_tests
 
@@ -20,7 +20,7 @@ class ImageToolsTests(unittest.TestCase):
     def test_module_loads_without_recipe_or_model_dependencies(self):
         code = ('import sys; sys.path.insert(0, sys.argv[1]); import image_tools; '
                 'assert not ({"recipe", "sizing", "monitoring", "stack_binding"} & sys.modules.keys())')
-        subprocess.run([sys.executable, '-c', code, str(HERE)], check=True)
+        subprocess.run([sys.executable, '-c', code, str(HERE.parent/'dev-images')], check=True)
 
     def test_component_builds_use_selected_platform_sources_and_targets(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -61,13 +61,13 @@ class ImageToolsTests(unittest.TestCase):
         values = []
         with patch.object(image_tools.time, 'sleep'), contextlib.redirect_stdout(io.StringIO()):
             image_tools.import_images(
-                fixture.archive, [fixture.recipe.image('gateway', 'edited')],
+                fixture.archive, [fixture.image],
                 context=fixture.config['context'], namespace=fixture.config['namespace'],
-                release=fixture.release, work=fixture.recipe.work,
+                release=fixture.release, work=fixture.work,
                 containerd=fixture.config['containerd'], node_names=fixture.nodes,
-                control_node=fixture.config['nodes']['control'],
+                control_node=fixture.config['controlNode'],
                 helm_apply=lambda *args, **kwargs: values.append((args, kwargs)),
-                run=fixture.execute, output=fixture.output, save=import_tests.tool.save,
+                run=fixture.execute, output=fixture.output, save=import_tests.save,
                 platform='linux/amd64')
         applied = values[0][0][2]
         self.assertEqual(applied['platform'], 'linux/amd64')
@@ -79,7 +79,7 @@ class ImageToolsTests(unittest.TestCase):
         self.assertIn('/images/images.tar', upload)
         for command in fixture.commands + fixture.calls:
             self.assertEqual(command[command.index('-n')+1], fixture.config['namespace'])
-        evidence = json.loads((fixture.recipe.work/'evidence/image-import.json').read_text())
+        evidence = json.loads((fixture.work/'evidence/image-import.json').read_text())
         self.assertEqual(evidence['nodeNames'], fixture.nodes)
 
     def test_import_rejects_unsafe_name_and_platform_before_inspection(self):

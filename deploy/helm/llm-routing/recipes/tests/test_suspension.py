@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import copy
 import json
-import importlib.util
 import pathlib
 import subprocess
 import tempfile
@@ -16,15 +15,20 @@ class SuspensionTests(unittest.TestCase):
     def cases(self):
         for release in all_profile_releases():
             yield release['model'] + '-' + release['profile'], ROOT/'charts/sglang', dict(release['values'], phase='serve')
-        spec = importlib.util.spec_from_file_location('gguf_suspension_recipe', ROOT/'recipe.py')
-        tool = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(tool)
+        definition = json.loads((ROOT/'glm-5.3/recipe.json').read_text())
+        lock = json.loads((ROOT/'glm-5.3/model.lock.json').read_text())
+        image = json.loads((ROOT/'glm-5.3/profiles.json').read_text())['runtimeImage']
         for count in (1, 2):
-            config = json.loads((ROOT/'config.example.json').read_text())
-            config['nodes']['model'] = config['nodes']['model'][:count]
-            config['gpu']['memoryGiB'] = 512
-            with tempfile.TemporaryDirectory() as directory:
-                values = tool.Recipe(config, directory).backend_values('serve', register=True, render=True)
+            values = {'phase': 'serve', 'image': image,
+                      'targets': [{'id': 'n'+str(i), 'node': 'model-'+str(i)} for i in range(count)],
+                      'gpu': {'product': 'NVIDIA-GB10'},
+                      'build': {'revision': definition['llamaCppRevision'], 'cudaArchitectures': '121a-real'},
+                      'runtime': {'sha256': 'a'*64},
+                      'model': {'lock': lock, 'register': True, 'firstShard': lock['files'][0]['rfilename'],
+                                'servedName': definition['servedName'], 'endpointName': definition['endpointName'],
+                                'canary': definition['canary'], 'args': definition['serverArgs']},
+                      'rpc': {'cache': {'enabled': count > 1}},
+                      'chain': {'runtimeRelease': 'suspend-test', 'artifactClaim': 'suspend-test-artifacts'}}
             yield 'gguf-' + str(count), ROOT/'charts/gguf-backend', values
 
     def render(self, chart, values, accepted=True):

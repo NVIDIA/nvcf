@@ -4,6 +4,7 @@ import json
 import pathlib
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -207,6 +208,43 @@ class ModelCapacityTests(unittest.TestCase):
                 check(**kwargs)
         with self.assertRaises(ValueError):
             check({'nodes': []})
+
+
+class CapacityPrimitiveTests(unittest.TestCase):
+    def test_kubernetes_quantities_are_exact_and_invalid_values_fail(self):
+        for value, expected in [('1000m', 1), ('1.5Gi', 1610612736), ('128G', 128000000000)]:
+            self.assertEqual(model_capacity.quantity(value), expected)
+        for value in ('bad', 'nan', '-1Gi'):
+            with self.assertRaises(ValueError):
+                model_capacity.quantity(value)
+
+    def test_read_only_inventory_uses_explicit_context_and_all_namespace_workloads(self):
+        with patch.object(model_capacity, 'command_json', return_value={'items': []}) as run:
+            result = model_capacity.inventory('explicit-context')
+            for call in run.call_args_list:
+                command = call.args[0]
+                self.assertEqual(command[:4], ['kubectl', '--context', 'explicit-context', 'get'])
+                if command[4] in ('pods', 'inferenceendpoints.pylon.nvidia.com'):
+                    self.assertIn('--all-namespaces', command)
+            self.assertEqual(result['context'], 'explicit-context')
+        for invalid in ('', None, '-argument'):
+            with patch.object(model_capacity, 'command_json') as run, self.assertRaises(ValueError):
+                model_capacity.inventory(invalid)
+            run.assert_not_called()
+
+    def test_alternate_discrete_hardware_requires_explicit_device_memory(self):
+        catalog = copy.deepcopy(CATALOG)
+        profile = next(recipe for recipe in catalog['recipes'] if recipe['id'] == 'qwen3.8-27b')['profiles'][0]
+        profile['hardware'] = {'os': 'linux', 'architecture': 'amd64', 'gpuCount': 1,
+                               'gpuProducts': ['NVIDIA-Test-GPU'], 'memoryMode': 'discrete', 'minDeviceMemoryGiB': 80}
+        snapshot = inventory(1)
+        snapshot['nodes'][0]['metadata']['labels'].update({
+            'kubernetes.io/arch': 'amd64', 'nvidia.com/gpu.product': 'NVIDIA Test GPU'})
+        for measured, expected in [(None, 'blocked'), (79, 'blocked'), (80, 'fits'), (True, 'blocked')]:
+            with self.subTest(measured=measured):
+                report = model_capacity.analyze(snapshot, catalog, 'qwen3.8-27b',
+                    capabilities={'nodes': {'node-0': {'cudaTotalMemoryGiB': measured}}})
+                self.assertEqual(report['status'], expected)
 
 
 if __name__ == '__main__':

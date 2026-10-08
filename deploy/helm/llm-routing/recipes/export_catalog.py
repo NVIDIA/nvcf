@@ -70,6 +70,15 @@ def helm_validation(record, profile, revision, image, available=True):
     return {"automaticHelmStatus": status, "automaticHelmWorkload": copy.deepcopy(record)}
 
 
+def profile_validation(model, profile, key):
+    record = profile.get(key, model.get(key))
+    if record and record.get("profile") != profile["id"]:
+        if key in profile:
+            raise ValueError("Validation record belongs to another profile: " + profile["id"])
+        return None
+    return copy.deepcopy(record)
+
+
 def sglang_recipes(root):
     chart = chart_reference(root, Path("charts/sglang"))
     automatic_ids = set(read(root / "charts/sglang/files/profiles.json"))
@@ -79,8 +88,7 @@ def sglang_recipes(root):
         profiles = []
         for profile in model["profiles"]:
             hardware = copy.deepcopy(profile["hardware"])
-            validated = model.get("validatedWorkload", {})
-            validated = copy.deepcopy(validated) if validated.get("profile") == profile["id"] else None
+            validated = profile_validation(model, profile, "validatedWorkload")
             if validated:
                 validated.setdefault("requestType", "short-prompt-smoke")
                 validated.setdefault("fullContextExercised", False)
@@ -100,14 +108,16 @@ def sglang_recipes(root):
                 "workload": {"defaultContextTokens": 8192, "defaultConcurrency": 1,
                     "maximumContextTokens": profile["maxContext"], "maximumConcurrency": profile["maxConcurrency"]},
                 "validation": {"runtimeStatus": "smoke-tested" if validated else "pending",
-                    "workload": validated, **helm_validation(model.get("automaticHelmValidation"), profile["id"],
+                    "workload": validated, **helm_validation(profile_validation(model, profile, "automaticHelmValidation"), profile["id"],
                         model["revision"], model["image"], automatic)},
                 "deployment": {"chart": copy.deepcopy(chart),
                     "lifecycle": "automatic" if automatic else "legacy-phased",
                     "values": {"recipe": model["id"], "profileName": profile["id"]} if automatic else None,
                     "requiredSiteValues": ["nodes", "runtimeClassName", "storageClassName", "sharedCAConfigMap"]
+                        + (["nodeCapabilities"] if profile.get("offload") or profile.get("fabric") else [])
                         if automatic else [],
-                    "guide": "../README.md" if automatic else "../ADVANCED.md#qwen-catalog-configuration"},
+                    "guide": ("../ADVANCED.md#helm-flash-next-recipes" if model["id"] == "qwen3.8-flash-next"
+                        else "../README.md") if automatic else "../ADVANCED.md#recipe-resources-and-tuning"},
             })
         recipes.append({"id": model["id"], "name": model["name"], "servedModelId": model["id"],
             "availability": {"status": "available", "deployable": True},

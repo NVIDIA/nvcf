@@ -1,6 +1,6 @@
 # Shared routing chart
 
-Compose the existing gateway stack and Pylon operator through local Helm dependencies. Do not copy their templates or change operator behavior here. Keep this chart free of model, GPU, RuntimeClass and storage requirements. Generated credentials must keep their identity across upgrades. Fail on missing credentials during upgrades, incompatible CRDs or overlapping operator watches.
+Install as release `llm-stack` in namespace `llm-stack`. Compose the gateway stack and Pylon operator through local Helm dependencies. Do not copy their templates or change operator behavior here. Keep this chart free of model, GPU, RuntimeClass and storage requirements. Generated credentials must keep their identity across upgrades. Keep `installCRDs` boolean and inherit its default from the operator dependency. Do not add discovery or compatibility paths for other stack layouts.
 
 From the repository root, run:
 

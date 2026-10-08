@@ -184,6 +184,69 @@ class SharedHelmTests(unittest.TestCase):
         after = {item['metadata']['name']: item['data'] for item in second if item['kind'] == 'Secret'}
         self.assertEqual(after, before)
 
+    def test_upgrade_rebuilds_missing_or_stale_authentication_from_source_credentials(self):
+        original = self.installed()
+        expected = {item['metadata']['name']: item['data'] for item in original if item['kind'] == 'Secret'}
+        stale_hash = hashlib.sha256(b'obsolete-credential').hexdigest()
+        for name, key, stale in (
+                ('llm-gateway-stack-api-keys', 'api-keys.json',
+                 {'keys': [{'id': 'stack-client', 'sha256': stale_hash}]}),
+                ('llm-gateway-stack-worker-credentials', 'credentials.yaml',
+                 {'clusters': {'llm-stack': ['sha256:' + stale_hash]}})):
+            for state in ('missing', 'stale'):
+                with self.subTest(secret=name, state=state):
+                    resources = copy.deepcopy(original)
+                    if state == 'missing':
+                        resources = [obj for obj in resources if obj['metadata']['name'] != name]
+                    else:
+                        secret = next(obj for obj in resources if obj['metadata']['name'] == name)
+                        secret['data'][key] = base64.b64encode(json.dumps(stale).encode()).decode()
+                    rendered = self.render(chart=self.lookup_chart(resources), upgrade=True)
+                    actual = {item['metadata']['name']: item['data'] for item in rendered if item['kind'] == 'Secret'}
+                    self.assertEqual(actual, expected)
+
+    def test_upgrade_rejects_foreign_owned_authentication(self):
+        original = self.installed()
+        for name in ('llm-gateway-stack-api-keys', 'llm-gateway-stack-worker-credentials'):
+            with self.subTest(secret=name):
+                resources = copy.deepcopy(original)
+                secret = next(obj for obj in resources if obj['metadata']['name'] == name)
+                secret['metadata']['annotations']['meta.helm.sh/release-name'] = 'other-stack'
+                self.render(chart=self.lookup_chart(resources), upgrade=True,
+                            fail='not owned by this Helm release')
+
+    def test_upgrade_switches_to_selected_existing_credentials(self):
+        original = self.installed()
+        secrets = {item['metadata']['name']: item for item in original if item['kind'] == 'Secret'}
+        for switch_caller, switch_transport in ((True, False), (False, True), (True, True)):
+            with self.subTest(caller=switch_caller, transport=switch_transport):
+                values = copy.deepcopy(self.values)
+                resources = copy.deepcopy(original)
+                caller = decode(secrets['llm-shared-caller-key'], 'api-key')
+                token = decode(secrets['llm-shared-cluster-token'], 'cluster-token')
+                external = []
+                if switch_caller:
+                    values['callerKey'] = {'existingSecret': 'external-caller'}
+                    caller = 'selected-external-caller'
+                    external.append(('external-caller', 'api-key', caller))
+                if switch_transport:
+                    values['clusterCredential'] = {'create': False}
+                    values['operator']['credential'] = {'existingSecret': 'external-transport'}
+                    token = 'selected-external-transport'
+                    external.append(('external-transport', 'cluster-token', token))
+                resources.extend({'apiVersion': 'v1', 'kind': 'Secret',
+                                  'metadata': {'name': name, 'namespace': 'test-models'},
+                                  'data': {key: base64.b64encode(value.encode()).decode()}}
+                                 for name, key, value in external)
+                rendered = self.render(values, chart=self.lookup_chart(resources), upgrade=True)
+                after = {item['metadata']['name']: item for item in rendered if item['kind'] == 'Secret'}
+                self.assertEqual(json.loads(decode(after['llm-gateway-stack-api-keys'], 'api-keys.json')),
+                                 {'keys': [{'id': 'stack-client', 'sha256': hashlib.sha256(caller.encode()).hexdigest()}]})
+                self.assertEqual(yaml.safe_load(decode(after['llm-gateway-stack-worker-credentials'], 'credentials.yaml')),
+                                 {'clusters': {'llm-stack': ['sha256:' + hashlib.sha256(token.encode()).hexdigest()]}})
+                for name, _, _ in external:
+                    self.assertNotIn(name, after)
+
     def test_upgrade_missing_key_fails_instead_of_rotating(self):
         first = [item for item in self.installed() if item['metadata']['name'] != 'llm-shared-caller-key']
         self.render(chart=self.lookup_chart(first), upgrade=True, fail='required Secret llm-shared-caller-key is missing')
@@ -245,52 +308,13 @@ class SharedHelmTests(unittest.TestCase):
                 values['operator']['watchNamespaces'] = watch
                 self.render(values, fail='must contain exactly the Helm release namespace')
 
-    def test_overlapping_operator_is_rejected_but_other_namespace_is_allowed(self):
-        for watch, blocked in [('', True), ('test-models', True), ('other', False)]:
-            with self.subTest(watch=watch):
-                deployment = {'apiVersion': 'apps/v1', 'kind': 'Deployment', 'metadata': {'namespace': 'other', 'name': 'existing-operator'},
-                              'spec': {'template': {'spec': {'containers': [{'name': 'operator', 'args': [
-                                  '--cluster-credential-secret=existing-token', '--watch-namespaces=' + watch]}]}}}}
-                fixture = {'apiVersion': 'apps/v1', 'kind': 'Deployment', 'items': [deployment]}
-                self.render(chart=self.lookup_chart([fixture]), fail='already watches namespace test-models' if blocked else None)
+    def test_crd_default_is_owned_by_the_operator_chart(self):
+        shared_values = yaml.safe_load((HERE/'charts/shared-stack/values.yaml').read_text())
+        operator_values = yaml.safe_load((HELM/'pylon-operator/pylon-operator/values.yaml').read_text())
+        self.assertNotIn('installCRDs', shared_values['operator'])
+        self.assertIs(operator_values['installCRDs'], True)
 
-    def existing_operator_chart(self, args):
-        deployment = {'metadata': {'namespace': 'other', 'name': 'existing-operator'},
-                      'spec': {'template': {'spec': {'containers': [{'name': 'operator', 'args':
-                          ['--pylon-image=localhost/pylon:test'] + args}]}}}}
-        return self.lookup_chart([{'apiVersion': 'apps/v1', 'kind': 'Deployment', 'items': [deployment]}])
-
-    def test_spaced_watch_target_is_rejected_in_both_argument_forms(self):
-        for args in (['--watch-namespaces= other, test-models ,team-b '],
-                     ['--watch-namespaces', ' other, test-models ,team-b ']):
-            with self.subTest(args=args):
-                self.render(chart=self.existing_operator_chart(args), fail='already watches namespace test-models')
-
-    def test_empty_normalized_watch_list_means_all_namespaces(self):
-        for watch in (' ', ',,,', ' , \t, '):
-            for args in (['--watch-namespaces=' + watch], ['--watch-namespaces', watch]):
-                with self.subTest(args=args):
-                    self.render(chart=self.existing_operator_chart(args), fail='already watches namespace test-models')
-
-    def test_spaced_nonoverlapping_watch_list_preserves_generated_scope(self):
-        resources = self.render(chart=self.existing_operator_chart(['--watch-namespaces= other, ,team-b , other ']))
-        operators = [container for item in resources if item['kind'] == 'Deployment'
-                     for container in item['spec']['template']['spec']['containers']
-                     if any(arg.startswith('--pylon-image=') for arg in container.get('args', []))]
-        self.assertEqual(len(operators), 1)
-        self.assertIn('--watch-namespaces=test-models', operators[0]['args'])
-
-    def test_pylon_image_operator_markers_and_duplicate_watches_are_detected(self):
-        for args, message in [(['--pylon-image=localhost/pylon:test', '--watch-namespaces=test-models'], 'already watches'),
-                              (['--pylon-image', 'localhost/pylon:test', '--watch-namespaces', 'test-models'], 'already watches'),
-                              (['--pylon-image=localhost/pylon:test', '--watch-namespaces=test-models', '--watch-namespaces=other'], 'ambiguous duplicate')]:
-            with self.subTest(args=args):
-                deployment = {'apiVersion': 'apps/v1', 'kind': 'Deployment',
-                              'metadata': {'namespace': 'other', 'name': 'existing-operator'},
-                              'spec': {'template': {'spec': {'containers': [{'name': 'operator', 'command': ['operator'] + args}]}}}}
-                self.render(chart=self.lookup_chart([{'apiVersion': 'apps/v1', 'kind': 'Deployment', 'items': [deployment]}]), fail=message)
-
-    def test_default_auto_creates_one_kept_crd_without_existing_api(self):
+    def test_default_true_creates_one_kept_crd_without_existing_api(self):
         resources = self.render(api=False)
         crds = [item for item in resources if item['kind'] == 'CustomResourceDefinition']
         self.assertEqual(len(crds), 1)
@@ -310,7 +334,7 @@ class SharedHelmTests(unittest.TestCase):
         resources = self.render(values, api=False)
         self.assertEqual(sum(item['kind'] == 'CustomResourceDefinition' for item in resources), 1)
 
-    def test_owned_crd_auto_upgrade_repairs_an_older_schema(self):
+    def test_owned_crd_upgrade_repairs_an_older_schema(self):
         resources = self.installed()
         crd = next(item for item in resources if item['kind'] == 'CustomResourceDefinition')
         version = next(item for item in crd['spec']['versions'] if item['name'] == 'v1alpha1')
@@ -326,7 +350,7 @@ class SharedHelmTests(unittest.TestCase):
         self.assertEqual(crds[0]['metadata']['annotations']['helm.sh/resource-policy'], 'keep')
 
     def test_invalid_crd_management_modes_are_rejected(self):
-        for mode in ('always', 'false', 1):
+        for mode in ('auto', 'always', 'true', 'false', 1):
             with self.subTest(mode=mode):
                 values = copy.deepcopy(self.values)
                 values['operator']['installCRDs'] = mode
@@ -360,7 +384,7 @@ class SharedHelmTests(unittest.TestCase):
                      'metadata': {'name': 'external-caller', 'namespace': 'test-models'}, 'data': {}}
         self.render(values, chart=self.lookup_chart([malformed]), fail='missing api-key')
 
-    def test_compatible_foreign_or_unowned_crd_is_reused_without_adoption(self):
+    def test_foreign_or_unowned_crd_requires_explicit_external_management(self):
         original = next(item for item in self.render(api=False) if item['kind'] == 'CustomResourceDefinition')
         for owner in (None, ('original-owner', 'original-namespace')):
             with self.subTest(owner=owner):
@@ -369,33 +393,35 @@ class SharedHelmTests(unittest.TestCase):
                     crd['metadata']['annotations'].update({'meta.helm.sh/release-name': owner[0],
                                                             'meta.helm.sh/release-namespace': owner[1]})
                 chart = self.lookup_chart([crd])
-                rendered = self.render(chart=chart)
-                self.assertFalse(any(item['kind'] == 'CustomResourceDefinition' for item in rendered))
+                self.render(chart=chart, fail='not owned by this Helm release')
                 values = copy.deepcopy(self.values)
-                values['operator']['installCRDs'] = True
-                self.render(values, chart=chart, fail='not owned by this Helm release')
+                values['operator']['installCRDs'] = False
+                rendered = self.render(values, chart=chart)
+                self.assertFalse(any(item['kind'] == 'CustomResourceDefinition' for item in rendered))
 
-    def test_auto_reuse_rejects_an_incompatible_foreign_schema(self):
+    def test_external_management_rejects_an_incompatible_schema(self):
         crd = next(item for item in self.render(api=False) if item['kind'] == 'CustomResourceDefinition')
         crd['metadata']['annotations'].update({'meta.helm.sh/release-name': 'original-owner',
                                                 'meta.helm.sh/release-namespace': 'original-namespace'})
         version = next(item for item in crd['spec']['versions'] if item['name'] == 'v1alpha1')
         version['schema']['openAPIV3Schema']['properties']['spec']['properties'].pop('health')
-        self.render(chart=self.lookup_chart([crd]), fail='existing InferenceEndpoint CRD is incompatible')
+        values = copy.deepcopy(self.values)
+        values['operator']['installCRDs'] = False
+        self.render(values, chart=self.lookup_chart([crd]), fail='existing InferenceEndpoint CRD is incompatible')
 
-    def test_auto_management_rejects_crd_identity_changes_for_any_owner(self):
-        original = next(item for item in self.render(api=False) if item['kind'] == 'CustomResourceDefinition')
-        for owner in (('test-stack', 'test-models'), ('original-owner', 'original-namespace')):
+    def test_crd_identity_changes_are_rejected(self):
+        original = next(item for item in self.installed() if item['kind'] == 'CustomResourceDefinition')
+        for manage in (False, True):
             for key, value in (('group', 'other.invalid'), ('scope', 'Cluster'), ('kind', 'OtherEndpoint')):
-                with self.subTest(owner=owner, key=key):
+                with self.subTest(manage=manage, key=key):
                     crd = copy.deepcopy(original)
-                    crd['metadata']['annotations'].update({'meta.helm.sh/release-name': owner[0],
-                                                            'meta.helm.sh/release-namespace': owner[1]})
                     if key == 'kind':
                         crd['spec']['names'][key] = value
                     else:
                         crd['spec'][key] = value
-                    self.render(chart=self.lookup_chart([crd]), fail='existing InferenceEndpoint CRD is incompatible')
+                    values = copy.deepcopy(self.values)
+                    values['operator']['installCRDs'] = manage
+                    self.render(values, chart=self.lookup_chart([crd]), fail='existing InferenceEndpoint CRD is incompatible')
 
     def test_duplicate_secret_names_and_argument_overrides_are_rejected(self):
         values = copy.deepcopy(self.values)

@@ -69,6 +69,79 @@ class CommonCatalogTests(unittest.TestCase):
         self.assertEqual(result["automaticHelmStatus"], "failed")
         self.assertEqual(result["automaticHelmWorkload"], record)
 
+    def export_flash(self, update):
+        original_read = catalog.read
+        source = original_read(ROOT / "catalog.json")
+        model = next(model for model in source["models"] if model["id"] == "qwen3.8-flash-next")
+        for owner in [model, *model["profiles"]]:
+            for key in ("validatedWorkload", "automaticHelmValidation"):
+                owner.pop(key, None)
+        update(model)
+        with patch.object(catalog, "read", side_effect=lambda path: source if path == ROOT / "catalog.json" else original_read(path)):
+            return next(recipe for recipe in catalog.sglang_recipes(ROOT) if recipe["id"] == model["id"])
+
+    def test_flash_profiles_require_capabilities_and_automatic_guide(self):
+        for profile in self.recipes["qwen3.8-flash-next"]["profiles"]:
+            with self.subTest(profile=profile["id"]):
+                deployment = profile["deployment"]
+                self.assertEqual(deployment["lifecycle"], "automatic")
+                self.assertEqual(deployment["values"], {"recipe": "qwen3.8-flash-next", "profileName": profile["id"]})
+                self.assertIn("nodeCapabilities", deployment["requiredSiteValues"])
+                self.assertEqual(deployment["guide"], "../ADVANCED.md#helm-flash-next-recipes")
+
+    def test_flash_validation_records_are_independent_per_profile(self):
+        def update(model):
+            for i, profile in enumerate(model["profiles"]):
+                profile["validatedWorkload"] = {"profile": profile["id"], "contextLength": 8192 + i}
+                profile["automaticHelmValidation"] = {"profile": profile["id"], "modelRevision": model["revision"],
+                    "runtimeImage": model["image"], "status": "smoke-tested" if i == 0 else "failed"}
+        recipe = self.export_flash(update)
+        for i, profile in enumerate(recipe["profiles"]):
+            with self.subTest(profile=profile["id"]):
+                validation = profile["validation"]
+                self.assertEqual(validation["runtimeStatus"], "smoke-tested")
+                self.assertEqual(validation["workload"]["profile"], profile["id"])
+                self.assertEqual(validation["workload"]["contextLength"], 8192 + i)
+                self.assertEqual(validation["automaticHelmStatus"], "smoke-tested" if i == 0 else "failed")
+                self.assertEqual(validation["automaticHelmWorkload"]["profile"], profile["id"])
+
+    def test_model_level_validation_applies_only_to_its_profile(self):
+        def update(model):
+            profile = model["profiles"][0]
+            model["validatedWorkload"] = {"profile": profile["id"]}
+            model["automaticHelmValidation"] = {"profile": profile["id"], "modelRevision": model["revision"],
+                "runtimeImage": model["image"]}
+        recipe = self.export_flash(update)
+        for i, profile in enumerate(recipe["profiles"]):
+            expected = "smoke-tested" if i == 0 else "pending"
+            self.assertEqual(profile["validation"]["runtimeStatus"], expected)
+            self.assertEqual(profile["validation"]["automaticHelmStatus"], expected)
+
+    def test_profile_records_override_or_clear_model_level_validation(self):
+        def update(model):
+            profile = model["profiles"][0]
+            model["validatedWorkload"] = {"profile": profile["id"], "contextLength": 4096}
+            model["automaticHelmValidation"] = {"profile": profile["id"], "modelRevision": model["revision"],
+                "runtimeImage": model["image"]}
+            profile["validatedWorkload"] = {"profile": profile["id"], "contextLength": 8192}
+            profile["automaticHelmValidation"] = None
+        validation = self.export_flash(update)["profiles"][0]["validation"]
+        self.assertEqual(validation["workload"]["contextLength"], 8192)
+        self.assertEqual(validation["automaticHelmStatus"], "pending")
+        self.assertIsNone(validation["automaticHelmWorkload"])
+
+    def test_profile_validation_rejects_wrong_profile_or_stale_pins(self):
+        for key in ("validatedWorkload", "automaticHelmValidation"):
+            def update(model):
+                model["profiles"][0][key] = {"profile": model["profiles"][1]["id"]}
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "another profile"):
+                self.export_flash(update)
+        def stale(model):
+            model["profiles"][0]["automaticHelmValidation"] = {"profile": model["profiles"][0]["id"],
+                "modelRevision": "old", "runtimeImage": model["image"]}
+        with self.assertRaisesRegex(ValueError, "pins changed"):
+            self.export_flash(stale)
+
     def test_inventory_covers_seven_families_with_two_qwen_precisions(self):
         self.assertEqual(set(self.recipes), {"qwen3.8-27b", "qwen3.8-27b-nvfp4", "qwen3.8-flash-next",
             "glm-5.3", "nemotron-5-nano-12b", "nemotron-5-super-49b", "qwen3.8-4b", "deepseek-v4-flash"})
@@ -123,12 +196,12 @@ class CommonCatalogTests(unittest.TestCase):
             self.assertEqual(candidate["hardware"]["tensorParallelSize"], 4)
             self.assertEqual(candidate["validation"]["status"], "unqualified")
             self.assertNotIn("deployment", candidate)
-        spec = importlib.util.spec_from_file_location("inventory_test_planner", ROOT / "recipes.py")
-        planner = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(planner)
+        import model_capacity
         for entry in catalog.read(ROOT / "planned.json")["recipes"]:
-            with self.subTest(recipe=entry["id"]), self.assertRaisesRegex(ValueError, "Unknown model"):
-                planner.plan({}, {}, [entry["id"]], "test", "storage", "runtime")
+            with self.subTest(recipe=entry["id"]):
+                report = model_capacity.analyze({'nodes': [], 'pods': []}, catalog.build(ROOT), entry['id'])
+                self.assertEqual(report['status'], 'unsupported')
+                self.assertEqual(report['chosenNodes'], [])
         for chart in ("sglang", "gguf-backend"):
             for path in (ROOT / "charts" / chart / "files").rglob("profiles.json"):
                 content = path.read_text()

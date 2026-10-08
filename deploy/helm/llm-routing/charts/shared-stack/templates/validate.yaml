@@ -39,11 +39,11 @@
 {{- end -}}
 
 {{- $crd := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "inferenceendpoints.pylon.nvidia.com" -}}
-{{- $manageCRDs := eq (include "pylon-operator.manageCRDs" .Subcharts.operator) "true" -}}
+{{- $manageCRDs := $operator.installCRDs -}}
 {{- if $manageCRDs -}}
 {{- if $crd -}}{{- include "llm-shared.owned" (dict "root" . "resource" $crd) -}}{{- end -}}
 {{- else if not (.Capabilities.APIVersions.Has "pylon.nvidia.com/v1alpha1") -}}
-{{- fail "shared-stack: no served InferenceEndpoint API; operator.installCRDs=false requires an existing CRD; use auto to install it, or supply --api-versions pylon.nvidia.com/v1alpha1 for offline rendering" -}}
+{{- fail "shared-stack: no served InferenceEndpoint API; operator.installCRDs=false requires an existing CRD; use true to install it, or supply --api-versions pylon.nvidia.com/v1alpha1 for offline rendering" -}}
 {{- end -}}
 {{- if $crd -}}
 {{- $compatible := false -}}
@@ -58,34 +58,6 @@
 {{- end -}}
 {{- if and (not $manageCRDs) (not $compatible) -}}
 {{- fail "shared-stack: existing InferenceEndpoint CRD is incompatible; upgrade the release that owns it before installing this stack" -}}
-{{- end -}}
-{{- end -}}
-
-{{- $ownOperator := include "pylon-operator.fullname" .Subcharts.operator -}}
-{{- range $deployment := (lookup "apps/v1" "Deployment" "" "").items -}}
-{{- $own := and (eq $deployment.metadata.namespace $.Release.Namespace) (eq $deployment.metadata.name $ownOperator) -}}
-{{- if not $own -}}
-{{- range $container := $deployment.spec.template.spec.containers -}}
-{{- $args := concat ($container.command | default list) ($container.args | default list) -}}
-{{- $isOperator := false -}}
-{{- $watch := "" -}}
-{{- $watchCount := 0 -}}
-{{- range $index, $arg := $args -}}
-{{- if or (hasPrefix "--cluster-credential-secret=" $arg) (eq $arg "--cluster-credential-secret") (hasPrefix "--pylon-image=" $arg) (eq $arg "--pylon-image") -}}{{- $isOperator = true -}}{{- end -}}
-{{- if hasPrefix "--watch-namespaces=" $arg -}}{{- $watch = trimPrefix "--watch-namespaces=" $arg -}}{{- $watchCount = add1 $watchCount -}}{{- end -}}
-{{- if eq $arg "--watch-namespaces" -}}{{- $watchCount = add1 $watchCount -}}{{- if lt (add1 $index) (len $args) -}}{{- $watch = index $args (int (add1 $index)) -}}{{- end -}}{{- end -}}
-{{- end -}}
-{{- if and $isOperator (gt (int $watchCount) 1) -}}{{- fail (printf "shared-stack: operator %s/%s has ambiguous duplicate --watch-namespaces arguments" $deployment.metadata.namespace $deployment.metadata.name) -}}{{- end -}}
-{{- $watchedNamespaces := list -}}
-{{- range $namespace := splitList "," $watch -}}
-{{- $namespace = trim $namespace -}}
-{{- if $namespace -}}{{- $watchedNamespaces = append $watchedNamespaces $namespace -}}{{- end -}}
-{{- end -}}
-{{- if and $isOperator (or (eq (len $watchedNamespaces) 0) (has $.Release.Namespace $watchedNamespaces)) -}}
-{{- fail (printf "shared-stack: operator %s/%s already watches namespace %s" $deployment.metadata.namespace $deployment.metadata.name $.Release.Namespace) -}}
-{{- end -}}
-{{- end -}}
-{{- else -}}{{- include "llm-shared.owned" (dict "root" $ "resource" $deployment) -}}
 {{- end -}}
 {{- end -}}
 

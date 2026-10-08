@@ -1,73 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
-# Candidate profile. Live validation is pending. Use qualify, download, serve.
-# Replace placeholder targets and select available GB10 nodes.
-# Override runtimeClassName and storageClassName for your cluster.
-# Verify Kubernetes ephemeral storage is on local NVMe with 56 GiB available.
-# This file does not run the planner capacity or local-NVMe checks.
-mode: phased
-phase: qualify
+# Cold startup, retained-cache upgrade and short-prompt inference validated.
+# Replace the placeholder node in both nodes and nodeCapabilities.
+# Verify local NVMe backs Kubernetes ephemeral storage with 56 GiB available.
+# The model cache also requires 180 GiB on persistent storage.
 recipe: qwen3.8-flash-next
 profileName: spark-nvfp4-nvme
+nodes:
+- gpu-node-1
+nodeCapabilities:
+  gpu-node-1:
+    localNvme: true
 runtimeClassName: nvidia
 storageClassName: local-path
 sharedCAConfigMap: llm-gateway-stack-ca
-targets:
-- node: gpu-node-1
-model:
-  id: qwen3.8-flash-next
-  repository: RadixArk/Qwen3.8-Flash-Next-NVFP4
-  revision: 7b719225242aacd3dbd3f9407468c2ee9a9d2594
-  precision: NVFP4
-image: lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06
-gpu:
-  product: NVIDIA-GB10
-profile:
-  id: spark-nvfp4-nvme
-  nodes: 1
-  memoryGiB: 110
-  memoryLimitGiB: 114
-  cpu: 4
-  cacheGiB: 180
-  minFreeDiskGiB: 140
-  maxContext: 262144
-  maxConcurrency: 8
-  offload: true
-  offloadGiB: 56
-  flags:
-  - --quantization
-  - modelopt_fp4
-  - --fp4-gemm-backend
-  - flashinfer_cutlass
-  - --page-size
-  - '64'
-  - --chunked-prefill-size
-  - '4096'
-  - --speculative-algorithm
-  - NEXTN
-  - --speculative-num-steps
-  - '3'
-  - --speculative-eagle-topk
-  - '1'
-  - --speculative-num-draft-tokens
-  - '4'
-  - --reasoning-parser
-  - qwen3
-  - --mem-fraction-static
-  - '0.85'
-  - --max-mamba-cache-size
-  - '40'
-  - --ple-offload-embedding
-  - --ple-offload-backend
-  - file
-  - --ple-offload-dir
-  - /ple
-  hardware:
-    os: linux
-    architecture: arm64
-    gpuProducts:
-    - NVIDIA-GB10
-    - NVIDIA GB10
-    cudaDeviceNames:
-    - NVIDIA GB10
-    gpuCount: 1
-    memoryMode: unified

@@ -141,5 +141,158 @@
       "performanceBenchmarked": false,
       "qualityEvaluated": false
     }
+  },
+  "qwen3.8-flash-next": {
+    "id": "qwen3.8-flash-next",
+    "repository": "RadixArk/Qwen3.8-Flash-Next-NVFP4",
+    "revision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+    "image": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
+    "profiles": [
+      {
+        "id": "spark-nvfp4-nvme",
+        "nodes": 1,
+        "memoryGiB": 110,
+        "memoryLimitGiB": 114,
+        "cpu": 4,
+        "cacheGiB": 180,
+        "minFreeDiskGiB": 140,
+        "maxContext": 262144,
+        "maxConcurrency": 8,
+        "offload": true,
+        "offloadGiB": 56,
+        "flags": [
+          "--quantization",
+          "modelopt_fp4",
+          "--fp4-gemm-backend",
+          "flashinfer_cutlass",
+          "--page-size",
+          "64",
+          "--chunked-prefill-size",
+          "4096",
+          "--speculative-algorithm",
+          "NEXTN",
+          "--speculative-num-steps",
+          "3",
+          "--speculative-eagle-topk",
+          "1",
+          "--speculative-num-draft-tokens",
+          "4",
+          "--reasoning-parser",
+          "qwen3",
+          "--mem-fraction-static",
+          "0.85",
+          "--max-mamba-cache-size",
+          "40",
+          "--ple-offload-embedding",
+          "--ple-offload-backend",
+          "file",
+          "--ple-offload-dir",
+          "/ple"
+        ],
+        "hardware": {
+          "os": "linux",
+          "architecture": "arm64",
+          "gpuProducts": [
+            "NVIDIA-GB10",
+            "NVIDIA GB10"
+          ],
+          "cudaDeviceNames": [
+            "NVIDIA GB10"
+          ],
+          "gpuCount": 1,
+          "memoryMode": "unified"
+        },
+        "validatedWorkload": {
+          "date": "2026-10-07",
+          "profile": "spark-nvfp4-nvme",
+          "modelRevision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+          "runtimeImage": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
+          "contextLength": 8192,
+          "concurrency": 1,
+          "requestType": "short-prompt-smoke",
+          "fullContextExercised": false,
+          "performanceBenchmarked": false,
+          "qualityEvaluated": false
+        },
+        "automaticHelmValidation": {
+          "date": "2026-10-07",
+          "profile": "spark-nvfp4-nvme",
+          "modelRevision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+          "runtimeImage": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
+          "contextLength": 8192,
+          "concurrency": 1,
+          "requestType": "short-prompt-smoke",
+          "fullContextExercised": false,
+          "performanceBenchmarked": false,
+          "qualityEvaluated": false,
+          "status": "smoke-tested",
+          "checks": [
+            "placement",
+            "gpu-qualification",
+            "cache-integrity",
+            "local-pcie-nvme",
+            "embedding-offload",
+            "readiness",
+            "registration",
+            "discovery",
+            "chat",
+            "streaming",
+            "authentication"
+          ]
+        }
+      },
+      {
+        "id": "spark-nvfp4-tp2",
+        "nodes": 2,
+        "memoryGiB": 110,
+        "memoryLimitGiB": 114,
+        "cpu": 4,
+        "cacheGiB": 180,
+        "minFreeDiskGiB": 140,
+        "maxContext": 262144,
+        "maxConcurrency": 24,
+        "offload": false,
+        "fabric": true,
+        "flags": [
+          "--quantization",
+          "modelopt_fp4",
+          "--fp4-gemm-backend",
+          "flashinfer_cutlass",
+          "--page-size",
+          "64",
+          "--chunked-prefill-size",
+          "4096",
+          "--speculative-algorithm",
+          "NEXTN",
+          "--speculative-num-steps",
+          "3",
+          "--speculative-eagle-topk",
+          "1",
+          "--speculative-num-draft-tokens",
+          "4",
+          "--reasoning-parser",
+          "qwen3",
+          "--mem-fraction-static",
+          "0.85",
+          "--max-mamba-cache-size",
+          "120",
+          "--no-ple-offload-embedding"
+        ],
+        "hardware": {
+          "os": "linux",
+          "architecture": "arm64",
+          "gpuProducts": [
+            "NVIDIA-GB10",
+            "NVIDIA GB10"
+          ],
+          "cudaDeviceNames": [
+            "NVIDIA GB10"
+          ],
+          "gpuCount": 1,
+          "memoryMode": "unified"
+        },
+        "minFabricGbps": 200
+      }
+    ]
   }
 }

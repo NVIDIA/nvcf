@@ -40,9 +40,7 @@ gatewayStack:
 operator:
   clusterId: llm-stack
   # Must contain exactly the Helm release namespace.
-  watchNamespaces: []
-  # Create missing CRDs, upgrade this release's CRDs, and reuse other owners' CRDs.
-  installCRDs: auto
+  watchNamespaces: [llm-stack]
   router:
     grpcAddress: http://llm-request-router:50071
   image:

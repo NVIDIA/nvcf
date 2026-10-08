@@ -8,7 +8,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "llm-shared.owned" -}}
 {{- $annotations := .resource.metadata.annotations | default dict -}}
 {{- if or (ne (index $annotations "meta.helm.sh/release-name") .root.Release.Name) (ne (index $annotations "meta.helm.sh/release-namespace") .root.Release.Namespace) -}}
-{{- fail (printf "shared-stack: %s is not owned by this Helm release; use an explicit existing Secret reference instead" .resource.metadata.name) -}}
+{{- fail (printf "shared-stack: %s is not owned by this Helm release; preserve it and migrate its ownership before continuing" .resource.metadata.name) -}}
 {{- end -}}
 {{- end -}}
 

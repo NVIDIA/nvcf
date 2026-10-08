@@ -61,6 +61,37 @@ class ClientTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'Incomplete SSE'):
                 c.completion(MODEL, 'calculate', True)
 
+    def test_stream_rejects_wrong_model_error_and_empty_usage(self):
+        instance = client.Client('http://localhost:18000')
+        for change in ({'model': 'other'}, {'error': {'message': 'failed'}}, {'usage': {'completion_tokens': 0}}):
+            response = stream()
+            lines = list(response)
+            event = json.loads(lines[2].decode().removeprefix('data: '))
+            event.update(change)
+            lines[2] = ('data: '+json.dumps(event)+'\n').encode()
+            response.__iter__ = Mock(return_value=iter(lines))
+            with self.subTest(change=change), patch.object(instance, 'request', return_value=(Mock(), response)), self.assertRaises(RuntimeError):
+                instance.completion(MODEL, 'hello', True)
+
+    def test_response_limits_and_redirects_fail_before_success(self):
+        with self.assertRaisesRegex(RuntimeError, 'limit'):
+            client.read_bounded(io.BytesIO(b'x'*(client.MAX_RESPONSE_BYTES+1)))
+        instance = client.Client('http://localhost:18000')
+        response = Mock(status=200)
+        response.__iter__ = Mock(return_value=iter([b'x'*(client.MAX_RESPONSE_BYTES+1)]))
+        with patch.object(instance, 'request', return_value=(Mock(), response)), self.assertRaisesRegex(RuntimeError, 'limit'):
+            instance.completion(MODEL, 'hello', True)
+        for status in (301, 302, 307, 308):
+            connection = Mock()
+            with self.subTest(status=status), patch.object(instance, 'request', return_value=(connection, Mock(status=status))), self.assertRaisesRegex(RuntimeError, 'HTTP '+str(status)):
+                instance.public_json('/v1/models')
+            connection.close.assert_called_once()
+
+    def test_urls_with_embedded_credentials_query_or_fragment_are_rejected(self):
+        for url in ('https://user:password@gateway', 'https://gateway?secret=yes', 'https://gateway#fragment'):
+            with self.subTest(url=url), self.assertRaisesRegex(ValueError, 'origin'):
+                client.Client(url)
+
     def test_fixture_content_cannot_pass_as_a_glm_response(self):
         c = client.Client('http://127.0.0.1:18000')
         response = Mock(status=200)

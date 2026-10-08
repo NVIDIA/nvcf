@@ -3,7 +3,7 @@
 {{- if .Values.enabled }}
 {{- if empty .Values.namespaces }}{{ fail "namespaces must name the recipe namespaces to scrape" }}{{ end }}
 {{- if empty .Values.targets }}{{ fail "targets must list the component scrape targets" }}{{ end }}
-{{- $secret := required "grafana.adminSecret must name a Secret with admin-user and admin-password" .Values.grafana.adminSecret }}
+{{- $secret := default (printf "%s-grafana-admin" .Release.Name) .Values.grafana.adminSecret }}
 {{- range $component, $settings := dict "collector" .Values.collector "victoria-metrics" .Values.victoriaMetrics "grafana" .Values.grafana }}
 {{- $port := index (dict "collector" 13133 "victoria-metrics" 8428 "grafana" 3000) $component }}
 apiVersion: apps/v1

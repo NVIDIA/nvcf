@@ -1,24 +1,24 @@
 # Build application images and chart packages
 
-Normal installations use the committed [development image values](../dev-images/values.yaml) and the images already preloaded on the shared Spark nodes. Build gateway, router, Pylon and operator images only when application code changes or another cluster needs images. Builds include local edits. Router and Pylon builds use Cargo profile `integration`.
+Image preparation is a temporary development workflow. The supported installation uses the `llm-stack` shared Helm release in namespace `llm-stack`, alongside independent model releases. Building or preloading images does not install the gateway, operator or model workloads.
 
-## Prepare images and charts
+## Development images
 
-Use the [temporary development preparation workflow](../dev-images/README.md) to build and preload all four images, package the charts and update the shared values with one command. Normal installers use the prepared artifacts from the main installation guide.
+Use the [development preparation command](../dev-images/README.md) when gateway, router, Pylon or operator sources change, or when another cluster needs local images. It builds from the current checkout, including local edits, and publishes matching image values and chart packages. Router and Pylon builds use Cargo profile `integration`.
 
-The existing `build-shared-images.py` helper remains available for custom workflows and retries using a saved configuration. It writes `shared.values.yaml` in its own `--output-dir` and does not update the committed file. The target namespace may already exist. Reusing that helper's output directory rebuilds its saved tags.
+Preloading mounts the selected nodes' containerd sockets through temporary import Jobs. It requires explicit opt-in. Keep archives, build evidence and node-specific configuration outside Git. A replacement node needs the images preloaded again when the pull policy is `Never`.
 
-Import Jobs run in a separate preparation namespace and mount the selected nodes' containerd sockets. Setup detects the K3s socket. For another containerd installation, set `config.containerd.socketPath` and compatible image-loader client settings in the saved `image-build-config.json`, then retry with `build-shared-images.py` and that saved output directory.
+## Registry images
 
-## Use registry images
+Set the four image repositories, tags and `IfNotPresent` pull policies in a private values file. Gateway and router fields are under `gatewayStack`, and operator and Pylon fields are under `operator`. Use the [shared values example](../charts/shared-stack/values.local.example.yaml) for field names. Every eligible node must be able to pull images for its architecture.
 
-Set the chart's four image repositories, tags and `IfNotPresent` pull policies in a private values file. The gateway and router fields are under `gatewayStack`, and the operator and Pylon fields are under `operator`. Use the [shared values example](../charts/shared-stack/values.local.example.yaml) for the field names. Every eligible node must be able to pull the images for its architecture. Use locally built images until registry images are published.
+Once images are distributed, [upgrade the shared release](../ADVANCED.md#shared-stack-upgrades) with the new values. Preserve its existing credentials, TLS configuration and identity. Model runtime images and checkpoints are pinned independently by their recipes.
 
 ## Verification image
 
 The shared chart's installation and upgrade checks use `python:3.12-alpine` with `IfNotPresent` pull policy. Distribute this image alongside the four application images. The image-loader server uses the same default image.
 
-For an offline installation, preload the image for each eligible node's architecture and set `verification.image.pullPolicy: Never`. For a registry mirror, set these values in your Helm values file:
+For offline installation, preload the verification image for every eligible architecture and set `verification.image.pullPolicy: Never`. For a registry mirror, use:
 
 ```yaml
 verification:
@@ -28,75 +28,10 @@ verification:
     pullPolicy: IfNotPresent
 ```
 
-Add `verification.imagePullSecrets` with Kubernetes Secret references when the mirror requires credentials. The verification Job uses the installed gateway CA and caller key. Its checks support both an empty registry and an existing stack with models.
+Set `verification.imagePullSecrets` to Kubernetes Secret references when the mirror requires credentials. The verification Job reads the installed gateway CA and caller key. Its checks work with an empty registry or an existing stack with models.
 
-## Build for a combined installation
+## Chart packages
 
-Run the commands below from `deploy/helm/llm-routing/recipes`. They use the saved configuration from [Configure](../ADVANCED.md#configure). Add `--work-dir DIR` to every command when using a non-default installation directory.
+Run `bash package-charts.sh --output-dir /path/to/fresh-output` from `deploy/helm/llm-routing` after preparing the local dependency archives. The package contains the shared chart, both recipe charts, catalog, guide snapshots, notices and checksums.
 
-1. Build all four images.
-
-   ```bash
-   python3 recipe.py build-images
-   ```
-
-2. Choose the distribution method.
-
-   - Registry: set `images.pullPolicy` to `IfNotPresent`, authenticate Docker with registry write credentials, then push. Every node where Pylon can schedule needs registry pull access.
-
-     ```bash
-     python3 recipe.py push-images
-     ```
-
-   - Node preload: set `images.pullPolicy` to `Never`, export the images, then [import the archive](#import-an-archive).
-
-     ```bash
-     python3 recipe.py export-images
-     ```
-
-3. Continue with [Deploy in order](../ADVANCED.md#deploy-in-order).
-
-## Rebuild gateway or router
-
-1. Edit the service in your checkout: `src/invocation-plane-services/llm-api-gateway` for gateway or `src/libraries/rust/stargate` for router. Build it with a fresh tag.
-
-   ```bash
-   COMPONENT=gateway # Or router.
-   NEW_TAG=dev-$(date -u +%Y%m%d%H%M%S)
-   python3 recipe.py build-images --component "$COMPONENT" --tag "$NEW_TAG"
-   ```
-
-2. Distribute the image using your existing method.
-
-   - Registry:
-
-     ```bash
-     python3 recipe.py push-images --component "$COMPONENT" --tag "$NEW_TAG"
-     ```
-
-   - Node preload: export the image, then [import the archive](#import-an-archive).
-
-     ```bash
-     python3 recipe.py export-images --component "$COMPONENT" --tag "$NEW_TAG"
-     ```
-
-3. Keep `COMPONENT` and `NEW_TAG` set and continue with [Update only gateway or router](../ADVANCED.md#update-only-gateway-or-router).
-
-## Import an archive
-
-After `export-images`, upload and import the archive through Kubernetes. Keep each archive below 1 GiB. Import Jobs mount the selected nodes' containerd sockets to update their image caches.
-
-For all four images:
-
-```bash
-python3 recipe.py import-images --allow-containerd-import
-```
-
-For a gateway/router rebuild, import only that component on the control node:
-
-```bash
-python3 recipe.py import-images \
-  --component "$COMPONENT" --tag "$NEW_TAG" --allow-containerd-import
-```
-
-For runtimes other than K3s, configure `containerd.socketPath` and a compatible `ctr` client in the image-loader chart.
+Run the [offline checks](../ADVANCED.md#local-validation) and compare the package with its source before publishing artifacts. Keep image values and the chart bundle consistent. Neither packaging nor image preparation changes the Helm ownership model.
