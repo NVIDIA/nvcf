@@ -35,6 +35,10 @@ spec:
     {{- end }}
     spec:
       restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
       serviceAccountName: {{ .Values.sis.lls.hmacRotation.serviceAccountName }}
       {{- with (include "sis.imagePullSecrets" .) }}
       imagePullSecrets:
@@ -44,6 +48,11 @@ spec:
         - name: addons-lls-migrations
           image: "{{ include "sis.image.full" (dict "image" .Values.sis.lls.hmacRotation.image "name" "sis.lls.hmacRotation.image") }}"
           imagePullPolicy: {{ .Values.sis.lls.hmacRotation.image.pullPolicy }}
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
           env:
             - name: CORE_MIGRATIONS_ENABLED
               value: "false"
