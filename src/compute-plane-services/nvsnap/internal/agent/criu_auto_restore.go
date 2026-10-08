@@ -229,6 +229,17 @@ func (a *Agent) recordCRIUCapture(ctx context.Context, hash, checkpointID string
 		log.Debug("CRIU capture not recorded: no capture record store")
 		return
 	}
+	// The catalog is content-addressed: a later capture of the same hash
+	// keeps the first checkpoint's id. Keep the record on that checkpoint
+	// too, or a restore on another node asks the catalog for an id it
+	// never registered.
+	if prev, err := a.captureBackend.Stat(ctx, hash); err == nil {
+		if id := prev.SourcePodMeta["checkpoint_id"]; id != "" && id != checkpointID && prev.CaptureMethod == "criu" {
+			log.WithFields(logrus.Fields{"hash": checkpointstore.ShortHash(hash), "recorded": id, "new": checkpointID}).
+				Info("CRIU capture of an already recorded hash; restores keep using the recorded checkpoint")
+			return
+		}
+	}
 	m := checkpointstore.Manifest{
 		Hash:          hash,
 		CaptureMethod: "criu",

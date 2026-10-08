@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
@@ -101,5 +102,27 @@ func TestCRIURestorer_FailedCheckpointsAreBlocked(t *testing.T) {
 	c.mu.Unlock()
 	if !c.Blocked(ctx, "c3") {
 		t.Error("a failure recorded by another agent is not seen after the cache expires")
+	}
+}
+
+// A second capture of the same hash leaves the record on the first
+// checkpoint, the one the content-addressed catalog keeps.
+func TestRecordCRIUCapture_FirstCaptureOfAHashWins(t *testing.T) {
+	local, err := checkpointstore.NewLocal(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cm := checkpointstore.NewConfigMapBackend(local, fake.NewSimpleClientset(), "nvsnap-system", logrus.New())
+	a := &Agent{captureBackend: cm, log: logrus.New(), config: Config{NodeName: "n1"}}
+	ctx, log := context.Background(), logrus.NewEntry(logrus.New())
+	req := CheckpointRequest{Namespace: "ns", PodName: "p"}
+	a.recordCRIUCapture(ctx, "d9a846172fb1663b4e26ea05c4425ab454386b7dd45d5c01bafbd42445439f93", "d9a8__first", req, "img", log)
+	a.recordCRIUCapture(ctx, "d9a846172fb1663b4e26ea05c4425ab454386b7dd45d5c01bafbd42445439f93", "d9a8__second", req, "img", log)
+	got, err := cm.Stat(ctx, "d9a846172fb1663b4e26ea05c4425ab454386b7dd45d5c01bafbd42445439f93")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CaptureMethod != "criu" || got.SourcePodMeta["checkpoint_id"] != "d9a8__first" {
+		t.Errorf("record = %+v, want the first checkpoint", got)
 	}
 }
