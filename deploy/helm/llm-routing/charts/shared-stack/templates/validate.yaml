@@ -64,16 +64,12 @@
 {{- $tls := $stack.tls.selfSigned -}}
 {{- if $tls.enabled -}}
 {{- if ne $operator.trustBundle.configMap $tls.caName -}}{{- fail "shared-stack: operator.trustBundle.configMap must match gatewayStack.tls.selfSigned.caName" -}}{{- end -}}
-{{- $routerNames := include "llm-gateway-stack.routerDnsNames" $context | fromJsonArray | join "," -}}
-{{- $gatewayDns := include "llm-gateway-stack.gatewayDnsNames" $context | fromJsonArray -}}
-{{- $gatewayNames := concat $gatewayDns ($tls.gatewayIPs | default list | uniq) | join "," -}}
-{{- range $name, $names := dict $tls.caName "" $router.tls.secretName $routerNames $gateway.tls.existingSecret $gatewayNames -}}
+{{- range $name := list $tls.caName $router.tls.secretName $gateway.tls.existingSecret -}}
 {{- $secret := lookup "v1" "Secret" $.Release.Namespace $name -}}
 {{- if $secret -}}
 {{- include "llm-shared.owned" (dict "root" $ "resource" $secret) -}}
-{{- if or (not (index ($secret.data | default dict) "tls.crt")) (not (index ($secret.data | default dict) "tls.key")) -}}{{- fail (printf "shared-stack: TLS Secret %s is incomplete; restore it before continuing" $name) -}}{{- end -}}
-{{- if and $names (ne (index ($secret.metadata.annotations | default dict) "llm-gateway-stack.nvidia.com/subject-alt-names") $names) -}}{{- fail (printf "shared-stack: TLS names changed for %s; use explicitly managed TLS Secrets for certificate replacement" $name) -}}{{- end -}}
-{{- else if $.Release.IsUpgrade -}}
+{{- if and (eq $name $tls.caName) (or (not (index ($secret.data | default dict) "tls.crt")) (not (index ($secret.data | default dict) "tls.key"))) -}}{{- fail (printf "shared-stack: TLS Secret %s is incomplete; restore it before continuing" $name) -}}{{- end -}}
+{{- else if and $.Release.IsUpgrade (eq $name $tls.caName) -}}
 {{- fail (printf "shared-stack: TLS Secret %s is missing; restore it before upgrading" $name) -}}
 {{- end -}}
 {{- end -}}

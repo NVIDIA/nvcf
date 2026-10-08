@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import yaml
@@ -308,9 +309,84 @@ class AutomaticRuntimeTests(unittest.TestCase):
             runtime.prepare_checkpoint(self.config, self.cache)
         self.assertFalse(self.fixture.marker.exists())
 
+    def download_metadata(self, **changes):
+        file = SimpleNamespace(blob_id=None, size=self.fixture.blob.stat().st_size,
+                               lfs=SimpleNamespace(sha256=self.fixture.blob.name))
+        info = SimpleNamespace(sha=self.config['model']['revision'], siblings=[file])
+        for key, value in changes.items():
+            setattr(info, key, value)
+        hub = Mock()
+        hub.HfApi.return_value.model_info.return_value = info
+        return hub, info
+
+    def test_partial_download_credits_only_pinned_blobs_and_resumable_bytes(self):
+        hub, info = self.download_metadata()
+        partial = self.fixture.blob.parent / ('b'*64 + '.incomplete')
+        partial.write_bytes(b'partial')
+        entry = SimpleNamespace(blob_id=None, size=20, lfs=SimpleNamespace(sha256='b'*64))
+        info.siblings += [entry, entry]
+        (self.fixture.blob.parent / ('c'*64)).write_bytes(b'unrelated'*100)
+        (self.fixture.repository.parent / 'models--another--model').mkdir()
+        with patch.dict('sys.modules', {'huggingface_hub': hub}), patch.dict(os.environ, HF_HUB_ENABLE_HF_TRANSFER='0'):
+            self.assertEqual(runtime.downloaded_bytes(self.config['model'], self.cache), self.fixture.blob.stat().st_size + 7)
+        hub.HfApi.return_value.model_info.assert_called_once_with('example/model', revision='a'*40, files_metadata=True, timeout=30)
+        self.assertEqual(partial.read_bytes(), b'partial')
+
+    def test_partial_download_does_not_credit_wrong_revision_corruption_or_escaping_files(self):
+        hub, info = self.download_metadata(sha='b'*40)
+        with patch.dict('sys.modules', {'huggingface_hub': hub}):
+            with self.assertRaisesRegex(RuntimeError, 'pinned model revision'):
+                runtime.downloaded_bytes(self.config['model'], self.cache)
+            info.sha = self.config['model']['revision']
+            original = self.fixture.blob.read_bytes()
+            self.fixture.blob.write_bytes(b'x'*len(original))
+            self.assertEqual(runtime.downloaded_bytes(self.config['model'], self.cache), 0)
+            outside = self.cache / 'outside-blob'
+            outside.write_bytes(original)
+            self.fixture.blob.unlink()
+            self.fixture.blob.symlink_to(outside)
+            self.assertEqual(runtime.downloaded_bytes(self.config['model'], self.cache), 0)
+
+    def test_partial_download_rejects_oversized_partial_and_does_not_credit_restarted_transfers(self):
+        hub, info = self.download_metadata()
+        info.siblings = [SimpleNamespace(blob_id=None, size=4, lfs=SimpleNamespace(sha256='b'*64))]
+        partial = self.fixture.blob.parent / ('b'*64 + '.incomplete')
+        partial.write_bytes(b'oversized')
+        with patch.dict('sys.modules', {'huggingface_hub': hub}), patch.dict(os.environ, HF_HUB_ENABLE_HF_TRANSFER='0'):
+            self.assertEqual(runtime.downloaded_bytes(self.config['model'], self.cache), 0)
+            partial.write_bytes(b'par')
+            with patch.dict(os.environ, HF_HUB_ENABLE_HF_TRANSFER='1'):
+                self.assertEqual(runtime.downloaded_bytes(self.config['model'], self.cache), 0)
+            self.assertEqual(runtime.downloaded_bytes(self.config['model'], self.cache), 3)
+
+    def test_low_free_space_resumes_with_pinned_bytes_without_deleting_weights(self):
+        self.config['reuseCaches'] = False
+        self.fixture.marker.unlink()
+        config_file = self.fixture.snapshot / 'config.json'
+        original_config = config_file.read_bytes()
+        config_file.unlink()
+        original_blob = self.fixture.blob.read_bytes()
+        self.config['profile']['minFreeDiskGiB'] = (len(original_blob) + 100) / runtime.GIB
+        hub, _ = self.download_metadata()
+        hub.snapshot_download.side_effect = lambda **kwargs: config_file.write_bytes(original_config)
+        with patch.dict('sys.modules', {'huggingface_hub': hub}), patch.object(runtime.shutil, 'disk_usage', return_value=Mock(free=100)), patch.object(runtime, 'log'):
+            self.assertEqual(runtime.prepare_checkpoint(self.config, self.cache), self.fixture.snapshot)
+        hub.snapshot_download.assert_called_once()
+        self.assertEqual(self.fixture.blob.read_bytes(), original_blob)
+
+    def test_low_free_space_still_refuses_insufficient_remaining_capacity(self):
+        self.config['reuseCaches'] = False
+        self.fixture.marker.unlink()
+        (self.fixture.snapshot / 'config.json').unlink()
+        hub, _ = self.download_metadata()
+        with patch.dict('sys.modules', {'huggingface_hub': hub}), patch.object(runtime.shutil, 'disk_usage', return_value=Mock(free=0)), self.assertRaisesRegex(RuntimeError, 'still required'):
+            runtime.prepare_checkpoint(self.config, self.cache)
+        hub.snapshot_download.assert_not_called()
+        self.assertFalse(self.fixture.marker.exists())
+
     def test_automatic_qualifies_then_prepares_then_serves_with_offline_environment(self):
         events = []
-        def serve(argv, config):
+        def serve(argv, config, **kwargs):
             self.assertEqual(os.environ['HF_HUB_OFFLINE'], '1')
             self.assertEqual(os.environ['TRANSFORMERS_OFFLINE'], '1')
             events.append('serve')

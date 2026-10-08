@@ -68,7 +68,7 @@
       "validation": {
         "legacyWorkflow": "hardware-validated",
         "helmAutomatic": "failed",
-        "scope": "The combined two-GB10 deployment passed inference and worker recovery. The cached automatic Helm trial passed qualification and weight verification, then stopped at the host-memory guard during model loading.",
+        "scope": "Historical combined two-GB10 inference and worker recovery used the retired phased workflow. The current automatic Helm trial passed qualification and weight verification, then stopped at the host-memory guard during model loading. Automatic inference remains unqualified.",
         "automaticHelmValidation": {
           "status": "failed",
           "date": "2026-10-07",

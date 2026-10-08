@@ -319,6 +319,8 @@ python3 llm.py recipes
 
 Copy [capabilities.example.json](recipes/capabilities.example.json) to a private path and record verified facts for your nodes. Set `localNvme` only after checking the storage backing `/var/lib/kubelet`. For two-node serving, verify both interfaces, addresses, link speeds and mutual reachability. The planner does not measure these facts. Select available GPUs with enough host memory and disk space.
 
+The two-node profile uses host networking. Its HTTP listener binds to the pod's reported node address; bootstrap and tensor-parallel coordination use the selected fabric addresses. These backend listeners have no gateway authentication, and Kubernetes NetworkPolicy may not cover host-network traffic. Configure host or network firewalls before installation: allow backend HTTP only from the cluster clients that need it, and allow fabric coordination only between the two model nodes. Inspect the rendered workload for the configured ports. Binding a specific address limits interface exposure; it does not authenticate clients.
+
 Print an install command for the one-node profile:
 
 ```bash
@@ -440,7 +442,7 @@ helm upgrade --install llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz
   --wait --timeout 10m
 ```
 
-The shared chart preserves generated caller and cluster credentials and reuses the existing CA. On each upgrade, it regenerates gateway caller-key hashes and router cluster hashes from the selected credential Secrets, including explicitly changed credentials. Missing or empty source credentials and ownership conflicts on chart-managed Secrets cause an error. Listener certificates are reused when their identity and validity still match the configured names. A planned TLS rotation requires a separate rollout and client trust update.
+The shared chart preserves generated caller and cluster credentials and reuses the existing CA. On each upgrade, it regenerates gateway caller-key hashes and router cluster hashes from the selected credential Secrets, including explicitly changed credentials. Missing or empty source credentials and ownership conflicts on chart-managed Secrets cause an error. Listener certificates are reused when their recorded names match and both certificate and key are present. Changed listener names or missing leaf material cause reissue under the preserved CA. Roll out the affected listener after a leaf change because it loads TLS at startup. Changing the CA also requires a planned client trust update.
 
 The upgrade also updates the CRD schema when `operator.installCRDs=true`. Review schema compatibility with every existing InferenceEndpoint before upgrading. With `false`, the external CRD owner must apply a compatible schema first. Do not switch ownership with an ordinary upgrade or delete the CRD to bypass Helm's ownership check.
 

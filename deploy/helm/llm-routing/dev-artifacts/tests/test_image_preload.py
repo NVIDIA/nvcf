@@ -101,7 +101,7 @@ class ImagePreloadTests(unittest.TestCase):
         self.assertEqual(self.releases, {})
         self.assertEqual(self.namespace['metadata']['uid'], result['namespaceUID'])
         args, kwargs = self.build.call_args
-        self.assertEqual(set(args[1]), {'gateway', 'router', 'pylon', 'operator'})
+        self.assertEqual(set(args[1]), {'gateway', 'router', 'pylon', 'operator', 'verification'})
         self.assertEqual(kwargs['platform'], 'linux/arm64')
         self.assertEqual(self.importer.call_args.kwargs['node_names'], ['cpu-a', 'cpu-b'])
         for command in self.commands:

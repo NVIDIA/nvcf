@@ -112,8 +112,9 @@
       "name": "GLM-5.3",
       "servedModelId": "GLM-5.3-UD-IQ2_M",
       "availability": {
-        "status": "available",
-        "deployable": true
+        "status": "experimental",
+        "deployable": true,
+        "reason": "Not validated."
       },
       "precision": "UD-IQ2_M",
       "license": "glm-5.3",
@@ -125,6 +126,7 @@
       },
       "runtime": {
         "backend": "llama.cpp",
+        "version": "llama.cpp f872b59",
         "revision": "f872b591121761ac7b2af18283bd99bdc092a63a",
         "image": "nvcr.io/nvidia/vllm@sha256:67c617846180989a71e0f353c8b101e9808dc7c2638b60f890064e3d7b660282"
       },
@@ -226,7 +228,7 @@
             "maximumConcurrency": 1
           },
           "validation": {
-            "runtimeStatus": "hardware-validated",
+            "runtimeStatus": "failed",
             "automaticHelmStatus": "failed",
             "automaticHelmWorkload": {
               "status": "failed",
@@ -254,15 +256,8 @@
               "performanceBenchmarked": false,
               "qualityEvaluated": false
             },
-            "scope": "The combined two-GB10 deployment passed inference and worker recovery. The cached automatic Helm trial passed qualification and weight verification, then stopped at the host-memory guard during model loading.",
-            "workload": {
-              "contextLength": 2048,
-              "concurrency": 1,
-              "requestType": "short-prompt-smoke",
-              "fullContextExercised": false,
-              "performanceBenchmarked": false,
-              "qualityEvaluated": false
-            }
+            "scope": "Historical combined two-GB10 inference and worker recovery used the retired phased workflow. The current automatic Helm trial passed qualification and weight verification, then stopped at the host-memory guard during model loading. Automatic inference remains unqualified.",
+            "workload": null
           },
           "deployment": {
             "chart": {

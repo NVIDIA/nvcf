@@ -35,8 +35,12 @@ class ImageToolsTests(unittest.TestCase):
                     image_tools.build_images(source, images, run=runner, platform=platform, source_revision=revision)
                     commands = [call.args[0] for call in runner.call_args_list]
                     self.assertEqual(commands[0], ['docker', 'info'])
-                    self.assertEqual(len(commands), len(images)+1)
-                    for name, command in zip(images, commands[1:]):
+                    self.assertEqual(len(commands), len(images)+2)
+                    self.assertEqual(commands[-2:], [
+                        ['docker', 'pull', '--platform', platform, image_tools.VERIFICATION_IMAGE],
+                        ['docker', 'tag', image_tools.VERIFICATION_IMAGE, images['verification']]])
+                    self.assertRegex(image_tools.VERIFICATION_IMAGE, r'@sha256:[0-9a-f]{64}$')
+                    for name, command in zip((n for n in images if n != 'verification'), commands[1:-2]):
                         self.assertEqual(command[:5], ['docker', 'buildx', 'build', '--platform', platform])
                         self.assertIn(images[name], command)
                         self.assertEqual(command[-1], str(source/image_tools.COMPONENTS[name]))
