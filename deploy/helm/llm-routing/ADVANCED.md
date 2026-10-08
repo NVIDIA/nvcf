@@ -366,9 +366,10 @@ All supported recipes use the same Helm lifecycle. Preparation, startup and endp
 | Flash-Next, either profile | `qwen-flash` | `pylon-sglang-recipe-0.2.0.tgz` | `qwen3.8-flash-next` |
 | GLM | `glm` | `pylon-gguf-backend-0.2.0.tgz` | `GLM-5.3-UD-IQ2_M` |
 
-For the commands below, select the existing release and its chart. Use the chart version that installed it for stop and resume. For example:
+For the commands below, select the Kubernetes context, existing release and its chart. Use the chart version that installed it for stop and resume. For example:
 
 ```bash
+CONTEXT=your-kubernetes-context
 MODEL_RELEASE=glm
 MODEL_CHART=dev-artifacts/charts/pylon-gguf-backend-0.2.0.tgz
 MODEL_ID=GLM-5.3-UD-IQ2_M
@@ -379,18 +380,18 @@ MODEL_ID=GLM-5.3-UD-IQ2_M
 Save its values privately and review changes to the same recipe, profile and node placement before upgrading a serving release. Use the target chart version in `MODEL_CHART`. GPU placement and retained claim names must stay consistent. Changing model pins or hardware needs fresh qualification.
 
 ```bash
-helm get values "$MODEL_RELEASE" --namespace llm-stack -o yaml > /path/to/private/model-values.yaml
-helm upgrade "$MODEL_RELEASE" "$MODEL_CHART" --namespace llm-stack \
+helm --kube-context "$CONTEXT" get values "$MODEL_RELEASE" --namespace llm-stack -o yaml > /path/to/private/model-values.yaml
+helm --kube-context "$CONTEXT" upgrade "$MODEL_RELEASE" "$MODEL_CHART" --namespace llm-stack \
   --values /path/to/private/model-values.yaml --wait --timeout 120m &&
-kubectl --namespace llm-stack wait \
+kubectl --context "$CONTEXT" --namespace llm-stack wait \
   --for=condition=Registered "inferenceendpoint/$MODEL_RELEASE" --timeout=5m
 ```
 
 After installation, upgrade or resume, verify the selected model separately:
 
 ```bash
-python3 llm.py models
-python3 recipes/verify.py --model "$MODEL_ID" \
+python3 llm.py --context "$CONTEXT" models
+python3 recipes/verify.py --context "$CONTEXT" --model "$MODEL_ID" \
   --output /path/to/private/model-results.json
 ```
 
@@ -399,25 +400,25 @@ python3 recipes/verify.py --model "$MODEL_ID" \
 Stop the model and wait for all its pods to terminate before reusing its GPUs:
 
 ```bash
-helm upgrade "$MODEL_RELEASE" "$MODEL_CHART" --namespace llm-stack \
+helm --kube-context "$CONTEXT" upgrade "$MODEL_RELEASE" "$MODEL_CHART" --namespace llm-stack \
   --reuse-values --set suspended=true --timeout 10m &&
-kubectl --namespace llm-stack wait --for=delete pod \
+kubectl --context "$CONTEXT" --namespace llm-stack wait --for=delete pod \
   -l "app.kubernetes.io/instance=$MODEL_RELEASE" --timeout=10m
 ```
 
 The stop command omits readiness waiting because the model is intentionally unavailable. The release and cache claims remain. When its original GPUs are free, resume and wait for registration:
 
 ```bash
-helm upgrade "$MODEL_RELEASE" "$MODEL_CHART" --namespace llm-stack \
+helm --kube-context "$CONTEXT" upgrade "$MODEL_RELEASE" "$MODEL_CHART" --namespace llm-stack \
   --reuse-values --set suspended=false --wait --timeout 120m &&
-kubectl --namespace llm-stack wait \
+kubectl --context "$CONTEXT" --namespace llm-stack wait \
   --for=condition=Registered "inferenceendpoint/$MODEL_RELEASE" --timeout=5m
 ```
 
 ### Remove and reinstall a recipe
 
 ```bash
-helm uninstall "$MODEL_RELEASE" --namespace llm-stack --wait --timeout 10m
+helm --kube-context "$CONTEXT" uninstall "$MODEL_RELEASE" --namespace llm-stack --wait --timeout 10m
 ```
 
 This removes the model workloads and endpoint, while retaining its caches. Reinstall with the same release name, recipe, profile and original cache nodes using its installation example. See [retained-cache settings](#helm-cache-reuse-and-recovery) for external claim names and offline reuse. Permanently deleting downloads is a separate [storage cleanup](#remove-downloaded-model-files).
@@ -500,7 +501,7 @@ Memory guards stop a recipe's runtime when its required memory floor is crossed 
 
 ## Add a recipe
 
-Use the [llm-add-recipe skill](../../../ai-tooling/dev/skills/llm-add-recipe/SKILL.md), or run the steps below manually. Start at the repository root and replace the example names with your recipe and cluster:
+Use the [llm-add-recipe skill](../../../ai-tooling/dev/skills/llm-add-recipe/SKILL.md), or run the steps below manually. Install Helm, kubectl and Python 3.11 or newer. Start at the repository root and replace the example names with your recipe and cluster:
 
 ```bash
 cd deploy/helm/llm-routing
@@ -516,9 +517,12 @@ VALUES_EXAMPLE="recipes/values/$RECIPE_ID-$PROFILE_ID.yaml"
 umask 077
 PRIVATE_DIR="$(mktemp -d)"
 MODEL_VALUES="$PRIVATE_DIR/model-values.yaml"
+python3 -m venv "$PRIVATE_DIR/venv" &&
+. "$PRIVATE_DIR/venv/bin/activate" &&
+python3 -m pip install -r recipes/tests/requirements.txt
 ```
 
-For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the setup block. Take `MODEL_RELEASE` and `SERVED_MODEL_ID` from the recipe metadata.
+For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the setup block. Take `MODEL_RELEASE` and `SERVED_MODEL_ID` from the recipe metadata. For an existing recipe, set `VALUES_EXAMPLE` to its existing file under `recipes/values/`.
 
 1. Add the maintained metadata. For SGLang, edit [recipes/catalog.json](recipes/catalog.json). For GGUF, create `recipes/<recipe-id>/recipe.json`, `model.lock.json`, `profiles.json` and `NOTICE`. Verify checkpoint/runtime pins, hardware fit, license, workload limits and chart support. Keep validation pending until tested. Remove a promoted model's entry from `recipes/planned.json`. For a new GGUF family, update the exporter's license and guide mappings, which currently target GLM.
 
@@ -551,14 +555,22 @@ For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the
 3. Add a values example for each profile, then edit its recipe, profile and node placeholders. Set `profileName` to your `PROFILE_ID`. Add the field if the template omits it. Keep real node names and cache settings in the private copy:
 
    ```bash
-   test ! -e "$VALUES_EXAMPLE" &&
-   cp "$CHART_SOURCE/values.example.yaml" "$VALUES_EXAMPLE"
+   if [ ! -e "$VALUES_EXAMPLE" ]; then
+     cp "$CHART_SOURCE/values.example.yaml" "$VALUES_EXAMPLE"
+   fi
    ```
 
    After editing the example, copy it and fill in the actual node placement, capabilities and retained claims:
 
    ```bash
    cp "$VALUES_EXAMPLE" "$MODEL_VALUES"
+   ```
+
+   When updating an existing release, use its saved values as the private starting point instead, then apply the intended recipe changes:
+
+   ```bash
+   helm --kube-context "$CONTEXT" get values "$MODEL_RELEASE" \
+     --namespace llm-stack --output yaml > "$MODEL_VALUES"
    ```
 
    Extend the recipe's tests, including any explicit supported-ID inventories. Then regenerate the index, test, lint and render. Stop if a check fails:
@@ -607,14 +619,14 @@ For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the
    test -f "$MODEL_CHART"
    ```
 
-5. Reuse the shared stack, or [install it once](README.md#1-install-shared-infrastructure). Inspect the plan before deploying. A successful exit can still report placement blockers. For an existing release, retain its cache nodes and saved values:
+5. Reuse the shared stack, or [install it once](README.md#1-install-shared-infrastructure). Inspect the plan before deploying. Exit code 2 means an existing release, blocked placement or an unsupported recipe. For an expected existing release, retain its cache nodes and saved values. Resolve other blockers before deploying:
 
    ```bash
    python3 llm.py --context "$CONTEXT" plan --model "$RECIPE_ID" \
      --profile "$PROFILE_ID" --release "$MODEL_RELEASE" --verbose
    ```
 
-   Supply `--capabilities /path/to/private/capabilities.json` for profiles needing verified NVMe or fabric facts. Once placement and values are correct, deploy and verify. Each verification run needs a fresh output path:
+   Supply `--capabilities /path/to/private/capabilities.json` for profiles needing verified NVMe or fabric facts. Once placement and values are correct, deploy and verify. Registration can precede gateway discovery. The loop below waits for discovery and a healthy registry before testing inference. Each verification run needs a fresh output path:
 
    ```bash
    VERIFY_DIR="$(mktemp -d)"
@@ -622,6 +634,21 @@ For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the
      --namespace llm-stack --values "$MODEL_VALUES" --wait --timeout 120m &&
    kubectl --context "$CONTEXT" --namespace llm-stack wait \
      --for=condition=Registered "inferenceendpoint/$MODEL_RELEASE" --timeout=5m &&
+   python3 - "$CONTEXT" "$SERVED_MODEL_ID" <<'PY' &&
+   import sys
+   import time
+   import llm
+   deadline = time.monotonic() + 300
+   with llm.gateway(sys.argv[1], 'llm-stack') as client:
+       while True:
+           try:
+               client.discovery(sys.argv[2])
+               break
+           except RuntimeError as error:
+               if time.monotonic() >= deadline:
+                   raise SystemExit(f'Model discovery did not become ready: {error}')
+               time.sleep(2)
+   PY
    python3 llm.py --context "$CONTEXT" models &&
    python3 recipes/verify.py --context "$CONTEXT" --model "$SERVED_MODEL_ID" \
      --output "$VERIFY_DIR/results.json"

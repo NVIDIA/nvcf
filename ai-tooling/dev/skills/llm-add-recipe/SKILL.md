@@ -179,22 +179,19 @@ installation, and inspect any existing release before upgrading it.
 
 ```bash
 python3 llm.py --context "$CONTEXT" plan \
-  --model "$RECIPE_ID" --profile "$PROFILE_ID" --verbose
+  --model "$RECIPE_ID" --profile "$PROFILE_ID" --release "$MODEL_RELEASE" --verbose
 ```
 
-Inspect the plan for eligible placement or an existing release. The command can
-exit successfully while reporting blockers. Resolve those blockers before
-installing. For an existing release, preserve its original cache placement.
+Inspect the plan for eligible placement or an existing release. Exit code 2
+means an existing release, blocked placement or an unsupported recipe. For an
+expected existing release, preserve its saved values and original cache placement.
+Resolve other blockers before installing.
 
-```bash
-helm --kube-context "$CONTEXT" upgrade --install "$MODEL_RELEASE" "$MODEL_CHART" \
-  --namespace llm-stack --values "$MODEL_VALUES" --wait --timeout 120m &&
-kubectl --context "$CONTEXT" --namespace llm-stack wait \
-  --for=condition=Registered "inferenceendpoint/$MODEL_RELEASE" --timeout=5m &&
-python3 llm.py --context "$CONTEXT" models &&
-python3 recipes/verify.py --context "$CONTEXT" --model "$SERVED_MODEL_ID" \
-  --output /path/to/private/model-results.json
-```
+Run the [manual deployment and verification block](../../../../deploy/helm/llm-routing/ADVANCED.md#add-a-recipe).
+It waits for Helm readiness, endpoint registration and healthy gateway discovery,
+then verifies inference. Registration can precede gateway discovery during a
+rollout, so preserve the bounded discovery wait and stop on timeout. Use a fresh
+verification output file for each run.
 
 Stop on a failed upgrade or verification. Before recording qualification, confirm
 the deployed Helm revision and running pod configuration match the intended
