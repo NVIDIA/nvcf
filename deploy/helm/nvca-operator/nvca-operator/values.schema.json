@@ -1159,6 +1159,11 @@
                     "type": "string",
                     "description": "Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.",
                     "default": ""
+                },
+                "eventLedgerServiceURL": {
+                    "type": "string",
+                    "description": "(Optional) URL of the Event Ledger service that the OTel collector exports to. Defaults to the in-cluster Event Ledger Service when empty.",
+                    "default": ""
                 }
             }
         },

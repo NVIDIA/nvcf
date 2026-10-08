@@ -199,6 +199,7 @@ This release does not wire the catalog into backend selection. Runtime use requi
 | `selfManaged.revalServiceHostHeaderOverride`                | Optional Host header override for selfManaged.revalServiceURL.                                                                                                                      | `""`                                      |
 | `selfManaged.natsURL`                         | (REQUIRED for self-managed clusters) URL of the NATS service. Set the endpoint generated during cluster registration.                                                                 | `""`        |
 | `selfManaged.natsHostOverride`                        | Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.                                                                                            | `""`                                      |
+| `selfManaged.eventLedgerServiceURL`           | (Optional) URL of the Event Ledger service that the OTel collector exports to. Defaults to the in-cluster Event Ledger Service when empty.                                            | `""`                                       |
 
 ### Node Selector Configuration
 

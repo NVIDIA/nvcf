@@ -1348,6 +1348,86 @@ func TestSetupNVCADeployment_SelfHosted(t *testing.T) {
 	}, gotDep.Spec.Template.Annotations)
 }
 
+func TestSetupNVCADeployment_SelfHostedOTelCollectorUsesPSAT(t *testing.T) {
+	ctx := newTestContext()
+
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{
+		clients:              clients,
+		ngcServiceKeyFetcher: &mockTokenFetcher{token: "randomkey"},
+		envType:              nvidiaiov1.EnvTypeStage,
+	}
+
+	inNVCFBackend := &nvidiaiov1.NVCFBackend{
+		Spec: nvidiaiov1.NVCFBackendSpec{
+			NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
+				ClusterSource: nvcaoptypes.ClusterSourceSelfHosted,
+				AccountConfig: nvidiaiov1.AccountConfig{NCAID: "ncaid1"},
+				ClusterConfig: nvidiaiov1.ClusterConfig{
+					ClusterID:        "some-cluster-id",
+					CloudProvider:    "ON-PREM",
+					ClusterGroupName: "FC-NVCF-Backend",
+					ClusterName:      "byoc-test",
+				},
+				NVCAImageConfig: nvidiaiov1.ImageConfig{
+					Repository: "registry.example.test/nvca",
+					Tag:        "1.0.0",
+				},
+				// A configured OAuth client must not pull the collector off PSAT.
+				OAuthConfig: nvidiaiov1.OAuthConfig{ClientID: "oauth-stg-abc123"},
+				VaultConfig: nvidiaiov1.VaultConfig{
+					Enabled: true,
+					Address: "https://vault.example.test:443",
+				},
+				OTelCollector: &nvidiaiov1.OTelCollectorConfig{
+					Enabled: true,
+					ImageConfig: nvidiaiov1.ImageConfig{
+						Repository: "test.registry.io/otel",
+						Tag:        "v1.0.0",
+					},
+				},
+				Version: "1.0.0",
+			},
+		},
+	}
+
+	err := bc.setupNVCADeployment(ctx, inNVCFBackend, getRequestsNamespace(inNVCFBackend))
+	require.NoError(t, err)
+
+	var gotDep *appsv1.Deployment
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		gotDep, err = clients.K8s.AppsV1().Deployments(DefaultNVCASystemNamespace).
+			Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
+		require.NoError(ct, err)
+	}, 10*time.Second, 100*time.Millisecond)
+
+	require.Len(t, gotDep.Spec.Template.Spec.InitContainers, 1)
+	collector := gotDep.Spec.Template.Spec.InitContainers[0]
+	require.Equal(t, NVCAOTelCollectorContainerName, collector.Name)
+
+	assert.Equal(t, []corev1.VolumeMount{
+		{
+			Name:      NVCAOTelCollectorConfigMapName,
+			MountPath: NVCAOTelCollectorConfigMountPath,
+			ReadOnly:  true,
+		},
+		{
+			Name:      "nvca-token",
+			MountPath: "/var/run/secrets/tokens",
+			ReadOnly:  true,
+		},
+	}, collector.VolumeMounts)
+
+	envMap := make(map[string]string)
+	for _, e := range collector.Env {
+		envMap[e.Name] = e.Value
+	}
+	assert.Equal(t, "/var/run/secrets/tokens/token", envMap[NVCAOTelCollectorBearerTokenFileEnvVar])
+	assert.Equal(t, NVCAOTelCollectorAuthenticatorBearerTokenAuth, envMap[NVCAOTelCollectorAuthenticatorEnvVar])
+	assert.Equal(t, "http://event-ledger.nvcf.svc.cluster.local:8080/v3/ledger/k8s-events",
+		envMap[NVCAOTelCollectorFNDSEndpointEnvVar])
+}
+
 func TestSetupNVCAStaticGPUs(t *testing.T) {
 	ctx := newTestContext()
 
@@ -4186,12 +4266,14 @@ func TestGetOTelCollectorImagePath(t *testing.T) {
 }
 
 func TestGetOTelCollectorContainerCommandArgsAndEnv(t *testing.T) {
+	ngcServiceAPIKeyFile := fmt.Sprintf("/var/run/secrets/%s/%s", NGCServiceAPIKeySecretName, NGCServiceAPIKeySecretDataKey)
 	tests := []struct {
 		name                      string
 		nb                        *nvidiaiov1.NVCFBackend
 		envType                   nvidiaiov1.EnvType
 		expectedRequestsNamespace string
 		expectedFNDSEndpoint      string
+		expectedBearerTokenFile   string
 	}{
 		{
 			name: "Default namespace - prod env",
@@ -4205,6 +4287,7 @@ func TestGetOTelCollectorContainerCommandArgsAndEnv(t *testing.T) {
 			envType:                   nvidiaiov1.EnvTypeProd,
 			expectedRequestsNamespace: DefaultNVCARequestsNamespace,
 			expectedFNDSEndpoint:      "https://deployment-stages.nvcf.nvidia.com/v3/ledger/k8s-events",
+			expectedBearerTokenFile:   ngcServiceAPIKeyFile,
 		},
 		{
 			name: "Custom namespace - stage env",
@@ -4220,6 +4303,7 @@ func TestGetOTelCollectorContainerCommandArgsAndEnv(t *testing.T) {
 			envType:                   nvidiaiov1.EnvTypeStage,
 			expectedRequestsNamespace: "custom-namespace",
 			expectedFNDSEndpoint:      "https://deployment-stages.stg.nvcf.nvidia.com/v3/ledger/k8s-events",
+			expectedBearerTokenFile:   ngcServiceAPIKeyFile,
 		},
 		{
 			name: "Custom FNDS endpoint",
@@ -4237,6 +4321,40 @@ func TestGetOTelCollectorContainerCommandArgsAndEnv(t *testing.T) {
 			envType:                   nvidiaiov1.EnvTypeProd,
 			expectedRequestsNamespace: DefaultNVCARequestsNamespace,
 			expectedFNDSEndpoint:      "https://custom-fnds.example.com/v3/ledger/k8s-events",
+			expectedBearerTokenFile:   ngcServiceAPIKeyFile,
+		},
+		{
+			name: "Self-hosted - colocated Event Ledger and PSAT",
+			nb: &nvidiaiov1.NVCFBackend{
+				Spec: nvidiaiov1.NVCFBackendSpec{
+					NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
+						ClusterSource: nvcaoptypes.ClusterSourceSelfHosted,
+					},
+				},
+			},
+			envType:                   nvidiaiov1.EnvTypeProd,
+			expectedRequestsNamespace: DefaultNVCARequestsNamespace,
+			expectedFNDSEndpoint:      "http://event-ledger.nvcf.svc.cluster.local:8080/v3/ledger/k8s-events",
+			expectedBearerTokenFile:   "/var/run/secrets/tokens/token",
+		},
+		{
+			name: "Self-hosted - configured Event Ledger URL",
+			nb: &nvidiaiov1.NVCFBackend{
+				Spec: nvidiaiov1.NVCFBackendSpec{
+					NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
+						ClusterSource: nvcaoptypes.ClusterSourceSelfHosted,
+						ClusterConfig: nvidiaiov1.ClusterConfig{
+							FNDService: &nvidiaiov1.FNDServiceConfig{
+								ServiceURL: "https://events.example.test",
+							},
+						},
+					},
+				},
+			},
+			envType:                   nvidiaiov1.EnvTypeProd,
+			expectedRequestsNamespace: DefaultNVCARequestsNamespace,
+			expectedFNDSEndpoint:      "https://events.example.test/v3/ledger/k8s-events",
+			expectedBearerTokenFile:   "/var/run/secrets/tokens/token",
 		},
 	}
 
@@ -4265,9 +4383,8 @@ func TestGetOTelCollectorContainerCommandArgsAndEnv(t *testing.T) {
 				envMap[e.Name] = e.Value
 			}
 
-			// Verify NGC service API key file env var
-			expectedAPIKeyPath := fmt.Sprintf("/var/run/secrets/%s/%s", NGCServiceAPIKeySecretName, NGCServiceAPIKeySecretDataKey)
-			assert.Equal(t, expectedAPIKeyPath, envMap[NGCServiceAPIKeyFileEnvVar])
+			assert.Equal(t, tt.expectedBearerTokenFile, envMap[NVCAOTelCollectorBearerTokenFileEnvVar])
+			assert.NotContains(t, envMap, "NGC_SERVICE_API_KEY_FILE")
 
 			// Verify OTel collector specific env vars
 			assert.Equal(t, tt.expectedRequestsNamespace, envMap[NVCAOTelCollectorRequestsNamespaceEnvVar])
@@ -4366,6 +4483,8 @@ func TestGetOTelCollectorContainer(t *testing.T) {
 		bcImageTag      string
 		expectContainer bool
 		expectedLength  int
+		// expectedMounts lists the collector's volume mount names in order.
+		expectedMounts []string
 	}{
 		{
 			name: "Returns container when OTel collector is enabled",
@@ -4386,6 +4505,7 @@ func TestGetOTelCollectorContainer(t *testing.T) {
 			bcImageTag:      "fallback-tag",
 			expectContainer: true,
 			expectedLength:  1,
+			expectedMounts:  []string{NVCAOTelCollectorConfigMapName, NGCServiceAPIKeySecretName},
 		},
 		{
 			name: "Returns nil when OTel collector is disabled",
@@ -4425,6 +4545,31 @@ func TestGetOTelCollectorContainer(t *testing.T) {
 			bcImageTag:      "v1.0.0",
 			expectContainer: true,
 			expectedLength:  1,
+			expectedMounts:  []string{NVCAOTelCollectorConfigMapName, NGCServiceAPIKeySecretName},
+		},
+		{
+			// Self-hosted collectors authenticate with the PSAT that
+			// applyPSATIdentity mounts, so the NGC service API key is not mounted.
+			name: "Returns container without NGC service API key mount when self-hosted",
+			nb: &nvidiaiov1.NVCFBackend{
+				Spec: nvidiaiov1.NVCFBackendSpec{
+					NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
+						ClusterSource: nvcaoptypes.ClusterSourceSelfHosted,
+						OTelCollector: &nvidiaiov1.OTelCollectorConfig{
+							Enabled: true,
+							ImageConfig: nvidiaiov1.ImageConfig{
+								Repository: "test.registry.io/otel",
+								Tag:        "v1.0.0",
+							},
+						},
+					},
+				},
+			},
+			bcImageRepo:     "test.registry.io/otel",
+			bcImageTag:      "v1.0.0",
+			expectContainer: true,
+			expectedLength:  1,
+			expectedMounts:  []string{NVCAOTelCollectorConfigMapName},
 		},
 	}
 
@@ -4475,10 +4620,12 @@ func TestGetOTelCollectorContainer(t *testing.T) {
 				assert.Equal(t, NVCAOTelCollectorMetricsPort, container.Ports[1].ContainerPort)
 
 				// Verify volume mounts
-				require.Len(t, container.VolumeMounts, 2)
-				assert.Equal(t, NVCAOTelCollectorConfigMapName, container.VolumeMounts[0].Name)
+				var mountNames []string
+				for _, mount := range container.VolumeMounts {
+					mountNames = append(mountNames, mount.Name)
+				}
+				assert.Equal(t, tt.expectedMounts, mountNames)
 				assert.Equal(t, NVCAOTelCollectorConfigMountPath, container.VolumeMounts[0].MountPath)
-				assert.Equal(t, NGCServiceAPIKeySecretName, container.VolumeMounts[1].Name)
 
 				// Verify liveness probe
 				assert.NotNil(t, container.LivenessProbe)
@@ -4501,11 +4648,23 @@ func TestGetOTelCollectorContainer(t *testing.T) {
 
 func TestGetOTelCollectorVolumeMounts(t *testing.T) {
 	bc := &BackendK8sCache{}
-	mounts := bc.getOTelCollectorVolumeMounts()
-	require.Len(t, mounts, 2)
-	assert.Equal(t, NVCAOTelCollectorConfigMapName, mounts[0].Name)
-	assert.Equal(t, NVCAOTelCollectorConfigMountPath, mounts[0].MountPath)
-	assert.Equal(t, NGCServiceAPIKeySecretName, mounts[1].Name)
+
+	t.Run("managed cluster mounts the NGC service API key", func(t *testing.T) {
+		mounts := bc.getOTelCollectorVolumeMounts(&nvidiaiov1.NVCFBackend{})
+		require.Len(t, mounts, 2)
+		assert.Equal(t, NVCAOTelCollectorConfigMapName, mounts[0].Name)
+		assert.Equal(t, NVCAOTelCollectorConfigMountPath, mounts[0].MountPath)
+		assert.Equal(t, NGCServiceAPIKeySecretName, mounts[1].Name)
+	})
+
+	t.Run("self-hosted cluster omits the NGC service API key", func(t *testing.T) {
+		nb := &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
+			ClusterSource: nvcaoptypes.ClusterSourceSelfHosted,
+		}}}
+		mounts := bc.getOTelCollectorVolumeMounts(nb)
+		require.Len(t, mounts, 1)
+		assert.Equal(t, NVCAOTelCollectorConfigMapName, mounts[0].Name)
+	})
 }
 
 func TestSetupOTelCollectorConfigMap(t *testing.T) {

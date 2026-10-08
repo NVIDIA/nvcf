@@ -55,6 +55,10 @@ global:
       # NATS URL: required; set per environment.
       natsURL: ""
       natsHostOverride: ""
+      # Event Ledger URL for the OTel collector. Leave empty when the control
+      # plane shares this cluster; the collector then uses the in-cluster
+      # Event Ledger Service.
+      eventLedgerServiceURL: ""
       # Feature gates enabled on this cluster. Extra gates set here are added on
       # top of a default set that the helmfile template always appends (see
       # nvca-operator.featureGateValues in helmfile.d/02-nvca.yaml.gotmpl). To
