@@ -4,6 +4,7 @@
     {
       "id": "qwen3.8-27b",
       "name": "Qwen3.8-27B",
+      "releaseName": "qwen-fp8",
       "precision": "FP8",
       "repository": "Qwen/Qwen3.8-27B-FP8",
       "revision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
@@ -98,6 +99,7 @@
     {
       "id": "qwen3.8-27b-nvfp4",
       "name": "Qwen3.8-27B",
+      "releaseName": "qwen-nvfp4",
       "precision": "NVFP4",
       "repository": "nvidia/Qwen3.8-27B-NVFP4",
       "revision": "482ca0f3832238542f8f5295dde86b5f22711d80",
@@ -196,6 +198,7 @@
     {
       "id": "qwen3.8-flash-next",
       "name": "Qwen3.8-Flash-Next",
+      "releaseName": "qwen-flash",
       "precision": "NVFP4",
       "repository": "RadixArk/Qwen3.8-Flash-Next-NVFP4",
       "revision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",

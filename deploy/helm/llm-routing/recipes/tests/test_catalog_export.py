@@ -33,6 +33,14 @@ class CommonCatalogTests(unittest.TestCase):
                 self.assertEqual(profile["perNode"][0]["storage"]["claimRequestBytes"], source_profile["cacheGiB"] * 2**30)
                 self.assertEqual(profile["hardware"]["memoryMode"], source_profile["hardware"]["memoryMode"])
 
+    def test_release_names_match_recipe_sources(self):
+        expected = {model['id']: model['releaseName'] for model in catalog.read(ROOT/'catalog.json')['models']}
+        expected['glm-5.3'] = catalog.read(ROOT/'glm-5.3/recipe.json')['releaseName']
+        for identifier, release in expected.items():
+            self.assertRegex(release, r'^[a-z0-9][a-z0-9-]*$')
+            for profile in self.recipes[identifier]['profiles']:
+                self.assertEqual(profile['deployment']['releaseName'], release)
+
     def test_available_and_planned_notice_paths_share_one_bundle_file(self):
         for identifier, recipe in self.recipes.items():
             with self.subTest(recipe=identifier):

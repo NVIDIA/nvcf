@@ -63,6 +63,17 @@ class PlanTests(unittest.TestCase):
         self.assertIn('No changes made', self.output.getvalue())
         self.assertIn('104.0 GiB RAM', self.output.getvalue())
 
+    def test_default_release_comes_from_catalog_deployment_metadata(self):
+        catalog = json.loads((HERE/'recipes/index.json').read_text())
+        model = next(item for item in catalog['recipes'] if item['id'] == 'qwen3.8-27b')
+        model['profiles'][0]['deployment']['releaseName'] = 'catalog-name'
+        original = Path.read_text
+        with patch.object(Path, 'read_text', lambda path, *a, **kw: json.dumps(catalog) if path == HERE/'recipes/index.json' else original(path, *a, **kw)):
+            report = self.plan()
+            override = self.plan(None, '--release', 'requested-release')
+        self.assertEqual(report['deployment']['release'], 'catalog-name')
+        self.assertEqual(override['deployment']['release'], 'requested-release')
+
     def test_default_chart_is_resolved_from_catalog_when_run_outside_checkout(self):
         with tempfile.TemporaryDirectory() as directory, contextlib.chdir(directory):
             report = self.plan()

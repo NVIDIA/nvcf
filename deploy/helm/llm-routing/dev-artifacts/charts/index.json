@@ -273,6 +273,7 @@
               "repository": null,
               "publication": "local"
             },
+            "releaseName": "glm",
             "lifecycle": "automatic",
             "values": {
               "recipe": "glm-5.3",
@@ -446,6 +447,7 @@
               "repository": null,
               "publication": "local"
             },
+            "releaseName": "qwen-fp8",
             "lifecycle": "automatic",
             "values": {
               "recipe": "qwen3.8-27b",
@@ -575,6 +577,7 @@
               "repository": null,
               "publication": "local"
             },
+            "releaseName": "qwen-nvfp4",
             "lifecycle": "automatic",
             "values": {
               "recipe": "qwen3.8-27b-nvfp4",
@@ -732,6 +735,7 @@
               "repository": null,
               "publication": "local"
             },
+            "releaseName": "qwen-flash",
             "lifecycle": "automatic",
             "values": {
               "recipe": "qwen3.8-flash-next",
@@ -822,6 +826,7 @@
               "repository": null,
               "publication": "local"
             },
+            "releaseName": "qwen-flash",
             "lifecycle": "automatic",
             "values": {
               "recipe": "qwen3.8-flash-next",

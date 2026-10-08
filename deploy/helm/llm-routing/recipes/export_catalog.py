@@ -124,7 +124,7 @@ def sglang_recipes(root):
                 "validation": {"runtimeStatus": "smoke-tested" if validated else "pending",
                     "workload": validated, **helm_validation(profile_validation(model, profile, "automaticHelmValidation"), profile["id"],
                         model["revision"], model["image"])},
-                "deployment": {"chart": copy.deepcopy(chart),
+                "deployment": {"chart": copy.deepcopy(chart), "releaseName": model["releaseName"],
                     "lifecycle": "automatic",
                     "values": {"recipe": model["id"], "profileName": profile["id"]},
                     "requiredSiteValues": ["nodes", "runtimeClassName", "storageClassName", "sharedCAConfigMap"]
@@ -182,7 +182,7 @@ def gguf_recipes(root):
                     "workload": {"contextLength": profile["contextLength"], "concurrency": profile["concurrency"],
                         "requestType": "short-prompt-smoke", "fullContextExercised": False,
                         "performanceBenchmarked": False, "qualityEvaluated": False}},
-                "deployment": {"chart": copy.deepcopy(chart), "lifecycle": "automatic",
+                "deployment": {"chart": copy.deepcopy(chart), "releaseName": recipe["releaseName"], "lifecycle": "automatic",
                     "values": {"recipe": metadata["recipe"], "profileName": profile["id"]},
                     "requiredSiteValues": ["nodes", "runtimeClassName", "storageClassName", "sharedCAConfigMap"],
                     "guide": "../ADVANCED.md#helm-glm-recipe"}})

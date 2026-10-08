@@ -133,9 +133,7 @@ def deployment_command(report, catalog, context, namespace, args, capabilities):
     model = next(model for model in catalog['recipes'] if model['id'] == report['model'])
     profile = next(profile for profile in model['profiles'] if profile['id'] == report['chosenProfile'])
     deployment = profile['deployment']
-    names = {'qwen3.8-27b': 'qwen-fp8', 'qwen3.8-27b-nvfp4': 'qwen-nvfp4',
-             'glm-5.3': 'glm', 'qwen3.8-flash-next': 'qwen-flash'}
-    release = args.release or names.get(model['id'], model['id'].replace('.', '-'))
+    release = args.release or deployment['releaseName']
     if deployment['lifecycle'] != 'automatic':
         raise ValueError('The selected profile does not support automatic Helm installation.')
     chart = args.chart_source or str((HERE / 'recipes' / deployment['chart']['localPath']).resolve())
