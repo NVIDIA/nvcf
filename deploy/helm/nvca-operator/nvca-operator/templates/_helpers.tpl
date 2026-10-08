@@ -252,6 +252,22 @@ transition.
 {{- if $agent }}
 {{- $_ := set $config "agent" $agent -}}
 {{- end -}}
+{{- /* worker.download renders under workload.workerInitDownload; zero fields are omitted so worker-init keeps its defaults. */ -}}
+{{- $download := dict -}}
+{{- with $worker.download }}
+{{- if .concurrentDownloads }}
+{{- $_ := set $download "concurrentDownloads" (int .concurrentDownloads) -}}
+{{- end -}}
+{{- if .concurrentChunks }}
+{{- $_ := set $download "concurrentChunks" (int .concurrentChunks) -}}
+{{- end -}}
+{{- if .chunkSizeBytes }}
+{{- $_ := set $download "chunkSizeBytes" (int64 .chunkSizeBytes) -}}
+{{- end -}}
+{{- end -}}
+{{- if $download }}
+{{- $_ := set $config "workload" (dict "workerInitDownload" $download) -}}
+{{- end -}}
 {{- $agentConfig := .Values.agentConfig | default dict -}}
 {{- $mergeConfigData := $agentConfig.mergeConfig | default "" -}}
 {{- if $mergeConfigData }}

@@ -521,6 +521,29 @@
                             "default": ""
                         }
                     }
+                },
+                "download": {
+                    "type": "object",
+                    "description": "Worker-init artifact downloader tuning. Zero keeps worker-init's built-in default for that field.",
+                    "properties": {
+                        "concurrentDownloads": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 256,
+                            "default": 0
+                        },
+                        "concurrentChunks": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 256,
+                            "default": 0
+                        },
+                        "chunkSizeBytes": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 0
+                        }
+                    }
                 }
             }
         },

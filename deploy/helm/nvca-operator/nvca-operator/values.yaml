@@ -155,6 +155,9 @@ storage:
 ## @param worker.timeouts.periodicInstanceStatusInterval Interval between periodic instance status reports. Leave unset to keep the agent's built-in default.
 ## @param worker.timeouts.icmsRequestAckInterval Interval between ICMS request acknowledgement polls. Leave unset to keep the agent's built-in default.
 ## @param worker.timeouts.icmsRequestAckRetryTimeout Timeout for retrying ICMS request acknowledgement. Leave unset to keep the agent's built-in default.
+## @param worker.download.concurrentDownloads Artifacts worker-init fetches at once (WORKER_CONCURRENT_DOWNLOADS). Applies to worker pods, model-cache writer Jobs, and Helm model-cache-init. Zero keeps worker-init's built-in default.
+## @param worker.download.concurrentChunks Ranged GETs per artifact (WORKER_CONCURRENT_CHUNKS). Total streams are concurrentDownloads times concurrentChunks. Zero keeps worker-init's built-in default.
+## @param worker.download.chunkSizeBytes Bytes per ranged GET (WORKER_CHUNK_SIZE), 1 MiB to 4 GiB. Zero keeps worker-init's built-in default.
 worker:
   minHealthcheckRefreshWait: ""
   staticGPUCapacity: 0
@@ -174,6 +177,15 @@ worker:
     periodicInstanceStatusInterval: ""
     icmsRequestAckInterval: ""
     icmsRequestAckRetryTimeout: ""
+  # Worker-init artifact downloader tuning. NVCA folds set fields into the
+  # launch environment of every container that runs worker-init. The NGC CLI
+  # profile is concurrentDownloads 4, concurrentChunks 16, chunkSizeBytes
+  # 536870912; an explicit agent.functionEnvOverrides or taskEnvOverrides
+  # entry for the same variable wins.
+  download:
+    concurrentDownloads: 0
+    concurrentChunks: 0
+    chunkSizeBytes: 0
 ## @param agentConfig.mergeConfig Merge fields into the generated NVCA config. Must be a string.
 ## @description agentConfig.mergeConfig is deprecated for BYOO, storage, and worker settings. Use the top-level byoo/storage/worker values instead.
 agentConfig:

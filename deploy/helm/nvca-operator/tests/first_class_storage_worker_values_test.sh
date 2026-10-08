@@ -105,6 +105,7 @@ assert_key_absent "${default_manifest}" '.agent' "forceSelfDestruct" "forceSelfD
 assert_absent "${default_manifest}" '.agent.csiVolumeMountOptions' "csiVolumeMountOptions should be unset by default"
 assert_absent "${default_manifest}" '.agent.credRenewInterval' "credRenewInterval should be unset by default"
 assert_absent "${default_manifest}" '.agent.heartbeatInterval' "heartbeatInterval should be unset by default"
+assert_absent "${default_manifest}" '.workload' "worker.download should emit no workload section by default so worker-init keeps its defaults"
 
 cat > "${explicit_values}" <<'EOF'
 storage:
@@ -140,6 +141,10 @@ worker:
     credRenewInterval: "45m"
     heartbeatInterval: "5m"
     icmsRequestAckRetryTimeout: "5m"
+  download:
+    concurrentDownloads: 4
+    concurrentChunks: 16
+    chunkSizeBytes: 536870912
 EOF
 render "${explicit_manifest}" --values "${explicit_values}"
 assert_equal "nvcr.io/nvidia/smb:1.0" "$(agent_config_value "${explicit_manifest}" '.agent.sharedStorage.server.image')" "unexpected shared-storage server image"
@@ -160,6 +165,13 @@ assert_equal "ro" "$(agent_config_value "${explicit_manifest}" '.agent.csiVolume
 assert_equal "45m" "$(agent_config_value "${explicit_manifest}" '.agent.credRenewInterval')" "unexpected cred renew interval"
 assert_equal "5m" "$(agent_config_value "${explicit_manifest}" '.agent.heartbeatInterval')" "unexpected heartbeat interval"
 assert_equal "5m" "$(agent_config_value "${explicit_manifest}" '.agent.icmsRequestAckRetryTimeout')" "unexpected ICMS request ack retry timeout"
+assert_equal "4" "$(agent_config_value "${explicit_manifest}" '.workload.workerInitDownload.concurrentDownloads')" "unexpected worker-init concurrent downloads"
+assert_equal "16" "$(agent_config_value "${explicit_manifest}" '.workload.workerInitDownload.concurrentChunks')" "unexpected worker-init concurrent chunks"
+assert_equal "536870912" "$(agent_config_value "${explicit_manifest}" '.workload.workerInitDownload.chunkSizeBytes')" "unexpected worker-init chunk size"
+# A partially set download block emits only the set fields.
+render "${tmp_dir}/partial-download-manifest.yaml" --set worker.download.chunkSizeBytes=1048576
+assert_equal "1048576" "$(agent_config_value "${tmp_dir}/partial-download-manifest.yaml" '.workload.workerInitDownload.chunkSizeBytes')" "unexpected partial worker-init chunk size"
+assert_key_absent "${tmp_dir}/partial-download-manifest.yaml" '.workload.workerInitDownload' "concurrentDownloads" "unset worker.download.concurrentDownloads must not be emitted"
 
 if render "${tmp_dir}/invalid-ips-manifest.yaml" \
   --set-string 'storage.internalPersistentStorage.hardResourceQuota.requests\.storage=7Gi' \
