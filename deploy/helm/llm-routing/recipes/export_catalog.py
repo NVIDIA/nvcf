@@ -7,6 +7,7 @@ import copy
 import json
 from pathlib import Path
 import re
+from urllib.parse import urlsplit
 
 HERE = Path(__file__).resolve().parent
 GIB = 1 << 30
@@ -16,7 +17,7 @@ def read(path):
     return json.loads(path.read_text())
 
 
-def chart_reference(root, relative):
+def chart_reference(root, relative, repository=None):
     """localPath is relative to the index directory and names an archive after packaging."""
     chart = root / relative
     text = (chart / "Chart.yaml").read_text()
@@ -26,8 +27,22 @@ def chart_reference(root, relative):
         if not match:
             raise ValueError(f"Missing {key} in {chart}/Chart.yaml")
         fields[key] = match.group(1).strip("\"'")
+    if repository is not None:
+        message = "chartRepository must be a full OCI chart repository ending in the chart name, without credentials, a tag or digest."
+        if not isinstance(repository, str) or re.search(r"[\s\x00-\x1f\x7f@?#]", repository):
+            raise ValueError(message)
+        parsed = urlsplit(repository)
+        host = r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+        component = r"[a-z0-9]+(?:(?:[._]|__|[-]+)[a-z0-9]+)*"
+        if (parsed.scheme != "oci" or not repository.startswith("oci://")
+                or not re.fullmatch(r"(?:" + host + r"\.)*" + host + r"(?::[0-9]+)?", parsed.netloc)
+                or (parsed.port is not None and not 1 <= parsed.port <= 65535)
+                or not re.fullmatch(r"(?:/" + component + r")+", parsed.path)
+                or parsed.path.rsplit("/", 1)[-1] != fields["name"]):
+            raise ValueError(message)
     return {**fields, "localPath": str(relative),
-            "archive": f"{fields['name']}-{fields['version']}.tgz", "publication": "local"}
+            "archive": f"{fields['name']}-{fields['version']}.tgz", "repository": repository,
+            "publication": "oci" if repository is not None else "local"}
 
 
 def bytes_gib(value):
@@ -78,10 +93,10 @@ def profile_validation(model, profile, key):
 
 
 def sglang_recipes(root):
-    chart = chart_reference(root, Path("charts/sglang"))
     automatic_ids = set(read(root / "charts/sglang/files/profiles.json"))
     recipes = []
     for model in read(root / "catalog.json")["models"]:
+        chart = chart_reference(root, Path("charts/sglang"), model.get("chartRepository"))
         if model["id"] not in automatic_ids:
             raise ValueError("Catalog recipe is missing its Helm runtime: " + model["id"])
         profiles = []
@@ -128,11 +143,11 @@ def sglang_recipes(root):
 
 
 def gguf_recipes(root):
-    chart = chart_reference(root, Path("charts/gguf-backend"))
     recipes = []
     for metadata_path in sorted(root.glob("*/profiles.json")):
         metadata = read(metadata_path)
         recipe = read(metadata_path.parent / metadata["recipeFile"])
+        chart = chart_reference(root, Path("charts/gguf-backend"), recipe.get("chartRepository"))
         lock = read(metadata_path.parent / metadata["lockFile"])
         profiles = []
         for profile in metadata["profiles"]:

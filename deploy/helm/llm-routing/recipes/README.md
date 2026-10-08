@@ -35,4 +35,6 @@ Resolve each deployment's `chart.localPath` and `guide` relative to its containi
 
 Chart packages include the same pinned metadata. Tests check synchronization. The common index records runtime smoke tests separately from automatic Helm lifecycle validation and points to local archives until publication is configured.
 
+Each exported `deployment.chart` includes `repository: null` and `publication: "local"` by default. To describe a published chart, set optional `chartRepository` on its SGLang model in `catalog.json` or its GGUF `recipe.json`, then regenerate the index. Supply the full OCI repository ending in the chart name, without a tag or digest; the exported chart version selects the tag. The exporter emits that address as `repository` with `publication: "oci"` and retains the local paths. This setting neither publishes a chart nor checks registry availability. Consumers must handle a null repository as local-only. The planner continues using local charts unless `--chart-source` is supplied.
+
 Use `../llm.py` for recipe discovery, placement planning, model discovery and chat. Use the [independent model lifecycle](../ADVANCED.md#independent-model-lifecycle) to upgrade, verify, stop, resume, remove and reinstall each recipe through its Helm release. See [Advanced deployment and configuration](../ADVANCED.md) for verification and recovery.

@@ -121,6 +121,9 @@ class ChartPackageTests(unittest.TestCase):
 
     def test_catalog_metadata_is_preserved_except_packaged_paths(self):
         source = json.loads((self.source/'recipes/index.json').read_text())
+        chart = next(recipe['profiles'][0]['deployment']['chart'] for recipe in source['recipes'] if recipe['profiles'])
+        chart.update(repository='oci://registry.example.com/charts/' + chart['name'], publication='oci')
+        (self.source/'recipes/index.json').write_text(json.dumps(source))
         self.package()
         packaged = json.loads((self.output/'index.json').read_text())
         for original, actual in zip(source['recipes'], packaged['recipes']):

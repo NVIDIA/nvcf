@@ -241,7 +241,51 @@ class CommonCatalogTests(unittest.TestCase):
                 self.assertTrue((ROOT / chart["localPath"] / "Chart.yaml").is_file())
                 self.assertEqual(chart["archive"], f"{chart['name']}-{chart['version']}.tgz")
                 self.assertEqual(chart["publication"], "local")
-                self.assertNotIn("oci", chart)
+                self.assertIsNone(chart["repository"])
+
+    def test_optional_oci_repositories_are_independent_per_recipe_and_backend(self):
+        original_read = catalog.read
+        expected = {
+            'qwen3.8-27b': 'oci://registry.example.com/qwen/pylon-sglang-recipe',
+            'qwen3.8-flash-next': 'oci://other.example.com:5443/team/flash/pylon-sglang-recipe',
+            'glm-5.3': 'oci://registry.example.com/gguf/pylon-gguf-backend',
+        }
+        def changed_read(path):
+            value = original_read(path)
+            if path == ROOT / 'catalog.json':
+                for model in value['models']:
+                    model['chartRepository'] = expected.get(model['id'])
+            elif path == ROOT / 'glm-5.3/recipe.json':
+                value['chartRepository'] = expected['glm-5.3']
+            return value
+        with patch.object(catalog, 'read', side_effect=changed_read):
+            recipes = catalog.build()['recipes']
+        for recipe in recipes:
+            for profile in recipe['profiles']:
+                chart = profile['deployment']['chart']
+                baseline = next(p for p in self.recipes[recipe['id']]['profiles'] if p['id'] == profile['id'])['deployment']['chart']
+                self.assertEqual(chart['repository'], expected.get(recipe['id']))
+                self.assertEqual(chart['publication'], 'oci' if recipe['id'] in expected else 'local')
+                self.assertEqual(chart['localPath'], baseline['localPath'])
+                self.assertEqual(chart['archive'], baseline['archive'])
+        self.assertTrue(all(p['deployment']['chart']['repository'] is None
+                            for recipe in catalog.build()['recipes'] for p in recipe['profiles']))
+
+    def test_chart_repositories_reject_malformed_or_incomplete_references(self):
+        good = 'oci://registry.example.com/charts/pylon-sglang-recipe'
+        invalid = (False, 1, [], {}, '', 'registry.example.com/charts/pylon-sglang-recipe',
+                   good.replace('oci:', 'https:'), 'oci:///pylon-sglang-recipe',
+                   'oci://registry.example.com', 'oci://registry.example.com/charts',
+                   good + ':0.2.0', good + '@sha256:' + 'a' * 64, good + '?tag=0.2.0',
+                   good + '?', good + '#part', good + '#', good + '/', good + ' ',
+                   good.replace('registry.', 'user:password@registry.'),
+                   good.replace('charts/', '../'), good.replace('charts/', 'bad%2Fpath/'),
+                   good.replace('charts/', 'charts//'), good.replace('charts/', 'Charts/'),
+                   good.replace('registry.', 'bad_host.'), good.replace('.com/', '.com:0/'),
+                   good.replace('.com/', '.com:65536/'), '\n' + good, good + '\x00')
+        for repository in invalid:
+            with self.subTest(repository=repository), self.assertRaises(ValueError):
+                catalog.chart_reference(ROOT, Path('charts/sglang'), repository)
 
     def test_source_guides_resolve_relative_to_index(self):
         for recipe in self.recipes.values():

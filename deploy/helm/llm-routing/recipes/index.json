@@ -270,6 +270,7 @@
               "version": "0.2.0",
               "localPath": "charts/gguf-backend",
               "archive": "pylon-gguf-backend-0.2.0.tgz",
+              "repository": null,
               "publication": "local"
             },
             "lifecycle": "automatic",
@@ -442,6 +443,7 @@
               "version": "0.2.0",
               "localPath": "charts/sglang",
               "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "repository": null,
               "publication": "local"
             },
             "lifecycle": "automatic",
@@ -570,6 +572,7 @@
               "version": "0.2.0",
               "localPath": "charts/sglang",
               "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "repository": null,
               "publication": "local"
             },
             "lifecycle": "automatic",
@@ -726,6 +729,7 @@
               "version": "0.2.0",
               "localPath": "charts/sglang",
               "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "repository": null,
               "publication": "local"
             },
             "lifecycle": "automatic",
@@ -815,6 +819,7 @@
               "version": "0.2.0",
               "localPath": "charts/sglang",
               "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "repository": null,
               "publication": "local"
             },
             "lifecycle": "automatic",
