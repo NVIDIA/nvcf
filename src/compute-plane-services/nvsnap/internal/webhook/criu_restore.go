@@ -119,7 +119,8 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 		VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: m.CheckpointHostRoot, Type: &dir}},
 	}})...)
 	patches = append(patches, addContainerMounts(i, c, []corev1.VolumeMount{
-		{Name: criuCheckpointsVolume, MountPath: criuCheckpointsMount, ReadOnly: true},
+		// Writable: CRIU writes restore.log into the images directory.
+		{Name: criuCheckpointsVolume, MountPath: criuCheckpointsMount},
 	})...)
 	if pod.Annotations == nil {
 		patches = append(patches, PatchOp{Op: "add", Path: "/metadata/annotations", Value: map[string]string{}})

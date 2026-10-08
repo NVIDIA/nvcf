@@ -77,7 +77,7 @@ func TestCRIURestore_PodBecomesThePlaceholder(t *testing.T) {
 	}
 	var mounted bool
 	for _, vm := range c.VolumeMounts {
-		mounted = mounted || (vm.MountPath == "/checkpoints" && vm.ReadOnly)
+		mounted = mounted || (vm.MountPath == "/checkpoints" && !vm.ReadOnly) // CRIU writes restore.log there
 	}
 	var hostRoot string
 	for _, v := range got.Spec.Volumes {
