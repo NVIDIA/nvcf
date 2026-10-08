@@ -38,7 +38,10 @@ For a durable backend, the flow is:
 
 ![NVCA model cache architecture](../../dev/assets/nvca-model-cache-architecture.svg)
 
-1. NVCA selects the first available storage backend.
+1. NVCA selects the backend when it creates the request: from the storage
+   capability catalog on NVCA 3.12.5 and later, or by the legacy first-match
+   order for requests created by earlier releases. See
+   [Backend Selection](#backend-selection).
 1. NVCA creates a model-cache `StorageRequest` in the workload namespace.
 1. A Kubernetes Lease selects one request as the writer for the cache handle.
 1. NVCA creates one writer Job in the `nvca-modelcache-init` namespace.
@@ -64,6 +67,7 @@ unless overridden):
 | `ReadWriteMany` (Weka, OCI File Storage, NetApp Trident) | Shared filesystem: one claim per cache handle, readers mount it read-only | Durable reuse across namespaces |
 | `ReadWriteOnce` and `ReadOnlyMany` (NVMesh) | NVMesh: writer claim, one derived reader PV per namespace | Durable reuse across namespaces |
 | No qualified mode, or the class is absent | `emptyDir` with a `model-cache-init` container | Pod-local caching only |
+| Class present with a reclaim policy other than `Retain` | None: NVCA does not create the request and logs a storage resolution error. Set `reclaimPolicy: Retain` on the class | Not applicable |
 
 On a `ReadWriteMany` backend the writer Job runs as root only when the
 driver's `CSIDriver` declares a `fsGroupPolicy` that skips `ReadWriteMany`
