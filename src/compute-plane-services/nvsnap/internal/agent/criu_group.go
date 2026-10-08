@@ -221,6 +221,15 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		log.WithError(err).Info("CRIU group capture: waiting for the whole instance")
 		return true
 	}
+	for _, r := range ranks {
+		if !a.gpushareEnabledFor(r) {
+			// Without the library a GPU checkpoint goes through the CUDA
+			// plugin: the whole GPU memory into the image, the engine paused
+			// for minutes. Instances are captured under gpushare only.
+			log.WithField("rank", r.Name).Info("CRIU group capture: skipped; the instance does not run under gpushare")
+			return false
+		}
+	}
 	if err := instanceCoversEngine(ranks); err != nil {
 		// Part of an engine: pausing it would stall the rest.
 		log.WithError(err).Warn("CRIU group capture: skipped; the instance is not the whole engine")
