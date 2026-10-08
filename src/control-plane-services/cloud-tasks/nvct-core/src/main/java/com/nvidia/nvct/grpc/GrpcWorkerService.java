@@ -297,10 +297,15 @@ public class GrpcWorkerService extends WorkerGrpc.WorkerImplBase {
         log.info(MESG_START_GRPC_ENDPOINT, taskId, "refreshToken");
 
         var ncaId = taskService.fetchTask(taskId).getNcaId();
-        tokenService.validateWorkerAccessAssertion(ncaId, taskId);
+        var delegated = tokenService.validateWorkerAccessAssertion(ncaId, taskId);
         NvctUtils.addTagsToCurrentSpan(tracer, Map.of(SPAN_TAG_TASK_ID, request.getTaskId()));
 
-        var newToken = tokenService.issueWorkerAccessAssertion(ncaId, taskId);
+        // A delegated (projected ServiceAccount) token is the worker's credential for its whole
+        // lifetime and is rotated by Kubernetes; no replacement Notary assertion is issued.
+        var newToken = delegated ? "" : tokenService.issueWorkerAccessAssertion(ncaId, taskId);
+        if (delegated) {
+            log.debug("task {} authenticated with a delegated token; no refresh token issued", taskId);
+        }
         var response = RefreshTokenResponse.newBuilder().setToken(newToken).build();
         responseObserver.onNext(response);
         responseObserver.onCompleted();
