@@ -355,6 +355,11 @@ func (p *StargateProvider) Proxy(
 	if request.Header != nil {
 		outbound.Header = request.Header.Clone()
 	}
+	// Send a fixed-length body, not chunked, so Stargate can reject a body over
+	// its size limit before it reads the body.
+	if request.ContentLength > 0 {
+		outbound.ContentLength = request.ContentLength
+	}
 	// X-Priority is gateway-owned: a client-supplied value cloned from the
 	// inbound request must never reach Stargate, even when no priority
 	// resolves for this request.
@@ -388,6 +393,14 @@ func (p *StargateProvider) Proxy(
 			outbound.Header.Set(headerAuthorization, "Bearer "+bearerToken)
 		}
 	}
+	// Caller credentials authorize NVCF, never the Messages model server.
+	// Enforce this before Stargate so older Pylon workers cannot leak them.
+	if request.Path == "/v1/messages" {
+		outbound.Header.Del(headerAuthorization)
+		outbound.Header.Del("X-API-Key")
+		outbound.Header.Del("Proxy-Authorization")
+	}
+
 	if request.InputTokens > 0 {
 		outbound.Header.Set(headerInputTokens, strconv.Itoa(request.InputTokens))
 	}

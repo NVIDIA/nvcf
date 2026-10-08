@@ -20,11 +20,12 @@ package clustervalidator
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,6 +49,10 @@ import (
 func TestMain(m *testing.M) {
 	probeDNSFn = func(context.Context) bool { return true }
 	probeAPIServiceIPFn = func(context.Context) bool { return true }
+	// Fake clients answer at once, so a short retry budget still retries a
+	// transient error several times without slowing every error-path test.
+	observeTimeout, observeRetryInterval = 300*time.Millisecond, 10*time.Millisecond
+	recheckDelay = 0
 	os.Exit(m.Run())
 }
 
@@ -707,23 +712,18 @@ func TestProbeReadyz_AgainstHTTPServer(t *testing.T) {
 // checkControlPlaneHealth: node-list failure (Greptile P2 follow-up)
 // ---------------------------------------------------------------------------
 
-// TestCheckControlPlaneHealth_NodeListErrorClearsNodesAllReady verifies that
-// when the API server fails the Nodes().List() call, both the cluster
-// verdict flips to unhealthy AND NodesAllReady is set to false — so the
-// summary row reads "Worker Nodes: 0 NotReady" rather than the misleading
-// "Worker Nodes: All Ready" that the prior code would have produced.
-func TestCheckControlPlaneHealth_NodeListErrorClearsNodesAllReady(t *testing.T) {
-	// Even with capability probes passing, a failed Nodes().List() call
-	// must flip the verdict to unhealthy AND clear NodesAllReady — node
-	// readiness is genuinely unknown and the summary row must not read
-	// "All Ready" when we never checked.
+// A failed node list is not a node status and not a control-plane fault:
+// /readyz and the capability probes judge the control plane. The worker-node
+// row is unknown, its key is left out of the summary rather than published as
+// 0, and the warning names the cause.
+func TestCheckControlPlaneHealth_NodeListErrorLeavesNodesUnobserved(t *testing.T) {
 	stubProbes(t, true, true)
 	client := fake.NewSimpleClientset(
 		makePod("coredns-abc", "kube-system", corev1.PodRunning),
 		makePod("kube-proxy-xyz", "kube-system", corev1.PodRunning),
 	)
 	client.PrependReactor("list", "nodes", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		return true, nil, fmt.Errorf("simulated nodes-list error")
+		return true, nil, apierrors.NewInternalError(errors.New("etcd timeout"))
 	})
 
 	state := &ValidationState{
@@ -732,10 +732,15 @@ func TestCheckControlPlaneHealth_NodeListErrorClearsNodesAllReady(t *testing.T) 
 		NodesAllReady:       true,
 	}
 	checkControlPlaneHealth(context.Background(), client, state)
-	assert.False(t, state.ControlPlaneHealthy,
-		"node listing failure must flip the cluster verdict")
-	assert.False(t, state.NodesAllReady,
-		"NodesAllReady must reflect that node status was not verified")
+	assert.True(t, state.ControlPlaneHealthy, "a node list error is not evidence about the control plane")
+	assert.True(t, state.Unobserved[CheckKeyWorkerNodesAllReady])
+	assert.Contains(t, strings.Join(state.Warnings, "; "),
+		"Worker Nodes: status unknown (could not read nodes: Internal error occurred: etcd timeout")
+
+	summary := buildSummary(state, time.Now(), true, VerdictReady)
+	_, published := summary.Checks[CheckKeyWorkerNodesAllReady]
+	assert.False(t, published, "an unobserved check must not be published as 0")
+	assert.True(t, summary.Checks[CheckKeyControlPlane])
 }
 
 // ---------------------------------------------------------------------------

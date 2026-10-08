@@ -24,6 +24,22 @@ CLI concurrency fallback ----------> pylon -> registration -> stargate routing
 The stream reports request counters. `/kv-cache/stats` is optional machine
 state.
 
+## Registration Updates
+
+Pylon publishes its registration, including model stats, to every Stargate in
+two cases:
+
+- When advertised stats or status change, for example when a request is
+  admitted, produces its first output, or completes. Updates are coalesced so
+  each registration stream sends at most one change-driven update per
+  `--stats-update-coalesce-ms` (default `10`).
+- As a heartbeat when nothing has been sent for `--min-update-interval-ms`
+  (default `1000`). Stargate uses this interval for registration liveness.
+
+Stargate routes on the most recent update plus its own pending reservations.
+Change-driven updates keep that view within the coalescing window and network
+delay of the backend's actual load, instead of up to one heartbeat behind.
+
 ## Stream Events
 
 Each non-empty line is JSON with `v: 1` and `type`.
@@ -124,6 +140,7 @@ Use it only when the runtime has reliable KV state.
 Pylon publishes:
 
 - sticky completed-request input throughput: `last_mean_input_tps`
+- generation maximum input throughput: optional `max_input_tps`
 - volatile generation throughput: `output_tps` and `max_output_tps`
 - request phase counts and queue sizes
 - effective maximum engine concurrency
@@ -138,13 +155,28 @@ counter-derived output window.
 
 If request stats go stale, volatile output TPS is cleared. Sticky input TPS
 stays until a later valid sample replaces it.
+The maximum is the greatest `last_mean_input_tps` published for the current
+model generation, including a configured initial TPS. It follows the smoothed
+mean rather than individual samples, so the mean dilutes one outlier sample.
+Lower means do not reduce it, and generation replacement clears it. It is
+absent until the first mean is published.
+
+Pylon publishes `pylon_model_max_input_tps` when the maximum is known and removes
+the series when the model is removed or replaced with unknown maximum state.
+The additive protobuf field preserves older messages as an absent maximum.
 
 Shared clusters sum backend-local live load and union labels. Effective input
 capacity is:
 
 ```text
-sum(active_runtime_reports)
+mean input capacity = sum(active runtime mean reports)
+maximum input capacity = max(active generation peak reports)
 ```
+
+Maximum capacity is available only when every active backend in the shared
+engine cluster reports a valid maximum. Historical per-observer peaks are not
+additive. Pulsar uses maximum capacity by default; queue estimates still use
+mean capacity.
 
 Before registration, Pylon initializes each model generation from exactly one
 source. `--initial-input-tps` installs the configured value. Local calibration

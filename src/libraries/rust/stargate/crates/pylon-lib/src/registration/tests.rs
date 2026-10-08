@@ -158,7 +158,7 @@ impl StargateControlPlane for TestTlsControlPlaneService {
             })));
         }
         tokio::spawn(async move {
-            if let Ok(Some(registration)) = stream.message().await {
+            while let Ok(Some(registration)) = stream.message().await {
                 let _ = registrations.send(registration);
             }
         });
@@ -386,6 +386,7 @@ fn test_registration_config() -> InferenceServerRegistrationConfig {
             ..Default::default()
         },
         min_update_interval: Duration::from_secs(2),
+        stats_update_coalesce: Duration::from_millis(10),
         reverse_tunnel: false,
         tls_cert_pem: None,
         grpc_tls_ca_cert_pem: None,
@@ -914,6 +915,84 @@ async fn custom_grpc_ca_completes_watch_and_registration_with_separate_authority
 }
 
 #[tokio::test]
+async fn stats_changes_publish_before_the_heartbeat_and_coalesce() {
+    let ca = TestCertificateAuthority::new("registration-change-ca");
+    let mut server = TestTlsControlPlane::spawn(&ca, "localhost").await;
+    let mut config = test_registration_config();
+    config.seeds = vec![server.dial_url.clone()];
+    config.grpc_tls_ca_cert_pem = Some(ca.pem());
+    config.min_update_interval = Duration::from_secs(60);
+    config.stats_update_coalesce = Duration::from_millis(50);
+    let runtime_state = config.forwarding.runtime_state.clone();
+    let mut client = InferenceServerRegistrationClient::default();
+
+    client.start(config).expect("registration should start");
+    server.first_registration().await;
+    for queued_input_size in 1..=5 {
+        runtime_state.set_model_stats(
+            "model-a",
+            CurrentModelStats {
+                last_mean_input_tps: 10.0,
+                queued_input_size,
+                ..CurrentModelStats::default()
+            },
+        );
+    }
+
+    let update = server.first_registration().await;
+    let stats = update.models["model-a"]
+        .stats
+        .as_ref()
+        .expect("model stats should be advertised");
+    assert_eq!(stats.queued_input_size, 5);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), server.registrations.recv())
+            .await
+            .is_err(),
+        "a burst of changes should produce one coalesced update"
+    );
+
+    client.shutdown().await;
+    server.shutdown().await;
+}
+
+#[test]
+fn change_after_initial_snapshot_stays_pending() {
+    type RuntimeChange = fn(&PylonRuntimeState);
+    let cases: [(&str, RuntimeChange); 2] = [
+        ("status", |state| {
+            state.set_status(InferenceServerStatus::Inactive)
+        }),
+        ("stats", |state| {
+            state.set_model_stats(
+                "model-a",
+                CurrentModelStats {
+                    queued_input_size: 1,
+                    ..CurrentModelStats::default()
+                },
+            )
+        }),
+    ];
+    for (name, change) in cases {
+        let runtime_state =
+            PylonRuntimeState::new(InferenceServerStatus::Active, &["model-a".to_string()]);
+
+        let (changes, _) = subscribe_then_snapshot(&runtime_state, || {
+            let snapshot = runtime_state.advertised_models();
+            change(&runtime_state);
+            snapshot
+        });
+
+        assert!(
+            changes
+                .has_changed()
+                .expect("runtime state should keep the change sender"),
+            "{name} change after the initial snapshot should stay pending"
+        );
+    }
+}
+
+#[tokio::test]
 async fn https_without_custom_ca_uses_configured_native_roots() {
     if let Ok(dial_url) = std::env::var(DEFAULT_ROOT_TEST_DIAL_URL_ENV) {
         let endpoint = StargateGrpcEndpoint::new(dial_url, "")
@@ -1398,6 +1477,7 @@ fn runtime_snapshot_forwards_bootstrap_and_collected_stats_exactly() {
         "model-a",
         CurrentModelStats {
             last_mean_input_tps: 3.5,
+            max_input_tps: Some(4.5),
             output_tps: 2.5,
             queue_size: 4,
             queued_input_size: 5,
@@ -1423,6 +1503,7 @@ fn runtime_snapshot_forwards_bootstrap_and_collected_stats_exactly() {
     assert_eq!(model.status, InferenceServerStatus::Active as i32);
     let stats = model.stats.as_ref().expect("stats should be present");
     assert_eq!(stats.last_mean_input_tps, 3.5);
+    assert_eq!(stats.max_input_tps, Some(4.5));
     assert_eq!(stats.output_tps, 2.5);
     assert_eq!(
         stats.queue_time_estimate_ms_by_priority,

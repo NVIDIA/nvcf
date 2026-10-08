@@ -26,6 +26,8 @@ macro_rules! impl_display {
 mod algorithm;
 mod cluster_comparator;
 mod config;
+pub(crate) mod dynamic_config;
+pub(crate) mod expression;
 mod factory;
 mod power_of_n;
 mod pulsar;
@@ -44,6 +46,7 @@ pub(crate) use algorithm::input_work_seconds_for_request;
 pub(super) use algorithm::{HashInputBuilder, cache_affinity_key_is_cacheable, input_work_units};
 pub use cluster_comparator::ClusterComparator;
 pub(super) use cluster_comparator::{Ttft, ttft};
+pub(crate) use config::PulsarRendezvousWeight;
 pub use config::{
     LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmOverride,
     LoadBalancerAlgorithmSettings, LoadBalancerConfig, LoadBalancerModelConfig,
@@ -55,4 +58,5 @@ pub use request::{LoadBalancerCandidateChoice, LoadBalancerDecision, LoadBalance
 pub use router::{
     LoadBalancerAlgorithmResolution, LoadBalancerCandidateSelection, LoadBalancerRouter,
 };
+pub(crate) use target_state::LoadBalancerDefinition;
 pub use target_state::LoadBalancerTargetState;

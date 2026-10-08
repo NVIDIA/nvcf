@@ -42,8 +42,6 @@ backends:
       decode_jitter_ms: 1
       prefill_tokens_per_s: 32768
       decode_tokens_per_s: 512
-    registration:
-      last_mean_input_tps: 32768
 
 traffic_pattern:
   kind: prefix_reuse

@@ -32,6 +32,7 @@ const (
 	chatCompletionsEndpointPath = "/v1/chat/completions"
 	responsesEndpointPath       = "/v1/responses"
 	embeddingsEndpointPath      = "/v1/embeddings"
+	messagesEndpointPath        = "/v1/messages"
 )
 
 // requireModelURIAllowlist checks the model's declared uris allowlist for

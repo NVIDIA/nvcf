@@ -64,11 +64,11 @@
 
   <rect class="bg" x="0" y="0" width="1280" height="460" rx="0" />
   <text class="title" x="48" y="48">LLM Invocation Path</text>
-  <text class="small" x="48" y="78">OpenAI-compatible traffic is handled by the LLM-specific invocation path.</text>
+  <text class="small" x="48" y="78">Native OpenAI and Anthropic Messages traffic share the LLM invocation path.</text>
 
   <rect class="panel" x="40" y="155" width="140" height="88" rx="8" />
   <text class="label" x="110" y="192" text-anchor="middle">Client</text>
-  <text class="small" x="110" y="218" text-anchor="middle">OpenAI API</text>
+  <text class="small" x="110" y="218" text-anchor="middle">LLM API</text>
 
   <rect class="optional" x="220" y="155" width="168" height="88" rx="8" />
   <text class="label" x="304" y="185" text-anchor="middle">Optional Vanity</text>

@@ -123,6 +123,9 @@ message ModelStats {
   // Sticky source labels for stat observations seen by this backend since the
   // model metrics state was initialized.
   repeated string stats_sources = 17;
+  // Greatest last_mean_input_tps published for the current backend model
+  // generation. Absent until the first mean is configured or observed.
+  optional double max_input_tps = 18;
 }
 
 enum InferenceServerStatus {
