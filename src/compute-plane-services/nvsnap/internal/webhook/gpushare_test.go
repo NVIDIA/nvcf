@@ -149,7 +149,7 @@ func mountAt(c corev1.Container, path string) *corev1.VolumeMount {
 
 func TestGPUSharePatches_NotAnnotated(t *testing.T) {
 	m := &Mutator{}
-	if p := m.gpusharePatches(gpushareTestPod(false, nil)); p != nil {
+	if p := m.gpusharePatches(context.Background(), gpushareTestPod(false, nil)); p != nil {
 		t.Fatalf("pod without %s must be left alone, got %v", GPUShareAnnotation, p)
 	}
 }
@@ -159,7 +159,7 @@ func TestGPUSharePatches_NotAnnotated(t *testing.T) {
 func TestGPUSharePatches_PlacesLibraryAndStore(t *testing.T) {
 	m := &Mutator{HostBundleRoot: "/bundle", GPUShareHostRoot: "/ckpt/gpushare-pods"}
 	pod := gpushareTestPod(true, nil)
-	got := applyPatches(t, pod, m.gpusharePatches(pod))
+	got := applyPatches(t, pod, m.gpusharePatches(context.Background(), pod))
 
 	vols := map[string]corev1.Volume{}
 	for _, v := range got.Spec.Volumes {
@@ -199,7 +199,7 @@ func TestGPUSharePatches_PlacesLibraryAndStore(t *testing.T) {
 func TestGPUSharePatches_AppendsToExistingPreload(t *testing.T) {
 	m := &Mutator{}
 	pod := gpushareTestPod(true, []corev1.EnvVar{{Name: "A", Value: "1"}, {Name: "LD_PRELOAD", Value: "/usr/lib/libjemalloc.so"}})
-	got := applyPatches(t, pod, m.gpusharePatches(pod))
+	got := applyPatches(t, pod, m.gpusharePatches(context.Background(), pod))
 	if e := envOf(got.Spec.Containers[1], "LD_PRELOAD"); e == nil || e.Value != "/usr/lib/libjemalloc.so:"+GPUShareLibPath {
 		t.Errorf("LD_PRELOAD = %+v", e)
 	}
@@ -207,7 +207,7 @@ func TestGPUSharePatches_AppendsToExistingPreload(t *testing.T) {
 		t.Errorf("env has %d entries, want 3 (A, LD_PRELOAD replaced in place, %s)", n, gpusharePodUIDEnv)
 	}
 
-	again := applyPatches(t, got, (&Mutator{}).gpusharePatches(got))
+	again := applyPatches(t, got, (&Mutator{}).gpusharePatches(context.Background(), got))
 	if e := envOf(again.Spec.Containers[1], "LD_PRELOAD"); e.Value != "/usr/lib/libjemalloc.so:"+GPUShareLibPath {
 		t.Errorf("re-admission changed LD_PRELOAD to %q", e.Value)
 	}
@@ -221,7 +221,7 @@ func TestGPUSharePatches_PreloadFromReference(t *testing.T) {
 	pod := gpushareTestPod(true, []corev1.EnvVar{{Name: "LD_PRELOAD", ValueFrom: &corev1.EnvVarSource{
 		ConfigMapKeyRef: &corev1.ConfigMapKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "cm"}, Key: "k"},
 	}}})
-	if p := m.gpusharePatches(pod); p != nil {
+	if p := m.gpusharePatches(context.Background(), pod); p != nil {
 		t.Fatalf("want no patches, got %v", p)
 	}
 }
@@ -232,7 +232,7 @@ func TestGPUSharePatches_ReusesMountedBundle(t *testing.T) {
 	pod := gpushareTestPod(true, nil)
 	pod.Spec.Volumes = []corev1.Volume{{Name: nvsnapToolsVolumeName}}
 	pod.Spec.Containers[1].VolumeMounts = []corev1.VolumeMount{{Name: nvsnapToolsVolumeName, MountPath: nvsnapToolsMountPath, ReadOnly: true}}
-	got := applyPatches(t, pod, m.gpusharePatches(pod))
+	got := applyPatches(t, pod, m.gpusharePatches(context.Background(), pod))
 	for _, v := range got.Spec.Volumes {
 		if v.Name == gpushareLibVolume {
 			t.Fatalf("library volume added although the bundle is already mounted")
@@ -279,21 +279,21 @@ func TestGPUShareStorePathIsTopLevel(t *testing.T) {
 func TestGPUSharePatches_FabricAnnotation(t *testing.T) {
 	m := &Mutator{}
 	pod := gpushareTestPod(true, nil)
-	got := applyPatches(t, pod, m.gpusharePatches(pod))
+	got := applyPatches(t, pod, m.gpusharePatches(context.Background(), pod))
 	if e := envOf(got.Spec.Containers[1], gpushareFabricEnv); e != nil {
 		t.Errorf("unannotated pod got %s=%q", gpushareFabricEnv, e.Value)
 	}
 
 	pod = gpushareTestPod(true, nil)
 	pod.Annotations[GPUShareFabricAnnotation] = "true"
-	got = applyPatches(t, pod, m.gpusharePatches(pod))
+	got = applyPatches(t, pod, m.gpusharePatches(context.Background(), pod))
 	if e := envOf(got.Spec.Containers[1], gpushareFabricEnv); e == nil || e.Value != "1" {
 		t.Errorf("%s = %+v, want 1", gpushareFabricEnv, e)
 	}
 
 	pod = gpushareTestPod(true, []corev1.EnvVar{{Name: gpushareFabricEnv, Value: "0"}})
 	pod.Annotations[GPUShareFabricAnnotation] = "true"
-	got = applyPatches(t, pod, m.gpusharePatches(pod))
+	got = applyPatches(t, pod, m.gpusharePatches(context.Background(), pod))
 	if e := envOf(got.Spec.Containers[1], gpushareFabricEnv); e == nil || e.Value != "0" {
 		t.Errorf("the pod's own %s was overridden: %+v", gpushareFabricEnv, e)
 	}

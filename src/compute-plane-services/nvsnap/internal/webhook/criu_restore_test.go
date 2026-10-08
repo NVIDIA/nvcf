@@ -160,16 +160,35 @@ func TestCRIURestore_FindsTheRecordInTheCaptureStore(t *testing.T) {
 func TestGPUShareByDefault(t *testing.T) {
 	m := &Mutator{GPUShareByDefault: true}
 	pod := gpushareTestPod(false, nil)
-	if got := applyPatches(t, pod, m.gpusharePatches(pod)); envOf(got.Spec.Containers[1], "LD_PRELOAD") == nil {
+	if got := applyPatches(t, pod, m.gpusharePatches(context.Background(), pod)); envOf(got.Spec.Containers[1], "LD_PRELOAD") == nil {
 		t.Error("CRIU cluster: unannotated GPU pod did not get the library")
 	}
 	out := gpushareTestPod(false, nil)
 	out.Annotations = map[string]string{GPUShareAnnotation: "false"}
-	if p := m.gpusharePatches(out); p != nil {
+	if p := m.gpusharePatches(context.Background(), out); p != nil {
 		t.Errorf("opted-out pod patched: %v", p)
 	}
-	if p := (&Mutator{}).gpusharePatches(gpushareTestPod(false, nil)); p != nil {
+	if p := (&Mutator{}).gpusharePatches(context.Background(), gpushareTestPod(false, nil)); p != nil {
 		t.Error("cachedir cluster: unannotated pod patched")
+	}
+}
+
+// An engine that spans pods keeps its multi-node NVLink memory: the
+// default leaves it alone, an annotation still opts it in.
+func TestGPUShareByDefault_NotForMultiPodEngines(t *testing.T) {
+	m := &Mutator{GPUShareByDefault: true}
+	flags := gpushareTestPod(false, nil)
+	flags.Spec.Containers[1].Args = []string{"vllm serve m --tensor-parallel-size 8 --nnodes 2 --node-rank 0 --master-addr x"}
+	lws := gpushareTestPod(false, nil)
+	lws.Annotations = map[string]string{lwsSizeAnnotation: "2"}
+	for name, pod := range map[string]*corev1.Pod{"multi-node flags": flags, "two-pod group": lws} {
+		if p := m.gpusharePatches(context.Background(), pod); p != nil {
+			t.Errorf("%s: library placed by default", name)
+		}
+		pod.Annotations = map[string]string{GPUShareAnnotation: "true"}
+		if p := m.gpusharePatches(context.Background(), pod); p == nil {
+			t.Errorf("%s: the annotation no longer opts in", name)
+		}
 	}
 }
 

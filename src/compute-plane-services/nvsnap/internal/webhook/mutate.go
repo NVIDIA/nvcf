@@ -509,7 +509,7 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	var injectPatches []PatchOp
 	// gpushare placement is independent of every other decision below and
 	// rides along with whichever patches they return.
-	injectPatches = append(injectPatches, m.gpusharePatches(pod)...)
+	injectPatches = append(injectPatches, m.gpusharePatches(ctx, pod)...)
 
 	raw, ok := pod.Annotations[RestoreFromAnnotation]
 	if !ok || raw == "" {

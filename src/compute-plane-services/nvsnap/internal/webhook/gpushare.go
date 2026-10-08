@@ -18,6 +18,7 @@ limitations under the License.
 package webhook
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -59,21 +60,57 @@ const (
 
 // gpushareWanted reports whether a pod runs under the gpushare library: when
 // annotated, or by default where CRIU is the capture method (the library
-// keeps GPU memory out of the CRIU image), unless annotated "false".
-func (m *Mutator) gpushareWanted(pod *corev1.Pod) bool {
+// keeps GPU memory out of the CRIU image), unless annotated "false". The
+// default leaves out the pods of an engine that spans pods: the library
+// hides multi-node NVLink memory unless told the pod shares it, and such an
+// engine then never finishes its distributed setup (kimi-k3 TP=8 on two
+// GB300 nodes hung 30 minutes in its first collective, 2026-10-08).
+func (m *Mutator) gpushareWanted(ctx context.Context, pod *corev1.Pod) bool {
 	switch pod.Annotations[GPUShareAnnotation] {
 	case "true":
 		return true
 	case "false":
 		return false
 	}
-	return m.GPUShareByDefault
+	if !m.GPUShareByDefault {
+		return false
+	}
+	if flag := multiNodeFlag(pod); flag != "" || m.groupSize(ctx, pod) > 1 {
+		m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).WithField("flag", flag).
+			Info("gpushare: the engine spans pods; not placing the library by default (annotate nvsnap.io/gpushare=true to opt in)")
+		return false
+	}
+	return true
+}
+
+// multiNodeEngineFlags only appear on an engine that spans nodes.
+var multiNodeEngineFlags = []string{"--nnodes", "--node-rank", "--node_rank", "--dist-init-addr", "--master-addr", "--master_addr",
+	"--data-parallel-address", "--headless"}
+
+// multiNodeFlag returns the first multi-node flag on a GPU container's
+// command line, or "".
+func multiNodeFlag(pod *corev1.Pod) string {
+	for _, c := range pod.Spec.Containers {
+		if _, ok := c.Resources.Limits["nvidia.com/gpu"]; !ok {
+			continue
+		}
+		for _, a := range append(append([]string{}, c.Command...), c.Args...) {
+			for _, w := range strings.Fields(a) {
+				for _, f := range multiNodeEngineFlags {
+					if w == f || strings.HasPrefix(w, f+"=") {
+						return f
+					}
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // gpusharePatches places the library and the store into every container of
 // an opted-in pod that requests GPUs.
-func (m *Mutator) gpusharePatches(pod *corev1.Pod) []PatchOp {
-	if !m.gpushareWanted(pod) {
+func (m *Mutator) gpusharePatches(ctx context.Context, pod *corev1.Pod) []PatchOp {
+	if !m.gpushareWanted(ctx, pod) {
 		return nil
 	}
 	gpuContainers := make([]int, 0, len(pod.Spec.Containers))
