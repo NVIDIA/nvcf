@@ -2,13 +2,13 @@
 
 Monitoring uses an independent Helm release for the collector, VictoriaMetrics and Grafana. The chart defaults scrape the `llm-stack` shared release and its Pylon workloads in namespace `llm-stack`.
 
-Run commands from `deploy/helm/llm-routing`. Replace `CONTEXT` with your Kubernetes context.
+Run commands from `deploy/helm/llm-routing`.
 
 ## Install and upgrade
 
 ```bash
 helm upgrade --install llm-monitoring recipes/charts/monitoring \
-  --kube-context CONTEXT --namespace llm-stack --wait --timeout 10m
+  --namespace llm-stack --wait --timeout 10m
 ```
 
 For placement, storage or ingress overrides, add `--values /path/to/private/monitoring-values.yaml`. Keep these environment settings outside the checkout. Resource defaults, scrape selectors and image versions are in [values.yaml](charts/monitoring/values.yaml).
@@ -53,7 +53,7 @@ Open `/grafana/d/llm-demo` through the ingress. Grafana serves the prefix itself
 ## Local access and admin login
 
 ```bash
-kubectl --context CONTEXT --namespace llm-stack port-forward \
+kubectl --namespace llm-stack port-forward \
   svc/llm-monitoring-grafana 13000:3000 --address 127.0.0.1
 ```
 
@@ -62,7 +62,7 @@ Open `http://127.0.0.1:13000/d/llm-demo`. With ingress enabled, include its path
 For administration, open Grafana's login page. The generated username is `admin`. Retrieve its password from the release's Secret in your own terminal:
 
 ```bash
-kubectl --context CONTEXT --namespace llm-stack get secret llm-monitoring-grafana-admin \
+kubectl --namespace llm-stack get secret llm-monitoring-grafana-admin \
   -o jsonpath='{.data.admin-password}' | base64 --decode
 ```
 
@@ -75,7 +75,7 @@ For an existing reverse proxy that strips `/grafana/`, set `grafana.rootURL` to 
 After installation, run the test helper to check fresh scrapes and dashboard Viewer permissions:
 
 ```bash
-python3 recipes/tests/verify_monitoring.py --context CONTEXT \
+python3 recipes/tests/verify_monitoring.py \
   --namespace llm-stack --release llm-monitoring \
   --output /path/to/private/monitoring-results.json
 ```
@@ -85,7 +85,7 @@ Add `--verify-traffic --model qwen3.8-27b` to send chat and streaming requests a
 ## Uninstall
 
 ```bash
-helm uninstall llm-monitoring --kube-context CONTEXT --namespace llm-stack --wait --timeout 10m
+helm uninstall llm-monitoring --namespace llm-stack --wait --timeout 10m
 ```
 
 The metrics PVC and generated Grafana credential Secret are retained. An external Grafana admin Secret remains under its existing owner. Reinstall under the same release name and namespace to reuse the metrics claim. Remove retained metrics data separately after checking its claim and reclaim policy. Routing and model releases remain installed.

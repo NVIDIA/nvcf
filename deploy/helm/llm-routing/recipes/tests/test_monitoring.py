@@ -38,6 +38,25 @@ class MonitoringTests(unittest.TestCase):
         self.monitor.ca_configmap, self.monitor.api_key_file = None, None
 
 
+    def test_cli_uses_current_context_unless_overridden(self):
+        for override in (None, 'other-context'):
+            with self.subTest(override=override):
+                output = self.monitor.work/(str(override)+'.json')
+                args = ['--output', str(output)]
+                if override:
+                    args += ['--context', override]
+                with patch.object(monitoring.llm, 'run', return_value='current-context\n') as run, \
+                     patch.object(monitoring, 'Monitoring') as verifier:
+                    verifier.return_value.verify.return_value = {'passed': True}
+                    monitoring.main(args)
+                self.assertEqual(verifier.call_args.args[:3], (override or 'current-context', 'llm-stack', 'llm-monitoring'))
+                verifier.return_value.verify.assert_called_once_with(18428, False, None)
+                self.assertEqual(json.loads(output.read_text()), {'passed': True})
+                if override:
+                    run.assert_not_called()
+                else:
+                    run.assert_called_once_with(['kubectl', 'config', 'current-context'])
+
     def test_verifier_reads_installed_values_and_requires_a_deployed_release(self):
         values = monitoring_values()
         values['grafana']['ingress'].update(enabled=True, path='/custom/metrics')

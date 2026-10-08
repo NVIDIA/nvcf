@@ -242,7 +242,7 @@ def validate_scrapes(response, expected, expected_pods=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--context', required=True)
+    parser.add_argument('--context')
     parser.add_argument('--namespace', default='llm-stack')
     parser.add_argument('--release', default='llm-monitoring')
     parser.add_argument('--ca-configmap')
