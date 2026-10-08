@@ -343,4 +343,6 @@ render "${tmp_dir}/demo-ui.yaml" --set-string "demoUiApiKey=${ui_key}" --set-jso
 [ "$(secret_value "${tmp_dir}/demo-ui.yaml" "${api_keys_secret}" api-keys.json | jq -c '.keys')" = "${ui_keys}" ] || fail "UI key must preserve existing caller keys"
 [ "$(count "${manifest}" Secret demo-ui-api-key)" = "0" ] || fail "UI Secret must be absent without a supplied key"
 assert_render_fails "demoUiApiKey requires its matching demo-ui hash" --set-string "demoUiApiKey=${ui_key}"
+assert_render_fails "demoUiApiKey requires apiKeysSecret.create=true" \
+  --set apiKeysSecret.create=false --set-string "demoUiApiKey=${ui_key}" --set-json "apiKeys=${ui_keys}"
 echo "PASS: demo UI API key and Secret"
