@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Package guid provides a GUID type. The backing structure for a GUID is
 // identical to that used by the golang.org/x/sys/windows GUID type.
 // There are two main binary encodings used for a GUID, the big-endian encoding,
