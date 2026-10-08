@@ -87,3 +87,15 @@ func TestCRIUGroupRestore_ColdStarts(t *testing.T) {
 		})
 	}
 }
+
+func TestGroveRankAndSize(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "k3-0-vllmworker-7-vllmworker-wkr-x6xtx",
+			Labels: map[string]string{GroveScalingGroupLabel: "k3-0-vllmworker", GroveScalingGroupReplicaLabel: "7", GroveScalingGroupPodLabel: "1"}},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Env: []corev1.EnvVar{{Name: "GROVE_PCSG_TEMPLATE_NUM_PODS", Value: "2"}}}}},
+	}
+	m := &Mutator{}
+	if o, s := podOrdinal(pod), m.groupSize(context.Background(), pod); o != 1 || s != 2 {
+		t.Errorf("ordinal %d size %d, want 1 and 2", o, s)
+	}
+}

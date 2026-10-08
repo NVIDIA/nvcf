@@ -89,14 +89,30 @@ func (a *Agent) lookupCRIUGroup(ctx context.Context, key string) (webhook.CRIUGr
 }
 
 // hasInstance reports whether the pod belongs to a workload instance: a
-// LeaderWorkerSet group or a controller. A bare pod is no instance.
+// Grove scaling group replica, a LeaderWorkerSet group or a controller. A
+// bare pod is no instance.
 func hasInstance(pod *corev1.Pod) bool {
-	return pod.Labels[lwsGroupKeyLabel] != "" || metav1.GetControllerOf(pod) != nil
+	return groveInstance(pod) != "" || pod.Labels[lwsGroupKeyLabel] != "" || metav1.GetControllerOf(pod) != nil
+}
+
+// groveInstance identifies the pod's Grove scaling group replica, or "".
+// Its pods have different controllers (one PodClique per role), so the
+// controller does not identify the instance.
+func groveInstance(pod *corev1.Pod) string {
+	g, r := pod.Labels[webhook.GroveScalingGroupLabel], pod.Labels[webhook.GroveScalingGroupReplicaLabel]
+	if g == "" || r == "" {
+		return ""
+	}
+	return g + "/" + r
 }
 
 // sameInstance reports whether p belongs to leader's instance: the same
-// LeaderWorkerSet group, else the same controller.
+// Grove scaling group replica, else the same LeaderWorkerSet group, else
+// the same controller.
 func sameInstance(leader, p *corev1.Pod) bool {
+	if g := groveInstance(leader); g != "" {
+		return groveInstance(p) == g
+	}
 	if g := leader.Labels[lwsGroupKeyLabel]; g != "" {
 		return p.Labels[lwsGroupKeyLabel] == g
 	}
@@ -204,6 +220,11 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	if err != nil {
 		log.WithError(err).Info("CRIU group capture: waiting for the whole instance")
 		return true
+	}
+	if err := instanceCoversEngine(ranks); err != nil {
+		// Part of an engine: pausing it would stall the rest.
+		log.WithError(err).Warn("CRIU group capture: skipped; the instance is not the whole engine")
+		return false
 	}
 	record := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: criuGroupConfigMapName(key), Labels: map[string]string{"app.kubernetes.io/managed-by": "nvsnap"}},
