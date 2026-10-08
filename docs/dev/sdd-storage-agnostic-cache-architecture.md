@@ -9,18 +9,20 @@ path has its provisioner, mount options, and namespace rewriting compiled in.
 
 ## How it fits together
 
+![NVCA model cache architecture](assets/nvca-model-cache-architecture.svg)
+
 ```mermaid
 flowchart LR
-  SC["StorageClass nvcf-sc"] --> RES["Resolve provisioner"]
+  REQ["Request with cache handle"] --> RES["Resolve: nvcf-sc provisioner, catalog entry, CSIDriver fsGroupPolicy"]
   CAT["Capability catalog ConfigMap"] --> RES
-  RES --> MODES{"Qualified access modes"}
-  MODES -->|ReadWriteMany| RWX["One shared claim, readers mount it read-only"]
-  MODES -->|ReadWriteOnce + ReadOnlyMany| ROX["Writer claim, one derived reader PV per namespace"]
-  MODES -->|none| OFF["Caching off for this driver"]
-  RWX --> BIND["ModelCacheBinding: decision, owned resources, request references"]
-  ROX --> BIND
-  BIND --> WRITE["Single writer Job populates the volume"]
-  WRITE --> READ["Readers in N namespaces reach the same data"]
+  RES --> SEL["Persisted selection on the request: transition, writer identity"]
+  SEL -->|ReadWriteMany| RWX["One shared claim, readers mount it read-only"]
+  SEL -->|ReadWriteOnce + ReadOnlyMany| ROX["Writer claim, one derived reader PV per namespace"]
+  SEL -->|no qualified mode| OFF["No durable cache: Helm falls back to a per-pod init download"]
+  RWX --> WRITE["Lease elects one writer Job; worker-init downloads from NGC"]
+  ROX --> WRITE
+  WRITE --> READ["Webhook mounts model-data read-only in every namespace"]
+  READ --> GC["Idle sweep deletes caches no request references"]
 ```
 
 Four pieces:
@@ -47,6 +49,35 @@ Four pieces:
 | Cache handle | Content hash identifying one model cache |
 | Writer | The single Job that populates a cache, serialized by a Lease. It runs non-root and relies on the pod fsGroup. On a shared claim NVCA records a writer identity when it selects storage: fsGroup when the live CSIDriver declares `fsGroupPolicy: File` (Weka), root when it declares ReadWriteOnceWithFSType or None (OCI FSS, a default NetApp Trident install), because those skip ReadWriteMany volumes and leave a fresh claim's root owned by root. Only the containers that write the claim are elevated; readers stay read-only and unprivileged |
 | Reader | A namespace-local read-only volume onto the same data |
+
+## Backend selection
+
+The selection is made once, when NVCA creates the ICMSRequest, and persisted
+on it. Everything downstream follows the persisted selection, so a catalog or
+class change never moves a live cache.
+
+```mermaid
+flowchart TD
+  G{"CachingSupport on? Helm: HelmModelCaching on?"}
+  G -->|no| NONE["none: no cache objects"]
+  G -->|yes| SC{"StorageClass nvcf-sc present with Retain?"}
+  SC -->|absent| EPH["Helm: ephemeral emptyDir plus model-cache-init. Regular: no cache"]
+  SC -->|present| CAT{"Catalog entry for its provisioner"}
+  CAT -->|ReadWriteMany| RWX["transition rwxReadOnly. Helm backend SharedFS, regular shared claim"]
+  CAT -->|ReadWriteOnce + ReadOnlyMany| ROX["transition roxReadOnly. NVMesh writer claim and derived reader PVs"]
+  CAT -->|no qualified modes or no entry| EPH
+  RWX --> WI{"Writer identity"}
+  WI -->|catalog writerIdentity set| CW["use it"]
+  WI -->|CSIDriver fsGroupPolicy File| FSG["fsGroup: writer stays uid 65532"]
+  WI -->|ReadWriteOnceWithFSType, None, or unset field| ROOT["root: containers that write the claim run as uid 0"]
+  WI -->|no CSIDriver object| FSG
+```
+
+A request created before selections existed carries none. Helm then falls
+back to the StorageClass-presence order: `nvcf-sc-30` selects NVMesh,
+`nvcf-miniservice-sc` selects SharedFS, `HelmSharedStorage` selects Samba,
+otherwise ephemeral. An existing model-cache StorageRequest pins the backend
+it was created with.
 
 ## Capability catalog
 
@@ -164,35 +195,75 @@ was the previous shared-filesystem reader.
 
 ## Runtime flow
 
-1. Gate on `CachingSupport` and `HelmModelCaching`. Persist `none` or
-   `ephemeral` when selected; no binding.
-2. Read `StorageClass/nvcf-sc`, require `Retain`, load the catalog, derive the
-   flow from the provisioner's entry. No derivable flow: no durable cache.
-3. Get or create the binding for (workflow, sharing domain, cache handle). A
-   `Retiring` binding is never joined.
-4. Add the request reference and persist the binding name and UID on the
-   request before any storage side effect.
-5. Run the flow: Lease elects one writer; readers derive from the writer's PV.
-6. Catalog, feature-gate, and StorageClass changes after step 4 never alter the
-   binding. NVCA never switches a live cache to another provider.
+The shared-claim flow on the regular workflow, as implemented:
 
-Steps 1 and 2 and persisting the selection on the request are implemented.
-Steps 3, 4, and 6 land with the binding controller.
+```mermaid
+sequenceDiagram
+  participant CP as Control plane
+  participant A as NVCA agent
+  participant K as Kubernetes API
+  participant W as Writer Job
+  participant P as Function pod
+  CP->>A: launch spec with cache handle
+  A->>K: ICMSRequest with persisted selection
+  A->>K: shared ReadWriteMany claim on nvcf-sc (reused if present)
+  alt claim already labeled populated
+    A->>K: skip the writer
+  else
+    A->>K: writer Job with the recorded identity, annotated with the claim UID
+    W->>W: worker-init downloads artifacts, exits 0
+    A->>K: label the claim populated
+  end
+  A->>K: function pods mount the claim read-only as model-data
+  P->>P: worker-init finds every artifact cached
+  Note over A,K: idle sweep deletes a claim no request references
+```
+
+Steps as implemented:
+
+1. Gate on `CachingSupport` and, for Helm, `HelmModelCaching`. Persist `none`
+   or `ephemeral` when selected.
+2. Read `StorageClass/nvcf-sc`, require `Retain`, load the catalog, derive the
+   transition from the provisioner's entry. For the shared-claim transition,
+   read the CSIDriver and record the writer identity. No derivable flow: no
+   durable cache.
+3. Persist the selection on the request before any storage side effect.
+4. Run the flow. Shared claim: one claim and one writer Job per cache handle in
+   the request namespace; the claim's populated label is the durable marker.
+   NVMesh: writer claim and Job, then one reader PV per namespace derived from
+   the writer's volume. A Lease serializes writers for a handle.
+5. Catalog, feature-gate, and StorageClass changes after step 3 never alter a
+   request's selection. NVCA never switches a live cache to another provider.
+
+The `ModelCacheBinding` CRD and clients exist; no controller creates a binding
+yet. Garbage collection is an idle sweep keyed on a last-referenced
+annotation, plus reclamation of retained shared-filesystem writer claims whose
+handle has no referrer.
 
 ## What runs today
 
-Public `main` selects by StorageClass presence: `nvcf-sc-30` present selects
-NVMesh; `nvcf-miniservice-sc` present selects the shared-filesystem path;
-`HelmSharedStorage` enabled with the model cache class present selects a Samba
-re-export of an `nvcf-sc` volume; otherwise a per-pod `emptyDir` with an init
-download. That is the path for a request with no persisted selection. A new
-request carries a selection derived from the catalog when it is created, and
-Helm backend selection follows it, and the regular workflow follows a
-`ReadWriteMany` selection onto one shared claim per cache handle, populated once
-and mounted read-only by every reader; its `ReadOnlyMany` shape still takes the
-NVMesh path. No controller creates a binding. Garbage collection is an idle
-sweep keyed on a last-referenced annotation. The mutating webhook
-injects the reader PVC into workload pods as a volume named `model-data`.
+Verified on NVCA 3.13.3:
+
+| Path | Behavior |
+|---|---|
+| Regular workflow, `ReadWriteMany` provisioner (OCI FSS qualified) | One shared claim per handle in the request namespace, writer Job runs as root where the CSIDriver skips fsGroup, claim labeled populated, worker pods report every artifact cached |
+| Regular workflow, NVMesh | Writer claim and derived reader PVs; the primary is kept while a function serves from it |
+| Helm workflow with a persisted selection | `rwxReadOnly` selects the SharedFS backend, `roxReadOnly` selects NVMesh, `ephemeral` injects an `emptyDir` and the `model-cache-init` container whose environment travels in the miniservice metadata ConfigMap |
+| Helm workflow without a selection | StorageClass-presence order: `nvcf-sc-30`, `nvcf-miniservice-sc`, `HelmSharedStorage` Samba, ephemeral |
+| Readers | The mutating webhook injects the reader claim as the `model-data` volume, mounted read-only, at `/config/models` and `/config/resources` |
+
+Known gaps, tracked publicly:
+
+- A writer Job whose pods are never admitted is reported in progress
+  indefinitely, and the idle sweep can delete a claim while its Job still
+  exists: [#2323](https://github.com/NVIDIA/nvcf/issues/2323).
+- Cache claim sizing has no headroom for filesystem metadata, and a full
+  volume is misreported as `job_not_found`:
+  [#2233](https://github.com/NVIDIA/nvcf/issues/2233).
+- The worker-init download rate is a typed cluster setting only once
+  [#2364](https://github.com/NVIDIA/nvcf/pull/2364) ships.
+- Shared-claim PVs use `Retain` and are not reclaimed by the storage-request PV
+  collector, so released cache volumes accumulate.
 
 ## Qualification
 
