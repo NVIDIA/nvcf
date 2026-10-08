@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: Apache-2.0
+# Automatic mode uses the bundled pinned recipe and explicit node placement.
+recipe: qwen3.8-27b
+profileName: ""
+nodes: []
+# Site-verified facts keyed by selected node. Runtime checks the device/link again.
+nodeCapabilities: {}
+sharedCAConfigMap: llm-gateway-stack-ca
+cache:
+  existingClaim: ""
+  # Optional per-rank retained PVCs for TP2. Empty entries create new claims.
+  existingClaims: []
+suspended: false
+# Automatic startup always checks existing files first. True requires a complete offline cache.
+reuseCaches: false
+imagePullPolicy: IfNotPresent
+runtimeClassName: nvidia
+storageClassName: local-path
+contextLength: 8192
+concurrency: 1
+register: true
+ports: {http: 30000, rendezvous: 34000, bootstrap: 38000}
+hfTokenSecret: ""

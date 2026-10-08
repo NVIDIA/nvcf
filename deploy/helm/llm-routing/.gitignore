@@ -1,1 +1,2 @@
-/charts/
+/charts/*
+!/charts/shared-stack/

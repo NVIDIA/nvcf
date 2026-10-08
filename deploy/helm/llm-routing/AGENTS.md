@@ -1,7 +1,13 @@
 # LLM routing stack
 
-This directory deploys the LLM routing stack and a model recipe on ARM64 NVIDIA GPU clusters, such as DGX Spark and GB300. Read `README.md` and `recipes/AGENTS.md`. Edit runtime code in its owning source directories in the current checkout. Builds include local edits. Commit IDs are informational. Image updates compare routing chart contents with the fingerprint recorded in the installed stack.
+This directory installs model-neutral LLM routing infrastructure and independent model recipes. Read `README.md`, `ADVANCED.md` and `recipes/AGENTS.md`. Keep the shared Helm installation and `llm.py` access commands in `README.md`. Keep configuration, upgrades, recovery and offline verification in `ADVANCED.md`.
 
-Run the Python tests and offline Helm render documented in the README. Always specify the Kubernetes context. Packaging validation must not change a live model deployment.
+`charts/shared-stack` owns the shared Helm lifecycle and post-install/post-upgrade gateway verification. Keep TLS, model discovery and caller-key authentication checks in the chart. Model charts own their preparation, cache, serving and endpoint resources. Keep GPU, model pins, RuntimeClass and model storage requirements in recipe-owned metadata. `llm.py` supplies model discovery and chat using the current kube context. Keep its credentials and port forwards scoped to each command. The supported installation is release `llm-stack` in namespace `llm-stack`, with the operator and CRD included as a subchart. Helpers read the installed stack directly and must not require saved connection files or recreate a separate stack/operator installation path. Image building and preloading belong to the temporary `dev-artifacts` workflow.
 
-Keep mocks under `recipes/tests` and out of the default deployment. Keep credentials, private targets, kubeconfigs and evidence in an external work directory. Do not publish private configuration overlays.
+Edit runtime code in its owning source directories in the current checkout. Builds include local edits. Commit IDs are informational. Manage image changes through the shared Helm release and preserve installed credentials and TLS material.
+
+Run `python3 -m unittest discover -s tests -v` for shared infrastructure, plus the recipe tests and offline Helm renders documented in `ADVANCED.md`. Run `python3 recipes/export_catalog.py --check` after recipe or chart metadata changes. Package charts with `bash dev-artifacts/package-charts.sh --output-dir /path/to/fresh-output` after synchronizing recipe metadata and placement copies. Keep package outputs outside the checkout.
+
+Pass an explicit Kubernetes context on cluster operations. Packaging tests must preserve live deployments. Helm rendering and local tests establish packaging behavior. Fresh-cluster installation, model readiness and inference require separate hardware evidence.
+
+Keep mocks under test directories and credentials, private targets, kubeconfigs and evidence in an external work directory. Publish only public example values.

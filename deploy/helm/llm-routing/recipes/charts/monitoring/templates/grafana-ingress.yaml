@@ -3,8 +3,21 @@
 {{- $ingress := .Values.grafana.ingress }}
 {{- if and .Values.enabled $ingress.enabled }}
 {{- if not (regexMatch "^(/[A-Za-z0-9._~-]+)+$" $ingress.path) }}{{ fail "grafana.ingress.path must be a path such as /grafana, without a trailing /" }}{{ end }}
-# Grafana serves its pages under the path itself (GF_SERVER_SERVE_FROM_SUB_PATH),
-# so any ingress controller can route the prefix without rewriting it.
+{{- range $key := list "className" "host" }}
+{{- $value := index $ingress $key }}
+{{- if or (not (kindIs "string" $value)) (not (regexMatch "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$" $value)) }}
+{{- fail (printf "grafana.ingress.%s must be a DNS name or empty" $key) }}
+{{- end }}
+{{- end }}
+{{- $rootURL := required "grafana.rootURL must specify the public URL when ingress is enabled" .Values.grafana.rootURL }}
+{{- if or (not (kindIs "string" $rootURL)) (not (regexMatch `^https?://[^/?#%@\s]+/` $rootURL)) }}
+{{- fail "grafana.rootURL must specify the public http:// or https:// URL when ingress is enabled" }}
+{{- end }}
+{{- $url := urlParse $rootURL }}
+{{- if or (ne $url.path (printf "%s/" $ingress.path)) $url.query $url.fragment }}
+{{- fail "grafana.rootURL must end in grafana.ingress.path followed by /" }}
+{{- end }}
+# Grafana serves the prefix itself. The ingress controller forwards it unchanged.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

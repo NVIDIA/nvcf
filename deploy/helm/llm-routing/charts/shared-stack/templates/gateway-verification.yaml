@@ -1,0 +1,87 @@
+{{/* SPDX-License-Identifier: Apache-2.0 */}}
+{{- $name := printf "%s-gateway-check" (.Release.Name | trunc 49 | trimSuffix "-") -}}
+{{- $gateway := index .Values.gatewayStack "llm-api-gateway" "llmApiGateway" -}}
+{{- $image := .Values.verification.image -}}
+{{- if or (not $image.repository) (not $image.tag) (regexMatch "[<>[:space:]]|example[.]|YOUR_|REPLACE_|placeholder" (printf "%s:%s" $image.repository ($image.tag | toString))) -}}
+{{- fail "shared-stack: set a verification image repository and tag" -}}
+{{- end -}}
+{{- if not (has $image.pullPolicy (list "Always" "IfNotPresent" "Never")) -}}{{- fail "shared-stack: invalid verification image pullPolicy" -}}{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-shared.labels" . | nindent 4 }}
+data:
+  verify-gateway.py: |
+    {{- .Files.Get "verify-gateway.py" | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "llm-shared.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  activeDeadlineSeconds: 210
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "llm-shared.labels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway-verification
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile: {type: RuntimeDefault}
+      {{- with (.Values.verification.nodeSelector | default $gateway.nodeSelector) }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.verification.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: verify
+          image: {{ printf "%s:%s" $image.repository ($image.tag | toString) | quote }}
+          imagePullPolicy: {{ $image.pullPolicy }}
+          command: [python3, -B, -u, /checks/verify-gateway.py]
+          env:
+            - name: GATEWAY_URL
+              value: {{ printf "https://%s.%s.svc:%v" (include "llm-gateway-stack.gatewayName" .Subcharts.gatewayStack) .Release.Namespace $gateway.service.port | quote }}
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 64Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: checks, mountPath: /checks, readOnly: true}
+            - {name: ca, mountPath: /access/ca, readOnly: true}
+            - {name: caller, mountPath: /access/caller, readOnly: true}
+      volumes:
+        - name: checks
+          configMap:
+            name: {{ $name }}
+            items: [{key: verify-gateway.py, path: verify-gateway.py}]
+        - name: ca
+          configMap:
+            name: {{ .Values.operator.trustBundle.configMap }}
+            items: [{key: ca.crt, path: ca.crt}]
+        - name: caller
+          secret:
+            secretName: {{ default .Values.callerKey.secretName .Values.callerKey.existingSecret }}
+            defaultMode: 0444
+            items: [{key: api-key, path: api-key}]

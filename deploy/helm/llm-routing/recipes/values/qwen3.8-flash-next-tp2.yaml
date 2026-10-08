@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Candidate profile. Live validation is pending.
+# Replace placeholder nodes in both nodes and nodeCapabilities.
+# Replace documentation IP addresses and interfaces with a verified 200 Gbps link.
+# Each node needs a 180 GiB persistent model cache.
+recipe: qwen3.8-flash-next
+profileName: spark-nvfp4-tp2
+nodes:
+- gpu-node-1
+- gpu-node-2
+nodeCapabilities:
+  gpu-node-1:
+    fabric: model-pair
+    address: 192.0.2.1
+    interface: eth1
+    linkGbps: 200
+  gpu-node-2:
+    fabric: model-pair
+    address: 192.0.2.2
+    interface: eth1
+    linkGbps: 200
+runtimeClassName: nvidia
+storageClassName: local-path
+sharedCAConfigMap: llm-gateway-stack-ca

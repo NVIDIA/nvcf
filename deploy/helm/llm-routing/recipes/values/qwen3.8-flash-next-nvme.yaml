@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Cold startup, retained-cache upgrade and short-prompt inference validated.
+# Replace the placeholder node in both nodes and nodeCapabilities.
+# Verify local NVMe backs Kubernetes ephemeral storage with 56 GiB available.
+# The model cache also requires 180 GiB on persistent storage.
+recipe: qwen3.8-flash-next
+profileName: spark-nvfp4-nvme
+nodes:
+- gpu-node-1
+nodeCapabilities:
+  gpu-node-1:
+    localNvme: true
+runtimeClassName: nvidia
+storageClassName: local-path
+sharedCAConfigMap: llm-gateway-stack-ca
