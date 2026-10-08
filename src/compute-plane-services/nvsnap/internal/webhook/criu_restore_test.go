@@ -173,22 +173,32 @@ func TestGPUShareByDefault(t *testing.T) {
 	}
 }
 
-// An engine that spans pods keeps its multi-node NVLink memory: the
-// default leaves it alone, an annotation still opts it in.
-func TestGPUShareByDefault_NotForMultiPodEngines(t *testing.T) {
+// An engine that spans pods runs under the library with fabric sharing on,
+// so its multi-node NVLink memory stays usable; a single-pod engine does
+// not get fabric, and the annotation wins either way.
+func TestGPUShareByDefault_FabricForMultiPodEngines(t *testing.T) {
 	m := &Mutator{GPUShareByDefault: true}
 	flags := gpushareTestPod(false, nil)
 	flags.Spec.Containers[1].Args = []string{"vllm serve m --tensor-parallel-size 8 --nnodes 2 --node-rank 0 --master-addr x"}
 	lws := gpushareTestPod(false, nil)
 	lws.Annotations = map[string]string{lwsSizeAnnotation: "2"}
 	for name, pod := range map[string]*corev1.Pod{"multi-node flags": flags, "two-pod group": lws} {
-		if p := m.gpusharePatches(context.Background(), pod); p != nil {
-			t.Errorf("%s: library placed by default", name)
+		got := applyPatches(t, pod, m.gpusharePatches(context.Background(), pod))
+		if envOf(got.Spec.Containers[1], "LD_PRELOAD") == nil {
+			t.Errorf("%s: library not placed", name)
 		}
-		pod.Annotations = map[string]string{GPUShareAnnotation: "true"}
-		if p := m.gpusharePatches(context.Background(), pod); p == nil {
-			t.Errorf("%s: the annotation no longer opts in", name)
+		if e := envOf(got.Spec.Containers[1], gpushareFabricEnv); e == nil || e.Value != "1" {
+			t.Errorf("%s: fabric sharing not on", name)
 		}
+		off := pod.DeepCopy()
+		off.Annotations = map[string]string{lwsSizeAnnotation: "2", GPUShareFabricAnnotation: "false"}
+		if e := envOf(applyPatches(t, off, m.gpusharePatches(context.Background(), off)).Spec.Containers[1], gpushareFabricEnv); e != nil {
+			t.Errorf("%s: the annotation did not switch fabric off", name)
+		}
+	}
+	single := applyPatches(t, gpushareTestPod(false, nil), m.gpusharePatches(context.Background(), gpushareTestPod(false, nil)))
+	if envOf(single.Spec.Containers[1], gpushareFabricEnv) != nil {
+		t.Error("single-pod engine got fabric sharing")
 	}
 }
 

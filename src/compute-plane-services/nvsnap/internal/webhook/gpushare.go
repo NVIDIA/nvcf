@@ -58,29 +58,39 @@ const (
 	gpushareFabricEnv   = "NVSNAP_GPUSHARE_FABRIC"
 )
 
-// gpushareWanted reports whether a pod runs under the gpushare library: when
-// annotated, or by default where CRIU is the capture method (the library
-// keeps GPU memory out of the CRIU image), unless annotated "false". The
-// default leaves out the pods of an engine that spans pods: the library
-// hides multi-node NVLink memory unless told the pod shares it, and such an
-// engine then never finishes its distributed setup (kimi-k3 TP=8 on two
-// GB300 nodes hung 30 minutes in its first collective, 2026-10-08).
-func (m *Mutator) gpushareWanted(ctx context.Context, pod *corev1.Pod) bool {
+// gpushareMode reports whether a pod runs under the gpushare library and
+// whether the library shares its GPU memory over multi-node NVLink
+// (fabric). The library runs when annotated, or by default where CRIU is
+// the capture method (it keeps GPU memory out of the CRIU image), unless
+// annotated "false". An engine that spans pods needs fabric: without it
+// the library hides multi-node NVLink memory, and the engine never
+// finishes its distributed setup (kimi-k3 TP=8 on two GB300 nodes hung 30
+// minutes in its first collective, 2026-10-08). nvsnap.io/gpushare-fabric
+// set either way wins.
+func (m *Mutator) gpushareMode(ctx context.Context, pod *corev1.Pod) (wanted, fabric bool) {
 	switch pod.Annotations[GPUShareAnnotation] {
 	case "true":
-		return true
+		wanted = true
 	case "false":
-		return false
+		return false, false
+	default:
+		wanted = m.GPUShareByDefault
 	}
-	if !m.GPUShareByDefault {
-		return false
+	if !wanted {
+		return false, false
+	}
+	switch pod.Annotations[GPUShareFabricAnnotation] {
+	case "true":
+		return true, true
+	case "false":
+		return true, false
 	}
 	if flag := multiNodeFlag(pod); flag != "" || m.groupSize(ctx, pod) > 1 {
 		m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).WithField("flag", flag).
-			Info("gpushare: the engine spans pods; not placing the library by default (annotate nvsnap.io/gpushare=true to opt in)")
-		return false
+			Info("gpushare: the engine spans pods; sharing its GPU memory over multi-node NVLink (fabric)")
+		return true, true
 	}
-	return true
+	return true, false
 }
 
 // multiNodeEngineFlags only appear on an engine that spans nodes.
@@ -110,7 +120,8 @@ func multiNodeFlag(pod *corev1.Pod) string {
 // gpusharePatches places the library and the store into every container of
 // an opted-in pod that requests GPUs.
 func (m *Mutator) gpusharePatches(ctx context.Context, pod *corev1.Pod) []PatchOp {
-	if !m.gpushareWanted(ctx, pod) {
+	wanted, fabric := m.gpushareMode(ctx, pod)
+	if !wanted {
 		return nil
 	}
 	gpuContainers := make([]int, 0, len(pod.Spec.Containers))
@@ -177,7 +188,7 @@ func (m *Mutator) gpusharePatches(ctx context.Context, pod *corev1.Pod) []PatchO
 		uid := corev1.EnvVar{Name: gpusharePodUIDEnv, ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.uid"}}}
 		vars := []corev1.EnvVar{uid, preloads[i]}
 		// A value the pod sets itself wins: it may switch fabric sharing off.
-		if pod.Annotations[GPUShareFabricAnnotation] == "true" && !hasEnv(c, gpushareFabricEnv) {
+		if fabric && !hasEnv(c, gpushareFabricEnv) {
 			vars = append(vars, corev1.EnvVar{Name: gpushareFabricEnv, Value: "1"})
 		}
 		patches = append(patches, setContainerEnv(i, c, vars)...)
