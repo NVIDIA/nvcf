@@ -929,6 +929,38 @@ func (a *Agent) RegisterWithICMS(ctx context.Context) (*types.ICMSRegistrationRe
 	return res, nil
 }
 
+var (
+	initialICMSRegistrationRetryInterval = 10 * time.Second
+	maxICMSRegistrationRetryInterval     = 5 * time.Minute
+)
+
+// registerWithICMSRetrying retries RegisterWithICMS with backoff until it succeeds or ctx is
+// canceled, instead of returning the first error. A registration failure during initial startup
+// (e.g. an ICMS 409 Conflict because the configured resource overhead would remove an instance
+// type that still has active instances) is a configuration problem, not a crash-worthy defect:
+// the same registration attempt would fail identically on every restart until the configuration
+// changes, so treating it as fatal only produces a crash loop. See the comment at the call site
+// in Start for how the readiness probe keeps this replica out of rotation while retrying.
+func (a *Agent) registerWithICMSRetrying(ctx context.Context) (*types.ICMSRegistrationResponse, error) {
+	log := core.GetLogger(ctx)
+	backoff := newGPURegistrationRetryBackoff(initialICMSRegistrationRetryInterval, maxICMSRegistrationRetryInterval)
+	for {
+		res, err := a.RegisterWithICMS(ctx)
+		if err == nil {
+			return res, nil
+		}
+		delay := backoff.next()
+		log.WithError(err).Warnf("Failed to register with ICMS, retrying in %s", delay)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 func (a *Agent) registerWithICMS(ctx context.Context, regBackendGPUs []types.RegistrationGPU) (*types.ICMSRegistrationResponse, error) {
 	log := core.GetLogger(ctx)
 	k8sVersion := a.K8sVersion
@@ -1298,10 +1330,16 @@ func (a *Agent) Start(ctx context.Context) error {
 			},
 		}
 	} else {
-		// Register with ICMS after health.
+		// Register with ICMS after health. Retried with backoff instead of
+		// returning fatally on failure: see registerWithICMSRetrying. This
+		// can block Start for as long as registration keeps failing; that is
+		// intentional, since the readiness check is only wired up below
+		// after a successful registration, so this replica stays NotReady
+		// (never crash-looping, never cutting the rolling update over to it)
+		// until registration succeeds or the process is asked to shut down.
 		log.Info("Registering with ICMS")
 		var regErr error
-		res, regErr = a.RegisterWithICMS(ctx)
+		res, regErr = a.registerWithICMSRetrying(ctx)
 		if regErr != nil {
 			log.WithError(regErr).Error("Failed to register with ICMS")
 			return regErr
