@@ -1,0 +1,359 @@
+{
+  "schemaVersion": 1,
+  "models": [
+    {
+      "id": "qwen3.8-27b",
+      "name": "Qwen3.8-27B",
+      "releaseName": "qwen-fp8",
+      "precision": "FP8",
+      "repository": "Qwen/Qwen3.8-27B-FP8",
+      "revision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+      "image": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+      "runtime": "SGLang v0.5.19",
+      "license": "Apache-2.0",
+      "source": "https://lmsysorg.mintlify.app/cookbook/autoregressive/Qwen/Qwen3.8-27B",
+      "validation": "spark-smoke-tested",
+      "profiles": [
+        {
+          "id": "spark-fp8",
+          "nodes": 1,
+          "memoryGiB": 104,
+          "memoryLimitGiB": 112,
+          "cpu": 4,
+          "cacheGiB": 80,
+          "minFreeDiskGiB": 40,
+          "maxContext": 9216,
+          "maxConcurrency": 1,
+          "offload": false,
+          "flags": [
+            "--trust-remote-code",
+            "--kv-cache-dtype",
+            "fp8_e4m3",
+            "--mem-fraction-static",
+            "0.80",
+            "--attention-backend",
+            "flashinfer",
+            "--chunked-prefill-size",
+            "2048",
+            "--reasoning-parser",
+            "qwen3",
+            "--tool-call-parser",
+            "qwen3_coder",
+            "--mamba-radix-cache-strategy",
+            "extra_buffer",
+            "--mamba-ssm-dtype",
+            "float32",
+            "--max-mamba-cache-size",
+            "5",
+            "--mamba-full-memory-ratio",
+            "2.55"
+          ],
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          }
+        }
+      ],
+      "validatedWorkload": {
+        "date": "2026-10-06",
+        "profile": "spark-fp8",
+        "contextLength": 8192,
+        "concurrency": 1,
+        "performanceBenchmarked": false,
+        "qualityEvaluated": false
+      },
+      "automaticHelmValidation": {
+        "date": "2026-10-07",
+        "profile": "spark-fp8",
+        "modelRevision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+        "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+        "contextLength": 8192,
+        "concurrency": 1,
+        "requestType": "short-prompt-smoke",
+        "fullContextExercised": false,
+        "performanceBenchmarked": false,
+        "qualityEvaluated": false,
+        "cacheMode": "retained-offline",
+        "checks": [
+          "placement",
+          "gpu-qualification",
+          "cache-integrity",
+          "readiness",
+          "discovery",
+          "chat",
+          "streaming",
+          "authentication",
+          "original-release-restoration"
+        ]
+      }
+    },
+    {
+      "id": "qwen3.8-27b-nvfp4",
+      "name": "Qwen3.8-27B",
+      "releaseName": "qwen-nvfp4",
+      "precision": "NVFP4",
+      "repository": "nvidia/Qwen3.8-27B-NVFP4",
+      "revision": "482ca0f3832238542f8f5295dde86b5f22711d80",
+      "image": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+      "runtime": "SGLang v0.5.19",
+      "license": "Apache-2.0",
+      "source": "https://lmsysorg.mintlify.app/cookbook/autoregressive/Qwen/Qwen3.8-27B",
+      "validation": "spark-smoke-tested",
+      "profiles": [
+        {
+          "id": "spark-nvfp4",
+          "nodes": 1,
+          "memoryGiB": 104,
+          "memoryLimitGiB": 112,
+          "cpu": 4,
+          "cacheGiB": 80,
+          "minFreeDiskGiB": 40,
+          "maxContext": 9216,
+          "maxConcurrency": 1,
+          "offload": false,
+          "flags": [
+            "--trust-remote-code",
+            "--kv-cache-dtype",
+            "fp8_e4m3",
+            "--mem-fraction-static",
+            "0.80",
+            "--attention-backend",
+            "flashinfer",
+            "--chunked-prefill-size",
+            "2048",
+            "--reasoning-parser",
+            "qwen3",
+            "--tool-call-parser",
+            "qwen3_coder",
+            "--mamba-radix-cache-strategy",
+            "extra_buffer",
+            "--mamba-ssm-dtype",
+            "float32",
+            "--max-mamba-cache-size",
+            "5",
+            "--mamba-full-memory-ratio",
+            "2.55"
+          ],
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          }
+        }
+      ],
+      "validatedWorkload": {
+        "date": "2026-10-06",
+        "profile": "spark-nvfp4",
+        "contextLength": 8192,
+        "concurrency": 1,
+        "requestType": "short-prompt-smoke",
+        "fullContextExercised": false,
+        "lifecycleIsolationVerified": true,
+        "performanceBenchmarked": false,
+        "qualityEvaluated": false
+      },
+      "automaticHelmValidation": {
+        "date": "2026-10-07",
+        "profile": "spark-nvfp4",
+        "modelRevision": "482ca0f3832238542f8f5295dde86b5f22711d80",
+        "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+        "contextLength": 8192,
+        "concurrency": 1,
+        "requestType": "short-prompt-smoke",
+        "fullContextExercised": false,
+        "performanceBenchmarked": false,
+        "qualityEvaluated": false,
+        "cacheMode": "retained-offline",
+        "checks": [
+          "placement",
+          "gpu-qualification",
+          "cache-integrity",
+          "readiness",
+          "discovery",
+          "chat",
+          "streaming",
+          "authentication",
+          "other-model-isolation",
+          "original-release-restoration"
+        ]
+      }
+    },
+    {
+      "id": "qwen3.8-flash-next",
+      "name": "Qwen3.8-Flash-Next",
+      "releaseName": "qwen-flash",
+      "precision": "NVFP4",
+      "repository": "RadixArk/Qwen3.8-Flash-Next-NVFP4",
+      "revision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+      "image": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
+      "runtime": "SGLang dev-qwen38-next-local (pinned ARM64 digest)",
+      "license": "Qwen Community 1.0 (base model); derivative card declares other",
+      "source": "https://lmsysorg.mintlify.app/cookbook/autoregressive/Qwen/Qwen3.8-Flash-Next",
+      "validation": "spark-nvme-smoke-tested-tp2-pending",
+      "profiles": [
+        {
+          "id": "spark-nvfp4-nvme",
+          "nodes": 1,
+          "memoryGiB": 110,
+          "memoryLimitGiB": 114,
+          "cpu": 4,
+          "cacheGiB": 180,
+          "minFreeDiskGiB": 140,
+          "maxContext": 262144,
+          "maxConcurrency": 8,
+          "offload": true,
+          "offloadGiB": 56,
+          "flags": [
+            "--quantization",
+            "modelopt_fp4",
+            "--fp4-gemm-backend",
+            "flashinfer_cutlass",
+            "--page-size",
+            "64",
+            "--chunked-prefill-size",
+            "4096",
+            "--speculative-algorithm",
+            "NEXTN",
+            "--speculative-num-steps",
+            "3",
+            "--speculative-eagle-topk",
+            "1",
+            "--speculative-num-draft-tokens",
+            "4",
+            "--reasoning-parser",
+            "qwen3",
+            "--mem-fraction-static",
+            "0.85",
+            "--max-mamba-cache-size",
+            "40",
+            "--ple-offload-embedding",
+            "--ple-offload-backend",
+            "file",
+            "--ple-offload-dir",
+            "/ple"
+          ],
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "validatedWorkload": {
+            "date": "2026-10-07",
+            "profile": "spark-nvfp4-nvme",
+            "modelRevision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+            "runtimeImage": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
+            "contextLength": 8192,
+            "concurrency": 1,
+            "requestType": "short-prompt-smoke",
+            "fullContextExercised": false,
+            "performanceBenchmarked": false,
+            "qualityEvaluated": false
+          },
+          "automaticHelmValidation": {
+            "date": "2026-10-07",
+            "profile": "spark-nvfp4-nvme",
+            "modelRevision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+            "runtimeImage": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
+            "contextLength": 8192,
+            "concurrency": 1,
+            "requestType": "short-prompt-smoke",
+            "fullContextExercised": false,
+            "performanceBenchmarked": false,
+            "qualityEvaluated": false,
+            "status": "smoke-tested",
+            "checks": [
+              "placement",
+              "gpu-qualification",
+              "cache-integrity",
+              "local-pcie-nvme",
+              "embedding-offload",
+              "readiness",
+              "registration",
+              "discovery",
+              "chat",
+              "streaming",
+              "authentication"
+            ]
+          }
+        },
+        {
+          "id": "spark-nvfp4-tp2",
+          "nodes": 2,
+          "memoryGiB": 110,
+          "memoryLimitGiB": 114,
+          "cpu": 4,
+          "cacheGiB": 180,
+          "minFreeDiskGiB": 140,
+          "maxContext": 262144,
+          "maxConcurrency": 24,
+          "offload": false,
+          "fabric": true,
+          "flags": [
+            "--quantization",
+            "modelopt_fp4",
+            "--fp4-gemm-backend",
+            "flashinfer_cutlass",
+            "--page-size",
+            "64",
+            "--chunked-prefill-size",
+            "4096",
+            "--speculative-algorithm",
+            "NEXTN",
+            "--speculative-num-steps",
+            "3",
+            "--speculative-eagle-topk",
+            "1",
+            "--speculative-num-draft-tokens",
+            "4",
+            "--reasoning-parser",
+            "qwen3",
+            "--mem-fraction-static",
+            "0.85",
+            "--max-mamba-cache-size",
+            "120",
+            "--no-ple-offload-embedding"
+          ],
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "minFabricGbps": 200
+        }
+      ]
+    }
+  ]
+}

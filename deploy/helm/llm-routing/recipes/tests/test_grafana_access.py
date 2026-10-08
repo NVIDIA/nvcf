@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+import base64
 import copy
 import json
 import pathlib
@@ -12,7 +13,7 @@ import unittest
 HERE = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
 import monitoring
-import recipe as tool
+from test_monitoring import monitoring_values
 
 try:
     import yaml
@@ -26,11 +27,10 @@ class GrafanaAccessTests(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls.tmp.cleanup)
-        recipe = tool.Recipe(json.loads((HERE/'config.example.json').read_text()), cls.tmp.name)
-        values = monitoring.chart_values(recipe)
+        values = monitoring_values()
         values['grafana']['adminPassword'] = 'test-only-admin-password'
-        cls.values, cls.work = values, recipe.work
-        path = recipe.work/'grafana-access-values.json'
+        cls.values, cls.work = values, pathlib.Path(cls.tmp.name)
+        path = cls.work/'grafana-access-values.json'
         path.write_text(json.dumps(values))
         rendered = subprocess.check_output(['helm', 'template', 'access-test', str(monitoring.CHART), '-f', str(path)], text=True)
         cls.docs = [doc for doc in yaml.safe_load_all(rendered) if doc]
@@ -55,15 +55,85 @@ class GrafanaAccessTests(unittest.TestCase):
         self.assertNotIn('GF_SERVER_ROOT_URL', self.env)
 
     def test_root_url_reaches_grafana(self):
-        values = copy.deepcopy(self.values)
-        values['grafana']['rootURL'] = '%(protocol)s://%(domain)s:%(http_port)s/grafana/'
-        path = self.work/'grafana-root-url-values.json'
-        path.write_text(json.dumps(values))
-        rendered = subprocess.check_output(['helm', 'template', 'access-test', str(monitoring.CHART), '-f', str(path)], text=True)
-        grafana = next(doc for doc in yaml.safe_load_all(rendered)
-                       if doc and doc['kind'] == 'Deployment' and doc['metadata']['name'] == 'access-test-grafana')
-        env = {entry['name']: entry for entry in grafana['spec']['template']['spec']['containers'][0]['env']}
-        self.assertEqual(env['GF_SERVER_ROOT_URL']['value'], '%(protocol)s://%(domain)s:%(http_port)s/grafana/')
+        for root_url in ('%(protocol)s://%(domain)s:%(http_port)s/grafana/', 'https://example.com/grafana/'):
+            with self.subTest(root_url=root_url):
+                values = copy.deepcopy(self.values)
+                values['grafana']['rootURL'] = root_url
+                result = self.render_credentials(values)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                grafana = next(doc for doc in yaml.safe_load_all(result.stdout)
+                               if doc and doc['kind'] == 'Deployment' and doc['metadata']['name'] == 'test-monitor-grafana')
+                env = {entry['name']: entry for entry in grafana['spec']['template']['spec']['containers'][0]['env']}
+                self.assertEqual(env['GF_SERVER_ROOT_URL']['value'], root_url)
+
+    def test_root_url_rejects_invalid_helm_values(self):
+        for root_url in ('/grafana/', 'grafana.example.com/', 'https://example.com/grafana',
+                         'https://example.com/a b/', 5, True):
+            with self.subTest(root_url=root_url):
+                values = copy.deepcopy(self.values)
+                values['grafana']['rootURL'] = root_url
+                result = self.render_credentials(values)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('grafana.rootURL must be a URL ending in /', result.stderr)
+
+    def render_credentials(self, values, existing=None, upgrade=False):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            chart = root/'chart'
+            shutil.copytree(monitoring.CHART, chart)
+            if existing is not None:
+                path = chart/'templates/grafana.yaml'
+                source = path.read_text().replace('lookup "v1" "Secret" .Release.Namespace $name',
+                    '('+json.dumps(json.dumps(existing))+' | fromJson)')
+                path.write_text(source)
+            path = root/'values.json'
+            path.write_text(json.dumps(values))
+            command = ['helm', 'template', 'test-monitor', str(chart), '-n', 'llm-stack', '-f', str(path)]
+            if upgrade:
+                command.append('--is-upgrade')
+            return subprocess.run(command, capture_output=True, text=True)
+
+    def test_default_credentials_are_generated_kept_and_reused_on_upgrade(self):
+        first = self.render_credentials(monitoring_values())
+        self.assertEqual(first.returncode, 0, first.stderr)
+        secret = next(d for d in yaml.safe_load_all(first.stdout) if d and d['kind'] == 'Secret')
+        self.assertEqual(secret['metadata']['name'], 'test-monitor-grafana-admin')
+        self.assertEqual(secret['metadata']['annotations']['helm.sh/resource-policy'], 'keep')
+        self.assertGreaterEqual(len(secret['stringData']['admin-password']), 40)
+        secret['metadata']['annotations'].update({'meta.helm.sh/release-name': 'test-monitor',
+                                                 'meta.helm.sh/release-namespace': 'llm-stack'})
+        secret['data'] = {key: base64.b64encode(value.encode()).decode() for key, value in secret.pop('stringData').items()}
+        upgraded = self.render_credentials(monitoring_values(), existing=secret, upgrade=True)
+        self.assertEqual(upgraded.returncode, 0, upgraded.stderr)
+        result = next(d for d in yaml.safe_load_all(upgraded.stdout) if d and d['kind'] == 'Secret')
+        self.assertEqual(result['stringData']['admin-password'], base64.b64decode(secret['data']['admin-password']).decode())
+        secret['metadata']['annotations']['meta.helm.sh/release-name'] = 'foreign'
+        failed = self.render_credentials(monitoring_values(), existing=secret)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn('belongs to another Helm release', failed.stderr)
+
+    def test_missing_upgrade_credentials_fail_instead_of_rotating(self):
+        result = self.render_credentials(monitoring_values(), upgrade=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('restore it before upgrading', result.stderr)
+
+    def test_explicit_external_secret_is_referenced_without_adoption(self):
+        values = monitoring_values()
+        values['grafana']['adminSecret'] = 'external-grafana'
+        result = self.render_credentials(values)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        objects = [d for d in yaml.safe_load_all(result.stdout) if d]
+        self.assertFalse(any(d['kind'] == 'Secret' for d in objects))
+        pod = next(d for d in objects if d['kind'] == 'Deployment' and d['metadata']['name'].endswith('-grafana'))
+        env = {v['name']: v for v in pod['spec']['template']['spec']['containers'][0]['env']}
+        self.assertEqual(env['GF_SECURITY_ADMIN_PASSWORD']['valueFrom']['secretKeyRef']['name'], 'external-grafana')
+
+    def test_generated_credentials_lint_strictly(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory)/'values.json'
+            path.write_text(json.dumps(monitoring_values()))
+            result = subprocess.run(['helm', 'lint', str(monitoring.CHART), '--strict', '-f', str(path)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
 
 
 if __name__ == '__main__':

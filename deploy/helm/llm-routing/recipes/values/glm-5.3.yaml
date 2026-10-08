@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# Replace the node names with available GB10 nodes.
+# Override runtimeClassName and storageClassName for your cluster.
+# Automatic startup remains unvalidated after a host-memory guard failure.
+recipe: glm-5.3
+profileName: gb10-x2
+nodes:
+- gpu-node-1
+- gpu-node-2
+runtimeClassName: nvidia
+storageClassName: local-path
+sharedCAConfigMap: llm-gateway-stack-ca

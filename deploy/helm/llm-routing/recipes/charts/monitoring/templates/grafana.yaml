@@ -15,15 +15,31 @@
 {{- end }}
 {{- $_ := set $dashboard "panels" $panels }}
 {{- end }}
-{{- if .Values.grafana.adminPassword }}
+{{- if or (not .Values.grafana.adminSecret) .Values.grafana.adminPassword }}
+{{- $name := default (printf "%s-grafana-admin" .Release.Name) .Values.grafana.adminSecret }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- $password := .Values.grafana.adminPassword }}
+{{- if $existing }}
+{{- $owner := $existing.metadata.annotations | default dict }}
+{{- if or (ne (index $owner "meta.helm.sh/release-name") .Release.Name) (ne (index $owner "meta.helm.sh/release-namespace") .Release.Namespace) }}
+{{- fail "Grafana credential Secret belongs to another Helm release; reference it with grafana.adminSecret and leave adminPassword empty" }}
+{{- end }}
+{{- $password = required "Grafana credential Secret is incomplete; restore admin-password" (index ($existing.data | default dict) "admin-password") | b64dec }}
+{{- else if and .Release.IsUpgrade (not $password) }}
+{{- fail "Grafana credential Secret is missing; restore it before upgrading" }}
+{{- else if not $password }}
+{{- $password = randAlphaNum 48 }}
+{{- end }}
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ .Values.grafana.adminSecret }}
+  name: {{ $name }}
+  annotations:
+    helm.sh/resource-policy: keep
 type: Opaque
 stringData:
   admin-user: admin
-  admin-password: {{ .Values.grafana.adminPassword | quote }}
+  admin-password: {{ $password | quote }}
 ---
 {{- end }}
 apiVersion: v1

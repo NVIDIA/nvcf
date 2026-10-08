@@ -1,500 +1,158 @@
-# LLM routing recipes
+# Run models through a shared gateway
 
-Deploy the LLM Gateway Stack (LLM API Gateway and request router), the Pylon Operator and a model recipe on an existing ARM64 Kubernetes cluster with NVIDIA GPUs. Each recipe serves one model and validates inference through authenticated gateway requests.
+Install the shared routing release `llm-stack` in namespace `llm-stack`, then install each model recipe with Helm. Each model has its own release and persistent cache. Applications select a model through the same gateway address and caller credential.
 
-## Overview
+## Before you start
 
-The `recipe.py` tool coordinates the combined gateway/router chart, the Pylon Operator chart and the model backend chart. The backend chart builds llama.cpp, downloads and verifies the model files, runs the model on one or more GPU nodes, and creates an `InferenceEndpoint` for Pylon to register.
+- Use Kubernetes with the NVIDIA device plugin, a GPU RuntimeClass and persistent storage. Choose available nodes from the [recipe catalog](recipes/index.json).
+- Install Helm, kubectl and Python 3.11+ on your workstation.
+- Run these commands from `deploy/helm/llm-routing` in one terminal. The supported release and namespace are both `llm-stack`.
 
-Recipes live in folders under `recipes/`. The only recipe today is `glm-5.3`: GLM-5.3 `UD-IQ2_M`, 222 GiB of GGUF weights. A recipe folder holds the model lock, the llama.cpp server arguments, server tuning defaults and the memory rules. The tool derives placement and GPU-specific settings from the cluster.
+The committed charts and [image values](dev-artifacts/values.yaml) use images preloaded on the shared Spark nodes. [Prepare new images and charts](dev-artifacts/README.md) only when sources change or another cluster needs them.
 
-Application images and charts use your checkout, including local edits.
+## 1. Install shared infrastructure
 
-## Placement
-
-The model runs on one node, or is split by layer across two nodes with llama.cpp RPC. `init` picks the smallest node count that fits the model and its default context in GPU memory:
-
-- DGX Spark (GB10): CPU and GPU share about 122 GiB, so GLM-5.3 needs two nodes.
-- GB300: one GPU has its own memory, reported by `nvidia-smi` as about 250 GiB, with 249.75 GiB usable through CUDA. With the GB300 defaults of two 65,536-token requests, GLM-5.3 needs 242 GiB on one node: 236 GiB for its weights and KV cache, plus 6 GiB headroom. It fits on one node with about 7 GiB to spare.
-
-The gateway, router and operator run on a separate node when the cluster has one, and share the first model node otherwise. A cluster needs at least one GPU node per model node; two nodes are enough for either example.
-
-Tested configurations:
-
-- Two DGX Spark nodes, model split across both. See [Recovery and limits](#recovery-and-limits) for load times.
-- Two GB300 workstations, model on one node (October 2026). `init` detected compute capability 10.3. `preflight` measured 249 GiB of free GPU memory. The model loaded in about 3 minutes from local disk, decoded at about 42 tokens per second at context 2048, and ran for more than 11 hours without restarts.
-  - `retune` to the GB300 defaults (two 65,536-token slots) reloaded the model in 2.5 minutes, and `verify-direct` and `verify-gateway` passed. The GPU used 231.4 GiB, below the 242 GiB the memory check budgets, up from 219.3 GiB at context 2048.
-  - A 33,367-token prompt took 133 seconds (about 250 tokens per second), and the answer decoded at about 32 tokens per second. A follow-up with the same prefix reused the cached prompt and started answering in 0.3 seconds.
-
-## Prerequisites
-
-- Hardware: idle ARM64 nodes with one NVIDIA GPU each, enough of them for the model (see [Placement](#placement)). Mixed GPU types are not supported.
-- Kubernetes and storage: an existing ARM64 Kubernetes cluster containing these nodes, with pod networking, `cluster.local` DNS, NetworkPolicy enforcement and node-compatible `ReadWriteOnce` persistent storage. Reserve 400 GiB on the first model node and 160 GiB on each additional model node.
-- GPU enablement: model nodes with a working NVIDIA driver, NVIDIA Container Toolkit configured for the container runtime, and a device plugin advertising `nvidia.com/gpu`. Use an installed `RuntimeClass` matching `runtimeClass` in the config (`nvidia` in the example).
-- Access: kubeconfig for the target cluster. For a kubeconfig with multiple contexts, pass `--context <name>` to the commands below. Initial installation requires creating namespaces, custom resource definitions (CRDs), role-based access control (RBAC) resources and namespaced Helm resources.
-- Workstation: Python 3.11+, Git, Helm 3.14+ or Helm 4, and kubectl. Provide access to GitHub, model downloads and container images. The [image build guide](recipes/BUILDING.md) covers build tools and distribution credentials.
-
-## Installation
-
-Follow these steps for the first installation of the stack and model.
-
-### Configure
-
-Use your existing kubeconfig.
-
-1. From the repository root, open the recipe directory and create the configuration.
-
-   ```bash
-   cd deploy/helm/llm-routing/recipes
-   python3 recipe.py init
-   ```
-
-   Review the selected nodes and generated configuration. `init` discovers idle GPUs, storage and image preload settings for K3s. It runs a short GPU probe pod on candidate nodes in a temporary namespace, then deletes the namespace. The probe uses the runtime image, so the first run can take several minutes to pull it. The configuration is saved at the printed path in a private work directory.
-
-   To place the model yourself, edit `nodes.model` in the saved configuration. For example, list two GB300 nodes to split the model across them. To change the context size or the number of concurrent requests, edit `tuning` (see [Server tuning](#server-tuning)). `preflight` checks that the placement and context fit.
-
-2. Render the manifests and inventory the cluster.
-
-   ```bash
-   python3 recipe.py render
-   python3 recipe.py inventory
-   ```
-
-`render` lints the Helm charts and generates manifests. `inventory` checks node readiness, GPU availability and cluster prerequisites. Continue after both commands pass.
-
-### Build and distribute the application images
-
-Build and distribute `gateway`, `router`, `pylon` and `operator` using the [image build guide](recipes/BUILDING.md).
-
-### Deploy in order
-
-Run each command in order and continue after it succeeds.
+Replace `YOUR_CONTEXT` with your kubeconfig context and select it once below. All remaining commands use the selected context.
 
 ```bash
-python3 recipe.py preflight
-python3 recipe.py stack
-python3 recipe.py build-runtime
-python3 recipe.py qualify
-python3 recipe.py download
-python3 recipe.py load
-python3 recipe.py verify-direct
-python3 recipe.py register
-python3 recipe.py verify-gateway
+kubectl config use-context YOUR_CONTEXT
+
+helm upgrade --install llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
+  --namespace llm-stack --create-namespace \
+  --values dev-artifacts/values.yaml --wait --timeout 10m
 ```
 
-1. `preflight`: Check GPU calculations, the GPU type and available memory on each model node against the configuration. The tested environments use NVIDIA driver 580 or newer and CUDA 13. Rerun `preflight` and `qualify` after changing these versions.
-2. `stack`: Install the gateway, router and Pylon Operator. This generates the default caller API key and self-signed certificates. To supply your own, complete [Optional configuration](#optional-configuration) before running `stack`.
-3. `build-runtime`: Build llama.cpp with CUDA and remote procedure call (RPC) support.
-4. `qualify`: Test calculations on each model GPU, and data transfer between them when the model is split. (After fixing a failed qualification Job, run `python3 recipe.py qualify --retry`.)
-5. `download`: Download the model files and verify their sizes and SHA256 checksums. See the [runtime](recipes/NOTICE) and [model](recipes/glm-5.3/NOTICE) licenses.
-6. `load`: Load the model on its GPUs and wait for the model server.
-7. `verify-direct`: Test model answers and streaming directly.
-8. `register`: Register the model with Pylon and wait for readiness.
-9. `verify-gateway`: Test model answers, streaming, authentication, discovery and registration through the gateway. For failures, see [Gateway check troubleshooting](#gateway-check-failures).
+Helm installs the gateway, router and namespace-scoped operator with an empty model registry. A chart verification Job checks gateway TLS, model discovery, acceptance of the caller key and rejection of an invalid key before Helm reports success. The same checks run on upgrades with registered models. The chart generates the caller credential and TLS material on first installation and preserves them on upgrades. The operator watches `llm-stack`. The operator chart defaults `installCRDs` to `true`, so the shared release owns the templated InferenceEndpoint CRD and updates its schema on upgrades. For an externally managed CRD, set `operator.installCRDs=false`. The CRD is retained on uninstall.
 
-Pinned `glm-5.3` runtime:
+## 2. Install a model
 
-- Model revision: `346b3591c7f28d1a23716f97a065ecf12ec14771`, with 238,577,585,701 bytes across six GGUF shards.
-- llama.cpp revision: `f872b591121761ac7b2af18283bd99bdc092a63a`.
-- Capacity: equal layer split across the model nodes. The context size and concurrent requests depend on the GPU; see [Server tuning](#server-tuning).
-
-## Verification
-
-Run these commands from `deploy/helm/llm-routing/recipes` after installation or [attachment to an existing stack](#update-an-existing-installation).
-
-### Inspect the deployment
+List known recipe IDs, precisions, hardware profiles and validation status:
 
 ```bash
-context="$(python3 recipe.py context)" &&
-  kubectl --context "$context" get nodes -o wide &&
-  kubectl --context "$context" get deployments,pods,services,inferenceendpoints --all-namespaces -o wide
+python3 llm.py recipes
 ```
 
-Check the node placement, ready replicas and model endpoint status.
+This reads the local catalog, including recipes that are not installed. Use `--json` for the complete catalog. Choose a recipe and profile from this table before checking capacity.
 
-### Send a chat or streaming request
+Check current GPU allocation and downloaded model caches. Add `--json` for JSON output.
 
 ```bash
-python3 recipe.py chat 'What is 17 multiplied by 19? Give one short sentence.'
-python3 recipe.py chat 'Explain what a GPU does in two sentences.' --stream
+python3 llm.py plan --model qwen3.8-27b
 ```
 
-## Monitoring
-
-From `deploy/helm/llm-routing/recipes`, install monitoring and view the dashboard:
+Install and register Qwen FP8 below, replacing `NODE_FROM_PLANNER` with your chosen node. To reuse retained downloads, keep the original release name, namespace and cache node. Completed model files are verified and reused automatically; missing files are downloaded. No cache flag or values file is required. [Model values examples](recipes/README.md#committed-values) are available for optional overrides and other recipes.
 
 ```bash
-python3 recipe.py monitoring
+helm upgrade --install qwen-fp8 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
+  --namespace llm-stack \
+  --set recipe=qwen3.8-27b --set 'nodes[0]=NODE_FROM_PLANNER' \
+  --wait --timeout 120m &&
+kubectl --namespace llm-stack wait \
+  --for=condition=Registered inferenceendpoint/qwen-fp8 --timeout=5m &&
+echo 'Model installed and registered.'
 ```
 
-Open `http://127.0.0.1:13000/d/llm-demo`. Viewing requires no login. Ctrl-C closes the tunnel and leaves monitoring running. Use `--port` to change the local port.
+Run the entire block. It installs the model and waits for registration. Each step runs only after the previous step succeeds. Send requests separately using the chat commands below.
 
-See [advanced monitoring configuration](recipes/MONITORING.md) for settings, dashboard access, verification and uninstall.
+### Add a second model
 
-## Connect a coding agent
-
-Coding agents such as [Pi](https://github.com/badlogic/pi-mono) and [Codex](https://github.com/openai/codex) can use the model through the gateway. They need a large context: their first request is 1,500 to 6,500 tokens before any file contents. Use the GB300 defaults or a similar `tuning.contextPerSlot` (see [Server tuning](#server-tuning)). The GB10 default of 2048 tokens is too small.
-
-Tested in October 2026 with Pi 1.0.4 and Codex 0.161.0 against `glm-5.3` on one GB300 with two 65,536-token slots. Each agent found and fixed a one-line bug by running a test, editing the file and running the test again, using tool calls through the gateway. Pi took 7 seconds and Codex 33 seconds.
-
-### Open the gateway
-
-From `deploy/helm/llm-routing/recipes`, find the work directory, then keep a port-forward running in its own terminal. Set `NAMESPACE` to the `namespace` in your configuration; `llm-routing-poc` is the default.
+Keep the shared stack and FP8 model installed. Check capacity for the NVFP4 recipe:
 
 ```bash
-python3 recipe.py paths
-NAMESPACE=llm-routing-poc
-kubectl --context "$(python3 recipe.py context)" -n "$NAMESPACE" port-forward svc/llm-api-gateway 18443:8080 --address 127.0.0.1
+python3 llm.py plan --model qwen3.8-27b-nvfp4
 ```
 
-`stack` saved the gateway CA as `ca.crt` in the work directory. It saved the caller API key there as `api-key`, unless the configuration sets `apiKeyFile`; then the key is in that file. A work directory created with `attach-existing` has `ca.crt` but no `api-key`; use the key file from the work directory that ran `stack`.
-
-In the terminal where you run the agent, set the work directory from the `workDir` value printed by `paths`, and the key file:
+Each recipe reserves its own GPU. Running both precisions on one-GPU nodes requires two distinct available nodes before installation. For the second model, replace `SECOND_NODE_FROM_PLANNER` with an available node different from the first model's node. If no GPU is free, [stop another model](#stop-and-resume) before installing.
 
 ```bash
-WORK=/path/printed/as/workDir
-KEY_FILE="$WORK/api-key"
-export GLM_API_KEY="$(cat "$KEY_FILE")"
+helm upgrade --install qwen-nvfp4 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
+  --namespace llm-stack \
+  --set recipe=qwen3.8-27b-nvfp4 --set 'nodes[0]=SECOND_NODE_FROM_PLANNER' \
+  --wait --timeout 120m &&
+kubectl --namespace llm-stack wait \
+  --for=condition=Registered inferenceendpoint/qwen-nvfp4 --timeout=5m &&
+echo 'Second model installed and registered.'
 ```
 
-The gateway certificate covers `127.0.0.1`, so the agents connect to `https://127.0.0.1:18443/v1` and trust `$WORK/ca.crt`.
+Both models use the same gateway and caller credential. Each keeps its own Helm release and cache. Select either model in the chat commands below.
 
-### Pi
+### Model choices
 
-Pi uses the chat completions API. Install it and add the model:
+| Recipe | Precision | Availability and validation |
+| --- | --- | --- |
+| [Qwen3.8-27B](recipes/values/qwen3.8-27b.yaml) | FP8 | One GB10. Cached Helm startup and inference tested. |
+| [Qwen3.8-27B](recipes/values/qwen3.8-27b-nvfp4.yaml) | NVIDIA NVFP4 | One GB10. Cached Helm startup, inference and model isolation tested. |
+| [GLM-5.3](recipes/values/glm-5.3.yaml) | UD-IQ2_M | Two GB10s. Combined runtime tested. [Automatic Helm startup](ADVANCED.md#helm-glm-recipe) stopped at the host-memory guard. |
+| Qwen3.8-Flash-Next | NVFP4 | Automatic [one-node NVMe](recipes/values/qwen3.8-flash-next-nvme.yaml) startup and short-prompt inference tested at context 8,192 and concurrency 1. [Two-node tensor parallel](recipes/values/qwen3.8-flash-next-tp2.yaml) validation pending. [Installation](ADVANCED.md#helm-flash-next-recipes). |
+| Nemotron 5 Nano 12B | Unverified | Unavailable. Exact public model artifact not verified. |
+| Nemotron 5 Super 49B | Unverified | Unavailable. Exact public model artifact not verified. |
+| Qwen3.8-4B | Unverified | Unavailable. Exact public model artifact not verified. |
+| DeepSeek V4 Flash | Upstream mixed FP4/FP8 | Planned. Public checkpoint and upstream four-GPU candidates recorded. Chart support and hardware qualification pending. |
+
+The catalog covers seven model families and eight entries, including two Qwen3.8-27B precisions. Deploy entries with `availability.deployable: true`. Planned and unavailable entries have no deployment profiles. Their dated primary sources and upstream candidates are recorded in the catalog.
+
+The listed tests used short prompts. The catalog records validation for each hardware profile and workload separately. Additional hardware profiles use the same installation interface after qualification.
+
+Flash-Next uses recipe `qwen3.8-flash-next`. Select `spark-nvfp4-nvme` for one node with local NVMe offload or `spark-nvfp4-tp2` for two nodes with a suitable interconnect. Its [installation guide](ADVANCED.md#helm-flash-next-recipes) shows how to supply verified node capabilities and print the Helm command for that placement.
+
+## 3. Discover and call models
+
+List the available models in a table and call each precision. Use `python3 llm.py models --json` for the complete gateway response in scripts:
 
 ```bash
-npm install -g --ignore-scripts @earendil-works/pi-coding-agent
-mkdir -p ~/.pi/agent
-cat > ~/.pi/agent/models.json <<'EOF'
-{"providers": {"llm-routing": {
-  "baseUrl": "https://127.0.0.1:18443/v1", "api": "openai-completions", "apiKey": "$GLM_API_KEY",
-  "compat": {"supportsStore": false, "supportsDeveloperRole": false, "supportsReasoningEffort": false,
-             "supportsUsageInStreaming": true, "supportsStrictMode": false, "maxTokensField": "max_tokens"},
-  "models": [{"id": "GLM-5.3-UD-IQ2_M", "name": "GLM-5.3", "reasoning": false,
-              "input": ["text"], "contextWindow": 65536, "maxTokens": 8192}]}}}
-EOF
-echo '{"defaultProvider": "llm-routing", "defaultModel": "GLM-5.3-UD-IQ2_M"}' > ~/.pi/agent/settings.json
-NODE_EXTRA_CA_CERTS="$WORK/ca.crt" pi
+python3 llm.py models
+python3 llm.py chat --model qwen3.8-27b \
+  'What is 17 multiplied by 19? Give one short sentence.'
+python3 llm.py chat --model qwen3.8-27b-nvfp4 --stream \
+  'Explain what a GPU does in two sentences.'
 ```
 
-- Set `contextWindow` to `tuning.contextPerSlot`. Pi sizes `max_tokens` from it and compacts the conversation before it fills.
-- If `~/.pi/agent` already has these files, merge the provider into them instead.
+The `models` and `chat` commands retrieve the gateway CA and caller key, open a temporary local connection, and clean up their local connection files when they finish. Use [connection overrides](ADVANCED.md#shared-cli-connection-options) for another context or an existing caller credential.
 
-### Codex
+## 4. Stop or uninstall a model
 
-Codex supports only the Responses API, which the gateway passes through to llama.cpp. Do not use `codex --oss`; it targets Ollama or LM Studio and cannot send the API key. Install Codex and add a profile:
+Downloaded model weights are the model cache on disk. Choose what to retain:
+
+| Action | GPU and runtime memory | Deployment configuration | Downloaded files |
+| --- | --- | --- | --- |
+| Stop | Released after the model pods terminate | Kept for resume | Kept |
+| Uninstall, keep downloads | Released | Removed | Kept for reinstall |
+| Uninstall completely | Released | Removed | Deleted through separate manual storage cleanup |
+
+These actions affect one model release. Keep the shared gateway and operator installed so other models continue serving and endpoint cleanup can finish.
+
+### Stop and resume
+
+Stop the FP8 release installed above. Use the same chart version that installed the release:
 
 ```bash
-npm install -g @openai/codex
-mkdir -p ~/.codex
-cat > ~/.codex/glm.config.toml <<'EOF'
-model = "GLM-5.3-UD-IQ2_M"
-model_provider = "llm-routing"
-model_context_window = 65536
-model_auto_compact_token_limit = 56000
-web_search = "disabled"
-include_apps_instructions = false
-show_raw_agent_reasoning = true
-
-[model_providers.llm-routing]
-name = "LLM routing gateway"
-base_url = "https://127.0.0.1:18443/v1"
-env_key = "GLM_API_KEY"
-wire_api = "responses"
-stream_idle_timeout_ms = 600000
-
-[features]
-multi_agent = false
-goals = false
-view_image = false
-apps = false
-
-[tools]
-experimental_request_user_input = { enabled = false }
-
-[skills]
-include_instructions = false
-EOF
-CODEX_CA_CERTIFICATE="$WORK/ca.crt" codex --profile glm
+helm upgrade qwen-fp8 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
+  --namespace llm-stack \
+  --reuse-values --set suspended=true --timeout 10m &&
+kubectl -n llm-stack wait --for=delete pod \
+  -l app.kubernetes.io/instance=qwen-fp8 --timeout=10m
 ```
 
-- Set `model_context_window` to `tuning.contextPerSlot`. Without it, Codex assumes a much larger context and requests fail when the conversation grows.
-- The `[features]`, `[tools]` and `[skills]` settings remove tools the model cannot use and keep the first request near 4,500 tokens instead of 6,600.
-- Codex never sets an output limit, so `tuning.defaultMaxTokens` caps each reply, including reasoning.
+Wait for the pods to terminate before assigning their GPUs to another model. The stop command omits Helm's readiness wait because the model is intentionally unavailable. The release keeps its node placement and cache claims.
 
-### Tips
-
-- The first request processes the whole prompt, at about 250 tokens per second on GB300. Later requests reuse the cached prefix, so start each agent once before a demo.
-- Each slot serves one request at a time. Two agents working at once use both GB300 slots; the Pylon canary waits for the next free slot.
-- For scripted runs, close stdin: `pi -p "<task>" < /dev/null` or `codex exec --profile glm "<task>" < /dev/null`. `pi -p` reads piped stdin as part of the prompt and waits until it closes.
-
-## Maintenance
-
-### Update only gateway or router
-
-If this workstation has not used the running installation before, [attach to it first](#update-an-existing-installation).
-
-1. Edit the service in your checkout: `src/invocation-plane-services/llm-api-gateway` for gateway or `src/libraries/rust/stargate` for router.
-2. [Build and distribute that component](recipes/BUILDING.md#rebuild-gateway-or-router) with a fresh tag. Run the next commands in the same terminal.
-3. Update the selected image and verify gateway requests.
-
-   ```bash
-   python3 recipe.py update --component "$COMPONENT" --tag "$NEW_TAG"
-   python3 recipe.py verify-gateway
-   ```
-
-4. Save the printed update record path for rollback.
-
-The model stays loaded. Gateway updates briefly interrupt requests. Router updates reconnect Pylon transports. Image-only updates require unchanged routing charts. For chart or API changes, follow [Update the stack](#update-the-stack).
-
-To roll back the image update:
-
-1. Replace the example filename below with the saved update record. The previous image must remain available in the node cache or registry.
-2. Restore the recorded tag and verify requests.
-
-   ```bash
-   python3 recipe.py rollback --result /path/to/saved-update.json
-   python3 recipe.py verify-gateway
-   ```
-
-Use the record from the latest update when rolling back.
-
-### Update an existing installation
-
-Use your existing kubeconfig.
-
-1. From the repository root, open the recipe directory.
-
-   ```bash
-   cd deploy/helm/llm-routing/recipes
-   ```
-
-2. Discover the installation and verify gateway requests.
-
-   ```bash
-   python3 recipe.py attach-existing
-   python3 recipe.py verify-gateway
-   ```
-
-Add `--namespace <namespace>` to attachment when the cluster has multiple installations or your access is limited to one namespace.
-
-Continue with [Update only gateway or router](#update-only-gateway-or-router).
-
-### Uninstall
-
-If monitoring is installed, [remove it first](recipes/MONITORING.md#uninstall).
-
-Run the entire block, including parentheses, from `deploy/helm/llm-routing/recipes` in the same configured terminal used for installation. The context lookup uses the recipe's normal selection. If you passed `--context`, `--config` or `--work-dir` during installation, pass the same options before `context` in the lookup below.
-
-The namespace, release and endpoint names below are the defaults for the `glm-5.3` recipe. If you changed `namespace`, `releasePrefix` or `releases` in your saved configuration, replace these names to match. The model release is the release prefix plus the recipe's `releaseName`, and the endpoint name is the recipe's `endpointName`. The chain release, `-chain`, exists only for split models. The image-import release is the release prefix plus `-images`.
-
-The block skips absent releases, including the optional image importer, and stops on other failures. It keeps the operator running until endpoint cleanup finishes.
+Resume when those GPUs are available again:
 
 ```bash
-(
-  set -eu
-  context="$(python3 recipe.py context)"
-  : "${context:?Context lookup returned an empty value}"
-  namespace=llm-routing-poc
-  : "${namespace:?Set the namespace from your saved configuration}"
-
-  helm --kube-context "$context" -n "$namespace" uninstall llm-poc-glm --ignore-not-found --wait --timeout 3m
-  kubectl --context "$context" -n "$namespace" wait --for=delete inferenceendpoint/glm53-iq2 --timeout=60s
-  kubectl --context "$context" -n "$namespace" wait --for=delete deployment/pylon-glm53-iq2 --timeout=90s
-  for release in llm-poc-glm-chain llm-poc-images llm-poc-operator llm-poc-stack; do
-    helm --kube-context "$context" -n "$namespace" uninstall "$release" --ignore-not-found --wait --timeout 3m
-  done
-)
+helm upgrade qwen-fp8 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
+  --namespace llm-stack \
+  --reuse-values --set suspended=false --wait --timeout 120m
 ```
 
-The model/artifact and RPC-cache PVCs, downloaded models, namespace, InferenceEndpoint CRD, CA Secret and operator credential remain. Keep the local work directory and saved configuration for reuse.
-
-After uninstalling the demo releases, run these commands from the recipe directory with the same configuration and context selection used for installation:
+### Uninstall, keep downloads
 
 ```bash
-python3 recipe.py init
-python3 recipe.py render
-python3 recipe.py inventory
+helm uninstall qwen-fp8 --namespace llm-stack --wait --timeout 10m
 ```
 
-`init` checks that the demo is uninstalled, reuses the saved placement, image references and credentials, and archives stale progress under `before-reinit-*` in the work directory. Continue with [Deploy in order](#deploy-in-order), starting at `preflight`.
+This removes the model's workloads, endpoint and Helm release. Its persistent volume claims (PVCs) and downloaded files remain. Reinstall using the [retained cache and its original node](ADVANCED.md#helm-cache-reuse-and-recovery).
 
-### Update the stack
+### Uninstall completely
 
-Builds use the selected checkout, including local edits. Use `--source-dir /path/to/existing/checkout` to select another checkout. The recorded commit ID is for debugging. Squash and rebase merges are supported.
+Follow the [complete removal procedure](ADVANCED.md#remove-downloaded-model-files) to record cache ownership, uninstall the release, then remove its storage. There is no combined uninstall-and-delete command. Delete only this model's dedicated cache claims after checking ownership and use. External or shared claims stay untouched. Physical disk reclamation depends on the volume's reclaim policy and storage provisioner.
 
-The stack records a SHA-256 fingerprint of its routing chart files. Image updates and rollback require matching chart contents. Older installations and rollback records without a fingerprint require a coordinated stack update first.
-
-1. Make runtime, API and chart changes in the same checkout, including generated files and regression tests.
-2. Render the manifests and run the [local regression checks](#local-validation).
-3. For an existing installation, preserve its installed Helm values and credentials when upgrading the stack. Copy only `recipeChartsSha256` from the private work directory's `render/stack-values.json` into those preserved values. The remaining render values are offline test data. Review the rendered changes before applying the upgrade. Fresh installations record this automatically during `stack`.
-4. Build and deploy gateway and router together when their API contract changes.
-5. Rerun gateway verification, recovery and image update/rollback checks.
-
-### Recovery and limits
-
-This optional resilience check interrupts model service and verifies inference after recovery. A split model loses its RPC workers; a single-node model loses its model server.
-
-1. Schedule a time when a model interruption is acceptable.
-2. Run the explicit recovery check.
-
-   ```bash
-   python3 recipe.py recover --confirm-model-interruption
-   ```
-
-3. Save and review the results from the target cluster.
-
-On two DGX Spark nodes, a cold load took about 26 minutes and recovery with cached weights about 11 minutes.
-
-Memory and runtime limits:
-
-- On GPUs that share memory with the CPU, such as GB10, monitor host `MemAvailable` when raising `tuning.contextPerSlot` or adding workloads.
-- On GPUs with their own memory, such as GB300, the model pod's cgroup memory can sit at its limit while the server process uses little memory. The difference is page cache from reading the model files, which the kernel reclaims under pressure. It is not a leak. On GB300 the pod stayed at its 64Gi limit for more than 11 hours with about 1.4 GiB resident, no swap, no memory-guard stops and no restarts.
-- The runtime stops below 1 GiB available memory or when the model process/container swaps.
-- `glm-5.3` uses two-bit quantization and TCP/RPC between split nodes. By default it serves one 2048-token request at a time on GB10, and two 65,536-token requests on GB300.
-- `glm-5.3` canary timing is 180 seconds for the timeout and 60 seconds for the interval.
-
-The model persistent volume claims (PVCs) remain after uninstall.
-
-## Optional configuration
-
-### Alternative container runtimes and external configuration
-
-For a non-K3s cluster or custom container runtime, prepare an external copy of [config.example.json](recipes/config.example.json) before installation. Set the context, node placement, GPU, storage, runtime and image settings for your cluster. Use that file instead of `init`, and pass `--config /path/to/config.json` to each recipe command, starting with `render` and `inventory`.
-
-The `gpu` section describes the GPU on every model node:
-
-- `name`: the name `nvidia-smi` reports, such as `NVIDIA GB300`. The `InferenceEndpoint` GPU product is derived from it.
-- `computeCapability`: such as `"10.3"`. The llama.cpp build targets it as `103a-real`.
-- `memoryGiB`: GPU memory, or host memory when `unifiedMemory` is `true`.
-- `unifiedMemory`: `true` when the GPU shares system memory, as on GB10.
-- `cudaArchitectures`: `null`, or a CMake architecture list that replaces the derived build target.
-
-### Server tuning
-
-`init` saves the recipe's llama.cpp tuning for the detected GPU memory type in the configuration. For `glm-5.3` on GB300:
-
-```json
-"tuning": {"contextPerSlot": 65536, "slots": 2, "batchSize": 2048, "ubatchSize": 512, "defaultMaxTokens": 8192, "threads": 8}
-```
-
-- `contextPerSlot`: tokens per request, prompt and output together. Use a multiple of 256.
-- `slots`: requests served at the same time. The Pylon canary sends a short request every 60 seconds; a second slot keeps it from waiting behind a long request.
-- `batchSize` and `ubatchSize`: prompt tokens processed per step. Larger values process long prompts faster and use more GPU memory. `ubatchSize` cannot exceed `batchSize`.
-- `defaultMaxTokens`: output limit for requests that do not set `max_tokens`. A request can set a larger limit.
-- `threads`: CPU threads for the model server.
-
-`glm-5.3` defaults:
-
-- GB10 and other GPUs that share memory with the CPU: one 2048-token slot, batch 128 and micro-batch 128, 512 default output tokens. These are the original Spark settings.
-- GB300 and other GPUs with their own memory: two 65,536-token slots, batch 2048 and micro-batch 512, 8192 default output tokens.
-
-Every slot reserves a KV cache for its full context. The recipe sets the cost per token in `kvCacheKiBPerToken`, 108 KiB for `glm-5.3`, so two 65,536-token slots use 13.5 GiB. `init`, `preflight` and `retune` include the KV cache in the memory check. When the context does not fit, the error reports the largest `contextPerSlot` that does.
-
-Before `load`, edit `tuning` and run `preflight` again. After `load`, edit `tuning`, then apply it and verify:
-
-```bash
-python3 recipe.py retune
-python3 recipe.py verify-direct
-python3 recipe.py verify-gateway
-```
-
-`retune` restarts the model server with the saved tuning and `resources`, and reuses the built runtime and downloaded model. RPC workers restart only when their memory limits change. The endpoint is unavailable while the model reloads. A loaded model holds its GPU memory, so `retune` checks the context against the free GPU memory that `preflight` measured. If the model does not come back, check the model pod logs, lower `tuning` and run `retune` again. It reapplies whenever the last Helm upgrade did not complete.
-
-### Pod resources
-
-The model server and RPC worker pods get CPU and memory from the recipe's memory rules. To change them, add a `resources` section to the saved configuration before `load`, or run `retune` after `load`:
-
-```json
-"resources": {
-  "model": {"requests": {"memory": "40Gi"}, "limits": {"memory": "96Gi", "cpu": "16"}},
-  "rpc": {"limits": {"memory": "120Gi"}}
-}
-```
-
-- `model` sets the model server pod and `rpc` sets each RPC worker pod while serving.
-- Only `cpu` and `memory` can be set, as strings: a number such as `8` or `0.5` with an optional suffix (`m`, `k`, `M`, `G`, `T`, `P`, `E`, `Ki`, `Mi`, `Gi`, `Ti`, `Pi` or `Ei`). This is a subset of Kubernetes quantities; exponents such as `1e6` and the `n` and `u` suffixes are rejected. CPU must be a whole number of millicores, such as `250m` or `1.5`. Memory cannot use the `m` suffix; use `Mi` or `M`. Each pod keeps one GPU.
-- Unset values keep their computed defaults. A request above its merged limit is rejected when the configuration is loaded, before any cluster command.
-- The `preflight` and `load` memory checks still use the recipe's memory rules, not these values.
-
-### Runtime image mirror
-
-To use a mirror of the pinned CUDA image, set `runtimeImage` in the saved configuration before running `preflight`.
-
-### API keys
-
-The gateway requires an API key for inference. Model and registry reads are public. By default, `stack` saves the caller key as `api-key` in the private work directory, and the recipe client uses it automatically.
-
-To supply your own key, set `apiKeyFile` in the saved configuration to a file containing the key before running `stack`.
-
-### Demo UI API key
-
-The existing `stack` step also creates a separate `demo-ui` key. It keeps `poc-client`, adds the UI key's SHA-256 hash to `apiKeys`, and creates Secret `demo-ui-api-key` with field `api-key` in the same namespace and Helm release.
-
-The UI backend should read that Secret and send the key with gateway requests. Keep the key on the server. The private work directory retains the key in `demo-ui-api-key`; reuse that directory for later stack runs so the key stays unchanged.
-
-For an existing stack, preserve its installed Helm values and caller keys when upgrading. Add the `demo-ui` hash to `apiKeys` and supply the matching plaintext key as `demoUiApiKey` from a private values file. Do not commit that file. After the gateway reloads its keys, verify inference with both keys and rejection of an invalid key.
-
-### TLS certificates
-
-Gateway clients use HTTPS and Pylon connects to the router over verified QUIC. Gateway/router HTTP, registration gRPC and Pylon/backend HTTP use plaintext inside the cluster.
-
-To use existing certificates, complete these steps before running `stack`:
-
-1. Set `tls.selfSigned.enabled=false` in the external configuration.
-2. Create Secrets `llm-gateway-stack-gateway-tls` and `llm-gateway-stack-router-tls` in the namespace with valid `tls.crt` and `tls.key` fields.
-3. Create the configured CA ConfigMap with a `ca.crt` field. Certificates must cover the configured service names and client address.
-
-## Add a recipe
-
-Create a folder under `recipes/` with these files:
-
-- `recipe.json`: the name (matching the folder), release and endpoint names, llama.cpp revision, server arguments, tuning defaults, KV cache cost, runtime environment, storage sizes and memory rules. Copy `glm-5.3/recipe.json` as a starting point.
-  - Do not set `--device`, `--tensor-split` or `--rpc` in `serverArgs`; the tool derives them from `nodes.model`.
-  - Do not set `--ctx-size`, `--parallel`, `--batch-size`, `--ubatch-size`, `--predict` or `--threads`; set `tuning.unified` and `tuning.discrete` instead.
-  - Set `kvCacheKiBPerToken` to the KV cache size of one token across all layers, rounded up. For `glm-5.3`, llama.cpp caches 576 values per layer for attention and 128 for the sparse-attention indexer, at 2 bytes each over 78 layers: about 107 KiB.
-- `model.lock.json`: the pinned model files with sizes and SHA256 checksums.
-- `NOTICE`: the model license terms.
-
-Select the recipe with `python3 recipe.py init --recipe <folder>`. When only one recipe exists, `init` uses it.
-
-## Migrating from the Spark recipe
-
-This tool replaces `deploy/helm/llm-routing/spark/spark.py`. Configuration and stored values changed without compatibility fallbacks:
-
-- `SPARK_CONTEXT` is now `LLM_ROUTING_CONTEXT`.
-- `nodes.leader` and `nodes.worker` are now the `nodes.model` list, and a `gpu` section is required.
-- `releases.glm` is now `releases.model`.
-- The stack records `recipeSource` and `recipeChartsSha256` instead of the `sparkRecipe` values.
-- Model resources are renamed, for example `rpc-worker` to `rpc-n1`.
-
-To move an existing installation, [uninstall](#uninstall) it with the Spark recipe's names, then run `init` and deploy again.
-
-## Troubleshooting
-
-If a command fails, follow the next check and diagnostic log path printed by the CLI. Detailed tool output is saved in private `evidence/*.log` files inside the work directory. Use `python3 recipe.py paths` to locate that directory.
-
-### Gateway check failures
-
-If `verify-gateway` fails, inspect its results in `evidence/gateway.json` under the local work directory. The check uses local port 18443. Stop a previous port-forward if it occupies that port.
-
-If the command reports incomplete key cleanup, run `python3 recipe.py cleanup-key`.
-
-After resolving the problem, rerun the check from the recipe directory:
-
-```bash
-python3 recipe.py verify-gateway
-```
-
-## Local validation
-
-From the recipe directory, run the runner/client tests, runtime chart tests and offline render checks. The render uses the example configuration, so it needs no cluster, context or `init`.
-
-```bash
-python3 -m pip install -r tests/requirements-monitoring.txt
-python3 -m unittest discover -s tests -v
-python3 -m unittest discover -s charts/gguf-backend/tests -v
-python3 recipe.py --context llm-routing-demo --config config.example.json --work-dir "$(mktemp -d)" render
-git diff --check
-```
+[Advanced deployment and configuration](ADVANCED.md) covers shared-stack upgrades and uninstall, credentials, model recovery, GLM and monitoring.

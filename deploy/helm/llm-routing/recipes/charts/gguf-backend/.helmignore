@@ -1,0 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
+files/__pycache__/
+tests/__pycache__/
+*.pyc

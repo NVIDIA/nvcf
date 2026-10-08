@@ -1,0 +1,5 @@
+{{/* SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. */}}
+{{/* SPDX-License-Identifier: Apache-2.0 */}}
+{{- if eq .Release.Name "llm-stack" }}{{ fail "llm-stack is reserved for the shared stack; use a separate model release name" }}{{ end -}}
+{{- if not (kindIs "bool" .Values.suspended) }}{{ fail "suspended must be a boolean" }}{{ end -}}
+{{- if hasKey .Values "phase" }}{{ fail "phase was removed; select a recipe and profileName" }}{{ end -}}

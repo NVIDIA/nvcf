@@ -1,78 +1,69 @@
-# Advanced monitoring configuration
+# Optional monitoring
 
-For installation and dashboard access, see [Monitoring](../README.md#monitoring). Run commands from `deploy/helm/llm-routing/recipes`, using the same `--context`, `--config` or `--work-dir` options as installation.
+Monitoring uses an independent Helm release for the collector, VictoriaMetrics and Grafana. It reads metrics from the `llm-stack` shared release and model workloads in namespace `llm-stack`. It does not install or change the gateway, router or Pylon operator.
 
-## Configuration
+Run commands from `deploy/helm/llm-routing` using the kubeconfig context selected for the main installation. Add `--context` to Python commands, `--kube-context` to Helm, or `--context` to kubectl when overriding it.
 
-Edit `monitoring` in the saved configuration, then run `python3 recipe.py monitoring` to apply it.
+## Generate values and install
 
-| Setting | Default | Purpose |
-| --- | --- | --- |
-| `enabled` | `false` when omitted; `init` enables it | Include monitoring in `stack`. The explicit `monitoring` command enables it. |
-| `retentionPeriod` | `3d` | At least `24h`. Use whole numbers with `h`, `d`, `w`, `M` (months) or `y`. |
-| `storageSize` | `5Gi` | Initial metrics volume size |
-| `namespaces` | Installation namespace | Namespaces to scrape, including the installation namespace |
-| `extraTargets` | `[]` | Additional metric exporters |
-| `model` | First discovered model, sorted by ID | Model for traffic verification |
-| `imagePullPolicy` | `IfNotPresent` | Use cached images or pull them. Use `Never` for preloaded images. |
-| `images` | [Chart defaults](charts/monitoring/values.yaml) | Override `collector`, `victoriaMetrics` or `grafana` with versioned images |
-| `networkPolicy.enabled` | `false` | Restrict monitoring egress. Requires an enforcing network plugin. |
-| `networkPolicy.apiServerCIDRs` | `[]` | API Service and endpoint IPs as `/32` or `/128` CIDRs when restricting egress |
-| `grafanaRootURL` | Grafana's default | Public URL when a reverse proxy serves Grafana under a path it strips, such as `%(protocol)s://%(domain)s:%(http_port)s/grafana/`. The `dashboard` tunnel can't render pages while it's set, so open the dashboard through that proxy. |
-
-Monitoring runs on `nodes.control` using the installation's storage class. Resource defaults and image versions are in [values.yaml](charts/monitoring/values.yaml). Setting `enabled=false` skips future automatic installation. To remove an installed release, use [Uninstall](#uninstall).
-
-Each `extraTargets` entry needs a unique name, pod label selector and named container port:
-
-```json
-{
-  "name": "model-runtime",
-  "selector": "app.kubernetes.io/name=my-model-server",
-  "portName": "http"
-}
-```
-
-Optional fields: `path` (default `/metrics`), `port`, and `runtime: "llama.cpp"` to add compatible backend panels. Include the target namespace in `namespaces`.
-
-For offline installation, export images on an online Docker workstation, transfer the archive, then import it on the installation workstation:
+Generate nonsecret monitoring values from the installed shared stack:
 
 ```bash
-python3 recipe.py export-monitoring-images --archive /path/to/monitoring.tar
-python3 recipe.py import-monitoring-images --archive /path/to/monitoring.tar --allow-containerd-import
+python3 recipes/monitoring.py --namespace llm-stack values \
+  --output /path/to/private/monitoring-values.json
 ```
 
-The importer needs configured `containerd` access and preloaded image-loader helper images. Set `monitoring.imagePullPolicy` to `Never` before installation. Review [image licenses](NOTICE) before distributing bundles.
-
-## Dashboard and admin access
-
-To reopen the dashboard after installation:
+Review the generated selectors before installing. Set `nodeSelector` and `victoriaMetrics.storage.storageClass` for your storage and placement requirements; generated values do not pin a node or choose a StorageClass. With an empty `grafana.adminSecret`, the chart generates its admin credential and reuses it on upgrades. A missing generated credential on upgrade is an error. To use an externally managed credential, set `grafana.adminSecret` to an existing Secret containing `admin-user` and `admin-password`.
 
 ```bash
-python3 recipe.py dashboard
+helm upgrade --install llm-monitoring recipes/charts/monitoring \
+  --namespace llm-stack --values /path/to/private/monitoring-values.json \
+  --wait --timeout 10m
 ```
 
-For admin access, stop the tunnel and run `python3 recipe.py dashboard --admin`. This opens your browser and signs in automatically. Sign out in Grafana to return to Viewer access. Admin manages users, permissions and data sources. Save lasting dashboard and data-source changes in the chart. Keep generated Helm values private.
+The generated configuration contains the selected stack's scrape targets. Resource defaults and image versions are in [values.yaml](charts/monitoring/values.yaml). Adjust these chart settings in the private file:
+
+| Setting | Purpose |
+| --- | --- |
+| `nodeSelector` | Monitoring pod placement |
+| `namespaces` | Keep the scrape namespace `llm-stack` |
+| `targets` | Pod selectors and named metric ports |
+| `victoriaMetrics.retentionPeriod` | Metrics retention, default `3d` |
+| `victoriaMetrics.storage` | Persistent volume class and size |
+| `imagePullPolicy` | Use `Never` only when every monitoring image is preloaded |
+| `collector.image`, `victoriaMetrics.image`, `grafana.image` | Versioned image references or mirrors |
+| `networkPolicy.enabled`, `networkPolicy.apiServerCIDRs` | Optional egress policy and API server addresses |
+| `grafana.rootURL` | Public URL ending in `/` when Grafana runs behind a reverse proxy |
+
+Each extra target needs a unique `name`, pod-label `selector` and `portName`. Optional fields are `path`, `port` and `runtime: llama.cpp`. Keep targets and the scrape scope in namespace `llm-stack`.
+
+For disconnected environments, distribute the pinned monitoring images using your normal registry or node-preload process. Review [image licenses](NOTICE) before distributing bundles.
+
+## Dashboard
+
+```bash
+python3 recipes/monitoring.py --namespace llm-stack --release llm-monitoring dashboard
+```
+
+The default local port is 13000. The dashboard grants anonymous Viewer access through the local tunnel. Use `--admin` for administrative access. Save lasting dashboards and data sources in the chart. Grafana's local data directory is temporary.
+
+When a reverse proxy strips a path such as `/grafana/`, set `grafana.rootURL` in the private Helm values to the public URL, for example `%(protocol)s://%(domain)s:%(http_port)s/grafana/`. Leave it empty for direct access. With a proxy path configured, open the dashboard through that proxy; the local `dashboard` tunnel cannot render its pages.
 
 ## Verification
 
-Check fresh metrics and dashboard access:
+Check metrics and dashboard access:
 
 ```bash
-python3 recipe.py verify-monitoring
+python3 recipes/monitoring.py --namespace llm-stack --release llm-monitoring verify \
+  --output /path/to/private/monitoring-results.json
 ```
 
-To also send real streaming and nonstreaming requests and check request, latency and token metrics:
-
-```bash
-python3 recipe.py verify-monitoring --verify-traffic
-```
-
-Use `--model <model-id>` to override model selection. The model must support chat completions, streaming and token usage. Verification reuses an available caller key or temporarily adds and removes one. Set `apiKeyFile` to select a key file. Results are saved in `evidence/monitoring.json`.
+Add `--verify-traffic --model qwen3.8-27b` to send real chat and streaming requests and check metric changes. This requires the selected model to be ready and a valid gateway caller credential. The helper uses the installed shared stack directly and needs no saved connection file.
 
 ## Uninstall
 
 ```bash
-python3 recipe.py uninstall-monitoring
+helm uninstall llm-monitoring --namespace llm-stack --wait --timeout 10m
 ```
 
-Metrics storage is retained. Reinstall with `python3 recipe.py monitoring`, which creates a new Grafana password. For full teardown, continue with [routing uninstall](../README.md#uninstall).
+The metrics PVC and generated Grafana credential Secret are retained. An external Grafana admin Secret remains under its existing owner. Reinstall under the same release name and namespace to reuse the metrics claim. Remove retained metrics data separately after checking its claim and reclaim policy. Routing and model releases remain installed.

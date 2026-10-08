@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+recipe: glm-5.3
+profileName: gb10-x2
+nodes: [gpu-node-1, gpu-node-2]
+runtimeClassName: nvidia
+storageClassName: local-path
+sharedCAConfigMap: llm-gateway-stack-ca
+# Set reuseCaches: true to verify retained runtime and model bytes offline.
+# artifacts: {existingClaim: retained-glm-artifacts}
+# rpc: {cache: {existingClaim: retained-glm-rpc-cache}}

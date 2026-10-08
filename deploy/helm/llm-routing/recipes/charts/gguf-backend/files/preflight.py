@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import datetime
 import json
+import os
 import pathlib
 import platform
 import shutil
@@ -31,7 +32,7 @@ report = {
 }
 print(json.dumps({"preflightBeforeCuda": report}), flush=True)
 assert not report["computeBefore"]["stdout"].strip(), "GPU already has a compute process"
-assert report["architecture"] == "aarch64"
+assert report["architecture"] == os.environ.get("EXPECTED_ARCHITECTURE", "aarch64")
 
 import torch
 

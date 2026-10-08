@@ -1,0 +1,244 @@
+{{/* SPDX-License-Identifier: Apache-2.0 */}}
+{{- $v := include "sglang.settings" . | fromJson -}}
+{{- if not (kindIs "bool" $v.reuseCaches) }}{{ fail "reuseCaches must be a boolean" }}{{ end -}}
+{{- if not (kindIs "bool" $v.suspended) }}{{ fail "suspended must be a boolean" }}{{ end -}}
+{{- if not (regexMatch "^.+@sha256:[a-f0-9]{64}$" $v.image) }}{{ fail "Use a digest-pinned runtime image" }}{{ end -}}
+{{- if not (regexMatch "^[a-f0-9]{40}$" (default "" $v.model.revision)) }}{{ fail "Use a pinned model revision" }}{{ end -}}
+{{- if or (lt (len $v.targets) 1) (gt (len $v.targets) 2) (ne (len $v.targets) (int $v.profile.nodes)) }}{{ fail "targets must match the recipe profile" }}{{ end -}}
+{{- if or (lt (int $v.contextLength) 1) (gt (int $v.contextLength) (int $v.profile.maxContext)) (lt (int $v.concurrency) 1) (gt (int $v.concurrency) (int $v.profile.maxConcurrency)) }}{{ fail "Workload exceeds the recipe context or concurrency envelope" }}{{ end -}}
+{{- if and $v.profile.offload (ne (len $v.targets) 1) }}{{ fail "NVMe offload requires the single-node profile" }}{{ end -}}
+{{- if and (eq (len $v.targets) 2) (eq (index $v.targets 0).node (index $v.targets 1).node) }}{{ fail "Each rank needs a distinct node" }}{{ end -}}
+{{- $hardware := required "profile.hardware is required" $v.profile.hardware -}}
+{{- if ne (int $hardware.gpuCount) 1 }}{{ fail "profile.hardware.gpuCount must be 1 for one GPU per rank" }}{{ end -}}
+{{- if not (has $hardware.memoryMode (list "unified" "discrete")) }}{{ fail "profile.hardware.memoryMode must be unified or discrete" }}{{ end -}}
+{{- if and (eq $hardware.memoryMode "discrete") (le (float64 (default 0 $hardware.minDeviceMemoryGiB)) 0.0) }}{{ fail "Discrete hardware profiles require a positive minDeviceMemoryGiB" }}{{ end -}}
+{{- if not $hardware.cudaDeviceNames }}{{ fail "profile.hardware.cudaDeviceNames is required" }}{{ end -}}
+{{- $gpuProduct := required "gpu.product is required" $v.gpu.product -}}
+{{- $root := . -}}
+{{- $claims := list -}}
+{{- range $rank, $target := $v.targets -}}
+{{- $existing := "" -}}
+{{ $existing = index $v.existingClaims $rank }}
+{{- $claims = append $claims (default (printf "%s-cache-%d" $root.Release.Name $rank) $existing) -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-runtime
+data:
+  runtime.py: |
+{{ .Files.Get "files/runtime.py" | indent 4 }}
+  placement.py: |
+{{ .Files.Get "files/placement.py" | indent 4 }}
+  config.json: |
+{{- $config := dict "namespace" .Release.Namespace "sharedCAConfigMap" $v.sharedCAConfigMap "storageClassName" $v.storageClassName "claimName" (index $claims 0) "claimNames" $claims "release" (printf "%s/%s" .Release.Namespace .Release.Name) "generation" .Release.Revision -}}
+{{ merge $config (dict "model" $v.model "profile" $v.profile "targets" $v.targets "contextLength" $v.contextLength "concurrency" $v.concurrency "ports" $v.ports "reuseCaches" $v.reuseCaches) | toPrettyJson | nindent 4 }}
+{{- if gt (len $v.targets) 1 }}
+{{- range $rank, $target := $v.targets }}
+  placement-{{ $rank }}.json: |
+{{ mergeOverwrite (deepCopy $config) (dict "targets" (list $target) "claimName" (index $claims $rank)) | toPrettyJson | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- range $rank, $target := $v.targets }}
+{{- if not (index $v.existingClaims $rank) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $root.Release.Name }}-cache-{{ $rank }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ required "storageClassName is required" $v.storageClassName | quote }}
+  resources:
+    requests: {storage: {{ printf "%dGi" (int $v.profile.cacheGiB) }}}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $root.Release.Name }}-serve-{{ $rank }}
+  labels:
+    app.kubernetes.io/instance: {{ $root.Release.Name }}
+    app.kubernetes.io/component: sglang
+spec:
+  replicas: {{ ternary 0 1 $v.suspended }}
+  strategy: {type: Recreate}
+  progressDeadlineSeconds: 21600
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+      recipe-rank: {{ $rank | quote }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ $root.Release.Name }}
+        app.kubernetes.io/component: sglang
+        recipe-rank: {{ $rank | quote }}
+      annotations:
+        checksum/placement: {{ $root.Files.Get "files/placement.py" | sha256sum }}
+        checksum/runtime: {{ $root.Files.Get "files/runtime.py" | sha256sum }}
+        checksum/config: {{ omit $v "suspended" | toJson | sha256sum }}
+{{- if gt (len $v.targets) 1 }}
+        recipe-generation: {{ $root.Release.Revision | quote }}
+{{- end }}
+    spec:
+      automountServiceAccountToken: false
+      serviceAccountName: {{ $root.Release.Name }}-check
+      initContainers:
+        - name: placement-check
+          image: {{ $v.image | quote }}
+          imagePullPolicy: {{ $v.imagePullPolicy }}
+          command: [python3, -u, /recipe/placement.py{{ if gt (len $v.targets) 1 }}, /recipe/placement-{{ $rank }}.json{{ end }}]
+          env:
+            - {name: PYTHONDONTWRITEBYTECODE, value: '1'}
+            - name: POD_NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+          resources:
+            requests: {cpu: '100m', memory: 128Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: recipe, mountPath: /recipe, readOnly: true}
+            - {name: cluster-access, mountPath: /var/run/recipe-cluster, readOnly: true}
+            - {name: shared-ca, mountPath: /shared-ca, readOnly: true}
+      restartPolicy: Always
+      runtimeClassName: {{ required "runtimeClassName is required" $v.runtimeClassName | quote }}
+{{- if eq (len $v.targets) 2 }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+{{- end }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchFields:
+                  - {key: metadata.name, operator: In, values: [{{ required "target.node is required" $target.node | quote }}]}
+                matchExpressions:
+                  - {key: kubernetes.io/os, operator: In, values: [{{ required "profile.hardware.os is required" $hardware.os | quote }}]}
+                  - {key: kubernetes.io/arch, operator: In, values: [{{ required "profile.hardware.architecture is required" $hardware.architecture | quote }}]}
+      securityContext:
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: sglang
+          image: {{ $v.image | quote }}
+          imagePullPolicy: {{ $v.imagePullPolicy }}
+          command: [python3, -u, /recipe/runtime.py, {{ $rank | quote }}]
+          env:
+            - {name: HF_HOME, value: /cache/huggingface}
+{{- if $v.reuseCaches }}
+            - {name: HF_HUB_OFFLINE, value: '1'}
+            - {name: TRANSFORMERS_OFFLINE, value: '1'}
+{{- end }}
+            - {name: SGLANG_CACHE_DIR, value: /cache/sglang}
+            - {name: PYTHONDONTWRITEBYTECODE, value: '1'}
+            - {name: PYTORCH_CUDA_ALLOC_CONF, value: 'expandable_segments:True'}
+{{- if $v.hfTokenSecret }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: {name: {{ $v.hfTokenSecret | quote }}, key: token}
+{{- end }}
+{{- if eq (len $v.targets) 2 }}
+            - {name: NCCL_SOCKET_IFNAME, value: {{ printf "=%s" $target.interface | quote }}}
+            - {name: GLOO_SOCKET_IFNAME, value: {{ $target.interface | quote }}}
+            - {name: NCCL_IB_DISABLE, value: '1'}
+            - {name: TORCH_NCCL_ASYNC_ERROR_HANDLING, value: '1'}
+            - {name: TORCH_NCCL_ENABLE_MONITORING, value: '1'}
+            - {name: TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC, value: '120'}
+{{- end }}
+          ports:
+            - {name: http, containerPort: {{ $v.ports.http }}}
+            - {name: bootstrap, containerPort: {{ $v.ports.bootstrap }}}
+{{- if eq (len $v.targets) 2 }}
+            - {name: rendezvous, containerPort: {{ $v.ports.rendezvous }}, hostPort: {{ $v.ports.rendezvous }}}
+{{- end }}
+          startupProbe:
+{{- if eq $rank 0 }}
+            httpGet: {path: /health, port: http}
+{{- else }}
+            httpGet: {path: /started, port: bootstrap, host: {{ $target.address | quote }}}
+{{- end }}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 2160
+          readinessProbe:
+{{- if eq $rank 0 }}
+            httpGet: {path: /health, port: http}
+{{- else }}
+            httpGet: {path: /started, port: bootstrap, host: {{ $target.address | quote }}}
+{{- end }}
+            periodSeconds: 5
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: {{ $v.profile.cpu | quote }}
+              memory: {{ printf "%dGi" (int $v.profile.memoryGiB) }}
+              nvidia.com/gpu: '1'
+{{- if $v.profile.offload }}
+              ephemeral-storage: {{ printf "%dGi" (int $v.profile.offloadGiB) }}
+{{- end }}
+            limits:
+              memory: {{ printf "%dGi" (int $v.profile.memoryLimitGiB) }}
+              nvidia.com/gpu: '1'
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: recipe, mountPath: /recipe, readOnly: true}
+            - {name: cache, mountPath: /cache}
+            - {name: shm, mountPath: /dev/shm}
+            - {name: tmp, mountPath: /tmp}
+{{- if $v.profile.offload }}
+            - {name: ple, mountPath: /ple}
+{{- end }}
+      volumes:
+        - name: shared-ca
+          configMap:
+            name: {{ $v.sharedCAConfigMap | quote }}
+            items: [{key: ca.crt, path: ca.crt}]
+        - name: cluster-access
+          projected:
+            sources:
+              - serviceAccountToken: {path: token, expirationSeconds: 600}
+              - configMap:
+                  name: kube-root-ca.crt
+                  items: [{key: ca.crt, path: ca.crt}]
+        - name: recipe
+          configMap: {name: {{ $root.Release.Name }}-runtime}
+        - name: cache
+          persistentVolumeClaim: {claimName: {{ index $claims $rank | quote }}}
+        - name: shm
+          emptyDir: {medium: Memory, sizeLimit: 8Gi}
+        - name: tmp
+          emptyDir: {sizeLimit: 4Gi}
+{{- if $v.profile.offload }}
+        - name: ple
+          emptyDir: {sizeLimit: {{ printf "%dGi" (int $v.profile.offloadGiB) }}}
+{{- end }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  selector: {app.kubernetes.io/instance: {{ .Release.Name }}, recipe-rank: '0'}
+  ports: [{name: http, port: 8000, targetPort: http}]
+{{- if and $v.register (not $v.suspended) }}
+---
+apiVersion: pylon.nvidia.com/v1alpha1
+kind: InferenceEndpoint
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  modelName: {{ required "model.id is required" $v.model.id | quote }}
+  inferenceAPIFormat: {type: chat}
+  service: {name: {{ .Release.Name }}, port: 8000}
+  health: {path: /health}
+  maxEngineConcurrency: {{ $v.concurrency }}
+  gpu: {product: {{ $gpuProduct | quote }}}
+  canary: {timeoutSeconds: 180, intervalSeconds: 60}
+{{- end }}

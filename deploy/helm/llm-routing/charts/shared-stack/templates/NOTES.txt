@@ -1,0 +1,10 @@
+Shared routing infrastructure is installed in {{ .Release.Namespace }}.
+Helm verifies gateway TLS, model discovery and caller authentication.
+Model recipes register independently with this shared stack.
+
+Use llm.py models to discover models and llm.py chat to call one.
+See deploy/helm/llm-routing/README.md for commands.
+Gateway Service: {{ include "llm-gateway-stack.gatewayName" .Subcharts.gatewayStack }}:{{ (index .Values.gatewayStack "llm-api-gateway" "llmApiGateway").service.port }} (HTTPS).
+
+The caller key, cluster token and CA are retained on uninstall. Store private
+values and any Helm render output containing credentials outside the checkout.

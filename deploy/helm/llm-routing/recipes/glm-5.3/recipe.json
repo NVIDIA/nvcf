@@ -1,5 +1,5 @@
 {
-  "name": "glm-5.3",
+  "name": "GLM-5.3",
   "description": "GLM-5.3 UD-IQ2_M GGUF served by llama.cpp",
   "releaseName": "glm",
   "llamaCppRevision": "f872b591121761ac7b2af18283bd99bdc092a63a",

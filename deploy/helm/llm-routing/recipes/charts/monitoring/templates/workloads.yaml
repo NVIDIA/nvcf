@@ -3,7 +3,11 @@
 {{- if .Values.enabled }}
 {{- if empty .Values.namespaces }}{{ fail "namespaces must name the recipe namespaces to scrape" }}{{ end }}
 {{- if empty .Values.targets }}{{ fail "targets must list the component scrape targets" }}{{ end }}
-{{- $secret := required "grafana.adminSecret must name a Secret with admin-user and admin-password" .Values.grafana.adminSecret }}
+{{- $rootURL := .Values.grafana.rootURL }}
+{{- if or (not (kindIs "string" $rootURL)) (and $rootURL (not (regexMatch `^(https?|%\(protocol\)s)://\S+/$` $rootURL))) }}
+{{- fail "grafana.rootURL must be a URL ending in /, such as %(protocol)s://%(domain)s:%(http_port)s/grafana/" }}
+{{- end }}
+{{- $secret := default (printf "%s-grafana-admin" .Release.Name) .Values.grafana.adminSecret }}
 {{- range $component, $settings := dict "collector" .Values.collector "victoria-metrics" .Values.victoriaMetrics "grafana" .Values.grafana }}
 {{- $port := index (dict "collector" 13133 "victoria-metrics" 8428 "grafana" 3000) $component }}
 apiVersion: apps/v1
@@ -132,7 +136,9 @@ metadata:
     helm.sh/resource-policy: keep
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: {{ .Values.victoriaMetrics.storage.storageClass | quote }}
+  {{- with .Values.victoriaMetrics.storage.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
   resources:
     requests:
       storage: {{ .Values.victoriaMetrics.storage.size }}

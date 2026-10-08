@@ -1,0 +1,308 @@
+{{/* SPDX-License-Identifier: Apache-2.0 */}}
+{{- $config := include "gguf.automatic" . | fromJson }}
+{{- $tuning := $config.tuning }}
+{{- $tuningArgs := list "--ctx-size" (mul $tuning.contextPerSlot $tuning.slots | toString) "--parallel" ($tuning.slots | toString) "--batch-size" ($tuning.batchSize | toString) "--ubatch-size" ($tuning.ubatchSize | toString) "--predict" ($tuning.defaultMaxTokens | toString) "--threads" ($tuning.threads | toString) }}
+{{- $name := .Release.Name }}
+{{- $scripts := dict }}
+{{- range $path, $_ := .Files.Glob "files/*.py" }}{{ $_ := set $scripts (base $path) ($.Files.Get $path) }}{{ end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-automatic
+data:
+  automatic.json: {{ $config | toJson | quote }}
+  model-lock.json: {{ $config.lock | toJson | quote }}
+{{- range $i, $role := $config.profile.roles }}
+  placement-{{ $role.id }}.json: {{ dict "targets" (list (dict "node" (index $.Values.nodes $i))) "profile" (dict "hardware" $config.profile.hardware "cacheGiB" $role.storageGiB) "claimName" (index $config.claims $i) "namespace" $.Release.Namespace "storageClassName" $.Values.storageClassName | toJson | quote }}
+{{- end }}
+{{- range $filename, $content := $scripts }}
+  {{ $filename }}: |
+{{ $content | indent 4 }}
+{{- end }}
+  rpc-gpu-check.cpp: |
+{{ .Files.Get "files/rpc-gpu-check.cpp" | indent 4 }}
+  rpc-chain-check.cpp: |
+{{ .Files.Get "files/rpc-chain-check.cpp" | indent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}-placement
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "gguf.nodeRole" . }}
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    resourceNames: {{ .Values.nodes | toJson }}
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "gguf.nodeRole" . }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "gguf.nodeRole" . }}}
+subjects: [{kind: ServiceAccount, name: {{ $name }}-placement, namespace: {{ .Release.Namespace }}}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}-placement
+rules:
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    resourceNames: {{ $config.claims | toJson }}
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-placement
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $name }}-placement}
+subjects: [{kind: ServiceAccount, name: {{ $name }}-placement, namespace: {{ .Release.Namespace }}}]
+{{- range $i, $role := $config.profile.roles }}
+{{- $existing := ternary $.Values.artifacts.existingClaim $.Values.rpc.cache.existingClaim (eq $i 0) }}
+{{- if not $existing }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ index $config.claims $i }}
+  annotations: {helm.sh/resource-policy: keep}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: {{ $.Values.storageClassName | quote }}
+  resources:
+    requests: {storage: {{ $role.storageGiB }}Gi}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ if eq $i 0 }}{{ $name }}{{ else }}{{ $name }}-rpc-{{ $role.id }}{{ end }}
+spec:
+  replicas: {{ if $.Values.suspended }}0{{ else }}1{{ end }}
+  strategy: {type: Recreate}
+  progressDeadlineSeconds: 32400
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ $name }}, app.kubernetes.io/component: {{ $role.role }}}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/instance: {{ $name }}, app.kubernetes.io/component: {{ $role.role }}}
+      annotations:
+        checksum/config: {{ $config | toJson | sha256sum | quote }}
+        checksum/scripts: {{ $scripts | toJson | sha256sum | quote }}
+    spec:
+      serviceAccountName: {{ $name }}-placement
+      automountServiceAccountToken: false
+      runtimeClassName: {{ $.Values.runtimeClassName | quote }}
+      nodeSelector:
+        kubernetes.io/hostname: {{ index $.Values.nodes $i | quote }}
+        kubernetes.io/os: linux
+        kubernetes.io/arch: arm64
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: placement
+          image: {{ $config.image | quote }}
+          command: [python3, -u, /checks/placement.py, /checks/placement-{{ $role.id }}.json]
+          env:
+            - {name: NVIDIA_VISIBLE_DEVICES, value: void}
+            - {name: PYTHONDONTWRITEBYTECODE, value: '1'}
+            - name: POD_NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: '1', memory: 512Mi}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: checks, mountPath: /checks, readOnly: true}
+            - {name: cluster-access, mountPath: /var/run/recipe-cluster, readOnly: true}
+            - {name: shared-ca, mountPath: /shared-ca, readOnly: true}
+{{- $stages := list "hardware" "fetch-runtime" }}
+{{- if eq $i 0 }}{{ $stages = list "hardware" "prepare-runtime" "qualify" "download" }}{{ end }}
+{{- range $stage := $stages }}
+        - name: {{ $stage }}
+          image: {{ $config.image | quote }}
+          command: [python3, -u, /checks/automatic.py, {{ $stage }}]
+          env:
+            - {name: HOME, value: /tmp}
+            - {name: PYTHONDONTWRITEBYTECODE, value: '1'}
+{{- if has $stage (list "prepare-runtime" "download" "fetch-runtime") }}
+            - {name: NVIDIA_VISIBLE_DEVICES, value: void}
+{{- end }}
+{{- range $key, $value := $config.recipe.runtimeEnv }}
+            - {name: {{ $key }}, value: {{ $value | quote }}}
+{{- end }}
+          resources:
+            requests: {cpu: {{ if eq $stage "prepare-runtime" }}'8'{{ else }}'1'{{ end }}, memory: {{ if eq $stage "prepare-runtime" }}24Gi{{ else }}2Gi{{ end }}{{ if has $stage (list "hardware" "qualify") }}, nvidia.com/gpu: 1{{ end }}}
+            limits: {cpu: {{ if eq $stage "prepare-runtime" }}'12'{{ else }}'4'{{ end }}, memory: {{ if eq $stage "prepare-runtime" }}40Gi{{ else }}4Gi{{ end }}{{ if has $stage (list "hardware" "qualify") }}, nvidia.com/gpu: 1{{ end }}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: checks, mountPath: /checks, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+{{- if eq $i 0 }}
+            - {name: cache, mountPath: /artifacts}
+{{- else }}
+            - {name: runtime, mountPath: /work}
+{{- end }}
+{{- end }}
+      containers:
+        - name: {{ $role.role }}
+          image: {{ $config.image | quote }}
+{{- if eq $i 0 }}
+          command: [python3, -u, /checks/automatic.py, serve]
+{{- else }}
+          command: [python3, -u, /checks/runtime_guard.py, /work/runtime/ggml-rpc-server, --host, '0.0.0.0', --port, '50052', --device, CUDA0, --cache]
+{{- end }}
+          env:
+            - {name: HOME, value: /tmp}
+            - {name: PYTHONDONTWRITEBYTECODE, value: '1'}
+{{- range $key, $value := $config.recipe.runtimeEnv }}
+            - {name: {{ $key }}, value: {{ $value | quote }}}
+{{- end }}
+{{- if eq $i 0 }}
+            - {name: FIRST_SHARD, value: {{ $config.recipe.firstShard | quote }}}
+            - {name: SERVED_MODEL, value: {{ $config.recipe.servedName | quote }}}
+            - {name: RPC_ENDPOINTS, value: {{ join "," $config.rpcEndpoints | quote }}}
+            - {name: SERVER_ARGS, value: {{ concat $config.recipe.serverArgs $tuningArgs (list "--device" "CUDA0,RPC0" "--tensor-split" (join "," $config.profile.tensorSplit)) | toJson | quote }}}
+          ports: [{name: http, containerPort: 8000}]
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            failureThreshold: 360
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 5
+{{- else }}
+            - {name: LLAMA_CACHE, value: /rpc-cache}
+          ports: [{name: rpc, containerPort: 50052}]
+          startupProbe:
+            exec: {command: [python3, /checks/rpc-health.py]}
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            exec: {command: [python3, /checks/rpc-health.py]}
+            periodSeconds: 10
+{{- end }}
+          resources: {{ $role.resources | toJson }}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: checks, mountPath: /checks, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+{{- if eq $i 0 }}
+            - {name: cache, mountPath: /artifacts, readOnly: true}
+{{- else }}
+            - {name: cache, mountPath: /rpc-cache}
+            - {name: runtime, mountPath: /work, readOnly: true}
+{{- end }}
+      volumes:
+        - name: checks
+          configMap: {name: {{ $name }}-automatic}
+        - name: cache
+          persistentVolumeClaim: {claimName: {{ index $config.claims $i }}}
+        - name: tmp
+          emptyDir: {sizeLimit: 8Gi}
+{{- if ne $i 0 }}
+        - name: runtime
+          emptyDir: {sizeLimit: 2Gi}
+{{- end }}
+        - name: shared-ca
+          configMap: {name: {{ $.Values.sharedCAConfigMap | quote }}}
+        - name: cluster-access
+          projected:
+            sources:
+              - serviceAccountToken: {path: token, expirationSeconds: 600}
+              - configMap:
+                  name: kube-root-ca.crt
+                  items: [{key: ca.crt, path: ca.crt}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ if eq $i 0 }}{{ $name }}{{ else }}{{ $name }}-rpc-{{ $role.id }}{{ end }}
+spec:
+  selector: {app.kubernetes.io/instance: {{ $name }}, app.kubernetes.io/component: {{ $role.role }}}
+  ports: [{name: {{ if eq $i 0 }}http{{ else }}rpc{{ end }}, port: {{ if eq $i 0 }}8000{{ else }}50052{{ end }}, targetPort: {{ if eq $i 0 }}http{{ else }}rpc{{ end }}}]
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-artifacts
+spec:
+  replicas: {{ if .Values.suspended }}0{{ else }}1{{ end }}
+  strategy: {type: Recreate}
+  selector:
+    matchLabels: {app.kubernetes.io/instance: {{ $name }}, app.kubernetes.io/component: artifacts}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/instance: {{ $name }}, app.kubernetes.io/component: artifacts}
+      annotations: {checksum/scripts: {{ $scripts | toJson | sha256sum | quote }}}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector: {kubernetes.io/hostname: {{ index .Values.nodes 0 | quote }}}
+      securityContext: {runAsUser: 1000, runAsGroup: 1000, runAsNonRoot: true, fsGroup: 1000, fsGroupChangePolicy: OnRootMismatch, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: artifacts
+          image: {{ $config.image | quote }}
+          command: [python3, -u, /checks/artifact-server.py]
+          env: [{name: NVIDIA_VISIBLE_DEVICES, value: void}, {name: PYTHONDONTWRITEBYTECODE, value: '1'}]
+          ports: [{name: http, containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /runtime.tar.gz.sha256, port: http}}
+          resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: '1', memory: 512Mi}}
+          securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+          volumeMounts:
+            - {name: artifacts, mountPath: /artifacts, readOnly: true}
+            - {name: checks, mountPath: /checks, readOnly: true}
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim: {claimName: {{ index $config.claims 0 }}}
+        - name: checks
+          configMap: {name: {{ $name }}-automatic}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-artifacts
+spec:
+  selector: {app.kubernetes.io/instance: {{ $name }}, app.kubernetes.io/component: artifacts}
+  ports: [{name: http, port: 8080, targetPort: http}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}-private-runtime
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/instance: {{ $name }}}
+    matchExpressions: [{key: app.kubernetes.io/component, operator: In, values: [artifacts, rpc]}]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/instance: {{ $name }}}
+      ports: [{protocol: TCP, port: 8080}, {protocol: TCP, port: 50052}]
+{{- if not .Values.suspended }}
+---
+apiVersion: pylon.nvidia.com/v1alpha1
+kind: InferenceEndpoint
+metadata:
+  name: {{ $name }}
+spec:
+  modelName: {{ $config.recipe.servedName | quote }}
+  inferenceAPIFormat: {type: chat}
+  service: {name: {{ $name }}, port: 8000}
+  health: {path: /health}
+  canary: {{ $config.recipe.canary | toJson }}
+  maxEngineConcurrency: {{ $tuning.slots }}
+  gpu: {product: {{ index $config.profile.hardware.gpuProducts 0 | quote }}}
+{{- end }}

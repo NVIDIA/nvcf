@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+
+# Generated on first install and reused by lookup on upgrades and reinstalls.
+# Set existingSecret to use a pre-created Secret containing api-key instead.
+callerKey:
+  secretName: llm-shared-caller-key
+  existingSecret: ""
+
+# Additional callers use api-key from explicitly named, pre-created Secrets.
+# Removing an entry revokes that key after the gateway reloads its key file.
+extraCallerKeys: []
+# - {id: demo-ui, secretName: demo-ui-api-key}
+
+# Set false to use the pre-created operator.credential.existingSecret.
+# It must contain cluster-token. Its hash is wired into the router automatically.
+clusterCredential:
+  create: true
+
+# Child chart values remain available for resource limits and node placement.
+gatewayStack:
+  clusterCredential:
+    create: false
+  apiKeysSecret:
+    create: false
+  tls:
+    selfSigned:
+      enabled: true
+      caName: llm-gateway-stack-ca
+  llm-api-gateway:
+    llmApiGateway:
+      image:
+        registry: ""
+        repository: ""
+        tag: ""
+      metrics:
+        enabled: true
+  llm-request-router:
+    llmRequestRouter:
+      image:
+        registry: ""
+        repository: ""
+        tag: ""
+
+operator:
+  clusterId: llm-stack
+  # Must contain exactly the Helm release namespace.
+  watchNamespaces: [llm-stack]
+  router:
+    grpcAddress: http://llm-request-router:50071
+  image:
+    repository: ""
+    tag: ""
+  pylon:
+    image:
+      repository: ""
+      tag: ""
+  credential:
+    existingSecret: llm-shared-cluster-token
+    generate: false
+  trustBundle:
+    configMap: llm-gateway-stack-ca
+
+# Required post-install and post-upgrade gateway checks.
+verification:
+  image:
+    repository: python
+    tag: 3.12-alpine
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  nodeSelector: {}
