@@ -12,8 +12,7 @@ import unittest
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
-import monitoring
-from test_monitoring import monitoring_values
+from test_monitoring import CHART, monitoring_values
 
 try:
     import yaml
@@ -32,7 +31,7 @@ class GrafanaAccessTests(unittest.TestCase):
         cls.values, cls.work = values, pathlib.Path(cls.tmp.name)
         path = cls.work/'grafana-access-values.json'
         path.write_text(json.dumps(values))
-        rendered = subprocess.check_output(['helm', 'template', 'access-test', str(monitoring.CHART), '-f', str(path)], text=True)
+        rendered = subprocess.check_output(['helm', 'template', 'access-test', str(CHART), '-f', str(path)], text=True)
         cls.docs = [doc for doc in yaml.safe_load_all(rendered) if doc]
         grafana = next(doc for doc in cls.docs if doc['kind'] == 'Deployment' and doc['metadata']['name'] == 'access-test-grafana')
         cls.env = {entry['name']: entry for entry in grafana['spec']['template']['spec']['containers'][0]['env']}
@@ -80,7 +79,7 @@ class GrafanaAccessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             chart = root/'chart'
-            shutil.copytree(monitoring.CHART, chart)
+            shutil.copytree(CHART, chart)
             if existing is not None:
                 path = chart/'templates/grafana.yaml'
                 source = path.read_text().replace('lookup "v1" "Secret" .Release.Namespace $name',
@@ -132,8 +131,64 @@ class GrafanaAccessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory)/'values.json'
             path.write_text(json.dumps(monitoring_values()))
-            result = subprocess.run(['helm', 'lint', str(monitoring.CHART), '--strict', '-f', str(path)], capture_output=True, text=True)
+            result = subprocess.run(['helm', 'lint', str(CHART), '--strict', '-f', str(path)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+
+    def test_no_ingress_by_default(self):
+        self.assertFalse(any(doc['kind'] == 'Ingress' for doc in self.docs))
+        self.assertNotIn('GF_SERVER_SERVE_FROM_SUB_PATH', self.env)
+
+    def test_ingress_serves_grafana_under_its_path(self):
+        for path, host, ingress_class in (('/grafana', '', ''),
+                                          ('/demo/metrics', 'demo.example.com', 'traefik')):
+            with self.subTest(path=path):
+                values = copy.deepcopy(self.values)
+                root_url = 'https://demo.example.com:8443'+path+'/'
+                values['grafana']['rootURL'] = root_url
+                values['grafana']['ingress'].update(enabled=True, className=ingress_class, host=host, path=path)
+                result = self.render_credentials(values)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                docs = [doc for doc in yaml.safe_load_all(result.stdout) if doc]
+                ingress = next(doc for doc in docs if doc['kind'] == 'Ingress')
+                self.assertEqual(ingress['spec'].get('ingressClassName', ''), ingress_class)
+                rule, = ingress['spec']['rules']
+                self.assertEqual(rule.get('host', ''), host)
+                self.assertEqual(rule['http']['paths'], [{
+                    'path': path, 'pathType': 'Prefix',
+                    'backend': {'service': {'name': 'test-monitor-grafana', 'port': {'name': 'http'}}}}])
+                grafana = next(doc for doc in docs if doc['kind'] == 'Deployment' and doc['metadata']['name'].endswith('-grafana'))
+                container = grafana['spec']['template']['spec']['containers'][0]
+                env = {entry['name']: entry for entry in container['env']}
+                self.assertEqual(env['GF_SERVER_ROOT_URL']['value'], root_url)
+                self.assertEqual(env['GF_SERVER_SERVE_FROM_SUB_PATH']['value'], 'true')
+                self.assertEqual(container['readinessProbe']['httpGet']['path'], path+'/api/health')
+                collector = next(doc for doc in docs if doc['kind'] == 'ConfigMap' and doc['metadata']['name'].endswith('-collector'))
+                jobs = yaml.safe_load(collector['data']['config.yaml'])['receivers']['prometheus']['config']['scrape_configs']
+                scrape = next(job for job in jobs if job['job_name'] == 'monitoring-grafana')
+                self.assertEqual(scrape['metrics_path'], path+'/metrics')
+                self.assertEqual(scrape['static_configs'][0]['targets'], ['test-monitor-grafana:3000'])
+
+    def test_ingress_requires_a_public_root_url_with_the_same_path(self):
+        for root_url in ('', '%(protocol)s://%(domain)s:%(http_port)s/grafana/',
+                         'https://demo.example.com/', 'https://demo.example.com/other/',
+                         'https://demo.example.com/grafana/?q=/', 'https://demo.example.com/grafana/#fragment/'):
+            with self.subTest(root_url=root_url):
+                values = copy.deepcopy(self.values)
+                values['grafana']['ingress']['enabled'] = True
+                values['grafana']['rootURL'] = root_url
+                result = self.render_credentials(values)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('grafana.rootURL', result.stderr)
+
+    def test_ingress_rejects_invalid_paths_before_installation(self):
+        for path in ('/grafana/', '/', '/a b'):
+            with self.subTest(path=path):
+                values = copy.deepcopy(self.values)
+                values['grafana']['rootURL'] = 'https://demo.example.com/grafana/'
+                values['grafana']['ingress'].update(enabled=True, path=path)
+                result = self.render_credentials(values)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('grafana.ingress.path', result.stderr)
 
 
 if __name__ == '__main__':

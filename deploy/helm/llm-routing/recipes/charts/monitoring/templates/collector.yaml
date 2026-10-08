@@ -102,6 +102,9 @@ data:
                     monitoring_release: {{ .Release.Name | quote }}
                     namespace: {{ .Release.Namespace | quote }}
             - job_name: monitoring-grafana
+              {{- if .Values.grafana.ingress.enabled }}
+              metrics_path: {{ printf "%s/metrics" .Values.grafana.ingress.path | quote }}
+              {{- end }}
               static_configs:
                 - targets: [{{ printf "%s-grafana:3000" .Release.Name | quote }}]
                   labels:

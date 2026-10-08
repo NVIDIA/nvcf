@@ -51,8 +51,12 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: {drop: [ALL]}
           ports: [{name: http, containerPort: {{ $port }}}]
+          {{- $health := ternary "/api/health" "/health" (eq $component "grafana") }}
+          {{- if and (eq $component "grafana") $.Values.grafana.ingress.enabled }}
+          {{- $health = print $.Values.grafana.ingress.path $health }}
+          {{- end }}
           readinessProbe:
-            httpGet: {path: {{ ternary "/api/health" "/health" (eq $component "grafana") }}, port: http}
+            httpGet: {path: {{ $health }}, port: http}
             initialDelaySeconds: 5
           {{- if eq $component "collector" }}
           args: [--config=/etc/otel/config.yaml]
@@ -77,8 +81,12 @@ spec:
             - {name: GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES, value: "false"}
             - {name: GF_PLUGINS_PREINSTALL_DISABLED, value: "true"}
             - {name: GF_LOG_MODE, value: console}
+            {{- $ingress := $.Values.grafana.ingress }}
             {{- with $.Values.grafana.rootURL }}
             - {name: GF_SERVER_ROOT_URL, value: {{ . | quote }}}
+            {{- end }}
+            {{- if $ingress.enabled }}
+            - {name: GF_SERVER_SERVE_FROM_SUB_PATH, value: "true"}
             {{- end }}
           {{- end }}
           volumeMounts:

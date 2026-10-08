@@ -1,12 +1,36 @@
 {
-  "enabled": false,
+  "enabled": true,
   "nodeSelector": {},
   "imagePullPolicy": "IfNotPresent",
   "imagePullSecrets": [],
   "scrapeInterval": "15s",
   "scrapeTimeout": "10s",
-  "namespaces": [],
-  "targets": [],
+  "namespaces": [
+    "llm-stack"
+  ],
+  "targets": [
+    {
+      "name": "gateway",
+      "selector": "app.kubernetes.io/name=llm-api-gateway,app.kubernetes.io/instance=llm-stack",
+      "portName": "http",
+      "port": 9464
+    },
+    {
+      "name": "router",
+      "selector": "app.kubernetes.io/name=llm-request-router,app.kubernetes.io/instance=llm-stack",
+      "portName": "metrics"
+    },
+    {
+      "name": "operator",
+      "selector": "app.kubernetes.io/name=operator,app.kubernetes.io/instance=llm-stack",
+      "portName": "metrics"
+    },
+    {
+      "name": "pylon",
+      "selector": "app.kubernetes.io/name=pylon,app.kubernetes.io/managed-by=pylon-operator",
+      "portName": "metrics"
+    }
+  ],
   "networkPolicy": {
     "enabled": false,
     "apiServerCIDRs": []
@@ -54,6 +78,12 @@
       }
     },
     "adminPassword": "",
-    "rootURL": ""
+    "rootURL": "",
+    "ingress": {
+      "enabled": false,
+      "className": "",
+      "host": "",
+      "path": "/grafana"
+    }
   }
 }
