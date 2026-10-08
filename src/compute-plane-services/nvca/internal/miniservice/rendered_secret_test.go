@@ -138,13 +138,16 @@ func TestRenderedSecret_IgnoredWhenInputsOrHashDiffer(t *testing.T) {
 		assert.False(t, found, "a render for another namespace must not be reused")
 	})
 
-	t.Run("status hash differs", func(t *testing.T) {
+	t.Run("stale status hash is resynced from the secret", func(t *testing.T) {
 		c, ms := persist(t)
+		storedHash := ms.Status.RenderDetails.Hash
 		ms.Status.RenderDetails.Hash = "sha256:0000"
 		r := newUpdateTestReconciler(t, c, mgrScheme)
-		_, found, err := r.getRenderedData(ctx, ms)
+		got, found, err := r.getRenderedData(ctx, ms)
 		require.NoError(t, err)
-		assert.False(t, found)
+		require.True(t, found, "identical inputs and a verified digest are sufficient to reuse the render")
+		assert.Equal(t, rendered, got)
+		assert.Equal(t, storedHash, ms.Status.RenderDetails.Hash)
 	})
 
 	t.Run("content corrupted", func(t *testing.T) {

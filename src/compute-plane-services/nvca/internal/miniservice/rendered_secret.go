@@ -125,25 +125,26 @@ func (r *Reconciler) saveRenderedData(ctx context.Context, ms *v1alpha1.MiniServ
 // getRenderedData returns the rendered chart for ms from the rendered Secret. It returns false when
 // no render matching the current spec is available, in which case callers render via ReVal.
 //
-// When status has no render details (first install, or a values update whose status patch was
-// lost before it landed), the Secret is still consulted: a render stored for identical inputs is
-// reused and its hash restored to status instead of calling ReVal again.
+// A stored render is trusted when it was produced from identical inputs and its content matches
+// its recorded digest. The hash in status is informational and is resynced from the Secret, so a
+// lost or stale status patch (crash or conflict after the Secret was written) never forces a
+// re-render.
 func (r *Reconciler) getRenderedData(ctx context.Context, ms *v1alpha1.MiniService) ([]byte, bool, error) {
 	log := logf.FromContext(ctx)
 
-	var expectedOutputHash string
-	if rd := ms.Status.RenderDetails; rd != nil {
-		expectedOutputHash = rd.Hash
-	} else {
-		log.V(1).Info("Rendered data not found in status")
-	}
-
-	data, found, err := r.loadRenderedSecret(ctx, ms, renderInputHash(ms), expectedOutputHash)
+	data, found, err := r.loadRenderedSecret(ctx, ms, renderInputHash(ms))
 	if err != nil || !found {
 		return nil, false, err
 	}
-	if ms.Status.RenderDetails == nil {
-		ms.Status.RenderDetails = &v1alpha1.RenderDetailsStatus{Hash: renderOutputHash(data)}
+
+	outputHash := renderOutputHash(data)
+	switch rd := ms.Status.RenderDetails; {
+	case rd == nil:
+		log.V(1).Info("Restoring render hash to status from rendered Secret")
+		ms.Status.RenderDetails = &v1alpha1.RenderDetailsStatus{Hash: outputHash}
+	case rd.Hash != outputHash:
+		log.V(1).Info("Resyncing render hash in status from rendered Secret", "statusHash", rd.Hash)
+		rd.Hash = outputHash
 	}
 	return data, true, nil
 }
@@ -265,11 +266,12 @@ func (r *Reconciler) saveRenderedSecret(ctx context.Context,
 	return nil
 }
 
-// loadRenderedSecret returns the rendered data stored for ms if it matches the given hashes.
-// Like Flux's artifact verification, the content digest is verified before it is trusted.
+// loadRenderedSecret returns the rendered data stored for ms if it was rendered from inputs
+// matching inputHash. Like Flux's artifact verification, the content digest is verified before
+// it is trusted.
 func (r *Reconciler) loadRenderedSecret(ctx context.Context,
 	ms *v1alpha1.MiniService,
-	inputHash, outputHash string,
+	inputHash string,
 ) ([]byte, bool, error) {
 	log := logf.FromContext(ctx).WithValues("secret", RenderedSecretName, "namespace", ms.Spec.Namespace)
 
@@ -287,12 +289,6 @@ func (r *Reconciler) loadRenderedSecret(ctx context.Context,
 		return nil, false, nil
 	}
 	storedOutputHash := secret.Annotations[renderedSecretOutputHashAnnotation]
-	if outputHash != "" && storedOutputHash != outputHash {
-		log.V(1).Info("Rendered Secret hash does not match MiniService status, ignoring",
-			"storedHash", storedOutputHash, "statusHash", outputHash)
-		return nil, false, nil
-	}
-
 	data, err := gunzipBytes(secret.Data[renderedSecretDataKey])
 	if err != nil {
 		log.Error(err, "Failed to decompress rendered Secret, ignoring")

@@ -956,9 +956,16 @@ func (r *Reconciler) prepareUpdateWorkload(ctx context.Context,
 		}
 
 		if objsData, err = r.render(ctx, ms, icmsReq); err != nil {
-			r.failedWorkloadUpdateRevisionCacheLock.Lock()
-			r.failedWorkloadUpdateRevisionCache[failedWorkloadUpdateRevisionCacheKey] = err
-			r.failedWorkloadUpdateRevisionCacheLock.Unlock()
+			// Only terminal results (invalid chart, non-retryable ReVal response) are cached;
+			// transient ReVal failures must be retried with backoff.
+			if isTerminal(err) {
+				r.failedWorkloadUpdateRevisionCacheLock.Lock()
+				if r.failedWorkloadUpdateRevisionCache == nil {
+					r.failedWorkloadUpdateRevisionCache = map[string]error{}
+				}
+				r.failedWorkloadUpdateRevisionCache[failedWorkloadUpdateRevisionCacheKey] = err
+				r.failedWorkloadUpdateRevisionCacheLock.Unlock()
+			}
 			return nil, nil, nil, "", "", err
 		}
 

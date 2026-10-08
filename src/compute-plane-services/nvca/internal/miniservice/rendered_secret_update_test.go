@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -246,4 +247,78 @@ func TestReconcile_ApplyFailureThenValuesRevertRerenders(t *testing.T) {
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Namespace: updateTestNamespace, Name: revisionConfigMapPrefix + "2"}, revCM))
 	assert.JSONEq(t, `{"key":"value-v1"}`, revCM.Data[revisionDataKeyValues])
 	assert.Equal(t, secret.Annotations[renderedSecretOutputHashAnnotation], revCM.Data[revisionDataKeyRenderHash])
+}
+
+// A transient ReVal failure during a values update must be retried on the next reconcile rather
+// than cached until the values change again. Only terminal render results are cached.
+func TestReconcile_UpdateTransientRenderErrorIsRetried(t *testing.T) {
+	ctx := newTestContext()
+	c, _ := newFakeClient(mgrScheme, updateTestObjects(`{"key":"value-v2"}`)...)
+	r := newUpdateTestReconciler(t, c, mgrScheme)
+	enableRevisionHistory(r)
+
+	flaky := &outputReValClient{err: errors.New("503 reval unavailable")}
+	r.ReValClient = flaky
+	req := reconcile.Request{NamespacedName: client.ObjectKey{Name: updateMSName}}
+
+	_, err := r.Reconcile(ctx, req)
+	require.Error(t, err)
+	assert.False(t, isTerminal(err))
+	assert.Equal(t, 1, flaky.calls)
+
+	ms := &v1alpha1.MiniService{}
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: updateMSName}, ms))
+	assert.Equal(t, v1alpha1.MiniServiceInstalling, ms.Status.Phase)
+	assert.Nil(t, ms.Status.RenderDetails)
+	assert.Equal(t, "existing", getWorkloadConfigMapValue(t, c))
+
+	// ReVal recovers; the retry renders again instead of returning a cached error.
+	healthy := newValidReValClient(newUpdateRenderedData(t, updateWorkloadObjectName, "v2"))
+	r.ReValClient = healthy
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, 1, healthy.calls, "transient render errors must not be cached")
+
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: updateMSName}, ms))
+	assert.Equal(t, v1alpha1.MiniServiceInstalled, ms.Status.Phase)
+	assert.Equal(t, "v2", getWorkloadConfigMapValue(t, c))
+	getRenderedSecret(t, c, updateTestNamespace)
+}
+
+// An invalid chart during a values update is cached per values hash so ReVal is not called again
+// until the values change; the running workload and the stored render are untouched.
+func TestReconcile_UpdateInvalidRenderIsCachedUntilValuesChange(t *testing.T) {
+	ctx := newTestContext()
+	c, _ := newFakeClient(mgrScheme, updateTestObjects(`{"key":"value-v2"}`)...)
+	r := newUpdateTestReconciler(t, c, mgrScheme)
+	enableRevisionHistory(r)
+
+	// Revision 1 render stored for the previous values.
+	previous := newUpdateMiniService(`{"key":"value-v1"}`)
+	previous.Status.Revision = 1
+	saveAndPersistRenderedData(t, ctx, r, previous, newUpdateRenderedData(t, updateWorkloadObjectName, "v1"))
+	previousInputHash := renderInputHash(previous)
+
+	invalid := &outputReValClient{output: HelmReValRenderOutput{Valid: newBool(false), ValidationErrors: []string{"bad"}}}
+	r.ReValClient = invalid
+	req := reconcile.Request{NamespacedName: client.ObjectKey{Name: updateMSName}}
+
+	for i := 0; i < 3; i++ {
+		_, err := r.Reconcile(ctx, req)
+		require.Error(t, err)
+		assert.False(t, isTerminal(err), "an update failure must not fail the running instance")
+	}
+	assert.Equal(t, 1, invalid.calls, "invalid results are cached per values hash")
+
+	ms := &v1alpha1.MiniService{}
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: updateMSName}, ms))
+	assert.Equal(t, v1alpha1.MiniServiceInstalling, ms.Status.Phase)
+	cond := meta.FindStatusCondition(ms.Status.Conditions, v1alpha1.MiniServiceConditionInstallSuccessful)
+	require.NotNil(t, cond)
+	assert.Equal(t, metav1.ConditionFalse, cond.Status)
+	assert.Equal(t, v1alpha1.MiniServiceStatusReasonReValResultInvalid, cond.Reason)
+	assert.Equal(t, "existing", getWorkloadConfigMapValue(t, c))
+	secret := getRenderedSecret(t, c, updateTestNamespace)
+	assert.Equal(t, previousInputHash, secret.Annotations[renderedSecretInputHashAnnotation], "stored render is untouched")
+	assert.Equal(t, "1", secret.Labels[revisionLabel])
 }
