@@ -35,7 +35,7 @@ def settings(config):
     options = config.get('monitoring', {})
     require(isinstance(options, dict), 'monitoring must be an object.')
     require(isinstance(options.get('enabled', False), bool), 'monitoring.enabled must be boolean.')
-    allowed = {'enabled', 'images', 'imagePullPolicy', 'retentionPeriod', 'storageSize', 'namespaces', 'extraTargets', 'networkPolicy', 'model'}
+    allowed = {'enabled', 'images', 'imagePullPolicy', 'retentionPeriod', 'storageSize', 'namespaces', 'extraTargets', 'networkPolicy', 'grafanaRootURL', 'model'}
     require(not set(options) - allowed, 'Unknown monitoring setting: ' + ', '.join(sorted(set(options) - allowed)))
     if 'model' in options:
         require(isinstance(options['model'], str) and bool(options['model'].strip()), 'monitoring.model must be a nonempty model ID.')
@@ -104,6 +104,10 @@ def chart_values(recipe):
         require('runtime' not in t or t['runtime'] == 'llama.cpp', 'Supported backend dashboard runtime: llama.cpp. Omit runtime for raw exporter metrics.')
         names.add(t['name'])
     values['targets'].extend(copy.deepcopy(extra))
+    root_url = options.get('grafanaRootURL', '')
+    require(isinstance(root_url, str) and (root_url == '' or re.fullmatch(r'(https?|%\(protocol\)s)://\S+/', root_url) is not None),
+            'grafanaRootURL must be a URL ending in /, such as %(protocol)s://%(domain)s:%(http_port)s/grafana/')
+    values['grafana']['rootURL'] = root_url
     values['grafana']['adminSecret'] = recipe.c['releasePrefix']+'-monitoring-grafana-admin'
     return values
 
