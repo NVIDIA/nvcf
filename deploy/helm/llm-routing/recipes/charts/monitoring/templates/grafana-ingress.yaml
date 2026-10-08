@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+{{- $ingress := .Values.grafana.ingress }}
+{{- if and .Values.enabled $ingress.enabled }}
+{{- if not (regexMatch "^(/[A-Za-z0-9._~-]+)+$" $ingress.path) }}{{ fail "grafana.ingress.path must be a path such as /grafana, without a trailing /" }}{{ end }}
+{{- $rootURL := required "grafana.rootURL must specify the public URL when ingress is enabled" .Values.grafana.rootURL }}
+{{- if or (not (kindIs "string" $rootURL)) (not (regexMatch `^https?://[^/?#%@\s]+/` $rootURL)) }}
+{{- fail "grafana.rootURL must specify the public http:// or https:// URL when ingress is enabled" }}
+{{- end }}
+{{- $url := urlParse $rootURL }}
+{{- if or (ne $url.path (printf "%s/" $ingress.path)) $url.query $url.fragment }}
+{{- fail "grafana.rootURL must end in grafana.ingress.path followed by /" }}
+{{- end }}
+# Grafana serves the prefix itself. The ingress controller forwards it unchanged.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-grafana
+spec:
+  {{- with $ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  rules:
+    - {{- with $ingress.host }}
+      host: {{ . | quote }}
+      {{- end }}
+      http:
+        paths:
+          - path: {{ $ingress.path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-grafana
+                port: {name: http}
+{{- end }}

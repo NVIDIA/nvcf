@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-License-Identifier: Apache-2.0
-"""Inspect, configure and verify monitoring for the Helm-installed routing stack."""
+"""Integration checks for metrics and dashboard access on an installed monitoring release."""
 import argparse
-import base64
-import binascii
 import contextlib
 import json
 import pathlib
@@ -16,58 +14,14 @@ import time
 import urllib.parse
 import urllib.request
 
-import dashboard_login
-
-HERE = pathlib.Path(__file__).resolve().parent
+HERE = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE.parent))
 import llm
-
-CHART = HERE / 'charts/monitoring'
 
 
 def require(condition, message):
     if not condition:
         raise RuntimeError(message)
-
-
-def shared_stack(context, namespace):
-    """Read the shared Helm release without a saved connection file."""
-    values = json.loads(llm.run(['helm', '--kube-context', context, '--namespace', namespace,
-                                'get', 'values', 'llm-stack', '--all', '-o', 'json']))
-    require(values.get('operator', {}).get('watchNamespaces') == [namespace],
-            'The shared operator must watch the selected namespace.')
-    deployments = json.loads(llm.run(llm.kube(context, namespace, 'get', 'deployments', '-o', 'json')))['items']
-    components = {}
-    names = {'llm-api-gateway': 'llm-api-gateway', 'llm-request-router': 'llm-request-router',
-             'pylon-operator': values['operator'].get('nameOverride') or 'operator'}
-    for component, name in names.items():
-        selected = [d for d in deployments if d['metadata'].get('labels', {}).get('app.kubernetes.io/name') == name
-                    and d['metadata'].get('annotations', {}).get('meta.helm.sh/release-name') == 'llm-stack'
-                    and d['metadata'].get('annotations', {}).get('meta.helm.sh/release-namespace') == namespace]
-        require(len(selected) == 1, 'Expected one shared-release Deployment for '+component)
-        components[component] = selected[0]
-    return values, components
-
-
-def chart_values(context, namespace):
-    stack, components = shared_stack(context, namespace)
-    values = json.loads((CHART/'values.yaml').read_text())
-    values.update(enabled=True, namespaces=[namespace])
-    values['targets'] = []
-    for component, name, port_name in (('gateway', 'llm-api-gateway', 'http'),
-                                       ('router', 'llm-request-router', 'metrics'),
-                                       ('operator', 'pylon-operator', 'metrics')):
-        deployment = components[name]
-        labels = deployment['spec']['selector']['matchLabels']
-        values['targets'].append({'name': component, 'selector': ','.join(k+'='+v for k, v in sorted(labels.items())),
-                                 'portName': port_name})
-    metrics = stack['gatewayStack']['llm-api-gateway']['llmApiGateway'].get('metrics', {})
-    port = metrics.get('port', 9464) if metrics.get('enabled') else 9464
-    require(type(port) is int and 1 <= port <= 65535, 'Gateway metrics port must be an integer from 1 to 65535.')
-    values['targets'][0]['port'] = port
-    values['targets'].append({'name': 'pylon', 'selector': 'app.kubernetes.io/name=pylon,app.kubernetes.io/managed-by=pylon-operator',
-                              'portName': 'metrics'})
-    return values
 
 
 def gateway_response(client, path, payload=None):
@@ -156,7 +110,6 @@ class Monitoring:
         self.ca_configmap, self.api_key_file = ca_configmap, api_key_file
         self.kc = llm.kube(context, namespace)
         self.output = llm.run
-        shared_stack(context, namespace)
         status = json.loads(llm.run(['helm', '--kube-context', context, '--namespace', namespace,
                                     'list', '-o', 'json']))
         require(any(r['name'] == release and r['chart'].startswith('llm-demo-monitoring-') and r['status'] == 'deployed'
@@ -192,37 +145,9 @@ class Monitoring:
                     proc.kill()
                     proc.wait()
 
-    def admin_credentials(self):
-        r = self
-        name = self.values['grafana'].get('adminSecret') or self.release+'-grafana-admin'
-        secret = json.loads(self.output(r.kc+['get', 'secret', name, '-o', 'json']))
-        owner = secret.get('metadata', {}).get('annotations', {})
-        require(self.values['grafana'].get('adminSecret') or
-                (owner.get('meta.helm.sh/release-name') == self.release and
-                 owner.get('meta.helm.sh/release-namespace') == r.namespace),
-                'Grafana credential Secret belongs to another installation.')
-        try:
-            credentials = tuple(base64.b64decode(secret['data'][key], validate=True).decode()
-                                for key in ('admin-user', 'admin-password'))
-        except (KeyError, TypeError, ValueError, binascii.Error):
-            raise RuntimeError('Grafana admin Secret is malformed.') from None
-        require(all(value and value.isprintable() for value in credentials), 'Grafana admin Secret is malformed.')
-        return credentials
-
-    def dashboard(self, port, admin=False):
-        credentials = self.admin_credentials() if admin else None
-        with self.forward('grafana', port, 3000) as proc:
-            try:
-                if credentials:
-                    dashboard_login.open_dashboard(port, credentials, proc)
-                print('Dashboard: http://127.0.0.1:'+str(port)+'/d/llm-demo', flush=True)
-                print('Signed in as admin.' if admin else 'No login required for viewing.', flush=True)
-                print('Press Ctrl-C to close the tunnel.', flush=True)
-                while True:
-                    require(proc.poll() is None, 'Grafana tunnel disconnected. Rerun dashboard after restoring access.')
-                    time.sleep(1)
-            except KeyboardInterrupt:
-                pass
+    def grafana_path(self):
+        ingress = self.values['grafana'].get('ingress', {})
+        return ingress['path'] if ingress.get('enabled') else ''
 
     @contextlib.contextmanager
     def traffic_client(self, model=None):
@@ -288,7 +213,7 @@ class Monitoring:
                         time.sleep(2)
                     report['traffic'] = {'model': selected, 'requests': requests, 'before': before, 'after': after}
         with self.forward('grafana', port+2, 3000):
-            request = urllib.request.Request('http://127.0.0.1:'+str(port+2)+'/api/dashboards/uid/llm-demo')
+            request = urllib.request.Request('http://127.0.0.1:'+str(port+2)+self.grafana_path()+'/api/dashboards/uid/llm-demo')
             with urllib.request.urlopen(request, timeout=20) as response:
                 dashboard = json.load(response)
             require(dashboard.get('dashboard', {}).get('panels'), 'Grafana demo dashboard is missing or empty.')
@@ -322,31 +247,17 @@ def main(argv=None):
     parser.add_argument('--release', default='llm-monitoring')
     parser.add_argument('--ca-configmap')
     parser.add_argument('--api-key-file', type=pathlib.Path)
-    sub = parser.add_subparsers(dest='command', required=True)
-    values = sub.add_parser('values', help='Write nonsecret monitoring Helm values from the installed stack.')
-    values.add_argument('--output', type=pathlib.Path, required=True)
-    dashboard = sub.add_parser('dashboard')
-    dashboard.add_argument('--port', type=int, default=13000)
-    dashboard.add_argument('--admin', action='store_true')
-    verify = sub.add_parser('verify')
-    verify.add_argument('--port', type=int, default=18428)
-    verify.add_argument('--verify-traffic', action='store_true')
-    verify.add_argument('--model')
-    verify.add_argument('--output', type=pathlib.Path, required=True)
+    parser.add_argument('--port', type=int, default=18428)
+    parser.add_argument('--verify-traffic', action='store_true')
+    parser.add_argument('--model')
+    parser.add_argument('--output', type=pathlib.Path, required=True)
     args = parser.parse_args(argv)
-    if hasattr(args, 'output') and args.output.exists():
+    if args.output.exists():
         parser.error('Use a new output file.')
     context = llm.selected_context(args.context)
-    if args.command == 'values':
-        result = chart_values(context, args.namespace)
-    else:
-        with tempfile.TemporaryDirectory(prefix='llm-monitoring-') as work:
-            monitor = Monitoring(context, args.namespace, args.release, work, args.ca_configmap, args.api_key_file)
-            if args.command == 'dashboard':
-                require(1 <= args.port <= 65535, 'Provide a valid dashboard port.')
-                monitor.dashboard(args.port, args.admin)
-                return
-            result = monitor.verify(args.port, args.verify_traffic, args.model)
+    with tempfile.TemporaryDirectory(prefix='llm-monitoring-test-') as work:
+        monitor = Monitoring(context, args.namespace, args.release, work, args.ca_configmap, args.api_key_file)
+        result = monitor.verify(args.port, args.verify_traffic, args.model)
     with args.output.open('x') as out:
         args.output.chmod(0o600)
         json.dump(result, out, indent=2)
