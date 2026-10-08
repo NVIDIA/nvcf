@@ -104,7 +104,7 @@ ARG TARGETARCH
 # image receives fixes published after the upstream OpenBao release.
 USER root
 RUN apk upgrade --no-cache && \
-    apk add --no-cache openssl uuidgen helm curl bash jq
+    apk add --no-cache openssl uuidgen curl bash jq
 
 COPY --from=bao-builder --chmod=0555 /out/bao-linux-${TARGETARCH} /usr/bin/bao
 COPY --from=jwker-builder /out/jwker /usr/local/bin/jwker
@@ -115,6 +115,9 @@ WORKDIR /app
 COPY --chmod=775 migrations/ /app/migrations/
 COPY --chmod=775 addons/ /app/addons/
 COPY --chmod=775 entrypoint.sh /app/
+
+# The hook scripts do not use Helm. Check the final runtime on both platforms.
+RUN ! command -v helm && ! apk info --exists helm
 
 USER openbao
 

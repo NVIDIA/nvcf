@@ -52,6 +52,16 @@ The `Dockerfile` uses the public upstream OpenBao 2.6.3 image as its runtime bas
 
 The image also builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.0. It rebuilds Kubernetes v1.36.4 `kubectl` from the checksum-pinned official source archive with a digest-pinned Go 1.26.6 toolchain and vendored dependencies. Keeping the 1.36 client preserves `kubectl`'s supported one-minor skew across this repository's Kubernetes latest-and-N-2 support window (1.35 through 1.37). The build verifies the source identity, embedded Go and target metadata, and the executable client's version, commit, build date, and platform.
 
+The image does not include the Helm CLI. The core migrations and LLS, LLM, and
+UI addons use `bao`, `kubectl`, and shell utilities. Helm runs outside this image
+to create the hook Jobs. The image build checks that neither a Helm executable
+nor its Alpine package is installed on either supported architecture.
+
+Use an OpenBao chart whose initialization script checks for Helm only in
+standalone `script` mode. Older charts check for Helm even in the in-cluster
+`helm` hook mode and cannot initialize with this image. Publish and consume
+the chart prerequisite fix together with the migration image update.
+
 ```bash
 docker build -t <your-registry>/<your-org>/openbao-migrations:<version> .
 ```
