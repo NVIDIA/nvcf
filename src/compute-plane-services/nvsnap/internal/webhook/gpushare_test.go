@@ -328,3 +328,17 @@ func TestDebugEnv(t *testing.T) {
 		t.Error("non-matching pod patched")
 	}
 }
+
+// Two patchers adding env to a container that has none must both land.
+func TestDebugEnv_ContainerWithoutEnv(t *testing.T) {
+	m := &Mutator{GPUShareByDefault: true, DebugEnv: []DebugEnv{{
+		Label: "function-id", Values: []string{"fn-a"}, Env: map[string]string{"NVSNAP_GPUSHARE_DEBUG": "1"},
+	}}}
+	pod := gpushareTestPod(false, nil)
+	pod.Labels = map[string]string{"function-id": "fn-a"}
+	got := applyPatches(t, pod, mergePatchPlan(append(m.gpusharePatches(context.Background(), pod), m.debugEnvPatches(pod)...)))
+	engine := got.Spec.Containers[1]
+	if envOf(engine, "LD_PRELOAD") == nil || envOf(engine, "NVSNAP_GPUSHARE_DEBUG") == nil {
+		t.Errorf("env lost: %v", engine.Env)
+	}
+}

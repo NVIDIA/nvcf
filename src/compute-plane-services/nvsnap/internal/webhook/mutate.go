@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -107,6 +108,23 @@ var mergeableArrayRe = regexp.MustCompile(`^/spec/containers/\d+/(volumeMounts|e
 // that multiple builders may bootstrap (so the plan must be normalized).
 func isMergeableArray(path string) bool {
 	return path == "/spec/volumes" || path == "/spec/initContainers" || mergeableArrayRe.MatchString(path)
+}
+
+// sliceElems returns the elements of a slice value of any element type:
+// patchers write typed slices ([]corev1.EnvVar, []corev1.Volume), and a
+// second whole-array add of the same path must become appends, not replace
+// the first (the gpushare variables were lost to the debug variables on a
+// container with no env of its own).
+func sliceElems(v any) ([]any, bool) {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Slice {
+		return nil, false
+	}
+	out := make([]any, rv.Len())
+	for i := range out {
+		out[i] = rv.Index(i).Interface()
+	}
+	return out, true
 }
 
 // patchElementName pulls the "name" field out of a patch value (volume,
@@ -198,7 +216,7 @@ func mergePatchPlan(patches []PatchOp) []PatchOp {
 		}
 		// Whole-array bootstrap form: /spec/volumes with a slice value.
 		if isMergeableArray(p.Path) {
-			elems, ok := p.Value.([]any)
+			elems, ok := sliceElems(p.Value)
 			if !ok {
 				out = append(out, p) // not the bootstrap shape we manage
 				continue
