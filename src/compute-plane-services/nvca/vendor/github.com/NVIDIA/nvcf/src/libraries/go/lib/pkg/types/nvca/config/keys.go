@@ -30,6 +30,8 @@ const yamlMergeTag = "!!merge"
 // same key. Viper folds keys to lower case while iterating a Go map, so keys
 // that differ only by case would otherwise resolve to an arbitrary value on
 // each decode.
+//
+// +k8s:deepcopy-gen=false
 type KeyConflictError struct {
 	// Path is the dotted path of the mapping that holds the keys. It is empty
 	// for the top level.
