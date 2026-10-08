@@ -540,8 +540,17 @@
                         },
                         "chunkSizeBytes": {
                             "type": "integer",
-                            "minimum": 0,
-                            "default": 0
+                            "default": 0,
+                            "description": "0 keeps worker-init's default; otherwise 1 MiB to 4 GiB inclusive, matching NVCA's validation.",
+                            "anyOf": [
+                                {
+                                    "const": 0
+                                },
+                                {
+                                    "minimum": 1048576,
+                                    "maximum": 4294967296
+                                }
+                            ]
                         }
                     }
                 }

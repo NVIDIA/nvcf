@@ -172,6 +172,20 @@ assert_equal "536870912" "$(agent_config_value "${explicit_manifest}" '.workload
 render "${tmp_dir}/partial-download-manifest.yaml" --set worker.download.chunkSizeBytes=1048576
 assert_equal "1048576" "$(agent_config_value "${tmp_dir}/partial-download-manifest.yaml" '.workload.workerInitDownload.chunkSizeBytes')" "unexpected partial worker-init chunk size"
 assert_key_absent "${tmp_dir}/partial-download-manifest.yaml" '.workload.workerInitDownload' "concurrentDownloads" "unset worker.download.concurrentDownloads must not be emitted"
+# The schema mirrors NVCA's validation so a bad chunk size fails at render
+# time instead of at agent startup: 0 or 1 MiB to 4 GiB inclusive.
+for bad in 4096 1048575 4294967297; do
+  if render "${tmp_dir}/bad-chunk-manifest.yaml" --set "worker.download.chunkSizeBytes=${bad}" 2>"${tmp_dir}/bad-chunk-error.log"; then
+    echo "worker.download.chunkSizeBytes=${bad}: expected helm template to fail schema validation, but it succeeded" >&2
+    exit 1
+  fi
+done
+render "${tmp_dir}/edge-chunk-manifest.yaml" --set worker.download.chunkSizeBytes=4294967296
+assert_equal "4294967296" "$(agent_config_value "${tmp_dir}/edge-chunk-manifest.yaml" '.workload.workerInitDownload.chunkSizeBytes')" "4 GiB chunk size must be accepted"
+if render "${tmp_dir}/bad-conc-manifest.yaml" --set worker.download.concurrentChunks=257 2>/dev/null; then
+  echo "worker.download.concurrentChunks=257: expected helm template to fail schema validation, but it succeeded" >&2
+  exit 1
+fi
 
 if render "${tmp_dir}/invalid-ips-manifest.yaml" \
   --set-string 'storage.internalPersistentStorage.hardResourceQuota.requests\.storage=7Gi' \
