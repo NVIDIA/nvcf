@@ -62,7 +62,7 @@ func TestRemoteGatewayExamplesConfigureAWSNLBOnEnvoyService(t *testing.T) {
 	}{
 		{
 			name: "gateway routing guide",
-			path: filepath.Join("..", "..", "docs", "user", "gateway-routing.md"),
+			path: filepath.Join("..", "..", "docs", "self-managed", "gateway-routing.md"),
 		},
 		{
 			name: "CLI install prompt",
