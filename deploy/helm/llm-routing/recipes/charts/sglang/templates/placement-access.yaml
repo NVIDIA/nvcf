@@ -1,0 +1,47 @@
+{{/* SPDX-License-Identifier: Apache-2.0 */}}
+{{- $v := include "sglang.settings" . | fromJson -}}
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-check
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "sglang.nodeRole" . }}
+rules:
+  - apiGroups: ['']
+    resources: [nodes]
+    resourceNames: {{ $v.nodes | toJson }}
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "sglang.nodeRole" . }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "sglang.nodeRole" . }}}
+subjects:
+  - {kind: ServiceAccount, name: {{ .Release.Name }}-check, namespace: {{ .Release.Namespace | quote }}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-check
+rules:
+  - apiGroups: ['']
+    resources: [persistentvolumeclaims]
+    resourceNames:
+{{- range $rank, $node := $v.nodes }}
+      - {{ default (printf "%s-cache-%d" $.Release.Name $rank) (index $v.existingClaims $rank) | quote }}
+{{- end }}
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-check
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ .Release.Name }}-check}
+subjects:
+  - {kind: ServiceAccount, name: {{ .Release.Name }}-check, namespace: {{ .Release.Namespace | quote }}}

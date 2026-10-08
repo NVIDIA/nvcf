@@ -1,0 +1,848 @@
+{
+  "schemaVersion": 1,
+  "units": {
+    "memory": "bytes",
+    "storage": "bytes",
+    "cpu": "millicores",
+    "context": "tokens"
+  },
+  "resourceScope": "Per model pod scheduling reservation, including init containers. additionalWorkloads lists separate per-node pods. Shared gateway, operator and Pylon resources are additional.",
+  "memoryAccounting": "Unified-memory profiles use one shared host/GPU memory pool. Do not add a separate GPU memory allocation.",
+  "placement": "Choose an eligible profile and supply distinct compatible nodes with exclusive available GPUs.",
+  "recipes": [
+    {
+      "id": "deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash",
+      "servedModelId": null,
+      "availability": {
+        "status": "planned",
+        "deployable": false,
+        "reason": "The verified checkpoint has upstream four-GPU candidates. Installation requires tensor-parallel chart support, model-specific startup/cache checks and hardware qualification.",
+        "checkedAt": "2026-10-07",
+        "sources": [
+          "https://huggingface.co/api/models/deepseek-ai/DeepSeek-V4-Flash",
+          "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/tree/60d8d70770c6776ff598c94bb586a859a38244f1",
+          "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/raw/60d8d70770c6776ff598c94bb586a859a38244f1/config.json",
+          "https://docs.sglang.io/cookbook/autoregressive/DeepSeek/DeepSeek-V4",
+          "https://github.com/ai-dynamo/dynamo/blob/main/recipes/deepseek-v4/deepseek-v4-flash/README.md",
+          "https://raw.githubusercontent.com/ai-dynamo/dynamo/main/recipes/deepseek-v4/container/sglang/Dockerfile.dsv4.sglang.b200",
+          "https://raw.githubusercontent.com/ai-dynamo/dynamo/main/recipes/deepseek-v4/container/sglang/Dockerfile.dsv4.sglang.gb200",
+          "https://hub.docker.com/v2/repositories/lmsysorg/sglang/tags/deepseek-v4-blackwell",
+          "https://hub.docker.com/v2/repositories/lmsysorg/sglang/tags/deepseek-v4-grace-blackwell",
+          "https://github.com/sgl-project/sglang/issues/39277"
+        ]
+      },
+      "precision": null,
+      "license": null,
+      "licenseNotice": "NOTICE",
+      "model": null,
+      "runtime": null,
+      "profiles": [],
+      "upstreamCandidates": [
+        {
+          "id": "b200-tp4",
+          "model": {
+            "repository": "deepseek-ai/DeepSeek-V4-Flash",
+            "revision": "60d8d70770c6776ff598c94bb586a859a38244f1",
+            "weightBytes": 159617149040,
+            "weightShards": 46,
+            "architecture": "DeepseekV4ForCausalLM",
+            "modelType": "deepseek_v4",
+            "totalParametersBillions": 284,
+            "activeParametersBillions": 13,
+            "maximumContextTokens": 1048576
+          },
+          "license": "MIT",
+          "precision": "FP4 MoE experts, FP8 attention/dense with BF16/F32 auxiliary tensors",
+          "runtime": {
+            "backend": "sglang",
+            "image": "lmsysorg/sglang@sha256:940f7652dd16b04e82ecc57c4dcb6a3ae7d7283bc38db1ce3c4aa6ae3685c4aa",
+            "upstreamTag": "deepseek-v4-blackwell"
+          },
+          "hardware": {
+            "os": "linux",
+            "architecture": "amd64",
+            "gpuProduct": "NVIDIA-B200",
+            "modelNodeCount": 1,
+            "gpusPerNode": 4,
+            "tensorParallelSize": 4
+          },
+          "validation": {
+            "status": "unqualified",
+            "scope": "Upstream documentation and image metadata only. No local container launch, model download, inference, recovery or isolation test."
+          }
+        },
+        {
+          "id": "gb200-tp4",
+          "model": {
+            "repository": "deepseek-ai/DeepSeek-V4-Flash",
+            "revision": "60d8d70770c6776ff598c94bb586a859a38244f1",
+            "weightBytes": 159617149040,
+            "weightShards": 46,
+            "architecture": "DeepseekV4ForCausalLM",
+            "modelType": "deepseek_v4",
+            "totalParametersBillions": 284,
+            "activeParametersBillions": 13,
+            "maximumContextTokens": 1048576
+          },
+          "license": "MIT",
+          "precision": "FP4 MoE experts, FP8 attention/dense with BF16/F32 auxiliary tensors",
+          "runtime": {
+            "backend": "sglang",
+            "image": "lmsysorg/sglang@sha256:e0a0ebb70572a70d2a90759de96482e7f482d501283c48c3393b1e62198051ef",
+            "upstreamTag": "deepseek-v4-grace-blackwell"
+          },
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProduct": "NVIDIA-GB200",
+            "modelNodeCount": 1,
+            "gpusPerNode": 4,
+            "tensorParallelSize": 4
+          },
+          "validation": {
+            "status": "unqualified",
+            "scope": "Upstream documentation and image metadata only. No local container launch, model download, inference, recovery or isolation test."
+          }
+        }
+      ]
+    },
+    {
+      "id": "glm-5.3",
+      "name": "GLM-5.3",
+      "servedModelId": "GLM-5.3-UD-IQ2_M",
+      "availability": {
+        "status": "available",
+        "deployable": true
+      },
+      "precision": "UD-IQ2_M",
+      "license": "glm-5.3",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "unsloth/GLM-5.3-GGUF",
+        "revision": "346b3591c7f28d1a23716f97a065ecf12ec14771",
+        "weightBytes": 238577585701
+      },
+      "runtime": {
+        "backend": "llama.cpp",
+        "revision": "f872b591121761ac7b2af18283bd99bdc092a63a",
+        "image": "nvcr.io/nvidia/vllm@sha256:67c617846180989a71e0f353c8b101e9808dc7c2638b60f890064e3d7b660282"
+      },
+      "profiles": [
+        {
+          "id": "gb10-x2",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuCount": 1,
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA_GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "computeCapability": "12.1",
+            "memoryMode": "unified",
+            "minHostMemoryGiB": 120
+          },
+          "modelNodeCount": 2,
+          "gpusPerNode": 1,
+          "minimumAvailableMemoryBytesPerNode": 121332826112,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 8000,
+                "cpuLimitMillicores": 12000,
+                "memoryRequestBytes": 118111600640,
+                "memoryLimitBytes": 122406567936,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "servingResources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": 12000,
+                "memoryRequestBytes": 118111600640,
+                "memoryLimitBytes": 122406567936,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 429496729600
+              },
+              "preparationResources": {
+                "cpuRequestMillicores": 8000,
+                "cpuLimitMillicores": 12000,
+                "memoryRequestBytes": 25769803776,
+                "memoryLimitBytes": 42949672960,
+                "gpuRequest": 0,
+                "gpuLimit": 0
+              },
+              "additionalWorkloads": [
+                {
+                  "role": "artifacts",
+                  "sharesModelClaim": true,
+                  "resources": {
+                    "cpuRequestMillicores": 100,
+                    "cpuLimitMillicores": 1000,
+                    "memoryRequestBytes": 134217728,
+                    "memoryLimitBytes": 536870912,
+                    "gpuRequest": 0,
+                    "gpuLimit": 0
+                  }
+                }
+              ]
+            },
+            {
+              "rank": 1,
+              "role": "rpc",
+              "resources": {
+                "cpuRequestMillicores": 2000,
+                "cpuLimitMillicores": 8000,
+                "memoryRequestBytes": 118111600640,
+                "memoryLimitBytes": 122406567936,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "servingResources": {
+                "cpuRequestMillicores": 2000,
+                "cpuLimitMillicores": 8000,
+                "memoryRequestBytes": 118111600640,
+                "memoryLimitBytes": 122406567936,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 171798691840
+              }
+            }
+          ],
+          "workload": {
+            "defaultContextTokens": 2048,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 2048,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "hardware-validated",
+            "automaticHelmStatus": "failed",
+            "automaticHelmWorkload": {
+              "status": "failed",
+              "date": "2026-10-07",
+              "profile": "gb10-x2",
+              "modelRevision": "346b3591c7f28d1a23716f97a065ecf12ec14771",
+              "runtimeImage": "nvcr.io/nvidia/vllm@sha256:67c617846180989a71e0f353c8b101e9808dc7c2638b60f890064e3d7b660282",
+              "contextLength": 2048,
+              "concurrency": 1,
+              "tensorSplit": [
+                1,
+                1
+              ],
+              "cacheMode": "retained-offline",
+              "reason": "host_available",
+              "phase": "model-loading",
+              "checksPassed": [
+                "placement",
+                "gpu-qualification",
+                "distributed-runtime-qualification",
+                "runtime-integrity",
+                "model-integrity"
+              ],
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "scope": "The combined two-GB10 deployment passed inference and worker recovery. The cached automatic Helm trial passed qualification and weight verification, then stopped at the host-memory guard during model loading.",
+            "workload": {
+              "contextLength": 2048,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-gguf-backend",
+              "version": "0.2.0",
+              "localPath": "charts/gguf-backend",
+              "archive": "pylon-gguf-backend-0.2.0.tgz",
+              "repository": null,
+              "publication": "local"
+            },
+            "releaseName": "glm",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "glm-5.3",
+              "profileName": "gb10-x2"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../ADVANCED.md#helm-glm-recipe"
+          }
+        }
+      ]
+    },
+    {
+      "id": "nemotron-5-nano-12b",
+      "name": "Nemotron 5 Nano 12B",
+      "servedModelId": null,
+      "availability": {
+        "status": "unavailable",
+        "deployable": false,
+        "reason": "Exact-name public artifact and access status remain unverified.",
+        "checkedAt": "2026-10-07",
+        "sources": [
+          "https://huggingface.co/api/models?author=nvidia&search=Nemotron&limit=1000",
+          "https://huggingface.co/nvidia",
+          "https://www.nvidia.com/en-us/ai-data-science/foundation-models/nemotron/"
+        ]
+      },
+      "precision": null,
+      "license": null,
+      "licenseNotice": null,
+      "model": null,
+      "runtime": null,
+      "profiles": [],
+      "upstreamCandidates": []
+    },
+    {
+      "id": "nemotron-5-super-49b",
+      "name": "Nemotron 5 Super 49B",
+      "servedModelId": null,
+      "availability": {
+        "status": "unavailable",
+        "deployable": false,
+        "reason": "Exact-name public artifact and access status remain unverified.",
+        "checkedAt": "2026-10-07",
+        "sources": [
+          "https://huggingface.co/api/models?author=nvidia&search=Nemotron&limit=1000",
+          "https://huggingface.co/nvidia",
+          "https://www.nvidia.com/en-us/ai-data-science/foundation-models/nemotron/"
+        ]
+      },
+      "precision": null,
+      "license": null,
+      "licenseNotice": null,
+      "model": null,
+      "runtime": null,
+      "profiles": [],
+      "upstreamCandidates": []
+    },
+    {
+      "id": "qwen3.8-27b",
+      "name": "Qwen3.8-27B",
+      "servedModelId": "qwen3.8-27b",
+      "availability": {
+        "status": "available",
+        "deployable": true
+      },
+      "precision": "FP8",
+      "license": "Apache-2.0",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "Qwen/Qwen3.8-27B-FP8",
+        "revision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+        "weightBytes": null
+      },
+      "runtime": {
+        "backend": "sglang",
+        "version": "SGLang v0.5.19",
+        "image": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513"
+      },
+      "profiles": [
+        {
+          "id": "spark-fp8",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 111669149696,
+                "memoryLimitBytes": 120259084288,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 85899345920,
+                "minimumFreeBytesBeforeDownload": 42949672960
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 9216,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-06",
+              "profile": "spark-fp8",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-07",
+              "profile": "spark-fp8",
+              "modelRevision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "cacheMode": "retained-offline",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication",
+                "original-release-restoration"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.2.0",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "repository": null,
+              "publication": "local"
+            },
+            "releaseName": "qwen-fp8",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.8-27b",
+              "profileName": "spark-fp8"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../README.md"
+          }
+        }
+      ]
+    },
+    {
+      "id": "qwen3.8-27b-nvfp4",
+      "name": "Qwen3.8-27B",
+      "servedModelId": "qwen3.8-27b-nvfp4",
+      "availability": {
+        "status": "available",
+        "deployable": true
+      },
+      "precision": "NVFP4",
+      "license": "Apache-2.0",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "nvidia/Qwen3.8-27B-NVFP4",
+        "revision": "482ca0f3832238542f8f5295dde86b5f22711d80",
+        "weightBytes": null
+      },
+      "runtime": {
+        "backend": "sglang",
+        "version": "SGLang v0.5.19",
+        "image": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513"
+      },
+      "profiles": [
+        {
+          "id": "spark-nvfp4",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 111669149696,
+                "memoryLimitBytes": 120259084288,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 85899345920,
+                "minimumFreeBytesBeforeDownload": 42949672960
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 9216,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-06",
+              "profile": "spark-nvfp4",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "lifecycleIsolationVerified": true,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-07",
+              "profile": "spark-nvfp4",
+              "modelRevision": "482ca0f3832238542f8f5295dde86b5f22711d80",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "cacheMode": "retained-offline",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication",
+                "other-model-isolation",
+                "original-release-restoration"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.2.0",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "repository": null,
+              "publication": "local"
+            },
+            "releaseName": "qwen-nvfp4",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.8-27b-nvfp4",
+              "profileName": "spark-nvfp4"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../README.md"
+          }
+        }
+      ]
+    },
+    {
+      "id": "qwen3.8-4b",
+      "name": "Qwen3.8-4B",
+      "servedModelId": null,
+      "availability": {
+        "status": "unavailable",
+        "deployable": false,
+        "reason": "Exact-name public artifact and access status remain unverified. HTTP 401 is ambiguous between private and nonexistent repositories.",
+        "checkedAt": "2026-10-07",
+        "sources": [
+          "https://huggingface.co/collections/Qwen/qwen38",
+          "https://huggingface.co/Qwen",
+          "https://huggingface.co/api/models?author=Qwen&search=Qwen3.8&limit=100&full=true",
+          "https://huggingface.co/api/models/Qwen/Qwen3.8-4B"
+        ]
+      },
+      "precision": null,
+      "license": null,
+      "licenseNotice": null,
+      "model": null,
+      "runtime": null,
+      "profiles": [],
+      "upstreamCandidates": []
+    },
+    {
+      "id": "qwen3.8-flash-next",
+      "name": "Qwen3.8-Flash-Next",
+      "servedModelId": "qwen3.8-flash-next",
+      "availability": {
+        "status": "available",
+        "deployable": true
+      },
+      "precision": "NVFP4",
+      "license": "Qwen Community 1.0 (base model); derivative card declares other",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "RadixArk/Qwen3.8-Flash-Next-NVFP4",
+        "revision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+        "weightBytes": null
+      },
+      "runtime": {
+        "backend": "sglang",
+        "version": "SGLang dev-qwen38-next-local (pinned ARM64 digest)",
+        "image": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06"
+      },
+      "profiles": [
+        {
+          "id": "spark-nvfp4-nvme",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 118111600640,
+                "memoryLimitBytes": 122406567936,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 193273528320,
+                "minimumFreeBytesBeforeDownload": 150323855360,
+                "offloadBytes": 60129542144,
+                "offloadMedium": "local-nvme"
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 262144,
+            "maximumConcurrency": 8
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-07",
+              "profile": "spark-nvfp4-nvme",
+              "modelRevision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+              "runtimeImage": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-07",
+              "profile": "spark-nvfp4-nvme",
+              "modelRevision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+              "runtimeImage": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "status": "smoke-tested",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "local-pcie-nvme",
+                "embedding-offload",
+                "readiness",
+                "registration",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.2.0",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "repository": null,
+              "publication": "local"
+            },
+            "releaseName": "qwen-flash",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.8-flash-next",
+              "profileName": "spark-nvfp4-nvme"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap",
+              "nodeCapabilities"
+            ],
+            "guide": "../ADVANCED.md#helm-flash-next-recipes"
+          }
+        },
+        {
+          "id": "spark-nvfp4-tp2",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 2,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 118111600640,
+                "memoryLimitBytes": 122406567936,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 193273528320,
+                "minimumFreeBytesBeforeDownload": 150323855360
+              }
+            },
+            {
+              "rank": 1,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 118111600640,
+                "memoryLimitBytes": 122406567936,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 193273528320,
+                "minimumFreeBytesBeforeDownload": 150323855360
+              }
+            }
+          ],
+          "fabric": {
+            "minimumGbps": 200
+          },
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 262144,
+            "maximumConcurrency": 24
+          },
+          "validation": {
+            "runtimeStatus": "pending",
+            "workload": null,
+            "automaticHelmStatus": "pending",
+            "automaticHelmWorkload": null
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.2.0",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "repository": null,
+              "publication": "local"
+            },
+            "releaseName": "qwen-flash",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.8-flash-next",
+              "profileName": "spark-nvfp4-tp2"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap",
+              "nodeCapabilities"
+            ],
+            "guide": "../ADVANCED.md#helm-flash-next-recipes"
+          }
+        }
+      ]
+    }
+  ]
+}

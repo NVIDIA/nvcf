@@ -1,0 +1,87 @@
+{{/* SPDX-License-Identifier: Apache-2.0 */}}
+{{- $operator := .Values.operator -}}
+{{- $stack := .Values.gatewayStack -}}
+{{- $context := .Subcharts.gatewayStack -}}
+{{- $gateway := index $stack "llm-api-gateway" "llmApiGateway" -}}
+{{- $router := index $stack "llm-request-router" "llmRequestRouter" -}}
+{{- if or (ne (len $operator.watchNamespaces) 1) (not (has .Release.Namespace $operator.watchNamespaces)) -}}
+{{- fail "shared-stack: operator.watchNamespaces must contain exactly the Helm release namespace" -}}
+{{- end -}}
+{{- if $operator.extraArgs -}}{{- fail "shared-stack: operator.extraArgs must be empty so namespace and credential arguments cannot be overridden" -}}{{- end -}}
+{{- if or $operator.credential.generate (not $operator.credential.existingSecret) (ne $operator.credential.key "cluster-token") -}}
+{{- fail "shared-stack: operator.credential requires existingSecret, key cluster-token and generate false" -}}
+{{- end -}}
+{{- if or $stack.clusterCredential.create $stack.apiKeysSecret.create $stack.demoUiApiKey -}}
+{{- fail "shared-stack: leave gatewayStack credential creation and demoUiApiKey disabled; this chart wires authentication" -}}
+{{- end -}}
+{{- if or (ne $gateway.auth.mode "staticKeys") (not $gateway.auth.staticKeys.existingSecret) $router.auth.workerAuthEndpoint (not $router.auth.credentialsSecret.name) -}}
+{{- fail "shared-stack: gateway and router must use the configured static credential Secrets" -}}
+{{- end -}}
+{{- if or (not $gateway.tls.enabled) (ne $router.tls.mode "existingSecret") $router.tls.quicInsecure $operator.devInsecureTransport -}}
+{{- fail "shared-stack: verified gateway and router TLS is required" -}}
+{{- end -}}
+{{- $routerAddress := printf "http://%s:%v" (include "llm-gateway-stack.routerName" $context) $router.service.grpcPort -}}
+{{- if ne $operator.router.grpcAddress $routerAddress -}}
+{{- fail (printf "shared-stack: operator.router.grpcAddress must be %s" $routerAddress) -}}
+{{- end -}}
+{{- range $component, $image := dict "gateway" $gateway.image "router" $router.image "operator" $operator.image "pylon" $operator.pylon.image -}}
+{{- $ref := printf "%s/%s:%s" ($image.registry | default "") $image.repository ($image.tag | toString) -}}
+{{- if or (not $image.repository) (not $image.tag) (regexMatch "[<>[:space:]]|example[.]|YOUR_|REPLACE_|placeholder" $ref) -}}
+{{- fail (printf "shared-stack: set an explicit %s image repository and tag; placeholder images cannot be installed" $component) -}}
+{{- end -}}
+{{- if not (has $image.pullPolicy (list "Always" "IfNotPresent" "Never")) -}}{{- fail (printf "shared-stack: invalid %s image pullPolicy" $component) -}}{{- end -}}
+{{- end -}}
+{{- $names := list (default .Values.callerKey.secretName .Values.callerKey.existingSecret) $operator.credential.existingSecret $gateway.auth.staticKeys.existingSecret $router.auth.credentialsSecret.name $gateway.tls.existingSecret $router.tls.secretName -}}
+{{- if $stack.tls.selfSigned.enabled -}}{{- $names = append $names $stack.tls.selfSigned.caName -}}{{- end -}}
+{{- if ne (len (uniq $names)) (len $names) -}}{{- fail "shared-stack: credential and TLS Secret names must be distinct" -}}{{- end -}}
+{{- range $name := $names -}}
+{{- if or (gt (len $name) 253) (not (regexMatch "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$" $name)) -}}{{- fail "shared-stack: Secret names must be nonempty DNS names" -}}{{- end -}}
+{{- end -}}
+
+{{- $crd := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "inferenceendpoints.pylon.nvidia.com" -}}
+{{- $manageCRDs := $operator.installCRDs -}}
+{{- if $manageCRDs -}}
+{{- if $crd -}}{{- include "llm-shared.owned" (dict "root" . "resource" $crd) -}}{{- end -}}
+{{- else if not (.Capabilities.APIVersions.Has "pylon.nvidia.com/v1alpha1") -}}
+{{- fail "shared-stack: no served InferenceEndpoint API; operator.installCRDs=false requires an existing CRD; use true to install it, or supply --api-versions pylon.nvidia.com/v1alpha1 for offline rendering" -}}
+{{- end -}}
+{{- if $crd -}}
+{{- $compatible := false -}}
+{{- range $version := $crd.spec.versions -}}
+{{- if and (eq $version.name "v1alpha1") $version.served -}}
+{{- $fields := dig "schema" "openAPIV3Schema" "properties" "spec" "properties" (dict) $version -}}
+{{- $compatible = and (hasKey $fields "modelName") (hasKey $fields "service") (hasKey $fields "inferenceAPIFormat") (hasKey $fields "health") (hasKey $fields "maxEngineConcurrency") -}}
+{{- end -}}
+{{- end -}}
+{{- if not (and (eq $crd.spec.group "pylon.nvidia.com") (eq $crd.spec.scope "Namespaced") (eq $crd.spec.names.kind "InferenceEndpoint")) -}}
+{{- fail "shared-stack: existing InferenceEndpoint CRD is incompatible" -}}
+{{- end -}}
+{{- if and (not $manageCRDs) (not $compatible) -}}
+{{- fail "shared-stack: existing InferenceEndpoint CRD is incompatible; upgrade the release that owns it before installing this stack" -}}
+{{- end -}}
+{{- end -}}
+
+{{- $tls := $stack.tls.selfSigned -}}
+{{- if $tls.enabled -}}
+{{- if ne $operator.trustBundle.configMap $tls.caName -}}{{- fail "shared-stack: operator.trustBundle.configMap must match gatewayStack.tls.selfSigned.caName" -}}{{- end -}}
+{{- $routerNames := include "llm-gateway-stack.routerDnsNames" $context | fromJsonArray | join "," -}}
+{{- $gatewayDns := include "llm-gateway-stack.gatewayDnsNames" $context | fromJsonArray -}}
+{{- $gatewayNames := concat $gatewayDns ($tls.gatewayIPs | default list | uniq) | join "," -}}
+{{- range $name, $names := dict $tls.caName "" $router.tls.secretName $routerNames $gateway.tls.existingSecret $gatewayNames -}}
+{{- $secret := lookup "v1" "Secret" $.Release.Namespace $name -}}
+{{- if $secret -}}
+{{- include "llm-shared.owned" (dict "root" $ "resource" $secret) -}}
+{{- if or (not (index ($secret.data | default dict) "tls.crt")) (not (index ($secret.data | default dict) "tls.key")) -}}{{- fail (printf "shared-stack: TLS Secret %s is incomplete; restore it before continuing" $name) -}}{{- end -}}
+{{- if and $names (ne (index ($secret.metadata.annotations | default dict) "llm-gateway-stack.nvidia.com/subject-alt-names") $names) -}}{{- fail (printf "shared-stack: TLS names changed for %s; use explicitly managed TLS Secrets for certificate replacement" $name) -}}{{- end -}}
+{{- else if $.Release.IsUpgrade -}}
+{{- fail (printf "shared-stack: TLS Secret %s is missing; restore it before upgrading" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- else -}}
+{{- range $name := list $router.tls.secretName $gateway.tls.existingSecret -}}
+{{- $secret := lookup "v1" "Secret" $.Release.Namespace $name -}}
+{{- if or (not (index ($secret.data | default dict) "tls.crt")) (not (index ($secret.data | default dict) "tls.key")) -}}{{- fail (printf "shared-stack: pre-create TLS Secret %s with tls.crt and tls.key" $name) -}}{{- end -}}
+{{- end -}}
+{{- $ca := lookup "v1" "ConfigMap" .Release.Namespace $operator.trustBundle.configMap -}}
+{{- if not (index ($ca.data | default dict) "ca.crt") -}}{{- fail "shared-stack: pre-create the operator trustBundle ConfigMap containing ca.crt" -}}{{- end -}}
+{{- end -}}

@@ -1,29 +1,28 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-License-Identifier: Apache-2.0
-"""Metrics collection and verification for an LLM routing stack."""
+"""Inspect, configure and verify monitoring for the Helm-installed routing stack."""
+import argparse
 import base64
 import binascii
 import contextlib
-import copy
-import ipaddress
 import json
 import pathlib
-import re
-import secrets
 import socket
 import subprocess
-import tarfile
+import sys
+import tempfile
 import time
 import urllib.parse
 import urllib.request
 
-from client import Client
 import dashboard_login
-import gateway_access
 
 HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+import llm
+
 CHART = HERE / 'charts/monitoring'
-MAX_ARCHIVE_BYTES = 2 * 1024**3
 
 
 def require(condition, message):
@@ -31,90 +30,44 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
-def settings(config):
-    options = config.get('monitoring', {})
-    require(isinstance(options, dict), 'monitoring must be an object.')
-    require(isinstance(options.get('enabled', False), bool), 'monitoring.enabled must be boolean.')
-    allowed = {'enabled', 'images', 'imagePullPolicy', 'retentionPeriod', 'storageSize', 'namespaces', 'extraTargets', 'networkPolicy', 'grafanaRootURL', 'model'}
-    require(not set(options) - allowed, 'Unknown monitoring setting: ' + ', '.join(sorted(set(options) - allowed)))
-    if 'model' in options:
-        require(isinstance(options['model'], str) and bool(options['model'].strip()), 'monitoring.model must be a nonempty model ID.')
-    return options
+def shared_stack(context, namespace):
+    """Read the shared Helm release without a saved connection file."""
+    values = json.loads(llm.run(['helm', '--kube-context', context, '--namespace', namespace,
+                                'get', 'values', 'llm-stack', '--all', '-o', 'json']))
+    require(values.get('operator', {}).get('watchNamespaces') == [namespace],
+            'The shared operator must watch the selected namespace.')
+    deployments = json.loads(llm.run(llm.kube(context, namespace, 'get', 'deployments', '-o', 'json')))['items']
+    components = {}
+    names = {'llm-api-gateway': 'llm-api-gateway', 'llm-request-router': 'llm-request-router',
+             'pylon-operator': values['operator'].get('nameOverride') or 'operator'}
+    for component, name in names.items():
+        selected = [d for d in deployments if d['metadata'].get('labels', {}).get('app.kubernetes.io/name') == name
+                    and d['metadata'].get('annotations', {}).get('meta.helm.sh/release-name') == 'llm-stack'
+                    and d['metadata'].get('annotations', {}).get('meta.helm.sh/release-namespace') == namespace]
+        require(len(selected) == 1, 'Expected one shared-release Deployment for '+component)
+        components[component] = selected[0]
+    return values, components
 
 
-def enabled(config):
-    return settings(config).get('enabled', False)
-
-
-def chart_values(recipe):
-    options = settings(recipe.c)
-    values = json.loads((CHART / 'values.yaml').read_text())
-    values.update(enabled=enabled(recipe.c), nodeSelector={'kubernetes.io/hostname': recipe.c['nodes']['control']},
-                  imagePullPolicy=options.get('imagePullPolicy', values['imagePullPolicy']))
-    require(values['imagePullPolicy'] in ('Never', 'IfNotPresent', 'Always'), 'Invalid monitoring imagePullPolicy.')
-    namespaces = options.get('namespaces', [recipe.c['namespace']])
-    require(isinstance(namespaces, list) and namespaces and all(isinstance(n, str) and re.fullmatch(r'[a-z0-9]([-a-z0-9]*[a-z0-9])?', n) for n in namespaces),
-            'monitoring.namespaces must list explicit Kubernetes namespace names.')
-    require(recipe.c['namespace'] in namespaces, 'monitoring.namespaces must include the installation namespace.')
-    values['namespaces'] = sorted(set(namespaces))
-    policy = options.get('networkPolicy', {})
-    require(isinstance(policy, dict) and set(policy) <= {'enabled', 'apiServerCIDRs'}, 'Invalid monitoring networkPolicy.')
-    values['networkPolicy'].update(policy)
-    policy = values['networkPolicy']
-    require(isinstance(policy['enabled'], bool), 'networkPolicy.enabled must be boolean.')
-    require(isinstance(policy['apiServerCIDRs'], list), 'networkPolicy.apiServerCIDRs must be a list.')
-    for cidr in policy['apiServerCIDRs']:
-        require(isinstance(cidr, str) and '/' in cidr, 'Use explicit API server host CIDRs.')
-        try:
-            network = ipaddress.ip_network(cidr)
-        except ValueError:
-            raise RuntimeError('Invalid API server host CIDR.') from None
-        require(network.prefixlen == network.max_prefixlen, 'Use /32 or /128 API server host CIDRs.')
-    require(not policy['enabled'] or policy['apiServerCIDRs'], 'Restricted monitoring needs API server host CIDRs.')
-    images = options.get('images', {})
-    require(isinstance(images, dict) and not set(images) - {'collector', 'victoriaMetrics', 'grafana'}, 'Unknown monitoring image component.')
-    for component, image in images.items():
-        require(isinstance(image, str) and re.fullmatch(r'[^\s]+(?::[A-Za-z0-9_.-]+|@sha256:[a-f0-9]{64})', image) and not image.endswith(':latest'),
-                'Monitoring images must have an explicit version tag or digest.')
-        values[component]['image'] = image
-    values['victoriaMetrics']['retentionPeriod'] = options.get('retentionPeriod', '3d')
-    retention = values['victoriaMetrics']['retentionPeriod']
-    duration = re.fullmatch(r'([1-9][0-9]*)([hdwMy])', retention) if isinstance(retention, str) else None
-    require(duration is not None and (duration[2] != 'h' or int(duration[1]) >= 24),
-            'Use a retention of at least 24h with h, d, w, M or y, such as 3d.')
-    storage = values['victoriaMetrics']['storage']
-    storage.update(storageClass=recipe.c['storageClass'], size=options.get('storageSize', '5Gi'))
-    require(re.fullmatch(r'[1-9][0-9]*(Mi|Gi|Ti)', storage['size']) is not None, 'Use a storageSize such as 5Gi.')
-    def target(name, selector, port_name, port=0):
-        return {'name': name, 'selector': selector, 'portName': port_name, 'port': port}
-    values['targets'] = [
-        target('gateway', 'app.kubernetes.io/name=llm-api-gateway,app.kubernetes.io/instance='+recipe.stack, 'http', 9464),
-        target('router', 'app.kubernetes.io/name=llm-request-router,app.kubernetes.io/instance='+recipe.stack, 'metrics'),
-        target('operator', 'app.kubernetes.io/instance='+recipe.operator, 'metrics'),
-        target('pylon', 'app.kubernetes.io/name=pylon,app.kubernetes.io/managed-by=pylon-operator', 'metrics')]
-    extra = options.get('extraTargets', [])
-    require(isinstance(extra, list), 'monitoring.extraTargets must be a list.')
-    names = {t['name'] for t in values['targets']} | {'monitoring-storage', 'monitoring-grafana', 'monitoring-collector'}
-    for t in extra:
-        require(isinstance(t, dict) and set(t) <= {'name', 'selector', 'portName', 'port', 'path', 'runtime'}, 'Invalid extra monitoring target.')
-        require(isinstance(t.get('name'), str) and re.fullmatch(r'[a-z][a-z0-9-]*', t['name']) and t['name'] not in names, 'Monitoring target names must be unique.')
-        require(isinstance(t.get('selector'), str) and t['selector'].strip() and isinstance(t.get('portName'), str) and t['portName'], 'Monitoring targets need selector and portName.')
-        require(type(t.get('port', 0)) is int and 0 <= t.get('port', 0) <= 65535, 'Invalid monitoring target port.')
-        require(isinstance(t.get('path', '/metrics'), str) and t.get('path', '/metrics').startswith('/'), 'Invalid metrics path.')
-        require('runtime' not in t or t['runtime'] == 'llama.cpp', 'Supported backend dashboard runtime: llama.cpp. Omit runtime for raw exporter metrics.')
-        names.add(t['name'])
-    values['targets'].extend(copy.deepcopy(extra))
-    root_url = options.get('grafanaRootURL', '')
-    require(isinstance(root_url, str) and (root_url == '' or re.fullmatch(r'(https?|%\(protocol\)s)://\S+/', root_url) is not None),
-            'grafanaRootURL must be a URL ending in /, such as %(protocol)s://%(domain)s:%(http_port)s/grafana/')
-    values['grafana']['rootURL'] = root_url
-    values['grafana']['adminSecret'] = recipe.c['releasePrefix']+'-monitoring-grafana-admin'
+def chart_values(context, namespace):
+    stack, components = shared_stack(context, namespace)
+    values = json.loads((CHART/'values.yaml').read_text())
+    values.update(enabled=True, namespaces=[namespace])
+    values['targets'] = []
+    for component, name, port_name in (('gateway', 'llm-api-gateway', 'http'),
+                                       ('router', 'llm-request-router', 'metrics'),
+                                       ('operator', 'pylon-operator', 'metrics')):
+        deployment = components[name]
+        labels = deployment['spec']['selector']['matchLabels']
+        values['targets'].append({'name': component, 'selector': ','.join(k+'='+v for k, v in sorted(labels.items())),
+                                 'portName': port_name})
+    metrics = stack['gatewayStack']['llm-api-gateway']['llmApiGateway'].get('metrics', {})
+    port = metrics.get('port', 9464) if metrics.get('enabled') else 9464
+    require(type(port) is int and 1 <= port <= 65535, 'Gateway metrics port must be an integer from 1 to 65535.')
+    values['targets'][0]['port'] = port
+    values['targets'].append({'name': 'pylon', 'selector': 'app.kubernetes.io/name=pylon,app.kubernetes.io/managed-by=pylon-operator',
+                              'portName': 'metrics'})
     return values
-
-
-def image_list(recipe):
-    values = chart_values(recipe)
-    return [values[k]['image'] for k in ('collector', 'victoriaMetrics', 'grafana')]
 
 
 def gateway_response(client, path, payload=None):
@@ -197,78 +150,25 @@ def sample_completion(client, model, stream):
 
 
 class Monitoring:
-    def __init__(self, recipe, run, output, save):
-        self.recipe = recipe
-        self.run, self.output, self.save = run, output, save
-        self.release = recipe.c['releasePrefix']+'-monitoring'
-
-    def release_exists(self):
-        existing = json.loads(self.output(self.recipe.hm+['list', '--deployed', '--failed', '--pending', '--uninstalled', '--superseded', '--uninstalling', '--filter', '^'+re.escape(self.release)+'$', '-o', 'json']))
-        require(all(item['chart'].startswith('llm-demo-monitoring-') for item in existing), 'Monitoring release belongs to another chart.')
-        return bool(existing)
-
-    def install(self):
-        r = self.recipe
-        require(enabled(r.c), 'Set monitoring.enabled=true in the saved configuration.')
-        r.bound_cluster()
-        values = chart_values(r)
-        stack = json.loads(self.output(r.hm+['get', 'values', r.stack, '--all', '-o', 'json']))
-        metrics = stack.get('llm-api-gateway', {}).get('llmApiGateway', {}).get('metrics', {})
-        if metrics.get('enabled'):
-            port = metrics.get('port', 9464)
-            require(type(port) is int and 1 <= port <= 65535, 'Gateway metrics port must be an integer from 1 to 65535.')
-            values['targets'][0]['port'] = port
-        existing = self.release_exists()
-        secret = json.loads(self.output(r.kc+['get', 'secret', values['grafana']['adminSecret'], '--ignore-not-found', '-o', 'json']) or '{}')
-        if secret:
-            owner = secret['metadata'].get('annotations', {})
-            require(owner.get('meta.helm.sh/release-name') == self.release and owner.get('meta.helm.sh/release-namespace') == r.c['namespace'], 'Grafana credential Secret belongs to another installation.')
-            password = base64.b64decode(secret['data']['admin-password']).decode()
-        else:
-            require(not existing, 'Existing monitoring release has lost its credential Secret. Restore it before upgrading.')
-            password = secrets.token_urlsafe(36)
-        values['grafana']['adminPassword'] = password
-        r.helm_apply(self.release, CHART, values)
-        r.stamp('monitoring', {'release': self.release})
-        print('Monitoring installed.')
-
-    def uninstall(self):
-        r = self.recipe
-        r.bound_cluster()
-        if self.release_exists():
-            self.run(r.hm+['uninstall', self.release, '--ignore-not-found', '--wait', '--timeout', '3m'])
-        if 'monitoring' in r.state:
-            require(r.state_path.exists() and json.loads(r.state_path.read_text()) == r.state,
-                    'Monitoring was removed, but local progress changed. No progress was overwritten.')
-            del r.state['monitoring']
-            self.save(r.state_path, r.state)
-        print('Monitoring removed. Metrics storage retained.')
-
-    def export_images(self, archive):
-        images = image_list(self.recipe)
-        require(all('@' not in image for image in images), 'Offline Docker export requires tagged images. Use version tags for offline distribution.')
-        for image in images:
-            self.run(['docker', 'pull', '--platform', 'linux/arm64', image])
-        archive = pathlib.Path(archive).resolve()
-        command = ['docker', 'save']
-        if '--platform' in self.output(['docker', 'save', '--help']):
-            command += ['--platform', 'linux/arm64']
-        self.run(command + ['-o', archive] + images)
-        require(archive.stat().st_size < MAX_ARCHIVE_BYTES, 'Monitoring archive exceeds the importer 2 GiB limit.')
-        with tarfile.open(archive) as tar:
-            manifest = json.load(tar.extractfile('manifest.json'))
-            tags = {tag for entry in manifest for tag in entry.get('RepoTags', [])}
-            for image in images:
-                require(bool({image, image.removeprefix('docker.io/')} & tags), 'Exported archive is missing '+image)
-            for entry in manifest:
-                config = json.load(tar.extractfile(entry['Config']))
-                require(config.get('architecture') == 'arm64' and config.get('os') == 'linux',
-                        'Exported archive contains a non-ARM64 image.')
-        print('Monitoring image archive:', archive)
+    def __init__(self, context, namespace, release, work, ca_configmap=None, api_key_file=None):
+        self.context, self.namespace, self.release = context, namespace, release
+        self.work = pathlib.Path(work)
+        self.ca_configmap, self.api_key_file = ca_configmap, api_key_file
+        self.kc = llm.kube(context, namespace)
+        self.output = llm.run
+        shared_stack(context, namespace)
+        status = json.loads(llm.run(['helm', '--kube-context', context, '--namespace', namespace,
+                                    'list', '-o', 'json']))
+        require(any(r['name'] == release and r['chart'].startswith('llm-demo-monitoring-') and r['status'] == 'deployed'
+                    for r in status), 'Select a deployed monitoring Helm release with --release.')
+        self.values = json.loads(llm.run(['helm', '--kube-context', context, '--namespace', namespace,
+                                         'get', 'values', release, '--all', '-o', 'json']))
+        require(self.values.get('enabled') and namespace in self.values.get('namespaces', []),
+                'Monitoring must be enabled and scrape the shared namespace.')
 
     @contextlib.contextmanager
     def forward(self, service, port, remote_port):
-        r = self.recipe
+        r = self
         with socket.socket() as probe:
             probe.bind(('127.0.0.1', port))
         with (r.work/'monitoring-port-forward.log').open('a') as log:
@@ -293,12 +193,13 @@ class Monitoring:
                     proc.wait()
 
     def admin_credentials(self):
-        r = self.recipe
-        name = self.release+'-grafana-admin'
+        r = self
+        name = self.values['grafana'].get('adminSecret') or self.release+'-grafana-admin'
         secret = json.loads(self.output(r.kc+['get', 'secret', name, '-o', 'json']))
         owner = secret.get('metadata', {}).get('annotations', {})
-        require(owner.get('meta.helm.sh/release-name') == self.release and
-                owner.get('meta.helm.sh/release-namespace') == r.c['namespace'],
+        require(self.values['grafana'].get('adminSecret') or
+                (owner.get('meta.helm.sh/release-name') == self.release and
+                 owner.get('meta.helm.sh/release-namespace') == r.namespace),
                 'Grafana credential Secret belongs to another installation.')
         try:
             credentials = tuple(base64.b64decode(secret['data'][key], validate=True).decode()
@@ -309,7 +210,6 @@ class Monitoring:
         return credentials
 
     def dashboard(self, port, admin=False):
-        self.recipe.bound_cluster()
         credentials = self.admin_credentials() if admin else None
         with self.forward('grafana', port, 3000) as proc:
             try:
@@ -325,34 +225,18 @@ class Monitoring:
                 pass
 
     @contextlib.contextmanager
-    def traffic_client(self, port, model=None):
-        r = self.recipe
-        require(r.state.get('stack'), 'Deploy or attach to the routing stack before verifying traffic.')
-        requested = model if model is not None else settings(r.c).get('model')
-        require(requested is None or (isinstance(requested, str) and bool(requested.strip())), 'Provide a nonempty model ID.')
-        configured_key = r.c.get('apiKeyFile')
-        if configured_key is not None:
-            require(isinstance(configured_key, str) and bool(configured_key.strip()), 'apiKeyFile must name a caller-key file.')
-            existing = str(pathlib.Path(configured_key).expanduser().resolve(strict=True))
-        else:
-            existing = r.state['stack'].get('apiKeyFile')
-        url = 'https://127.0.0.1:' + str(port)
-        with r.forward(True, port):
-            access = contextlib.nullcontext(existing) if existing else gateway_access.temporary_gateway_key(r, url)
-            with access as key:
-                client = Client(url, r.work/'ca.crt', key)
-                yield client, select_model(client, requested)
+    def traffic_client(self, model=None):
+        with llm.gateway(self.context, self.namespace, self.ca_configmap, self.api_key_file) as client:
+            yield client, select_model(client, model)
 
     def verify(self, port, traffic=False, model=None):
         require(1 <= port <= 65533, 'Monitoring verification needs three consecutive local ports.')
-        r = self.recipe
-        r.bound_cluster()
-        self.save(r.work/'evidence/monitoring.json', {'passed': False, 'startedAt': time.time()})
-        values = chart_values(r)
+        r = self
+        values = self.values
         expected_pods = set()
         for namespace in values['namespaces']:
             for target in values['targets']:
-                pods = json.loads(self.output(['kubectl', '--context', r.c['context'], '-n', namespace, 'get', 'pods', '-l', target['selector'], '-o', 'json']))['items']
+                pods = json.loads(self.output(['kubectl', '--context', r.context, '-n', namespace, 'get', 'pods', '-l', target['selector'], '-o', 'json']))['items']
                 for pod in pods:
                     if pod.get('status', {}).get('phase') == 'Running' and not pod['metadata'].get('deletionTimestamp'):
                         ports = [p for c in pod['spec']['containers'] for p in c.get('ports', []) if p['name'] == target['portName']]
@@ -379,7 +263,7 @@ class Monitoring:
                         raise
                     time.sleep(min(2, remaining))
             if traffic:
-                with self.traffic_client(port+1, model) as (client, selected):
+                with self.traffic_client(model) as (client, selected):
                     selector = '{monitoring_release='+json.dumps(self.release)+',model='+json.dumps(selected, ensure_ascii=False)+'}'
                     expressions = {
                         'requests': 'sum(llm_api_gateway_http_requests_total'+selector+')',
@@ -412,10 +296,10 @@ class Monitoring:
                     'Grafana anonymous access must have Viewer permissions.')
             report['dashboardUid'] = dashboard['dashboard']['uid']
             report['anonymousViewer'] = True
-        self.save(r.work/'evidence/monitoring.json', report)
         print('Fresh metrics and provisioned dashboard verified:', ', '.join(sorted(expected)))
         if not traffic:
             print('Use --verify-traffic to check metric increases from real gateway requests.')
+        return report
 
 
 def validate_scrapes(response, expected, expected_pods=None):
@@ -429,3 +313,49 @@ def validate_scrapes(response, expected, expected_pods=None):
     failed = [s['metric'] for s in series if s.get('value', [0, '0'])[1] != '1']
     require(not failed, 'Failed scrape targets: '+json.dumps(failed, sort_keys=True))
     return {'passed': True, 'verifiedAt': time.time(), 'targets': series}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--context')
+    parser.add_argument('--namespace', default='llm-stack')
+    parser.add_argument('--release', default='llm-monitoring')
+    parser.add_argument('--ca-configmap')
+    parser.add_argument('--api-key-file', type=pathlib.Path)
+    sub = parser.add_subparsers(dest='command', required=True)
+    values = sub.add_parser('values', help='Write nonsecret monitoring Helm values from the installed stack.')
+    values.add_argument('--output', type=pathlib.Path, required=True)
+    dashboard = sub.add_parser('dashboard')
+    dashboard.add_argument('--port', type=int, default=13000)
+    dashboard.add_argument('--admin', action='store_true')
+    verify = sub.add_parser('verify')
+    verify.add_argument('--port', type=int, default=18428)
+    verify.add_argument('--verify-traffic', action='store_true')
+    verify.add_argument('--model')
+    verify.add_argument('--output', type=pathlib.Path, required=True)
+    args = parser.parse_args(argv)
+    if hasattr(args, 'output') and args.output.exists():
+        parser.error('Use a new output file.')
+    context = llm.selected_context(args.context)
+    if args.command == 'values':
+        result = chart_values(context, args.namespace)
+    else:
+        with tempfile.TemporaryDirectory(prefix='llm-monitoring-') as work:
+            monitor = Monitoring(context, args.namespace, args.release, work, args.ca_configmap, args.api_key_file)
+            if args.command == 'dashboard':
+                require(1 <= args.port <= 65535, 'Provide a valid dashboard port.')
+                monitor.dashboard(args.port, args.admin)
+                return
+            result = monitor.verify(args.port, args.verify_traffic, args.model)
+    with args.output.open('x') as out:
+        args.output.chmod(0o600)
+        json.dump(result, out, indent=2)
+        out.write('\n')
+    print('Saved:', args.output)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (RuntimeError, ValueError, OSError, KeyError) as error:
+        raise SystemExit(str(error)) from None

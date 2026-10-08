@@ -2,6 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 apiVersion: v2
 name: pylon-gguf-backend
-description: Scoped CUDA and distributed GGUF backend integration checks
+description: Pinned GGUF recipes with Kubernetes preparation and distributed serving
 type: application
-version: 0.1.0
+version: 0.2.0

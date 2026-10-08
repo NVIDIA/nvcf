@@ -55,11 +55,89 @@ class ClientTests(unittest.TestCase):
         self.assertTrue(result['usage'])
         connection.close.assert_called_once()
 
+    def test_interactive_length_completion_is_returned_with_neutral_parameters(self):
+        instance = client.Client('http://localhost:18000')
+        response = Mock(status=200)
+        response.read.return_value = json.dumps({'model': 'qwen', 'choices': [
+            {'finish_reason': 'length', 'message': {'content': 'Partial answer'}}]}).encode()
+        output, errors = io.StringIO(), io.StringIO()
+        with patch.object(instance, 'request', return_value=(Mock(), response)) as request, \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            result = instance.completion('qwen', 'explain', display=True, strict=False, max_tokens=4096)
+        self.assertEqual(result['content'], 'Partial answer')
+        self.assertEqual(result['finishes'], ['length'])
+        self.assertEqual(request.call_args.args[1], {'model': 'qwen', 'messages': [
+            {'role': 'user', 'content': 'explain'}], 'stream': False, 'max_tokens': 4096})
+        self.assertIn('Partial answer', output.getvalue())
+        self.assertIn('Token limit reached', errors.getvalue())
+        with patch.object(instance, 'request', return_value=(Mock(), response)), self.assertRaisesRegex(RuntimeError, 'incomplete'):
+            instance.completion('qwen', 'explain')
+
+    def test_interactive_stream_accepts_length_without_usage_but_requires_done(self):
+        instance = client.Client('http://localhost:18000')
+        for done in (True, False):
+            response = Mock(status=200)
+            event = {'model': 'qwen', 'choices': [{'delta': {'content': 'partial'}, 'finish_reason': 'length'}]}
+            lines = [('data: ' + json.dumps(event) + '\n').encode()]
+            if done:
+                lines.append(b'data: [DONE]\n')
+            response.__iter__ = Mock(return_value=iter(lines))
+            with patch.object(instance, 'request', return_value=(Mock(), response)) as request:
+                if done:
+                    result = instance.completion('qwen', 'explain', stream=True, strict=False)
+                    self.assertEqual(result['content'], 'partial')
+                    self.assertNotIn('max_tokens', request.call_args.args[1])
+                    self.assertNotIn('chat_template_kwargs', request.call_args.args[1])
+                else:
+                    with self.assertRaisesRegex(RuntimeError, 'Incomplete SSE'):
+                        instance.completion('qwen', 'explain', stream=True, strict=False)
+
+    def test_interactive_reasoning_only_length_is_not_a_transport_failure(self):
+        instance = client.Client('http://localhost:18000')
+        response = Mock(status=200)
+        response.read.return_value = json.dumps({'model': 'qwen', 'choices': [
+            {'finish_reason': 'length', 'message': {'reasoning_content': 'thinking'}}]}).encode()
+        with patch.object(instance, 'request', return_value=(Mock(), response)):
+            result = instance.completion('qwen', 'explain', strict=False)
+        self.assertEqual(result['content'], '')
+        self.assertEqual(result['finishes'], ['length'])
+
     def test_truncated_sse_is_not_success(self):
         c = client.Client('http://127.0.0.1:18000')
         with patch.object(c, 'request', return_value=(Mock(), stream(False))):
             with self.assertRaisesRegex(RuntimeError, 'Incomplete SSE'):
                 c.completion(MODEL, 'calculate', True)
+
+    def test_stream_rejects_wrong_model_error_and_empty_usage(self):
+        instance = client.Client('http://localhost:18000')
+        for change in ({'model': 'other'}, {'error': {'message': 'failed'}}, {'usage': {'completion_tokens': 0}}):
+            response = stream()
+            lines = list(response)
+            event = json.loads(lines[2].decode().removeprefix('data: '))
+            event.update(change)
+            lines[2] = ('data: '+json.dumps(event)+'\n').encode()
+            response.__iter__ = Mock(return_value=iter(lines))
+            with self.subTest(change=change), patch.object(instance, 'request', return_value=(Mock(), response)), self.assertRaises(RuntimeError):
+                instance.completion(MODEL, 'hello', True)
+
+    def test_response_limits_and_redirects_fail_before_success(self):
+        with self.assertRaisesRegex(RuntimeError, 'limit'):
+            client.read_bounded(io.BytesIO(b'x'*(client.MAX_RESPONSE_BYTES+1)))
+        instance = client.Client('http://localhost:18000')
+        response = Mock(status=200)
+        response.__iter__ = Mock(return_value=iter([b'x'*(client.MAX_RESPONSE_BYTES+1)]))
+        with patch.object(instance, 'request', return_value=(Mock(), response)), self.assertRaisesRegex(RuntimeError, 'limit'):
+            instance.completion(MODEL, 'hello', True)
+        for status in (301, 302, 307, 308):
+            connection = Mock()
+            with self.subTest(status=status), patch.object(instance, 'request', return_value=(connection, Mock(status=status))), self.assertRaisesRegex(RuntimeError, 'HTTP '+str(status)):
+                instance.public_json('/v1/models')
+            connection.close.assert_called_once()
+
+    def test_urls_with_embedded_credentials_query_or_fragment_are_rejected(self):
+        for url in ('https://user:password@gateway', 'https://gateway?secret=yes', 'https://gateway#fragment'):
+            with self.subTest(url=url), self.assertRaisesRegex(ValueError, 'origin'):
+                client.Client(url)
 
     def test_fixture_content_cannot_pass_as_a_glm_response(self):
         c = client.Client('http://127.0.0.1:18000')

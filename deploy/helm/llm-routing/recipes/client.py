@@ -14,11 +14,22 @@ import time
 import urllib.parse
 
 
+MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+
+
+def read_bounded(response):
+    data = response.read(MAX_RESPONSE_BYTES + 1)
+    if len(data) > MAX_RESPONSE_BYTES:
+        raise RuntimeError('Gateway response exceeded the verification limit.')
+    return data
+
+
 class Client:
     def __init__(self, url, ca_file=None, api_key_file=None):
         self.url = urllib.parse.urlsplit(url)
-        if self.url.scheme not in ('http', 'https') or self.url.path not in ('', '/'):
-            raise ValueError('Use an http(s) origin without a path.')
+        if (self.url.scheme not in ('http', 'https') or self.url.path not in ('', '/')
+                or self.url.username or self.url.password or self.url.query or self.url.fragment):
+            raise ValueError('Use an http(s) origin without a path, credentials, query or fragment.')
         self.context = ssl.create_default_context(cafile=ca_file) if self.url.scheme == 'https' else None
         self.key = pathlib.Path(api_key_file).read_text().strip() if api_key_file else None
         if api_key_file and not self.key:
@@ -47,7 +58,7 @@ class Client:
         try:
             if response.status != 200:
                 raise RuntimeError('Discovery failed with HTTP ' + str(response.status) + ': ' + path)
-            return json.loads(response.read())
+            return json.loads(read_bounded(response))
         finally:
             connection.close()
 
@@ -78,10 +89,15 @@ class Client:
             raise RuntimeError('Expected cluster has no healthy model server.')
         return {'modelList': listing, 'model': detail, 'registry': registry}
 
-    def completion(self, model, prompt, stream=False, display=False):
-        payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}],
-                   'max_tokens': 512, 'temperature': 0, 'seed': 7, 'stream': stream,
-                   'reasoning_effort': 'low', 'chat_template_kwargs': {'clear_thinking': True}}
+    def completion(self, model, prompt, stream=False, display=False, *, max_tokens=None, strict=True):
+        if max_tokens is not None and (type(max_tokens) is not int or max_tokens < 1):
+            raise ValueError('max_tokens must be a positive integer.')
+        payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}], 'stream': stream}
+        if strict:
+            payload.update(max_tokens=512, temperature=0, seed=7,
+                           reasoning_effort='low', chat_template_kwargs={'clear_thinking': True})
+        if max_tokens is not None:
+            payload['max_tokens'] = max_tokens
         if stream:
             payload['stream_options'] = {'include_usage': True}
         started = time.monotonic()
@@ -95,7 +111,11 @@ class Client:
             if stream:
                 content, reasoning, events, usage, finishes = [], [], [], [], []
                 done = False
+                received = 0
                 for line in response:
+                    received += len(line)
+                    if received > MAX_RESPONSE_BYTES:
+                        raise RuntimeError('Gateway response exceeded the verification limit.')
                     text = line.decode().strip()
                     if not text.startswith('data:'):
                         continue
@@ -104,6 +124,8 @@ class Client:
                         done = True
                         break
                     data = json.loads(event)
+                    if data.get('error') or data.get('model', model) != model:
+                        raise RuntimeError('Streaming response reported an error or a different model.')
                     events.append(time.monotonic() - started)
                     if data.get('usage'):
                         usage.append(data['usage'])
@@ -121,20 +143,26 @@ class Client:
                             finishes.append(choice['finish_reason'])
                 record.update(content=''.join(content), reasoningCharacters=len(''.join(reasoning)),
                               events=len(events), done=done, usage=usage, finishes=finishes)
-                if not done or len(events) < 2 or not usage or 'stop' not in finishes:
+                if not done or (strict and (len(events) < 2 or not usage or usage[-1].get('completion_tokens', 0) <= 0 or 'stop' not in finishes)):
                     raise RuntimeError('Incomplete SSE content, finish reason, usage, or completion marker.')
                 if display:
                     print()
             else:
-                data = json.loads(response.read())
-                if data['model'] != model or data['choices'][0]['finish_reason'] != 'stop':
+                data = json.loads(read_bounded(response))
+                if data['model'] != model or (strict and data['choices'][0]['finish_reason'] != 'stop'):
                     raise RuntimeError('Unexpected model or incomplete generation.')
-                record.update(content=data['choices'][0]['message'].get('content') or '', usage=data['usage'])
+                if strict and data.get('usage', {}).get('completion_tokens', 0) <= 0:
+                    raise RuntimeError('Chat response lacks completion token usage.')
+                record.update(content=data['choices'][0]['message'].get('content') or '', usage=data.get('usage'),
+                              finishes=[data['choices'][0].get('finish_reason')])
                 if display:
                     print(record['content'])
-            if not record['content'].strip():
+            limited = 'length' in record['finishes']
+            if not record['content'].strip() and (strict or not limited):
                 raise RuntimeError('No final answer.')
-            if record['content'].strip() == 'xxxx':
+            if not strict and limited and display:
+                print('Token limit reached. Increase --max-tokens for a longer answer.', file=sys.stderr)
+            if strict and record['content'].strip() == 'xxxx':
                 raise RuntimeError('Received a fixture response for a real model.')
             record['seconds'] = time.monotonic() - started
             return record
