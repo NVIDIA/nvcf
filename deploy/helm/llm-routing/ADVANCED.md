@@ -111,6 +111,109 @@ curl --fail-with-body --cacert "$LLM_WORK/gateway-ca.crt" -H "Authorization: Bea
 
 Change `model` to `qwen3.8-27b-nvfp4` to call the other precision. Add `"stream":true` for streaming. When finished, stop the port-forward, unset `API_KEY` and remove the temporary CA file.
 
+### Connect a coding agent
+
+Coding agents such as [Pi](https://github.com/badlogic/pi-mono) and [Codex](https://github.com/openai/codex) can use the model through the gateway. They need a large context: their first request is 1,500 to 6,500 tokens before any file contents. For GLM, the GB300 profile uses `tuning.discrete` in [recipe.json](recipes/glm-5.3/recipe.json), including 65,536 tokens per slot. The GB10 default of 2048 tokens is too small. See [Recipe resources and tuning](#recipe-resources-and-tuning) before changing these settings.
+
+Tested in October 2026 with Pi 1.0.4 and Codex 0.161.0 against `glm-5.3` on one GB300 with two 65,536-token slots. Each agent found and fixed a one-line bug by running a test, editing the file and running the test again, using tool calls through the gateway. Pi took 7 seconds and Codex 33 seconds. Automatic Helm profile validation is recorded separately in the [catalog](recipes/index.json).
+
+#### Open the gateway
+
+Use the shared `llm-stack` installation. Set `LLM_CONTEXT` to your kubeconfig context and keep a port-forward running in its own terminal:
+
+```bash
+LLM_CONTEXT=my-cluster
+kubectl --context "$LLM_CONTEXT" -n llm-stack port-forward svc/llm-api-gateway 18443:8080 --address 127.0.0.1
+```
+
+In the terminal where you run the agent, select the same context and retrieve the existing gateway CA and caller key:
+
+```bash
+LLM_CONTEXT=my-cluster
+LLM_CA_CONFIGMAP=llm-gateway-stack-ca
+LLM_CALLER_SECRET=llm-shared-caller-key
+umask 077
+LLM_WORK="$(mktemp -d)"
+kubectl --context "$LLM_CONTEXT" -n llm-stack get configmap "$LLM_CA_CONFIGMAP" \
+  -o 'jsonpath={.data.ca\.crt}' > "$LLM_WORK/gateway-ca.crt"
+export GLM_API_KEY="$(kubectl --context "$LLM_CONTEXT" -n llm-stack get secret "$LLM_CALLER_SECRET" \
+  -o 'go-template={{index .data "api-key" | base64decode}}')"
+```
+
+These are the shared chart defaults. If the installation overrides them, use `operator.trustBundle.configMap` for `LLM_CA_CONFIGMAP` and `callerKey.existingSecret` (or `callerKey.secretName` when empty) for `LLM_CALLER_SECRET`. Read the installed names with `helm --kube-context "$LLM_CONTEXT" -n llm-stack get values llm-stack --all`. An existing caller key file can instead supply `GLM_API_KEY` with `export GLM_API_KEY="$(cat /path/to/api-key)"`.
+
+The default gateway certificate covers `127.0.0.1`, so the agents connect to `https://127.0.0.1:18443/v1` and trust `$LLM_WORK/gateway-ca.crt`. When finished, stop the port-forward, unset `GLM_API_KEY` and remove the temporary CA file.
+
+#### Pi
+
+Pi uses the chat completions API. Install it and add the model:
+
+```bash
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+mkdir -p ~/.pi/agent
+cat > ~/.pi/agent/models.json <<'EOF'
+{"providers": {"llm-routing": {
+  "baseUrl": "https://127.0.0.1:18443/v1", "api": "openai-completions", "apiKey": "$GLM_API_KEY",
+  "compat": {"supportsStore": false, "supportsDeveloperRole": false, "supportsReasoningEffort": false,
+             "supportsUsageInStreaming": true, "supportsStrictMode": false, "maxTokensField": "max_tokens"},
+  "models": [{"id": "GLM-5.3-UD-IQ2_M", "name": "GLM-5.3", "reasoning": false,
+              "input": ["text"], "contextWindow": 65536, "maxTokens": 8192}]}}}
+EOF
+echo '{"defaultProvider": "llm-routing", "defaultModel": "GLM-5.3-UD-IQ2_M"}' > ~/.pi/agent/settings.json
+NODE_EXTRA_CA_CERTS="$LLM_WORK/gateway-ca.crt" pi
+```
+
+- Set `contextWindow` to the selected recipe tuning's `contextPerSlot`. Pi sizes `max_tokens` from it and compacts the conversation before it fills.
+- If `~/.pi/agent` already has these files, merge the provider into them instead.
+
+#### Codex
+
+Codex supports only the Responses API, which the gateway passes through to llama.cpp. Do not use `codex --oss`; it targets Ollama or LM Studio and cannot send the API key. Install Codex and add a [configuration profile](https://learn.chatgpt.com/docs/config-file/config-advanced):
+
+```bash
+npm install -g @openai/codex
+mkdir -p ~/.codex
+cat > ~/.codex/glm.config.toml <<'EOF'
+model = "GLM-5.3-UD-IQ2_M"
+model_provider = "llm-routing"
+model_context_window = 65536
+model_auto_compact_token_limit = 56000
+web_search = "disabled"
+include_apps_instructions = false
+show_raw_agent_reasoning = true
+
+[model_providers.llm-routing]
+name = "LLM routing gateway"
+base_url = "https://127.0.0.1:18443/v1"
+env_key = "GLM_API_KEY"
+wire_api = "responses"
+stream_idle_timeout_ms = 600000
+
+[features]
+multi_agent = false
+goals = false
+view_image = false
+apps = false
+
+[tools]
+experimental_request_user_input = { enabled = false }
+
+[skills]
+include_instructions = false
+EOF
+CODEX_CA_CERTIFICATE="$LLM_WORK/gateway-ca.crt" codex --profile glm
+```
+
+- Set `model_context_window` to the selected recipe tuning's `contextPerSlot`. Without it, Codex assumes a much larger context and requests fail when the conversation grows.
+- The `[features]`, `[tools]` and `[skills]` settings remove tools the model cannot use and keep the first request near 4,500 tokens instead of 6,600.
+- The recipe's `defaultMaxTokens` supplies the server's output cap for requests that omit a limit, including reasoning.
+
+#### Tips
+
+- The first request processes the whole prompt, at about 250 tokens per second on GB300. Later requests reuse the cached prefix, so start each agent once before a demo.
+- Each slot serves one request at a time. Two agents working at once use both GB300 slots; the Pylon canary waits for the next free slot.
+- For scripted runs, close stdin: `pi -p "<task>" < /dev/null` or `codex exec --profile glm "<task>" < /dev/null`. `pi -p` reads piped stdin as part of the prompt and waits until it closes.
+
 ### Helm cache reuse and recovery
 
 Automatic SGLang startup checks its cache before downloading. Reinstalling the same release in the same namespace on the original node reuses its retained claim without extra flags. Completed files are verified locally, including complete Hugging Face snapshots without a recipe completion marker. Missing files are downloaded into that cache. A cache marked complete but failing validation stops startup instead of silently replacing its contents.

@@ -3,6 +3,10 @@
 {{- if .Values.enabled }}
 {{- if empty .Values.namespaces }}{{ fail "namespaces must name the recipe namespaces to scrape" }}{{ end }}
 {{- if empty .Values.targets }}{{ fail "targets must list the component scrape targets" }}{{ end }}
+{{- $rootURL := .Values.grafana.rootURL }}
+{{- if or (not (kindIs "string" $rootURL)) (and $rootURL (not (regexMatch `^(https?|%\(protocol\)s)://\S+/$` $rootURL))) }}
+{{- fail "grafana.rootURL must be a URL ending in /, such as %(protocol)s://%(domain)s:%(http_port)s/grafana/" }}
+{{- end }}
 {{- $secret := default (printf "%s-grafana-admin" .Release.Name) .Values.grafana.adminSecret }}
 {{- range $component, $settings := dict "collector" .Values.collector "victoria-metrics" .Values.victoriaMetrics "grafana" .Values.grafana }}
 {{- $port := index (dict "collector" 13133 "victoria-metrics" 8428 "grafana" 3000) $component }}
@@ -73,6 +77,9 @@ spec:
             - {name: GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES, value: "false"}
             - {name: GF_PLUGINS_PREINSTALL_DISABLED, value: "true"}
             - {name: GF_LOG_MODE, value: console}
+            {{- with $.Values.grafana.rootURL }}
+            - {name: GF_SERVER_ROOT_URL, value: {{ . | quote }}}
+            {{- end }}
           {{- end }}
           volumeMounts:
             - {name: tmp, mountPath: /tmp}

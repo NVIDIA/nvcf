@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 import base64
+import copy
 import json
 import pathlib
 import shutil
@@ -28,7 +29,8 @@ class GrafanaAccessTests(unittest.TestCase):
         cls.addClassCleanup(cls.tmp.cleanup)
         values = monitoring_values()
         values['grafana']['adminPassword'] = 'test-only-admin-password'
-        path = pathlib.Path(cls.tmp.name)/'grafana-access-values.json'
+        cls.values, cls.work = values, pathlib.Path(cls.tmp.name)
+        path = cls.work/'grafana-access-values.json'
         path.write_text(json.dumps(values))
         rendered = subprocess.check_output(['helm', 'template', 'access-test', str(monitoring.CHART), '-f', str(path)], text=True)
         cls.docs = [doc for doc in yaml.safe_load_all(rendered) if doc]
@@ -48,6 +50,31 @@ class GrafanaAccessTests(unittest.TestCase):
             self.assertNotIn('value', self.env[setting])
             self.assertEqual(self.env[setting]['valueFrom']['secretKeyRef'], {'name': secret['metadata']['name'], 'key': key})
         self.assertEqual(secret['stringData'], {'admin-user': 'admin', 'admin-password': 'test-only-admin-password'})
+
+    def test_root_url_is_unset_by_default(self):
+        self.assertNotIn('GF_SERVER_ROOT_URL', self.env)
+
+    def test_root_url_reaches_grafana(self):
+        for root_url in ('%(protocol)s://%(domain)s:%(http_port)s/grafana/', 'https://example.com/grafana/'):
+            with self.subTest(root_url=root_url):
+                values = copy.deepcopy(self.values)
+                values['grafana']['rootURL'] = root_url
+                result = self.render_credentials(values)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                grafana = next(doc for doc in yaml.safe_load_all(result.stdout)
+                               if doc and doc['kind'] == 'Deployment' and doc['metadata']['name'] == 'test-monitor-grafana')
+                env = {entry['name']: entry for entry in grafana['spec']['template']['spec']['containers'][0]['env']}
+                self.assertEqual(env['GF_SERVER_ROOT_URL']['value'], root_url)
+
+    def test_root_url_rejects_invalid_helm_values(self):
+        for root_url in ('/grafana/', 'grafana.example.com/', 'https://example.com/grafana',
+                         'https://example.com/a b/', 5, True):
+            with self.subTest(root_url=root_url):
+                values = copy.deepcopy(self.values)
+                values['grafana']['rootURL'] = root_url
+                result = self.render_credentials(values)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('grafana.rootURL must be a URL ending in /', result.stderr)
 
     def render_credentials(self, values, existing=None, upgrade=False):
         with tempfile.TemporaryDirectory() as directory:

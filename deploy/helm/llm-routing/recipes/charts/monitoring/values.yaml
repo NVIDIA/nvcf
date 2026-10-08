@@ -53,6 +53,7 @@
         "memory": "1Gi"
       }
     },
-    "adminPassword": ""
+    "adminPassword": "",
+    "rootURL": ""
   }
 }

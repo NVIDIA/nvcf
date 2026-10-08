@@ -33,6 +33,7 @@ The generated configuration contains the selected stack's scrape targets. Resour
 | `imagePullPolicy` | Use `Never` only when every monitoring image is preloaded |
 | `collector.image`, `victoriaMetrics.image`, `grafana.image` | Versioned image references or mirrors |
 | `networkPolicy.enabled`, `networkPolicy.apiServerCIDRs` | Optional egress policy and API server addresses |
+| `grafana.rootURL` | Public URL ending in `/` when Grafana runs behind a reverse proxy |
 
 Each extra target needs a unique `name`, pod-label `selector` and `portName`. Optional fields are `path`, `port` and `runtime: llama.cpp`. Keep targets and the scrape scope in namespace `llm-stack`.
 
@@ -45,6 +46,8 @@ python3 recipes/monitoring.py --namespace llm-stack --release llm-monitoring das
 ```
 
 The default local port is 13000. The dashboard grants anonymous Viewer access through the local tunnel. Use `--admin` for administrative access. Save lasting dashboards and data sources in the chart. Grafana's local data directory is temporary.
+
+When a reverse proxy strips a path such as `/grafana/`, set `grafana.rootURL` in the private Helm values to the public URL, for example `%(protocol)s://%(domain)s:%(http_port)s/grafana/`. Leave it empty for direct access. With a proxy path configured, open the dashboard through that proxy; the local `dashboard` tunnel cannot render its pages.
 
 ## Verification
 
