@@ -2174,6 +2174,10 @@ func TestSyncNVCFBackendHealthKeepsInvalidAgentConfigUnhealthy(t *testing.T) {
 			name:        "reserved requests namespace",
 			mergeConfig: "agent:\n  requestsNamespace: kube-system\n",
 		},
+		{
+			name:        "keys that differ only by case",
+			mergeConfig: caseCollidingMergeConfig,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

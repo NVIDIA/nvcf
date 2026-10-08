@@ -1636,6 +1636,11 @@ func isResourceQuantityDecodeError(err error) bool {
 	return strings.Contains(err.Error(), "decode resource ")
 }
 
+func isKeyConflictError(err error) bool {
+	var target *nvcaconfig.KeyConflictError
+	return errors.As(err, &target)
+}
+
 func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
 	log := core.GetLogger(ctx)
 	cm, err := bc.clients.K8s.CoreV1().ConfigMaps(bc.operatorNamespace).Get(ctx, agentConfigMergeConfigMapName, metav1.GetOptions{})
@@ -1654,7 +1659,7 @@ func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaco
 	cfg, err := nvcaconfig.DecodeConfig([]byte(data))
 	if err != nil {
 		wrappedErr := fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err)
-		if isResourceQuantityDecodeError(err) {
+		if isResourceQuantityDecodeError(err) || isKeyConflictError(err) {
 			return nvcaconfig.Config{}, false, &invalidAgentConfigError{err: wrappedErr}
 		}
 		return nvcaconfig.Config{}, false, nvcaoperatorerrors.FatalError(wrappedErr)

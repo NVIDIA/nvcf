@@ -125,6 +125,11 @@ Render the effective chart-owned agent configuration. Top-level byoo/utils/
 storage/worker values provide the supported API. agentConfig.mergeConfig
 remains a legacy override and takes precedence for one minor-version
 transition.
+
+NVCA reads config keys case-insensitively. A mergeConfig key that differs
+from a chart-generated key only by case is renamed to the chart spelling and
+overrides the chart value. Rendering fails if mergeConfig or the effective
+configuration spells one key more than one way.
 */}}
 {{- define "nvcaop.effectiveAgentConfig" -}}
 {{- $byoo := .Values.byoo | default dict -}}
@@ -259,13 +264,80 @@ transition.
 {{- if hasKey $parsedMergeConfig "Error" -}}
 {{- fail (printf "agentConfig.mergeConfig contains invalid YAML: %s" $parsedMergeConfig.Error) -}}
 {{- end -}}
-{{- $config = mergeOverwrite $config ($parsedMergeConfig | default dict) -}}
+{{- $parsedMergeConfig = $parsedMergeConfig | default dict -}}
+{{- $_ := include "nvcaop.validateConfigKeyCase" (dict "value" $parsedMergeConfig "path" "" "source" "agentConfig.mergeConfig") -}}
+{{- $_ := include "nvcaop.alignOverrideKeyCase" (dict "base" $config "override" $parsedMergeConfig) -}}
+{{- $config = mergeOverwrite $config $parsedMergeConfig -}}
 {{- end -}}
+{{- $_ := include "nvcaop.validateConfigKeyCase" (dict "value" $config "path" "" "source" "effective agent configuration") -}}
 {{- $finalAgent := $config.agent | default dict -}}
 {{- if and $finalAgent.skipSelfDestruct $finalAgent.forceSelfDestruct -}}
 {{- fail "worker.skipSelfDestruct and worker.forceSelfDestruct cannot both be true (including via agentConfig.mergeConfig); NVCA rejects this combination at startup" -}}
 {{- end -}}
 {{- $config | toYaml -}}
+{{- end -}}
+
+{{/*
+Fail when a mapping in the agent configuration has keys that differ only by
+case. NVCA folds keys to lower case while iterating a map, so such keys
+resolve to an arbitrary value on each decode and the operator keeps rolling
+out the agent.
+Arguments: dict "value" <any> "path" <string> "source" <string>
+*/}}
+{{- define "nvcaop.validateConfigKeyCase" -}}
+{{- $value := .value -}}
+{{- if kindIs "map" $value -}}
+{{- $location := "at the top level" -}}
+{{- if .path -}}
+{{- $location = printf "under %q" .path -}}
+{{- end -}}
+{{- $seen := dict -}}
+{{- range $key := keys $value | sortAlpha -}}
+{{- $folded := lower $key -}}
+{{- if hasKey $seen $folded -}}
+{{- fail (printf "%s: keys %q and %q %s differ only by case; keep one spelling" $.source (get $seen $folded) $key $location) -}}
+{{- end -}}
+{{- $_ := set $seen $folded $key -}}
+{{- end -}}
+{{- range $key := keys $value | sortAlpha -}}
+{{- $childPath := ternary $key (printf "%s.%s" $.path $key) (eq $.path "") -}}
+{{- $_ := include "nvcaop.validateConfigKeyCase" (dict "value" (get $value $key) "path" $childPath "source" $.source) -}}
+{{- end -}}
+{{- else if kindIs "slice" $value -}}
+{{- range $index, $item := $value -}}
+{{- $_ := include "nvcaop.validateConfigKeyCase" (dict "value" $item "path" (printf "%s[%d]" $.path $index) "source" $.source) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Rename override keys in place to the spelling of the matching base key when
+the two differ only by case, so mergeOverwrite replaces the base value instead
+of keeping both spellings. Recurses into mappings present on both sides. The
+override must already pass nvcaop.validateConfigKeyCase.
+Arguments: dict "base" <map> "override" <map>
+*/}}
+{{- define "nvcaop.alignOverrideKeyCase" -}}
+{{- $base := .base -}}
+{{- $override := .override -}}
+{{- $baseKeys := dict -}}
+{{- range $key := keys $base | sortAlpha -}}
+{{- $_ := set $baseKeys (lower $key) $key -}}
+{{- end -}}
+{{- range $key := keys $override | sortAlpha -}}
+{{- $baseKey := get $baseKeys (lower $key) -}}
+{{- if $baseKey -}}
+{{- if ne $baseKey $key -}}
+{{- $_ := set $override $baseKey (get $override $key) -}}
+{{- $_ := unset $override $key -}}
+{{- end -}}
+{{- $baseValue := get $base $baseKey -}}
+{{- $overrideValue := get $override $baseKey -}}
+{{- if and (kindIs "map" $baseValue) (kindIs "map" $overrideValue) -}}
+{{- $_ := include "nvcaop.alignOverrideKeyCase" (dict "base" $baseValue "override" $overrideValue) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
