@@ -1,24 +1,24 @@
 # Run models through a shared gateway
 
-Install shared routing once, then install each model recipe with Helm and a small values file. Each model has its own release and persistent cache. Applications select a model through the same gateway address and caller credential.
+Install shared routing once, then install each model recipe with Helm. Each model has its own release and persistent cache. Applications select a model through the same gateway address and caller credential.
 
 ## Before you start
 
 - Use Kubernetes with the NVIDIA device plugin, a GPU RuntimeClass and persistent storage. Choose available nodes from the [recipe catalog](recipes/index.json).
 - Install Helm, kubectl and Python 3.11+ on your workstation.
-- Select your kubeconfig context and run these commands from `deploy/helm/llm-routing` in one terminal. The examples use namespace `llm-stack`.
+- Run these commands from `deploy/helm/llm-routing` in one terminal. The examples use namespace `llm-stack`.
 
 The committed charts and [image values](dev-images/values.yaml) use images preloaded on the shared Spark nodes. [Prepare new images and charts](dev-images/README.md) only when sources change or another cluster needs them.
 
 ## 1. Install shared infrastructure
 
+Replace `YOUR_CONTEXT` with your kubeconfig context and select it once below. All remaining commands use the selected context.
+
 ```bash
-export LLM_CONTEXT="$(kubectl config current-context)"
-export LLM_WORK="$HOME/.local/state/llm-routing/$LLM_CONTEXT/llm-stack"
-mkdir -p "$LLM_WORK"
+kubectl config use-context YOUR_CONTEXT
 
 helm upgrade --install llm-stack dev-images/charts/llm-shared-stack-0.1.0.tgz \
-  --kube-context "$LLM_CONTEXT" --namespace llm-stack --create-namespace \
+  --namespace llm-stack --create-namespace \
   --values dev-images/values.yaml --wait --timeout 10m
 ```
 
@@ -26,36 +26,49 @@ Helm installs the gateway, router and namespace-scoped operator with an empty mo
 
 ## 2. Install a model
 
-Check whether your selected model fits before installing it:
+Check current GPU allocation and downloaded model caches. Add `--json` for JSON output.
 
 ```bash
 python3 llm.py plan --model qwen3.8-27b
 ```
 
-The command uses your current context and namespace `llm-stack`. It reads cluster allocations without changing workloads or fetching gateway credentials:
-
-- If the model fits, it prints a Helm install command using the committed [recipe values](recipes/README.md#committed-values) and actual available node names. Run that printed command.
-- If it does not fit, it shows the model requirements, each node's reserved and available GPU and memory capacity, and the workloads using those resources. [Stop or uninstall](#4-stop-or-uninstall-a-model) a model you no longer need, then rerun the check. Nothing is stopped automatically.
-- If the model already has an endpoint in this namespace, it shows its readiness and inspection commands. Recover or resume that release instead of creating a duplicate. Stopped releases without endpoints and retained caches are not discovered; resume or reuse their original release and cache instead of installing another copy.
-
-The check uses Kubernetes resource reservations, not momentary GPU utilization. It does not reserve the selected nodes or verify physical disk space, downloads or runtime startup. Recheck if cluster usage changes. The defaults use runtime class `nvidia` and storage class `local-path`. See [capacity-check options](ADVANCED.md#model-capacity-check) for another context, namespace, storage class or hardware profile. When writing a Helm command manually, replace every example node name with an actual available node. Never pass the `gpu-node-1` or `gpu-node-2` placeholders unchanged.
-
-After the printed FP8 installation command succeeds, wait for registration:
+Install and register Qwen FP8 below, replacing `NODE_FROM_PLANNER` with your chosen node. To reuse retained downloads, keep the original release name, namespace and cache node. Completed model files are verified and reused automatically; missing files are downloaded. No cache flag or values file is required. [Model values examples](recipes/README.md#committed-values) are available for optional overrides and other recipes.
 
 ```bash
-kubectl --context "$LLM_CONTEXT" -n llm-stack wait \
-  --for=condition=Registered inferenceendpoint/qwen-fp8 --timeout=5m
+helm upgrade --install qwen-fp8 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
+  --namespace llm-stack \
+  --set recipe=qwen3.8-27b --set 'nodes[0]=NODE_FROM_PLANNER' \
+  --wait --timeout 120m &&
+kubectl --namespace llm-stack wait \
+  --for=condition=Registered inferenceendpoint/qwen-fp8 --timeout=5m &&
+echo 'Model installed and registered.'
 ```
 
-Kubernetes checks placement, qualifies the GPU, prepares the pinned model cache and starts serving. First startup includes the model download. Subsequent startups validate and reuse the cache. Readiness gates healthy serving through the shared gateway. See [retained caches and recovery](ADVANCED.md#helm-cache-reuse-and-recovery) for an existing download.
+Run the entire block. It installs the model and waits for registration. Each step runs only after the previous step succeeds. Send requests separately using the chat commands below.
 
-Installing a second precision is optional. Check capacity for NVFP4, then run its printed Helm command if it fits:
+### Add a second model
+
+Keep the shared stack and FP8 model installed. Check capacity for the NVFP4 recipe:
 
 ```bash
 python3 llm.py plan --model qwen3.8-27b-nvfp4
 ```
 
-Each recipe reserves its own GPU. Running both precisions on one-GPU nodes requires two available nodes.
+Each recipe reserves its own GPU. Running both precisions on one-GPU nodes requires two distinct available nodes before installation. For the second model, replace `SECOND_NODE_FROM_PLANNER` with an available node different from the first model's node. If no GPU is free, [stop another model](#stop-and-resume) before installing.
+
+```bash
+helm upgrade --install qwen-nvfp4 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
+  --namespace llm-stack \
+  --set recipe=qwen3.8-27b-nvfp4 --set 'nodes[0]=SECOND_NODE_FROM_PLANNER' \
+  --wait --timeout 120m &&
+kubectl --namespace llm-stack wait \
+  --for=condition=Registered inferenceendpoint/qwen-nvfp4 --timeout=5m &&
+echo 'Second model installed and registered.'
+```
+
+Both models use the same gateway and caller credential. Each keeps its own Helm release and cache. Select either model in the chat commands below.
+
+### Model choices
 
 | Recipe | Precision | Availability and validation |
 | --- | --- | --- |
@@ -104,9 +117,9 @@ Stop the FP8 release installed above. Use the same chart version that installed 
 
 ```bash
 helm upgrade qwen-fp8 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
-  --kube-context "$LLM_CONTEXT" --namespace llm-stack \
+  --namespace llm-stack \
   --reuse-values --set suspended=true --timeout 10m &&
-kubectl --context "$LLM_CONTEXT" -n llm-stack wait --for=delete pod \
+kubectl -n llm-stack wait --for=delete pod \
   -l app.kubernetes.io/instance=qwen-fp8 --timeout=10m
 ```
 
@@ -116,15 +129,14 @@ Resume when those GPUs are available again:
 
 ```bash
 helm upgrade qwen-fp8 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
-  --kube-context "$LLM_CONTEXT" --namespace llm-stack \
+  --namespace llm-stack \
   --reuse-values --set suspended=false --wait --timeout 120m
 ```
 
 ### Uninstall, keep downloads
 
 ```bash
-helm uninstall qwen-fp8 --kube-context "$LLM_CONTEXT" \
-  --namespace llm-stack --wait --timeout 10m
+helm uninstall qwen-fp8 --namespace llm-stack --wait --timeout 10m
 ```
 
 This removes the model's workloads, endpoint and Helm release. Its persistent volume claims (PVCs) and downloaded files remain. Reinstall using the [retained cache and its original node](ADVANCED.md#helm-cache-reuse-and-recovery).

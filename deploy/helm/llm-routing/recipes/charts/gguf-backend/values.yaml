@@ -5,7 +5,7 @@ recipe: ""
 profileName: ""
 nodes: []
 storageClassName: local-path
-sharedCAConfigMap: ""
+sharedCAConfigMap: llm-gateway-stack-ca
 reuseCaches: false
 suspended: false
 image: ""

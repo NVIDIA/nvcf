@@ -16,6 +16,7 @@ spec = importlib.util.spec_from_file_location('llm_plan_tested', HERE / 'llm.py'
 llm = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(llm)
 recipes, capacity = llm.planning_modules()
+import model_storage
 
 
 def snapshot(count=1):
@@ -31,6 +32,7 @@ def snapshot(count=1):
 
 class PlanTests(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.object(model_storage, 'collect', return_value={'caches': [], 'warnings': []}))
         self.output = self.enterContext(contextlib.redirect_stdout(io.StringIO()))
         self.errors = self.enterContext(contextlib.redirect_stderr(io.StringIO()))
         self.enterContext(patch.object(llm, 'gateway', side_effect=AssertionError('Plan must not access gateway')))
@@ -47,12 +49,13 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(data, before)
         return report
 
-    def test_fit_uses_committed_values_actual_node_and_matching_profile(self):
-        report = self.plan()
+    def test_fit_uses_bundled_defaults_actual_node_and_matching_profile(self):
+        report = self.plan(None, '--verbose')
         self.assertEqual(report['status'], 'fits')
         command = shlex.split(report['deployment']['command'])
         self.assertEqual(command[:3], ['helm', 'install', 'qwen-fp8'])
-        self.assertIn('recipes/values/qwen3.8-27b.yaml', command)
+        self.assertNotIn('--values', command)
+        self.assertIn('recipe=qwen3.8-27b', command)
         self.assertIn('nodes[0]=available-0', command)
         self.assertIn('profileName=spark-fp8', command)
         self.assertNotIn('gpu-node-1', report['deployment']['command'])
@@ -86,7 +89,7 @@ class PlanTests(unittest.TestCase):
                          'spec': {'nodeName': 'available-0', 'containers': [{'resources': {
                              'requests': {'nvidia.com/gpu': 1, 'memory': '104Gi', 'cpu': '4'}}}]},
                          'status': {'phase': 'Running'}}]
-        report = self.plan(data)
+        report = self.plan(data, '--verbose')
         self.assertEqual(report['status'], 'blocked')
         self.assertIsNone(report['deployment'])
         self.assertIn('another-team/existing-model', self.output.getvalue())
@@ -99,7 +102,7 @@ class PlanTests(unittest.TestCase):
         data['endpoints'] = [{'metadata': {'name': 'qwen-fp8', 'namespace': 'llm-stack', 'annotations': {
             'meta.helm.sh/release-name': 'qwen-fp8'}}, 'spec': {'modelName': 'qwen3.8-27b'},
             'status': {'conditions': [{'type': 'Ready', 'status': 'False'}, {'type': 'Registered', 'status': 'False'}]}}]
-        report = self.plan(data)
+        report = self.plan(data, '--verbose')
         self.assertEqual(report['status'], 'existing')
         self.assertIsNone(report['deployment'])
         self.assertIn('Ready=False, Registered=False', self.output.getvalue())
@@ -115,13 +118,13 @@ class PlanTests(unittest.TestCase):
                                           'operator': 'In', 'values': ['placeholder-node']}]}]}}}},
                          'status': {'phase': 'Pending', 'conditions': [{'type': 'PodScheduled', 'status': 'False',
                              'reason': 'Unschedulable', 'message': 'No nodes match node affinity.'}]}}]
-        report = self.plan(data)
+        report = self.plan(data, '--verbose')
         self.assertEqual(report['status'], 'blocked')
         self.assertIn('Requested nodes: placeholder-node', self.output.getvalue())
         self.assertIn('No nodes match node affinity.', self.output.getvalue())
 
     def test_planned_recipe_reports_unsupported_without_install_command(self):
-        report = self.plan(model='deepseek-v4-flash')
+        report = self.plan(None, '--verbose', model='deepseek-v4-flash')
         self.assertEqual(report['status'], 'unsupported')
         self.assertIsNone(report['deployment'])
         self.assertIn('NO DEPLOYABLE RECIPE', self.output.getvalue())
@@ -137,7 +140,7 @@ class PlanTests(unittest.TestCase):
             data = snapshot()
             data[field] = []
             with self.subTest(field=field):
-                report = self.plan(data)
+                report = self.plan(data, '--verbose')
                 self.assertEqual(report['status'], 'blocked')
                 self.assertIsNone(report['deployment'])
 
@@ -147,7 +150,7 @@ class PlanTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'capabilities.json'
             path.write_text(json.dumps(facts))
-            report = self.plan(snapshot(2), '--profile', 'spark-nvfp4-tp2', '--capabilities', str(path),
+            report = self.plan(snapshot(2), '--verbose', '--profile', 'spark-nvfp4-tp2', '--capabilities', str(path),
                                '--context-length', '32768', model='qwen3.8-flash-next')
         self.assertEqual(report['status'], 'fits')
         command = shlex.split(report['deployment']['command'])
@@ -169,7 +172,8 @@ class PlanTests(unittest.TestCase):
         report = self.plan(snapshot(2), model='glm-5.3')
         self.assertEqual(report['status'], 'fits')
         command = shlex.split(report['deployment']['command'])
-        self.assertIn('recipes/values/glm-5.3.yaml', command)
+        self.assertNotIn('--values', command)
+        self.assertIn('recipe=glm-5.3', command)
         self.assertTrue(any('pylon-gguf-backend-' in value for value in command))
         self.assertIn('nodes[1]=available-1', command)
 
@@ -182,6 +186,43 @@ class PlanTests(unittest.TestCase):
         del data['nodes'][0]['status']['allocatable']['nvidia.com/gpu']
         self.assertEqual(self.plan(data)['status'], 'blocked')
         self.assertIn('unknown', self.output.getvalue())
+
+    def test_default_is_two_tables_without_deployment_diagnostics(self):
+        data = snapshot()
+        data['endpoints'] = [{'metadata': {'name': 'old-model', 'namespace': 'llm-stack'},
+                             'spec': {'modelName': 'qwen3.8-27b'}}]
+        caches = {'caches': [{'claim': 'old-cache', 'namespace': 'another-namespace',
+                             'nodes': ['available-0'], 'bytesUsed': 29 * 1024**3,
+                             'usageStatus': 'measured'}], 'warnings': []}
+        with patch.object(model_storage, 'collect', return_value=caches):
+            report = self.plan(data)
+        output = self.output.getvalue()
+        self.assertEqual(report['status'], 'existing')
+        self.assertIsNone(report['deployment'])
+        for expected in ('GPU allocation', 'Model files and caches', 'old-cache', '29.0 GiB', 'another-namespace'):
+            self.assertIn(expected, output)
+        for hidden in ('EXISTING DEPLOYMENT', 'Endpoint ', 'helm install', 'helm status', 'No changes made', 'Rank 0: Insufficient'):
+            self.assertNotIn(hidden, output)
+
+    def test_json_includes_cache_bytes_and_unmeasured_status_without_table_text(self):
+        storage = {'caches': [
+            {'claim': 'mounted', 'namespace': 'old-namespace', 'nodes': ['available-0'],
+             'bytesUsed': 123456, 'usageStatus': 'measured'},
+            {'claim': 'retained', 'namespace': 'old-namespace', 'nodes': ['available-0'],
+             'bytesUsed': None, 'usageStatus': 'not-mounted'}], 'warnings': []}
+        with patch.object(model_storage, 'collect', return_value=storage):
+            report = self.plan(None, '--json')
+        parsed = json.loads(self.output.getvalue())
+        self.assertEqual(parsed, report)
+        self.assertEqual(parsed['storage']['caches'][0]['bytesUsed'], 123456)
+        self.assertIsNone(parsed['storage']['caches'][1]['bytesUsed'])
+        self.assertEqual(parsed['storage']['caches'][1]['usageStatus'], 'not-mounted')
+
+    def test_storage_inventory_failure_is_not_presented_as_no_caches(self):
+        with patch.object(model_storage, 'collect', return_value={'caches': [], 'warnings': ['Forbidden']}):
+            self.plan()
+        self.assertIn('Storage inventory incomplete', self.output.getvalue())
+        self.assertNotIn('No model cache claims found', self.output.getvalue())
 
     def test_invalid_inputs_stop_before_inventory(self):
         for args in (['--concurrency', '0'], ['--release', 'bad,name'], ['--storage-class', 'other,inject=true']):

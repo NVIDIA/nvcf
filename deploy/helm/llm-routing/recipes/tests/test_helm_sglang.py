@@ -76,6 +76,24 @@ class HelmSGLangTests(unittest.TestCase):
                 endpoint = next(doc for doc in docs if doc['kind'] == 'InferenceEndpoint')
                 self.assertEqual(endpoint['spec']['modelName'], name)
 
+    def test_each_automatic_recipe_installs_without_a_values_file_or_cache_flag(self):
+        for recipe in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4'):
+            with self.subTest(recipe=recipe):
+                result = subprocess.run(['helm', 'template', 'test-model', str(CHART),
+                                         '--namespace', 'test-stack', '--set', 'recipe=' + recipe,
+                                         '--set', 'nodes[0]=selected-node'], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                docs = [doc for doc in yaml.safe_load_all(result.stdout) if doc]
+                config = self.configuration(docs)
+                self.assertEqual(config['model']['id'], recipe)
+                self.assertFalse(config['reuseCaches'])
+                self.assertEqual(config['sharedCAConfigMap'], 'llm-gateway-stack-ca')
+                self.assertEqual(config['storageClassName'], 'local-path')
+                pod = next(doc for doc in docs if doc['kind'] == 'Deployment')['spec']['template']['spec']
+                self.assertEqual(pod['runtimeClassName'], 'nvidia')
+                self.assertEqual(next(v for v in pod['volumes'] if v['name'] == 'cache')['persistentVolumeClaim']['claimName'],
+                                 'test-model-cache-0')
+
     def test_automatic_mode_uses_bundled_pins_even_with_legacy_overrides(self):
         values = self.values()
         values.update(image='untrusted:latest', model={'id': 'wrong', 'revision': 'main'}, profile={'memoryGiB': 1})
@@ -233,6 +251,22 @@ class AutomaticRuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'checksum differs'):
                 runtime.prepare_checkpoint(self.config, self.cache)
 
+    def test_default_automatically_reuses_complete_cache_without_network_or_free_disk(self):
+        self.config['reuseCaches'] = False
+        with patch.dict('sys.modules', {'huggingface_hub': None}), \
+             patch.object(runtime.shutil, 'disk_usage', side_effect=AssertionError('No download space needed')), \
+             patch.object(runtime, 'log'):
+            self.assertEqual(runtime.prepare_checkpoint(self.config, self.cache), self.fixture.snapshot)
+
+    def test_complete_unmarked_download_is_reused_without_network(self):
+        self.config['reuseCaches'] = False
+        self.fixture.marker.unlink()
+        with patch.dict('sys.modules', {'huggingface_hub': None}), \
+             patch.object(runtime.shutil, 'disk_usage', side_effect=AssertionError('No download space needed')), \
+             patch.object(runtime, 'log'):
+            self.assertEqual(runtime.prepare_checkpoint(self.config, self.cache), self.fixture.snapshot)
+        self.assertEqual(json.loads(self.fixture.marker.read_text())['revision'], self.config['model']['revision'])
+
     def test_existing_legacy_marker_is_preserved_for_exact_previous_runtime_rollback(self):
         original = self.fixture.marker.read_bytes()
         with patch.dict('sys.modules', {'huggingface_hub': None}), patch.object(runtime, 'log'):
@@ -249,6 +283,10 @@ class AutomaticRuntimeTests(unittest.TestCase):
         self.config['reuseCaches'] = False
         self.fixture.marker.unlink()
         hub = Mock()
+        config_file = self.fixture.snapshot / 'config.json'
+        original_config = config_file.read_bytes()
+        config_file.unlink()
+        hub.snapshot_download.side_effect = lambda **kwargs: config_file.write_bytes(original_config)
         with patch.dict('sys.modules', {'huggingface_hub': hub}), patch.object(runtime.shutil, 'disk_usage', return_value=Mock(free=2000 * runtime.GIB)), patch.object(runtime, 'log'):
             self.assertEqual(runtime.prepare_checkpoint(self.config, self.cache), self.fixture.snapshot)
         hub.snapshot_download.assert_called_once_with(repo_id='example/model', revision='a'*40, cache_dir=str(self.cache/'huggingface/hub'))

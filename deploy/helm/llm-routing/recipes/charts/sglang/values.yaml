@@ -5,17 +5,18 @@ mode: automatic
 recipe: qwen3.8-27b
 profileName: ""
 nodes: []
-sharedCAConfigMap: ""
+sharedCAConfigMap: llm-gateway-stack-ca
 cache:
   existingClaim: ""
 phase: deploy
 suspended: false
+# Automatic startup always checks existing files first. True requires a complete offline cache.
 reuseCaches: false
 model: {}
 image: ""
 imagePullPolicy: IfNotPresent
-runtimeClassName: ""
-storageClassName: ""
+runtimeClassName: nvidia
+storageClassName: local-path
 profile: {}
 gpu: {product: ""}
 targets: []

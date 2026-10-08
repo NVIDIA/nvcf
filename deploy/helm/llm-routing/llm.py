@@ -142,9 +142,10 @@ def deployment_command(report, catalog, context, namespace, args, capabilities):
         values += '-nvme' if profile['id'].endswith('-nvme') else '-tp2'
     command = ['helm', 'install', release,
                'dev-images/charts/' + deployment['chart']['archive'],
-               '--kube-context', context, '--namespace', namespace,
-               '--values', 'recipes/values/' + values + '.yaml']
-    settings = {'profileName': profile['id'], 'runtimeClassName': args.runtime_class,
+               '--kube-context', context, '--namespace', namespace]
+    if deployment['lifecycle'] == 'legacy-phased':
+        command += ['--values', 'recipes/values/' + values + '.yaml']
+    settings = {'recipe': model['id'], 'profileName': profile['id'], 'runtimeClassName': args.runtime_class,
                 'storageClassName': args.storage_class, 'sharedCAConfigMap': args.shared_ca_configmap}
     phased = deployment['lifecycle'] == 'legacy-phased'
     for index, node in enumerate(report['chosenNodes']):
@@ -184,7 +185,9 @@ def capacity_plan(context, args):
     report.update(context=context, namespace=args.namespace)
     report['deployment'] = None
     report['existingDeployments'] = []
-    report['limitations'].append('Stopped releases without endpoints and retained caches are not discovered. Resume or reuse their original release and cache placement instead of installing another copy.')
+    report['limitations'].append('Retained caches are listed separately. Cache contents and compatibility for reuse are not verified; preserve their original placement.')
+    import model_storage
+    report['storage'] = model_storage.collect(context, snapshot, run)
     model_names = {report['model'], report.get('modelName')}
     for endpoint in snapshot['endpoints']:
         metadata = endpoint.get('metadata', {})
@@ -218,7 +221,7 @@ def capacity_plan(context, args):
     return report
 
 
-def print_capacity_plan(report):
+def print_capacity_details(report):
     print(f"Model: {report['model']} | Cluster: {report['context']} | Namespace: {report['namespace']}")
     statuses = {'fits': 'FITS current scheduling allocations.', 'blocked': 'DOES NOT FIT current requirements.',
                 'unsupported': 'NO DEPLOYABLE RECIPE.', 'existing': 'EXISTING DEPLOYMENT found in this namespace; inspect it before creating another.'}
@@ -287,6 +290,75 @@ def print_capacity_plan(report):
         print('  ' + limitation)
 
 
+def print_table(headers, rows):
+    def cell(value):
+        return ' '.join(str(value).split())
+    rows = [[cell(value) for value in row] for row in rows]
+    widths = [max([len(header)] + [len(row[index]) for row in rows])
+              for index, header in enumerate(headers)]
+    def line(row):
+        return '  '.join(value.ljust(width) for value, width in zip(row, widths)).rstrip()
+    print(line(headers))
+    print(line(['-' * width for width in widths]))
+    for row in rows:
+        print(line(row))
+
+
+def print_capacity_plan(report, verbose=False):
+    if verbose:
+        print_capacity_details(report)
+    else:
+        print(f"Model: {report['model']} | Cluster: {report['context']}")
+        for profile in report.get('profiles', []):
+            requirements = profile['requirements']
+            print(f"Needs ({profile['id']}): {requirements['modelNodeCount']} node(s)")
+            for rank in requirements.get('perNode', []):
+                resources = rank.get('resources', rank)
+                cache = rank.get('storage', {}).get('claimRequestBytes')
+                text = (f"  Rank {rank.get('rank', 0)}: {resources.get('gpuRequest', 0):g} GPU, "
+                        f"{resources.get('memoryRequestBytes', 0) / 1024**3:.1f} GiB RAM, "
+                        f"{resources.get('cpuRequestMillicores', 0) / 1000:g} CPU")
+                if cache:
+                    text += f", {cache / 1024**3:g} GiB cache required"
+                print(text)
+        if report['status'] == 'unsupported':
+            print('No deployable recipe.')
+        print('\nGPU allocation (Kubernetes reservations)')
+        def quantity(value):
+            return 'unknown' if value is None else f'{value:g}'
+        rows = []
+        for node in report.get('nodes', []):
+            gpu, memory = node['gpu'], node['memory']['freeBytes']
+            owners = sorted({w.get('model') or w.get('release') or w['pod']
+                             for w in node.get('workloads', []) if w['gpu']})
+            rows.append([node['name'], f"{quantity(gpu['allocated'])} / {quantity(gpu['allocatable'])}",
+                         quantity(gpu['free']), 'unknown' if memory is None else f'{memory / 1024**3:.1f} GiB',
+                         ', '.join(owners) or '-'])
+        print_table(['NODE', 'USED GPUs', 'FREE GPUs', 'FREE RAM', 'MODELS'], rows)
+    print('\nModel files and caches')
+    storage = report.get('storage', {'caches': [], 'warnings': []})
+    statuses = {'not-mounted': 'Not mounted', 'not-provisioned': 'Not provisioned', 'unavailable': 'Unavailable'}
+    rows = []
+    for cache in storage['caches']:
+        used = (f"{cache['bytesUsed'] / 1024**3:.1f} GiB" if cache['bytesUsed'] is not None
+                else statuses.get(cache['usageStatus'], 'Unknown'))
+        # Keep small but nonempty caches distinct from empty volumes.
+        if cache['bytesUsed'] is not None and 0 < cache['bytesUsed'] < 1024**3 / 10:
+            used = f"{cache['bytesUsed'] / 1024:.0f} KiB"
+        rows.append([cache['claim'], cache['namespace'], ', '.join(cache['nodes']) or '-', used])
+    print_table(['CACHE', 'NAMESPACE', 'NODE', 'DISK USED'], rows)
+    if not rows and not storage['warnings']:
+        print('No model cache claims found.')
+    if storage['warnings']:
+        print('Storage inventory incomplete; use --verbose for details.')
+    if verbose:
+        for warning in storage['warnings']:
+            print('  ' + warning)
+        for cache in storage['caches']:
+            if cache.get('measurementError'):
+                print(f"  {cache['namespace']}/{cache['claim']}: {cache['measurementError']}")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--context', help='Override the current kubectl context.')
@@ -309,6 +381,7 @@ def main(argv=None):
     plan.add_argument('--storage-class', default='local-path')
     plan.add_argument('--shared-ca-configmap', default='llm-gateway-stack-ca')
     plan.add_argument('--release', help='Name for a new Helm release. Existing endpoints are reported separately.')
+    plan.add_argument('--verbose', action='store_true', help='Show deployment checks, per-pod allocations and an install command when eligible.')
     plan.add_argument('--json', action='store_true', help='Print the complete capacity report as JSON.')
     args = parser.parse_args(argv)
     if not re.fullmatch(r'[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?', args.namespace):
@@ -331,7 +404,7 @@ def main(argv=None):
         if args.json:
             print(json.dumps(report, indent=2))
         else:
-            print_capacity_plan(report)
+            print_capacity_plan(report, verbose=args.verbose)
         return report
     with gateway(context, args.namespace, args.ca_configmap, args.api_key_file) as client:
         if args.command == 'models':

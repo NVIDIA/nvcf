@@ -283,6 +283,15 @@ def prepare_checkpoint(config, cache):
         snapshot = reuse_snapshot(model, cache, write_marker=False)
         log('download_pass', model=model['id'], revision=model['revision'], reused=True)
         return snapshot
+    # External downloads can contain a complete, locally verifiable snapshot.
+    # Validate locally before importing the download client or requiring free space.
+    try:
+        snapshot = reuse_snapshot(model, cache, require_complete=False)
+    except RuntimeError:
+        pass
+    else:
+        log('download_pass', model=model['id'], revision=model['revision'], reused=True)
+        return snapshot
     if shutil.disk_usage(cache).free < config['profile']['minFreeDiskGiB'] * GIB:
         raise RuntimeError('Insufficient cache disk space for the model checkpoint')
     from huggingface_hub import snapshot_download

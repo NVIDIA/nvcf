@@ -6,7 +6,7 @@ The catalog contains seven model families and eight entries. `availability.deplo
 
 ## Committed values
 
-Select the values file for your model and hardware profile. Pass it directly with Helm `--values`, then override the example node names with `--set`. Runtime class `nvidia`, storage class `local-path` and shared CA `llm-gateway-stack-ca` are defaults you can override for your cluster. These profiles target Linux ARM64 GB10 nodes.
+Automatic recipes need only the recipe and node placement: the charts supply the model pins, runtime class `nvidia`, storage class `local-path` and shared CA `llm-gateway-stack-ca`. The files below are optional examples for overriding these defaults with Helm `--values`. Replace their example nodes with your selected nodes. Flash-Next still uses its phased values file. These profiles target Linux ARM64 GB10 nodes.
 
 | Recipe | Values file | Installation |
 | --- | --- | --- |

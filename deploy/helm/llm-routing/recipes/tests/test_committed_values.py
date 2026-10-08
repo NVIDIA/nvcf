@@ -45,6 +45,27 @@ class CommittedValuesTests(unittest.TestCase):
                     self.assertEqual(len({target['address'] for target in values['targets']}), profile['nodes'])
                     self.assertTrue(all(target['interface'] for target in values['targets']))
 
+    def test_automatic_source_and_packages_install_without_values_files(self):
+        for recipe_id in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'glm-5.3'):
+            recipe = self.recipes[recipe_id]
+            profile = recipe['profiles'][0]
+            chart = profile['deployment']['chart']
+            for path in (ROOT / chart['localPath'], ROOT.parent / 'dev-images/charts' / chart['archive']):
+                with self.subTest(recipe=recipe_id, chart=str(path)):
+                    command = ['helm', 'template', 'default-model', str(path), '--namespace', 'llm-stack',
+                               '--set', 'recipe=' + recipe_id]
+                    for i in range(profile['modelNodeCount']):
+                        command += ['--set', f'nodes[{i}]=selected-node-{i}']
+                    result = subprocess.run(command, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    objects = [item for item in yaml.safe_load_all(result.stdout) if item]
+                    endpoints = [item for item in objects if item['kind'] == 'InferenceEndpoint']
+                    self.assertEqual(len(endpoints), 1)
+                    self.assertEqual(endpoints[0]['spec']['modelName'], recipe['servedModelId'])
+                    claims = [item for item in objects if item['kind'] == 'PersistentVolumeClaim']
+                    self.assertTrue(claims)
+                    self.assertTrue(all(p['metadata']['annotations']['helm.sh/resource-policy'] == 'keep' for p in claims))
+
     def test_source_and_packaged_charts_render_model_and_placement_overrides(self):
         for path, values in self.examples.items():
             recipe = self.recipes[values['recipe']]
