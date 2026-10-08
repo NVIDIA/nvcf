@@ -166,7 +166,8 @@ func TestDoStatus_BYOOSidecarUnhealthy(t *testing.T) {
 
 			r := &Reconciler{
 				ControllerOptions: ControllerOptions{
-					K8sTimeConfig: (&nvcak8sutil.TimeConfig{}).Complete(),
+					SystemNamespace: updateSystemNamespace,
+					K8sTimeConfig:   (&nvcak8sutil.TimeConfig{}).Complete(),
 				},
 				Client:                c,
 				Decoder:               serializer.NewCodecFactory(mgrScheme).UniversalDeserializer(),

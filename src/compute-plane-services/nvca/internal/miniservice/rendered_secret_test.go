@@ -22,6 +22,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -52,12 +53,22 @@ func (c *outputReValClient) Render(_ context.Context, _ HelmReValRenderInput) (H
 	return c.output, c.err
 }
 
-func getRenderedSecret(t *testing.T, c client.Client, ns string) *corev1.Secret {
+// updateSystemNamespace is the agent system namespace used by MiniService test reconcilers.
+const updateSystemNamespace = "nvca-system"
+
+func getRenderedSecret(t *testing.T, c client.Client, ms *v1alpha1.MiniService) *corev1.Secret {
 	t.Helper()
 	secret := &corev1.Secret{}
-	err := c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: RenderedSecretName}, secret)
+	err := c.Get(context.Background(), client.ObjectKey{Namespace: updateSystemNamespace, Name: RenderedSecretName(ms)}, secret)
 	require.NoError(t, err)
 	return secret
+}
+
+func listRenderedSecrets(t *testing.T, c client.Client) []corev1.Secret {
+	t.Helper()
+	secrets := &corev1.SecretList{}
+	require.NoError(t, c.List(context.Background(), secrets, client.InNamespace(updateSystemNamespace)))
+	return secrets.Items
 }
 
 func TestRenderedSecret_PersistAndLoadAcrossReconcilers(t *testing.T) {
@@ -73,7 +84,7 @@ func TestRenderedSecret_PersistAndLoadAcrossReconcilers(t *testing.T) {
 	require.NotNil(t, ms.Status.RenderDetails)
 	require.NoError(t, r.persistRenderedData(ctx, ms, rendered))
 
-	secret := getRenderedSecret(t, c, updateTestNamespace)
+	secret := getRenderedSecret(t, c, ms)
 	assert.Equal(t, renderedSecretType, secret.Type)
 	assert.Equal(t, managedByValue, secret.Labels[managedByLabel])
 	assert.Equal(t, ms.Name, secret.Labels[miniserviceNameLabel])
@@ -91,7 +102,7 @@ func TestRenderedSecret_PersistAndLoadAcrossReconcilers(t *testing.T) {
 	// Persisting again is a no-op that does not error.
 	rv := secret.ResourceVersion
 	require.NoError(t, r.persistRenderedData(ctx, ms, rendered))
-	assert.Equal(t, rv, getRenderedSecret(t, c, updateTestNamespace).ResourceVersion)
+	assert.Equal(t, rv, getRenderedSecret(t, c, ms).ResourceVersion)
 
 	// A fresh reconciler (simulating an agent restart) loads the render from the Secret.
 	r2 := newUpdateTestReconciler(t, c, mgrScheme)
@@ -126,11 +137,6 @@ func TestRenderedSecret_IgnoredWhenInputsOrHashDiffer(t *testing.T) {
 
 	t.Run("namespace changed", func(t *testing.T) {
 		c, ms := persist(t)
-		require.NoError(t, c.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "other-ns"}}))
-		secret := getRenderedSecret(t, c, updateTestNamespace)
-		secret.ResourceVersion = ""
-		secret.Namespace = "other-ns"
-		require.NoError(t, c.Create(ctx, secret))
 		ms.Spec.Namespace = "other-ns"
 		r := newUpdateTestReconciler(t, c, mgrScheme)
 		_, found, err := r.getRenderedData(ctx, ms)
@@ -152,7 +158,7 @@ func TestRenderedSecret_IgnoredWhenInputsOrHashDiffer(t *testing.T) {
 
 	t.Run("content corrupted", func(t *testing.T) {
 		c, ms := persist(t)
-		secret := getRenderedSecret(t, c, updateTestNamespace)
+		secret := getRenderedSecret(t, c, ms)
 		corrupted, err := gzipBytes([]byte(`[{"kind":"ConfigMap"}]`))
 		require.NoError(t, err)
 		secret.Data[renderedSecretDataKey] = corrupted
@@ -224,10 +230,9 @@ func TestRenderedSecret_UpdateOverwritesPreviousRevision(t *testing.T) {
 	require.NoError(t, r.persistRenderedData(ctx, ms, v2Data))
 	require.NotEqual(t, v1Hash, ms.Status.RenderDetails.Hash)
 
-	secrets := &corev1.SecretList{}
-	require.NoError(t, c.List(ctx, secrets, client.InNamespace(updateTestNamespace)))
-	require.Len(t, secrets.Items, 1, "the rendered Secret is overwritten, not duplicated")
-	secret := secrets.Items[0]
+	secrets := listRenderedSecrets(t, c)
+	require.Len(t, secrets, 1, "the rendered Secret is overwritten, not duplicated")
+	secret := secrets[0]
 	assert.Equal(t, "1", secret.Labels[revisionLabel])
 	assert.Equal(t, ms.Status.RenderDetails.Hash, secret.Annotations[renderedSecretOutputHashAnnotation])
 	data, err := gunzipBytes(secret.Data[renderedSecretDataKey])
@@ -237,20 +242,20 @@ func TestRenderedSecret_UpdateOverwritesPreviousRevision(t *testing.T) {
 
 func TestRenderedSecret_ReplacesSecretOfDifferentType(t *testing.T) {
 	ctx := newTestContext()
+	ms := newUpdateMiniService(`{"key":"value"}`)
 	stale := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: RenderedSecretName, Namespace: updateTestNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: RenderedSecretName(ms), Namespace: updateSystemNamespace},
 		Type:       corev1.SecretTypeOpaque,
 		Data:       map[string][]byte{"old": []byte("format")},
 	}
 	c, _ := newFakeClient(mgrScheme, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: updateTestNamespace}}, stale)
 	r := newUpdateTestReconciler(t, c, mgrScheme)
-	ms := newUpdateMiniService(`{"key":"value"}`)
 	rendered := newUpdateRenderedData(t, "workload-cm", "v1")
 
 	r.saveRenderedData(ctx, ms, rendered)
 	require.NoError(t, r.persistRenderedData(ctx, ms, rendered))
 
-	secret := getRenderedSecret(t, c, updateTestNamespace)
+	secret := getRenderedSecret(t, c, ms)
 	assert.Equal(t, renderedSecretType, secret.Type)
 	assert.NotContains(t, secret.Data, "old")
 	data, err := gunzipBytes(secret.Data[renderedSecretDataKey])
@@ -272,9 +277,7 @@ func TestRenderedSecret_TooLargeIsSkipped(t *testing.T) {
 	r.saveRenderedData(ctx, ms, large)
 	require.NoError(t, r.persistRenderedData(ctx, ms, large), "oversize renders are skipped, not failed")
 
-	secrets := &corev1.SecretList{}
-	require.NoError(t, c.List(ctx, secrets, client.InNamespace(updateTestNamespace)))
-	assert.Empty(t, secrets.Items)
+	assert.Empty(t, listRenderedSecrets(t, c))
 
 	// Nothing is retained in memory, so later reconciles fall back to rendering on demand.
 	_, found, err := r.getRenderedData(ctx, ms)
@@ -289,7 +292,7 @@ func TestRenderedSecret_FallsBackToAPIReaderWhenCacheLags(t *testing.T) {
 	// Cached client: pretends the Secret has not reached the informer yet.
 	cached, tracker := newFakeClientWithInterceptors(mgrScheme, interceptor.Funcs{
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			if _, ok := obj.(*corev1.Secret); ok && key.Name == RenderedSecretName {
+			if _, ok := obj.(*corev1.Secret); ok && strings.HasPrefix(key.Name, RenderedSecretNamePrefix) {
 				return apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, key.Name)
 			}
 			return c.Get(ctx, key, obj, opts...)
@@ -328,7 +331,7 @@ func TestRenderedSecret_FallsBackToAPIReaderWhenCacheLags(t *testing.T) {
 		updated := newUpdateRenderedData(t, "workload-cm", "v2")
 		r.saveRenderedData(ctx, ms, updated)
 		require.NoError(t, r.persistRenderedData(ctx, ms, updated))
-		secret := getRenderedSecret(t, direct, updateTestNamespace)
+		secret := getRenderedSecret(t, direct, ms)
 		assert.Equal(t, "7", secret.Labels[revisionLabel])
 		assert.Equal(t, ms.Status.RenderDetails.Hash, secret.Annotations[renderedSecretOutputHashAnnotation])
 	})
@@ -487,4 +490,51 @@ func saveAndPersistRenderedData(t *testing.T, ctx context.Context, r *Reconciler
 	t.Helper()
 	r.saveRenderedData(ctx, ms, data)
 	require.NoError(t, r.persistRenderedData(ctx, ms, data))
+}
+
+func TestRenderedSecret_LivesInSystemNamespace(t *testing.T) {
+	ctx := newTestContext()
+	c, _ := newFakeClient(mgrScheme, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: updateTestNamespace}})
+	r := newUpdateTestReconciler(t, c, mgrScheme)
+	ms := newUpdateMiniService(`{"key":"value"}`)
+	rendered := newUpdateRenderedData(t, "workload-cm", "v1")
+	saveAndPersistRenderedData(t, ctx, r, ms, rendered)
+
+	// Nothing is written to the instance namespace, which the workload ServiceAccount can write to.
+	instanceSecrets := &corev1.SecretList{}
+	require.NoError(t, c.List(ctx, instanceSecrets, client.InNamespace(updateTestNamespace)))
+	assert.Empty(t, instanceSecrets.Items)
+
+	secret := getRenderedSecret(t, c, ms)
+	assert.Equal(t, updateSystemNamespace, secret.Namespace)
+	assert.Equal(t, RenderedSecretNamePrefix+ms.Name, secret.Name)
+
+	// Explicit cleanup removes it; a second delete is a no-op.
+	require.NoError(t, r.deleteRenderedSecret(ctx, ms))
+	assert.Empty(t, listRenderedSecrets(t, c))
+	require.NoError(t, r.deleteRenderedSecret(ctx, ms))
+
+	t.Run("system namespace is required", func(t *testing.T) {
+		r := newUpdateTestReconciler(t, c, mgrScheme)
+		r.SystemNamespace = ""
+		assert.Error(t, r.persistRenderedData(ctx, ms, rendered))
+		_, _, err := r.getRenderedData(ctx, ms)
+		assert.Error(t, err)
+	})
+}
+
+func TestGunzipBytes_BoundsDecompression(t *testing.T) {
+	small, err := gzipBytes([]byte(`[]`))
+	require.NoError(t, err)
+	out, err := gunzipBytes(small)
+	require.NoError(t, err)
+	assert.Equal(t, []byte(`[]`), out)
+
+	// Highly compressible payload just over the uncompressed limit.
+	bomb, err := gzipBytes(make([]byte, renderedSecretMaxUncompressedBytes+1))
+	require.NoError(t, err)
+	require.Less(t, len(bomb), renderedSecretMaxCompressedBytes, "the compressed form fits in a Secret")
+	_, err = gunzipBytes(bomb)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "exceeds")
 }

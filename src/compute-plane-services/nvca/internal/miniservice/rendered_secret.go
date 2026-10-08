@@ -38,10 +38,16 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 )
 
-// The rendered Helm Chart of a MiniService is persisted in a Secret in the instance namespace,
-// similar to how Helm stores a release record (sh.helm.release.v1.<name>.v<N>) in the release
-// namespace. The Secret is the durable copy of the ReVal render output for the lifetime of the
-// instance, so status checks and cleanup never need to call ReVal again after a successful render.
+// The rendered Helm Chart of a MiniService is persisted in a Secret, similar to how Helm stores a
+// release record (sh.helm.release.v1.<name>.v<N>). The Secret is the durable copy of the ReVal
+// render output for the lifetime of the instance, so status checks and cleanup never need to call
+// ReVal again after a successful render.
+//
+// The Secret lives in the agent's system namespace, not the instance namespace: the instance
+// workload ServiceAccount is granted write access to Secrets in its own namespace (see the
+// mini-service-restrictions Role), and the controller acts on the stored render with its own
+// privileges, so the render must only be writable by the agent. It is owned by the cluster-scoped
+// MiniService for garbage collection and is also deleted explicitly on cleanup.
 //
 // The Secret always holds the latest successful render and is overwritten on Helm values updates.
 // It is written before workload objects are applied, so while an update is failing to apply, its
@@ -53,8 +59,8 @@ import (
 //
 //nolint:gosec // These are Secret object names, keys, and annotation keys, not credentials (G101).
 const (
-	// RenderedSecretName is the name of the Secret holding the rendered Helm Chart in the instance namespace.
-	RenderedSecretName = "nvcf-miniservice-rendered"
+	// RenderedSecretNamePrefix prefixes the per-MiniService Secret name in the agent system namespace.
+	RenderedSecretNamePrefix = "nvcf-miniservice-rendered-"
 	// renderedSecretType versions the Secret format. Bump the suffix on incompatible changes, as Helm does.
 	renderedSecretType = corev1.SecretType("nvca.nvcf.nvidia.io/rendered-chart.v1")
 	// renderedSecretDataKey holds the gzipped ReVal render output.
@@ -72,6 +78,9 @@ const (
 	// renderedSecretMaxCompressedBytes leaves headroom under the 1 MiB etcd object size limit.
 	// Larger renders are not persisted and fall back to re-rendering on demand.
 	renderedSecretMaxCompressedBytes = 900 << 10
+	// renderedSecretMaxUncompressedBytes bounds decompression so a corrupted or crafted Secret
+	// cannot expand without limit. Real renders are a few MB at most.
+	renderedSecretMaxUncompressedBytes = 64 << 20
 )
 
 // renderInput mirrors the fields of HelmReValRenderInput that affect Helm template output.
@@ -156,17 +165,38 @@ func (r *Reconciler) persistRenderedData(ctx context.Context, ms *v1alpha1.MiniS
 	return r.saveRenderedSecret(ctx, ms, data, renderInputHash(ms), renderOutputHash(data))
 }
 
-func renderedSecretKey(ms *v1alpha1.MiniService) client.ObjectKey {
-	return client.ObjectKey{Namespace: ms.Spec.Namespace, Name: RenderedSecretName}
+// RenderedSecretName returns the name of the rendered Secret for a MiniService.
+func RenderedSecretName(ms *v1alpha1.MiniService) string {
+	return RenderedSecretNamePrefix + ms.Name
+}
+
+func (r *Reconciler) renderedSecretKey(ms *v1alpha1.MiniService) client.ObjectKey {
+	return client.ObjectKey{Namespace: r.SystemNamespace, Name: RenderedSecretName(ms)}
+}
+
+// deleteRenderedSecret removes the rendered Secret for ms. NotFound is not an error.
+func (r *Reconciler) deleteRenderedSecret(ctx context.Context, ms *v1alpha1.MiniService) error {
+	if r.SystemNamespace == "" {
+		return nil
+	}
+	secret := &corev1.Secret{}
+	secret.Namespace, secret.Name = r.SystemNamespace, RenderedSecretName(ms)
+	if err := r.Client.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete rendered secret: %w", err)
+	}
+	return nil
 }
 
 // getRenderedSecret reads the rendered Secret through the informer cache and, when the cache does
 // not have it yet (for example right after it was created), directly from the API server.
 func (r *Reconciler) getRenderedSecret(ctx context.Context, ms *v1alpha1.MiniService) (*corev1.Secret, error) {
+	if r.SystemNamespace == "" {
+		return nil, fmt.Errorf("system namespace is not configured; cannot locate rendered secret")
+	}
 	secret := &corev1.Secret{}
-	err := r.Client.Get(ctx, renderedSecretKey(ms), secret)
+	err := r.Client.Get(ctx, r.renderedSecretKey(ms), secret)
 	if apierrors.IsNotFound(err) && r.APIReader != nil {
-		err = r.APIReader.Get(ctx, renderedSecretKey(ms), secret)
+		err = r.APIReader.Get(ctx, r.renderedSecretKey(ms), secret)
 	}
 	if err != nil {
 		return nil, err
@@ -180,7 +210,7 @@ func (r *Reconciler) saveRenderedSecret(ctx context.Context,
 	data []byte,
 	inputHash, outputHash string,
 ) error {
-	log := logf.FromContext(ctx).WithValues("secret", RenderedSecretName, "namespace", ms.Spec.Namespace)
+	log := logf.FromContext(ctx).WithValues("secret", RenderedSecretName(ms), "namespace", r.SystemNamespace)
 
 	existing, err := r.getRenderedSecret(ctx, ms)
 	switch {
@@ -219,8 +249,8 @@ func (r *Reconciler) saveRenderedSecret(ctx context.Context,
 
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      RenderedSecretName,
-			Namespace: ms.Spec.Namespace,
+			Name:      RenderedSecretName(ms),
+			Namespace: r.SystemNamespace,
 			Labels: map[string]string{
 				managedByLabel:       managedByValue,
 				miniserviceNameLabel: ms.Name,
@@ -273,7 +303,7 @@ func (r *Reconciler) loadRenderedSecret(ctx context.Context,
 	ms *v1alpha1.MiniService,
 	inputHash string,
 ) ([]byte, bool, error) {
-	log := logf.FromContext(ctx).WithValues("secret", RenderedSecretName, "namespace", ms.Spec.Namespace)
+	log := logf.FromContext(ctx).WithValues("secret", RenderedSecretName(ms), "namespace", r.SystemNamespace)
 
 	secret, err := r.getRenderedSecret(ctx, ms)
 	if err != nil {
@@ -326,5 +356,13 @@ func gunzipBytes(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer gzr.Close()
-	return io.ReadAll(gzr)
+	// Read one byte past the limit to detect oversize content without buffering it all.
+	out, err := io.ReadAll(io.LimitReader(gzr, renderedSecretMaxUncompressedBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > renderedSecretMaxUncompressedBytes {
+		return nil, fmt.Errorf("decompressed data exceeds %d bytes", renderedSecretMaxUncompressedBytes)
+	}
+	return out, nil
 }

@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -100,7 +101,7 @@ func TestReconcile_UpdateSecretWriteFailureIsRetried(t *testing.T) {
 	c, _ := newFakeClientWithInterceptors(mgrScheme,
 		interceptor.Funcs{
 			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-				if s, ok := obj.(*corev1.Secret); ok && s.Name == RenderedSecretName && failSecretCreate {
+				if s, ok := obj.(*corev1.Secret); ok && strings.HasPrefix(s.Name, RenderedSecretNamePrefix) && failSecretCreate {
 					return apierrors.NewInternalError(errors.New("injected secret create failure"))
 				}
 				return c.Create(ctx, obj, opts...)
@@ -125,8 +126,7 @@ func TestReconcile_UpdateSecretWriteFailureIsRetried(t *testing.T) {
 	assert.Equal(t, v1alpha1.MiniServiceInstalling, ms.Status.Phase)
 	require.NotNil(t, ms.Status.RenderDetails, "render hash is recorded even though the Secret write failed")
 	assert.Equal(t, "existing", getWorkloadConfigMapValue(t, c), "objects must not be applied before the render is stored")
-	err = c.Get(ctx, client.ObjectKey{Namespace: updateTestNamespace, Name: RenderedSecretName}, &corev1.Secret{})
-	assert.True(t, apierrors.IsNotFound(err))
+	assert.Empty(t, listRenderedSecrets(t, c))
 
 	// Retry: the render is redone (no in-memory copy), the Secret write succeeds, then the apply proceeds.
 	failSecretCreate = false
@@ -138,7 +138,7 @@ func TestReconcile_UpdateSecretWriteFailureIsRetried(t *testing.T) {
 	assert.Equal(t, v1alpha1.MiniServiceInstalled, ms.Status.Phase)
 	assert.Equal(t, "v2", getWorkloadConfigMapValue(t, c))
 
-	secret := getRenderedSecret(t, c, updateTestNamespace)
+	secret := getRenderedSecret(t, c, ms)
 	assert.Equal(t, "2", secret.Labels[revisionLabel])
 	assert.Equal(t, ms.Status.RenderDetails.Hash, secret.Annotations[renderedSecretOutputHashAnnotation])
 	assert.Equal(t, renderInputHash(ms), secret.Annotations[renderedSecretInputHashAnnotation])
@@ -161,7 +161,7 @@ func TestReconcile_UpdateReusesSecretWhenStatusHashIsMissing(t *testing.T) {
 	scratch := newUpdateMiniService(`{"key":"value-v2"}`)
 	previous.saveRenderedData(ctx, scratch, rendered)
 	require.NoError(t, previous.persistRenderedData(ctx, scratch, rendered))
-	storedHash := getRenderedSecret(t, c, updateTestNamespace).Annotations[renderedSecretOutputHashAnnotation]
+	storedHash := getRenderedSecret(t, c, scratch).Annotations[renderedSecretOutputHashAnnotation]
 
 	ms := &v1alpha1.MiniService{}
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: updateMSName}, ms))
@@ -216,7 +216,7 @@ func TestReconcile_ApplyFailureThenValuesRevertRerenders(t *testing.T) {
 	assert.Equal(t, v1alpha1.MiniServiceInstalling, ms.Status.Phase)
 	assert.Equal(t, int64(2), ms.Status.Revision)
 	v2InputHash := renderInputHash(ms)
-	secret := getRenderedSecret(t, c, updateTestNamespace)
+	secret := getRenderedSecret(t, c, ms)
 	assert.Equal(t, "2", secret.Labels[revisionLabel])
 	assert.Equal(t, v2InputHash, secret.Annotations[renderedSecretInputHashAnnotation])
 	err = c.Get(ctx, client.ObjectKey{Namespace: updateTestNamespace, Name: revisionConfigMapPrefix + "2"}, &corev1.ConfigMap{})
@@ -239,7 +239,7 @@ func TestReconcile_ApplyFailureThenValuesRevertRerenders(t *testing.T) {
 	assert.Equal(t, int64(2), ms.Status.Revision, "values unchanged from history keeps the pending revision")
 	assert.Equal(t, "v1", getWorkloadConfigMapValue(t, c))
 
-	secret = getRenderedSecret(t, c, updateTestNamespace)
+	secret = getRenderedSecret(t, c, ms)
 	assert.Equal(t, renderInputHash(ms), secret.Annotations[renderedSecretInputHashAnnotation])
 	assert.NotEqual(t, v2InputHash, secret.Annotations[renderedSecretInputHashAnnotation])
 
@@ -282,7 +282,7 @@ func TestReconcile_UpdateTransientRenderErrorIsRetried(t *testing.T) {
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: updateMSName}, ms))
 	assert.Equal(t, v1alpha1.MiniServiceInstalled, ms.Status.Phase)
 	assert.Equal(t, "v2", getWorkloadConfigMapValue(t, c))
-	getRenderedSecret(t, c, updateTestNamespace)
+	getRenderedSecret(t, c, ms)
 }
 
 // An invalid chart during a values update is cached per values hash so ReVal is not called again
@@ -318,7 +318,7 @@ func TestReconcile_UpdateInvalidRenderIsCachedUntilValuesChange(t *testing.T) {
 	assert.Equal(t, metav1.ConditionFalse, cond.Status)
 	assert.Equal(t, v1alpha1.MiniServiceStatusReasonReValResultInvalid, cond.Reason)
 	assert.Equal(t, "existing", getWorkloadConfigMapValue(t, c))
-	secret := getRenderedSecret(t, c, updateTestNamespace)
+	secret := getRenderedSecret(t, c, ms)
 	assert.Equal(t, previousInputHash, secret.Annotations[renderedSecretInputHashAnnotation], "stored render is untouched")
 	assert.Equal(t, "1", secret.Labels[revisionLabel])
 }

@@ -1471,6 +1471,12 @@ func (r *Reconciler) doCleanup(ctx context.Context, //nolint:gocyclo
 		log.Info("Miniservice namespace terminated, waiting for deletion", "namespace", ms.Spec.Namespace)
 	}
 
+	// The rendered Secret lives in the system namespace and is owned by the MiniService; delete it
+	// explicitly so cleanup does not depend on garbage collection timing.
+	if err := r.deleteRenderedSecret(ctx, ms); err != nil {
+		return reconcile.Result{}, err
+	}
+
 	stList := &nvcav2beta1.StorageRequestList{}
 	if err := r.Client.List(ctx, stList, client.InNamespace(ms.Spec.Namespace)); err != nil {
 		log.Error(err, "Failed to list storage requests for miniservice cleanup, proceeding with cleanup")

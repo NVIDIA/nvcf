@@ -27,7 +27,6 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -893,10 +892,6 @@ rules:
 	gotSecrets := &corev1.SecretList{}
 	err = r.Client.List(ctx, gotSecrets, client.InNamespace(ms.Spec.Namespace))
 	require.NoError(t, err)
-	// The rendered chart Secret is asserted separately.
-	gotSecrets.Items = slices.DeleteFunc(gotSecrets.Items, func(s corev1.Secret) bool {
-		return s.Name == RenderedSecretName
-	})
 	require.Len(t, gotSecrets.Items, 4)
 	sort.Slice(gotSecrets.Items, func(i, j int) bool {
 		return gotSecrets.Items[i].Name < gotSecrets.Items[j].Name
@@ -2827,10 +2822,6 @@ rules:
 	gotSecrets := &corev1.SecretList{}
 	err = r.Client.List(ctx, gotSecrets, client.InNamespace(ms.Spec.Namespace))
 	require.NoError(t, err)
-	// The rendered chart Secret is asserted separately.
-	gotSecrets.Items = slices.DeleteFunc(gotSecrets.Items, func(s corev1.Secret) bool {
-		return s.Name == RenderedSecretName
-	})
 	require.Len(t, gotSecrets.Items, 4)
 	sort.Slice(gotSecrets.Items, func(i, j int) bool {
 		return gotSecrets.Items[i].Name < gotSecrets.Items[j].Name
@@ -4137,6 +4128,7 @@ func TestDoUpdateWorkload(t *testing.T) {
 
 		r := &Reconciler{
 			ControllerOptions: ControllerOptions{
+				SystemNamespace:    updateSystemNamespace,
 				FeatureFlagFetcher: &featureflagmock.Fetcher{},
 				K8sTimeConfig:      (&k8sutil.TimeConfig{}).Complete(),
 			},

@@ -196,6 +196,7 @@ func newUpdateTestReconciler(t *testing.T, c client.Client, scheme *runtime.Sche
 
 	r := &Reconciler{
 		ControllerOptions: ControllerOptions{
+			SystemNamespace:      updateSystemNamespace,
 			ICMSRequestNamespace: updateICMSNamespace,
 			FeatureFlagFetcher:   &featureflagmock.Fetcher{},
 			K8sTimeConfig:        (&k8sutil.TimeConfig{}).Complete(),
