@@ -57,9 +57,7 @@ def normalized_resources(resources):
             "gpuRequest": requests.get("nvidia.com/gpu", 0), "gpuLimit": limits.get("nvidia.com/gpu", 0)}
 
 
-def helm_validation(record, profile, revision, image, available=True):
-    if not available:
-        return {"automaticHelmStatus": "unavailable", "automaticHelmWorkload": None}
+def helm_validation(record, profile, revision, image):
     if not record or record.get("profile") != profile:
         return {"automaticHelmStatus": "pending", "automaticHelmWorkload": None}
     if record.get("modelRevision") != revision or record.get("runtimeImage") != image:
@@ -84,7 +82,8 @@ def sglang_recipes(root):
     automatic_ids = set(read(root / "charts/sglang/files/profiles.json"))
     recipes = []
     for model in read(root / "catalog.json")["models"]:
-        automatic = model["id"] in automatic_ids
+        if model["id"] not in automatic_ids:
+            raise ValueError("Catalog recipe is missing its Helm runtime: " + model["id"])
         profiles = []
         for profile in model["profiles"]:
             hardware = copy.deepcopy(profile["hardware"])
@@ -109,15 +108,14 @@ def sglang_recipes(root):
                     "maximumContextTokens": profile["maxContext"], "maximumConcurrency": profile["maxConcurrency"]},
                 "validation": {"runtimeStatus": "smoke-tested" if validated else "pending",
                     "workload": validated, **helm_validation(profile_validation(model, profile, "automaticHelmValidation"), profile["id"],
-                        model["revision"], model["image"], automatic)},
+                        model["revision"], model["image"])},
                 "deployment": {"chart": copy.deepcopy(chart),
-                    "lifecycle": "automatic" if automatic else "legacy-phased",
-                    "values": {"recipe": model["id"], "profileName": profile["id"]} if automatic else None,
+                    "lifecycle": "automatic",
+                    "values": {"recipe": model["id"], "profileName": profile["id"]},
                     "requiredSiteValues": ["nodes", "runtimeClassName", "storageClassName", "sharedCAConfigMap"]
-                        + (["nodeCapabilities"] if profile.get("offload") or profile.get("fabric") else [])
-                        if automatic else [],
+                        + (["nodeCapabilities"] if profile.get("offload") or profile.get("fabric") else []),
                     "guide": ("../ADVANCED.md#helm-flash-next-recipes" if model["id"] == "qwen3.8-flash-next"
-                        else "../README.md") if automatic else "../ADVANCED.md#recipe-resources-and-tuning"},
+                        else "../README.md")},
             })
         recipes.append({"id": model["id"], "name": model["name"], "servedModelId": model["id"],
             "availability": {"status": "available", "deployable": True},

@@ -255,15 +255,14 @@ class CommonCatalogTests(unittest.TestCase):
             if (recipe["runtime"] or {}).get("backend") != "sglang":
                 continue
             for profile in recipe["profiles"]:
-                self.assertEqual(profile["deployment"]["lifecycle"] == "automatic", recipe["id"] in supported)
-                if recipe["id"] not in supported:
-                    self.assertIsNone(profile["deployment"]["values"])
+                self.assertIn(recipe["id"], supported)
+                self.assertEqual(profile["deployment"]["lifecycle"], "automatic")
 
     def test_runtime_smoke_results_do_not_claim_new_helm_validation(self):
         for recipe in self.recipes.values():
             for profile in recipe["profiles"]:
                 validation = profile["validation"]
-                self.assertIn(validation["automaticHelmStatus"], ("pending", "unavailable", "smoke-tested", "failed"))
+                self.assertIn(validation["automaticHelmStatus"], ("pending", "smoke-tested", "failed"))
                 if validation["automaticHelmStatus"] == "smoke-tested":
                     record = validation["automaticHelmWorkload"]
                     self.assertEqual(record["modelRevision"], recipe["model"]["revision"])

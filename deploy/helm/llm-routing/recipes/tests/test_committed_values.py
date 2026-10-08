@@ -33,9 +33,8 @@ class CommittedValuesTests(unittest.TestCase):
         models = {model['id']: model for model in json.loads((ROOT / 'catalog.json').read_text())['models']}
         for path, values in self.examples.items():
             with self.subTest(values=path.name):
-                for duplicated in ('model', 'image', 'profile', 'targets', 'phase'):
+                for duplicated in ('model', 'image', 'profile', 'targets', 'phase', 'mode'):
                     self.assertNotIn(duplicated, values)
-                self.assertEqual(values.get('mode', 'automatic'), 'automatic')
                 if values['recipe'] not in models:
                     continue
                 model = models[values['recipe']]
@@ -119,7 +118,6 @@ class CommittedValuesTests(unittest.TestCase):
                     self.assertEqual([item['kind'] for item in workloads], ['Deployment'] * len(nodes))
                     runtime = next(item for item in objects if item['kind'] == 'ConfigMap' and 'config.json' in item['data'])
                     config = json.loads(runtime['data']['config.json'])
-                    self.assertIs(config['automatic'], True)
                     self.assertEqual(config['profile']['id'], values['profileName'])
                     self.assertEqual([target['node'] for target in config['targets']], nodes)
 

@@ -3,6 +3,7 @@ import copy
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -37,7 +38,7 @@ class SchemaTests(unittest.TestCase):
                 p = pathlib.Path(d) / 'values.json'
                 p.write_text(json.dumps(release['values']))
                 rendered = subprocess.check_output(['helm', 'template', release['name'], str(ROOT / 'charts/sglang'),
-                    '-n', 'llm-gateway', '-f', str(p), '--set', 'phase=serve'], text=True)
+                    '-n', 'llm-gateway', '-f', str(p)], text=True)
                 docs = list(yaml.safe_load_all(rendered))
                 endpoint = next(v for v in docs if v['kind'] == 'InferenceEndpoint')
                 jsonschema.Draft7Validator(schema).validate(endpoint)
@@ -46,7 +47,7 @@ class SchemaTests(unittest.TestCase):
                 self.assertEqual(service['spec']['selector']['recipe-rank'], '0')
                 self.assertEqual(endpoint['spec']['service']['name'], service['metadata']['name'])
                 self.assertEqual(endpoint['spec']['maxEngineConcurrency'], release['values']['concurrency'])
-                self.assertEqual(endpoint['spec']['gpu']['product'], release['values']['gpu']['product'])
+                self.assertEqual(endpoint['spec']['gpu']['product'], release['config']['profile']['hardware']['gpuProducts'][0])
                 selected = [v for v in docs if v['kind'] == 'Deployment' and all(
                     v['spec']['template']['metadata']['labels'].get(k) == val for k, val in service['spec']['selector'].items())]
                 self.assertEqual(selected, [head])
@@ -57,40 +58,33 @@ class SchemaTests(unittest.TestCase):
                         self.assertGreaterEqual(container[probe].get('timeoutSeconds', 1), 5)
 
 
-    def test_hardware_fixture_controls_placement_and_endpoint_gpu_product(self):
-        values = copy.deepcopy(all_profile_releases()[0]['values'])
-        values['profile']['hardware'] = {'os': 'linux', 'architecture': 'amd64', 'gpuProducts': ['NVIDIA-Example-GPU'],
-                                         'cudaDeviceNames': ['NVIDIA Example GPU'], 'gpuCount': 1,
-                                         'memoryMode': 'discrete', 'minDeviceMemoryGiB': 72}
-        values['gpu'] = {'product': 'NVIDIA-Example-GPU'}
+    def test_profile_hardware_controls_placement_and_endpoint(self):
+        release = all_profile_releases()[0]
         with tempfile.TemporaryDirectory() as directory:
+            chart = pathlib.Path(directory) / 'chart'
+            shutil.copytree(ROOT/'charts/sglang', chart)
+            profiles = chart/'files/profiles.json'
+            metadata = json.loads(profiles.read_text())
+            hardware = metadata[release['model']]['profiles'][0]['hardware']
+            hardware.update(architecture='amd64', gpuProducts=['NVIDIA-Example-GPU'],
+                            cudaDeviceNames=['NVIDIA Example GPU'], memoryMode='discrete', minDeviceMemoryGiB=72)
+            profiles.write_text(json.dumps(metadata))
             path = pathlib.Path(directory)/'values.json'
-            path.write_text(json.dumps(values))
-            docs = list(yaml.safe_load_all(subprocess.check_output(['helm', 'template', 'hardware-fixture', str(ROOT/'charts/sglang'),
-                                    '-f', str(path), '--set', 'phase=serve'], text=True)))
-        endpoint = next(doc for doc in docs if doc['kind'] == 'InferenceEndpoint')
-        self.assertEqual(endpoint['spec']['gpu']['product'], 'NVIDIA-Example-GPU')
-        for deployment in (doc for doc in docs if doc['kind'] == 'Deployment'):
-            spec = deployment['spec']['template']['spec']
-            expressions = spec['affinity']['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']['nodeSelectorTerms'][0]['matchExpressions']
+            path.write_text(json.dumps(release['values']))
+            command = ['helm', 'template', 'hardware-fixture', str(chart), '-f', str(path)]
+            docs = list(yaml.safe_load_all(subprocess.check_output(command, text=True)))
+            endpoint = next(doc for doc in docs if doc['kind'] == 'InferenceEndpoint')
+            self.assertEqual(endpoint['spec']['gpu']['product'], 'NVIDIA-Example-GPU')
+            pod = next(doc for doc in docs if doc['kind'] == 'Deployment')['spec']['template']['spec']
+            expressions = pod['affinity']['nodeAffinity']['requiredDuringSchedulingIgnoredDuringExecution']['nodeSelectorTerms'][0]['matchExpressions']
             self.assertEqual({item['key']: item['values'] for item in expressions},
                              {'kubernetes.io/os': ['linux'], 'kubernetes.io/arch': ['amd64']})
-            self.assertEqual(spec['containers'][0]['resources']['limits']['nvidia.com/gpu'], '1')
-
-    def test_chart_rejects_missing_profile_device_memory_and_registration_product(self):
-        original = all_profile_releases()[0]['values']
-        for change, expected in (({'gpu': {'product': ''}}, 'gpu.product is required'),
-                                  ({'profile': dict(original['profile'], hardware=None)}, 'profile.hardware is required'),
-                                  ({'profile': dict(original['profile'], hardware=dict(original['profile']['hardware'],
-                                      memoryMode='discrete'))}, 'positive minDeviceMemoryGiB')):
-            values = dict(original, **change)
-            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory:
-                path = pathlib.Path(directory)/'values.json'
-                path.write_text(json.dumps(values))
-                result = subprocess.run(['helm', 'template', 'hardware-fixture', str(ROOT/'charts/sglang'), '-f', str(path)],
-                                        capture_output=True, text=True)
+            self.assertEqual(pod['containers'][0]['resources']['limits']['nvidia.com/gpu'], '1')
+            del hardware['minDeviceMemoryGiB']
+            profiles.write_text(json.dumps(metadata))
+            result = subprocess.run(command, capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn(expected, result.stderr)
+            self.assertIn('positive minDeviceMemoryGiB', result.stderr)
 
 
 if __name__ == '__main__':

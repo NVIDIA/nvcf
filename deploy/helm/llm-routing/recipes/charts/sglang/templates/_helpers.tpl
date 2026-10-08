@@ -2,11 +2,7 @@
 {{- define "sglang.settings" -}}
 {{- if eq .Release.Name "llm-stack" }}{{ fail "llm-stack is reserved for the shared stack; use a separate model release name" }}{{ end -}}
 {{- $v := deepCopy .Values -}}
-{{- if not (has $v.mode (list "automatic" "phased")) }}{{ fail "mode must be automatic or phased" }}{{ end -}}
-{{- if and (eq $v.mode "phased") (or (empty $v.phase) (eq $v.phase "deploy")) }}{{ fail "phased mode requires an explicit phase" }}{{ end -}}
-{{- $automatic := or (empty $v.phase) (eq $v.phase "deploy") -}}
-{{- $_ := set $v "automatic" $automatic -}}
-{{- if $automatic -}}
+{{- if or (hasKey $v "phase") (hasKey $v "mode") }}{{ fail "phase and mode were removed; select a recipe and profileName" }}{{ end -}}
 {{- $recipes := .Files.Get "files/profiles.json" | fromJson -}}
 {{- $model := get $recipes $v.recipe -}}
 {{- if not $model }}{{ fail "Automatic mode requires a bundled recipe" }}{{ end -}}
@@ -51,7 +47,6 @@
 {{- $_ := set $v "image" $model.image -}}
 {{- $_ := set $v "gpu" (dict "product" (index $profile.hardware.gpuProducts 0)) -}}
 {{- $_ := set $v "targets" $targets -}}
-{{- $_ := set $v "phase" "serve" -}}
 {{- if and $v.cache.existingClaim (gt (len $v.nodes) 1) }}{{ fail "TP2 retained caches require cache.existingClaims in rank order" }}{{ end -}}
 {{- if and $v.cache.existingClaim $v.cache.existingClaims }}{{ fail "Use either cache.existingClaim or cache.existingClaims" }}{{ end -}}
 {{- if and $v.cache.existingClaims (ne (len $v.cache.existingClaims) (len $v.nodes)) }}{{ fail "cache.existingClaims must match the number of ranks" }}{{ end -}}
@@ -64,7 +59,6 @@
 {{- end -}}
 {{- if and (eq (len $claims) 2) (index $claims 0) (eq (index $claims 0) (index $claims 1)) }}{{ fail "Each rank needs a distinct cache claim" }}{{ end -}}
 {{- $_ := set $v "existingClaims" $claims -}}
-{{- end -}}
 {{- $v | toJson -}}
 {{- end -}}
 

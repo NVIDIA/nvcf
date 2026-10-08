@@ -1,5 +1,4 @@
 {{/* SPDX-License-Identifier: Apache-2.0 */}}
-{{- if or (empty .Values.phase) (eq .Values.phase "deploy") }}
 {{- $config := include "gguf.automatic" . | fromJson }}
 {{- $tuning := $config.tuning }}
 {{- $tuningArgs := list "--ctx-size" (mul $tuning.contextPerSlot $tuning.slots | toString) "--parallel" ($tuning.slots | toString) "--batch-size" ($tuning.batchSize | toString) "--ubatch-size" ($tuning.ubatchSize | toString) "--predict" ($tuning.defaultMaxTokens | toString) "--threads" ($tuning.threads | toString) }}
@@ -306,5 +305,4 @@ spec:
   canary: {{ $config.recipe.canary | toJson }}
   maxEngineConcurrency: {{ $tuning.slots }}
   gpu: {product: {{ index $config.profile.hardware.gpuProducts 0 | quote }}}
-{{- end }}
 {{- end }}

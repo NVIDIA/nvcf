@@ -40,7 +40,7 @@ class HardwareProfileTests(unittest.TestCase):
         self.cuda.get_device_name.return_value = 'NVIDIA GB10'
         for release in all_profile_releases():
             with self.subTest(profile=release['profile']), patch.object(runtime.platform, 'machine', return_value='aarch64'):
-                result = runtime.check_hardware(release['values'], self.cuda)
+                result = runtime.check_hardware(release['config'], self.cuda)
             self.assertEqual(result['gpu'], 'NVIDIA GB10')
             self.assertEqual(result['cudaTotalMemoryGiB'], 80)
 
@@ -59,19 +59,15 @@ class HardwareProfileTests(unittest.TestCase):
 
     def test_serving_rechecks_hardware_before_loading_model_artifacts(self):
         config = copy.deepcopy(self.config)
-        config['profile']['memoryGiB'] = 4
+        config['profile'].update(memoryGiB=4, nodes=1)
         config['model'] = {'id': 'fixture', 'revision': 'a' * 40}
         self.cuda.get_device_name.return_value = 'unexpected-device'
-        torch = MagicMock()
-        torch.cuda = self.cuda
-        hub = MagicMock()
-        with patch.dict(sys.modules, {'torch': torch, 'huggingface_hub': hub}), \
-             patch.object(sys, 'argv', ['runtime.py', 'serve', '0']), \
-             patch.object(runtime.pathlib.Path, 'read_text', return_value=json.dumps(config)), \
-             patch.object(runtime, 'host_memory', return_value=8 * runtime.GIB), patch.object(runtime, 'log'), \
-             self.assertRaisesRegex(RuntimeError, 'does not match the hardware profile'):
-            runtime.main()
-        hub.snapshot_download.assert_not_called()
+        torch = MagicMock(cuda=self.cuda)
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules, {'torch': torch, 'torch.distributed': torch.distributed}), \
+                patch.object(runtime, 'prepare_checkpoint') as prepare, patch.object(runtime, 'host_memory', return_value=200 * runtime.GIB), \
+                self.assertRaisesRegex(RuntimeError, 'does not match'):
+            runtime.automatic(config, 0, pathlib.Path(directory))
+        prepare.assert_not_called()
 
     def test_profile_rejects_mismatched_os_architecture_and_unsupported_gpu_count(self):
         for field, value in (('os', 'windows'), ('architecture', 'arm64'), ('gpuCount', 2), ('gpuCount', True)):
@@ -123,9 +119,9 @@ class CacheReuseTests(unittest.TestCase):
     def test_reuse_verifies_local_files_without_importing_download_client(self):
         with patch.dict(sys.modules, {'huggingface_hub': None}), patch.object(runtime, 'log') as log, \
                 patch.object(runtime.shutil, 'disk_usage', side_effect=AssertionError('No new disk allocation check')):
-            self.assertEqual(runtime.download(self.config, self.cache), 0)
+            self.assertEqual(runtime.prepare_checkpoint(self.config, self.cache), self.snapshot)
         log.assert_called_once_with('download_pass', model='test-model', revision='a' * 40, reused=True)
-        self.assertEqual(json.loads(self.marker.read_text()), {'model': 'test-model', 'repository': 'example/model', 'revision': 'a' * 40})
+        self.assertEqual(self.marker.read_text().strip(), self.model['repository'])
         self.assertEqual(runtime.completed_checkpoint(self.model, self.cache), self.marker)
         self.assertEqual(runtime.reuse_snapshot(self.model, self.cache), self.snapshot)
 
@@ -138,7 +134,7 @@ class CacheReuseTests(unittest.TestCase):
                 else:
                     self.marker.write_text(marker)
                 with patch.dict(sys.modules, {'huggingface_hub': None}), self.assertRaisesRegex(RuntimeError, 'marker'):
-                    runtime.download(self.config, self.cache)
+                    runtime.prepare_checkpoint(self.config, self.cache)
 
     def test_missing_snapshot_or_tokenizer_refuses_reuse(self):
         for name in ('config.json', 'tokenizer_config.json', 'tokenizer.json'):
@@ -147,7 +143,7 @@ class CacheReuseTests(unittest.TestCase):
             path.unlink()
             with self.subTest(file=name), patch.dict(sys.modules, {'huggingface_hub': None}), \
                     self.assertRaisesRegex(RuntimeError, 'Missing|missing'):
-                runtime.download(self.config, self.cache)
+                runtime.prepare_checkpoint(self.config, self.cache)
             path.write_text(original)
         other = dict(self.model, revision='b' * 40)
         (self.cache / (other['revision'] + '.complete')).write_text(other['repository'])
@@ -197,40 +193,13 @@ class CacheReuseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'checksum differs'):
             runtime.reuse_snapshot(self.model, self.cache)
 
-    def test_serving_accepts_structured_marker_and_uses_only_local_snapshot(self):
-        runtime.reuse_snapshot(self.model, self.cache)
-        config = all_profile_releases()[0]['values']
-        config['model'] = self.model
-        config['reuseCaches'] = True
-        hub = MagicMock()
-        hub.snapshot_download.return_value = str(self.snapshot)
-        original_read = pathlib.Path.read_text
-        original_complete = runtime.completed_checkpoint
-        def read(path, *args, **kwargs):
-            return json.dumps(config) if str(path) == '/recipe/config.json' else original_read(path, *args, **kwargs)
-        with patch.dict(sys.modules, {'huggingface_hub': hub, 'torch': MagicMock()}), \
-                patch.object(runtime.pathlib.Path, 'read_text', read), \
-                patch.object(runtime, 'completed_checkpoint', side_effect=lambda model, _: original_complete(model, self.cache)), \
-                patch.object(runtime, 'host_memory', return_value=200 * runtime.GIB), \
-                patch.object(runtime, 'check_hardware'), patch.object(runtime, 'supervise', return_value=0), \
-                patch.object(runtime, 'log'), patch.object(sys, 'argv', ['runtime.py', 'serve', '0']):
-            self.assertEqual(runtime.main(), 0)
-        hub.snapshot_download.assert_called_once_with(repo_id='example/model', revision='a' * 40, local_files_only=True)
-
-    def test_normal_download_behavior_remains_available(self):
-        hub = MagicMock()
-        self.config['reuseCaches'] = False
-        with patch.dict(sys.modules, {'huggingface_hub': hub}), patch.object(runtime, 'log') as log:
-            self.assertEqual(runtime.download(self.config, self.cache), 0)
-        hub.snapshot_download.assert_called_once_with(repo_id='example/model', revision='a' * 40)
-        log.assert_called_once_with('download_pass', model='test-model', revision='a' * 40)
 
     def test_chart_requires_boolean_and_exposes_reuse_in_runtime_config(self):
         values = all_profile_releases()[0]['values']
         values['reuseCaches'] = True
         file = self.cache / 'values.json'
         file.write_text(json.dumps(values))
-        command = ['helm', 'template', 'cache-check', str(ROOT / 'charts/sglang'), '-f', str(file), '--set', 'phase=download']
+        command = ['helm', 'template', 'cache-check', str(ROOT / 'charts/sglang'), '-f', str(file)]
         result = subprocess.run(command, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('"reuseCaches": true', result.stdout)

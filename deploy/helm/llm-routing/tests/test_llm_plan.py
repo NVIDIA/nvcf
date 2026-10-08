@@ -194,7 +194,6 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn('phase=qualify', command)
         self.assertNotIn('--wait-for-jobs', command)
         self.assertIn('contextLength=32768', command)
-        self.assertEqual(report['deployment']['phase'], 'deploy')
         self.assertNotIn('qualification only', self.output.getvalue())
 
     def test_flash_nvme_command_includes_only_selected_verified_capability(self):
@@ -211,7 +210,6 @@ class PlanTests(unittest.TestCase):
         self.assertIn('nodes[0]=available-0', command)
         option = command[command.index('--set-json') + 1]
         self.assertEqual(json.loads(option.split('=', 1)[1]), {'available-0': {'localNvme': True}})
-        self.assertEqual(report['deployment']['phase'], 'deploy')
 
     def test_flash_requires_verified_nvme_or_fabric_before_suggesting_installation(self):
         for profile in ('spark-nvfp4-nvme', 'spark-nvfp4-tp2'):

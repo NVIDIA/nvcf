@@ -2,8 +2,6 @@
 {{- $v := include "sglang.settings" . | fromJson -}}
 {{- if not (kindIs "bool" $v.reuseCaches) }}{{ fail "reuseCaches must be a boolean" }}{{ end -}}
 {{- if not (kindIs "bool" $v.suspended) }}{{ fail "suspended must be a boolean" }}{{ end -}}
-{{- if and $v.suspended (ne $v.phase "serve") }}{{ fail "suspended is supported only in phase serve" }}{{ end -}}
-{{- if not (has $v.phase (list "qualify" "download" "serve")) }}{{ fail "phase must be qualify, download or serve" }}{{ end -}}
 {{- if not (regexMatch "^.+@sha256:[a-f0-9]{64}$" $v.image) }}{{ fail "Use a digest-pinned runtime image" }}{{ end -}}
 {{- if not (regexMatch "^[a-f0-9]{40}$" (default "" $v.model.revision)) }}{{ fail "Use a pinned model revision" }}{{ end -}}
 {{- if or (lt (len $v.targets) 1) (gt (len $v.targets) 2) (ne (len $v.targets) (int $v.profile.nodes)) }}{{ fail "targets must match the recipe profile" }}{{ end -}}
@@ -20,7 +18,7 @@
 {{- $claims := list -}}
 {{- range $rank, $target := $v.targets -}}
 {{- $existing := "" -}}
-{{- if $v.automatic }}{{ $existing = index $v.existingClaims $rank }}{{ end -}}
+{{ $existing = index $v.existingClaims $rank }}
 {{- $claims = append $claims (default (printf "%s-cache-%d" $root.Release.Name $rank) $existing) -}}
 {{- end -}}
 apiVersion: v1
@@ -33,16 +31,16 @@ data:
   placement.py: |
 {{ .Files.Get "files/placement.py" | indent 4 }}
   config.json: |
-{{- $config := dict "automatic" $v.automatic "namespace" .Release.Namespace "sharedCAConfigMap" $v.sharedCAConfigMap "storageClassName" $v.storageClassName "claimName" (index $claims 0) "claimNames" $claims "release" (printf "%s/%s" .Release.Namespace .Release.Name) "generation" .Release.Revision -}}
+{{- $config := dict "namespace" .Release.Namespace "sharedCAConfigMap" $v.sharedCAConfigMap "storageClassName" $v.storageClassName "claimName" (index $claims 0) "claimNames" $claims "release" (printf "%s/%s" .Release.Namespace .Release.Name) "generation" .Release.Revision -}}
 {{ merge $config (dict "model" $v.model "profile" $v.profile "targets" $v.targets "contextLength" $v.contextLength "concurrency" $v.concurrency "ports" $v.ports "reuseCaches" $v.reuseCaches) | toPrettyJson | nindent 4 }}
-{{- if and $v.automatic (gt (len $v.targets) 1) }}
+{{- if gt (len $v.targets) 1 }}
 {{- range $rank, $target := $v.targets }}
   placement-{{ $rank }}.json: |
 {{ mergeOverwrite (deepCopy $config) (dict "targets" (list $target) "claimName" (index $claims $rank)) | toPrettyJson | nindent 4 }}
 {{- end }}
 {{- end }}
 {{- range $rank, $target := $v.targets }}
-{{- if not (and $v.automatic (index $v.existingClaims $rank)) }}
+{{- if not (index $v.existingClaims $rank) }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -57,31 +55,21 @@ spec:
     requests: {storage: {{ printf "%dGi" (int $v.profile.cacheGiB) }}}
 {{- end }}
 ---
-{{- if eq $v.phase "serve" }}
 apiVersion: apps/v1
 kind: Deployment
-{{- else }}
-apiVersion: batch/v1
-kind: Job
-{{- end }}
 metadata:
-  name: {{ $root.Release.Name }}-{{ $v.phase }}-{{ $rank }}
+  name: {{ $root.Release.Name }}-serve-{{ $rank }}
   labels:
     app.kubernetes.io/instance: {{ $root.Release.Name }}
     app.kubernetes.io/component: sglang
 spec:
-{{- if eq $v.phase "serve" }}
   replicas: {{ ternary 0 1 $v.suspended }}
   strategy: {type: Recreate}
-  progressDeadlineSeconds: {{ ternary 21600 7200 $v.automatic }}
+  progressDeadlineSeconds: 21600
   selector:
     matchLabels:
       app.kubernetes.io/instance: {{ $root.Release.Name }}
       recipe-rank: {{ $rank | quote }}
-{{- else }}
-  backoffLimit: 0
-  activeDeadlineSeconds: {{ if eq $v.phase "download" }}14400{{ else }}600{{ end }}
-{{- end }}
   template:
     metadata:
       labels:
@@ -92,12 +80,11 @@ spec:
         checksum/placement: {{ $root.Files.Get "files/placement.py" | sha256sum }}
         checksum/runtime: {{ $root.Files.Get "files/runtime.py" | sha256sum }}
         checksum/config: {{ omit $v "suspended" | toJson | sha256sum }}
-{{- if and $v.automatic (gt (len $v.targets) 1) }}
+{{- if gt (len $v.targets) 1 }}
         recipe-generation: {{ $root.Release.Revision | quote }}
 {{- end }}
     spec:
       automountServiceAccountToken: false
-{{- if $v.automatic }}
       serviceAccountName: {{ $root.Release.Name }}-check
       initContainers:
         - name: placement-check
@@ -118,12 +105,9 @@ spec:
             - {name: recipe, mountPath: /recipe, readOnly: true}
             - {name: cluster-access, mountPath: /var/run/recipe-cluster, readOnly: true}
             - {name: shared-ca, mountPath: /shared-ca, readOnly: true}
-{{- end }}
-      restartPolicy: {{ if eq $v.phase "serve" }}Always{{ else }}Never{{ end }}
-{{- if ne $v.phase "download" }}
+      restartPolicy: Always
       runtimeClassName: {{ required "runtimeClassName is required" $v.runtimeClassName | quote }}
-{{- end }}
-{{- if and (eq (len $v.targets) 2) (ne $v.phase "download") }}
+{{- if eq (len $v.targets) 2 }}
       hostNetwork: true
       dnsPolicy: ClusterFirstWithHostNet
 {{- end }}
@@ -142,7 +126,7 @@ spec:
         - name: sglang
           image: {{ $v.image | quote }}
           imagePullPolicy: {{ $v.imagePullPolicy }}
-          command: [python3, -u, /recipe/runtime.py, {{ ternary "automatic" $v.phase $v.automatic | quote }}, {{ $rank | quote }}]
+          command: [python3, -u, /recipe/runtime.py, {{ $rank | quote }}]
           env:
             - {name: HF_HOME, value: /cache/huggingface}
 {{- if $v.reuseCaches }}
@@ -158,7 +142,7 @@ spec:
                 secretKeyRef: {name: {{ $v.hfTokenSecret | quote }}, key: token}
 {{- end }}
 {{- if eq (len $v.targets) 2 }}
-            - {name: NCCL_SOCKET_IFNAME, value: {{ if $v.automatic }}{{ printf "=%s" $target.interface | quote }}{{ else }}{{ required "target.interface is required for TP2" $target.interface | quote }}{{ end }}}
+            - {name: NCCL_SOCKET_IFNAME, value: {{ printf "=%s" $target.interface | quote }}}
             - {name: GLOO_SOCKET_IFNAME, value: {{ $target.interface | quote }}}
             - {name: NCCL_IB_DISABLE, value: '1'}
             - {name: TORCH_NCCL_ASYNC_ERROR_HANDLING, value: '1'}
@@ -168,43 +152,37 @@ spec:
           ports:
             - {name: http, containerPort: {{ $v.ports.http }}}
             - {name: bootstrap, containerPort: {{ $v.ports.bootstrap }}}
-{{- if and (eq (len $v.targets) 2) (ne $v.phase "download") }}
+{{- if eq (len $v.targets) 2 }}
             - {name: rendezvous, containerPort: {{ $v.ports.rendezvous }}, hostPort: {{ $v.ports.rendezvous }}}
 {{- end }}
-{{- if eq $v.phase "serve" }}
           startupProbe:
 {{- if eq $rank 0 }}
             httpGet: {path: /health, port: http}
 {{- else }}
-            httpGet: {path: /started, port: bootstrap{{ if $v.automatic }}, host: {{ $target.address | quote }}{{ end }}}
+            httpGet: {path: /started, port: bootstrap, host: {{ $target.address | quote }}}
 {{- end }}
             periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: {{ ternary 2160 720 $v.automatic }}
+            failureThreshold: 2160
           readinessProbe:
 {{- if eq $rank 0 }}
             httpGet: {path: /health, port: http}
 {{- else }}
-            httpGet: {path: /started, port: bootstrap{{ if $v.automatic }}, host: {{ $target.address | quote }}{{ end }}}
+            httpGet: {path: /started, port: bootstrap, host: {{ $target.address | quote }}}
 {{- end }}
             periodSeconds: 5
             timeoutSeconds: 5
-{{- end }}
           resources:
             requests:
-              cpu: {{ if eq $v.phase "download" }}'1'{{ else }}{{ $v.profile.cpu | quote }}{{ end }}
-              memory: {{ if eq $v.phase "download" }}4Gi{{ else }}{{ printf "%dGi" (int $v.profile.memoryGiB) }}{{ end }}
-{{- if ne $v.phase "download" }}
+              cpu: {{ $v.profile.cpu | quote }}
+              memory: {{ printf "%dGi" (int $v.profile.memoryGiB) }}
               nvidia.com/gpu: '1'
-{{- end }}
 {{- if $v.profile.offload }}
               ephemeral-storage: {{ printf "%dGi" (int $v.profile.offloadGiB) }}
 {{- end }}
             limits:
-              memory: {{ if eq $v.phase "download" }}8Gi{{ else }}{{ printf "%dGi" (int $v.profile.memoryLimitGiB) }}{{ end }}
-{{- if ne $v.phase "download" }}
+              memory: {{ printf "%dGi" (int $v.profile.memoryLimitGiB) }}
               nvidia.com/gpu: '1'
-{{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
@@ -217,7 +195,6 @@ spec:
             - {name: ple, mountPath: /ple}
 {{- end }}
       volumes:
-{{- if $v.automatic }}
         - name: shared-ca
           configMap:
             name: {{ $v.sharedCAConfigMap | quote }}
@@ -229,7 +206,6 @@ spec:
               - configMap:
                   name: kube-root-ca.crt
                   items: [{key: ca.crt, path: ca.crt}]
-{{- end }}
         - name: recipe
           configMap: {name: {{ $root.Release.Name }}-runtime}
         - name: cache
@@ -243,7 +219,6 @@ spec:
           emptyDir: {sizeLimit: {{ printf "%dGi" (int $v.profile.offloadGiB) }}}
 {{- end }}
 {{- end }}
-{{- if eq $v.phase "serve" }}
 ---
 apiVersion: v1
 kind: Service
@@ -252,7 +227,7 @@ metadata:
 spec:
   selector: {app.kubernetes.io/instance: {{ .Release.Name }}, recipe-rank: '0'}
   ports: [{name: http, port: 8000, targetPort: http}]
-{{- if and $v.register (or (not $v.automatic) (not $v.suspended)) }}
+{{- if and $v.register (not $v.suspended) }}
 ---
 apiVersion: pylon.nvidia.com/v1alpha1
 kind: InferenceEndpoint
@@ -266,5 +241,4 @@ spec:
   maxEngineConcurrency: {{ $v.concurrency }}
   gpu: {product: {{ $gpuProduct | quote }}}
   canary: {timeoutSeconds: 180, intervalSeconds: 60}
-{{- end }}
 {{- end }}

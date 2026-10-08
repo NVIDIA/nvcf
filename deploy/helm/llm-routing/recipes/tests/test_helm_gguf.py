@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import math
 import pathlib
 import shutil
 import subprocess
@@ -86,25 +87,26 @@ class AutomaticChartTests(unittest.TestCase):
         self.assertEqual(args[:len(self.config['recipe']['serverArgs'])], self.config['recipe']['serverArgs'])
 
     def test_recipe_tuning_matches_server_arguments_and_catalog_workload(self):
-        spec = importlib.util.spec_from_file_location('gguf_tuning_sizing', ROOT / 'sizing.py')
-        sizing = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(sizing)
         profile = self.config['profile']
         tuning = self.config['recipe']['tuning'][profile['hardware']['memoryMode']]
         self.assertEqual(self.config['tuning'], tuning)
-        plan = sizing.memory_plan(dict(self.config['recipe'], lock=self.config['lock']),
-                                  {'unifiedMemory': True, 'memoryGiB': profile['hardware']['minHostMemoryGiB']},
-                                  profile['nodes'], tuning)
-        self.assertEqual(profile['minAvailableMemoryGiB'], plan['hostAvailableGiB'])
+        recipe = self.config['recipe']
+        kv_gib = recipe['kvCacheKiBPerToken'] * tuning['contextPerSlot'] * tuning['slots'] / 1024**2
+        share = (self.config['lock']['weightGiB'] + kv_gib) / profile['nodes']
+        rules = recipe['memory']['unified']
+        self.assertEqual(profile['minAvailableMemoryGiB'], math.ceil(share) + rules['checkOverShareGiB'])
         for role in profile['roles']:
-            self.assertEqual(role['resources']['requests']['memory'], str(plan['requestGiB']) + 'Gi')
-            self.assertEqual(role['resources']['limits']['memory'], str(plan['limitGiB']) + 'Gi')
+            self.assertEqual(role['resources']['requests']['memory'], str(math.floor(share) - rules['requestUnderShareGiB']) + 'Gi')
+            self.assertEqual(role['resources']['limits']['memory'], str(math.ceil(share) + rules['limitOverShareGiB']) + 'Gi')
         model = object_named(self.objects, 'Deployment', 'gguf-test')['spec']['template']['spec']['containers'][0]
         environment = {item['name']: item['value'] for item in model['env']}
         args = json.loads(environment['SERVER_ARGS'])
-        for flag, value in zip(sizing.tuning_args(tuning)[::2], sizing.tuning_args(tuning)[1::2]):
+        expected = {'--ctx-size': tuning['contextPerSlot'] * tuning['slots'], '--parallel': tuning['slots'],
+                    '--batch-size': tuning['batchSize'], '--ubatch-size': tuning['ubatchSize'],
+                    '--predict': tuning['defaultMaxTokens'], '--threads': tuning['threads']}
+        for flag, value in expected.items():
             self.assertEqual(args.count(flag), 1)
-            self.assertEqual(args[args.index(flag) + 1], value)
+            self.assertEqual(args[args.index(flag) + 1], str(value))
         exported = next(recipe for recipe in json.loads((ROOT / 'index.json').read_text())['recipes'] if recipe['id'] == 'glm-5.3')
         workload = next(p for p in exported['profiles'] if p['id'] == profile['id'])['workload']
         self.assertEqual(tuning['contextPerSlot'], workload['defaultContextTokens'])
@@ -198,16 +200,6 @@ class AutomaticChartTests(unittest.TestCase):
         for item in objects:
             if item['kind'] == 'PersistentVolumeClaim':
                 self.assertEqual(item['metadata']['annotations']['helm.sh/resource-policy'], 'keep')
-
-    def test_existing_explicit_serve_phase_remains_available(self):
-        config = {'phase': 'serve', 'image': self.config['image'], 'targets': [{'id': 'n0', 'node': 'a'}, {'id': 'n1', 'node': 'b'}],
-                  'runtime': {'sha256': 'a' * 64}, 'model': {'lock': self.config['lock'], 'firstShard': self.config['recipe']['firstShard'],
-                   'servedName': 'legacy', 'args': self.config['recipe']['serverArgs']}}
-        objects = render(config)
-        self.assertFalse(any(item['kind'] in ('Role', 'ClusterRole') for item in objects))
-        self.assertFalse(any(item['metadata']['name'].endswith('-automatic') for item in objects))
-        pod = object_named(objects, 'Deployment', 'gguf-test')['spec']['template']['spec']
-        self.assertEqual(pod['containers'][0]['command'][-1], '/checks/serve.py')
 
 
 class SourceBuildTests(unittest.TestCase):

@@ -2,6 +2,4 @@
 {{/* SPDX-License-Identifier: Apache-2.0 */}}
 {{- if eq .Release.Name "llm-stack" }}{{ fail "llm-stack is reserved for the shared stack; use a separate model release name" }}{{ end -}}
 {{- if not (kindIs "bool" .Values.suspended) }}{{ fail "suspended must be a boolean" }}{{ end -}}
-{{- if and .Values.suspended (not (has .Values.phase (list "" "deploy" "serve"))) }}{{ fail "suspended is supported only in phase serve or deploy" }}{{ end -}}
-
-{{- if not (has .Values.phase (list "" "deploy" "preflight" "build" "qualify" "download" "serve" "chain")) }}{{ fail "Unknown GGUF deployment phase" }}{{ end -}}
+{{- if hasKey .Values "phase" }}{{ fail "phase was removed; select a recipe and profileName" }}{{ end -}}

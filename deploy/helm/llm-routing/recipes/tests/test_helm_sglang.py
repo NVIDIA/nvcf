@@ -14,7 +14,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import yaml
-from test_recipes import ROOT, all_profile_releases, runtime
+from test_recipes import ROOT, runtime
 import test_runtime_and_gateway as runtime_tests
 
 CHART = ROOT/'charts/sglang'
@@ -77,7 +77,6 @@ class HelmSGLangTests(unittest.TestCase):
             with self.subTest(recipe=name):
                 docs = self.render(self.values(name))
                 config = self.configuration(docs)
-                self.assertTrue(config['automatic'])
                 self.assertEqual(config['model']['revision'], pins[name]['revision'])
                 self.assertEqual(config['profile'], pins[name]['profiles'][0])
                 self.assertFalse(any(doc['kind'] == 'Job' for doc in docs))
@@ -86,7 +85,7 @@ class HelmSGLangTests(unittest.TestCase):
                 pod = deployment['spec']['template']['spec']
                 main = pod['containers'][0]
                 self.assertEqual(main['image'], pins[name]['image'])
-                self.assertEqual(main['command'], ['python3', '-u', '/recipe/runtime.py', 'automatic', '0'])
+                self.assertEqual(main['command'], ['python3', '-u', '/recipe/runtime.py', '0'])
                 for field in ('requests', 'limits'):
                     self.assertEqual(main['resources'][field]['nvidia.com/gpu'], '1')
                 self.assertEqual(main['startupProbe']['httpGet']['path'], '/health')
@@ -130,7 +129,7 @@ class HelmSGLangTests(unittest.TestCase):
                  ({'nodes': ['bad/name']}, 'Kubernetes node name'), ({'recipe': 'missing-model'}, 'bundled recipe'),
                  ({'profileName': 'spark-nvfp4'}, 'does not belong'), ({'sharedCAConfigMap': ''}, 'sharedCAConfigMap is required'),
                  ({'contextLength': 100000}, 'Workload exceeds'), ({'reuseCaches': 'true'}, 'must be a boolean'),
-                 ({'mode': 'phased'}, 'explicit phase'), ({'cache': {'existingClaim': '../claim'}}, 'PVC name')]
+                 ({'mode': 'phased'}, 'removed'), ({'cache': {'existingClaim': '../claim'}}, 'PVC name')]
         for changes, error in cases:
             with self.subTest(changes=changes):
                 self.assertIn(error, self.render(dict(self.values(), **changes), success=False))
@@ -175,12 +174,6 @@ class HelmSGLangTests(unittest.TestCase):
             self.assertEqual(pvc['metadata']['annotations']['helm.sh/resource-policy'], 'keep')
         self.assertEqual([doc for doc in original if doc['kind'] != 'InferenceEndpoint'], suspended)
 
-    def test_legacy_serve_suspend_keeps_endpoint_for_existing_phase_workflows(self):
-        for release in all_profile_releases():
-            with self.subTest(profile=release['profile']):
-                docs = self.render(dict(release['values'], phase='serve', suspended=True, register=True))
-                self.assertEqual(sum(doc['kind'] == 'InferenceEndpoint' for doc in docs), 1)
-                self.assertTrue(all(doc['spec']['replicas'] == 0 for doc in docs if doc['kind'] == 'Deployment'))
 
     def test_profile_rollback_restores_pinned_config_and_retains_cache_identity(self):
         first = self.render(self.values())
@@ -191,16 +184,6 @@ class HelmSGLangTests(unittest.TestCase):
         claims = [[doc for doc in docs if doc['kind'] == 'PersistentVolumeClaim'] for docs in (first, second, restored)]
         self.assertEqual(claims[0], claims[1])
         self.assertEqual(claims[1], claims[2])
-
-    def test_explicit_legacy_phases_remain_available_for_all_profiles(self):
-        for release in all_profile_releases():
-            for phase in ('qualify', 'download', 'serve'):
-                with self.subTest(profile=release['profile'], phase=phase):
-                    docs = self.render(dict(release['values'], phase=phase))
-                    self.assertFalse(self.configuration(docs)['automatic'])
-                    self.assertFalse(any(doc['kind'] in ('ClusterRole', 'Role', 'ServiceAccount') for doc in docs))
-                    workload = next(doc for doc in docs if doc['kind'] in ('Deployment', 'Job'))
-                    self.assertEqual(workload['spec']['template']['spec']['containers'][0]['command'][3], phase)
 
 
 class PlacementTests(unittest.TestCase):

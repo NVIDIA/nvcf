@@ -240,41 +240,6 @@ class StartupBarrier:
             raise RuntimeError('TP2 peer stopped responding; stopping this rank')
 
 
-def wait_worker(config):
-    url = f"http://{config['targets'][1]['address']}:{config['ports']['bootstrap']}/started"
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    deadline = time.monotonic() + 180
-    while time.monotonic() < deadline:
-        try:
-            with opener.open(url, timeout=2) as response:
-                body = json.load(response)
-                if body == {'model': config['model']['id'], 'rank': 1, 'revision': config['model']['revision']}:
-                    return
-        except (OSError, ValueError):
-            pass
-        time.sleep(1)
-    raise RuntimeError('Worker did not start on the configured fabric within 180 seconds')
-
-
-def marker_server(config, rank):
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            if self.path != '/started':
-                self.send_error(404)
-                return
-            data = json.dumps({'model': config['model']['id'], 'rank': rank, 'revision': config['model']['revision']}).encode()
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Content-Length', str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-        def log_message(self, *_):
-            pass
-    server = http.server.ThreadingHTTPServer(('0.0.0.0', config['ports']['bootstrap']), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    return server
-
-
 def stop(child):
     if child.poll() is not None:
         return
@@ -407,25 +372,6 @@ def reuse_snapshot(model, cache=pathlib.Path('/cache'), require_complete=True, w
     return snapshot
 
 
-def download(config, cache=pathlib.Path('/cache')):
-    profile, model = config['profile'], config['model']
-    reuse = config.get('reuseCaches', False)
-    if type(reuse) is not bool:
-        raise RuntimeError('reuseCaches must be a boolean')
-    if reuse:
-        reuse_snapshot(model, cache)
-        log('download_pass', model=model['id'], revision=model['revision'], reused=True)
-        return 0
-    from huggingface_hub import snapshot_download
-    complete = cache / (model['revision'] + '.complete')
-    if not complete.exists() and shutil.disk_usage(cache).free < profile['minFreeDiskGiB'] * GIB:
-        raise RuntimeError('Insufficient cache disk space for the model checkpoint')
-    snapshot_download(repo_id=model['repository'], revision=model['revision'])
-    complete.write_text(model['repository'] + '\n')
-    log('download_pass', model=model['id'], revision=model['revision'])
-    return 0
-
-
 def prepare_checkpoint(config, cache):
     model = config['model']
     if config.get('reuseCaches') or (cache / (model['revision'] + '.complete')).exists():
@@ -495,49 +441,11 @@ def automatic(config, rank, cache=pathlib.Path('/cache')):
 
 def main():
     config = json.loads(pathlib.Path('/recipe/config.json').read_text())
-    phase, rank = sys.argv[1], int(sys.argv[2])
-    profile, model = config['profile'], config['model']
-    log('phase_start', phase=phase, rank=rank, model=model['id'], revision=model['revision'])
-    reuse = config.get('reuseCaches', False)
-    if type(reuse) is not bool:
+    rank = int(sys.argv[1])
+    if type(config.get('reuseCaches', False)) is not bool:
         raise RuntimeError('reuseCaches must be a boolean')
-    if phase == 'automatic':
-        return automatic(config, rank)
-    if phase == 'download':
-        return download(config)
-    if host_memory() < profile['memoryGiB'] * GIB:
-        raise RuntimeError('Insufficient host MemAvailable for this profile; capacity may have changed since planning')
-    if phase == 'qualify':
-        qualify(config, rank)
-        return 0
-    if phase != 'serve':
-        raise RuntimeError('Unknown phase')
-    import torch
-    check_hardware(config, torch.cuda)
-    from huggingface_hub import snapshot_download
-    completed_checkpoint(model, pathlib.Path('/cache'))
-    model_path = snapshot_download(repo_id=model['repository'], revision=model['revision'], local_files_only=True)
-    if profile['offload']:
-        # This mount is this pod's disposable emptyDir, never the retained model cache.
-        for path in pathlib.Path('/ple').iterdir():
-            if path.is_dir():
-                shutil.rmtree(path)
-            else:
-                path.unlink()
-        if shutil.disk_usage('/ple').free < 50 * GIB:
-            raise RuntimeError('NVMe offload requires at least 50 GiB free on the pod ephemeral disk')
-    server = None
-    if profile['nodes'] > 1:
-        if rank == 0:
-            wait_worker(config)
-        else:
-            server = marker_server(config, rank)
-    try:
-        return supervise(command(config, model_path, rank), config)
-    finally:
-        if server:
-            server.shutdown()
-            server.server_close()
+    log('phase_start', phase='automatic', rank=rank, model=config['model']['id'], revision=config['model']['revision'])
+    return automatic(config, rank)
 
 
 if __name__ == '__main__':

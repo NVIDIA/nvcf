@@ -14,7 +14,7 @@ The automatic SGLang and GGUF charts use `recipe`, `profileName`, explicit `node
 
 ## Local helpers
 
-Keep `sizing.py` free of cluster access. Its supported placement includes one model node and a split across nodes, covered by `tests/test_sizing.py`. `../llm.py` reads live inventory for planning and reads installed shared-stack credentials for discovery and chat. Advanced verification helpers must work with the Helm-installed stack without a saved connection file.
+`../llm.py` reads live inventory for planning and reads installed shared-stack credentials for discovery and chat. Advanced verification helpers must work with the Helm-installed stack without a saved connection file.
 
 Recipe tuning defaults live in `recipe.json` under `tuning.unified` and `tuning.discrete`. Automatic Helm profiles select defaults by `hardware.memoryMode`; their advertised context and concurrency must match. Keep derived placement, tuned llama.cpp arguments and resource reservations covered by tests.
 
@@ -37,4 +37,4 @@ helm lint --strict charts/sglang -f charts/sglang/values.example.yaml
 helm lint --strict charts/gguf-backend -f charts/gguf-backend/values.example.yaml
 ```
 
-Tests cover every supported profile and phase, startup gates, resource reservations, cache reuse and scoped ownership. A render does not establish a fresh-cluster deployment. Validate real readiness, inference and failure isolation separately. Land runtime and chart fixes in their owning sources. Generate API and deepcopy files through their existing generators.
+Tests cover every supported profile, startup gates, resource reservations, cache reuse and scoped ownership. A render does not establish a fresh-cluster deployment. Validate real readiness, inference and failure isolation separately. Land runtime and chart fixes in their owning sources. Generate API and deepcopy files through their existing generators.

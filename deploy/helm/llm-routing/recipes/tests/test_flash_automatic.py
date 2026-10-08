@@ -30,10 +30,9 @@ class FlashHelmTests(unittest.TestCase):
     def test_nvme_automatic_installs_pins_and_reserves_disposable_offload(self):
         docs = self.render(self.values())
         config = self.configuration(docs)
-        self.assertTrue(config['automatic'])
         self.assertEqual(config['profile']['id'], 'spark-nvfp4-nvme')
         pod = next(d for d in docs if d['kind'] == 'Deployment')['spec']['template']['spec']
-        self.assertEqual(pod['containers'][0]['command'][-2:], ['automatic', '0'])
+        self.assertEqual(pod['containers'][0]['command'][-2:], ['/recipe/runtime.py', '0'])
         self.assertEqual(pod['containers'][0]['resources']['requests']['ephemeral-storage'], '56Gi')
         self.assertEqual(next(v for v in pod['volumes'] if v['name'] == 'ple')['emptyDir'], {'sizeLimit': '56Gi'})
         self.assertEqual(config['targets'], [{'node': 'gpu-node-1', 'localNvme': True}])
@@ -55,7 +54,7 @@ class FlashHelmTests(unittest.TestCase):
             self.assertEqual(env['NCCL_SOCKET_IFNAME'], '=eth1')
             if rank == 1:
                 self.assertEqual(pod['containers'][0]['readinessProbe']['httpGet']['host'], config['targets'][rank]['address'])
-            self.assertEqual(pod['containers'][0]['command'][-2:], ['automatic', str(rank)])
+            self.assertEqual(pod['containers'][0]['command'][-2:], ['/recipe/runtime.py', str(rank)])
             self.assertEqual(pod['initContainers'][0]['command'][-1], f'/recipe/placement-{rank}.json')
             placement = json.loads(cm[f'placement-{rank}.json'])
             self.assertEqual(placement['targets'], [config['targets'][rank]])

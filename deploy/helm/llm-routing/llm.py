@@ -168,7 +168,7 @@ def deployment_command(report, catalog, context, namespace, args, capabilities):
             if value is not None:
                 command += ['--set', f'{key}={value}']
     command += ['--wait', '--timeout', '120m']
-    return {'release': release, 'phase': 'deploy', 'command': shlex.join(command),
+    return {'release': release, 'command': shlex.join(command),
             'guide': deployment['guide'].removeprefix('../')}
 
 
@@ -289,8 +289,6 @@ def print_capacity_details(report):
         print('Selected nodes: ' + ', '.join(report['chosenNodes']))
         print('Run from deploy/helm/llm-routing:')
         print(deployment['command'])
-        if deployment['phase'] == 'qualify':
-            print('This command runs qualification only. Continue the download and serve phases in ' + deployment['guide'])
     print('No changes made. Recheck capacity before deploying.')
     for limitation in report.get('limitations', []):
         print('  ' + limitation)
@@ -320,8 +318,7 @@ def print_recipe_catalog(catalog):
             continue
         for profile in profiles:
             lifecycle = profile['deployment']['lifecycle']
-            validation_key = 'automaticHelmStatus' if lifecycle == 'automatic' else 'runtimeStatus'
-            validation = profile.get('validation', {}).get(validation_key, 'pending')
+            validation = profile.get('validation', {}).get('automaticHelmStatus', 'pending')
             rows.append([recipe['id'], recipe.get('precision') or '-', profile['id'],
                          profile['modelNodeCount'], lifecycle, validation])
     print_table(['RECIPE', 'PRECISION', 'PROFILE', 'NODES', 'LIFECYCLE', 'VALIDATION'], rows)

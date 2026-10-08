@@ -1,7 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
 # Automatic mode uses the bundled pinned recipe and explicit node placement.
-# Supplying phase retains the advanced qualify/download/serve workflow.
-mode: automatic
 recipe: qwen3.8-27b
 profileName: ""
 nodes: []
@@ -12,18 +10,12 @@ cache:
   existingClaim: ""
   # Optional per-rank retained PVCs for TP2. Empty entries create new claims.
   existingClaims: []
-phase: deploy
 suspended: false
 # Automatic startup always checks existing files first. True requires a complete offline cache.
 reuseCaches: false
-model: {}
-image: ""
 imagePullPolicy: IfNotPresent
 runtimeClassName: nvidia
 storageClassName: local-path
-profile: {}
-gpu: {product: ""}
-targets: []
 contextLength: 8192
 concurrency: 1
 register: true
