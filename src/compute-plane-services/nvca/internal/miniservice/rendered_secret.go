@@ -48,6 +48,9 @@ import (
 // revision label can be ahead of the latest revision ConfigMap (see revision.go), which remains the
 // history of applied values, chart URL, and render hash per revision.
 //
+// No rendered data is retained in agent memory: reads go through the informer cache (which holds the
+// gzipped Secret regardless), with an uncached fallback for the window right after a write.
+//
 //nolint:gosec // These are Secret object names, keys, and annotation keys, not credentials (G101).
 const (
 	// RenderedSecretName is the name of the Secret holding the rendered Helm Chart in the instance namespace.
@@ -70,17 +73,6 @@ const (
 	// Larger renders are not persisted and fall back to re-rendering on demand.
 	renderedSecretMaxCompressedBytes = 900 << 10
 )
-
-// renderedEntry is the in-memory copy of a MiniService's rendered chart. Entries are immutable
-// and replaced wholesale, so they can be shared without locking.
-type renderedEntry struct {
-	inputHash  string
-	outputHash string
-	data       []byte
-	// synced is true once the entry has been reconciled with the rendered Secret
-	// (stored, found already stored, or skipped because it is too large).
-	synced bool
-}
 
 // renderInput mirrors the fields of HelmReValRenderInput that affect Helm template output.
 // Namespace is included because templates using .Release.Namespace render namespace-specific values.
@@ -120,26 +112,18 @@ func renderOutputHash(data []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
-// saveRenderedData records freshly rendered data in the MiniService status and in memory.
+// saveRenderedData records the hash of freshly rendered data in the MiniService status.
 // It does not persist the Secret because the instance namespace may not exist yet during install;
 // callers must call persistRenderedData once the namespace exists.
 func (r *Reconciler) saveRenderedData(ctx context.Context, ms *v1alpha1.MiniService, data []byte) {
 	logf.FromContext(ctx).Info("Saving rendered Helm Chart data")
-
-	outputHash := renderOutputHash(data)
 	ms.Status.RenderDetails = &v1alpha1.RenderDetailsStatus{
-		Hash: outputHash,
+		Hash: renderOutputHash(data),
 	}
-	r.renderedCache.Store(ms.Name, &renderedEntry{
-		inputHash:  renderInputHash(ms),
-		outputHash: outputHash,
-		data:       data,
-	})
 }
 
-// getRenderedData returns the rendered chart for ms from memory or from the rendered Secret.
-// It returns false when no render matching the current spec is available, in which case
-// callers render via ReVal.
+// getRenderedData returns the rendered chart for ms from the rendered Secret. It returns false when
+// no render matching the current spec is available, in which case callers render via ReVal.
 //
 // When status has no render details (first install, or a values update whose status patch was
 // lost before it landed), the Secret is still consulted: a render stored for identical inputs is
@@ -154,75 +138,39 @@ func (r *Reconciler) getRenderedData(ctx context.Context, ms *v1alpha1.MiniServi
 		log.V(1).Info("Rendered data not found in status")
 	}
 
-	inputHash := renderInputHash(ms)
-	if entry, ok := r.loadRenderedEntry(ms); ok {
-		if entry.inputHash == inputHash && (expectedOutputHash == "" || entry.outputHash == expectedOutputHash) {
-			return entry.data, true, nil
-		}
-		log.V(1).Info("Discarding in-memory rendered data for different inputs or hash")
-		r.renderedCache.Delete(ms.Name)
-	}
-
-	data, found, err := r.loadRenderedSecret(ctx, ms, inputHash, expectedOutputHash)
+	data, found, err := r.loadRenderedSecret(ctx, ms, renderInputHash(ms), expectedOutputHash)
 	if err != nil || !found {
 		return nil, false, err
 	}
-	outputHash := renderOutputHash(data)
-	log.V(1).Info("Loaded rendered Helm Chart data from Secret")
 	if ms.Status.RenderDetails == nil {
-		ms.Status.RenderDetails = &v1alpha1.RenderDetailsStatus{Hash: outputHash}
+		ms.Status.RenderDetails = &v1alpha1.RenderDetailsStatus{Hash: renderOutputHash(data)}
 	}
-	r.renderedCache.Store(ms.Name, &renderedEntry{
-		inputHash:  inputHash,
-		outputHash: outputHash,
-		data:       data,
-		synced:     true,
-	})
 	return data, true, nil
 }
 
-func (r *Reconciler) loadRenderedEntry(ms *v1alpha1.MiniService) (*renderedEntry, bool) {
-	v, ok := r.renderedCache.Load(ms.Name)
-	if !ok {
-		return nil, false
-	}
-	entry, ok := v.(*renderedEntry)
-	return entry, ok
-}
-
-// forgetRenderedData drops the in-memory rendered data for ms. The rendered Secret is owned by
-// the MiniService and lives in the instance namespace, so it is garbage collected with either.
-func (r *Reconciler) forgetRenderedData(ms *v1alpha1.MiniService) {
-	r.renderedCache.Delete(ms.Name)
-}
-
-// persistRenderedData ensures the rendered Secret in the instance namespace holds data.
-// It is idempotent and cheap once the in-memory entry is marked synced. The instance namespace
-// must exist. Like Helm, callers persist the record before applying workload objects.
+// persistRenderedData ensures the rendered Secret in the instance namespace holds data. It is
+// idempotent: when the stored Secret already matches, only an informer cache read is performed.
+// The instance namespace must exist. Like Helm, callers persist the record before applying objects.
 func (r *Reconciler) persistRenderedData(ctx context.Context, ms *v1alpha1.MiniService, data []byte) error {
-	inputHash := renderInputHash(ms)
-	outputHash := renderOutputHash(data)
-
-	if entry, ok := r.loadRenderedEntry(ms); ok &&
-		entry.synced && entry.inputHash == inputHash && entry.outputHash == outputHash {
-		return nil
-	}
-
-	if err := r.saveRenderedSecret(ctx, ms, data, inputHash, outputHash); err != nil {
-		return err
-	}
-
-	r.renderedCache.Store(ms.Name, &renderedEntry{
-		inputHash:  inputHash,
-		outputHash: outputHash,
-		data:       data,
-		synced:     true,
-	})
-	return nil
+	return r.saveRenderedSecret(ctx, ms, data, renderInputHash(ms), renderOutputHash(data))
 }
 
 func renderedSecretKey(ms *v1alpha1.MiniService) client.ObjectKey {
 	return client.ObjectKey{Namespace: ms.Spec.Namespace, Name: RenderedSecretName}
+}
+
+// getRenderedSecret reads the rendered Secret through the informer cache and, when the cache does
+// not have it yet (for example right after it was created), directly from the API server.
+func (r *Reconciler) getRenderedSecret(ctx context.Context, ms *v1alpha1.MiniService) (*corev1.Secret, error) {
+	secret := &corev1.Secret{}
+	err := r.Client.Get(ctx, renderedSecretKey(ms), secret)
+	if apierrors.IsNotFound(err) && r.APIReader != nil {
+		err = r.APIReader.Get(ctx, renderedSecretKey(ms), secret)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return secret, nil
 }
 
 // saveRenderedSecret creates or updates the rendered Secret for ms.
@@ -233,8 +181,7 @@ func (r *Reconciler) saveRenderedSecret(ctx context.Context,
 ) error {
 	log := logf.FromContext(ctx).WithValues("secret", RenderedSecretName, "namespace", ms.Spec.Namespace)
 
-	existing := &corev1.Secret{}
-	err := r.Client.Get(ctx, renderedSecretKey(ms), existing)
+	existing, err := r.getRenderedSecret(ctx, ms)
 	switch {
 	case err == nil:
 		if existing.Type == renderedSecretType &&
@@ -262,7 +209,7 @@ func (r *Reconciler) saveRenderedSecret(ctx context.Context,
 		return fmt.Errorf("compress rendered data: %w", err)
 	}
 	if len(compressed) > renderedSecretMaxCompressedBytes {
-		// Nothing more can be done within the etcd object size limit; status checks will
+		// Nothing more can be done within the etcd object size limit; later reconciles will
 		// fall back to re-rendering on demand for this instance.
 		log.Info("Rendered Helm Chart is too large to persist in a Secret, skipping",
 			"compressedBytes", len(compressed), "maxBytes", renderedSecretMaxCompressedBytes)
@@ -299,8 +246,8 @@ func (r *Reconciler) saveRenderedSecret(ctx context.Context,
 		log.Info("Creating rendered Secret", "revision", ms.Status.Revision)
 		err = r.Client.Create(ctx, secret)
 		if apierrors.IsAlreadyExists(err) {
-			// Created concurrently or not yet visible in the informer cache; fall through to update.
-			if err = r.Client.Get(ctx, renderedSecretKey(ms), existing); err != nil {
+			// Created concurrently; fetch the live object to update it.
+			if existing, err = r.getRenderedSecret(ctx, ms); err != nil {
 				return fmt.Errorf("get rendered secret after create conflict: %w", err)
 			}
 		} else if err != nil {
@@ -326,8 +273,8 @@ func (r *Reconciler) loadRenderedSecret(ctx context.Context,
 ) ([]byte, bool, error) {
 	log := logf.FromContext(ctx).WithValues("secret", RenderedSecretName, "namespace", ms.Spec.Namespace)
 
-	secret := &corev1.Secret{}
-	if err := r.Client.Get(ctx, renderedSecretKey(ms), secret); err != nil {
+	secret, err := r.getRenderedSecret(ctx, ms)
+	if err != nil {
 		if apierrors.IsNotFound(err) {
 			log.V(1).Info("Rendered Secret not found")
 			return nil, false, nil

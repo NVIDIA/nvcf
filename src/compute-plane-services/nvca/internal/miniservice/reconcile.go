@@ -91,9 +91,9 @@ type Reconciler struct {
 
 	eventRecorder record.EventRecorder
 
-	// In-memory rendered Helm Charts by MiniService name, backed by the rendered Secret
-	// in each instance namespace (see rendered_secret.go).
-	renderedCache sync.Map
+	// APIReader reads directly from the API server, bypassing the informer cache. Used for the
+	// rendered Secret right after it is written (see rendered_secret.go). Optional.
+	APIReader client.Reader
 	// Instance type cache
 	regITCache registrationInstanceTypeCache
 	// Attributes for enforcement
@@ -529,8 +529,6 @@ func (r *Reconciler) prepareUpdateIfNeeded(ctx context.Context, ms *v1alpha1.Min
 		log.Info("Helm values unchanged, skipping update")
 		return nil
 	}
-
-	r.forgetRenderedData(ms)
 
 	ms.Status.RenderDetails = nil
 	ms.Status.Revision++
@@ -1458,9 +1456,6 @@ func (r *Reconciler) doCleanup(ctx context.Context, //nolint:gocyclo
 		}
 		log.Info("Miniservice namespace terminated, waiting for deletion", "namespace", ms.Spec.Namespace)
 	}
-
-	// The rendered Secret is deleted with the namespace; drop the in-memory copy.
-	r.forgetRenderedData(ms)
 
 	stList := &nvcav2beta1.StorageRequestList{}
 	if err := r.Client.List(ctx, stList, client.InNamespace(ms.Spec.Namespace)); err != nil {

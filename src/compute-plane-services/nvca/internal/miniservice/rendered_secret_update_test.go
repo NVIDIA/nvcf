@@ -90,8 +90,8 @@ func getWorkloadConfigMapValue(t *testing.T, c client.Client) string {
 	return cm.Data["key"]
 }
 
-// A Secret write failure after a successful render must not attempt the apply and must be retried
-// on the next reconcile without calling ReVal again.
+// A Secret write failure after a successful render must not attempt the apply. Nothing is kept in
+// memory, so the retry renders again, stores the Secret, and only then applies.
 func TestReconcile_UpdateSecretWriteFailureIsRetried(t *testing.T) {
 	ctx := newTestContext()
 
@@ -127,11 +127,11 @@ func TestReconcile_UpdateSecretWriteFailureIsRetried(t *testing.T) {
 	err = c.Get(ctx, client.ObjectKey{Namespace: updateTestNamespace, Name: RenderedSecretName}, &corev1.Secret{})
 	assert.True(t, apierrors.IsNotFound(err))
 
-	// Retry: the in-memory render is reused, the Secret write is retried, then the apply proceeds.
+	// Retry: the render is redone (no in-memory copy), the Secret write succeeds, then the apply proceeds.
 	failSecretCreate = false
 	_, err = r.Reconcile(ctx, req)
 	require.NoError(t, err)
-	assert.Equal(t, 1, rv.calls, "retry must not call ReVal again")
+	assert.Equal(t, 2, rv.calls, "retry renders again because nothing is retained in memory")
 
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: updateMSName}, ms))
 	assert.Equal(t, v1alpha1.MiniServiceInstalled, ms.Status.Phase)

@@ -4065,7 +4065,7 @@ func TestDoUpdateWorkload(t *testing.T) {
 		r := newReconciler(t, c)
 		ms := newMiniService()
 		icmsReq := newICMSRequest()
-		r.saveRenderedData(ctx, ms, newRenderedObjectsData(t))
+		saveAndPersistRenderedData(t, ctx, r, ms, newRenderedObjectsData(t))
 
 		return r, ms, icmsReq
 	}

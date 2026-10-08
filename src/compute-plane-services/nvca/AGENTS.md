@@ -330,7 +330,7 @@ gofmt -w $(find . -name '*.go' -not -path './vendor/*') && make test && make lin
 5. **Local vs CI** - local tests may pass but CI may have additional checks
 6. **Queue message idempotency** - handlers may receive duplicate messages
 7. **Storage controller timing** - PVC operations are async, handle races carefully
-8. **MiniService rendered charts are persisted in a Secret** - After a successful ReVal render, the controller stores the output in the `nvcf-miniservice-rendered` Secret in the instance namespace (`internal/miniservice/rendered_secret.go`), like a Helm release record. Status checks, updates, and cleanup read from that Secret (and an in-memory copy) and never re-render while the inputs are unchanged. The Secret is validated by a render-input hash and a render-output hash (`status.renderedDetails.hash`). Any new `HelmReValRenderInput` field that affects template output MUST be added to `renderInput` so a stored render is not reused for different inputs.
+8. **MiniService rendered charts are persisted in a Secret** - After a successful ReVal render, the controller stores the output in the `nvcf-miniservice-rendered` Secret in the instance namespace (`internal/miniservice/rendered_secret.go`), like a Helm release record. Status checks, updates, and cleanup read from that Secret and never re-render while the inputs are unchanged. The Secret is validated by a render-input hash and a render-output hash (`status.renderedDetails.hash`). Any new `HelmReValRenderInput` field that affects template output MUST be added to `renderInput` so a stored render is not reused for different inputs.
 
 ## Code Generation Triggers
 

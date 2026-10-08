@@ -30,7 +30,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -97,10 +99,6 @@ func TestRenderedSecret_PersistAndLoadAcrossReconcilers(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, rendered, got)
-	// And the second read is served from memory.
-	entry, ok := r2.loadRenderedEntry(ms)
-	require.True(t, ok)
-	assert.True(t, entry.synced)
 }
 
 func TestRenderedSecret_IgnoredWhenInputsOrHashDiffer(t *testing.T) {
@@ -167,12 +165,11 @@ func TestRenderedSecret_IgnoredWhenInputsOrHashDiffer(t *testing.T) {
 		r := newUpdateTestReconciler(t, c, mgrScheme)
 		ms := newUpdateMiniService(`{"key":"value"}`)
 		r.saveRenderedData(ctx, ms, rendered)
+		require.NoError(t, r.persistRenderedData(ctx, ms, rendered))
 		ms.Spec.HelmChartConfig.Values = []byte(`{"key":"changed"}`)
 		_, found, err := r.getRenderedData(ctx, ms)
 		require.NoError(t, err)
 		assert.False(t, found)
-		_, ok := r.loadRenderedEntry(ms)
-		assert.False(t, ok)
 	})
 
 	t.Run("no render details reuses matching secret and restores hash", func(t *testing.T) {
@@ -212,7 +209,6 @@ func TestRenderedSecret_UpdateOverwritesPreviousRevision(t *testing.T) {
 	v1Hash := ms.Status.RenderDetails.Hash
 
 	// Simulate prepareUpdateIfNeeded followed by a new render.
-	r.forgetRenderedData(ms)
 	ms.Status.RenderDetails = nil
 	ms.Status.Revision = 1
 	ms.Spec.HelmChartConfig.Values = []byte(`{"key":"v2"}`)
@@ -277,16 +273,62 @@ func TestRenderedSecret_TooLargeIsSkipped(t *testing.T) {
 	require.NoError(t, c.List(ctx, secrets, client.InNamespace(updateTestNamespace)))
 	assert.Empty(t, secrets.Items)
 
-	// Still served from memory in this process, but a fresh reconciler falls back to rendering.
-	got, found, err := r.getRenderedData(ctx, ms)
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, large, got)
-
-	r2 := newUpdateTestReconciler(t, c, mgrScheme)
-	_, found, err = r2.getRenderedData(ctx, ms)
+	// Nothing is retained in memory, so later reconciles fall back to rendering on demand.
+	_, found, err := r.getRenderedData(ctx, ms)
 	require.NoError(t, err)
 	assert.False(t, found)
+}
+
+func TestRenderedSecret_FallsBackToAPIReaderWhenCacheLags(t *testing.T) {
+	ctx := newTestContext()
+	rendered := newUpdateRenderedData(t, "workload-cm", "v1")
+
+	// Cached client: pretends the Secret has not reached the informer yet.
+	cached, tracker := newFakeClientWithInterceptors(mgrScheme, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.Secret); ok && key.Name == RenderedSecretName {
+				return apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, key.Name)
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: updateTestNamespace}})
+	// Uncached reader: sees the same object store directly.
+	direct := clientfake.NewClientBuilder().WithScheme(mgrScheme).WithObjectTracker(tracker).
+		WithRESTMapper(newTestRESTMapper(mgrScheme)).Build()
+
+	ms := newUpdateMiniService(`{"key":"value"}`)
+	writer := newUpdateTestReconciler(t, direct, mgrScheme)
+	writer.saveRenderedData(ctx, ms, rendered)
+	require.NoError(t, writer.persistRenderedData(ctx, ms, rendered))
+
+	t.Run("without api reader the lagging cache is a miss", func(t *testing.T) {
+		r := newUpdateTestReconciler(t, cached, mgrScheme)
+		_, found, err := r.getRenderedData(ctx, ms)
+		require.NoError(t, err)
+		assert.False(t, found)
+	})
+
+	t.Run("api reader serves the read", func(t *testing.T) {
+		r := newUpdateTestReconciler(t, cached, mgrScheme)
+		r.APIReader = direct
+		got, found, err := r.getRenderedData(ctx, ms)
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, rendered, got)
+	})
+
+	t.Run("api reader resolves a create conflict into an update", func(t *testing.T) {
+		r := newUpdateTestReconciler(t, cached, mgrScheme)
+		r.APIReader = direct
+		ms := ms.DeepCopy()
+		ms.Status.Revision = 7
+		updated := newUpdateRenderedData(t, "workload-cm", "v2")
+		r.saveRenderedData(ctx, ms, updated)
+		require.NoError(t, r.persistRenderedData(ctx, ms, updated))
+		secret := getRenderedSecret(t, direct, updateTestNamespace)
+		assert.Equal(t, "7", secret.Labels[revisionLabel])
+		assert.Equal(t, ms.Status.RenderDetails.Hash, secret.Annotations[renderedSecretOutputHashAnnotation])
+	})
 }
 
 func TestRenderedSecret_PersistErrorsAreReturned(t *testing.T) {
@@ -303,9 +345,7 @@ func TestRenderedSecret_PersistErrorsAreReturned(t *testing.T) {
 	r.saveRenderedData(ctx, ms, rendered)
 	err := r.persistRenderedData(ctx, ms, rendered)
 	require.Error(t, err)
-	entry, ok := r.loadRenderedEntry(ms)
-	require.True(t, ok)
-	assert.False(t, entry.synced, "a failed persist must be retried on the next reconcile")
+	require.NotNil(t, ms.Status.RenderDetails, "the render hash stays in status so the write is retried next reconcile")
 }
 
 func TestDoStatus_UsesPersistedRenderInsteadOfReVal(t *testing.T) {
@@ -437,4 +477,11 @@ func TestRenderInputHash(t *testing.T) {
 	other := newUpdateMiniService(`{"a": 1}`)
 	other.Spec.ICMSRequestName = "other-request"
 	assert.Equal(t, renderInputHash(base), renderInputHash(other))
+}
+
+// saveAndPersistRenderedData records and stores a render as a completed install would have.
+func saveAndPersistRenderedData(t *testing.T, ctx context.Context, r *Reconciler, ms *v1alpha1.MiniService, data []byte) {
+	t.Helper()
+	r.saveRenderedData(ctx, ms, data)
+	require.NoError(t, r.persistRenderedData(ctx, ms, data))
 }
