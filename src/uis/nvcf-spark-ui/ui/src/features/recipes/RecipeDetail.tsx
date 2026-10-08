@@ -76,8 +76,8 @@ function facts(model: RecipeModel): string {
 
 /**
  * One model's recipe (slide 8): pick a hardware configuration, then deploy it
- * with the GitOps manifest or `helm install`. The pick lives in the URL
- * (`?config=`), so a link opens the same snippets.
+ * with `helm install`. The pick lives in the URL (`?config=`), so a link opens
+ * the same snippet.
  */
 function RecipeDetail() {
 	const { recipeId } = route.useParams();

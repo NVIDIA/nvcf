@@ -21,17 +21,12 @@ import { ArrowRightIcon } from "lucide-react";
 import type { Deployment, RecipeModel } from "../utils";
 import { RecipeStatusBadge } from "./RecipeStatusBadge";
 
-/** What the card says about a model's builds: their precisions and engines. */
+/**
+ * What the card says about a model's deployable builds: their precisions and
+ * engines. Empty for a model with none, whose badge already says so.
+ */
 function buildSummary(model: RecipeModel): string {
 	const deployable = model.builds.filter((b) => b.availability.deployable);
-	if (deployable.length === 0) {
-		// Planned or unavailable, and when that was last checked.
-		const { status, checkedAt } = model.builds[0]?.availability ?? {};
-		const state = status
-			? status.charAt(0).toUpperCase() + status.slice(1)
-			: "Unavailable";
-		return checkedAt ? `${state} · checked ${checkedAt}` : state;
-	}
 	const unique = (values: (string | null | undefined)[]) => [
 		...new Set(values.filter((v): v is string => Boolean(v))),
 	];
@@ -54,6 +49,7 @@ export function RecipeCard({
 	model: RecipeModel;
 	deployments: readonly Deployment[];
 }) {
+	const summary = buildSummary(model);
 	return (
 		<Card asChild interactive>
 			<Link
@@ -63,16 +59,12 @@ export function RecipeCard({
 				viewTransition
 			>
 				<div className="flex h-full flex-col gap-4">
-					<div className="flex flex-col gap-1">
-						{/* The badge wraps under a long name rather than squeezing it. */}
-						<div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1">
-							<Text asChild kind="body/bold/xl">
-								<h2 className="min-w-0 [overflow-wrap:anywhere]">
-									{model.name}
-								</h2>
-							</Text>
-							<RecipeStatusBadge deployments={deployments} model={model} />
-						</div>
+					<div className="flex flex-col items-start gap-1">
+						<Text asChild kind="body/bold/xl">
+							<h2 className="[overflow-wrap:anywhere]">{model.name}</h2>
+						</Text>
+						{/* Under the name on every card, so a long name never moves it. */}
+						<RecipeStatusBadge deployments={deployments} model={model} />
 						<Text
 							className="line-clamp-2 text-secondary"
 							kind="body/regular/sm"
@@ -98,9 +90,11 @@ export function RecipeCard({
 							)}
 						</div>
 					</div>
-					<Text className="text-placeholder" kind="label/regular/sm">
-						{buildSummary(model)}
-					</Text>
+					{summary ? (
+						<Text className="text-placeholder" kind="label/regular/sm">
+							{summary}
+						</Text>
+					) : null}
 					<Text
 						className="mt-auto inline-flex items-center gap-1 text-brand"
 						kind="label/semibold/md"

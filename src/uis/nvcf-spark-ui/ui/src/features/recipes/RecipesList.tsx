@@ -20,7 +20,6 @@ import {
 	Grid,
 	Select,
 	StatusMessage,
-	Text,
 	TextInput,
 } from "@nvidia/foundations-react-core";
 import { createLazyRoute, getRouteApi } from "@tanstack/react-router";
@@ -102,45 +101,40 @@ function RecipesList() {
 	return (
 		<div className="flex flex-col gap-6">
 			<RecipesPageHeading />
-			<div className="flex flex-col gap-4">
-				<div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-					<TextInput
-						aria-label="Search recipes"
-						className="w-full sm:w-80"
-						onValueChange={setQuery}
-						placeholder="Search by name"
-						slotStart={<SearchIcon aria-hidden size="1em" />}
-						type="search"
-						value={query}
-					/>
-					<Select
-						aria-label="Filter by hardware"
-						className="w-full sm:w-44"
-						dismissible
-						items={HARDWARE_CLASSES.map((h) => ({ value: h, children: h }))}
-						onValueChange={(value: string) => {
-							void navigate({
-								search: (prev) => ({
-									...prev,
-									hardware: asHardwareClass(value),
-								}),
-								replace: true,
-							});
-						}}
-						placeholder="Hardware"
-						value={hardware ?? ""}
-					/>
-				</div>
-				<Text
-					aria-live="polite"
-					className="flex h-10 items-center"
-					kind="title/sm"
-				>
-					{filtered
-						? `${visible.length} of ${models.length} ${plural(models.length)}`
-						: `${models.length} ${plural(models.length)}`}
-				</Text>
+			<div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+				<TextInput
+					aria-label="Search recipes"
+					className="w-full sm:w-80"
+					onValueChange={setQuery}
+					placeholder="Search by name"
+					slotStart={<SearchIcon aria-hidden size="1em" />}
+					type="search"
+					value={query}
+				/>
+				<Select
+					aria-label="Filter by hardware"
+					className="w-full sm:w-44"
+					dismissible
+					items={HARDWARE_CLASSES.map((h) => ({ value: h, children: h }))}
+					onValueChange={(value: string) => {
+						void navigate({
+							search: (prev) => ({
+								...prev,
+								hardware: asHardwareClass(value),
+							}),
+							replace: true,
+						});
+					}}
+					placeholder="Hardware"
+					value={hardware ?? ""}
+				/>
 			</div>
+			{/* Not shown: screen readers announce how many recipes a filter leaves. */}
+			<output className="sr-only">
+				{filtered
+					? `${visible.length} of ${models.length} ${plural(models.length)}`
+					: `${models.length} ${plural(models.length)}`}
+			</output>
 			{visible.length === 0 ? (
 				<div className="py-12">
 					<StatusMessage
