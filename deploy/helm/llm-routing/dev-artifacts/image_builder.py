@@ -32,7 +32,7 @@ def validate_config(config):
     require(dns(config.get('namespace')), 'Set a DNS label for namespace.')
     require(config.get('imagePlatform') in ('linux/arm64', 'linux/amd64'), 'Select a supported image platform.')
     require(isinstance(config.get('images'), dict) and set(config['images']) == set(COMPONENTS),
-            'Bind all four routing image components.')
+            'Bind all routing images and the verification image.')
     require(isinstance(config.get('containerd'), dict), 'Bind image preload nodes and their UIDs.')
     for image in config['images'].values():
         require(isinstance(image, dict) and isinstance(image.get('repository'), str)
@@ -79,7 +79,8 @@ def discover_config(context, namespace, control_node=None):
 
 def helm_values(config):
     selector = {'kubernetes.io/os': 'linux', 'kubernetes.io/arch': config['imagePlatform'].split('/')[1]}
-    values = {'gatewayStack': {}, 'operator': {
+    values = {'gatewayStack': {},
+        'verification': {'image': config['images']['verification'], 'nodeSelector': selector}, 'operator': {
         'image': config['images']['operator'],
         'pylon': {'image': config['images']['pylon']}, 'nodeSelector': selector}}
     for component, chart, field in [('gateway', 'llm-api-gateway', 'llmApiGateway'),

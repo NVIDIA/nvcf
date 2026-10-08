@@ -46,6 +46,8 @@ class DeveloperImagesTests(unittest.TestCase):
         self.assertNotIn('credential', values['operator'])
         self.assertEqual(values['operator']['nodeSelector'], {'kubernetes.io/os': 'linux', 'kubernetes.io/arch': 'arm64'})
         self.assertEqual(values['operator']['pylon']['image'], self.config['images']['pylon'])
+        self.assertEqual(values['verification'], {'image': self.config['images']['verification'],
+                                                'nodeSelector': values['operator']['nodeSelector']})
         self.assertEqual(values['gatewayStack']['llm-api-gateway']['llmApiGateway']['image'], self.config['images']['gateway'])
         self.assertEqual((self.output/'unrelated.txt').read_text(), 'preserve')
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)

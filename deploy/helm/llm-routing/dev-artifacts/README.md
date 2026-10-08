@@ -16,7 +16,7 @@ python3 dev-artifacts/build.py --allow-containerd-import
 
 The script:
 
-1. Builds gateway, router, operator and Pylon from the checkout, including local edits, with fresh image tags. Router and Pylon use Cargo profile `integration`.
+1. Builds gateway, router, operator and Pylon from the checkout, including local edits, with fresh image tags. Router and Pylon use Cargo profile `integration`. It also pulls the digest-pinned Python verification image and tags it for the same local distribution.
 2. Loads the images onto compatible nodes in the current kubeconfig context.
 3. Packages the shared stack and both model charts.
 4. Updates `dev-artifacts/values.yaml` and `dev-artifacts/charts/` after preparation succeeds. Failures preserve the previous shared artifacts.
@@ -41,9 +41,9 @@ Once images are distributed, [upgrade the shared release](../ADVANCED.md#shared-
 
 ## Verification image
 
-The shared chart's installation and upgrade checks use `python:3.12-alpine` with `IfNotPresent` pull policy. Distribute this image alongside the four application images. The image-loader server uses the same default image.
+The shared chart's installation and upgrade checks use Python. The development build preloads a digest-pinned `python:3.12-alpine` alongside the four application images. It publishes `verification.image` with a local tag, `Never` pull policy and the matching architecture selector. Re-run image preparation to add this image to an older development bundle; chart packaging alone does not preload images.
 
-For offline installation, preload the verification image for every eligible architecture and set `verification.image.pullPolicy: Never`. For a registry mirror, use:
+Without development values, the shared chart defaults to `python:3.12-alpine` with `IfNotPresent`. For a registry mirror, use:
 
 ```yaml
 verification:

@@ -169,29 +169,35 @@ def gguf_recipes(root):
                     node["additionalWorkloads"] = [{"role": "artifacts", "sharesModelClaim": True,
                         "resources": normalized_resources(profile["artifactsService"]["resources"])}]
                 per_node.append(node)
+            automatic = helm_validation(profile["validation"].get("automaticHelmValidation"),
+                profile["id"], lock["revision"], metadata["runtimeImage"])
+            qualified = automatic["automaticHelmStatus"] == "smoke-tested"
             profiles.append({"id": profile["id"], "hardware": copy.deepcopy(profile["hardware"]),
                 "modelNodeCount": profile["nodes"], "gpusPerNode": profile["gpusPerNode"],
                 "minimumAvailableMemoryBytesPerNode": bytes_gib(profile["minAvailableMemoryGiB"]),
                 "perNode": per_node,
                 "workload": {"defaultContextTokens": profile["contextLength"], "defaultConcurrency": profile["concurrency"],
                     "maximumContextTokens": profile["contextLength"], "maximumConcurrency": profile["concurrency"]},
-                "validation": {"runtimeStatus": profile["validation"]["legacyWorkflow"],
-                    **helm_validation(profile["validation"].get("automaticHelmValidation"), profile["id"],
-                        lock["revision"], metadata["runtimeImage"]),
+                "validation": {"runtimeStatus": automatic["automaticHelmStatus"], **automatic,
                     "scope": profile["validation"]["scope"],
                     "workload": {"contextLength": profile["contextLength"], "concurrency": profile["concurrency"],
                         "requestType": "short-prompt-smoke", "fullContextExercised": False,
-                        "performanceBenchmarked": False, "qualityEvaluated": False}},
+                        "performanceBenchmarked": False, "qualityEvaluated": False} if qualified else None},
                 "deployment": {"chart": copy.deepcopy(chart), "releaseName": recipe["releaseName"], "lifecycle": "automatic",
                     "values": {"recipe": metadata["recipe"], "profileName": profile["id"]},
                     "requiredSiteValues": ["nodes", "runtimeClassName", "storageClassName", "sharedCAConfigMap"],
                     "guide": "../ADVANCED.md#helm-glm-recipe"}})
+        qualified = any(profile["validation"]["automaticHelmStatus"] == "smoke-tested" for profile in profiles)
+        availability = {"status": "available" if qualified else "experimental", "deployable": True}
+        if not qualified:
+            availability["reason"] = "Automatic Helm inference has not been qualified for any profile."
         recipes.append({"id": metadata["recipe"], "name": recipe["name"], "servedModelId": recipe["servedName"],
-            "availability": {"status": "available", "deployable": True},
+            "availability": availability,
             "precision": lock["quantization"], "license": "glm-5.3",
             "licenseNotice": "notices/" + metadata["recipe"] + "/NOTICE",
             "model": {"repository": lock["model"], "revision": lock["revision"], "weightBytes": lock["weightFileBytes"]},
-            "runtime": {"backend": "llama.cpp", "revision": recipe["llamaCppRevision"], "image": metadata["runtimeImage"]},
+            "runtime": {"backend": "llama.cpp", "version": "llama.cpp " + recipe["llamaCppRevision"][:7],
+                        "revision": recipe["llamaCppRevision"], "image": metadata["runtimeImage"]},
             "profiles": profiles})
     return recipes
 

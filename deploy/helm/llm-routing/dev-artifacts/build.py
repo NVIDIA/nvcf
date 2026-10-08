@@ -43,6 +43,7 @@ def publish_values(source, target):
         values['operator'] = settings(operator)
         pylon = settings({'image': operator['pylon']['image'], 'nodeSelector': operator['nodeSelector']})
         values['operator']['pylon'] = {'image': pylon['image']}
+        values['verification'] = settings(saved['verification'])
     except (KeyError, TypeError, AttributeError) as error:
         raise ValueError('Generated values are missing required image settings.') from error
     temporary = None

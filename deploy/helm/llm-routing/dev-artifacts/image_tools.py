@@ -14,7 +14,10 @@ import time
 HERE = pathlib.Path(__file__).resolve().parent
 COMPONENTS = {'gateway': 'src/invocation-plane-services/llm-api-gateway',
               'router': 'src/libraries/rust/stargate', 'pylon': 'src/libraries/rust/stargate',
-              'operator': 'src/compute-plane-services/pylon-operator'}
+              'operator': 'src/compute-plane-services/pylon-operator',
+              'verification': 'deploy/helm/llm-routing/dev-artifacts'}
+# Multi-platform index for the Python interpreter used by the shared Helm hook.
+VERIFICATION_IMAGE = 'python:3.12-alpine@sha256:1b668429b3511ab407d8e00648891631b0b1a4d7e15e3ca70f38ab5b91ad4ab4'
 PLATFORMS = ('linux/arm64', 'linux/amd64')
 
 
@@ -38,6 +41,10 @@ def build_images(source, images, *, run, platform='linux/arm64', source_revision
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         raise DockerUnavailableError('Start Docker, then retry the image build.') from None
     for name, image in images.items():
+        if name == 'verification':
+            run(['docker', 'pull', '--platform', platform, VERIFICATION_IMAGE])
+            run(['docker', 'tag', VERIFICATION_IMAGE, image])
+            continue
         command = ['docker', 'buildx', 'build', '--platform', platform, '--load', '--tag', image]
         if name in ('router', 'pylon'):
             command += ['--target', 'stargate-runtime' if name == 'router' else 'pylon-runtime', '--build-arg', 'CARGO_PROFILE=integration']

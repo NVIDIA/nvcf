@@ -52,6 +52,8 @@ class FlashHelmTests(unittest.TestCase):
             self.assertTrue(pod['hostNetwork'])
             env = {entry['name']: entry.get('value') for entry in pod['containers'][0]['env']}
             self.assertEqual(env['NCCL_SOCKET_IFNAME'], '=eth1')
+            pod_ip = next(entry for entry in pod['containers'][0]['env'] if entry['name'] == 'POD_IP')
+            self.assertEqual(pod_ip['valueFrom'], {'fieldRef': {'fieldPath': 'status.podIP'}})
             if rank == 1:
                 self.assertEqual(pod['containers'][0]['readinessProbe']['httpGet']['host'], config['targets'][rank]['address'])
             self.assertEqual(pod['containers'][0]['command'][-2:], ['/recipe/runtime.py', str(rank)])
@@ -92,6 +94,22 @@ class FlashHelmTests(unittest.TestCase):
         self.assertTrue(all(d['metadata']['annotations']['helm.sh/resource-policy'] == 'keep' for d in docs if d['kind'] == 'PersistentVolumeClaim'))
         self.assertTrue(all(d['spec']['replicas'] == 0 for d in docs if d['kind'] == 'Deployment'))
         self.assertFalse(any(d['kind'] == 'InferenceEndpoint' for d in docs))
+
+    def test_fabric_addresses_match_runtime_rules_including_link_local(self):
+        values = self.values(True)
+        for rank, facts in enumerate(values['nodeCapabilities'].values()):
+            facts['address'] = f'169.254.10.{rank + 1}'
+        self.render(values)
+        for address in ('0.0.0.0', '127.0.0.1', '224.0.0.1', '240.0.0.1', '255.255.255.255',
+                        '::1', '2001:db8::1', '192.0.2.256', '192.0.002.1', 'node-name'):
+            values['nodeCapabilities']['gpu-node-1']['address'] = address
+            with self.subTest(address=address):
+                self.assertIn('usable IPv4', self.render(values, success=False))
+        values = self.values(True)
+        for interface in ('.', '..', 'eth0:1', 'a'*16, '../eth0'):
+            values['nodeCapabilities']['gpu-node-1']['interface'] = interface
+            with self.subTest(interface=interface):
+                self.assertIn('nodeCapabilities.interface', self.render(values, success=False))
 
 
 class FlashRuntimeTests(unittest.TestCase):
@@ -183,8 +201,7 @@ class FlashRuntimeTests(unittest.TestCase):
             interface.mkdir()
             (interface / 'speed').write_text('200000\n')
             (interface / 'operstate').write_text('up\n')
-            address = b'\0' * 20 + socket.inet_aton('192.0.2.1')
-            with patch.object(runtime.fcntl, 'ioctl', return_value=address):
+            with patch.object(runtime, 'interface_addresses', return_value={'169.254.0.1', '192.0.2.1'}):
                 runtime.check_fabric(self.config, 0, net)
                 (interface / 'speed').write_text('100000\n')
                 with self.assertRaisesRegex(RuntimeError, 'bandwidth'):
@@ -193,8 +210,46 @@ class FlashRuntimeTests(unittest.TestCase):
                 (interface / 'operstate').write_text('down\n')
                 with self.assertRaisesRegex(RuntimeError, 'not up'):
                     runtime.check_fabric(self.config, 0, net)
-            with patch.object(runtime.fcntl, 'ioctl', return_value=b'\0'*20 + socket.inet_aton('192.0.2.3')), self.assertRaisesRegex(RuntimeError, 'does not belong'):
+            with patch.object(runtime, 'interface_addresses', return_value={'192.0.2.3'}), self.assertRaisesRegex(RuntimeError, 'does not belong'):
                 runtime.check_fabric(self.config, 0, net)
+
+    def test_fabric_accepts_assigned_link_local_and_rejects_unusable_addresses(self):
+        self.tp2()
+        for rank, target in enumerate(self.config['targets']):
+            target['address'] = f'169.254.10.{rank + 1}'
+        with tempfile.TemporaryDirectory() as temp:
+            net = pathlib.Path(temp)
+            (net / 'eth1').mkdir()
+            (net / 'eth1/operstate').write_text('up')
+            (net / 'eth1/speed').write_text('200000')
+            with patch.object(runtime, 'interface_addresses', return_value={'192.0.2.1', '169.254.10.1'}):
+                runtime.check_fabric(self.config, 0, net)
+            for address in ('0.0.0.0', '127.0.0.1', '224.0.0.1', '240.0.0.1', '255.255.255.255', '::1', '192.0.002.1'):
+                self.config['targets'][0]['address'] = address
+                with self.subTest(address=address), self.assertRaisesRegex(RuntimeError, 'usable IPv4'):
+                    runtime.check_fabric(self.config, 0, net)
+
+    def test_interface_enumeration_includes_secondary_ipv4_and_frees_native_list(self):
+        ctypes = runtime.ctypes
+        libc = Mock()
+        allocated = []
+        def getifaddrs(reference):
+            entry_type = reference._obj._type_
+            entries = [entry_type() for _ in range(3)]
+            for index, (name, address) in enumerate((('eth1', '169.254.0.1'), ('eth1', '192.0.2.1'), ('eth2', '192.0.2.2'))):
+                sockaddr = ctypes.create_string_buffer(socket.AF_INET.to_bytes(2, runtime.sys.byteorder) + b'\0\0' + socket.inet_aton(address) + b'\0'*8)
+                allocated.append(sockaddr)
+                entries[index].name = name.encode()
+                entries[index].address = ctypes.addressof(sockaddr)
+                if index < 2:
+                    entries[index].next = ctypes.pointer(entries[index + 1])
+            allocated.extend(entries)
+            ctypes.cast(reference, ctypes.POINTER(ctypes.POINTER(entry_type)))[0] = ctypes.pointer(entries[0])
+            return 0
+        libc.getifaddrs.side_effect = getifaddrs
+        with patch.object(ctypes, 'CDLL', return_value=libc):
+            self.assertEqual(runtime.interface_addresses('eth1'), {'169.254.0.1', '192.0.2.1'})
+        libc.freeifaddrs.assert_called_once()
 
     def test_distributed_starts_only_after_cache_pair_qualification_and_offload_gates(self):
         self.tp2()
@@ -208,7 +263,7 @@ class FlashRuntimeTests(unittest.TestCase):
             self.assertEqual(os.environ['HF_HUB_OFFLINE'], '1')
             events.append('serve')
             return 0
-        with patch.dict(os.environ), patch.dict('sys.modules', {'torch': Mock()}), patch.object(runtime, 'host_memory', return_value=8*runtime.GIB), \
+        with patch.dict(os.environ, POD_IP='192.0.2.10'), patch.dict('sys.modules', {'torch': Mock()}), patch.object(runtime, 'host_memory', return_value=8*runtime.GIB), \
              patch.object(runtime, 'check_fabric', side_effect=lambda *args: events.append('fabric')), patch.object(runtime, 'check_hardware'), \
              patch.object(runtime, 'StartupBarrier', return_value=barrier), patch.object(runtime, 'prepare_checkpoint', side_effect=lambda *args: events.append('cache') or self.fixture.snapshot), \
              patch.object(runtime, 'qualify', side_effect=lambda *args: events.append('qualify')), patch.object(runtime, 'prepare_offload', side_effect=lambda *args: events.append('offload')), \
@@ -234,6 +289,29 @@ class FlashRuntimeTests(unittest.TestCase):
              patch.object(runtime, 'prepare_offload', side_effect=RuntimeError('offload rejected')), patch.object(runtime, 'supervise') as serve, self.assertRaisesRegex(RuntimeError, 'offload rejected'):
             runtime.automatic(self.config, 0, self.cache)
         serve.assert_not_called()
+
+    def test_latched_memory_failure_stops_each_profile_before_preparation_or_peer_work(self):
+        for world in (1, 2):
+            with self.subTest(nodes=world), tempfile.TemporaryDirectory() as temp:
+                if world == 2:
+                    self.tp2()
+                state = pathlib.Path(temp)
+                cause = {'model': self.config['model']['id'], 'availableBytes': 1234, 'swapBytes': 5678}
+                latch = state / 'recipe-memory-stop.json'
+                latch.write_text(json.dumps(cause))
+                original = self.fixture.blob.read_bytes()
+                with patch.object(runtime, 'host_memory') as memory, patch.object(runtime, 'check_fabric') as fabric, \
+                     patch.object(runtime, 'qualify') as qualify, patch.object(runtime, 'prepare_checkpoint') as cache, \
+                     patch.object(runtime, 'prepare_offload') as offload, patch.object(runtime, 'StartupBarrier') as barrier, \
+                     patch.object(runtime, 'supervise') as serve, patch.object(runtime, 'log') as log, \
+                     self.assertRaisesRegex(RuntimeError, '1234.*5678'):
+                    runtime.automatic(self.config, 0, self.cache, state)
+                for operation in (memory, fabric, qualify, cache, offload, barrier, serve):
+                    operation.assert_not_called()
+                log.assert_called_once_with('memory_guard_latched', cause=cause)
+                self.assertFalse((self.cache / '.recipe.lock').exists())
+                self.assertEqual(self.fixture.blob.read_bytes(), original)
+                self.assertEqual(json.loads(latch.read_text()), cause)
 
     def test_peer_identity_attempt_and_reciprocal_pair_are_checked(self):
         config = self.tp2()

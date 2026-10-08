@@ -255,10 +255,58 @@ class SharedHelmTests(unittest.TestCase):
         first = [item for item in self.installed() if not (item['kind'] == 'Secret' and item['metadata']['name'] == 'llm-gateway-stack-ca')]
         self.render(chart=self.lookup_chart(first), upgrade=True, fail='TLS Secret llm-gateway-stack-ca is missing')
 
-    def test_changed_tls_names_require_explicit_replacement(self):
+    def test_changed_gateway_names_reissue_only_leaf_under_preserved_ca(self):
+        original = self.installed()
+        before = {item['metadata']['name']: item for item in original if item['kind'] == 'Secret'}
         values = copy.deepcopy(self.values)
-        values['gatewayStack']['tls'] = {'selfSigned': {'gatewayDnsNames': ['localhost', 'extra.example.org']}}
-        self.render(values, chart=self.lookup_chart(self.installed()), upgrade=True, fail='TLS names changed')
+        values['gatewayStack']['tls'] = {'selfSigned': {
+            'gatewayDnsNames': ['localhost', 'extra.example.org'], 'gatewayIPs': ['127.0.0.1', '10.20.30.40']}}
+        rendered = self.render(values, chart=self.lookup_chart(original), upgrade=True)
+        after = {item['metadata']['name']: item for item in rendered if item['kind'] == 'Secret'}
+        leaf_name = 'llm-gateway-stack-gateway-tls'
+        self.assertNotEqual(after[leaf_name]['data'], before[leaf_name]['data'])
+        for name in before.keys() - {leaf_name}:
+            self.assertEqual(after[name]['data'], before[name]['data'])
+        self.assertEqual(after[leaf_name]['data']['ca.crt'], before['llm-gateway-stack-ca']['data']['tls.crt'])
+        ca = self.root/'preserved-ca.pem'
+        leaf = self.root/'reissued-leaf.pem'
+        ca.write_text(decode(after['llm-gateway-stack-ca'], 'tls.crt'))
+        leaf.write_text(decode(after[leaf_name], 'tls.crt'))
+        result = subprocess.run(['openssl', 'verify', '-CAfile', str(ca), str(leaf)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        import ssl
+        names = ssl._ssl._test_decode_cert(str(leaf))['subjectAltName']
+        self.assertIn(('DNS', 'extra.example.org'), names)
+        self.assertIn(('IP Address', '10.20.30.40'), names)
+        before_ca = next(item for item in original if item['kind'] == 'ConfigMap' and item['metadata']['name'] == 'llm-gateway-stack-ca')
+        after_ca = next(item for item in rendered if item['kind'] == 'ConfigMap' and item['metadata']['name'] == 'llm-gateway-stack-ca')
+        self.assertEqual(after_ca['data'], before_ca['data'])
+
+    def test_missing_or_incomplete_leaf_is_reissued_but_ca_and_ownership_are_required(self):
+        original = self.installed()
+        for state in ('missing', 'incomplete'):
+            with self.subTest(state=state):
+                resources = copy.deepcopy(original)
+                name = 'llm-gateway-stack-gateway-tls'
+                if state == 'missing':
+                    resources = [item for item in resources if item['metadata']['name'] != name]
+                else:
+                    next(item for item in resources if item['metadata']['name'] == name)['data'].pop('tls.key')
+                after = self.render(chart=self.lookup_chart(resources), upgrade=True)
+                secrets = {item['metadata']['name']: item for item in after if item['kind'] == 'Secret'}
+                self.assertTrue(secrets[name]['data']['tls.crt'])
+                self.assertTrue(secrets[name]['data']['tls.key'])
+                ca = next(item for item in original if item['kind'] == 'Secret' and item['metadata']['name'] == 'llm-gateway-stack-ca')
+                self.assertEqual(secrets['llm-gateway-stack-ca']['data'], ca['data'])
+        for name, failure in (('llm-gateway-stack-ca', 'incomplete'),
+                              ('llm-gateway-stack-gateway-tls', 'not owned')):
+            resources = copy.deepcopy(original)
+            secret = next(item for item in resources if item['kind'] == 'Secret' and item['metadata']['name'] == name)
+            if failure == 'incomplete':
+                secret['data'].pop('tls.key')
+            else:
+                secret['metadata']['annotations']['meta.helm.sh/release-name'] = 'external-owner'
+            self.render(chart=self.lookup_chart(resources), upgrade=True, fail=failure)
 
     def test_foreign_owned_generated_secret_rejected(self):
         resources = self.installed()

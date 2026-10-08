@@ -144,6 +144,22 @@ class ModelCapacityTests(unittest.TestCase):
         del snapshot['nodes'][0]['status']['allocatable']['ephemeral-storage']
         self.assertEqual(check(snapshot)['status'], 'fits')
 
+    def test_fabric_allows_link_local_but_rejects_unusable_addresses_and_interfaces(self):
+        facts = {f'node-{rank}': {'fabric': 'direct', 'gbps': 200, 'interface': 'enp1s0',
+                                'address': f'169.254.1.{rank + 1}'} for rank in range(2)}
+        def evaluate():
+            return check(inventory(2), 'qwen3.8-flash-next', profile_id='spark-nvfp4-tp2', capabilities=facts)
+        self.assertEqual(evaluate()['status'], 'fits')
+        for address in ('0.0.0.0', '127.0.0.1', '224.0.0.1', '240.0.0.1', '255.255.255.255', '::1'):
+            with self.subTest(address=address):
+                facts['node-0']['address'] = address
+                self.assertEqual(evaluate()['status'], 'blocked')
+        facts['node-0']['address'] = '169.254.1.1'
+        for interface in ('.', '..', 'enp1s0:1', 'x' * 16):
+            with self.subTest(interface=interface):
+                facts['node-0']['interface'] = interface
+                self.assertEqual(evaluate()['status'], 'blocked')
+
     def test_glm_accounts_for_preparation_and_artifact_pod_and_role_order(self):
         snapshot = inventory(2)
         snapshot['nodes'][0]['status']['allocatable']['cpu'] = '4'

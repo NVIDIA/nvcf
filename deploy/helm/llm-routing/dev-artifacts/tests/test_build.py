@@ -31,7 +31,8 @@ class SharedDevImagesTests(unittest.TestCase):
                      '--control-node', 'cpu-node', '--output-dir', str(self.output),
                      '--allow-containerd-import']
         selector = {'kubernetes.io/os': 'linux', 'kubernetes.io/arch': 'arm64'}
-        self.expected = {'gatewayStack': {}, 'operator': {
+        self.expected = {'gatewayStack': {},
+            'verification': {'image': self.image('verification'), 'nodeSelector': selector}, 'operator': {
             'image': self.image('operator'), 'pylon': {'image': self.image('pylon')},
             'nodeSelector': selector}}
         for name, chart, field in [('gateway', 'llm-api-gateway', 'llmApiGateway'),
