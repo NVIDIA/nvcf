@@ -30,6 +30,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"nvcf-cli/internal/selfhosted"
+	"nvcf-cli/internal/selfhosted/kubectx"
 	"nvcf-cli/internal/selfhosted/progress"
 )
 
@@ -38,6 +40,7 @@ import (
 //   - prints a deprecation warning to stderr, AND
 //   - falls through to JSONL streaming behaviour on stderr (same as --json).
 func TestCheck_LegacyOutputJSONWarnsAndStreams(t *testing.T) {
+	resetCheckFlags(t)
 	// Reset global flag state left over from other tests.
 	t.Cleanup(func() {
 		selfHostedJSON = false
@@ -63,6 +66,7 @@ func TestCheck_LegacyOutputJSONWarnsAndStreams(t *testing.T) {
 // the §6.6.3 schema: schemaVersion header, then check_started/check_completed/
 // category_completed events per check, then a final event with verdict fields.
 func TestCheck_NewJSON(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -112,13 +116,13 @@ func TestCheck_NewJSON(t *testing.T) {
 
 // TestCheck_WaitTimesOutCleanly verifies that --wait honors the timeout duration.
 func TestSelfHostedCheck_WaitTimesOutCleanly(t *testing.T) {
-	t.Setenv("NVCF_CLI_SELFHOSTED_LOCAL_ONLY", "1")
-	t.Setenv("NVCF_CLI_SELFHOSTED_FORCE_FAIL", "1") // seam: forces a failing check
-	rootCmd.SetArgs([]string{"self-hosted", "check", "--pre", "--wait", "2s"})
+	stuck := func(context.Context) ([]selfhosted.StaleNamespace, error) {
+		return []selfhosted.StaleNamespace{{Name: "nvcf", Reason: "stuck Terminating"}}, nil
+	}
 	start := time.Now()
-	err := rootCmd.Execute()
+	run := runCheck(t, checkStubs{stale: stuck}, "--control-plane", "--skip-cluster-validation", "--wait", "2s")
 	elapsed := time.Since(start)
-	assert.Error(t, err)
+	assert.Equal(t, 5, run.code())
 	assert.True(t, elapsed >= 2*time.Second && elapsed < 5*time.Second,
 		"wait should have honored 2s timeout, got %s", elapsed)
 }
@@ -135,7 +139,7 @@ func TestCheck_OneShotTTYUsesStaticRenderer(t *testing.T) {
 	checkWriterIsTTY = func(io.Writer) bool { return true }
 	var stderr bytes.Buffer
 
-	sink, err := selectCheckRenderer(&stderr, false)
+	sink, err := selectCheckRenderer(&stderr, false, nil)
 	require.NoError(t, err)
 	require.IsType(t, &progress.CheckOneShotRenderer{}, sink)
 
@@ -160,6 +164,7 @@ func TestCheck_OneShotTTYUsesStaticRenderer(t *testing.T) {
 // TestCheck_PreflightStreamingOrder verifies that for each tool the events arrive
 // in CheckStarted → CheckCompleted order, and CategoryCompleted follows all checks.
 func TestCheck_PreflightStreamingOrder(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -174,6 +179,7 @@ func TestCheck_PreflightStreamingOrder(t *testing.T) {
 	_ = rootCmd.Execute()
 
 	lines := parseJSONLLines(t, stderr.String())
+	require.NotEmpty(t, lines, "expected at least one JSONL line")
 	// Skip schemaVersion header.
 	var kinds []string
 	for _, l := range lines[1:] {
@@ -219,6 +225,7 @@ func TestCheck_PreflightStreamingOrder(t *testing.T) {
 // TestCheck_LocalOnlyFlag verifies that --local-only causes only local-host-tools
 // events (no control-plane-cluster or compute-plane-cluster events).
 func TestCheck_LocalOnlyFlag(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -245,15 +252,21 @@ func TestCheck_LocalOnlyFlag(t *testing.T) {
 		}
 	}
 	assert.Contains(t, categories, "local-host-tools", "expected local-host-tools category")
-	for _, cat := range categories {
-		assert.NotEqual(t, "control-plane-cluster", cat, "control-plane-cluster must not appear with --local-only")
-		assert.NotEqual(t, "compute-plane-cluster", cat, "compute-plane-cluster must not appear with --local-only")
+	// The cluster categories hold only the row that says they were skipped.
+	for _, l := range lines[1:] {
+		if l["event"] != "check_completed" {
+			continue
+		}
+		if cat := l["category"]; cat == "control-plane-cluster" || cat == "compute-plane-cluster" {
+			assert.Contains(t, l["message"], "skipped (--local-only)", "%s/%s", cat, l["id"])
+		}
 	}
 }
 
 // TestCheck_SingleClusterMode verifies that without context flags, both
 // control-plane-cluster and compute-plane-cluster category events appear.
 func TestCheck_SingleClusterMode(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -285,6 +298,7 @@ func TestCheck_SingleClusterMode(t *testing.T) {
 }
 
 func TestCheck_PreDoesNotProbeSISReachability(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -309,6 +323,7 @@ func TestCheck_PreDoesNotProbeSISReachability(t *testing.T) {
 // TestCheck_SplitClusterMode verifies that providing both context flags causes
 // both control-plane and compute-plane category events (run in parallel).
 func TestCheck_SplitClusterMode(t *testing.T) {
+	resetCheckFlags(t)
 	t.Cleanup(func() {
 		selfHostedJSON = false
 		selfHostedOutput = "text"
@@ -343,9 +358,87 @@ func TestCheck_SplitClusterMode(t *testing.T) {
 	assert.Contains(t, categories, "compute-plane-cluster", "expected compute-plane-cluster in split mode")
 }
 
-// parseJSONLLines splits s into non-empty lines, skips any non-JSON lines
-// (e.g. cobra error messages written to stderr), and unmarshals each JSON line
-// as an object. Returns them in order.
+// TestCheck_ComputePlaneFlagRunsChecks verifies that --compute-plane alone
+// produces compute-plane-cluster category events. Before the gating fix this
+// flag was a complete no-op and produced no check events at all.
+func TestCheck_ComputePlaneFlagRunsChecks(t *testing.T) {
+	resetCheckFlags(t)
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkComputePlane = false
+	})
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--compute-plane", "--skip-cluster-validation", "--json"})
+	_ = rootCmd.Execute()
+
+	lines := parseJSONLLines(t, stderr.String())
+	require.NotEmpty(t, lines, "expected at least one JSONL line")
+
+	var categories []string
+	for _, l := range lines[1:] {
+		if l["event"] == "category_completed" {
+			if cat, ok := l["category"].(string); ok {
+				categories = append(categories, cat)
+			}
+		}
+	}
+	assert.Contains(t, categories, "compute-plane-cluster",
+		"--compute-plane must produce compute-plane-cluster events")
+}
+
+// TestCheck_ControlPlaneFlagRunsChecks verifies that --control-plane alone
+// produces control-plane-cluster category events.
+func TestCheck_ControlPlaneFlagRunsChecks(t *testing.T) {
+	resetCheckFlags(t)
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkControlPlane = false
+	})
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--control-plane", "--skip-cluster-validation", "--json"})
+	_ = rootCmd.Execute()
+
+	lines := parseJSONLLines(t, stderr.String())
+	require.NotEmpty(t, lines, "expected at least one JSONL line")
+
+	var categories []string
+	for _, l := range lines[1:] {
+		if l["event"] == "category_completed" {
+			if cat, ok := l["category"].(string); ok {
+				categories = append(categories, cat)
+			}
+		}
+	}
+	assert.Contains(t, categories, "control-plane-cluster",
+		"--control-plane must produce control-plane-cluster events")
+}
+
+// --pre in ModeSplit visits both clusters, so a skipped validator is a row in
+// each: a consumer of the stream must not read "no validator row" as
+// "validated".
+func TestCheck_SkippedValidatorIsARowForPreInSplitMode(t *testing.T) {
+	run := runCheck(t, checkStubs{}, "--pre", "--skip-cluster-validation",
+		"--control-plane-context", "admin@cp", "--compute-plane-context", "admin@gpu1")
+	for _, category := range []string{"control-plane-cluster", "compute-plane-cluster"} {
+		row := run.row(t, category, "cluster-validator")
+		require.NotNil(t, row, category)
+		assert.Contains(t, row["message"], "skipped (--skip-cluster-validation)", category)
+	}
+	assert.Empty(t, run.validators)
+}
+
 func parseJSONLLines(t *testing.T, s string) []map[string]any {
 	t.Helper()
 	var out []map[string]any
@@ -362,4 +455,191 @@ func parseJSONLLines(t *testing.T, s string) []map[string]any {
 		out = append(out, m)
 	}
 	return out
+}
+
+// TestPlaneIsVisited covers the dispatch predicates: --pre visits both roles
+// in either mode, and a role flag alone visits only its own role.
+//
+// The mode column is kept to document that the answer is the same in both
+// modes.
+func TestPlaneIsVisited(t *testing.T) {
+	t.Cleanup(func() {
+		checkPre = false
+		checkControlPlane = false
+		checkComputePlane = false
+		checkAll = false
+	})
+
+	tests := []struct {
+		name          string
+		pre, cp, gpu  bool
+		all           bool
+		mode          kubectx.Mode
+		wantCP        bool
+		wantComputeGP bool
+	}{
+		{"--pre split visits both", true, false, false, false, kubectx.ModeSplit, true, true},
+		{"--pre single visits both", true, false, false, false, kubectx.ModeSingle, true, true},
+		{"--control-plane split skips compute", false, true, false, false, kubectx.ModeSplit, true, false},
+		{"--compute-plane split skips control", false, false, true, false, kubectx.ModeSplit, false, true},
+		{"--all split visits both", false, false, false, true, kubectx.ModeSplit, true, true},
+		{"--control-plane single skips compute", false, true, false, false, kubectx.ModeSingle, true, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checkPre, checkControlPlane, checkComputePlane, checkAll = tt.pre, tt.cp, tt.gpu, tt.all
+			assert.Equal(t, tt.wantCP, controlPlaneIsVisited())
+			assert.Equal(t, tt.wantComputeGP, computePlaneIsVisited())
+		})
+	}
+}
+
+// TestCheck_SplitModeControlPlaneOnlySkipsComputeCluster is the regression
+// guard for the dispatch gating: in ModeSplit with only --control-plane, the
+// compute cluster must not be contacted at all, so no compute-plane-cluster
+// category is emitted.
+func TestCheck_SplitModeControlPlaneOnlySkipsComputeCluster(t *testing.T) {
+	resetCheckFlags(t)
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkControlPlane = false
+		selfHostedControlPlaneContext = ""
+		selfHostedComputePlaneContext = ""
+	})
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--control-plane",
+		"--control-plane-context", "cp-ctx", "--compute-plane-context", "gpu-ctx",
+		"--skip-cluster-validation", "--json"})
+	_ = rootCmd.Execute()
+
+	lines := parseJSONLLines(t, stderr.String())
+	require.NotEmpty(t, lines, "expected at least one JSONL line")
+
+	var categories []string
+	for _, l := range lines[1:] {
+		if l["event"] == "category_completed" {
+			if cat, ok := l["category"].(string); ok {
+				categories = append(categories, cat)
+			}
+		}
+	}
+	assert.Contains(t, categories, "control-plane-cluster")
+	assert.NotContains(t, categories, "compute-plane-cluster",
+		"--control-plane in split mode must not probe the compute cluster")
+}
+
+// TestCheck_HostLocalChecksRunOnce guards against the host-local categories
+// being emitted once per role. Local tool versions and registry credentials
+// are checked on the operator's machine, so running them for both roles
+// repeats the same check IDs in --json and double-counts them in the totals.
+func TestCheck_HostLocalChecksRunOnce(t *testing.T) {
+	resetCheckFlags(t)
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkAll = false
+	})
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--all", "--skip-cluster-validation", "--json",
+		"--cluster-validator-registries", "harbor.example.com:443"})
+	_ = rootCmd.Execute()
+
+	lines := parseJSONLLines(t, stderr.String())
+	require.NotEmpty(t, lines, "expected at least one JSONL line")
+
+	counts := map[string]int{}
+	registryRows := 0
+	for _, l := range lines {
+		if l["event"] != "check_completed" {
+			continue
+		}
+		id, _ := l["id"].(string)
+		if strings.HasPrefix(id, "local-host-tools-") || strings.HasPrefix(id, "registry-cred-") {
+			counts[id]++
+		}
+		if strings.HasPrefix(id, "registry-cred-") {
+			registryRows++
+		}
+	}
+	require.NotEmpty(t, counts, "expected local-host-tools checks in the stream")
+	require.Positive(t, registryRows, "expected registry-credentials checks in the stream")
+	harbor := 0
+	for id, n := range counts {
+		if strings.Contains(id, "harbor.example.com") {
+			harbor += n
+		}
+	}
+	assert.Equal(t, 1, harbor, "the extra registry is checked once: %v", counts)
+	for id, n := range counts {
+		assert.Equal(t, 1, n, "check %s emitted %d times", id, n)
+	}
+}
+
+// The JSON verdict and the exit code must derive from the same predicate. A
+// warning-severity result previously emitted success:false / verdict:failed
+// while the process exited 0, so a CI gate on final.success broke for every
+// user whose registry credentials live in a Docker credential helper.
+func TestEmitCheckFinal_WarningIsNotAFailure(t *testing.T) {
+	results := []selfhosted.CheckResult{
+		{ID: "a", Passed: true, Severity: selfhosted.SeverityInfo},
+		{ID: "b", Passed: false, Severity: selfhosted.SeverityWarning},
+	}
+	assert.False(t, anyFailed(results), "a warning must not set the exit code")
+
+	var buf bytes.Buffer
+	sink := progress.NewJSONLRenderer(&buf)
+	emitCheckFinal(context.Background(), sink, results, nil)
+
+	line := buf.String()
+	assert.Contains(t, line, `"verdict":"warnings"`)
+	assert.Contains(t, line, `"success":true`,
+		"success must agree with the exit code")
+	assert.Contains(t, line, `"failedCount":0`)
+}
+
+func TestEmitCheckFinal_ErrorIsAFailure(t *testing.T) {
+	results := []selfhosted.CheckResult{
+		{ID: "a", Passed: true, Severity: selfhosted.SeverityInfo},
+		{ID: "b", Passed: false, Severity: selfhosted.SeverityError},
+	}
+	assert.True(t, anyFailed(results))
+
+	var buf bytes.Buffer
+	sink := progress.NewJSONLRenderer(&buf)
+	emitCheckFinal(context.Background(), sink, results, nil)
+	assert.Contains(t, buf.String(), `"verdict":"failed"`)
+	assert.Contains(t, buf.String(), `"success":false`)
+}
+
+// Both roles emit a cluster-validator result under the same ID, so stopping at
+// the first drops the other transcript entirely from --all --show-logs. Each
+// is framed with its category: a validator image that predates roles prints
+// no role line, so the frame is all that tells the two apart.
+func TestMaybeShowClusterValidatorLogs_PrintsBothRolesLabelled(t *testing.T) {
+	prev := checkShowLogs
+	checkShowLogs = true
+	t.Cleanup(func() { checkShowLogs = prev })
+
+	var buf bytes.Buffer
+	maybeShowClusterValidatorLogs(&buf, []selfhosted.CheckResult{
+		{ID: "cluster-validator", Category: selfhosted.CategoryControlPlane, Logs: "first transcript\n"},
+		{ID: "cluster-validator", Category: selfhosted.CategoryComputePlane, Logs: "second transcript\n"},
+	})
+
+	assert.Equal(t, "--- cluster-validator logs (control-plane-cluster) ---\nfirst transcript\n"+
+		"--- end cluster-validator logs (control-plane-cluster) ---\n"+
+		"--- cluster-validator logs (compute-plane-cluster) ---\nsecond transcript\n"+
+		"--- end cluster-validator logs (compute-plane-cluster) ---\n", buf.String())
 }

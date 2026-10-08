@@ -521,6 +521,38 @@
                             "default": ""
                         }
                     }
+                },
+                "download": {
+                    "type": "object",
+                    "description": "Worker-init artifact downloader tuning. Defaults equal worker-init's built-in values; 0 omits a variable and defers to the image.",
+                    "properties": {
+                        "concurrentDownloads": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 256,
+                            "default": 5
+                        },
+                        "concurrentChunks": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 256,
+                            "default": 4
+                        },
+                        "chunkSizeBytes": {
+                            "type": "integer",
+                            "default": 16777216,
+                            "description": "worker-init's built-in 16 MiB by default; 0 defers to the image; otherwise 1 MiB to 4 GiB inclusive, matching NVCA's validation.",
+                            "anyOf": [
+                                {
+                                    "const": 0
+                                },
+                                {
+                                    "minimum": 1048576,
+                                    "maximum": 4294967296
+                                }
+                            ]
+                        }
+                    }
                 }
             }
         },

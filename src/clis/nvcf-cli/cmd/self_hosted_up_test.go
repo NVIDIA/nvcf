@@ -562,6 +562,9 @@ func TestUp_SIGTERM_EmitsCancellation(t *testing.T) {
 	})
 
 	err := rootCmd.ExecuteContext(parentCtx)
+	// cobra keeps the cancelled context on rootCmd, and every later Execute
+	// would hand it to commands that have none of their own.
+	t.Cleanup(func() { rootCmd.SetContext(nil) })
 	var ece *ExitCodeError
 	require.ErrorAs(t, err, &ece, "expected ExitCodeError, got: %v", err)
 	assert.Equal(t, 130, ece.Code, "exit code must be 130 for cancellation")

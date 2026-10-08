@@ -120,8 +120,9 @@ func TestComputePlaneInstallTemplatesUserValuesFile(t *testing.T) {
 	assert.Contains(t, out, "env:CLUSTER_NAME=gpu-from-values")
 	assert.Contains(t, out, "env:NCA_ID=nca-from-values")
 	// The worker helmfile reads $OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml,
-	// so install must point OUTPUT_DIR at the directory of --values.
-	assert.Contains(t, out, "env:OUTPUT_DIR="+filepath.Dir(valuesFile))
+	// which must be the --values file whatever it is named.
+	assert.Contains(t, out, "registration:clusterName: gpu-from-values")
+	assert.NotContains(t, out, "registration missing")
 	assert.Contains(t, out, "arg="+stackDir)
 	assert.FileExists(t, fakeBin)
 }
@@ -150,6 +151,137 @@ func TestComputePlaneInstallAppliesByDefault(t *testing.T) {
 	out := stdout.String()
 	assert.Contains(t, out, "verb=apply")
 	assert.Contains(t, out, "env:CLUSTER_NAME=gpu-a")
+}
+
+// register --output=gpu2.yaml then install --values=gpu2.yaml installs
+// gpu2.yaml, not a gpu2-register-values.yaml left beside it by an earlier
+// registration, and leaves no copy behind.
+func TestComputePlaneInstall_ValuesUnderAnyNameWinOverAStaleNeighbour(t *testing.T) {
+	resetComputePlaneFlags(t)
+
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	dir := t.TempDir()
+	valuesFile := filepath.Join(dir, "gpu2.yaml")
+	require.NoError(t, os.WriteFile(valuesFile, []byte("clusterName: gpu2\nclusterID: fresh-id\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "gpu2-register-values.yaml"),
+		[]byte("clusterName: gpu2\nclusterID: stale-id\n"), 0o644))
+	installFakeComputePlaneHelmfile(t)
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "install",
+		"--compute-plane-stack", stackDir,
+		"--values", valuesFile,
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	out := stdout.String()
+	assert.Contains(t, out, "registration:clusterID: fresh-id")
+	assert.NotContains(t, out, "stale-id")
+	outputDir := fakeHelmfileEnv(t, out, "OUTPUT_DIR")
+	assert.NotEqual(t, dir, outputDir)
+	assert.NoDirExists(t, outputDir, "the staged copy must be removed after the install")
+}
+
+// A --cluster-name that overrides the values file's own name still installs
+// that file, not the overriding name's file beside it.
+func TestComputePlaneInstall_ClusterNameOverrideDoesNotSwapTheValuesFile(t *testing.T) {
+	resetComputePlaneFlags(t)
+
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	dir := t.TempDir()
+	valuesFile := filepath.Join(dir, "gpu2-register-values.yaml")
+	require.NoError(t, os.WriteFile(valuesFile, []byte("clusterID: given-id\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "gpu3-register-values.yaml"),
+		[]byte("clusterID: other-id\n"), 0o644))
+	installFakeComputePlaneHelmfile(t)
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "install",
+		"--compute-plane-stack", stackDir,
+		"--values", valuesFile,
+		"--cluster-name", "gpu3",
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	out := stdout.String()
+	assert.Contains(t, out, "env:CLUSTER_NAME=gpu3")
+	assert.Contains(t, out, "registration:clusterID: given-id")
+	assert.NotContains(t, out, "other-id")
+}
+
+// A values file already named for its cluster is read in place.
+func TestComputePlaneInstall_ReadsARegisterValuesFileInPlace(t *testing.T) {
+	resetComputePlaneFlags(t)
+
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	dir := t.TempDir()
+	valuesFile := filepath.Join(dir, "gpu2-register-values.yaml")
+	require.NoError(t, os.WriteFile(valuesFile, []byte("clusterName: gpu2\nclusterID: in-place\n"), 0o644))
+	installFakeComputePlaneHelmfile(t)
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "install",
+		"--compute-plane-stack", stackDir,
+		"--values", valuesFile,
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	out := stdout.String()
+	assert.Equal(t, dir, fakeHelmfileEnv(t, out, "OUTPUT_DIR"))
+	assert.Contains(t, out, "registration:clusterID: in-place")
+}
+
+// A cluster name that is not a single path element cannot name the file the
+// helmfile reads, so install refuses it instead of writing outside its
+// private directory.
+func TestComputePlaneInstall_RejectsAClusterNameWithAPathSeparator(t *testing.T) {
+	resetComputePlaneFlags(t)
+
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	valuesFile := filepath.Join(t.TempDir(), "gpu2.yaml")
+	require.NoError(t, os.WriteFile(valuesFile, []byte("clusterID: x\n"), 0o644))
+	installFakeComputePlaneHelmfile(t)
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "install",
+		"--compute-plane-stack", stackDir,
+		"--values", valuesFile,
+		"--cluster-name", "../gpu2",
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cluster name")
+	assert.NotContains(t, stdout.String(), "verb=", "helmfile must not run")
+}
+
+// fakeHelmfileEnv returns the value installFakeComputePlaneHelmfile printed
+// for the environment variable key.
+func fakeHelmfileEnv(t *testing.T, out, key string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if v, ok := strings.CutPrefix(line, "env:"+key+"="); ok {
+			return v
+		}
+	}
+	t.Fatalf("the fake helmfile printed no %s in:\n%s", key, out)
+	return ""
 }
 
 func TestComputePlaneRegisterDryRunPrintsClusterIdentity(t *testing.T) {
@@ -1076,6 +1208,8 @@ printf 'verb=%s\n' "$verb"
 printf 'env:CLUSTER_NAME=%s\n' "$CLUSTER_NAME"
 printf 'env:NCA_ID=%s\n' "$NCA_ID"
 printf 'env:OUTPUT_DIR=%s\n' "$OUTPUT_DIR"
+reg="$OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml"
+if [ -f "$reg" ]; then sed 's/^/registration:/' "$reg"; else printf 'registration missing: %s\n' "$reg"; fi
 `
 	require.NoError(t, os.WriteFile(fakeBin, []byte(body), 0o755))
 	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))

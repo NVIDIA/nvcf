@@ -250,8 +250,8 @@ func newCobraCommand(
 					FailingObjectsBackoffTimeout:              cfg.Workload.FailingObjectsBackoffTimeout,
 					FailingObjectsBackoffRequeueInterval:      cfg.Workload.FailingObjectsBackoffRequeueInterval,
 				},
-				FunctionEnvOverrides: cfg.Workload.FunctionEnvOverrides,
-				TaskEnvOverrides:     cfg.Workload.TaskEnvOverrides,
+				FunctionEnvOverrides: cfg.Workload.EffectiveFunctionEnvOverrides(),
+				TaskEnvOverrides:     cfg.Workload.EffectiveTaskEnvOverrides(),
 			}
 
 			// The operator injects OTEL_EXPORTER via the otel-nvca-config secret, but Viper
