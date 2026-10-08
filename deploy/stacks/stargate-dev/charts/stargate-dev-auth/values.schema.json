@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["image", "credentials"],
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "digest", "pullPolicy"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"},
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name"],
+        "properties": {"name": {"type": "string", "minLength": 1}}
+      }
+    },
+    "credentials": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["serviceToken", "clientToken", "workers"],
+      "properties": {
+        "serviceToken": {"type": "string", "minLength": 1},
+        "clientToken": {"type": "string", "minLength": 1},
+        "workers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["token", "routingKey"],
+            "properties": {
+              "token": {"type": "string", "minLength": 1},
+              "routingKey": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    "resources": {"type": "object"},
+    "podAnnotations": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    }
+  }
+}

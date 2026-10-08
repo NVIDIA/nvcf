@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+{{- if not (and .Values.llmRequestRouter.vault .Values.llmRequestRouter.vault.noVaultAnnotations) }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -23,3 +24,4 @@ metadata:
 data:
   secrets.json.tmpl: |-
 {{ .Files.Get "vault-agent-templates/secrets.json.tmpl" | indent 4 }}
+{{- end }}

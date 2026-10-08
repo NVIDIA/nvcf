@@ -103,6 +103,27 @@ py_test(
     size = "small",
 )
 
+rust_binary(
+    name = "stargate-dev-auth",
+    srcs = ["src/bin/stargate-dev-auth.rs"],
+    aliases = aliases(),
+    crate_root = "src/bin/stargate-dev-auth.rs",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = _WORKSPACE_DEPS + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "stargate_dev_auth_test",
+    srcs = ["src/bin/stargate-dev-auth.rs"],
+    aliases = aliases(),
+    crate_root = "src/bin/stargate-dev-auth.rs",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    deps = _WORKSPACE_DEPS + all_crate_deps(normal = True),
+)
+
 rust_test(
     name = "stargate_test",
     crate = ":stargate_lib",
@@ -136,6 +157,25 @@ rust_oci_image(
     extra_layers = ["//src/libraries/rust/stargate/crates/stargate-k8s-router:stargate-k8s-router-image_layer"],
     tags = ["stargate"],
     visibility = ["//visibility:public"],
+)
+
+rust_oci_image(
+    name = "dev_auth_image",
+    base = "@distroless_cc",
+    binary = ":stargate-dev-auth",
+    binary_path = "/usr/local/bin/stargate-dev-auth",
+    tags = ["stargate-dev-auth"],
+    visibility = ["//visibility:public"],
+)
+
+sh_test(
+    name = "dev_auth_image_entrypoint_mode_test",
+    srcs = ["//src/libraries/rust/stargate/tools/ci:image_entrypoint_mode_test.sh"],
+    args = [
+        "$(location :dev_auth_image_layer)",
+        "/usr/local/bin/stargate-dev-auth",
+    ],
+    data = [":dev_auth_image_layer"],
 )
 
 # Entrypoint exec-bit guard. Inspect the assembled image layer and fail if

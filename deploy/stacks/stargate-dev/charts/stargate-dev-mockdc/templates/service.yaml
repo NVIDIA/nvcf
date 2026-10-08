@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- range $index := until 2 }}
+{{- if gt $index 0 }}
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "stargate-dev-mockdc.fullname" $ }}-backend-{{ $index }}
+  labels:
+    {{- include "stargate-dev-mockdc.labels" $ | nindent 4 }}
+    stargate.nvidia.com/backend-index: {{ $index | quote }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "stargate-dev-mockdc.selectorLabels" $ | nindent 4 }}
+    stargate.nvidia.com/backend-index: {{ $index | quote }}
+  ports:
+    - name: http
+      port: 8090
+      targetPort: mock-http
+      protocol: TCP
+{{- end }}

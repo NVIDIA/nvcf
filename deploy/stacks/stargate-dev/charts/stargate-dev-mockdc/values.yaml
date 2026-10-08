@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+clusterId: ""
+modelName: ""
+workerToken: ""
+
+stargate:
+  address: ""
+  quicCaSecretName: ""
+  quicCaSecretKey: ca.crt
+
+images:
+  mockDynamo:
+    repository: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  pylon:
+    repository: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Setting numGpuWorkers on a backend runs MockDynamo's batched engine as a
+# deployment of that many GPU workers, each with maxNumSeqs sequences
+# (default 25) and kvCacheCapacityTokens of KV cache (default 400000). Pylon
+# then advertises numGpuWorkers x maxNumSeqs as its engine concurrency.
+# Without numGpuWorkers the backend runs the named profile.
+mockDynamo:
+  backend0:
+    profile: h100-llama-3.1-8b
+    healthDelayMs: 0
+    statsStreamEnabled: false
+  backend1:
+    profile: h100-llama-3.1-8b
+    healthDelayMs: 0
+    statsStreamEnabled: false
+
+pylon:
+  engineStatsStream: auto
+  maxEngineConcurrency: 25
+  doCalibration: true
+  calibrationMaxConcurrency: 25
+  initialInputTps: ""
+  activeCanaryIntervalMs: 0
+
+resources:
+  mockDynamo:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  pylon:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
+
+podAnnotations: {}

@@ -15,7 +15,8 @@
 
 use axum::body::{Body, Bytes};
 use axum::extract::State;
-use axum::response::Response;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use std::time::Duration;
 use tokio::sync::broadcast;
@@ -38,7 +39,11 @@ pub(crate) enum StatsStreamEvent {
         finished: bool,
     },
     #[serde(rename = "ping")]
-    Ping { v: u8 },
+    Ping {
+        v: u8,
+        model: String,
+        max_engine_concurrency: usize,
+    },
 }
 
 fn is_false(value: &bool) -> bool {
@@ -46,7 +51,15 @@ fn is_false(value: &bool) -> bool {
 }
 
 pub(crate) async fn stats_stream(State(state): State<AppState>) -> Response {
+    if !state.stats_stream_enabled {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let mut events = state.stats_events.subscribe();
+    let model = state.model_name;
+    let max_engine_concurrency = state
+        .request_capacity
+        .as_ref()
+        .map_or(0, |capacity| capacity.limit);
     let stream = async_stream::stream! {
         let mut ping = tokio::time::interval(Duration::from_secs(1));
         ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -59,7 +72,11 @@ pub(crate) async fn stats_stream(State(state): State<AppState>) -> Response {
                         Err(broadcast::error::RecvError::Closed) => break,
                     }
                 }
-                _ = ping.tick() => StatsStreamEvent::Ping { v: 1 },
+                _ = ping.tick() => StatsStreamEvent::Ping {
+                    v: 1,
+                    model: model.clone(),
+                    max_engine_concurrency,
+                },
             };
             yield Ok::<Bytes, std::convert::Infallible>(ndjson_event(&event));
         }

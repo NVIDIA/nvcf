@@ -1,0 +1,189 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- $clusterId := required "clusterId is required" .Values.clusterId -}}
+{{- $modelName := required "modelName is required" .Values.modelName -}}
+{{- $stargateAddress := required "stargate.address is required" .Values.stargate.address -}}
+{{- $quicCaSecretName := required "stargate.quicCaSecretName is required" .Values.stargate.quicCaSecretName -}}
+{{- $initialInputTps := .Values.pylon.initialInputTps | toString | trim -}}
+{{- if and .Values.pylon.doCalibration $initialInputTps -}}
+{{- fail "pylon.doCalibration and pylon.initialInputTps cannot both be set" -}}
+{{- end -}}
+{{- $backends := list .Values.mockDynamo.backend0 .Values.mockDynamo.backend1 -}}
+{{- range $index, $mock := $backends }}
+{{- /* A backend with numGpuWorkers runs the batched engine as a multi-GPU
+deployment, and its Pylon advertises the deployment's concurrency. */}}
+{{- $maxNumSeqs := $mock.maxNumSeqs | default 25 }}
+{{- $engineConcurrency := $.Values.pylon.maxEngineConcurrency }}
+{{- if $mock.numGpuWorkers }}
+{{- $engineConcurrency = mul $mock.numGpuWorkers $maxNumSeqs }}
+{{- end }}
+{{- $backendId := printf "%s-backend-%d" $clusterId $index -}}
+{{- if gt $index 0 }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "stargate-dev-mockdc.fullname" $ }}-backend-{{ $index }}
+  labels:
+    {{- include "stargate-dev-mockdc.labels" $ | nindent 4 }}
+    stargate.nvidia.com/backend-index: {{ $index | quote }}
+spec:
+  replicas: 1
+  # Replace the pod in place so the new pod can take the node its
+  # predecessor held; backends of one cluster never share a node.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "stargate-dev-mockdc.selectorLabels" $ | nindent 6 }}
+      stargate.nvidia.com/backend-index: {{ $index | quote }}
+  template:
+    metadata:
+      labels:
+        {{- include "stargate-dev-mockdc.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: mock-backend
+        stargate.nvidia.com/backend-id: {{ $backendId | quote }}
+        stargate.nvidia.com/backend-index: {{ $index | quote }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "9089"
+        {{- with $.Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "stargate-dev-mockdc.fullname" $ }}
+      automountServiceAccountToken: false
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "stargate-dev-mockdc.selectorLabels" $ | nindent 18 }}
+      containers:
+        - name: mock-dynamo
+          image: {{ include "stargate-dev-mockdc.mockDynamoImage" $ }}
+          imagePullPolicy: {{ $.Values.images.mockDynamo.pullPolicy }}
+          args:
+            - --http-listen-addr=0.0.0.0:8090
+            - --model-name={{ $modelName }}
+            {{- if $mock.numGpuWorkers }}
+            - --engine-model=batched
+            - --num-gpu-workers={{ $mock.numGpuWorkers }}
+            - --max-num-seqs={{ $maxNumSeqs }}
+            - --kv-cache-capacity-tokens={{ $mock.kvCacheCapacityTokens | default 400000 | int64 }}
+            {{- with $mock.stepFixedMs }}
+            - --step-fixed-ms={{ . }}
+            {{- end }}
+            {{- with $mock.stepDecodeMsPerSeq }}
+            - --step-decode-ms-per-seq={{ . }}
+            {{- end }}
+            {{- with $mock.stepPrefillMsPerToken }}
+            - --step-prefill-ms-per-token={{ . }}
+            {{- end }}
+            {{- else }}
+            - --profile={{ $mock.profile }}
+            {{- end }}
+            - --health-delay-ms={{ $mock.healthDelayMs }}
+            {{- if not $mock.statsStreamEnabled }}
+            - --disable-stats-stream
+            {{- end }}
+          ports:
+            - name: mock-http
+              containerPort: 8090
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: mock-http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: mock-http
+            periodSeconds: 10
+          resources:
+            {{- toYaml $.Values.resources.mockDynamo | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+        - name: pylon
+          image: {{ include "stargate-dev-mockdc.pylonImage" $ }}
+          imagePullPolicy: {{ $.Values.images.pylon.pullPolicy }}
+          args:
+            - --upstream-http-base-url=http://127.0.0.1:8090
+            - --upstream-health-path=/health
+            - --model-name={{ $modelName }}
+            - --stargate-address={{ $stargateAddress }}
+            - --inference-server-id={{ $backendId }}
+            - --cluster-id={{ $backendId }}
+            - --backend-connectivity=reverse
+            - --tunnel-protocol=raw-quic
+            - --tls-cert-path=/var/run/stargate/tls/{{ $.Values.stargate.quicCaSecretKey }}
+            - --grpc-tls-ca-cert-path=/var/run/stargate/tls/{{ $.Values.stargate.quicCaSecretKey }}
+            - --auth-token-file=/var/run/stargate/auth/token
+            - --kv-cache-stats-path=/kv-cache/stats
+            - --active-canary-interval-ms={{ $.Values.pylon.activeCanaryIntervalMs }}
+            - --engine-stats-stream={{ $.Values.pylon.engineStatsStream }}
+            - --max-engine-concurrency={{ $engineConcurrency }}
+            {{- if $.Values.pylon.doCalibration }}
+            - --do-calibration
+            - --calibration-max-concurrency={{ $.Values.pylon.calibrationMaxConcurrency }}
+            {{- end }}
+            {{- if $initialInputTps }}
+            - --initial-input-tps={{ $initialInputTps }}
+            {{- end }}
+          ports:
+            - name: metrics
+              containerPort: 9089
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: metrics
+            periodSeconds: 10
+          resources:
+            {{- toYaml $.Values.resources.pylon | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: worker-auth
+              mountPath: /var/run/stargate/auth
+              readOnly: true
+            - name: stargate-ca
+              mountPath: /var/run/stargate/tls
+              readOnly: true
+      volumes:
+        - name: worker-auth
+          secret:
+            secretName: {{ include "stargate-dev-mockdc.fullname" $ }}-worker-credentials
+        - name: stargate-ca
+          secret:
+            secretName: {{ $quicCaSecretName }}
+            items:
+              - key: {{ $.Values.stargate.quicCaSecretKey }}
+                path: {{ $.Values.stargate.quicCaSecretKey }}
+{{- end }}

@@ -290,10 +290,18 @@ Coverage, matching the role flags:
 {{- $registry := .Values.llmRequestRouter.image.registry -}}
 {{- $repository := .Values.llmRequestRouter.image.repository -}}
 {{- $tag := default .Chart.AppVersion .Values.llmRequestRouter.image.tag -}}
+{{- $digest := .Values.llmRequestRouter.image.digest | default "" | toString | trim -}}
+{{- if and $digest (not (regexMatch "^sha256:[a-f0-9]{64}$" $digest)) -}}
+{{- fail "llmRequestRouter.image.digest must be a sha256 digest" -}}
+{{- end -}}
+{{- $name := $repository -}}
 {{- if $registry -}}
-{{- printf "%s/%s:%s" $registry $repository $tag -}}
+{{- $name = printf "%s/%s" $registry $repository -}}
+{{- end -}}
+{{- if $digest -}}
+{{- printf "%s@%s" $name $digest -}}
 {{- else -}}
-{{- printf "%s:%s" $repository $tag -}}
+{{- printf "%s:%s" $name $tag -}}
 {{- end -}}
 {{- end }}
 
@@ -346,10 +354,22 @@ externally reachable address.
 {{- $registry := default .Values.llmRequestRouter.image.registry $image.registry -}}
 {{- $repository := required "llmRequestRouter.backendRouter.image.repository or llmRequestRouter.image.repository is required when backend routing is enabled" (default .Values.llmRequestRouter.image.repository $image.repository) -}}
 {{- $tag := include "llm-request-router.backendRouterImageTag" . -}}
+{{- $usesMainImage := and (not $image.registry) (not $image.repository) (not $image.tag) (not $image.digest) -}}
+{{- $digest := $image.digest | default "" | toString | trim -}}
+{{- if $usesMainImage -}}
+{{- $digest = .Values.llmRequestRouter.image.digest | default "" | toString | trim -}}
+{{- end -}}
+{{- if and $digest (not (regexMatch "^sha256:[a-f0-9]{64}$" $digest)) -}}
+{{- fail "llmRequestRouter.backendRouter.image.digest or llmRequestRouter.image.digest must be a sha256 digest" -}}
+{{- end -}}
+{{- $name := $repository -}}
 {{- if $registry -}}
-{{- printf "%s/%s:%s" $registry $repository $tag -}}
+{{- $name = printf "%s/%s" $registry $repository -}}
+{{- end -}}
+{{- if $digest -}}
+{{- printf "%s@%s" $name $digest -}}
 {{- else -}}
-{{- printf "%s:%s" $repository $tag -}}
+{{- printf "%s:%s" $name $tag -}}
 {{- end -}}
 {{- end }}
 
@@ -491,6 +511,10 @@ Generate all pod annotations
 
 {{- if .Values.llmRequestRouter.podAnnotations -}}
 {{- $annotations = merge $annotations .Values.llmRequestRouter.podAnnotations -}}
+{{- end -}}
+
+{{- if .Values.llmRequestRouter.loadBalancer.config -}}
+{{- $_ := set $annotations "checksum/load-balancer-config" (.Values.llmRequestRouter.loadBalancer.config | sha256sum) -}}
 {{- end -}}
 
 {{- if not (and .Values.llmRequestRouter.vault .Values.llmRequestRouter.vault.noVaultAnnotations) -}}

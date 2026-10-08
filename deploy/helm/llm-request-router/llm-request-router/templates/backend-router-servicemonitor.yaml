@@ -22,4 +22,5 @@ spec:
   selector:
     matchLabels:
       {{- include "llm-request-router.backendRouterSelectorLabels" . | nindent 6 }}
+      app.kubernetes.io/metrics: "true"
 {{- end }}

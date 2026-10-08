@@ -82,7 +82,7 @@ RUN --mount=type=bind,source=.,target=/build-context,readonly \
     cargo build -p stargate -p stargate-k8s-router -p mock-dynamo -p pylon \
       --profile "${CARGO_PROFILE}" --target "${rust_target}"; \
     cp "target/${rust_target}/${CARGO_PROFILE}/stargate" \
-       "target/${rust_target}/${CARGO_PROFILE}/stargate-worker-auth-gateway" \
+       "target/${rust_target}/${CARGO_PROFILE}/stargate-dev-auth" \
        "target/${rust_target}/${CARGO_PROFILE}/stargate-k8s-router" \
        "target/${rust_target}/${CARGO_PROFILE}/mock-dynamo" \
        "target/${rust_target}/${CARGO_PROFILE}/pylon" \
@@ -143,6 +143,17 @@ ARG TARGETARCH
 COPY --from=binary-builder /out/stargate-k8s-router /usr/local/bin/stargate-k8s-router
 
 ENTRYPOINT ["stargate-k8s-router"]
+CMD []
+
+####################################
+### STARGATE DEV AUTH RUNTIME ######
+####################################
+FROM runtime-base AS stargate-dev-auth-runtime
+ARG TARGETARCH
+
+COPY --from=binary-builder /out/stargate-dev-auth /usr/local/bin/stargate-dev-auth
+
+ENTRYPOINT ["stargate-dev-auth"]
 CMD []
 
 ####################################
