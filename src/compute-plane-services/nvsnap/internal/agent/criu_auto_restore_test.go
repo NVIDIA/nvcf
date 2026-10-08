@@ -116,8 +116,8 @@ func TestRecordCRIUCapture_FirstCaptureOfAHashWins(t *testing.T) {
 	a := &Agent{captureBackend: cm, log: logrus.New(), config: Config{NodeName: "n1"}}
 	ctx, log := context.Background(), logrus.NewEntry(logrus.New())
 	req := CheckpointRequest{Namespace: "ns", PodName: "p"}
-	a.recordCRIUCapture(ctx, "d9a846172fb1663b4e26ea05c4425ab454386b7dd45d5c01bafbd42445439f93", "d9a8__first", req, "img", log)
-	a.recordCRIUCapture(ctx, "d9a846172fb1663b4e26ea05c4425ab454386b7dd45d5c01bafbd42445439f93", "d9a8__second", req, "img", log)
+	a.recordCRIUCapture(ctx, "d9a846172fb1663b4e26ea05c4425ab454386b7dd45d5c01bafbd42445439f93", "d9a8__first", req, "img", false, log)
+	a.recordCRIUCapture(ctx, "d9a846172fb1663b4e26ea05c4425ab454386b7dd45d5c01bafbd42445439f93", "d9a8__second", req, "img", false, log)
 	got, err := cm.Stat(ctx, "d9a846172fb1663b4e26ea05c4425ab454386b7dd45d5c01bafbd42445439f93")
 	if err != nil {
 		t.Fatal(err)

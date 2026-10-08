@@ -70,12 +70,6 @@ func (m *Mutator) criuRestoreFor(ctx context.Context, pod *corev1.Pod, hash stri
 	if id == "" {
 		return "", man
 	}
-	if pod.Annotations[GPUShareAnnotation] == "true" {
-		// Its store mount would have to come from the checkpoint rather
-		// than the pod; not supported yet. A fresh start is correct.
-		log.WithField("checkpoint", id).Info("CRIU restore: gpushare pods are not restored in place yet; cold start")
-		return "", man
-	}
 	if m.CRIURestoreBlocked != nil && m.CRIURestoreBlocked(ctx, id) {
 		log.WithField("checkpoint", id).Warn("CRIU restore: this checkpoint failed to restore before; cold start")
 		return "", man
@@ -114,14 +108,37 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 		patches = append(patches, PatchOp{Op: "remove", Path: base + "/startupProbe"})
 	}
 	dir := corev1.HostPathDirectory
-	patches = append(patches, addVolumes(pod, []corev1.Volume{{
+	vols := []corev1.Volume{{
 		Name:         criuCheckpointsVolume,
 		VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: m.CheckpointHostRoot, Type: &dir}},
-	}})...)
-	patches = append(patches, addContainerMounts(i, c, []corev1.VolumeMount{
+	}}
+	mounts := []corev1.VolumeMount{
 		// Writable: CRIU writes restore.log into the images directory.
 		{Name: criuCheckpointsVolume, MountPath: criuCheckpointsMount},
-	})...)
+	}
+	if man.SourcePodMeta["gpushare"] == "true" {
+		// The restored processes re-map the library from where it was and
+		// load their GPU memory from the checkpoint's chunk store, at the
+		// store path they saved it from.
+		bundleRoot := m.HostBundleRoot
+		if bundleRoot == "" {
+			bundleRoot = DefaultHostBundleRoot
+		}
+		vols = append(vols, corev1.Volume{Name: gpushareStoreVolume, VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
+			Path: m.CheckpointHostRoot + "/" + checkpointID + "/gpushare", Type: &dir}}})
+		mounts = append(mounts, corev1.VolumeMount{Name: gpushareStoreVolume, MountPath: GPUShareStorePath})
+		libMounted := false
+		for _, vm := range c.VolumeMounts {
+			libMounted = libMounted || vm.MountPath == nvsnapToolsMountPath
+		}
+		if !libMounted {
+			vols = append(vols, corev1.Volume{Name: gpushareLibVolume, VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
+				Path: bundleRoot + "/nvsnap", Type: &dir}}})
+			mounts = append(mounts, corev1.VolumeMount{Name: gpushareLibVolume, MountPath: nvsnapToolsMountPath, ReadOnly: true})
+		}
+	}
+	patches = append(patches, addVolumes(pod, vols)...)
+	patches = append(patches, addContainerMounts(i, c, mounts)...)
 	if pod.Annotations == nil {
 		patches = append(patches, PatchOp{Op: "add", Path: "/metadata/annotations", Value: map[string]string{}})
 	}

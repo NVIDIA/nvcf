@@ -373,6 +373,9 @@ type Mutator struct {
 	// CRIURestoreBlocked reports a checkpoint that failed to restore; its
 	// pods start fresh instead. Nil: none is blocked.
 	CRIURestoreBlocked func(ctx context.Context, checkpointID string) bool
+	// GPUShareByDefault puts every GPU pod under the gpushare library
+	// unless it is annotated nvsnap.io/gpushare: "false" (CRIU clusters).
+	GPUShareByDefault bool
 
 	// EnsureLocal makes the capture's bytes available to the local
 	// Backend BEFORE Backend.Mount is called. Without this, a webhook
@@ -563,7 +566,9 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 			return injectPatches, nil
 		}
 		plog.WithField("checkpoint", id).Info("CRIU restore: pod admitted as the restore placeholder")
-		return mergePatchPlan(append(injectPatches, cp...)), nil
+		// Not injectPatches: a gpushare restore mounts the checkpoint's
+		// chunk store, not the pod's own empty one.
+		return mergePatchPlan(cp), nil
 	}
 
 	// Resolve the manifest so the L2 dispatch can branch on the capture

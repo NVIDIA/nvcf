@@ -191,6 +191,9 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		GPUShareHostRoot: filepath.Join(a.checkpointHostRoot(), GPUSharePodStoresSubdir),
 		// CRIU captures restore into their pods (criu_auto_restore.go).
 		CheckpointHostRoot: a.checkpointHostRoot(),
+		// On a CRIU cluster every GPU pod runs under the gpushare library,
+		// which keeps GPU memory out of the CRIU image.
+		GPUShareByDefault: criuIsDefault(),
 		// nvsnap#202: restore-prep strategy. When "init-container",
 		// the webhook emits a nvsnap-mount-prep init container instead
 		// of doing the OverlayFS mount syscalls during admission.

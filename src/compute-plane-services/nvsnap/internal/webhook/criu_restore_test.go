@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
@@ -104,7 +105,6 @@ func TestCRIURestore_SkipsWhenItCannotRestore(t *testing.T) {
 		"blocked checkpoint": func(m *Mutator, _ *corev1.Pod) {
 			m.CRIURestoreBlocked = func(context.Context, string) bool { return true }
 		},
-		"gpushare pod": func(_ *Mutator, p *corev1.Pod) { p.Annotations[GPUShareAnnotation] = "true" },
 		"not a CRIU capture": func(m *Mutator, _ *corev1.Pod) {
 			m.L2Backend = &criuL2Backend{man: checkpointstore.Manifest{CaptureMethod: "cachedir"}}
 		},
@@ -152,5 +152,60 @@ func TestCRIURestore_FindsTheRecordInTheCaptureStore(t *testing.T) {
 	}
 	if got := applyPatches(t, pod, patches); got.Annotations[CRIURestoreAnnotation] != "abc123__20261008-101010" {
 		t.Errorf("record in the capture store not used: annotations %v", got.Annotations)
+	}
+}
+
+// On a CRIU cluster a GPU pod runs under gpushare without an annotation;
+// "false" opts it out.
+func TestGPUShareByDefault(t *testing.T) {
+	m := &Mutator{GPUShareByDefault: true}
+	pod := gpushareTestPod(false, nil)
+	if got := applyPatches(t, pod, m.gpusharePatches(pod)); envOf(got.Spec.Containers[1], "LD_PRELOAD") == nil {
+		t.Error("CRIU cluster: unannotated GPU pod did not get the library")
+	}
+	out := gpushareTestPod(false, nil)
+	out.Annotations = map[string]string{GPUShareAnnotation: "false"}
+	if p := m.gpusharePatches(out); p != nil {
+		t.Errorf("opted-out pod patched: %v", p)
+	}
+	if p := (&Mutator{}).gpusharePatches(gpushareTestPod(false, nil)); p != nil {
+		t.Error("cachedir cluster: unannotated pod patched")
+	}
+}
+
+// A gpushare checkpoint restores with the checkpoint's chunk store at the
+// store path and the library mounted, and without the pod's own store.
+func TestCRIURestore_GPUShareCheckpoint(t *testing.T) {
+	man := criuCaptureRecord()
+	man.SourcePodMeta["gpushare"] = "true"
+	m := criuMutator(t, man)
+	m.GPUShareByDefault = true
+	pod := podWithAnnotation("abc123")
+	pod.Spec = criuFunctionPod().Spec
+	pod.Spec.Containers[1].Resources.Limits = corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("1")}
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := applyPatches(t, pod, patches)
+	vols := map[string]string{}
+	for _, v := range got.Spec.Volumes {
+		if v.HostPath != nil {
+			vols[v.Name] = v.HostPath.Path
+		}
+	}
+	if vols[gpushareStoreVolume] != "/var/lib/containers/nvsnap-checkpoints/abc123__20261008-101010/gpushare" {
+		t.Errorf("store = %q, want the checkpoint's chunk store", vols[gpushareStoreVolume])
+	}
+	if vols[gpushareLibVolume] == "" {
+		t.Error("library not mounted")
+	}
+	var store, lib bool
+	for _, vm := range got.Spec.Containers[1].VolumeMounts {
+		store = store || (vm.MountPath == GPUShareStorePath && vm.SubPathExpr == "")
+		lib = lib || vm.MountPath == nvsnapToolsMountPath
+	}
+	if !store || !lib {
+		t.Errorf("mounts: store=%v lib=%v (store must not be the per-pod subpath)", store, lib)
 	}
 }

@@ -223,7 +223,7 @@ func (c *criuAutoRestorer) Blocked(ctx context.Context, id string) bool {
 // webhook reads capture records to decide how a pod with
 // nvsnap.io/restore-from restores. The checkpoint stays where it is; only
 // the record is written.
-func (a *Agent) recordCRIUCapture(ctx context.Context, hash, checkpointID string, req CheckpointRequest, image string, log *logrus.Entry) {
+func (a *Agent) recordCRIUCapture(ctx context.Context, hash, checkpointID string, req CheckpointRequest, image string, gpushare bool, log *logrus.Entry) {
 	r, ok := a.captureBackend.(checkpointstore.ManifestRecorder)
 	if !ok || hash == "" {
 		log.Debug("CRIU capture not recorded: no capture record store")
@@ -248,6 +248,10 @@ func (a *Agent) recordCRIUCapture(ctx context.Context, hash, checkpointID string
 			"engine": "criu", "checkpoint_id": checkpointID,
 			"namespace": req.Namespace, "pod": req.PodName, "image": image, "node": a.config.NodeName,
 		},
+	}
+	if gpushare {
+		// The restore mounts the checkpoint's chunk store and the library.
+		m.SourcePodMeta["gpushare"] = "true"
 	}
 	if a.config.NodeName != "" {
 		m.CapturedOnNodes = []string{a.config.NodeName}

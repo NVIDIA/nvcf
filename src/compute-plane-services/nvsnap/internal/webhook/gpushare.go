@@ -57,10 +57,23 @@ const (
 	gpushareFabricEnv   = "NVSNAP_GPUSHARE_FABRIC"
 )
 
+// gpushareWanted reports whether a pod runs under the gpushare library: when
+// annotated, or by default where CRIU is the capture method (the library
+// keeps GPU memory out of the CRIU image), unless annotated "false".
+func (m *Mutator) gpushareWanted(pod *corev1.Pod) bool {
+	switch pod.Annotations[GPUShareAnnotation] {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	return m.GPUShareByDefault
+}
+
 // gpusharePatches places the library and the store into every container of
 // an opted-in pod that requests GPUs.
 func (m *Mutator) gpusharePatches(pod *corev1.Pod) []PatchOp {
-	if pod.Annotations[GPUShareAnnotation] != "true" {
+	if !m.gpushareWanted(pod) {
 		return nil
 	}
 	gpuContainers := make([]int, 0, len(pod.Spec.Containers))
