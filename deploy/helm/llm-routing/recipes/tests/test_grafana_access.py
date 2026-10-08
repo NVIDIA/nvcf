@@ -181,17 +181,15 @@ class GrafanaAccessTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('grafana.rootURL', result.stderr)
 
-    def test_ingress_rejects_invalid_values_before_installation(self):
-        for field, value in (('path', '/grafana/'), ('path', '/'), ('path', '/a b'),
-                             ('className', 'not a class'), ('className', 123),
-                             ('host', 'https://example.com')):
-            with self.subTest(field=field, value=value):
+    def test_ingress_rejects_invalid_paths_before_installation(self):
+        for path in ('/grafana/', '/', '/a b'):
+            with self.subTest(path=path):
                 values = copy.deepcopy(self.values)
                 values['grafana']['rootURL'] = 'https://demo.example.com/grafana/'
-                values['grafana']['ingress'].update(enabled=True, **{field: value})
+                values['grafana']['ingress'].update(enabled=True, path=path)
                 result = self.render_credentials(values)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertIn('grafana.ingress.'+field, result.stderr)
+                self.assertIn('grafana.ingress.path', result.stderr)
 
 
 if __name__ == '__main__':

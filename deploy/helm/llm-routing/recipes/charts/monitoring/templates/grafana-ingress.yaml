@@ -3,12 +3,6 @@
 {{- $ingress := .Values.grafana.ingress }}
 {{- if and .Values.enabled $ingress.enabled }}
 {{- if not (regexMatch "^(/[A-Za-z0-9._~-]+)+$" $ingress.path) }}{{ fail "grafana.ingress.path must be a path such as /grafana, without a trailing /" }}{{ end }}
-{{- range $key := list "className" "host" }}
-{{- $value := index $ingress $key }}
-{{- if or (not (kindIs "string" $value)) (not (regexMatch "^([a-z0-9]([-a-z0-9.]*[a-z0-9])?)?$" $value)) }}
-{{- fail (printf "grafana.ingress.%s must be a DNS name or empty" $key) }}
-{{- end }}
-{{- end }}
 {{- $rootURL := required "grafana.rootURL must specify the public URL when ingress is enabled" .Values.grafana.rootURL }}
 {{- if or (not (kindIs "string" $rootURL)) (not (regexMatch `^https?://[^/?#%@\s]+/` $rootURL)) }}
 {{- fail "grafana.rootURL must specify the public http:// or https:// URL when ingress is enabled" }}
