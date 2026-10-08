@@ -41,7 +41,7 @@ ULIMIT_SHIM = "/usr/bin/shelless_ulimit"
 # /usr/bin/java is present on both arches.
 JAVA_BIN = "/usr/bin/java"
 
-def _java_oci_image_impl(name, visibility, jar, base, jar_path, java_bin, entrypoint, jvm_flags, env, workdir, registry, tags):
+def _java_oci_image_impl(name, visibility, jar, base, jar_path, java_bin, entrypoint, jvm_flags, env, workdir, user, registry, tags):
     layer_name = name + "_layer"
     files_name = name + "_files"
 
@@ -85,6 +85,7 @@ def _java_oci_image_impl(name, visibility, jar, base, jar_path, java_bin, entryp
         entrypoint = entry,
         env = env,
         workdir = workdir,
+        user = user,
         visibility = visibility,
         registry = registry,
         tags = tags,
@@ -139,6 +140,10 @@ java_oci_image = macro(
             doc = "Container working directory. Unset leaves the base's value.",
             configurable = False,
         ),
+        "user": attr.string(
+            doc = "Runtime UID:GID. Unset leaves the base image's user unchanged.",
+            configurable = False,
+        ),
         "jvm_flags": attr.string_list(
             doc = "JVM flags inserted before -jar. Ignored when entrypoint is set.",
             configurable = False,
@@ -161,7 +166,7 @@ java_oci_image = macro(
     },
 )
 
-def _java_image_contract_test_impl(name, visibility, image, jar_path, env, workdir, **kwargs):
+def _java_image_contract_test_impl(name, visibility, image, jar_path, env, workdir, user, **kwargs):
     sh_test(
         name = name,
         srcs = ["//rules/oci/private:java_image_contract_test.sh"],
@@ -176,7 +181,7 @@ def _java_image_contract_test_impl(name, visibility, image, jar_path, env, workd
         # JDK_JAVA_OPTIONS would arrive truncated at its first space and the
         # test would silently assert only the first fragment.
         env = dict(
-            [("EXPECT_ENV_COUNT", str(len(env)))] +
+            [("EXPECT_ENV_COUNT", str(len(env))), ("EXPECT_USER", user)] +
             [
                 ("EXPECT_ENV_{}".format(i), "{}={}".format(k, env[k]))
                 for i, k in enumerate(sorted(env.keys()))
@@ -223,6 +228,10 @@ java_image_contract_test = macro(
             configurable = False,
             default = "/home/app",
             doc = "Expected working directory.",
+        ),
+        "user": attr.string(
+            configurable = False,
+            doc = "Expected runtime UID:GID when the image sets one.",
         ),
     },
 )
