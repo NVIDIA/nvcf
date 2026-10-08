@@ -301,6 +301,21 @@ class SharedHelmTests(unittest.TestCase):
                 self.assertFalse(any(item['kind'] == 'Secret' and item['metadata']['name'] == 'external-caller'
                                      for item in result))
 
+    def test_external_worker_hash_matches_trimmed_pylon_token(self):
+        values = copy.deepcopy(self.values)
+        values['clusterCredential'] = {'create': False}
+        values['operator']['credential'] = {'existingSecret': 'external-transport'}
+        for token in ('worker-from-file\n', ' \tworker-from-file\r\n'):
+            with self.subTest(token=repr(token)):
+                secret = {'apiVersion': 'v1', 'kind': 'Secret',
+                          'metadata': {'name': 'external-transport', 'namespace': 'test-models'},
+                          'data': {'cluster-token': base64.b64encode(token.encode()).decode()}}
+                rendered = self.render(values, chart=self.lookup_chart([secret]))
+                auth = next(item for item in rendered if item['metadata']['name'] == 'llm-gateway-stack-worker-credentials')
+                self.assertEqual(yaml.safe_load(decode(auth, 'credentials.yaml')),
+                                 {'clusters': {'llm-stack': ['sha256:' + hashlib.sha256(token.strip().encode()).hexdigest()]}})
+                self.assertFalse(any(item['metadata']['name'] == 'external-transport' for item in rendered))
+
     def test_extra_callers_are_explicit_and_removal_or_rotation_replaces_live_hashes(self):
         resources = self.installed()
         extra = {'apiVersion': 'v1', 'kind': 'Secret',
