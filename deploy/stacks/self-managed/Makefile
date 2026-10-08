@@ -15,6 +15,7 @@ test:
 	@tests/gateway-routes-default-ownership.sh
 	@tests/grpc-proxy-nats-endpoint.sh
 	@tests/llm-pki-openbao-migration.sh
+	@tests/nonroot-llm-migrations.sh
 	@tests/api-keys-startup-probe.sh
 	@tests/upgrade-receipt-wiring.sh
 	@tests/cassandra-openbao-credential-wiring.sh
