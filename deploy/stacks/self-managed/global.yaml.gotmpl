@@ -1258,6 +1258,13 @@ ess:
   {{- end }}
 
 notary:
+  {{- /* Operator-supplied notary env, merged over the computed keys below, so a
+         deployment can set or override any notary environment variable from its
+         environment file. Same shape as api, apikeys and invocation. */}}
+  {{- $configuredNotaryEnv := dig "notary" "env" dict .Values }}
+  {{- if not (kindIs "map" $configuredNotaryEnv) }}
+  {{- fail "notary.env must be a map" }}
+  {{- end }}
   fullnameOverride: notary-service
   {{- if $haEnabled }}
   replicaCount: {{ max 2 (dig "notary" "replicaCount" 1 .Values | int) }}
@@ -1292,12 +1299,14 @@ notary:
   {{- . | nindent 2 }}
   {{- end }}
 
+  {{- /* Observability */}}
+  {{- $notaryEnv := dict "MANAGEMENT_TRACING_ENABLED" (.Values.global.observability.tracing.enabled | toString) }}
+  {{- if .Values.global.observability.tracing.enabled }}
+  {{- $_ := set $notaryEnv "MANAGEMENT_OTLP_TRACING_ENDPOINT" (printf "%s://%s:%v/v1/traces" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint .Values.global.observability.tracing.collectorPort) }}
+  {{- end }}
+  {{- $notaryEnv = mergeOverwrite $notaryEnv $configuredNotaryEnv }}
   env:
-    # Observability
-    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
-    {{- if .Values.global.observability.tracing.enabled }}
-    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
-    {{- end }}
+    {{- toYaml $notaryEnv | nindent 4 }}
 
 sis:
   fullnameOverride: spot-instance-service
