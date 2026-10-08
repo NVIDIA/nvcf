@@ -17,12 +17,16 @@
 package com.nvidia.icms.util;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
@@ -76,5 +80,34 @@ class AuthUtilsTest {
                 "sub", subject,
                 "aud", audience);
         return new Jwt("token", Instant.now(), Instant.now().plusSeconds(60), headers, claims);
+    }
+
+    @Test
+    void workerSubjectNamespace_acceptsOnlyFixedWorkerServiceAccount() {
+        assertEquals("inst-789", AuthUtils.workerSubjectNamespace("system:serviceaccount:inst-789:nvcf-worker"));
+        assertTrue(AuthUtils.isValidWorkerPsatSubject("system:serviceaccount:ns:nvcf-worker"));
+        assertNull(AuthUtils.workerSubjectNamespace("system:serviceaccount:ns:nvcf-worker-inst-1"));
+        assertNull(AuthUtils.workerSubjectNamespace("system:serviceaccount:ns:nvca"));
+        assertNull(AuthUtils.workerSubjectNamespace("system:serviceaccount::nvcf-worker"));
+        assertNull(AuthUtils.workerSubjectNamespace("system:serviceaccount:a:b:nvcf-worker"));
+        assertNull(AuthUtils.workerSubjectNamespace("spiffe://x/worker/y"));
+        assertFalse(AuthUtils.isValidWorkerPsatSubject(null));
+    }
+
+    @Test
+    void isClusterPrincipal_trueOnlyForClusterAuthorities() {
+        assertFalse(AuthUtils.isClusterPrincipal());
+
+        var svc = new TestingAuthenticationToken("nvcf-api", "n/a", "worker-token-introspect");
+        SecurityContextHolder.getContext().setAuthentication(svc);
+        assertFalse(AuthUtils.isClusterPrincipal());
+
+        var psat = new TestingAuthenticationToken("cluster", "n/a", "nvca-cluster", "instance_request_update");
+        SecurityContextHolder.getContext().setAuthentication(psat);
+        assertTrue(AuthUtils.isClusterPrincipal());
+
+        var apiKey = new TestingAuthenticationToken("cluster", "n/a", "apikey:nvca-cluster");
+        SecurityContextHolder.getContext().setAuthentication(apiKey);
+        assertTrue(AuthUtils.isClusterPrincipal());
     }
 }

@@ -35,6 +35,7 @@ import com.nvidia.icms.util.audit.AuditOperation;
 import com.nvidia.icms.util.audit.AuditState;
 import com.nvidia.icms.util.audit.AuditUtils;
 import jakarta.validation.constraints.NotNull;
+import com.nvidia.icms.service.workers.WorkerIdentifierService;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -92,6 +93,8 @@ public class StaleRequestDeletionTask {
     private final InstanceServiceHelper instanceServiceHelper;
 
     private final DbQueryExecutorService dbQueryExecutorService;
+
+    private final WorkerIdentifierService workerIdentifierService;
 
     public void execute() {
 
@@ -181,6 +184,7 @@ public class StaleRequestDeletionTask {
                 });
 
                 // Delete Request
+                workerIdentifierService.deleteForRequestQuietly(instanceRequestEntity.getRequestId());
                 instanceRequestV2Repository.delete(instanceRequestEntity);
                 deletedRequest.add(instanceRequestEntity.getRequestId());
 
@@ -212,6 +216,7 @@ public class StaleRequestDeletionTask {
             updateRequestStateToClosed(instanceRequestEntity);
 
             instanceRequestV2Repository.update(instanceRequestEntity);
+            workerIdentifierService.deleteForRequestQuietly(instanceRequestEntity.getRequestId());
 
             sendAuditForTerminatedRequest(entityBefore, instanceRequestEntity);
             closedRequests.add(instanceRequestEntity.getRequestId());
