@@ -242,6 +242,8 @@ fn prepare_proxy_request(
         },
     );
 
+    // Counted only once every request check below has passed.
+    let mut accepted_expression = None;
     let lb_resolution = if let Some(raw) = &request_inputs.routing_expression {
         let (definition, outcome) = app
             .dynamic_config
@@ -249,6 +251,7 @@ fn prepare_proxy_request(
                 RoutingExpression::parse(raw)?.compile(&app.lb_router, model_id)
             })
             .map_err(|error| reject_invalid_routing_algorithm(target, &error))?;
+        accepted_expression = Some((definition.config().algorithm(), outcome));
         if outcome != Outcome::Hit {
             info!(
                 routing_key = ?target.routing_key,
@@ -281,6 +284,11 @@ fn prepare_proxy_request(
     let retry_deadline = retry_budget_deadline(&parts.headers, &app.retry, request_start)?;
     let replay_body =
         ReplayableRequestBody::new(&parts.headers, body, app.retry.max_replay_body_bytes)?;
+    if let Some((algorithm, outcome)) = accepted_expression {
+        app.metrics
+            .routing_expressions_total(&algorithm.to_string(), outcome.as_str())
+            .inc();
+    }
 
     Ok(PreparedProxyRequest {
         request_inputs,
@@ -381,6 +389,13 @@ mod test_support {
         app: &ProxyAppState,
         header: &str,
     ) -> super::PreparedProxyRequest {
+        try_prepare_with_routing_method(app, header).unwrap()
+    }
+
+    fn try_prepare_with_routing_method(
+        app: &ProxyAppState,
+        header: &str,
+    ) -> Result<super::PreparedProxyRequest, super::ProxyRequestError> {
         let request = axum::http::Request::builder()
             .uri("/v1/chat/completions")
             .header("x-model", "model")
@@ -397,7 +412,90 @@ mod test_support {
             super::OpenAiProxyEndpoint::CHAT_COMPLETIONS,
             std::time::Instant::now(),
         )
-        .unwrap()
+    }
+
+    // (algorithm, cache, count) for every exported routing expression series.
+    fn routing_expression_series(app: &ProxyAppState) -> Vec<(String, String, u64)> {
+        let mut series = app
+            .metrics
+            .registry()
+            .gather()
+            .iter()
+            .filter(|family| family.name() == "stargate_routing_expressions_total")
+            .flat_map(|family| family.get_metric())
+            .map(|metric| {
+                let label = |name: &str| {
+                    metric
+                        .get_label()
+                        .iter()
+                        .find(|label| label.name() == name)
+                        .map_or_else(String::new, |label| label.value().to_owned())
+                };
+                (
+                    label("algorithm"),
+                    label("cache"),
+                    metric.get_counter().value() as u64,
+                )
+            })
+            .collect::<Vec<_>>();
+        series.sort();
+        series
+    }
+
+    #[tokio::test]
+    async fn routing_expression_metrics_count_accepted_values_with_bounded_labels() {
+        let app = test_proxy_app_state_with_lb_config(LoadBalancerConfig::permissive_default());
+        let long_seed = format!("pulsar;seed=\"{}\"", "owner".repeat(150));
+        for header in [
+            "pulsar;seed=stable-a",
+            "pulsar;seed=stable-a",
+            "pulsar;seed=stable-b",
+            r#"pulsar;seed="free text from an owner""#,
+            long_seed.as_str(),
+            "wait-and-widen;n=2",
+            // Rejections are logged, not counted.
+            "pulsar;widen=2",
+            "pulsar;seed",
+            "fastest;seed=x",
+        ] {
+            let _ = try_prepare_with_routing_method(&app, header);
+        }
+        // Compiles, then fails request validation without an affinity key: not counted.
+        assert!(
+            try_prepare_with_routing_method(&app, "pulsar;require_cache_affinity_key=true")
+                .is_err()
+        );
+
+        let series = routing_expression_series(&app);
+        let counted = series
+            .iter()
+            .filter(|(_, _, count)| *count > 0)
+            .map(|(algorithm, cache, count)| (algorithm.as_str(), cache.as_str(), *count))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            counted,
+            [
+                ("pulsar", "build", 1),
+                ("pulsar", "hit", 1),
+                ("pulsar", "rebuild", 3),
+                // One target, so a new algorithm replaces the entry.
+                ("wait-and-widen", "rebuild", 1),
+            ]
+        );
+
+        let algorithms = [
+            "power-of-n",
+            "wait-and-widen",
+            "round-robin",
+            "random",
+            "pulsar",
+            "pulsar-wait-and-widen",
+        ];
+        let caches = ["hit", "build", "rebuild"];
+        for (algorithm, cache, _) in &series {
+            assert!(algorithms.contains(&algorithm.as_str()), "{algorithm}");
+            assert!(caches.contains(&cache.as_str()), "{cache}");
+        }
     }
 
     #[tokio::test]

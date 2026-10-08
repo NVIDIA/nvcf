@@ -134,7 +134,7 @@ Optional trusted headers:
 | Header | Meaning |
 | --- | --- |
 | `x-routing-key` | Authenticated routing scope. Omit for unscoped. |
-| `x-routing-method` | Request-scoped load-balancer override, only for methods allowed by Stargate config. |
+| `x-routing-method` | Request-scoped load-balancer override, only for methods allowed by Stargate config, optionally with expression parameters. See [routing expressions](load-balancer-configuration.md#routing-expressions). |
 | `x-cache-affinity-key` | Opaque cache/prefix identity. Required by some LB configs. |
 | `x-priority` | Unsigned priority rank; lower is more urgent. Omit when no priority is resolved. |
 | `x-request-slo-ms` | Per-request LB latency hint. |
