@@ -17,6 +17,7 @@ def read(path):
 
 
 def chart_reference(root, relative):
+    """localPath is relative to the index directory and names an archive after packaging."""
     chart = root / relative
     text = (chart / "Chart.yaml").read_text()
     fields = {}

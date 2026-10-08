@@ -376,6 +376,59 @@ class RuntimeTests(unittest.TestCase):
             auto.fetch_runtime(self.config, 'http://artifacts/runtime.tar.gz', work)
         self.assertEqual((work / 'runtime/llama-server').read_bytes(), b'llama-server')
 
+    def test_worker_retries_checksum_races_without_replacing_the_verified_archive(self):
+        bundle = (self.root / 'runtime.tar.gz').read_bytes()
+        checksum = hashlib.sha256(bundle).hexdigest().encode()
+        for failure in ('malformed', 'non-utf8', 'mismatch'):
+            with self.subTest(failure=failure):
+                work = self.root / failure
+                work.mkdir()
+                archive = work / 'runtime.tar.gz'
+                archive.write_bytes(b'previous verified archive')
+                first = {'malformed': [b'not-a-checksum'], 'non-utf8': [b'\xff'],
+                         'mismatch': [checksum, b'replaced upstream archive']}[failure]
+                responses = iter(first + [checksum, bundle])
+                def response(url, **kwargs):
+                    self.assertEqual(archive.read_bytes(), b'previous verified archive')
+                    return io.BytesIO(next(responses))
+                with patch.object(auto.urllib.request, 'urlopen', side_effect=response) as network, \
+                        patch.object(auto.time, 'monotonic', return_value=0), patch.object(auto.time, 'sleep') as sleep:
+                    auto.fetch_runtime(self.config, 'http://artifacts/runtime.tar.gz', work)
+                sleep.assert_called_once_with(5)
+                self.assertEqual(network.call_count, len(first) + 2)
+                self.assertEqual(archive.read_bytes(), bundle)
+                self.assertFalse((work / 'runtime.tar.gz.partial').exists())
+                auto.verify_runtime(self.config, work / 'runtime')
+
+    def test_worker_checksum_and_download_failures_stop_at_deadline_and_preserve_old_files(self):
+        checksum = (self.root / 'runtime.tar.gz.sha256').read_bytes()
+        for failure in ('malformed', 'mismatch', 'interrupted'):
+            with self.subTest(failure=failure):
+                work = self.root / failure
+                work.mkdir()
+                archive = work / 'runtime.tar.gz'
+                archive.write_bytes(b'previous verified archive')
+                runtime = work / 'runtime'
+                runtime.mkdir()
+                (runtime / 'existing').write_bytes(b'previous runtime')
+                if failure == 'malformed':
+                    responses = [io.BytesIO(b'not-a-checksum')]
+                elif failure == 'mismatch':
+                    responses = [io.BytesIO(checksum), io.BytesIO(b'partial archive')]
+                else:
+                    interrupted = MagicMock()
+                    interrupted.__enter__.return_value = interrupted
+                    interrupted.read.side_effect = [b'partial archive', OSError('transfer interrupted')]
+                    responses = [io.BytesIO(checksum), interrupted]
+                with patch.object(auto.urllib.request, 'urlopen', side_effect=responses), \
+                        patch.object(auto.time, 'monotonic', side_effect=[0, 10800]), patch.object(auto.time, 'sleep') as sleep, \
+                        self.assertRaisesRegex(RuntimeError, 'Timed out waiting for the prepared runtime bundle'):
+                    auto.fetch_runtime(self.config, 'http://artifacts/runtime.tar.gz', work)
+                sleep.assert_not_called()
+                self.assertEqual(archive.read_bytes(), b'previous verified archive')
+                self.assertEqual((runtime / 'existing').read_bytes(), b'previous runtime')
+                self.assertFalse((work / 'runtime.tar.gz.partial').exists())
+
     def test_failed_distributed_check_stops_local_rpc_and_prevents_download(self):
         child = MagicMock()
         with patch.object(auto.subprocess, 'Popen', return_value=child), patch.object(auto, 'wait_endpoints') as wait, \

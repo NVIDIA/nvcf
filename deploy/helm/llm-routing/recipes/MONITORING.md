@@ -1,6 +1,6 @@
 # Advanced monitoring configuration
 
-For installation and dashboard access, see [Monitoring](../README.md#4-view-monitoring). Run commands from `deploy/helm/llm-routing/recipes`, using the same `--context`, `--config` or `--work-dir` options as installation.
+For installation and dashboard access, see [Monitoring](../ADVANCED.md#monitoring). Run commands from `deploy/helm/llm-routing/recipes`, using the same `--context`, `--config` or `--work-dir` options as installation.
 
 ## Configuration
 

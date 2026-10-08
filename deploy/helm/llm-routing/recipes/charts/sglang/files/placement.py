@@ -82,7 +82,8 @@ def preflight(config):
     target = config['targets'][0]['node']
     if os.environ.get('POD_NODE_NAME') != target:
         raise RuntimeError('The pod was placed on a different node')
-    ssl.create_default_context(cafile='/shared-ca/ca.crt')
+    # Validate the mounted shared CA. Kubernetes API reads use service-account trust.
+    _shared_ca_validation = ssl.create_default_context(cafile='/shared-ca/ca.crt')
     node = cluster_object('/api/v1/nodes/' + urllib.parse.quote(target, safe=''))
     claim = cluster_object('/api/v1/namespaces/' + urllib.parse.quote(config['namespace'], safe='') +
                            '/persistentvolumeclaims/' + urllib.parse.quote(config['claimName'], safe=''))

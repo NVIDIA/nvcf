@@ -596,7 +596,8 @@ class Recipe:
             found = [n for n in nodes if n['metadata']['name'] == name]
             require(len(found) == 1, 'Missing '+role+' node: '+name)
             node = found[0]
-            require(node['metadata']['labels'].get('kubernetes.io/arch') == 'arm64', 'Selected nodes must be ARM64.')
+            if role == 'model' or not external:
+                require(node['metadata']['labels'].get('kubernetes.io/arch') == 'arm64', 'Selected nodes must be ARM64.')
             require(any(c['type'] == 'Ready' and c['status'] == 'True' for c in node['status']['conditions']), 'Node is not Ready.')
             if role == 'model':
                 require(int(node['status']['allocatable'].get('nvidia.com/gpu', 0)) >= 1, 'GPU device plugin has not advertised a GPU on '+name+'.')

@@ -271,6 +271,40 @@ class StackBindingTests(unittest.TestCase):
         for call in run.call_args_list:
             self.assertIn('get', call.args[0])
 
+    def test_inventory_accepts_amd64_shared_control_with_arm64_model_nodes(self):
+        control = next(node for node in self.nodes if node['metadata']['name'] == self.config['nodes']['control'])
+        control['metadata']['labels']['kubernetes.io/arch'] = 'amd64'
+        control['status']['allocatable'] = {}
+        self.attach()
+        with patch.object(spark.stack_binding, 'inspect_connection', return_value=self.inspection), \
+             patch.object(spark, 'output', side_effect=self.output), patch.object(spark, 'run') as run, redirect_stdout(io.StringIO()):
+            self.recipe.inventory()
+        self.assertIn('inventory', self.recipe.state)
+        self.assertEqual(run.call_count, 2)
+
+    def test_inventory_rejects_non_arm64_model_nodes_with_external_stack(self):
+        self.attach()
+        model = next(node for node in self.nodes if node['metadata']['name'] == self.config['nodes']['model'][0])
+        model['metadata']['labels']['kubernetes.io/arch'] = 'amd64'
+        with patch.object(spark.stack_binding, 'inspect_connection', return_value=self.inspection), \
+             patch.object(spark, 'output', side_effect=self.output), patch.object(spark, 'run') as run, \
+             self.assertRaisesRegex(RuntimeError, 'Selected nodes must be ARM64'):
+            self.recipe.inventory()
+        run.assert_not_called()
+        self.assertNotIn('inventory', self.recipe.state)
+
+    def test_inventory_rejects_unready_shared_control_nodes(self):
+        self.attach()
+        control = next(node for node in self.nodes if node['metadata']['name'] == self.config['nodes']['control'])
+        control['metadata']['labels']['kubernetes.io/arch'] = 'amd64'
+        control['status']['conditions'] = [{'type': 'Ready', 'status': 'False'}]
+        with patch.object(spark.stack_binding, 'inspect_connection', return_value=self.inspection), \
+             patch.object(spark, 'output', side_effect=self.output), patch.object(spark, 'run') as run, \
+             self.assertRaisesRegex(RuntimeError, 'Node is not Ready'):
+            self.recipe.inventory()
+        run.assert_not_called()
+        self.assertNotIn('inventory', self.recipe.state)
+
     def test_inventory_rejects_busy_gpu_after_successful_attachment(self):
         self.attach()
         self.pods = [{'metadata': {'name': 'busy-model', 'namespace': 'unrelated'}, 'status': {'phase': 'Running'},

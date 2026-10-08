@@ -187,6 +187,45 @@ class StackTests(unittest.TestCase):
             with self.subTest(watches=watches), self.assertRaisesRegex(ValueError, 'Another Pylon operator'):
                 stack.check_watchers([other], self.config['namespace'], self.config['namespace'], self.config['operatorRelease'])
 
+    def test_watcher_detection_reads_command_and_both_operator_markers(self):
+        watch = '--watch-namespaces=' + self.config['namespace']
+        for marker in ('--pylon-image', '--cluster-credential-secret'):
+            for container in ({'command': ['/operator', marker + '=configured', watch]},
+                              {'command': ['/operator', marker, 'configured'], 'args': [watch]},
+                              {'command': None, 'args': [marker + '=configured', watch]},
+                              {'command': ['/operator', watch, marker], 'args': None}):
+                other = copy.deepcopy(self.other_operator)
+                other['spec']['template']['spec']['containers'] = [container]
+                with self.subTest(container=container), self.assertRaisesRegex(ValueError, 'Another Pylon operator'):
+                    stack.check_watchers([other], self.config['namespace'], self.config['namespace'], self.config['operatorRelease'])
+
+    def test_watcher_scope_trims_namespaces_and_rejects_blank_lists(self):
+        for watched in ('original-models, ' + self.config['namespace'] + ' ,team-b', ' ', ',', ' , \t, '):
+            for option in (['--watch-namespaces=' + watched], ['--watch-namespaces', watched]):
+                other = copy.deepcopy(self.other_operator)
+                other['spec']['template']['spec']['containers'][0]['args'] = ['--pylon-image=configured', *option]
+                with self.subTest(option=option), self.assertRaisesRegex(ValueError, 'Another Pylon operator'):
+                    stack.check_watchers([other], self.config['namespace'], self.config['namespace'], self.config['operatorRelease'])
+
+    def test_watcher_detection_allows_disjoint_scopes_and_nonoperators(self):
+        for container in ({'command': ['/operator', '--cluster-credential-secret=configured'],
+                           'args': ['--watch-namespaces= original-models, ,team-b , original-models ']},
+                          {'command': ['/unrelated', '--watch-namespaces=' + self.config['namespace']], 'args': None},
+                          {'command': None, 'args': None}):
+            other = copy.deepcopy(self.other_operator)
+            other['spec']['template']['spec']['containers'] = [container]
+            with self.subTest(container=container):
+                stack.check_watchers([other], self.config['namespace'], self.config['namespace'], self.config['operatorRelease'])
+
+    def test_watcher_rejects_duplicate_watch_options_across_command_and_args(self):
+        for second in (['--watch-namespaces=team-b'], ['--watch-namespaces']):
+            other = copy.deepcopy(self.other_operator)
+            other['spec']['template']['spec']['containers'] = [{
+                'command': ['/operator', '--pylon-image=configured', '--watch-namespaces=original-models'],
+                'args': second}]
+            with self.subTest(second=second), self.assertRaisesRegex(ValueError, 'Duplicate operator option'):
+                stack.check_watchers([other], self.config['namespace'], self.config['namespace'], self.config['operatorRelease'])
+
     def test_connection_load_requires_full_uid_and_fingerprint_binding(self):
         path = self.work/'connection.json'
         stack.save(path, self.connection)

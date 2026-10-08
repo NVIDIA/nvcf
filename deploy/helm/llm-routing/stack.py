@@ -214,8 +214,8 @@ def argument(args, name):
     for index, value in enumerate(args):
         if value.startswith(name + '='):
             values.append(value.split('=', 1)[1])
-        elif value == name and index + 1 < len(args):
-            values.append(args[index + 1])
+        elif value == name:
+            values.append(args[index + 1] if index + 1 < len(args) else None)
     require(len(values) <= 1, 'Duplicate operator option: ' + name)
     return values[0] if values else None
 
@@ -226,11 +226,13 @@ def check_watchers(deployments, namespace, own_namespace, own_name):
         if (metadata.get('namespace'), metadata['name']) == (own_namespace, own_name):
             continue
         for container in deployment['spec']['template']['spec']['containers']:
-            args = container.get('args', [])
-            if argument(args, '--pylon-image') is None:
+            args = list(container.get('command') or []) + list(container.get('args') or [])
+            markers = ('--pylon-image', '--cluster-credential-secret')
+            if not any(value == marker or value.startswith(marker + '=') for value in args for marker in markers):
                 continue
             watches = argument(args, '--watch-namespaces')
-            require(watches and namespace not in watches.split(','), 'Another Pylon operator watches the target namespace: ' + metadata['name'])
+            watched = [item.strip() for item in (watches or '').split(',') if item.strip()]
+            require(watched and namespace not in watched, 'Another Pylon operator watches the target namespace: ' + metadata['name'])
 
 
 def check_crd(crd):

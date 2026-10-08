@@ -108,17 +108,23 @@ def prepare_runtime(config, root=ROOT):
 
 def fetch_runtime(config, url, work=pathlib.Path('/work')):
     archive = work / 'runtime.tar.gz'
+    partial = work / 'runtime.tar.gz.partial'
     deadline = time.monotonic() + 10800
     while True:
         try:
             with urllib.request.urlopen(url + '.sha256', timeout=20) as response:
                 checksum = response.read(256).decode().strip()
-            require(re.fullmatch('[a-f0-9]{64}', checksum) is not None, 'Runtime bundle checksum is invalid')
-            with urllib.request.urlopen(url, timeout=120) as response, archive.open('wb') as target:
+            if re.fullmatch('[a-f0-9]{64}', checksum) is None:
+                raise ValueError('Runtime bundle checksum is invalid')
+            with urllib.request.urlopen(url, timeout=120) as response, partial.open('wb') as target:
                 shutil.copyfileobj(response, target)
-            require(digest(archive) == checksum, 'Runtime bundle checksum mismatch')
+            # The producer can replace the bundle between these two requests.
+            if digest(partial) != checksum:
+                raise ValueError('Runtime bundle checksum mismatch')
+            partial.replace(archive)
             break
-        except OSError:
+        except (OSError, ValueError):
+            partial.unlink(missing_ok=True)
             if time.monotonic() >= deadline:
                 raise RuntimeError('Timed out waiting for the prepared runtime bundle') from None
             time.sleep(5)

@@ -223,6 +223,21 @@ class SharedHelmTests(unittest.TestCase):
         keys = next(item for item in result if item['metadata']['name'] == 'llm-gateway-stack-api-keys')
         self.assertEqual(json.loads(decode(keys, 'api-keys.json'))['keys'][0]['sha256'], hashlib.sha256(b'owned-outside-chart').hexdigest())
 
+    def test_external_caller_hash_matches_trimmed_client_key(self):
+        values = copy.deepcopy(self.values)
+        values['callerKey'] = {'existingSecret': 'external-caller'}
+        for token in ('caller-from-file\n', ' \tcaller-from-file\r\n'):
+            with self.subTest(token=repr(token)):
+                secret = {'apiVersion': 'v1', 'kind': 'Secret',
+                          'metadata': {'name': 'external-caller', 'namespace': 'test-models'},
+                          'data': {'api-key': base64.b64encode(token.encode()).decode()}}
+                result = self.render(values, chart=self.lookup_chart([secret]))
+                keys = next(item for item in result if item['metadata']['name'] == 'llm-gateway-stack-api-keys')
+                self.assertEqual(json.loads(decode(keys, 'api-keys.json'))['keys'][0]['sha256'],
+                                 hashlib.sha256(token.strip().encode()).hexdigest())
+                self.assertFalse(any(item['kind'] == 'Secret' and item['metadata']['name'] == 'external-caller'
+                                     for item in result))
+
     def test_watch_scope_must_equal_release_namespace(self):
         for watch in ([], ['other'], ['test-models', 'other']):
             with self.subTest(watch=watch):

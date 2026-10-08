@@ -170,6 +170,12 @@ class CommonCatalogTests(unittest.TestCase):
                 self.assertEqual(chart["publication"], "local")
                 self.assertNotIn("oci", chart)
 
+    def test_source_guides_resolve_relative_to_index(self):
+        for recipe in self.recipes.values():
+            for profile in recipe["profiles"]:
+                guide = profile["deployment"]["guide"].split("#", 1)[0]
+                self.assertTrue((ROOT / guide).is_file(), guide)
+
     def test_automatic_support_tracks_bundled_recipes(self):
         supported = set(catalog.read(ROOT / "charts/sglang/files/profiles.json"))
         for recipe in self.recipes.values():

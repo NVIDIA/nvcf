@@ -268,7 +268,7 @@
             "chart": {
               "name": "pylon-gguf-backend",
               "version": "0.2.0",
-              "localPath": "charts/gguf-backend",
+              "localPath": "pylon-gguf-backend-0.2.0.tgz",
               "archive": "pylon-gguf-backend-0.2.0.tgz",
               "publication": "local"
             },
@@ -283,7 +283,7 @@
               "storageClassName",
               "sharedCAConfigMap"
             ],
-            "guide": "../ADVANCED.md#helm-glm-recipe"
+            "guide": "guides/ADVANCED.md#helm-glm-recipe"
           }
         }
       ]
@@ -440,7 +440,7 @@
             "chart": {
               "name": "pylon-sglang-recipe",
               "version": "0.2.0",
-              "localPath": "charts/sglang",
+              "localPath": "pylon-sglang-recipe-0.2.0.tgz",
               "archive": "pylon-sglang-recipe-0.2.0.tgz",
               "publication": "local"
             },
@@ -455,7 +455,7 @@
               "storageClassName",
               "sharedCAConfigMap"
             ],
-            "guide": "../README.md"
+            "guide": "guides/README.md"
           }
         }
       ]
@@ -568,7 +568,7 @@
             "chart": {
               "name": "pylon-sglang-recipe",
               "version": "0.2.0",
-              "localPath": "charts/sglang",
+              "localPath": "pylon-sglang-recipe-0.2.0.tgz",
               "archive": "pylon-sglang-recipe-0.2.0.tgz",
               "publication": "local"
             },
@@ -583,7 +583,7 @@
               "storageClassName",
               "sharedCAConfigMap"
             ],
-            "guide": "../README.md"
+            "guide": "guides/README.md"
           }
         }
       ]
@@ -688,14 +688,14 @@
             "chart": {
               "name": "pylon-sglang-recipe",
               "version": "0.2.0",
-              "localPath": "charts/sglang",
+              "localPath": "pylon-sglang-recipe-0.2.0.tgz",
               "archive": "pylon-sglang-recipe-0.2.0.tgz",
               "publication": "local"
             },
             "lifecycle": "legacy-phased",
             "values": null,
             "requiredSiteValues": [],
-            "guide": "../ADVANCED.md#qwen-catalog-configuration"
+            "guide": "guides/ADVANCED.md#qwen-catalog-configuration"
           }
         },
         {
@@ -768,14 +768,14 @@
             "chart": {
               "name": "pylon-sglang-recipe",
               "version": "0.2.0",
-              "localPath": "charts/sglang",
+              "localPath": "pylon-sglang-recipe-0.2.0.tgz",
               "archive": "pylon-sglang-recipe-0.2.0.tgz",
               "publication": "local"
             },
             "lifecycle": "legacy-phased",
             "values": null,
             "requiredSiteValues": [],
-            "guide": "../ADVANCED.md#qwen-catalog-configuration"
+            "guide": "guides/ADVANCED.md#qwen-catalog-configuration"
           }
         }
       ]

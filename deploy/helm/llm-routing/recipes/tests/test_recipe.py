@@ -308,6 +308,18 @@ class RecipeTests(unittest.TestCase):
         self.assertEqual(self.recipe.components(), ['gateway', 'router', 'pylon', 'operator'])
         self.assertEqual(self.recipe.state['stack']['apiKeyFile'], str(key_path.resolve()))
 
+    def test_standalone_inventory_still_requires_arm64_control_nodes(self):
+        nodes = [{'metadata': {'name': name, 'uid': name, 'labels': {
+                      'kubernetes.io/arch': 'amd64' if name == self.config['nodes']['control'] else 'arm64'}},
+                  'status': {'conditions': [{'type': 'Ready', 'status': 'True'}],
+                             'allocatable': {'nvidia.com/gpu': '1'}}} for name in tool.all_nodes(self.config)]
+        responses = [json.dumps({'items': items}) for items in (nodes, [], [])]
+        with patch.object(tool, 'output', side_effect=responses), patch.object(tool, 'run') as run, \
+             self.assertRaisesRegex(RuntimeError, 'Selected nodes must be ARM64'):
+            self.recipe.inventory()
+        run.assert_not_called()
+        self.assertNotIn('inventory', self.recipe.state)
+
     def test_inventory_rejects_all_gpu_allocations_on_model_nodes(self):
         nodes = [{'metadata': {'name': name, 'uid': name, 'labels': {'kubernetes.io/arch': 'arm64'}},
                   'status': {'conditions': [{'type': 'Ready', 'status': 'True'}],

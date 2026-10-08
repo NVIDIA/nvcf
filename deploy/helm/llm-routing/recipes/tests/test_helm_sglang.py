@@ -225,7 +225,7 @@ class PlacementTests(unittest.TestCase):
             with self.subTest(case=index), self.assertRaises(RuntimeError):
                 placement.validate_placement(self.config, self.node, claim)
 
-    def test_preflight_reads_only_selected_node_and_cache_with_shared_ca(self):
+    def test_preflight_validates_shared_ca_and_reads_only_selected_node_and_cache(self):
         with patch.dict(os.environ, POD_NODE_NAME='node-one'), patch.object(placement.ssl, 'create_default_context') as tls, \
              patch.object(placement, 'cluster_object', side_effect=[self.node, self.claim]) as read, patch.object(placement, 'log'):
             self.assertEqual(placement.preflight(self.config), 0)

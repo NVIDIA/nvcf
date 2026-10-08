@@ -31,6 +31,8 @@ python3 export_catalog.py
 python3 export_catalog.py --check
 ```
 
+Resolve each deployment's `chart.localPath` and `guide` relative to its containing `index.json`. The source index points to chart directories and repository guides. `package-charts.sh` rewrites these fields to the packaged chart archives and included guide snapshots. `chart.archive` and `licenseNotice` identify files relative to the package directory. Guide snapshots describe the repository workflow, so their commands and links to other source files still require the checkout.
+
 Chart packages include the same pinned metadata. Tests check synchronization. The common index records runtime smoke tests separately from automatic Helm lifecycle validation and points to local archives until publication is configured.
 
 The existing `recipe.py`, `recipes.py` and `sizing.py` workflows remain available for advanced placement planning, combined installations and phased operation. See [Advanced deployment and configuration](../ADVANCED.md).

@@ -63,12 +63,25 @@ import shutil
 import sys
 
 recipes, staging, output = map(Path, sys.argv[1:])
-for recipe in json.loads((staging / 'index.json').read_text())['recipes']:
+index = json.loads((staging / 'index.json').read_text())
+guides = {}
+for recipe in index['recipes']:
     for profile in recipe['profiles']:
-        chart = profile['deployment']['chart']
+        deployment = profile['deployment']
+        chart = deployment['chart']
         archive = chart['archive']
         if archive != f"{chart['name']}-{chart['version']}.tgz" or Path(archive).name != archive or not (staging / archive).is_file():
             raise SystemExit('Recipe index is stale. Run python3 recipes/export_catalog.py before packaging.')
+        chart['localPath'] = archive
+        guide, separator, fragment = deployment['guide'].partition('#')
+        if guide not in ('../README.md', '../ADVANCED.md'):
+            raise SystemExit('Invalid deployment guide path in index.json')
+        source = recipes / guide
+        if not source.is_file():
+            raise SystemExit(f'Missing deployment guide: {guide}')
+        target = Path('guides') / source.name
+        guides[target] = source
+        deployment['guide'] = target.as_posix() + separator + fragment
     name = recipe['id']
     if not re.fullmatch(r'[a-z0-9][a-z0-9.-]*', name):
         raise SystemExit('Invalid recipe id in index.json')
@@ -87,6 +100,11 @@ for recipe in json.loads((staging / 'index.json').read_text())['recipes']:
     target = staging / 'notices' / name / 'NOTICE'
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(notice, target)
+for relative, source in guides.items():
+    target = staging / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, target)
+(staging / 'index.json').write_text(json.dumps(index, indent=2) + '\n')
 files = sorted(path for path in staging.rglob('*') if path.is_file())
 (staging / 'SHA256SUMS').write_text(''.join(
     hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + str(path.relative_to(staging)) + '\n' for path in files))
@@ -106,4 +124,4 @@ for path in files:
     with path.open('rb') as source, target.open('xb') as destination:
         shutil.copyfileobj(source, destination)
 PYTHON
-echo "Chart packages, index.json, model notices and SHA256SUMS are in $OUTPUT"
+echo "Chart packages, index.json, guides, model notices and SHA256SUMS are in $OUTPUT"
