@@ -90,7 +90,9 @@ func TestCRIUGroupCaptureLeader(t *testing.T) {
 	notReady := stsRank("kimi-0", "0", "2", "sts-a", false)
 	restored := stsRank("kimi-0", "0", "2", "sts-a", true)
 	restored.Annotations[webhook.CRIURestoreAnnotation] = "a"
-	for name, p := range map[string]corev1.Pod{"rank 1": r1, "not ready": notReady, "restored": restored} {
+	bare := stsRank("src", "0", "1", "", true)
+	bare.OwnerReferences = nil
+	for name, p := range map[string]corev1.Pod{"rank 1": r1, "not ready": notReady, "restored": restored, "a bare pod": bare} {
 		if _, _, ok := criuGroupCaptureLeader(&p); ok {
 			t.Errorf("%s drives a capture", name)
 		}

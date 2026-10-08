@@ -88,6 +88,12 @@ func (a *Agent) lookupCRIUGroup(ctx context.Context, key string) (webhook.CRIUGr
 	return parseCRIUGroup(key, cm.Data)
 }
 
+// hasInstance reports whether the pod belongs to a workload instance: a
+// LeaderWorkerSet group or a controller. A bare pod is no instance.
+func hasInstance(pod *corev1.Pod) bool {
+	return pod.Labels[lwsGroupKeyLabel] != "" || metav1.GetControllerOf(pod) != nil
+}
+
 // sameInstance reports whether p belongs to leader's instance: the same
 // LeaderWorkerSet group, else the same controller.
 func sameInstance(leader, p *corev1.Pod) bool {
@@ -150,7 +156,7 @@ func criuGroupCaptureLeader(pod *corev1.Pod) (key string, size int, ok bool) {
 		return "", 0, false
 	}
 	o, s, ok := podRank(pod, modelvolume.CacheOrdinalAnnotation, modelvolume.CacheGroupSizeAnnotation)
-	if !ok || o != 0 || !rootfsonly.IsPodReady(pod) || gpuContainer(pod) == "" {
+	if !ok || o != 0 || !rootfsonly.IsPodReady(pod) || gpuContainer(pod) == "" || !hasInstance(pod) {
 		return "", 0, false
 	}
 	return webhook.CRIUGroupKey(uri), s, true
@@ -288,7 +294,7 @@ func criuGroupRestoreLeader(pod *corev1.Pod) (key string, size int, ok bool) {
 		return "", 0, false
 	}
 	o, s, ok := podRank(pod, webhook.CRIUGroupOrdinalAnnotation, webhook.CRIUGroupSizeAnnotation)
-	if !ok || o != 0 || s < 2 {
+	if !ok || o != 0 || s < 2 || !hasInstance(pod) {
 		return "", 0, false
 	}
 	if _, _, running := criuRestoreTarget(pod); !running {
