@@ -36,6 +36,9 @@ import (
 	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 )
 
+// doStorageRequests creates the StorageRequests for the instance and reports
+// whether all are ready. A failed shared-storage request returns a terminal
+// error that includes the recorded cause.
 func (r *Reconciler) doStorageRequests(ctx context.Context,
 	ms *v1alpha1.MiniService,
 	icmsReq *nvcav2beta1.ICMSRequest,
@@ -87,7 +90,7 @@ func (r *Reconciler) doStorageRequests(ctx context.Context,
 		}
 		switch st.Status.Phase {
 		case nvcav2beta1.StorageFailed, nvcav2beta1.StorageRuntimeError:
-			lerr := fmt.Errorf("storage request %s has failed", st.Spec.Type)
+			lerr := fmt.Errorf("storage request %s has failed: %s", st.Spec.Type, nvcastorage.GetStorageRequestErrorLog(&st))
 			switch st.Spec.Type {
 			case nvcav2beta1.ModelCacheRequest:
 				durable, err := persistedDurableHelmCacheSelection(icmsReq)
