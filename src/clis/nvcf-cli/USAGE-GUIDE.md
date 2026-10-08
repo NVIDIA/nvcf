@@ -867,9 +867,10 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
 }
 ```
 
-For LLM models, `llmConfig.routingMethod` accepts the API/auth spellings
-`round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`. The
-CLI validates these values before sending the create request.
+For LLM models, `llmConfig.routingMethod` is a routing algorithm name,
+optionally followed by `;name=value` tuning parameters, such as
+`pulsar;seed=stable-a`. The CLI sends the value unchanged; the API checks it
+and the CLI prints the API error.
 Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings`,
 and native Anthropic `/v1/messages`. Messages requires a compatible gateway,
 Stargate, and Pylon build and a backend that serves that protocol. Published

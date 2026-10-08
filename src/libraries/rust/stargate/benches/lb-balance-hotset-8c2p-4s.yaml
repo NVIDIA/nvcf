@@ -42,8 +42,6 @@ backends:
       decode_jitter_ms: 3
       prefill_tokens_per_s: 8200
       decode_tokens_per_s: 190
-    registration:
-      last_mean_input_tps: 185
   profiles:
     - count: 4
       profile:
@@ -57,8 +55,6 @@ backends:
           decode_jitter_ms: 2
           prefill_tokens_per_s: 14000
           decode_tokens_per_s: 285
-        registration:
-          last_mean_input_tps: 310
     - count: 8
       profile:
         name: balanced-cluster
@@ -71,8 +67,6 @@ backends:
           decode_jitter_ms: 3
           prefill_tokens_per_s: 8200
           decode_tokens_per_s: 190
-        registration:
-          last_mean_input_tps: 185
     - count: 4
       profile:
         name: constrained-cluster
@@ -85,8 +79,6 @@ backends:
           decode_jitter_ms: 6
           prefill_tokens_per_s: 4000
           decode_tokens_per_s: 100
-        registration:
-          last_mean_input_tps: 90
 
 traffic_pattern:
   kind: zipf_hotset

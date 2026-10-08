@@ -42,8 +42,6 @@ backends:
       decode_jitter_ms: 2
       prefill_tokens_per_s: 32768
       decode_tokens_per_s: 220
-    registration:
-      last_mean_input_tps: 32768
   profiles:
     - count: 2
       profile:
@@ -57,8 +55,6 @@ backends:
           decode_jitter_ms: 1
           prefill_tokens_per_s: 65536
           decode_tokens_per_s: 320
-        registration:
-          last_mean_input_tps: 65536
     - count: 4
       profile:
         name: balanced-prefix-cluster
@@ -71,8 +67,6 @@ backends:
           decode_jitter_ms: 2
           prefill_tokens_per_s: 32768
           decode_tokens_per_s: 220
-        registration:
-          last_mean_input_tps: 32768
     - count: 2
       profile:
         name: constrained-prefix-cluster
@@ -85,8 +79,6 @@ backends:
           decode_jitter_ms: 4
           prefill_tokens_per_s: 16384
           decode_tokens_per_s: 120
-        registration:
-          last_mean_input_tps: 16384
 
 traffic_pattern:
   kind: prefix_reuse

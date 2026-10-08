@@ -95,6 +95,7 @@ type OpenAIError struct {
 }
 
 type FunctionInfo struct {
+	publicModelName        string
 	functionId             string
 	functionVersionId      string
 	pathOverride           *string
@@ -251,7 +252,12 @@ func buildModelMapping(
 			pathOverride = &entry.OutgoingPathOverride
 		}
 		initializeShadowDropMetrics(shadowModelNames(entry.Shadows))
+		publicModelName := ""
+		if !privateModelMatcher.MatchString(modelName) {
+			publicModelName = modelName
+		}
 		modelNameToNVCFUrl[modelName] = FunctionInfo{
+			publicModelName:        publicModelName,
 			functionId:             entry.FunctionId,
 			functionVersionId:      entry.FunctionVersionId,
 			pathOverride:           pathOverride,
@@ -567,6 +573,7 @@ func (d *ModelDirector) GetModel(writer http.ResponseWriter, request *http.Reque
 	} else if model != "" {
 		modelName = model
 	} else {
+		markGatewayRejected(writer, request)
 		http.Error(writer, "model name was undefined", http.StatusInternalServerError)
 		return
 	}
@@ -583,6 +590,7 @@ func (d *ModelDirector) GetModel(writer http.ResponseWriter, request *http.Reque
 	)
 	if !ok {
 		modelMissingError := "Model does not exist by the name of " + modelName
+		markGatewayRejected(writer, request)
 		http.Error(writer, modelMissingError, http.StatusNotFound)
 		return
 	}
@@ -601,7 +609,7 @@ func (d *ModelDirector) GetModel(writer http.ResponseWriter, request *http.Reque
 	if ok {
 		middleware.AddOpenAIRequestMetricAttributes(request.Context(), modelName, funcInfo.functionId)
 	}
-	if ok && writeFunctionStatusError(writer, funcInfo.offlineMessage, funcInfo.eol, modelName) {
+	if ok && writeFunctionStatusError(writer, request, funcInfo.offlineMessage, funcInfo.eol, modelName) {
 		return
 	}
 
@@ -657,6 +665,7 @@ func (d *ModelDirector) proxyModelMappedRequest(writer http.ResponseWriter, requ
 func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, request *http.Request, modelToNVCFUrl map[string]FunctionInfo) (resolvedOpenAIRequest, bool) {
 	body, err := extractOpenAIRequestBody(request)
 	if err != nil {
+		markGatewayRejected(writer, request)
 		if request.URL.Path == "/v1/messages" {
 			status, message := http.StatusInternalServerError, "failed to read Messages request"
 			var syntaxErr *json.SyntaxError
@@ -717,6 +726,7 @@ func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, re
 	nvcfUrl, ok := modelToNVCFUrl[body.Model]
 	if !ok {
 		_ = request.Body.Close()
+		markGatewayRejected(writer, request)
 		if request.URL.Path == "/v1/messages" {
 			writeAnthropicError(writer, http.StatusNotFound, "model not found")
 		} else {
@@ -724,20 +734,23 @@ func (d *ModelDirector) resolveModelMappedRequest(writer http.ResponseWriter, re
 		}
 		return resolvedOpenAIRequest{}, true
 	}
+	middleware.SetPreUpstreamModel(request.Context(), nvcfUrl.publicModelName)
 	middleware.AddOpenAIRequestMetricAttributes(request.Context(), body.Model, nvcfUrl.functionId)
 
 	statusHandled := false
 	if request.URL.Path == "/v1/messages" {
 		if nvcfUrl.offlineMessage != "" {
+			markGatewayRejected(writer, request)
 			writer.Header().Set("Retry-After", "10800")
 			writeAnthropicError(writer, http.StatusServiceUnavailable, nvcfUrl.offlineMessage)
 			statusHandled = true
 		} else if isModelExpired(nvcfUrl.eol) {
+			markGatewayRejected(writer, request)
 			writeAnthropicError(writer, http.StatusGone, "model has reached end of life")
 			statusHandled = true
 		}
 	} else {
-		statusHandled = writeFunctionStatusError(writer, nvcfUrl.offlineMessage, nvcfUrl.eol, body.Model)
+		statusHandled = writeFunctionStatusError(writer, request, nvcfUrl.offlineMessage, nvcfUrl.eol, body.Model)
 	}
 	if statusHandled {
 		_ = request.Body.Close()

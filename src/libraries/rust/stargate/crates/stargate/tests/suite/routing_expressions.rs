@@ -61,6 +61,7 @@ async fn routing_expressions_proxy_valid_values_and_reject_before_selection() {
         model,
         CurrentModelStats {
             last_mean_input_tps: 1000.0,
+            max_input_tps: Some(1000.0),
             ..CurrentModelStats::default()
         },
     );
@@ -123,6 +124,15 @@ async fn routing_expressions_proxy_valid_values_and_reject_before_selection() {
             "{header}"
         );
     }
+
+    // The runtime exports the entry gauge; it refreshes on the cache maintenance interval.
+    assert!(
+        metrics
+            .registry()
+            .gather()
+            .iter()
+            .any(|family| family.name() == "stargate_routing_expression_cache_entries")
+    );
 
     let before = selections(&metrics, None);
     for (header, class) in [

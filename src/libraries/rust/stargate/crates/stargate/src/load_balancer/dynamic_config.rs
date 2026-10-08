@@ -1,13 +1,19 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use moka::notification::RemovalCause;
 use moka::ops::compute::{CompResult, Op};
 use moka::sync::Cache;
+use prometheus::IntGauge;
+use prometheus::core::{Collector, Desc};
+use prometheus::proto::MetricFamily;
+use tokio::time::MissedTickBehavior;
+use tokio_util::sync::CancellationToken;
 
+use crate::metrics::StargateMetrics;
 use crate::routing_state::{RoutingTargetKey, StargateState};
 
 use super::expression::RejectionError;
@@ -50,6 +56,8 @@ pub(crate) enum Outcome {
 }
 
 impl Outcome {
+    pub(crate) const ALL: [Self; 3] = [Self::Hit, Self::Build, Self::Rebuild];
+
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Hit => "hit",
@@ -60,6 +68,8 @@ impl Outcome {
 }
 
 pub(crate) const DYNAMIC_CONFIG_IDLE_EXPIRY: Duration = Duration::from_secs(15 * 60);
+// An idle entry is removed at most this long after its idle expiry.
+pub(crate) const DYNAMIC_CONFIG_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60);
 // A memory backstop well above the deployed (function, model) pairs one router serves.
 pub(crate) const DYNAMIC_CONFIG_MAX_ENTRIES: u64 = 16_384;
 
@@ -130,9 +140,63 @@ impl DynamicConfigCache {
         Ok((definition, outcome))
     }
 
+    /// Runs the cache's pending tasks every `interval` until `shutdown`. The sync cache has no
+    /// background housekeeper, so without this, idle entries and their load-balancer instances
+    /// stay until the next routing expression request.
+    pub(crate) async fn run_maintenance(
+        self: Arc<Self>,
+        interval: Duration,
+        shutdown: CancellationToken,
+    ) {
+        let mut ticks = tokio::time::interval(interval);
+        ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => return,
+                _ = ticks.tick() => self.entries.run_pending_tasks(),
+            }
+        }
+    }
+
+    /// Exports the entry count as of the last cache maintenance.
+    pub(crate) fn register_entry_gauge(
+        self: &Arc<Self>,
+        metrics: &StargateMetrics,
+    ) -> anyhow::Result<()> {
+        let gauge = IntGauge::new(
+            format!("{}routing_expression_cache_entries", metrics.prefix()),
+            "Routing targets that hold a routing expression configuration",
+        )?;
+        metrics.registry().register(Box::new(EntryGauge {
+            // The cache owns routing state, which owns the metrics; a strong reference would cycle.
+            cache: Arc::downgrade(self),
+            gauge,
+        }))?;
+        Ok(())
+    }
+
     #[cfg(test)]
     fn run_pending_tasks(&self) {
         self.entries.run_pending_tasks();
+    }
+}
+
+struct EntryGauge {
+    cache: Weak<DynamicConfigCache>,
+    gauge: IntGauge,
+}
+
+impl Collector for EntryGauge {
+    fn desc(&self) -> Vec<&Desc> {
+        self.gauge.desc()
+    }
+
+    fn collect(&self) -> Vec<MetricFamily> {
+        if let Some(cache) = self.cache.upgrade() {
+            self.gauge
+                .set(i64::try_from(cache.entries.entry_count()).unwrap_or(i64::MAX));
+        }
+        self.gauge.collect()
     }
 }
 
@@ -450,6 +514,52 @@ mod tests {
         assert_ne!(first, second);
         let _in_flight = snapshot.load_balancers().load_balancer(&first);
         assert_eq!(snapshot.load_balancers().instance_count(), 0);
+    }
+
+    fn scraped_entry_gauge(metrics: &StargateMetrics) -> f64 {
+        metrics
+            .registry()
+            .gather()
+            .iter()
+            .find(|family| family.name() == "stargate_routing_expression_cache_entries")
+            .expect("entry gauge should be registered")
+            .get_metric()[0]
+            .get_gauge()
+            .value()
+    }
+
+    #[tokio::test]
+    async fn test_maintenance_expires_idle_entries_and_updates_entry_gauge() {
+        let state = Arc::new(StargateState::new());
+        let target = RoutingTargetKey::new(None, "model");
+        let snapshot = register_target(&state, &target).await;
+        let cache = Arc::new(DynamicConfigCache::new(
+            state,
+            Duration::from_millis(500),
+            DYNAMIC_CONFIG_MAX_ENTRIES,
+        ));
+        let metrics = StargateMetrics::new().unwrap();
+        cache.register_entry_gauge(&metrics).unwrap();
+        assert_eq!(scraped_entry_gauge(&metrics), 0.0);
+
+        let (definition, _) = cache
+            .resolve(&target, EXPRESSION, || compile(EXPRESSION))
+            .unwrap();
+        let _instance = snapshot.load_balancers().load_balancer(&definition);
+        let shutdown = CancellationToken::new();
+        let maintenance = tokio::spawn(
+            Arc::clone(&cache).run_maintenance(Duration::from_millis(50), shutdown.clone()),
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(scraped_entry_gauge(&metrics), 1.0);
+
+        // After the idle window only the maintenance task touches the cache.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(scraped_entry_gauge(&metrics), 0.0);
+        assert_eq!(snapshot.load_balancers().instance_count(), 0);
+
+        shutdown.cancel();
+        maintenance.await.unwrap();
     }
 
     #[test]

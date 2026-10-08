@@ -524,11 +524,85 @@ dropped before replay. The `openai_model_name` label identifies the shadow
 target. The `reason` label is one of `body_read_error`, `body_rewrite_error`,
 or `concurrency_limit`.
 
-`gateway_proxy_outcome` is present only on Gateway server metrics emitted when
-the ReverseProxy ErrorHandler writes an error response. Its value is
-`client_canceled` when the inbound request is canceled before upstream response
-headers are written, or `gateway_proxy_error` for another ErrorHandler failure.
-Successful requests and upstream HTTP responses omit this label.
+`gateway_proxy_outcome` labels the origin of covered non-2xx responses on the
+Gateway server metric (`http_server_request_duration_seconds`) and as the
+`gateway.proxy.outcome` span attribute. Successful requests omit it. Values:
+
+- `gateway_rejected`: the gateway answered itself with no dependency involved
+  (offline `503`, end-of-life `410`, reserved-header `400`, request validation
+  `400`/`404`/`500`).
+- `client_canceled`: the inbound request was canceled before upstream response
+  headers were written (`499`).
+- `gateway_proxy_error`: another ReverseProxy ErrorHandler failure (`502`).
+- `upstream_status`: a non-2xx status passed through from the upstream,
+  including `429` responses whose body the gateway rewrites.
+
+Responses with a labeled outcome also carry an `NVCF-Error-Source` header with
+the same value. Some non-2xx responses are not labeled and have no header (router
+404/405, panic recovery, request timeout), so a missing label or header does not
+mean the response was successful or came from the upstream. Any
+`NVCF-Error-Source` header sent by the upstream is removed first. Shadow replays
+never set this error-origin label. Their telemetry context and metric labeler
+are isolated from the primary request. Status codes and bodies are unchanged.
+Because the metric label set depends on the response status, the label values
+cannot be pre-initialized on the first scrape.
+
+### Request duration boundaries
+
+`http_server_request_duration_seconds` measures the full handler lifetime,
+including upstream waits and response-body forwarding. Existing route, model,
+function, status, and error-origin attributes retain their meaning.
+
+`nvcf_vanity_gateway_pre_upstream_processing_seconds` measures each primary
+request from server telemetry entry to entry into the outbound transport,
+before client instrumentation, connection setup, upstream headers, or body
+streaming. It covers routing, validation, request-body parsing and rewriting,
+and shadow scheduling before primary dispatch. It is elapsed pre-upstream
+processing time, including scheduling and request-body reads, not gateway CPU
+time or total gateway work. Post-dispatch processing is excluded.
+
+The histogram uses buckets from 1 ms through 60 seconds. Labels:
+
+- `http_route`: the registered route pattern, or `unknown` before routing.
+- `openai_model_name`: the configured public model name when resolved. Unknown
+  user-supplied names, private models, and path-only routes omit this label.
+- `outcome`: `dispatched` at primary transport entry, or `client_canceled` if
+  its context is already canceled. A later proxy error, upstream error status,
+  cancellation, or streaming failure does not change that observation.
+  Requests that finish locally record at handler exit with `gateway_rejected`,
+  `gateway_proxy_error`, or `client_canceled` when known. Other local responses,
+  including model listings, health checks, and unmatched routes, use `local`.
+  Cancellation or deadline expiry before dispatch takes precedence over other
+  local outcomes. Each request observed by server telemetry records once.
+
+Primary pre-upstream p99 in seconds, grouped by route and public model:
+
+```promql
+histogram_quantile(
+  0.99,
+  sum by (le, http_route, openai_model_name) (
+    rate(nvcf_vanity_gateway_pre_upstream_processing_seconds_bucket{outcome="dispatched"}[5m])
+  )
+)
+```
+
+Remove the outcome filter to include local failures and pre-dispatch
+cancellation. Multiply by 1000 to display milliseconds. Histograms create
+series on the first observation; this adds no counters requiring zero samples.
+
+Outbound HTTP metrics add `nvcf_shadow="false"` for primary and other non-shadow
+calls, including health probes, and `nvcf_shadow="true"` for shadow replays.
+Filter client metrics by this label when comparing populations. Shadow replay
+server metrics also carry `nvcf_shadow="true"`; primary server series keep
+existing labels. Shadows never record the pre-upstream histogram or mutate
+primary timing, model, or error-origin labels. Select server series with
+`nvcf_shadow!="true"` to exclude replay handlers.
+
+With the pinned HTTP instrumentation, client duration ends at response headers,
+while its trace span continues until body EOF or Close. Server duration minus
+client duration therefore includes streaming time. Neither aggregate duration
+nor histogram quantiles can be subtracted to recover gateway processing time.
+`model.stream` remains a trace-only attribute; no stream metric label is added.
 
 ## Running a Local OpenAI-compatible Model
 
