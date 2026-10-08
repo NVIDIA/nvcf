@@ -39,6 +39,10 @@ spec:
         app.kubernetes.io/component: account-bootstrap
     spec:
       restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
       serviceAccountName: nvcf-api-account-bootstrap
       {{- with .Values.api.accountBootstrap.schedulingGates }}
       schedulingGates:
@@ -64,6 +68,13 @@ spec:
       - name: account-bootstrap-creator
         image: "{{ include "nvcf-api.accountBootstrapImage" . }}"
         imagePullPolicy: {{ .Values.api.accountBootstrap.image.pullPolicy }}
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [ALL]
         command: ["/bin/bash"]
         args: ["/scripts/account-bootstrap.sh"]
         volumeMounts:
