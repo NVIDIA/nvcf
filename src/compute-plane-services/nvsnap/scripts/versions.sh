@@ -42,7 +42,7 @@ NVSNAP_CRIU_SRC="${NVSNAP_CRIU_SRC:-}"
 
 # Core images — reset to a v0.0.1 baseline on 2026-05-21 and bumped from
 # there per CLAUDE.md rule 19 (never reuse a tag on rebuild).
-NVSNAP_BASE_VERSION="${NVSNAP_BASE_VERSION:-v0.0.25}"
+NVSNAP_BASE_VERSION="${NVSNAP_BASE_VERSION:-v0.0.26}"
 NVSNAP_APP_VERSION="${NVSNAP_APP_VERSION:-v0.2.43}"
 NVSNAP_SERVER_VERSION="${NVSNAP_SERVER_VERSION:-v0.0.31}"
 NVSNAP_BLOBSTORE_VERSION="${NVSNAP_BLOBSTORE_VERSION:-v0.0.1}"
@@ -67,7 +67,7 @@ NVSNAP_CRIU_REPO="${NVSNAP_CRIU_REPO:-https://github.com/balajinvda/criu.git}"
 #   fatal: couldn't find remote ref 169595fd8
 # Only the clean-checkout path fetches, so a developer with a local ../criu
 # checkout never sees this; it breaks OSS clone-and-build only.
-NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-fe550a78725f4ee1043af61c85f5e22d737b5799}"
+NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-52877d285276feb372fc3fb68db51d6a26553d3f}"
 
 
 # vLLM base image
