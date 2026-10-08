@@ -493,7 +493,7 @@ networkPolicy:
     extraEgress: []
 ## @section Cluster Validator Configuration
 
-## @param clusterValidator.enabled Enable the cluster-validator: the operator's init container, the CronJob and, under role control-plane, the runs the operator starts when the validator spec changes
+## @param clusterValidator.enabled Enable the cluster-validator: the operator's init container, the CronJob and, under role control-plane, the validator Jobs the operator starts when the validator spec changes
 ## @param clusterValidator.image.repository Cluster Validator container registry path, without tag
 ## @param clusterValidator.image.tag Cluster Validator container image tag
 ## @param clusterValidator.image.pullPolicy K8s ImagePullPolicy for cluster-validator
@@ -503,7 +503,7 @@ networkPolicy:
 ## @param clusterValidator.gatewayNames Every NVCF Gateway as "namespace/name" (the stack's ingress.gatewayApi.gateways); replaces discovery from the NVCF routes for the Envoy, LoadBalancer and Tier-1 checks. Only named Gateways can fail Tier-1, and a Gateway left out is not assessed
 ## @param clusterValidator.externalComponents Stack quorum components (nats, openbao, cassandra) that run outside this cluster, so Tier-2 does not report them missing after install
 ## @param clusterValidator.storageClass StorageClass the stack binds its PVCs to (global.storageClass); when set, it must exist and no default StorageClass is required
-## @param clusterValidator.nodeToNodeProbeImage Image for the node-to-node overlay probe; must provide sh and busybox-style nc and be pullable without imagePullSecrets. When empty, networkChecks.enforcement.testImage if set, else busybox:1.36 from Docker Hub
+## @param clusterValidator.nodeToNodeProbeImage Image for the node-to-node overlay probe; must provide sh and busybox-style nc and be pullable without imagePullSecrets. When empty, networkChecks.enforcement.testImage if set, else busybox:1.36 from Docker Hub. make render-values-from-stack sets it to busybox:1.36 under the stack's repository on a registry other than NGC (nvcr.io or a subdomain), and leaves it empty on NGC, which has no busybox
 ## @param clusterValidator.tolerations Extra tolerations for the validator Job pods. The pods also carry the control-plane tolerations and the operator's tolerations and nodeSelector
 ## @param clusterValidator.schedule CronJob schedule (cron expression)
 ## @param clusterValidator.configMapName ConfigMap name for user-defined network checks (reachability + network policy validation)

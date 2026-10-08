@@ -1293,7 +1293,7 @@
                 },
                 "nodeToNodeProbeImage": {
                     "type": "string",
-                    "description": "Image for the node-to-node overlay probe; needs sh and busybox-style nc and must be pullable without imagePullSecrets. When empty, networkChecks.enforcement.testImage if set, else busybox:1.36",
+                    "description": "Image for the node-to-node overlay probe; needs sh and busybox-style nc and must be pullable without imagePullSecrets. When empty, networkChecks.enforcement.testImage if set, else busybox:1.36 from Docker Hub. make render-values-from-stack sets it to busybox:1.36 under the stack's repository on a registry other than NGC (nvcr.io or a subdomain), and leaves it empty on NGC, which has no busybox",
                     "default": ""
                 },
                 "tolerations": {
