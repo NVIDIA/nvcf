@@ -9,7 +9,7 @@ The canonical multi-cluster topology. Each compute plane is registered separatel
 ```sh
 # 1. Bring up the control plane (one-time, on the control-plane cluster):
 KUBECONFIG=cp.yaml nvcf-cli self-hosted install --control-plane | kubectl apply -f -
-nvcf-cli self-hosted check --control-plane --wait 5m
+KUBECONFIG=cp.yaml nvcf-cli self-hosted status
 
 # 2. Register + install each compute plane:
 for CTX in admin@gpu-east-1 admin@gpu-west-1 admin@gpu-eu-1; do
