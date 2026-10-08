@@ -60,6 +60,7 @@ nvcf_java_test(
         "//src/control-plane-services/cloud-tasks/nvct-core:nvct_core",
         "//src/control-plane-services/cloud-tasks/nvct-core:nvct_core_test_fixtures",
         "//src/libraries/java/nv-boot-parent/nv-boot-mock-servers-test:nv_boot_mock_servers_test",
+        "//src/libraries/java/nv-boot-parent/nv-boot-starter-exceptions:nv_boot_starter_exceptions",
         "@nv_third_party_deps//:io_grpc_grpc_api",
         "@nv_third_party_deps//:io_grpc_grpc_protobuf",
         "@nv_third_party_deps//:io_grpc_grpc_services",

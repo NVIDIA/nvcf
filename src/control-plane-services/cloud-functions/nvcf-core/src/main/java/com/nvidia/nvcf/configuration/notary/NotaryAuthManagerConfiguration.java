@@ -57,9 +57,6 @@ public class NotaryAuthManagerConfiguration {
 
     private final NotaryConfigurationProperties notaryConfiguration;
 
-    @Value("${nvcf.notary.base-url}")
-    private String notaryBaseUrl;
-
     @Value("${nvcf.notary.audiences.nvcf}")
     private String nvcfAudience;
 
@@ -98,7 +95,7 @@ public class NotaryAuthManagerConfiguration {
         @Override
         public OAuth2TokenValidatorResult validate(Jwt token) {
             var issuer = token.getIssuer();
-            if (issuer == null || !issuer.toString().equals(notaryBaseUrl)) {
+            if (issuer == null || !issuer.toString().equals(notaryConfiguration.getIssuerUri())) {
                 log.debug("Invalid iss found in the token '{}'", token);
                 return OAuth2TokenValidatorResult.failure(new OAuth2Error(INVALID_TOKEN));
             }
