@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -107,7 +108,9 @@ var allowedNetPolProtocols = map[string]bool{
 // It returns (nil, nil) when the ConfigMap does not exist, allowing callers
 // to silently skip configurable checks.
 func LoadNetworkCheckConfig(ctx context.Context, client kubernetes.Interface, namespace, name string) (*NetworkCheckConfig, error) {
-	cm, err := client.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
+	cm, err := observe(ctx, func(c context.Context) (*corev1.ConfigMap, error) {
+		return client.CoreV1().ConfigMaps(namespace).Get(c, name, metav1.GetOptions{})
+	})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil

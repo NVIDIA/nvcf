@@ -269,6 +269,11 @@ type Agent struct {
 	// → CRIU dumps stay on L1 hostpath + L4 blobstore; multi-node
 	// restore falls back to L3 peer cascade.
 	l2Backend checkpointstore.Backend
+	// l2Profile is the StorageProfile resolved for the L2 StorageClass at
+	// startup (nil when L2 is off or nothing matched). The webhook reads
+	// its prewarm policy; the promoter strategy is already baked into
+	// l2Backend.
+	l2Profile *checkpointstore.StorageProfile
 
 	// kubeClient is the shared K8s API client used by the rootfs-only
 	// capture watcher AND the admission-webhook cascade-fetch path

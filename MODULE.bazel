@@ -459,7 +459,7 @@ oci.pull(
 # rather than an internal-only path.
 oci.pull(
     name = "distroless_go",
-    digest = "sha256:731531712c92ee24001a4a6e0a0897c4fa542432d7186c5d73b0110ba6d0da16",
+    digest = "sha256:965c2a14a594d7d467bbe9a6517d958cee22ed035333097bdc216da68fd55ba5",
     image = "nvcr.io/nvidia/distroless/go",
     platforms = [
         "linux/amd64",

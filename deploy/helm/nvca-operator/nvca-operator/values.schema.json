@@ -521,6 +521,38 @@
                             "default": ""
                         }
                     }
+                },
+                "download": {
+                    "type": "object",
+                    "description": "Worker-init artifact downloader tuning. Defaults equal worker-init's built-in values; 0 omits a variable and defers to the image.",
+                    "properties": {
+                        "concurrentDownloads": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 256,
+                            "default": 5
+                        },
+                        "concurrentChunks": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 256,
+                            "default": 4
+                        },
+                        "chunkSizeBytes": {
+                            "type": "integer",
+                            "default": 16777216,
+                            "description": "worker-init's built-in 16 MiB by default; 0 defers to the image; otherwise 1 MiB to 4 GiB inclusive, matching NVCA's validation.",
+                            "anyOf": [
+                                {
+                                    "const": 0
+                                },
+                                {
+                                    "minimum": 1048576,
+                                    "maximum": 4294967296
+                                }
+                            ]
+                        }
+                    }
                 }
             }
         },
@@ -1214,7 +1246,7 @@
             "properties": {
                 "enabled": {
                     "type": "boolean",
-                    "description": "Enable the cluster-validator CronJob and init container",
+                    "description": "Enable the cluster-validator: the operator's init container, the CronJob and, under role control-plane, the runs the operator starts when the validator spec changes",
                     "default": false
                 },
                 "image": {
@@ -1246,6 +1278,63 @@
                     "type": "string",
                     "description": "ConfigMap name for user-defined network checks (reachability + network policy validation)",
                     "default": "cluster-validator-network-checks"
+                },
+                "role": {
+                    "type": "string",
+                    "description": "Check set the CronJob runs: control-plane runs the gateway, storage, overlay and HA checks; compute-plane or empty runs the compute-plane checks. Use control-plane only in a single-cluster topology, where the NVCF control plane runs in this cluster; on a compute-only cluster every run is Not-Ready. Matched case-insensitively; other values are rejected.",
+                    "pattern": "^\\s*([Cc][Oo][Nn][Tt][Rr][Oo][Ll]-[Pp][Ll][Aa][Nn][Ee]|[Cc][Oo][Mm][Pp][Uu][Tt][Ee]-[Pp][Ll][Aa][Nn][Ee])?\\s*$",
+                    "default": ""
+                },
+                "openBaoNamespace": {
+                    "type": "string",
+                    "description": "Namespace holding OpenBao when it is not vault-system",
+                    "default": ""
+                },
+                "envoyGatewayNamespace": {
+                    "type": "string",
+                    "description": "Namespace holding Envoy Gateway when it is not envoy-gateway-system",
+                    "default": ""
+                },
+                "gatewayNames": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "pattern": "^[^/\\s]+/[^/\\s]+$"
+                    },
+                    "description": "Every NVCF Gateway as namespace/name (the stack's ingress.gatewayApi.gateways); replaces discovery from the NVCF routes for the Envoy, LoadBalancer and Tier-1 checks. Only named Gateways can fail Tier-1, and a Gateway left out is not assessed",
+                    "default": []
+                },
+                "externalComponents": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "nats",
+                            "openbao",
+                            "cassandra"
+                        ]
+                    },
+                    "uniqueItems": true,
+                    "description": "Stack quorum components (nats, openbao, cassandra) that run outside this cluster, so the Tier-2 check does not report them missing after install",
+                    "default": []
+                },
+                "storageClass": {
+                    "type": "string",
+                    "description": "StorageClass the stack binds its PVCs to (global.storageClass); when set, it must exist and no default StorageClass is required",
+                    "default": ""
+                },
+                "nodeToNodeProbeImage": {
+                    "type": "string",
+                    "description": "Image for the node-to-node overlay probe; needs sh and busybox-style nc and must be pullable without imagePullSecrets. When empty, networkChecks.enforcement.testImage if set, else busybox:1.36 from Docker Hub. make render-values-from-stack sets it to busybox:1.36 under the stack's repository on a registry other than NGC (nvcr.io or a subdomain), and leaves it empty on NGC, which has no busybox",
+                    "default": ""
+                },
+                "tolerations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    },
+                    "description": "Extra tolerations for the validator Job pods. The pods also carry the control-plane tolerations and the operator's tolerations and nodeSelector",
+                    "default": []
                 },
                 "networkChecks": {
                     "type": [

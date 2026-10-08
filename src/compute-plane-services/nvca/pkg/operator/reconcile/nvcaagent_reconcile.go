@@ -102,6 +102,8 @@ const (
 	nvcfBackendSelfManagedConfigMapName    = "nvcfbackend-self-managed"
 	nvcfBackendChartDefaultsConfigMapName  = "nvcfbackend-chart-defaults"
 
+	agentContainerName = "agent"
+
 	//nolint:gosec // G101: This is a ConfigMap name, not a credential
 	nvcfCustomAnnotationsConfigMapName = "nvca-namespace-pod-annotations"
 
@@ -2112,7 +2114,7 @@ func (bc *BackendK8sCache) setupNVCADeployment(
 	}
 
 	nvcaContainer := corev1.Container{
-		Name:            "agent",
+		Name:            agentContainerName,
 		Image:           bc.getNVCAImagePathFromConfig(nb),
 		ImagePullPolicy: getImagePullPolicyFromConfig(nb.Spec.NVCAImageConfig),
 		Args:            []string{"/usr/bin/nvca", "--config", agentConfigFilePath},
@@ -2187,6 +2189,14 @@ func (bc *BackendK8sCache) setupNVCADeployment(
 	nvcaContainer.Env = append(nvcaContainer.Env, corev1.EnvVar{
 		Name:  clustervalidator.SummaryConfigMapNamespaceEnv,
 		Value: bc.operatorNamespace,
+	})
+	// Only where the validator runs does the agent publish its metrics
+	// baseline; elsewhere a last_run of 0 would read as a validator that
+	// never ran, forever. Always set, so the agent can tell a disabled
+	// validator from an operator that predates the setting.
+	nvcaContainer.Env = append(nvcaContainer.Env, corev1.EnvVar{
+		Name:  clustervalidator.EnabledEnv,
+		Value: strconv.FormatBool(bc.clusterValidatorEnabled),
 	})
 
 	// Add OAuth authentication environment variables.

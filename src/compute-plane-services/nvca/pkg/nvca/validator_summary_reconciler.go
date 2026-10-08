@@ -67,6 +67,29 @@ func resolveValidatorSummaryNamespace() string {
 	return defaultValidatorSummaryNamespace
 }
 
+// startValidatorSummaryReconciler republishes the cluster-validator summary
+// ConfigMap in the operator/validator namespace as metrics on the agent's
+// /metrics endpoint. It reads nothing where the operator says the validator is
+// disabled: a summary left from an enabled period would otherwise come back
+// with its old last_run and fire the staleness alert on a cluster with no
+// validator. Unset means an operator that predates the setting and may run the
+// validator, so the summary is still read. Failures are non-fatal: metrics are
+// an SLI, not a gate.
+func (a *Agent) startValidatorSummaryReconciler(ctx context.Context, client kubernetes.Interface) {
+	if a.metrics == nil {
+		return
+	}
+	log := core.GetLogger(ctx)
+	if enabled, set := clustervalidator.Enabled(); set && !enabled {
+		log.Infof("cluster-validator disabled (%s=false); not publishing its metrics", clustervalidator.EnabledEnv)
+		return
+	}
+	r := NewValidatorSummaryReconciler(client, resolveValidatorSummaryNamespace(), a.metrics)
+	if err := r.Start(ctx); err != nil {
+		log.WithError(err).Warn("cluster-validator summary reconciler failed to start; metrics will be unavailable")
+	}
+}
+
 // ValidatorSummaryReconciler watches the well-known cluster-validator
 // summary ConfigMap and republishes its content as Prometheus metrics
 // on the agent's long-lived /metrics endpoint. The cluster-validator

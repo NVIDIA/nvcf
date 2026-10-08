@@ -62,14 +62,16 @@ var errUnqualifiedStorage = errors.New("L2 storage profile: provisioner matched 
 // merely accepts is not a qualification, and on Weka, VAST or FSS the
 // claim can bind and read wrong. Always logs what L2 resolved to.
 //
-// (nil, nil) means "no promoter, but that is fine" — currently unused,
-// kept so a future strategy can opt into the backend default explicitly.
-func resolveL2Promoter(ctx context.Context, kc kubernetes.Interface, dyn dynamic.Interface, scName, namespace string, log logrus.FieldLogger) (checkpointstore.Promoter, error) {
+// The resolved profile is returned alongside the promoter because the
+// webhook consumes it too (cachedir prewarm policy). It is nil when no
+// profile matched, so callers fall back to the profile's zero-value
+// defaults.
+func resolveL2Promoter(ctx context.Context, kc kubernetes.Interface, dyn dynamic.Interface, scName, namespace string, log logrus.FieldLogger) (checkpointstore.Promoter, *checkpointstore.StorageProfile, error) {
 	sc, err := kc.StorageV1().StorageClasses().Get(ctx, scName, metav1.GetOptions{})
 	if err != nil {
 		log.WithError(err).WithField("sc", scName).
 			Error("L2 storage profile: cannot read StorageClass; L2 disabled (an unreadable class cannot be a qualified one)")
-		return nil, fmt.Errorf("%w: read StorageClass %q: %w", errUnqualifiedStorage, scName, err)
+		return nil, nil, fmt.Errorf("%w: read StorageClass %q: %w", errUnqualifiedStorage, scName, err)
 	}
 	provisioner := sc.Provisioner
 	volType := sc.Parameters["type"] // disambiguates pd.csi (hyperdisk-ml vs pd-ssd)
@@ -89,20 +91,21 @@ func resolveL2Promoter(ctx context.Context, kc kubernetes.Interface, dyn dynamic
 	if !ok {
 		log.WithFields(logrus.Fields{"sc": scName, "provisioner": provisioner, "type": volType}).
 			Error("L2 storage profile: no profile for provisioner[/type]; L2 disabled. Add an entry to the nvsnap-storage-profiles ConfigMap to qualify this backend")
-		return nil, fmt.Errorf("%w: provisioner %q type %q", errUnqualifiedStorage, provisioner, volType)
+		return nil, nil, fmt.Errorf("%w: provisioner %q type %q", errUnqualifiedStorage, provisioner, volType)
 	}
 	promoter, err := checkpointstore.NewPromoterFromProfile(profile, scName, kc, dyn, log)
 	if err != nil {
 		log.WithError(err).WithField("strategy", profile.Strategy).
 			Error("L2 storage profile: cannot construct promoter; L2 disabled")
-		return nil, fmt.Errorf("construct promoter for strategy %q: %w", profile.Strategy, err)
+		return nil, &profile, fmt.Errorf("construct promoter for strategy %q: %w", profile.Strategy, err)
 	}
 	log.WithFields(logrus.Fields{
 		"sc": scName, "provisioner": provisioner, "type": volType,
 		"profile_key": key, "strategy": profile.Strategy,
 		"read_only_many": profile.ReadOnlyMany, "vh_transform": profile.VolumeHandleTransform,
+		"prewarm": profile.PrewarmEnabled(), "prewarm_workers": profile.PrewarmWorkers(),
 	}).Info("L2 storage profile resolved")
-	return promoter, nil
+	return promoter, &profile, nil
 }
 
 // startL2Backend constructs the PerCapturePVCBackend if L2 is enabled
@@ -186,7 +189,8 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 	// or FSS that is either a promote-time failure or a claim that binds
 	// and reads wrong. There is deliberately no override: qualify the
 	// driver in the nvsnap-storage-profiles ConfigMap instead.
-	promoter, err := resolveL2Promoter(context.Background(), kc, dyn, cfg.StorageClass, cfg.Namespace, log)
+	promoter, profile, err := resolveL2Promoter(context.Background(), kc, dyn, cfg.StorageClass, cfg.Namespace, log)
+	a.l2Profile = profile
 	if err != nil {
 		return nil, fmt.Errorf("L2 disabled: %w", err)
 	}

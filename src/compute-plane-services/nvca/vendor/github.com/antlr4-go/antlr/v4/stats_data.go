@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 package antlr
 
 // A JStatRec is a record of a particular use of a [JStore], [JMap] or JPCMap] collection. Typically, it will be

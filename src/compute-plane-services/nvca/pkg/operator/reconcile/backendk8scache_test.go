@@ -25,7 +25,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -53,8 +55,10 @@ import (
 	fakek8sclient "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/record"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	fakenvcaopclient "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake"
@@ -3205,6 +3209,114 @@ func TestCreateOrUpdateNVCFBackend(t *testing.T) {
 	require.NoError(t, err)
 	// Bar from override replaces Baz from spec (override behavior for non-maintenance features)
 	assert.ElementsMatch(t, []string{"CordonMaintenance", "GXCache"}, cfg.Agent.FeatureFlags)
+}
+
+// Enabling or disabling the cluster-validator restarts only the operator, and
+// its start-up sync is not forced, so the setting itself must roll the agent:
+// otherwise the agent keeps publishing, or keeps omitting, the validator
+// metrics. A sync with nothing changed leaves the agent alone.
+func TestSyncNVCFBackend_ClusterValidatorToggleRollsTheAgent(t *testing.T) {
+	eventRecorder := record.NewFakeRecorder(0)
+	eventRecorder.Events = nil
+	c := &BackendK8sCache{
+		clients:              mockKubeClients(),
+		operatorNamespace:    NVCAOperatorNamespace,
+		eventRecorder:        eventRecorder,
+		ngcServiceKeyFetcher: &mockTokenFetcher{token: "randomkey"},
+		now:                  time.Now,
+	}
+	ctx := newTestContext()
+	nb := getTestNVCFBackendAllFeatures()
+	nb.Spec.Overrides = nil
+	require.NoError(t, c.CreateOrUpdateNVCFBackend(ctx, nb))
+
+	k8s := c.clients.K8s.(*fakek8sclient.Clientset)
+	agentUpdates := func() int {
+		n := 0
+		for _, a := range k8s.Actions() {
+			if a.GetVerb() == "update" && a.GetResource().Resource == "deployments" &&
+				a.(k8stesting.UpdateAction).GetObject().(*appsv1.Deployment).Name == nvcaoptypes.NVCAModuleName {
+				n++
+			}
+		}
+		return n
+	}
+	agentSetting := func() string {
+		dep, err := k8s.AppsV1().Deployments(getSystemNamespace(nb)).Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
+		require.NoError(t, err)
+		for _, ctr := range dep.Spec.Template.Spec.Containers {
+			for _, env := range ctr.Env {
+				if ctr.Name == agentContainerName && env.Name == clustervalidator.EnabledEnv {
+					return env.Value
+				}
+			}
+		}
+		return ""
+	}
+
+	require.NoError(t, c.syncNVCFBackend(ctx, nb, false))
+	require.Equal(t, "false", agentSetting())
+
+	for _, enabled := range []bool{true, false} {
+		c.clusterValidatorEnabled = enabled
+		before := agentUpdates()
+		require.NoError(t, c.syncNVCFBackend(ctx, nb, false))
+		assert.Equal(t, strconv.FormatBool(enabled), agentSetting())
+		assert.Equal(t, before+1, agentUpdates(), "enabled=%t rolls the agent once", enabled)
+
+		require.NoError(t, c.syncNVCFBackend(ctx, nb, false))
+		assert.Equal(t, before+1, agentUpdates(), "enabled=%t unchanged leaves the agent alone", enabled)
+	}
+}
+
+// An agent an older operator wrote has no cluster-validator setting. With the
+// validator disabled that means the same as false, so the first sync after
+// the operator upgrade leaves the agent running; enabling the validator still
+// rolls it once.
+func TestSyncNVCFBackend_AgentWithoutValidatorSettingStaysWhileDisabled(t *testing.T) {
+	eventRecorder := record.NewFakeRecorder(0)
+	eventRecorder.Events = nil
+	c := &BackendK8sCache{
+		clients:              mockKubeClients(),
+		operatorNamespace:    NVCAOperatorNamespace,
+		eventRecorder:        eventRecorder,
+		ngcServiceKeyFetcher: &mockTokenFetcher{token: "randomkey"},
+		now:                  time.Now,
+	}
+	ctx := newTestContext()
+	nb := getTestNVCFBackendAllFeatures()
+	nb.Spec.Overrides = nil
+	require.NoError(t, c.CreateOrUpdateNVCFBackend(ctx, nb))
+	require.NoError(t, c.syncNVCFBackend(ctx, nb, false))
+
+	k8s := c.clients.K8s.(*fakek8sclient.Clientset)
+	deployments := k8s.AppsV1().Deployments(getSystemNamespace(nb))
+	dep, err := deployments.Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
+	require.NoError(t, err)
+	for i := range dep.Spec.Template.Spec.Containers {
+		ctr := &dep.Spec.Template.Spec.Containers[i]
+		ctr.Env = slices.DeleteFunc(ctr.Env, func(e corev1.EnvVar) bool { return e.Name == clustervalidator.EnabledEnv })
+	}
+	_, err = deployments.Update(ctx, dep, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	agentUpdates := func() int {
+		n := 0
+		for _, a := range k8s.Actions() {
+			if a.GetVerb() == "update" && a.GetResource().Resource == "deployments" &&
+				a.(k8stesting.UpdateAction).GetObject().(*appsv1.Deployment).Name == nvcaoptypes.NVCAModuleName {
+				n++
+			}
+		}
+		return n
+	}
+	before := agentUpdates()
+
+	require.NoError(t, c.syncNVCFBackend(ctx, nb, false))
+	assert.Equal(t, before, agentUpdates(), "a disabled validator does not roll an agent without the setting")
+
+	c.clusterValidatorEnabled = true
+	require.NoError(t, c.syncNVCFBackend(ctx, nb, false))
+	assert.Equal(t, before+1, agentUpdates(), "enabling it rolls the agent once")
 }
 
 func TestCreateOrUpdateNVCFBackend_PropagatesNVCAOTELConfig(t *testing.T) {

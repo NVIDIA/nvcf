@@ -51,6 +51,26 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+# The self-managed and compute-plane stacks, also outside gazelle, for the
+# nvcf-cli tests that pin the CLI's view of the stacks to their source.
+# ROOT_GLOBS in .github/workflows/bazel.yml lists the same directories, so a
+# change to them runs those tests.
+filegroup(
+    name = "nvcf-cli-stacks",
+    srcs = glob(
+        [
+            "deploy/stacks/nvcf-compute-plane/**",
+            "deploy/stacks/self-managed/**",
+        ],
+        exclude = [
+            "deploy/stacks/*/out/**",
+            "deploy/stacks/*/testdata/**",
+            "deploy/stacks/*/tests/**",
+        ],
+    ),
+    visibility = ["//src/clis/nvcf-cli:__subpackages__"],
+)
+
 # Gazelle manages only the native Go subtrees listed in go.work.bazel.
 # nv-boot-parent and Cloud Tasks are also owned by the root Bazel module, but
 # their checked-in Java BUILD files are maintained manually and remain outside

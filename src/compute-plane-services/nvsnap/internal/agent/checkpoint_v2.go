@@ -503,4 +503,3 @@ func tailOfFile(path string, n int) string {
 	}
 	return strings.Join(lines, " | ")
 }
-

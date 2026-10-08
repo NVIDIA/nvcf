@@ -30,7 +30,7 @@ var resolveSelfHostedHelmRuntimeMode = func(ctx context.Context) (selfhosted.Hel
 		Tools:     selfHostedHelmRuntimePreflightTools(),
 	})
 	for _, result := range results {
-		if !result.Passed && result.Severity == "error" {
+		if result.IsBlockingFailure() {
 			return "", fmt.Errorf("%s: %s", result.ID, result.Message)
 		}
 	}

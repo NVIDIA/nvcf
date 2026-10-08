@@ -42,7 +42,7 @@ func profilesCM(ns, body string) *corev1.ConfigMap {
 // bind a claim that reads wrong.
 func TestResolveL2Promoter_UnqualifiedProvisionerFailsClosed(t *testing.T) {
 	kc := fake.NewSimpleClientset(scWithProvisioner("weka-sc", "csi.weka.io"))
-	_, err := resolveL2Promoter(context.Background(), kc, nil, "weka-sc", "nvsnap-system", quietLog())
+	_, _, err := resolveL2Promoter(context.Background(), kc, nil, "weka-sc", "nvsnap-system", quietLog())
 	if !errors.Is(err, errUnqualifiedStorage) {
 		t.Fatalf("want errUnqualifiedStorage for an unknown provisioner, got %v", err)
 	}
@@ -51,7 +51,7 @@ func TestResolveL2Promoter_UnqualifiedProvisionerFailsClosed(t *testing.T) {
 // An unreadable StorageClass is not a qualified one either.
 func TestResolveL2Promoter_MissingStorageClassFailsClosed(t *testing.T) {
 	kc := fake.NewSimpleClientset()
-	_, err := resolveL2Promoter(context.Background(), kc, nil, "absent-sc", "nvsnap-system", quietLog())
+	_, _, err := resolveL2Promoter(context.Background(), kc, nil, "absent-sc", "nvsnap-system", quietLog())
 	if !errors.Is(err, errUnqualifiedStorage) {
 		t.Fatalf("want errUnqualifiedStorage for an unreadable class, got %v", err)
 	}
@@ -61,7 +61,7 @@ func TestResolveL2Promoter_MissingStorageClassFailsClosed(t *testing.T) {
 // has not broken the backends that were already supported.
 func TestResolveL2Promoter_QualifiedProvisionerStillResolves(t *testing.T) {
 	kc := fake.NewSimpleClientset(scWithProvisioner("nvmesh-sc", "nvmesh-csi.excelero.com"))
-	p, err := resolveL2Promoter(context.Background(), kc, nil, "nvmesh-sc", "nvsnap-system", quietLog())
+	p, _, err := resolveL2Promoter(context.Background(), kc, nil, "nvmesh-sc", "nvsnap-system", quietLog())
 	if err != nil {
 		t.Fatalf("qualified provisioner should resolve, got %v", err)
 	}
@@ -79,7 +79,7 @@ func TestResolveL2Promoter_ConfigMapQualifiesUnknownProvisioner(t *testing.T) {
 		scWithProvisioner("weka-sc", "csi.weka.io"),
 		profilesCM("nvsnap-system", "csi.weka.io:\n  strategy: shared-volume\n  volumeHandleTransform: none\n"),
 	)
-	p, err := resolveL2Promoter(context.Background(), kc, nil, "weka-sc", "nvsnap-system", quietLog())
+	p, _, err := resolveL2Promoter(context.Background(), kc, nil, "weka-sc", "nvsnap-system", quietLog())
 	if err != nil {
 		t.Fatalf("ConfigMap-qualified provisioner should resolve, got %v", err)
 	}
@@ -95,7 +95,7 @@ func TestResolveL2Promoter_ConfigMapOverridesBuiltin(t *testing.T) {
 		scWithProvisioner("nvmesh-sc", "nvmesh-csi.excelero.com"),
 		profilesCM("nvsnap-system", "nvmesh-csi.excelero.com:\n  strategy: snapshot-clone\n  snapshotClass: some-class\n  readOnlyMany: true\n"),
 	)
-	p, err := resolveL2Promoter(context.Background(), kc, nil, "nvmesh-sc", "nvsnap-system", quietLog())
+	p, _, err := resolveL2Promoter(context.Background(), kc, nil, "nvmesh-sc", "nvsnap-system", quietLog())
 	if err != nil {
 		t.Fatalf("override should resolve, got %v", err)
 	}
@@ -112,7 +112,7 @@ func TestResolveL2Promoter_BadConfigMapYAMLStillFailsClosed(t *testing.T) {
 		scWithProvisioner("weka-sc", "csi.weka.io"),
 		profilesCM("nvsnap-system", "csi.weka.io: [this is not a profile"),
 	)
-	if _, err := resolveL2Promoter(context.Background(), kc, nil, "weka-sc", "nvsnap-system", quietLog()); !errors.Is(err, errUnqualifiedStorage) {
+	if _, _, err := resolveL2Promoter(context.Background(), kc, nil, "weka-sc", "nvsnap-system", quietLog()); !errors.Is(err, errUnqualifiedStorage) {
 		t.Fatalf("bad ConfigMap should leave the driver unqualified, got %v", err)
 	}
 }
@@ -121,7 +121,7 @@ func TestResolveL2Promoter_BadConfigMapYAMLStillFailsClosed(t *testing.T) {
 // itself: the built-in table still qualifies the backends it knows.
 func TestResolveL2Promoter_AbsentConfigMapUsesBuiltins(t *testing.T) {
 	kc := fake.NewSimpleClientset(scWithProvisioner("nvmesh-sc", "nvmesh-csi.excelero.com"))
-	if _, err := resolveL2Promoter(context.Background(), kc, nil, "nvmesh-sc", "nvsnap-system", quietLog()); err != nil {
+	if _, _, err := resolveL2Promoter(context.Background(), kc, nil, "nvmesh-sc", "nvsnap-system", quietLog()); err != nil {
 		t.Fatalf("absent ConfigMap should fall through to built-ins, got %v", err)
 	}
 }
@@ -132,12 +132,12 @@ func TestResolveL2Promoter_AbsentConfigMapUsesBuiltins(t *testing.T) {
 // this change exists to stop making.
 func TestResolveL2Promoter_CompositeKeyDistinguishesVolumeType(t *testing.T) {
 	kcML := fake.NewSimpleClientset(scWithType("hdml", "pd.csi.storage.gke.io", "hyperdisk-ml"))
-	pML, err := resolveL2Promoter(context.Background(), kcML, nil, "hdml", "nvsnap-system", quietLog())
+	pML, _, err := resolveL2Promoter(context.Background(), kcML, nil, "hdml", "nvsnap-system", quietLog())
 	if err != nil {
 		t.Fatalf("hyperdisk-ml should resolve, got %v", err)
 	}
 	kcSSD := fake.NewSimpleClientset(scWithType("ssd", "pd.csi.storage.gke.io", "pd-ssd"))
-	pSSD, err := resolveL2Promoter(context.Background(), kcSSD, nil, "ssd", "nvsnap-system", quietLog())
+	pSSD, _, err := resolveL2Promoter(context.Background(), kcSSD, nil, "ssd", "nvsnap-system", quietLog())
 	if err != nil {
 		t.Fatalf("pd-ssd should resolve, got %v", err)
 	}
