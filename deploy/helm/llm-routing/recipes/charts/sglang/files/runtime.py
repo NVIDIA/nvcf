@@ -356,8 +356,8 @@ def cached_blob(path, repository, cache):
     if path.is_file() and resolved.is_relative_to(repository.resolve()):
         return resolved, resolved.name
     if path.is_file() and path.is_symlink():
-        # Hub 1.33 links snapshot -> repository/blobs/<ETag> ->
-        # hub/blobs/<prefix>/<Xet hash>. The Xet hash is NOT a SHA256 digest.
+        # Hub 1.33 snapshot links pass through repository/blobs/<ETag> to
+        # hub/blobs/<prefix>/<Xet hash>. The ETag supplies the SHA256 identity.
         alias = pathlib.Path(os.path.abspath(path.parent.resolve() / os.readlink(path)))
         store = repository.resolve().parent / 'blobs'
         if (alias.parent == repository.resolve() / 'blobs' and alias.parent.resolve() == alias.parent

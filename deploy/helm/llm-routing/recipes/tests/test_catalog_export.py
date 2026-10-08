@@ -116,7 +116,7 @@ class CommonCatalogTests(unittest.TestCase):
             if qualified:
                 self.assertNotIn('reason', recipe['availability'])
             else:
-                self.assertIn('not been qualified', recipe['availability']['reason'])
+                self.assertEqual(recipe['availability']['reason'], 'Not validated.')
 
     def test_available_and_planned_notice_paths_share_one_bundle_file(self):
         for identifier, recipe in self.recipes.items():
@@ -414,8 +414,7 @@ class CommonCatalogTests(unittest.TestCase):
         self.assertGreater(evidence["weightBytes"], 0)
 
     def test_chart_references_resolve_to_source_and_published_charts(self):
-        # Every executable recipe names its published chart; without one, the
-        # planner would install the source chart instead.
+        # Every executable recipe names its published chart for registry installs.
         for recipe in self.recipes.values():
             for profile in recipe["profiles"]:
                 chart = profile["deployment"]["chart"]

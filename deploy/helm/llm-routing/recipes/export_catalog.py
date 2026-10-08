@@ -213,7 +213,7 @@ def gguf_recipes(root):
         qualified = any(profile["validation"]["automaticHelmStatus"] == "smoke-tested" for profile in profiles)
         availability = {"status": "available" if qualified else "experimental", "deployable": True}
         if not qualified:
-            availability["reason"] = "Automatic Helm inference has not been qualified for any profile."
+            availability["reason"] = "Not validated."
         recipes.append({"id": metadata["recipe"], "name": recipe["name"], "servedModelId": recipe["servedName"],
             **({"description": description} if description else {}),
             "availability": availability,
