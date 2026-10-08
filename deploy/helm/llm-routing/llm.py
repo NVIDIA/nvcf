@@ -170,6 +170,68 @@ def deployment_command(report, catalog, context, namespace, args, capabilities):
             'guide': deployment['guide'].removeprefix('../')}
 
 
+def model_releases(context, namespace, model):
+    helm = ['helm', '--kube-context', context, '--namespace', namespace]
+    releases = []
+    while True:
+        page = json.loads(run(helm + ['list', '--deployed', '--failed', '--pending', '--uninstalled',
+                                     '--superseded', '--uninstalling', '--output', 'json',
+                                     '--max', '256', '--offset', str(len(releases))]))
+        releases.extend(page)
+        if len(page) < 256:
+            break
+    chart_names = {profile['deployment']['chart']['name'] for profile in model['profiles']}
+    matching = []
+    for release in releases:
+        if not any(release.get('chart', '').startswith(name + '-') for name in chart_names):
+            continue
+        values = json.loads(run(helm + ['get', 'values', release['name'], '--all', '--output', 'json']))
+        if values.get('recipe') != model['id']:
+            continue
+        matching.append({'release': release['name'], 'status': release.get('status'),
+                         'suspended': values.get('suspended', False), 'nodes': values.get('nodes', []),
+                         'profile': values.get('profileName'),
+                         'inspectCommand': shlex.join(helm + ['get', 'values', release['name'], '--all']),
+                         'releaseCommand': shlex.join(helm + ['status', release['name']])})
+    return matching, {release['name'] for release in releases}
+
+
+def retained_cache_nodes(storage, namespace, release, model, storage_class):
+    required, capacities, blockers, ranks = {}, {}, [], set()
+    for claim in storage.get('claims', []):
+        if claim['namespace'] != namespace:
+            continue
+        name = claim['claim']
+        if model['runtime']['backend'] == 'sglang':
+            match = re.fullmatch(re.escape(release) + r'-cache-(0|[1-9]\d*)', name)
+            rank = int(match[1]) if match else None
+        else:
+            match = re.fullmatch(re.escape(release) + r'-rpc-cache-n([1-9]\d*)', name)
+            rank = 0 if name == release + '-artifacts' else int(match[1]) if match else None
+        if rank is None:
+            if claim.get('release') == release:
+                blockers.append('Retained claim requires explicit inspection before reuse: ' + name)
+            continue
+        if rank in ranks:
+            blockers.append('Multiple retained cache claims map to rank ' + str(rank) + '.')
+            continue
+        ranks.add(rank)
+        if claim.get('release') != release or claim.get('releaseNamespace') != namespace:
+            blockers.append('Cache claim has different or unknown Helm ownership: ' + name)
+        elif claim.get('storageClass') != storage_class:
+            blockers.append('Retained cache requires its original StorageClass: ' + name)
+        elif claim.get('deleting') or claim.get('phase') != 'Bound' or not claim.get('volume'):
+            blockers.append('Retained cache must be Bound and not terminating: ' + name)
+        elif claim.get('accessModes') != ['ReadWriteOnce'] or claim.get('volumeMode') != 'Filesystem':
+            blockers.append('Retained cache requires ReadWriteOnce filesystem access: ' + name)
+        elif len(claim['nodes']) != 1:
+            blockers.append('Retained cache node placement is unknown or ambiguous: ' + name)
+        else:
+            required[rank] = claim['nodes'][0]
+            capacities[rank] = claim.get('capacityBytes', 0)
+    return required, capacities, blockers
+
+
 def capacity_plan(context, args):
     analyzer = planning_modules()
     catalog = json.loads((HERE / 'recipes/index.json').read_text())
@@ -183,15 +245,29 @@ def capacity_plan(context, args):
             value is not None for value in (args.context_length, args.concurrency)):
         raise ValueError('GGUF profiles use fixed recipe tuning. Omit --context-length and --concurrency.')
     snapshot = analyzer.inventory(context)
+    import model_storage
+    storage = model_storage.collect(context, snapshot, run)
+    prerequisites, existing_releases, required_nodes, cache_capacities = [], [], {}, {}
+    if model['availability']['deployable']:
+        release = args.release or model['profiles'][0]['deployment']['releaseName']
+        required_nodes, cache_capacities, prerequisites = retained_cache_nodes(
+            storage, args.namespace, release, model, args.storage_class)
+        if storage['warnings']:
+            prerequisites.append('Storage inventory is incomplete; inspect retained claims before installing.')
+        try:
+            existing_releases, names = model_releases(context, args.namespace, model)
+            if release in names and not any(item['release'] == release for item in existing_releases):
+                prerequisites.append('Helm release name is already in use: ' + release)
+        except (RuntimeError, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+            prerequisites.append('Helm release inventory failed: ' + str(error))
     report = analyzer.analyze(snapshot, catalog, args.model, capabilities=capabilities,
                               profile_id=args.profile, context_length=args.context_length,
-                              concurrency=args.concurrency)
+                              concurrency=args.concurrency, required_nodes=required_nodes, cache_capacities=cache_capacities)
     report.update(context=context, namespace=args.namespace)
     report['deployment'] = None
     report['existingDeployments'] = []
-    report['limitations'].append('Retained caches are listed separately. Cache contents and compatibility for reuse are not verified; preserve their original placement.')
-    import model_storage
-    report['storage'] = model_storage.collect(context, snapshot, run)
+    report['limitations'].append('Retained claim ownership, capacity, access mode and node placement are checked. Cached file integrity and compatibility are verified during startup.')
+    report['storage'] = storage
     model_names = {report['model'], report.get('modelName')}
     for endpoint in snapshot['endpoints']:
         metadata = endpoint.get('metadata', {})
@@ -208,10 +284,11 @@ def capacity_plan(context, args):
             entry['releaseCommand'] = shlex.join(['helm', 'status', release, '--kube-context', context,
                                                  '--namespace', args.namespace])
         report['existingDeployments'].append(entry)
+    known_releases = {item.get('release') for item in report['existingDeployments']}
+    report['existingDeployments'].extend(item for item in existing_releases if item['release'] not in known_releases)
     if report['existingDeployments']:
         report['status'] = 'existing'
     elif report['status'] == 'fits':
-        prerequisites = []
         if not any(item['metadata']['name'] == args.runtime_class for item in snapshot['runtimeClasses']):
             prerequisites.append('RuntimeClass is not installed: ' + args.runtime_class)
         storage = next((item for item in snapshot['storageClasses'] if item['metadata']['name'] == args.storage_class), None)
@@ -231,7 +308,10 @@ def print_capacity_details(report):
                 'unsupported': 'NO DEPLOYABLE RECIPE.', 'existing': 'EXISTING DEPLOYMENT found in this namespace; inspect it before creating another.'}
     print(statuses[report['status']])
     for existing in report['existingDeployments']:
-        print(f"Endpoint {existing['endpoint']}: Ready={existing['ready']}, Registered={existing['registered']}")
+        if existing.get('endpoint'):
+            print(f"Endpoint {existing['endpoint']}: Ready={existing['ready']}, Registered={existing['registered']}")
+        else:
+            print(f"Helm release {existing['release']}: status={existing['status']}, suspended={existing['suspended']}")
         print('Inspect the existing deployment: ' + existing['inspectCommand'])
         if existing.get('releaseCommand'):
             print(existing['releaseCommand'])
@@ -411,7 +491,7 @@ def main(argv=None):
     plan.add_argument('--runtime-class', default='nvidia')
     plan.add_argument('--storage-class', default='local-path')
     plan.add_argument('--shared-ca-configmap', default='llm-gateway-stack-ca')
-    plan.add_argument('--release', help='Name for a new Helm release. Existing endpoints are reported separately.')
+    plan.add_argument('--release', help='Name for a new Helm release. Existing model releases are reported separately.')
     plan.add_argument('--chart-source', help='Exact Helm chart reference for the install command. Defaults to the recipe source chart.')
     plan.add_argument('--verbose', action='store_true', help='Show deployment checks, per-pod allocations and an install command when eligible.')
     plan.add_argument('--json', action='store_true', help='Print the complete capacity report as JSON.')
@@ -437,6 +517,8 @@ def main(argv=None):
                 parser.error('--' + field.replace('_', '-') + ' must be a Kubernetes resource name.')
         if args.release and not re.fullmatch(r'[a-z0-9](?:[-a-z0-9]{0,51}[a-z0-9])?', args.release):
             parser.error('--release must be a Helm release name (at most 53 characters).')
+        if args.release == 'llm-stack':
+            parser.error('--release llm-stack is reserved for shared infrastructure.')
         if args.chart_source is not None and (not args.chart_source.strip() or args.chart_source.startswith('-')):
             parser.error('--chart-source must be a nonempty Helm chart reference.')
         if any(value is not None and value <= 0 for value in (args.context_length, args.concurrency)):

@@ -13,7 +13,9 @@ import model_storage
 def claim(name='old-model-cache-0', namespace='old-namespace', release='old-model', bound=True):
     return {'metadata': {'name': name, 'namespace': namespace, 'annotations': {
         'meta.helm.sh/release-name': release, 'volume.kubernetes.io/selected-node': 'node-a'}},
-        'spec': {'resources': {'requests': {'storage': '80Gi'}}, **({'volumeName': 'pv-a'} if bound else {})}}
+        'spec': {'accessModes': ['ReadWriteOnce'], 'resources': {'requests': {'storage': '80Gi'}},
+                 **({'volumeName': 'pv-a'} if bound else {})},
+        'status': {'phase': 'Bound' if bound else 'Pending', 'capacity': {'storage': '80Gi'} if bound else {}}}
 
 
 def pod(name='server', cache='old-model-cache-0', namespace='old-namespace'):
@@ -25,7 +27,7 @@ def pod(name='server', cache='old-model-cache-0', namespace='old-namespace'):
 
 
 class StorageTests(unittest.TestCase):
-    def collect(self, claims=None, pods=None, usage='30448560\t/cache\n', failures=None):
+    def collect(self, claims=None, pods=None, usage='30448560\t/cache\n', failures=None, volumes=None, nodes=None):
         calls = []
         claims = [claim()] if claims is None else claims
         failures = failures or {}
@@ -40,14 +42,14 @@ class StorageTests(unittest.TestCase):
                     self.assertIn('--all-namespaces', command)
                     return json.dumps({'items': claims})
                 self.assertEqual(kind, 'persistentvolumes')
-                return json.dumps({'items': []})
+                return json.dumps({'items': volumes or []})
             self.assertEqual(command[3:6], ['--namespace', 'old-namespace', 'exec'])
             self.assertEqual(command[-4:], ['--', 'du', '-sk', '/cache'])
             self.assertEqual(timeout, 10)
             if isinstance(usage, Exception):
                 raise usage
             return usage
-        report = model_storage.collect('test-context', {'pods': pods or []}, run)
+        report = model_storage.collect('test-context', {'pods': pods or [], 'nodes': nodes or []}, run)
         return report, calls
 
     def test_retained_claims_discovered_without_endpoints_or_pods(self):
@@ -59,6 +61,51 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(row['usageStatus'], 'not-mounted')
         self.assertIsNone(row['bytesUsed'])
         self.assertEqual(len(calls), 2)
+
+    def test_claim_inventory_keeps_ownership_for_foreign_name_conflicts(self):
+        pvc = claim('qwen-fp8-cache-0', namespace='llm-stack', release='different-release')
+        pvc['metadata']['annotations']['meta.helm.sh/release-namespace'] = 'llm-stack'
+        pvc['spec']['storageClassName'] = 'local-path'
+        report, _ = self.collect(claims=[pvc])
+        self.assertEqual(report['caches'], [])
+        self.assertEqual(report['claims'][0]['release'], 'different-release')
+        self.assertEqual(report['claims'][0]['releaseNamespace'], 'llm-stack')
+        self.assertEqual(report['claims'][0]['storageClass'], 'local-path')
+        self.assertEqual(report['claims'][0]['nodes'], ['node-a'])
+
+    def test_claim_inventory_preserves_actual_bound_capacity_and_access(self):
+        pvc = claim()
+        pvc['status']['capacity']['storage'] = '10Gi'
+        report, _ = self.collect(claims=[pvc])
+        row = report['claims'][0]
+        self.assertEqual(row['capacityBytes'], 10 * 1024**3)
+        self.assertEqual(row['phase'], 'Bound')
+        self.assertEqual(row['accessModes'], ['ReadWriteOnce'])
+        self.assertEqual(row['volumeMode'], 'Filesystem')
+        self.assertFalse(row['deleting'])
+        pvc['metadata']['deletionTimestamp'] = '2026-10-08T00:00:00Z'
+        report, _ = self.collect(claims=[pvc])
+        self.assertTrue(report['claims'][0]['deleting'])
+
+    def test_pv_hostname_affinity_resolves_node_names(self):
+        pvc = claim()
+        del pvc['metadata']['annotations']['volume.kubernetes.io/selected-node']
+        nodes = [{'metadata': {'name': 'available-0', 'labels': {'kubernetes.io/hostname': 'worker-a'}}}]
+        selector = {'key': 'kubernetes.io/hostname', 'operator': 'In', 'values': ['worker-a']}
+        volume = {'metadata': {'name': 'pv-a'}, 'spec': {'nodeAffinity': {'required': {
+            'nodeSelectorTerms': [{'matchExpressions': [selector]}]}}}}
+        report, _ = self.collect(claims=[pvc], volumes=[volume], nodes=nodes)
+        self.assertEqual(report['claims'][0]['nodes'], ['available-0'])
+        self.assertEqual(report['caches'][0]['nodes'], ['available-0'])
+        nodes.append({'metadata': {'name': 'available-1', 'labels': {'kubernetes.io/hostname': 'worker-a'}}})
+        report, _ = self.collect(claims=[pvc], volumes=[volume], nodes=nodes)
+        self.assertEqual(report['claims'][0]['nodes'], ['available-0', 'available-1'])
+        report, _ = self.collect(claims=[pvc], volumes=[volume], nodes=[])
+        self.assertEqual(report['claims'][0]['nodes'], [])
+        volume['spec']['nodeAffinity']['required']['nodeSelectorTerms'] = [
+            {'matchFields': [{'key': 'metadata.name', 'operator': 'In', 'values': ['available-1']}]}]
+        report, _ = self.collect(claims=[pvc], volumes=[volume], nodes=nodes)
+        self.assertEqual(report['claims'][0]['nodes'], ['available-1'])
 
     def test_disk_measurement_uses_blocks_not_claim_request(self):
         report, calls = self.collect(pods=[pod()])

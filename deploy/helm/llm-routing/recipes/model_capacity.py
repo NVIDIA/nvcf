@@ -222,7 +222,7 @@ def candidate_blockers(node, usage, profile, role, facts):
     return reasons
 
 
-def analyze(snapshot, catalog, model_id, capabilities=None, profile_id=None, context_length=None, concurrency=None):
+def analyze(snapshot, catalog, model_id, capabilities=None, profile_id=None, context_length=None, concurrency=None, required_nodes=None, cache_capacities=None):
     """Report scheduling fit without allocating resources or contacting Kubernetes."""
     for field in ('nodes', 'pods'):
         if not isinstance(snapshot.get(field), list):
@@ -233,6 +233,8 @@ def analyze(snapshot, catalog, model_id, capabilities=None, profile_id=None, con
     for name, value in [('context_length', context_length), ('concurrency', concurrency)]:
         if value is not None and (type(value) is not int or value < 1):
             raise ValueError(name + ' must be a positive integer.')
+    required_nodes = required_nodes or {}
+    cache_capacities = cache_capacities or {}
     usage, pending = node_usage(snapshot)
     report = {'model': model_id, 'modelName': recipe.get('servedModelId'), 'displayName': recipe['name'],
               'status': 'blocked', 'chosenProfile': None, 'chosenNodes': [], 'requirements': [], 'profiles': [],
@@ -263,6 +265,8 @@ def analyze(snapshot, catalog, model_id, capabilities=None, profile_id=None, con
         result = {'id': profile['id'], 'status': 'blocked', 'requirements': required,
                   'candidateNodes': [], 'chosenNodes': [], 'blockers': list(global_blockers),
                   'nodeBlockers': [], 'validation': copy.deepcopy(profile.get('validation', {}))}
+        if any(rank >= profile['modelNodeCount'] for rank in required_nodes):
+            result['blockers'].append('Retained cache ranks do not match this profile node count.')
         workload = profile['workload']
         ctx = context_length if context_length is not None else workload['defaultContextTokens']
         conc = concurrency if concurrency is not None else workload['defaultConcurrency']
@@ -271,9 +275,14 @@ def analyze(snapshot, catalog, model_id, capabilities=None, profile_id=None, con
             result['blockers'].append('Requested context or concurrency exceeds this profile envelope.')
         eligible = []
         for role in required['perNode']:
+            if (role['rank'] in cache_capacities and
+                    cache_capacities[role['rank']] < role['storage'].get('claimRequestBytes', 0)):
+                result['blockers'].append('Retained cache capacity is smaller than this profile requires for rank ' + str(role['rank']) + '.')
             candidates = []
             for row in usage:
                 reasons = candidate_blockers(nodes[row['name']], row, profile, role, facts.get(row['name'], {}))
+                if role['rank'] in required_nodes and row['name'] != required_nodes[role['rank']]:
+                    reasons.append('Retained cache for this rank is on ' + required_nodes[role['rank']] + '.')
                 if reasons:
                     result['nodeBlockers'].append({'node': row['name'], 'rank': role['rank'], 'reasons': reasons})
                 else:

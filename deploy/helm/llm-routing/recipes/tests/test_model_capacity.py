@@ -50,6 +50,25 @@ class ModelCapacityTests(unittest.TestCase):
             self.assertTrue(any('reservation' in note for note in result['limitations']))
         self.assertEqual(snapshot, before)
 
+    def test_retained_cache_placement_and_capacity_constrain_each_profile(self):
+        snapshot = inventory(2)
+        self.assertEqual(check(snapshot, required_nodes={0: 'node-1'}, cache_capacities={0: 80 * GIB})['chosenNodes'], ['node-1'])
+        result = check(snapshot, required_nodes={0: 'node-1'}, cache_capacities={0: 10 * GIB})
+        self.assertEqual(result['status'], 'blocked')
+        self.assertIn('Retained cache capacity', str(result['blockers']))
+        self.assertEqual(check(snapshot, required_nodes={0: 'missing'}, cache_capacities={0: 80 * GIB})['status'], 'blocked')
+        self.assertEqual(check(snapshot, required_nodes={1: 'node-1'})['status'], 'blocked')
+        catalog = copy.deepcopy(CATALOG)
+        recipe = next(item for item in catalog['recipes'] if item['id'] == 'qwen3.8-27b')
+        larger = copy.deepcopy(recipe['profiles'][0])
+        larger['id'] = 'larger-cache'
+        larger['perNode'][0]['storage']['claimRequestBytes'] = 160 * GIB
+        recipe['profiles'].insert(0, larger)
+        result = model_capacity.analyze(snapshot, catalog, recipe['id'], required_nodes={0: 'node-1'}, cache_capacities={0: 80 * GIB})
+        self.assertEqual(result['status'], 'fits')
+        self.assertNotEqual(result['chosenProfile'], 'larger-cache')
+        self.assertEqual(result['chosenNodes'], ['node-1'])
+
     def test_busy_gpu_workloads_in_other_namespaces_are_explained(self):
         snapshot = inventory(1)
         snapshot['pods'] = [pod('existing-model', namespace='another-namespace', **{'nvidia.com/gpu': '1'})]

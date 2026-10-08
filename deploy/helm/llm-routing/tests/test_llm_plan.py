@@ -30,9 +30,18 @@ def snapshot(count=1):
                 for index in range(count)]}
 
 
+def retained_claim(name='qwen-fp8-cache-0', release='qwen-fp8', node='available-1'):
+    return {'namespace': 'llm-stack', 'claim': name, 'release': release,
+            'releaseNamespace': 'llm-stack', 'storageClass': 'local-path', 'nodes': [node],
+            'volume': 'retained-pv', 'phase': 'Bound', 'accessModes': ['ReadWriteOnce'],
+            'volumeMode': 'Filesystem', 'capacityBytes': 80 * 1024**3}
+
+
 class PlanTests(unittest.TestCase):
     def setUp(self):
-        self.enterContext(patch.object(model_storage, 'collect', return_value={'caches': [], 'warnings': []}))
+        self.storage = self.enterContext(patch.object(model_storage, 'collect', return_value={'caches': [], 'claims': [], 'warnings': []}))
+        self.original_model_releases = llm.model_releases
+        self.releases = self.enterContext(patch.object(llm, 'model_releases', return_value=([], set())))
         self.output = self.enterContext(contextlib.redirect_stdout(io.StringIO()))
         self.errors = self.enterContext(contextlib.redirect_stderr(io.StringIO()))
         self.enterContext(patch.object(llm, 'gateway', side_effect=AssertionError('Plan must not access gateway')))
@@ -62,6 +71,116 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn('gpu-node-1', report['deployment']['command'])
         self.assertIn('No changes made', self.output.getvalue())
         self.assertIn('104.0 GiB RAM', self.output.getvalue())
+
+    def test_suspended_existing_model_suppresses_duplicate_even_with_release_override(self):
+        entry = {'release': 'original-model', 'status': 'deployed', 'suspended': True, 'nodes': ['available-0'],
+                 'inspectCommand': 'helm get values original-model', 'releaseCommand': 'helm status original-model'}
+        self.releases.return_value = ([entry], {'original-model'})
+        report = self.plan(snapshot(2), '--release', 'duplicate', '--verbose')
+        self.assertEqual(report['status'], 'existing')
+        self.assertIsNone(report['deployment'])
+        self.assertIn('suspended=True', self.output.getvalue())
+        self.assertIn('resume its existing release', self.output.getvalue())
+
+    def test_retained_owned_cache_selects_original_node_and_blocks_busy_or_unknown_placement(self):
+        claim = retained_claim()
+        self.storage.return_value['claims'] = [claim]
+        report = self.plan(snapshot(2))
+        self.assertEqual(report['chosenNodes'], ['available-1'])
+        self.assertIn('nodes[0]=available-1', report['deployment']['command'])
+        data = snapshot(2)
+        data['pods'] = [{'metadata': {'name': 'busy', 'namespace': 'other'}, 'spec': {
+            'nodeName': 'available-1', 'containers': [{'resources': {'requests': {'nvidia.com/gpu': 1}}}]}}]
+        self.assertEqual(self.plan(data)['status'], 'blocked')
+        for change in ({'nodes': []}, {'nodes': ['available-0', 'available-1']}, {'release': 'foreign'},
+                       {'releaseNamespace': None}, {'storageClass': 'other'}, {'phase': 'Pending'},
+                       {'phase': 'Lost'}, {'deleting': True}, {'volume': None}, {'accessModes': ['ReadWriteMany']},
+                       {'volumeMode': 'Block'}, {'capacityBytes': 10 * 1024**3}, {'capacityBytes': 0}):
+            with self.subTest(change=change):
+                self.storage.return_value['claims'] = [dict(claim, **change)]
+                report = self.plan(snapshot(2))
+                self.assertEqual(report['status'], 'blocked')
+                self.assertIsNone(report['deployment'])
+
+    def test_helm_inventory_reads_model_values_and_detects_suspended_alias(self):
+        def run(command):
+            self.assertEqual(command[:5], ['helm', '--kube-context', 'test-cluster', '--namespace', 'llm-stack'])
+            if command[5] == 'list':
+                self.assertNotIn('--all', command)
+                return json.dumps([{'name': 'alias', 'chart': 'pylon-sglang-recipe-0.2.0', 'status': 'deployed'},
+                                   {'name': 'llm-stack', 'chart': 'llm-shared-stack-0.1.0', 'status': 'deployed'}])
+            self.assertEqual(command[5:], ['get', 'values', 'alias', '--all', '--output', 'json'])
+            return json.dumps({'recipe': 'qwen3.8-27b', 'suspended': True, 'nodes': ['available-0']})
+        with patch.object(llm, 'model_releases', self.original_model_releases), patch.object(llm, 'run', side_effect=run) as calls:
+            report = self.plan(snapshot(2), '--release', 'duplicate')
+        self.assertEqual(report['status'], 'existing')
+        self.assertEqual(report['existingDeployments'][0]['release'], 'alias')
+        self.assertEqual(calls.call_count, 2)
+
+    def test_helm_release_name_used_by_another_recipe_does_not_generate_install(self):
+        responses = [json.dumps([{'name': 'qwen-fp8', 'chart': 'pylon-sglang-recipe-0.2.0', 'status': 'deployed'}]),
+                     json.dumps({'recipe': 'qwen3.8-27b-nvfp4'})]
+        with patch.object(llm, 'model_releases', self.original_model_releases), patch.object(llm, 'run', side_effect=responses):
+            report = self.plan()
+        self.assertEqual(report['status'], 'blocked')
+        self.assertIsNone(report['deployment'])
+
+    def test_retained_extra_rank_cannot_be_installed_as_a_single_node_profile(self):
+        self.storage.return_value['claims'] = [retained_claim('qwen-fp8-cache-1')]
+        report = self.plan(snapshot(2))
+        self.assertEqual(report['status'], 'blocked')
+        self.assertIn('Retained cache ranks', str(report['blockers']))
+        self.assertIsNone(report['deployment'])
+
+    def test_helm_inventory_includes_suspended_releases_after_the_first_page(self):
+        pages = [[{'name': 'other-' + str(i), 'chart': 'unrelated-1.0.0'} for i in range(256)],
+                 [{'name': 'alias', 'chart': 'pylon-sglang-recipe-0.2.0', 'status': 'deployed'}]]
+        offsets = []
+        def run(command):
+            if command[5] == 'list':
+                offsets.append(command[command.index('--offset') + 1])
+                self.assertEqual(command[command.index('--max') + 1], '256')
+                return json.dumps(pages.pop(0))
+            return json.dumps({'recipe': 'qwen3.8-27b', 'suspended': True})
+        with patch.object(llm, 'model_releases', self.original_model_releases), patch.object(llm, 'run', side_effect=run):
+            report = self.plan()
+        self.assertEqual(offsets, ['0', '256'])
+        self.assertEqual(report['status'], 'existing')
+        self.assertIsNone(report['deployment'])
+        self.assertEqual(report['existingDeployments'][0]['release'], 'alias')
+
+    def test_duplicate_or_noncanonical_cache_ranks_block_install(self):
+        claim = retained_claim()
+        self.storage.return_value['claims'] = [claim, dict(claim, nodes=['available-0'])]
+        report = self.plan(snapshot(2))
+        self.assertEqual(report['status'], 'blocked')
+        self.assertIn('Multiple retained cache claims', str(report['blockers']))
+        catalog = json.loads((HERE / 'recipes/index.json').read_text())
+        model = next(item for item in catalog['recipes'] if item['id'] == 'glm-5.3')
+        caches = {'claims': [retained_claim('glm-artifacts', 'glm', 'available-0'),
+                             retained_claim('glm-rpc-cache-n0', 'glm', 'available-1')]}
+        nodes, _, blockers = llm.retained_cache_nodes(caches, 'llm-stack', 'glm', model, 'local-path')
+        self.assertEqual(nodes, {0: 'available-0'})
+        self.assertIn('explicit inspection', str(blockers))
+
+    def test_shared_release_name_is_reserved(self):
+        with self.assertRaises(SystemExit):
+            self.plan(None, '--release', 'llm-stack')
+        self.assertIn('reserved for shared infrastructure', self.errors.getvalue())
+
+    def test_inventory_errors_and_taken_release_names_suppress_installs(self):
+        self.releases.return_value = ([], {'qwen-fp8'})
+        report = self.plan()
+        self.assertEqual(report['status'], 'blocked')
+        self.assertIn('already in use', str(report['blockers']))
+        self.releases.side_effect = RuntimeError('Forbidden')
+        report = self.plan()
+        self.assertEqual(report['status'], 'blocked')
+        self.assertIn('Helm release inventory failed', str(report['blockers']))
+        self.releases.side_effect = None
+        self.releases.return_value = ([], set())
+        self.storage.return_value['warnings'] = ['PVC inventory forbidden']
+        self.assertEqual(self.plan()['status'], 'blocked')
 
     def test_default_release_comes_from_catalog_deployment_metadata(self):
         catalog = json.loads((HERE/'recipes/index.json').read_text())
