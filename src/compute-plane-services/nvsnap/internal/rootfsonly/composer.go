@@ -300,6 +300,7 @@ var (
 	roleFlagsNoValue = map[string]bool{
 		"--is-prefill-worker": true, // dynamo.vllm
 		"--is-decode-worker":  true,
+		"--headless":          true, // vLLM: the ranks of a multi-node engine other than the first
 	}
 	roleFlagsWithValue = map[string]bool{
 		"--disaggregation-mode":             true, // dynamo.sglang, dynamo.trtllm
@@ -308,17 +309,23 @@ var (
 		"--disaggregation-transfer-backend": true,
 		"--kv-transfer-config":              true, // vLLM connector JSON, carries kv_role
 		"--kv-events-config":                true, // KV event publishing, prefill side only
+		// The rank of a pod in a multi-node engine: every rank shares
+		// the configuration, and the instance's ranks share its caches.
+		"--node-rank":                true, // vLLM, SGLang
+		"--node_rank":                true,
+		"--data-parallel-start-rank": true,
+		"--data-parallel-rank":       true,
 	}
 	// GROVE_*: Grove gang-scheduling env the Dynamo operator injects, with
 	// the component name and the pod index in it.
 	roleEnvPrefixes = []string{"DYN_", "DYNAMO_", "GROVE_"}
-	roleEnvExact    = []string{"ETCD_ENDPOINTS", "NATS_SERVER", "NATS_URL"}
+	roleEnvExact    = []string{"ETCD_ENDPOINTS", "NATS_SERVER", "NATS_URL", "NODE_RANK", "RANK", "GROUP_RANK"}
 
 	// roleFlagInString removes the same flags from a shell-script arg (the
 	// bash -lc "vllm serve ..." convention), value quoted or bare.
 	roleFlagInString = regexp.MustCompile(
-		`\s--(?:is-prefill-worker|is-decode-worker)\b` +
-			`|\s--(?:disaggregation-mode|disaggregation-strategy|disaggregation-bootstrap-port|disaggregation-transfer-backend|kv-transfer-config|kv-events-config)(?:=|\s+)(?:'[^']*'|"[^"]*"|\S+)`)
+		`\s--(?:is-prefill-worker|is-decode-worker|headless)\b` +
+			`|\s--(?:disaggregation-mode|disaggregation-strategy|disaggregation-bootstrap-port|disaggregation-transfer-backend|kv-transfer-config|kv-events-config|node-rank|node_rank|data-parallel-start-rank|data-parallel-rank)(?:=|\s+)(?:'[^']*'|"[^"]*"|\S+)`)
 )
 
 // stripRoleFlags returns args without the role flags, in both the
