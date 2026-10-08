@@ -28,6 +28,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
@@ -216,4 +217,33 @@ func (c *criuAutoRestorer) Blocked(ctx context.Context, id string) bool {
 		c.blocked, c.blockedAt = m, time.Now()
 	}
 	return c.blocked[id]
+}
+
+// recordCRIUCapture makes a CRIU checkpoint findable by its hash: the
+// webhook reads capture records to decide how a pod with
+// nvsnap.io/restore-from restores. The checkpoint stays where it is; only
+// the record is written.
+func (a *Agent) recordCRIUCapture(ctx context.Context, hash, checkpointID string, req CheckpointRequest, image string, log *logrus.Entry) {
+	r, ok := a.captureBackend.(checkpointstore.ManifestRecorder)
+	if !ok || hash == "" {
+		log.Debug("CRIU capture not recorded: no capture record store")
+		return
+	}
+	m := checkpointstore.Manifest{
+		Hash:          hash,
+		CaptureMethod: "criu",
+		CapturedAt:    time.Now().UTC(),
+		SourcePodMeta: map[string]string{
+			"engine": "criu", "checkpoint_id": checkpointID,
+			"namespace": req.Namespace, "pod": req.PodName, "image": image, "node": a.config.NodeName,
+		},
+	}
+	if a.config.NodeName != "" {
+		m.CapturedOnNodes = []string{a.config.NodeName}
+	}
+	if err := r.RecordManifest(ctx, hash, m); err != nil {
+		log.WithError(err).Warn("CRIU capture not recorded; pods restoring from it will start fresh")
+		return
+	}
+	log.WithFields(logrus.Fields{"hash": checkpointstore.ShortHash(hash), "checkpoint": checkpointID}).Info("CRIU capture recorded for restore")
 }

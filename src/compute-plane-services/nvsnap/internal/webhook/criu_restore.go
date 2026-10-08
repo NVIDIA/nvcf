@@ -52,14 +52,21 @@ func criuCheckpointID(man checkpointstore.Manifest) string {
 // (where CRIU captures are recorded) and returns its checkpoint id when the
 // pod should be restored with CRIU.
 func (m *Mutator) criuRestoreFor(ctx context.Context, pod *corev1.Pod, hash string, log logrus.FieldLogger) (string, checkpointstore.Manifest) {
-	if m.L2Backend == nil {
-		return "", checkpointstore.Manifest{}
+	var man checkpointstore.Manifest
+	var id string
+	for _, b := range []checkpointstore.Backend{m.Backend, m.L2Backend} {
+		if b == nil {
+			continue
+		}
+		got, err := b.Stat(ctx, hash)
+		if err != nil {
+			continue
+		}
+		if id = criuCheckpointID(got); id != "" {
+			man = got
+			break
+		}
 	}
-	man, err := m.L2Backend.Stat(ctx, hash)
-	if err != nil {
-		return "", checkpointstore.Manifest{}
-	}
-	id := criuCheckpointID(man)
 	if id == "" {
 		return "", man
 	}

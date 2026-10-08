@@ -138,3 +138,19 @@ func TestCRIUNodePreference_KeepsExistingAffinity(t *testing.T) {
 		t.Errorf("affinity = %+v; the function's own terms must stay and ours be added", na)
 	}
 }
+
+// The record the agent writes at capture time lives in the main capture
+// store (ConfigMaps), not on L2; the webhook must find it there.
+func TestCRIURestore_FindsTheRecordInTheCaptureStore(t *testing.T) {
+	m := &Mutator{Backend: &criuL2Backend{man: criuCaptureRecord()}, MainContainer: 1,
+		CheckpointHostRoot: "/var/lib/containerd/nvsnap-checkpoints"}
+	pod := podWithAnnotation("abc123")
+	pod.Spec = criuFunctionPod().Spec
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := applyPatches(t, pod, patches); got.Annotations[CRIURestoreAnnotation] != "abc123__20261008-101010" {
+		t.Errorf("record in the capture store not used: annotations %v", got.Annotations)
+	}
+}

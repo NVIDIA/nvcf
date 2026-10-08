@@ -982,6 +982,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	// CatalogStateWriter — see l2_catalog_writer.go) is the source of
 	// truth for L2 progress, independent of CRD Phase or HTTP response
 	// timing.
+	a.recordCRIUCapture(ctx, catalog.Hash, checkpointID, req, containerInfo.Image, log)
 	if a.l2Backend != nil {
 		hostDumpPath, hostPathErr := a.checkpointHostPath(checkpointDir)
 		if hostPathErr != nil {
