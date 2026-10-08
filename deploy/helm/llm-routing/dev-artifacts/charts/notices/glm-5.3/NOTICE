@@ -1,3 +1,0 @@
-# GLM-5.3 model terms
-
-The model weights are external downloads and are not distributed in this repository. The GLM-5.3 model card identifies the custom `glm-5.3` license, outside this repository's standard license allowlist. Review and accept the upstream terms before downloading or redistributing weights. This recipe does not establish license compatibility for a downstream product. Model and terms: https://huggingface.co/unsloth/GLM-5.3-GGUF and https://huggingface.co/zai-org/GLM-5.3.

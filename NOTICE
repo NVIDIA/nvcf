@@ -9,6 +9,7 @@ regenerate this file by running:
 The following third-party licenses are included in this repository:
 
     deploy/helm/container-cache/NOTICE
+    deploy/helm/llm-routing/dev-artifacts/charts/NOTICE
     deploy/helm/llm-routing/recipes/glm-5.3/NOTICE
     deploy/helm/llm-routing/recipes/NOTICE
     deploy/helm/nats/NOTICE

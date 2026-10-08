@@ -222,6 +222,9 @@ def planned_recipes(root):
 
 def build(root=HERE):
     recipes = sglang_recipes(root) + gguf_recipes(root) + planned_recipes(root)
+    for recipe in recipes:
+        if recipe.get("licenseNotice") is not None:
+            recipe["licenseNotice"] = "NOTICE"
     if len({recipe["id"] for recipe in recipes}) != len(recipes):
         raise ValueError("Duplicate recipe ID in common catalog")
     return {"schemaVersion": 1,

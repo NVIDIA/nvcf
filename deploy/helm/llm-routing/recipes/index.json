@@ -34,7 +34,7 @@
       },
       "precision": null,
       "license": null,
-      "licenseNotice": "notices/deepseek-v4-flash/NOTICE",
+      "licenseNotice": "NOTICE",
       "model": null,
       "runtime": null,
       "profiles": [],
@@ -117,7 +117,7 @@
       },
       "precision": "UD-IQ2_M",
       "license": "glm-5.3",
-      "licenseNotice": "notices/glm-5.3/NOTICE",
+      "licenseNotice": "NOTICE",
       "model": {
         "repository": "unsloth/GLM-5.3-GGUF",
         "revision": "346b3591c7f28d1a23716f97a065ecf12ec14771",
@@ -345,7 +345,7 @@
       },
       "precision": "FP8",
       "license": "Apache-2.0",
-      "licenseNotice": "notices/qwen3.8-27b/NOTICE",
+      "licenseNotice": "NOTICE",
       "model": {
         "repository": "Qwen/Qwen3.8-27B-FP8",
         "revision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
@@ -472,7 +472,7 @@
       },
       "precision": "NVFP4",
       "license": "Apache-2.0",
-      "licenseNotice": "notices/qwen3.8-27b-nvfp4/NOTICE",
+      "licenseNotice": "NOTICE",
       "model": {
         "repository": "nvidia/Qwen3.8-27B-NVFP4",
         "revision": "482ca0f3832238542f8f5295dde86b5f22711d80",
@@ -625,7 +625,7 @@
       },
       "precision": "NVFP4",
       "license": "Qwen Community 1.0 (base model); derivative card declares other",
-      "licenseNotice": "notices/qwen3.8-flash-next/NOTICE",
+      "licenseNotice": "NOTICE",
       "model": {
         "repository": "RadixArk/Qwen3.8-Flash-Next-NVFP4",
         "revision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",

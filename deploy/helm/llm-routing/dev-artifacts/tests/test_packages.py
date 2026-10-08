@@ -87,14 +87,15 @@ class ChartPackageTests(unittest.TestCase):
                 guide = profile['deployment']['guide'].split('#', 1)[0]
                 self.assertEqual((self.output/guide).read_bytes(), (self.source/pathlib.Path(guide).name).read_bytes())
         sums = (self.output/'SHA256SUMS').read_text().splitlines()
-        self.assertEqual(len(sums), 6 + sum(recipe['licenseNotice'] is not None for recipe in index['recipes']))
-        for recipe in index['recipes']:
-            notice = self.output/'notices'/recipe['id']/'NOTICE'
-            self.assertEqual(notice.is_file(), recipe['licenseNotice'] is not None)
-        self.assertEqual((self.output/'notices/deepseek-v4-flash/NOTICE').read_bytes(),
-                         (self.source/'recipes/NOTICE.deepseek-v4-flash').read_bytes())
-        self.assertNotEqual((self.output/'notices/deepseek-v4-flash/NOTICE').read_bytes(),
-                            (self.source/'recipes/NOTICE').read_bytes())
+        self.assertEqual(len(sums), 7)
+        self.assertEqual({recipe['licenseNotice'] for recipe in index['recipes']}, {None, 'NOTICE'})
+        self.assertFalse((self.output/'notices').exists())
+        notice = (self.output/'NOTICE').read_bytes()
+        for relative in ('NOTICE', 'glm-5.3/NOTICE', 'NOTICE.deepseek-v4-flash'):
+            source_notice = (self.source/'recipes'/relative).read_bytes()
+            self.assertEqual(notice.count(source_notice), 1, relative)
+        self.assertIn('    deploy/helm/llm-routing/dev-artifacts/charts/NOTICE',
+                      (HERE.parents[2]/'NOTICE').read_text().splitlines())
         for line in sums:
             digest, relative = line.split(maxsplit=1)
             self.assertEqual(hashlib.sha256((self.output/relative).read_bytes()).hexdigest(), digest)

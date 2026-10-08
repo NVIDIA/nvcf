@@ -33,6 +33,12 @@ class CommonCatalogTests(unittest.TestCase):
                 self.assertEqual(profile["perNode"][0]["storage"]["claimRequestBytes"], source_profile["cacheGiB"] * 2**30)
                 self.assertEqual(profile["hardware"]["memoryMode"], source_profile["hardware"]["memoryMode"])
 
+    def test_available_and_planned_notice_paths_share_one_bundle_file(self):
+        for identifier, recipe in self.recipes.items():
+            with self.subTest(recipe=identifier):
+                expected = None if recipe["availability"]["status"] == "unavailable" else "NOTICE"
+                self.assertEqual(recipe["licenseNotice"], expected)
+
     def test_gguf_storage_and_resources_stay_per_rank(self):
         source = catalog.read(ROOT / "glm-5.3/profiles.json")["profiles"][0]
         recipe = self.recipes["glm-5.3"]
@@ -157,7 +163,8 @@ class CommonCatalogTests(unittest.TestCase):
         self.assertEqual(len(source), 4)
         for recipe in source:
             exported = self.recipes[recipe["id"]]
-            self.assertEqual(exported, recipe)
+            self.assertEqual(exported, {**recipe,
+                "licenseNotice": "NOTICE" if recipe["licenseNotice"] is not None else None})
             self.assertIs(exported["availability"]["deployable"], False)
             self.assertEqual(exported["profiles"], [])
             self.assertIsNone(exported["servedModelId"])

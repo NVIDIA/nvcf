@@ -31,7 +31,7 @@ python3 export_catalog.py
 python3 export_catalog.py --check
 ```
 
-Resolve each deployment's `chart.localPath` and `guide` relative to its containing `index.json`. The source index points to chart directories and repository guides. `dev-artifacts/package-charts.sh` rewrites these fields to the packaged chart archives and included guide snapshots. `chart.archive` and `licenseNotice` identify files relative to the package directory. Guide snapshots describe the repository workflow, so their commands and links to other source files still require the checkout.
+Resolve each deployment's `chart.localPath` and `guide` relative to its containing `index.json`. The source index points to chart directories and repository guides. `dev-artifacts/package-charts.sh` rewrites these fields to the packaged chart archives and included guide snapshots. `chart.archive` and `licenseNotice` identify files relative to the package directory. `licenseNotice` is `NOTICE` when terms are recorded and `null` otherwise. The packager includes each distinct maintained notice once in that file, including terms for planned upstream candidates. Guide snapshots describe the repository workflow, so their commands and links to other source files still require the checkout.
 
 Chart packages include the same pinned metadata. Tests check synchronization. The common index records runtime smoke tests separately from automatic Helm lifecycle validation and points to local archives until publication is configured.
 

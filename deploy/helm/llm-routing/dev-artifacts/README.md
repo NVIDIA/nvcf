@@ -23,7 +23,7 @@ The script:
 
 Build outputs and reuse:
 
-- `dev-artifacts/charts/` contains three Helm archives, `index.json`, model notices and `SHA256SUMS`.
+- `dev-artifacts/charts/` contains three Helm archives, `index.json`, one combined `NOTICE` and `SHA256SUMS`.
 - Image archives, saved configuration and build evidence stay outside Git. Use `--output-dir` to choose their parent directory.
 - The committed values contain image references and shared Helm settings, without credentials or workstation paths.
 - Images use `Never` pull policy. Replacement nodes and evicted images need preloading again.
@@ -57,7 +57,7 @@ Set `verification.imagePullSecrets` to Kubernetes Secret references when the mir
 
 ## Chart packages
 
-Run `bash dev-artifacts/package-charts.sh --output-dir /path/to/fresh-output` from `deploy/helm/llm-routing` after synchronizing recipe metadata and placement sources. The package contains the shared chart, both recipe charts, catalog, guide snapshots, notices and checksums.
+Run `bash dev-artifacts/package-charts.sh --output-dir /path/to/fresh-output` from `deploy/helm/llm-routing` after synchronizing recipe metadata and placement sources. The package contains the shared chart, both recipe charts, catalog, guide snapshots, one combined `NOTICE` and checksums.
 
 The packager checks the maintained placement copies, then stages local chart dependencies without changing the source tree. Run the [offline checks](../ADVANCED.md#local-validation) and compare packages with their sources before publishing artifacts. Keep image values and chart bundles consistent.
 

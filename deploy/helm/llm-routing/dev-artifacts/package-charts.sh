@@ -66,6 +66,7 @@ import sys
 recipes, staging, output = map(Path, sys.argv[1:])
 index = json.loads((staging / 'index.json').read_text())
 guides = {}
+notices = []
 for recipe in index['recipes']:
     for profile in recipe['profiles']:
         deployment = profile['deployment']
@@ -89,7 +90,7 @@ for recipe in index['recipes']:
     notice_path = recipe.get('licenseNotice')
     if notice_path is None:
         continue
-    if notice_path != f'notices/{name}/NOTICE':
+    if notice_path != 'NOTICE':
         raise SystemExit('Invalid model notice path in index.json')
     notice = recipes / name / 'NOTICE'
     if not notice.is_file():
@@ -98,9 +99,11 @@ for recipe in index['recipes']:
         notice = recipes / 'NOTICE'
     if not notice.is_file():
         raise SystemExit(f'Missing model notice for {name}')
-    target = staging / 'notices' / name / 'NOTICE'
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(notice, target)
+    content = notice.read_bytes()
+    if content not in notices:
+        notices.append(content)
+if notices:
+    (staging / 'NOTICE').write_bytes(b'\n'.join(notices))
 for relative, source in guides.items():
     target = staging / relative
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -125,4 +128,4 @@ for path in files:
     with path.open('rb') as source, target.open('xb') as destination:
         shutil.copyfileobj(source, destination)
 PYTHON
-echo "Chart packages, index.json, guides, model notices and SHA256SUMS are in $OUTPUT"
+echo "Chart packages, index.json, guides, NOTICE and SHA256SUMS are in $OUTPUT"
