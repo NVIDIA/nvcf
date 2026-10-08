@@ -12,8 +12,7 @@ import unittest
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
-import monitoring
-from test_monitoring import monitoring_values
+from test_monitoring import CHART, monitoring_values
 
 try:
     import yaml
@@ -32,7 +31,7 @@ class GrafanaAccessTests(unittest.TestCase):
         cls.values, cls.work = values, pathlib.Path(cls.tmp.name)
         path = cls.work/'grafana-access-values.json'
         path.write_text(json.dumps(values))
-        rendered = subprocess.check_output(['helm', 'template', 'access-test', str(monitoring.CHART), '-f', str(path)], text=True)
+        rendered = subprocess.check_output(['helm', 'template', 'access-test', str(CHART), '-f', str(path)], text=True)
         cls.docs = [doc for doc in yaml.safe_load_all(rendered) if doc]
         grafana = next(doc for doc in cls.docs if doc['kind'] == 'Deployment' and doc['metadata']['name'] == 'access-test-grafana')
         cls.env = {entry['name']: entry for entry in grafana['spec']['template']['spec']['containers'][0]['env']}
@@ -80,7 +79,7 @@ class GrafanaAccessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             chart = root/'chart'
-            shutil.copytree(monitoring.CHART, chart)
+            shutil.copytree(CHART, chart)
             if existing is not None:
                 path = chart/'templates/grafana.yaml'
                 source = path.read_text().replace('lookup "v1" "Secret" .Release.Namespace $name',
@@ -132,7 +131,7 @@ class GrafanaAccessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory)/'values.json'
             path.write_text(json.dumps(monitoring_values()))
-            result = subprocess.run(['helm', 'lint', str(monitoring.CHART), '--strict', '-f', str(path)], capture_output=True, text=True)
+            result = subprocess.run(['helm', 'lint', str(CHART), '--strict', '-f', str(path)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
 
     def test_no_ingress_by_default(self):

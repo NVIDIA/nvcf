@@ -1,11 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Read-only Helm discovery, verification and monitoring chart behavior."""
-import base64
+"""Monitoring chart defaults and integration-check behavior."""
 import contextlib
 import copy
 import json
 import pathlib
-import re
 import shutil
 import subprocess
 import sys
@@ -17,24 +15,14 @@ import yaml
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(HERE))
-import monitoring
+import verify_monitoring as monitoring
 
 
-def installation():
-    values = {'operator': {'watchNamespaces': ['llm-stack']},
-              'gatewayStack': {'llm-api-gateway': {'llmApiGateway': {'metrics': {'enabled': True, 'port': 9464}}}}}
-    deployments = []
-    for name in ('llm-api-gateway', 'llm-request-router', 'operator'):
-        labels = {'app.kubernetes.io/name': name, 'app.kubernetes.io/instance': 'llm-stack'}
-        deployments.append({'metadata': {'name': name, 'labels': labels,
-                                        'annotations': {'meta.helm.sh/release-name': 'llm-stack', 'meta.helm.sh/release-namespace': 'llm-stack'}},
-                            'spec': {'selector': {'matchLabels': labels}}})
-    return [values, {'items': deployments}]
+CHART = HERE/'charts/monitoring'
 
 
 def monitoring_values():
-    with patch.object(monitoring.llm, 'run', side_effect=[json.dumps(x) for x in installation()]):
-        return monitoring.chart_values('test-context', 'llm-stack')
+    return json.loads((CHART/'values.yaml').read_text())
 
 
 class MonitoringTests(unittest.TestCase):
@@ -49,46 +37,23 @@ class MonitoringTests(unittest.TestCase):
         self.monitor.output = self.output = Mock()
         self.monitor.ca_configmap, self.monitor.api_key_file = None, None
 
-    def test_values_discover_one_shared_release_and_unique_component_selectors(self):
-        fixture = installation()
-        with patch.object(monitoring.llm, 'run', side_effect=[json.dumps(x) for x in fixture]) as run:
-            values = monitoring.chart_values('test-context', 'llm-stack')
-        self.assertEqual(values['namespaces'], ['llm-stack'])
-        self.assertEqual(len(values['targets']), 4)
-        for target, deployment in zip(values['targets'], fixture[1]['items']):
-            selector = dict(pair.split('=', 1) for pair in target['selector'].split(','))
-            matches = [d for d in fixture[1]['items'] if all(d['metadata']['labels'].get(k) == v for k, v in selector.items())]
-            self.assertEqual(matches, [deployment])
-        self.assertEqual(values['grafana']['adminPassword'], '')
-        for call in run.call_args_list:
-            command = call.args[0]
-            self.assertFalse(set(command) & {'upgrade', 'install', 'apply', 'patch', 'delete'})
-            self.assertIn('test-context', command)
 
-    def test_missing_shared_release_or_wrong_namespace_is_rejected(self):
-        with patch.object(monitoring.llm, 'run', side_effect=RuntimeError('release not found')), self.assertRaisesRegex(RuntimeError, 'release not found'):
-            monitoring.shared_stack('test-context', 'llm-stack')
-        values = installation()[0]
-        values['operator']['watchNamespaces'] = ['other']
-        with patch.object(monitoring.llm, 'run', return_value=json.dumps(values)), self.assertRaisesRegex(RuntimeError, 'watch the selected namespace'):
-            monitoring.shared_stack('test-context', 'llm-stack')
-
-    def test_missing_component_or_foreign_owner_is_rejected(self):
-        for mutate in ('missing', 'foreign'):
-            fixture = installation()
-            if mutate == 'missing':
-                fixture[1]['items'].pop()
-            else:
-                fixture[1]['items'][2]['metadata']['annotations']['meta.helm.sh/release-name'] = 'old-operator'
-            with patch.object(monitoring.llm, 'run', side_effect=[json.dumps(x) for x in fixture]), self.assertRaisesRegex(RuntimeError, 'Pylon|pylon-operator'):
-                monitoring.shared_stack('test-context', 'llm-stack')
-
-    def test_custom_gateway_metrics_port_comes_from_shared_values(self):
-        for enabled, port, expected in ((True, 9500, 9500), (False, 9500, 9464)):
-            fixture = installation()
-            fixture[0]['gatewayStack']['llm-api-gateway']['llmApiGateway']['metrics'] = {'enabled': enabled, 'port': port}
-            with patch.object(monitoring.llm, 'run', side_effect=[json.dumps(x) for x in fixture]):
-                self.assertEqual(monitoring.chart_values('test-context', 'llm-stack')['targets'][0]['port'], expected)
+    def test_verifier_reads_installed_values_and_requires_a_deployed_release(self):
+        values = monitoring_values()
+        values['grafana']['ingress'].update(enabled=True, path='/custom/metrics')
+        values['targets'][0]['port'] = 9500
+        for status in ('deployed', 'failed'):
+            releases = [{'name': 'llm-monitoring', 'chart': 'llm-demo-monitoring-0.1.0', 'status': status}]
+            with self.subTest(status=status), patch.object(monitoring.llm, 'run', side_effect=[json.dumps(releases), json.dumps(values)]) as run:
+                if status == 'failed':
+                    with self.assertRaisesRegex(RuntimeError, 'deployed monitoring'):
+                        monitoring.Monitoring('test-context', 'llm-stack', 'llm-monitoring', self.monitor.work)
+                else:
+                    monitor = monitoring.Monitoring('test-context', 'llm-stack', 'llm-monitoring', self.monitor.work)
+                    self.assertEqual(monitor.values['targets'][0]['port'], 9500)
+                    self.assertEqual(monitor.grafana_path(), '/custom/metrics')
+                    self.assertEqual(run.call_args.args[0], ['helm', '--kube-context', 'test-context', '--namespace', 'llm-stack',
+                                                           'get', 'values', 'llm-monitoring', '--all', '-o', 'json'])
 
     def test_traffic_reuses_scoped_gateway_client_without_issuing_credentials(self):
         monitor = monitoring.Monitoring.__new__(monitoring.Monitoring)
@@ -244,93 +209,6 @@ class MonitoringTests(unittest.TestCase):
         self.assertEqual([call.args for call in sleep.call_args_list], [(2,), (1,)])
         forward.assert_called_once_with('victoria-metrics', 18000, 8428)
 
-    def test_dashboard_viewer_does_not_read_or_display_credentials(self):
-        import contextlib
-        import io
-        stream = io.StringIO()
-        proc = Mock()
-        proc.poll.return_value = None
-        with patch.object(self.monitor, 'forward', return_value=contextlib.nullcontext(proc)), \
-             patch.object(monitoring.dashboard_login, 'open_dashboard') as login, \
-             patch.object(monitoring.time, 'sleep', side_effect=KeyboardInterrupt), contextlib.redirect_stdout(stream):
-            self.monitor.dashboard(13000)
-        login.assert_not_called()
-        self.output.assert_not_called()
-        self.assertIn('/d/llm-demo', stream.getvalue())
-        self.assertIn('No login required', stream.getvalue())
-        self.assertNotIn('Password', stream.getvalue())
-
-    def admin_secret(self):
-        return {'metadata': {'annotations': {'meta.helm.sh/release-name': self.monitor.release,
-                 'meta.helm.sh/release-namespace': self.monitor.namespace}},
-                'data': {key: base64.b64encode(value.encode()).decode()
-                         for key, value in [('admin-user', 'admin'), ('admin-password', 'current-password')]}}
-
-    def test_dashboard_reads_ingress_path_from_installed_helm_values(self):
-        import io
-        for prefix in ('', '/grafana', '/demo/metrics'):
-            values = monitoring_values()
-            values['grafana']['ingress'].update(enabled=bool(prefix), path=prefix or '/grafana')
-            reads = installation()+[[{'name': self.monitor.release, 'chart': 'llm-demo-monitoring-0.1.0',
-                                      'status': 'deployed'}], values]
-            with self.subTest(prefix=prefix), patch.object(monitoring.llm, 'run', side_effect=[json.dumps(v) for v in reads]) as run:
-                monitor = monitoring.Monitoring('test-context', 'llm-stack', 'llm-monitoring', self.monitor.work)
-                self.assertEqual(run.call_args.args[0], ['helm', '--kube-context', 'test-context', '--namespace', 'llm-stack',
-                                                       'get', 'values', 'llm-monitoring', '--all', '-o', 'json'])
-            proc = Mock(poll=Mock(return_value=None))
-            for admin in (False, True):
-                output = io.StringIO()
-                with patch.object(monitor, 'forward', return_value=contextlib.nullcontext(proc)), \
-                     patch.object(monitor, 'admin_credentials', return_value=('admin', 'private-password')) as credentials, \
-                     patch.object(monitoring.dashboard_login, 'open_dashboard') as login, \
-                     patch.object(monitoring.time, 'sleep', side_effect=KeyboardInterrupt), contextlib.redirect_stdout(output):
-                    monitor.dashboard(13000, admin=admin)
-                self.assertIn('http://127.0.0.1:13000'+prefix+'/d/llm-demo', output.getvalue())
-                self.assertNotIn('private-password', output.getvalue())
-                if admin:
-                    login.assert_called_once_with(13000, ('admin', 'private-password'), proc, prefix=prefix)
-                else:
-                    credentials.assert_not_called()
-                    login.assert_not_called()
-
-    def test_admin_access_rejects_foreign_or_malformed_credentials_before_tunneling(self):
-        import contextlib
-        import io
-        for problem in ('owner', 'namespace', 'missing', 'base64', 'utf8', 'empty', 'control'):
-            secret = self.admin_secret()
-            if problem in ('owner', 'namespace'):
-                key = 'meta.helm.sh/release-'+('name' if problem == 'owner' else 'namespace')
-                secret['metadata']['annotations'][key] = 'other'
-            elif problem == 'missing':
-                del secret['data']['admin-password']
-            else:
-                secret['data']['admin-password'] = {'base64': '***', 'utf8': '/w==', 'empty': '',
-                                                    'control': base64.b64encode(b'password\n').decode()}[problem]
-            self.output.return_value = json.dumps(secret)
-            stream = io.StringIO()
-            with self.subTest(problem=problem), patch.object(self.monitor, 'forward') as forward, \
-                 contextlib.redirect_stdout(stream), self.assertRaisesRegex(RuntimeError, 'another installation|malformed'):
-                self.monitor.dashboard(13000, admin=True)
-            forward.assert_not_called()
-            self.assertEqual(stream.getvalue(), '')
-
-    def test_admin_bind_failure_does_not_print_credentials(self):
-        import contextlib
-        import io
-        self.output.return_value = json.dumps(self.admin_secret())
-        stream = io.StringIO()
-        with patch.object(self.monitor, 'forward', side_effect=OSError('Address already in use')), \
-             contextlib.redirect_stdout(stream), self.assertRaises(OSError):
-            self.monitor.dashboard(13000, admin=True)
-        self.assertEqual(stream.getvalue(), '')
-
-    def test_dashboard_reports_a_lost_tunnel(self):
-        import contextlib
-        proc = Mock()
-        proc.poll.return_value = 1
-        with patch.object(self.monitor, 'forward', return_value=contextlib.nullcontext(proc)):
-            with self.assertRaisesRegex(RuntimeError, 'Grafana tunnel disconnected'):
-                self.monitor.dashboard(13000)
 
     def test_traffic_verification_requires_latency_and_both_token_types_in_each_mode(self):
         import contextlib
@@ -402,11 +280,11 @@ class MonitoringChartTests(unittest.TestCase):
         cls.values['nodeSelector'] = {'kubernetes.io/hostname': 'control-node'}
         path = cls.work/'values.json'
         path.write_text(json.dumps(cls.values))
-        rendered = subprocess.check_output(['helm', 'template', 'llm-monitoring', str(monitoring.CHART), '-n', 'llm-stack', '-f', str(path)], text=True)
+        rendered = subprocess.check_output(['helm', 'template', 'llm-monitoring', str(CHART), '-n', 'llm-stack', '-f', str(path)], text=True)
         cls.docs = [d for d in yaml.safe_load_all(rendered) if d]
         cls.config = yaml.safe_load(next(d for d in cls.docs if d['kind']=='ConfigMap' and d['metadata']['name'].endswith('-collector'))['data']['config.yaml'])
 
-    def test_discovered_selectors_match_the_rendered_shared_stack(self):
+    def test_default_selectors_match_the_rendered_shared_stack(self):
         import importlib.util
         path = HERE.parent/'tests/test_helm_shared_stack.py'
         spec = importlib.util.spec_from_file_location('monitoring_shared_fixture', path)
@@ -415,16 +293,14 @@ class MonitoringChartTests(unittest.TestCase):
         fixture = module.SharedHelmTests
         fixture.setUpClass()
         try:
-            resources = fixture().installed()
-            deployments = [d for d in resources if d['kind'] == 'Deployment']
-            values = {'operator': {'watchNamespaces': ['test-models']},
-                      'gatewayStack': {'llm-api-gateway': {'llmApiGateway': {'metrics': {'enabled': True}}}}}
-            for deployment in deployments:
-                deployment['metadata']['annotations']['meta.helm.sh/release-name'] = 'llm-stack'
-            reads = [values, {'items': deployments}]
-            with patch.object(monitoring.llm, 'run', side_effect=[json.dumps(v) for v in reads]):
-                generated = monitoring.chart_values('test-context', 'test-models')
-            for target in generated['targets'][:3]:
+            values = copy.deepcopy(fixture.values)
+            values['operator']['watchNamespaces'] = ['llm-stack']
+            path = self.work/'shared-values.json'
+            path.write_text(json.dumps(values))
+            rendered = subprocess.check_output(['helm', 'template', 'llm-stack', str(fixture.chart),
+                '-n', 'llm-stack', '-f', str(path), '--api-versions', 'pylon.nvidia.com/v1alpha1'], text=True)
+            deployments = [d for d in yaml.safe_load_all(rendered) if d and d['kind'] == 'Deployment']
+            for target in self.values['targets'][:3]:
                 labels = dict(pair.split('=', 1) for pair in target['selector'].split(','))
                 selected = [d for d in deployments if all(d['spec']['template']['metadata']['labels'].get(k) == v for k, v in labels.items())]
                 self.assertEqual(len(selected), 1, target)
@@ -434,14 +310,14 @@ class MonitoringChartTests(unittest.TestCase):
             fixture.tearDownClass()
 
     def test_disabled_chart_creates_no_resources(self):
-        result = subprocess.check_output(['helm', 'template', 'disabled', str(monitoring.CHART)], text=True)
+        result = subprocess.check_output(['helm', 'template', 'disabled', str(CHART), '--set', 'enabled=false'], text=True)
         self.assertFalse([doc for doc in yaml.safe_load_all(result) if doc])
 
     def test_storage_uses_cluster_default_unless_explicitly_selected(self):
         claim = next(d for d in self.docs if d['kind'] == 'PersistentVolumeClaim')
         self.assertNotIn('storageClassName', claim['spec'])
         rendered = subprocess.check_output([
-            'helm', 'template', 'selected-storage', str(monitoring.CHART),
+            'helm', 'template', 'selected-storage', str(CHART),
             '-f', str(self.work/'values.json'),
             '--set', 'victoriaMetrics.storage.storageClass=local-fast'], text=True)
         claim = next(d for d in yaml.safe_load_all(rendered) if d and d['kind'] == 'PersistentVolumeClaim')
@@ -453,7 +329,7 @@ class MonitoringChartTests(unittest.TestCase):
         values['networkPolicy'] = {'enabled': True, 'apiServerCIDRs': ['10.0.0.1/32']}
         path = self.work/'restricted.json'
         path.write_text(json.dumps(values))
-        rendered = subprocess.check_output(['helm', 'template', 'restricted', str(monitoring.CHART), '-f', str(path)], text=True)
+        rendered = subprocess.check_output(['helm', 'template', 'restricted', str(CHART), '-f', str(path)], text=True)
         policy = next(d for d in yaml.safe_load_all(rendered) if d and d['kind']=='NetworkPolicy')['spec']
         self.assertEqual(policy['podSelector'], {'matchLabels': {'app.kubernetes.io/instance': 'restricted'}})
         self.assertEqual(policy['policyTypes'], ['Egress'])
@@ -526,7 +402,7 @@ class MonitoringChartTests(unittest.TestCase):
                 values['targets'].append(target)
                 path = self.work/'runtime-target.json'
                 path.write_text(json.dumps(values))
-                rendered = subprocess.check_output(['helm', 'template', 'optional-runtime', str(monitoring.CHART), '-f', str(path)], text=True)
+                rendered = subprocess.check_output(['helm', 'template', 'optional-runtime', str(CHART), '-f', str(path)], text=True)
                 docs = [d for d in yaml.safe_load_all(rendered) if d]
                 collector = yaml.safe_load(next(d for d in docs if d['kind'] == 'ConfigMap' and d['metadata']['name'].endswith('-collector'))['data']['config.yaml'])
                 job = next(j for j in collector['receivers']['prometheus']['config']['scrape_configs'] if j['job_name'] == target['name'])
