@@ -45,6 +45,7 @@ type contextKey string
 
 const (
 	claimsContextKey       contextKey = "claims"
+	verifiedJWTContextKey  contextKey = "verified_jwt"
 	tenantClaimsContextKey contextKey = "tenant_claims"
 
 	ErrFetchingJwk             = "failed to fetch jwk"
@@ -235,16 +236,11 @@ func NewJWTParserOptions(jwksURL string, method jwt.SigningMethod, jwkCacheRefre
 }
 
 // MaybeRequireScopes This middleware can be chained with any http.Handler in order to place a scope(s) requirement
-// on the request path. If auth is disabled, it will simply pass through the request.
+// on the request path. Verified JWTs are checked even when local checks are disabled for API keys.
 // If requireAllScopes is true, all scopes must be present in the JWT token.
 // If requireAllScopes is false, at least one of the scopes must be present in the JWT token.
 func MaybeRequireScopes(logger *otelzap.Logger, authEnabled bool, requiredScopes Scopes, scopeRequirement ScopeRequirement) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		if !authEnabled {
-			return next
-		}
-		return requireScopes(requiredScopes, scopeRequirement, false)(next)
-	}
+	return maybeRequireScopes(authEnabled, requiredScopes, scopeRequirement, false)
 }
 
 // MaybeRequireScopesAllowNVCA is MaybeRequireScopes, but also trusts an
@@ -252,11 +248,22 @@ func MaybeRequireScopes(logger *otelzap.Logger, authEnabled bool, requiredScopes
 // handler also binds the identity to a specific cluster (see
 // bindNVCAClusterID in cmd/api/service/v3.go).
 func MaybeRequireScopesAllowNVCA(logger *otelzap.Logger, authEnabled bool, requiredScopes Scopes, scopeRequirement ScopeRequirement) func(http.Handler) http.Handler {
+	return maybeRequireScopes(authEnabled, requiredScopes, scopeRequirement, true)
+}
+
+func maybeRequireScopes(authEnabled bool, requiredScopes Scopes, scopeRequirement ScopeRequirement, allowNVCAIdentity bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		if !authEnabled {
-			return next
+		scoped := requireScopes(requiredScopes, scopeRequirement, allowNVCAIdentity)(next)
+		if authEnabled {
+			return scoped
 		}
-		return requireScopes(requiredScopes, scopeRequirement, true)(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if verified, _ := r.Context().Value(verifiedJWTContextKey).(bool); verified {
+				scoped.ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
 	}
 }
 
@@ -455,8 +462,8 @@ func tenantValuesFromClaim(value interface{}) []string {
 	return nil
 }
 
-// IsTenantAuthorized reports whether a JWT-authenticated request may access a
-// tenant. Other authentication providers continue through their own policy.
+// IsTenantAuthorized checks JWT tenant claims when configured. Route scopes
+// apply separately; without tenant claims, this check does not restrict namespaces.
 func IsTenantAuthorized(ctx context.Context, tenant string) bool {
 	authorizedTenants, ok := ctx.Value(tenantClaimsContextKey).([]string)
 	if !ok {
@@ -576,6 +583,7 @@ func processJWTToken(opts JWTParserOptions, jwkCache *jwk.Cache, w http.Response
 	}
 
 	newCtx := context.WithValue(ctx, claimsContextKey, token.Claims)
+	newCtx = context.WithValue(newCtx, verifiedJWTContextKey, true)
 	if opts.TenantClaim != "" {
 		authorizedTenants := tenantValuesFromClaim(claims[opts.TenantClaim])
 		if len(authorizedTenants) == 0 {

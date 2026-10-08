@@ -225,9 +225,14 @@ func assertPodLaneTransforms(t *testing.T, config string) {
 	require.GreaterOrEqual(t, fvIdx, 0, "function_version_id namespace statement missing")
 	require.GreaterOrEqual(t, taskIdx, 0, "task_id namespace override missing")
 	assert.Less(t, fvIdx, taskIdx, "task_id override must run after the function_version_id default")
-	assert.GreaterOrEqual(t, indexOfContaining(stmts,
-		`Concat(["Pod", resource.attributes["k8s.container.name"], log.attributes["k8s.event.reason"]]`), 0,
-		"container-scoped event_name branch missing")
+	dropIdx := indexOfContaining(stmts, `delete_key(resource.attributes, "k8s.container.name")`)
+	containerEventIdx := indexOfContaining(stmts,
+		`Concat(["Pod", resource.attributes["k8s.container.name"], log.attributes["k8s.event.reason"]]`)
+	require.GreaterOrEqual(t, dropIdx, 0, "Pod-level events must drop the k8sattributes default container")
+	assert.GreaterOrEqual(t, indexOfContaining(stmts, `delete_key(resource.attributes, "container.image.name")`), 0)
+	assert.GreaterOrEqual(t, indexOfContaining(stmts, `delete_key(resource.attributes, "container.image.tag")`), 0)
+	require.GreaterOrEqual(t, containerEventIdx, 0, "container-scoped event_name branch missing")
+	assert.Less(t, dropIdx, containerEventIdx, "default container must be dropped before event_name is built")
 	assert.GreaterOrEqual(t, indexOfContaining(stmts,
 		`Concat(["Pod", log.attributes["k8s.event.reason"]]`), 0,
 		"pod-scoped event_name branch missing")

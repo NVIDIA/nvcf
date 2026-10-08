@@ -89,6 +89,12 @@ processors:
   transform:
     error_mode: ignore
     log_statements:
+      # k8sattributes falls back to a default container for Pod-level Events (no
+      # container in involvedObject.fieldPath). Drop those so the Event stays
+      # Pod-scoped instead of being attributed to an arbitrary container.
+      - delete_key(resource.attributes, "k8s.container.name") where resource.attributes["k8s.object.fieldpath"] == nil or not IsMatch(resource.attributes["k8s.object.fieldpath"], ".*\\{[^}]+\\}.*")
+      - delete_key(resource.attributes, "container.image.name") where resource.attributes["k8s.object.fieldpath"] == nil or not IsMatch(resource.attributes["k8s.object.fieldpath"], ".*\\{[^}]+\\}.*")
+      - delete_key(resource.attributes, "container.image.tag") where resource.attributes["k8s.object.fieldpath"] == nil or not IsMatch(resource.attributes["k8s.object.fieldpath"], ".*\\{[^}]+\\}.*")
       - set(log.attributes["cluster_id"], resource.attributes["cluster_name"]) where resource.attributes["cluster_name"] != nil
       - set(log.attributes["deployment_id"], resource.attributes["deployment_id"]) where resource.attributes["deployment_id"] != nil
       - set(log.attributes["gpu_specification_id"], resource.attributes["gpu_specification_id"]) where resource.attributes["gpu_specification_id"] != nil

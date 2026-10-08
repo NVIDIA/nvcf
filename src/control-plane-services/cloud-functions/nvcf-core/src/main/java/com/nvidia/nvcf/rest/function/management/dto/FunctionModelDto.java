@@ -74,7 +74,10 @@ public class FunctionModelDto {
         @Nullable
         private String tokenizer;
 
-        @Schema(description = "Routing method for this model.")
+        @Schema(description = "Routing method for this model: a request router algorithm name, " +
+                "optionally followed by ';name=value' tuning parameters, for example " +
+                "pulsar;seed=stable-a. The API checks only the format. The request router " +
+                "checks the algorithm and parameters on each request.")
         @Nullable
         private String routingMethod;
 
