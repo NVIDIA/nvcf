@@ -97,6 +97,15 @@ src/uis/nvcf-ui/backend/static
 src/uis/nvcf-ui/backend/bin
 src/uis/nvcf-ui/node_modules
 
+# nvcf-spark-ui (the Inference Endpoints in a Box demo UI), the same layout.
+src/uis/nvcf-spark-ui/ui/node_modules
+src/uis/nvcf-spark-ui/ui/dist
+src/uis/nvcf-spark-ui/ui/coverage
+src/uis/nvcf-spark-ui/ui/test-results
+src/uis/nvcf-spark-ui/ui/playwright-report
+src/uis/nvcf-spark-ui/backend/static
+src/uis/nvcf-spark-ui/backend/bin
+
 # Lifted from src/compute-plane-services/ess-agent/.bazelignore on migration into the root module.
 src/compute-plane-services/ess-agent/local
 src/compute-plane-services/ess-agent/vault
