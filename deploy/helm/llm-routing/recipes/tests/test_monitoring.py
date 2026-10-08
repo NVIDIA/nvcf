@@ -408,6 +408,16 @@ class MonitoringChartTests(unittest.TestCase):
         result = subprocess.check_output(['helm', 'template', 'disabled', str(monitoring.CHART)], text=True)
         self.assertFalse([doc for doc in yaml.safe_load_all(result) if doc])
 
+    def test_storage_uses_cluster_default_unless_explicitly_selected(self):
+        claim = next(d for d in self.docs if d['kind'] == 'PersistentVolumeClaim')
+        self.assertNotIn('storageClassName', claim['spec'])
+        rendered = subprocess.check_output([
+            'helm', 'template', 'selected-storage', str(monitoring.CHART),
+            '-f', str(self.work/'values.json'),
+            '--set', 'victoriaMetrics.storage.storageClass=local-fast'], text=True)
+        claim = next(d for d in yaml.safe_load_all(rendered) if d and d['kind'] == 'PersistentVolumeClaim')
+        self.assertEqual(claim['spec']['storageClassName'], 'local-fast')
+
     def test_optional_egress_policy_selects_only_monitoring_and_allows_cluster_access(self):
         self.assertFalse(any(d['kind']=='NetworkPolicy' for d in self.docs))
         values = copy.deepcopy(self.values)

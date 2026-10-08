@@ -129,7 +129,9 @@ metadata:
     helm.sh/resource-policy: keep
 spec:
   accessModes: [ReadWriteOnce]
-  storageClassName: {{ .Values.victoriaMetrics.storage.storageClass | quote }}
+  {{- with .Values.victoriaMetrics.storage.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
   resources:
     requests:
       storage: {{ .Values.victoriaMetrics.storage.size }}
