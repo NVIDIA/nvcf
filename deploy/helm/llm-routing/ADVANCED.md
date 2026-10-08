@@ -46,7 +46,7 @@ python3 llm.py --context my-cluster chat \
   --model qwen3.8-27b 'Say hello in one short sentence.'
 ```
 
-The `recipes` command reads the local catalog and works without cluster access. The `models` and `chat` commands retrieve the installed CA and caller credential for each call. Their local connection and temporary files last only for that command. The `plan` command reads Kubernetes inventory and never opens a gateway connection. Its install command defaults to the recipe source chart. Pass `plan --chart-source PATH_OR_REFERENCE` to select a local archive or published Helm chart. Use `--ca-configmap NAME` and `--api-key-file FILE` to select an existing CA and caller key. Image preparation remains in the [image build guide](dev-artifacts/README.md).
+The `recipes` command reads the local catalog and works without cluster access. The `models` and `chat` commands retrieve the installed CA and caller credential for each call. Their local connection and temporary files last only for that command. Chat uses the model's normal generation defaults; pass `chat --max-tokens N` to limit output. Reaching that limit returns the partial answer. The separate verifier retains deterministic prompts and strict completion checks. The `plan` command reads Kubernetes inventory and never opens a gateway connection. Its install command defaults to the recipe source chart. Pass `plan --chart-source PATH_OR_REFERENCE` to select a local archive or published Helm chart. Use `--ca-configmap NAME` and `--api-key-file FILE` to select an existing CA and caller key. Image preparation remains in the [image build guide](dev-artifacts/README.md).
 
 ### Model capacity check
 

@@ -400,6 +400,7 @@ def main(argv=None):
     chat = commands.add_parser('chat', help='Chat with a model through the gateway.')
     chat.add_argument('--model', required=True)
     chat.add_argument('--stream', action='store_true')
+    chat.add_argument('--max-tokens', type=int, help='Maximum generated tokens. Defaults to the model server setting.')
     chat.add_argument('prompt')
     plan = commands.add_parser('plan', help='Check recipe capacity and show placement or current allocations, without changes.')
     plan.add_argument('--model', required=True, help='Recipe ID shown by llm.py recipes.')
@@ -426,6 +427,8 @@ def main(argv=None):
         parser.error('--namespace must be a Kubernetes namespace name.')
     if args.command == 'chat' and (not args.model.strip() or not args.prompt.strip()):
         parser.error('Choose a served model and provide a nonempty prompt.')
+    if args.command == 'chat' and args.max_tokens is not None and args.max_tokens < 1:
+        parser.error('--max-tokens must be a positive integer.')
     if args.command == 'plan':
         if not args.model.strip():
             parser.error('Choose a recipe model ID.')
@@ -454,7 +457,8 @@ def main(argv=None):
             else:
                 print_model_list(listing)
             return listing
-        return client.completion(args.model, args.prompt, stream=args.stream, display=True)
+        return client.completion(args.model, args.prompt, stream=args.stream, display=True,
+                                 max_tokens=args.max_tokens, strict=False)
 
 
 def terminate(signum, frame):

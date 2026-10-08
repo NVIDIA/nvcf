@@ -115,8 +115,18 @@ class CommandTests(IsolatedTest):
             client.completion.return_value = {'content': 'hello'}
             result = llm.main(['--context', 'target', 'chat', '--model', model, '--stream', prompt])
         gateway.assert_called_once_with('target', 'llm-stack', None, None)
-        client.completion.assert_called_once_with(model, prompt, stream=True, display=True)
+        client.completion.assert_called_once_with(model, prompt, stream=True, display=True, max_tokens=None, strict=False)
         self.assertEqual(result, {'content': 'hello'})
+
+    def test_chat_max_tokens_is_forwarded_and_validated_before_cluster_access(self):
+        with patch.object(llm, 'gateway') as gateway:
+            llm.main(['--context', 'target', 'chat', '--model', 'model', '--max-tokens', '4096', 'hello'])
+        gateway.return_value.__enter__.return_value.completion.assert_called_once_with(
+            'model', 'hello', stream=False, display=True, max_tokens=4096, strict=False)
+        for value in ('0', '-1'):
+            with self.subTest(value=value), patch.object(llm, 'selected_context') as context, self.assertRaises(SystemExit):
+                llm.main(['chat', '--model', 'model', '--max-tokens', value, 'hello'])
+            context.assert_not_called()
 
     def test_empty_chat_input_and_invalid_namespace_fail_before_cluster_access(self):
         for arguments in (['chat', '--model', ' ', 'hello'], ['chat', '--model', 'real', ' '],
