@@ -12,6 +12,16 @@ The shared chart generates the caller key in `llm-shared-caller-key` and the tra
 
 TLS customization uses `gatewayStack.tls` and the child chart listener TLS values. See [shared-stack/values.yaml](charts/shared-stack/values.yaml) and the [gateway chart](../llm-gateway-stack/llm-gateway-stack/values.yaml). Model values reference the same CA ConfigMap through `sharedCAConfigMap`.
 
+To configure additional callers, create a Secret containing `api-key` for each caller in the release namespace, then list them in shared values:
+
+```yaml
+extraCallerKeys:
+  - id: demo-ui
+    secretName: demo-ui-api-key
+```
+
+Caller IDs and trimmed keys must be distinct, including the primary caller. Upgrades regenerate authentication hashes from these configured Secrets. Removing an entry revokes it after the gateway reloads its authentication file; unlisted live entries are not preserved.
+
 ### Shared Helm installation and verification
 
 Use the context selected in the [installation guide](README.md#1-install-shared-infrastructure). The shared chart runs a verification Job after installation and upgrade. It uses the installed CA to check gateway TLS and the `/v1/models` response, then checks that an unknown model returns HTTP 401 with an invalid key and HTTP 404 with the valid key. An empty registry is valid on first installation. Existing models remain valid on upgrades. A failed check makes the Helm command fail:

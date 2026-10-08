@@ -7,6 +7,11 @@ callerKey:
   secretName: llm-shared-caller-key
   existingSecret: ""
 
+# Additional callers use api-key from explicitly named, pre-created Secrets.
+# Removing an entry revokes that key after the gateway reloads its key file.
+extraCallerKeys: []
+# - {id: demo-ui, secretName: demo-ui-api-key}
+
 # Set false to use the pre-created operator.credential.existingSecret.
 # It must contain cluster-token. Its hash is wired into the router automatically.
 clusterCredential:

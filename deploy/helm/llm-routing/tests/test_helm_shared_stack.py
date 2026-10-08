@@ -301,6 +301,58 @@ class SharedHelmTests(unittest.TestCase):
                 self.assertFalse(any(item['kind'] == 'Secret' and item['metadata']['name'] == 'external-caller'
                                      for item in result))
 
+    def test_extra_callers_are_explicit_and_removal_or_rotation_replaces_live_hashes(self):
+        resources = self.installed()
+        extra = {'apiVersion': 'v1', 'kind': 'Secret',
+                 'metadata': {'name': 'demo-ui-api-key', 'namespace': 'test-models'},
+                 'data': {'api-key': base64.b64encode(b' demo-caller-key\n').decode()}}
+        resources.append(extra)
+        resources.append({'apiVersion': 'v1', 'kind': 'Secret',
+                          'metadata': {'name': 'automation-api-key', 'namespace': 'test-models'},
+                          'data': {'api-key': base64.b64encode(b'automation-key').decode()}})
+        auth = next(item for item in resources if item['metadata']['name'] == 'llm-gateway-stack-api-keys')
+        stale = json.loads(decode(auth, 'api-keys.json'))
+        stale['keys'].append({'id': 'unconfigured-live-key', 'sha256': hashlib.sha256(b'unconfigured-key').hexdigest()})
+        auth['data']['api-keys.json'] = base64.b64encode(json.dumps(stale).encode()).decode()
+        values = copy.deepcopy(self.values)
+        values['extraCallerKeys'] = [{'id': 'demo-ui', 'secretName': 'demo-ui-api-key'},
+                                    {'id': 'automation', 'secretName': 'automation-api-key'}]
+        for token in ('demo-caller-key', 'rotated-caller-key'):
+            extra['data']['api-key'] = base64.b64encode((' '+token+'\n').encode()).decode()
+            rendered = self.render(values, chart=self.lookup_chart(resources), upgrade=True)
+            keys = json.loads(decode(next(item for item in rendered if item['metadata']['name'] == 'llm-gateway-stack-api-keys'), 'api-keys.json'))['keys']
+            self.assertEqual(keys, [stale['keys'][0], {'id': 'demo-ui', 'sha256': hashlib.sha256(token.encode()).hexdigest()},
+                                    {'id': 'automation', 'sha256': hashlib.sha256(b'automation-key').hexdigest()}])
+            self.assertFalse(any(item['metadata']['name'] in ('demo-ui-api-key', 'automation-api-key') for item in rendered))
+            auth['data']['api-keys.json'] = base64.b64encode(json.dumps({'keys': keys}).encode()).decode()
+        rendered = self.render(chart=self.lookup_chart(resources), upgrade=True)
+        keys = json.loads(decode(next(item for item in rendered if item['metadata']['name'] == 'llm-gateway-stack-api-keys'), 'api-keys.json'))['keys']
+        self.assertEqual(keys, [stale['keys'][0]])
+
+    def test_extra_caller_configuration_rejects_invalid_or_duplicate_entries(self):
+        external = {'apiVersion': 'v1', 'kind': 'Secret',
+                    'metadata': {'name': 'extra-key', 'namespace': 'test-models'},
+                    'data': {'api-key': base64.b64encode(b'extra-key-value').decode()}}
+        cases = [({}, 'must be a list'), (['bad'], 'require id and secretName'),
+                 ([{'id': 7, 'secretName': 'extra-key'}], 'require string'),
+                 ([{'id': '', 'secretName': 'extra-key'}], 'nonempty and unique'),
+                 ([{'id': 'stack-client', 'secretName': 'extra-key'}], 'nonempty and unique'),
+                 ([{'id': 'ui', 'secretName': 'INVALID'}], 'DNS names'),
+                 ([{'id': 'ui', 'secretName': 'extra-key'}] * 2, 'nonempty and unique'),
+                 ([{'id': 'ui', 'secretName': 'extra-key'}, {'id': 'other', 'secretName': 'extra-key'}], 'distinct hashes')]
+        chart = self.lookup_chart([external])
+        for entries, error in cases:
+            with self.subTest(entries=entries):
+                values = copy.deepcopy(self.values)
+                values['extraCallerKeys'] = entries
+                self.render(values, chart=chart, fail=error)
+        values = copy.deepcopy(self.values)
+        values['extraCallerKeys'] = [{'id': 'ui', 'secretName': 'extra-key'}]
+        self.render(values, fail='required Secret extra-key is missing')
+        for data, error in (({}, 'missing api-key'), ({'api-key': base64.b64encode(b' \n').decode()}, 'empty credential')):
+            external['data'] = data
+            self.render(values, chart=self.lookup_chart([external]), fail=error)
+
     def test_watch_scope_must_equal_release_namespace(self):
         for watch in ([], ['other'], ['test-models', 'other']):
             with self.subTest(watch=watch):
