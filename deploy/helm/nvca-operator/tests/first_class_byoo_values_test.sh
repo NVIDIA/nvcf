@@ -61,16 +61,15 @@ assert_absent() {
   fi
 }
 
-# byoo.resources/otelCollector/additionalResourceOverhead/fluentbit.resources default to {}
-# so a no-op chart upgrade does not change the agent's built-in resource defaults; only
-# logChunking and utils.resources ship non-empty chart defaults.
+# byoo values default to {} so a no-op chart upgrade does not change the agent's
+# built-in defaults; only utils.resources ships a non-empty chart default. An empty
+# logChunking also keeps a legacy mergeConfig override from meeting a chart-owned block.
 render "${default_manifest}"
 assert_absent "${default_manifest}" '.agent.BYOOResources' "BYOOResources should be unset by default"
 assert_absent "${default_manifest}" '.agent.byooOtelCollector' "byooOtelCollector should be unset by default"
 assert_absent "${default_manifest}" '.agent.additionalResourceOverhead' "additionalResourceOverhead should be unset by default"
 assert_absent "${default_manifest}" '.agent.BYOOFluentBitResources' "BYOOFluentBitResources should be unset by default"
-assert_equal "0" "$(agent_config_value "${default_manifest}" '.agent.byooLogChunking.maxPayloadBytes')" "unexpected default BYOO log chunk payload size"
-assert_equal "false" "$(agent_config_value "${default_manifest}" '.agent.byooLogChunking.dryRun')" "unexpected default BYOO log chunk dry-run"
+assert_absent "${default_manifest}" '.agent.byooLogChunking' "byooLogChunking should be unset by default"
 assert_equal "4" "$(agent_config_value "${default_manifest}" '.agent.UtilsResources.cpu')" "unexpected utils CPU sizing"
 assert_equal "4Gi" "$(agent_config_value "${default_manifest}" '.agent.UtilsResources.memory')" "unexpected utils memory sizing"
 
@@ -166,10 +165,14 @@ agentConfig:
 EOF_VALUES
 legacy_case_manifest="${tmp_dir}/legacy-case-manifest.yaml"
 render "${legacy_case_manifest}" --values "${legacy_case_values}"
-assert_equal "byooLogChunking" "$(agent_key_spellings "${legacy_case_manifest}" "byoologchunking")" "legacy BYOOLogChunking should render once under the chart spelling"
-assert_equal "262144" "$(agent_config_value "${legacy_case_manifest}" '.agent.byooLogChunking.maxBodyBytes')" "legacy BYOO log chunk size was dropped"
-assert_equal "0" "$(agent_config_value "${legacy_case_manifest}" '.agent.byooLogChunking.maxPayloadBytes')" "chart default BYOO log chunk payload size was dropped"
-assert_equal "1000000" "$(agent_config_value "${legacy_case_manifest}" '.agent.byooLogChunking.exporterBatchMaxSizeBytes')" "legacy BYOO log chunk field was dropped"
+assert_equal "BYOOLogChunking" "$(agent_key_spellings "${legacy_case_manifest}" "byoologchunking")" "legacy BYOOLogChunking should render once when the chart sets no log chunking"
+assert_equal "262144" "$(agent_config_value "${legacy_case_manifest}" '.agent.BYOOLogChunking.maxBodyBytes')" "legacy BYOO log chunk size was dropped"
+assert_equal "1000000" "$(agent_config_value "${legacy_case_manifest}" '.agent.BYOOLogChunking.exporterBatchMaxSizeBytes')" "legacy BYOO log chunk field was dropped"
+
+legacy_with_chart_manifest="${tmp_dir}/legacy-with-chart-manifest.yaml"
+render "${legacy_with_chart_manifest}" --values "${legacy_case_values}" --set byoo.logChunking.dryRun=true
+assert_equal "byooLogChunking" "$(agent_key_spellings "${legacy_with_chart_manifest}" "byoologchunking")" "legacy BYOOLogChunking should merge into the chart spelling when byoo.logChunking is set"
+assert_equal "262144" "$(agent_config_value "${legacy_with_chart_manifest}" '.agent.byooLogChunking.maxBodyBytes')" "legacy BYOO log chunk size was dropped"
 
 nested_case_values="${tmp_dir}/nested-case-values.yaml"
 cat > "${nested_case_values}" <<'EOF_VALUES'

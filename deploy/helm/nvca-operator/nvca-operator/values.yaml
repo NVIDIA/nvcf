@@ -98,16 +98,18 @@ enableGXCache: true
 ddcsIPAllowList: ""
 ## @section BYOO Configuration
 ## @param byoo.resources Resource requests and limits for the BYOO OTel collector container. Leave unset to keep the agent's built-in defaults.
-## @param byoo.logChunking.maxPayloadBytes Maximum log chunk payload size in bytes. Zero disables the override.
-## @param byoo.logChunking.dryRun Record chunking metrics without modifying log payloads.
+## @param byoo.logChunking BYOO log chunking overrides: `maxPayloadBytes` (maximum log chunk payload size in bytes) and `dryRun` (record chunking metrics without modifying log payloads). Leave unset to keep the agent's built-in defaults.
 ## @param byoo.otelCollector Structured BYOO OTel collector rendering overrides.
 ## @param byoo.additionalResourceOverhead Cluster capacity reserved for BYOO and related DaemonSet overhead. Leave unset to keep the agent's built-in defaults.
 ## @param byoo.fluentbit.resources Resource requests and limits for the BYOO FluentBit container. Leave unset to keep the agent's built-in defaults.
 byoo:
   resources: {}
-  logChunking:
-    maxPayloadBytes: 0
-    dryRun: false
+  logChunking: {}
+  # Example:
+  #
+  # logChunking:
+  #   maxPayloadBytes: 262144
+  #   dryRun: false
   otelCollector: {}
   additionalResourceOverhead: {}
   fluentbit:
