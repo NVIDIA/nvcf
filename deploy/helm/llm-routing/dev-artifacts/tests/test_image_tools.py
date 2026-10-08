@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(HERE.parent/'dev-images'))
+sys.path.insert(0, str(HERE))
 import image_tools
 import test_image_import as import_tests
 
@@ -20,7 +20,7 @@ class ImageToolsTests(unittest.TestCase):
     def test_module_loads_without_recipe_or_model_dependencies(self):
         code = ('import sys; sys.path.insert(0, sys.argv[1]); import image_tools; '
                 'assert not ({"recipe", "sizing", "monitoring", "stack_binding"} & sys.modules.keys())')
-        subprocess.run([sys.executable, '-c', code, str(HERE.parent/'dev-images')], check=True)
+        subprocess.run([sys.executable, '-c', code, str(HERE)], check=True)
 
     def test_component_builds_use_selected_platform_sources_and_targets(self):
         with tempfile.TemporaryDirectory() as directory:

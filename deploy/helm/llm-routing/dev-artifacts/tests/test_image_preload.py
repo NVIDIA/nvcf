@@ -11,8 +11,8 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-HERE = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('test_shared_stack_images', HERE / 'dev-images/image_preload.py')
+HERE = pathlib.Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location('test_shared_stack_images', HERE / 'dev-artifacts/image_preload.py')
 images = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(images)
 
@@ -85,7 +85,7 @@ class ImagePreloadTests(unittest.TestCase):
         return Mock(returncode=0)
 
     def import_images(self, archive, references, **kwargs):
-        kwargs['helm_apply']('image-loader', HERE / 'recipes/charts/image-loader', {'enabled': True}, wait=False)
+        kwargs['helm_apply']('image-loader', HERE / 'dev-artifacts/image-loader', {'enabled': True}, wait=False)
         if self.fail_import:
             raise RuntimeError('import interrupted')
 
@@ -218,7 +218,7 @@ class ImagePreloadTests(unittest.TestCase):
             self.prepare()
 
     def test_adapter_has_no_model_recipe_imports(self):
-        text = (HERE / 'dev-images/image_preload.py').read_text()
+        text = (HERE / 'dev-artifacts/image_preload.py').read_text()
         self.assertNotIn('import recipe', text)
         self.assertNotIn('Recipe(', text)
         self.assertNotIn('glm', text.lower())

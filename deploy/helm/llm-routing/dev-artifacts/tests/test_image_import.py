@@ -21,7 +21,7 @@ from contextlib import ExitStack, redirect_stdout
 from unittest.mock import Mock, patch
 
 HERE = pathlib.Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('tested_image_import', HERE.parent/'dev-images/image_tools.py')
+spec = importlib.util.spec_from_file_location('tested_image_import', HERE/'image_tools.py')
 tool = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tool)
 
@@ -279,7 +279,7 @@ class ImageImportTests(unittest.TestCase):
 @unittest.skipUnless(shutil.which('helm'), 'Helm is required to render the image-loader chart')
 class ImageLoaderChartTests(unittest.TestCase):
     def test_acknowledgements_require_pending_nodes_and_uploaded_archive(self):
-        rendered = subprocess.check_output(['helm', 'template', 'image-test', str(HERE/'charts/image-loader'),
+        rendered = subprocess.check_output(['helm', 'template', 'image-test', str(HERE/'image-loader'),
                     '--set', 'enabled=true', '--set', 'nodeNames[0]=node-one', '--set', 'archiveNode=node-one',
                     '--set', 'archiveSha256='+'a'*64], text=True)
         code = textwrap.dedent(re.search(r'args:\n            - \|\n(.*?)\n          env:', rendered, re.S).group(1))
@@ -316,7 +316,7 @@ class ImageLoaderChartTests(unittest.TestCase):
         self.assertEqual(pending, set())
 
     def test_server_uses_rootless_writable_temporary_storage_and_clients_keep_socket_access(self):
-        rendered = subprocess.check_output(['helm', 'template', 'image-test', str(HERE/'charts/image-loader'),
+        rendered = subprocess.check_output(['helm', 'template', 'image-test', str(HERE/'image-loader'),
                     '--set', 'enabled=true', '--set', 'nodeNames[0]=node-one', '--set', 'archiveNode=node-one',
                     '--set', 'archiveSha256='+'a'*64, '--set', 'runAsUser=2345',
                     '--set', 'archiveDirectory=/unused/legacy/path'], text=True)

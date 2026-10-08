@@ -114,11 +114,11 @@ def main(argv=None):
     args.output_dir = work
     source = images.prepare(args)
     charts = Path(tempfile.mkdtemp(prefix='charts-', dir=work))
-    subprocess.run(['bash', str(HERE.parent / 'package-charts.sh'), '--output-dir', str(charts)], check=True)
+    subprocess.run(['bash', str(HERE / 'package-charts.sh'), '--output-dir', str(charts)], check=True)
     publish_preparation(source, charts)
     print('Updated shared Helm values: ' + str(VALUES), flush=True)
     print('Updated chart packages: ' + str(CHARTS), flush=True)
-    print('Commit dev-images/values.yaml and dev-images/charts together to share this preparation.', flush=True)
+    print('Commit dev-artifacts/values.yaml and dev-artifacts/charts together to share this preparation.', flush=True)
     return VALUES
 
 

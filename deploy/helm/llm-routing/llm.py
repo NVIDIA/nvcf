@@ -138,8 +138,9 @@ def deployment_command(report, catalog, context, namespace, args, capabilities):
     release = args.release or names.get(model['id'], model['id'].replace('.', '-'))
     if deployment['lifecycle'] != 'automatic':
         raise ValueError('The selected profile does not support automatic Helm installation.')
+    chart = args.chart_source or str((HERE / 'recipes' / deployment['chart']['localPath']).resolve())
     command = ['helm', 'install', release,
-               'dev-images/charts/' + deployment['chart']['archive'],
+               chart,
                '--kube-context', context, '--namespace', namespace]
     settings = {'recipe': model['id'], 'profileName': profile['id'], 'runtimeClassName': args.runtime_class,
                 'storageClassName': args.storage_class, 'sharedCAConfigMap': args.shared_ca_configmap}
@@ -415,6 +416,7 @@ def main(argv=None):
     plan.add_argument('--storage-class', default='local-path')
     plan.add_argument('--shared-ca-configmap', default='llm-gateway-stack-ca')
     plan.add_argument('--release', help='Name for a new Helm release. Existing endpoints are reported separately.')
+    plan.add_argument('--chart-source', help='Exact Helm chart reference for the install command. Defaults to the recipe source chart.')
     plan.add_argument('--verbose', action='store_true', help='Show deployment checks, per-pod allocations and an install command when eligible.')
     plan.add_argument('--json', action='store_true', help='Print the complete capacity report as JSON.')
     args = parser.parse_args(argv)
@@ -437,6 +439,8 @@ def main(argv=None):
                 parser.error('--' + field.replace('_', '-') + ' must be a Kubernetes resource name.')
         if args.release and not re.fullmatch(r'[a-z0-9](?:[-a-z0-9]{0,51}[a-z0-9])?', args.release):
             parser.error('--release must be a Helm release name (at most 53 characters).')
+        if args.chart_source is not None and (not args.chart_source.strip() or args.chart_source.startswith('-')):
+            parser.error('--chart-source must be a nonempty Helm chart reference.')
         if any(value is not None and value <= 0 for value in (args.context_length, args.concurrency)):
             parser.error('Context length and concurrency must be positive integers.')
     context = selected_context(args.context)

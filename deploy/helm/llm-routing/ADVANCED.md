@@ -2,9 +2,9 @@
 
 ## Helm configuration
 
-The [main guide](README.md) uses local chart archives and an explicit values file. Build these archives with [package-charts.sh](package-charts.sh). A chart source directory can also be installed after its local dependencies are built. Helm and kubectl use your current kubeconfig context. Use their `--kube-context` and `--context` flags for an explicit override.
+The [main guide](README.md) uses local chart archives and an explicit values file. Build these archives with [package-charts.sh](dev-artifacts/package-charts.sh). A chart source directory can also be installed after its local dependencies are built. Helm and kubectl use your current kubeconfig context. Use their `--kube-context` and `--context` flags for an explicit override.
 
-The supported installation is the `llm-stack` release in namespace `llm-stack`. It contains the gateway, router, Pylon operator and InferenceEndpoint CRD. Independent model releases use that stack in the same namespace. Use [shared-stack/values.local.example.yaml](charts/shared-stack/values.local.example.yaml) for image references and placement, with the operator watching `llm-stack`. Images may come from a registry or a node cache. [Local image preparation](dev-images/README.md) is a temporary development convenience.
+The supported installation is the `llm-stack` release in namespace `llm-stack`. It contains the gateway, router, Pylon operator and InferenceEndpoint CRD. Independent model releases use that stack in the same namespace. Use [shared-stack/values.local.example.yaml](charts/shared-stack/values.local.example.yaml) for image references and placement, with the operator watching `llm-stack`. Images may come from a registry or a node cache. [Local image preparation](dev-artifacts/README.md) is a temporary development convenience.
 
 `operator.installCRDs` inherits the operator chart's boolean default, `true`. The CRD stays in the chart templates so upgrades of the owning release update its schema. Its `helm.sh/resource-policy: keep` annotation retains it and existing InferenceEndpoints on uninstall. Set `operator.installCRDs=false` only when a compatible CRD is managed externally. The chart checks compatibility but does not change that CRD's schema or ownership. Do not delete the CRD to resolve a Helm ownership conflict.
 
@@ -17,14 +17,14 @@ TLS customization uses `gatewayStack.tls` and the child chart listener TLS value
 Use the context selected in the [installation guide](README.md#1-install-shared-infrastructure). The shared chart runs a verification Job after installation and upgrade. It uses the installed CA to check gateway TLS and the `/v1/models` response, then checks that an unknown model returns HTTP 401 with an invalid key and HTTP 404 with the valid key. An empty registry is valid on first installation. Existing models remain valid on upgrades. A failed check makes the Helm command fail:
 
 ```bash
-helm upgrade --install llm-stack dev-images/charts/llm-shared-stack-0.1.0.tgz \
+helm upgrade --install llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
   --namespace llm-stack --create-namespace \
-  --values dev-images/values.yaml --wait --timeout 10m
+  --values dev-artifacts/values.yaml --wait --timeout 10m
 ```
 
 The Job retries temporary connection and gateway availability failures for up to 120 seconds. TLS certificate and authentication failures stop verification immediately. Successful verification Jobs are removed. Failed Jobs and their logs remain available until the next install or upgrade.
 
-The verification image must be pullable or preloaded on eligible nodes. See [verification image distribution](recipes/BUILDING.md#verification-image) for its default and offline settings.
+The verification image must be pullable or preloaded on eligible nodes. See [verification image distribution](dev-artifacts/README.md#verification-image) for its default and offline settings.
 
 ### Shared CLI connection options
 
@@ -36,7 +36,7 @@ python3 llm.py --context my-cluster chat \
   --model qwen3.8-27b 'Say hello in one short sentence.'
 ```
 
-The `recipes` command reads the local catalog and works without cluster access. The `models` and `chat` commands retrieve the installed CA and caller credential for each call. Their local connection and temporary files last only for that command. The `plan` command reads Kubernetes inventory and never opens a gateway connection. Use `--ca-configmap NAME` and `--api-key-file FILE` to select an existing CA and caller key. Image preparation remains in the [image build guide](recipes/BUILDING.md).
+The `recipes` command reads the local catalog and works without cluster access. The `models` and `chat` commands retrieve the installed CA and caller credential for each call. Their local connection and temporary files last only for that command. The `plan` command reads Kubernetes inventory and never opens a gateway connection. Its install command defaults to the recipe source chart. Pass `plan --chart-source PATH_OR_REFERENCE` to select a local archive or published Helm chart. Use `--ca-configmap NAME` and `--api-key-file FILE` to select an existing CA and caller key. Image preparation remains in the [image build guide](dev-artifacts/README.md).
 
 ### Model capacity check
 
@@ -173,7 +173,7 @@ The committed [GLM values](recipes/values/glm-5.3.yaml) select the automatic two
 Install it with the shared stack already running:
 
 ```bash
-helm upgrade --install glm dev-images/charts/pylon-gguf-backend-0.2.0.tgz \
+helm upgrade --install glm dev-artifacts/charts/pylon-gguf-backend-0.2.0.tgz \
   --namespace llm-stack \
   --values recipes/values/glm-5.3.yaml \
   --set 'nodes[0]=gpu-node-1' --set 'nodes[1]=gpu-node-2' \
@@ -185,7 +185,9 @@ echo 'Model installed and registered.'
 
 Kubernetes checks placement, builds the pinned llama.cpp runtime, starts the worker RPC server and qualifies both GPUs. It then verifies or downloads the pinned GGUF cache and starts the model server. The served model ID is `GLM-5.3-UD-IQ2_M`. Use that ID for [gateway verification](#verification). The common catalog lists its per-node resource and storage requirements. The current cached two-node Helm trial stopped at the host-memory guard during loading. Automatic serving validation remains open.
 
-To reuse existing GLM downloads and runtime artifacts, set `reuseCaches: true`, `artifacts.existingClaim` and `rpc.cache.existingClaim` to the retained claims. Supply their original nodes in leader/worker order. The artifact claim must contain the pinned build and source files used for GPU qualification, as well as the runtime bundle and complete model files. Missing qualification state stops startup without rebuilding or deleting the retained files. Use a complete retained artifact cache or a new runtime cache; do not bypass the qualification check. Runtime identity and complete model checksums are validated before serving.
+By default (`reuseCaches: false`), a changed image, llama.cpp revision or CUDA architecture rebuilds compiled runtime state while preserving model files and cached source archives. Unchanged runtimes are verified and reused.
+
+To require offline reuse without rebuilding, set `reuseCaches: true`, `artifacts.existingClaim` and `rpc.cache.existingClaim` to the retained claims. Supply their original nodes in leader/worker order. The artifact claim must contain the pinned build and source files used for GPU qualification, as well as the runtime bundle and complete model files. Missing qualification state stops startup without rebuilding or deleting the retained files. Use a complete retained artifact cache or a new runtime cache; do not bypass the qualification check. Runtime identity and complete model checksums are validated before serving.
 
 ### Helm Flash-Next recipes
 
@@ -225,7 +227,7 @@ Run the printed Helm command when all placement checks pass. It contains the rec
 For a direct one-node install, replace `NODE_FROM_PLANNER` in both places below. The entire block installs the model and waits for gateway registration:
 
 ```bash
-helm upgrade --install qwen-flash dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
+helm upgrade --install qwen-flash dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
   --namespace llm-stack \
   --set recipe=qwen3.8-flash-next --set profileName=spark-nvfp4-nvme \
   --set 'nodes[0]=NODE_FROM_PLANNER' \
@@ -255,7 +257,7 @@ For the commands below, select the existing release and its chart. Use the chart
 
 ```bash
 MODEL_RELEASE=glm
-MODEL_CHART=dev-images/charts/pylon-gguf-backend-0.2.0.tgz
+MODEL_CHART=dev-artifacts/charts/pylon-gguf-backend-0.2.0.tgz
 MODEL_ID=GLM-5.3-UD-IQ2_M
 ```
 
@@ -319,7 +321,7 @@ Save the installed values and release revision privately before upgrading. Revie
 umask 077
 helm get values llm-stack --namespace llm-stack -o yaml > /path/to/private/previous-values.yaml
 helm history llm-stack --namespace llm-stack
-helm upgrade --install llm-stack dev-images/charts/llm-shared-stack-0.1.0.tgz \
+helm upgrade --install llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
   --namespace llm-stack --values /path/to/private/site-values.yaml \
   --wait --timeout 10m
 ```
@@ -399,8 +401,8 @@ python3 -m unittest discover -s tests -v
 python3 -m unittest discover -s recipes/tests -v
 python3 -m unittest discover -s recipes/charts/gguf-backend/tests -v
 python3 recipes/export_catalog.py --check
-helm lint --strict dev-images/charts/llm-shared-stack-0.1.0.tgz \
-  --values dev-images/values.yaml
+helm lint --strict dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
+  --namespace llm-stack --values dev-artifacts/values.yaml
 helm lint --strict recipes/charts/sglang --values recipes/charts/sglang/values.example.yaml
 helm lint --strict recipes/charts/gguf-backend --values recipes/charts/gguf-backend/values.example.yaml
 git diff --check
@@ -411,10 +413,10 @@ Use private temporary output for offline rendered manifests because they can con
 ```bash
 umask 077
 RENDER_DIR="$(mktemp -d)"
-helm template llm-stack dev-images/charts/llm-shared-stack-0.1.0.tgz \
-  --namespace llm-stack --values dev-images/values.yaml > "$RENDER_DIR/shared.yaml"
+helm template llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
+  --namespace llm-stack --values dev-artifacts/values.yaml > "$RENDER_DIR/shared.yaml"
 helm template qwen-fp8 recipes/charts/sglang --namespace llm-stack \
   --set recipe=qwen3.8-27b --set 'nodes[0]=offline-gpu-node' > "$RENDER_DIR/model.yaml"
 ```
 
-Offline rendering cannot inspect live ownership or prove credential reuse. Use [package-charts.sh](package-charts.sh) to build archives in a fresh output directory, then check catalog paths, bundled source equality and `SHA256SUMS`. Package generation and developer image builds do not install or upgrade a release.
+Offline rendering cannot inspect live ownership or prove credential reuse. Use [package-charts.sh](dev-artifacts/package-charts.sh) to build archives in a fresh output directory, then check catalog paths, bundled source equality and `SHA256SUMS`. Package generation and developer image builds do not install or upgrade a release.

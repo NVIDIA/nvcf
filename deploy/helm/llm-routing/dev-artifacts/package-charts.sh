@@ -18,7 +18,7 @@ if [[ $# != 2 || $1 != --output-dir || -z $2 ]]; then
 fi
 command -v helm >/dev/null || { echo 'Helm is required.' >&2; exit 1; }
 command -v python3 >/dev/null || { echo 'Python 3 is required for development packaging.' >&2; exit 1; }
-SOURCE=$(cd "$(dirname "$0")" && pwd -P)
+SOURCE=$(cd "$(dirname "$0")/.." && pwd -P)
 REPO=$(cd "$SOURCE/../../.." && pwd -P)
 OUTPUT=$2
 mkdir -p "$OUTPUT"
@@ -27,6 +27,7 @@ case "$OUTPUT/" in
   "$REPO/"*) echo 'Keep generated chart packages outside the checkout.' >&2; exit 1 ;;
 esac
 [[ -f "$SOURCE/recipes/index.json" ]] || { echo 'The recipe catalog recipes/index.json is missing.' >&2; exit 1; }
+python3 "$SOURCE/recipes/sync-placement.py" --check
 BUILD=$(mktemp -d "${TMPDIR:-/tmp}/llm-charts.XXXXXX")
 trap 'rm -rf "$BUILD"' EXIT
 STAGING="$BUILD/packages"

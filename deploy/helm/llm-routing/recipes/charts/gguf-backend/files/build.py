@@ -26,7 +26,7 @@ def extract_source(archive, source):
 
 
 def main():
-    root = pathlib.Path('/artifacts')
+    root = pathlib.Path(os.environ.get('ARTIFACTS_DIR', '/artifacts'))
     revision = os.environ['LLAMA_REVISION']
     assert re.fullmatch(r'[0-9a-f]{40}', revision), 'Use a full immutable commit'
     source_url = 'https://codeload.github.com/ggml-org/llama.cpp/tar.gz/' + revision

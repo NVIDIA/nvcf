@@ -9,15 +9,15 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-HERE = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('shared_dev_image_builder', HERE/'dev-images/build.py')
+HERE = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location('shared_dev_image_builder', HERE/'dev-artifacts/build.py')
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 
 
 class SharedDevImagesTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix='dev-images-test-')
+        self.temporary = tempfile.TemporaryDirectory(prefix='dev-artifacts-test-')
         self.addCleanup(self.temporary.cleanup)
         self.work = Path(self.temporary.name).resolve()
         self.values = self.work/'values.yaml'
@@ -80,7 +80,7 @@ class SharedDevImagesTests(unittest.TestCase):
         self.assertTrue(args.allow_containerd_import)
         output = args.output_dir
         package_args = self.package.call_args.args[0]
-        self.assertEqual(package_args[:3], ['bash', str(HERE/'package-charts.sh'), '--output-dir'])
+        self.assertEqual(package_args[:3], ['bash', str(HERE/'dev-artifacts/package-charts.sh'), '--output-dir'])
         self.assertEqual(Path(package_args[-1]).parent, output)
         self.assertTrue(Path(package_args[-1]).name.startswith('charts-'))
 

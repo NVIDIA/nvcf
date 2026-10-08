@@ -329,6 +329,144 @@ class RuntimeTests(unittest.TestCase):
                 auto.prepare_runtime(self.config, self.root)
             run.assert_not_called()
 
+    def publish_runtime(self, root, config):
+        runtime = root / 'runtime'
+        runtime.mkdir(exist_ok=True)
+        (root / 'build').mkdir(exist_ok=True)
+        identity = json.dumps(auto.build_identity(config), sort_keys=True).encode()
+        binaries = {}
+        for name in auto.BINARIES:
+            (runtime / name).write_bytes(name.encode() + identity)
+            binaries[name] = auto.digest(runtime / name)
+        manifest = dict(self.manifest, revision=config['recipe']['llamaCppRevision'], image=config['image'],
+                        options=['-DCMAKE_CUDA_ARCHITECTURES=' + config['profile']['cudaArchitectures']], binaries=binaries)
+        (runtime / 'build-manifest.json').write_text(json.dumps(manifest))
+        with tarfile.open(root / 'runtime.tar.gz', 'w:gz') as archive:
+            archive.add(runtime, arcname='runtime')
+        (root / 'runtime.tar.gz.sha256').write_text(auto.digest(root / 'runtime.tar.gz'))
+
+    def test_unchanged_online_cache_reuses_verified_runtime_without_touching_weights(self):
+        self.config['reuseCaches'] = False
+        model = self.root / 'model'
+        model.mkdir()
+        (model / 'weights.gguf').write_bytes(b'preserve model bytes')
+        before = {path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}
+        with patch.object(auto.subprocess, 'run') as build, patch.object(auto.urllib.request, 'urlopen') as network:
+            auto.prepare_runtime(self.config, self.root)
+        build.assert_not_called()
+        network.assert_not_called()
+        self.assertEqual(before, {path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()})
+        auto.emit.assert_called_once_with('runtime_pass', reused=True)
+
+    def test_changed_build_pins_replace_only_compiled_artifacts(self):
+        for field, value in [('revision', 'd' * 40), ('image', 'new@sha256:' + 'e' * 64), ('cudaArchitectures', '120-real')]:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temp:
+                root = pathlib.Path(temp) / 'artifacts'
+                shutil.copytree(self.root, root)
+                for name in ('model', 'qualification', 'checks'):
+                    (root / name).mkdir(exist_ok=True)
+                    (root / name / 'saved').write_bytes(b'keep only model bytes')
+                (root / 'build/stale.o').write_bytes(b'old compiler output')
+                source = root / ('llama.cpp-' + self.config['recipe']['llamaCppRevision'])
+                source.mkdir()
+                (source / 'saved.cpp').write_bytes(b'cached source')
+                config = copy.deepcopy(self.config)
+                config['reuseCaches'] = False
+                if field == 'revision':
+                    config['recipe']['llamaCppRevision'] = value
+                elif field == 'image':
+                    config['image'] = value
+                else:
+                    config['profile']['cudaArchitectures'] = value
+                def build(*args, **kwargs):
+                    self.assertFalse(any((root / name).exists() for name in auto.COMPILED_PATHS))
+                    self.assertEqual(kwargs['env']['ARTIFACTS_DIR'], str(root))
+                    self.assertEqual(kwargs['env']['LLAMA_REVISION'], config['recipe']['llamaCppRevision'])
+                    self.assertEqual(kwargs['env']['BUILD_IMAGE'], config['image'])
+                    self.assertEqual(kwargs['env']['CUDA_ARCHITECTURES'], config['profile']['cudaArchitectures'])
+                    self.assertEqual(json.loads((root / 'automatic-build.json').read_text()), auto.build_identity(config))
+                    self.publish_runtime(root, config)
+                with patch.object(auto.subprocess, 'run', side_effect=build) as run:
+                    auto.prepare_runtime(config, root)
+                run.assert_called_once()
+                auto.verify_runtime(config, root / 'runtime', root / 'runtime.tar.gz')
+                self.assertEqual((root / 'model/saved').read_bytes(), b'keep only model bytes')
+                self.assertEqual((source / 'saved.cpp').read_bytes(), b'cached source')
+                self.assertFalse((root / 'build/stale.o').exists())
+
+    def test_offline_changed_pins_never_build_or_mutate_cache(self):
+        for field in ('revision', 'image', 'cudaArchitectures'):
+            config = copy.deepcopy(self.config)
+            if field == 'revision':
+                config['recipe']['llamaCppRevision'] = 'd' * 40
+            elif field == 'image':
+                config['image'] = 'new@sha256:' + 'e' * 64
+            else:
+                config['profile']['cudaArchitectures'] = '120-real'
+            before = {path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}
+            with self.subTest(field=field), patch.object(auto.subprocess, 'run') as build, \
+                    patch.object(auto.urllib.request, 'urlopen') as network, self.assertRaises(auto.RuntimePinsChanged):
+                auto.prepare_runtime(config, self.root)
+            build.assert_not_called()
+            network.assert_not_called()
+            self.assertEqual(before, {path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()})
+
+    def test_corrupt_runtime_never_gets_silently_rebuilt(self):
+        (self.runtime / 'llama-server').write_bytes(b'corrupt')
+        for revision in (self.config['recipe']['llamaCppRevision'], 'd' * 40):
+            config = copy.deepcopy(self.config)
+            config['reuseCaches'] = False
+            config['recipe']['llamaCppRevision'] = revision
+            with self.subTest(revision=revision), patch.object(auto.subprocess, 'run') as build, \
+                    self.assertRaisesRegex(RuntimeError, 'binary checksum'):
+                auto.prepare_runtime(config, self.root)
+            build.assert_not_called()
+            self.assertTrue((self.root / 'runtime.tar.gz.sha256').exists())
+            self.assertFalse((self.root / 'automatic-build.json').exists())
+
+    def test_interrupted_changed_runtime_build_retries_and_preserves_weights(self):
+        config = copy.deepcopy(self.config)
+        config['reuseCaches'] = False
+        config['recipe']['llamaCppRevision'] = 'd' * 40
+        model = self.root / 'model'
+        model.mkdir()
+        (model / 'weights.gguf').write_bytes(b'preserve model bytes')
+        def interrupted(*args, **kwargs):
+            self.runtime.mkdir()
+            (self.runtime / 'llama-server').write_bytes(b'partial new runtime')
+            raise subprocess.CalledProcessError(1, 'build')
+        with patch.object(auto.subprocess, 'run', side_effect=interrupted), self.assertRaises(subprocess.CalledProcessError):
+            auto.prepare_runtime(config, self.root)
+        auto.emit.assert_not_called()
+        self.assertFalse((self.root / 'runtime.tar.gz.sha256').exists())
+        def complete(*args, **kwargs):
+            self.assertEqual((self.runtime / 'llama-server').read_bytes(), b'partial new runtime')
+            self.publish_runtime(self.root, config)
+        with patch.object(auto.subprocess, 'run', side_effect=complete) as build:
+            auto.prepare_runtime(config, self.root)
+        build.assert_called_once()
+        auto.verify_runtime(config, self.runtime, self.root / 'runtime.tar.gz')
+        self.assertEqual((model / 'weights.gguf').read_bytes(), b'preserve model bytes')
+
+    def test_interrupted_changed_runtime_cleanup_resumes_before_building(self):
+        config = copy.deepcopy(self.config)
+        config['reuseCaches'] = False
+        config['image'] = 'new@sha256:' + 'e' * 64
+        model = self.root / 'model'
+        model.mkdir()
+        (model / 'weights.gguf').write_bytes(b'preserve model bytes')
+        with patch.object(auto.shutil, 'rmtree', side_effect=OSError('cleanup interrupted')), \
+                patch.object(auto.subprocess, 'run') as build, self.assertRaisesRegex(OSError, 'cleanup interrupted'):
+            auto.prepare_runtime(config, self.root)
+        build.assert_not_called()
+        self.assertTrue(json.loads((self.root / 'automatic-build.json').read_text())['reset'])
+        with patch.object(auto.subprocess, 'run', side_effect=lambda *args, **kwargs: self.publish_runtime(self.root, config)) as build:
+            auto.prepare_runtime(config, self.root)
+        build.assert_called_once()
+        auto.verify_runtime(config, self.runtime, self.root / 'runtime.tar.gz')
+        self.assertEqual((model / 'weights.gguf').read_bytes(), b'preserve model bytes')
+        self.assertEqual(json.loads((self.root / 'automatic-build.json').read_text()), auto.build_identity(config))
+
     def test_hardware_checks_available_memory_and_device_before_model_preparation(self):
         self.config['profile'].update({'hardware': {'os': 'linux', 'architecture': 'arm64', 'minHostMemoryGiB': 120, 'cudaDeviceNames': ['NVIDIA GB10'],
                                                    'computeCapability': '12.1'}, 'minAvailableMemoryGiB': 113})
@@ -367,15 +505,56 @@ class RuntimeTests(unittest.TestCase):
         run.assert_not_called()
         network.assert_not_called()
 
-    def test_worker_rejects_wrong_runtime_revision_before_publishing(self):
-        self.manifest['revision'] = 'f' * 40
-        self.write_bundle()
+    def test_worker_waits_for_upgraded_runtime_without_publishing_old_pins(self):
+        old_bundle = (self.root / 'runtime.tar.gz').read_bytes()
+        old_checksum = (self.root / 'runtime.tar.gz.sha256').read_bytes()
+        config = copy.deepcopy(self.config)
+        config['recipe']['llamaCppRevision'] = 'd' * 40
+        self.publish_runtime(self.root, config)
+        new_bundle = (self.root / 'runtime.tar.gz').read_bytes()
+        work = self.root / 'work'
+        work.mkdir()
+        (work / 'runtime.tar.gz').write_bytes(b'previous archive')
+        responses = iter([old_checksum, old_bundle, (self.root / 'runtime.tar.gz.sha256').read_bytes(), new_bundle])
+        def response(*args, **kwargs):
+            self.assertEqual((work / 'runtime.tar.gz').read_bytes(), b'previous archive')
+            self.assertFalse((work / 'runtime').exists())
+            return io.BytesIO(next(responses))
+        with patch.object(auto.urllib.request, 'urlopen', side_effect=response), patch.object(auto.time, 'sleep') as sleep:
+            auto.fetch_runtime(config, 'http://artifacts/runtime.tar.gz', work)
+        sleep.assert_called_once_with(5)
+        self.assertEqual((work / 'runtime.tar.gz').read_bytes(), new_bundle)
+        auto.verify_runtime(config, work / 'runtime')
+
+    def test_worker_old_pins_stop_at_deadline_without_publication(self):
+        config = copy.deepcopy(self.config)
+        config['image'] = 'new@sha256:' + 'e' * 64
         work = self.root / 'work'
         work.mkdir()
         responses = [io.BytesIO((self.root / 'runtime.tar.gz.sha256').read_bytes()), io.BytesIO((self.root / 'runtime.tar.gz').read_bytes())]
-        with patch.object(auto.urllib.request, 'urlopen', side_effect=responses), self.assertRaisesRegex(RuntimeError, 'revision differs'):
-            auto.fetch_runtime(self.config, 'http://artifacts/runtime.tar.gz', work)
+        with patch.object(auto.urllib.request, 'urlopen', side_effect=responses), \
+                patch.object(auto.time, 'monotonic', side_effect=[0, 10800]), patch.object(auto.time, 'sleep') as sleep, \
+                self.assertRaisesRegex(RuntimeError, 'Timed out waiting'):
+            auto.fetch_runtime(config, 'http://artifacts/runtime.tar.gz', work)
+        sleep.assert_not_called()
+        self.assertFalse((work / 'runtime.tar.gz').exists())
         self.assertFalse((work / 'runtime').exists())
+
+    def test_worker_rejects_corrupt_runtime_without_replacing_previous_files(self):
+        (self.runtime / 'llama-server').write_bytes(b'corrupt')
+        self.write_bundle()
+        work = self.root / 'work'
+        work.mkdir()
+        (work / 'runtime.tar.gz').write_bytes(b'previous archive')
+        (work / 'runtime').mkdir()
+        (work / 'runtime/saved').write_bytes(b'previous runtime')
+        responses = [io.BytesIO((self.root / 'runtime.tar.gz.sha256').read_bytes()), io.BytesIO((self.root / 'runtime.tar.gz').read_bytes())]
+        with patch.object(auto.urllib.request, 'urlopen', side_effect=responses), patch.object(auto.time, 'sleep') as sleep, \
+                self.assertRaisesRegex(RuntimeError, 'binary checksum'):
+            auto.fetch_runtime(self.config, 'http://artifacts/runtime.tar.gz', work)
+        sleep.assert_not_called()
+        self.assertEqual((work / 'runtime.tar.gz').read_bytes(), b'previous archive')
+        self.assertEqual((work / 'runtime/saved').read_bytes(), b'previous runtime')
 
     def test_worker_verifies_bundle_and_binaries_before_publishing(self):
         work = self.root / 'work'

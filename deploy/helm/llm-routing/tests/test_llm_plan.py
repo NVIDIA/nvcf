@@ -54,6 +54,7 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(report['status'], 'fits')
         command = shlex.split(report['deployment']['command'])
         self.assertEqual(command[:3], ['helm', 'install', 'qwen-fp8'])
+        self.assertEqual(command[3], str(HERE / 'recipes/charts/sglang'))
         self.assertNotIn('--values', command)
         self.assertIn('recipe=qwen3.8-27b', command)
         self.assertIn('nodes[0]=available-0', command)
@@ -61,6 +62,23 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn('gpu-node-1', report['deployment']['command'])
         self.assertIn('No changes made', self.output.getvalue())
         self.assertIn('104.0 GiB RAM', self.output.getvalue())
+
+    def test_default_chart_is_resolved_from_catalog_when_run_outside_checkout(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.chdir(directory):
+            report = self.plan()
+        chart = Path(shlex.split(report['deployment']['command'])[3])
+        self.assertEqual(chart, HERE / 'recipes/charts/sglang')
+        self.assertTrue((chart / 'Chart.yaml').is_file())
+
+    def test_chart_source_preserves_exact_helm_reference_as_one_argument(self):
+        for chart in ('./packages/model chart.tgz', 'repository/model-chart',
+                      'oci://registry.example.com/charts/model', 'https://example.com/model.tgz'):
+            with self.subTest(chart=chart):
+                report = self.plan(None, '--chart-source', chart)
+                command = shlex.split(report['deployment']['command'])
+                self.assertEqual(command[3], chart)
+                self.assertIn('profileName=spark-fp8', command)
+                self.assertIn('nodes[0]=available-0', command)
 
     def test_current_context_resolved_once_and_every_inventory_call_is_read_only(self):
         data = snapshot()
@@ -213,7 +231,7 @@ class PlanTests(unittest.TestCase):
         command = shlex.split(report['deployment']['command'])
         self.assertNotIn('--values', command)
         self.assertIn('recipe=glm-5.3', command)
-        self.assertTrue(any('pylon-gguf-backend-' in value for value in command))
+        self.assertEqual(command[3], str(HERE / 'recipes/charts/gguf-backend'))
         self.assertIn('nodes[1]=available-1', command)
 
     def test_json_is_machine_readable_and_unknown_gpu_is_printable(self):
@@ -264,7 +282,8 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn('No model cache claims found', self.output.getvalue())
 
     def test_invalid_inputs_stop_before_inventory(self):
-        for args in (['--concurrency', '0'], ['--release', 'bad,name'], ['--storage-class', 'other,inject=true']):
+        for args in (['--concurrency', '0'], ['--release', 'bad,name'], ['--storage-class', 'other,inject=true'],
+                     ['--chart-source', ''], ['--chart-source=--unexpected-option']):
             with self.subTest(args=args), patch.object(capacity, 'inventory') as inventory, self.assertRaises(SystemExit):
                 llm.main(['--context', 'test-cluster', 'plan', '--model', 'qwen3.8-27b', *args])
             inventory.assert_not_called()

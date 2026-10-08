@@ -6,7 +6,9 @@ import importlib.util
 import json
 import os
 import pathlib
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -22,6 +24,25 @@ spec.loader.exec_module(placement)
 
 
 class HelmSGLangTests(unittest.TestCase):
+    def test_placement_sync_reports_drift_and_repairs_gguf_chart_copy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            shutil.copy2(ROOT / 'sync-placement.py', root / 'sync-placement.py')
+            source = root / 'charts/sglang/files/placement.py'
+            source.parent.mkdir(parents=True)
+            shutil.copy2(CHART / 'files/placement.py', source)
+            target = root / 'charts/gguf-backend/files/placement.py'
+            target.parent.mkdir(parents=True)
+            target.write_text('stale copy')
+            command = [sys.executable, str(root / 'sync-placement.py')]
+            stale = subprocess.run(command + ['--check'], text=True, capture_output=True)
+            self.assertNotEqual(stale.returncode, 0)
+            self.assertIn('Stale GGUF placement copy', stale.stderr)
+            self.assertEqual(target.read_text(), 'stale copy')
+            subprocess.run(command, check=True, capture_output=True)
+            subprocess.run(command + ['--check'], check=True, capture_output=True)
+            self.assertEqual(target.read_bytes(), source.read_bytes())
+
     def values(self, recipe='qwen3.8-27b'):
         return {'recipe': recipe, 'nodes': ['gpu-node-1'], 'storageClassName': 'local-path',
                 'runtimeClassName': 'nvidia', 'sharedCAConfigMap': 'routing-ca'}

@@ -11,8 +11,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-HERE = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('developer_shared_images', HERE/'dev-images/image_builder.py')
+HERE = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location('developer_shared_images', HERE/'dev-artifacts/image_builder.py')
 images = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(images)
 

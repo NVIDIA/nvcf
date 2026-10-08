@@ -4,7 +4,7 @@ Read `../README.md` for the Helm installation path and `../ADVANCED.md` for conf
 
 ## Metadata and chart ownership
 
-`catalog.json` owns SGLang model pins and hardware profiles. Each GGUF recipe folder owns `recipe.json`, `model.lock.json`, `profiles.json` and `NOTICE`. Keep model-specific settings in those sources. The charts bundle copies for independent Helm packaging. Keep bundled metadata synchronized and covered by equality tests.
+`catalog.json` owns SGLang model pins and hardware profiles. Each GGUF recipe folder owns `recipe.json`, `model.lock.json`, `profiles.json` and `NOTICE`. Keep model-specific settings in those sources. The charts bundle copies for independent Helm packaging. Keep bundled metadata synchronized and covered by equality tests. `charts/sglang/files/placement.py` owns the shared placement check. Run `python3 sync-placement.py` after editing it, then `python3 sync-placement.py --check` to verify the GGUF chart copy.
 
 `planned.json` records unavailable models and upstream candidates. Keep their deployment profiles empty until an executable recipe is implemented.
 

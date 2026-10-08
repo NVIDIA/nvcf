@@ -12,7 +12,7 @@ import uuid
 
 HERE = pathlib.Path(__file__).resolve().parent.parent
 REPO = HERE.parents[2]
-spec = importlib.util.spec_from_file_location('routing_image_tools', HERE / 'dev-images/image_tools.py')
+spec = importlib.util.spec_from_file_location('routing_image_tools', HERE / 'dev-artifacts/image_tools.py')
 image_tools = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(image_tools)
 
@@ -159,7 +159,7 @@ class Preparation:
         existing = self.owned_release('image-preparation', 'llm-image-preparation') if namespace else False
         values = self.work / 'bootstrap-values.json'
         save(values, {'preparationSession': self.state['session']})
-        self.run(self.hm + [('upgrade' if existing else 'install'), 'image-preparation', HERE / 'charts/image-preparation',
+        self.run(self.hm + [('upgrade' if existing else 'install'), 'image-preparation', HERE / 'dev-artifacts/image-preparation',
                            '--create-namespace', '-f', values, '--wait', '--timeout', '2m'])
         namespace = self.namespace_info()
         require(namespace and not namespace['metadata'].get('deletionTimestamp'), 'Image preparation namespace did not become available.')
@@ -170,7 +170,7 @@ class Preparation:
         self.check_namespace()
 
     def helm_apply(self, release, chart, values, wait=False):
-        require(release == 'image-loader' and pathlib.Path(chart).resolve() == (HERE / 'recipes/charts/image-loader').resolve(),
+        require(release == 'image-loader' and pathlib.Path(chart).resolve() == (HERE / 'dev-artifacts/image-loader').resolve(),
                 'Image preparation may apply only its loader chart.')
         self.check_nodes()
         self.check_namespace()

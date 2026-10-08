@@ -8,7 +8,7 @@ Install the shared routing release `llm-stack` in namespace `llm-stack`, then in
 - Install Helm, kubectl and Python 3.11+ on your workstation.
 - Run these commands from `deploy/helm/llm-routing` in one terminal. The supported release and namespace are both `llm-stack`.
 
-The committed charts and [image values](dev-images/values.yaml) use images preloaded on the shared Spark nodes. [Prepare new images and charts](dev-images/README.md) only when sources change or another cluster needs them.
+The committed charts and [image values](dev-artifacts/values.yaml) use images preloaded on the shared Spark nodes. [Prepare new images and charts](dev-artifacts/README.md) only when sources change or another cluster needs them.
 
 ## 1. Install shared infrastructure
 
@@ -17,9 +17,9 @@ Replace `YOUR_CONTEXT` with your kubeconfig context and select it once below. Al
 ```bash
 kubectl config use-context YOUR_CONTEXT
 
-helm upgrade --install llm-stack dev-images/charts/llm-shared-stack-0.1.0.tgz \
+helm upgrade --install llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
   --namespace llm-stack --create-namespace \
-  --values dev-images/values.yaml --wait --timeout 10m
+  --values dev-artifacts/values.yaml --wait --timeout 10m
 ```
 
 Helm installs the gateway, router and namespace-scoped operator with an empty model registry. A chart verification Job checks gateway TLS, model discovery, acceptance of the caller key and rejection of an invalid key before Helm reports success. The same checks run on upgrades with registered models. The chart generates the caller credential and TLS material on first installation and preserves them on upgrades. The operator watches `llm-stack`. The operator chart defaults `installCRDs` to `true`, so the shared release owns the templated InferenceEndpoint CRD and updates its schema on upgrades. For an externally managed CRD, set `operator.installCRDs=false`. The CRD is retained on uninstall.
@@ -43,7 +43,7 @@ python3 llm.py plan --model qwen3.8-27b
 Install and register Qwen FP8 below, replacing `NODE_FROM_PLANNER` with your chosen node. To reuse retained downloads, keep the original release name, namespace and cache node. Completed model files are verified and reused automatically; missing files are downloaded. No cache flag or values file is required. [Model values examples](recipes/README.md#committed-values) are available for optional overrides and other recipes.
 
 ```bash
-helm upgrade --install qwen-fp8 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
+helm upgrade --install qwen-fp8 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
   --namespace llm-stack \
   --set recipe=qwen3.8-27b --set 'nodes[0]=NODE_FROM_PLANNER' \
   --wait --timeout 120m &&
@@ -65,7 +65,7 @@ python3 llm.py plan --model qwen3.8-27b-nvfp4
 Each recipe reserves its own GPU. Running both precisions on one-GPU nodes requires two distinct available nodes before installation. For the second model, replace `SECOND_NODE_FROM_PLANNER` with an available node different from the first model's node. If no GPU is free, [stop another model](#stop-and-resume) before installing.
 
 ```bash
-helm upgrade --install qwen-nvfp4 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
+helm upgrade --install qwen-nvfp4 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
   --namespace llm-stack \
   --set recipe=qwen3.8-27b-nvfp4 --set 'nodes[0]=SECOND_NODE_FROM_PLANNER' \
   --wait --timeout 120m &&
@@ -126,7 +126,7 @@ These actions affect one model release. Keep the shared gateway and operator ins
 Stop the FP8 release installed above. Use the same chart version that installed the release:
 
 ```bash
-helm upgrade qwen-fp8 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
+helm upgrade qwen-fp8 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
   --namespace llm-stack \
   --reuse-values --set suspended=true --timeout 10m &&
 kubectl -n llm-stack wait --for=delete pod \
@@ -138,7 +138,7 @@ Wait for the pods to terminate before assigning their GPUs to another model. The
 Resume when those GPUs are available again:
 
 ```bash
-helm upgrade qwen-fp8 dev-images/charts/pylon-sglang-recipe-0.2.0.tgz \
+helm upgrade qwen-fp8 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
   --namespace llm-stack \
   --reuse-values --set suspended=false --wait --timeout 120m
 ```

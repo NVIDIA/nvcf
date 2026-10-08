@@ -21,6 +21,12 @@ import urllib.request
 ROOT = pathlib.Path('/artifacts')
 CHECKS = pathlib.Path('/checks')
 BINARIES = ('llama-server', 'llama-cli', 'ggml-rpc-server', 'test-rpc-multi-server', 'rpc-gpu-check')
+COMPILED_PATHS = ('runtime.tar.gz.sha256', 'runtime.tar.gz.sha256.partial', 'runtime.tar.gz',
+                  'runtime.tar.gz.partial', 'runtime', 'build', 'qualification', 'checks')
+
+
+class RuntimePinsChanged(RuntimeError):
+    pass
 
 
 def require(condition, message):
@@ -39,10 +45,13 @@ def digest(path):
 
 def verify_runtime(config, runtime, archive=None):
     manifest = json.loads((runtime / 'build-manifest.json').read_text())
-    require(manifest.get('revision') == config['recipe']['llamaCppRevision'], 'Cached runtime revision differs from recipe')
-    require(manifest.get('image') == config['image'], 'Cached runtime build image differs from recipe')
+    if manifest.get('revision') != config['recipe']['llamaCppRevision']:
+        raise RuntimePinsChanged('Cached runtime revision differs from recipe')
+    if manifest.get('image') != config['image']:
+        raise RuntimePinsChanged('Cached runtime build image differs from recipe')
     option = '-DCMAKE_CUDA_ARCHITECTURES=' + config['profile']['cudaArchitectures']
-    require(option in manifest.get('options', []), 'Cached runtime CUDA architecture differs from profile')
+    if option not in manifest.get('options', []):
+        raise RuntimePinsChanged('Cached runtime CUDA architecture differs from profile')
     require(re.fullmatch('[a-f0-9]{64}', manifest.get('sourceArchiveSHA256', '')) is not None, 'Runtime source digest is missing')
     for name in BINARIES:
         path = runtime / name
@@ -82,25 +91,70 @@ def hardware(config, cuda=None):
     emit('hardware_pass', gpu=cuda.get_device_name(), capability=capability)
 
 
+def build_identity(config):
+    return {'revision': config['recipe']['llamaCppRevision'], 'image': config['image'],
+            'cudaArchitectures': config['profile']['cudaArchitectures']}
+
+
+def write_build_journal(root, identity):
+    temporary = root / 'automatic-build.pending'
+    temporary.write_text(json.dumps(identity) + '\n')
+    temporary.replace(root / 'automatic-build.json')
+
+
+def reset_compiled_runtime(root, identity):
+    # Keep this marker until cleanup finishes so a retry cannot trust the old completion file.
+    write_build_journal(root, dict(identity, reset=True))
+    for name in COMPILED_PATHS:
+        path = root / name
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink(missing_ok=True)
+    write_build_journal(root, identity)
+
+
 def prepare_runtime(config, root=ROOT):
     runtime, archive = root / 'runtime', root / 'runtime.tar.gz'
     complete = root / 'runtime.tar.gz.sha256'
-    if complete.exists() or config['reuseCaches']:
+    if config['reuseCaches']:
         verify_runtime(config, runtime, archive)
         emit('runtime_pass', reused=True)
         return
-    identity = {'revision': config['recipe']['llamaCppRevision'], 'image': config['image'],
-                'cudaArchitectures': config['profile']['cudaArchitectures']}
+    identity = build_identity(config)
     journal = root / 'automatic-build.json'
-    if journal.exists():
-        require(json.loads(journal.read_text()) == identity, 'Incomplete runtime build belongs to different recipe pins')
+    previous = json.loads(journal.read_text()) if journal.exists() else None
+    if previous is not None:
+        require(isinstance(previous, dict) and set(previous) in (set(identity), set(identity) | {'reset'})
+                and ('reset' not in previous or previous['reset'] is True), 'Invalid automatic runtime build journal')
+    if previous and previous.get('reset'):
+        reset_compiled_runtime(root, identity)
+    elif complete.exists():
+        try:
+            verify_runtime(config, runtime, archive)
+        except RuntimePinsChanged:
+            manifest = json.loads((runtime / 'build-manifest.json').read_text())
+            architectures = [option.removeprefix('-DCMAKE_CUDA_ARCHITECTURES=') for option in manifest.get('options', [])
+                             if isinstance(option, str) and option.startswith('-DCMAKE_CUDA_ARCHITECTURES=')]
+            require(re.fullmatch('[a-f0-9]{40}', manifest.get('revision', '')) is not None
+                    and re.fullmatch('.+@sha256:[a-f0-9]{64}', manifest.get('image', '')) is not None
+                    and len(architectures) == 1 and bool(architectures[0]), 'Cached runtime build identity is invalid')
+            cached = dict(config, recipe=dict(config['recipe'], llamaCppRevision=manifest['revision']),
+                          image=manifest['image'], profile=dict(config['profile'], cudaArchitectures=architectures[0]))
+            verify_runtime(cached, runtime, archive)
+            reset_compiled_runtime(root, identity)
+        else:
+            emit('runtime_pass', reused=True)
+            return
+    elif previous is not None:
+        if previous != identity:
+            reset_compiled_runtime(root, identity)
     else:
-        require(not runtime.exists() and not archive.exists(), 'Incomplete cached runtime requires its matching automatic build journal')
-        temporary = root / 'automatic-build.pending'
-        temporary.write_text(json.dumps(identity) + '\n')
-        temporary.replace(journal)
+        require(not any((root / name).exists() or (root / name).is_symlink() for name in COMPILED_PATHS),
+                'Incomplete cached runtime requires its matching automatic build journal')
+        write_build_journal(root, identity)
     env = dict(os.environ, LLAMA_REVISION=identity['revision'], CUDA_ARCHITECTURES=identity['cudaArchitectures'],
-               BUILD_PARALLEL='8', BUILD_IMAGE=identity['image'])
+               BUILD_PARALLEL='8', BUILD_IMAGE=identity['image'], ARTIFACTS_DIR=str(root))
     subprocess.run([sys.executable, '-u', str(CHECKS / 'build.py')], env=env, check=True, timeout=7200)
     verify_runtime(config, runtime, archive)
     emit('runtime_pass', reused=False)
@@ -121,25 +175,24 @@ def fetch_runtime(config, url, work=pathlib.Path('/work')):
             # The producer can replace the bundle between these two requests.
             if digest(partial) != checksum:
                 raise ValueError('Runtime bundle checksum mismatch')
+            with tempfile.TemporaryDirectory(dir=work) as staging:
+                with tarfile.open(partial) as tar:
+                    members = tar.getmembers()
+                    require(all(not member.issym() and not member.islnk() and
+                                (member.isdir() or member.isfile()) and pathlib.PurePosixPath(member.name).parts[0] == 'runtime' for member in members) and sum(member.size for member in members) <= 2 * 1024**3,
+                            'Unexpected runtime archive member')
+                    tar.extractall(staging, filter='data')
+                runtime = pathlib.Path(staging) / 'runtime'
+                verify_runtime(config, runtime)
+                shutil.rmtree(work / 'runtime', ignore_errors=True)
+                runtime.rename(work / 'runtime')
             partial.replace(archive)
             break
-        except (OSError, ValueError):
+        except (OSError, ValueError, RuntimePinsChanged):
             partial.unlink(missing_ok=True)
             if time.monotonic() >= deadline:
                 raise RuntimeError('Timed out waiting for the prepared runtime bundle') from None
             time.sleep(5)
-    # Verify extracted files in a temporary directory before publishing the executable tree.
-    with tempfile.TemporaryDirectory(dir=work) as staging:
-        with tarfile.open(archive) as tar:
-            members = tar.getmembers()
-            require(all(not member.issym() and not member.islnk() and
-                        (member.isdir() or member.isfile()) and pathlib.PurePosixPath(member.name).parts[0] == 'runtime' for member in members) and sum(member.size for member in members) <= 2 * 1024**3,
-                    'Unexpected runtime archive member')
-            tar.extractall(staging, filter='data')
-        runtime = pathlib.Path(staging) / 'runtime'
-        verify_runtime(config, runtime)
-        shutil.rmtree(work / 'runtime', ignore_errors=True)
-        runtime.rename(work / 'runtime')
     emit('worker_runtime_pass', sha256=checksum)
 
 

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-License-Identifier: Apache-2.0
 import hashlib
+import importlib.util
 import json
 import pathlib
 import py_compile
@@ -12,7 +13,10 @@ import unittest
 
 import yaml
 
-HERE = pathlib.Path(__file__).resolve().parents[1]
+HERE = pathlib.Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location('recipe_values_tests', HERE/'recipes/tests/test_committed_values.py')
+values_tests = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(values_tests)
 
 
 @unittest.skipUnless(shutil.which('helm'), 'Helm is required')
@@ -29,7 +33,9 @@ class ChartPackageTests(unittest.TestCase):
                             ignore=shutil.ignore_patterns('charts', 'Chart.lock'))
         for path in ('charts/shared-stack', 'recipes/charts/sglang', 'recipes/charts/gguf-backend'):
             shutil.copytree(HERE/path, self.source/path, ignore=shutil.ignore_patterns('charts', 'Chart.lock', '__pycache__'))
-        shutil.copy2(HERE/'package-charts.sh', self.source/'package-charts.sh')
+        (self.source/'dev-artifacts').mkdir()
+        shutil.copy2(HERE/'dev-artifacts/package-charts.sh', self.source/'dev-artifacts/package-charts.sh')
+        shutil.copy2(HERE/'recipes/sync-placement.py', self.source/'recipes/sync-placement.py')
         for guide in ('README.md', 'ADVANCED.md'):
             shutil.copy2(HERE/guide, self.source/guide)
         shutil.copy2(HERE/'recipes/index.json', self.source/'recipes/index.json')
@@ -43,7 +49,7 @@ class ChartPackageTests(unittest.TestCase):
                 for path in self.source.parent.rglob('*') if path.is_file()}
 
     def package(self, success=True):
-        result = subprocess.run([str(self.source/'package-charts.sh'), '--output-dir', str(self.output)],
+        result = subprocess.run([str(self.source/'dev-artifacts/package-charts.sh'), '--output-dir', str(self.output)],
                                 capture_output=True, text=True)
         if success:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -202,6 +208,23 @@ class ChartPackageTests(unittest.TestCase):
         result = self.package(success=False)
         self.assertIn('recipe catalog recipes/index.json is missing', result.stderr)
         self.assertEqual(list(self.output.iterdir()), [])
+
+
+@unittest.skipUnless(shutil.which('helm'), 'Helm is required')
+class CommittedPackageValuesTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.examples = {path: yaml.safe_load(path.read_text()) for path in (HERE/'recipes/values').glob('*.yaml')}
+        cls.recipes = {entry['id']: entry for entry in json.loads((HERE/'recipes/index.json').read_text())['recipes']}
+
+    def chart_path(self, chart):
+        return HERE/'dev-artifacts/charts'/chart['archive']
+
+    def test_automatic_packages_install_without_values_files(self):
+        values_tests.CommittedValuesTests.check_automatic_install(self)
+
+    def test_packaged_charts_render_model_and_placement_overrides(self):
+        values_tests.CommittedValuesTests.check_model_and_placement_overrides(self)
 
 
 if __name__ == '__main__':
