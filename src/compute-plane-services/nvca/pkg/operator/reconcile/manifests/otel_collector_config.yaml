@@ -95,7 +95,11 @@ processors:
       - delete_key(resource.attributes, "k8s.container.name") where resource.attributes["k8s.object.fieldpath"] == nil or not IsMatch(resource.attributes["k8s.object.fieldpath"], ".*\\{[^}]+\\}.*")
       - delete_key(resource.attributes, "container.image.name") where resource.attributes["k8s.object.fieldpath"] == nil or not IsMatch(resource.attributes["k8s.object.fieldpath"], ".*\\{[^}]+\\}.*")
       - delete_key(resource.attributes, "container.image.tag") where resource.attributes["k8s.object.fieldpath"] == nil or not IsMatch(resource.attributes["k8s.object.fieldpath"], ".*\\{[^}]+\\}.*")
+      # cluster_name is the cluster name, not its ID. Under PSAT, Event Ledger
+      # fills cluster_id from the verified identity and rejects a mismatch.
+{{- if not .UsePSAT }}
       - set(log.attributes["cluster_id"], resource.attributes["cluster_name"]) where resource.attributes["cluster_name"] != nil
+{{- end }}
       - set(log.attributes["deployment_id"], resource.attributes["deployment_id"]) where resource.attributes["deployment_id"] != nil
       - set(log.attributes["gpu_specification_id"], resource.attributes["gpu_specification_id"]) where resource.attributes["gpu_specification_id"] != nil
       - set(log.attributes["instance_id"], resource.attributes["k8s.pod.name"]) where resource.attributes["k8s.pod.name"] != nil
@@ -157,7 +161,10 @@ processors:
       # Tasks are keyed by task-id in FnDs; override function_version_id when present.
       - set(log.attributes["namespace"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/task-id"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/task-id"] != nil and log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/task-id"] != ""
       - set(log.attributes["instance_id"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/instance-id"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/instance-id"] != nil
+      # Left unset under PSAT for the same reason as the Pod lane.
+{{- if not .UsePSAT }}
       - set(log.attributes["cluster_id"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/cluster-id"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/cluster-id"] != nil
+{{- end }}
       - set(log.attributes["nca_id"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/nca-id"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/nca-id"] != nil
       - set(log.attributes["function_id"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/function-id"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/function-id"] != nil
       - set(log.attributes["instance_state"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/instance-state"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/instance-state"] != nil
@@ -185,7 +192,7 @@ extensions:
     scopes: ["write"]
 {{ else }}
   bearertokenauth:
-    filename: "${env:NGC_SERVICE_API_KEY_FILE}"
+    filename: "${env:NVCA_OTEL_COLLECTOR_BEARER_TOKEN_FILE}"
 {{ end }}
   health_check:
     endpoint: ":${env:NVCA_OTEL_COLLECTOR_HEALTH_CHECK_PORT}"
