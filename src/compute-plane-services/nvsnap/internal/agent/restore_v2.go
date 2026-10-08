@@ -38,6 +38,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -60,9 +61,14 @@ import (
 // read the images.
 const v2CheckpointsMountInContainer = "/checkpoints"
 
-func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, checkpointDir string, placeholderInfo *containerd.ContainerInfo, startTime time.Time, log *logrus.Entry) (*RestoreResult, error) {
+func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, checkpointDir string, placeholderInfo *containerd.ContainerInfo, startTime time.Time, group restoreV2Group, log *logrus.Entry) (*RestoreResult, error) {
 	if placeholderInfo == nil {
 		return nil, fmt.Errorf("criu-v2 restore requires a placeholder pod (placeholderPodName/placeholderNamespace)")
+	}
+	if group.InetAddrMap != "" && group.Session == "" {
+		// --keep-network-lock with nobody to release it would leave the pod
+		// unable to send.
+		return nil, errors.New("criu-v2: an address map needs a group restore session to unlock the network")
 	}
 	hostPID := int(placeholderInfo.PID)
 	procBase := "/proc"
@@ -149,7 +155,23 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 			}
 		}
 	}
-	args := restoreV2Args(hostPID, imgsInContainer, gs != nil, gs != nil && bundledSupportsDirectImageIO())
+	// A group restore's session: the driver learns from it that this pod
+	// is restored, and answers with the unlock (and, for gpushare, the
+	// handle exchange of the resume).
+	var sess *restoreSession
+	if group.Session != "" {
+		if group.InetAddrMap != "" && !bundledSupportsNetMigration() {
+			return nil, errors.New("criu-v2: the bundled CRIU has no --inet-addr-map/net-unlock; the agent base image predates them")
+		}
+		s, err := a.openRestoreSession(group, checkpointDir, gs != nil)
+		if err != nil {
+			return nil, err
+		}
+		sess = s
+		defer sess.close()
+		log = log.WithField("fabricSession", group.Session)
+	}
+	args := restoreV2Args(hostPID, imgsInContainer, gs != nil, gs != nil && bundledSupportsDirectImageIO(), group.InetAddrMap)
 	rctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	_, criuSpan := tracing.Tracer().Start(ctx, "restore.criu")
@@ -201,10 +223,30 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	}
 	criuSpan.End()
 
+	fabricDir := ""
+	if sess != nil {
+		// Every pod of the instance must be restored before any of them
+		// sends: hold the lock until the driver says so, then release it in
+		// this pod's network namespace.
+		verdict, err := sess.awaitUnlock(ctx, log)
+		if err != nil {
+			return nil, err
+		}
+		if verdict != "unlock" {
+			return nil, fmt.Errorf("criu-v2: group restore %s aborted: another pod of the instance failed to restore; this pod stays locked until it is deleted", group.Session)
+		}
+		if group.InetAddrMap != "" {
+			if err := netUnlock(ctx, hostPID, checkpointDir, log); err != nil {
+				return nil, err
+			}
+		}
+		fabricDir = sess.containerDir
+	}
+
 	if gs != nil {
 		_, gsSpan := tracing.Tracer().Start(ctx, "restore.gpushare_resume")
 		gpuMap := gs.StorePath + "/" + gpushareGPUMapFile
-		if err := gpushareResume(ctx, hostPID, gs.PIDs, gpuMap, "", log); err != nil {
+		if err := gpushareResume(ctx, hostPID, gs.PIDs, gpuMap, fabricDir, log); err != nil {
 			gsSpan.RecordError(err)
 			gsSpan.SetStatus(codes.Error, "gpushare resume failed")
 			gsSpan.End()
@@ -445,7 +487,7 @@ func cancelWhenRestoreFailed(ctx context.Context, logPath string, grace time.Dur
 // restoreV2Args builds the nsenter + criu restore argv. A gpushare restore
 // omits the CUDA plugin: nvsnap-gpu-suspend restores the GPU state after
 // CRIU. directIO reads the pages image with O_DIRECT.
-func restoreV2Args(hostPID int, imgsInContainer string, gpushare, directIO bool) []string {
+func restoreV2Args(hostPID int, imgsInContainer string, gpushare, directIO bool, inetAddrMap string) []string {
 	args := []string{
 		"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
 		v2BinDirInContainer + "/criu", "restore",
@@ -468,6 +510,14 @@ func restoreV2Args(hostPID int, imgsInContainer string, gpushare, directIO bool)
 	)
 	if directIO {
 		args = append(args, "--image-io-mode", "direct")
+	}
+	if inetAddrMap != "" {
+		// A group restore: the connections between the instance's pods
+		// move to the new pods' addresses, and stay locked after CRIU
+		// exits, so a pod restored early cannot reach a peer that is not
+		// restored yet (its kernel would answer with a reset). The driver
+		// unlocks every pod once all of them are restored.
+		args = append(args, "--inet-addr-map", inetAddrMap, "--keep-network-lock")
 	}
 	return args
 }

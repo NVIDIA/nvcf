@@ -129,11 +129,11 @@ func TestDumpV2Args_GPUShare(t *testing.T) {
 }
 
 func TestRestoreV2Args_GPUShare(t *testing.T) {
-	plain := restoreV2Args(10, "/checkpoints/x", false, false)
+	plain := restoreV2Args(10, "/checkpoints/x", false, false, "")
 	if !slices.Contains(plain, "--libdir") {
 		t.Errorf("plain restore must load the CUDA plugin: %v", plain)
 	}
-	gs := restoreV2Args(10, "/checkpoints/x", true, true)
+	gs := restoreV2Args(10, "/checkpoints/x", true, true, "")
 	if slices.Contains(gs, "--libdir") || !slices.Contains(gs, "--image-io-mode") || !slices.Contains(gs, "--restore-detached") {
 		t.Errorf("gpushare restore argv: %v", gs)
 	}

@@ -34,6 +34,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -102,19 +103,154 @@ func (a *Agent) openFabricSession(session, namespace, pod, podUID string) (conta
 	if podUID == "" {
 		return "", nil, errors.New("gpushare: a fabric session needs the pod uid to find its store")
 	}
-	host := a.fabricHostDir(podUID, session)
+	closeFn, err = a.openFabricSessionAt(session, namespace, pod, a.fabricHostDir(podUID, session))
+	if err != nil {
+		return "", nil, err
+	}
+	return fabricContainerDir(session), closeFn, nil
+}
+
+// openFabricSessionAt creates host (fresh) and registers it for the pod.
+func (a *Agent) openFabricSessionAt(session, namespace, pod, host string) (func(), error) {
+	if !validFabricSession(session) {
+		return nil, fmt.Errorf("gpushare: invalid fabric session %q", session)
+	}
 	if err := os.RemoveAll(host); err != nil {
-		return "", nil, fmt.Errorf("gpushare: clear fabric dir: %w", err)
+		return nil, fmt.Errorf("gpushare: clear fabric dir: %w", err)
 	}
 	if err := os.MkdirAll(host, 0o755); err != nil {
-		return "", nil, fmt.Errorf("gpushare: create fabric dir: %w", err)
+		return nil, fmt.Errorf("gpushare: create fabric dir: %w", err)
 	}
 	key := fabricKey(session, namespace, pod)
 	a.fabricSessions.Store(key, host)
-	return fabricContainerDir(session), func() {
+	return func() {
 		a.fabricSessions.Delete(key)
 		_ = os.RemoveAll(host)
 	}, nil
+}
+
+// GPUShareGroupInfo places a checkpoint in its instance.
+type GPUShareGroupInfo struct {
+	Session string `json:"session"`
+	Index   int    `json:"index"`
+	Size    int    `json:"size"`
+}
+
+func gpushareGroupInfo(req CheckpointRequest) *GPUShareGroupInfo {
+	if req.GPUShareFabricSession == "" {
+		return nil
+	}
+	return &GPUShareGroupInfo{Session: req.GPUShareFabricSession, Index: req.GPUShareGroupIndex, Size: req.GPUShareGroupSize}
+}
+
+// restoreV2Group is a restore's part in a group restore.
+type restoreV2Group struct {
+	Session, InetAddrMap string
+	Namespace, Pod       string
+}
+
+// restoreSession is one pod's directory in a group restore.
+type restoreSession struct {
+	hostDir string
+	// containerDir is where the gpushare tool sees it ("" without gpushare).
+	containerDir string
+	close        func()
+}
+
+// openRestoreSession creates the pod's session directory. With gpushare it
+// lives in the checkpoint's store, which the placeholder mounts at the store
+// path, so the tool's resume can use it as --fabric-map.
+func (a *Agent) openRestoreSession(g restoreV2Group, checkpointDir string, gpushare bool) (*restoreSession, error) {
+	host := filepath.Join(checkpointDir, fabricDirPrefix+g.Session)
+	cdir := ""
+	if gpushare {
+		host = filepath.Join(checkpointDir, GPUShareCheckpointSubdir, fabricDirPrefix+g.Session)
+		cdir = fabricContainerDir(g.Session)
+	}
+	closeFn, err := a.openFabricSessionAt(g.Session, g.Namespace, g.Pod, host)
+	if err != nil {
+		return nil, err
+	}
+	var once sync.Once
+	return &restoreSession{hostDir: host, containerDir: cdir, close: func() { once.Do(closeFn) }}, nil
+}
+
+// fabricUnlockWait bounds the hold: TCP gives up on a connection held
+// longer than about 13 minutes.
+const fabricUnlockWait = 10 * time.Minute
+
+// awaitUnlock reports this pod restored and waits for the driver's
+// verdict, "unlock" or "abort".
+func (s *restoreSession) awaitUnlock(ctx context.Context, log *logrus.Entry) (string, error) {
+	if err := writeFileAtomic(s.hostDir, "restored", []byte("1\n")); err != nil {
+		return "", fmt.Errorf("group restore: report restored: %w", err)
+	}
+	log.Info("group restore: CRIU restore done, holding the network lock until every pod is restored")
+	return waitFabricVerdictFile(ctx, filepath.Join(s.hostDir, "u"), fabricUnlockWait)
+}
+
+// waitFabricVerdictFile polls path for "unlock" or "abort".
+func waitFabricVerdictFile(ctx context.Context, path string, limit time.Duration) (string, error) {
+	t0 := time.Now()
+	for {
+		if b, err := os.ReadFile(path); err == nil {
+			v := strings.TrimSpace(string(b))
+			if v == "unlock" || v == fabricVerdictAbort {
+				return v, nil
+			}
+			return "", fmt.Errorf("group restore: unexpected verdict %q", v)
+		}
+		if time.Since(t0) > limit {
+			return "", fmt.Errorf("group restore: no unlock after %s; the other pods did not finish restoring", limit)
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(fabricPollInterval):
+		}
+	}
+}
+
+// netUnlockArgs releases a group restore's network lock: CRIU reads the
+// lock's name from the images and removes it in the pod's network
+// namespace (through libnftables; no nft binary needed). The agent's own
+// CRIU runs it, with only the network namespace entered, so the binary and
+// the images are the agent's paths.
+func netUnlockArgs(hostPID int, imagesDir string) []string {
+	return []string{"-t", strconv.Itoa(hostPID), "-n", "--",
+		v2BinDirInContainer + "/criu", "net-unlock", "-D", imagesDir, "-o", "net-unlock.log"}
+}
+
+func netUnlock(ctx context.Context, hostPID int, imagesDir string, log *logrus.Entry) error {
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	t0 := time.Now()
+	out, err := exec.CommandContext(cctx, "nsenter", netUnlockArgs(hostPID, imagesDir)...).CombinedOutput() //nolint:gosec // fixed binary; args are a pid and a path built here
+	if err != nil {
+		return fmt.Errorf("criu net-unlock: %w (output: %s; net-unlock.log tail: %s)", err,
+			strings.TrimSpace(string(out)), tailOfFile(filepath.Join(imagesDir, "net-unlock.log"), 6))
+	}
+	log.WithField("duration", time.Since(t0).Round(time.Millisecond).String()).Info("group restore: network unlocked")
+	return nil
+}
+
+var (
+	bundledNetMigrationOnce sync.Once
+	bundledNetMigration     bool
+)
+
+// bundledSupportsNetMigration reports whether the bundled CRIU can move
+// connections to new addresses and unlock separately.
+func bundledSupportsNetMigration() bool {
+	bundledNetMigrationOnce.Do(func() {
+		out, _ := exec.Command(v2BinDirInContainer+"/criu", "--help").CombinedOutput()
+		bundledNetMigration = criuSupportsNetMigration(string(out))
+	})
+	return bundledNetMigration
+}
+
+func criuSupportsNetMigration(help string) bool {
+	return strings.Contains(help, "--inet-addr-map") && strings.Contains(help, "net-unlock")
 }
 
 // fabricVote is one tool's vote for one attempt.
@@ -130,6 +266,9 @@ type fabricState struct {
 	Out *string `json:"out,omitempty"`
 	// HaveIn reports whether the merged list has been delivered.
 	HaveIn bool `json:"haveIn"`
+	// Restored reports a group restore member's CRIU restore done (it then
+	// holds its network lock until the driver unlocks it).
+	Restored bool `json:"restored,omitempty"`
 }
 
 // parseFabricVote reads "<attempt> ok|busy".
@@ -166,6 +305,9 @@ func readFabricState(dir string) (fabricState, error) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "in")); err == nil {
 		st.HaveIn = true
+	}
+	if _, err := os.Stat(filepath.Join(dir, "restored")); err == nil {
+		st.Restored = true
 	}
 	return st, nil
 }
@@ -243,6 +385,23 @@ func (a *Agent) fabricVerdictHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (a *Agent) fabricUnlockHandler(w http.ResponseWriter, r *http.Request) {
+	dir, ok := a.fabricDirFor(w, r)
+	if !ok {
+		return
+	}
+	verdict := r.URL.Query().Get("verdict")
+	if verdict != "unlock" && verdict != fabricVerdictAbort {
+		http.Error(w, "verdict (unlock, abort) required", http.StatusBadRequest)
+		return
+	}
+	if err := writeFileAtomic(dir, "u", []byte(verdict+"\n")); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // fabricInLimit bounds a merged handle list: one line per shared allocation
 // per process, around a hundred bytes each.
 const fabricInLimit = 64 << 20
@@ -273,33 +432,47 @@ type fabricMember interface {
 	State(ctx context.Context) (st fabricState, ok bool, err error)
 	Verdict(ctx context.Context, attempt int, verdict string) error
 	PutIn(ctx context.Context, data []byte) error
+	Unlock(ctx context.Context, verdict string) error
 }
 
 // fabricOutcome records how the driver ended a session, for the result.
 type fabricOutcome struct {
-	Attempts  int  `json:"attempts"`
-	Went      bool `json:"went"`
+	Attempts  int  `json:"attempts,omitempty"`
+	Went      bool `json:"went,omitempty"`
+	Unlocked  bool `json:"unlocked,omitempty"`
 	Exchanged bool `json:"exchanged"`
 	Handles   int  `json:"handles"`
 }
 
-// driveFabric runs the votes and the exchange of one session until every
-// member's checkpoint has returned (done reports that per member) or ctx
-// ends.
+// fabricDriveOpts picks the phases a session runs.
+type fabricDriveOpts struct {
+	// Vote: a suspend's quiesce vote (group checkpoint).
+	Vote bool
+	// Unlock: hold every member until all are restored, then unlock them
+	// together (group restore). The exchange waits for the unlock.
+	Unlock bool
+}
+
+// driveFabric runs one session until every member's operation has returned
+// (done reports that per member) or ctx ends.
 //
-// Votes: once every member still running has voted the same attempt, the
+// Vote: once every member still running has voted the same attempt, the
 // answer is "go" if all are quiesced, else "retry". A member whose
 // checkpoint returned before the go cannot release: every later vote is
 // answered "abort", and the others roll back at their tool's timeout.
 //
+// Unlock: once every member has reported its CRIU restore done, all get
+// "unlock". A member that returns first has failed; the rest get "abort".
+//
 // Exchange: once every member still running has written its out, the
 // lists are concatenated in member order and delivered once to all of
-// them. A member whose checkpoint returned without an out (it failed, or
+// them. A member whose operation returned without an out (it failed, or
 // does not resume) takes no part.
-func driveFabric(ctx context.Context, members []fabricMember, done func(i int) bool, log *logrus.Entry) fabricOutcome {
+func driveFabric(ctx context.Context, members []fabricMember, done func(i int) bool, opts fabricDriveOpts, log *logrus.Entry) fabricOutcome {
 	var out fabricOutcome
 	decided := -1 // highest attempt answered
 	aborted := false
+	unlockSent := false
 	exchanged := false
 	tick := time.NewTicker(fabricPollInterval)
 	defer tick.Stop()
@@ -313,10 +486,7 @@ func driveFabric(ctx context.Context, members []fabricMember, done func(i int) b
 		if len(running) == 0 {
 			return out
 		}
-		if !out.Went && len(running) < len(members) && !aborted {
-			aborted = true
-			log.Warn("gpushare fabric: a member ended before the quiesce vote passed; aborting the vote")
-		}
+		lostOne := len(running) < len(members)
 
 		states := make(map[int]fabricState, len(running))
 		for _, i := range running {
@@ -330,52 +500,43 @@ func driveFabric(ctx context.Context, members []fabricMember, done func(i int) b
 			}
 		}
 
-		// Votes.
-		if !out.Went {
-			attempt, all, allOK := -1, true, true
-			for _, i := range running {
-				st, ok := states[i]
-				if !ok || st.Vote == nil {
-					all = false
-					break
-				}
-				if attempt == -1 {
-					attempt = st.Vote.Attempt
-				}
-				if st.Vote.Attempt != attempt {
-					all = false
-					break
-				}
-				allOK = allOK && st.Vote.OK
+		if opts.Vote && !out.Went {
+			if lostOne && !aborted {
+				aborted = true
+				log.Warn("gpushare fabric: a member ended before the quiesce vote passed; aborting the vote")
 			}
-			// An abort answers each member's own attempt as it votes.
-			if aborted {
+			driveVote(ctx, members, running, states, aborted, &decided, &out, log)
+		}
+
+		if opts.Unlock && !unlockSent {
+			verdict := ""
+			if lostOne {
+				verdict = fabricVerdictAbort
+			} else {
+				all := true
 				for _, i := range running {
-					if st, ok := states[i]; ok && st.Vote != nil && st.Vote.Attempt > decided {
-						if err := members[i].Verdict(ctx, st.Vote.Attempt, fabricVerdictAbort); err != nil {
-							log.WithError(err).WithField("member", members[i].Name()).Warn("gpushare fabric: abort verdict")
-						}
+					if st, ok := states[i]; !ok || !st.Restored {
+						all = false
+						break
 					}
 				}
-			} else if all && attempt > decided {
-				verdict := "retry"
-				if allOK {
-					verdict = "go"
+				if all {
+					verdict = "unlock"
 				}
+			}
+			if verdict != "" {
 				for _, i := range running {
-					if err := members[i].Verdict(ctx, attempt, verdict); err != nil {
-						log.WithError(err).WithField("member", members[i].Name()).Warn("gpushare fabric: verdict")
+					if err := members[i].Unlock(ctx, verdict); err != nil {
+						log.WithError(err).WithField("member", members[i].Name()).Warn("gpushare fabric: unlock verdict")
 					}
 				}
-				decided = attempt
-				out.Attempts = attempt + 1
-				out.Went = verdict == "go"
-				log.WithFields(logrus.Fields{"attempt": attempt, "verdict": verdict}).Info("gpushare fabric: quiesce vote")
+				unlockSent = true
+				out.Unlocked = verdict == "unlock"
+				log.WithFields(logrus.Fields{"verdict": verdict, "members": len(running)}).Info("gpushare fabric: group restore network lock")
 			}
 		}
 
-		// Exchange.
-		if !exchanged {
+		if !exchanged && (!opts.Unlock || out.Unlocked) {
 			var merged bytes.Buffer
 			ready := true
 			for _, i := range running {
@@ -408,6 +569,51 @@ func driveFabric(ctx context.Context, members []fabricMember, done func(i int) b
 		case <-tick.C:
 		}
 	}
+}
+
+// driveVote answers one round of the quiesce vote, if it is complete.
+func driveVote(ctx context.Context, members []fabricMember, running []int, states map[int]fabricState, aborted bool, decided *int, out *fabricOutcome, log *logrus.Entry) {
+	if aborted {
+		// An abort answers each member's own attempt as it votes.
+		for _, i := range running {
+			if st, ok := states[i]; ok && st.Vote != nil && st.Vote.Attempt > *decided {
+				if err := members[i].Verdict(ctx, st.Vote.Attempt, fabricVerdictAbort); err != nil {
+					log.WithError(err).WithField("member", members[i].Name()).Warn("gpushare fabric: abort verdict")
+				}
+			}
+		}
+		return
+	}
+	attempt, allOK := -1, true
+	for _, i := range running {
+		st, ok := states[i]
+		if !ok || st.Vote == nil {
+			return
+		}
+		if attempt == -1 {
+			attempt = st.Vote.Attempt
+		}
+		if st.Vote.Attempt != attempt {
+			return
+		}
+		allOK = allOK && st.Vote.OK
+	}
+	if attempt <= *decided {
+		return
+	}
+	verdict := "retry"
+	if allOK {
+		verdict = "go"
+	}
+	for _, i := range running {
+		if err := members[i].Verdict(ctx, attempt, verdict); err != nil {
+			log.WithError(err).WithField("member", members[i].Name()).Warn("gpushare fabric: verdict")
+		}
+	}
+	*decided = attempt
+	out.Attempts = attempt + 1
+	out.Went = verdict == "go"
+	log.WithFields(logrus.Fields{"attempt": attempt, "verdict": verdict}).Info("gpushare fabric: quiesce vote")
 }
 
 // httpFabricMember reaches a member's session on its node's agent.
@@ -473,6 +679,10 @@ func (m *httpFabricMember) PutIn(ctx context.Context, data []byte) error {
 	return m.send(ctx, m.url("/in"), data)
 }
 
+func (m *httpFabricMember) Unlock(ctx context.Context, verdict string) error {
+	return m.send(ctx, m.url("/unlock?verdict="+url.QueryEscape(verdict)), nil)
+}
+
 // fabricHTTPClient carries the agent token to peers. No overall timeout: a
 // member's checkpoint call runs as long as the suspend, dump and resume do,
 // bounded by the caller's context.
@@ -487,8 +697,10 @@ var fabricHTTPClient = &http.Client{
 // memory is shared across nodes, as one fabric session.
 type GroupCheckpointRequest struct {
 	Members []CheckpointRequest `json:"members"`
-	// LeaveRunning applies to every member. The session needs it: a member
-	// that stops after its dump cannot take part in the others' resume.
+	// LeaveRunning applies to every member: true suspends and resumes the
+	// instance in place around the dump; false dumps it for a move, and
+	// the network lock then holds the source pods' connections until the
+	// pods are deleted.
 	LeaveRunning bool `json:"leaveRunning"`
 }
 
@@ -513,9 +725,6 @@ type GroupCheckpointResult struct {
 func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest, log *logrus.Entry) (*GroupCheckpointResult, error) {
 	if len(req.Members) < 2 {
 		return nil, errors.New("a group checkpoint needs at least two members")
-	}
-	if !req.LeaveRunning {
-		return nil, errors.New("a group checkpoint requires leaveRunning: a member stopped by its dump cannot take part in the others' resume")
 	}
 	if a.kubeClient == nil {
 		return nil, errors.New("a group checkpoint needs the kube client to find each member's node")
@@ -549,8 +758,9 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 	finished := make([]bool, len(req.Members))
 	var wg sync.WaitGroup
 	for i, m := range req.Members {
-		m.LeaveRunning = true
+		m.LeaveRunning = req.LeaveRunning
 		m.GPUShareFabricSession = session
+		m.GPUShareGroupIndex, m.GPUShareGroupSize = i, len(req.Members)
 		wg.Add(1)
 		go func(i int, m CheckpointRequest) {
 			defer wg.Done()
@@ -569,7 +779,7 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 		defer mu.Unlock()
 		return finished[i]
 	}
-	res.Fabric = driveFabric(ctx, members, done, log)
+	res.Fabric = driveFabric(ctx, members, done, fabricDriveOpts{Vote: true}, log)
 	wg.Wait()
 
 	var failed []string

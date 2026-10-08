@@ -224,19 +224,66 @@ quiesced, `retry` otherwise), and once every member has written its handle
 list, delivers the concatenated lists to all of them, once. A fresh
 directory per session means a list from an earlier cycle is never merged.
 
-Limits:
+`leaveRunning: true` suspends and resumes the instance in place around the
+dump. `leaveRunning: false` dumps it for a move: the processes stop, and the
+dump's network lock keeps the source pods from sending resets until the pods
+are deleted. Each checkpoint records its pod's IP and its index in the
+instance.
 
-- `leaveRunning` is required: a member stopped by its dump cannot take part
-  in the others' resume.
+Limits of the group checkpoint:
+
 - If a member's checkpoint ends before the vote passes, every later vote is
   answered `abort`. The tool treats that as `retry` and rolls the workload
   back at its own timeout (`--timeout-ms`, 120 s here), not at once.
 - A member whose dump fails still resumes, and takes part in the exchange.
   A member whose checkpoint returns without writing a handle list is left
   out of it; the others resume among themselves.
-- Restoring a session's checkpoints on other nodes is not covered: the pods
-  get new addresses and NCCL's connections between nodes have to be
-  re-established.
+
+#### Moving an instance to new pods
+
+A group restore keeps the TCP connections between the instance's pods
+(NCCL bootstrap, Gloo, ZMQ, TCPStore) although every new pod has a new IP:
+
+```bash
+curl -X POST http://<agent>:8081/v1/gpushare/group-restore \
+  -H "Authorization: Bearer $TOKEN" -d '{
+    "members": [
+      {"checkpointId": "<id of vllm-0>", "placeholderNamespace": "llm", "placeholderPodName": "vllm-0-r"},
+      {"checkpointId": "<id of vllm-1>", "placeholderNamespace": "llm", "placeholderPodName": "vllm-1-r"}
+    ]}'
+```
+
+1. The driving agent waits until every target pod has its IP, makes each
+   checkpoint local on its target node and reads its metadata there. The
+   checkpoints must be the complete set of one group checkpoint, one per
+   target pod.
+2. It builds one address map for the instance, `OLD1=NEW1,OLD2=NEW2,...`.
+3. Every member restores with `criu restore --inet-addr-map <map>
+   --keep-network-lock` and reports itself restored. Its connections stay
+   locked, so a pod restored early cannot reach a peer that is not restored
+   yet.
+4. Once every member is restored, the driver unlocks them all: each runs
+   `criu net-unlock` in the pod's network namespace.
+5. Only then does each member run the GPU resume, with the handle exchange.
+
+If any member fails, the others are told to abort and the driver deletes
+every target pod (`keepFailedPods: true` keeps them): a pod holds its lock
+until its network namespace goes away.
+
+Limits of the move:
+
+- Only connections between the instance's pods survive, and only because
+  every pod restores with the same map. Connections to anything else (API
+  clients, Services) are reset after the unlock; the application has to
+  reconnect.
+- Only existing connections move. A connection the application opens later
+  to an address it remembers (an old `MASTER_ADDR`) fails.
+- A connection with data waiting to be sent can take about as long as the
+  hold lasted, up to about 2 minutes, before it sends again. The members
+  wait at most 10 minutes for the unlock; TCP drops a connection held longer
+  than about 13 minutes.
+- Requires a CRIU with `--inet-addr-map` and `net-unlock` (base image
+  v0.0.26 or later); the restore refuses to start otherwise.
 
 ## Requirements and limits
 

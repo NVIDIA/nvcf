@@ -147,6 +147,14 @@ type RestoreRequest struct {
 	PlaceholderContainerID string `json:"placeholderContainerId,omitempty"` // Container to restore into
 	PlaceholderPodName     string `json:"placeholderPodName,omitempty"`     // Pod name of placeholder
 	PlaceholderNamespace   string `json:"placeholderNamespace,omitempty"`   // Namespace of placeholder
+
+	// GPUShareFabricSession joins the restore to a group restore driven by
+	// another agent (see gpushare_fabric.go). InetAddrMap ("OLD=NEW,...",
+	// every pod of the instance) moves the connections between the pods
+	// to their new addresses; the restore then holds them locked until the
+	// driver reports every pod restored.
+	GPUShareFabricSession string `json:"gpushareFabricSession,omitempty"`
+	InetAddrMap           string `json:"inetAddrMap,omitempty"`
 }
 
 // RestoreResult is the result of a restore operation
@@ -469,7 +477,10 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 	// applies. The shared placeholder prep above (pod-IP alias, unix-sk
 	// dirs, rootfs-diff + mount replay) has already run.
 	if metadata.CapturePath == CapturePathCRIUV2 {
-		return a.restoreV2(ctx, &metadata, checkpointDir, placeholderInfo, startTime, log)
+		return a.restoreV2(ctx, &metadata, checkpointDir, placeholderInfo, startTime, restoreV2Group{
+			Session: req.GPUShareFabricSession, InetAddrMap: req.InetAddrMap,
+			Namespace: req.PlaceholderNamespace, Pod: req.PlaceholderPodName,
+		}, log)
 	}
 
 	// Every checkpoint this agent writes is criu-v2 (Checkpoint stamps

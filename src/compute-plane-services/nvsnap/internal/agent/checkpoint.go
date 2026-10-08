@@ -212,6 +212,11 @@ type CheckpointRequest struct {
 	// session driven by another agent (see gpushare_fabric.go): the
 	// suspend and resume coordinate with the workload's other pods.
 	GPUShareFabricSession string `json:"gpushareFabricSession,omitempty"`
+	// GPUShareGroupIndex and GPUShareGroupSize place this pod in its
+	// session's group; a group restore maps each checkpoint back to a pod
+	// by them.
+	GPUShareGroupIndex int `json:"gpushareGroupIndex,omitempty"`
+	GPUShareGroupSize  int `json:"gpushareGroupSize,omitempty"`
 }
 
 // CheckpointResult is the result of a checkpoint operation
@@ -370,6 +375,10 @@ type CheckpointMetadata struct {
 	// GPUShare is set when the workload ran under libnvsnap_gpushare.so and
 	// its GPU state was saved by nvsnap-gpu-suspend (see gpushare.go).
 	GPUShare *GPUShareInfo `json:"gpushare,omitempty"`
+	// GPUShareGroup is set when the pod was dumped with the other pods of
+	// its instance; with SourcePodIP it lets a group restore move the
+	// connections between those pods to the new pods' addresses.
+	GPUShareGroup *GPUShareGroupInfo `json:"gpushareGroup,omitempty"`
 
 	// Integrity (v1.6+): SHA-256 checksums for critical checkpoint files
 	Integrity *CheckpointIntegrity `json:"integrity,omitempty"`
@@ -621,6 +630,11 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	// Step 4.7: Get pod IP for stable network identity (MUST be before CRIU dump)
 	// After CRIU dump, the process may be gone and /proc/<pid> won't exist.
 	podIP := a.getPodIP(int(containerInfo.PID))
+	if req.GPUShareFabricSession != "" && podIP == "" {
+		// A group restore maps each pod's old address to its new one; a
+		// member without one would leave its peers' connections unmapped.
+		return nil, fmt.Errorf("gpushare: fabric session %s: cannot determine the pod IP of %s/%s", req.GPUShareFabricSession, req.Namespace, req.PodName)
+	}
 	if podIP != "" {
 		log.WithField("podIP", podIP).Info("Captured pod IP for restore compatibility")
 	} else {
@@ -816,6 +830,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 		RootFS:         containerInfo.RootFS,
 		PodLabels:      containerInfo.Labels,
 		SourcePodIP:    podIP,
+		GPUShareGroup:  gpushareGroupInfo(req),
 		Skipped:        skippedResources,
 		CUDA: &CUDACheckpointInfo{
 			// criu-v2: cuda_plugin locks, checkpoints and (leave-running) resumes
