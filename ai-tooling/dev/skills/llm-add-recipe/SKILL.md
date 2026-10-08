@@ -234,9 +234,12 @@ with `python3 recipes/export_catalog.py`, then run the affected tests and
 `--check`. Repackage through `dev-artifacts/package-charts.sh` and refresh the
 packaged catalog, changed archives, guides, combined notice and checksums from
 that output. Update the README validation summary to match the recorded result.
-Verify the final archives match source. If executable content changed after the
-live pass, rerun the affected live checks using the final package. Metadata-only
-validation updates do not require repeating inference.
+Verify the final archives match source and compare the rendered pod templates
+with the tested deployment. SGLang hashes model metadata into its configuration
+checksum, so even a validation-record update can trigger a rollout. If executable
+content or pod templates changed after the live pass, upgrade with the final
+package and rerun the affected readiness and inference checks. Metadata changes
+that leave pod templates and runtime behavior unchanged need only local checks.
 
 Finish with the tested model/profile, artifact pins, workload, check results,
 remaining gaps and final release/cache state. Commit and publish only within

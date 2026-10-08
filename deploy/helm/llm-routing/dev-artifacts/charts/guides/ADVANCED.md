@@ -500,13 +500,14 @@ Memory guards stop a recipe's runtime when its required memory floor is crossed 
 
 ## Add a recipe
 
-Use the [llm-add-recipe skill](../../../ai-tooling/dev/skills/llm-add-recipe/SKILL.md) for the full workflow: research the model, prepare its metadata, deploy through Helm, verify on the target cluster, adjust the recipe from the results, and regenerate its catalogs and packages. Offline checks prepare the recipe for live qualification. Research-only work leaves qualification pending.
+You can use the [llm-add-recipe skill](../../../ai-tooling/dev/skills/llm-add-recipe/SKILL.md), or follow these steps manually:
 
-SGLang recipes live in [recipes/catalog.json](recipes/catalog.json). GGUF recipe folders own `recipe.json`, `model.lock.json`, `profiles.json` and `NOTICE`. Keep artifact pins, hardware requirements, workload limits, tuning and license notices there. The charts bundle this metadata for installation without a separate Python deployment step.
-
-Synchronize changed SGLang entries into `recipes/charts/sglang/files/profiles.json`, or GGUF files into `recipes/charts/gguf-backend/files/recipes/<recipe-id>/`. Add a values example for each deployable profile and extend its metadata and startup tests. The exporter generates the index only, and the packager copies chart sources; neither updates these bundled recipe files. The current GGUF automatic chart uses the first profile with one leader and one RPC worker, so another topology also needs implementation changes.
-
-An executable profile needs a compatible image, model revision, resource reservations and automatic startup implementation. Run hardware qualification and gateway inference before marking that exact profile and workload validated. Keep unsupported models in [recipes/planned.json](recipes/planned.json) without deployable profiles. Regenerate the [common index](recipes/README.md#catalog-maintenance) and chart packages after metadata changes.
+1. Verify the model checkpoint, runtime image, license and target hardware. Pin the model revision and image digest. Choose the precision, context length and concurrency to test.
+2. Add SGLang metadata to [recipes/catalog.json](recipes/catalog.json), or GGUF metadata to a recipe folder containing `recipe.json`, `model.lock.json`, `profiles.json` and `NOTICE`. Check that the chart supports the model's startup and node layout. Implement missing support before exposing an installable profile.
+3. Copy the metadata into `recipes/charts/sglang/files/profiles.json` or `recipes/charts/gguf-backend/files/recipes/<recipe-id>/`. The exporter and packager do not synchronize these copies. Add a values example for each profile and extend its tests.
+4. [Regenerate the index](recipes/README.md#catalog-maintenance), run the affected [local checks](#local-validation), and [package the charts](dev-artifacts/README.md#chart-packages).
+5. [Install through Helm and verify the model](#independent-model-lifecycle) on the target cluster. Check startup, registration, inference, streaming and cache reuse. Adjust the maintained recipe from the results, repeat steps 3-4, and retest. Preserve existing caches and other models.
+6. Record the tested profile, model/runtime versions, date, context length, concurrency and checks passed. Keep untested profiles pending. Update the README validation summary, synchronize chart metadata, and regenerate the index, packages, guides and checksums once more.
 
 ## Local validation
 
