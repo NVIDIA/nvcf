@@ -62,9 +62,9 @@ class VerifierTests(unittest.TestCase):
                     verifier.check(ORIGIN, object(), KEY)
                 request.assert_called_once()
 
-    def test_invalid_key_acceptance_and_configured_key_rejection_fail(self):
+    def test_invalid_key_acceptance_and_unexpected_configured_key_status_fail(self):
         for results, label, expected_calls in (([listing(), (404, b'')], 'Invalid caller key', 2),
-                                               ([listing(), (401, b''), (401, b'')], 'Configured caller key', 3)):
+                                               ([listing(), (401, b''), (403, b'')], 'Configured caller key', 3)):
             with self.subTest(label=label), patch.object(verifier, 'request', side_effect=results) as request:
                 with self.assertRaisesRegex(verifier.VerificationFailure, label):
                     verifier.check(ORIGIN, object(), KEY)
@@ -100,6 +100,28 @@ class VerifierTests(unittest.TestCase):
                 verifier.verify(ORIGIN.geturl(), 'ca', 'key', retry_seconds=4)
         self.assertEqual(check.call_count, 2)
         sleep.assert_called_once_with(1)
+
+    def test_configured_key_401_retries_past_secret_sync_then_succeeds(self):
+        responses = [listing(), (401, b''), (401, b''), listing(), (401, b''), (404, b'')]
+        with patch.object(verifier.ssl, 'create_default_context'), patch.object(verifier.Path, 'read_text', return_value=KEY), \
+                patch.object(verifier, 'request', side_effect=responses) as request, \
+                patch.object(verifier.time, 'monotonic', side_effect=[0, 125]), patch.object(verifier.time, 'sleep') as sleep:
+            self.assertEqual(verifier.verify(ORIGIN.geturl(), 'ca', 'key'), 0)
+        self.assertEqual(request.call_count, 6)
+        sleep.assert_called_once_with(2)
+        self.assertEqual([json.loads(line)['result'] for line in self.output.getvalue().splitlines()], ['RETRY', 'PASS'])
+        self.assertNotIn(KEY, self.output.getvalue())
+
+    def test_configured_key_401_fails_at_reload_deadline(self):
+        responses = [listing(), (401, b''), (401, b'')] * 2
+        with patch.object(verifier.ssl, 'create_default_context'), patch.object(verifier.Path, 'read_text', return_value=KEY), \
+                patch.object(verifier, 'request', side_effect=responses) as request, \
+                patch.object(verifier.time, 'monotonic', side_effect=[0, 179, 180]), patch.object(verifier.time, 'sleep') as sleep:
+            with self.assertRaisesRegex(verifier.VerificationFailure, 'timed out.*credential reload'):
+                verifier.verify(ORIGIN.geturl(), 'ca', 'key')
+        self.assertEqual(request.call_count, 6)
+        sleep.assert_called_once_with(1)
+        self.assertNotIn(KEY, self.output.getvalue())
 
     def test_invalid_behavior_fails_immediately_without_retry(self):
         with patch.object(verifier.ssl, 'create_default_context'), patch.object(verifier.Path, 'read_text', return_value=KEY), \

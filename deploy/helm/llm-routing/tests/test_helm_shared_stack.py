@@ -125,7 +125,7 @@ class SharedHelmTests(unittest.TestCase):
         self.assertEqual(annotations['helm.sh/hook'], 'post-install,post-upgrade')
         self.assertEqual(set(annotations['helm.sh/hook-delete-policy'].split(',')), {'before-hook-creation', 'hook-succeeded'})
         self.assertEqual(job['spec']['backoffLimit'], 0)
-        self.assertLessEqual(job['spec']['activeDeadlineSeconds'], 180)
+        self.assertEqual(job['spec']['activeDeadlineSeconds'], 210)
         self.assertNotIn('ttlSecondsAfterFinished', job['spec'])
         pod = job['spec']['template']['spec']
         self.assertFalse(pod['automountServiceAccountToken'])

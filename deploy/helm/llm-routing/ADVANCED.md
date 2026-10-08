@@ -32,7 +32,7 @@ helm upgrade --install llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz
   --values dev-artifacts/values.yaml --wait --timeout 10m
 ```
 
-The Job retries temporary connection and gateway availability failures for up to 120 seconds. TLS certificate and authentication failures stop verification immediately. Successful verification Jobs are removed. Failed Jobs and their logs remain available until the next install or upgrade.
+The Job retries temporary connection failures, gateway unavailability and HTTP 401 for the configured caller key for up to 180 seconds. This allows time for Secret projection and authentication reload after key rotation. TLS failures and other unexpected authentication responses fail immediately. Successful verification Jobs are removed. Failed Jobs and their logs remain available until the next install or upgrade.
 
 The verification image must be pullable or preloaded on eligible nodes. See [verification image distribution](dev-artifacts/README.md#verification-image) for its default and offline settings.
 

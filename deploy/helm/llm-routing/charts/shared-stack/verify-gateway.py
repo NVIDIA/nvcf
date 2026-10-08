@@ -64,12 +64,14 @@ def check(origin, context, key):
     payload = {'model': unknown, 'messages': [{'role': 'user', 'content': 'Check gateway access.'}], 'max_tokens': 1}
     for credential, expected, label in [('invalid-verification-key', 401, 'Invalid caller key'), (key, 404, 'Configured caller key')]:
         status, _ = request(origin, context, '/v1/chat/completions', payload, credential)
+        if label == 'Configured caller key' and status == 401:
+            raise RetryableFailure('Configured caller key is waiting for the gateway credential reload: HTTP 401')
         if status != expected:
             raise VerificationFailure(label + ' returned HTTP ' + str(status) + ', expected ' + str(expected))
     return len(listing['data'])
 
 
-def verify(url, ca_file, key_file, retry_seconds=120):
+def verify(url, ca_file, key_file, retry_seconds=180):
     origin = urllib.parse.urlsplit(url)
     if origin.scheme != 'https' or not origin.hostname or origin.username or origin.password or origin.path not in ('', '/'):
         raise VerificationFailure('Verification requires a gateway HTTPS origin')
