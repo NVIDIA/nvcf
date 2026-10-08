@@ -501,7 +501,7 @@ Memory guards stop a recipe's runtime when its required memory floor is crossed 
 
 ## Add a recipe
 
-Use the [llm-add-recipe skill](../../../ai-tooling/dev/skills/llm-add-recipe/SKILL.md), or run the steps below manually. Install Helm, kubectl and Python 3.11 or newer. Start at the repository root and replace the example names with your recipe and cluster:
+Run the steps below manually. Install Helm, kubectl and Python 3.11 or newer. Start at the repository root and replace the example names with your recipe and cluster:
 
 ```bash
 cd deploy/helm/llm-routing
