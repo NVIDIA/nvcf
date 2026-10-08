@@ -17,11 +17,11 @@
 
 package com.nvidia.apikeys.persistance.dao;
 
-import com.nvidia.apikeys.persistance.models.KeyByAccountAndOwnerAndServiceModel;
+import com.nvidia.apikeys.persistance.models.KeysByOwnerAndAccountAndServiceModel;
 import com.nvidia.apikeys.persistance.models.KeyByOwnerAndServiceModel;
 import com.nvidia.apikeys.persistance.models.KeyModel;
 import com.nvidia.apikeys.validators.KeyExpirationValidator;
-import com.nvidia.apikeys.vo.KeyByAccountAndOwnerAndServiceVo;
+import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
 import com.nvidia.apikeys.vo.KeyByOwnerAndServiceVo;
 import com.nvidia.apikeys.vo.KeyVo;
 import com.nvidia.boot.jwt.services.mapping.EncryptedModelConverter;
@@ -39,8 +39,8 @@ public class KeyModelConverter {
     private final EncryptedModelConverter<KeyModel, KeyVo> keyConverter;
     private final EncryptedModelConverter<KeyByOwnerAndServiceModel, KeyByOwnerAndServiceVo>
             keyByOwnerAndServiceConverter;
-    private final EncryptedModelConverter<KeyByAccountAndOwnerAndServiceModel,
-            KeyByAccountAndOwnerAndServiceVo> keyByAccountAndOwnerAndServiceConverter;
+    private final EncryptedModelConverter<KeysByOwnerAndAccountAndServiceModel,
+            KeysByOwnerAndAccountAndServiceVo> keysByOwnerAndAccountAndServiceConverter;
     private final KeyExpirationValidator expirationValidator;
 
     public KeyModel voToModel(KeyVo vo) {
@@ -59,12 +59,12 @@ public class KeyModelConverter {
         return expirationValidator.validateStatus(keyByOwnerAndServiceConverter.modelToVo(model));
     }
 
-    public KeyByAccountAndOwnerAndServiceModel voToModel(KeyByAccountAndOwnerAndServiceVo vo) {
-        return keyByAccountAndOwnerAndServiceConverter.voToModel(vo);
+    public KeysByOwnerAndAccountAndServiceModel voToModel(KeysByOwnerAndAccountAndServiceVo vo) {
+        return keysByOwnerAndAccountAndServiceConverter.voToModel(vo);
     }
 
-    public KeyByAccountAndOwnerAndServiceVo modelToVo(KeyByAccountAndOwnerAndServiceModel model) {
+    public KeysByOwnerAndAccountAndServiceVo modelToVo(KeysByOwnerAndAccountAndServiceModel model) {
         return expirationValidator.validateStatus(
-                keyByAccountAndOwnerAndServiceConverter.modelToVo(model));
+                keysByOwnerAndAccountAndServiceConverter.modelToVo(model));
     }
 }

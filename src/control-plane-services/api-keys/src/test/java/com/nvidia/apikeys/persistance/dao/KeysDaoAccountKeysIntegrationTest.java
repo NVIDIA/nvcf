@@ -30,7 +30,7 @@ import com.nvidia.apikeys.config.IntegrationTestConfiguration;
 import com.nvidia.apikeys.config.IntegrationTestConfiguration.TestCleanerExtension;
 import com.nvidia.apikeys.utils.TestClock;
 import com.nvidia.apikeys.vo.KeysByAccountSliceVo;
-import com.nvidia.apikeys.vo.KeyByAccountAndOwnerAndServiceVo;
+import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
 import com.nvidia.apikeys.vo.KeyOwnerStatus;
 import com.nvidia.apikeys.vo.KeyOwnerVo;
 import com.nvidia.apikeys.vo.KeyStatus;
@@ -87,9 +87,9 @@ class KeysDaoAccountKeysIntegrationTest {
     void saveWritesHashRowAndEncryptedAccountRow() {
         KeyVo key = key(NCA_1, OWNER_1, SERVICE_A, "key-1");
 
-        KeyByAccountAndOwnerAndServiceVo saved = dao.saveAccountKey(key);
+        KeysByOwnerAndAccountAndServiceVo saved = dao.saveAccountKey(key);
 
-        assertThat(saved).isEqualTo(KeyByAccountAndOwnerAndServiceVo.from(key));
+        assertThat(saved).isEqualTo(KeysByOwnerAndAccountAndServiceVo.from(key));
         assertThat(dao.getKeyByHash(key.getKeyHash()))
                 .get()
                 .satisfies(stored -> {
@@ -134,7 +134,7 @@ class KeysDaoAccountKeysIntegrationTest {
 
         assertThat(dao.listAccountKeys(NCA_1, USER, OWNER_1))
                 .singleElement()
-                .extracting(KeyByAccountAndOwnerAndServiceVo::getKeyStatus)
+                .extracting(KeysByOwnerAndAccountAndServiceVo::getKeyStatus)
                 .isEqualTo(KeyStatus.SUSPENDED);
         assertThat(dao.getKeyByHash(key.getKeyHash()))
                 .get()
@@ -161,13 +161,13 @@ class KeysDaoAccountKeysIntegrationTest {
         dao.saveAccountKey(key(NCA_2, OWNER_1, SERVICE_A, "key-4"));
 
         assertThat(dao.listAccountKeys(NCA_1, USER, OWNER_1))
-                .extracting(KeyByAccountAndOwnerAndServiceVo::getKeyId)
+                .extracting(KeysByOwnerAndAccountAndServiceVo::getKeyId)
                 .containsExactlyInAnyOrder("key-1", "key-2");
         assertThat(dao.listAccountKeys(NCA_1, USER, OWNER_1, SERVICE_A))
-                .extracting(KeyByAccountAndOwnerAndServiceVo::getKeyId)
+                .extracting(KeysByOwnerAndAccountAndServiceVo::getKeyId)
                 .containsExactly("key-1");
         assertThat(dao.listAccountKeys(NCA_2, USER, OWNER_1))
-                .extracting(KeyByAccountAndOwnerAndServiceVo::getKeyId)
+                .extracting(KeysByOwnerAndAccountAndServiceVo::getKeyId)
                 .containsExactly("key-4");
         assertThat(dao.listAccountKeys(NCA_2, USER, OWNER_2)).isEmpty();
         assertThat(dao.listAccountKeys(NCA_1, USER, OWNER_1, "unknown-service")).isEmpty();
@@ -243,7 +243,7 @@ class KeysDaoAccountKeysIntegrationTest {
         KeysByAccountSliceVo slice = dao.listKeysByAccountAndService(NCA_1, SERVICE_A, 100, null);
 
         assertThat(slice.keys())
-                .extracting(KeyByAccountAndOwnerAndServiceVo::getKeyId)
+                .extracting(KeysByOwnerAndAccountAndServiceVo::getKeyId)
                 .containsExactlyInAnyOrder("key-1", "key-2");
         assertThat(slice.cursor()).isNull();
     }
@@ -282,10 +282,10 @@ class KeysDaoAccountKeysIntegrationTest {
 
         assertThat(dao.getAccountKey(NCA_1, USER, OWNER_1, SERVICE_A, "key-1"))
                 .get()
-                .extracting(KeyByAccountAndOwnerAndServiceVo::getKeyStatus)
+                .extracting(KeysByOwnerAndAccountAndServiceVo::getKeyStatus)
                 .isEqualTo(KeyStatus.EXPIRED);
         assertThat(dao.listKeysByAccount(NCA_1, 10, null).keys())
-                .extracting(KeyByAccountAndOwnerAndServiceVo::getKeyStatus)
+                .extracting(KeysByOwnerAndAccountAndServiceVo::getKeyStatus)
                 .containsExactly(KeyStatus.EXPIRED);
         assertThat(accountRow(NCA_1, OWNER_1).getString("key_status"))
                 .isEqualTo(KeyStatus.ACTIVE.name());
@@ -301,7 +301,7 @@ class KeysDaoAccountKeysIntegrationTest {
 
         assertThat(dao.getAccountKey(NCA_1, USER, OWNER_1, SERVICE_A, "key-1"))
                 .get()
-                .extracting(KeyByAccountAndOwnerAndServiceVo::getKeyStatus)
+                .extracting(KeysByOwnerAndAccountAndServiceVo::getKeyStatus)
                 .isEqualTo(KeyStatus.SUSPENDED);
     }
 
@@ -312,7 +312,7 @@ class KeysDaoAccountKeysIntegrationTest {
         KeyVo otherAccount = key(NCA_2, OWNER_1, SERVICE_A, "key-1").toBuilder()
                 .keyHash("hash-key-1-nca-2")
                 .build();
-        KeyByAccountAndOwnerAndServiceVo saved = dao.saveAccountKey(key);
+        KeysByOwnerAndAccountAndServiceVo saved = dao.saveAccountKey(key);
         dao.saveAccountKey(sibling);
         dao.saveAccountKey(otherAccount);
 
@@ -330,14 +330,14 @@ class KeysDaoAccountKeysIntegrationTest {
     void deleteOfMissingKeyIsNoOp() {
         KeyVo kept = key(NCA_1, OWNER_1, SERVICE_A, "key-1");
         dao.saveAccountKey(kept);
-        KeyByAccountAndOwnerAndServiceVo missing =
-                KeyByAccountAndOwnerAndServiceVo.from(key(NCA_1, OWNER_1, SERVICE_A, "key-2"));
+        KeysByOwnerAndAccountAndServiceVo missing =
+                KeysByOwnerAndAccountAndServiceVo.from(key(NCA_1, OWNER_1, SERVICE_A, "key-2"));
 
         dao.deleteAccountKey(missing);
         dao.deleteAccountKey(missing);
 
         assertThat(dao.listAccountKeys(NCA_1, USER, OWNER_1))
-                .extracting(KeyByAccountAndOwnerAndServiceVo::getKeyId)
+                .extracting(KeysByOwnerAndAccountAndServiceVo::getKeyId)
                 .containsExactly("key-1");
         assertThat(dao.getKeyByHash(kept.getKeyHash())).isPresent();
     }
@@ -364,7 +364,7 @@ class KeysDaoAccountKeysIntegrationTest {
                 .extracting(k -> k.getKeyId())
                 .containsExactly("key-1");
         assertThat(IntegrationTestConfiguration.CQL_SESSION.execute(
-                "SELECT COUNT(*) FROM " + KEY_SPACE + ".keys_by_account_owner_and_service")
+                "SELECT COUNT(*) FROM " + KEY_SPACE + ".keys_by_owner_and_account_and_service")
                            .one().getLong(0)).isZero();
     }
 
@@ -384,14 +384,14 @@ class KeysDaoAccountKeysIntegrationTest {
     private static List<String> keyIds(List<KeysByAccountSliceVo> slices) {
         return slices.stream()
                 .flatMap(slice -> slice.keys().stream())
-                .map(KeyByAccountAndOwnerAndServiceVo::getKeyId)
+                .map(KeysByOwnerAndAccountAndServiceVo::getKeyId)
                 .toList();
     }
 
     private static Row accountRow(String ncaId, String ownerId) {
         return IntegrationTestConfiguration.CQL_SESSION.execute(
                 "SELECT key_status, created_at, key_details FROM " + KEY_SPACE
-                        + ".keys_by_account_owner_and_service WHERE nca_id = ? AND owner_type = ?"
+                        + ".keys_by_owner_and_account_and_service WHERE nca_id = ? AND owner_type = ?"
                         + " AND owner_id = ?", ncaId, USER.name(), ownerId).one();
     }
 

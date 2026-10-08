@@ -31,11 +31,11 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.nvidia.apikeys.config.exceptions.CassandraException;
-import com.nvidia.apikeys.persistance.models.KeyByAccountAndOwnerAndServiceModel;
+import com.nvidia.apikeys.persistance.models.KeysByOwnerAndAccountAndServiceModel;
 import com.nvidia.apikeys.persistance.models.KeyModel;
-import com.nvidia.apikeys.persistance.repositories.KeyByAccountAndOwnerAndServiceRepository;
+import com.nvidia.apikeys.persistance.repositories.KeysByOwnerAndAccountAndServiceRepository;
 import com.nvidia.apikeys.persistance.repositories.KeyRepository;
-import com.nvidia.apikeys.vo.KeyByAccountAndOwnerAndServiceVo;
+import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
 import com.nvidia.apikeys.vo.KeyVo;
 import com.nvidia.boot.exceptions.BadRequestException;
 import java.util.List;
@@ -57,11 +57,11 @@ import org.springframework.data.domain.Pageable;
 class KeysDaoAccountKeysTest {
 
     private static final KeyVo KEY = KEY_VO_1.toBuilder().ncaId("nca-1").build();
-    private static final KeyByAccountAndOwnerAndServiceVo ACCOUNT_KEY =
-            KeyByAccountAndOwnerAndServiceVo.from(KEY);
+    private static final KeysByOwnerAndAccountAndServiceVo ACCOUNT_KEY =
+            KeysByOwnerAndAccountAndServiceVo.from(KEY);
 
     @Mock
-    private KeyByAccountAndOwnerAndServiceRepository repository;
+    private KeysByOwnerAndAccountAndServiceRepository repository;
     @Mock
     private KeyModelConverter keyConverter;
     @Mock
@@ -75,7 +75,7 @@ class KeysDaoAccountKeysTest {
     @Mock
     private KeyModel keyModel;
     @Mock
-    private KeyByAccountAndOwnerAndServiceModel accountKeyModel;
+    private KeysByOwnerAndAccountAndServiceModel accountKeyModel;
 
     @InjectMocks
     private KeysDao dao;
@@ -148,8 +148,8 @@ class KeysDaoAccountKeysTest {
         ArgumentCaptor<List<?>> deleted = ArgumentCaptor.forClass(List.class);
         verify(batchOperations, times(2)).delete(deleted.capture());
         KeyModel hashRow = (KeyModel) deleted.getAllValues().get(0).get(0);
-        KeyByAccountAndOwnerAndServiceModel accountRow =
-                (KeyByAccountAndOwnerAndServiceModel) deleted.getAllValues().get(1).get(0);
+        KeysByOwnerAndAccountAndServiceModel accountRow =
+                (KeysByOwnerAndAccountAndServiceModel) deleted.getAllValues().get(1).get(0);
         assertThat(hashRow.getKeyHash()).isEqualTo(KEY.getKeyHash());
         assertThat(hashRow.getKeyDetails()).isNull();
         assertThat(accountRow.getNcaId()).isEqualTo("nca-1");

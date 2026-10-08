@@ -23,14 +23,14 @@ import static com.datastax.oss.driver.api.core.data.ByteUtils.toHexString;
 import com.datastax.oss.driver.api.core.cql.ResultSet;
 import com.nvidia.apikeys.converters.KeyOwnerVoBuilder;
 import com.nvidia.apikeys.config.exceptions.CassandraException;
-import com.nvidia.apikeys.persistance.models.KeyByAccountAndOwnerAndServiceModel;
+import com.nvidia.apikeys.persistance.models.KeysByOwnerAndAccountAndServiceModel;
 import com.nvidia.apikeys.persistance.models.KeyByOwnerAndServiceModel;
 import com.nvidia.apikeys.persistance.models.KeyModel;
-import com.nvidia.apikeys.persistance.repositories.KeyByAccountAndOwnerAndServiceRepository;
+import com.nvidia.apikeys.persistance.repositories.KeysByOwnerAndAccountAndServiceRepository;
 import com.nvidia.apikeys.persistance.repositories.KeyByOwnerAndServiceRepository;
 import com.nvidia.apikeys.persistance.repositories.KeyRepository;
 import com.nvidia.apikeys.vo.KeysByAccountSliceVo;
-import com.nvidia.apikeys.vo.KeyByAccountAndOwnerAndServiceVo;
+import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
 import com.nvidia.apikeys.vo.KeyByOwnerAndServiceVo;
 import com.nvidia.apikeys.vo.KeyOwnerType;
 import com.nvidia.apikeys.vo.KeyOwnerVo;
@@ -60,7 +60,7 @@ import org.springframework.stereotype.Service;
  * management row in an index table. Saves and deletes write both rows in one logged batch.
  *
  * <p>Legacy keys are indexed per user in keys_by_owner_and_service. Keys issued for a specific
- * account are indexed in keys_by_account_owner_and_service and use the account key methods.
+ * account are indexed in keys_by_owner_and_account_and_service and use the account key methods.
  */
 @Slf4j
 @Service
@@ -72,7 +72,7 @@ public class KeysDao {
 
     private final KeyRepository keyRepository;
     private final KeyByOwnerAndServiceRepository keyByOwnerAndServiceRepository;
-    private final KeyByAccountAndOwnerAndServiceRepository keyByAccountAndOwnerAndServiceRepository;
+    private final KeysByOwnerAndAccountAndServiceRepository keysByOwnerAndAccountAndServiceRepository;
     private final KeyModelConverter keyConverter;
     private final KeyOwnerVoBuilder keyOwnerVoBuilder;
     private final Clock clock;
@@ -186,14 +186,14 @@ public class KeysDao {
                 .toList();
     }
 
-    public KeyByAccountAndOwnerAndServiceVo saveAccountKey(KeyVo key) {
+    public KeysByOwnerAndAccountAndServiceVo saveAccountKey(KeyVo key) {
         if (key.getNcaId() == null) {
             throw new IllegalArgumentException("nca_id is required for account-scoped keys");
         }
 
         KeyModel keyModel = keyConverter.voToModel(key);
-        KeyByAccountAndOwnerAndServiceModel accountKeyModel =
-                keyConverter.voToModel(KeyByAccountAndOwnerAndServiceVo.from(key));
+        KeysByOwnerAndAccountAndServiceModel accountKeyModel =
+                keyConverter.voToModel(KeysByOwnerAndAccountAndServiceVo.from(key));
 
         WriteResult writeResult = cassandraTemplate.batchOps()
                 .insert(List.of(keyModel))
@@ -213,25 +213,25 @@ public class KeysDao {
                 .orElseThrow(() -> new CassandraException("Failed to read saved account key"));
     }
 
-    public Optional<KeyByAccountAndOwnerAndServiceVo> getAccountKey(
+    public Optional<KeysByOwnerAndAccountAndServiceVo> getAccountKey(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             String keyId) {
-        return keyByAccountAndOwnerAndServiceRepository
+        return keysByOwnerAndAccountAndServiceRepository
                 .findByNcaIdAndOwnerTypeAndOwnerIdAndIssuerServiceIdAndKeyId(
                         ncaId, ownerType, ownerId, issuerServiceId, keyId)
                 .map(keyConverter::modelToVo);
     }
 
-    public Stream<KeyByAccountAndOwnerAndServiceVo> listAccountKeys(
+    public Stream<KeysByOwnerAndAccountAndServiceVo> listAccountKeys(
             String ncaId, KeyOwnerType ownerType, String ownerId) {
-        return keyByAccountAndOwnerAndServiceRepository
+        return keysByOwnerAndAccountAndServiceRepository
                 .findByNcaIdAndOwnerTypeAndOwnerId(ncaId, ownerType, ownerId)
                 .map(keyConverter::modelToVo);
     }
 
-    public Stream<KeyByAccountAndOwnerAndServiceVo> listAccountKeys(
+    public Stream<KeysByOwnerAndAccountAndServiceVo> listAccountKeys(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId) {
-        return keyByAccountAndOwnerAndServiceRepository
+        return keysByOwnerAndAccountAndServiceRepository
                 .findByNcaIdAndOwnerTypeAndOwnerIdAndIssuerServiceId(
                         ncaId, ownerType, ownerId, issuerServiceId)
                 .map(keyConverter::modelToVo);
@@ -239,25 +239,25 @@ public class KeysDao {
 
     public KeysByAccountSliceVo listKeysByAccount(String ncaId, int limit, String cursor) {
         return sliceAccountKeys(
-                pageable -> keyByAccountAndOwnerAndServiceRepository.findByNcaId(ncaId, pageable),
+                pageable -> keysByOwnerAndAccountAndServiceRepository.findByNcaId(ncaId, pageable),
                 limit, cursor);
     }
 
     public KeysByAccountSliceVo listKeysByAccountAndService(
             String ncaId, String issuerServiceId, int limit, String cursor) {
         return sliceAccountKeys(
-                pageable -> keyByAccountAndOwnerAndServiceRepository.findByNcaIdAndIssuerServiceId(
+                pageable -> keysByOwnerAndAccountAndServiceRepository.findByNcaIdAndIssuerServiceId(
                         ncaId, issuerServiceId, pageable),
                 limit, cursor);
     }
 
-    public void deleteAccountKey(KeyByAccountAndOwnerAndServiceVo key) {
+    public void deleteAccountKey(KeysByOwnerAndAccountAndServiceVo key) {
         KeyModel keyModel = KeyModel.builder()
                 .keyHash(key.getKeyHash())
                 .keyStatus(key.getKeyStatus())
                 .build();
 
-        KeyByAccountAndOwnerAndServiceModel accountKeyModel = KeyByAccountAndOwnerAndServiceModel.builder()
+        KeysByOwnerAndAccountAndServiceModel accountKeyModel = KeysByOwnerAndAccountAndServiceModel.builder()
                 .ncaId(key.getNcaId())
                 .ownerType(key.getOwnerType())
                 .ownerId(key.getOwnerId())
@@ -275,12 +275,12 @@ public class KeysDao {
     }
 
     private KeysByAccountSliceVo sliceAccountKeys(
-            Function<Pageable, Slice<KeyByAccountAndOwnerAndServiceModel>> query,
+            Function<Pageable, Slice<KeysByOwnerAndAccountAndServiceModel>> query,
             int limit, String cursor) {
         if (limit < 1) {
             throw new BadRequestException(MESG_INVALID_LIMIT.formatted(limit));
         }
-        Slice<KeyByAccountAndOwnerAndServiceModel> pagedResult;
+        Slice<KeysByOwnerAndAccountAndServiceModel> pagedResult;
         try {
             var byteBuffer = cursor == null ? null : fromHexString(cursor);
             var pageRequest = CassandraPageRequest.of(PageRequest.of(0, limit), byteBuffer);

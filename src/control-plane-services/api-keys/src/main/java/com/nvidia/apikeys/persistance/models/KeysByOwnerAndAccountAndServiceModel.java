@@ -17,7 +17,7 @@
 
 package com.nvidia.apikeys.persistance.models;
 
-import com.nvidia.apikeys.vo.KeyByAccountAndOwnerAndServiceVo;
+import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
 import com.nvidia.apikeys.vo.KeyOwnerType;
 import com.nvidia.apikeys.vo.KeyStatus;
 import com.nvidia.boot.jwt.services.mapping.annotation.EncryptedFields;
@@ -41,10 +41,10 @@ import org.springframework.data.cassandra.core.mapping.Table;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor(onConstructor_ = @PersistenceCreator)
-@Table(KeyByAccountAndOwnerAndServiceModel.TABLE_NAME)
-public class KeyByAccountAndOwnerAndServiceModel {
+@Table(KeysByOwnerAndAccountAndServiceModel.TABLE_NAME)
+public class KeysByOwnerAndAccountAndServiceModel {
 
-    public static final String TABLE_NAME = "keys_by_account_owner_and_service";
+    public static final String TABLE_NAME = "keys_by_owner_and_account_and_service";
     public static final String COLUMN_NCA_ID = "nca_id";
     public static final String COLUMN_OWNER_TYPE = "owner_type";
     public static final String COLUMN_OWNER_ID = "owner_id";
@@ -88,6 +88,6 @@ public class KeyByAccountAndOwnerAndServiceModel {
 
     @Column(COLUMN_KEY_DETAILS)
     @EncryptedFields(encryptionKeyName = "payload_jwe_kid",
-            valueObject = KeyByAccountAndOwnerAndServiceVo.class)
+            valueObject = KeysByOwnerAndAccountAndServiceVo.class)
     private String keyDetails;
 }

@@ -100,7 +100,7 @@ class KeyOperationsDaoIntegrationTest {
                            .matchedCount(10L)
                            .completedCount(4L)
                            .failedCount(1L)
-                           .selectionState("keys_by_account_owner_and_service")
+                           .selectionState("keys_by_owner_and_account_and_service")
                            .pagingState("opaque-paging-state")
                            .build());
 

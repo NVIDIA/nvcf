@@ -43,7 +43,7 @@ import org.springframework.test.context.ContextConfiguration;
 @ContextConfiguration(initializers = IntegrationTestConfiguration.Initializer.class)
 class MultiTenantSchemaIntegrationTest {
 
-    private static final String MANAGEMENT_TABLE = "keys_by_account_owner_and_service";
+    private static final String MANAGEMENT_TABLE = "keys_by_owner_and_account_and_service";
 
     private static final List<String> SAI_INDEXES = List.of(
             "keys_by_scope_nca_idx",

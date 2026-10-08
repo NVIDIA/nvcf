@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS row_update_lock
 
 -- Account-scoped management index. Keep keys_by_owner_and_service until the
 -- dual-write migration stops using it.
-CREATE TABLE IF NOT EXISTS keys_by_account_owner_and_service
+CREATE TABLE IF NOT EXISTS keys_by_owner_and_account_and_service
 (
     nca_id            TEXT,
     owner_type        TEXT,
@@ -81,30 +81,30 @@ CREATE TABLE IF NOT EXISTS keys_by_account_owner_and_service
 
 -- SAI on the management table for admin and bulk selection that does not
 -- have the full partition key. These indexes select rows only. Bulk updates
--- still write each key in keys and keys_by_account_owner_and_service.
+-- still write each key in keys and keys_by_owner_and_account_and_service.
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_nca_idx
-    ON keys_by_account_owner_and_service (nca_id)
+    ON keys_by_owner_and_account_and_service (nca_id)
     USING 'StorageAttachedIndex';
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_owner_idx
-    ON keys_by_account_owner_and_service (owner_id)
+    ON keys_by_owner_and_account_and_service (owner_id)
     USING 'StorageAttachedIndex';
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_owner_type_idx
-    ON keys_by_account_owner_and_service (owner_type)
+    ON keys_by_owner_and_account_and_service (owner_type)
     USING 'StorageAttachedIndex';
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_service_idx
-    ON keys_by_account_owner_and_service (issuer_service_id)
+    ON keys_by_owner_and_account_and_service (issuer_service_id)
     USING 'StorageAttachedIndex';
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_status_idx
-    ON keys_by_account_owner_and_service (key_status)
+    ON keys_by_owner_and_account_and_service (key_status)
     USING 'StorageAttachedIndex';
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_created_at_idx
-    ON keys_by_account_owner_and_service (created_at)
+    ON keys_by_owner_and_account_and_service (created_at)
     USING 'StorageAttachedIndex';
 
 CREATE TABLE IF NOT EXISTS owner_status_by_account

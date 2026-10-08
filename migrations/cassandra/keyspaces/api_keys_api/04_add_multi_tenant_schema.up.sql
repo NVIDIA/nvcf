@@ -5,7 +5,7 @@
 
 ALTER TABLE api_keys_api.keys ADD IF NOT EXISTS nca_id TEXT;
 
-CREATE TABLE IF NOT EXISTS api_keys_api.keys_by_account_owner_and_service
+CREATE TABLE IF NOT EXISTS api_keys_api.keys_by_owner_and_account_and_service
 (
     nca_id            TEXT,
     owner_type        TEXT,
@@ -21,27 +21,27 @@ CREATE TABLE IF NOT EXISTS api_keys_api.keys_by_account_owner_and_service
 );
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_nca_idx
-    ON api_keys_api.keys_by_account_owner_and_service (nca_id)
+    ON api_keys_api.keys_by_owner_and_account_and_service (nca_id)
     USING 'StorageAttachedIndex';
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_owner_idx
-    ON api_keys_api.keys_by_account_owner_and_service (owner_id)
+    ON api_keys_api.keys_by_owner_and_account_and_service (owner_id)
     USING 'StorageAttachedIndex';
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_owner_type_idx
-    ON api_keys_api.keys_by_account_owner_and_service (owner_type)
+    ON api_keys_api.keys_by_owner_and_account_and_service (owner_type)
     USING 'StorageAttachedIndex';
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_service_idx
-    ON api_keys_api.keys_by_account_owner_and_service (issuer_service_id)
+    ON api_keys_api.keys_by_owner_and_account_and_service (issuer_service_id)
     USING 'StorageAttachedIndex';
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_status_idx
-    ON api_keys_api.keys_by_account_owner_and_service (key_status)
+    ON api_keys_api.keys_by_owner_and_account_and_service (key_status)
     USING 'StorageAttachedIndex';
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_created_at_idx
-    ON api_keys_api.keys_by_account_owner_and_service (created_at)
+    ON api_keys_api.keys_by_owner_and_account_and_service (created_at)
     USING 'StorageAttachedIndex';
 
 CREATE TABLE IF NOT EXISTS api_keys_api.owner_status_by_account

@@ -25,7 +25,7 @@ import lombok.Builder;
  */
 @Builder
 public record KeysByAccountSliceVo(
-        List<KeyByAccountAndOwnerAndServiceVo> keys,
+        List<KeysByOwnerAndAccountAndServiceVo> keys,
         String cursor,
         Integer limit) {
 }

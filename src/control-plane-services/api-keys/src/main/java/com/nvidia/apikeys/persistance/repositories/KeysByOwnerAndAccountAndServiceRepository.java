@@ -17,7 +17,7 @@
 
 package com.nvidia.apikeys.persistance.repositories;
 
-import com.nvidia.apikeys.persistance.models.KeyByAccountAndOwnerAndServiceModel;
+import com.nvidia.apikeys.persistance.models.KeysByOwnerAndAccountAndServiceModel;
 import com.nvidia.apikeys.vo.KeyOwnerType;
 import java.util.Optional;
 import java.util.stream.Stream;
@@ -27,23 +27,23 @@ import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Repository;
 
 @Repository
-public interface KeyByAccountAndOwnerAndServiceRepository extends
-        MapIdCassandraRepository<KeyByAccountAndOwnerAndServiceModel> {
+public interface KeysByOwnerAndAccountAndServiceRepository extends
+        MapIdCassandraRepository<KeysByOwnerAndAccountAndServiceModel> {
 
-    Stream<KeyByAccountAndOwnerAndServiceModel> findByNcaIdAndOwnerTypeAndOwnerId(
+    Stream<KeysByOwnerAndAccountAndServiceModel> findByNcaIdAndOwnerTypeAndOwnerId(
             String ncaId, KeyOwnerType ownerType, String ownerId);
 
-    Stream<KeyByAccountAndOwnerAndServiceModel> findByNcaIdAndOwnerTypeAndOwnerIdAndIssuerServiceId(
+    Stream<KeysByOwnerAndAccountAndServiceModel> findByNcaIdAndOwnerTypeAndOwnerIdAndIssuerServiceId(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId);
 
-    Optional<KeyByAccountAndOwnerAndServiceModel>
+    Optional<KeysByOwnerAndAccountAndServiceModel>
             findByNcaIdAndOwnerTypeAndOwnerIdAndIssuerServiceIdAndKeyId(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             String keyId);
 
     // served by storage-attached indexes, not by the partition key
-    Slice<KeyByAccountAndOwnerAndServiceModel> findByNcaId(String ncaId, Pageable pageable);
+    Slice<KeysByOwnerAndAccountAndServiceModel> findByNcaId(String ncaId, Pageable pageable);
 
-    Slice<KeyByAccountAndOwnerAndServiceModel> findByNcaIdAndIssuerServiceId(
+    Slice<KeysByOwnerAndAccountAndServiceModel> findByNcaIdAndIssuerServiceId(
             String ncaId, String issuerServiceId, Pageable pageable);
 }
