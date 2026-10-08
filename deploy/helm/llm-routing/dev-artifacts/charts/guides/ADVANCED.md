@@ -500,7 +500,11 @@ Memory guards stop a recipe's runtime when its required memory floor is crossed 
 
 ## Add a recipe
 
+Use the [llm-add-recipe skill](../../../ai-tooling/dev/skills/llm-add-recipe/SKILL.md) for the full workflow: research the model, prepare its metadata, deploy through Helm, verify on the target cluster, adjust the recipe from the results, and regenerate its catalogs and packages. Offline checks prepare the recipe for live qualification. Research-only work leaves qualification pending.
+
 SGLang recipes live in [recipes/catalog.json](recipes/catalog.json). GGUF recipe folders own `recipe.json`, `model.lock.json`, `profiles.json` and `NOTICE`. Keep artifact pins, hardware requirements, workload limits, tuning and license notices there. The charts bundle this metadata for installation without a separate Python deployment step.
+
+Synchronize changed SGLang entries into `recipes/charts/sglang/files/profiles.json`, or GGUF files into `recipes/charts/gguf-backend/files/recipes/<recipe-id>/`. Add a values example for each deployable profile and extend its metadata and startup tests. The exporter generates the index only, and the packager copies chart sources; neither updates these bundled recipe files. The current GGUF automatic chart uses the first profile with one leader and one RPC worker, so another topology also needs implementation changes.
 
 An executable profile needs a compatible image, model revision, resource reservations and automatic startup implementation. Run hardware qualification and gateway inference before marking that exact profile and workload validated. Keep unsupported models in [recipes/planned.json](recipes/planned.json) without deployable profiles. Regenerate the [common index](recipes/README.md#catalog-maintenance) and chart packages after metadata changes.
 
