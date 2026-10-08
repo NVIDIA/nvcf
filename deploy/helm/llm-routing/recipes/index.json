@@ -134,9 +134,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "archive": "pylon-sglang-recipe-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
               "publication": "oci"
             },
@@ -231,9 +231,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "archive": "pylon-sglang-recipe-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
               "publication": "oci"
             },
@@ -274,6 +274,7 @@
       },
       "runtime": {
         "backend": "llama.cpp",
+        "version": "llama.cpp f872b59",
         "revision": "f872b591121761ac7b2af18283bd99bdc092a63a",
         "image": "nvcr.io/nvidia/vllm@sha256:67c617846180989a71e0f353c8b101e9808dc7c2638b60f890064e3d7b660282"
       },
@@ -375,7 +376,7 @@
             "maximumConcurrency": 1
           },
           "validation": {
-            "runtimeStatus": "hardware-validated",
+            "runtimeStatus": "failed",
             "automaticHelmStatus": "failed",
             "automaticHelmWorkload": {
               "status": "failed",
@@ -436,22 +437,15 @@
               ],
               "minimumAvailableGiB": 1.0
             },
-            "scope": "The combined two-GB10 deployment passed inference and worker recovery. Automatic Helm trials on 2026-10-07 and 2026-10-12 passed qualification and weight verification, then stopped at the host-memory guard during model loading. The 2026-10-12 trials at tensor splits 50/50, 52/48 and 51/49 each ended with under 1 GiB of host memory available on one node, below the 1 GiB floor. The guard was left unchanged.",
-            "workload": {
-              "contextLength": 2048,
-              "concurrency": 1,
-              "requestType": "short-prompt-smoke",
-              "fullContextExercised": false,
-              "performanceBenchmarked": false,
-              "qualityEvaluated": false
-            }
+            "scope": "Historical combined two-GB10 inference and worker recovery used the retired phased workflow. Automatic Helm trials on 2026-10-07 and 2026-10-12 passed qualification and weight verification, then stopped at the host-memory guard during model loading. The 2026-10-12 trials at tensor splits 50/50, 52/48 and 51/49 each ended with under 1 GiB of host memory available on one node, below the 1 GiB floor. The guard was left unchanged.",
+            "workload": null
           },
           "deployment": {
             "chart": {
               "name": "pylon-gguf-backend",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/gguf-backend",
-              "archive": "pylon-gguf-backend-0.3.0-iiab.tgz",
+              "archive": "pylon-gguf-backend-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-gguf-backend",
               "publication": "oci"
             },
@@ -590,7 +584,7 @@
             "maximumConcurrency": 1
           },
           "validation": {
-            "runtimeStatus": "pending",
+            "runtimeStatus": "smoke-tested",
             "automaticHelmStatus": "smoke-tested",
             "automaticHelmWorkload": {
               "status": "smoke-tested",
@@ -637,9 +631,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-gguf-backend",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/gguf-backend",
-              "archive": "pylon-gguf-backend-0.3.0-iiab.tgz",
+              "archive": "pylon-gguf-backend-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-gguf-backend",
               "publication": "oci"
             },
@@ -756,7 +750,7 @@
             "maximumConcurrency": 1
           },
           "validation": {
-            "runtimeStatus": "pending",
+            "runtimeStatus": "smoke-tested",
             "automaticHelmStatus": "smoke-tested",
             "automaticHelmWorkload": {
               "date": "2026-10-11",
@@ -883,9 +877,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-gguf-backend",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/gguf-backend",
-              "archive": "pylon-gguf-backend-0.3.0-iiab.tgz",
+              "archive": "pylon-gguf-backend-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-gguf-backend",
               "publication": "oci"
             },
@@ -1012,9 +1006,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "archive": "pylon-sglang-recipe-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
               "publication": "oci"
             },
@@ -1208,9 +1202,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "archive": "pylon-sglang-recipe-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
               "publication": "oci"
             },
@@ -1337,9 +1331,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "archive": "pylon-sglang-recipe-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
               "publication": "oci"
             },
@@ -1532,9 +1526,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "archive": "pylon-sglang-recipe-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
               "publication": "oci"
             },
@@ -1662,9 +1656,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "archive": "pylon-sglang-recipe-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
               "publication": "oci"
             },
@@ -1846,9 +1840,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "archive": "pylon-sglang-recipe-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
               "publication": "oci"
             },
@@ -1975,9 +1969,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "archive": "pylon-sglang-recipe-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
               "publication": "oci"
             },
@@ -2107,9 +2101,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "archive": "pylon-sglang-recipe-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
               "publication": "oci"
             },
@@ -2238,9 +2232,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "archive": "pylon-sglang-recipe-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
               "publication": "oci"
             },
@@ -2373,9 +2367,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "archive": "pylon-sglang-recipe-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
               "publication": "oci"
             },
@@ -2464,9 +2458,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "archive": "pylon-sglang-recipe-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
               "publication": "oci"
             },
@@ -2575,9 +2569,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.3.0-iiab",
+              "version": "0.3.1-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "archive": "pylon-sglang-recipe-0.3.1-iiab.tgz",
               "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
               "publication": "oci"
             },

@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -44,6 +45,11 @@ def all_profile_releases():
 
 
 class RuntimeTests(unittest.TestCase):
+    def setUp(self):
+        environment = patch.dict(runtime.os.environ, POD_IP='192.0.2.10')
+        environment.start()
+        self.addCleanup(environment.stop)
+
     def test_nvfp4_uses_checkpoint_quantization_and_bounded_spark_pools(self):
         values = profile_release('qwen3.8-27b-nvfp4')['config']
         args = runtime.command(values, '/snapshot', 0)
@@ -70,8 +76,18 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(args[args.index('--nnodes') + 1], '2')
             self.assertEqual(args[args.index('--node-rank') + 1], str(rank))
             self.assertEqual(args[args.index('--tp') + 1], '2')
+            self.assertEqual(args[args.index('--host') + 1], '192.0.2.10')
             self.assertIn('--no-ple-offload-embedding', args)
             self.assertNotIn('--ple-offload-backend', args)
+
+    def test_tp2_requires_explicit_service_address_and_single_node_keeps_pod_binding(self):
+        values = profile_release('qwen3.8-flash-next', 'spark-nvfp4-tp2')['config']
+        for address in ('', '0.0.0.0', '127.0.0.1', '224.0.0.1'):
+            with self.subTest(address=address), patch.dict(runtime.os.environ, POD_IP=address), self.assertRaises(RuntimeError):
+                runtime.command(values, '/snapshot', 0)
+        single = profile_release('qwen3.8-flash-next', 'spark-nvfp4-nvme')['config']
+        args = runtime.command(single, '/snapshot', 0)
+        self.assertEqual(args[args.index('--host') + 1], '0.0.0.0')
 
     def test_one_node_offload_is_file_backed(self):
         values = profile_release('qwen3.8-flash-next', 'spark-nvfp4-nvme')['config']
