@@ -114,7 +114,7 @@
       "availability": {
         "status": "experimental",
         "deployable": true,
-        "reason": "Automatic Helm inference has not been qualified for any profile."
+        "reason": "Not validated."
       },
       "precision": "UD-IQ2_M",
       "license": "glm-5.3",

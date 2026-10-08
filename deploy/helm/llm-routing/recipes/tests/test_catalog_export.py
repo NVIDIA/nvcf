@@ -77,7 +77,7 @@ class CommonCatalogTests(unittest.TestCase):
             if qualified:
                 self.assertNotIn('reason', recipe['availability'])
             else:
-                self.assertIn('not been qualified', recipe['availability']['reason'])
+                self.assertEqual(recipe['availability']['reason'], 'Not validated.')
 
     def test_available_and_planned_notice_paths_share_one_bundle_file(self):
         for identifier, recipe in self.recipes.items():
