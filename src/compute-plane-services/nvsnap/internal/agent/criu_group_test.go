@@ -83,8 +83,16 @@ func TestInstanceRanks(t *testing.T) {
 
 func TestCRIUGroupCaptureLeader(t *testing.T) {
 	r0 := stsRank("kimi-0", "0", "2", "sts-a", true)
+	if _, _, ok := criuGroupCaptureLeader(&r0); ok {
+		t.Error("a multi-pod instance was captured without opting in")
+	}
+	r0.Annotations[criuCaptureAnnotation] = "true"
 	if key, size, ok := criuGroupCaptureLeader(&r0); !ok || key != "k1" || size != 2 {
 		t.Errorf("rank 0: %q %d %v", key, size, ok)
+	}
+	single := stsRank("one-0", "0", "1", "sts-b", true)
+	if _, _, ok := criuGroupCaptureLeader(&single); !ok {
+		t.Error("a single-pod instance needs no opt-in")
 	}
 	r1 := stsRank("kimi-1", "1", "2", "sts-a", true)
 	notReady := stsRank("kimi-0", "0", "2", "sts-a", false)

@@ -51,6 +51,11 @@ const (
 	criuGroupStateFailed    = "failed"
 
 	lwsGroupKeyLabel = "leaderworkerset.sigs.k8s.io/group-key"
+
+	// criuCaptureAnnotation opts a multi-pod instance into the capture.
+	// Multi-pod capture is opt-in: a failed multi-node GPU suspend has
+	// taken down the engine it suspended (kimi-k3, 2026-10-08).
+	criuCaptureAnnotation = "nvsnap.io/criu-capture"
 )
 
 func criuGroupConfigMapName(key string) string { return criuGroupConfigMapPrefix + key }
@@ -173,6 +178,9 @@ func criuGroupCaptureLeader(pod *corev1.Pod) (key string, size int, ok bool) {
 	}
 	o, s, ok := podRank(pod, modelvolume.CacheOrdinalAnnotation, modelvolume.CacheGroupSizeAnnotation)
 	if !ok || o != 0 || !rootfsonly.IsPodReady(pod) || gpuContainer(pod) == "" || !hasInstance(pod) {
+		return "", 0, false
+	}
+	if s > 1 && pod.Annotations[criuCaptureAnnotation] != "true" {
 		return "", 0, false
 	}
 	return webhook.CRIUGroupKey(uri), s, true
