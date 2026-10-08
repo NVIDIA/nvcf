@@ -304,6 +304,14 @@ def print_table(headers, rows):
         print(line(row))
 
 
+def print_model_list(listing):
+    if not listing['data']:
+        print('No models available.')
+        return
+    print_table(['MODEL', 'OWNER'],
+                [[model['id'], model.get('owned_by') or '-'] for model in listing['data']])
+
+
 def print_capacity_plan(report, verbose=False):
     if verbose:
         print_capacity_details(report)
@@ -366,7 +374,8 @@ def main(argv=None):
     parser.add_argument('--ca-configmap', help='CA ConfigMap for an existing legacy stack.')
     parser.add_argument('--api-key-file', type=pathlib.Path, help='Caller key file for an existing legacy stack.')
     commands = parser.add_subparsers(dest='command', required=True)
-    commands.add_parser('models', help='List models through the gateway.')
+    models = commands.add_parser('models', help='List models through the gateway.')
+    models.add_argument('--json', action='store_true', help='Print the complete model list as JSON.')
     chat = commands.add_parser('chat', help='Chat with a model through the gateway.')
     chat.add_argument('--model', required=True)
     chat.add_argument('--stream', action='store_true')
@@ -409,7 +418,10 @@ def main(argv=None):
     with gateway(context, args.namespace, args.ca_configmap, args.api_key_file) as client:
         if args.command == 'models':
             listing = model_list(client)
-            print(json.dumps(listing, indent=2))
+            if args.json:
+                print(json.dumps(listing, indent=2))
+            else:
+                print_model_list(listing)
             return listing
         return client.completion(args.model, args.prompt, stream=args.stream, display=True)
 

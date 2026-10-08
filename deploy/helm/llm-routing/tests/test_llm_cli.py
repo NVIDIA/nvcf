@@ -82,13 +82,39 @@ class CommandTests(IsolatedTest):
                 llm.main(arguments)
             context.assert_not_called()
 
-    def test_models_outputs_only_discovery_json(self):
-        listing = {'object': 'list', 'data': [{'id': 'first'}, {'id': 'second'}]}
+    def test_models_displays_available_models_as_a_table(self):
+        listing = {'object': 'list', 'data': [
+            {'id': 'first', 'owned_by': 'stargate', 'created': 123},
+            {'id': 'a-longer-model'}]}
         with patch.object(llm, 'gateway') as gateway:
             client = gateway.return_value.__enter__.return_value
             client.key = 'sensitive-caller-value'
             client.public_json.return_value = listing
             self.assertEqual(llm.main(['--context', 'target', 'models']), listing)
+        client.public_json.assert_called_once_with('/v1/models')
+        lines = self.output.getvalue().splitlines()
+        self.assertEqual(lines[0].split(), ['MODEL', 'OWNER'])
+        self.assertEqual(lines[2].split(), ['first', 'stargate'])
+        self.assertEqual(lines[3].split(), ['a-longer-model', '-'])
+        self.assertEqual(lines[0].index('OWNER'), lines[2].index('stargate'))
+        self.assertNotIn(client.key, self.output.getvalue() + self.errors.getvalue())
+
+    def test_models_explains_an_empty_gateway_list(self):
+        listing = {'object': 'list', 'data': []}
+        with patch.object(llm, 'gateway') as gateway:
+            gateway.return_value.__enter__.return_value.public_json.return_value = listing
+            self.assertEqual(llm.main(['--context', 'target', 'models']), listing)
+        self.assertEqual(self.output.getvalue(), 'No models available.\n')
+
+    def test_models_json_outputs_only_the_complete_discovery_response(self):
+        listing = {'object': 'list', 'data': [
+            {'id': 'first', 'owned_by': 'stargate', 'created': 123, 'object': 'model'},
+            {'id': 'second', 'extra': {'kept': True}}]}
+        with patch.object(llm, 'gateway') as gateway:
+            client = gateway.return_value.__enter__.return_value
+            client.key = 'sensitive-caller-value'
+            client.public_json.return_value = listing
+            self.assertEqual(llm.main(['--context', 'target', 'models', '--json']), listing)
         self.assertEqual(json.loads(self.output.getvalue()), listing)
         self.assertNotIn(client.key, self.output.getvalue() + self.errors.getvalue())
 

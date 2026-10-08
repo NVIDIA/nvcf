@@ -87,7 +87,7 @@ The listed tests used short prompts. The catalog records validation for each har
 
 ## 3. Discover and call models
 
-List the registered models and call each precision:
+List the available models in a table and call each precision. Use `python3 llm.py models --json` for the complete gateway response in scripts:
 
 ```bash
 python3 llm.py models
