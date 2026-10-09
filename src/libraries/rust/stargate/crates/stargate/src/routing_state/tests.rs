@@ -1015,6 +1015,120 @@ async fn removing_backend_drops_its_reservations_immediately() {
     reservation.release();
 }
 
+fn routing_reservations_active(
+    metrics: &crate::metrics::StargateMetrics,
+    target: &RoutingTargetKey,
+) -> i64 {
+    use prometheus::Encoder;
+
+    let mut encoded = Vec::new();
+    prometheus::TextEncoder::new()
+        .encode(&metrics.registry().gather(), &mut encoded)
+        .expect("metrics should encode");
+    let series = format!(
+        "stargate_routing_reservations_active{{model=\"{}\",routing_key=\"{}\"}} ",
+        target.model_id,
+        target.routing_key.as_deref().unwrap_or_default()
+    );
+    String::from_utf8(encoded)
+        .expect("metrics should be UTF-8")
+        .lines()
+        .find_map(|line| line.strip_prefix(&series))
+        .expect("reservation gauge series should exist")
+        .parse()
+        .expect("reservation gauge should be an integer")
+}
+
+#[derive(Clone, Copy)]
+enum RetiredClusterReplacement {
+    ActiveUpsert,
+    InactiveRemoval,
+}
+
+async fn assert_retired_cluster_drop_settles_reservation_gauge(
+    name: &str,
+    replacement_kind: RetiredClusterReplacement,
+) {
+    let scenario = RegistrationScenario::new(Some(&format!("rk-{name}")));
+    let model_id = format!("model-{name}");
+    let inference_server_id = format!("inst-{name}");
+    let cluster_id = format!("cluster-{name}");
+    let target = scenario.target(&model_id);
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    let old = scenario.start_in(&inference_server_id, &cluster_id, 1111);
+    scenario.activate(&old, &model_id).await;
+
+    let selected_cluster = scenario.selected_cluster(&model_id).await;
+    let reserve = || {
+        selected_cluster
+            .reserve_backend_with_ttl(
+                &old.generation(),
+                37,
+                4,
+                Duration::from_secs(60),
+                metrics.clone(),
+                &target,
+            )
+            .expect("active backend should accept reservation")
+    };
+    reserve().release();
+    let pending = reserve();
+    assert_eq!(routing_reservations_active(&metrics, &target), 1);
+    drop(pending);
+    drop(selected_cluster);
+    assert_eq!(
+        routing_reservations_active(&metrics, &target),
+        1,
+        "the cluster generation still owns the pending reservation"
+    );
+
+    let ended = scenario
+        .state
+        .registrations
+        .end_registration(old)
+        .expect("exact old registration should be removed");
+    assert!(ended.registration.cluster_generation.is_retired());
+    let replacement = scenario.start_in(&inference_server_id, &cluster_id, 2222);
+    let status = match replacement_kind {
+        RetiredClusterReplacement::ActiveUpsert => Active,
+        RetiredClusterReplacement::InactiveRemoval => Inactive,
+    };
+    scenario
+        .publish_default_stats(&replacement, &model_id, status, Some(6))
+        .await;
+
+    assert_eq!(
+        routing_reservations_active(&metrics, &target),
+        0,
+        "dropping a retired cluster generation must settle its reservations once"
+    );
+    scenario
+        .state
+        .routing
+        .remove_inference_server_targets(&ended.registration, &HashSet::from([target.clone()]))
+        .await;
+    scenario.state.end_registration(replacement).await;
+    assert_eq!(routing_reservations_active(&metrics, &target), 0);
+}
+
+#[tokio::test]
+async fn replacing_retired_cluster_generation_settles_reservation_gauge() {
+    assert_retired_cluster_drop_settles_reservation_gauge(
+        "res-retired-upsert",
+        RetiredClusterReplacement::ActiveUpsert,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn removing_retired_cluster_generation_settles_reservation_gauge() {
+    assert_retired_cluster_drop_settles_reservation_gauge(
+        "res-retired-remove",
+        RetiredClusterReplacement::InactiveRemoval,
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn dropping_retired_cluster_generation_decrements_active_reservation_gauge() {
     let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
