@@ -16,7 +16,11 @@ helm template sis "$repo_root/deploy/helm/icms/icms-api" -n sis \
   --set sis.lls.hmacRotation.image.tag=test >"$work_dir/sis.yaml"
 
 selector='select(.kind == "Job" and .metadata.name == "addons-lls-migrations")'
+test "$(yq -r "$selector | .spec.template.spec.securityContext.runAsNonRoot" "$work_dir/sis.yaml")" = true
 test "$(yq -r "$selector | .spec.template.spec.securityContext.runAsUser" "$work_dir/sis.yaml")" = 100
+test "$(yq -r "$selector | .spec.template.spec.securityContext.runAsGroup" "$work_dir/sis.yaml")" = 1000
 test "$(yq -r "$selector | .spec.template.spec.containers[0].securityContext.runAsNonRoot" "$work_dir/sis.yaml")" = true
+test "$(yq -r "$selector | .spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation" "$work_dir/sis.yaml")" = false
+test "$(yq -r "$selector | .spec.template.spec.containers[0].securityContext.capabilities.drop[0]" "$work_dir/sis.yaml")" = ALL
 
 echo "nonroot-icms-migrations: all checks passed"
