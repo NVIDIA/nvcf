@@ -19,6 +19,11 @@ use stargate_protocol::common::queue_time_delta_ms;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+/// Long enough that no test reservation expires on wall-clock time while a
+/// test runs. `Duration::MAX` would overflow `Instant + Duration`.
+#[cfg(test)]
+pub(super) const UNEXPIRING_TEST_RESERVATION_TTL: Duration = Duration::from_secs(600);
+
 #[derive(Debug)]
 pub(super) struct PendingClusterReservation {
     pub(super) inference_server_id: String,

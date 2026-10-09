@@ -17,7 +17,7 @@ use super::registration::{
     RegistrationClusterGeneration, test_registration_generation,
     test_registration_generation_in_cluster,
 };
-use super::reservations::update_reserved_priority_queue_time;
+use super::reservations::{UNEXPIRING_TEST_RESERVATION_TTL, update_reserved_priority_queue_time};
 use super::snapshots::{ClusterBackendUpsert, RoutedClusterState, RoutingTargetGeneration};
 use super::*;
 use crate::load_balancer::{
@@ -909,13 +909,16 @@ async fn reservation_is_in_snapshot_before_expiry_and_pruned_at_expiry() {
     let selected_cluster = scenario.selected_cluster("model-res-expiry").await;
     let target = scenario.target("model-res-expiry");
     let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    // The registration update below prunes with the real clock, so the TTL must
+    // outlast any scheduler stall. The boundary checks use explicit instants
+    // relative to expires_at instead.
     let reservation = selected_cluster
         .reserve_backend_with_ttl(
             &running.generation(),
             37,
             4,
-            Duration::from_millis(60),
-            metrics,
+            UNEXPIRING_TEST_RESERVATION_TTL,
+            metrics.clone(),
             &target,
         )
         .expect("active backend should accept reservation");
@@ -923,13 +926,19 @@ async fn reservation_is_in_snapshot_before_expiry_and_pruned_at_expiry() {
 
     scenario.publish_connected(&running, &update).await;
     assert_eq!(
+        selected_cluster.pending_reservation_count(),
+        1,
+        "a registration update must not clear the reservation"
+    );
+    assert_eq!(routing_reservations_active(&metrics, &target), 1);
+    assert_eq!(
         selected_cluster
             .routing_snapshot_at(expires_at - Duration::from_millis(1))
             .expect("cluster should remain routable")
             .stats
             .queue_size,
         1,
-        "a registration update must not clear the reservation"
+        "reservation should count just before its expiry boundary"
     );
     assert_eq!(
         selected_cluster
@@ -941,6 +950,7 @@ async fn reservation_is_in_snapshot_before_expiry_and_pruned_at_expiry() {
         "reservation should not count at its expiry boundary"
     );
     assert_eq!(selected_cluster.pending_reservation_count(), 0);
+    assert_eq!(routing_reservations_active(&metrics, &target), 0);
 
     reservation.release();
 }
@@ -976,10 +986,12 @@ async fn snapshot_read_prunes_ten_thousand_idle_expired_reservations() {
     }
 
     assert_eq!(selected_cluster.pending_reservation_count(), 10_000);
+    assert_eq!(routing_reservations_active(&metrics, &target), 10_000);
     selected_cluster
         .routing_snapshot_at(last_expiry + Duration::from_millis(1))
         .expect("cluster should remain routable");
     assert_eq!(selected_cluster.pending_reservation_count(), 0);
+    assert_eq!(routing_reservations_active(&metrics, &target), 0);
 }
 
 #[tokio::test]
@@ -1002,7 +1014,7 @@ async fn removing_backend_drops_its_reservations_immediately() {
             &running.generation(),
             37,
             4,
-            Duration::from_secs(1),
+            UNEXPIRING_TEST_RESERVATION_TTL,
             metrics,
             &target,
         )
@@ -1175,7 +1187,7 @@ async fn dropping_retired_cluster_generation_decrements_active_reservation_gauge
             &old.generation(),
             10,
             0,
-            Duration::from_secs(1),
+            UNEXPIRING_TEST_RESERVATION_TTL,
             metrics.clone(),
             &target,
         )
@@ -1238,7 +1250,7 @@ async fn released_reservation_restores_local_snapshot_before_registration_update
     let candidates = scenario.clusters("model-release").await;
     assert_queue_stats(&candidates[0].stats, 0, 0, 0, 0, 4, 5);
 
-    let consumed_by_heartbeat = selected_cluster
+    let released_after_update = selected_cluster
         .reserve_backend(&running.generation(), 10, 4)
         .expect("active backend should accept reservation");
     scenario.publish_connected(&running, &update).await;
@@ -1246,7 +1258,7 @@ async fn released_reservation_restores_local_snapshot_before_registration_update
         .reserve_backend(&running.generation(), 20, 4)
         .expect("active backend should accept reservation");
 
-    consumed_by_heartbeat.release();
+    released_after_update.release();
     let candidates = scenario.clusters("model-release").await;
     assert_queue_stats(&candidates[0].stats, 1, 1, 20, 20, 4, 205);
 
