@@ -164,6 +164,7 @@ helm uninstall llm-gateway-stack --namespace llm-gateway
 | `clusterCredential.sha256Hashes` | `[]` | More hashes in the same forms, merged after `sha256`. At least one hash from either value is required while `create` is true; a hash may appear once. Use during rotation |
 | `apiKeys` | `[]` | Caller keys as `{id, sha256}`. At least one is required while `apiKeysSecret.create` is true |
 | `apiKeysSecret.create` | `true` | Render the gateway key file Secret from `apiKeys` |
+| `demoUiApiKey` | `""` | Create the demo UI key Secret. Requires `apiKeysSecret.create=true` and a matching `demo-ui` hash in `apiKeys` |
 | `tls.selfSigned.enabled` | `true` | Generate the CA and the router and gateway certificates |
 | `tls.selfSigned.validityDays` | `3650` | Validity of the generated CA and certificates |
 | `tls.selfSigned.caName` | `llm-gateway-stack-ca` | Name of the CA Secret and of the CA ConfigMap (key `ca.crt`) |
@@ -303,7 +304,9 @@ Give the operator the issuer's CA through its `trustBundle.configMap`.
   file every 30 seconds; a file that fails to load keeps the previous keys.
 - To manage either Secret outside this chart, set `clusterCredential.create` or
   `apiKeysSecret.create` to false and create the Secret under the name in the
-  subchart values.
+  subchart values. When managing the API key Secret outside the chart, also
+  provide the demo UI key outside the chart; `demoUiApiKey` requires the
+  chart-managed API key Secret.
 
 ## Development
 

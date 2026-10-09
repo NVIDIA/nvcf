@@ -49,7 +49,8 @@ apiKeys: []
 
 # Optional plaintext UI key, supplied from a private file by the routing recipe.
 # Creates Secret demo-ui-api-key (field api-key) in this release's namespace.
-# apiKeys must also contain its matching hash under id demo-ui.
+# Requires apiKeysSecret.create=true and a matching hash under id demo-ui in
+# apiKeys. With an external API key Secret, supply the UI key separately.
 demoUiApiKey: ""
 
 apiKeysSecret:
