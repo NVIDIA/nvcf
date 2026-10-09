@@ -64,6 +64,7 @@ const (
 	MiniServiceStatusReasonObjectStatusErrors     = "ObjectStatusErrors"
 	MiniServiceStatusReasonUnexpectedInstallError = "UnexpectedInstallError"
 	MiniServiceStatusReasonUnexpectedRuntimeError = "UnexpectedRuntimeError"
+	MiniServiceStatusReasonWorkloadDryRunRejected = "WorkloadDryRunRejected"
 )
 
 var MiniServiceStatusBadReasons = map[string]bool{
@@ -76,4 +77,5 @@ var MiniServiceStatusBadReasons = map[string]bool{
 	MiniServiceStatusReasonObjectStatusErrors:     true,
 	MiniServiceStatusReasonUnexpectedInstallError: true,
 	MiniServiceStatusReasonUnexpectedRuntimeError: true,
+	MiniServiceStatusReasonWorkloadDryRunRejected: true,
 }

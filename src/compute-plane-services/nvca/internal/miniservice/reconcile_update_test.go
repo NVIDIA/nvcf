@@ -270,6 +270,53 @@ func TestDoUpdateWorkload_UnwrapsTerminalApplyError(t *testing.T) {
 	assert.Equal(t, v1alpha1.MiniServiceInstalling, ms.Status.Phase)
 }
 
+func TestDoUpdateWorkload_DryRunValidationFails(t *testing.T) {
+	ctx := newTestContext()
+	testScheme := mgrScheme
+	const workloadObjectName = "updated-workload-cm"
+
+	dryRunCalls := 0
+	applyCalls := 0
+	c, _ := newFakeClientWithInterceptors(testScheme,
+		interceptor.Funcs{
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if cm, ok := obj.(*corev1.ConfigMap); ok && cm.Name == workloadObjectName {
+					patchOpts := &client.PatchOptions{}
+					for _, opt := range opts {
+						opt.ApplyToPatch(patchOpts)
+					}
+					isDryRun := len(patchOpts.DryRun) > 0 && patchOpts.DryRun[0] == metav1.DryRunAll
+					
+					if isDryRun {
+						dryRunCalls++
+						return apierrors.NewForbidden(
+							schema.GroupResource{Group: "", Resource: "configmaps"},
+							cm.Name,
+							fmt.Errorf("forbidden by test during dry-run"),
+						)
+					}
+					applyCalls++
+				}
+				return c.Patch(ctx, obj, patch, opts...)
+			},
+		},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: updateTestNamespace}},
+		newReadyUtilsPod(),
+	)
+	r := newUpdateTestReconciler(t, c, testScheme)
+	ms := newUpdateMiniService(`{"key":"value-v2"}`)
+	icmsReq := newUpdateICMSRequest(true)
+	require.NoError(t, r.saveRenderedData(ctx, ms, newUpdateRenderedData(t, workloadObjectName, "v2")))
+
+	gotRes, err := r.doUpdateWorkload(ctx, ms, icmsReq)
+	require.Error(t, err)
+	assert.Equal(t, reconcile.Result{}, gotRes)
+	assert.ErrorContains(t, err, "forbidden by test during dry-run")
+	assert.Equal(t, 1, dryRunCalls, "expected one dry-run SSA patch attempt")
+	assert.Equal(t, 0, applyCalls, "expected zero real SSA patch attempts due to dry-run failure")
+	assert.Equal(t, v1alpha1.MiniServiceInstalling, ms.Status.Phase)
+}
+
 func TestDoUpdateWorkload_ApplyFailureRetainsRenderedCache(t *testing.T) {
 	ctx := newTestContext()
 	testScheme := mgrScheme
