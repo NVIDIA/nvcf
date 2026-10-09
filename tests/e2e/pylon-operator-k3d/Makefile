@@ -64,8 +64,9 @@ test-cleanup:
 
 check:
 	bash -n ./run.sh
+	bash -n ./restart-cases.sh
 	@if command -v shellcheck >/dev/null 2>&1; then \
-		shellcheck ./run.sh; \
+		shellcheck -x ./run.sh ./restart-cases.sh; \
 	else \
 		echo "shellcheck not found on PATH; skipping"; \
 	fi

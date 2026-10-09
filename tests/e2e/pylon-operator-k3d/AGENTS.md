@@ -7,6 +7,9 @@ cluster. `README.md` lists the prerequisites, settings and assertions.
 
 - `run.sh`: installs the charts from this checkout, applies the manifests and
   runs every assertion. Keep it compatible with bash 3.2.
+- `restart-cases.sh`: the restart and failure cases, their checks and their
+  faults. `run.sh` sources it and calls `run_restart_cases`; it is not run on
+  its own and uses `run.sh`'s helpers. The same bash 3.2 and `kc` rules apply.
 - `manifests/`: the sample backend and the `InferenceEndpoint`, without a
   namespace; `run.sh` applies them with `-n`.
 - `Makefile`: `test`, `test-cleanup`, `check`, and the local workflow targets

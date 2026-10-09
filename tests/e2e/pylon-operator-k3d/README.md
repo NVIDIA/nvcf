@@ -135,10 +135,11 @@ Assertions, each polled for up to `E2E_TIMEOUT` seconds:
   the transport Deployment at 0 replicas, and `TransportReady` and
   `Registered` `False/ScaledToZero`. Patched back: the transport returns to one
   replica and every condition to `True`.
-- Restart and failure cases. Each starts and ends in the steady state: every
-  condition `True` and the registry `Healthy` with one registered and one
-  healthy server. Assertion names start with the case ID; `stack` checks read
-  the gateway API, `operator` checks read the `InferenceEndpoint`.
+- Restart and failure cases, in `restart-cases.sh`, which `run.sh` sources.
+  Each starts and ends in the steady state: every condition `True` and the
+  registry `Healthy` with one registered and one healthy server. Assertion
+  names start with the case ID; `stack` checks read the gateway API,
+  `operator` checks read the `InferenceEndpoint`.
   - C7a, backend process killed with `kill 1`: the router logs a failed health
     probe for the endpoint's server id, the operator records a Warning Event
     for `Ready=False`, the container restarts in place, and `Registered`
