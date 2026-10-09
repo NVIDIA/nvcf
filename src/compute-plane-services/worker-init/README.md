@@ -29,11 +29,12 @@ go test ./...
 
 ## Runtime identity
 
-The image declares OCI user `1000:1000`. Generated function and task init
-containers run with that UID and GID. Their pods use `fsGroup: 1000` when no
-other group is configured, so worker-init can write shared volumes. A custom
-`INIT_CONTAINER` image must support the same non-root identity and writable
-paths.
+The image declares OCI user `1000:1000`. NVCA's generated pod and container
+security contexts determine the effective init-container identity and volume
+group. A custom `INIT_CONTAINER` image must support the configured identity and
+writable paths.
 
-The transport trust bundle installer uses the same non-root identity. It writes
-the merged CA bundle to an ephemeral volume before worker-init starts.
+The transport trust bundle installer is packaged in the same image. It writes
+the merged CA bundle to an ephemeral volume before worker-init starts. NVCA's
+container security context takes precedence over the image default. In
+particular, `runAsUser: 0` with `runAsNonRoot: false` runs the installer as root.
