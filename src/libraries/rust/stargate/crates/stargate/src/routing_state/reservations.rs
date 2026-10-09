@@ -114,7 +114,13 @@ impl PendingClusterReservation {
     }
 }
 
-// Cancellation is explicit because a successful attempt remains pending until its heartbeat.
+impl Drop for PendingClusterReservation {
+    fn drop(&mut self) {
+        self.deactivate();
+    }
+}
+
+// Cancellation is explicit because a successful attempt remains pending until its TTL expires.
 #[derive(Debug)]
 pub(crate) struct RoutingReservation(pub(super) Arc<PendingClusterReservation>);
 

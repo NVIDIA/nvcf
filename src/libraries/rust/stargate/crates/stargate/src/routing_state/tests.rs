@@ -26,6 +26,7 @@ use crate::load_balancer::{
     LoadBalancerRequest, LoadBalancerRouter, PowerOfNAlgorithmConfig, WaitAndWidenAlgorithmConfig,
 };
 use InferenceServerStatus::{Active, Inactive};
+use prometheus::Encoder;
 use stargate_proto::pb::InferenceServerModelRegistration;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1012,6 +1013,93 @@ async fn removing_backend_drops_its_reservations_immediately() {
 
     assert_eq!(selected_cluster.pending_reservation_count(), 0);
     reservation.release();
+}
+
+#[tokio::test]
+async fn dropping_retired_cluster_generation_decrements_active_reservation_gauge() {
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    let state = StargateState::new_with_metrics(metrics.clone());
+    let target = make_target(Some("rk-generation-drop"), "model-generation-drop");
+    let identity = |port| RegistrationIdentity {
+        inference_server_id: "inst-generation-drop".to_string(),
+        cluster_id: "cluster-generation-drop".to_string(),
+        inference_server_url: format!("quic://127.0.0.1:{port}"),
+        routing_key: target.routing_key.clone(),
+        reverse_tunnel: false,
+    };
+    let update = |identity: &RegistrationIdentity| InferenceServerRegistration {
+        inference_server_id: identity.inference_server_id.clone(),
+        cluster_id: identity.cluster_id.clone(),
+        inference_server_url: identity.inference_server_url.clone(),
+        models: HashMap::from([(
+            target.model_id.clone(),
+            InferenceServerModelRegistration {
+                stats: Some(priority_stats(100.0, [(0, 5)])),
+                status: Active as i32,
+            },
+        )]),
+        reverse_tunnel: identity.reverse_tunnel,
+    };
+
+    let old_identity = identity(1111);
+    let old = state.begin_registration(&old_identity).unwrap();
+    state
+        .apply_registration_update(
+            &old,
+            &update(&old_identity),
+            true,
+            Some(Duration::from_millis(10)),
+        )
+        .await;
+    let selected = state
+        .routing_target_snapshot(&target)
+        .await
+        .unwrap()
+        .into_selected_cluster(0);
+    let reservation = selected
+        .reserve_backend_with_ttl(
+            &old.generation(),
+            10,
+            0,
+            Duration::from_secs(1),
+            metrics.clone(),
+            &target,
+        )
+        .expect("active old backend should accept a reservation");
+    let metrics_text = || {
+        let mut encoded = Vec::new();
+        prometheus::TextEncoder::new()
+            .encode(&metrics.registry().gather(), &mut encoded)
+            .expect("metrics should encode");
+        String::from_utf8(encoded).expect("metrics should be UTF-8")
+    };
+    assert!(metrics_text().contains(
+        "stargate_routing_reservations_active{model=\"model-generation-drop\",routing_key=\"rk-generation-drop\"} 1"
+    ));
+
+    state.end_registration(old).await;
+    let replacement_identity = identity(2222);
+    let replacement = state.begin_registration(&replacement_identity).unwrap();
+    state
+        .apply_registration_update(
+            &replacement,
+            &update(&replacement_identity),
+            true,
+            Some(Duration::from_millis(10)),
+        )
+        .await;
+    assert_eq!(
+        state.candidates_for_target(&target).await[0].inference_server_url,
+        "quic://127.0.0.1:2222"
+    );
+
+    drop(reservation);
+    drop(selected);
+    let metrics_text = metrics_text();
+    assert!(metrics_text.contains(
+        "stargate_routing_reservations_active{model=\"model-generation-drop\",routing_key=\"rk-generation-drop\"} 0"
+    ));
+    state.end_registration(replacement).await;
 }
 
 #[tokio::test]

@@ -47,8 +47,8 @@ cluster mean), fixed at dispatch, and is bounded by
 `--routing-reservation-ttl-max-ms` (default `1000`). Registration updates do not
 clear reservations. If an update includes the request before its reservation
 expires, routing temporarily counts it in both reported stats and the local
-reservation. Deploy Pylons with change-driven stats updates before enabling
-this Stargate behavior; the RTT-based expiry can otherwise leave a short gap
+reservation. Deploy Pylons with change-driven stats updates before deploying
+this Stargate version; the RTT-based expiry can otherwise leave a short gap
 until the next heartbeat.
 
 ## Stream Events
