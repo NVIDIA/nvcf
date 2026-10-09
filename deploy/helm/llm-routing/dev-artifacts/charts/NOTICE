@@ -40,6 +40,7 @@ Model weights and runtime images are referenced by immutable revisions/digests. 
 
 Qwen3.8-27B-FP8: Apache-2.0, https://huggingface.co/Qwen/Qwen3.8-27B-FP8 .
 NVIDIA Qwen3.8-27B-NVFP4: Apache-2.0, https://huggingface.co/nvidia/Qwen3.8-27B-NVFP4 .
+NVIDIA Nemotron Nano 12B v2: NVIDIA Open Model License, https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/ , https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-12B-v2 . Review the license terms before downloading or redistributing weights.
 Qwen3.8-Flash-Next: Qwen Community License 1.0, https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/main/LICENSE . The RadixArk NVFP4 derivative declares license "other" and refers to upstream terms: https://huggingface.co/RadixArk/Qwen3.8-Flash-Next-NVFP4 . This custom model license is outside the repository standard allowlist. Review upstream terms before downloading or redistributing weights; these recipes do not establish downstream license compatibility.
 
 SGLang: Apache-2.0, https://github.com/sgl-project/sglang . The container image includes additional upstream components under their respective terms. This recipe does not redistribute image contents. Container digests and model revisions are in catalog.json. The Flash-Next runtime is the cookbook's development build, not a claim of stable-release qualification.

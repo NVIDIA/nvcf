@@ -8,12 +8,14 @@
       "availability": {
         "status": "unavailable",
         "deployable": false,
-        "reason": "Exact-name public artifact and access status remain unverified.",
-        "checkedAt": "2026-10-07",
+        "reason": "No public artifact named Nemotron 5 Nano 12B exists. nvidia/Nemotron-5-Nano-12B returns HTTP 401, which is ambiguous between private and nonexistent. The closest public 12B model is nemotron-nano-12b-v2, which has its own executable recipe.",
+        "checkedAt": "2026-10-09",
         "sources": [
           "https://huggingface.co/api/models?author=nvidia&search=Nemotron&limit=1000",
           "https://huggingface.co/nvidia",
-          "https://www.nvidia.com/en-us/ai-data-science/foundation-models/nemotron/"
+          "https://www.nvidia.com/en-us/ai-data-science/foundation-models/nemotron/",
+          "https://huggingface.co/api/models/nvidia/Nemotron-5-Nano-12B",
+          "https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-12B-v2"
         ]
       },
       "precision": null,

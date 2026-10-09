@@ -363,6 +363,7 @@ All supported recipes use the same Helm lifecycle. Preparation, startup and endp
 | --- | --- | --- | --- |
 | Qwen FP8 | `qwen-fp8` | `pylon-sglang-recipe-0.2.0.tgz` | `qwen3.8-27b` |
 | Qwen NVFP4 | `qwen-nvfp4` | `pylon-sglang-recipe-0.2.0.tgz` | `qwen3.8-27b-nvfp4` |
+| Nemotron Nano 12B v2 | `nemotron-nano` | `pylon-sglang-recipe-0.2.0.tgz` | `nemotron-nano-12b-v2` |
 | Flash-Next, either profile | `qwen-flash` | `pylon-sglang-recipe-0.2.0.tgz` | `qwen3.8-flash-next` |
 | GLM | `glm` | `pylon-gguf-backend-0.2.0.tgz` | `GLM-5.3-UD-IQ2_M` |
 

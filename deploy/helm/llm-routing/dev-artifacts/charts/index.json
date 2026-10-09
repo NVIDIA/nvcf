@@ -297,12 +297,14 @@
       "availability": {
         "status": "unavailable",
         "deployable": false,
-        "reason": "Exact-name public artifact and access status remain unverified.",
-        "checkedAt": "2026-10-07",
+        "reason": "No public artifact named Nemotron 5 Nano 12B exists. nvidia/Nemotron-5-Nano-12B returns HTTP 401, which is ambiguous between private and nonexistent. The closest public 12B model is nemotron-nano-12b-v2, which has its own executable recipe.",
+        "checkedAt": "2026-10-09",
         "sources": [
           "https://huggingface.co/api/models?author=nvidia&search=Nemotron&limit=1000",
           "https://huggingface.co/nvidia",
-          "https://www.nvidia.com/en-us/ai-data-science/foundation-models/nemotron/"
+          "https://www.nvidia.com/en-us/ai-data-science/foundation-models/nemotron/",
+          "https://huggingface.co/api/models/nvidia/Nemotron-5-Nano-12B",
+          "https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-12B-v2"
         ]
       },
       "precision": null,
@@ -335,6 +337,134 @@
       "runtime": null,
       "profiles": [],
       "upstreamCandidates": []
+    },
+    {
+      "id": "nemotron-nano-12b-v2",
+      "name": "Nemotron Nano 12B v2",
+      "servedModelId": "nemotron-nano-12b-v2",
+      "availability": {
+        "status": "available",
+        "deployable": true
+      },
+      "precision": "BF16",
+      "license": "NVIDIA Open Model License",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "nvidia/NVIDIA-Nemotron-Nano-12B-v2",
+        "revision": "f428df0ec725fed457b89cfca54dc26500fb88c1",
+        "weightBytes": null
+      },
+      "runtime": {
+        "backend": "sglang",
+        "version": "SGLang v0.5.19",
+        "image": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513"
+      },
+      "profiles": [
+        {
+          "id": "spark-bf16",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 68719476736,
+                "memoryLimitBytes": 85899345920,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 64424509440,
+                "minimumFreeBytesBeforeDownload": 42949672960
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 16384,
+            "maximumConcurrency": 2
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-09",
+              "profile": "spark-bf16",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "lifecycleIsolationVerified": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-09",
+              "profile": "spark-bf16",
+              "modelRevision": "f428df0ec725fed457b89cfca54dc26500fb88c1",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "cacheMode": "retained-offline",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.2.0",
+              "localPath": "pylon-sglang-recipe-0.2.0.tgz",
+              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "repository": null,
+              "publication": "local"
+            },
+            "releaseName": "nemotron-nano",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "nemotron-nano-12b-v2",
+              "profileName": "spark-bf16"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "guides/README.md"
+          }
+        }
+      ]
     },
     {
       "id": "qwen3.8-27b",

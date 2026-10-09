@@ -66,14 +66,14 @@ class HelmSGLangTests(unittest.TestCase):
     def test_bundled_profiles_match_catalog_pins_and_workload_envelopes(self):
         bundled = json.loads((CHART/'files/profiles.json').read_text())
         catalog = {model['id']: model for model in json.loads((ROOT/'catalog.json').read_text())['models']}
-        self.assertEqual(set(bundled), {'qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'qwen3.8-flash-next'})
+        self.assertEqual(set(bundled), {'qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'nemotron-nano-12b-v2', 'qwen3.8-flash-next'})
         for name, model in bundled.items():
             for field in ('id', 'repository', 'revision', 'image', 'profiles'):
                 self.assertEqual(model[field], catalog[name][field])
 
     def test_small_values_install_both_pinned_profiles_with_automatic_startup(self):
         pins = json.loads((CHART/'files/profiles.json').read_text())
-        for name in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4'):
+        for name in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'nemotron-nano-12b-v2'):
             with self.subTest(recipe=name):
                 docs = self.render(self.values(name))
                 config = self.configuration(docs)
@@ -98,7 +98,7 @@ class HelmSGLangTests(unittest.TestCase):
                 self.assertEqual(endpoint['spec']['modelName'], name)
 
     def test_each_automatic_recipe_installs_without_a_values_file_or_cache_flag(self):
-        for recipe in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4'):
+        for recipe in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'nemotron-nano-12b-v2'):
             with self.subTest(recipe=recipe):
                 result = subprocess.run(['helm', 'template', 'test-model', str(CHART),
                                          '--namespace', 'test-stack', '--set', 'recipe=' + recipe,
