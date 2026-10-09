@@ -703,7 +703,7 @@ main() {
     log "E2E_DEPLOY_ONLY=1: stopping once the InferenceEndpoint is ready"
     REMAINING_STEPS="setup|steady state conditions|registration status|printer columns|"
   else
-    REMAINING_STEPS="setup|steady state conditions|registration status|printer columns|gateway checks|backend scaled to zero|backend restored|model name mismatch|model name restored|C7a backend process killed|C1 router restart|C2 gateway restart|C3 operator down|C5 transport restart|endpoint deleted|"
+    REMAINING_STEPS="setup|steady state conditions|registration status|printer columns|gateway checks|backend scaled to zero|backend restored|model name mismatch|model name restored|backend killed|router restart|gateway restart|operator down|Pylon restart|endpoint deleted|"
   fi
 
   section "Setup"
@@ -756,13 +756,13 @@ main() {
   expect "POST /v1/chat/completions without key is 401" 30 chat_without_key_is_401 || true
   step_done
 
-  section "Failure path: backend scaled to zero (C7b)"
+  section "Failure path: backend scaled to zero"
   scale_backend 0
   expect "backend at 0: Ready=False/NoReadyEndpoints" "${T}" conditions_are Ready=False/NoReadyEndpoints || true
   hold "backend at 0: Registered stays True/RegisteredWithRouter" 20 conditions_are Registered=True/RegisteredWithRouter || true
-  expect "C7b stack: registry Unhealthy, 1 registered, 0 healthy" 60 registry_is Unhealthy 1 0 || true
-  expect "C7b stack: GET /v1/models omits ${MODEL}" 30 models_omit_test_model || true
-  expect "C7b stack: chat returns 503 from the router" 30 chat_status_is 503 || true
+  expect "backend at 0, stack: registry Unhealthy, 1 registered, 0 healthy" 60 registry_is Unhealthy 1 0 || true
+  expect "backend at 0, stack: GET /v1/models omits ${MODEL}" 30 models_omit_test_model || true
+  expect "backend at 0, stack: chat returns 503 from the router" 30 chat_status_is 503 || true
   log "backend at 0: $(conditions_are Ready= TransportReady= Registered= || true; printf '%s' "${LAST_OBSERVED}")"
   step_done
   scale_backend 1

@@ -13,7 +13,7 @@
 
 readonly OPERATOR_DEPLOYMENT="${OPERATOR_RELEASE}"
 readonly SAMPLE_SELECTOR="app.kubernetes.io/name=openai-compatible-sample"
-# A second InferenceEndpoint applied while the operator is down (C3b).
+# A second InferenceEndpoint applied while the operator is down.
 # shellcheck disable=SC2153 # ENDPOINT is set in run.sh.
 readonly ENDPOINT_B="${ENDPOINT}-b"
 
@@ -285,9 +285,9 @@ run_restart_cases() {
   local T="${E2E_TIMEOUT}"
   local ids before restarts events_from registered_at old_pod start ready_at selector
 
-  section "C7a: backend process killed"
+  section "Failure path: backend process killed"
   ensure_context
-  expect "C7a steady state before the fault" "${T}" steady_state || true
+  expect "backend killed: steady state before the fault" "${T}" steady_state || true
   ids="$(server_ids)"
   before="$(router_log_count 'health check failed' "${ids}")"
   restarts="$(container_restarts "${E2E_MODELS_NAMESPACE}" "${SAMPLE_SELECTOR}")"
@@ -295,47 +295,47 @@ run_restart_cases() {
   registered_at="$(transition_time Registered)"
   log "killing the backend process at $(date -u +%H:%M:%S) UTC"
   kill_backend_process
-  expect "C7a stack: router logs a failed health probe for ${ids}" 60 \
+  expect "backend killed, stack: router logs a failed health probe for ${ids}" 60 \
     count_above "router 'health check failed' lines" "${before}" router_log_count 'health check failed' "${ids}" || true
   log "router: $(router_log_last 'health check failed' "${ids}")"
   log "router: $(router_log_last 'skipping routing update' "${ids}")"
-  expect "C7a operator: Warning Event for Ready=False" 60 \
+  expect "backend killed, operator: Warning Event for Ready=False" 60 \
     count_above "Warning Events after ${events_from:-<none>}" 0 events_after "${ENDPOINT}" "${events_from}" type=Warning || true
-  expect "C7a backend container restarted in place" 60 \
+  expect "backend killed: backend container restarted in place" 60 \
     count_above restartCount "${restarts:-0}" container_restarts "${E2E_MODELS_NAMESPACE}" "${SAMPLE_SELECTOR}" || true
-  expect "C7a recovered: steady state in both views" "${T}" steady_state || true
-  expect "C7a operator: Registered stayed True (lastTransitionTime unchanged)" 0 \
+  expect "backend killed, recovered: steady state in both views" "${T}" steady_state || true
+  expect "backend killed, operator: Registered stayed True (lastTransitionTime unchanged)" 0 \
     value_is lastTransitionTime "${registered_at}" transition_time Registered || true
   log "Events: $(event_reasons "${ENDPOINT}")"
   step_done
 
-  section "C1: router pod deleted"
+  section "Failure path: router pod deleted"
   ensure_context
   ids="$(server_ids)"
   selector="$(deployment_selector "${E2E_STACK_NAMESPACE}" "${ROUTER_DEPLOYMENT}")"
   old_pod="$(first_pod "${E2E_STACK_NAMESPACE}" "${selector}")"
   start="${SECONDS}"
   kc -n "${E2E_STACK_NAMESPACE}" delete pod "${old_pod}" --wait=false >/dev/null
-  expect "C1 operator: Registered=False/RouterUnreachable, TransportReady=False/TunnelNotConnected" 90 \
+  expect "router restart, operator: Registered=False/RouterUnreachable, TransportReady=False/TunnelNotConnected" 90 \
     conditions_are Registered=False/RouterUnreachable TransportReady=False/TunnelNotConnected || true
-  expect "C1 stack: GET /v1/registry is 502 while no router is ready" 60 registry_status_is 502 || true
-  if expect "C1 new router pod Ready" "${T}" new_pod_ready "${E2E_STACK_NAMESPACE}" "${selector}" "${old_pod}"; then
+  expect "router restart, stack: GET /v1/registry is 502 while no router is ready" 60 registry_status_is 502 || true
+  if expect "router restart: new router pod Ready" "${T}" new_pod_ready "${E2E_STACK_NAMESPACE}" "${selector}" "${old_pod}"; then
     ready_at="${SECONDS}"
     log "router pod deleted to new pod Ready: $((ready_at - start))s (readiness warm-up)"
-    if expect "C1 stack: registry Healthy, 1 registered, 1 healthy" 60 registry_is Healthy 1 1; then
+    if expect "router restart, stack: registry Healthy, 1 registered, 1 healthy" 60 registry_is Healthy 1 1; then
       if [ $((SECONDS - ready_at)) -le 15 ]; then
-        pass "C1 stack: re-registered within 15s of the new router being Ready" "$((SECONDS - ready_at))s"
+        pass "router restart, stack: re-registered within 15s of the new router being Ready" "$((SECONDS - ready_at))s"
       else
-        fail "C1 stack: re-registered within 15s of the new router being Ready" "$((SECONDS - ready_at))s"
+        fail "router restart, stack: re-registered within 15s of the new router being Ready" "$((SECONDS - ready_at))s"
       fi
     fi
   fi
-  expect "C1 recovered: steady state in both views" "${T}" steady_state || true
-  expect "C1 operator: same server id after the router restart" 0 value_is servers "${ids}" server_ids || true
+  expect "router restart, recovered: steady state in both views" "${T}" steady_state || true
+  expect "router restart, operator: same server id after the router restart" 0 value_is servers "${ids}" server_ids || true
   log "Events: $(event_reasons "${ENDPOINT}")"
   step_done
 
-  section "C2: gateway pod deleted"
+  section "Failure path: gateway pod deleted"
   ensure_context
   registered_at="$(transition_time Registered)"
   events_from="$(latest_event_time "${ENDPOINT}")"
@@ -343,62 +343,62 @@ run_restart_cases() {
   old_pod="$(first_pod "${E2E_STACK_NAMESPACE}" "${selector}")"
   kc -n "${E2E_STACK_NAMESPACE}" delete pod "${old_pod}" --wait=true --timeout=60s >/dev/null || true
   stop_port_forward
-  expect "C2 new gateway pod Ready" "${T}" new_pod_ready "${E2E_STACK_NAMESPACE}" "${selector}" "${old_pod}" || true
+  expect "gateway restart: new gateway pod Ready" "${T}" new_pod_ready "${E2E_STACK_NAMESPACE}" "${selector}" "${old_pod}" || true
   # Restart the port-forward here: started from gw inside $(...), it would
   # hold the command substitution open.
   if ! start_port_forward; then
-    fail "C2 port-forward to the new gateway pod" "$(tail -n 5 "${PF_LOG}" | tr '\n' ' ')"
+    fail "gateway restart: port-forward to the new gateway pod" "$(tail -n 5 "${PF_LOG}" | tr '\n' ' ')"
   fi
-  expect "C2 stack: new gateway serves the registry, Healthy, 1 registered, 1 healthy" 60 registry_is Healthy 1 1 || true
-  expect "C2 operator: no transition (Registered lastTransitionTime unchanged)" 0 \
+  expect "gateway restart, stack: new gateway serves the registry, Healthy, 1 registered, 1 healthy" 60 registry_is Healthy 1 1 || true
+  expect "gateway restart, operator: no transition (Registered lastTransitionTime unchanged)" 0 \
     value_is lastTransitionTime "${registered_at}" transition_time Registered || true
-  expect "C2 operator: no new Events" 0 \
+  expect "gateway restart, operator: no new Events" 0 \
     value_is "Events after ${events_from:-<none>}" 0 events_after "${ENDPOINT}" "${events_from}" || true
   step_done
 
-  section "C3: operator down during a stream (C3b: new endpoint while down)"
+  section "Failure path: operator down during a stream, and a new endpoint while down"
   ensure_context
   ids="$(server_ids)"
   registered_at="$(transition_time Registered)"
   before="$(pod_uids "${E2E_MODELS_NAMESPACE}" "${TRANSPORT_SELECTOR}")"
-  start_stream "${E2E_WORK_DIR}/c3-stream.sse" 60 500
+  start_stream "${E2E_WORK_DIR}/operator-down-stream.sse" 60 500
   sleep 2
   scale_operator 0
-  expect "C3 operator pods gone" 60 pods_gone "${E2E_OPERATOR_NAMESPACE}" "${OPERATOR_SELECTOR}" || true
-  expect "C3 stack: stream started before the outage is still open with the operator gone" 0 stream_open || true
+  expect "operator down: operator pods gone" 60 pods_gone "${E2E_OPERATOR_NAMESPACE}" "${OPERATOR_SELECTOR}" || true
+  expect "operator down, stack: stream started before the outage is still open with the operator gone" 0 stream_open || true
   apply_second_endpoint
-  hold "C3 stack: registry stays Healthy, 1 registered, 1 healthy, while the operator is down" 10 registry_is Healthy 1 1 || true
-  expect "C3 stack: new chat while the operator is down streams SSE (200)" 30 chat_stream_ok || true
-  expect "C3b operator: ${ENDPOINT_B} has no status while the operator is down" 0 endpoint_status_empty "${ENDPOINT_B}" || true
-  expect "C3b operator: no transport Deployment pylon-${ENDPOINT_B} while the operator is down" 0 \
+  hold "operator down, stack: registry stays Healthy, 1 registered, 1 healthy, while the operator is down" 10 registry_is Healthy 1 1 || true
+  expect "operator down, stack: new chat while the operator is down streams SSE (200)" 30 chat_stream_ok || true
+  expect "operator down, new endpoint: ${ENDPOINT_B} has no status while the operator is down" 0 endpoint_status_empty "${ENDPOINT_B}" || true
+  expect "operator down, new endpoint: no transport Deployment pylon-${ENDPOINT_B} while the operator is down" 0 \
     deployment_absent "${E2E_MODELS_NAMESPACE}" "pylon-${ENDPOINT_B}" || true
-  expect "C3 stack: stream started before the outage ends with [DONE]" 0 stream_completed "${E2E_WORK_DIR}/c3-stream.sse" || true
+  expect "operator down, stack: stream started before the outage ends with [DONE]" 0 stream_completed "${E2E_WORK_DIR}/operator-down-stream.sse" || true
   scale_operator 1
-  expect "C3b operator: ${ENDPOINT_B} reconciled after the operator returns" "${T}" endpoint_observed "${ENDPOINT_B}" || true
-  expect "C3b operator: ${ENDPOINT_B} TransportReady=True (its Pylon connected)" "${T}" \
+  expect "operator down, new endpoint: ${ENDPOINT_B} reconciled after the operator returns" "${T}" endpoint_observed "${ENDPOINT_B}" || true
+  expect "operator down, new endpoint: ${ENDPOINT_B} TransportReady=True (its Pylon connected)" "${T}" \
     value_is TransportReady True endpoint_field "${ENDPOINT_B}" '{.status.conditions[?(@.type=="TransportReady")].status}' || true
-  expect "C3 operator: conditions True after the operator returns" "${T}" \
+  expect "operator down, operator: conditions True after the operator returns" "${T}" \
     conditions_are Ready=True/HealthProbeSucceeded TransportReady=True/PylonConnected Registered=True/RegisteredWithRouter || true
-  expect "C3 operator: no transition (Registered lastTransitionTime unchanged)" 0 \
+  expect "operator down, operator: no transition (Registered lastTransitionTime unchanged)" 0 \
     value_is lastTransitionTime "${registered_at}" transition_time Registered || true
-  expect "C3 operator: Pylon pod unchanged (same name and UID)" 0 \
+  expect "operator down, operator: Pylon pod unchanged (same name and UID)" 0 \
     value_is pods "${before}" pod_uids "${E2E_MODELS_NAMESPACE}" "${TRANSPORT_SELECTOR}" || true
-  expect "C3 operator: same server id" 0 value_is servers "${ids}" server_ids || true
+  expect "operator down, operator: same server id" 0 value_is servers "${ids}" server_ids || true
   delete_second_endpoint || true
-  expect "C3b cleanup: pylon-${ENDPOINT_B} garbage-collected" "${T}" deployment_absent "${E2E_MODELS_NAMESPACE}" "pylon-${ENDPOINT_B}" || true
-  expect "C3 recovered: steady state in both views" "${T}" steady_state || true
+  expect "operator down, new endpoint, cleanup: pylon-${ENDPOINT_B} garbage-collected" "${T}" deployment_absent "${E2E_MODELS_NAMESPACE}" "pylon-${ENDPOINT_B}" || true
+  expect "operator down, recovered: steady state in both views" "${T}" steady_state || true
   step_done
 
-  section "C5: transport (Pylon) pod deleted"
+  section "Failure path: Pylon pod deleted"
   ensure_context
   ids="$(server_ids)"
   kc -n "${E2E_MODELS_NAMESPACE}" delete pod -l "${TRANSPORT_SELECTOR}" --wait=false >/dev/null
-  expect "C5 operator: one server with a new server id" "${T}" server_id_replaced "${ids}" || true
-  expect "C5 operator: conditions True" "${T}" \
+  expect "Pylon restart, operator: one server with a new server id" "${T}" server_id_replaced "${ids}" || true
+  expect "Pylon restart, operator: conditions True" "${T}" \
     conditions_are Ready=True/HealthProbeSucceeded TransportReady=True/PylonConnected Registered=True/RegisteredWithRouter || true
-  expect "C5 stack: registry Healthy, 1 registered, 1 healthy" 60 registry_is Healthy 1 1 || true
+  expect "Pylon restart, stack: registry Healthy, 1 registered, 1 healthy" 60 registry_is Healthy 1 1 || true
   # The hold outlasts the 3 s registry cache, so a stale second server would show.
-  hold "C5 stack: registry Healthy, 1 registered (old server removed), 1 healthy" 9 registry_is Healthy 1 1 || true
+  hold "Pylon restart, stack: registry Healthy, 1 registered (old server removed), 1 healthy" 9 registry_is Healthy 1 1 || true
   log "servers: $(server_ids)"
   log "Events: $(event_reasons "${ENDPOINT}")"
   step_done
