@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES.
 # SPDX-License-Identifier: Apache-2.0
-"""List local recipes, check model capacity, discover deployed models and chat."""
+"""Check cluster prerequisites, list local recipes, check model capacity, discover deployed models and chat."""
 import argparse
 import base64
 import contextlib
@@ -73,11 +73,11 @@ def access_material(context, namespace, ca_configmap=None, api_key_file=None):
 
 
 @contextlib.contextmanager
-def forward(context, namespace, work):
+def forward(context, namespace, work, local_port=None, keep_open=False):
     path = work / 'port-forward.log'
     with path.open('w') as log:
         process = subprocess.Popen(kube(context, namespace, 'port-forward', 'svc/llm-api-gateway',
-                                        ':8080', '--address', '127.0.0.1'), stdout=log, stderr=log)
+                                        f'{local_port or ""}:8080', '--address', '127.0.0.1'), stdout=log, stderr=log)
         try:
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
@@ -87,6 +87,9 @@ def forward(context, namespace, work):
                 match = re.search(r'Forwarding from 127\.0\.0\.1:(\d+) -> 8080', output)
                 if match:
                     yield 'https://127.0.0.1:' + match[1]
+                    if keep_open:
+                        process.wait()
+                        raise RuntimeError('Gateway connection closed: ' + path.read_text().strip()[-2000:])
                     return
                 time.sleep(0.1)
             raise RuntimeError('Timed out connecting to the gateway. Check VPN access and gateway readiness.')
@@ -101,16 +104,33 @@ def forward(context, namespace, work):
 
 
 @contextlib.contextmanager
-def gateway(context, namespace, ca_configmap=None, api_key_file=None):
-    ca, key = access_material(context, namespace, ca_configmap, api_key_file)
+def private_access(ca, key):
     with tempfile.TemporaryDirectory(prefix='llm-gateway-') as directory:
         work = pathlib.Path(directory)
         for name, value in [('ca.crt', ca), ('api-key', key)]:
             path = work / name
             path.touch(mode=0o600)
             path.write_text(value)
-        with forward(context, namespace, work) as url:
-            yield Client(url, work / 'ca.crt', work / 'api-key')
+        yield work
+
+
+@contextlib.contextmanager
+def gateway(context, namespace, ca_configmap=None, api_key_file=None):
+    ca, key = access_material(context, namespace, ca_configmap, api_key_file)
+    with private_access(ca, key) as work, forward(context, namespace, work) as url:
+        yield Client(url, work / 'ca.crt', work / 'api-key')
+
+
+def hold_gateway(context, namespace, port, ca_configmap=None, api_key_file=None):
+    ca, key = access_material(context, namespace, ca_configmap, api_key_file)
+    with private_access(ca, key) as work, forward(context, namespace, work, port, keep_open=True) as url:
+        print(f'Gateway for context {context} is open at {url}/v1.')
+        print('Run these in the terminal where you start an agent or client:\n')
+        print(f'export LLM_GATEWAY_URL={url}/v1')
+        print('export LLM_GATEWAY_CA=' + shlex.quote(str(work / 'ca.crt')))
+        print('export LLM_API_KEY="$(cat ' + shlex.quote(str(work / 'api-key')) + ')"')
+        print('\nKeep this command running. Press Ctrl-C to close the connection and remove the credential files.',
+              flush=True)
 
 
 def model_list(client):
@@ -302,6 +322,172 @@ def capacity_plan(context, args):
     return report
 
 
+def node_ready(node):
+    conditions = {item['type']: item.get('status') for item in node.get('status', {}).get('conditions', [])}
+    return conditions.get('Ready') == 'True' and not node.get('spec', {}).get('unschedulable')
+
+
+def gpu_node_problems(node):
+    spec, status = node.get('spec', {}), node.get('status', {})
+    labels = node['metadata'].get('labels', {})
+    problems = []
+    if not node_ready(node):
+        problems.append('not Ready or cordoned')
+    if any(taint.get('effect') in ('NoSchedule', 'NoExecute') for taint in spec.get('taints', [])):
+        problems.append('NoSchedule or NoExecute taint')
+    if not labels.get('nvidia.com/gpu.product'):
+        problems.append('no nvidia.com/gpu.product label')
+    if labels.get('nvidia.com/gpu.sharing-strategy', 'none') != 'none' or labels.get('nvidia.com/gpu.replicas', '1') != '1':
+        problems.append('GPU shared by time-slicing or MPS')
+    if (labels.get('nvidia.com/mig.capable') != 'false' and labels.get('nvidia.com/mig.strategy', 'none') != 'none') or any(
+            name.startswith('nvidia.com/mig-') for name in status.get('allocatable', {})):
+        problems.append('MIG enabled')
+    return problems
+
+
+def node_recipes(node, catalog, gpu_product):
+    labels = node['metadata'].get('labels', {})
+    product = gpu_product(labels.get('nvidia.com/gpu.product', ''))
+    gpus = str(node.get('status', {}).get('allocatable', {}).get('nvidia.com/gpu'))
+    matches = []
+    for recipe in catalog['recipes']:
+        for profile in recipe.get('profiles', []):
+            hardware = profile['hardware']
+            if (labels.get('kubernetes.io/os') == hardware['os'] and labels.get('kubernetes.io/arch') == hardware['architecture']
+                    and product in {gpu_product(name) for name in hardware['gpuProducts']}
+                    and gpus == str(hardware['gpuCount']) and recipe['id'] not in matches):
+                matches.append(recipe['id'])
+    return matches
+
+
+def preloaded_images(values):
+    images, architectures = set(), set()
+
+    def walk(item):
+        if isinstance(item, dict):
+            if item.get('pullPolicy') == 'Never' and item.get('repository') and item.get('tag'):
+                images.add(f"{item['repository']}:{item['tag']}")
+            if isinstance(item.get('nodeSelector'), dict) and item['nodeSelector'].get('kubernetes.io/arch'):
+                architectures.add(item['nodeSelector']['kubernetes.io/arch'])
+            for value in item.values():
+                walk(value)
+        elif isinstance(item, list):
+            for value in item:
+                walk(value)
+    walk(values)
+    return sorted(images), architectures
+
+
+def preflight(args):
+    checks = []
+
+    def check(name, ok, detail, warning=False):
+        checks.append({'check': name, 'result': 'PASS' if ok else 'WARN' if warning else 'FAIL', 'detail': detail})
+        return ok
+
+    report = {'context': None, 'checks': checks, 'nodes': [],
+              'notChecked': ['Outbound access from nodes to Hugging Face, Docker Hub, nvcr.io and GitHub.',
+                             'Free disk on each node for model caches.']}
+    check('Python', sys.version_info >= (3, 11), 'Python ' + '.'.join(map(str, sys.version_info[:3])) + '; 3.11 or newer required.')
+    for name, command, minimum in [('kubectl', ['kubectl', 'version', '--client'], None),
+                                   ('Helm', ['helm', 'version', '--short'], (3, 10))]:
+        try:
+            version = run(command).strip().splitlines()[0]
+        except (OSError, RuntimeError, subprocess.SubprocessError, IndexError) as error:
+            check(name, False, 'Not usable: ' + str(error))
+            continue
+        found = re.search(r'v(\d+)\.(\d+)', version)
+        check(name, not minimum or bool(found and tuple(map(int, found.groups())) >= minimum),
+              version + ('; ' + '.'.join(map(str, minimum)) + ' or newer required.' if minimum else ''))
+    try:
+        context = report['context'] = selected_context(args.context)
+        nodes = json.loads(run(['kubectl', '--context', context, 'get', 'nodes', '-o', 'json']))['items']
+    except (OSError, ValueError, RuntimeError, KeyError, subprocess.SubprocessError) as error:
+        check('Cluster access', False, str(error))
+        report['status'] = 'blocked'
+        return report
+    check('Cluster access', True, f'Context {context} reaches {len(nodes)} node(s).')
+    try:
+        allowed = run(['kubectl', '--context', context, 'auth', 'can-i', 'create',
+                       'customresourcedefinitions.apiextensions.k8s.io']).strip().startswith('yes')
+    except (RuntimeError, subprocess.SubprocessError):
+        allowed = False
+    check('Permissions', allowed, 'Can create the InferenceEndpoint CRD that the shared release installs.' if allowed else
+          'Cannot create CustomResourceDefinitions. Use a cluster-admin context, or manage the CRD externally with operator.installCRDs=false.')
+
+    def listing(name, resource):
+        try:
+            return json.loads(run(['kubectl', '--context', context, 'get', resource, '-o', 'json']))['items']
+        except (ValueError, RuntimeError, KeyError, subprocess.SubprocessError) as error:
+            check(name, False, f'Cannot list {resource}: {error}')
+
+    catalog = json.loads((HERE / 'recipes/index.json').read_text())
+    gpu_product = planning_modules().gpu_product
+    gpu_nodes = [node for node in nodes if str(node.get('status', {}).get('allocatable', {}).get('nvidia.com/gpu', '0')) not in ('0', '')]
+    for node in gpu_nodes:
+        labels = node['metadata'].get('labels', {})
+        report['nodes'].append({'name': node['metadata']['name'], 'product': labels.get('nvidia.com/gpu.product', ''),
+                                'architecture': labels.get('kubernetes.io/arch', ''),
+                                'gpus': node['status']['allocatable']['nvidia.com/gpu'],
+                                'recipes': node_recipes(node, catalog, gpu_product), 'problems': gpu_node_problems(node)})
+    usable = [node for node in report['nodes'] if node['recipes'] and not node['problems']]
+    if check('GPU nodes', bool(gpu_nodes), f'{len(gpu_nodes)} node(s) advertise nvidia.com/gpu.' if gpu_nodes else
+             'No node advertises nvidia.com/gpu. Install the NVIDIA device plugin.'):
+        check('Recipe hardware', len(usable) == len(gpu_nodes),
+              f'{len(usable)} of {len(gpu_nodes)} GPU node(s) match a recipe profile and have no problems.', warning=bool(usable))
+    runtime_classes = listing('RuntimeClass', 'runtimeclasses')
+    if runtime_classes is not None:
+        runtime_class = any(item['metadata']['name'] == args.runtime_class for item in runtime_classes)
+        check('RuntimeClass', runtime_class, f'RuntimeClass {args.runtime_class} ' + ('exists.' if runtime_class else 'is not installed.'))
+    storage_classes = listing('StorageClass', 'storageclasses')
+    if storage_classes is not None:
+        storage = next((item for item in storage_classes if item['metadata']['name'] == args.storage_class), None)
+        check('StorageClass', bool(storage) and storage.get('volumeBindingMode') == 'WaitForFirstConsumer' and not storage.get('allowedTopologies'),
+              f'StorageClass {args.storage_class} ' + ('is not installed.' if not storage else
+                                                      f"uses {storage.get('volumeBindingMode', 'Immediate')} binding"
+                                                      + (' with allowedTopologies' if storage.get('allowedTopologies') else '')
+                                                      + '; WaitForFirstConsumer with unrestricted topology required.'))
+    if args.values:
+        images, architectures = [], set()
+        try:
+            images, architectures = preloaded_images(json.loads(args.values.read_text()))
+        except OSError as error:
+            check('Images', False, f'Cannot read values file {args.values}: {error.strerror or error}')
+        except ValueError:
+            check('Images', False, f'Image check reads JSON values files only: {args.values}', warning=True)
+        eligible = [node for node in nodes if node_ready(node) and (
+            not architectures or node['metadata'].get('labels', {}).get('kubernetes.io/arch') in architectures)]
+        if images and not eligible:
+            check('Images', False, 'No Ready node matches the architecture selected in ' + str(args.values) + '.')
+            images = []
+        for image in images:
+            listed = [node['metadata']['name'] for node in eligible if any(
+                name in (image, 'docker.io/' + image, 'docker.io/library/' + image)
+                for entry in node.get('status', {}).get('images', []) for name in entry.get('names', []))]
+            missing = sorted({node['metadata']['name'] for node in eligible} - set(listed))
+            check('Image', not missing, f'{image}: listed on {len(listed)} of {len(eligible)} eligible node(s)'
+                  + ('; missing on ' + ', '.join(missing) + '. Kubelet lists at most 50 images per node.' if missing else '.'),
+                  warning=bool(listed))
+    report['status'] = 'blocked' if any(item['result'] == 'FAIL' for item in checks) else 'ready'
+    return report
+
+
+def print_preflight(report):
+    if report['context']:
+        print('Cluster: ' + report['context'])
+    print_table(['CHECK', 'RESULT', 'DETAIL'], [[item['check'], item['result'], item['detail']] for item in report['checks']])
+    if report['nodes']:
+        print()
+        print_table(['GPU NODE', 'PRODUCT', 'ARCH', 'GPUS', 'RECIPES', 'PROBLEMS'],
+                    [[node['name'], node['product'] or '-', node['architecture'] or '-', node['gpus'],
+                      ', '.join(node['recipes']) or '-', '; '.join(node['problems']) or '-'] for node in report['nodes']])
+    print('\nNot checked:')
+    for item in report['notChecked']:
+        print('  ' + item)
+    print('\n' + ('Prerequisites met. Continue with README.md#1-install-shared-infrastructure.' if report['status'] == 'ready'
+                  else 'Fix each FAIL above, then rerun. See README.md#prerequisites.'))
+
+
 def print_capacity_details(report):
     print(f"Model: {report['model']} | Cluster: {report['context']} | Namespace: {report['namespace']}")
     statuses = {'fits': 'FITS current scheduling allocations.', 'blocked': 'DOES NOT FIT current requirements.',
@@ -473,6 +659,11 @@ def main(argv=None):
     parser.add_argument('--ca-configmap', help='CA ConfigMap for gateway trust.')
     parser.add_argument('--api-key-file', type=pathlib.Path, help='Caller key file for gateway requests.')
     commands = parser.add_subparsers(dest='command', required=True)
+    check = commands.add_parser('preflight', help='Check workstation tools and cluster prerequisites, without changes.')
+    check.add_argument('--runtime-class', default='nvidia')
+    check.add_argument('--storage-class', default='local-path')
+    check.add_argument('--values', type=pathlib.Path, help='Shared stack values file whose Never-pull images must be preloaded.')
+    check.add_argument('--json', action='store_true', help='Print the complete check report as JSON.')
     recipe_list = commands.add_parser('recipes', help='List local recipes and hardware profiles without cluster access.')
     recipe_list.add_argument('--json', action='store_true', help='Print the complete local recipe catalog as JSON.')
     models = commands.add_parser('models', help='List models through the gateway.')
@@ -482,6 +673,8 @@ def main(argv=None):
     chat.add_argument('--stream', action='store_true')
     chat.add_argument('--max-tokens', type=int, help='Maximum generated tokens. Defaults to the model server setting.')
     chat.add_argument('prompt')
+    connect = commands.add_parser('connect', help='Keep a gateway connection open for coding agents and other local clients.')
+    connect.add_argument('--port', type=int, default=18443, help='Local port for the gateway (default: 18443).')
     plan = commands.add_parser('plan', help='Check recipe capacity and show placement or current allocations, without changes.')
     plan.add_argument('--model', required=True, help='Recipe ID shown by llm.py recipes.')
     plan.add_argument('--profile', help='Select one hardware profile instead of considering every supported profile.')
@@ -509,12 +702,24 @@ def main(argv=None):
         parser.error('Choose a served model and provide a nonempty prompt.')
     if args.command == 'chat' and args.max_tokens is not None and args.max_tokens < 1:
         parser.error('--max-tokens must be a positive integer.')
+    if args.command == 'connect' and not 0 < args.port < 65536:
+        parser.error('--port must be between 1 and 65535.')
+    if args.command in ('plan', 'preflight'):
+        for field in ('runtime_class', 'storage_class'):
+            if not re.fullmatch(r'[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?', getattr(args, field)):
+                parser.error('--' + field.replace('_', '-') + ' must be a Kubernetes resource name.')
+    if args.command == 'preflight':
+        report = preflight(args)
+        if args.json:
+            print(json.dumps(report, indent=2))
+        else:
+            print_preflight(report)
+        return report
     if args.command == 'plan':
         if not args.model.strip():
             parser.error('Choose a recipe model ID.')
-        for field in ('runtime_class', 'storage_class', 'shared_ca_configmap'):
-            if not re.fullmatch(r'[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?', getattr(args, field)):
-                parser.error('--' + field.replace('_', '-') + ' must be a Kubernetes resource name.')
+        if not re.fullmatch(r'[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?', args.shared_ca_configmap):
+            parser.error('--shared-ca-configmap must be a Kubernetes resource name.')
         if args.release and not re.fullmatch(r'[a-z0-9](?:[-a-z0-9]{0,51}[a-z0-9])?', args.release):
             parser.error('--release must be a Helm release name (at most 53 characters).')
         if args.release == 'llm-stack':
@@ -531,6 +736,8 @@ def main(argv=None):
         else:
             print_capacity_plan(report, verbose=args.verbose)
         return report
+    if args.command == 'connect':
+        return hold_gateway(context, args.namespace, args.port, args.ca_configmap, args.api_key_file)
     with gateway(context, args.namespace, args.ca_configmap, args.api_key_file) as client:
         if args.command == 'models':
             listing = model_list(client)
