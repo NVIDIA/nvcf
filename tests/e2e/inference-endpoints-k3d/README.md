@@ -136,8 +136,9 @@ Assertions, each polled for up to `E2E_TIMEOUT` seconds:
   `Registered` `False/ScaledToZero`. Patched back: the transport returns to one
   replica and every condition to `True`.
 - Restart and failure cases, in `restart-cases.sh`, which `run.sh` sources.
-  Each starts and ends in the steady state: every condition `True` and the
-  registry `Healthy` with one registered and one healthy server. Assertion
+  Each starts and ends in the steady state: every condition `True`, one entry
+  in `status.servers`, and the registry `Healthy` with one registered and one
+  healthy server. Assertion
   names start with the case ID; `stack` checks read the gateway API,
   `operator` checks read the `InferenceEndpoint`.
   - C7a, backend process killed with `kill 1`: the router logs a failed health
@@ -155,8 +156,8 @@ Assertions, each polled for up to `E2E_TIMEOUT` seconds:
     and ends with `data: [DONE]`, a new chat returns 200, the registry stays
     healthy, and the Pylon pod keeps its UID. C3b applies a second
     `InferenceEndpoint`, `test-model-b`, while the operator is down. It gets
-    no status and no transport until the operator returns, and is then
-    reconciled and deleted.
+    no status and no transport until the operator returns. It is then
+    reconciled, reaches `TransportReady=True`, and is deleted.
   - C5, Pylon pod deleted: `status.servers` lists only the new pod's server id,
     and the registry shows one registered server, not two.
 - `InferenceEndpoint` deleted: the transport Deployment is garbage-collected

@@ -14,6 +14,7 @@
 readonly OPERATOR_DEPLOYMENT="${OPERATOR_RELEASE}"
 readonly SAMPLE_SELECTOR="app.kubernetes.io/name=openai-compatible-sample"
 # A second InferenceEndpoint applied while the operator is down (C3b).
+# shellcheck disable=SC2153 # ENDPOINT is set in run.sh.
 readonly ENDPOINT_B="${ENDPOINT}-b"
 
 STREAM_PID=""
@@ -52,10 +53,16 @@ chat_status_is() {
   [ "${code}" = "$1" ]
 }
 
-# steady_state: both views agree that the endpoint is registered and healthy.
+# steady_state: both views agree that the endpoint is registered and healthy
+# with one server. A Pylon pod that is shutting down can stay in
+# status.servers after the router drops it.
 steady_state() {
   local cr
   if ! conditions_are Ready=True/HealthProbeSucceeded TransportReady=True/PylonConnected Registered=True/RegisteredWithRouter; then
+    LAST_OBSERVED="CR: ${LAST_OBSERVED}"
+    return 1
+  fi
+  if ! servers_count_is 1; then
     LAST_OBSERVED="CR: ${LAST_OBSERVED}"
     return 1
   fi
@@ -148,6 +155,7 @@ event_reasons() {
 
 # deployment_selector NAMESPACE DEPLOYMENT: the Deployment's pod selector as k=v,k=v.
 deployment_selector() {
+  # shellcheck disable=SC2016 # a Go template, not shell expansion
   kc -n "$1" get deployment "$2" \
     -o go-template='{{range $k, $v := .spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}' 2>/dev/null | sed 's/,$//' || true
 }
@@ -367,6 +375,8 @@ run_restart_cases() {
   expect "C3 stack: stream started before the outage ends with [DONE]" 0 stream_completed "${E2E_WORK_DIR}/c3-stream.sse" || true
   scale_operator 1
   expect "C3b operator: ${ENDPOINT_B} reconciled after the operator returns" "${T}" endpoint_observed "${ENDPOINT_B}" || true
+  expect "C3b operator: ${ENDPOINT_B} TransportReady=True (its Pylon connected)" "${T}" \
+    value_is TransportReady True endpoint_field "${ENDPOINT_B}" '{.status.conditions[?(@.type=="TransportReady")].status}' || true
   expect "C3 operator: conditions True after the operator returns" "${T}" \
     conditions_are Ready=True/HealthProbeSucceeded TransportReady=True/PylonConnected Registered=True/RegisteredWithRouter || true
   expect "C3 operator: no transition (Registered lastTransitionTime unchanged)" 0 \

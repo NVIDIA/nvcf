@@ -53,7 +53,7 @@ help:
 	@echo "make test-charts   run the render tests of the four charts and tools/ci/check-helm-charts"
 	@echo "make all           images, import, deploy and test"
 	@echo "make destroy       print the k3d cluster delete command; CONFIRM=1 runs it"
-	@echo "make check         syntax-check run.sh with bash -n, and shellcheck when installed"
+	@echo "make check         syntax-check run.sh and restart-cases.sh with bash -n, and shellcheck when installed"
 	@echo "make sample-image  build the in-repo OpenAI-compatible sample image and import it into $(E2E_KUBE_CONTEXT)"
 
 test:
