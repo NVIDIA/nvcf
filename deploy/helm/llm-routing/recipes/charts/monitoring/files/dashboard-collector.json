@@ -1,0 +1,320 @@
+{
+  "uid": "llm-collector",
+  "title": "OpenTelemetry Collector",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "15s",
+  "timezone": "browser",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "tags": [
+    "llm",
+    "observability",
+    "otel"
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "release",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "demo-metrics"
+        },
+        "query": "label_values(up{component=\"monitoring-collector\"}, monitoring_release)",
+        "refresh": 1
+      },
+      {
+        "name": "namespace",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "demo-metrics"
+        },
+        "query": "label_values(up{monitoring_release=\"$release\",component=\"monitoring-collector\"}, namespace)",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Metric points received and exported",
+      "type": "timeseries",
+      "description": "Metric points per second accepted by receivers and sent by exporters.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (instance, receiver) (rate(otelcol_receiver_accepted_metric_points_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"}[$__rate_interval]))",
+          "legendFormat": "received {{receiver}} / {{instance}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (instance, exporter) (rate(otelcol_exporter_sent_metric_points_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"}[$__rate_interval]))",
+          "legendFormat": "exported {{exporter}} / {{instance}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Failed and refused metric points",
+      "type": "timeseries",
+      "description": "Receiver failures/refusals and exporter send failures per second. Exporter failures can be retried.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (instance, receiver) (rate(otelcol_receiver_failed_metric_points_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"}[$__rate_interval]))",
+          "legendFormat": "receive failed {{receiver}} / {{instance}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (instance, receiver) (rate(otelcol_receiver_refused_metric_points_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"}[$__rate_interval]))",
+          "legendFormat": "refused {{receiver}} / {{instance}}"
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (instance, exporter) (rate(otelcol_exporter_send_failed_metric_points_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"}[$__rate_interval]))",
+          "legendFormat": "send failed {{exporter}} / {{instance}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Exporter queue size and capacity",
+      "type": "timeseries",
+      "description": "Queue occupancy and configured capacity in the exporter queue sizing units. Samples older than 45 seconds are hidden.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "otelcol_exporter_queue_size{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"} and (time() - timestamp(otelcol_exporter_queue_size{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"}) < 45)",
+          "legendFormat": "size {{exporter}} / {{instance}}"
+        },
+        {
+          "refId": "B",
+          "expr": "otelcol_exporter_queue_capacity{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"} and (time() - timestamp(otelcol_exporter_queue_capacity{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"}) < 45)",
+          "legendFormat": "capacity {{exporter}} / {{instance}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Collector CPU usage",
+      "type": "timeseries",
+      "description": "CPU seconds per second. One core means one CPU fully used.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cores",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (instance) (rate(otelcol_process_cpu_seconds_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"}[$__rate_interval]))",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Collector memory",
+      "type": "timeseries",
+      "description": "Resident process memory and allocated Go heap. Samples older than 45 seconds are hidden.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "otelcol_process_memory_rss{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"} and (time() - timestamp(otelcol_process_memory_rss{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"}) < 45)",
+          "legendFormat": "RSS {{instance}}"
+        },
+        {
+          "refId": "B",
+          "expr": "otelcol_process_runtime_heap_alloc_bytes{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"} and (time() - timestamp(otelcol_process_runtime_heap_alloc_bytes{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"}) < 45)",
+          "legendFormat": "heap {{instance}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Collector uptime",
+      "type": "timeseries",
+      "description": "Seconds since the collector started. Samples older than 45 seconds are hidden.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "demo-metrics"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "No data",
+          "custom": {
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "otelcol_process_uptime_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"} and (time() - timestamp(otelcol_process_uptime_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"}) < 45)",
+          "legendFormat": "{{instance}}"
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    }
+  ]
+}

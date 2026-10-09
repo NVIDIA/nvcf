@@ -70,4 +70,6 @@ data:
           path: /var/lib/grafana/dashboards
   dashboard.json: |
 {{ $dashboard | toPrettyJson | indent 4 }}
+  dashboard-collector.json: |
+{{ .Files.Get "files/dashboard-collector.json" | indent 4 }}
 {{- end }}

@@ -2,6 +2,8 @@
 
 Monitoring uses an independent Helm release for the collector, VictoriaMetrics and Grafana. The chart defaults scrape the `llm-stack` shared release and its Pylon workloads in namespace `llm-stack`.
 
+Grafana includes two dashboards: `LLM routing demo` for inference and routing metrics, and `OpenTelemetry Collector` for received/exported metrics, failures, export queues, CPU, memory and uptime. The collector dashboard uses the existing `otelcol_` metrics and filters by monitoring release and namespace.
+
 Run commands from `deploy/helm/llm-routing`.
 
 ## Install and upgrade
@@ -49,6 +51,8 @@ grafana:
 Use your public scheme, host and port in `grafana.rootURL` so shared dashboard links resolve correctly. Its path must match `grafana.ingress.path` with a trailing `/`. The chart rejects mismatches. `className` and `host` are optional. An empty host matches all hosts. The chart does not configure ingress TLS.
 
 Open `/grafana/d/llm-demo` through the ingress. Grafana serves the prefix itself, so configure the controller to forward it unchanged. Dashboard viewing is anonymous. Administrative access requires the Grafana credential.
+
+Open `/grafana/d/llm-collector` for the collector dashboard, or select `OpenTelemetry Collector` from Grafana's dashboard list.
 
 ## Local access and admin login
 
