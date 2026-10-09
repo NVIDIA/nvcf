@@ -33,6 +33,8 @@ use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
 mod attempt;
 mod diagnostics;
 mod request;
+#[cfg(test)]
+mod reservation_tests;
 mod retry;
 mod routing;
 mod run;
