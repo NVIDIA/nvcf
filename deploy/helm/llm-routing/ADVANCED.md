@@ -319,6 +319,8 @@ python3 llm.py recipes
 
 Copy [capabilities.example.json](recipes/capabilities.example.json) to a private path and record verified facts for your nodes. Set `localNvme` only after checking the storage backing `/var/lib/kubelet`. For two-node serving, verify both interfaces, addresses, link speeds and mutual reachability. The planner does not measure these facts. Select available GPUs with enough host memory and disk space.
 
+The two-node profile uses host networking. Its HTTP listener binds to the pod's reported node address; bootstrap and tensor-parallel coordination use the selected fabric addresses. These backend listeners have no gateway authentication, and Kubernetes NetworkPolicy may not cover host-network traffic. Configure host or network firewalls before installation: allow backend HTTP only from the cluster clients that need it, and allow fabric coordination only between the two model nodes. Inspect the rendered workload for the configured ports. Binding a specific address limits interface exposure; it does not authenticate clients.
+
 Print an install command for the one-node profile:
 
 ```bash
@@ -483,7 +485,7 @@ The verifier opens a temporary connection through the installed shared stack. `-
 
 Recipe qualification has separate stages: hardware compatibility and placement, preparation, runtime readiness, registration, and gateway inference. Offline tests establish rendering and local behavior. Accept a hardware trial only after its exact model pins and profile pass discovery, chat, streaming, authentication, retained-cache restart and isolation from another running model. Record the tested context and concurrency separately from the profile's candidate limits.
 
-The current Qwen FP8 and NVFP4 evidence covers short prompts at configured context 8,192 and concurrency 1. The one-node Flash-Next NVMe profile also passed startup and short-prompt gateway checks at context 8,192 and concurrency 1. Flash-Next tensor-parallel serving remains unverified. GLM's latest automatic Helm trial stopped at its host-memory guard. These records do not establish maximum context, throughput or output quality. Gateway checks passed against the existing shared Helm release. Fresh-cluster installation remains unverified.
+The current Qwen FP8 and NVFP4 evidence covers short prompts at configured context 8,192 and concurrency 1. Both the one-node Flash-Next NVMe profile and the two-node tensor-parallel profile passed startup and short-prompt gateway checks at configured context 8,192 and concurrency 1. The recorded TP2 chat and streaming probes used 47 to 56 input tokens. GLM's latest automatic Helm trial stopped at its host-memory guard. These records do not establish maximum context, throughput or output quality. Gateway checks passed against the existing shared Helm release. Fresh-cluster installation remains unverified.
 
 ## Monitoring
 

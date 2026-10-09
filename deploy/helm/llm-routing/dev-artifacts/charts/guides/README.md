@@ -83,7 +83,7 @@ Both models use the same gateway and caller credential. Each keeps its own Helm 
 | [Qwen3.8-27B](recipes/values/qwen3.8-27b.yaml) | FP8 | One GB10. Cached Helm startup and inference tested. |
 | [Qwen3.8-27B](recipes/values/qwen3.8-27b-nvfp4.yaml) | NVIDIA NVFP4 | One GB10. Cached Helm startup, inference and model isolation tested. |
 | [GLM-5.3](recipes/values/glm-5.3.yaml) | UD-IQ2_M | Two GB10s. Combined runtime tested. [Automatic Helm startup](ADVANCED.md#helm-glm-recipe) stopped at the host-memory guard. |
-| Qwen3.8-Flash-Next | NVFP4 | Automatic [one-node NVMe](recipes/values/qwen3.8-flash-next-nvme.yaml) startup and short-prompt inference tested at context 8,192 and concurrency 1. [Two-node tensor parallel](recipes/values/qwen3.8-flash-next-tp2.yaml) validation pending. [Installation](ADVANCED.md#helm-flash-next-recipes). |
+| Qwen3.8-Flash-Next | NVFP4 | Automatic [one-node NVMe](recipes/values/qwen3.8-flash-next-nvme.yaml) and [two-node tensor parallel](recipes/values/qwen3.8-flash-next-tp2.yaml) startup and short-prompt gateway checks passed at configured context 8,192 and concurrency 1. [Installation](ADVANCED.md#helm-flash-next-recipes). |
 | Nemotron 5 Nano 12B | Unverified | Unavailable. Exact public model artifact not verified. |
 | Nemotron 5 Super 49B | Unverified | Unavailable. Exact public model artifact not verified. |
 | Qwen3.8-4B | Unverified | Unavailable. Exact public model artifact not verified. |
