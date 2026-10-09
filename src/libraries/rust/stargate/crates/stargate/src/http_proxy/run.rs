@@ -113,6 +113,7 @@ impl<'a> ProxyRequestRun<'a> {
             received_at: self.request.request_start,
             request_slo: request_inputs.request_slo_ms.map(Duration::from_millis),
             excluded_cluster_ids: self.excluded_cluster_ids(),
+            last_cluster: Some(&request_inputs.last_cluster),
         }
     }
 
@@ -197,6 +198,16 @@ impl<'a> ProxyRequestRun<'a> {
         selected_cluster.record_selection_metrics(
             self.app.metrics.as_ref(),
             &self.request.request_inputs.target,
+        );
+        crate::load_balancer::record_session_selection(
+            self.app.metrics.as_ref(),
+            self.request.lb_resolution.config(),
+            &selected_cluster.routing_algorithm,
+            &self.request.request_inputs.request_id,
+            &self.request.request_inputs.target,
+            &self.request.request_inputs.last_cluster,
+            &selected_cluster.cluster.snapshot().cluster_id,
+            selected_cluster.selection.choice.rank_depth,
         );
         let comparator = self.request.lb_resolution.config().comparator();
 
@@ -390,6 +401,7 @@ mod tests {
 
     fn request_inputs() -> ProxyRequestInputs {
         ProxyRequestInputs {
+            request_id: "req-1".to_string(),
             target: target(),
             input_tokens: 128,
             priority: 0,
@@ -398,6 +410,7 @@ mod tests {
             cache_affinity_key: None,
             routing_algorithm_override: None,
             routing_expression: None,
+            last_cluster: Default::default(),
         }
     }
 

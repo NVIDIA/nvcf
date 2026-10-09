@@ -102,6 +102,7 @@ define_stargate_metrics! {
         proxy_retries_total("proxy_retries_total", "Total number of proxy retries", ["routing_key", "model", "reason"]);
         routing_selections_total("routing_selections_total", "Total number of primary and ranked fallback cluster choices used for upstream attempts", ["routing_key", "model", "algorithm", "selection"]);
         routing_kv_free_token_fallback_selections_total("routing_kv_free_token_fallback_selections_total", "Total number of selected routes reached after a higher-ranked candidate was skipped by KV free-token eligibility", ["routing_key", "model", "algorithm"]);
+        routing_session_selections_total("routing_session_selections_total", "Total number of cluster choices for session-classified requests by session state and whether the session's primary target was chosen", ["routing_key", "model", "algorithm", "session_state", "selection"]);
         proxy_retry_exhausted_total("proxy_retry_exhausted_total", "Total number of proxy requests that exhausted retry options", ["routing_key", "model", "reason"]);
         proxy_ambiguous_delivery_total("proxy_ambiguous_delivery_total", "Total number of proxy requests stopped because delivery may have occurred", []);
         admission_rejections_total("admission_rejections_total", "Total number of requests rejected by local admission control", ["routing_key", "model", "reason"]);
@@ -206,6 +207,7 @@ impl StargateMetrics {
         GenericCounter<AtomicU64>, proxy_retries_total(routing_key: Option<&str>, model: &str, reason: &str) => [routing_key.unwrap_or(""), model, reason];
         GenericCounter<AtomicU64>, routing_selections_total(routing_key: Option<&str>, model: &str, algorithm: &str, selection: &str) => [routing_key.unwrap_or(""), model, algorithm, selection];
         GenericCounter<AtomicU64>, routing_kv_free_token_fallback_selections_total(routing_key: Option<&str>, model: &str, algorithm: &str) => [routing_key.unwrap_or(""), model, algorithm];
+        GenericCounter<AtomicU64>, routing_session_selections_total(routing_key: Option<&str>, model: &str, algorithm: &str, session_state: &str, selection: &str) => [routing_key.unwrap_or(""), model, algorithm, session_state, selection];
         GenericCounter<AtomicU64>, proxy_retry_exhausted_total(routing_key: Option<&str>, model: &str, reason: &str) => [routing_key.unwrap_or(""), model, reason];
         GenericCounter<AtomicU64>, proxy_ambiguous_delivery_total() => [];
         GenericCounter<AtomicU64>, admission_rejections_total(routing_key: Option<&str>, model: &str, reason: &str) => [routing_key.unwrap_or(""), model, reason];

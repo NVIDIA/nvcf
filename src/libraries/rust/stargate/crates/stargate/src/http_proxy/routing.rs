@@ -339,6 +339,7 @@ mod tests {
             received_at: Instant::now(),
             request_slo: None,
             excluded_cluster_ids: None,
+            last_cluster: None,
         }
     }
 

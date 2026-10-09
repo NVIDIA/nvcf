@@ -36,6 +36,7 @@ mod random;
 mod request;
 mod round_robin;
 mod router;
+mod session;
 mod target_state;
 #[cfg(test)]
 mod tests;
@@ -58,5 +59,7 @@ pub use request::{LoadBalancerCandidateChoice, LoadBalancerDecision, LoadBalance
 pub use router::{
     LoadBalancerAlgorithmResolution, LoadBalancerCandidateSelection, LoadBalancerRouter,
 };
+pub(crate) use session::record_session_selection;
+pub use session::{LastClusterHint, SessionClassification, SessionSelection, SessionState};
 pub(crate) use target_state::LoadBalancerDefinition;
 pub use target_state::LoadBalancerTargetState;

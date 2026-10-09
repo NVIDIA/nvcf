@@ -24,6 +24,8 @@ pub const HEADER_STARGATE_UPSTREAM_RETRYABLE: &str = "x-stargate-upstream-retrya
 pub const HEADER_STARGATE_RETRYABLE: &str = "x-stargate-retryable";
 pub const HEADER_STARGATE_RETRY_REASON: &str = "x-stargate-retry-reason";
 pub const HEADER_STARGATE_RETRY_AFTER_MS: &str = "x-stargate-retry-after-ms";
+/// Gateway hint naming the cluster that served the session's last request.
+pub const HEADER_STARGATE_LAST_CLUSTER_ID: &str = "x-stargate-last-cluster-id";
 
 pub const RETRY_REASON_QUEUE_ESTIMATE_MISMATCH: &str = "queue_estimate_mismatch";
 pub const RETRY_REASON_UPSTREAM_ADMISSION_REJECTED: &str = "upstream_admission_rejected";
@@ -70,6 +72,13 @@ mod tests {
         assert_eq!(HEADER_STARGATE_RETRYABLE, "x-stargate-retryable");
         assert_eq!(HEADER_STARGATE_RETRY_REASON, "x-stargate-retry-reason");
         assert_eq!(HEADER_STARGATE_RETRY_AFTER_MS, "x-stargate-retry-after-ms");
+        assert_eq!(
+            HEADER_STARGATE_LAST_CLUSTER_ID,
+            "x-stargate-last-cluster-id"
+        );
+        assert!(is_internal_control_header(
+            &http::header::HeaderName::from_static(HEADER_STARGATE_LAST_CLUSTER_ID)
+        ));
         assert_eq!(HEADER_INFERENCE_SERVER_ID, "x-inference-server-id");
         assert_eq!(HEADER_REVERSE_AUTH_TOKEN, "x-stargate-auth-token");
         assert_eq!(WEBTRANSPORT_TUNNEL_PATH, "/_stargate/webtransport");

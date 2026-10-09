@@ -16,12 +16,15 @@
 use axum::http::{HeaderMap, StatusCode};
 use stargate_protocol::tunnel_contract::{
     HEADER_INPUT_TOKENS, HEADER_MODEL, HEADER_PRIORITY, HEADER_REQUEST_ID, HEADER_ROUTING_KEY,
+    HEADER_STARGATE_LAST_CLUSTER_ID,
 };
 use tracing::{Span, warn};
 
 use super::ProxyRequestError;
 use crate::load_balancer::expression::RejectionError;
-use crate::load_balancer::{LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmOverride};
+use crate::load_balancer::{
+    LastClusterHint, LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmOverride,
+};
 use crate::routing_state::RoutingTargetKey;
 
 use super::{
@@ -30,6 +33,7 @@ use super::{
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ProxyRequestInputs {
+    pub(super) request_id: String,
     pub(super) target: RoutingTargetKey,
     pub(super) input_tokens: u64,
     pub(super) priority: u32,
@@ -38,6 +42,8 @@ pub(super) struct ProxyRequestInputs {
     pub(super) cache_affinity_key: Option<String>,
     pub(super) routing_algorithm_override: Option<LoadBalancerAlgorithmOverride>,
     pub(super) routing_expression: Option<String>,
+    /// Consumed here; `x-stargate-*` headers are never forwarded upstream.
+    pub(super) last_cluster: LastClusterHint,
 }
 
 pub(super) fn parse_proxy_request_inputs(
@@ -49,7 +55,8 @@ pub(super) fn parse_proxy_request_inputs(
             value.to_str().unwrap_or("<invalid-utf8>"),
         );
     }
-    get_optional_header(headers, HEADER_REQUEST_ID).ok_or(StatusCode::BAD_REQUEST)?;
+    let request_id =
+        get_optional_header(headers, HEADER_REQUEST_ID).ok_or(StatusCode::BAD_REQUEST)?;
     let input_tokens = parse_optional_numeric_header(headers, HEADER_INPUT_TOKENS)?
         .ok_or(StatusCode::BAD_REQUEST)?;
     let target = RoutingTargetKey::new(
@@ -58,6 +65,7 @@ pub(super) fn parse_proxy_request_inputs(
     );
     let routing_algorithm_override = parse_routing_algorithm_override(headers, &target)?;
     Ok(ProxyRequestInputs {
+        request_id,
         target,
         input_tokens,
         priority: parse_optional_numeric_header(headers, HEADER_PRIORITY)?.unwrap_or(0),
@@ -70,6 +78,12 @@ pub(super) fn parse_proxy_request_inputs(
             .and_then(|value| value.to_str().ok())
             .filter(|raw| raw.contains(';'))
             .map(ToOwned::to_owned),
+        // Blank or non-UTF-8 values read as absent, so a bad hint never fails
+        // the request.
+        last_cluster: LastClusterHint::new(get_optional_header(
+            headers,
+            HEADER_STARGATE_LAST_CLUSTER_ID,
+        )),
     })
 }
 
@@ -196,6 +210,44 @@ mod tests {
             HeaderName::from_static(name),
             HeaderValue::from_static(value),
         );
+    }
+
+    #[test]
+    fn last_cluster_header_is_trimmed_and_request_id_is_kept() {
+        let mut headers = proxy_headers();
+        set_header(
+            &mut headers,
+            HEADER_STARGATE_LAST_CLUSTER_ID,
+            "  cluster-b  ",
+        );
+
+        let inputs = parse_proxy_request_inputs(&headers).expect("headers should parse");
+
+        assert_eq!(inputs.request_id, "req-test");
+        assert_eq!(inputs.last_cluster.last_cluster_id(), Some("cluster-b"));
+        assert_eq!(inputs.last_cluster.classification(), None);
+    }
+
+    #[test]
+    fn unusable_last_cluster_header_reads_as_absent() {
+        for value in [
+            HeaderValue::from_static(""),
+            HeaderValue::from_static("   "),
+            HeaderValue::from_bytes(b"\xff\xfe").unwrap(),
+        ] {
+            let mut headers = proxy_headers();
+            headers.insert(
+                HeaderName::from_static(HEADER_STARGATE_LAST_CLUSTER_ID),
+                value,
+            );
+
+            let inputs = parse_proxy_request_inputs(&headers)
+                .expect("an unusable hint must not fail the request");
+            assert_eq!(inputs.last_cluster.last_cluster_id(), None);
+        }
+
+        let inputs = parse_proxy_request_inputs(&proxy_headers()).unwrap();
+        assert_eq!(inputs.last_cluster.last_cluster_id(), None);
     }
 
     #[test]

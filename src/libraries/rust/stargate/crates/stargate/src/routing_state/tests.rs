@@ -2136,6 +2136,7 @@ async fn routing_target_recreation_starts_fresh_load_balancer_state() {
         received_at: Instant::now(),
         request_slo: None,
         excluded_cluster_ids: None,
+        last_cluster: None,
     };
     let candidates = [
         RoutedClusterSnapshot {
@@ -2364,6 +2365,7 @@ async fn three_shared_backends_merge_sparse_priority_maps() {
         received_at: Instant::now(),
         request_slo: None,
         excluded_cluster_ids: None,
+        last_cluster: None,
     };
     let choice = router
         .choose_candidate(snapshot.load_balancers(), &request, snapshot.clusters())
@@ -2621,6 +2623,7 @@ async fn routing_uses_load_from_every_shared_cluster_backend() {
         received_at: Instant::now(),
         request_slo: None,
         excluded_cluster_ids: None,
+        last_cluster: None,
     };
     let choice = router
         .choose_candidate(snapshot.load_balancers(), &request, snapshot.clusters())
@@ -2726,6 +2729,7 @@ async fn registered_backend_rtt_means_drive_cluster_load_balancer_selection() {
         received_at: Instant::now(),
         request_slo: None,
         excluded_cluster_ids: None,
+        last_cluster: None,
     };
     let choice = router
         .choose_candidate(
