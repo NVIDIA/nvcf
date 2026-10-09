@@ -411,6 +411,40 @@ class MonitoringChartTests(unittest.TestCase):
             self.assertEqual(panel['datasource']['uid'], datasource['uid'])
             self.assertEqual(panel['fieldConfig']['defaults']['noValue'], 'No data')
 
+    def test_collector_dashboard_is_mounted_and_scoped_to_collection(self):
+        config = next(d for d in self.docs if d['kind'] == 'ConfigMap' and d['metadata']['name'].endswith('-grafana'))
+        dashboard = json.loads(config['data']['dashboard-collector.json'])
+        self.assertEqual(dashboard['uid'], 'llm-collector')
+        deployment = next(d for d in self.docs if d['kind'] == 'Deployment' and d['metadata']['name'].endswith('-grafana'))
+        pod = deployment['spec']['template']['spec']
+        volume = next(v for v in pod['volumes'] if v['name'] == 'dashboard')
+        self.assertEqual(volume['configMap']['name'], config['metadata']['name'])
+        self.assertEqual(volume['configMap']['items'], [
+            {'key': 'dashboard.json', 'path': 'dashboard.json'},
+            {'key': 'dashboard-collector.json', 'path': 'dashboard-collector.json'},
+        ])
+        mount = next(v for v in pod['containers'][0]['volumeMounts'] if v['name'] == 'dashboard')
+        provider = yaml.safe_load(config['data']['dashboard.yaml'])['providers'][0]
+        self.assertEqual(mount['mountPath'], provider['options']['path'])
+        self.assertTrue(mount['readOnly'])
+        self.assertEqual({v['name'] for v in dashboard['templating']['list']}, {'release', 'namespace'})
+        self.assertEqual(len({p['id'] for p in dashboard['panels']}), len(dashboard['panels']))
+        for panel in dashboard['panels']:
+            self.assertEqual(panel['datasource']['uid'], 'demo-metrics')
+            self.assertEqual(panel['fieldConfig']['defaults']['noValue'], 'No data')
+            self.assertFalse(panel['fieldConfig']['defaults']['custom']['spanNulls'])
+            for target in panel['targets']:
+                query = target['expr']
+                self.assertIn('monitoring_release="$release"', query)
+                self.assertIn('namespace=~"${namespace}"', query)
+                self.assertIn('component="monitoring-collector"', query)
+                self.assertNotIn('model', query)
+                self.assertNotIn('or vector(0)', query)
+                if 'rate(' in query:
+                    self.assertIn('[$__rate_interval]', query)
+                else:
+                    self.assertIn('timestamp(', query)
+
     def test_runtime_panels_and_labels_require_explicit_supported_target(self):
         for runtime in (None, 'llama.cpp'):
             with self.subTest(runtime=runtime):
