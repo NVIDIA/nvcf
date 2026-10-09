@@ -2,13 +2,36 @@
 
 Install the shared routing release `llm-stack` in namespace `llm-stack`, then install each model recipe with Helm. Each model has its own release and persistent cache. Applications select a model through the same gateway address and caller credential.
 
-## Before you start
+## Prerequisites
 
-- Use Kubernetes with the NVIDIA device plugin, a GPU RuntimeClass and persistent storage. Choose available nodes from the [recipe catalog](recipes/index.json).
-- Install Helm, kubectl and Python 3.11+ on your workstation.
-- Run these commands from `deploy/helm/llm-routing` in one terminal. The supported release and namespace are both `llm-stack`.
+### Cluster
 
-The committed charts and [image values](dev-artifacts/values.yaml) use images preloaded on the shared Spark nodes. [Prepare new images and charts](dev-artifacts/README.md) only when sources change or another cluster needs them.
+- Kubernetes that you reach with kubectl and Helm, using a context that can create CustomResourceDefinitions and namespaces.
+- Linux ARM64 GPU nodes whose GPU matches a recipe profile. The automatic profiles in the [recipe catalog](recipes/index.json) target GB10 today. `python3 llm.py recipes` lists them.
+- One whole GPU per node for each model: no MIG, time-slicing or MPS, and no `NoSchedule` or `NoExecute` taints on model nodes.
+- The NVIDIA driver and container toolkit on each GPU node, and a RuntimeClass named `nvidia`.
+- The [NVIDIA device plugin](https://github.com/NVIDIA/k8s-device-plugin) advertising `nvidia.com/gpu`. Use v0.17.4 or later on GB10.
+- The node label `nvidia.com/gpu.product` on each GPU node. [GPU Feature Discovery](https://github.com/NVIDIA/k8s-device-plugin/tree/main/docs/gpu-feature-discovery) sets it, or apply it with `kubectl label node NODE nvidia.com/gpu.product=NVIDIA-GB10`. Capacity planning and the in-chart placement check match it against the recipe profile.
+- A StorageClass named `local-path`, or another class passed to `llm.py plan --storage-class`, with `WaitForFirstConsumer` binding and unrestricted topology. Each model cache is node-local disk on its model node.
+- The shared stack images on every eligible node. No published images exist yet. The committed [image values](dev-artifacts/values.yaml) reference development images with `Never` pull policy, so [prepare and preload them](dev-artifacts/README.md) on your nodes first. The verification Job also needs `python:3.12-alpine`, pulled or preloaded.
+- Outbound access from the nodes to Hugging Face for model weights, Docker Hub for `lmsysorg/sglang`, nvcr.io, and GitHub for the llama.cpp source used by GGUF recipes.
+
+k3s provides the `nvidia` RuntimeClass when the container toolkit is installed before k3s starts. It also installs Traefik ingress and the `local-path` StorageClass by default.
+
+### Workstation
+
+- kubectl, Helm 3.10 or newer, and Python 3.11 or newer.
+- A checkout of this repository. Run all commands from `deploy/helm/llm-routing` in one terminal. The supported release and namespace are both `llm-stack`.
+
+### Check the cluster
+
+Check the workstation tools and cluster prerequisites without changing anything. Replace `YOUR_CONTEXT` with your kubeconfig context:
+
+```bash
+python3 llm.py --context YOUR_CONTEXT preflight --values dev-artifacts/values.yaml
+```
+
+Exit code 2 means a check failed. The output lists each check, then each GPU node with its matching recipes and any problems. The preflight does not test outbound access from the nodes or free disk space for model caches.
 
 ## 1. Install shared infrastructure
 
@@ -23,6 +46,10 @@ helm upgrade --install llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz
 ```
 
 Helm installs the gateway, router and namespace-scoped operator with an empty model registry. A chart verification Job checks gateway TLS, model discovery, acceptance of the caller key and rejection of an invalid key before Helm reports success. The same checks run on upgrades with registered models. The chart generates the caller credential and TLS material on first installation and preserves them on upgrades. The operator watches `llm-stack`. The operator chart defaults `installCRDs` to `true`, so the shared release owns the templated InferenceEndpoint CRD and updates its schema on upgrades. For an externally managed CRD, set `operator.installCRDs=false`. The CRD is retained on uninstall.
+
+### Add monitoring (optional)
+
+To collect gateway and model metrics in VictoriaMetrics and view them in Grafana, install the independent monitoring release described in [Optional monitoring](recipes/MONITORING.md). It runs in namespace `llm-stack` and installs and uninstalls separately from the models.
 
 ## 2. Install a model
 
@@ -106,6 +133,16 @@ python3 llm.py chat --model qwen3.8-27b-nvfp4 --stream \
 ```
 
 The `models` and `chat` commands retrieve the gateway CA and caller key, open a temporary local connection, and clean up their local connection files when they finish. Use [connection overrides](ADVANCED.md#shared-cli-connection-options) for another context or an existing caller credential.
+
+### Connect a coding agent
+
+Coding agents on your workstation reach the models through the same gateway. Keep the connection open in its own terminal:
+
+```bash
+python3 llm.py connect
+```
+
+It forwards the gateway to `https://127.0.0.1:18443/v1` and prints `export` lines for the gateway URL, CA file and caller key. Run them in the terminal where you start the agent, then configure [Pi](ADVANCED.md#pi) or [Codex](ADVANCED.md#codex). Press Ctrl-C to close the connection and remove the credential files. Agents need a recipe tuned for a large context. See [Connect a coding agent](ADVANCED.md#connect-a-coding-agent).
 
 ## 4. Stop or uninstall a model
 
