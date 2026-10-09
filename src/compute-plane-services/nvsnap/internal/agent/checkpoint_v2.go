@@ -247,6 +247,33 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		gsInfo = &GPUShareInfo{PIDs: gsPIDs, StorePath: GPUShareStoreInContainer, LibPath: gsLib}
 	}
 
+	if nsPID == 1 {
+		// The workload is the container's pid 1: dump it with its pid
+		// namespace, from outside (pidns_capture.go).
+		_ = os.RemoveAll(imgsDir)
+		if err := a.dumpPIDNamespace(ctx, procBase, targetHostPID, checkpointDir, externals, leaveRunning, gsOn, log); err != nil {
+			if gsOn {
+				if rerr := gpushareResume(ctx, hostPID, gsPIDs, "", fabricDir, log); rerr != nil {
+					log.WithError(rerr).Error("gpushare: resuming the source after a failed dump failed; the workload stays suspended")
+				}
+			}
+			return nil, err
+		}
+		if gsOn {
+			if leaveRunning {
+				if err := gpushareResume(ctx, hostPID, gsPIDs, "", fabricDir, log); err != nil {
+					return nil, fmt.Errorf("gpushare: resume the source after the dump: %w", err)
+				}
+			}
+			closeFabric()
+			if err := a.gpushareCollectStore(containerInfo, root, checkpointDir, gpuMap); err != nil {
+				return nil, err
+			}
+		}
+		log.Info("criu-v2: pid-namespace dump complete")
+		return gsInfo, nil
+	}
+
 	// 5. nsenter into the container's mnt/pid/net/ipc/uts namespaces and
 	// dump. Environment is deliberately minimal: PATH covers the staged bundle
 	// so the CUDA plugin finds cuda-checkpoint. LD_LIBRARY_PATH is deliberately

@@ -22,6 +22,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -45,6 +46,12 @@ func main() {
 	// still works. New code paths use "capture-write".
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "pidns-restore-exec":
+			if err := pidNSRestoreExec(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "pidns-restore-exec:", err)
+				os.Exit(1)
+			}
+			return
 		case "capture-write", "capture-copy":
 			log := logrus.New()
 			log.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})

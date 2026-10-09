@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "capture_write.go",
         "main.go",
+        "pidns_exec.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/agent",
     visibility = ["//visibility:private"],
@@ -13,6 +14,7 @@ go_library(
         "//src/compute-plane-services/nvsnap/internal/checkpointstore",
         "//src/compute-plane-services/nvsnap/internal/treecopy",
         "@com_github_sirupsen_logrus//:logrus",
+        "@org_golang_x_sys//unix",
     ],
 )
 

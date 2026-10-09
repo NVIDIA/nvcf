@@ -123,10 +123,20 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	// starts, but the reservation only lands after that shell finishes sourcing
 	// its login profile, a few hundred forks in these images. Sampling once
 	// races that window and rejects a placeholder that was about to be fine.
-	if maxPID, perr := awaitPlaceholderPIDReservation(procBase, hostPID, log); perr != nil {
-		return nil, perr
-	} else if maxPID > 0 {
-		log.WithField("maxNSPID", maxPID).Info("criu-v2: placeholder reserved its pid range")
+	// A checkpoint that carries its pid namespace is restored into a nested
+	// one, where every pid is free (pidns_capture.go).
+	pidns, pidnsCapture, err := readPIDNSMarkerOrFalse(checkpointDir)
+	if err != nil {
+		return nil, err
+	}
+	if !pidns {
+		if maxPID, perr := awaitPlaceholderPIDReservation(procBase, hostPID, log); perr != nil {
+			return nil, perr
+		} else if maxPID > 0 {
+			log.WithField("maxNSPID", maxPID).Info("criu-v2: placeholder reserved its pid range")
+		}
+	} else if err := a.stagePIDNSRestoreHelper(root); err != nil {
+		return nil, err
 	}
 
 	log.WithFields(logrus.Fields{
@@ -172,6 +182,12 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		log = log.WithField("fabricSession", group.Session)
 	}
 	args := restoreV2Args(hostPID, imgsInContainer, gs != nil, gs != nil && bundledSupportsDirectImageIO(), group.InetAddrMap)
+	if pidns {
+		args = append([]string{"-t", strconv.Itoa(hostPID), "-m", "-p", "-r", "-w", "--",
+			v2BinDirInContainer + "/" + pidNSRestoreHelperName, "pidns-restore-exec", v2BinDirInContainer + "/criu"},
+			pidNSRestoreArgs(imgsInContainer, pidnsCapture.Mounts, gs != nil, gs != nil && bundledSupportsDirectImageIO(), group.InetAddrMap)...)
+		log.WithField("externalMounts", len(pidnsCapture.Mounts)).Info("criu-v2: restoring into a nested pid namespace")
+	}
 	rctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	_, criuSpan := tracing.Tracer().Start(ctx, "restore.criu")
@@ -246,7 +262,18 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	if gs != nil {
 		_, gsSpan := tracing.Tracer().Start(ctx, "restore.gpushare_resume")
 		gpuMap := gs.StorePath + "/" + gpushareGPUMapFile
-		if err := gpushareResume(ctx, hostPID, gs.PIDs, gpuMap, fabricDir, log); err != nil {
+		resumePID := hostPID
+		if pidns {
+			// The restored processes live in the nested pid namespace; their
+			// saved pids are pids there.
+			p, err := nestedInitHostPID(procBase, hostPID)
+			if err != nil {
+				gsSpan.End()
+				return nil, fmt.Errorf("gpushare resume: %w", err)
+			}
+			resumePID = p
+		}
+		if err := gpushareResume(ctx, resumePID, gs.PIDs, gpuMap, fabricDir, log); err != nil {
 			gsSpan.RecordError(err)
 			gsSpan.SetStatus(codes.Error, "gpushare resume failed")
 			gsSpan.End()
