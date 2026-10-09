@@ -1013,7 +1013,9 @@ mod tests {
                 &lock.lock_name,
                 &lock.node_id,
                 lock.acquired_at.clone(),
-                &lock.lock_token,
+                lock.lock_token
+                    .as_deref()
+                    .expect("test lock has a token"),
             )
             .await
             .unwrap());
@@ -1028,7 +1030,10 @@ mod tests {
                 &lock.lock_name,
                 "another-node",
                 reacquired_lock.acquired_at.clone(),
-                &reacquired_lock.lock_token,
+                reacquired_lock
+                    .lock_token
+                    .as_deref()
+                    .expect("reacquired test lock has a token"),
             )
             .await
             .unwrap());
