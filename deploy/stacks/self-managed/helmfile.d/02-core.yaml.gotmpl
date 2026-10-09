@@ -69,7 +69,7 @@ releases:
     {{- $sisChartPath := dig "sis" "chartPath" "" .Values }}
     chart: {{ $sisChartPath | default "nvcf/helm-nvcf-sis" | quote }}
     {{- if not $sisChartPath }}
-    version: 2.6.0
+    version: 2.6.1
     {{- end }}
     namespace: sis
     condition: icms.enabled
