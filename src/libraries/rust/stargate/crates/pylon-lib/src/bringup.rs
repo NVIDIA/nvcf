@@ -146,10 +146,24 @@ mod tests {
         Result<ChatCompletionResponse, BringupError>,
         Vec<crate::RequestObservationState>,
     ) {
+        let (result, events) = send_observed_completion_events(upstream_http_base_url).await;
+        let states = events
+            .into_iter()
+            .map(|event| event.into_observation().state)
+            .collect();
+        (result, states)
+    }
+
+    async fn send_observed_completion_events(
+        upstream_http_base_url: &str,
+    ) -> (
+        Result<ChatCompletionResponse, BringupError>,
+        Vec<crate::RequestObservationEvent>,
+    ) {
         let (runtime_state, observations) = PylonRuntimeState::observed(
             InferenceServerStatus::Active,
             &["test-model".to_string()],
-            8,
+            16,
             None,
         );
         let result = send_completion_request(
@@ -167,11 +181,7 @@ mod tests {
             Some(&runtime_state),
         )
         .await;
-        let states = observations
-            .try_iter()
-            .map(|event| event.into_observation().state)
-            .collect();
-        (result, states)
+        (result, observations.try_iter().collect())
     }
 
     fn test_stats_collector() -> (PylonRuntimeState, StatsCollectorHandle) {
@@ -776,6 +786,231 @@ mod tests {
 
         assert_eq!(outcome, CalibrationStepOutcome::Completed);
         assert_eq!(max_in_flight.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn calibration_prompts_are_unique_and_keep_the_requested_length() {
+        for prompt_units in [8, 33, CALIBRATION_PROMPT_UNITS_FLOOR, 4096] {
+            let prompts = (0..64)
+                .map(|_| calibration_prompt(prompt_units))
+                .collect::<Vec<_>>();
+            assert!(prompts.iter().all(|prompt| prompt.len() == prompt_units));
+            assert!(prompts.iter().all(|prompt| prompt.is_ascii()));
+            let prefix_len = prompt_units.min(32);
+            let prefixes = prompts
+                .iter()
+                .map(|prompt| &prompt[..prefix_len])
+                .collect::<std::collections::HashSet<_>>();
+            assert_eq!(
+                prefixes.len(),
+                prompts.len(),
+                "every calibration prompt must start with a distinct prefix"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn calibration_prompts_do_not_share_prefixes_across_requests_or_steps() {
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        let base_url = spawn_test_server(TestServerState {
+            prompts: Some(prompts.clone()),
+            ..TestServerState::default()
+        })
+        .await;
+        let client = reqwest::Client::new();
+        let runtime_state = test_runtime_state();
+        let steps = calibration_ramp(&CalibrationConfig {
+            calibration_requests: 2,
+            calibration_prompt_units: 1024,
+            calibration_max_concurrency: 2,
+            ..CalibrationConfig::default()
+        })
+        .take(4)
+        .collect::<Vec<_>>();
+        for step in &steps {
+            let outcome = send_calibration_batch(
+                &client,
+                &base_url,
+                &test_generation(),
+                Duration::from_secs(1),
+                *step,
+                &runtime_state,
+            )
+            .await
+            .expect("calibration batch should succeed");
+            assert_eq!(outcome, CalibrationStepOutcome::Completed);
+        }
+
+        let prompts = prompts.lock().await.clone();
+        let mut expected_lengths = steps
+            .iter()
+            .flat_map(|step| std::iter::repeat_n(step.prompt_units, step.request_count))
+            .collect::<Vec<_>>();
+        let mut lengths = prompts.iter().map(String::len).collect::<Vec<_>>();
+        expected_lengths.sort_unstable();
+        lengths.sort_unstable();
+        assert_eq!(
+            lengths, expected_lengths,
+            "unique prompts must keep each step's prompt size"
+        );
+        for (index, prompt) in prompts.iter().enumerate() {
+            for other in &prompts[index + 1..] {
+                assert_ne!(
+                    prompt[..32],
+                    other[..32],
+                    "calibration prompts must not share a cacheable prefix"
+                );
+            }
+        }
+    }
+
+    fn parse_input_usage(usage: Value) -> Option<InputUsage> {
+        serde_json::from_value::<ChatCompletionResponse>(serde_json::json!({"usage": usage}))
+            .expect("usage should deserialize")
+            .usage
+            .input_usage()
+    }
+
+    #[test]
+    fn calibration_usage_reports_uncached_prompt_tokens() {
+        assert_eq!(
+            parse_input_usage(serde_json::json!({
+                "prompt_tokens": 100,
+                "completion_tokens": 1,
+                "prompt_tokens_details": {"cached_tokens": 64},
+            })),
+            Some(InputUsage {
+                input_tokens: 100,
+                uncached_input_tokens: Some(36),
+            })
+        );
+        assert_eq!(
+            parse_input_usage(serde_json::json!({
+                "prompt_tokens": 100,
+                "completion_tokens": 1,
+                "prompt_tokens_details": {"cached_tokens": 0},
+            })),
+            Some(InputUsage {
+                input_tokens: 100,
+                uncached_input_tokens: Some(100),
+            })
+        );
+    }
+
+    #[test]
+    fn calibration_usage_without_cached_details_reports_only_the_total() {
+        for usage in [
+            serde_json::json!({"prompt_tokens": 100, "completion_tokens": 1}),
+            serde_json::json!({
+                "prompt_tokens": 100,
+                "completion_tokens": 1,
+                "prompt_tokens_details": null,
+            }),
+            serde_json::json!({
+                "prompt_tokens": 100,
+                "completion_tokens": 1,
+                "prompt_tokens_details": {"audio_tokens": 0},
+            }),
+        ] {
+            assert_eq!(
+                parse_input_usage(usage),
+                Some(InputUsage {
+                    input_tokens: 100,
+                    uncached_input_tokens: None,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn calibration_usage_ignores_invalid_cached_tokens() {
+        for cached_tokens in [serde_json::json!(128), serde_json::json!("64")] {
+            assert_eq!(
+                parse_input_usage(serde_json::json!({
+                    "prompt_tokens": 100,
+                    "completion_tokens": 1,
+                    "prompt_tokens_details": {"cached_tokens": cached_tokens},
+                })),
+                Some(InputUsage {
+                    input_tokens: 100,
+                    uncached_input_tokens: None,
+                }),
+                "cached tokens that are malformed or exceed the prompt total are unavailable"
+            );
+        }
+    }
+
+    #[test]
+    fn calibration_usage_without_prompt_tokens_is_unavailable() {
+        assert_eq!(
+            parse_input_usage(serde_json::json!({"completion_tokens": 1})),
+            None
+        );
+        assert_eq!(
+            parse_input_usage(serde_json::json!({
+                "prompt_tokens": "100",
+                "completion_tokens": 1,
+                "prompt_tokens_details": {"cached_tokens": 64},
+            })),
+            None
+        );
+    }
+
+    async fn observed_calibration_input(usage: Value) -> (u64, bool, Option<u64>) {
+        let server = spawn_test_server(TestServerState {
+            usage: Some(usage),
+            ..TestServerState::default()
+        })
+        .await;
+        let (result, events) = send_observed_completion_events(server.as_str()).await;
+        result.expect("calibration request should succeed");
+        let terminal = events
+            .into_iter()
+            .last()
+            .expect("calibration request should be observed");
+        let explicit = terminal.input_tokens_explicit;
+        let uncached = terminal.uncached_input_tokens;
+        let observation = terminal.into_observation();
+        assert_eq!(observation.state, crate::RequestObservationState::Complete);
+        (observation.input_tokens, explicit, uncached)
+    }
+
+    #[tokio::test]
+    async fn calibration_response_usage_feeds_exact_uncached_input_tokens() {
+        assert_eq!(
+            observed_calibration_input(serde_json::json!({
+                "prompt_tokens": 13,
+                "completion_tokens": 1,
+                "prompt_tokens_details": {"cached_tokens": 8},
+            }))
+            .await,
+            (13, true, Some(5))
+        );
+        assert_eq!(
+            observed_calibration_input(serde_json::json!({
+                "prompt_tokens": 13,
+                "completion_tokens": 1,
+            }))
+            .await,
+            (13, true, None)
+        );
+        assert_eq!(
+            observed_calibration_input(serde_json::json!({
+                "prompt_tokens": 13,
+                "completion_tokens": 1,
+                "prompt_tokens_details": {"cached_tokens": 21},
+            }))
+            .await,
+            (13, true, None)
+        );
+    }
+
+    #[tokio::test]
+    async fn calibration_response_without_prompt_usage_keeps_the_header_estimate() {
+        assert_eq!(
+            observed_calibration_input(serde_json::json!({"completion_tokens": 1})).await,
+            (5, false, None)
+        );
     }
 
     #[tokio::test]
@@ -1816,6 +2051,8 @@ mod tests {
         request_ids: Option<Arc<Mutex<Vec<String>>>>,
         prompt_lengths: Option<Arc<Mutex<Vec<usize>>>>,
         prompt_rejections: Option<Arc<Mutex<Vec<usize>>>>,
+        prompts: Option<Arc<Mutex<Vec<String>>>>,
+        usage: Option<Value>,
     }
 
     impl Default for TestServerState {
@@ -1838,6 +2075,8 @@ mod tests {
                 request_ids: None,
                 prompt_lengths: None,
                 prompt_rejections: None,
+                prompts: None,
+                usage: None,
             }
         }
     }
@@ -1921,6 +2160,9 @@ mod tests {
         let prompt_len = prompt.len();
         if let Some(prompt_lengths) = &state.prompt_lengths {
             prompt_lengths.lock().await.push(prompt_len);
+        }
+        if let Some(prompts) = &state.prompts {
+            prompts.lock().await.push(prompt.to_string());
         }
         let reject_prompt = if let Some(prompt_rejections) = &state.prompt_rejections {
             let mut prompt_rejections = prompt_rejections.lock().await;
@@ -2046,9 +2288,9 @@ mod tests {
                 .into_response();
         }
 
-        Json(serde_json::json!({
-            "usage": {"completion_tokens": completion_tokens}
-        }))
-        .into_response()
+        let usage = state
+            .usage
+            .unwrap_or_else(|| serde_json::json!({"completion_tokens": completion_tokens}));
+        Json(serde_json::json!({ "usage": usage })).into_response()
     }
 }

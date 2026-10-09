@@ -302,6 +302,10 @@ fn finish_observation(
         let generation = observer
             .generation_mut()
             .expect("chat completion observer should expose generation progress");
+        if let Some(input_usage) = completion.usage.input_usage() {
+            generation
+                .observe_input_usage(input_usage.input_tokens, input_usage.uncached_input_tokens);
+        }
         generation.observe_generated_output(
             Instant::now(),
             completion.usage.completion_tokens > 0,
@@ -386,12 +390,38 @@ impl BringupError {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ChatCompletionResponse {
-    usage: Usage,
+    pub(super) usage: Usage,
 }
 
 #[derive(Debug, Deserialize)]
-struct Usage {
+pub(super) struct Usage {
     completion_tokens: u32,
+    #[serde(default)]
+    prompt_tokens: serde_json::Value,
+    #[serde(default)]
+    prompt_tokens_details: serde_json::Value,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct InputUsage {
+    pub(super) input_tokens: u64,
+    pub(super) uncached_input_tokens: Option<u64>,
+}
+
+impl Usage {
+    /// Returns the exact prompt usage, matching the streaming usage parser:
+    /// cached tokens that are malformed or exceed the prompt total leave the
+    /// uncached count unavailable.
+    pub(super) fn input_usage(&self) -> Option<InputUsage> {
+        let input_tokens = self.prompt_tokens.as_u64()?;
+        let uncached_input_tokens = self.prompt_tokens_details["cached_tokens"]
+            .as_u64()
+            .and_then(|cached| input_tokens.checked_sub(cached));
+        Some(InputUsage {
+            input_tokens,
+            uncached_input_tokens,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
