@@ -42,19 +42,19 @@ walks through the same setup step by step.
 From the repository root:
 
 ```bash
-make -C tests/e2e/pylon-operator-k3d test
+make -C tests/e2e/inference-endpoints-k3d test
 ```
 
 Or directly:
 
 ```bash
-tests/e2e/pylon-operator-k3d/run.sh
+tests/e2e/inference-endpoints-k3d/run.sh
 ```
 
 To create the cluster, build and import the images and deploy in one go:
 
 ```bash
-make -C tests/e2e/pylon-operator-k3d cluster images import deploy
+make -C tests/e2e/inference-endpoints-k3d cluster images import deploy
 ```
 
 | Target | What it does |

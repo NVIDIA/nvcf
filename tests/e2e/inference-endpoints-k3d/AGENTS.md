@@ -1,4 +1,4 @@
-# AGENTS.md - tests/e2e/pylon-operator-k3d
+# AGENTS.md - tests/e2e/inference-endpoints-k3d
 
 End-to-end test of Pylon Operator with the LLM gateway stack on a local k3d
 cluster. `README.md` lists the prerequisites, settings and assertions.
@@ -22,11 +22,11 @@ cluster. `README.md` lists the prerequisites, settings and assertions.
 From the repository root:
 
 ```bash
-make -C tests/e2e/pylon-operator-k3d check         # bash -n, and shellcheck when installed
-make -C tests/e2e/pylon-operator-k3d test          # needs the k3d cluster and imported images
-make -C tests/e2e/pylon-operator-k3d test-cleanup  # also removes the releases and namespaces
-make -C tests/e2e/pylon-operator-k3d deploy        # install and stop once the endpoint is ready
-make -n -C tests/e2e/pylon-operator-k3d all        # dry run of the whole local workflow
+make -C tests/e2e/inference-endpoints-k3d check         # bash -n, and shellcheck when installed
+make -C tests/e2e/inference-endpoints-k3d test          # needs the k3d cluster and imported images
+make -C tests/e2e/inference-endpoints-k3d test-cleanup  # also removes the releases and namespaces
+make -C tests/e2e/inference-endpoints-k3d deploy        # install and stop once the endpoint is ready
+make -n -C tests/e2e/inference-endpoints-k3d all        # dry run of the whole local workflow
 ```
 
 ## Rules
