@@ -30,11 +30,13 @@ const containerMountinfo = `100 90 0:300 / / rw - overlay overlay rw
 113 101 0:302 /null /proc/kcore rw - tmpfs tmpfs rw
 114 100 9:127 /kubelet/pods/u/volumes/my\040vol /data rw - xfs /dev/md127 rw
 115 102 0:5 /nvidia0 /dev/nvidia0 rw - devtmpfs udev rw
+116 100 0:99 /driver/lib/firmware/nvidia/610.57.04/gsp_tu10x.bin /lib/firmware/nvidia/610.57.04/gsp_tu10x.bin ro - tmpfs tmpfs rw
 `
 
 func TestPIDNSExternalMounts(t *testing.T) {
 	got := pidNSExternalMounts(parseMountinfo(containerMountinfo))
-	want := []string{"/sys/fs/cgroup", "/etc/hosts", "/dev/termination-log", "/etc/hostname", "/data", "/dev/nvidia0"}
+	want := []string{"/sys/fs/cgroup", "/etc/hosts", "/dev/termination-log", "/etc/hostname", "/data", "/dev/nvidia0",
+		"/lib/firmware/nvidia/610.57.04/gsp_tu10x.bin"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("external mounts\\n got %v\\nwant %v", got, want)
 	}

@@ -53,7 +53,7 @@ var criuNativeFS = map[string]bool{"proc": true, "sysfs": true, "devpts": true, 
 
 // mountinfoEntry is one line of /proc/<pid>/mountinfo.
 type mountinfoEntry struct {
-	Root, MountPoint, FSType string
+	Dev, Root, MountPoint, FSType string
 }
 
 func parseMountinfo(data string) []mountinfoEntry {
@@ -72,7 +72,7 @@ func parseMountinfo(data string) []mountinfoEntry {
 		if sep < 5 || sep+1 >= len(f) {
 			continue
 		}
-		out = append(out, mountinfoEntry{Root: unescapeMountinfo(f[3]), MountPoint: unescapeMountinfo(f[4]), FSType: f[sep+1]})
+		out = append(out, mountinfoEntry{Dev: f[2], Root: unescapeMountinfo(f[3]), MountPoint: unescapeMountinfo(f[4]), FSType: f[sep+1]})
 	}
 	return out
 }
@@ -98,20 +98,29 @@ func unescapeMountinfo(s string) string {
 }
 
 // pidNSExternalMounts returns the mountpoints of a container that CRIU must
-// treat as external: everything but the root and the filesystems it
-// recreates itself (mounted at their own root). Bind mounts from the node
-// (kubelet's /etc/hosts, volumes, the CDI driver files) and the cgroup mount
-// are external; restore binds the placeholder's copy of each.
+// treat as external: everything but the root and the filesystems CRIU
+// recreates itself. CRIU recreates a proc, sysfs, devpts, mqueue or tmpfs
+// mount when that filesystem is mounted at its own root in the container;
+// a bind of part of it (the runtime's masks of /proc/kcore and friends,
+// bound from /dev's tmpfs) is rebuilt from that mount. A tmpfs bound from
+// the node is not: the NVIDIA driver's firmware files on GB300 come from a
+// tmpfs on the host, and CRIU refuses them ("doesn't have a proper root
+// mount"). Those, the node's bind mounts (kubelet's /etc/hosts, volumes,
+// the CDI driver files) and the cgroup mount are external; restore binds
+// the placeholder's copy of each.
 func pidNSExternalMounts(entries []mountinfoEntry) []string {
+	rootOf := map[string]bool{} // devices mounted at their own root here
+	for _, e := range entries {
+		if e.Root == "/" {
+			rootOf[e.Dev] = true
+		}
+	}
 	var out []string
 	for _, e := range entries {
 		if e.MountPoint == "/" {
 			continue
 		}
-		if criuNativeFS[e.FSType] {
-			// A tmpfs bound from inside the container (the runtime's masks of
-			// /proc/kcore and friends, bound from /dev's tmpfs) is rebuilt
-			// from that tmpfs too.
+		if criuNativeFS[e.FSType] && rootOf[e.Dev] {
 			continue
 		}
 		out = append(out, e.MountPoint)
