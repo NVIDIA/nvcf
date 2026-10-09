@@ -6,6 +6,8 @@ Install the shared routing release `llm-stack` in namespace `llm-stack`, then in
 
 ### Cluster
 
+No cluster yet? [Prepare a k3s GPU cluster](cluster/README.md) from your own GPU machines first. It covers node requirements, k3s, GPU scheduling and workstation access.
+
 - Kubernetes that you reach with kubectl and Helm, using a context that can create CustomResourceDefinitions and namespaces.
 - Linux ARM64 GPU nodes whose GPU matches a recipe profile. The automatic profiles in the [recipe catalog](recipes/index.json) target GB10 today. `python3 llm.py recipes` lists them.
 - One whole GPU per node for each model: no MIG, time-slicing or MPS, and no `NoSchedule` or `NoExecute` taints on model nodes.
