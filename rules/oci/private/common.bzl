@@ -51,9 +51,9 @@ def create_oci_image(
       - {name}_push: Push to `registry` (if set)
       - {name}_push_{suffix}: Push to each entry in `extra_registries`
 
-    env, workdir and extra_registries are optional. env and workdir default to
-    leaving the base image's values untouched, so existing callers are
-    unaffected.
+    env, workdir, user and extra_registries are optional. env, workdir and user
+    leave the base image's values untouched when unset. A non-empty user
+    overrides the image's runtime identity, for example "1000:1000".
     """
     all_tags = ["manual"] + (tags or [])
 

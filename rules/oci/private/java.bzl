@@ -42,6 +42,7 @@ ULIMIT_SHIM = "/usr/bin/shelless_ulimit"
 JAVA_BIN = "/usr/bin/java"
 
 def _java_oci_image_impl(name, visibility, jar, base, jar_path, java_bin, entrypoint, jvm_flags, env, workdir, user, registry, tags):
+    """Install the jar and apply the declared runtime settings to the image."""
     layer_name = name + "_layer"
     files_name = name + "_files"
 
@@ -167,6 +168,7 @@ java_oci_image = macro(
 )
 
 def _java_image_contract_test_impl(name, visibility, image, jar_path, env, workdir, user, **kwargs):
+    """Check the host tar and each indexed platform against runtime expectations."""
     sh_test(
         name = name,
         srcs = ["//rules/oci/private:java_image_contract_test.sh"],
@@ -201,11 +203,11 @@ java_image_contract_test = macro(
     Checks the jar is installed where the entrypoint names it and is not
     whited out, that the entrypoint keeps the base's shelless_ulimit shim,
     that every declared env entry is present as a complete entry, and that
-    the working directory matches. Runs against the host tar and against
-    each platform in the image index, so an index that is missing or
-    mislabels an architecture fails.
+    the working directory matches. When user is set, checks that identity too.
+    Runs against the host tar and each platform in the image index, so an
+    index that is missing or mislabels an architecture fails.
 
-    Pass the same `env`, `jar_path` and `workdir` given to java_oci_image.
+    Pass the same `env`, `jar_path`, `workdir` and `user` given to java_oci_image.
     """,
     implementation = _java_image_contract_test_impl,
     attrs = {
