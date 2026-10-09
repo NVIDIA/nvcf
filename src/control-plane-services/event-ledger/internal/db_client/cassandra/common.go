@@ -19,6 +19,7 @@ package cassandra
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -41,6 +42,24 @@ import (
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/data_access"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/pkg/constants"
 )
+
+// insertEventIfAbsent shares duplicate and read-failure handling across V1 and
+// V2. The caller retries both steps after a connection error.
+func insertEventIfAbsent(read, write func() error, inserted *bool) error {
+	*inserted = false
+	err := read()
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, gocql.ErrNotFound) {
+		return fmt.Errorf("failed to check for existing event: %w", err)
+	}
+	if err := write(); err != nil {
+		return fmt.Errorf("failed to write event: %w", err)
+	}
+	*inserted = true
+	return nil
+}
 
 // isConnectionError checks if the error is related to connection issues
 func isConnectionError(err error) bool {
