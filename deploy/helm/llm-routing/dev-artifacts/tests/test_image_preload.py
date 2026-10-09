@@ -125,6 +125,68 @@ class ImagePreloadTests(unittest.TestCase):
         self.assertEqual(self.build.call_args.kwargs['platform'], 'linux/amd64')
         self.assertEqual(self.importer.call_args.kwargs['platform'], 'linux/amd64')
 
+    def reported_images(self):
+        return [{'names': [image['repository'] + ':' + image['tag']]}
+                for image in self.config['images'].values()]
+
+    def test_load_imports_only_missing_nodes_without_building_or_exporting(self):
+        self.nodes[0]['status']['images'] = self.reported_images()
+        preparation = images.Preparation(self.config, self.work, True)
+        archive = self.work / 'existing-images.tar'
+        with patch.object(images.image_tools, 'export_images') as export:
+            result = preparation.execute(archive=archive)
+        self.assertTrue(result['completed'])
+        self.build.assert_not_called()
+        export.assert_not_called()
+        self.assertEqual(self.importer.call_args.args[0], archive)
+        self.assertEqual(self.importer.call_args.kwargs['node_names'], ['cpu-b'])
+        self.assertFalse(any(command[0] == 'git' for command in self.commands))
+        self.assertEqual(self.releases, {})
+
+    def test_load_skips_without_any_helm_calls_if_images_appear_before_import(self):
+        for node in self.nodes:
+            node['status']['images'] = self.reported_images()
+        preparation = images.Preparation(self.config, self.work, True)
+        preparation.execute(archive=self.work / 'unused.tar')
+        self.build.assert_not_called()
+        self.importer.assert_not_called()
+        self.assertFalse(any(command[0] == 'helm' for command in self.commands))
+
+    def test_missing_images_match_exact_tags_and_registries(self):
+        self.nodes[0]['status']['images'] = self.reported_images()
+        self.nodes[1]['status']['images'] = self.reported_images()
+        preparation = images.Preparation(self.config, self.work, True)
+        self.assertEqual(preparation.missing_nodes(), [])
+        self.nodes[1]['status']['images'][0]['names'][0] += '-other-tag'
+        self.assertEqual(preparation.missing_nodes(), ['cpu-b'])
+        self.nodes[1]['status']['images'] = self.reported_images()
+        self.nodes[1]['status']['images'][0]['names'][0] = 'docker.io/' + self.nodes[1]['status']['images'][0]['names'][0]
+        self.assertEqual(preparation.missing_nodes(), ['cpu-b'])
+
+    def test_inventory_truncation_is_treated_as_missing(self):
+        self.nodes[0]['status']['images'] = self.reported_images()
+        self.nodes[1]['status']['images'] = [{'names': ['example.test/other:image-' + str(i)]} for i in range(50)]
+        preparation = images.Preparation(self.config, self.work, True)
+        self.assertEqual(preparation.missing_nodes(), ['cpu-b'])
+
+    def test_load_rejects_replaced_node_before_any_import(self):
+        preparation = images.Preparation(self.config, self.work, True)
+        self.nodes[1]['metadata']['uid'] = 'new-node-uid'
+        with self.assertRaisesRegex(ValueError, 'node was replaced'):
+            preparation.execute(archive=self.work / 'unused.tar')
+        self.importer.assert_not_called()
+
+    def test_load_failure_retry_preserves_namespace_ownership_guards(self):
+        self.fail_import = True
+        preparation = images.Preparation(self.config, self.work, True)
+        with self.assertRaisesRegex(ValueError, 'import interrupted'):
+            preparation.execute(archive=self.work / 'images.tar')
+        self.namespace['metadata']['uid'] = 'replaced-namespace'
+        self.importer.reset_mock()
+        with self.assertRaisesRegex(ValueError, 'namespace changed'):
+            preparation.execute(archive=self.work / 'images.tar')
+        self.importer.assert_not_called()
+
     def test_import_authorization_and_socket_are_checked_before_build(self):
         with self.assertRaisesRegex(ValueError, 'authorization'):
             images.prepare(self.config, self.work, allow_containerd_import=False)

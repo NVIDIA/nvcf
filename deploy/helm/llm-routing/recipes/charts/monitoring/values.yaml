@@ -80,8 +80,8 @@
     "adminPassword": "",
     "rootURL": "",
     "ingress": {
-      "enabled": false,
-      "className": "",
+      "enabled": true,
+      "className": "traefik",
       "host": "",
       "path": "/grafana"
     }
