@@ -469,7 +469,7 @@ impl RoutedClusterState {
             registration,
             input_tokens,
             priority,
-            Duration::from_secs(1),
+            super::reservations::UNEXPIRING_TEST_RESERVATION_TTL,
             None,
             &RoutingTargetKey::new(None, ""),
         )
