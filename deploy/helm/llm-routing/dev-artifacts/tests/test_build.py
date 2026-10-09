@@ -84,6 +84,37 @@ class SharedDevImagesTests(unittest.TestCase):
         self.assertEqual(Path(package_args[-1]).parent, output)
         self.assertTrue(Path(package_args[-1]).name.startswith('charts-'))
 
+    def test_load_only_dispatch_preserves_values_and_packages(self):
+        with patch.object(builder.images, 'load', return_value=self.values) as load:
+            result = builder.main(['--load-only', '--context', 'test-context'])
+        self.assertEqual(result, self.values)
+        args = load.call_args.args[0]
+        self.assertEqual(args.values, self.values)
+        self.assertEqual(args.context, 'test-context')
+        self.assertFalse(args.allow_containerd_import)
+        self.build.assert_not_called()
+        self.package.assert_not_called()
+        self.assertEqual(self.values.read_text(), self.previous)
+        self.assertEqual((self.charts / 'previous-chart.tgz').read_bytes(), b'previous chart bundle')
+
+    def test_load_only_passes_selected_values_and_import_permission(self):
+        values = self.work / 'selected-values.yaml'
+        with patch.object(builder.images, 'load') as load:
+            builder.main(['--load-only', '--values', str(values), '--allow-containerd-import'])
+        self.assertEqual(load.call_args.args[0].values, values)
+        self.assertTrue(load.call_args.args[0].allow_containerd_import)
+        self.assertIsNone(load.call_args.args[0].context)
+        self.build.assert_not_called()
+        self.package.assert_not_called()
+
+    def test_load_only_and_build_arguments_are_not_mixed(self):
+        for arguments in (['--load-only', '--resume-from', str(self.work)],
+                          ['--values', str(self.values)]):
+            with self.subTest(arguments=arguments), self.assertRaises(ValueError):
+                builder.main(arguments)
+        self.build.assert_not_called()
+        self.package.assert_not_called()
+
     def test_each_build_gets_a_fresh_external_directory(self):
         builder.main(self.args)
         builder.main(self.args)

@@ -6,6 +6,16 @@ This directory contains temporary image building, preloading, chart packaging an
 
 Use Python 3.11+, Helm, kubectl and Docker with Buildx support. Docker needs access to base images and build dependencies. The selected Kubernetes cluster must have compatible ARM64 or AMD64 nodes using containerd. Image import Jobs need permission to mount the nodes' containerd sockets.
 
+## Load existing images
+
+Before preflight, run from `deploy/helm/llm-routing`:
+
+```bash
+python3 dev-artifacts/build.py --load-only --allow-containerd-import
+```
+
+The helper checks images from `dev-artifacts/values.yaml`, skips nodes that report them, and loads missing images from a matching saved local build. If no matching build exists, build from source below. Node image lists can be truncated, so an existing image may be imported again.
+
 ## Build images and package charts
 
 Run from `deploy/helm/llm-routing`:
