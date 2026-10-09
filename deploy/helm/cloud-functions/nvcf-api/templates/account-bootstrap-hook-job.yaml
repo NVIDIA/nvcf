@@ -43,6 +43,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
+        fsGroup: 1000
       serviceAccountName: nvcf-api-account-bootstrap
       {{- with .Values.api.accountBootstrap.schedulingGates }}
       schedulingGates:
