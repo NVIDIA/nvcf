@@ -340,7 +340,12 @@ struct map {
 };
 
 /* A mapping of a local allocation (to re-export by VA if needed). */
-struct lmap { CUdeviceptr va; size_t size; CUmemGenericAllocationHandle h; size_t off; };
+struct lmap {
+    CUdeviceptr va; size_t size; CUmemGenericAllocationHandle h; size_t off;
+    int app_rel;  /* the app released its handle (the mapping keeps the memory) */
+    int ours;     /* re-created by "load" (see struct xdrop): the shim releases h at unmap */
+    int fresh;    /* created after the checkpoint: exports as is (see replace_alloc) */
+};
 /* A local allocation the shim replaced (see replace_alloc): the app's
  * handle stands for the new one. */
 struct swap { CUmemGenericAllocationHandle app_h, cur_h; };
@@ -431,6 +436,21 @@ struct mcbind {
 VEC(struct mcobj, mcs);
 VEC(struct mcbind, mcbinds);
 VEC(struct map, mcmaps);  /* .imp: index into mcs */
+/* An allocation the app created and shares (cuMemCreate + export): the
+ * driver checkpoint saves it otherwise, and on driver 610 it fails with
+ * OUT_OF_MEMORY on some (a 512 MiB FlashInfer MNNVL workspace in a
+ * multi-node vLLM worker). "release" saves it like a valloc and frees it;
+ * "load" creates it again at the same VA with the same access. */
+struct xdrop {
+    CUdeviceptr va; size_t size;
+    CUmemGenericAllocationHandle old;
+    int app_rel;
+    CUmemAllocationProp prop;
+    CUmemAccessDesc acc[MAX_DEV]; int na;
+    struct valloc sv;  /* contents, as for a valloc */
+    CUmemGenericAllocationHandle nh;  /* "load": the new one */
+};
+VEC(struct xdrop, xdrops);
 static unsigned long long next_id = 1;
 static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
 
@@ -599,6 +619,8 @@ static int request(int pid, const char *txt, int fd_in, char *reply, size_t n, i
 static CUresult export_id(unsigned long long id, int fab, int *fd, CUmemFabricHandle *fh);
 static CUresult valloc_drop(struct valloc *v);
 static CUresult valloc_restore(struct valloc *v);
+static CUresult xdrop_save_all(int *nx, size_t *nb);
+static CUresult xdrop_load_all(int *nx, size_t *nb, char *reply, size_t n);
 static void stage_put(void);
 #define STAGE_SIZE (64UL << 20)
 static void *stage;           /* pinned staging buffer for the chunk store */
@@ -1025,6 +1047,15 @@ static void do_release(char *reply, size_t n, const char *args)
         r = valloc_drop(&vallocs[i]);
         nb += vallocs[i].size;
     }
+    int nx = 0;
+    size_t nxb = 0;
+    if (r == CUDA_SUCCESS) {
+        what = "save shared allocation";
+        r = xdrop_save_all(&nx, &nxb);
+        nb += nxb;
+    }
+    if (nx) logf_("release: saved and freed %d shared allocation(s) of the app (%zu MiB)", nx, nxb >> 20);
+    for (int i = 0; i < n_lmaps; i++) lmaps[i].fresh = 0;  /* pre-checkpoint from now on */
     if (r == CUDA_SUCCESS) what = "write chunk list";
     if (chunk_list) {  /* durable before the checkpoint is reported done */
         if (fclose(chunk_list) != 0 && r == CUDA_SUCCESS) r = CUDA_ERROR_FILE_NOT_FOUND;
@@ -1091,6 +1122,11 @@ static void do_load(char *reply, size_t n, const char *cache_dir)
         nl++;
         nb += vallocs[i].size;
     }
+    int nx = 0;
+    size_t nxb = 0;
+    if (r == CUDA_SUCCESS) r = xdrop_load_all(&nx, &nxb, reply, n);
+    nl += nx;
+    nb += nxb;
     stage_put();
     for (int i = 0; r == CUDA_SUCCESS && i < n_fexps; i++) {  /* see struct fabmap */
         CUmemFabricHandle old = fexps[i].fh, nf;
@@ -1105,7 +1141,7 @@ static void do_load(char *reply, size_t n, const char *cache_dir)
             if (xregs[x].id == fexps[i].id && !xregs[x].h)
                 for (int l = 0; k < 0 && l < n_lmaps; l++)
                     if (lmaps[l].va == xregs[x].va) k = l;
-        if (k >= 0 && (r = replace_alloc(k)) != CUDA_SUCCESS) {
+        if (k >= 0 && !lmaps[k].fresh && (r = replace_alloc(k)) != CUDA_SUCCESS) {
             snprintf(reply, n, "err replace fabric id %llu: %s", fexps[i].id, errstr(r));
             break;
         }
@@ -1527,6 +1563,27 @@ static void do_whosefab(const char *hex, int s)
     msg_send(s, rep, -1);
 }
 
+/* A peer opens a lazy IPC handle of ours: export the legacy memory now. */
+static __typeof__(&cuIpcGetMemHandle) r_ipc_get;
+static void do_ipcget(unsigned long long base, int s)
+{
+    char rep[200];
+    CUcontext c = NULL, old;
+    CUipcMemHandle h;
+    CUresult r = CU(cuPointerGetAttribute, &c, CU_POINTER_ATTRIBUTE_CONTEXT, (CUdeviceptr)base);
+    if (r == CUDA_SUCCESS && (r = CU(cuCtxPushCurrent, c)) == CUDA_SUCCESS) {
+        r = REAL(r_ipc_get, "cuIpcGetMemHandle")(&h, (CUdeviceptr)base);
+        CU(cuCtxPopCurrent, &old);
+    }
+    if (r != CUDA_SUCCESS) {
+        snprintf(rep, sizeof(rep), "err cuIpcGetMemHandle: %s", errstr(r));
+    } else {
+        memcpy(rep, "ok ", 3);
+        hex_encode((const unsigned char *)h.reserved, sizeof(h.reserved), rep + 3);
+    }
+    msg_send(s, rep, -1);
+}
+
 static void serve(int s)
 {
     char buf[256], rep[256];
@@ -1545,9 +1602,10 @@ static void serve(int s)
     else if (!strncmp(buf, "exportfab ", 10)) do_export(strtoull(buf + 10, NULL, 10), 1, s);
     else if (!strcmp(buf, "whose") && fd >= 0) do_whose(fd, s);
     else if (!strncmp(buf, "whosefab ", 9)) do_whosefab(buf + 9, s);
+    else if (!strncmp(buf, "ipcget ", 7)) do_ipcget(strtoull(buf + 7, NULL, 10), s);
     else msg_send(s, "err unknown command", -1);
     if (fd >= 0) close(fd);
-    if (strncmp(buf, "export", 6) && strncmp(buf, "whose", 5))
+    if (strncmp(buf, "export", 6) && strncmp(buf, "whose", 5) && strncmp(buf, "ipcget", 6))
         logf_("%s: %s", buf, rep);
 }
 
@@ -1773,7 +1831,7 @@ static CUresult w_map(CUdeviceptr va, size_t size, size_t off, CUmemGenericAlloc
         if (i >= 0) PUSH(maps, ((struct map){ .va = va, .size = size, .offset = off, .imp = i }));
         else if (m >= 0) PUSH(mcmaps, ((struct map){ .va = va, .size = size, .offset = off, .imp = m }));
         else {
-            PUSH(lmaps, ((struct lmap){ va, size, h, off }));
+            PUSH(lmaps, ((struct lmap){ .va = va, .size = size, .h = h, .off = off }));
             for (int j = 0; j < n_exps; j++) if (exps[j].h == h && !exps[j].id) { exps[j].id = xreg_id(va, 0); exps[j].h = 0; }
             for (int j = 0; j < n_fexps; j++) if (fexps[j].h == h && !fexps[j].id) { fexps[j].id = xreg_id(va, 0); fexps[j].h = 0; }
         }
@@ -1792,7 +1850,10 @@ static CUresult w_unmap(CUdeviceptr va, size_t size)
     for (int i = n_mcmaps - 1; i >= 0; i--)
         if (mcmaps[i].va >= va && mcmaps[i].va < va + size) DEL(mcmaps, i);
     for (int i = n_lmaps - 1; i >= 0; i--)
-        if (lmaps[i].va >= va && lmaps[i].va < va + size) DEL(lmaps, i);
+        if (lmaps[i].va >= va && lmaps[i].va < va + size) {
+            if (lmaps[i].ours) REAL(r_release, "cuMemRelease")(lmaps[i].h);
+            DEL(lmaps, i);
+        }
     for (int i = n_rets - 1; i >= 0; i--)
         if (rets[i].va >= va && rets[i].va < va + size) DEL(rets, i);
     xreg_kill(va, size);
@@ -1819,6 +1880,8 @@ static CUresult w_release(CUmemGenericAllocationHandle h)
         if (swaps[j].app_h == h) { h = swaps[j].cur_h; DEL(swaps, j); }
     for (int j = 0; i < 0 && m < 0 && j < n_mcbinds; j++)
         if (mcbinds[j].memh == h) mcbinds[j].memh_released = 1;
+    for (int j = 0; i < 0 && m < 0 && j < n_lmaps; j++)
+        if (lmaps[j].h == h) lmaps[j].app_rel = 1;
     /* Exported, never mapped: forget it before the handle value is reused. */
     for (int j = n_exps - 1; i < 0 && m < 0 && j >= 0; j--)
         if (!exps[j].id && exps[j].h == h) { close(exps[j].fd); DEL(exps, j); }
@@ -1875,7 +1938,7 @@ static CUresult w_retain(CUmemGenericAllocationHandle *h, void *addr)
         if (a >= lmaps[i].va && a < lmaps[i].va + lmaps[i].size) base = lmaps[i].va;
     int i = 0;
     while (i < n_rets && rets[i].h != *h) i++;
-    if (i == n_rets) PUSH(rets, ((struct lmap){ base, 0, *h, 0 }));
+    if (i == n_rets) PUSH(rets, ((struct lmap){ .va = base, .h = *h }));
     else rets[i].va = base;
     pthread_mutex_unlock(&mu);
     return r;
@@ -1893,8 +1956,13 @@ static CUresult w_retain(CUmemGenericAllocationHandle *h, void *addr)
 #define VMM_MIN (2UL << 20)
 #define IPC_MAGIC 0x4E56475348ULL  /* "NVGSH" */
 
-
-struct wc_ipc { uint64_t magic; int32_t pid, pad; uint64_t base, size, key; /* xreg id */ };
+/* Smaller cuMemAlloc memory stays legacy, and a legacy IPC export of it
+ * makes the driver's checkpoint (610) crash the process: NULL read in the
+ * restore thread, libcuda+0x352f84. So its handle is ours too ("lazy"):
+ * the driver export is only made when a peer opens the handle (ipcget),
+ * and a handle nobody opens (vLLM's multi-node custom all-reduce) never
+ * reaches the driver. */
+struct wc_ipc { uint64_t magic; int32_t pid, lazy; uint64_t base, size, key; /* xreg id */ };
 _Static_assert(sizeof(struct wc_ipc) <= sizeof(CUipcMemHandle), "IPC handle too small");
 
 static __typeof__(&cuMemAlloc) r_alloc;
@@ -2178,7 +2246,7 @@ static CUresult valloc_save(struct valloc *v)
         r = CU(cuMemcpyDtoH_v2, v->save, v->va, v->size);
     }
     if (r == CUDA_SUCCESS) r = REAL(r_unmap, "cuMemUnmap")(v->va, v->size);
-    if (r == CUDA_SUCCESS) r = REAL(r_release, "cuMemRelease")(v->h);
+    if (r == CUDA_SUCCESS && v->h) r = REAL(r_release, "cuMemRelease")(v->h);
     if (r != CUDA_SUCCESS) {
         free(v->save); v->save = NULL;
         free(v->chunks); v->chunks = NULL;
@@ -2236,6 +2304,146 @@ static CUresult valloc_load(struct valloc *v)
     return CUDA_SUCCESS;
 }
 
+/* ── Shared allocations of the app (see struct xdrop) ─────────────── */
+
+/* lmaps[k] is an allocation the app created and shares, mapped once from
+ * offset 0 (mu held). */
+static int xd_eligible(int k)
+{
+    const struct lmap *l = &lmaps[k];
+    if (l->off) return 0;
+    for (int j = 0; j < n_lmaps; j++)
+        if (j != k && lmaps[j].h == l->h) return 0;
+    for (int j = 0; j < n_vallocs; j++)
+        if (l->va >= vallocs[j].va && l->va < vallocs[j].va + vallocs[j].size) return 0;
+    for (int x = 0; x < n_xregs; x++)
+        if (xregs[x].va == l->va && !xregs[x].h) return 1;
+    return 0;
+}
+
+/* "release": save and free them (mu held). */
+static CUresult xdrop_save_all(int *nx, size_t *nb)
+{
+    CUresult r = CUDA_SUCCESS;
+    for (int k = 0; r == CUDA_SUCCESS && k < n_lmaps; k++) {
+        if (!xd_eligible(k)) continue;
+        struct lmap *l = &lmaps[k];
+        struct xdrop x;
+        memset(&x, 0, sizeof(x));
+        x.va = l->va;
+        x.size = l->size;
+        x.old = l->h;
+        x.app_rel = l->app_rel;
+        CUmemGenericAllocationHandle rh;  /* the app's handle may be released */
+        if ((r = CU(cuMemRetainAllocationHandle, &rh, (void *)(uintptr_t)l->va)) != CUDA_SUCCESS) break;
+        r = CU(cuMemGetAllocationPropertiesFromHandle, &x.prop, rh);
+        REAL(r_release, "cuMemRelease")(rh);
+        if (r != CUDA_SUCCESS) break;
+        if (x.prop.location.type != CU_MEM_LOCATION_TYPE_DEVICE) continue;
+        int ndev = 0;
+        CU(cuDeviceGetCount, &ndev);
+        for (int d = 0; d < ndev && d < MAX_DEV; d++) {
+            CUmemLocation loc = { CU_MEM_LOCATION_TYPE_DEVICE, d };
+            unsigned long long f = CU_MEM_ACCESS_FLAGS_PROT_NONE;
+            if (CU(cuMemGetAccess, &f, &loc, l->va) == CUDA_SUCCESS && f != CU_MEM_ACCESS_FLAGS_PROT_NONE)
+                x.acc[x.na++] = (CUmemAccessDesc){ loc, (CUmemAccess_flags)f };
+        }
+        x.sv.va = l->va;
+        x.sv.size = l->size;
+        x.sv.dev = x.prop.location.id;
+        /* Drop the app's reference (its handle then stands for the new
+         * allocation, see swaps) or ours; one the app released already
+         * goes with the unmap. */
+        x.sv.h = (l->ours || !l->app_rel) ? l->h : 0;
+        int dev = push_dev_ctx(x.sv.dev);
+        if (dev < 0) { r = CUDA_ERROR_INVALID_CONTEXT; break; }
+        r = valloc_save(&x.sv);
+        pop_ctx(dev);
+        if (r != CUDA_SUCCESS) break;
+        PUSH(xdrops, x);
+        (*nx)++;
+        *nb += x.size;
+    }
+    return r;
+}
+
+/* "load": create them again in place (mu held). */
+static CUresult xdrop_load_all(int *nx, size_t *nb, char *reply, size_t n)
+{
+    CUresult r = CUDA_SUCCESS;
+    int i = 0;
+    for (; r == CUDA_SUCCESS && i < n_xdrops; i++) {
+        struct xdrop *x = &xdrops[i];
+        if (x->sv.chunks && stage_get() != CUDA_SUCCESS) { r = CUDA_ERROR_OUT_OF_MEMORY; break; }
+        int dev = push_dev_ctx(x->sv.dev);
+        if (dev < 0) { r = CUDA_ERROR_INVALID_CONTEXT; break; }
+        CUmemGenericAllocationHandle nh = 0;
+        CUmemAllocationProp p = x->prop;
+        r = REAL(r_mem_create, "cuMemCreate")(&nh, x->size, &p, 0);
+        if (r == CUDA_ERROR_NOT_PERMITTED && (p.requestedHandleTypes & CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR)) {
+            p.requestedHandleTypes &= ~CU_MEM_HANDLE_TYPE_FABRIC;  /* see "IMEX channel" */
+            r = REAL(r_mem_create, "cuMemCreate")(&nh, x->size, &p, 0);
+        }
+        int mapped = 0;
+        if (r == CUDA_SUCCESS && (r = REAL(r_map, "cuMemMap")(x->va, x->size, 0, nh, 0)) == CUDA_SUCCESS) {
+            mapped = 1;
+            if (x->na) r = REAL(r_set_access, "cuMemSetAccess")(x->va, x->size, x->acc, x->na);
+            const struct valloc *v = &x->sv;
+            if (r == CUDA_SUCCESS && !v->chunks && v->save) r = CU(cuMemcpyHtoD_v2, v->va, v->save, v->size);
+            for (size_t o = 0; v->chunks && r == CUDA_SUCCESS && o < v->size; o += STAGE_SIZE) {
+                size_t len = v->size - o < STAGE_SIZE ? v->size - o : STAGE_SIZE;
+                const struct chunk *c = &v->chunks[o / STAGE_SIZE];
+                if (!c->h[0] && !c->h[1]) { r = CU(cuMemsetD8_v2, v->va + o, 0, len); continue; }
+                if (chunk_get(c, len) != 0) { r = CUDA_ERROR_FILE_NOT_FOUND; break; }
+                r = CU(cuMemcpyHtoD_v2, v->va + o, stage, len);
+            }
+        }
+        pop_ctx(dev);
+        if (r != CUDA_SUCCESS) {
+            if (mapped) REAL(r_unmap, "cuMemUnmap")(x->va, x->size);
+            if (nh) REAL(r_release, "cuMemRelease")(nh);
+            snprintf(reply, n, "err load shared allocation %#llx+%zu: %s", (unsigned long long)x->va, x->size, errstr(r));
+            break;
+        }
+        x->nh = nh;
+        for (int l = 0; l < n_lmaps; l++)  /* by VA: unambiguous */
+            if (lmaps[l].va == x->va && lmaps[l].size == x->size) {
+                lmaps[l].h = nh;
+                lmaps[l].app_rel = x->app_rel;
+                lmaps[l].ours = x->app_rel;  /* nobody else releases it */
+                lmaps[l].fresh = 1;
+            }
+        free(x->sv.save);
+        free(x->sv.chunks);
+        x->sv.save = NULL;
+        x->sv.chunks = NULL;
+        (*nx)++;
+        *nb += x->size;
+    }
+    int done = i;  /* xdrops[0..done) are loaded */
+    /* The new allocations take the old ones' place (as in replace_alloc).
+     * Old handle values are free again and a new handle may reuse one, so
+     * each reference is translated once, from its value before this load. */
+    for (int j = 0; j < n_mcbinds; j++)
+        for (int k = 0; k < done; k++)
+            if (mcbinds[j].memh == xdrops[k].old) { mcbinds[j].memh = xdrops[k].nh; break; }
+    for (int j = 0; j < n_swaps; j++)
+        for (int k = 0; k < done; k++)
+            if (!xdrops[k].app_rel && swaps[j].cur_h == xdrops[k].old) {
+                swaps[j].cur_h = xdrops[k].nh;
+                xdrops[k].app_rel = -1;  /* swap done */
+                break;
+            }
+    for (int k = 0; k < done; k++)  /* no swap yet: the app's handle is the old one */
+        if (!xdrops[k].app_rel) PUSH(swaps, ((struct swap){ xdrops[k].old, xdrops[k].nh }));
+    /* Keep what is not loaded yet, for a retry. */
+    if (done > 0) {
+        memmove(xdrops, xdrops + done, (n_xdrops - done) * sizeof(*xdrops));
+        n_xdrops -= done;
+    }
+    return r;
+}
+
 static CUresult w_free(CUdeviceptr va)
 {
     pthread_mutex_lock(&mu);
@@ -2266,7 +2474,18 @@ static CUresult w_ipc_get(CUipcMemHandle *out, CUdeviceptr p)
             w.key = xreg_id(vallocs[i].va, vallocs[i].h);  /* same id for the same allocation */
         }
     pthread_mutex_unlock(&mu);
-    if (!w.size) return REAL(r_ipc_get, "cuIpcGetMemHandle")(out, p);
+    if (!w.size) {
+        int legacy = 0;
+        CUdeviceptr base = 0;
+        size_t size = 0;
+        if (CU(cuPointerGetAttribute, &legacy, CU_POINTER_ATTRIBUTE_IS_LEGACY_CUDA_IPC_CAPABLE, p) != CUDA_SUCCESS ||
+            !legacy || CU(cuMemGetAddressRange, &base, &size, p) != CUDA_SUCCESS)
+            return REAL(r_ipc_get, "cuIpcGetMemHandle")(out, p);
+        w.base = base;
+        w.size = size;
+        w.lazy = 1;
+        if (getenv("NVSNAP_GPUSHARE_DEBUG")) logf_("IPC get %#llx+%zu: lazy (legacy memory)", (unsigned long long)base, size);
+    }
     start_ctl();
     memset(out, 0, sizeof(*out));
     memcpy(out, &w, sizeof(w));
@@ -2283,8 +2502,20 @@ static CUresult w_ipc_open(CUdeviceptr *out, CUipcMemHandle hd, unsigned flags)
         return r;
     }
     start_ctl();
-    char req[64], rep[128];
+    char req[64], rep[256] = "";
     int fd = -1;
+    if (w.lazy) {
+        CUipcMemHandle lh;
+        snprintf(req, sizeof(req), "ipcget %llu", (unsigned long long)w.base);
+        if (w.pid == getpid() || request(w.pid, req, -1, rep, sizeof(rep), NULL) < 0 || strncmp(rep, "ok ", 3) ||
+            hex_decode(rep + 3, (unsigned char *)lh.reserved, sizeof(lh.reserved)) < 0) {
+            logf_("IPC open: legacy export from pid %d failed: %s", w.pid, w.pid == getpid() ? "own handle" : rep);
+            return CUDA_ERROR_INVALID_HANDLE;
+        }
+        CUresult r = REAL(r_ipc_open, "cuIpcOpenMemHandle_v2")(out, lh, flags);
+        if (r == CUDA_SUCCESS) __atomic_add_fetch(&n_legacy, 1, __ATOMIC_SEQ_CST);
+        return r;
+    }
     snprintf(req, sizeof(req), "export %llu", (unsigned long long)w.key);
     if (request(w.pid, req, -1, rep, sizeof(rep), &fd) < 0 || fd < 0) {
         logf_("IPC open: export from pid %d failed: %s", w.pid, fd < 0 ? rep : strerror(errno));

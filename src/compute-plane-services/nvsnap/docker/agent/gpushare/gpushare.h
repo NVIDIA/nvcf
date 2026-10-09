@@ -13,7 +13,9 @@ SPDX-License-Identifier: Apache-2.0
  *
  * libnvsnap_gpushare.so (LD_PRELOAD) tracks every imported mapping, and runs
  * CUDA IPC on cuMem: cuMemAlloc >= 2 MiB is backed by an exportable cuMem
- * allocation, and cuIpc*MemHandle use our own handles for it. Each
+ * allocation, and cuIpc*MemHandle use our own handles for it; smaller
+ * (legacy) memory gets our handle too, and the driver export is made only
+ * when a peer opens it (a legacy export crashes the driver checkpoint). Each
  * process that exports or imports runs a control thread on an abstract
  * unix socket; nvsnap-gpu-suspend drives it:
  *
@@ -25,7 +27,10 @@ SPDX-License-Identifier: Apache-2.0
  *            memory (the driver restores none of these on Grace); save
  *            the cuMem allocations backing cuMemAlloc to host memory and
  *            free them, keeping the VA (on Grace the driver's checkpoint of
- *            a TP worker holding many fails with OUT_OF_MEMORY).
+ *            a TP worker holding many fails with OUT_OF_MEMORY); likewise
+ *            the cuMem allocations the app created and shares, mapped
+ *            once from offset 0 (re-created by "load" with the same
+ *            properties and access).
  *   remap    (after restore + unlock of all pids)  re-create the saved
  *            allocations at the same VA (or earlier, on a peer's export
  *            request); re-register host memory;

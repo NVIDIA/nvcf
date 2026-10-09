@@ -36,9 +36,9 @@ Each process that loads the shim runs a control thread on the abstract socket
 | Command | Who | What it does |
 | --- | --- | --- |
 | `quiesce` | all pids, before any release | Holds kernel and graph launches, copies, memsets and stream memory operations; drains the GPU; checks that everything shared can be released. |
-| `release` | all pids at once | Unmaps imported memory and multicast objects and unregisters host memory. Saves the shim's own cuMem allocations, to host memory or to a chunk store. |
+| `release` | all pids at once | Unmaps imported memory and multicast objects and unregisters host memory. Saves the shim's own cuMem allocations, and the cuMem allocations the app created and shares, to host memory or to a chunk store, and frees them. |
 | *(driver)* | | `cuCheckpointProcessLock` / `Checkpoint`, in parallel. |
-| `load` | all pids at once, after restore | Re-creates the saved allocations at the same addresses. |
+| `load` | all pids at once, after restore | Re-creates the saved allocations at the same addresses, with the same properties and access. |
 | `remap` | each pid | Re-imports peers' memory and rebuilds multicast objects. |
 | `resume` | each pid | Binds multicast memory and reopens launches. |
 
@@ -54,6 +54,15 @@ the devices granted with `cuMemSetAccess`, so the shim also follows
 access to the allocations it covers. A process that drives several GPUs
 keeps its peer access, and each allocation is saved and loaded on its own
 device.
+
+Smaller `cuMemAlloc` memory stays legacy memory, and the driver checkpoint
+(610) crashes a process that holds a legacy IPC export of it (a NULL read
+in the driver's checkpoint thread). vLLM's custom all-reduce takes such a
+handle for its small signal buffer, and in multi-node mode never opens it.
+So the shim hands out its own handle for legacy memory too, and makes the
+driver export only when a peer opens the handle (asking the exporter over
+the control socket). A handle that is opened stays a legacy export, which
+the driver still cannot checkpoint.
 
 ### Control socket access
 
@@ -339,13 +348,19 @@ Limits of the move:
     nodes concatenated, to re-import from at `remap`.
 - Scope: exporters on the same node are found among the processes in the
   same pid namespace.
-- Large shared allocations: driver 610.57.04 will not export an allocation
-  of 512 MiB or more that a restored process created before its
-  checkpoint (`INVALID_VALUE`). FlashInfer's all-reduce workspace is such
-  an allocation. When a peer's re-import fails that way, the shim replaces
-  the allocation: it copies the contents into a new one at the same
-  address and releases the old one, and the app's handle then stands for
-  the new one. Only an allocation mapped once, from offset 0, is replaced.
+- Shared allocations of the app: the driver checkpoint saves the cuMem
+  allocations a process created itself, and on 610.57.04 it fails with
+  `CUDA_ERROR_OUT_OF_MEMORY` on some: FlashInfer's 512 MiB multi-node
+  all-reduce workspace in a vLLM worker. The driver also will not export an
+  allocation of 512 MiB or more that a restored process created before its
+  checkpoint (`INVALID_VALUE`). So at `release` the shim saves and frees
+  every allocation the app created and shares (exported as a POSIX fd or
+  fabric handle) that is mapped once, from offset 0, and at `load` creates
+  it again at the same address, with the same properties and access; the
+  app's handle then stands for the new one. An allocation shared otherwise
+  (mapped more than once) is left to the driver, and when a peer's
+  re-import of it fails as above, the shim replaces it: it copies the
+  contents into a new allocation at the same address.
 - `hostNetwork`: such pods share the node's abstract socket names. If two of
   them run a process with the same pid, the second cannot bind its control
   socket, and its checkpoint is refused.
@@ -409,6 +424,12 @@ previous cycle), and resume succeeded when run again with the right
 lists. Whoever drives the nodes must remove `DIR/out` and `DIR/in` before
 `resume`.
 
+A 1-trillion-parameter MoE model on a vLLM build with a multi-node custom
+all-reduce and FlashInfer's multi-node all-reduce fusion, TP=8 across the 2
+nodes (about 266 GB of GPU memory per rank, saved to a chunk store):
+in-place suspend and resume with `--fabric-map`, 3 out of 3 cycles in a
+row passed, with output identical to the baseline.
+
 On 4x H100 with driver 580.126.16, Qwen2.5-7B-Instruct, TP=4 was dumped
 with CRIU, restored into a new pod and answered as before, with the three
 multicast users off for driver 580 (`NCCL_NVLS_ENABLE=0`,
@@ -418,8 +439,9 @@ compilation config's `pass_config`).
 The GPU tests in `tests/gpushare/` pass on GB300 (driver 610) and on RTX
 PRO 6000 (x86, driver 580). `test_multi_gpu` covers a single process driving
 two GPUs with peer access. `test_export_copies` covers an app that keeps the
-fds of its own exports, and `test_large_export` a shared 512 MiB
-allocation. `test_ipc_release` and `test_cumem_release` are
+fds of its own exports, `test_large_export` a shared 512 MiB
+allocation, and `test_ipc_legacy` an unopened IPC handle of small legacy
+memory. `test_ipc_release` and `test_cumem_release` are
 probes of the driver without the shim. On both platforms, the driver cannot
 checkpoint or re-export memory shared through its own CUDA IPC, which is
 why the shim replaces it.

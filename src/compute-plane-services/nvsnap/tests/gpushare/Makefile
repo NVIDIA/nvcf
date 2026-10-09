@@ -13,7 +13,7 @@ CUDA_INC ?= /usr/local/cuda/include
 CUDA_STUBS ?= /usr/local/cuda/lib64/stubs
 CFLAGS ?= -O2 -Wall
 
-CUDA_TESTS = test_feature_restore test_cumem_release test_ipc_release test_ipc_share test_multi_gpu test_release_rollback test_export_copies test_large_export
+CUDA_TESTS = test_feature_restore test_cumem_release test_ipc_release test_ipc_share test_ipc_legacy test_multi_gpu test_release_rollback test_export_copies test_large_export
 
 all: $(CUDA_TESTS) test_checkpoint_nccl
 
