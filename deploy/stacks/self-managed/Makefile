@@ -17,6 +17,7 @@ test:
 	@tests/llm-pki-openbao-migration.sh
 	@tests/nonroot-llm-migrations.sh
 	@tests/api-keys-startup-probe.sh
+	@tests/nonroot-api-keys.sh
 	@tests/upgrade-receipt-wiring.sh
 	@tests/cassandra-openbao-credential-wiring.sh
 	@tests/llm-pki-release.sh

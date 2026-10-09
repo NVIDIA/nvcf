@@ -624,14 +624,6 @@ apikeys:
   startupProbe:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  {{- with dig "apikeys" "livenessProbe" dict .Values }}
-  livenessProbe:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
-  {{- with dig "apikeys" "resources" dict .Values }}
-  resources:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
   {{- with dig "apikeys" "env" dict .Values }}
   env:
     {{- toYaml . | nindent 4 }}
