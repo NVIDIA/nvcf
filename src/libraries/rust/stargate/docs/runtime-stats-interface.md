@@ -126,16 +126,17 @@ client sets `stream_options.include_usage=true` or the deployment opts in to
 Without cached details, it counts total prompt tokens. Text peeking is last
 resort.
 
-Fallback input throughput is the mean over the latest smoothing-window requests
-(8 by default), ordered by first output. A request expected to report usage
-reserves a pending slot at first output. The rate covers the latest resolved
-requests before the oldest pending one, and newer requests wait.
-A long decode therefore delays the published mean until its usage arrives.
-Retained requests are capped at 8 times the window size. Past the cap, the
-oldest pending request resolves provisionally with total prompt tokens and is
-not max-eligible. Usage that arrives while it is still retained replaces the
-provisional values. Requests that do not request usage resolve at first output
-with total prompt tokens.
+Fallback input throughput divides the input tokens of the latest
+smoothing-window requests (8 by default) by the union of their
+submit-to-first-output intervals. Requests are ordered by first output. A
+request expected to report usage reserves a pending slot at first output. The
+rate covers the latest resolved requests before the oldest pending one, and
+newer requests wait. A long decode therefore delays the published mean until
+its usage arrives. Pylon drops the oldest pending request from the rate when a
+newer first output is more than 120 seconds past its own, or when more than
+1024 requests (or 8 windows, if larger) are retained. Its late usage is then
+ignored. Requests that do not request usage resolve at first output with total
+prompt tokens.
 
 ## Optional KV Stats
 
@@ -182,9 +183,11 @@ but do not raise the maximum, because cached input may be counted as prefill.
 The maximum follows the smoothed mean rather than individual samples, so the
 mean dilutes one outlier sample. Lower means do not reduce it, and generation
 replacement clears it. It is absent until the first max-eligible mean. A
-fallback-only backend with no `--initial-input-tps`, no calibration, and Chat
-traffic without `include_usage` never reports one. Its cluster then has no
-maximum capacity, which default Pulsar ranking requires (see below).
+fallback-only backend with no `--initial-input-tps` and no calibration never
+reports one unless its usage includes cached-token details. Chat traffic
+without `include_usage`, or an engine that omits those details, is not enough.
+Its cluster then has no maximum capacity, which default Pulsar ranking requires
+(see below).
 
 Pylon publishes `pylon_model_max_input_tps` when the maximum is known and removes
 the series when the model is removed or replaced with unknown maximum state.
