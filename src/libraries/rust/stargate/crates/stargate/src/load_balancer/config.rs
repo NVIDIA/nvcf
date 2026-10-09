@@ -221,6 +221,11 @@ pub struct WaitAndWidenAlgorithmConfig {
     pub max_queued: Option<u64>,
     pub ignore_queue_time: Option<bool>,
     pub ignore_input_processing_time: Option<bool>,
+    /// Use `x-stargate-last-cluster-id` to tell new sessions from returning
+    /// ones. New sessions skip the affinity wait and prefill discount;
+    /// returning sessions put their last cluster first in the affinity order.
+    /// Defaults to `false`.
+    pub last_cluster_affinity: Option<bool>,
 }
 
 impl WaitAndWidenAlgorithmConfig {

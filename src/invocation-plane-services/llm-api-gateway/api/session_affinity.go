@@ -36,10 +36,10 @@ const (
 	HeaderMultiTurnSessionID = "x-multi-turn-session-id"
 
 	sessionIDMaxLen              = 256
-	sessionAffinitySourceHeader  = "header"
-	sessionAffinitySourcePayload = "payload"
-	sessionAffinitySourcePrompt  = "prompt_cache_key"
-	sessionAffinitySourceConv    = "conversation_id"
+	sessionAffinitySourceHeader  = requestctx.SessionSourceHeader
+	sessionAffinitySourcePayload = requestctx.SessionSourcePayload
+	sessionAffinitySourcePrompt  = requestctx.SessionSourcePromptCacheKey
+	sessionAffinitySourceConv    = requestctx.SessionSourceConversationID
 	sessionAffinitySourceSession = "session"
 )
 

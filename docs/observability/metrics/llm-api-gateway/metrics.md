@@ -40,3 +40,6 @@ other unbounded request fields as metric labels.
 | `llm_api_gateway_rate_limit_synchronizer_queue_wait_seconds` | Histogram | `llm-api-gateway:9464/metrics` | None | Time spent queueing a rate limit event in seconds. |
 | `llm_api_gateway_rate_limit_synchronizer_queue_length` | Gauge | `llm-api-gateway:9464/metrics` | None | Current rate limit synchronizer queue length. |
 | `llm_api_gateway_rate_limit_synchronizer_events_dropped_total` | Counter | `llm-api-gateway:9464/metrics` | `reason` | Number of rate limit events dropped before publishing. `reason` is a bounded enum such as `old_message`. |
+| `llm_api_gateway_last_cluster_lookups_total` | Counter | `llm-api-gateway:9464/metrics` | `result` | Session last-cluster store lookups. `result` is `hit`, `miss`, `error`, `timeout`, or `skipped`. All values start at zero. |
+| `llm_api_gateway_last_cluster_writes_total` | Counter | `llm-api-gateway:9464/metrics` | `result` | Session last-cluster store writes. `result` is `ok` or `error`. All values start at zero. |
+| `llm_api_gateway_last_cluster_lookup_duration_seconds` | Histogram | `llm-api-gateway:9464/metrics` | `result` | Session last-cluster store lookup duration in seconds, with buckets from 1 ms to 50 ms. Skipped lookups are not timed. |

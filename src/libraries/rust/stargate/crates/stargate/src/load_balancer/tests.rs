@@ -13,11 +13,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use stargate_proto::pb::{InferenceServerStatus, ModelStats};
 
+use super::session::{self, MissingLastCluster};
 use super::*;
 use crate::load_balancer::algorithm::{MAX_CACHE_AFFINITY_CACHE_KEY_BYTES, input_work_seconds};
 use crate::load_balancer::pulsar::{PulsarLoadBalancer, pulsar_hash64, pulsar_ranked_indices};
@@ -91,6 +93,7 @@ fn request_with_priority<'a>(
         received_at: Instant::now(),
         request_slo: None,
         excluded_cluster_ids: None,
+        last_cluster: None,
     }
 }
 
@@ -197,7 +200,7 @@ fn candidate(id: &str, kv_cache_free_tokens: u64) -> RoutedClusterSnapshot {
     }
 }
 
-fn candidates(ids: &[&str]) -> Vec<RoutedClusterSnapshot> {
+pub(super) fn candidates(ids: &[&str]) -> Vec<RoutedClusterSnapshot> {
     ids.iter().map(|id| candidate(id, 1024)).collect()
 }
 
@@ -790,6 +793,42 @@ fn algorithm_specific_load_balancer_fields_are_rejected_for_other_algorithms() {
         ),
     ] {
         assert_json_rejected::<LoadBalancerAlgorithmConfig>(raw, expected_field);
+    }
+}
+
+#[test]
+fn last_cluster_affinity_is_rejected_for_other_algorithms() {
+    for algorithm in ["power-of-n", "round-robin", "random", "pulsar"] {
+        let raw = format!(r#"{{"algorithm":"{algorithm}","last_cluster_affinity":true}}"#);
+        let error = serde_json::from_str::<LoadBalancerAlgorithmConfig>(&raw)
+            .expect_err("last_cluster_affinity should be rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("last_cluster_affinity") && message.contains(algorithm),
+            "error should name the field and {algorithm}: {message}"
+        );
+    }
+    for raw in [
+        r#"{"default":"power-of-n","models":{"model-a":{"algorithm":"pulsar","last_cluster_affinity":true}}}"#,
+        r#"{"default":"power-of-n","request_algorithms":{"random":{"algorithm":"random","last_cluster_affinity":true}}}"#,
+    ] {
+        assert_json_rejected::<LoadBalancerConfig>(raw, "last_cluster_affinity");
+    }
+}
+
+#[test]
+fn last_cluster_affinity_parses_for_wait_and_widen_algorithms() {
+    for algorithm in ["wait-and-widen", "pulsar-wait-and-widen"] {
+        let config: LoadBalancerAlgorithmConfig = parse_json(&format!(
+            r#"{{"algorithm":"{algorithm}","last_cluster_affinity":true}}"#
+        ));
+        assert_eq!(
+            config
+                .wait_and_widen_settings()
+                .and_then(|settings| settings.last_cluster_affinity),
+            Some(true)
+        );
+        create_load_balancer_with_config(&config).expect("factory should accept the flag");
     }
 }
 
@@ -1436,6 +1475,7 @@ fn wait_and_widen_config_resolves_internal_defaults() {
     assert_eq!(config.max_queued, 0);
     assert!(config.ignore_queue_time);
     assert!(config.ignore_input_processing_time);
+    assert!(!config.last_cluster_affinity);
 
     let target = target();
     let request = request(&target, None, Some(0));
@@ -3511,4 +3551,655 @@ fn wait_and_widen_without_affinity_prefers_a_fast_bucket_with_capacity() {
             "fast-available"
         );
     }
+}
+
+// Session-aware wait-and-widen (`last_cluster_affinity`).
+
+const SESSION_WAIT: Duration = Duration::from_millis(300);
+
+fn session_wait_and_widen_config(
+    selection_count: usize,
+    last_cluster_affinity: bool,
+    configure: impl FnOnce(&mut WaitAndWidenAlgorithmConfig),
+) -> WaitAndWidenConfig {
+    let mut config = wait_and_widen_affinity_algorithm_config(8, selection_count, Some(2));
+    let settings = config.wait_and_widen_settings_mut().unwrap();
+    settings.cache_affinity_wait_ms = Some(300);
+    settings.cache_affinity_input_tokens_scale = Some(0.1);
+    settings.last_cluster_affinity = Some(last_cluster_affinity);
+    configure(settings);
+    wait_and_widen_config(&config)
+}
+
+fn session_request<'a>(
+    target: &'a RoutingTargetKey,
+    input_tokens: u64,
+    hint: &'a LastClusterHint,
+) -> LoadBalancerRequest<'a> {
+    LoadBalancerRequest {
+        last_cluster: Some(hint),
+        ..request(target, Some("session-prefix"), Some(input_tokens))
+    }
+}
+
+fn last_cluster(id: &str) -> LastClusterHint {
+    LastClusterHint::new(Some(id.to_string()))
+}
+
+fn mark_full(candidate: &mut RoutedClusterSnapshot) {
+    candidate.stats.max_engine_concurrency = 1;
+    candidate.stats.num_running_queries = 1;
+}
+
+fn mark_free(candidate: &mut RoutedClusterSnapshot) {
+    candidate.stats.max_engine_concurrency = 1;
+    candidate.stats.num_running_queries = 0;
+}
+
+fn selected_index(decision: LoadBalancerDecision) -> usize {
+    match decision {
+        LoadBalancerDecision::Selected(choice) => choice.candidate_index,
+        other => panic!("expected a selection, got {other:?}"),
+    }
+}
+
+/// Affinity group of the session key, then every other candidate.
+fn session_affinity_order(
+    config: &WaitAndWidenConfig,
+    target: &RoutingTargetKey,
+    candidates: &[RoutedClusterSnapshot],
+) -> Vec<usize> {
+    let request = request(target, Some("session-prefix"), Some(0));
+    let mut order = cache_affinity_candidate_indices(config, &request, candidates).unwrap();
+    let rest: Vec<_> = (0..candidates.len())
+        .filter(|index| !order.contains(index))
+        .collect();
+    order.extend(rest);
+    order
+}
+
+#[test]
+fn wait_and_widen_new_session_overflows_without_waiting() {
+    let config = session_wait_and_widen_config(1, true, |_| {});
+    let target = target();
+    let mut candidates = candidates(&["a", "b"]);
+    let order = session_affinity_order(&config, &target, &candidates);
+    mark_full(&mut candidates[order[0]]);
+    mark_free(&mut candidates[order[1]]);
+
+    for hint in [LastClusterHint::default(), last_cluster("gone")] {
+        let lb = WaitAndWidenLoadBalancer::new(config.clone());
+        let request = session_request(&target, 100, &hint);
+        assert_eq!(
+            selected_index(lb.decide_at(&request, &candidates, Duration::ZERO)),
+            order[1]
+        );
+    }
+
+    let flag_off = WaitAndWidenLoadBalancer::new(session_wait_and_widen_config(1, false, |_| {}));
+    let hint = LastClusterHint::default();
+    assert_eq!(
+        flag_off.decide_at(
+            &session_request(&target, 100, &hint),
+            &candidates,
+            Duration::ZERO
+        ),
+        LoadBalancerDecision::Wait(SESSION_WAIT)
+    );
+}
+
+#[test]
+fn wait_and_widen_new_session_matches_flag_off_without_wait_or_discount() {
+    let target = target();
+    // Sampling covers every candidate and RTTs sit in distinct TTFT buckets,
+    // so each decision has one deterministic winner.
+    let config = session_wait_and_widen_config(2, true, |s| s.n = Some(4));
+    let baseline = WaitAndWidenLoadBalancer::new(session_wait_and_widen_config(2, false, |s| {
+        s.n = Some(4);
+        s.cache_affinity_wait_ms = Some(0);
+        s.cache_affinity_input_tokens_scale = Some(1.0);
+    }));
+    let mut all_free = candidates(&["a", "b", "c", "d"]);
+    let order = session_affinity_order(&config, &target, &all_free);
+    for (rtt_ms, index) in [
+        (120, order[0]),
+        (80, order[1]),
+        (40, order[2]),
+        (160, order[3]),
+    ] {
+        all_free[index].rtt = Duration::from_millis(rtt_ms);
+    }
+    let mut all_full = all_free.clone();
+    all_full.iter_mut().for_each(mark_full);
+    let mut group_full = all_free.clone();
+    mark_full(&mut group_full[order[0]]);
+    mark_full(&mut group_full[order[1]]);
+
+    for candidates in [&all_free, &all_full, &group_full] {
+        for elapsed_ms in [0, 50, 300, 1_000] {
+            let elapsed = Duration::from_millis(elapsed_ms);
+            for hint in [LastClusterHint::default(), last_cluster("gone")] {
+                let lb = WaitAndWidenLoadBalancer::new(config.clone());
+                let request = session_request(&target, 100, &hint);
+                assert_eq!(
+                    lb.decide_at(&request, candidates, elapsed),
+                    baseline.decide_at(&request, candidates, elapsed),
+                    "at {elapsed_ms} ms"
+                );
+            }
+        }
+    }
+    // The affinity group wins when it can serve; otherwise C overflows at once.
+    let hint = LastClusterHint::default();
+    let request = session_request(&target, 100, &hint);
+    let lb = WaitAndWidenLoadBalancer::new(config);
+    assert_eq!(
+        selected_index(lb.decide_at(&request, &all_free, Duration::ZERO)),
+        order[1]
+    );
+    assert_eq!(
+        selected_index(lb.decide_at(&request, &group_full, Duration::ZERO)),
+        order[2]
+    );
+}
+
+#[test]
+fn wait_and_widen_new_session_uses_full_prefill_in_affinity_group() {
+    let target = target();
+    let config = session_wait_and_widen_config(2, true, |_| {});
+    let mut candidates = candidates(&["a", "b", "c", "d"]);
+    let order = session_affinity_order(&config, &target, &candidates);
+    // Full prefill favors the faster processor (1500 vs 2001 ms).
+    // Discounted prefill favors the closer backend (600 vs 201 ms).
+    candidates[order[0]].rtt = Duration::from_millis(500);
+    candidates[order[0]].stats.last_mean_input_tps = 1_000.0;
+    candidates[order[1]].rtt = Duration::from_millis(1);
+    candidates[order[1]].stats.last_mean_input_tps = 500.0;
+
+    let flag_off = WaitAndWidenLoadBalancer::new(session_wait_and_widen_config(2, false, |_| {}));
+    let new_hint = LastClusterHint::default();
+    let request = session_request(&target, 1_000, &new_hint);
+    assert_eq!(
+        selected_index(flag_off.decide_at(&request, &candidates, Duration::ZERO)),
+        order[1]
+    );
+    for hint in [LastClusterHint::default(), last_cluster("gone")] {
+        let lb = WaitAndWidenLoadBalancer::new(config.clone());
+        let request = session_request(&target, 1_000, &hint);
+        assert_eq!(
+            selected_index(lb.decide_at(&request, &candidates, Duration::ZERO)),
+            order[0]
+        );
+    }
+}
+
+#[test]
+fn wait_and_widen_returning_session_waits_for_last_cluster() {
+    let target = target();
+    let config = session_wait_and_widen_config(1, true, |_| {});
+    let mut candidates = candidates(&["a", "b", "c"]);
+    let order = session_affinity_order(&config, &target, &candidates);
+    let (a, b) = (order[0], order[1]);
+    mark_free(&mut candidates[a]);
+    mark_full(&mut candidates[b]);
+    let hint = last_cluster(&candidates[b].cluster_id);
+    let lb = WaitAndWidenLoadBalancer::new(config);
+    let request = session_request(&target, 100, &hint);
+
+    assert_eq!(
+        lb.decide_at(&request, &candidates, Duration::ZERO),
+        LoadBalancerDecision::Wait(SESSION_WAIT)
+    );
+    for elapsed_ms in (0..300).step_by(10) {
+        assert!(
+            matches!(
+                lb.decide_at(&request, &candidates, Duration::from_millis(elapsed_ms)),
+                LoadBalancerDecision::Wait(_)
+            ),
+            "returning session must wait for its last cluster at {elapsed_ms} ms"
+        );
+    }
+    assert_eq!(
+        hint.classification(),
+        Some(SessionClassification {
+            state: SessionState::Returning,
+            promoted: true,
+        })
+    );
+
+    mark_free(&mut candidates[b]);
+    let choice = lb
+        .decide_at(&request, &candidates, Duration::ZERO)
+        .selected()
+        .unwrap();
+    assert_eq!(choice.candidate_index, b);
+    assert_eq!(choice.rank_depth, 1);
+}
+
+#[test]
+fn wait_and_widen_returning_session_discounts_only_the_last_cluster() {
+    let target = target();
+    let config = session_wait_and_widen_config(1, true, |_| {});
+    let mut candidates = candidates(&["a", "b", "c"]);
+    let order = session_affinity_order(&config, &target, &candidates);
+    let (a, b, c) = (order[0], order[1], order[2]);
+    mark_full(&mut candidates[b]);
+    // A wins only when discounted (201 ms vs C at 1500 ms). Full prefill
+    // makes A 2001 ms, so C wins the open set.
+    candidates[a].rtt = Duration::from_millis(1);
+    candidates[a].stats.last_mean_input_tps = 500.0;
+    candidates[c].rtt = Duration::from_millis(500);
+    candidates[c].stats.last_mean_input_tps = 1_000.0;
+    let hint = last_cluster(&candidates[b].cluster_id);
+    let lb = WaitAndWidenLoadBalancer::new(config.clone());
+    let request = session_request(&target, 1_000, &hint);
+
+    assert_eq!(
+        selected_index(lb.decide_at(&request, &candidates, SESSION_WAIT)),
+        c
+    );
+
+    // Flag off, A is the discounted affinity member and wins at once.
+    let flag_off = WaitAndWidenLoadBalancer::new(session_wait_and_widen_config(1, false, |_| {}));
+    assert_eq!(
+        selected_index(flag_off.decide_at(&request, &candidates, Duration::ZERO)),
+        a
+    );
+}
+
+#[test]
+fn wait_and_widen_returning_session_outside_group_replaces_last_member() {
+    let target = target();
+    let config = session_wait_and_widen_config(2, true, |_| {});
+    let mut candidates = candidates(&["a", "b", "c", "d"]);
+    let order = session_affinity_order(&config, &target, &candidates);
+    let (a, b, c, d) = (order[0], order[1], order[2], order[3]);
+    let hint = last_cluster(&candidates[c].cluster_id);
+    let lb = WaitAndWidenLoadBalancer::new(config);
+    let request = session_request(&target, 100, &hint);
+
+    // The group is (C, A): B is not selectable during the wait.
+    for _ in 0..32 {
+        let choice = selected_index(lb.decide_at(&request, &candidates, Duration::ZERO));
+        assert!([a, c].contains(&choice), "chose {choice}");
+    }
+
+    mark_full(&mut candidates[a]);
+    mark_full(&mut candidates[c]);
+    mark_full(&mut candidates[d]);
+    mark_free(&mut candidates[b]);
+    assert_eq!(
+        lb.decide_at(&request, &candidates, Duration::from_millis(100)),
+        LoadBalancerDecision::Wait(Duration::from_millis(200))
+    );
+    assert_eq!(
+        selected_index(lb.decide_at(&request, &candidates, SESSION_WAIT)),
+        b
+    );
+}
+
+#[test]
+fn wait_and_widen_returning_session_inside_group_keeps_members() {
+    let target = target();
+    let config = session_wait_and_widen_config(2, true, |_| {});
+    let flag_off = WaitAndWidenLoadBalancer::new(session_wait_and_widen_config(2, false, |_| {}));
+    let mut candidates = candidates(&["a", "b", "c", "d"]);
+    let order = session_affinity_order(&config, &target, &candidates);
+    let hint = last_cluster(&candidates[order[1]].cluster_id);
+    let lb = WaitAndWidenLoadBalancer::new(config);
+    let request = session_request(&target, 100, &hint);
+
+    for _ in 0..32 {
+        let choice = selected_index(lb.decide_at(&request, &candidates, Duration::ZERO));
+        assert!(order[..2].contains(&choice), "chose {choice}");
+    }
+    mark_full(&mut candidates[order[0]]);
+    mark_full(&mut candidates[order[1]]);
+    for elapsed_ms in [0, 100, 300] {
+        let elapsed = Duration::from_millis(elapsed_ms);
+        let session = lb.decide_at(&request, &candidates, elapsed);
+        let expected = flag_off.decide_at(&request, &candidates, elapsed);
+        assert_eq!(
+            matches!(session, LoadBalancerDecision::Wait(_)),
+            matches!(expected, LoadBalancerDecision::Wait(_)),
+            "{session:?} vs {expected:?} at {elapsed_ms} ms"
+        );
+    }
+}
+
+#[test]
+fn wait_and_widen_retry_excluded_last_cluster_acts_as_ineligible_primary() {
+    let target = target();
+    let config = session_wait_and_widen_config(1, true, |_| {});
+    let candidates = candidates(&["a", "b", "c"]);
+    let order = session_affinity_order(&config, &target, &candidates);
+    let b_id = candidates[order[1]].cluster_id.clone();
+    let hint = last_cluster(&b_id);
+    let excluded = excluded(&[&b_id]);
+    let lb = WaitAndWidenLoadBalancer::new(config);
+    let request = LoadBalancerRequest {
+        excluded_cluster_ids: Some(&excluded),
+        ..session_request(&target, 100, &hint)
+    };
+
+    assert_eq!(
+        lb.decide_at(&request, &candidates, Duration::ZERO),
+        LoadBalancerDecision::Wait(SESSION_WAIT)
+    );
+    let choice = selected_index(lb.decide_at(&request, &candidates, SESSION_WAIT));
+    assert_ne!(candidates[choice].cluster_id, b_id);
+}
+
+#[test]
+fn wait_and_widen_promotion_is_not_cached() {
+    let target = target();
+    let config = session_wait_and_widen_config(1, true, |_| {});
+    let candidates = candidates(&["a", "b", "c"]);
+    let order = session_affinity_order(&config, &target, &candidates);
+    let lb = WaitAndWidenLoadBalancer::new(config.clone());
+    let returning = last_cluster(&candidates[order[1]].cluster_id);
+    assert_eq!(
+        selected_index(lb.decide_at(
+            &session_request(&target, 100, &returning),
+            &candidates,
+            Duration::ZERO
+        )),
+        order[1]
+    );
+
+    let new_session = LastClusterHint::default();
+    assert_eq!(
+        selected_index(lb.decide_at(
+            &session_request(&target, 100, &new_session),
+            &candidates,
+            Duration::ZERO
+        )),
+        order[0]
+    );
+    assert_eq!(
+        cache_affinity_candidate_indices(
+            &config,
+            &request(&target, Some("session-prefix"), Some(0)),
+            &candidates
+        )
+        .unwrap(),
+        vec![order[0]]
+    );
+}
+
+#[test]
+fn wait_and_widen_session_decisions_match_across_instances() {
+    let target = target();
+    let config = session_wait_and_widen_config(2, true, |s| s.n = Some(4));
+    let mut candidates = candidates(&["a", "b", "c", "d"]);
+    let order = session_affinity_order(&config, &target, &candidates);
+    let (a, b, c, d) = (order[0], order[1], order[2], order[3]);
+    // B is fastest but leaves the group when C is promoted: (C, A).
+    for (rtt_ms, index) in [(60, a), (20, b), (100, c), (140, d)] {
+        candidates[index].rtt = Duration::from_millis(rtt_ms);
+    }
+    let last_id = candidates[c].cluster_id.clone();
+    let mut group_full = candidates.clone();
+    mark_full(&mut group_full[a]);
+    mark_full(&mut group_full[c]);
+
+    let instances: Vec<_> = (0..2)
+        .map(|_| WaitAndWidenLoadBalancer::new(config.clone()))
+        .collect();
+    let plans: Vec<_> = instances
+        .iter()
+        .map(|_| {
+            let hint = last_cluster(&last_id);
+            let request = session_request(&target, 100, &hint);
+            let affinity =
+                cache_affinity_candidate_indices(&config, &request, &candidates).unwrap();
+            let plan = session::plan_affinity(
+                config.last_cluster_affinity,
+                &request,
+                &candidates,
+                Cow::Borrowed(affinity.as_slice()),
+                MissingLastCluster::InsertAndTruncate,
+                config.cache_affinity_wait,
+                config.cache_affinity_input_tokens_scale,
+            );
+            (
+                plan.order.into_owned(),
+                plan.affinity_wait,
+                plan.input_tokens_scale,
+                hint.classification(),
+            )
+        })
+        .collect();
+    assert_eq!(plans[0], plans[1]);
+    assert_eq!(plans[0].0, vec![c, a]);
+    assert_eq!((plans[0].1, plans[0].2), (SESSION_WAIT, 0.1));
+
+    for (snapshot, elapsed_ms, expected) in [
+        (&candidates, 0, Some(a)),
+        (&group_full, 150, None),
+        (&group_full, 300, Some(b)),
+        (&group_full, 1_000, Some(b)),
+    ] {
+        let elapsed = Duration::from_millis(elapsed_ms);
+        let decisions: Vec<_> = instances
+            .iter()
+            .map(|lb| {
+                let hint = last_cluster(&last_id);
+                lb.decide_at(&session_request(&target, 100, &hint), snapshot, elapsed)
+            })
+            .collect();
+        assert_eq!(decisions[0], decisions[1], "at {elapsed_ms} ms");
+        assert_eq!(
+            decisions[0].selected().map(|choice| choice.candidate_index),
+            expected,
+            "at {elapsed_ms} ms"
+        );
+    }
+}
+
+#[test]
+fn wait_and_widen_ignores_last_cluster_when_flag_is_off() {
+    let target = target();
+    let config = session_wait_and_widen_config(1, false, |_| {});
+    let mut candidates = candidates(&["a", "b", "c"]);
+    let order = session_affinity_order(&config, &target, &candidates);
+    mark_full(&mut candidates[order[1]]);
+    let lb = WaitAndWidenLoadBalancer::new(config);
+
+    for elapsed_ms in [0, 300] {
+        let elapsed = Duration::from_millis(elapsed_ms);
+        let hint = last_cluster(&candidates[order[1]].cluster_id);
+        let with_header = lb.decide_at(&session_request(&target, 100, &hint), &candidates, elapsed);
+        let without = lb.decide_at(
+            &request(&target, Some("session-prefix"), Some(100)),
+            &candidates,
+            elapsed,
+        );
+        assert_eq!(with_header, without);
+        assert_eq!(hint.classification(), None);
+    }
+}
+
+#[test]
+fn wait_and_widen_session_needs_affinity_key_and_group() {
+    let target = target();
+    let candidates = candidates(&["a", "b"]);
+    let hint = last_cluster("b");
+
+    let without_key = WaitAndWidenLoadBalancer::new(session_wait_and_widen_config(1, true, |_| {}));
+    let request_without_key = LoadBalancerRequest {
+        last_cluster: Some(&hint),
+        ..request(&target, None, Some(100))
+    };
+    assert!(
+        without_key
+            .decide_at(&request_without_key, &candidates, Duration::ZERO)
+            .selected()
+            .is_some()
+    );
+    assert_eq!(hint.classification(), None);
+
+    let without_group =
+        WaitAndWidenLoadBalancer::new(session_wait_and_widen_config(1, true, |s| {
+            s.cache_affinity_backend_selection_count = None;
+        }));
+    assert!(
+        without_group
+            .decide_at(
+                &session_request(&target, 100, &hint),
+                &candidates,
+                Duration::ZERO
+            )
+            .selected()
+            .is_some()
+    );
+    assert_eq!(hint.classification(), None);
+}
+
+#[test]
+fn router_ignores_last_cluster_for_algorithm_without_flag() {
+    let router = router_from_json(
+        r#"{
+            "default": "power-of-n",
+            "models": {
+                "model-a": {
+                    "algorithm": "wait-and-widen",
+                    "seed": "seed-1",
+                    "cache_affinity_backend_selection_count": 1,
+                    "cache_affinity_wait_ms": 300,
+                    "request_algorithms": {
+                        "pulsar-wait-and-widen": {
+                            "algorithm": "pulsar-wait-and-widen",
+                            "last_cluster_affinity": true
+                        }
+                    }
+                }
+            }
+        }"#,
+    );
+    let resolution = router
+        .resolve_algorithm_override("model-a", None)
+        .expect("default model algorithm should resolve");
+    assert_eq!(
+        resolution
+            .config()
+            .wait_and_widen_settings()
+            .and_then(|settings| settings.last_cluster_affinity),
+        None
+    );
+    let resolution = router
+        .resolve_algorithm_override(
+            "model-a",
+            Some(
+                &"pulsar-wait-and-widen"
+                    .parse::<LoadBalancerAlgorithmOverride>()
+                    .unwrap(),
+            ),
+        )
+        .expect("override should resolve");
+    assert_eq!(
+        resolution
+            .config()
+            .wait_and_widen_settings()
+            .and_then(|settings| settings.last_cluster_affinity),
+        Some(true)
+    );
+}
+
+#[test]
+fn routing_method_override_without_flag_ignores_last_cluster() {
+    let router = router_from_json(
+        r#"{
+            "default": "power-of-n",
+            "models": {
+                "model-a": {
+                    "algorithm": "wait-and-widen",
+                    "seed": "seed-1",
+                    "cache_affinity_virtual_nodes": 8,
+                    "cache_affinity_backend_selection_count": 1,
+                    "cache_affinity_wait_ms": 300,
+                    "last_cluster_affinity": true,
+                    "request_algorithms": {
+                        "pulsar-wait-and-widen": {
+                            "algorithm": "pulsar-wait-and-widen",
+                            "seed": "seed-1",
+                            "cache_affinity_wait_ms": 300
+                        }
+                    }
+                }
+            }
+        }"#,
+    );
+    let algorithm_override = "pulsar-wait-and-widen"
+        .parse::<LoadBalancerAlgorithmOverride>()
+        .unwrap();
+    let resolution = router
+        .resolve_algorithm_override("model-a", Some(&algorithm_override))
+        .expect("override should resolve");
+    let target = target();
+    let target_state = LoadBalancerTargetState::default();
+    let metrics = crate::metrics::StargateMetrics::new().unwrap();
+    let base = candidates(&["a", "b", "c"]);
+    let mut snapshots = vec![base.clone()];
+    for index in 0..base.len() {
+        let mut snapshot = base.clone();
+        mark_full(&mut snapshot[index]);
+        snapshots.push(snapshot);
+    }
+
+    for snapshot in &snapshots {
+        for last in &base {
+            let hint = last_cluster(&last.cluster_id);
+            let with_header = router.decide_with_algorithm_resolution(
+                &target_state,
+                &session_request(&target, 100, &hint),
+                snapshot,
+                &resolution,
+            );
+            let without = router.decide_with_algorithm_resolution(
+                &target_state,
+                &request(&target, Some("session-prefix"), Some(100)),
+                snapshot,
+                &resolution,
+            );
+            // Decisions use wall-clock elapsed time, so compare wait kinds.
+            let comparable = |decision: LoadBalancerDecision| match decision {
+                LoadBalancerDecision::Wait(_) => LoadBalancerDecision::Wait(Duration::ZERO),
+                decision => decision,
+            };
+            assert_eq!(comparable(with_header), comparable(without));
+            assert_eq!(hint.classification(), None);
+            record_session_selection(
+                &metrics,
+                resolution.config(),
+                "pulsar-wait-and-widen",
+                "req-1",
+                &target,
+                &hint,
+                &last.cluster_id,
+                1,
+            );
+        }
+    }
+    assert!(
+        metrics
+            .registry()
+            .gather()
+            .iter()
+            .all(|family| family.name() != "stargate_routing_session_selections_total")
+    );
+
+    // The model default carries the flag and classifies the same request.
+    let default_resolution = router.resolve_algorithm_override("model-a", None).unwrap();
+    let hint = last_cluster("b");
+    let _ = router.decide_with_algorithm_resolution(
+        &target_state,
+        &session_request(&target, 100, &hint),
+        &base,
+        &default_resolution,
+    );
+    assert_eq!(
+        hint.classification().map(|c| c.state),
+        Some(SessionState::Returning)
+    );
 }

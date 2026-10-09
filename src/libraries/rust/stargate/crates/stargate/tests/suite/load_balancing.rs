@@ -1587,3 +1587,279 @@ async fn wait_and_widen_capacity_rejection_returns_overloaded_error() {
     stop_backends(&mut backends);
     stargate.shutdown().await;
 }
+
+const LAST_CLUSTER_HEADER: &str = "x-stargate-last-cluster-id";
+
+fn session_selections(handle: &StargateHandle, model: &str, labels: &[(&str, &str)]) -> f64 {
+    handle
+        .metrics()
+        .registry()
+        .gather()
+        .iter()
+        .filter(|family| family.name() == "stargate_routing_session_selections_total")
+        .flat_map(|family| family.get_metric())
+        .filter(|metric| {
+            let has_label = |name: &str, value: &str| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|label| label.name() == name && label.value() == value)
+            };
+            has_label("model", model) && labels.iter().all(|(name, value)| has_label(name, value))
+        })
+        .map(|metric| metric.get_counter().value())
+        .sum()
+}
+
+fn session_stats(num_running_queries: u64, max_engine_concurrency: u64) -> CurrentModelStats {
+    CurrentModelStats {
+        last_mean_input_tps: 100.0,
+        max_input_tps: Some(100.0),
+        max_output_tps: 1000.0,
+        num_running_queries,
+        max_engine_concurrency: Some(max_engine_concurrency),
+        ..CurrentModelStats::default()
+    }
+}
+
+async fn wait_for_clusters(
+    state: &StargateState,
+    model_id: &str,
+    description: &str,
+    ready: impl Fn(&[RoutedClusterSnapshot]) -> bool,
+) {
+    let target = RoutingTargetKey {
+        routing_key: None,
+        model_id: model_id.to_string(),
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let clusters = state.cluster_candidates_for_target(&target).await;
+        if ready(&clusters) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "model '{model_id}' clusters did not reach {description}: {clusters:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+fn cluster_has_capacity(clusters: &[RoutedClusterSnapshot], cluster_id: &str, max: u64) -> bool {
+    clusters.iter().any(|cluster| {
+        cluster.cluster_id == cluster_id && cluster.stats.max_engine_concurrency == max
+    })
+}
+
+async fn send_session_request(
+    chat: &ChatRequests,
+    request_id: &str,
+    affinity_key: &str,
+    last_cluster: Option<&str>,
+) -> String {
+    let mut request = chat.with_affinity(request_id, affinity_key);
+    if let Some(last_cluster) = last_cluster {
+        request = request.header(LAST_CLUSTER_HEADER, last_cluster);
+    }
+    let response = request.send().await.expect("request failed");
+    assert_eq!(response.status(), 200, "request {request_id} failed");
+    let cluster_id = response_header(&response, "x-stargate-cluster-id").to_string();
+    let _ = tokio::time::timeout(Duration::from_secs(15), response.bytes()).await;
+    cluster_id
+}
+
+struct CacheThrashRun {
+    model: String,
+    rank_one: String,
+    rank_two: String,
+    follow_ups: Vec<String>,
+    stargate: RunningStargate,
+    backends: Vec<RegisteredBackend>,
+}
+
+impl CacheThrashRun {
+    fn session_selections(&self, labels: &[(&str, &str)]) -> f64 {
+        session_selections(&self.stargate.handle, &self.model, labels)
+    }
+
+    async fn finish(mut self) {
+        stop_backends(&mut self.backends);
+        self.stargate.shutdown().await;
+    }
+}
+
+/// Reproduces the overflow cache-thrash scenario for one algorithm and flag
+/// value. Records the rank-1 cluster, the overflow cluster, and the clusters
+/// chosen for follow-up requests that carry the overflow cluster as the hint.
+async fn run_cache_thrash(algorithm: &str, last_cluster_affinity: bool) -> CacheThrashRun {
+    let flag = if last_cluster_affinity { "on" } else { "off" };
+    let model = format!("{algorithm}-thrash-{flag}");
+    let virtual_nodes = if algorithm == "wait-and-widen" {
+        r#""cache_affinity_virtual_nodes": 8,"#
+    } else {
+        ""
+    };
+    let config = format!(
+        r#"{{
+            "default": "power-of-n",
+            "models": {{
+                "{model}": {{
+                    "algorithm": "{algorithm}",
+                    "seed": "test-seed",
+                    "require_cache_affinity_key": true,
+                    {virtual_nodes}
+                    "cache_affinity_backend_selection_count": 1,
+                    "cache_affinity_wait_ms": 300,
+                    "cache_affinity_input_tokens_scale": 0.1,
+                    "last_cluster_affinity": {last_cluster_affinity}
+                }}
+            }}
+        }}"#
+    );
+    let stargate = RunningStargate::start(&format!("test-sg-{model}"), Some(&config)).await;
+    let cluster_ids = [format!("{model}-x"), format!("{model}-y")];
+    let mut backends = Vec::new();
+    for cluster_id in &cluster_ids {
+        let backend =
+            RegisteredBackend::active_with_fast_updates(stargate.grpc_addr, &model, cluster_id)
+                .await;
+        backend.set_stats(session_stats(0, 100));
+        backends.push(backend);
+    }
+    let state = stargate.handle.state();
+    wait_for_clusters(&state, &model, "two free clusters", |clusters| {
+        clusters.len() == 2
+            && cluster_ids
+                .iter()
+                .all(|cluster_id| cluster_has_capacity(clusters, cluster_id, 100))
+    })
+    .await;
+    wait_for_routing_with_cache_affinity(
+        stargate.http_addr,
+        &model,
+        "warmup-session",
+        Duration::from_secs(5),
+    )
+    .await;
+
+    let chat = ChatRequests::new(stargate.http_addr, &model);
+    let affinity_key = "thrash-session";
+
+    // Rank 1 for the session is stable while every cluster is free.
+    let rank_one = send_session_request(&chat, "thrash-probe-0", affinity_key, None).await;
+    for attempt in 1..5 {
+        let chosen = send_session_request(
+            &chat,
+            &format!("thrash-probe-{attempt}"),
+            affinity_key,
+            None,
+        )
+        .await;
+        assert_eq!(chosen, rank_one, "rank 1 must be stable for a free pool");
+    }
+    let rank_one_index = cluster_ids
+        .iter()
+        .position(|cluster_id| *cluster_id == rank_one)
+        .expect("rank 1 must be a registered cluster");
+    let rank_two = cluster_ids[1 - rank_one_index].clone();
+
+    // Fill rank 1. The first request of the session overflows to rank 2.
+    backends[rank_one_index].set_stats(session_stats(1, 1));
+    wait_for_clusters(&state, &model, "full rank 1", |clusters| {
+        clusters.iter().any(|cluster| {
+            cluster.cluster_id == rank_one
+                && cluster.stats.max_engine_concurrency == 1
+                && cluster.stats.num_running_queries >= 1
+        })
+    })
+    .await;
+    let overflow = send_session_request(&chat, "thrash-first", affinity_key, None).await;
+    assert_eq!(overflow, rank_two, "a full rank 1 must overflow to rank 2");
+
+    // Rank 1 drains. Follow-up requests carry the overflow cluster as the hint.
+    backends[rank_one_index].set_stats(session_stats(0, 100));
+    wait_for_clusters(&state, &model, "drained rank 1", |clusters| {
+        cluster_has_capacity(clusters, &rank_one, 100)
+    })
+    .await;
+    let mut follow_ups = Vec::new();
+    for attempt in 0..10 {
+        follow_ups.push(
+            send_session_request(
+                &chat,
+                &format!("thrash-follow-up-{attempt}"),
+                affinity_key,
+                Some(&overflow),
+            )
+            .await,
+        );
+    }
+
+    CacheThrashRun {
+        model,
+        rank_one,
+        rank_two,
+        follow_ups,
+        stargate,
+        backends,
+    }
+}
+
+async fn assert_cache_thrash_keeps_session_on_last_cluster(algorithm: &str) {
+    let run = run_cache_thrash(algorithm, true).await;
+    assert_eq!(
+        run.follow_ups,
+        vec![run.rank_two.clone(); 10],
+        "{algorithm}: returning requests must stay on their last cluster"
+    );
+    assert_eq!(
+        run.session_selections(&[("session_state", "returning"), ("selection", "primary")]),
+        10.0
+    );
+    assert_eq!(
+        run.session_selections(&[("session_state", "returning"), ("selection", "fallback")]),
+        0.0
+    );
+    assert_eq!(
+        run.session_selections(&[("session_state", "new"), ("selection", "fallback")]),
+        1.0,
+        "{algorithm}: only the overflowing first request leaves the affinity group"
+    );
+    run.finish().await;
+}
+
+async fn assert_cache_thrash_without_flag_returns_to_rank_one(algorithm: &str) {
+    let run = run_cache_thrash(algorithm, false).await;
+    assert_eq!(
+        run.follow_ups,
+        vec![run.rank_one.clone(); 10],
+        "{algorithm}: without last_cluster_affinity the hint is ignored"
+    );
+    assert_eq!(
+        run.session_selections(&[]),
+        0.0,
+        "{algorithm}: unclassified requests must not record session selections"
+    );
+    run.finish().await;
+}
+
+#[tokio::test]
+async fn wait_and_widen_last_cluster_affinity_prevents_cache_thrash() {
+    assert_cache_thrash_keeps_session_on_last_cluster("wait-and-widen").await;
+}
+
+#[tokio::test]
+async fn wait_and_widen_without_last_cluster_affinity_returns_to_rank_one() {
+    assert_cache_thrash_without_flag_returns_to_rank_one("wait-and-widen").await;
+}
+
+#[tokio::test]
+async fn pulsar_wait_and_widen_last_cluster_affinity_prevents_cache_thrash() {
+    assert_cache_thrash_keeps_session_on_last_cluster("pulsar-wait-and-widen").await;
+}
+
+#[tokio::test]
+async fn pulsar_wait_and_widen_without_last_cluster_affinity_returns_to_rank_one() {
+    assert_cache_thrash_without_flag_returns_to_rank_one("pulsar-wait-and-widen").await;
+}

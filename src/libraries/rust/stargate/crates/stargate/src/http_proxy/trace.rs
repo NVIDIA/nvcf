@@ -64,6 +64,7 @@ pub(super) fn proxy_openai_request_span(headers: &HeaderMap) -> Span {
         routing.comparator = field::Empty,
         routing.rank_depth = field::Empty,
         routing.selected_after_kv_free_tokens_skip = field::Empty,
+        routing.session_state = field::Empty,
         routing.retry_attempts = field::Empty,
         routing.admission_rejection_reason = field::Empty,
         proxy.upstream_status = field::Empty,
@@ -188,5 +189,89 @@ mod tests {
         assert!(fields.field("routing.sample_count_configured").is_some());
         assert!(fields.field("routing.sample_count_effective").is_some());
         assert!(fields.field("routing.comparator").is_some());
+        assert!(fields.field("routing.session_state").is_some());
+    }
+
+    #[derive(Clone, Default)]
+    struct CapturedLogs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedLogs {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn session_selection_records_span_state_and_debug_event() {
+        use crate::load_balancer::{
+            LastClusterHint, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig,
+            SessionClassification, SessionState, record_session_selection,
+        };
+        use crate::metrics::StargateMetrics;
+        use crate::routing_state::RoutingTargetKey;
+
+        let logs = CapturedLogs::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer({
+                let logs = logs.clone();
+                move || logs.clone()
+            })
+            .finish();
+        let metrics = StargateMetrics::new().unwrap();
+        let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PulsarWaitAndWiden);
+        let target = RoutingTargetKey::new(Some("tenant-a".to_string()), "model-a");
+        let hint = LastClusterHint::classified(
+            Some("cluster-b"),
+            SessionClassification {
+                state: SessionState::Returning,
+                promoted: true,
+            },
+        );
+
+        tracing::subscriber::with_default(subscriber, || {
+            let span = proxy_openai_request_span(&HeaderMap::new());
+            let _entered = span.enter();
+            record_session_selection(
+                &metrics,
+                &config,
+                "pulsar-wait-and-widen",
+                "req-42",
+                &target,
+                &hint,
+                "cluster-b",
+                1,
+            );
+        });
+
+        let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
+        let event = output
+            .lines()
+            .find(|line| line.contains("routing session classified"))
+            .unwrap_or_else(|| panic!("missing session debug event in {output}"));
+        assert!(event.contains("DEBUG"), "{event}");
+        // The span prefix shows the recorded field value.
+        assert!(
+            event.contains("routing.session_state=\"returning\""),
+            "{event}"
+        );
+        for field in [
+            "request_id=req-42",
+            "model_id=model-a",
+            "routing_key=Some(\"tenant-a\")",
+            "session_state=\"returning\"",
+            "last_cluster_promoted=true",
+            "selected_cluster_id=cluster-b",
+            "selection=\"primary\"",
+        ] {
+            assert!(event.contains(field), "missing {field} in {event}");
+        }
     }
 }

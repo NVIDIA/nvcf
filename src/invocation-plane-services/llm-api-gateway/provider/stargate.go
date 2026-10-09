@@ -41,6 +41,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/lastcluster"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
@@ -74,12 +75,22 @@ const (
 	sseMaxToken = 4 * 1024 * 1024
 )
 
+const (
+	// headerStargateClusterID names the cluster that served a request.
+	headerStargateClusterID = "X-Stargate-Cluster-Id"
+	// headerStargateLastClusterID is gateway-owned: it carries the cluster
+	// that served the session's last successful request.
+	headerStargateLastClusterID = "X-Stargate-Last-Cluster-Id"
+)
+
 type StargateProvider struct {
 	baseURL                 *url.URL
 	client                  *http.Client
 	requestTimeout          time.Duration
 	upstreamRequestsTotal   otelmetric.Int64Counter
 	upstreamRequestDuration otelmetric.Float64Histogram
+	// lastCluster is nil when last-cluster hints are disabled.
+	lastCluster *lastcluster.Tracker
 }
 
 func NewStargateProvider(cfg config.StargateConfig) (*StargateProvider, error) {
@@ -120,6 +131,36 @@ func NewStargateProvider(cfg config.StargateConfig) (*StargateProvider, error) {
 	}, nil
 }
 
+// SetLastClusterTracker enables last-cluster hints. Call it before serving
+// requests.
+func (p *StargateProvider) SetLastClusterTracker(tracker *lastcluster.Tracker) {
+	p.lastCluster = tracker
+}
+
+// setLastClusterHeader replaces any inbound last-cluster hint with the
+// gateway's own value, or removes it when there is none.
+func setLastClusterHeader(headers http.Header, clusterID string) {
+	headers.Del(headerStargateLastClusterID)
+	if clusterID != "" {
+		headers.Set(headerStargateLastClusterID, clusterID)
+	}
+}
+
+// rememberLastCluster records the serving cluster at response-header time.
+// The tracker ignores non-2xx responses and writes in the background.
+func (p *StargateProvider) rememberLastCluster(
+	ctx context.Context,
+	reqCtx *requestctx.RequestContext,
+	model string,
+	key string,
+	resp *http.Response,
+) {
+	if key == "" || resp == nil {
+		return
+	}
+	p.lastCluster.Remember(ctx, reqCtx, model, key, resp.StatusCode, resp.Header.Get(headerStargateClusterID))
+}
+
 func (p *StargateProvider) Complete(
 	ctx context.Context,
 	reqCtx *requestctx.RequestContext,
@@ -129,6 +170,9 @@ func (p *StargateProvider) Complete(
 	if err != nil {
 		return nil, err
 	}
+	lastClusterModel := effectiveModel(reqCtx, request)
+	lastClusterKey, lastClusterID := p.lastCluster.Lookup(ctx, reqCtx, lastClusterModel)
+	setLastClusterHeader(outbound.Header, lastClusterID)
 
 	requestCtx, cancel := p.requestContext(ctx)
 	start := time.Now()
@@ -145,6 +189,7 @@ func (p *StargateProvider) Complete(
 		p.recordUpstreamRequest(ctx, reqCtx, start, resp.StatusCode, err)
 		return nil, err
 	}
+	p.rememberLastCluster(ctx, reqCtx, lastClusterModel, lastClusterKey, resp)
 
 	events := make(chan StreamEvent, 8)
 	go p.readStream(requestCtx, cancel, resp.Body, events)
@@ -169,6 +214,9 @@ func (p *StargateProvider) Stream(
 	if err != nil {
 		return nil, err
 	}
+	lastClusterModel := effectiveModel(reqCtx, request)
+	lastClusterKey, lastClusterID := p.lastCluster.Lookup(ctx, reqCtx, lastClusterModel)
+	setLastClusterHeader(outbound.Header, lastClusterID)
 
 	requestCtx, cancel := p.requestContext(ctx)
 	start := time.Now()
@@ -187,6 +235,7 @@ func (p *StargateProvider) Stream(
 	}
 
 	p.recordUpstreamRequest(ctx, reqCtx, start, resp.StatusCode, nil)
+	p.rememberLastCluster(ctx, reqCtx, lastClusterModel, lastClusterKey, resp)
 	events := make(chan StreamEvent, 8)
 	go p.readStream(requestCtx, cancel, resp.Body, events)
 
@@ -336,6 +385,12 @@ func (p *StargateProvider) Proxy(
 		return nil, errors.New("proxy path is required")
 	}
 
+	var lastClusterModel, lastClusterKey, lastClusterID string
+	if reqCtx != nil {
+		lastClusterModel = reqCtx.Model
+		lastClusterKey, lastClusterID = p.lastCluster.Lookup(ctx, reqCtx, lastClusterModel)
+	}
+
 	requestCtx, cancel := p.requestContext(ctx)
 	target := p.baseURL.ResolveReference(&url.URL{
 		Path:     request.Path,
@@ -366,6 +421,9 @@ func (p *StargateProvider) Proxy(
 	outbound.Header.Del(headerPriority)
 	// An inbound X-Routing-Method request header must never reach the router.
 	outbound.Header.Del(headerRoutingMethod)
+	// X-Stargate-Last-Cluster-Id is gateway-owned: only the gateway store may
+	// set it.
+	setLastClusterHeader(outbound.Header, lastClusterID)
 
 	if reqCtx != nil {
 		if reqCtx.RequestID != "" {
@@ -417,6 +475,7 @@ func (p *StargateProvider) Proxy(
 	}
 
 	p.recordUpstreamRequest(ctx, reqCtx, start, resp.StatusCode, nil)
+	p.rememberLastCluster(ctx, reqCtx, lastClusterModel, lastClusterKey, resp)
 	return &ProxyResponse{
 		StatusCode: clientStatusCode(resp),
 		Header:     resp.Header.Clone(),

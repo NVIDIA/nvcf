@@ -55,3 +55,29 @@ Run the support-script tests after changing repository tooling:
 ```bash
 python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
+
+## Last-Cluster End-to-End Check
+
+`scripts/e2e-last-cluster.sh` runs the LLM API gateway against a real
+Stargate, two Pylons, and two mock-dynamo backends on loopback. It reproduces
+the overflow cache-thrash scenario for `last_cluster_affinity`:
+
+1. Two long requests fill the session's rank-1 cluster (A).
+2. The session's first gateway request overflows to cluster B.
+3. A drains.
+4. The next 10 gateway requests with the same `prompt_cache_key` stay on B
+   with the feature on, and return to A with it off.
+
+```bash
+scripts/e2e-last-cluster.sh
+scripts/e2e-last-cluster.sh --algorithm pulsar-wait-and-widen --mode on
+```
+
+Mode `on` sets `STARGATE_LAST_CLUSTER_ENABLED=true` in the gateway and
+`last_cluster_affinity: true` in Stargate. Mode `off` disables both. The
+script builds release binaries and the gateway first unless `--no-build` is
+set. It attributes each request to a cluster through the mock-dynamo
+`/test-control` counters, checks
+`stargate_routing_session_selections_total`, and exits non-zero on any
+mismatch. It needs `cargo`, `go`, `curl`, and `jq`, uses 32 loopback ports
+starting at `E2E_PORT_BASE` (default `27100`), and keeps logs on failure.

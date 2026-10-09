@@ -17,12 +17,14 @@ mod cache_affinity;
 mod estimates;
 mod fast_path;
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
 use rand::Rng;
 
+use super::session::{self, MissingLastCluster};
 use super::{
     ClusterComparator, LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice,
     LoadBalancerDecision, LoadBalancerRequest, Ttft, ttft,
@@ -65,6 +67,7 @@ pub(super) struct WaitAndWidenConfig {
     pub(super) max_queued: u64,
     pub(super) ignore_queue_time: bool,
     pub(super) ignore_input_processing_time: bool,
+    pub(super) last_cluster_affinity: bool,
 }
 
 impl WaitAndWidenConfig {
@@ -100,6 +103,7 @@ impl WaitAndWidenConfig {
             max_queued: config.max_queued.unwrap_or(0),
             ignore_queue_time: config.ignore_queue_time.unwrap_or(false),
             ignore_input_processing_time: config.ignore_input_processing_time.unwrap_or(false),
+            last_cluster_affinity: config.last_cluster_affinity.unwrap_or(false),
         })
     }
 
@@ -179,14 +183,25 @@ impl WaitAndWidenLoadBalancer {
             self.cache_affinity
                 .candidate_indices(&self.config, request, candidates)
         {
+            // Session rules adjust a per-request copy; the ring cache keeps
+            // the original selection.
+            let plan = session::plan_affinity(
+                self.config.last_cluster_affinity,
+                request,
+                candidates,
+                Cow::Borrowed(affinity_indices.as_slice()),
+                MissingLastCluster::InsertAndTruncate,
+                self.config.cache_affinity_wait,
+                self.config.cache_affinity_input_tokens_scale,
+            );
             // Every attempt checks affinity first, even after the hold expires.
             // Affinity uses the same TTFT buckets, admission and comparator as
             // global routing. A busy ring primary must not bypass those rules.
             let affinity_bucket_wait = match self.decide_from_candidate_indices(
                 request,
                 candidates,
-                &affinity_indices,
-                self.config.cache_affinity_input_tokens_scale,
+                &plan.order,
+                plan.input_tokens_scale,
                 elapsed,
             ) {
                 LoadBalancerDecision::Selected(choice) => {
@@ -195,8 +210,8 @@ impl WaitAndWidenLoadBalancer {
                 LoadBalancerDecision::Wait(delay) => Some(delay),
                 LoadBalancerDecision::Unavailable => None,
             };
-            if elapsed < self.config.cache_affinity_wait {
-                let remaining = self.config.cache_affinity_wait - elapsed;
+            if elapsed < plan.affinity_wait {
+                let remaining = plan.affinity_wait - elapsed;
                 return LoadBalancerDecision::Wait(
                     affinity_bucket_wait.map_or(remaining, |delay| delay.min(remaining)),
                 );
@@ -209,10 +224,10 @@ impl WaitAndWidenLoadBalancer {
                 candidates.iter(),
                 candidates,
                 1.0,
-                elapsed.saturating_sub(self.config.cache_affinity_wait),
+                elapsed.saturating_sub(plan.affinity_wait),
             ) {
                 LoadBalancerDecision::Selected(mut choice) => {
-                    choice.rank_depth = affinity_indices.len() + 1;
+                    choice.rank_depth = plan.order.len() + 1;
                     LoadBalancerDecision::Selected(choice)
                 }
                 LoadBalancerDecision::Wait(delay) => LoadBalancerDecision::Wait(
@@ -244,10 +259,6 @@ impl WaitAndWidenLoadBalancer {
             config,
             cache_affinity: CacheAffinitySelector::default(),
         }
-    }
-
-    pub(super) fn has_queue_slo(&self, request: &LoadBalancerRequest<'_>) -> bool {
-        self.config.max_queue_time(request).is_some()
     }
 
     #[cfg(test)]

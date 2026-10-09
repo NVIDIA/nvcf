@@ -226,6 +226,7 @@ mod tests {
         for name in [
             "X-Stargate-Upstream-Retryable",
             "X-Stargate-Auth-Token",
+            "X-Stargate-Last-Cluster-Id",
             "X-Stargate-Max-Wait-Ms",
             "X-Stargate-Additional-Control",
         ] {

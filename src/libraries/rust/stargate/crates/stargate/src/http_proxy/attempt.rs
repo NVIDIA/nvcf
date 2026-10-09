@@ -558,6 +558,7 @@ mod tests {
                 .resolve_algorithm_override(&target.model_id, None)
                 .unwrap(),
             request_inputs: ProxyRequestInputs {
+                request_id: "req-1".to_string(),
                 target,
                 input_tokens: 1,
                 priority: 0,
@@ -566,6 +567,7 @@ mod tests {
                 cache_affinity_key: None,
                 routing_algorithm_override: None,
                 routing_expression: None,
+                last_cluster: Default::default(),
             },
             endpoint_name: "chat_completions",
             method: Method::POST,
