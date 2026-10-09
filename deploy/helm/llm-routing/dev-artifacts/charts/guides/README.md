@@ -7,7 +7,7 @@ Install the shared routing release `llm-stack` in namespace `llm-stack`, then in
 ### Cluster
 
 - Kubernetes that you reach with kubectl and Helm, using a context that can create CustomResourceDefinitions and namespaces.
-- Linux ARM64 GPU nodes whose GPU matches a recipe profile. The automatic profiles in the [recipe catalog](recipes/index.json) target GB10 today. `python3 llm.py recipes` lists them.
+- Linux ARM64 GPU nodes whose GPU matches a recipe profile. The [recipe catalog](recipes/index.json) includes GB10 (Spark) and GB300 (Station) profiles. `python3 llm.py recipes` lists them.
 - One whole GPU per node for each model: no MIG, time-slicing or MPS, and no `NoSchedule` or `NoExecute` taints on model nodes.
 - The NVIDIA driver and container toolkit on each GPU node, and a RuntimeClass named `nvidia`.
 - The [NVIDIA device plugin](https://github.com/NVIDIA/k8s-device-plugin) advertising `nvidia.com/gpu`. Use v0.17.4 or later on GB10.
@@ -69,12 +69,13 @@ Check current GPU allocation and downloaded model caches. Add `--json` for JSON 
 python3 llm.py plan --model qwen3.8-27b
 ```
 
-Install and register Qwen FP8 below, replacing `NODE_FROM_PLANNER` with your chosen node. To reuse retained downloads, keep the original release name, namespace and cache node. Completed model files are verified and reused automatically; missing files are downloaded. No cache flag or values file is required. [Model values examples](recipes/README.md#committed-values) are available for optional overrides and other recipes.
+Install and register Qwen FP8 below, replacing `PROFILE_FROM_PLANNER` and `NODE_FROM_PLANNER` with your chosen profile and node. To reuse retained downloads, keep the original release name, namespace and cache node. Completed model files are verified and reused automatically; missing files are downloaded. No cache flag or values file is required. [Model values examples](recipes/README.md#committed-values) are available for optional overrides and other recipes.
 
 ```bash
 helm upgrade --install qwen-fp8 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
   --namespace llm-stack \
-  --set recipe=qwen3.8-27b --set 'nodes[0]=NODE_FROM_PLANNER' \
+  --set recipe=qwen3.8-27b --set profileName=PROFILE_FROM_PLANNER \
+  --set 'nodes[0]=NODE_FROM_PLANNER' \
   --wait --timeout 120m &&
 kubectl --namespace llm-stack wait \
   --for=condition=Registered inferenceendpoint/qwen-fp8 --timeout=5m &&
@@ -91,12 +92,13 @@ Keep the shared stack and FP8 model installed. Check capacity for the NVFP4 reci
 python3 llm.py plan --model qwen3.8-27b-nvfp4
 ```
 
-Each recipe reserves its own GPU. Running both precisions on one-GPU nodes requires two distinct available nodes before installation. For the second model, replace `SECOND_NODE_FROM_PLANNER` with an available node different from the first model's node. If no GPU is free, [stop another model](#stop-and-resume) before installing.
+Each recipe reserves its own GPU. Running both precisions on one-GPU nodes requires two distinct available nodes before installation. For the second model, replace `PROFILE_FROM_PLANNER` with its profile and `SECOND_NODE_FROM_PLANNER` with an available node different from the first model's node. If no GPU is free, [stop another model](#stop-and-resume) before installing.
 
 ```bash
 helm upgrade --install qwen-nvfp4 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
   --namespace llm-stack \
-  --set recipe=qwen3.8-27b-nvfp4 --set 'nodes[0]=SECOND_NODE_FROM_PLANNER' \
+  --set recipe=qwen3.8-27b-nvfp4 --set profileName=PROFILE_FROM_PLANNER \
+  --set 'nodes[0]=SECOND_NODE_FROM_PLANNER' \
   --wait --timeout 120m &&
 kubectl --namespace llm-stack wait \
   --for=condition=Registered inferenceendpoint/qwen-nvfp4 --timeout=5m &&
@@ -107,19 +109,15 @@ Both models use the same gateway and caller credential. Each keeps its own Helm 
 
 ### Model choices
 
-| Recipe | Precision | Availability and validation |
+| Recipe | Precision | Hardware |
 | --- | --- | --- |
-| [Qwen3.8-27B](recipes/values/qwen3.8-27b.yaml) | FP8 | One GB10. Cached Helm startup and inference tested. |
-| [Qwen3.8-27B](recipes/values/qwen3.8-27b-nvfp4.yaml) | NVIDIA NVFP4 | One GB10. Cached Helm startup, inference and model isolation tested. |
-| [GLM-5.3](recipes/values/glm-5.3.yaml) | UD-IQ2_M | Two GB10s. Combined runtime tested. [Automatic Helm startup](ADVANCED.md#helm-glm-recipe) stopped at the host-memory guard. |
-| Qwen3.8-Flash-Next | NVFP4 | Automatic [one-node NVMe](recipes/values/qwen3.8-flash-next-nvme.yaml) startup and short-prompt inference tested at context 8,192 and concurrency 1. [Two-node tensor parallel](recipes/values/qwen3.8-flash-next-tp2.yaml) validation pending. [Installation](ADVANCED.md#helm-flash-next-recipes). |
-| DeepSeek V4 Flash | Upstream mixed FP4/FP8 | Planned. Public checkpoint and upstream four-GPU candidates recorded. Chart support and hardware qualification pending. |
+| [Qwen3.8-27B](#2-install-a-model) | FP8 | [1 GB10 (Spark)](recipes/values/qwen3.8-27b.yaml) or [1 GB300 (Station)](recipes/values/qwen3.8-27b-station.yaml) |
+| [Qwen3.8-27B](#add-a-second-model) | NVIDIA NVFP4 | [1 GB10 (Spark)](recipes/values/qwen3.8-27b-nvfp4.yaml) |
+| [GLM-5.3](ADVANCED.md#helm-glm-recipe) | UD-IQ2_M | [2 GB10s (Spark)](recipes/values/glm-5.3.yaml) |
+| [Qwen3.8-Flash-Next](ADVANCED.md#helm-flash-next-recipes) | NVFP4 | [1 GB10 (Spark) with local NVMe](recipes/values/qwen3.8-flash-next-nvme.yaml) or [2 GB10s (Spark) with a 200 Gbps link](recipes/values/qwen3.8-flash-next-tp2.yaml) |
+| [DeepSeek V4 Flash](recipes/planned.json) | Upstream mixed FP4/FP8 | No recipe profile yet |
 
-Deploy catalog entries with `availability.deployable: true`. Planned entries have no deployment profiles. Their dated primary sources and upstream candidates are recorded in the catalog.
-
-The listed tests used short prompts. The catalog records validation for each hardware profile and workload separately. Additional hardware profiles use the same installation interface after qualification.
-
-Flash-Next uses recipe `qwen3.8-flash-next`. Select `spark-nvfp4-nvme` for one node with local NVMe offload or `spark-nvfp4-tp2` for two nodes with a suitable interconnect. Its [installation guide](ADVANCED.md#helm-flash-next-recipes) shows how to supply verified node capabilities and print the Helm command for that placement.
+Planned recipes have no installable profile. See the [catalog](recipes/index.json) for profile details and the [Flash-Next guide](ADVANCED.md#helm-flash-next-recipes) for NVMe and two-node setup.
 
 ## 3. Discover and call models
 
@@ -189,6 +187,6 @@ This removes the model's workloads, endpoint and Helm release. Its persistent vo
 
 ### Uninstall completely
 
-Follow the [complete removal procedure](ADVANCED.md#remove-downloaded-model-files) to record cache ownership, uninstall the release, then remove its storage. There is no combined uninstall-and-delete command. Delete only this model's dedicated cache claims after checking ownership and use. External or shared claims stay untouched. Physical disk reclamation depends on the volume's reclaim policy and storage provisioner.
+Follow the [complete removal procedure](ADVANCED.md#remove-downloaded-model-files) to check cache ownership and use, uninstall the release, and remove its dedicated storage. Disk reclamation depends on the volume's reclaim policy and storage provisioner.
 
 [Advanced deployment and configuration](ADVANCED.md) covers shared-stack upgrades and uninstall, credentials, model recovery, GLM and monitoring.

@@ -61,6 +61,116 @@
             "gpuCount": 1,
             "memoryMode": "unified"
           }
+        },
+        {
+          "id": "station-fp8",
+          "nodes": 1,
+          "memoryGiB": 64,
+          "memoryLimitGiB": 128,
+          "cpu": 4,
+          "cacheGiB": 80,
+          "minFreeDiskGiB": 40,
+          "maxContext": 8192,
+          "maxConcurrency": 1,
+          "offload": false,
+          "flags": [
+            "--trust-remote-code",
+            "--kv-cache-dtype",
+            "fp8_e4m3",
+            "--mem-fraction-static",
+            "0.80",
+            "--attention-backend",
+            "trtllm_mha",
+            "--chunked-prefill-size",
+            "2048",
+            "--reasoning-parser",
+            "qwen3",
+            "--tool-call-parser",
+            "qwen3_coder",
+            "--mamba-radix-cache-strategy",
+            "extra_buffer",
+            "--mamba-ssm-dtype",
+            "float32",
+            "--max-mamba-cache-size",
+            "5",
+            "--mamba-full-memory-ratio",
+            "2.55"
+          ],
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB300",
+              "NVIDIA GB300"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB300"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "discrete",
+            "minDeviceMemoryGiB": 64
+          },
+          "validatedWorkload": {
+            "date": "2026-10-09",
+            "profile": "station-fp8",
+            "modelRevision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+            "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+            "contextLength": 8192,
+            "concurrency": 1,
+            "requestType": "short-prompt-smoke",
+            "promptTokens": [
+              47,
+              56
+            ],
+            "maximumObservedTotalTokens": 126,
+            "fullContextExercised": false,
+            "performanceBenchmarked": false,
+            "qualityEvaluated": false
+          },
+          "automaticHelmValidation": {
+            "date": "2026-10-09",
+            "profile": "station-fp8",
+            "modelRevision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+            "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+            "contextLength": 8192,
+            "concurrency": 1,
+            "requestType": "short-prompt-smoke",
+            "fullContextExercised": false,
+            "performanceBenchmarked": false,
+            "qualityEvaluated": false,
+            "status": "smoke-tested",
+            "reason": "Fresh packaged Helm installation, registration, discovery, short arithmetic chat and streaming passed. The earlier 8160-token context-boundary request returned HTTP 502 and has not been retested. Full-context and lifecycle validation remain pending.",
+            "cacheMode": "fresh-download",
+            "checks": [
+              "placement",
+              "gpu-qualification",
+              "cache-integrity",
+              "packaged-helm-install",
+              "readiness",
+              "registration",
+              "discovery",
+              "chat",
+              "streaming",
+              "arithmetic-smoke"
+            ],
+            "failedChecks": [
+              "context-boundary"
+            ],
+            "failedWorkload": {
+              "requestType": "context-boundary-smoke",
+              "tokenizerPromptTokens": 8160,
+              "maxOutputTokens": 32,
+              "httpStatus": 502,
+              "backendExecutionConfirmed": false
+            },
+            "pendingChecks": [
+              "context-boundary-retest",
+              "authentication-rejection",
+              "stop-resume",
+              "uninstall-reinstall",
+              "final-package-live-verification"
+            ]
+          }
         }
       ],
       "validatedWorkload": {

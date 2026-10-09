@@ -36,12 +36,13 @@ class HardwareProfileTests(unittest.TestCase):
         log.assert_called_once_with('qualification_pass', rank=0, nodes=1, nccl=self.cuda.nccl.version(),
                                     gpu='NVIDIA Example GPU', cudaTotalMemoryGiB=80)
 
-    def test_current_unified_catalog_profiles_accept_the_declared_cuda_device(self):
-        self.cuda.get_device_name.return_value = 'NVIDIA GB10'
+    def test_current_catalog_profiles_accept_the_declared_cuda_device(self):
         for release in all_profile_releases():
+            device = release['config']['profile']['hardware']['cudaDeviceNames'][0]
+            self.cuda.get_device_name.return_value = device
             with self.subTest(profile=release['profile']), patch.object(runtime.platform, 'machine', return_value='aarch64'):
                 result = runtime.check_hardware(release['config'], self.cuda)
-            self.assertEqual(result['gpu'], 'NVIDIA GB10')
+            self.assertEqual(result['gpu'], device)
             self.assertEqual(result['cudaTotalMemoryGiB'], 80)
 
     def test_wrong_device_or_gpu_count_fails_before_collective(self):

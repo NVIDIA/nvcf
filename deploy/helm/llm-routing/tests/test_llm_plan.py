@@ -376,7 +376,7 @@ class PlanTests(unittest.TestCase):
         data = snapshot(2)
         for node in data['nodes']:
             node['metadata']['labels']['nvidia.com/gpu.product'] = 'NVIDIA-GB300'
-        report = self.plan(data)
+        report = self.plan(data, '--profile', 'spark-fp8')
         output = self.output.getvalue()
         self.assertEqual(report['status'], 'blocked')
         self.assertIsNone(report['chosenProfile'])
@@ -389,7 +389,7 @@ class PlanTests(unittest.TestCase):
             self.assertIn(expected, output)
         self.output.truncate(0)
         self.output.seek(0)
-        verbose_report = self.plan(data, '--verbose')
+        verbose_report = self.plan(data, '--profile', 'spark-fp8', '--verbose')
         self.assertEqual(verbose_report, report)
         verbose = self.output.getvalue()
         self.assertIn('DOES NOT FIT', verbose)

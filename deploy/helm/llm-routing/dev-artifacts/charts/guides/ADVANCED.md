@@ -675,7 +675,8 @@ RENDER_DIR="$(mktemp -d)"
 helm template llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
   --namespace llm-stack --values dev-artifacts/values.yaml > "$RENDER_DIR/shared.yaml"
 helm template qwen-fp8 recipes/charts/sglang --namespace llm-stack \
-  --set recipe=qwen3.8-27b --set 'nodes[0]=offline-gpu-node' > "$RENDER_DIR/model.yaml"
+  --set recipe=qwen3.8-27b --set profileName=spark-fp8 \
+  --set 'nodes[0]=offline-gpu-node' > "$RENDER_DIR/model.yaml"
 ```
 
 Offline rendering cannot inspect live ownership or prove credential reuse. Use [package-charts.sh](dev-artifacts/package-charts.sh) to build archives in a fresh output directory, then check catalog paths, bundled source equality and `SHA256SUMS`. Package generation and developer image builds do not install or upgrade a release.
