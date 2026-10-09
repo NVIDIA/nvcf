@@ -60,7 +60,7 @@ releases:
 
   # --- NVCF Services ---
   - name: api-keys
-    version: 1.9.0
+    version: 1.9.1
     namespace: api-keys
     inherit:
       - template: service
@@ -69,7 +69,7 @@ releases:
     {{- $sisChartPath := dig "sis" "chartPath" "" .Values }}
     chart: {{ $sisChartPath | default "nvcf/helm-nvcf-sis" | quote }}
     {{- if not $sisChartPath }}
-    version: 2.6.0
+    version: 2.6.1
     {{- end }}
     namespace: sis
     condition: icms.enabled
@@ -80,7 +80,7 @@ releases:
       release-group: services
 
   - name: api
-    version: 1.28.0
+    version: 1.28.1
     namespace: nvcf
     inherit:
       - template: service
@@ -239,7 +239,7 @@ releases:
     {{- $llmRequestRouterChartPath := dig "addons" "llm" "requestRouter" "chartPath" "" .Values }}
     chart: {{ $llmRequestRouterChartPath | default "nvcf/helm-nvcf-llm-request-router" | quote }}
     {{- if not $llmRequestRouterChartPath }}
-    version: 1.15.0
+    version: 1.15.2
     {{- end }}
     namespace: nvcf
     condition: addons.llm.enabled
@@ -285,7 +285,7 @@ releases:
 
   - name: event-ledger
     chart: nvcf/helm-nvcf-event-ledger
-    version: 0.5.0
+    version: 0.6.0
     namespace: nvcf
     condition: addons.eventLedger.enabled
     values:
