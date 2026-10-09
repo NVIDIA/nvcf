@@ -1154,6 +1154,67 @@ func (c *CassandraHandler) UpsertEventV3(traceCtx context.Context, namespace, ev
 	return err
 }
 
+var _ data_access.GuardedEventsWriter = (*CassandraHandler)(nil)
+
+// execQuery runs a conditional statement. A statement that is not applied is not an error.
+// Failures are logged with the event key and returned wrapped.
+func (c *CassandraHandler) execQuery(ctx context.Context, ev data_access.EventV3UpsertRecord, action, query string, args ...any) (bool, error) {
+	applied, err := c.session.Query(query, args...).WithContext(ctx).MapScanCAS(make(map[string]any))
+	if err != nil {
+		logging.GetLogger(ctx).ErrorContext(ctx, "Failed to "+action+" in events_v3 table",
+			zap.Error(err),
+			zap.String("namespace", ev.Namespace),
+			zap.String("context", ev.Context),
+			zap.String("event_name", ev.EventName))
+		return false, fmt.Errorf("failed to %s in events_v3: %w", action, err)
+	}
+	return applied, nil
+}
+
+// UpsertEventsIfNewerV3 writes each event only if its timestamp is newer than the stored
+// row's, so a delayed or repeated write cannot replace newer data. It costs a conditional
+// write per event, so it is meant for write cache flushes. Writes run in parallel, up to
+// 20 at a time, and the first error is returned.
+func (c *CassandraHandler) UpsertEventsIfNewerV3(traceCtx context.Context, events []data_access.EventV3UpsertRecord) error {
+	const maxConcurrency = 20
+	sem := semaphore.NewWeighted(maxConcurrency)
+	g, gctx := errgroup.WithContext(traceCtx)
+
+	for _, ev := range events {
+		g.Go(func() error {
+			if err := sem.Acquire(gctx, 1); err != nil {
+				return err
+			}
+			defer sem.Release(1)
+			return c.upsertEventIfNewerV3(gctx, ev)
+		})
+	}
+
+	return g.Wait()
+}
+
+// upsertEventIfNewerV3 inserts the event if its key is new, and otherwise updates the row
+// only if the stored timestamp is older. The update leaves created_at untouched. A row that
+// is already newer is not an error.
+func (c *CassandraHandler) upsertEventIfNewerV3(traceCtx context.Context, ev data_access.EventV3UpsertRecord) error {
+	return c.executeWithSessionRecreation(traceCtx, func() error {
+		applied, err := c.execQuery(traceCtx, ev, "insert event",
+			`INSERT INTO events_v3 (namespace, context, event_name, source, details, timestamp, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS`,
+			ev.Namespace, ev.Context, ev.EventName, ev.Source, ev.Details, ev.Timestamp, ev.Timestamp, ev.Timestamp)
+		if err != nil || applied {
+			return err
+		}
+
+		_, err = c.execQuery(traceCtx, ev, "conditionally update event",
+			`UPDATE events_v3 SET source = ?, details = ?, timestamp = ?, updated_at = ?
+			 WHERE namespace = ? AND context = ? AND event_name = ?
+			 IF timestamp < ?`,
+			ev.Source, ev.Details, ev.Timestamp, time.Now(), ev.Namespace, ev.Context, ev.EventName, ev.Timestamp)
+		return err
+	}, "upsertEventIfNewerV3")
+}
+
 // BulkUpsertEventsV3 inserts or updates multiple events in the events_v3 table.
 // Events are grouped by partition key (namespace, context). Each group is written
 // with one SELECT + one unlogged BATCH, reducing Cassandra round-trips from 2N

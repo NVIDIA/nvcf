@@ -55,9 +55,7 @@ func newMetricsHandler(t *testing.T, cfg Config) (*CachingDBHandler, *flushRecor
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
 	recorder := &flushRecorder{}
-	handler, err := NewCachingDBHandler(&fakeDB{}, cfg, recorder.flush, provider.Meter("cache-test"))
-	require.NoError(t, err)
-	return handler, recorder, reader
+	return newHandlerOver(t, &fakeDB{}, cfg, recorder.flush, provider.Meter("cache-test")), recorder, reader
 }
 
 func collectMetrics(t *testing.T, reader *sdkmetric.ManualReader) metricdata.ResourceMetrics {
