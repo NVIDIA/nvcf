@@ -372,7 +372,109 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(self.plan(data)['status'], 'blocked')
         self.assertIn('unknown', self.output.getvalue())
 
-    def test_default_is_two_tables_without_deployment_diagnostics(self):
+    def test_default_rejects_incompatible_hardware_without_advertising_its_requirements(self):
+        data = snapshot(2)
+        for node in data['nodes']:
+            node['metadata']['labels']['nvidia.com/gpu.product'] = 'NVIDIA-GB300'
+        report = self.plan(data)
+        output = self.output.getvalue()
+        self.assertEqual(report['status'], 'blocked')
+        self.assertIsNone(report['chosenProfile'])
+        self.assertIsNone(report['deployment'])
+        self.assertIn("No compatible profile found for this model and the cluster's GPUs.", output)
+        for hidden in ('Needs (', '104.0 GiB RAM', 'Selected nodes:', 'helm install',
+                       'spark-fp8:', 'GPU product does not match', 'No distinct compatible node group'):
+            self.assertNotIn(hidden, output)
+        for expected in ('available-0', 'available-1', 'GPU allocation', 'No model cache claims found.'):
+            self.assertIn(expected, output)
+        self.output.truncate(0)
+        self.output.seek(0)
+        verbose_report = self.plan(data, '--verbose')
+        self.assertEqual(verbose_report, report)
+        verbose = self.output.getvalue()
+        self.assertIn('DOES NOT FIT', verbose)
+        self.assertIn('Evaluated profile: spark-fp8', verbose)
+        self.assertIn('Required GPU: NVIDIA-GB10\n', verbose)
+        self.assertIn('Result: incompatible with detected NVIDIA-GB300 GPUs', verbose)
+        self.assertEqual(verbose.count('GPU product does not match this profile.'), 2)
+
+    def test_verbose_does_not_infer_gpu_mismatch_for_mixed_or_unknown_products(self):
+        for product in ('NVIDIA-GB10', ''):
+            with self.subTest(product=product):
+                self.output.truncate(0)
+                self.output.seek(0)
+                data = snapshot(3)
+                data['nodes'][0]['metadata']['labels']['nvidia.com/gpu.product'] = 'NVIDIA-GB300'
+                data['nodes'][1]['metadata']['labels']['nvidia.com/gpu.product'] = product
+                data['nodes'][2]['status']['allocatable']['nvidia.com/gpu'] = '0'
+                data['nodes'][2]['metadata']['labels']['nvidia.com/gpu.product'] = 'ignored-cpu-node'
+                self.plan(data, '--verbose')
+                output = self.output.getvalue()
+                self.assertIn('Detected GPUs: ' + ', '.join(sorted(['NVIDIA-GB300', product or 'unknown'])), output)
+                self.assertIn('Result: ' + ('fits' if product else 'blocked'), output)
+                self.assertNotIn('Result: incompatible', output)
+                self.assertNotIn('ignored-cpu-node', output)
+
+    def test_busy_matching_gpu_is_not_reported_as_missing_profile(self):
+        data = snapshot(2)
+        data['nodes'][0]['metadata']['labels']['nvidia.com/gpu.product'] = 'NVIDIA-GB300'
+        data['pods'] = [{'metadata': {'name': 'busy', 'namespace': 'other'}, 'spec': {
+            'nodeName': 'available-1', 'containers': [{'resources': {'requests': {'nvidia.com/gpu': 1}}}]}}]
+        report = self.plan(data)
+        self.assertEqual(report['status'], 'blocked')
+        output = self.output.getvalue()
+        self.assertIn('DOES NOT FIT', output)
+        self.assertIn('Insufficient GPU', output)
+        self.assertNotIn('No compatible profile found', output)
+
+    def test_too_few_matching_nodes_is_not_reported_as_missing_profile(self):
+        data = snapshot(2)
+        data['nodes'][0]['metadata']['labels']['nvidia.com/gpu.product'] = 'NVIDIA-GB300'
+        report = self.plan(data, model='glm-5.3')
+        self.assertEqual(report['status'], 'blocked')
+        self.assertTrue(any(candidate['nodes'] for candidate in report['profiles'][0]['candidateNodes']))
+        output = self.output.getvalue()
+        self.assertIn('DOES NOT FIT', output)
+        self.assertIn('No distinct compatible node group', output)
+        self.assertNotIn('No compatible profile found', output)
+
+    def test_default_shows_only_the_selected_fitting_profile(self):
+        catalog = json.loads((HERE / 'recipes/index.json').read_text())
+        model = next(item for item in catalog['recipes'] if item['id'] == 'qwen3.8-27b')
+        selected = copy.deepcopy(model['profiles'][0])
+        selected['id'] = 'matching-profile'
+        model['profiles'][0]['hardware']['gpuProducts'] = ['other-gpu']
+        model['profiles'].append(selected)
+        alternative = copy.deepcopy(selected)
+        alternative['id'] = 'another-matching-profile'
+        model['profiles'].append(alternative)
+        original = Path.read_text
+        with patch.object(Path, 'read_text', lambda path, *a, **kw: json.dumps(catalog) if path == HERE/'recipes/index.json' else original(path, *a, **kw)):
+            report = self.plan()
+        output = self.output.getvalue()
+        self.assertEqual(report['status'], 'fits')
+        self.assertEqual(report['chosenProfile'], selected['id'])
+        self.assertIn('FITS current scheduling allocations.', output)
+        self.assertIn('Needs (matching-profile)', output)
+        self.assertIn('104.0 GiB RAM', output)
+        self.assertIn('Selected nodes: available-0', output)
+        self.assertNotIn('Needs (spark-fp8)', output)
+        self.assertNotIn('Needs (another-matching-profile)', output)
+        self.assertNotIn('GPU product does not match', output)
+
+    def test_default_shows_site_blocker_even_when_hardware_fits(self):
+        data = snapshot()
+        data['runtimeClasses'] = []
+        report = self.plan(data)
+        self.assertEqual(report['status'], 'blocked')
+        self.assertIsNotNone(report['chosenProfile'])
+        output = self.output.getvalue()
+        self.assertIn('DOES NOT FIT', output)
+        self.assertIn('RuntimeClass is not installed: nvidia', output)
+        self.assertNotIn('Needs (', output)
+        self.assertNotIn('Selected nodes:', output)
+
+    def test_default_is_two_tables_with_status_without_detailed_deployment_diagnostics(self):
         data = snapshot()
         data['endpoints'] = [{'metadata': {'name': 'old-model', 'namespace': 'llm-stack'},
                              'spec': {'modelName': 'qwen3.8-27b'}}]
@@ -384,9 +486,9 @@ class PlanTests(unittest.TestCase):
         output = self.output.getvalue()
         self.assertEqual(report['status'], 'existing')
         self.assertIsNone(report['deployment'])
-        for expected in ('GPU allocation', 'Model files and caches', 'old-cache', '29.0 GiB', 'another-namespace'):
+        for expected in ('EXISTING DEPLOYMENT', 'GPU allocation', 'Model files and caches', 'old-cache', '29.0 GiB', 'another-namespace'):
             self.assertIn(expected, output)
-        for hidden in ('EXISTING DEPLOYMENT', 'Endpoint ', 'helm install', 'helm status', 'No changes made', 'Rank 0: Insufficient'):
+        for hidden in ('Needs (', 'Endpoint ', 'helm install', 'helm status', 'No changes made', 'Rank 0: Insufficient'):
             self.assertNotIn(hidden, output)
 
     def test_json_includes_cache_bytes_and_unmeasured_status_without_table_text(self):

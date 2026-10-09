@@ -36,7 +36,7 @@ class RecipeCatalogTests(IsolatedTest):
     def test_local_catalog_lists_profiles_and_recorded_validation_without_cluster_access(self):
         catalog = llm.main(['recipes'])
         output = self.output.getvalue()
-        self.assertEqual(output.splitlines()[0].split(), ['RECIPE', 'PRECISION', 'PROFILE', 'NODES', 'LIFECYCLE', 'VALIDATION'])
+        self.assertEqual(output.splitlines()[0].split(), ['RECIPE', 'PRECISION', 'PROFILE', 'GPU', 'NODES', 'VALIDATION'])
         for recipe in catalog['recipes']:
             with self.subTest(recipe=recipe['id']):
                 rows = [line for line in output.splitlines() if line.startswith(recipe['id'] + ' ')]
@@ -44,7 +44,6 @@ class RecipeCatalogTests(IsolatedTest):
                 if recipe['availability']['deployable']:
                     for profile, row in zip(recipe['profiles'], rows):
                         self.assertIn(profile['id'], row)
-                        self.assertIn(profile['deployment']['lifecycle'], row)
                         validation_key = 'automaticHelmStatus' if profile['deployment']['lifecycle'] == 'automatic' else 'runtimeStatus'
                         self.assertIn(profile['validation'][validation_key], row)
                 else:
@@ -57,6 +56,22 @@ class RecipeCatalogTests(IsolatedTest):
         result = llm.main(['recipes', '--json'])
         self.assertEqual(result, expected)
         self.assertEqual(json.loads(self.output.getvalue()), expected)
+
+    def test_gpu_column_uses_hardware_and_collapses_product_aliases(self):
+        profiles = [
+            ('generic-profile', ['NVIDIA-GB10', 'NVIDIA GB10', 'NVIDIA_GB10'], 'NVIDIA-GB10'),
+            ('spark-named-profile', ['NVIDIA-GB300', 'NVIDIA GB300'], 'NVIDIA-GB300'),
+            ('multiple-products', ['NVIDIA-GB10', 'NVIDIA-GB300', 'NVIDIA-H100'],
+             'NVIDIA-GB10, NVIDIA-GB300, NVIDIA-H100')]
+        catalog = {'recipes': [{'id': 'test-recipe', 'precision': 'FP8',
+            'availability': {'deployable': True, 'status': 'available'},
+            'profiles': [{'id': name, 'modelNodeCount': 1, 'deployment': {'lifecycle': 'automatic'},
+                          'hardware': {'gpuProducts': products}} for name, products, _ in profiles]}]}
+        with patch.object(llm, 'print_table') as table:
+            llm.print_recipe_catalog(catalog)
+        headers, rows = table.call_args.args
+        column = headers.index('GPU')
+        self.assertEqual([row[column] for row in rows], [expected for _, _, expected in profiles])
 
     def test_recipe_status_does_not_promote_pending_or_failed_profiles(self):
         def profile(name, validation):

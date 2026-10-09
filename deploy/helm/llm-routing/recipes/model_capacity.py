@@ -145,6 +145,7 @@ def node_usage(snapshot):
         if any(taint.get('effect') in ('NoSchedule', 'NoExecute', 'PreferNoSchedule') for taint in node.get('spec', {}).get('taints', [])):
             row['blockers'].append('Node has a scheduling or eviction taint.')
         labels = node['metadata'].get('labels', {})
+        row['gpuProduct'] = gpu_product(labels.get('nvidia.com/gpu.product', '')) or None
         if labels.get('nvidia.com/gpu.sharing-strategy', 'none') != 'none' or labels.get('nvidia.com/gpu.replicas', '1') != '1':
             row['blockers'].append('GPU sharing is enabled; the profiles require exclusive GPUs.')
         if any(key.startswith('nvidia.com/mig-') and quantity(value) > 0 for key, value in allocatable.items()):
