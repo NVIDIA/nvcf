@@ -19,6 +19,7 @@ package com.nvidia.apikeys.validators;
 
 import static com.nvidia.apikeys.TestData.KEY_BY_OWNER_AND_SERVICE_VO_1;
 import static com.nvidia.apikeys.TestData.KEY_EXPIRES_AT_1;
+import static com.nvidia.apikeys.TestData.KEY_V2_VO_1;
 import static com.nvidia.apikeys.TestData.KEY_VO_1;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
@@ -98,16 +99,43 @@ class KeyExpirationValidatorTest {
     }
 
     @Test
+    void validateStatus_KeyV2_noChangesIfKeyNotExpired() {
+        when(clockMock.instant()).thenReturn(KEY_EXPIRES_AT_1.plusSeconds(-1));
+
+        assertThat(validator.validateStatus(KEY_V2_VO_1)).isEqualTo(KEY_V2_VO_1);
+    }
+
+    @Test
+    void validateStatus_KeyV2_noChangesIfKeySuspended() {
+        var key = KEY_V2_VO_1.toBuilder()
+                .keyStatus(KeyStatus.SUSPENDED)
+                .build();
+
+        assertThat(validator.validateStatus(key)).isEqualTo(key);
+    }
+
+    @Test
+    void validateStatus_KeyV2_setStatusToExpired() {
+        when(clockMock.instant()).thenReturn(KEY_EXPIRES_AT_1.plusSeconds(1));
+
+        var expected = KEY_V2_VO_1.toBuilder()
+                .keyStatus(KeyStatus.EXPIRED)
+                .build();
+
+        assertThat(validator.validateStatus(KEY_V2_VO_1)).isEqualTo(expected);
+    }
+
+    @Test
     void validateStatus_KeyByAccount_noChangesIfKeyNotExpired() {
         when(clockMock.instant()).thenReturn(KEY_EXPIRES_AT_1.plusSeconds(-1));
-        var key = KeysByOwnerAndAccountAndServiceVo.from(KEY_VO_1);
+        var key = KeysByOwnerAndAccountAndServiceVo.from(KEY_V2_VO_1);
 
         assertThat(validator.validateStatus(key)).isEqualTo(key);
     }
 
     @Test
     void validateStatus_KeyByAccount_noChangesIfKeySuspended() {
-        var key = KeysByOwnerAndAccountAndServiceVo.from(KEY_VO_1).toBuilder()
+        var key = KeysByOwnerAndAccountAndServiceVo.from(KEY_V2_VO_1).toBuilder()
                 .keyStatus(KeyStatus.SUSPENDED)
                 .build();
 
@@ -117,7 +145,7 @@ class KeyExpirationValidatorTest {
     @Test
     void validateStatus_KeyByAccount_setStatusToExpired() {
         when(clockMock.instant()).thenReturn(KEY_EXPIRES_AT_1.plusSeconds(1));
-        var key = KeysByOwnerAndAccountAndServiceVo.from(KEY_VO_1);
+        var key = KeysByOwnerAndAccountAndServiceVo.from(KEY_V2_VO_1);
 
         var expected = key.toBuilder()
                 .keyStatus(KeyStatus.EXPIRED)

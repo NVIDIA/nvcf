@@ -22,6 +22,7 @@ import static com.nvidia.apikeys.vo.KeyStatus.ACTIVE;
 import com.nvidia.apikeys.vo.KeysByOwnerAndAccountAndServiceVo;
 import com.nvidia.apikeys.vo.KeyByOwnerAndServiceVo;
 import com.nvidia.apikeys.vo.KeyStatus;
+import com.nvidia.apikeys.vo.KeyV2Vo;
 import com.nvidia.apikeys.vo.KeyVo;
 import java.time.Clock;
 import java.time.Instant;
@@ -48,6 +49,14 @@ public class KeyExpirationValidator {
     }
 
     public KeyByOwnerAndServiceVo validateStatus(KeyByOwnerAndServiceVo key) {
+        return isExpired(key::getExpiresAt, key::getKeyStatus)
+                ? key.toBuilder()
+                .keyStatus(KeyStatus.EXPIRED)
+                .build()
+                : key;
+    }
+
+    public KeyV2Vo validateStatus(KeyV2Vo key) {
         return isExpired(key::getExpiresAt, key::getKeyStatus)
                 ? key.toBuilder()
                 .keyStatus(KeyStatus.EXPIRED)

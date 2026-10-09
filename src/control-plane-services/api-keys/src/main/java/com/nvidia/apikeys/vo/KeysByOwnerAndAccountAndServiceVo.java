@@ -49,8 +49,8 @@ public class KeysByOwnerAndAccountAndServiceVo {
     private String description;
     private Set<String> audienceServiceIds;
 
-    public static KeysByOwnerAndAccountAndServiceVo from(KeyVo key) {
-        // authorizations stay only on the keys table
+    public static KeysByOwnerAndAccountAndServiceVo from(KeyV2Vo key) {
+        // authorizations stay only on the keys_v2 table
         return KeysByOwnerAndAccountAndServiceVo.builder()
                 .ncaId(key.getNcaId())
                 .ownerType(key.getOwnerType())

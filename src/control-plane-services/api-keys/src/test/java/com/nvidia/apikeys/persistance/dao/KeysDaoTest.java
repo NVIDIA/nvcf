@@ -62,6 +62,8 @@ class KeysDaoTest {
     @Mock
     private KeyModelConverter converterMock;
     @Mock
+    private KeyByOwnerAndServiceModelConverter keyByOwnerAndServiceConverterMock;
+    @Mock
     private CassandraTemplate cassandraTemplateMock;
     @Mock
     private CassandraBatchOperations cassandraBatchOperationsMock;
@@ -78,7 +80,7 @@ class KeysDaoTest {
     void save() {
         // mock conversion to model
         when(converterMock.voToModel(KEY_VO_1)).thenReturn(modelMock);
-        when(converterMock.voToModel(KEY_BY_OWNER_AND_SERVICE_VO_1))
+        when(keyByOwnerAndServiceConverterMock.voToModel(KEY_BY_OWNER_AND_SERVICE_VO_1))
                 .thenReturn(KEY_BY_OWNER_AND_SERVICE_MODEL_1);
 
         // mock successful batch save
@@ -98,7 +100,7 @@ class KeysDaoTest {
         when(keyByOwnerAndServiceRepositoryMock.findByOwnerTypeAndOwnerIdAndIssuerServiceIdAndKeyId(
                 USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
                 .thenReturn(Optional.of(KEY_BY_OWNER_AND_SERVICE_MODEL_1));
-        when(converterMock.modelToVo(KEY_BY_OWNER_AND_SERVICE_MODEL_1))
+        when(keyByOwnerAndServiceConverterMock.modelToVo(KEY_BY_OWNER_AND_SERVICE_MODEL_1))
                 .thenReturn(KEY_BY_OWNER_AND_SERVICE_VO_1);
 
         SavedKeyVo expectedValue = SavedKeyVo.builder()
@@ -113,7 +115,7 @@ class KeysDaoTest {
     void save_throwsIfFailedToWrite() {
         // mock conversion to model
         when(converterMock.voToModel(KEY_VO_1)).thenReturn(modelMock);
-        when(converterMock.voToModel(KEY_BY_OWNER_AND_SERVICE_VO_1))
+        when(keyByOwnerAndServiceConverterMock.voToModel(KEY_BY_OWNER_AND_SERVICE_VO_1))
                 .thenReturn(KEY_BY_OWNER_AND_SERVICE_MODEL_1);
 
         // mock successful batch save
@@ -145,7 +147,7 @@ class KeysDaoTest {
                 .keyStatus(ACTIVE)
                 .build();
 
-        when(converterMock.voToModel(KEY_BY_OWNER_AND_SERVICE_VO_1))
+        when(keyByOwnerAndServiceConverterMock.voToModel(KEY_BY_OWNER_AND_SERVICE_VO_1))
                 .thenReturn(KEY_BY_OWNER_AND_SERVICE_MODEL_1);
 
         when(cassandraTemplateMock.batchOps()).thenReturn(cassandraBatchOperationsMock);
@@ -170,7 +172,7 @@ class KeysDaoTest {
                 .keyStatus(ACTIVE)
                 .build();
 
-        when(converterMock.voToModel(KEY_BY_OWNER_AND_SERVICE_VO_1))
+        when(keyByOwnerAndServiceConverterMock.voToModel(KEY_BY_OWNER_AND_SERVICE_VO_1))
                 .thenReturn(KEY_BY_OWNER_AND_SERVICE_MODEL_1);
 
         when(cassandraTemplateMock.batchOps()).thenReturn(cassandraBatchOperationsMock);

@@ -78,7 +78,8 @@ public class KeysByOwnerAndAccountAndServiceModel {
     private KeyStatus keyStatus;
 
     @Column(COLUMN_CREATED_AT)
-    private Instant createdAt;
+    @Builder.Default
+    private Instant createdAt = Instant.now();
 
     @Column(COLUMN_EXPIRES_AT)
     private Instant expiresAt;

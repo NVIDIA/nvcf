@@ -17,7 +17,8 @@
 
 package com.nvidia.apikeys.vo;
 
-import static com.nvidia.apikeys.TestData.KEY_VO_1;
+import static com.nvidia.apikeys.TestData.KEY_V2_VO_1;
+import static com.nvidia.apikeys.TestData.NCA_ID_1;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
@@ -26,11 +27,11 @@ class KeysByOwnerAndAccountAndServiceVoTest {
 
     @Test
     void fromCopiesEveryManagementFieldFromKey() {
-        KeyVo key = KEY_VO_1.toBuilder().ncaId("nca-1").build();
+        KeyV2Vo key = KEY_V2_VO_1;
 
         KeysByOwnerAndAccountAndServiceVo vo = KeysByOwnerAndAccountAndServiceVo.from(key);
 
-        assertThat(vo.getNcaId()).isEqualTo("nca-1");
+        assertThat(vo.getNcaId()).isEqualTo(NCA_ID_1);
         assertThat(vo.getOwnerType()).isEqualTo(key.getOwnerType());
         assertThat(vo.getOwnerId()).isEqualTo(key.getOwnerId());
         assertThat(vo.getIssuerServiceId()).isEqualTo(key.getIssuerServiceId());
@@ -43,10 +44,5 @@ class KeysByOwnerAndAccountAndServiceVoTest {
         assertThat(vo.getApiKeySuffix()).isEqualTo(key.getApiKeySuffix());
         assertThat(vo.getDescription()).isEqualTo(key.getDescription());
         assertThat(vo.getAudienceServiceIds()).isEqualTo(key.getAudienceServiceIds());
-    }
-
-    @Test
-    void fromKeepsNullAccount() {
-        assertThat(KeysByOwnerAndAccountAndServiceVo.from(KEY_VO_1).getNcaId()).isNull();
     }
 }

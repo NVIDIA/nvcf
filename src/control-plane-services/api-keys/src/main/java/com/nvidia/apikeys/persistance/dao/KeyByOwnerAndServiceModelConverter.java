@@ -17,9 +17,9 @@
 
 package com.nvidia.apikeys.persistance.dao;
 
-import com.nvidia.apikeys.persistance.models.KeyModel;
+import com.nvidia.apikeys.persistance.models.KeyByOwnerAndServiceModel;
 import com.nvidia.apikeys.validators.KeyExpirationValidator;
-import com.nvidia.apikeys.vo.KeyVo;
+import com.nvidia.apikeys.vo.KeyByOwnerAndServiceVo;
 import com.nvidia.boot.jwt.services.mapping.EncryptedModelConverter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -29,19 +29,17 @@ import org.springframework.stereotype.Service;
  */
 @Service
 @RequiredArgsConstructor
-public class KeyModelConverter {
+public class KeyByOwnerAndServiceModelConverter {
 
-    private final EncryptedModelConverter<KeyModel, KeyVo> converter;
+    private final EncryptedModelConverter<KeyByOwnerAndServiceModel, KeyByOwnerAndServiceVo> converter;
     private final KeyExpirationValidator expirationValidator;
 
-
-    public KeyModel voToModel(KeyVo vo) {
+    public KeyByOwnerAndServiceModel voToModel(KeyByOwnerAndServiceVo vo) {
         return converter.voToModel(vo);
     }
 
-    public KeyVo modelToVo(KeyModel model) {
-        KeyVo keyVo = converter.modelToVo(model);
-        return expirationValidator.validateStatus(keyVo);
+    public KeyByOwnerAndServiceVo modelToVo(KeyByOwnerAndServiceModel model) {
+        KeyByOwnerAndServiceVo vo = converter.modelToVo(model);
+        return expirationValidator.validateStatus(vo);
     }
-
 }

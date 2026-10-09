@@ -65,8 +65,10 @@ public class OwnerStatusByAccountModel {
     private KeyOwnerStatus ownerStatus;
 
     @Column(COLUMN_CREATED_AT)
-    private Instant createdAt;
+    @Builder.Default
+    private Instant createdAt = Instant.now();
 
     @Column(COLUMN_UPDATED_AT)
-    private Instant updatedAt;
+    @Builder.Default
+    private Instant updatedAt = Instant.now();
 }

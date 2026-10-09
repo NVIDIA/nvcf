@@ -23,7 +23,6 @@ import com.nvidia.apikeys.persistance.repositories.OwnerStatusByAccountAndServic
 import com.nvidia.apikeys.persistance.repositories.OwnerStatusByAccountRepository;
 import com.nvidia.apikeys.vo.KeyOwnerStatus;
 import com.nvidia.apikeys.vo.KeyOwnerType;
-import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
@@ -39,7 +38,6 @@ public class OwnerStatusByAccountDao {
 
     private final OwnerStatusByAccountRepository accountRepository;
     private final OwnerStatusByAccountAndServiceRepository serviceRepository;
-    private final Clock clock;
 
     public Optional<OwnerStatusByAccountModel> getAccountStatus(
             String ncaId, KeyOwnerType ownerType, String ownerId) {
@@ -54,8 +52,8 @@ public class OwnerStatusByAccountDao {
 
     public OwnerStatusByAccountModel saveAccountStatus(
             String ncaId, KeyOwnerType ownerType, String ownerId, KeyOwnerStatus status) {
-        Instant now = clock.instant();
-        Instant createdAt = getAccountStatus(ncaId, ownerType, ownerId)
+        var now = Instant.now();
+        var createdAt = getAccountStatus(ncaId, ownerType, ownerId)
                 .map(OwnerStatusByAccountModel::getCreatedAt)
                 .orElse(now);
         return accountRepository.save(OwnerStatusByAccountModel.builder()
@@ -71,8 +69,8 @@ public class OwnerStatusByAccountDao {
     public OwnerStatusByAccountAndServiceModel saveServiceStatus(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             KeyOwnerStatus status) {
-        Instant now = clock.instant();
-        Instant createdAt = getServiceStatus(ncaId, ownerType, ownerId, issuerServiceId)
+        var now = Instant.now();
+        var createdAt = getServiceStatus(ncaId, ownerType, ownerId, issuerServiceId)
                 .map(OwnerStatusByAccountAndServiceModel::getCreatedAt)
                 .orElse(now);
         return serviceRepository.save(OwnerStatusByAccountAndServiceModel.builder()
@@ -91,7 +89,7 @@ public class OwnerStatusByAccountDao {
      */
     public KeyOwnerStatus getEffectiveStatus(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId) {
-        boolean accountSuspended = getAccountStatus(ncaId, ownerType, ownerId)
+        var accountSuspended = getAccountStatus(ncaId, ownerType, ownerId)
                 .map(OwnerStatusByAccountModel::getOwnerStatus)
                 .filter(KeyOwnerStatus.SUSPENDED::equals)
                 .isPresent();

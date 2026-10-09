@@ -18,7 +18,7 @@
 package com.nvidia.apikeys.persistance.models;
 
 import com.nvidia.apikeys.vo.KeyStatus;
-import com.nvidia.apikeys.vo.KeyVo;
+import com.nvidia.apikeys.vo.KeyV2Vo;
 import com.nvidia.boot.jwt.services.mapping.annotation.EncryptedFields;
 import com.nvidia.boot.observability.tracing.redaction.DoNotTraceValue;
 import java.time.Instant;
@@ -37,11 +37,12 @@ import org.springframework.data.cassandra.core.mapping.Table;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor(onConstructor_ = @PersistenceCreator)
-@Table(KeyModel.TABLE_NAME)
-public class KeyModel {
+@Table(KeyV2Model.TABLE_NAME)
+public class KeyV2Model {
 
-    public static final String TABLE_NAME = "keys";
+    public static final String TABLE_NAME = "keys_v2";
     public static final String COLUMN_API_KEY_HASH = "api_key_hash";
+    public static final String COLUMN_NCA_ID = "nca_id";
     public static final String COLUMN_STATUS = "status";
     public static final String COLUMN_EXPIRES_AT = "expires_at";
     public static final String COLUMN_DELETES_AT = "deletes_at";
@@ -53,6 +54,10 @@ public class KeyModel {
     private String keyHash;
 
     @NonNull
+    @Column(COLUMN_NCA_ID)
+    private String ncaId;
+
+    @NonNull
     @Column(COLUMN_STATUS)
     private KeyStatus keyStatus;
 
@@ -62,7 +67,7 @@ public class KeyModel {
     @Column(COLUMN_DELETES_AT)
     private Instant deletesAt;
 
-    @EncryptedFields(encryptionKeyName = "payload_jwe_kid", valueObject = KeyVo.class)
+    @EncryptedFields(encryptionKeyName = "payload_jwe_kid", valueObject = KeyV2Vo.class)
     @Column(COLUMN_KEY_DETAILS)
     private String keyDetails;
 }

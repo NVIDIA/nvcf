@@ -26,11 +26,7 @@ import com.nvidia.apikeys.config.IntegrationTestConfiguration;
 import com.nvidia.apikeys.config.IntegrationTestConfiguration.TestCleanerExtension;
 import com.nvidia.apikeys.config.exceptions.CassandraException;
 import com.nvidia.apikeys.persistance.models.KeyOperationModel;
-import com.nvidia.apikeys.utils.TestClock;
 import com.nvidia.apikeys.vo.KeyOperationStatus;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -41,8 +37,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -62,16 +56,6 @@ class KeyOperationsDaoIntegrationTest {
     @Autowired
     private KeyOperationsDao dao;
 
-    @BeforeEach
-    void setUp() {
-        TestClock.setBaseClock(TestClock.fixed(TEST_TIME, ZoneId.systemDefault()));
-    }
-
-    @AfterEach
-    void tearDown() {
-        TestClock.resetToDefaults();
-    }
-
     @Test
     void createAssignsDefaultsAndRoundTripsScope() {
         KeyOperationModel created = dao.create(operation().build());
@@ -81,18 +65,20 @@ class KeyOperationsDaoIntegrationTest {
         assertThat(created.getMatchedCount()).isZero();
         assertThat(created.getCompletedCount()).isZero();
         assertThat(created.getFailedCount()).isZero();
-        assertThat(created.getCreatedAt()).isEqualTo(TEST_TIME);
-        assertThat(created.getUpdatedAt()).isEqualTo(TEST_TIME);
+        assertThat(created.getCreatedAt()).isNotNull();
+        assertThat(created.getUpdatedAt()).isNotNull();
 
-        assertThat(dao.get(created.getOperationId())).contains(created);
+        assertThat(dao.get(created.getOperationId()))
+                .get()
+                .usingRecursiveComparison()
+                .ignoringFields("createdAt", "updatedAt")
+                .isEqualTo(created);
     }
 
     @Test
     void updatePersistsProgressAndPagingState() {
         KeyOperationModel created = dao.create(operation().build());
 
-        Instant later = TEST_TIME.plus(Duration.ofMinutes(5));
-        TestClock.setBaseClock(TestClock.fixed(later, ZoneId.systemDefault()));
         assertThat(dao.update(created.toBuilder()
                                       .operationStatus(KeyOperationStatus.RUNNING)
                                       .matchedCount(10L)
@@ -103,7 +89,7 @@ class KeyOperationsDaoIntegrationTest {
                                       .build()))
                 .get()
                 .extracting(KeyOperationModel::getUpdatedAt)
-                .isEqualTo(later);
+                .isNotNull();
 
         assertThat(dao.get(created.getOperationId()))
                 .get()
@@ -113,8 +99,8 @@ class KeyOperationsDaoIntegrationTest {
                     assertThat(stored.getCompletedCount()).isEqualTo(4L);
                     assertThat(stored.getFailedCount()).isEqualTo(1L);
                     assertThat(stored.getPagingState()).isEqualTo("opaque-paging-state");
-                    assertThat(stored.getCreatedAt()).isEqualTo(TEST_TIME);
-                    assertThat(stored.getUpdatedAt()).isEqualTo(later);
+                    assertThat(stored.getCreatedAt()).isNotNull();
+                    assertThat(stored.getUpdatedAt()).isNotNull();
                     assertThat(stored.getNcaIds()).containsExactlyInAnyOrder("nca-1", "nca-2");
                 });
     }

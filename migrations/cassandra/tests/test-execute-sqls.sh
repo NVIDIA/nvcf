@@ -296,8 +296,9 @@ if grep -F -q 'keys_by_owner_and_account_and_service' "${api_keys_schema}"; then
 fi
 
 api_keys_mt_migration="${keyspaces}/api_keys_api/04_add_multi_tenant_schema.up.sql"
-if ! grep -F -q 'ALTER TABLE api_keys_api.keys ADD IF NOT EXISTS nca_id TEXT;' \
+if ! grep -F -q 'CREATE TABLE IF NOT EXISTS api_keys_api.keys_v2' \
   "${api_keys_mt_migration}" ||
+  grep -F -q 'ALTER TABLE api_keys_api.keys ' "${api_keys_mt_migration}" ||
   ! grep -F -q 'CREATE TABLE IF NOT EXISTS api_keys_api.keys_by_owner_and_account_and_service' \
     "${api_keys_mt_migration}"; then
   fail "api_keys_api upgrade migration does not add the multi-tenant schema idempotently"

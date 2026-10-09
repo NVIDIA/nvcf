@@ -17,7 +17,7 @@
 
 package com.nvidia.apikeys.vo;
 
-import com.nvidia.apikeys.persistance.models.KeyModel;
+import com.nvidia.apikeys.persistance.models.KeyV2Model;
 import com.nvidia.boot.jwt.services.mapping.annotation.ValueObject;
 import java.time.Instant;
 import java.util.Set;
@@ -30,10 +30,11 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-@ValueObject(model = KeyModel.class)
-public class KeyVo {
+@ValueObject(model = KeyV2Model.class)
+public class KeyV2Vo {
 
     private KeyStatus keyStatus;
+    private String ncaId;
     private KeyOwnerType ownerType;
     private String ownerId;
     private String issuerServiceId;

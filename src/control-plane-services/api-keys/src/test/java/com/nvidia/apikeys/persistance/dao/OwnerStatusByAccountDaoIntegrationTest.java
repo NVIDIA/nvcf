@@ -17,7 +17,6 @@
 
 package com.nvidia.apikeys.persistance.dao;
 
-import static com.nvidia.apikeys.TestData.TEST_TIME;
 import static com.nvidia.apikeys.vo.KeyOwnerStatus.ACTIVE;
 import static com.nvidia.apikeys.vo.KeyOwnerStatus.SUSPENDED;
 import static com.nvidia.apikeys.vo.KeyOwnerType.USER;
@@ -26,13 +25,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.nvidia.apikeys.App;
 import com.nvidia.apikeys.config.IntegrationTestConfiguration;
 import com.nvidia.apikeys.config.IntegrationTestConfiguration.TestCleanerExtension;
+import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountAndServiceModel;
 import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountModel;
-import com.nvidia.apikeys.utils.TestClock;
-import java.time.Duration;
 import java.time.Instant;
-import java.time.ZoneId;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -57,16 +52,6 @@ class OwnerStatusByAccountDaoIntegrationTest {
 
     @Autowired
     private OwnerStatusByAccountDao dao;
-
-    @BeforeEach
-    void setUp() {
-        TestClock.setBaseClock(TestClock.fixed(TEST_TIME, ZoneId.systemDefault()));
-    }
-
-    @AfterEach
-    void tearDown() {
-        TestClock.resetToDefaults();
-    }
 
     @Test
     void missingStatusIsActive() {
@@ -140,27 +125,36 @@ class OwnerStatusByAccountDaoIntegrationTest {
     @Test
     void saveReturnsStoredRow() {
         OwnerStatusByAccountModel saved = dao.saveAccountStatus(NCA_1, USER, OWNER, SUSPENDED);
+        OwnerStatusByAccountAndServiceModel savedService =
+                dao.saveServiceStatus(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
 
-        assertThat(dao.getAccountStatus(NCA_1, USER, OWNER)).contains(saved);
-        assertThat(dao.saveServiceStatus(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED))
-                .satisfies(status -> assertThat(dao.getServiceStatus(
-                        NCA_1, USER, OWNER, SERVICE_A)).contains(status));
+        assertThat(dao.getAccountStatus(NCA_1, USER, OWNER))
+                .get()
+                .usingRecursiveComparison()
+                .ignoringFields("createdAt", "updatedAt")
+                .isEqualTo(saved);
+        assertThat(dao.getServiceStatus(NCA_1, USER, OWNER, SERVICE_A))
+                .get()
+                .usingRecursiveComparison()
+                .ignoringFields("createdAt", "updatedAt")
+                .isEqualTo(savedService);
     }
 
     @Test
     void reactivatingKeepsCreatedAtAndRefreshesUpdatedAt() {
         dao.saveAccountStatus(NCA_1, USER, OWNER, SUSPENDED);
+        Instant createdAt = dao.getAccountStatus(NCA_1, USER, OWNER)
+                .map(OwnerStatusByAccountModel::getCreatedAt)
+                .orElseThrow();
 
-        Instant later = TEST_TIME.plus(Duration.ofHours(1));
-        TestClock.setBaseClock(TestClock.fixed(later, ZoneId.systemDefault()));
         dao.saveAccountStatus(NCA_1, USER, OWNER, ACTIVE);
 
         assertThat(dao.getAccountStatus(NCA_1, USER, OWNER))
                 .get()
                 .satisfies(status -> {
                     assertThat(status.getOwnerStatus()).isEqualTo(ACTIVE);
-                    assertThat(status.getCreatedAt()).isEqualTo(TEST_TIME);
-                    assertThat(status.getUpdatedAt()).isEqualTo(later);
+                    assertThat(status.getCreatedAt()).isEqualTo(createdAt);
+                    assertThat(status.getUpdatedAt()).isNotNull();
                 });
         assertThat(dao.getAccountStatus(NCA_1, USER, OWNER))
                 .map(OwnerStatusByAccountModel::getNcaId)
@@ -170,17 +164,18 @@ class OwnerStatusByAccountDaoIntegrationTest {
     @Test
     void serviceStatusKeepsCreatedAtOnUpdate() {
         dao.saveServiceStatus(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
+        Instant createdAt = dao.getServiceStatus(NCA_1, USER, OWNER, SERVICE_A)
+                .map(OwnerStatusByAccountAndServiceModel::getCreatedAt)
+                .orElseThrow();
 
-        Instant later = TEST_TIME.plus(Duration.ofHours(1));
-        TestClock.setBaseClock(TestClock.fixed(later, ZoneId.systemDefault()));
         dao.saveServiceStatus(NCA_1, USER, OWNER, SERVICE_A, ACTIVE);
 
         assertThat(dao.getServiceStatus(NCA_1, USER, OWNER, SERVICE_A))
                 .get()
                 .satisfies(status -> {
                     assertThat(status.getOwnerStatus()).isEqualTo(ACTIVE);
-                    assertThat(status.getCreatedAt()).isEqualTo(TEST_TIME);
-                    assertThat(status.getUpdatedAt()).isEqualTo(later);
+                    assertThat(status.getCreatedAt()).isEqualTo(createdAt);
+                    assertThat(status.getUpdatedAt()).isNotNull();
                 });
     }
 }

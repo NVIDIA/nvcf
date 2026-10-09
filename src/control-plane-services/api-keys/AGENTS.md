@@ -40,13 +40,19 @@ adding local delta files.
 
 `03_init_tables.up.sql` stays the original single-tenant tables. Do not add
 multi-tenant objects to `03`. `04_add_multi_tenant_schema.up.sql` is the
-deployed delta for new and existing clusters. Keep `keys_by_owner_and_service`
-until the dual-write migration stops using it.
+deployed delta for new and existing clusters. `keys` and
+`keys_by_owner_and_service` stay as legacy tables until the migration completes.
 
-Multi-tenant persistence lives in the `KeysDao` account key methods,
-`OwnerStatusByAccountDao`, and `KeyOperationsDao`. `EncryptedModelConverter` maps every model column to a
-same-named value-object field, so a new column on an encrypted model also needs
-that field on its `@ValueObject`.
+`KeysDao`, `KeyModel`, and `KeyVo` serve the legacy tables. Do not add
+multi-tenant behavior to them. Keys issued to an account use `KeysV2Dao`,
+`KeyV2Model`, and `KeyV2Vo` against `keys_v2` and
+`keys_by_owner_and_account_and_service`. Owner status and bulk operations use
+`OwnerStatusByAccountDao` and `KeyOperationsDao`.
+
+`keys_v2.nca_id` is a regular column. `KeysV2Dao` and `KeyV2Model` require it.
+`EncryptedModelConverter` maps each model to exactly one `@ValueObject` and
+maps every model column to a same-named value-object field, so a new column on
+an encrypted model also needs that field on its `@ValueObject`.
 
 Integration tests bind each `.cql` file in `local_env/docker-compose.test.yml`
 because Bazel runfiles are symlinks. Local Compose mounts the whole schema

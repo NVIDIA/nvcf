@@ -17,12 +17,9 @@ CREATE KEYSPACE IF NOT EXISTS nvcf_api_keys with replication = {'class':'SimpleS
 
 USE nvcf_api_keys;
 
--- Hash lookup stays keyed by api_key_hash. nca_id is a regular column because
--- evaluate starts from the presented secret and does not know the account yet.
 CREATE TABLE IF NOT EXISTS keys
 (
     api_key_hash TEXT,
-    nca_id       TEXT,
     status       TEXT,
     expires_at   TIMESTAMP,
     deletes_at   TIMESTAMP,
@@ -62,8 +59,21 @@ CREATE TABLE IF NOT EXISTS row_update_lock
     PRIMARY KEY ((table_name, record_key))
 );
 
--- Account-scoped management index. Keep keys_by_owner_and_service until the
--- dual-write migration stops using it.
+-- keys and keys_by_owner_and_service stay as legacy tables until the migration completes.
+-- keys_v2 holds keys issued to an account. Hash lookup stays keyed by api_key_hash, and
+-- nca_id is a regular column that the application always sets.
+CREATE TABLE IF NOT EXISTS keys_v2
+(
+    api_key_hash TEXT,
+    nca_id       TEXT,
+    status       TEXT,
+    expires_at   TIMESTAMP,
+    deletes_at   TIMESTAMP,
+    key_details  TEXT,
+    PRIMARY KEY ((api_key_hash))
+);
+
+-- Account-scoped management index for keys in keys_v2.
 CREATE TABLE IF NOT EXISTS keys_by_owner_and_account_and_service
 (
     nca_id            TEXT,

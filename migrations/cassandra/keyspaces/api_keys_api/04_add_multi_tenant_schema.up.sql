@@ -1,9 +1,19 @@
 -- Multi-tenant API Keys tables. 03_init_tables.up.sql stays the original schema.
 -- New and existing clusters apply this file. Statements are idempotent.
--- Keep keys_by_owner_and_service until the dual-write migration stops using it.
--- Hash lookup stays keyed by api_key_hash. nca_id is a regular column.
+-- keys and keys_by_owner_and_service stay as legacy tables until the migration completes.
+-- keys_v2 holds keys issued to an account. Hash lookup stays keyed by api_key_hash, and
+-- nca_id is a regular column that the application always sets.
 
-ALTER TABLE api_keys_api.keys ADD IF NOT EXISTS nca_id TEXT;
+CREATE TABLE IF NOT EXISTS api_keys_api.keys_v2
+(
+    api_key_hash TEXT,
+    nca_id       TEXT,
+    status       TEXT,
+    expires_at   TIMESTAMP,
+    deletes_at   TIMESTAMP,
+    key_details  TEXT,
+    PRIMARY KEY ((api_key_hash))
+);
 
 CREATE TABLE IF NOT EXISTS api_keys_api.keys_by_owner_and_account_and_service
 (

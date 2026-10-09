@@ -21,7 +21,6 @@ import com.nvidia.apikeys.config.exceptions.CassandraException;
 import com.nvidia.apikeys.persistance.models.KeyOperationModel;
 import com.nvidia.apikeys.persistance.repositories.KeyOperationRepository;
 import com.nvidia.apikeys.vo.KeyOperationStatus;
-import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
@@ -44,14 +43,12 @@ public class KeyOperationsDao {
 
     private final KeyOperationRepository repository;
     private final CassandraTemplate cassandraTemplate;
-    private final Clock clock;
 
     /**
      * Inserts a new operation. Assigns an id, PENDING status, and zero counters when unset.
      */
     public KeyOperationModel create(KeyOperationModel operation) {
-        Instant now = clock.instant();
-        KeyOperationModel model = operation.toBuilder()
+        var model = operation.toBuilder()
                 .operationId(Optional.ofNullable(operation.getOperationId())
                                      .orElseGet(UUID::randomUUID))
                 .operationStatus(Optional.ofNullable(operation.getOperationStatus())
@@ -59,8 +56,6 @@ public class KeyOperationsDao {
                 .matchedCount(zeroIfNull(operation.getMatchedCount()))
                 .completedCount(zeroIfNull(operation.getCompletedCount()))
                 .failedCount(zeroIfNull(operation.getFailedCount()))
-                .createdAt(now)
-                .updatedAt(now)
                 .build();
 
         if (!cassandraTemplate.insert(model, IF_NOT_EXISTS).wasApplied()) {
@@ -78,8 +73,8 @@ public class KeyOperationsDao {
      * Returns empty when the operation does not exist.
      */
     public Optional<KeyOperationModel> update(KeyOperationModel operation) {
-        KeyOperationModel model = operation.toBuilder()
-                .updatedAt(clock.instant())
+        var model = operation.toBuilder()
+                .updatedAt(Instant.now())
                 .build();
 
         if (!cassandraTemplate.update(model, IF_EXISTS).wasApplied()) {
