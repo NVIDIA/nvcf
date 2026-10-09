@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Qualify, cache, and supervise one rank of a pinned SGLang recipe."""
 import datetime
-import ctypes
 import fcntl
 import hashlib
 import http.client
@@ -13,10 +12,10 @@ import math
 import os
 import pathlib
 import platform
-import re
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -40,19 +39,10 @@ def host_memory():
 
 def command(config, model_path, rank):
     profile = config['profile']
-    host = '0.0.0.0'
-    if profile['nodes'] > 1:
-        host = os.environ.get('POD_IP', '')
-        try:
-            address = ipaddress.ip_address(host)
-        except ValueError:
-            raise RuntimeError('TP2 requires POD_IP from the Kubernetes downward API') from None
-        if address.is_unspecified or address.is_loopback or address.is_multicast:
-            raise RuntimeError('TP2 requires a usable pod IP for the backend Service')
     flags = ['--model-path', str(model_path), '--served-model-name', config['model']['id'],
              '--tp', str(profile['nodes']), '--context-length', str(config['contextLength']),
              '--max-running-requests', str(config['concurrency']), '--max-total-tokens', str(config['contextLength'] * config['concurrency']),
-             '--host', host, '--port', str(config['ports']['http'])] + profile['flags']
+             '--host', '0.0.0.0', '--port', str(config['ports']['http'])] + profile['flags']
     if profile['nodes'] > 1:
         flags += ['--nnodes', str(profile['nodes']), '--node-rank', str(rank),
                   '--dist-init-addr', config['targets'][0]['address'] + ':' + str(config['ports']['rendezvous'])]
@@ -143,48 +133,21 @@ def prepare_offload(config, directory=pathlib.Path('/ple')):
         raise RuntimeError('Insufficient free NVMe space for the profile offload reservation')
 
 
-def interface_addresses(interface):
-    """Read all IPv4 addresses assigned to a Linux interface, including secondary addresses."""
-    class IfAddrs(ctypes.Structure):
-        pass
-    IfAddrs._fields_ = [('next', ctypes.POINTER(IfAddrs)), ('name', ctypes.c_char_p),
-                       ('flags', ctypes.c_uint), ('address', ctypes.c_void_p)]
-    libc = ctypes.CDLL(None, use_errno=True)
-    libc.getifaddrs.argtypes = [ctypes.POINTER(ctypes.POINTER(IfAddrs))]
-    libc.getifaddrs.restype = ctypes.c_int
-    libc.freeifaddrs.argtypes = [ctypes.POINTER(IfAddrs)]
-    libc.freeifaddrs.restype = None
-    head = ctypes.POINTER(IfAddrs)()
-    if libc.getifaddrs(ctypes.byref(head)) != 0:
-        raise RuntimeError('Cannot inspect fabric interface addresses: ' + os.strerror(ctypes.get_errno()))
-    addresses = set()
-    try:
-        current = head
-        while current:
-            entry = current.contents
-            if entry.name == interface.encode() and entry.address and ctypes.c_ushort.from_address(entry.address).value == socket.AF_INET:
-                addresses.add(socket.inet_ntoa(ctypes.string_at(entry.address + 4, 4)))
-            current = entry.next
-    finally:
-        libc.freeifaddrs(head)
-    return addresses
-
-
 def check_fabric(config, rank, net=pathlib.Path('/sys/class/net')):
     targets, profile = config['targets'], config['profile']
     if len(targets) != 2 or targets[0].get('fabric') != targets[1].get('fabric') or not targets[0].get('fabric'):
         raise RuntimeError('TP2 requires two targets on the same verified fabric')
-    try:
-        addresses = [ipaddress.ip_address(target['address']) for target in targets]
-    except ValueError:
-        raise RuntimeError('TP2 requires distinct usable IPv4 fabric addresses') from None
-    if len(set(addresses)) != 2 or any(address.version != 4 or address.is_unspecified or address.is_loopback or address.is_multicast or address.is_reserved for address in addresses):
+    addresses = [ipaddress.ip_address(target['address']) for target in targets]
+    if len(set(addresses)) != 2 or any(address.version != 4 or address.is_unspecified or address.is_loopback or address.is_multicast or address.is_link_local for address in addresses):
         raise RuntimeError('TP2 requires distinct usable IPv4 fabric addresses')
     target = targets[rank]
     interface = target['interface']
-    if not re.fullmatch(r'[a-zA-Z0-9_.-]{1,15}', interface) or interface in ('.', '..'):
+    if len(interface.encode()) > 15 or '/' in interface or interface in ('', '.', '..'):
         raise RuntimeError('Invalid fabric interface name')
-    if target['address'] not in interface_addresses(interface):
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        # SIOCGIFADDR returns the IPv4 address assigned to this local interface.
+        result = fcntl.ioctl(sock.fileno(), 0x8915, struct.pack('256s', interface.encode()))
+    if socket.inet_ntoa(result[20:24]) != target['address']:
         raise RuntimeError('Configured fabric address does not belong to the selected interface')
     if (net / interface / 'operstate').read_text().strip() != 'up':
         raise RuntimeError('The selected fabric interface is not up')
@@ -288,21 +251,10 @@ def stop(child):
         child.wait()
 
 
-def check_memory_latch(state_dir=pathlib.Path('/tmp')):
+def supervise(argv, config, state_dir=pathlib.Path('/tmp'), cgroup=pathlib.Path('/sys/fs/cgroup'), peer_guard=None):
     latch = state_dir / 'recipe-memory-stop.json'
     if latch.exists():
-        cause = latch.read_text()
-        try:
-            cause = json.loads(cause)
-        except ValueError:
-            pass
-        log('memory_guard_latched', cause=cause)
-        raise RuntimeError('Memory guard previously stopped this pod. Inspect the recorded cause before replacing the pod: ' + str(cause))
-
-
-def supervise(argv, config, state_dir=pathlib.Path('/tmp'), cgroup=pathlib.Path('/sys/fs/cgroup'), peer_guard=None):
-    check_memory_latch(state_dir)
-    latch = state_dir / 'recipe-memory-stop.json'
+        raise RuntimeError('Memory guard previously stopped this pod. Inspect the cause before replacing the pod.')
     swap = cgroup / 'memory.swap.current'
     if not swap.exists():
         raise RuntimeError('Runtime memory guard requires cgroup v2')
@@ -346,17 +298,6 @@ def completed_checkpoint(model, cache):
     return complete
 
 
-def blob_matches(path, digest):
-    """Hub blobs use SHA256 for LFS files and Git blob SHA1 for other files."""
-    checksum = hashlib.sha256() if len(digest) == 64 else hashlib.sha1(usedforsecurity=False)
-    if len(digest) == 40:
-        checksum.update(('blob ' + str(path.stat().st_size) + '\0').encode())
-    with path.open('rb') as stream:
-        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
-            checksum.update(chunk)
-    return checksum.hexdigest() == digest
-
-
 def reuse_snapshot(model, cache=pathlib.Path('/cache'), require_complete=True, write_marker=True):
     """Validate retained Hugging Face files directly; never import a download client."""
     complete = completed_checkpoint(model, cache) if require_complete else cache / (model['revision'] + '.complete')
@@ -371,8 +312,15 @@ def reuse_snapshot(model, cache=pathlib.Path('/cache'), require_complete=True, w
         resolved = path.resolve()
         if not path.is_file() or not resolved.is_relative_to(repository.resolve()):
             raise RuntimeError('Cached snapshot has a missing file or invalid link: ' + path.name)
-        if resolved not in checked and re.fullmatch(r'[a-f0-9]{64}|[a-f0-9]{40}', resolved.name):
-            if not blob_matches(path, resolved.name):
+        # Hub blobs use SHA256 for LFS files and Git blob SHA1 for other files.
+        if resolved not in checked and len(resolved.name) in (40, 64) and all(c in '0123456789abcdef' for c in resolved.name):
+            digest = hashlib.sha256() if len(resolved.name) == 64 else hashlib.sha1(usedforsecurity=False)
+            if len(resolved.name) == 40:
+                digest.update(('blob ' + str(path.stat().st_size) + '\0').encode())
+            with path.open('rb') as stream:
+                for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
+                    digest.update(chunk)
+            if digest.hexdigest() != resolved.name:
                 raise RuntimeError('Cached model blob checksum differs: ' + path.name)
             checked.add(resolved)
     def read_json(name):
@@ -424,38 +372,6 @@ def reuse_snapshot(model, cache=pathlib.Path('/cache'), require_complete=True, w
     return snapshot
 
 
-def downloaded_bytes(model, cache):
-    """Credit only blobs belonging to the pinned revision, without changing the cache."""
-    from huggingface_hub import HfApi
-    info = HfApi().model_info(model['repository'], revision=model['revision'], files_metadata=True, timeout=30)
-    if info.sha != model['revision'] or not info.siblings:
-        raise RuntimeError('Download metadata does not match the pinned model revision')
-    blobs = cache / 'huggingface/hub' / ('models--' + model['repository'].replace('/', '--')) / 'blobs'
-    if not blobs.resolve().is_relative_to(cache.resolve()):
-        raise RuntimeError('Model blob directory escapes the cache')
-    total, seen = 0, set()
-    for file in info.siblings:
-        digest = file.lfs.sha256 if file.lfs else file.blob_id
-        size = file.size
-        if not isinstance(digest, str) or not re.fullmatch(r'[a-f0-9]{64}|[a-f0-9]{40}', digest) or type(size) is not int or size < 0:
-            raise RuntimeError('Pinned download metadata lacks a valid blob identity or size')
-        if digest in seen:
-            continue
-        seen.add(digest)
-        path = blobs / digest
-        if path.is_file() and not path.is_symlink() and path.stat().st_size == size:
-            if blob_matches(path, digest):
-                total += size
-            continue
-        path = blobs / (digest + '.incomplete')
-        # hf_transfer starts incomplete downloads from the beginning.
-        if os.environ.get('HF_HUB_ENABLE_HF_TRANSFER', '').upper() not in ('1', 'ON', 'YES', 'TRUE') and path.is_file() and not path.is_symlink():
-            stat = path.stat()
-            if stat.st_size <= size:
-                total += min(stat.st_size, stat.st_blocks * 512)
-    return total
-
-
 def prepare_checkpoint(config, cache):
     model = config['model']
     if config.get('reuseCaches') or (cache / (model['revision'] + '.complete')).exists():
@@ -471,12 +387,8 @@ def prepare_checkpoint(config, cache):
     else:
         log('download_pass', model=model['id'], revision=model['revision'], reused=True)
         return snapshot
-    required = config['profile']['minFreeDiskGiB'] * GIB
-    free = shutil.disk_usage(cache).free
-    if free < required:
-        remaining = max(0, required - downloaded_bytes(model, cache))
-        if free < remaining:
-            raise RuntimeError(f'Insufficient cache disk space for the model checkpoint: {free} free bytes, {remaining} still required')
+    if shutil.disk_usage(cache).free < config['profile']['minFreeDiskGiB'] * GIB:
+        raise RuntimeError('Insufficient cache disk space for the model checkpoint')
     from huggingface_hub import snapshot_download
     snapshot_download(repo_id=model['repository'], revision=model['revision'], cache_dir=str(cache / 'huggingface/hub'))
     snapshot = reuse_snapshot(model, cache, require_complete=False)
@@ -484,8 +396,7 @@ def prepare_checkpoint(config, cache):
     return snapshot
 
 
-def automatic(config, rank, cache=pathlib.Path('/cache'), state_dir=pathlib.Path('/tmp')):
-    check_memory_latch(state_dir)
+def automatic(config, rank, cache=pathlib.Path('/cache')):
     world = config['profile']['nodes']
     if world not in (1, 2) or rank not in range(world):
         raise RuntimeError('Automatic startup requires one or two valid profile ranks')
@@ -521,8 +432,8 @@ def automatic(config, rank, cache=pathlib.Path('/cache'), state_dir=pathlib.Path
             log('serve_start', model=config['model']['id'], revision=config['model']['revision'], rank=rank)
             if barrier:
                 barrier.state['phase'] = 'serving'
-            return supervise(command(config, model_path, rank), config, state_dir=state_dir,
-                             peer_guard=barrier.guard if barrier else None)
+                return supervise(command(config, model_path, rank), config, peer_guard=barrier.guard)
+            return supervise(command(config, model_path, rank), config)
         finally:
             if barrier:
                 barrier.close()
