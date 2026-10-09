@@ -25,21 +25,23 @@ k3s provides the `nvidia` RuntimeClass when the container toolkit is installed b
 
 ### Check the cluster
 
-Check the workstation tools and cluster prerequisites without changing anything. Replace `YOUR_CONTEXT` with your kubeconfig context:
-
-```bash
-python3 llm.py --context YOUR_CONTEXT preflight --values dev-artifacts/values.yaml
-```
-
-Exit code 2 means a check failed. The output lists each check, then each GPU node with its matching recipes and any problems. The preflight does not test outbound access from the nodes or free disk space for model caches.
-
-## 1. Install shared infrastructure
-
-Replace `YOUR_CONTEXT` with your kubeconfig context and select it once below. All remaining commands use the selected context.
+Replace `YOUR_CONTEXT` with your kubeconfig context, then check and load any missing shared images:
 
 ```bash
 kubectl config use-context YOUR_CONTEXT
+python3 dev-artifacts/build.py --load-only --allow-containerd-import
+```
 
+Then run preflight to check tools, cluster access, GPU compatibility, runtime, storage configuration and image availability:
+
+```bash
+python3 llm.py preflight --values dev-artifacts/values.yaml
+```
+
+## 1. Install shared infrastructure
+
+
+```bash
 helm upgrade --install llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
   --namespace llm-stack --create-namespace \
   --values dev-artifacts/values.yaml --wait --timeout 10m

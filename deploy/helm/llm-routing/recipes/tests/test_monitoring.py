@@ -22,7 +22,9 @@ CHART = HERE/'charts/monitoring'
 
 
 def monitoring_values():
-    return json.loads((CHART/'values.yaml').read_text())
+    values = json.loads((CHART/'values.yaml').read_text())
+    values['grafana']['rootURL'] = 'http://192.0.2.10/grafana/'
+    return values
 
 
 class MonitoringTests(unittest.TestCase):

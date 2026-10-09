@@ -91,12 +91,21 @@ def main(argv=None):
     parser.add_argument('--context', help='Override the current kubectl context.')
     parser.add_argument('--namespace', default='llm-stack', help='Image repository prefix; shared values target llm-stack.')
     parser.add_argument('--control-node')
+    parser.add_argument('--load-only', action='store_true',
+                        help='Load missing development images from a saved build without building or publishing artifacts.')
+    parser.add_argument('--values', type=Path,
+                        help='Helm values to read with --load-only (default: dev-artifacts/values.yaml).')
     directories = parser.add_mutually_exclusive_group()
     directories.add_argument('--output-dir', type=Path, help='External parent directory for per-build archives and state.')
     directories.add_argument('--resume-from', type=Path, help='Resume the printed build directory after an interrupted preparation.')
     parser.add_argument('--allow-containerd-import', action='store_true',
                         help='Allow image import Jobs to mount the nodes containerd sockets.')
     args = parser.parse_args(argv)
+    if args.load_only:
+        images.require(not args.resume_from, 'Rerun --load-only with the same arguments to retry an import.')
+        args.values = args.values or VALUES
+        return images.load(args)
+    images.require(not args.values, '--values requires --load-only.')
     images.require(args.allow_containerd_import, 'Use --allow-containerd-import to build and preload images.')
     images.require(not VALUES.is_symlink(), 'Shared values must not be a symlink.')
     images.require(not CHARTS.is_symlink(), 'Shared charts must not be a symlink.')

@@ -31,6 +31,54 @@ def save(path, value):
         stream.write(value if isinstance(value, str) else json.dumps(value, indent=2) + '\n')
 
 
+def check_nodes(config, output):
+    nodes = json.loads(output(['kubectl', '--context', config['context'], 'get', 'nodes', '-o', 'json']))['items']
+    architecture = config['imagePlatform'].split('/')[1]
+    eligible = set()
+    indexed = {node['metadata']['name']: node for node in nodes}
+    for node in nodes:
+        labels = node['metadata'].get('labels', {})
+        conditions = {c['type']: c['status'] for c in node.get('status', {}).get('conditions', [])}
+        schedulable = not node['metadata'].get('deletionTimestamp') and not node.get('spec', {}).get('unschedulable') and not any(
+            taint.get('effect') in ('NoSchedule', 'NoExecute') for taint in node.get('spec', {}).get('taints', []))
+        if labels.get('kubernetes.io/os') == 'linux' and labels.get('kubernetes.io/arch') == architecture and conditions.get('Ready') == 'True' and schedulable and not any(
+                conditions.get(condition) == 'True' for condition in ('MemoryPressure', 'DiskPressure', 'PIDPressure')):
+            eligible.add(node['metadata']['name'])
+    require(eligible <= set(config['containerd']['nodeNames']), 'New compatible nodes are missing from the bound image preload set. Run setup again.')
+    for name in config['containerd']['nodeNames']:
+        node = indexed.get(name)
+        require(node and node['metadata']['uid'] == config['containerd']['nodeUIDs'][name], 'Image preload node was replaced: ' + name)
+        require(name in eligible, 'Image preload node is unschedulable, pressured, not Ready or does not match ' + config['imagePlatform'] + ': ' + name)
+        require(node.get('status', {}).get('nodeInfo', {}).get('containerRuntimeVersion', '').startswith('containerd://'),
+                'Image preload requires containerd on node: ' + name)
+    return indexed
+
+
+def image_aliases(reference):
+    registry = reference.split('/', 1)[0]
+    if registry != 'docker.io' and ('.' in registry or ':' in registry or registry == 'localhost'):
+        return {reference}
+    bare = reference.removeprefix('docker.io/')
+    aliases = {bare, 'docker.io/' + bare}
+    if bare.startswith('library/'):
+        aliases.add(bare.removeprefix('library/'))
+    elif '/' not in bare:
+        aliases.update({'library/' + bare, 'docker.io/library/' + bare})
+    return aliases
+
+
+def missing_nodes(config, output):
+    nodes = check_nodes(config, output)
+    references = [image['repository'] + ':' + image['tag'] for image in config['images'].values()]
+    missing = []
+    for name in config['containerd']['nodeNames']:
+        reported = {reference for entry in nodes[name].get('status', {}).get('images', [])
+                    for reference in entry.get('names', [])}
+        if any(not (image_aliases(reference) & reported) for reference in references):
+            missing.append(name)
+    return missing
+
+
 class Preparation:
     def __init__(self, config, work, allow):
         require(allow, 'Building and preloading images requires explicit containerd-import authorization.')
@@ -55,7 +103,8 @@ class Preparation:
         user = self.containerd.get('runAsUser', 1000)
         require(type(user) is int and user > 0, 'containerd.runAsUser must be a positive user ID.')
         self.images = {}
-        for component in image_tools.COMPONENTS:
+        require(config.get('images') and set(config['images']) <= image_tools.COMPONENTS.keys(), 'Select known routing images.')
+        for component in config['images']:
             image = config.get('images', {}).get(component, {})
             repository, tag = image.get('repository'), image.get('tag')
             require(isinstance(repository, str) and '/' in repository and not repository.startswith('-') and not any(c.isspace() for c in repository),
@@ -107,25 +156,10 @@ class Preparation:
             return subprocess.check_output([str(arg) for arg in command], text=True, **kwargs)
 
     def check_nodes(self):
-        nodes = json.loads(self.output(['kubectl', '--context', self.context, 'get', 'nodes', '-o', 'json']))['items']
-        architecture = self.platform.split('/')[1]
-        eligible = set()
-        indexed = {node['metadata']['name']: node for node in nodes}
-        for node in nodes:
-            labels = node['metadata'].get('labels', {})
-            conditions = {c['type']: c['status'] for c in node.get('status', {}).get('conditions', [])}
-            schedulable = not node['metadata'].get('deletionTimestamp') and not node.get('spec', {}).get('unschedulable') and not any(
-                taint.get('effect') in ('NoSchedule', 'NoExecute') for taint in node.get('spec', {}).get('taints', []))
-            if labels.get('kubernetes.io/os') == 'linux' and labels.get('kubernetes.io/arch') == architecture and conditions.get('Ready') == 'True' and schedulable and not any(
-                    conditions.get(condition) == 'True' for condition in ('MemoryPressure', 'DiskPressure', 'PIDPressure')):
-                eligible.add(node['metadata']['name'])
-        require(eligible <= set(self.nodes), 'New compatible nodes are missing from the bound image preload set. Run setup again.')
-        for name in self.nodes:
-            node = indexed.get(name)
-            require(node and node['metadata']['uid'] == self.containerd['nodeUIDs'][name], 'Image preload node was replaced: ' + name)
-            require(name in eligible, 'Image preload node is unschedulable, pressured, not Ready or does not match ' + self.platform + ': ' + name)
-            require(node.get('status', {}).get('nodeInfo', {}).get('containerRuntimeVersion', '').startswith('containerd://'),
-                    'Image preload requires containerd on node: ' + name)
+        return check_nodes(self.config, self.output)
+
+    def missing_nodes(self):
+        return missing_nodes(self.config, self.output)
 
     def namespace_info(self):
         value = self.output(['kubectl', '--context', self.context, 'get', 'namespace', self.namespace, '--ignore-not-found', '-o', 'json'])
@@ -186,21 +220,29 @@ class Preparation:
             command.append('--wait')
         self.run(command)
 
-    def execute(self):
+    def execute(self, archive=None):
         try:
             self.check_nodes()
             if self.state.get('namespaceUID'):
                 self.check_namespace()
-            revision = self.output(['git', 'rev-parse', 'HEAD'], cwd=REPO).strip()
-            if self.output(['git', 'status', '--porcelain'], cwd=REPO).strip():
-                revision += '-dirty'
-            image_tools.build_images(REPO, self.images, run=self.run, platform=self.platform, source_revision=revision)
-            archive = image_tools.export_images(list(self.images.values()), self.work / 'images.tar', run=self.run)
+            targets = self.nodes
+            if archive is None:
+                revision = self.output(['git', 'rev-parse', 'HEAD'], cwd=REPO).strip()
+                if self.output(['git', 'status', '--porcelain'], cwd=REPO).strip():
+                    revision += '-dirty'
+                image_tools.build_images(REPO, self.images, run=self.run, platform=self.platform, source_revision=revision)
+                archive = image_tools.export_images(list(self.images.values()), self.work / 'images.tar', run=self.run)
+                self.state['sourceRevision'] = revision
+            else:
+                targets = self.missing_nodes()
+                if not targets:
+                    print('Development images are already listed on all target nodes. No import needed.', flush=True)
+                    return copy.deepcopy(self.state)
             self.check_nodes()
             self.bootstrap()
-            print('Preloading routing images on ' + ', '.join(self.nodes) + '. Logs: ' + str(self.log_path), flush=True)
+            print('Preloading routing images on ' + ', '.join(targets) + '. Logs: ' + str(self.log_path), flush=True)
             image_tools.import_images(archive, list(self.images.values()), context=self.context, namespace=self.namespace,
-                release='image-loader', work=self.work, containerd=self.containerd, node_names=self.nodes,
+                release='image-loader', work=self.work, containerd=self.containerd, node_names=targets,
                 control_node=self.config['controlNode'], helm_apply=self.helm_apply, run=self.run, output=self.output,
                 save=save, platform=self.platform, archive_name='images.tar')
             self.check_nodes()
@@ -209,10 +251,9 @@ class Preparation:
                 if self.owned_release(release, chart):
                     self.run(self.hm + ['uninstall', release, '--wait', '--timeout', '3m'])
             self.state['completed'] = True
-            self.state['sourceRevision'] = revision
             self.state['retainedNamespace'] = 'Empty preparation namespace retained with its saved UID for guarded retries.'
             save(self.state_path, self.state)
-            print('Shared routing images are built and preloaded. Evidence: ' + str(self.work), flush=True)
+            print('Shared routing images are preloaded. Evidence: ' + str(self.work), flush=True)
             return copy.deepcopy(self.state)
         except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as error:
             self.state['completed'] = False
