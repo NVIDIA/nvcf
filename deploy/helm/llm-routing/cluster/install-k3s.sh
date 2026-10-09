@@ -84,7 +84,10 @@ if [ "$ROLE" = agent ]; then
   [ "${#TLS_SANS[@]}" -eq 0 ] || die "--tls-san applies to servers only"
   [ -z "$KUBECONFIG_MODE" ] || die "--kubeconfig-mode applies to servers only"
 fi
-[ -z "$KUBECONFIG_MODE" ] || [[ "$KUBECONFIG_MODE" =~ ^[0-7]{3,4}$ ]] || die "--kubeconfig-mode must be octal, such as 600"
+if [ -n "$KUBECONFIG_MODE" ]; then
+  [[ "$KUBECONFIG_MODE" =~ ^[0-7]{3,4}$ ]] || die "--kubeconfig-mode must be octal, such as 600"
+  [ $((8#$KUBECONFIG_MODE & 2)) -eq 0 ] || die "--kubeconfig-mode must not let other users write the kubeconfig: $KUBECONFIG_MODE"
+fi
 if [ -z "$VERSION" ] || [ "$VERSION" = "$DEFAULT_VERSION" ]; then
   VERSION="$DEFAULT_VERSION"
   INSTALLER_SHA256="${INSTALLER_SHA256:-$DEFAULT_INSTALLER_SHA256}"
@@ -111,6 +114,13 @@ if command -v k3s >/dev/null 2>&1; then
   installed=$(k3s --version 2>/dev/null | awk 'NR==1 {print $3}' || true)
   for service in k3s k3s-agent; do
     if systemctl is-active --quiet "$service"; then
+      running_role=server
+      [ "$service" = k3s ] || running_role=agent
+      if [ "$running_role" != "$ROLE" ]; then
+        echo "k3s is already running here as $running_role ($service), not $ROLE. No changes made." >&2
+        echo "To change the role, delete the node from the cluster, then run /usr/local/bin/$service-uninstall.sh." >&2
+        exit 1
+      fi
       echo "k3s ${installed:-<unknown version>} is already installed and $service is running. No changes made."
       [ "$installed" = "$VERSION" ] || echo "This script installs $VERSION. Keep every node on the same k3s version."
       echo "To reinstall, run /usr/local/bin/$service-uninstall.sh first. It deletes this node's k3s data."
@@ -137,6 +147,9 @@ else
     *) pass "$NODE_IP is a static address on $IFACE" ;;
   esac
 fi
+case "$NODE_IP" in
+  10.42.*|10.43.*) fail "$NODE_IP is inside the k3s default pod (10.42.0.0/16) or service (10.43.0.0/16) network" ;;
+esac
 
 if ! command -v timedatectl >/dev/null 2>&1; then
   warn "timedatectl not found; confirm the clock is synchronized with NTP"
@@ -152,8 +165,9 @@ if gpu_names=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null) &&
   if [ "$(echo "$distinct" | grep -c .)" -ne 1 ]; then
     fail "GPU models differ on this node: $(echo "$distinct" | paste -sd, -)"
   else
-    # The same form GPU Feature Discovery uses: spaces become dashes.
-    GPU_PRODUCT=$(echo "$distinct" | tr -cd 'A-Za-z0-9._ -' | sed -e 's/^ *//' -e 's/ *$//' | tr ' ' '-')
+    # The same form GPU Feature Discovery uses: drop other characters, then
+    # join the words with dashes.
+    GPU_PRODUCT=$(echo "$distinct" | tr -cd 'A-Za-z0-9._ -' | awk '{$1 = $1; gsub(/ /, "-"); print}')
     pass "$(echo "$gpu_names" | grep -c .) x $distinct, label nvidia.com/gpu.product=$GPU_PRODUCT"
   fi
 else
@@ -171,29 +185,32 @@ fi
 if [ "$ROLE" = server ]; then
   ports="6443/tcp, 2379-2380/tcp, 8472/udp and 10250/tcp"
 else
-  ports="8472/udp and 10250/tcp, and reach 6443/tcp on the servers"
+  ports="8472/udp and 10250/tcp"
 fi
+rules="allow $ports between cluster nodes, and traffic from the pod and service networks 10.42.0.0/16 and 10.43.0.0/16"
 firewall=""
 if command -v ufw >/dev/null 2>&1; then
   case "$(ufw status 2>&1 || true)" in
     *"Status: active"*) firewall="ufw" ;;
     *"Status: inactive"*) ;;
-    *) warn "could not read ufw status; if it is active, allow $ports between nodes" ;;
+    *) warn "could not read ufw status; if it is active, $rules" ;;
   esac
 fi
 if command -v firewall-cmd >/dev/null 2>&1 && [ "$(firewall-cmd --state 2>/dev/null || true)" = running ]; then
   firewall="${firewall:+$firewall and }firewalld"
 fi
 if [ -n "$firewall" ]; then
-  warn "$firewall is active. Allow $ports between cluster nodes"
+  warn "$firewall is active: $rules"
 else
   pass "no active ufw or firewalld"
 fi
 
 TOKEN=""
 if [ -n "$JOIN" ]; then
-  if [ -r "$TOKEN_FILE" ] && [ -s "$TOKEN_FILE" ]; then
+  if [ -f "$TOKEN_FILE" ] && [ -r "$TOKEN_FILE" ]; then
     TOKEN=$(tr -d '[:space:]' < "$TOKEN_FILE")
+  fi
+  if [ -n "$TOKEN" ]; then
     pass "join token read from $TOKEN_FILE"
   else
     fail "cannot read a join token from $TOKEN_FILE"
@@ -257,21 +274,28 @@ fi
 if [ "$ROLE" = agent ]; then
   systemctl is-active --quiet k3s-agent || { echo "k3s-agent is not running. See: journalctl -u k3s-agent" >&2; exit 1; }
   echo
-  echo "Agent installed. Check it from a server or your workstation: kubectl get nodes -o wide"
+  echo "Agent installed. Delete the token file: rm $TOKEN_FILE"
+  echo "Check the node from a server or your workstation: kubectl get nodes -o wide"
   exit 0
 fi
 
 node=$(hostname | tr '[:upper:]' '[:lower:]')
+ready=0
 for _ in $(seq 60); do
   if [ "$(k3s kubectl get node "$node" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)" = True ]; then
+    ready=1
     break
   fi
   sleep 2
 done
 k3s kubectl get nodes -o wide || true
+if [ "$ready" -ne 1 ]; then
+  echo "Node $node is not Ready after 2 minutes. See: journalctl -u k3s" >&2
+  exit 1
+fi
 echo
 if [ -n "$JOIN" ]; then
-  echo "Server joined. Delete the token file once every node has joined: rm $TOKEN_FILE"
+  echo "Server joined. Delete the token file: rm $TOKEN_FILE"
 else
   echo "First server installed. The join token is in /var/lib/rancher/k3s/server/node-token. Keep it private."
   echo "Join other nodes with this script and --join $NODE_IP."

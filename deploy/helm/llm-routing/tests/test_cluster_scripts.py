@@ -5,6 +5,7 @@ import hashlib
 import os
 from pathlib import Path
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -29,6 +30,7 @@ STUBS = {
     'nvidia-smi': '[ -n "$STUB_GPUS" ] || exit 9; printf "%b\\n" "$STUB_GPUS"',
     'nvidia-container-runtime': 'exit 0',
     'timeout': 'exit "${STUB_REACH:-0}"',
+    'sleep': 'exit 0',
     'curl': 'while [ $# -gt 0 ]; do [ "$1" = -o ] && cp "$STUB_INSTALLER" "$2"; shift; done',
     'k3s': 'case "$1" in --version) echo "k3s version v1.36.5+k3s1 (stub)" ;; kubectl) echo True ;; esac',
 }
@@ -55,10 +57,10 @@ class ScriptTest(unittest.TestCase):
         path.write_text(body if body.startswith('#!') else '#!/bin/sh\n' + body + '\n')
         path.chmod(0o755)
 
-    def run_script(self, script, *args, **env):
+    def run_script(self, script, *args, stdin='', **env):
         environment = {'PATH': str(self.bin), 'HOME': str(self.work), 'LC_ALL': 'C'}
         environment.update(env)
-        return subprocess.run([BASH, str(CLUSTER / script), *args], env=environment,
+        return subprocess.run([BASH, str(CLUSTER / script), *args], env=environment, input=stdin,
                               capture_output=True, text=True, timeout=60)
 
 
@@ -66,7 +68,7 @@ class InstallK3sTests(ScriptTest):
     def setUp(self):
         super().setUp()
         for name in ('uname', 'hostname', 'id', 'ip', 'timedatectl', 'systemctl', 'nvidia-smi',
-                     'nvidia-container-runtime', 'timeout', 'curl'):
+                     'nvidia-container-runtime', 'timeout', 'sleep', 'curl'):
             self.stub(name, STUBS[name])
         self.stub('sha256sum', SHA256SUM)
         self.token = self.work / 'k3s-token'
@@ -142,7 +144,8 @@ class InstallK3sTests(ScriptTest):
         result = self.install('agent', '--join', '192.0.2.10', '--token-file', str(self.token),
                               '--node-ip', '192.0.2.10', '--dry-run')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('WARN  ufw is active. Allow 8472/udp and 10250/tcp, and reach 6443/tcp on the servers', result.stdout)
+        self.assertIn('WARN  ufw is active: allow 8472/udp and 10250/tcp between cluster nodes, and traffic from '
+                      'the pod and service networks 10.42.0.0/16 and 10.43.0.0/16', result.stdout)
 
     def test_usage_errors(self):
         cases = {
@@ -152,6 +155,7 @@ class InstallK3sTests(ScriptTest):
             ('server', '--node-ip', '192.0.2.10', '--k3s-version', 'v1.35.0+k3s1'): 'needs --installer-sha256',
             ('agent', '--join', 'x', '--token-file', 't', '--node-ip', '192.0.2.10', '--tls-san', 'a'): 'servers only',
             ('server', '--node-ip', '192.0.2.10', '--kubeconfig-mode', 'rw'): 'must be octal',
+            ('server', '--node-ip', '192.0.2.10', '--kubeconfig-mode', '666'): 'must not let other users write',
             ('cluster',): 'must be server or agent',
         }
         for args, message in cases.items():
@@ -201,6 +205,69 @@ class InstallK3sTests(ScriptTest):
         self.assertIn('First server installed.', result.stdout)
         self.assertIn('--join 192.0.2.10', result.stdout)
 
+    def test_server_join_dry_run_joins_existing_etcd(self):
+        result = self.install('server', '--join', 'k3s.example.com', '--token-file', str(self.token),
+                              '--node-ip', '192.0.2.10', '--tls-san', 'k3s.example.com', '--dry-run')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('sh install.sh server --server https://k3s.example.com:6443 --node-ip 192.0.2.10', result.stdout)
+        self.assertIn('--tls-san 192.0.2.10 --tls-san k3s.example.com', result.stdout)
+        self.assertNotIn('--cluster-init', result.stdout)
+        self.assertNotIn('secret-join-token', result.stdout + result.stderr)
+
+    def test_join_probe_connects_to_the_server_api_port(self):
+        self.stub('timeout', 'shift; exec "$@"')
+        listener = socket.socket()
+        try:
+            listener.bind(('127.0.0.1', 6443))
+        except OSError:
+            listener.close()
+            self.skipTest('127.0.0.1:6443 is in use')
+        listener.listen(1)
+        args = ('agent', '--join', '127.0.0.1', '--token-file', str(self.token), '--node-ip', '192.0.2.10', '--dry-run')
+        with listener:
+            result = self.install(*args)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('PASS  server 127.0.0.1 answers on 6443/tcp', result.stdout)
+        result = self.install(*args)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('FAIL  cannot reach 127.0.0.1 on 6443/tcp', result.stdout)
+
+    def test_whitespace_only_token_fails(self):
+        self.token.write_text(' \n\n')
+        result = self.install('agent', '--join', '192.0.2.10', '--token-file', str(self.token),
+                              '--node-ip', '192.0.2.10', '--dry-run')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(f'FAIL  cannot read a join token from {self.token}', result.stdout)
+
+    def test_node_ip_inside_k3s_networks_fails(self):
+        result = self.install('server', '--node-ip', '10.42.0.5', '--dry-run',
+                              STUB_IP_ADDR=STATIC.replace('192.0.2.10', '10.42.0.5'))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('FAIL  10.42.0.5 is inside the k3s default pod (10.42.0.0/16) or service (10.43.0.0/16) network',
+                      result.stdout)
+
+    def test_gpu_label_matches_gpu_feature_discovery(self):
+        result = self.install('server', '--node-ip', '192.0.2.10', '--dry-run', STUB_GPUS='NVIDIA  GB10 (x)')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('--node-label nvidia.com/gpu.product=NVIDIA-GB10-x', result.stdout)
+
+    def test_running_k3s_with_another_role_is_an_error(self):
+        self.stub('k3s', STUBS['k3s'])
+        result = self.install('agent', '--join', '192.0.2.10', '--token-file', str(self.token),
+                              '--node-ip', '192.0.2.10', STUB_ACTIVE='k3s')
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('k3s is already running here as server (k3s), not agent. No changes made.', result.stderr)
+
+    def test_node_not_ready_fails_install(self):
+        self.stub('k3s-after-install', 'case "$1" in kubectl) echo False ;; esac')
+        installer = FAKE_INSTALLER + f'mv "{self.bin}/k3s-after-install" "{self.bin}/k3s"\n'
+        self.installer.write_text(installer)
+        result = self.install('server', '--node-ip', '192.0.2.10',
+                              '--installer-sha256', hashlib.sha256(installer.encode()).hexdigest())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('Node node1 is not Ready after 2 minutes', result.stderr)
+        self.assertNotIn('First server installed.', result.stdout)
+
     def test_checksum_mismatch_does_not_run_installer(self):
         result = self.install('server', '--node-ip', '192.0.2.10')
         self.assertEqual(result.returncode, 1)
@@ -238,12 +305,17 @@ class FetchKubeconfigTests(ScriptTest):
         self.remote = self.work / 'remote-k3s.yaml'
         self.remote.write_text(K3S_KUBECONFIG)
         self.calls = self.work / 'ssh-calls'
-        self.stub('ssh', f'echo "$@" >> "{self.calls}"; cat "$STUB_REMOTE"')
+        self.stub('ssh', f'echo "$@" >> "{self.calls}"\n'
+                         'case "$*" in\n'
+                         '  *"sudo -S"*) IFS= read -r password; [ "$password" = "$STUB_PASSWORD" ] && cat "$STUB_REMOTE" ;;\n'
+                         '  *) [ -n "$STUB_READABLE" ] && cat "$STUB_REMOTE" ;;\n'
+                         'esac')
         self.output = self.work / 'my-cluster.yaml'
 
-    def fetch(self, *args):
+    def fetch(self, *args, context='my-cluster', readable='1', stdin=''):
         return self.run_script('fetch-kubeconfig.sh', '--no-check', '--output', str(self.output), *args,
-                               'node1', 'k3s.example.com', 'my-cluster', STUB_REMOTE=str(self.remote))
+                               'node1', 'k3s.example.com', context, stdin=stdin, STUB_REMOTE=str(self.remote),
+                               STUB_READABLE=readable, STUB_PASSWORD='correct horse')
 
     def kubeconfig(self, jsonpath):
         return subprocess.run(['kubectl', '--kubeconfig', str(self.output), 'config', 'view', '-o',
@@ -266,6 +338,26 @@ class FetchKubeconfigTests(ScriptTest):
         self.assertEqual(self.output.read_text(), 'keep me')
         self.assertEqual(self.fetch('--force').returncode, 0)
         self.assertEqual(self.kubeconfig('{.current-context}'), 'my-cluster')
+
+    def test_asks_for_the_sudo_password_when_the_file_is_private(self):
+        result = self.fetch(readable='', stdin='correct horse\n')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('sudo password on node1:', result.stderr)
+        self.assertNotIn('correct horse', result.stdout + result.stderr + self.calls.read_text())
+        self.assertEqual(self.kubeconfig('{.current-context}'), 'my-cluster')
+
+    def test_wrong_or_missing_sudo_password_fails(self):
+        for stdin in ('wrong\n', ''):
+            with self.subTest(stdin=stdin):
+                result = self.fetch(readable='', stdin=stdin)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn('could not read /etc/rancher/k3s/k3s.yaml on node1', result.stderr)
+                self.assertFalse(self.output.exists())
+
+    def test_rejects_default_context(self):
+        result = self.fetch(context='default')
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("not 'default'", result.stderr)
 
     def test_rejects_a_file_that_is_not_a_k3s_server_kubeconfig(self):
         self.remote.write_text(K3S_KUBECONFIG.replace('https://127.0.0.1:6443', 'https://203.0.113.5:6443'))

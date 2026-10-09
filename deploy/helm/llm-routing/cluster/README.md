@@ -18,10 +18,10 @@ Each node needs:
 
 - An operating system, kernel and NVIDIA driver supported for its GPU, with `nvidia-smi` listing the GPUs.
 - The [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html), installed before k3s. k3s detects `nvidia-container-runtime` only when it starts, and then creates the `nvidia` RuntimeClass. If you install the toolkit later, restart k3s on that node.
-- One IPv4 address that never changes: a static address or a DHCP reservation. k3s registers each node by address, servers join etcd by address, and the API certificate lists the address. A node whose address changes drops out of the cluster.
+- One IPv4 address that never changes: a static address or a DHCP reservation. k3s registers each node by address, servers join etcd by address, and the API certificate lists the address. A node whose address changes drops out of the cluster. The address must be outside 10.42.0.0/16 and 10.43.0.0/16, the k3s pod and service networks.
 - A unique hostname. k3s uses it as the node name.
 - A clock synchronized with NTP. etcd and certificate checks depend on it. `timedatectl` reports `System clock synchronized: yes`.
-- If a host firewall is active, these ports open between nodes: 6443/tcp (Kubernetes API), 2379-2380/tcp (etcd, servers only), 8472/udp (flannel VXLAN) and 10250/tcp (kubelet).
+- If a host firewall is active, these ports open between nodes: 6443/tcp (Kubernetes API), 2379-2380/tcp (etcd, servers only), 8472/udp (flannel VXLAN) and 10250/tcp (kubelet). Also allow traffic from the pod network 10.42.0.0/16 and the service network 10.43.0.0/16.
 - systemd, sudo, and outbound HTTPS to GitHub to download k3s, plus the outbound access in the [cluster prerequisites](../README.md#cluster).
 
 Give k3s each node's management network address. If a node also has high-speed links for GPU traffic, keep them for [two-node models](#two-node-models).
@@ -37,17 +37,17 @@ ssh -t node1 sudo ./install-k3s.sh server --node-ip 192.0.2.10 --tls-san k3s.exa
 
 The script checks the node first and stops if a check fails:
 
-- `--node-ip` is assigned to an interface on the node. A DHCP-assigned address gives a warning: confirm that it is reserved.
+- `--node-ip` is assigned to an interface on the node, outside the k3s pod and service networks. A DHCP-assigned address gives a warning: confirm that it is reserved.
 - The clock is synchronized.
 - `nvidia-smi` lists GPUs, all of one model.
 - The NVIDIA Container Toolkit is installed.
-- An active ufw or firewalld gives a warning that lists the ports to open.
+- An active ufw or firewalld gives a warning that lists the ports and networks to allow.
 - With `--join`, the token file is readable and the server answers on 6443/tcp.
 
 It then downloads the k3s installer for release `v1.36.5+k3s1`, verifies its SHA-256 checksum, and installs k3s with:
 
 - `--cluster-init` on the first server, for embedded etcd. More servers can join later without a reinstall.
-- `--node-ip`, and `--flannel-iface` set to the interface that holds that address.
+- `--node-ip` and `--node-external-ip` set to the address, and `--flannel-iface` set to the interface that holds it.
 - `--tls-san` for the node address and each name you pass. Pass every name you will use to reach the API from your workstation.
 - The node label `nvidia.com/gpu.product` from `nvidia-smi`, such as `NVIDIA-GB10`. Recipes match it against their hardware profiles. k3s applies it when the node first registers.
 
@@ -67,7 +67,7 @@ sudo cat /var/lib/rancher/k3s/server/node-token
 (umask 077 && cat > ~/k3s-token)
 ```
 
-Copy `cluster/install-k3s.sh` to the new node. Join it as an agent, or as a server:
+Copy `cluster/install-k3s.sh` to the new node. On that node, join it as an agent, or as a server:
 
 ```bash
 sudo ./install-k3s.sh agent --join 192.0.2.10 --token-file ~/k3s-token --node-ip 192.0.2.11
@@ -90,7 +90,7 @@ cluster/fetch-kubeconfig.sh node1 k3s.example.com my-cluster
 export KUBECONFIG="$HOME/.kube/config:$HOME/.kube/my-cluster.yaml"
 ```
 
-It writes `~/.kube/my-cluster.yaml` with context `my-cluster`, then runs `kubectl get nodes`. Your ssh user needs read access to `/etc/rancher/k3s/k3s.yaml` on the server, or passwordless sudo. The file grants cluster-admin. Keep it mode 600.
+It writes `~/.kube/my-cluster.yaml` with context `my-cluster`, then runs `kubectl get nodes`. If your ssh user cannot read `/etc/rancher/k3s/k3s.yaml` on the server, the script asks for your sudo password there. The file grants cluster-admin. Keep it mode 600.
 
 ## Enable GPU scheduling
 
