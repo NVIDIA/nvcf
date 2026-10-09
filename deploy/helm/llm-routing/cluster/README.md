@@ -154,4 +154,4 @@ sudo /usr/local/bin/k3s-uninstall.sh
 sudo /usr/local/bin/k3s-agent-uninstall.sh
 ```
 
-Removing a server changes etcd membership, which needs quorum. Stopping the server first can lose quorum: with two servers, the API stops. To replace servers, add the new ones before removing the old ones. Uninstalling deletes the node's k3s data, including its `local-path` volumes.
+Removing a server changes etcd membership, which needs quorum. Stopping the server first can lose quorum: with two servers, the API stops. To replace servers, add the new ones before removing the old ones. Uninstalling deletes the node's k3s data, including its `local-path` volumes and container images. If Tailscale is installed on the node, the uninstall script also clears the routes it advertises.
