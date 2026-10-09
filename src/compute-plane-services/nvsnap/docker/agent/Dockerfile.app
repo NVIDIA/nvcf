@@ -8,7 +8,7 @@
 # Prerequisites: Build base image first with Dockerfile.base
 # Build: docker build -t nvsnap-agent:v0.x.x -f Dockerfile.app .
 
-ARG BASE_IMAGE=nvcr.io/0651155215864979/ncp-dev/nvsnap-agent-base:v0.0.27
+ARG BASE_IMAGE=nvcr.io/0651155215864979/ncp-dev/nvsnap-agent-base:v0.0.28
 
 # ============================================================================
 # Stage 1: Build Go binaries

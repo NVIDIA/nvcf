@@ -41,7 +41,7 @@ spec:
   imagePullSecrets: [{name: nvsnap-pull-secret}]
   initContainers:
   - name: gpushare
-    image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent-base:v0.0.27
+    image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent-base:v0.0.28
     command: [sh, -c, "mkdir -p /ckpt/wc && cp /criu-bundle/libnvsnap_gpushare.so /criu-bundle/nvsnap-gpu-suspend /ckpt/wc/"]
     volumeMounts:
     - {name: ckpt, mountPath: /ckpt}
