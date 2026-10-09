@@ -211,11 +211,11 @@ def candidate_blockers(node, usage, profile, role, facts):
             reasons.append('A verified fabric group is required.')
         if not positive_number(facts.get('gbps')) or facts['gbps'] < profile['fabric']['minimumGbps']:
             reasons.append('Verified fabric bandwidth is missing or below the profile minimum.')
-        if not re.fullmatch(r'[a-zA-Z0-9_.:-]+', facts.get('interface', '')):
+        if not re.fullmatch(r'[a-zA-Z0-9_.-]{1,15}', facts.get('interface', '')) or facts.get('interface') in ('.', '..'):
             reasons.append('A fabric network interface is required.')
         try:
             address = ipaddress.ip_address(facts.get('address', ''))
-            if address.version != 4 or address.is_unspecified or address.is_loopback:
+            if address.version != 4 or address.is_unspecified or address.is_loopback or address.is_multicast or address.is_reserved:
                 raise ValueError('Invalid fabric address')
         except ValueError:
             reasons.append('A usable fabric IPv4 address is required.')
