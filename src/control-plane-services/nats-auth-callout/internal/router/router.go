@@ -23,6 +23,7 @@ import (
 	"time"
 
 	_ "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/api"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/models"
 	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 
 	ginzap "github.com/gin-contrib/zap"
@@ -157,11 +158,8 @@ func (r *Router) setupRoutes() {
 	r.engine.GET("/", r.handleRoot)
 
 	// Add routes
-	r.engine.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status": "ok",
-		})
-	})
+	// The control-plane health monitor polls /health, so it reports the NATS dependency like /readyz.
+	r.engine.GET("/health", r.handleReadyz)
 
 	r.engine.GET("/ping", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -210,12 +208,10 @@ func (r *Router) handlePing(c *gin.Context) {
 // @Router			/healthz [get]
 func (r *Router) handleHealthz(c *gin.Context) {
 	if r.config.NATS != nil && r.config.NATS.Status() == nats.CLOSED {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "down"})
+		c.JSON(http.StatusServiceUnavailable, models.HealthResponse{Status: "down"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"status": "ok",
-	})
+	c.JSON(http.StatusOK, models.HealthResponse{Status: "ok"})
 }
 
 // handleReadyz handle readiness check endpoint
@@ -228,10 +224,10 @@ func (r *Router) handleHealthz(c *gin.Context) {
 // @Router			/readyz [get]
 func (r *Router) handleReadyz(c *gin.Context) {
 	if r.config.NATS != nil && r.config.NATS.Status() != nats.CONNECTED {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"status": "degraded"})
+		c.JSON(http.StatusServiceUnavailable, models.HealthResponse{Status: "degraded"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	c.JSON(http.StatusOK, models.HealthResponse{Status: "ok"})
 }
 
 // handleRoot handles the root path

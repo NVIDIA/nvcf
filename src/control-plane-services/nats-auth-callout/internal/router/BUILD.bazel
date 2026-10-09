@@ -25,6 +25,7 @@ go_library(
     visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
     deps = [
         "//src/control-plane-services/nats-auth-callout/api",
+        "//src/control-plane-services/nats-auth-callout/internal/models",
         "@com_github_gin_contrib_zap//:zap",
         "@com_github_gin_gonic_gin//:gin",
         "@com_github_nats_io_nats_go//:nats_go",

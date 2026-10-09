@@ -199,7 +199,8 @@ func TestHealthProbes_FollowNATSStatus(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			router := New(zap.NewNop(), &Config{ServiceName: "test-service", NATS: tt.nats})
-			for path, want := range map[string]int{"/healthz": tt.wantHealthz, "/readyz": tt.wantReadyz} {
+			// /health is what the control-plane health monitor polls, so it follows readiness.
+			for path, want := range map[string]int{"/healthz": tt.wantHealthz, "/readyz": tt.wantReadyz, "/health": tt.wantReadyz} {
 				w := httptest.NewRecorder()
 				router.engine.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
 				if w.Code != want {
