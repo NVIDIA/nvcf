@@ -419,6 +419,10 @@ mod tests {
             StatusCode::SERVICE_UNAVAILABLE,
             &headers
         ));
+        assert!(!should_release_queue_mismatch_reservation(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &headers
+        ));
 
         headers.insert(
             HEADER_STARGATE_RETRY_REASON,

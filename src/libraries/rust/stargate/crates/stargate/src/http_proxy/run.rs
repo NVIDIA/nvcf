@@ -313,7 +313,7 @@ pub(super) struct SelectedClusterRun {
 }
 
 impl SelectedClusterRun {
-    fn new(
+    pub(super) fn new(
         target_snapshot: RoutingTargetSnapshot,
         selection: LoadBalancerCandidateSelection,
         priority: u32,
@@ -364,6 +364,7 @@ mod tests {
     use prometheus::Encoder;
     use stargate_proto::pb::{InferenceServerStatus, ModelStats};
 
+    use super::super::upstream::headers_for_upstream_attempt;
     use super::*;
     use crate::load_balancer::{
         LoadBalancerAlgorithm, LoadBalancerCandidateChoice, LoadBalancerCandidateSelection,
@@ -516,6 +517,89 @@ mod tests {
             ),
             "selected cluster should preserve routing selection metric labels, got:\n{body}"
         );
+    }
+
+    #[tokio::test]
+    async fn upstream_expected_queue_header_includes_an_active_reservation() {
+        let app = super::super::test_support::test_proxy_app_state();
+        let target = target();
+        let identity = RegistrationIdentity {
+            inference_server_id: "inst-a".to_string(),
+            cluster_id: "cluster-a".to_string(),
+            inference_server_url: "quic://127.0.0.1:5000".to_string(),
+            routing_key: target.routing_key.clone(),
+            reverse_tunnel: false,
+        };
+        let registration = app.state.begin_registration(&identity).unwrap();
+        let update = stargate_proto::pb::InferenceServerRegistration {
+            inference_server_id: identity.inference_server_id.clone(),
+            cluster_id: identity.cluster_id.clone(),
+            inference_server_url: identity.inference_server_url.clone(),
+            models: std::collections::HashMap::from([(
+                target.model_id.clone(),
+                stargate_proto::pb::InferenceServerModelRegistration {
+                    stats: Some(ModelStats {
+                        last_mean_input_tps: 100.0,
+                        max_engine_concurrency: 1,
+                        queue_time_estimate_ms_by_priority: std::collections::HashMap::from([(
+                            0, 0,
+                        )]),
+                        ..ModelStats::default()
+                    }),
+                    status: InferenceServerStatus::Active.into(),
+                },
+            )]),
+            reverse_tunnel: false,
+        };
+        app.state
+            .apply_registration_update(
+                &registration,
+                &update,
+                true,
+                Some(Duration::from_millis(10)),
+            )
+            .await;
+
+        let before = app
+            .state
+            .routing_target_snapshot(&target)
+            .await
+            .expect("registered backend should be routable")
+            .into_selected_cluster(0);
+        let _reservation = before
+            .reserve_backend(&registration.generation(), 10, 0)
+            .expect("active backend should accept reservation");
+        let resolution = app
+            .lb_router
+            .resolve_algorithm_override(&target.model_id, None)
+            .unwrap();
+        let selected = SelectedClusterRun::new(
+            app.state
+                .routing_target_snapshot(&target)
+                .await
+                .expect("target should remain routable"),
+            resolution.selection(LoadBalancerCandidateChoice::with_rank_depth_1(0)),
+            0,
+        );
+        let expected_queue_ms = selected
+            .expected_queue_ms
+            .expect("reservation should contribute a queue estimate");
+        assert!(expected_queue_ms > 0);
+        let headers = headers_for_upstream_attempt(
+            &HeaderMap::new(),
+            &tracing::info_span!("reservation_queue_header_test"),
+            Some(expected_queue_ms),
+        );
+
+        assert_eq!(
+            headers
+                .get(stargate_protocol::tunnel_contract::HEADER_STARGATE_EXPECTED_QUEUE_MS)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            expected_queue_ms.to_string()
+        );
+        app.state.end_registration(registration).await;
     }
 
     #[tokio::test]

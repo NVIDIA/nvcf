@@ -161,6 +161,12 @@ struct Args {
         value_name = "MS"
     )]
     registration_update_max_idle_timeout_ms: u64,
+    /// Minimum backend RTT-based routing reservation lifetime.
+    #[arg(long, default_value_t = 1, value_name = "MS")]
+    routing_reservation_ttl_min_ms: u64,
+    /// Maximum backend RTT-based routing reservation lifetime.
+    #[arg(long, default_value_t = 1000, value_name = "MS")]
+    routing_reservation_ttl_max_ms: u64,
     /// Grace period for shutdown tasks after Stargate starts draining.
     #[arg(long, default_value_t = 30000, value_name = "MS")]
     shutdown_drain_timeout_ms: u64,
@@ -677,6 +683,36 @@ mod tests {
         assert_eq!(
             Duration::from_millis(args.registration_update_max_idle_timeout_ms),
             DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn routing_reservation_ttl_defaults_and_bounds_are_validated() {
+        let args = parse_args("");
+        assert_eq!(args.routing_reservation_ttl_min_ms, 1);
+        assert_eq!(args.routing_reservation_ttl_max_ms, 1000);
+        let args =
+            parse_args("--routing-reservation-ttl-min-ms 20 --routing-reservation-ttl-max-ms 200");
+        let config = runtime_config_from_args(&args, proxy_transport(&args))
+            .expect("valid TTL bounds should reach runtime config");
+        assert_eq!(
+            config.routing_reservation_ttl_min,
+            Duration::from_millis(20)
+        );
+        assert_eq!(
+            config.routing_reservation_ttl_max,
+            Duration::from_millis(200)
+        );
+
+        let args =
+            parse_args("--routing-reservation-ttl-min-ms 20 --routing-reservation-ttl-max-ms 10");
+        let error = runtime_config_from_args(&args, proxy_transport(&args))
+            .err()
+            .expect("minimum TTL above maximum should fail startup config");
+        assert!(
+            error
+                .to_string()
+                .contains("minimum must not exceed maximum")
         );
     }
 

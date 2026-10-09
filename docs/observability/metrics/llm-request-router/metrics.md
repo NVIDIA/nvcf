@@ -41,3 +41,5 @@ unbounded request fields as metric labels.
 | `stargate_proxy_duration_seconds` | Histogram | `llm-request-router:9090/metrics` | `routing_key`, `model`, `inference_server_id` | Time to first byte from upstream in seconds. |
 | `stargate_routing_duration_seconds` | Histogram | `llm-request-router:9090/metrics` | `routing_key`, `model` | Load-balancer decision time in seconds. |
 | `stargate_active_inference_servers` | Gauge | `llm-request-router:9090/metrics` | `routing_key`, `model` | Currently routable inference servers for a routing target. |
+| `stargate_routing_reservations_active` | Gauge | `llm-request-router:9090/metrics` | `routing_key`, `model` | Local routing reservations not yet released or pruned. Expiry is lazy: an expired reservation stays counted until the next snapshot read or registration update for its cluster prunes it. Removing the backend also drops its reservations. |
+| `stargate_routing_reservation_ttl_seconds` | Histogram | `llm-request-router:9090/metrics` | `routing_key`, `model` | RTT-based reservation TTL in seconds after applying the configured bounds. |

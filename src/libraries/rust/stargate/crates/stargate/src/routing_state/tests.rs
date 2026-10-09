@@ -17,7 +17,7 @@ use super::registration::{
     RegistrationClusterGeneration, test_registration_generation,
     test_registration_generation_in_cluster,
 };
-use super::reservations::update_reserved_priority_queue_time;
+use super::reservations::{UNEXPIRING_TEST_RESERVATION_TTL, update_reserved_priority_queue_time};
 use super::snapshots::{ClusterBackendUpsert, RoutedClusterState, RoutingTargetGeneration};
 use super::*;
 use crate::load_balancer::{
@@ -26,6 +26,7 @@ use crate::load_balancer::{
     LoadBalancerRequest, LoadBalancerRouter, PowerOfNAlgorithmConfig, WaitAndWidenAlgorithmConfig,
 };
 use InferenceServerStatus::{Active, Inactive};
+use prometheus::Encoder;
 use stargate_proto::pb::InferenceServerModelRegistration;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -868,7 +869,7 @@ async fn active_registration_keeps_connection_rtt_in_snapshot() {
 }
 
 #[tokio::test]
-async fn reservation_updates_local_snapshot_until_next_registration_update() {
+async fn reservation_survives_registration_update_until_expiry() {
     let scenario = RegistrationScenario::new(Some("rk-res"));
     let running = scenario.start("inst-res", 8888);
     let mut stats = priority_stats(100.0, [(4, 5)]);
@@ -889,10 +890,344 @@ async fn reservation_updates_local_snapshot_until_next_registration_update() {
     scenario.publish_connected(&running, &update).await;
 
     let candidates = scenario.clusters("model-res").await;
-    assert_queue_stats(&candidates[0].stats, 0, 0, 0, 0, 4, 5);
+    assert_queue_stats(&candidates[0].stats, 1, 1, 37, 37, 4, 375);
 
     let clusters = scenario.clusters("model-res").await;
-    assert_queue_stats(&clusters[0].stats, 0, 0, 0, 0, 4, 5);
+    assert_queue_stats(&clusters[0].stats, 1, 1, 37, 37, 4, 375);
+}
+
+#[tokio::test]
+async fn reservation_is_in_snapshot_before_expiry_and_pruned_at_expiry() {
+    let scenario = RegistrationScenario::new(Some("rk-res-expiry"));
+    let running = scenario.start("inst-res-expiry", 8888);
+    let update = scenario.update(
+        &running,
+        "model-res-expiry",
+        Active,
+        priority_stats(100.0, [(4, 5)]),
+    );
+    scenario.publish_connected(&running, &update).await;
+
+    let selected_cluster = scenario.selected_cluster("model-res-expiry").await;
+    let target = scenario.target("model-res-expiry");
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    // The registration update below prunes with the real clock, so the TTL must
+    // outlast any scheduler stall. The boundary checks use explicit instants
+    // relative to expires_at instead.
+    let reservation = selected_cluster
+        .reserve_backend_with_ttl(
+            &running.generation(),
+            37,
+            4,
+            UNEXPIRING_TEST_RESERVATION_TTL,
+            metrics.clone(),
+            &target,
+        )
+        .expect("active backend should accept reservation");
+    let expires_at = reservation.0.expires_at();
+
+    scenario.publish_connected(&running, &update).await;
+    assert_eq!(
+        selected_cluster.pending_reservation_count(),
+        1,
+        "a registration update must not clear the reservation"
+    );
+    assert_eq!(routing_reservations_active(&metrics, &target), 1);
+    assert_eq!(
+        selected_cluster
+            .routing_snapshot_at(expires_at - Duration::from_millis(1))
+            .expect("cluster should remain routable")
+            .stats
+            .queue_size,
+        1,
+        "reservation should count just before its expiry boundary"
+    );
+    assert_eq!(
+        selected_cluster
+            .routing_snapshot_at(expires_at)
+            .expect("cluster should remain routable")
+            .stats
+            .queue_size,
+        0,
+        "reservation should not count at its expiry boundary"
+    );
+    assert_eq!(selected_cluster.pending_reservation_count(), 0);
+    assert_eq!(routing_reservations_active(&metrics, &target), 0);
+
+    reservation.release();
+}
+
+#[tokio::test]
+async fn snapshot_read_prunes_ten_thousand_idle_expired_reservations() {
+    let scenario = RegistrationScenario::new(Some("rk-res-prune"));
+    let running = scenario.start("inst-res-prune", 8888);
+    let update = scenario.update(
+        &running,
+        "model-res-prune",
+        Active,
+        priority_stats(100.0, [(4, 5)]),
+    );
+    scenario.publish_connected(&running, &update).await;
+
+    let selected_cluster = scenario.selected_cluster("model-res-prune").await;
+    let target = scenario.target("model-res-prune");
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    let mut last_expiry = Instant::now();
+    for _ in 0..10_000 {
+        let reservation = selected_cluster
+            .reserve_backend_with_ttl(
+                &running.generation(),
+                1,
+                0,
+                Duration::from_millis(1),
+                metrics.clone(),
+                &target,
+            )
+            .expect("active backend should accept reservation");
+        last_expiry = last_expiry.max(reservation.0.expires_at());
+    }
+
+    assert_eq!(selected_cluster.pending_reservation_count(), 10_000);
+    assert_eq!(routing_reservations_active(&metrics, &target), 10_000);
+    selected_cluster
+        .routing_snapshot_at(last_expiry + Duration::from_millis(1))
+        .expect("cluster should remain routable");
+    assert_eq!(selected_cluster.pending_reservation_count(), 0);
+    assert_eq!(routing_reservations_active(&metrics, &target), 0);
+}
+
+#[tokio::test]
+async fn removing_backend_drops_its_reservations_immediately() {
+    let scenario = RegistrationScenario::new(Some("rk-res-remove"));
+    let running = scenario.start("inst-res-remove", 8888);
+    let update = scenario.update(
+        &running,
+        "model-res-remove",
+        Active,
+        priority_stats(100.0, [(4, 5)]),
+    );
+    scenario.publish_connected(&running, &update).await;
+
+    let selected_cluster = scenario.selected_cluster("model-res-remove").await;
+    let target = scenario.target("model-res-remove");
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    let reservation = selected_cluster
+        .reserve_backend_with_ttl(
+            &running.generation(),
+            37,
+            4,
+            UNEXPIRING_TEST_RESERVATION_TTL,
+            metrics,
+            &target,
+        )
+        .expect("active backend should accept reservation");
+    assert_eq!(selected_cluster.pending_reservation_count(), 1);
+
+    scenario.state.end_registration(running).await;
+
+    assert_eq!(selected_cluster.pending_reservation_count(), 0);
+    reservation.release();
+}
+
+fn routing_reservations_active(
+    metrics: &crate::metrics::StargateMetrics,
+    target: &RoutingTargetKey,
+) -> i64 {
+    use prometheus::Encoder;
+
+    let mut encoded = Vec::new();
+    prometheus::TextEncoder::new()
+        .encode(&metrics.registry().gather(), &mut encoded)
+        .expect("metrics should encode");
+    let series = format!(
+        "stargate_routing_reservations_active{{model=\"{}\",routing_key=\"{}\"}} ",
+        target.model_id,
+        target.routing_key.as_deref().unwrap_or_default()
+    );
+    String::from_utf8(encoded)
+        .expect("metrics should be UTF-8")
+        .lines()
+        .find_map(|line| line.strip_prefix(&series))
+        .expect("reservation gauge series should exist")
+        .parse()
+        .expect("reservation gauge should be an integer")
+}
+
+#[derive(Clone, Copy)]
+enum RetiredClusterReplacement {
+    ActiveUpsert,
+    InactiveRemoval,
+}
+
+async fn assert_retired_cluster_drop_settles_reservation_gauge(
+    name: &str,
+    replacement_kind: RetiredClusterReplacement,
+) {
+    let scenario = RegistrationScenario::new(Some(&format!("rk-{name}")));
+    let model_id = format!("model-{name}");
+    let inference_server_id = format!("inst-{name}");
+    let cluster_id = format!("cluster-{name}");
+    let target = scenario.target(&model_id);
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    let old = scenario.start_in(&inference_server_id, &cluster_id, 1111);
+    scenario.activate(&old, &model_id).await;
+
+    let selected_cluster = scenario.selected_cluster(&model_id).await;
+    let reserve = || {
+        selected_cluster
+            .reserve_backend_with_ttl(
+                &old.generation(),
+                37,
+                4,
+                Duration::from_secs(60),
+                metrics.clone(),
+                &target,
+            )
+            .expect("active backend should accept reservation")
+    };
+    reserve().release();
+    let pending = reserve();
+    assert_eq!(routing_reservations_active(&metrics, &target), 1);
+    drop(pending);
+    drop(selected_cluster);
+    assert_eq!(
+        routing_reservations_active(&metrics, &target),
+        1,
+        "the cluster generation still owns the pending reservation"
+    );
+
+    let ended = scenario
+        .state
+        .registrations
+        .end_registration(old)
+        .expect("exact old registration should be removed");
+    assert!(ended.registration.cluster_generation.is_retired());
+    let replacement = scenario.start_in(&inference_server_id, &cluster_id, 2222);
+    let status = match replacement_kind {
+        RetiredClusterReplacement::ActiveUpsert => Active,
+        RetiredClusterReplacement::InactiveRemoval => Inactive,
+    };
+    scenario
+        .publish_default_stats(&replacement, &model_id, status, Some(6))
+        .await;
+
+    assert_eq!(
+        routing_reservations_active(&metrics, &target),
+        0,
+        "dropping a retired cluster generation must settle its reservations once"
+    );
+    scenario
+        .state
+        .routing
+        .remove_inference_server_targets(&ended.registration, &HashSet::from([target.clone()]))
+        .await;
+    scenario.state.end_registration(replacement).await;
+    assert_eq!(routing_reservations_active(&metrics, &target), 0);
+}
+
+#[tokio::test]
+async fn replacing_retired_cluster_generation_settles_reservation_gauge() {
+    assert_retired_cluster_drop_settles_reservation_gauge(
+        "res-retired-upsert",
+        RetiredClusterReplacement::ActiveUpsert,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn removing_retired_cluster_generation_settles_reservation_gauge() {
+    assert_retired_cluster_drop_settles_reservation_gauge(
+        "res-retired-remove",
+        RetiredClusterReplacement::InactiveRemoval,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn dropping_retired_cluster_generation_decrements_active_reservation_gauge() {
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    let state = StargateState::new_with_metrics(metrics.clone());
+    let target = make_target(Some("rk-generation-drop"), "model-generation-drop");
+    let identity = |port| RegistrationIdentity {
+        inference_server_id: "inst-generation-drop".to_string(),
+        cluster_id: "cluster-generation-drop".to_string(),
+        inference_server_url: format!("quic://127.0.0.1:{port}"),
+        routing_key: target.routing_key.clone(),
+        reverse_tunnel: false,
+    };
+    let update = |identity: &RegistrationIdentity| InferenceServerRegistration {
+        inference_server_id: identity.inference_server_id.clone(),
+        cluster_id: identity.cluster_id.clone(),
+        inference_server_url: identity.inference_server_url.clone(),
+        models: HashMap::from([(
+            target.model_id.clone(),
+            InferenceServerModelRegistration {
+                stats: Some(priority_stats(100.0, [(0, 5)])),
+                status: Active as i32,
+            },
+        )]),
+        reverse_tunnel: identity.reverse_tunnel,
+    };
+
+    let old_identity = identity(1111);
+    let old = state.begin_registration(&old_identity).unwrap();
+    state
+        .apply_registration_update(
+            &old,
+            &update(&old_identity),
+            true,
+            Some(Duration::from_millis(10)),
+        )
+        .await;
+    let selected = state
+        .routing_target_snapshot(&target)
+        .await
+        .unwrap()
+        .into_selected_cluster(0);
+    let reservation = selected
+        .reserve_backend_with_ttl(
+            &old.generation(),
+            10,
+            0,
+            UNEXPIRING_TEST_RESERVATION_TTL,
+            metrics.clone(),
+            &target,
+        )
+        .expect("active old backend should accept a reservation");
+    let metrics_text = || {
+        let mut encoded = Vec::new();
+        prometheus::TextEncoder::new()
+            .encode(&metrics.registry().gather(), &mut encoded)
+            .expect("metrics should encode");
+        String::from_utf8(encoded).expect("metrics should be UTF-8")
+    };
+    assert!(metrics_text().contains(
+        "stargate_routing_reservations_active{model=\"model-generation-drop\",routing_key=\"rk-generation-drop\"} 1"
+    ));
+
+    state.end_registration(old).await;
+    let replacement_identity = identity(2222);
+    let replacement = state.begin_registration(&replacement_identity).unwrap();
+    state
+        .apply_registration_update(
+            &replacement,
+            &update(&replacement_identity),
+            true,
+            Some(Duration::from_millis(10)),
+        )
+        .await;
+    assert_eq!(
+        state.candidates_for_target(&target).await[0].inference_server_url,
+        "quic://127.0.0.1:2222"
+    );
+
+    drop(reservation);
+    drop(selected);
+    let metrics_text = metrics_text();
+    assert!(metrics_text.contains(
+        "stargate_routing_reservations_active{model=\"model-generation-drop\",routing_key=\"rk-generation-drop\"} 0"
+    ));
+    state.end_registration(replacement).await;
 }
 
 #[tokio::test]
@@ -917,7 +1252,7 @@ async fn released_reservation_restores_local_snapshot_before_registration_update
     let candidates = scenario.clusters("model-release").await;
     assert_queue_stats(&candidates[0].stats, 0, 0, 0, 0, 4, 5);
 
-    let consumed_by_heartbeat = selected_cluster
+    let released_after_update = selected_cluster
         .reserve_backend(&running.generation(), 10, 4)
         .expect("active backend should accept reservation");
     scenario.publish_connected(&running, &update).await;
@@ -925,7 +1260,7 @@ async fn released_reservation_restores_local_snapshot_before_registration_update
         .reserve_backend(&running.generation(), 20, 4)
         .expect("active backend should accept reservation");
 
-    consumed_by_heartbeat.release();
+    released_after_update.release();
     let candidates = scenario.clusters("model-release").await;
     assert_queue_stats(&candidates[0].stats, 1, 1, 20, 20, 4, 205);
 

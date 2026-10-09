@@ -75,6 +75,9 @@ pub struct StargateRuntimeConfig {
     pub registration_update_idle_timeout: Duration,
     /// Registration idle-time hard cap and fallback without heartbeat hints; zero disables enforcement.
     pub registration_update_max_idle_timeout: Duration,
+    /// Lower and upper bounds for backend RTT-based routing reservation expiry.
+    pub routing_reservation_ttl_min: Duration,
+    pub routing_reservation_ttl_max: Duration,
     /// QUIC, TLS, tunnel-protocol, and retry configuration for backend request forwarding.
     pub proxy_transport: ProxyTransportConfig,
     /// Optional JSON load-balancer config path.
@@ -392,6 +395,8 @@ impl StargateRuntime {
             quic_proxy,
             lb_router,
             metrics: metrics.clone(),
+            routing_reservation_ttl_min: self.config.routing_reservation_ttl_min,
+            routing_reservation_ttl_max: self.config.routing_reservation_ttl_max,
             retry: self.config.proxy_transport.retry.clone(),
             debug_config: DebugConfig {
                 stargate_id: self.config.stargate_id.clone(),
@@ -634,6 +639,8 @@ mod tests {
                 crate::control_plane::DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT,
             registration_update_max_idle_timeout:
                 crate::control_plane::DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT,
+            routing_reservation_ttl_min: Duration::from_millis(1),
+            routing_reservation_ttl_max: Duration::from_millis(1000),
             proxy_transport: ProxyTransportConfig {
                 quic: crate::tunnel::QuicTunnelConfig {
                     connect_timeout: Duration::from_secs(5),
