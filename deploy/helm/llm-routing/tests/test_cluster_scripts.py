@@ -251,6 +251,16 @@ class InstallK3sTests(ScriptTest):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn('--node-label nvidia.com/gpu.product=NVIDIA-GB10-x', result.stdout)
 
+    def test_dry_run_on_a_running_node_still_checks_it(self):
+        self.stub('k3s', STUBS['k3s'])
+        result = self.install('server', '--node-ip', '192.0.2.10', '--kubeconfig-mode', '644', '--dry-run',
+                              STUB_ACTIVE='k3s')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('k3s v1.36.5+k3s1 is running as k3s. Dry run: checking the node anyway.', result.stdout)
+        self.assertIn('PASS  192.0.2.10 is a static address on eth1', result.stdout)
+        self.assertIn('--write-kubeconfig-mode 644', result.stdout)
+        self.assertIn('Compare with the running install: systemctl cat k3s', result.stdout)
+
     def test_running_k3s_with_another_role_is_an_error(self):
         self.stub('k3s', STUBS['k3s'])
         result = self.install('agent', '--join', '192.0.2.10', '--token-file', str(self.token),
