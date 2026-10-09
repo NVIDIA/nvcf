@@ -109,27 +109,37 @@ fi
 command -v systemctl >/dev/null 2>&1 || die "k3s needs systemd; systemctl was not found"
 
 # An existing install is left alone. Reinstalling with different flags means
-# uninstalling first, which deletes the node's k3s data.
+# uninstalling first, which deletes the node's k3s data. A dry run still checks
+# the node and prints the command, to compare with the running install.
+RUNNING=""
 if command -v k3s >/dev/null 2>&1; then
   installed=$(k3s --version 2>/dev/null | awk 'NR==1 {print $3}' || true)
   for service in k3s k3s-agent; do
     if systemctl is-active --quiet "$service"; then
-      running_role=server
-      [ "$service" = k3s ] || running_role=agent
-      if [ "$running_role" != "$ROLE" ]; then
-        echo "k3s is already running here as $running_role ($service), not $ROLE. No changes made." >&2
-        echo "To change the role, delete the node from the cluster, then run /usr/local/bin/$service-uninstall.sh." >&2
-        exit 1
-      fi
-      echo "k3s ${installed:-<unknown version>} is already installed and $service is running. No changes made."
-      [ "$installed" = "$VERSION" ] || echo "This script installs $VERSION. Keep every node on the same k3s version."
-      echo "To reinstall, run /usr/local/bin/$service-uninstall.sh first. It deletes this node's k3s data."
-      exit 0
+      RUNNING="$service"
+      break
     fi
   done
-  echo "k3s ${installed:-<unknown version>} is installed but neither k3s nor k3s-agent is running." >&2
-  echo "Start the service, or run its uninstall script under /usr/local/bin before installing again." >&2
-  exit 1
+  if [ -n "$RUNNING" ]; then
+    running_role=server
+    [ "$RUNNING" = k3s ] || running_role=agent
+    if [ "$running_role" != "$ROLE" ]; then
+      echo "k3s is already running here as $running_role ($RUNNING), not $ROLE. No changes made." >&2
+      echo "To change the role, delete the node from the cluster, then run /usr/local/bin/$RUNNING-uninstall.sh." >&2
+      exit 1
+    fi
+    if [ "$DRY_RUN" -eq 0 ]; then
+      echo "k3s ${installed:-<unknown version>} is already installed and $RUNNING is running. No changes made."
+      [ "$installed" = "$VERSION" ] || echo "This script installs $VERSION. Keep every node on the same k3s version."
+      echo "To reinstall, run /usr/local/bin/$RUNNING-uninstall.sh first. It deletes this node's k3s data."
+      exit 0
+    fi
+    echo "k3s ${installed:-<unknown version>} is running as $RUNNING. Dry run: checking the node anyway."
+  elif [ "$DRY_RUN" -eq 0 ]; then
+    echo "k3s ${installed:-<unknown version>} is installed but neither k3s nor k3s-agent is running." >&2
+    echo "Start the service, or run its uninstall script under /usr/local/bin before installing again." >&2
+    exit 1
+  fi
 fi
 
 echo "Checking $(hostname) for a k3s $ROLE install"
@@ -252,6 +262,7 @@ printf ' %q' "${ARGS[@]}"
 printf '\n  install.sh: %s\n  sha256: %s\n' "$INSTALLER_URL" "$INSTALLER_SHA256"
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "Dry run: nothing installed."
+  [ -z "$RUNNING" ] || echo "Compare with the running install: systemctl cat $RUNNING"
   exit 0
 fi
 

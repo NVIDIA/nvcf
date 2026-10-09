@@ -51,7 +51,7 @@ It then downloads the k3s installer for release `v1.36.5+k3s1`, verifies its SHA
 - `--tls-san` for the node address and each name you pass. Pass every name you will use to reach the API from your workstation.
 - The node label `nvidia.com/gpu.product` from `nvidia-smi`, such as `NVIDIA-GB10`. Recipes match it against their hardware profiles. k3s applies it when the node first registers.
 
-Add `--dry-run` to run the checks and print the install command without installing. If k3s is already running, the script changes nothing. `--help` lists all options, including `--k3s-version` with `--installer-sha256` for another release.
+Add `--dry-run` to run the checks and print the install command without installing. If k3s is already running, the script changes nothing. A dry run still checks the node and prints the command, so you can compare it with `systemctl cat k3s` on a node you installed another way. `--help` lists all options, including `--k3s-version` with `--installer-sha256` for another release.
 
 The server kubeconfig, `/etc/rancher/k3s/k3s.yaml`, keeps the k3s default mode 600. Pass `--kubeconfig-mode 644` only if every user on the node may administer the cluster.
 
