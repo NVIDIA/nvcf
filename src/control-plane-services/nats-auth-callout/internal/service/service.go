@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
@@ -38,6 +39,8 @@ type Service struct {
 	nc             *nats.Conn
 	logger         *zap.Logger
 	calloutService *callout.AuthorizationService
+	// stopping marks a close requested by Stop, so it is not reported as a failure.
+	stopping atomic.Bool
 }
 
 func NewFromConfig(ctx context.Context, config *config.ServiceConfig, logger *zap.Logger) (*Service, error) {
@@ -80,10 +83,16 @@ func NewFromConfig(ctx context.Context, config *config.ServiceConfig, logger *za
 		return nil, fmt.Errorf("signing key must be an account or operator key: %w", err)
 	}
 
-	nc, err := nats.Connect(config.NatsURL, nkeyOpt)
+	s := &Service{
+		config: config,
+		logger: logger,
+	}
+	nc, err := nats.Connect(config.NatsURL, append([]nats.Option{nkeyOpt}, s.connectionOptions()...)...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}
+	s.nc = nc
+	setConnectionStatus(nc.Status())
 	logger.Info("Connected to NATS server", zap.String("url", config.NatsURL))
 
 	pm := plugins.NewManager(config, logger)
@@ -125,15 +134,15 @@ func NewFromConfig(ctx context.Context, config *config.ServiceConfig, logger *za
 
 	logger.Info("Svc info:", zap.Any("info", calloutService.Service.Info()))
 
-	return &Service{
-		nc:             nc,
-		config:         config,
-		logger:         logger,
-		calloutService: calloutService,
-	}, nil
+	s.calloutService = calloutService
+	return s, nil
 }
 
 func (s *Service) Stop() {
+	// callout.AuthorizationService.Stop panics when called twice.
+	if s.stopping.Swap(true) {
+		return
+	}
 	_ = s.calloutService.Stop()
 	s.nc.Close()
 }

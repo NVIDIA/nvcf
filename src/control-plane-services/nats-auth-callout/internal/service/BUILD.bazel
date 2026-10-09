@@ -19,6 +19,7 @@ go_library(
     name = "service",
     srcs = [
         "auth.go",
+        "connection.go",
         "metrics.go",
         "service.go",
     ],
@@ -50,7 +51,17 @@ alias(
 
 go_test(
     name = "service_test",
-    srcs = ["auth_test.go"],
+    srcs = [
+        "auth_test.go",
+        "connection_test.go",
+    ],
     embed = [":service"],
-    deps = ["//src/control-plane-services/nats-auth-callout/internal/plugins/types"],
+    deps = [
+        "//src/control-plane-services/nats-auth-callout/internal/plugins/types",
+        "@com_github_nats_io_nats_go//:nats_go",
+        "@com_github_prometheus_client_golang//prometheus/testutil",
+        "@org_uber_go_zap//:zap",
+        "@org_uber_go_zap//zapcore",
+        "@org_uber_go_zap//zaptest/observer",
+    ],
 )

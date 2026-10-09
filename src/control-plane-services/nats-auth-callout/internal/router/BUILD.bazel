@@ -27,6 +27,7 @@ go_library(
         "//src/control-plane-services/nats-auth-callout/api",
         "@com_github_gin_contrib_zap//:zap",
         "@com_github_gin_gonic_gin//:gin",
+        "@com_github_nats_io_nats_go//:nats_go",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_prometheus_client_golang//prometheus/promauto",
@@ -54,6 +55,7 @@ go_test(
     embed = [":router"],
     deps = [
         "@com_github_gin_gonic_gin//:gin",
+        "@com_github_nats_io_nats_go//:nats_go",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_stretchr_testify//assert",
