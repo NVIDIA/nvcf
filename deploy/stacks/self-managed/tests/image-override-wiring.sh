@@ -162,10 +162,13 @@ global:
 EOF
 
 render_values "$work_dir/default-values.yaml"
-test "$(yq -r '.nats.podTemplate.merge.spec.securityContext.runAsUser' "$work_dir/default-values.yaml")" = 1000 ||
-  fail "nats pod user must be non-root in stack values"
-test "$(yq -r '.nats.container.merge.securityContext.runAsNonRoot' "$work_dir/default-values.yaml")" = true ||
-  fail "nats container must run as non-root in stack values"
+assert_yaml_path_absent "$work_dir/default-values.yaml" .nats.container.merge.securityContext "nats security-context chart default"
+# An empty map preserves chart defaults; a null spec would remove them during
+# Helm values merging when no placement overrides are configured.
+test "$(yq -r '.nats.podTemplate.merge.spec.securityContext | tag' "$work_dir/default-values.yaml")" = '!!map' ||
+  fail "nats pod security-context defaults must be a map"
+test "$(yq -r '.nats.podTemplate.merge.spec.securityContext | length' "$work_dir/default-values.yaml")" = 0 ||
+  fail "nats pod security-context defaults must remain chart-owned"
 assert_absent "$work_dir/default-values.yaml" \
   natsio/nats-server-config-reloader "nats.reloader chart default"
 assert_yaml_path_absent "$work_dir/default-values.yaml" \
@@ -434,5 +437,46 @@ assert_absent "$work_dir/mirror-values.yaml" \
   natsio/nats-server-config-reloader "nats.reloader mirror install"
 assert_absent "$work_dir/mirror-values.yaml" \
   alpine/k8s "api.accountBootstrap mirror install"
+
+# Security contexts are chart-owned defaults. Forward environment overrides
+# without requiring image overrides or replacing unrelated chart defaults.
+write_env <<'EOF'
+nats:
+  container:
+    merge:
+      securityContext:
+        runAsUser: 2000
+        runAsGroup: 2000
+        readOnlyRootFilesystem: true
+  reloader:
+    merge:
+      securityContext:
+        runAsUser: 2000
+        runAsGroup: 2000
+  podTemplate:
+    merge:
+      spec:
+        securityContext:
+          runAsUser: 2000
+          runAsGroup: 2000
+          fsGroup: 2000
+          fsGroupChangePolicy: Always
+EOF
+
+render_values "$work_dir/security-context-values.yaml"
+for path in .nats.container.merge.securityContext .nats.reloader.merge.securityContext .nats.podTemplate.merge.spec.securityContext; do
+  for field in runAsUser runAsGroup; do
+    test "$(yq -r "$path.$field" "$work_dir/security-context-values.yaml")" = 2000 ||
+      fail "nats security-context override must preserve $path.$field"
+  done
+  assert_yaml_path_absent "$work_dir/security-context-values.yaml" "$path.runAsNonRoot" "nats chart-owned non-root default"
+done
+test "$(yq -r '.nats.podTemplate.merge.spec.securityContext.fsGroup' "$work_dir/security-context-values.yaml")" = 2000 ||
+  fail "nats pod filesystem-group override must be preserved"
+test "$(yq -r '.nats.podTemplate.merge.spec.securityContext.fsGroupChangePolicy' "$work_dir/security-context-values.yaml")" = Always ||
+  fail "nats pod filesystem-group change policy must be preserved"
+test "$(yq -r '.nats.container.merge.securityContext.readOnlyRootFilesystem' "$work_dir/security-context-values.yaml")" = true ||
+  fail "nats container security settings must be preserved"
+assert_yaml_path_absent "$work_dir/security-context-values.yaml" .nats.reloader.image "nats security-only override"
 
 echo "image-override-wiring: OK"

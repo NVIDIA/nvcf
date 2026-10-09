@@ -468,14 +468,11 @@ nats:
         {{- end }}
   {{- end }}
   container:
+    {{- with dig "nats" "container" "merge" "securityContext" dict .Values }}
     merge:
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        allowPrivilegeEscalation: false
-        capabilities:
-          drop: [ALL]
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nats-server
@@ -483,8 +480,15 @@ nats:
   {{- $natsReloaderRegistry := dig "nats" "reloader" "image" "registry" "" .Values }}
   {{- $natsReloaderRepository := dig "nats" "reloader" "image" "repository" "" .Values }}
   {{- $natsReloaderTag := dig "nats" "reloader" "image" "tag" "" .Values }}
-  {{- if or $natsReloaderRegistry $natsReloaderRepository $natsReloaderTag }}
+  {{- $natsReloaderSecurityContext := dig "nats" "reloader" "merge" "securityContext" dict .Values }}
+  {{- if or $natsReloaderRegistry $natsReloaderRepository $natsReloaderTag $natsReloaderSecurityContext }}
   reloader:
+    {{- with $natsReloaderSecurityContext }}
+    merge:
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- if or $natsReloaderRegistry $natsReloaderRepository $natsReloaderTag }}
     image:
       {{- with $natsReloaderRegistry }}
       registry: {{ . }}
@@ -495,6 +499,7 @@ nats:
       {{- with $natsReloaderTag }}
       tag: {{ . | quote }}
       {{- end }}
+    {{- end }}
   {{- end }}
   natsBox:
     container:
@@ -516,11 +521,7 @@ nats:
     merge:
       spec:
         securityContext:
-          runAsNonRoot: true
-          runAsUser: 1000
-          runAsGroup: 1000
-          fsGroup: 1000
-          fsGroupChangePolicy: OnRootMismatch
+          {{- dig "nats" "podTemplate" "merge" "spec" "securityContext" dict .Values | toYaml | nindent 10 }}
         {{- with $natsNs }}
         {{- . | nindent 8 }}
         {{- end }}

@@ -65,6 +65,30 @@ for container in nats reloader; do
   test "$(yq -r "select(.kind == \"StatefulSet\") | .spec.template.spec.containers[] | select(.name == \"$container\") | .securityContext.runAsNonRoot" "$default_render")" = true
   test "$(yq -r "select(.kind == \"StatefulSet\") | .spec.template.spec.containers[] | select(.name == \"$container\") | .securityContext.runAsUser" "$default_render")" = 1000
 done
+# Environment-supplied identities must override defaults without dropping the
+# remaining non-root restrictions from the owning chart.
+identity_render="$tmpdir/identity-override.yaml"
+render \
+  --set nats.container.merge.securityContext.runAsUser=2000 \
+  --set nats.container.merge.securityContext.runAsGroup=2000 \
+  --set nats.reloader.merge.securityContext.runAsUser=2000 \
+  --set nats.reloader.merge.securityContext.runAsGroup=2000 \
+  --set nats.podTemplate.merge.spec.securityContext.runAsUser=2000 \
+  --set nats.podTemplate.merge.spec.securityContext.runAsGroup=2000 \
+  --set nats.podTemplate.merge.spec.securityContext.fsGroup=2000 > "$identity_render"
+for field in runAsUser runAsGroup fsGroup; do
+  test "$(yq -r "select(.kind == \"StatefulSet\") | .spec.template.spec.securityContext.$field" "$identity_render")" = 2000
+done
+for container in nats reloader; do
+  context="select(.kind == \"StatefulSet\") | .spec.template.spec.containers[] | select(.name == \"$container\") | .securityContext"
+  for field in runAsUser runAsGroup; do
+    test "$(yq -r "$context.$field" "$identity_render")" = 2000
+  done
+  test "$(yq -r "$context.runAsNonRoot" "$identity_render")" = true
+  test "$(yq -r "$context.allowPrivilegeEscalation" "$identity_render")" = false
+  test "$(yq -r "$context.capabilities.drop[]" "$identity_render")" = ALL
+done
+
 reloader_image="$(yq -r '.nats.reloader.image.registry + "/" + .nats.reloader.image.repository + ":" + .nats.reloader.image.tag' "$chart_dir/values.yaml")"
 assert_contains "$default_render" "image: $reloader_image"
 assert_contains "$default_render" "# Source: helm-nvcf-nats/templates/nats-auth-callout-nkeys-secret.yaml"
