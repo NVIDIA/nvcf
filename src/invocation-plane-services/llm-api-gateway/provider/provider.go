@@ -24,6 +24,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/lastcluster"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
@@ -92,6 +93,12 @@ type InferenceProvider interface {
 		reqCtx *requestctx.RequestContext,
 		request *NormalizedRequest,
 	) (<-chan StreamEvent, error)
+}
+
+// LastClusterAware is implemented by providers that send the session's last
+// serving cluster to Stargate.
+type LastClusterAware interface {
+	SetLastClusterTracker(tracker *lastcluster.Tracker)
 }
 
 type OpenAIProxyProvider interface {

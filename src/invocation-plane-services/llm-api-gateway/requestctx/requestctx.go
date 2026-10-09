@@ -21,6 +21,15 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 )
 
+// Session sources recorded in RequestContext.SessionSource.
+const (
+	SessionSourceHeader           = "header"
+	SessionSourcePayload          = "payload"
+	SessionSourcePromptCacheKey   = "prompt_cache_key"
+	SessionSourceConversationID   = "conversation_id"
+	SessionSourceClaudeCodeHeader = "claude_code_header"
+)
+
 type RequestContext struct {
 	RequestID        string
 	APIKeyID         string // client auth subject; reserved for attribution, auditing, or future API-key policy hooks

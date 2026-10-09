@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/servicetier"
 )
@@ -46,6 +47,65 @@ func TestDefaultSetsExpectedDefaults(t *testing.T) {
 	}
 	if cfg.Server.InferenceWriteTimeout <= 0 {
 		t.Fatalf("inference write timeout = %s, want a positive stall bound", cfg.Server.InferenceWriteTimeout)
+	}
+	want := LastClusterConfig{
+		Enabled:         false,
+		TTL:             10 * time.Minute,
+		LookupTimeout:   20 * time.Millisecond,
+		LocalMaxEntries: 100000,
+	}
+	if cfg.Stargate.LastCluster != want {
+		t.Fatalf("last cluster = %+v, want %+v", cfg.Stargate.LastCluster, want)
+	}
+}
+
+func TestLoadFromEnvReadsLastCluster(t *testing.T) {
+	t.Setenv("STARGATE_LAST_CLUSTER_ENABLED", "true")
+	t.Setenv("STARGATE_LAST_CLUSTER_TTL", "90s")
+	t.Setenv("STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT", "5ms")
+	t.Setenv("STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES", "42")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv() error = %v", err)
+	}
+
+	want := LastClusterConfig{
+		Enabled:         true,
+		TTL:             90 * time.Second,
+		LookupTimeout:   5 * time.Millisecond,
+		LocalMaxEntries: 42,
+	}
+	if cfg.Stargate.LastCluster != want {
+		t.Fatalf("last cluster = %+v, want %+v", cfg.Stargate.LastCluster, want)
+	}
+}
+
+func TestLoadFromEnvRejectsInvalidLastCluster(t *testing.T) {
+	cases := []struct {
+		key   string
+		value string
+	}{
+		{key: "STARGATE_LAST_CLUSTER_ENABLED", value: "maybe"},
+		{key: "STARGATE_LAST_CLUSTER_TTL", value: "10"},
+		{key: "STARGATE_LAST_CLUSTER_TTL", value: "0s"},
+		{key: "STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT", value: "-1ms"},
+		{key: "STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES", value: "0"},
+		{key: "STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES", value: "-1"},
+		{key: "STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES", value: "many"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.key+"="+tc.value, func(t *testing.T) {
+			t.Setenv(tc.key, tc.value)
+
+			_, err := LoadFromEnv()
+			if err == nil {
+				t.Fatal("LoadFromEnv() error = nil, want error")
+			}
+			if !strings.Contains(err.Error(), tc.key) {
+				t.Fatalf("error %q does not mention %s", err.Error(), tc.key)
+			}
+		})
 	}
 }
 

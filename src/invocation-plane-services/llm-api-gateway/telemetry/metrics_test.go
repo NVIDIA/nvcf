@@ -104,11 +104,106 @@ func TestMetricsDefinitionsUseServiceScopedNames(t *testing.T) {
 		"llm_api_gateway_rate_limit_synchronizer_queue_wait_seconds",
 		"llm_api_gateway_rate_limit_synchronizer_queue_length",
 		"llm_api_gateway_rate_limit_synchronizer_events_dropped_total",
+		"llm_api_gateway_last_cluster_lookups_total",
+		"llm_api_gateway_last_cluster_writes_total",
 	} {
 		if !names[want] {
 			t.Fatalf("missing metric %q in %#v", want, names)
 		}
 	}
+}
+
+func TestLastClusterMetricsPreInitialized(t *testing.T) {
+	reader := installManualReader(t)
+
+	InitializeMetrics()
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	want := map[string][]string{
+		"llm_api_gateway_last_cluster_lookups_total": {"hit", "miss", "error", "timeout", "skipped"},
+		"llm_api_gateway_last_cluster_writes_total":  {"ok", "error"},
+	}
+	for name, results := range want {
+		sum, ok := findInt64Sum(rm, name)
+		if !ok {
+			t.Fatalf("metric %q not found", name)
+		}
+		got := map[string]int64{}
+		for _, dp := range sum.DataPoints {
+			value, _ := dp.Attributes.Value("result")
+			got[value.AsString()] = dp.Value
+		}
+		if len(got) != len(results) {
+			t.Fatalf("%s results = %v, want %v", name, got, results)
+		}
+		for _, result := range results {
+			value, ok := got[result]
+			if !ok || value != 0 {
+				t.Fatalf("%s{result=%q} = %d (present=%v), want 0", name, result, value, ok)
+			}
+		}
+	}
+}
+
+func TestLastClusterLookupDurationBuckets(t *testing.T) {
+	reader := installManualReader(t)
+
+	RecordLastClusterLookup(context.Background(), LastClusterLookupHit, 3*time.Millisecond)
+	RecordLastClusterLookup(context.Background(), LastClusterLookupSkipped, 0)
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect() error = %v", err)
+	}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "llm_api_gateway_last_cluster_lookup_duration_seconds" {
+				continue
+			}
+			hist, ok := m.Data.(metricdata.Histogram[float64])
+			if !ok {
+				t.Fatalf("lookup duration data = %T, want float64 histogram", m.Data)
+			}
+			if len(hist.DataPoints) != 1 {
+				t.Fatalf("lookup duration points = %d, want 1 (skipped is not timed)", len(hist.DataPoints))
+			}
+			bounds := hist.DataPoints[0].Bounds
+			if fmt.Sprint(bounds) != fmt.Sprint([]float64{0.001, 0.002, 0.005, 0.01, 0.02, 0.05}) {
+				t.Fatalf("lookup duration bounds = %v, want 1ms to 50ms", bounds)
+			}
+			return
+		}
+	}
+	t.Fatal("lookup duration histogram not found")
+}
+
+func installManualReader(t *testing.T) *sdkmetric.ManualReader {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	oldProvider := otel.GetMeterProvider()
+	otel.SetMeterProvider(provider)
+	t.Cleanup(func() {
+		otel.SetMeterProvider(oldProvider)
+		_ = provider.Shutdown(context.Background())
+	})
+	return reader
+}
+
+func findInt64Sum(rm metricdata.ResourceMetrics, name string) (metricdata.Sum[int64], bool) {
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != name {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			return sum, ok
+		}
+	}
+	return metricdata.Sum[int64]{}, false
 }
 
 func TestFunctionIDAttribute(t *testing.T) {

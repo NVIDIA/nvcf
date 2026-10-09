@@ -98,6 +98,8 @@ func InitializeMetrics() {
 	_ = authRequestsTotal()
 	_ = authRequestDuration()
 	preInitAuthMetrics()
+	_ = lastClusterLookupDuration()
+	preInitLastClusterMetrics()
 }
 
 func Add(
@@ -463,6 +465,85 @@ func preInitAuthMetrics() {
 				attribute.String("grpc_status", code),
 			),
 		)
+	}
+}
+
+// Result labels for the Stargate last-cluster store metrics.
+const (
+	LastClusterLookupHit     = "hit"
+	LastClusterLookupMiss    = "miss"
+	LastClusterLookupError   = "error"
+	LastClusterLookupTimeout = "timeout"
+	LastClusterLookupSkipped = "skipped"
+
+	LastClusterWriteOK    = "ok"
+	LastClusterWriteError = "error"
+)
+
+var (
+	lastClusterLookupResults = []string{
+		LastClusterLookupHit,
+		LastClusterLookupMiss,
+		LastClusterLookupError,
+		LastClusterLookupTimeout,
+		LastClusterLookupSkipped,
+	}
+	lastClusterWriteResults = []string{LastClusterWriteOK, LastClusterWriteError}
+)
+
+// LastClusterLookupBuckets cover the store lookup latency. The lookup runs on
+// the request path with a 20ms default deadline, so buckets stop at 50ms.
+var LastClusterLookupBuckets = []float64{0.001, 0.002, 0.005, 0.01, 0.02, 0.05}
+
+func lastClusterLookupsTotal() otelmetric.Int64Counter {
+	return must.Get(Meter().Int64Counter(
+		metricPrefix+"last_cluster_lookups_total",
+		otelmetric.WithDescription("Stargate last-cluster store lookups, labelled by result."),
+	))
+}
+
+func lastClusterWritesTotal() otelmetric.Int64Counter {
+	return must.Get(Meter().Int64Counter(
+		metricPrefix+"last_cluster_writes_total",
+		otelmetric.WithDescription("Stargate last-cluster store writes, labelled by result."),
+	))
+}
+
+func lastClusterLookupDuration() otelmetric.Float64Histogram {
+	return must.Get(Meter().Float64Histogram(
+		metricPrefix+"last_cluster_lookup_duration_seconds",
+		otelmetric.WithUnit("s"),
+		otelmetric.WithDescription("Duration of Stargate last-cluster store lookups on the request path."),
+		otelmetric.WithExplicitBucketBoundaries(LastClusterLookupBuckets...),
+	))
+}
+
+// RecordLastClusterLookup counts one lookup. Skipped lookups never touch the
+// store, so they are counted but not timed.
+func RecordLastClusterLookup(ctx context.Context, result string, elapsed time.Duration) {
+	attrs := otelmetric.WithAttributes(attribute.String("result", result))
+	lastClusterLookupsTotal().Add(ctx, 1, attrs)
+	if result != LastClusterLookupSkipped {
+		lastClusterLookupDuration().Record(ctx, elapsed.Seconds(), attrs)
+	}
+}
+
+func RecordLastClusterWrite(ctx context.Context, result string) {
+	lastClusterWritesTotal().Add(ctx, 1, otelmetric.WithAttributes(attribute.String("result", result)))
+}
+
+// preInitLastClusterMetrics emits a zero sample for every result label so
+// absent() and rate() work on the first scrape, whether or not the feature
+// is enabled.
+func preInitLastClusterMetrics() {
+	ctx := context.Background()
+	lookups := lastClusterLookupsTotal()
+	for _, result := range lastClusterLookupResults {
+		lookups.Add(ctx, 0, otelmetric.WithAttributes(attribute.String("result", result)))
+	}
+	writes := lastClusterWritesTotal()
+	for _, result := range lastClusterWriteResults {
+		writes.Add(ctx, 0, otelmetric.WithAttributes(attribute.String("result", result)))
 	}
 }
 

@@ -79,11 +79,23 @@ llmApiGateway:
     defaultModel: ""
     defaultRpm: 120
     defaultTpm: 240000
+    # Session last-cluster hint sent to the LLM Request Router as
+    # x-stargate-last-cluster-id. Entries live in the embedded Olric cluster
+    # when olric.enabled is true, otherwise in a per-pod LRU capped at
+    # localMaxEntries. Enable it after the router is upgraded and before any
+    # model turns on last_cluster_affinity.
+    lastCluster:
+      enabled: false
+      ttl: 10m
+      lookupTimeout: 20ms
+      localMaxEntries: 100000
 
-  # Rate-limit state is kept in an embedded Olric cluster colocated with the
-  # gateway pods (no separate Redis deployment). The gateway's server.go picks
-  # ratelimit.AllowAll when RATE_LIMIT_ENABLED=true AND OLRIC_ENABLED=false, so
-  # enabling rate limiting without Olric silently turns into a no-op.
+  # Rate-limit state and session last-cluster hints are kept in an embedded
+  # Olric cluster colocated with the gateway pods (no separate Redis
+  # deployment). The node starts whenever olric.enabled is true. The gateway's
+  # server.go picks ratelimit.AllowAll when RATE_LIMIT_ENABLED=true AND
+  # OLRIC_ENABLED=false, so enabling rate limiting without Olric silently turns
+  # into a no-op.
   olric:
     enabled: true
     # "local" | "lan" | "wan" - memberlist tuning. Use "local" for single-pod k3d
