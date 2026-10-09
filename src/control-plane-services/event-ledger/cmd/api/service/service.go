@@ -24,6 +24,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
+	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/common/core/types"
@@ -32,6 +33,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/interfaces"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/registrations"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/pkg/codex"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/pkg/constants"
 )
 
 type Connections struct {
@@ -59,6 +61,13 @@ func InitConns(cfg config.Config, logger *otelzap.Logger) (Connections, error) {
 		logger.Warn("database handler does not implement v2 interface. v2 endpoints will fail")
 		// Return only the V1 handler populated.
 		return Connections{DbHandler: db}, nil
+	}
+
+	// Wrap the V2 handler in the write cache when it is enabled. The V1 handler is the
+	// same database connection and stays as it is, because other components use it.
+	dbV2, err = wrapWithCache(dbV2, cfg.Cache, otel.GetMeterProvider().Meter(constants.ApiSvcName))
+	if err != nil {
+		return Connections{}, fmt.Errorf("could not set up the write cache: %w", err)
 	}
 
 	// Return both V1 and V2 handlers populated.
