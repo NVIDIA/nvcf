@@ -142,6 +142,8 @@ spec:
                 secretKeyRef: {name: {{ $v.hfTokenSecret | quote }}, key: token}
 {{- end }}
 {{- if eq (len $v.targets) 2 }}
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
             - {name: NCCL_SOCKET_IFNAME, value: {{ printf "=%s" $target.interface | quote }}}
             - {name: GLOO_SOCKET_IFNAME, value: {{ $target.interface | quote }}}
             - {name: NCCL_IB_DISABLE, value: '1'}

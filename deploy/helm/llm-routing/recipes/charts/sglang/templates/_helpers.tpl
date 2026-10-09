@@ -27,7 +27,11 @@
 {{- if $profile.fabric -}}
 {{- $_ := required "TP2 requires nodeCapabilities.fabric for every selected node" $facts.fabric -}}
 {{- $_ := required "TP2 requires nodeCapabilities.address for every selected node" $facts.address -}}
-{{- if not (regexMatch "^[a-zA-Z0-9_.-]{1,15}$" (default "" $facts.interface)) }}{{ fail "TP2 requires a valid nodeCapabilities.interface" }}{{ end -}}
+{{- $octet := "(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])" -}}
+{{- if or (not (kindIs "string" $facts.address)) (not (regexMatch (printf "^%s\\.%s\\.%s\\.%s$" $octet $octet $octet $octet) $facts.address)) }}{{ fail "TP2 requires a usable IPv4 fabric address" }}{{ end -}}
+{{- $first := int (first (splitList "." $facts.address)) -}}
+{{- if or (eq $facts.address "0.0.0.0") (eq $first 127) (ge $first 224) }}{{ fail "TP2 requires a usable IPv4 fabric address" }}{{ end -}}
+{{- if or (not (regexMatch "^[a-zA-Z0-9_.-]{1,15}$" (default "" $facts.interface))) (has $facts.interface (list "." "..")) }}{{ fail "TP2 requires a valid nodeCapabilities.interface" }}{{ end -}}
 {{- if lt (float64 (default 0 $facts.linkGbps)) (float64 $profile.minFabricGbps) }}{{ fail "TP2 nodeCapabilities.linkGbps is below the profile minimum" }}{{ end -}}
 {{- $_ := merge $target (pick $facts "fabric" "address" "interface" "linkGbps") -}}
 {{- end -}}
