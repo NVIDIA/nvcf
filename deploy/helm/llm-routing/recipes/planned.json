@@ -31,7 +31,7 @@
       "availability": {
         "status": "unavailable",
         "deployable": false,
-        "reason": "Exact-name public artifact and access status remain unverified. HTTP 401 is ambiguous between private and nonexistent repositories. Rechecked 2026-10-09: the Qwen3.8-4B, Qwen3.8-4B-FP8 and nvidia Qwen3.8-4B-NVFP4 repositories return 401 and no 4B model appears in the Qwen3.8 author listing.",
+        "reason": "Exact-name public artifact and access status remain unverified. HTTP 401 is ambiguous between private and nonexistent repositories. Rechecked 2026-10-09: the Qwen3.8-4B, Qwen3.8-4B-FP8 and nvidia Qwen3.8-4B-NVFP4 repositories return 401 and no 4B model appears in the Qwen3.8 author listing. The public Qwen3.5-4B has its own executable recipe, qwen3.5-4b.",
         "checkedAt": "2026-10-09",
         "sources": [
           "https://huggingface.co/collections/Qwen/qwen38",

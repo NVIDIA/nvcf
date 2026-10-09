@@ -570,6 +570,135 @@
       ]
     },
     {
+      "id": "qwen3.5-4b",
+      "name": "Qwen3.5-4B",
+      "servedModelId": "qwen3.5-4b",
+      "availability": {
+        "status": "available",
+        "deployable": true
+      },
+      "precision": "BF16",
+      "license": "Apache-2.0",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "Qwen/Qwen3.5-4B",
+        "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+        "weightBytes": null
+      },
+      "runtime": {
+        "backend": "sglang",
+        "version": "SGLang v0.5.19",
+        "image": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513"
+      },
+      "profiles": [
+        {
+          "id": "spark-bf16",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 51539607552,
+                "memoryLimitBytes": 68719476736,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 32212254720,
+                "minimumFreeBytesBeforeDownload": 21474836480
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 32768,
+            "maximumConcurrency": 4
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-09",
+              "profile": "spark-bf16",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "lifecycleIsolationVerified": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-09",
+              "profile": "spark-bf16",
+              "modelRevision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "completionBudgetTokens": 2048,
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "cacheMode": "fresh-download",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.2.0",
+              "localPath": "pylon-sglang-recipe-0.2.0.tgz",
+              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "repository": null,
+              "publication": "local"
+            },
+            "releaseName": "qwen35-4b",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.5-4b",
+              "profileName": "spark-bf16"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "guides/README.md"
+          }
+        }
+      ]
+    },
+    {
       "id": "qwen3.8-27b",
       "name": "Qwen3.8-27B",
       "servedModelId": "qwen3.8-27b",
@@ -834,7 +963,7 @@
       "availability": {
         "status": "unavailable",
         "deployable": false,
-        "reason": "Exact-name public artifact and access status remain unverified. HTTP 401 is ambiguous between private and nonexistent repositories. Rechecked 2026-10-09: the Qwen3.8-4B, Qwen3.8-4B-FP8 and nvidia Qwen3.8-4B-NVFP4 repositories return 401 and no 4B model appears in the Qwen3.8 author listing.",
+        "reason": "Exact-name public artifact and access status remain unverified. HTTP 401 is ambiguous between private and nonexistent repositories. Rechecked 2026-10-09: the Qwen3.8-4B, Qwen3.8-4B-FP8 and nvidia Qwen3.8-4B-NVFP4 repositories return 401 and no 4B model appears in the Qwen3.8 author listing. The public Qwen3.5-4B has its own executable recipe, qwen3.5-4b.",
         "checkedAt": "2026-10-09",
         "sources": [
           "https://huggingface.co/collections/Qwen/qwen38",

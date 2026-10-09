@@ -2,7 +2,7 @@
 
 Follow the [LLM routing guide](../README.md) to install shared infrastructure once and deploy models directly with Helm. The [common catalog](index.json) includes both SGLang and llama.cpp recipes, precise per-node resources, pinned artifacts, supported profiles, workload limits, validation and local chart references.
 
-The catalog contains eight model families and nine entries. `availability.deployable: true` identifies executable recipes, with validation recorded separately for each profile. Nemotron 5 Super 49B and Qwen3.8-4B are unavailable because their exact public artifacts were not verified. DeepSeek V4 Flash is planned, with verified upstream checkpoint and runtime candidates under `upstreamCandidates`. These three entries have no served model ID or installable profile. [planned.json](planned.json) records the dated evidence and remaining gaps.
+The catalog contains nine model families and ten entries. `availability.deployable: true` identifies executable recipes, with validation recorded separately for each profile. Nemotron 5 Super 49B and Qwen3.8-4B are unavailable because their exact public artifacts were not verified. DeepSeek V4 Flash is planned, with verified upstream checkpoint and runtime candidates under `upstreamCandidates`. These three entries have no served model ID or installable profile. [planned.json](planned.json) records the dated evidence and remaining gaps.
 
 ## Committed values
 
@@ -12,6 +12,7 @@ Automatic recipes select pinned model and runtime settings from the chart. Suppl
 | --- | --- | --- |
 | Qwen3.8-27B FP8 | [qwen3.8-27b.yaml](values/qwen3.8-27b.yaml) | [Automatic, one node](../README.md#2-install-a-model) |
 | Qwen3.8-27B NVIDIA NVFP4 | [qwen3.8-27b-nvfp4.yaml](values/qwen3.8-27b-nvfp4.yaml) | [Automatic, one node](../README.md#2-install-a-model) |
+| Qwen3.5-4B BF16 | [qwen3.5-4b.yaml](values/qwen3.5-4b.yaml) | [Automatic, one node](../README.md#2-install-a-model). Gateway checks passed at context 8,192 and concurrency 1 with a 2,048-token completion budget. |
 | Nemotron Nano 12B v2 BF16 | [nemotron-nano-12b-v2.yaml](values/nemotron-nano-12b-v2.yaml) | [Automatic, one node](../README.md#2-install-a-model). Short-prompt gateway checks passed at context 8,192 and concurrency 1. |
 | Nemotron 3.5 Lightning NVFP4 | [nemotron-3.5-lightning.yaml](values/nemotron-3.5-lightning.yaml) | [Automatic, one node](../README.md#2-install-a-model). Short-prompt gateway checks passed at context 8,192 and concurrency 1. |
 | GLM-5.3 UD-IQ2_M | [glm-5.3.yaml](values/glm-5.3.yaml) | [Automatic, two nodes](../ADVANCED.md#helm-glm-recipe). Latest trial stopped at the host-memory guard. |

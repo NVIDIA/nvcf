@@ -196,6 +196,96 @@
       }
     },
     {
+      "id": "qwen3.5-4b",
+      "name": "Qwen3.5-4B",
+      "releaseName": "qwen35-4b",
+      "precision": "BF16",
+      "repository": "Qwen/Qwen3.5-4B",
+      "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+      "image": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+      "runtime": "SGLang v0.5.19",
+      "license": "Apache-2.0",
+      "source": "https://huggingface.co/Qwen/Qwen3.5-4B",
+      "validation": "spark-smoke-tested",
+      "profiles": [
+        {
+          "id": "spark-bf16",
+          "nodes": 1,
+          "memoryGiB": 48,
+          "memoryLimitGiB": 64,
+          "cpu": 4,
+          "cacheGiB": 30,
+          "minFreeDiskGiB": 20,
+          "maxContext": 32768,
+          "maxConcurrency": 4,
+          "offload": false,
+          "flags": [
+            "--trust-remote-code",
+            "--mem-fraction-static",
+            "0.55",
+            "--attention-backend",
+            "flashinfer",
+            "--chunked-prefill-size",
+            "2048",
+            "--mamba-ssm-dtype",
+            "float32",
+            "--reasoning-parser",
+            "qwen3",
+            "--tool-call-parser",
+            "qwen3_coder"
+          ],
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          }
+        }
+      ],
+      "validatedWorkload": {
+        "date": "2026-10-09",
+        "profile": "spark-bf16",
+        "contextLength": 8192,
+        "concurrency": 1,
+        "requestType": "short-prompt-smoke",
+        "fullContextExercised": false,
+        "lifecycleIsolationVerified": false,
+        "performanceBenchmarked": false,
+        "qualityEvaluated": false
+      },
+      "automaticHelmValidation": {
+        "date": "2026-10-09",
+        "profile": "spark-bf16",
+        "modelRevision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+        "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+        "contextLength": 8192,
+        "concurrency": 1,
+        "requestType": "short-prompt-smoke",
+        "completionBudgetTokens": 2048,
+        "fullContextExercised": false,
+        "performanceBenchmarked": false,
+        "qualityEvaluated": false,
+        "cacheMode": "fresh-download",
+        "checks": [
+          "placement",
+          "gpu-qualification",
+          "cache-integrity",
+          "readiness",
+          "discovery",
+          "chat",
+          "streaming",
+          "authentication"
+        ]
+      }
+    },
+    {
       "id": "nemotron-nano-12b-v2",
       "name": "Nemotron Nano 12B v2",
       "releaseName": "nemotron-nano",

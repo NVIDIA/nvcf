@@ -158,10 +158,10 @@ class CommonCatalogTests(unittest.TestCase):
 
     def test_inventory_covers_seven_families_with_two_qwen_precisions(self):
         self.assertEqual(set(self.recipes), {"qwen3.8-27b", "qwen3.8-27b-nvfp4", "qwen3.8-flash-next",
-            "glm-5.3", "nemotron-nano-12b-v2", "nemotron-3.5-lightning", "nemotron-5-super-49b", "qwen3.8-4b", "deepseek-v4-flash"})
-        self.assertEqual(len({recipe["name"] for recipe in self.recipes.values()}), 8)
+            "glm-5.3", "nemotron-nano-12b-v2", "nemotron-3.5-lightning", "qwen3.5-4b", "nemotron-5-super-49b", "qwen3.8-4b", "deepseek-v4-flash"})
+        self.assertEqual(len({recipe["name"] for recipe in self.recipes.values()}), 9)
         available = {recipe["id"] for recipe in self.recipes.values() if recipe["availability"]["deployable"]}
-        self.assertEqual(available, {"qwen3.8-27b", "qwen3.8-27b-nvfp4", "qwen3.8-flash-next", "glm-5.3", "nemotron-nano-12b-v2", "nemotron-3.5-lightning"})
+        self.assertEqual(available, {"qwen3.8-27b", "qwen3.8-27b-nvfp4", "qwen3.8-flash-next", "glm-5.3", "nemotron-nano-12b-v2", "nemotron-3.5-lightning", "qwen3.5-4b"})
         for identifier in available:
             self.assertEqual(self.recipes[identifier]["availability"]["status"], "available")
             self.assertTrue(self.recipes[identifier]["profiles"])
