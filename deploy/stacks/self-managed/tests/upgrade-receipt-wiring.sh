@@ -23,6 +23,8 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 grep -q 'kind: Job' <<<"$rendered" || fail "no Job rendered"
 test "$(yq -r 'select(.kind == "Job") | .spec.template.spec.containers[0].securityContext.runAsNonRoot' <<<"$rendered")" = true \
   || fail "receipt must run as non-root"
+test "$(yq -r 'select(.kind == "Job") | .spec.template.spec.securityContext.fsGroup' <<<"$rendered")" = 1000 \
+  || fail "receipt must set the pod filesystem group to 1000"
 grep -q '"helm.sh/hook": post-install,post-upgrade' <<<"$rendered" \
   || fail "receipt must run on both install and upgrade, after the release it describes"
 grep -q "value: \"${expected_version}\"" <<<"$rendered" \
