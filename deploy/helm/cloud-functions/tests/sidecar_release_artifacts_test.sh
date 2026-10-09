@@ -47,7 +47,7 @@ helm template nvcf-api "${chart_dir}" \
 expected_annotations=(
   "release-artifact-init-container-image: \"${hostname}/${repository}/nvcf-worker-init-oss:1.2.1\""
   "release-artifact-utils-container-image-go-image: \"${hostname}/${repository}/nvcf-worker-utils-oss:1.2.3\""
-  "release-artifact-niclls-container-image: \"${hostname}/${repository}/nvcf_worker_niclls:2.110.0\""
+  "release-artifact-niclls-container-image: \"${hostname}/${repository}/nvcf_worker_niclls:2.117.1\""
   "release-artifact-ess-agent-container-image: \"${hostname}/${repository}/ess-agent:1.4.1\""
   "release-artifact-llm-credential-manager-image: \"${hostname}/${repository}/nvcf-worker-llm-credentials-oss:1.1.2\""
   "release-artifact-llm-router-client-image: \"${hostname}/${repository}/pylon:0.15.1\""
