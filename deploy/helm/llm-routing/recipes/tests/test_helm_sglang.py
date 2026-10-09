@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import copy
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
@@ -331,6 +332,26 @@ class AutomaticRuntimeTests(unittest.TestCase):
             self.assertEqual(runtime.downloaded_bytes(self.config['model'], self.cache), self.fixture.blob.stat().st_size + 7)
         hub.HfApi.return_value.model_info.assert_called_once_with('example/model', revision='a'*40, files_metadata=True, timeout=30)
         self.assertEqual(partial.read_bytes(), b'partial')
+
+    def test_git_blob_integrity_is_checked_for_both_reuse_and_download_credit(self):
+        path = self.fixture.snapshot / 'config.json'
+        data = path.read_bytes()
+        digest = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data,
+                             usedforsecurity=False).hexdigest()
+        blob = self.fixture.blob.parent / digest
+        blob.write_bytes(data)
+        path.unlink()
+        path.symlink_to(blob)
+        hub, info = self.download_metadata()
+        info.siblings.append(SimpleNamespace(blob_id=digest, size=len(data), lfs=None))
+        weight_size = self.fixture.blob.stat().st_size
+        with patch.dict('sys.modules', {'huggingface_hub': hub}):
+            self.assertEqual(runtime.downloaded_bytes(self.config['model'], self.cache), weight_size + len(data))
+            self.assertEqual(runtime.reuse_snapshot(self.config['model'], self.cache), self.fixture.snapshot)
+            blob.write_bytes(b'x' * len(data))
+            self.assertEqual(runtime.downloaded_bytes(self.config['model'], self.cache), weight_size)
+            with self.assertRaisesRegex(RuntimeError, 'checksum differs'):
+                runtime.reuse_snapshot(self.config['model'], self.cache)
 
     def test_partial_download_does_not_credit_wrong_revision_corruption_or_escaping_files(self):
         hub, info = self.download_metadata(sha='b'*40)

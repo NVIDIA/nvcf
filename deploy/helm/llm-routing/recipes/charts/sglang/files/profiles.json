@@ -144,16 +144,9 @@
   },
   "qwen3.8-flash-next": {
     "id": "qwen3.8-flash-next",
-    "name": "Qwen3.8-Flash-Next",
-    "releaseName": "qwen-flash",
-    "precision": "NVFP4",
     "repository": "RadixArk/Qwen3.8-Flash-Next-NVFP4",
     "revision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
     "image": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
-    "runtime": "SGLang dev-qwen38-next-local (pinned ARM64 digest)",
-    "license": "Qwen Community 1.0 (base model); derivative card declares other",
-    "source": "https://lmsysorg.mintlify.app/cookbook/autoregressive/Qwen/Qwen3.8-Flash-Next",
-    "validation": "spark-nvme-and-tp2-smoke-tested",
     "profiles": [
       {
         "id": "spark-nvfp4-nvme",

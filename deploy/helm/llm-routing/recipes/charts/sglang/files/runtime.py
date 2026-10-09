@@ -346,6 +346,17 @@ def completed_checkpoint(model, cache):
     return complete
 
 
+def blob_matches(path, digest):
+    """Hub blobs use SHA256 for LFS files and Git blob SHA1 for other files."""
+    checksum = hashlib.sha256() if len(digest) == 64 else hashlib.sha1(usedforsecurity=False)
+    if len(digest) == 40:
+        checksum.update(('blob ' + str(path.stat().st_size) + '\0').encode())
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
+            checksum.update(chunk)
+    return checksum.hexdigest() == digest
+
+
 def reuse_snapshot(model, cache=pathlib.Path('/cache'), require_complete=True, write_marker=True):
     """Validate retained Hugging Face files directly; never import a download client."""
     complete = completed_checkpoint(model, cache) if require_complete else cache / (model['revision'] + '.complete')
@@ -360,15 +371,8 @@ def reuse_snapshot(model, cache=pathlib.Path('/cache'), require_complete=True, w
         resolved = path.resolve()
         if not path.is_file() or not resolved.is_relative_to(repository.resolve()):
             raise RuntimeError('Cached snapshot has a missing file or invalid link: ' + path.name)
-        # Hub blobs use SHA256 for LFS files and Git blob SHA1 for other files.
-        if resolved not in checked and len(resolved.name) in (40, 64) and all(c in '0123456789abcdef' for c in resolved.name):
-            digest = hashlib.sha256() if len(resolved.name) == 64 else hashlib.sha1(usedforsecurity=False)
-            if len(resolved.name) == 40:
-                digest.update(('blob ' + str(path.stat().st_size) + '\0').encode())
-            with path.open('rb') as stream:
-                for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
-                    digest.update(chunk)
-            if digest.hexdigest() != resolved.name:
+        if resolved not in checked and re.fullmatch(r'[a-f0-9]{64}|[a-f0-9]{40}', resolved.name):
+            if not blob_matches(path, resolved.name):
                 raise RuntimeError('Cached model blob checksum differs: ' + path.name)
             checked.add(resolved)
     def read_json(name):
@@ -440,13 +444,7 @@ def downloaded_bytes(model, cache):
         seen.add(digest)
         path = blobs / digest
         if path.is_file() and not path.is_symlink() and path.stat().st_size == size:
-            checksum = hashlib.sha256() if len(digest) == 64 else hashlib.sha1(usedforsecurity=False)
-            if len(digest) == 40:
-                checksum.update(('blob ' + str(size) + '\0').encode())
-            with path.open('rb') as stream:
-                for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
-                    checksum.update(chunk)
-            if checksum.hexdigest() == digest:
+            if blob_matches(path, digest):
                 total += size
             continue
         path = blobs / (digest + '.incomplete')
@@ -476,9 +474,9 @@ def prepare_checkpoint(config, cache):
     required = config['profile']['minFreeDiskGiB'] * GIB
     free = shutil.disk_usage(cache).free
     if free < required:
-        cached = downloaded_bytes(model, cache)
-        if free < max(0, required - cached):
-            raise RuntimeError(f'Insufficient cache disk space for the model checkpoint: {free} free bytes, {max(0, required - cached)} still required')
+        remaining = max(0, required - downloaded_bytes(model, cache))
+        if free < remaining:
+            raise RuntimeError(f'Insufficient cache disk space for the model checkpoint: {free} free bytes, {remaining} still required')
     from huggingface_hub import snapshot_download
     snapshot_download(repo_id=model['repository'], revision=model['revision'], cache_dir=str(cache / 'huggingface/hub'))
     snapshot = reuse_snapshot(model, cache, require_complete=False)
@@ -523,8 +521,8 @@ def automatic(config, rank, cache=pathlib.Path('/cache'), state_dir=pathlib.Path
             log('serve_start', model=config['model']['id'], revision=config['model']['revision'], rank=rank)
             if barrier:
                 barrier.state['phase'] = 'serving'
-                return supervise(command(config, model_path, rank), config, state_dir=state_dir, peer_guard=barrier.guard)
-            return supervise(command(config, model_path, rank), config, state_dir=state_dir)
+            return supervise(command(config, model_path, rank), config, state_dir=state_dir,
+                             peer_guard=barrier.guard if barrier else None)
         finally:
             if barrier:
                 barrier.close()
