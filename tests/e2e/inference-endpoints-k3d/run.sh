@@ -441,6 +441,7 @@ step_done() {
 }
 
 on_exit() {
+  undo_faults
   stop_port_forward
 }
 trap on_exit EXIT
@@ -518,6 +519,9 @@ reset_endpoint() {
     log "deleting the InferenceEndpoint left by a previous run"
     kc -n "${E2E_MODELS_NAMESPACE}" delete inferenceendpoint "${ENDPOINT}" --wait=true --timeout=60s >/dev/null
     poll 60 transport_deployment_gone || true
+  fi
+  if kc get crd inferenceendpoints.pylon.nvidia.com >/dev/null 2>&1; then
+    delete_second_endpoint || true
   fi
 }
 
@@ -653,6 +657,7 @@ cleanup() {
   ensure_context
   section "Cleanup (E2E_CLEANUP=1)"
   kc -n "${E2E_MODELS_NAMESPACE}" delete inferenceendpoint "${ENDPOINT}" --ignore-not-found --wait=true --timeout=60s || true
+  delete_second_endpoint || true
   hm uninstall "${OPERATOR_RELEASE}" --namespace "${E2E_OPERATOR_NAMESPACE}" --wait || true
   hm uninstall "${STACK_RELEASE}" --namespace "${E2E_STACK_NAMESPACE}" --wait || true
   kc delete namespace "${E2E_MODELS_NAMESPACE}" "${E2E_OPERATOR_NAMESPACE}" "${E2E_STACK_NAMESPACE}" --ignore-not-found --wait=true --timeout=120s || true
@@ -682,6 +687,10 @@ Then call it with the CA and the API key in ${E2E_WORK_DIR}:
 EOF
 }
 
+# Restart and failure cases: helpers, faults and run_restart_cases.
+# shellcheck source=restart-cases.sh
+source "${SCRIPT_DIR}/restart-cases.sh"
+
 # ---------------------------------------------------------------------------
 # Main
 
@@ -694,7 +703,7 @@ main() {
     log "E2E_DEPLOY_ONLY=1: stopping once the InferenceEndpoint is ready"
     REMAINING_STEPS="setup|steady state conditions|registration status|printer columns|"
   else
-    REMAINING_STEPS="setup|steady state conditions|registration status|printer columns|gateway checks|backend scaled to zero|backend restored|model name mismatch|model name restored|endpoint deleted|"
+    REMAINING_STEPS="setup|steady state conditions|registration status|printer columns|gateway checks|backend scaled to zero|backend restored|model name mismatch|model name restored|backend killed|router restart|gateway restart|operator down|Pylon restart|endpoint deleted|"
   fi
 
   section "Setup"
@@ -751,6 +760,9 @@ main() {
   scale_backend 0
   expect "backend at 0: Ready=False/NoReadyEndpoints" "${T}" conditions_are Ready=False/NoReadyEndpoints || true
   hold "backend at 0: Registered stays True/RegisteredWithRouter" 20 conditions_are Registered=True/RegisteredWithRouter || true
+  expect "backend at 0, stack: registry Unhealthy, 1 registered, 0 healthy" 60 registry_is Unhealthy 1 0 || true
+  expect "backend at 0, stack: GET /v1/models omits ${MODEL}" 30 models_omit_test_model || true
+  expect "backend at 0, stack: chat returns 503 from the router" 30 chat_status_is 503 || true
   log "backend at 0: $(conditions_are Ready= TransportReady= Registered= || true; printf '%s' "${LAST_OBSERVED}")"
   step_done
   scale_backend 1
@@ -773,6 +785,8 @@ main() {
     conditions_are TransportReady=True/PylonConnected Registered=True/RegisteredWithRouter || true
   expect "modelName restored: GET /v1/models lists ${MODEL}" "${T}" models_lists_test_model || true
   step_done
+
+  run_restart_cases
 
   section "Failure path: endpoint deleted"
   ensure_context

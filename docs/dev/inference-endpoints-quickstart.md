@@ -4,7 +4,7 @@ This page runs the Inference Endpoints stack on a local
 [k3d](https://k3d.io/) cluster: the LLM API gateway, the LLM request router,
 Pylon Operator and one OpenAI-compatible model. Use it to develop and test the
 operator, the charts, the gateway, the router or Pylon. The steps match the
-end-to-end test in `tests/e2e/pylon-operator-k3d`.
+end-to-end test in `tests/e2e/inference-endpoints-k3d`.
 
 <Info>
 This setup is only for local development. It uses a sample backend that
@@ -41,11 +41,11 @@ flowchart LR
     P -->|"HTTP"| B["Service openai-compatible-sample"]
 ```
 
-The Makefile in `tests/e2e/pylon-operator-k3d` automates every step on this
+The Makefile in `tests/e2e/inference-endpoints-k3d` automates every step on this
 page:
 
 ```bash
-make -C tests/e2e/pylon-operator-k3d cluster images import deploy
+make -C tests/e2e/inference-endpoints-k3d cluster images import deploy
 ```
 
 The sections below show what each target does, so you can run or change one
@@ -108,7 +108,7 @@ Docker config directory, and it pulls the base images anonymously:
 mkdir -p /tmp/empty-docker-config
 bazel run --repo_env=DOCKER_CONFIG=/tmp/empty-docker-config \
   //src/compute-plane-services/pylon-operator:image_load
-make -C tests/e2e/pylon-operator-k3d images DOCKER_CONFIG_DIR=/tmp/empty-docker-config
+make -C tests/e2e/inference-endpoints-k3d images DOCKER_CONFIG_DIR=/tmp/empty-docker-config
 ```
 
 Use the same value for builds and tests. A different value makes Bazel fetch
@@ -124,7 +124,7 @@ bazel run //src/libraries/rust/stargate/crates/stargate:image_load
 docker build -t openai-compatible-sample:e2e examples/function-samples/openai-compatible-sample
 ```
 
-With make, `make -C tests/e2e/pylon-operator-k3d images` runs the same
+With make, `make -C tests/e2e/inference-endpoints-k3d images` runs the same
 commands. Set `BAZEL_FLAGS` for extra Bazel flags. `make ... sample-image`
 builds the sample and imports it into the cluster in one step.
 
@@ -155,7 +155,7 @@ k3d image import -c pylon-op-e2e \
   openai-compatible-sample:e2e
 ```
 
-With make, run `make -C tests/e2e/pylon-operator-k3d cluster import`.
+With make, run `make -C tests/e2e/inference-endpoints-k3d cluster import`.
 `cluster` creates the cluster only when it does not exist; like the command
 above, k3d then switches the current context to it. For an existing cluster,
 `cluster` does not switch the context and fails when the current context is
@@ -177,7 +177,7 @@ restarting the Deployments.
 
 ## Deploy
 
-`make -C tests/e2e/pylon-operator-k3d deploy` runs the steps in this section
+`make -C tests/e2e/inference-endpoints-k3d deploy` runs the steps in this section
 through `run.sh` with `E2E_DEPLOY_ONLY=1`. It stops once the `InferenceEndpoint`
 reports `Ready`, `TransportReady` and `Registered`, prints the port-forward
 and `curl` commands, and leaves everything installed. It keeps the generated
@@ -376,7 +376,7 @@ EOF
 kubectl -n models wait inferenceendpoint/test-model --for=condition=Registered --timeout=3m
 ```
 
-`tests/e2e/pylon-operator-k3d/manifests/` has the same objects with resource
+`tests/e2e/inference-endpoints-k3d/manifests/` has the same objects with resource
 limits and a restricted security context.
 
 The `InferenceEndpoint` fields:
@@ -504,7 +504,7 @@ make -C deploy/helm/pylon-operator check-crd
 tools/ci/check-helm-charts
 
 # End to end, against the k3d cluster
-make -C tests/e2e/pylon-operator-k3d test
+make -C tests/e2e/inference-endpoints-k3d test
 ```
 
 The Bazel Stargate suite does not run `crates/stargate/tests/` or the tests
@@ -519,15 +519,15 @@ The end-to-end test deploys like `make deploy`, then checks the gateway API
 and three failure paths: the backend scaled to zero, a wrong `modelName`, and
 the endpoint deleted. It leaves the stack installed. `make ... test-cleanup`
 also removes the releases, the namespaces and the `InferenceEndpoint` CRD. The
-[end-to-end test README](https://github.com/NVIDIA/nvcf/blob/main/tests/e2e/pylon-operator-k3d/README.md)
+[end-to-end test README](https://github.com/NVIDIA/nvcf/blob/main/tests/e2e/inference-endpoints-k3d/README.md)
 lists its settings and assertions.
 
 The Makefile groups these:
 
 ```bash
-make -C tests/e2e/pylon-operator-k3d test-unit     # the three Bazel suites
-make -C tests/e2e/pylon-operator-k3d test-charts   # the four chart tests and check-helm-charts
-make -C tests/e2e/pylon-operator-k3d all           # images, import, deploy and test
+make -C tests/e2e/inference-endpoints-k3d test-unit     # the three Bazel suites
+make -C tests/e2e/inference-endpoints-k3d test-charts   # the four chart tests and check-helm-charts
+make -C tests/e2e/inference-endpoints-k3d all           # images, import, deploy and test
 ```
 
 `test-unit` and `images` accept `BAZEL_FLAGS` and `DOCKER_CONFIG_DIR`.
