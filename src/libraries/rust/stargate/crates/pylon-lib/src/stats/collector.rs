@@ -1406,8 +1406,8 @@ mod tests {
                 .metrics
                 .request_input_intervals
                 .len(),
-            0,
-            "provisional total-token rate must not enter the window"
+            1,
+            "the request holds its window position while its usage is pending"
         );
 
         let mut terminal = live;
@@ -2562,7 +2562,7 @@ mod tests {
     }
 
     #[test]
-    fn delayed_usage_observation_is_retained_in_completion_order() {
+    fn delayed_usage_observation_holds_back_newer_requests() {
         let mut aggregator = test_aggregator(config!(smoothing_window_size: 4));
         let start = std::time::Instant::now();
         let mut pending = Vec::new();
@@ -2596,7 +2596,11 @@ mod tests {
             terminal.uncached_input_tokens = Some(100);
             aggregator.apply_fallback_observation(&terminal);
         }
-        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 500.0);
+        assert_eq!(
+            aggregator.snapshot("model-a").last_mean_input_tps,
+            0.0,
+            "newer requests wait for the oldest pending request"
+        );
 
         let mut delayed = pending[0].clone();
         delayed.observation.state = RequestObservationState::Complete;
@@ -2604,7 +2608,7 @@ mod tests {
         delayed.uncached_input_tokens = Some(100);
         aggregator.apply_fallback_observation(&delayed);
 
-        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 400.0);
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 500.0);
         assert_eq!(
             aggregator.per_model["model-a"]
                 .metrics
@@ -2688,8 +2692,8 @@ mod tests {
                     interval,
                     input_tokens: later_cumulative.input_tokens,
                     input_tokens_explicit: false,
-                    cache_aware: false,
-                    deferred_until_usage: false,
+                    max_input_tps_eligible: false,
+                    pending: false,
                 },
                 &config,
             );

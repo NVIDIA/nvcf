@@ -142,9 +142,8 @@ impl StatsAggregator {
         if matches!(
             observation.endpoint,
             RequestObservationEndpoint::ChatCompletions | RequestObservationEndpoint::Responses
-        ) && (!event.input_usage_expected() || observation.is_terminal())
-            && let Some(interval) = event.input_interval()
-            && let Some(input_tps) = model_state.request_input_intervals.observe(
+        ) && let Some(interval) = event.input_interval()
+            && let Some(window_rate) = model_state.request_input_intervals.observe(
                 InputIntervalSample {
                     request_id: &observation.request_id,
                     interval,
@@ -152,16 +151,16 @@ impl StatsAggregator {
                         .uncached_input_tokens()
                         .unwrap_or(observation.input_tokens),
                     input_tokens_explicit: event.input_tokens_explicit(),
-                    cache_aware: event.uncached_input_tokens().is_some(),
-                    deferred_until_usage: event.input_usage_expected() && observation.is_terminal(),
+                    max_input_tps_eligible: event.uncached_input_tokens().is_some()
+                        || generated_request_kind(&observation.request_id)
+                            == Some(GeneratedRequestKind::Calibration),
+                    pending: event.input_usage_expected() && !observation.is_terminal(),
                 },
                 config,
             )
         {
-            let update_max_input_tps = model_state
-                .request_input_intervals
-                .all_intervals_cache_aware();
-            input_tps_changed = model_state.publish_mean_input_tps(input_tps, update_max_input_tps);
+            input_tps_changed = model_state
+                .publish_mean_input_tps(window_rate.input_tps, window_rate.max_input_tps_eligible);
         }
         let mut completed_sample_recorded = false;
         if observation.state == RequestObservationState::Complete {
