@@ -134,9 +134,10 @@ rate covers the latest resolved requests before the oldest pending one, and
 newer requests wait. A long decode therefore delays the published mean until
 its usage arrives. Pylon drops the oldest pending request from the rate when a
 newer first output is more than 120 seconds past its own, or when more than
-1024 requests (or 8 windows, if larger) are retained. Its late usage is then
-ignored. Requests that do not request usage resolve at first output with total
-prompt tokens.
+1024 requests (or 8 windows, if larger) are retained. Its late usage can still
+re-enter the rate unless newer resolved requests have already left the window.
+Requests that do not request usage resolve at first output with total prompt
+tokens.
 
 ## Optional KV Stats
 
@@ -211,7 +212,11 @@ source. `--initial-input-tps` installs the configured value. Local calibration
 installs nothing: it runs an increasing request ramp until a load-step timeout,
 and those requests' exact-generation observer events build the same distribution
 used at runtime. Calibration request windows are max-eligible, so the ramp can
-raise the maximum without cached-token details. Duplicate engine events for
+raise the maximum without cached-token details. Each calibration request starts
+with a unique prompt prefix, so it cannot reuse an earlier calibration prompt
+from the prefix cache. Calibrated throughput counts the prompt tokens the
+engine reports, uncached when reported, and falls back to the character
+estimate when usage lacks `prompt_tokens`. Duplicate engine events for
 calibration IDs are ignored. Pylon logs the current stats at timeout without
 reinjecting them.
 Later valid runtime samples continue updating either unpinned distribution.
