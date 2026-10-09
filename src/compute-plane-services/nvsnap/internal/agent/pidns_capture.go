@@ -298,6 +298,9 @@ func parentPID(procBase string, pid int) (int, error) {
 // checkpointDir, running the agent's criu from the agent's namespaces, and
 // records the external mounts for the restore.
 func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID int, checkpointDir string, deviceExternals []string, leaveRunning, gpushare bool, log *logrus.Entry) error {
+	if err := awaitSettledZombies(procBase, hostPID, 15*time.Second); err != nil {
+		return fmt.Errorf("pid-namespace dump: %w", err)
+	}
 	mi, err := os.ReadFile(filepath.Join(procBase, strconv.Itoa(hostPID), "mountinfo"))
 	if err != nil {
 		return fmt.Errorf("pid-namespace dump: read mounts: %w", err)
@@ -313,7 +316,10 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 		Info("criu-v2: dumping the pid namespace from outside the container")
 	dctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(dctx, a.config.CRIUPath, args...)
+	// CRIU locks TCP in the network namespace it runs in. The agent runs on
+	// the node's network, so enter the pod's: the lock must hold the pod's
+	// connections, never the node's.
+	cmd := exec.CommandContext(dctx, "nsenter", append([]string{"-t", strconv.Itoa(hostPID), "-n", "--", a.config.CRIUPath}, args...)...)
 	cmd.Env = []string{"PATH=" + filepath.Dir(a.config.CRIUPath) + ":/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("criu-v2 pid-namespace dump: %w (output: %s; dump.log tail: %s)", err,
@@ -351,4 +357,69 @@ func readPIDNSMarkerOrFalse(checkpointDir string) (bool, pidNSCapture, error) {
 		return false, c, fmt.Errorf("read %s: %w", pidNSMarkerFile, err)
 	}
 	return ok, c, nil
+}
+
+// awaitSettledZombies waits until no process in the pid namespace of
+// hostPID is a zombie that still has threads. A whole-namespace dump takes
+// every process in it, and CRIU refuses a zombie that is still exiting
+// ("Zombies with threads are not supported"). The gpushare suspend tool's
+// holder is one: it exits after freezing the workload, and the container's
+// pid 1 (the engine) never reaps it, so it is a zombie from then on, and
+// for a moment one with threads.
+func awaitSettledZombies(procBase string, hostPID int, limit time.Duration) error {
+	nsOf := func(pid int) (string, error) {
+		return os.Readlink(filepath.Join(procBase, strconv.Itoa(pid), "ns", "pid"))
+	}
+	ns, err := nsOf(hostPID)
+	if err != nil {
+		return fmt.Errorf("pid namespace of %d: %w", hostPID, err)
+	}
+	deadline := time.Now().Add(limit)
+	for {
+		busy := 0
+		ents, err := os.ReadDir(procBase)
+		if err != nil {
+			return err
+		}
+		for _, e := range ents {
+			pid, err := strconv.Atoi(e.Name())
+			if err != nil {
+				continue
+			}
+			if n, err := nsOf(pid); err != nil || n != ns {
+				continue
+			}
+			if state, threads := procStateThreads(procBase, pid); state == "Z" && threads > 1 {
+				busy = pid
+				break
+			}
+		}
+		if busy == 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("process %d is still exiting (a zombie with threads) after %s", busy, limit)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// procStateThreads returns the state letter and thread count of pid.
+func procStateThreads(procBase string, pid int) (string, int) {
+	b, err := os.ReadFile(filepath.Join(procBase, strconv.Itoa(pid), "status"))
+	if err != nil {
+		return "", 0
+	}
+	state, threads := "", 0
+	for _, line := range strings.Split(string(b), "\n") {
+		if v, ok := strings.CutPrefix(line, "State:"); ok {
+			if f := strings.Fields(v); len(f) > 0 {
+				state = f[0]
+			}
+		}
+		if v, ok := strings.CutPrefix(line, "Threads:"); ok {
+			threads, _ = strconv.Atoi(strings.TrimSpace(v))
+		}
+	}
+	return state, threads
 }

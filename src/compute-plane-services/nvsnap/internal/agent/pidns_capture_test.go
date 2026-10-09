@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The mounts of a plain pod's container, as the node shows them (GB300,
@@ -104,5 +105,33 @@ func TestNestedInitHostPID(t *testing.T) {
 	}
 	if _, err := nestedInitHostPID(proc, 400); err == nil {
 		t.Error("found a nested init where none was restored")
+	}
+}
+
+func TestAwaitSettledZombies(t *testing.T) {
+	proc := t.TempDir()
+	write := func(pid int, ns, state string, threads int) {
+		d := filepath.Join(proc, strconv.Itoa(pid))
+		if err := os.MkdirAll(filepath.Join(d, "ns"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.Remove(filepath.Join(d, "ns", "pid"))
+		if err := os.Symlink("pid:["+ns+"]", filepath.Join(d, "ns", "pid")); err != nil {
+			t.Fatal(err)
+		}
+		status := "State:\t" + state + " (x)\nThreads:\t" + strconv.Itoa(threads) + "\n"
+		if err := os.WriteFile(filepath.Join(d, "status"), []byte(status), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(10, "1", "S", 30) // the engine, pid 1
+	write(11, "1", "Z", 1)  // a settled zombie: dumpable
+	write(20, "2", "Z", 4)  // another container's exiting zombie
+	if err := awaitSettledZombies(proc, 10, time.Second); err != nil {
+		t.Errorf("settled container: %v", err)
+	}
+	write(12, "1", "Z", 3) // the holder, still exiting
+	if err := awaitSettledZombies(proc, 10, 300*time.Millisecond); err == nil {
+		t.Error("dumped with an exiting zombie in the container")
 	}
 }
