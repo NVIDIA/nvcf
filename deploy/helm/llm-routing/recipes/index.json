@@ -812,50 +812,10 @@
             "maximumConcurrency": 24
           },
           "validation": {
-            "runtimeStatus": "smoke-tested",
-            "workload": {
-              "date": "2026-10-08",
-              "profile": "spark-nvfp4-tp2",
-              "modelRevision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
-              "runtimeImage": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
-              "contextLength": 8192,
-              "concurrency": 1,
-              "requestType": "short-prompt-smoke",
-              "fullContextExercised": false,
-              "performanceBenchmarked": false,
-              "qualityEvaluated": false
-            },
-            "automaticHelmStatus": "smoke-tested",
-            "automaticHelmWorkload": {
-              "date": "2026-10-08",
-              "profile": "spark-nvfp4-tp2",
-              "modelRevision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
-              "runtimeImage": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
-              "contextLength": 8192,
-              "concurrency": 1,
-              "requestType": "short-prompt-smoke",
-              "fullContextExercised": false,
-              "performanceBenchmarked": false,
-              "qualityEvaluated": false,
-              "status": "smoke-tested",
-              "checks": [
-                "placement",
-                "gpu-qualification",
-                "nccl-all-reduce",
-                "cache-integrity",
-                "fabric-link",
-                "readiness",
-                "registration",
-                "discovery",
-                "chat",
-                "streaming",
-                "authentication",
-                "model-isolation",
-                "cache-reuse",
-                "helm-stop-resume",
-                "helm-uninstall-cache-retention"
-              ]
-            }
+            "runtimeStatus": "pending",
+            "workload": null,
+            "automaticHelmStatus": "pending",
+            "automaticHelmWorkload": null
           },
           "deployment": {
             "chart": {
