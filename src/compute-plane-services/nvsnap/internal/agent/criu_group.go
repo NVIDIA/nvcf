@@ -180,15 +180,41 @@ func criuGroupCaptureLeader(pod *corev1.Pod) (key string, size int, ok bool) {
 	if !ok || o != 0 || !rootfsonly.IsPodReady(pod) || gpuContainer(pod) == "" || !hasInstance(pod) {
 		return "", 0, false
 	}
-	if s > 1 && pod.Annotations[criuCaptureAnnotation] != "true" {
-		return "", 0, false
-	}
 	return webhook.CRIUGroupKey(uri), s, true
+}
+
+// CaptureOptIn opts the pods whose Label has one of Values into the
+// multi-pod instance capture, for workloads whose pod spec nvsnap does not
+// own (an NVCF function's pods are built by NVCA).
+type CaptureOptIn struct {
+	Label  string   `json:"label"`
+	Values []string `json:"values"`
+}
+
+// captureOptedIn reports whether a multi-pod instance's rank 0 may be
+// captured: annotated nvsnap.io/criu-capture, or matched by the agent's
+// configured opt-ins.
+func (a *Agent) captureOptedIn(pod *corev1.Pod) bool {
+	if pod.Annotations[criuCaptureAnnotation] == "true" {
+		return true
+	}
+	for _, o := range a.config.CaptureOptIn {
+		v, ok := pod.Labels[o.Label]
+		if !ok {
+			continue
+		}
+		for _, want := range o.Values {
+			if v == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (c *criuAutoRestorer) considerGroupCapture(ctx context.Context, pod *corev1.Pod) {
 	key, size, ok := criuGroupCaptureLeader(pod)
-	if !ok {
+	if !ok || (size > 1 && !c.a.captureOptedIn(pod)) {
 		return
 	}
 	if _, busy := c.attempted.LoadOrStore("capture/"+string(pod.UID), struct{}{}); busy {

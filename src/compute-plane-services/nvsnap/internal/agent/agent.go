@@ -66,6 +66,9 @@ type Config struct {
 	ContainerdNamespace string
 	CudaCheckpointPath  string
 	CRIUPath            string
+	// CaptureOptIn opts matching pods into the multi-pod instance capture
+	// (criu_group.go); NVSNAP_CRIU_CAPTURE_OPT_IN, JSON.
+	CaptureOptIn []CaptureOptIn
 	NodeName            string
 	LogLevel            string
 

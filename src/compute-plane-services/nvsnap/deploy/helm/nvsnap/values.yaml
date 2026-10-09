@@ -338,6 +338,14 @@ agent:
   # process, restored in place of a fresh start). Applies to every capture
   # on the cluster, including NVCA functions.
   captureMethod: cachedir
+  # Multi-pod instances (a Helm StatefulSet, LeaderWorkerSet or Grove group)
+  # are captured only on request: their pods annotated
+  # nvsnap.io/criu-capture: "true", or matched here, for pods whose spec
+  # nvsnap does not own (NVCF functions):
+  #   criuCaptureOptIn:
+  #     - label: function-id
+  #       values: ["<function id>"]
+  criuCaptureOptIn: []
 
   # Extra env injected verbatim into the agent container. The chart
   # auto-wires OTEL_EXPORTER_OTLP_ENDPOINT when .Values.jaeger.enabled

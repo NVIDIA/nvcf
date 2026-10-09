@@ -266,6 +266,10 @@ spec:
             {{- end }}
             - name: NVSNAP_DEFAULT_CAPTURE_PATH
               value: {{ $method | quote }}
+            {{- with .Values.agent.criuCaptureOptIn }}
+            - name: NVSNAP_CRIU_CAPTURE_OPT_IN
+              value: {{ toJson . | quote }}
+            {{- end }}
             {{- with .Values.webhook.debugEnv }}
             - name: NVSNAP_WEBHOOK_DEBUG_ENV
               value: {{ toJson . | quote }}
