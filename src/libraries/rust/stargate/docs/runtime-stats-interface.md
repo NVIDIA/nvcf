@@ -118,7 +118,26 @@ only controls calibration traffic and does not supply this fallback.
 Transient errors, malformed events, and EOF do not switch `auto` to fallback.
 
 Fallback reads streamed OpenAI usage fields such as `usage.completion_tokens` or
-`output_tokens_so_far`. Text peeking is last resort.
+`output_tokens_so_far`. For Chat Completions, usage is available only when the
+client sets `stream_options.include_usage=true` or the deployment opts in to
+`--force-chat-completions-include-usage` (off by default). When usage reports
+`cached_tokens` (Chat `prompt_tokens_details` or Responses
+`input_tokens_details`), input throughput counts only uncached prompt tokens.
+Without cached details, it counts total prompt tokens. Text peeking is last
+resort.
+
+Fallback input throughput divides the input tokens of the latest
+smoothing-window requests (8 by default) by the union of their
+submit-to-first-output intervals. Requests are ordered by first output. A
+request expected to report usage reserves a pending slot at first output. The
+rate covers the latest resolved requests before the oldest pending one, and
+newer requests wait. A long decode therefore delays the published mean until
+its usage arrives. Pylon drops the oldest pending request from the rate when a
+newer first output is more than 120 seconds past its own, or when more than
+1024 requests (or 8 windows, if larger) are retained. Its late usage can still
+re-enter the rate unless newer resolved requests have already left the window.
+Requests that do not request usage resolve at first output with total prompt
+tokens.
 
 ## Optional KV Stats
 
@@ -155,11 +174,21 @@ counter-derived output window.
 
 If request stats go stale, volatile output TPS is cleared. Sticky input TPS
 stays until a later valid sample replaces it.
-The maximum is the greatest `last_mean_input_tps` published for the current
-model generation, including a configured initial TPS. It follows the smoothed
-mean rather than individual samples, so the mean dilutes one outlier sample.
-Lower means do not reduce it, and generation replacement clears it. It is
-absent until the first mean is published.
+The maximum is the greatest max-eligible `last_mean_input_tps` published for
+the current model generation. A configured `--initial-input-tps` seeds it.
+Engine stats stream counters and embeddings samples raise it. An OpenAI
+fallback mean raises it only when every request in the rate window is
+max-eligible: usage reported cached-token details, or the request is a Pylon
+calibration request. Other fallback means still update `last_mean_input_tps`
+but do not raise the maximum, because cached input may be counted as prefill.
+The maximum follows the smoothed mean rather than individual samples, so the
+mean dilutes one outlier sample. Lower means do not reduce it, and generation
+replacement clears it. It is absent until the first max-eligible mean. A
+fallback-only backend with no `--initial-input-tps` and no calibration never
+reports one unless its usage includes cached-token details. Chat traffic
+without `include_usage`, or an engine that omits those details, is not enough.
+Its cluster then has no maximum capacity, which default Pulsar ranking requires
+(see below).
 
 Pylon publishes `pylon_model_max_input_tps` when the maximum is known and removes
 the series when the model is removed or replaced with unknown maximum state.
@@ -182,8 +211,14 @@ Before registration, Pylon initializes each model generation from exactly one
 source. `--initial-input-tps` installs the configured value. Local calibration
 installs nothing: it runs an increasing request ramp until a load-step timeout,
 and those requests' exact-generation observer events build the same distribution
-used at runtime. Duplicate engine events for calibration IDs are ignored. Pylon
-logs the current stats at timeout without reinjecting them.
+used at runtime. Calibration request windows are max-eligible, so the ramp can
+raise the maximum without cached-token details. Each calibration request starts
+with a unique prompt prefix, so it cannot reuse an earlier calibration prompt
+from the prefix cache. Calibrated throughput counts the prompt tokens the
+engine reports, uncached when reported, and falls back to the character
+estimate when usage lacks `prompt_tokens`. Duplicate engine events for
+calibration IDs are ignored. Pylon logs the current stats at timeout without
+reinjecting them.
 Later valid runtime samples continue updating either unpinned distribution.
 
 Labels:
