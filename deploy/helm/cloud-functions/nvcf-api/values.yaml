@@ -255,7 +255,7 @@ api:
           utils-container-image:
             go: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-utils-oss:1.2.3
           otel-container: dummy
-          niclls-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf_worker_niclls:2.110.0
+          niclls-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf_worker_niclls:2.117.1
           ess-agent-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/ess-agent:1.4.1
           otel-collector-container: dummy
           llm-credential-manager-image: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-llm-credentials-oss:1.1.2
