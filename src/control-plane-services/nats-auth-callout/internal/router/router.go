@@ -23,10 +23,12 @@ import (
 	"time"
 
 	_ "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/api"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/models"
 	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 
 	ginzap "github.com/gin-contrib/zap"
 	"github.com/gin-gonic/gin"
+	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
@@ -34,11 +36,18 @@ import (
 	"go.uber.org/zap"
 )
 
+// NATSStatusSource reports the state of the connection the health probes depend on.
+type NATSStatusSource interface {
+	Status() nats.Status
+}
+
 // Config holds the configuration for the router
 type Config struct {
 	ServiceName    string
 	TracingEnabled bool
 	Metrics        *MetricsConfig
+	// NATS is the connection the health probes report on. Nil means no NATS dependency.
+	NATS NATSStatusSource
 }
 
 // MetricsConfig holds metrics-specific configuration
@@ -106,7 +115,7 @@ func (r *Router) prometheusMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// skip metrics collection for healthz and metrics endpoints
 		path := c.Request.URL.Path
-		if path == "/healthz" || path == "/metrics" {
+		if path == "/healthz" || path == "/readyz" || path == "/metrics" {
 			c.Next()
 			return
 		}
@@ -128,6 +137,7 @@ func (r *Router) prometheusMiddleware() gin.HandlerFunc {
 func (r *Router) setupRoutes() {
 	// Health check interface (no version)
 	r.engine.GET("/healthz", r.handleHealthz)
+	r.engine.GET("/readyz", r.handleReadyz)
 
 	// The go-lib handler owns method handling: GET returns build info, other
 	// methods get 405 with Allow: GET. TestInfoEndpoint_RejectsNonGET pins that
@@ -148,11 +158,8 @@ func (r *Router) setupRoutes() {
 	r.engine.GET("/", r.handleRoot)
 
 	// Add routes
-	r.engine.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status": "ok",
-		})
-	})
+	// The control-plane health monitor polls /health, so it reports the NATS dependency like /readyz.
+	r.engine.GET("/health", r.handleReadyz)
 
 	r.engine.GET("/ping", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -187,7 +194,7 @@ func (r *Router) handlePing(c *gin.Context) {
 
 // handleHealthz handle health check endpoint
 // @Summary		Health check interface
-// @Description	return service health status
+// @Description	liveness: fails only when the NATS connection is closed for good, so short NATS outages do not restart the service
 // @Tags			Health
 // @Accept			json
 // @Produce		json
@@ -197,11 +204,30 @@ func (r *Router) handlePing(c *gin.Context) {
 // @Failure		401	{object}	models.ErrorResponse	"Unauthorized"
 // @Failure		429	{object}	models.ErrorResponse	"Too many requests"
 // @Failure		500	{object}	models.ErrorResponse	"Internal server error"
+// @Failure		503	{object}	models.HealthResponse	"NATS connection closed"
 // @Router			/healthz [get]
 func (r *Router) handleHealthz(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"status": "ok",
-	})
+	if r.config.NATS != nil && r.config.NATS.Status() == nats.CLOSED {
+		c.JSON(http.StatusServiceUnavailable, models.HealthResponse{Status: "down"})
+		return
+	}
+	c.JSON(http.StatusOK, models.HealthResponse{Status: "ok"})
+}
+
+// handleReadyz handle readiness check endpoint
+// @Summary		Readiness check interface
+// @Description	readiness: fails while the NATS connection is not connected
+// @Tags			Health
+// @Produce		json
+// @Success		200	{object}	models.HealthResponse	"Ready"
+// @Failure		503	{object}	models.HealthResponse	"NATS connection not connected"
+// @Router			/readyz [get]
+func (r *Router) handleReadyz(c *gin.Context) {
+	if r.config.NATS != nil && r.config.NATS.Status() != nats.CONNECTED {
+		c.JSON(http.StatusServiceUnavailable, models.HealthResponse{Status: "degraded"})
+		return
+	}
+	c.JSON(http.StatusOK, models.HealthResponse{Status: "ok"})
 }
 
 // handleRoot handles the root path

@@ -40,7 +40,36 @@ var (
 		Help:    "Duration of auth request processing",
 		Buckets: prometheus.DefBuckets,
 	})
+
+	NATSConnectionStatus      = newNATSConnectionStatus()
+	NATSConnectionEventsTotal = newNATSConnectionEventsTotal()
 )
+
+// newNATSConnectionStatus creates every status series up front so dashboards
+// and absent() alerts see them on the first scrape.
+func newNATSConnectionStatus() *prometheus.GaugeVec {
+	gauge := promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "nvcf_nats_auth_callout_nats_connection_status",
+		Help: "Current NATS connection status: 1 for the current status, 0 for every other status",
+	}, []string{"status"})
+	for _, status := range connectionStatuses {
+		gauge.WithLabelValues(statusLabel(status))
+	}
+	return gauge
+}
+
+func newNATSConnectionEventsTotal() *prometheus.CounterVec {
+	counter := promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "nvcf_nats_auth_callout_nats_connection_events_total",
+		Help: "NATS connection lifecycle events by event and failure reason",
+	}, []string{"event", "reason"})
+	for _, event := range connectionEvents {
+		for _, reason := range connectionReasons {
+			counter.WithLabelValues(event, reason)
+		}
+	}
+	return counter
+}
 
 // RecordAuthSuccess records a successful authentication request.
 func RecordAuthSuccess(plugin, account string) {

@@ -86,12 +86,13 @@ func setupCommonTestInfrastructure(t *testing.T) *TestSetup {
 	}
 
 	// Start embedded NATS server with auth callout using generated public key
-	natsServer := runNATSServerWithAuthCallout(t, authServiceLoginPublicKey, signingKeyPublic)
+	natsServer, natsConfigPath := runNATSServerWithAuthCallout(t, authServiceLoginPublicKey, signingKeyPublic)
 	t.Cleanup(natsServer.Shutdown)
 
 	return &TestSetup{
 		TempDir:    tempDir,
 		NATSServer: natsServer,
+		ConfigPath: natsConfigPath,
 		Logger:     logger,
 		// Store the seeds for use in config creation
 		AuthServiceLoginSeed: string(authServiceLoginSeed),
@@ -123,7 +124,7 @@ func (setup *TestSetup) createBaseConfig() *config.ServiceConfig {
 }
 
 // runNATSServerWithAuthCallout starts an embedded NATS server with auth callout configuration using test utilities
-func runNATSServerWithAuthCallout(t *testing.T, authServiceLoginPublicKey string, issuerPublicKey string) *server.Server {
+func runNATSServerWithAuthCallout(t *testing.T, authServiceLoginPublicKey string, issuerPublicKey string) (*server.Server, string) {
 	t.Helper()
 
 	// Use t.TempDir() so the directory is unique per test, owned by the test process,
@@ -157,5 +158,5 @@ authorization {
 
 	// Use test utility to run server with config
 	srv, _ := test.RunServerWithConfig(configPath)
-	return srv
+	return srv, configPath
 }

@@ -23,6 +23,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
 )
 
@@ -173,5 +174,39 @@ func TestMetricsDisabled(t *testing.T) {
 	router.engine.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Errorf("Expected status code %d for healthz endpoint, but got %d", http.StatusOK, w.Code)
+	}
+}
+
+type fakeNATSStatus nats.Status
+
+func (f fakeNATSStatus) Status() nats.Status { return nats.Status(f) }
+
+func TestHealthProbes_FollowNATSStatus(t *testing.T) {
+	tests := []struct {
+		name        string
+		nats        NATSStatusSource
+		wantHealthz int
+		wantReadyz  int
+	}{
+		{"no NATS dependency", nil, http.StatusOK, http.StatusOK},
+		{"connected", fakeNATSStatus(nats.CONNECTED), http.StatusOK, http.StatusOK},
+		{"connecting", fakeNATSStatus(nats.CONNECTING), http.StatusOK, http.StatusServiceUnavailable},
+		{"reconnecting", fakeNATSStatus(nats.RECONNECTING), http.StatusOK, http.StatusServiceUnavailable},
+		{"disconnected", fakeNATSStatus(nats.DISCONNECTED), http.StatusOK, http.StatusServiceUnavailable},
+		{"draining", fakeNATSStatus(nats.DRAINING_SUBS), http.StatusOK, http.StatusServiceUnavailable},
+		{"closed", fakeNATSStatus(nats.CLOSED), http.StatusServiceUnavailable, http.StatusServiceUnavailable},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := New(zap.NewNop(), &Config{ServiceName: "test-service", NATS: tt.nats})
+			// /health is what the control-plane health monitor polls, so it follows readiness.
+			for path, want := range map[string]int{"/healthz": tt.wantHealthz, "/readyz": tt.wantReadyz, "/health": tt.wantReadyz} {
+				w := httptest.NewRecorder()
+				router.engine.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+				if w.Code != want {
+					t.Errorf("GET %s = %d, want %d", path, w.Code, want)
+				}
+			}
+		})
 	}
 }
