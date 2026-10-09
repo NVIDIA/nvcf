@@ -23,7 +23,7 @@ use crate::secrets::secrets_config::CassandraSslCertificates;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use base64::Engine;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures::TryStreamExt as _;
 use openssl::ssl::{SslContextBuilder, SslMethod, SslVerifyMode};
 use scylla::client::session::Session;
@@ -582,6 +582,15 @@ impl CassandraServiceManager {
         node_id: &str,
         ttl_seconds: i32,
     ) -> Result<bool> {
+        let Some(lock) = self.get_lock(lock_name).await? else {
+            return Ok(false);
+        };
+        if lock.node_id != node_id {
+            return Ok(false);
+        }
+        // Keep the acquisition timestamp stable. It distinguishes a later
+        // acquisition by the same node from the lease observed above.
+        let acquired_at = lock.acquired_at;
         let session = self.get_session().await?;
         with_cassandra_timing("refresh_lock_ttl", || async {
             let mut prepared = session
@@ -590,17 +599,25 @@ impl CassandraServiceManager {
             prepared.set_consistency(Consistency::LocalQuorum);
             prepared.set_serial_consistency(Some(SerialConsistency::Serial));
             prepared.set_is_idempotent(false);
-            let refreshed_at = Utc::now();
             let result = session
                 .execute_unpaged(
                     &prepared,
-                    (ttl_seconds, node_id, refreshed_at, lock_name, node_id),
+                    (
+                        ttl_seconds,
+                        node_id,
+                        acquired_at.clone(),
+                        lock_name,
+                        node_id,
+                        acquired_at,
+                    ),
                 )
                 .await?;
             let rows = result.into_rows_result()?;
-            // On a CAS miss, Scylla returns [applied]=false + the IF-clause columns (node_id).
-            // Check for that shape first; if node_id is present we know applied=false.
-            if rows.column_specs().get_by_name("node_id").is_some() {
+            // On a CAS miss, Scylla returns [applied]=false plus the IF columns.
+            // Check for that shape first to avoid decoding the returned row as (bool,).
+            if rows.column_specs().get_by_name("node_id").is_some()
+                || rows.column_specs().get_by_name("acquired_at").is_some()
+            {
                 return Ok(false);
             }
             if let Some(row) = rows.rows::<(bool,)>()?.next() {
@@ -636,10 +653,15 @@ impl CassandraServiceManager {
         Ok(())
     }
 
-    /// Delete a lock only when it is still owned by `node_id`.
-    /// Returns false when the lock has expired or another node owns it.
+    /// Delete a lock only when its owner and acquisition generation still match.
+    /// Returns false when the lease expired, changed owner, or was reacquired.
     #[tracing::instrument(skip(self))]
-    pub async fn delete_owned_lock(&self, lock_name: &str, node_id: &str) -> Result<bool> {
+    pub async fn delete_owned_lock(
+        &self,
+        lock_name: &str,
+        node_id: &str,
+        acquired_at: DateTime<Utc>,
+    ) -> Result<bool> {
         let session = self.get_session().await?;
         with_cassandra_timing("delete_owned_lock", || async {
             let mut prepared = session
@@ -649,10 +671,12 @@ impl CassandraServiceManager {
             prepared.set_serial_consistency(Some(SerialConsistency::Serial));
             prepared.set_is_idempotent(false);
             let result = session
-                .execute_unpaged(&prepared, (lock_name, node_id))
+                .execute_unpaged(&prepared, (lock_name, node_id, acquired_at))
                 .await?;
             let rows = result.into_rows_result()?;
-            if rows.column_specs().get_by_name("node_id").is_some() {
+            if rows.column_specs().get_by_name("node_id").is_some()
+                || rows.column_specs().get_by_name("acquired_at").is_some()
+            {
                 return Ok(false);
             }
             if let Some(row) = rows.rows::<(bool,)>()?.next() {
@@ -966,13 +990,34 @@ mod tests {
         let get_result = manager.get_lock(&lock.lock_name).await;
         assert!(get_result.is_ok());
         assert!(get_result.unwrap().is_none());
-        // Test insert again- it should succeed
-        let put_result = manager.put_lock(&lock, ttl_seconds).await;
+        // Reacquiring under the same node ID creates a new lock generation.
+        let reacquired_lock = DistributedLock {
+            lock_name: lock.lock_name.clone(),
+            node_id: lock.node_id.clone(),
+            acquired_at: Utc::now(),
+        };
+        let put_result = manager.put_lock(&reacquired_lock, ttl_seconds).await;
         assert!(put_result.is_ok());
         assert!(put_result.unwrap());
 
+        // A delayed guard for the previous generation must not delete this lease,
+        // even though the node ID is unchanged.
         assert!(!manager
-            .delete_owned_lock(&lock.lock_name, "another-node")
+            .delete_owned_lock(&lock.lock_name, &lock.node_id, lock.acquired_at.clone(),)
+            .await
+            .unwrap());
+        let current_lock = manager.get_lock(&lock.lock_name).await.unwrap().unwrap();
+        assert_eq!(
+            current_lock.acquired_at.timestamp_millis(),
+            reacquired_lock.acquired_at.timestamp_millis()
+        );
+
+        assert!(!manager
+            .delete_owned_lock(
+                &lock.lock_name,
+                "another-node",
+                reacquired_lock.acquired_at.clone(),
+            )
             .await
             .unwrap());
         assert!(manager.get_lock(&lock.lock_name).await.unwrap().is_some());
@@ -1018,7 +1063,11 @@ mod tests {
         // The original acquired_at TTL has expired, but the refresh must keep
         // the complete row readable while the renewed lease remains active.
         tokio::time::sleep(Duration::from_secs(2)).await;
-        assert!(manager.get_lock(&lock.lock_name).await.unwrap().is_some());
+        let refreshed_lock = manager.get_lock(&lock.lock_name).await.unwrap().unwrap();
+        assert_eq!(
+            refreshed_lock.acquired_at.timestamp_millis(),
+            lock.acquired_at.timestamp_millis()
+        );
 
         let contender = DistributedLock {
             lock_name: lock.lock_name.clone(),

@@ -19,7 +19,7 @@ use crate::cassandra::cassandra_service::CassandraServiceManager;
 use crate::metrics;
 use crate::models::DistributedLock;
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use tracing;
 
@@ -61,13 +61,14 @@ impl DistributedLockManager {
         lock_name: String,
         lock_duration_seconds: i32,
     ) -> Result<bool> {
+        let acquired_at = Utc::now();
         let acquired = self
             .cassandra_service
             .put_lock(
                 &DistributedLock {
                     lock_name: lock_name.clone(),
                     node_id: self.node_id.clone(),
-                    acquired_at: Utc::now(),
+                    acquired_at: acquired_at.clone(),
                 },
                 lock_duration_seconds,
             )
@@ -98,6 +99,7 @@ impl DistributedLockManager {
 pub struct DistributedLockGuard {
     lock_name: String,
     node_id: String,
+    acquired_at: DateTime<Utc>,
     cassandra_service: Arc<CassandraServiceManager>,
     released: bool,
 }
@@ -109,12 +111,13 @@ impl DistributedLockGuard {
         cassandra_service: Arc<CassandraServiceManager>,
         lock_duration_seconds: i32,
     ) -> Result<Option<Self>> {
+        let acquired_at = Utc::now();
         let lock_acquired = cassandra_service
             .put_lock(
                 &DistributedLock {
                     lock_name: lock_name.clone(),
                     node_id: node_id.clone(),
-                    acquired_at: Utc::now(),
+                    acquired_at: acquired_at.clone(),
                 },
                 lock_duration_seconds,
             )
@@ -124,6 +127,7 @@ impl DistributedLockGuard {
             Ok(Some(Self {
                 lock_name,
                 node_id,
+                acquired_at,
                 cassandra_service,
                 released: false,
             }))
@@ -139,17 +143,22 @@ impl Drop for DistributedLockGuard {
         if !self.released {
             let lock_name = self.lock_name.clone();
             let node_id = self.node_id.clone();
+            let acquired_at = self.acquired_at.clone();
             let cassandra_service = self.cassandra_service.clone();
 
             tokio::spawn(async move {
-                match cassandra_service.delete_owned_lock(&lock_name, &node_id).await {
+                match cassandra_service
+                    .delete_owned_lock(&lock_name, &node_id, acquired_at.clone())
+                    .await
+                {
                     Ok(true) => {
                         tracing::info!("Released lock {} during drop", lock_name);
                     }
                     Ok(false) => {
                         tracing::debug!(
                             "Lock {} was no longer owned by node {}; leaving current owner intact",
-                            lock_name, node_id
+                            lock_name,
+                            node_id
                         );
                     }
                     Err(e) => {
@@ -158,11 +167,16 @@ impl Drop for DistributedLockGuard {
                         // If deletion fails, retry conditionally so a new owner is never removed.
                         let retry_lock_name = lock_name.clone();
                         let retry_node_id = node_id.clone();
+                        let retry_acquired_at = acquired_at.clone();
                         let retry_cassandra_service = cassandra_service.clone();
                         tokio::spawn(async move {
                             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                             match retry_cassandra_service
-                                .delete_owned_lock(&retry_lock_name, &retry_node_id)
+                                .delete_owned_lock(
+                                    &retry_lock_name,
+                                    &retry_node_id,
+                                    retry_acquired_at,
+                                )
                                 .await
                             {
                                 Ok(true) => tracing::info!(

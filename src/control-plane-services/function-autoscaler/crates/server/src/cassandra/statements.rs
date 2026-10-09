@@ -29,7 +29,7 @@ pub(crate) fn get_delete_locks_stmt(keyspace: &str) -> String {
 
 pub(crate) fn get_delete_owned_lock_stmt(keyspace: &str) -> String {
     format!(
-        "DELETE FROM {}.locks WHERE lock_name = ? IF node_id = ?;",
+        "DELETE FROM {}.locks WHERE lock_name = ? IF node_id = ? AND acquired_at = ?;",
         keyspace
     )
 }
@@ -70,14 +70,15 @@ pub(crate) fn get_stmt_insert_to_locks(keyspace: &str) -> String {
     )
 }
 
-// LWT conditional update — only refreshes TTL if node_id still matches this node.
+// LWT conditional update — only refreshes TTL if this acquisition still owns the lock.
 // Refresh every non-key lock column so Cassandra's per-cell TTL semantics
-// cannot leave a partially expired row behind.
-// Returns [applied]=true if the row was updated, false if another node now owns the lock.
-// Bind order: (ttl_seconds, node_id, acquired_at, lock_name, node_id)
+// cannot leave a partially expired row behind. Keep acquired_at unchanged: it is
+// the generation token used to distinguish a reacquisition by the same node.
+// Returns [applied]=true if the row was updated, false if ownership changed.
+// Bind order: (ttl_seconds, node_id, acquired_at, lock_name, node_id, acquired_at)
 pub(crate) fn get_stmt_refresh_lock(keyspace: &str) -> String {
     format!(
-        "UPDATE {}.locks USING TTL ? SET node_id = ?, acquired_at = ? WHERE lock_name = ? IF node_id = ?",
+        "UPDATE {}.locks USING TTL ? SET node_id = ?, acquired_at = ? WHERE lock_name = ? IF node_id = ? AND acquired_at = ?",
         keyspace,
     )
 }
@@ -115,14 +116,14 @@ mod tests {
         let statement = get_stmt_refresh_lock("test_keyspace");
 
         assert!(statement.contains("SET node_id = ?, acquired_at = ?"));
-        assert!(statement.contains("IF node_id = ?"));
+        assert!(statement.contains("IF node_id = ? AND acquired_at = ?"));
     }
 
     #[test]
-    fn delete_owned_lock_checks_node_id() {
+    fn delete_owned_lock_checks_node_and_acquisition_generation() {
         assert_eq!(
             get_delete_owned_lock_stmt("test_keyspace"),
-            "DELETE FROM test_keyspace.locks WHERE lock_name = ? IF node_id = ?;"
+            "DELETE FROM test_keyspace.locks WHERE lock_name = ? IF node_id = ? AND acquired_at = ?;"
         );
     }
 
