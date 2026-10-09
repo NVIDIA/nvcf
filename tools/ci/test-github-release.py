@@ -1695,7 +1695,7 @@ class GithubReleaseTest(unittest.TestCase):
                 self.assertTrue(service.get("release_branch_only"))
 
     def chart_release_metadata(self):
-        """Return minimal release metadata for the chart publication tests."""
+        """Return minimal release metadata for the chart tag tests."""
         return {
             "version": 1,
             "services": [
@@ -1767,7 +1767,7 @@ class GithubReleaseTest(unittest.TestCase):
                 )
 
     def test_chart_release_refuses_metadata_name_mismatch(self):
-        """Publishing must reject chart names that disagree with release metadata."""
+        """A chart tag must reject chart names that disagree with release metadata."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             chart_dir = root / "deploy/helm/nats-auth-callout"
@@ -1779,222 +1779,75 @@ class GithubReleaseTest(unittest.TestCase):
                     root, self.chart_release_metadata()["services"][0]
                 )
 
-    def test_chart_dependencies_require_lock_file(self):
-        """Dependency-bearing charts must pin resolution with a lock file."""
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            chart_dir = root / "chart"
-            chart_dir.mkdir()
-            (chart_dir / "Chart.yaml").write_text(
-                "name: example\n"
-                "dependencies:\n"
-                "  - name: dependency\n"
-                "    version: 1.0.0\n"
-                "    repository: https://example.invalid/charts\n"
-            )
-
-            with self.assertRaisesRegex(SystemExit, "dependencies require Chart.lock"):
-                self.github_release.package_release_chart(
-                    chart_dir, "1.2.0", root / "output"
-                )
-
-    def test_indented_chart_dependencies_require_lock_file(self):
-        """An indented dependencies key must still activate the lock-file guard."""
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            chart_dir = root / "chart"
-            chart_dir.mkdir()
-            (chart_dir / "Chart.yaml").write_text(
-                "  name: example\n"
-                "  dependencies:\n"
-                "    - name: dependency\n"
-                "      version: 1.0.0\n"
-                "      repository: https://example.invalid/charts\n"
-            )
-
-            with self.assertRaisesRegex(SystemExit, "dependencies require Chart.lock"):
-                self.github_release.package_release_chart(
-                    chart_dir, "1.2.0", root / "output"
-                )
-
-    def test_chart_is_published_before_github_release(self):
-        """The immutable chart must exist before its GitHub release becomes visible."""
+    def tag_chart_release(self, chart_name):
+        """Run tag mode for a chart tag; return the commands it ran and any exit."""
         root = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: shutil.rmtree(root))
-        tag = "deploy/helm/nats-auth-callout/v1.2.0"
+        chart_dir = root / "deploy/helm/nats-auth-callout"
+        chart_dir.mkdir(parents=True)
+        (chart_dir / "Chart.yaml").write_text(f"name: {chart_name}\n")
         calls = []
         self.github_release.repo_root = lambda: root
         self.github_release.load_metadata = lambda *_args: self.chart_release_metadata()
         self.github_release.github_release_mode = lambda: (True, False)
-        self.github_release.publish_release_chart = (
-            lambda _root, service, version, dry_run, app_version=None: calls.append(
-                ("chart", service["id"], version, dry_run)
-            )
-        )
+        self.github_release.run = lambda args, **_kwargs: calls.append(list(args))
         self.github_release.create_release = (
-            lambda *_args, **_kwargs: calls.append(("release",))
+            lambda tag, *_args, **_kwargs: calls.append(["create_release", tag])
         )
 
-        with contextlib.redirect_stdout(io.StringIO()):
-            self.github_release.tag_release(
-                types.SimpleNamespace(tag=tag, metadata="metadata.json")
-            )
+        def record_subprocess(args, *_args, **_kwargs):
+            """Record any direct subprocess call so a registry command cannot hide."""
+            calls.append(list(args))
+            return subprocess.CompletedProcess(args, 0, "", "")
 
-        self.assertEqual(
-            calls,
-            [("chart", "nats-auth-callout-helm", "1.2.0", False), ("release",)],
-        )
+        def refuse_process(args, *_args, **_kwargs):
+            """Popen backs stream(), call and check_call; none should run here."""
+            calls.append(list(args))
+            raise AssertionError(f"unexpected process: {args}")
 
-    def test_chart_publish_failure_prevents_github_release(self):
-        """A chart publication failure must prevent the GitHub release event."""
-        root = Path(tempfile.mkdtemp())
-        self.addCleanup(lambda: shutil.rmtree(root))
-        self.github_release.repo_root = lambda: root
-        self.github_release.load_metadata = lambda *_args: self.chart_release_metadata()
-        self.github_release.github_release_mode = lambda: (True, False)
-        self.github_release.publish_release_chart = lambda *_args: (_ for _ in ()).throw(
-            RuntimeError("push failed")
-        )
-        released = []
-        self.github_release.create_release = lambda *_args, **_kwargs: released.append(True)
-
-        with self.assertRaisesRegex(RuntimeError, "push failed"):
-            with contextlib.redirect_stdout(io.StringIO()):
+        try:
+            with mock.patch.object(
+                self.github_release.subprocess, "run", record_subprocess
+            ), mock.patch.object(
+                self.github_release.subprocess, "Popen", refuse_process
+            ), contextlib.redirect_stdout(io.StringIO()):
                 self.github_release.tag_release(
                     types.SimpleNamespace(
-                        tag="deploy/helm/nats-auth-callout/v1.2.0",
-                        metadata="metadata.json",
+                        tag="deploy/helm/nats-auth-callout/v1.2.0", metadata="metadata.json"
                     )
                 )
-        self.assertEqual(released, [])
+        except SystemExit as exc:
+            return calls, exc
+        return calls, None
 
-    def test_missing_chart_is_pushed_with_exact_tag_version(self):
-        """A missing chart must be pushed with the version encoded in its tag."""
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            chart_dir = root / "chart"
-            chart_dir.mkdir()
-            package = root / "chart-1.2.0.tgz"
-            package.write_bytes(b"package")
-            calls = []
-            self.github_release.release_chart_directory = lambda *_args: chart_dir
-            self.github_release.helm_registry_settings = lambda: (
-                "nvcr.io/example/ncp-dev",
-                "secret",
-            )
-            self.github_release.package_release_chart = lambda *_args: package
-            self.github_release.helm_registry_login = (
-                lambda registry, _key: calls.append(("login", registry))
-            )
-            self.github_release.pull_release_chart = (
-                lambda *_args: (1, "manifest unknown: not found", [])
-            )
-            self.github_release.run = lambda args, **_kwargs: calls.append(tuple(args))
+    def test_chart_tag_creates_release_without_publishing(self):
+        """A separate pipeline publishes charts; tag mode only creates the release."""
+        calls, exit_error = self.tag_chart_release("helm-nvcf-nats-auth-callout-service")
 
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.github_release.publish_release_chart(
-                    root, self.chart_release_metadata()["services"][0], "1.2.0", False
-                )
+        self.assertIsNone(exit_error)
+        self.assertEqual(calls, [["create_release", "deploy/helm/nats-auth-callout/v1.2.0"]])
 
-            self.assertIn(("login", "nvcr.io/example/ncp-dev"), calls)
-            self.assertIn(
-                ("helm", "push", str(package), "oci://nvcr.io/example/ncp-dev"),
-                calls,
-            )
+    def test_chart_tag_with_wrong_chart_name_creates_no_release(self):
+        """A tag whose chart does not match its release metadata must not be announced."""
+        calls, exit_error = self.tag_chart_release("another-chart")
 
-    def test_chart_publish_uses_replayed_tag_source(self):
-        """Manual replay must package chart content from the selected tag worktree."""
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "current"
-            replay_root = Path(tmp) / "tagged"
-            chart_dir = replay_root / "deploy/helm/nats-auth-callout"
-            chart_dir.mkdir(parents=True)
-            selected_roots = []
+        self.assertIn("does not match", str(exit_error))
+        self.assertEqual(calls, [])
 
-            def select_chart(selected_root, _service):
-                """Record the source root chosen by the publisher."""
-                selected_roots.append(selected_root)
-                return chart_dir
-
-            self.github_release.release_chart_directory = select_chart
-            with mock.patch.dict(
-                os.environ,
-                {"NVCF_RELEASE_SOURCE_ROOT": str(replay_root)},
-            ), contextlib.redirect_stdout(io.StringIO()):
-                self.github_release.publish_release_chart(
-                    root,
-                    self.chart_release_metadata()["services"][0],
-                    "1.2.0",
-                    True,
-                )
-
-            self.assertEqual(selected_roots, [replay_root])
-
-    def test_only_registry_missing_signals_allow_a_chart_push(self):
-        """Only explicit missing-artifact responses may permit a chart push."""
-        self.assertTrue(self.github_release.missing_helm_chart_output("manifest unknown"))
-        self.assertTrue(self.github_release.missing_helm_chart_output("status code: 404"))
-        self.assertFalse(
-            self.github_release.missing_helm_chart_output("credentials file not found")
-        )
-
-    def test_existing_chart_is_only_accepted_when_content_matches(self):
-        """An existing immutable version is reusable only when its content matches."""
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            chart_dir = root / "chart"
-            chart_dir.mkdir()
-            local = root / "local.tgz"
-            remote = root / "remote.tgz"
-            local.write_bytes(b"local")
-            remote.write_bytes(b"remote")
-            self.github_release.release_chart_directory = lambda *_args: chart_dir
-            self.github_release.helm_registry_settings = lambda: ("nvcr.io/example", "secret")
-            self.github_release.package_release_chart = lambda *_args: local
-            self.github_release.helm_registry_login = lambda *_args: None
-            self.github_release.pull_release_chart = lambda *_args: (0, "", [remote])
-            self.github_release.helm_archive_signature = lambda package: package.name
-
-            with self.assertRaisesRegex(SystemExit, "different content"):
-                self.github_release.publish_release_chart(
-                    root, self.chart_release_metadata()["services"][0], "1.2.0", False
-                )
-
-            self.github_release.helm_archive_signature = lambda _package: "same"
-            calls = []
-            self.github_release.run = lambda args, **_kwargs: calls.append(args)
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.github_release.publish_release_chart(
-                    root, self.chart_release_metadata()["services"][0], "1.2.0", False
-                )
-            self.assertEqual(calls, [])
-
-    def test_registry_error_does_not_get_mistaken_for_missing_chart(self):
-        """Registry failures must not be treated as proof that a chart is absent."""
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            chart_dir = root / "chart"
-            chart_dir.mkdir()
-            package = root / "local.tgz"
-            package.write_bytes(b"local")
-            self.github_release.release_chart_directory = lambda *_args: chart_dir
-            self.github_release.helm_registry_settings = lambda: ("nvcr.io/example", "secret")
-            self.github_release.package_release_chart = lambda *_args: package
-            self.github_release.helm_registry_login = lambda *_args: None
-            self.github_release.pull_release_chart = lambda *_args: (
-                1,
-                "unauthorized: authentication required",
-                [],
-            )
-
-            with self.assertRaisesRegex(SystemExit, "could not determine"):
-                with contextlib.redirect_stdout(io.StringIO()):
-                    self.github_release.publish_release_chart(
-                        root,
-                        self.chart_release_metadata()["services"][0],
-                        "1.2.0",
-                        False,
-                    )
+    def test_tag_workflow_does_not_publish_charts(self):
+        """Chart publication and its manual replay are not part of the tag workflow."""
+        workflow = (SCRIPT_PATH.parents[2] / ".github/workflows/release-tags.yml").read_text()
+        for retired in (
+            "release_tag",
+            "Prepare existing chart tag for replay",
+            "NVCF_RELEASE_SOURCE_ROOT",
+            "HELM_REGISTRY_CONFIG",
+            "'deploy/helm/'",
+            "helm push",
+            "helm package",
+        ):
+            with self.subTest(retired=retired):
+                self.assertNotIn(retired, workflow)
 
     def test_publish_release_makes_the_exact_draft_public(self):
         calls = []
@@ -2241,11 +2094,6 @@ class GithubReleaseTest(unittest.TestCase):
         self.assertEqual(workflow.count("Install inventory rendering tools"), 1)
         self.assertIn("Install Helm release tool", workflow)
         self.assertIn("Install Helmfile inventory tool", workflow)
-        self.assertIn("inputs.release_tag || github.ref_name", workflow)
-        self.assertIn("Prepare existing chart tag for replay", workflow)
-        self.assertIn("NVCF_RELEASE_SOURCE_ROOT=", workflow)
-        self.assertIn("HELM_REGISTRY_CONFIG: ${{ runner.temp }}/helm-registry-config.json", workflow)
-        self.assertIn('release_tag must be a deploy/helm/*/v* tag', workflow)
         self.assertLess(
             workflow.index("Install Helm release tool"),
             workflow.index("Validate tag and create release notes"),
@@ -2271,38 +2119,6 @@ class GithubReleaseTest(unittest.TestCase):
         self.assertIn("actions/upload-artifact@v4", preflight_workflow)
         self.assertIn("if-no-files-found: error", preflight_workflow)
         self.assertNotIn("github-release tag", preflight_workflow)
-
-    def test_release_replay_requires_an_exact_tag_ref(self):
-        """A tag-shaped branch must not satisfy manual replay validation."""
-        workflow = (SCRIPT_PATH.parents[2] / ".github/workflows/release-tags.yml").read_text()
-        tag_check = 'git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"'
-        exact_checkout = '"refs/tags/${RELEASE_TAG}"'
-        replay_step = workflow.split("- name: Prepare existing chart tag for replay", 1)[1]
-        replay_step = replay_step.split("- uses: actions/setup-go@v5", 1)[0]
-
-        self.assertIn(tag_check, replay_step)
-        self.assertGreaterEqual(replay_step.count(exact_checkout), 2)
-        self.assertLess(replay_step.index(tag_check), replay_step.rindex(exact_checkout))
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            release_tag = "deploy/helm/example/v1.2.3"
-            self.init_repo(root)
-            git(root, "commit", "--allow-empty", "-m", "seed")
-            git(root, "branch", release_tag)
-            verify_tag = [
-                "git",
-                "show-ref",
-                "--verify",
-                "--quiet",
-                f"refs/tags/{release_tag}",
-            ]
-
-            branch_only = subprocess.run(verify_tag, cwd=root, check=False)
-            self.assertNotEqual(branch_only.returncode, 0)
-            git(root, "tag", release_tag)
-            tagged = subprocess.run(verify_tag, cwd=root, check=False)
-            self.assertEqual(tagged.returncode, 0)
 
     def publish_and_capture_comments(self, version):
         """Publish a tag for `version` from a release branch, recording any comments.
@@ -2704,54 +2520,6 @@ class FollowerReleaseTest(unittest.TestCase):
             self.assertEqual(git_out(root, "rev-parse", f"{tag}^{{commit}}").strip(), stable_commit)
 
 
-class PackagedAppVersionTest(unittest.TestCase):
-    """A follower chart publishes the operator version its release carries."""
-
-    setUp = GithubReleaseTest.setUp
-
-    def chart(self, tmp, app_version="3.10.0"):
-        chart_dir = Path(tmp) / "nvca-operator"
-        chart_dir.mkdir()
-        (chart_dir / "Chart.yaml").write_text(
-            "apiVersion: v2\n"
-            "name: helm-nvca-operator\n"
-            "version: 0.0.0\n"
-            f'appVersion: "{app_version}"\n'
-        )
-        (chart_dir / "values.yaml").write_text("image:\n  tag: \"\"\n")
-        return chart_dir
-
-    def packaged_app_version(self, package):
-        out = subprocess.run(
-            ["helm", "show", "chart", str(package)],
-            check=True, stdout=subprocess.PIPE, text=True,
-        ).stdout
-        for line in out.splitlines():
-            if line.startswith("appVersion:"):
-                return line.split(":", 1)[1].strip().strip('"')
-        return ""
-
-    def test_follower_package_carries_the_release_version(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "out"
-            out.mkdir()
-            package = self.github_release.package_release_chart(
-                self.chart(tmp), "3.13.0", out, app_version="3.13.0"
-            )
-            # Committed appVersion was 3.10.0. Publishing it unchanged would ship
-            # a chart that resolves the operator image to a superseded release.
-            self.assertEqual(self.packaged_app_version(package), "3.13.0")
-
-    def test_other_charts_keep_their_committed_app_version(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "out"
-            out.mkdir()
-            package = self.github_release.package_release_chart(
-                self.chart(tmp), "1.28.4", out
-            )
-            self.assertEqual(self.packaged_app_version(package), "3.10.0")
-
-
 class DecoupledVersionSourceTest(unittest.TestCase):
     """Clearing version_source must decouple the version and nothing else.
 
@@ -2885,48 +2653,6 @@ class DecoupledVersionSourceTest(unittest.TestCase):
             )
             self.assertFalse(
                 git_out(root, "tag", "-l", "deploy/helm/nvca-operator/v1.28.6").strip()
-            )
-
-    def test_publication_stamps_the_leader_as_of_the_chart_tag(self):
-        """Not HEAD: the chart files come from a worktree detached at the tag.
-
-        release-tags.yml packages from `git worktree add --detach <tag>` while
-        the checkout this reads history from stays on the branch tip. By the
-        time publication runs the tip can carry a newer leader release.
-        Stamping that would put appVersion ahead of the chart version the
-        release is named for, and would build a different archive on a re-run
-        of an immutable version.
-        """
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp) / "repo"
-            root.mkdir()
-            self.init_multi_path_repo(root, remote=Path(tmp) / "remote.git")
-            git(root, "tag", "src/compute-plane-services/nvca/v3.13.0")
-            chart_tag = "deploy/helm/nvca-operator/v3.13.0"
-            git(root, "tag", chart_tag)
-
-            # main moves on, and a newer leader lands, before publication runs.
-            self.touch(root, "src/compute-plane-services/nvca/a.go", "feat(nvca): add a thing")
-            git(root, "tag", "src/compute-plane-services/nvca/v3.14.0")
-
-            stamped = []
-            self.github_release.repo_root = lambda: root
-            self.github_release.load_metadata = lambda *_args: self.metadata()
-            self.github_release.github_release_mode = lambda: (True, False)
-            self.github_release.publish_release_chart = (
-                lambda _root, _service, _version, _dry_run, app_version=None:
-                    stamped.append(app_version)
-            )
-            self.github_release.create_release = lambda *_a, **_k: None
-
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.github_release.tag_release(
-                    types.SimpleNamespace(tag=chart_tag, metadata="metadata.json")
-                )
-
-            self.assertEqual(
-                stamped, ["3.13.0"],
-                "the package must declare the leader release this tag shipped, not the tip",
             )
 
     def test_a_prerelease_chart_tag_does_not_block_the_refresh(self):

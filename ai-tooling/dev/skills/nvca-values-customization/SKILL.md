@@ -50,8 +50,8 @@ deployment are supplied by whoever installs the chart:
 - an ngc-managed install passes `ngcConfig.serviceKey` and the `helmManaged.*`
   values on the command line
 
-`image.tag` ships empty so templates fall back to `appVersion`, which the
-release stamps at packaging time.
+`image.tag` ships empty so templates fall back to the `appVersion` in
+`Chart.yaml`.
 
 ## Deploy-time Overrides
 
@@ -103,7 +103,6 @@ tools/ci/validate-helm-chart deploy/helm/nvca-operator/nvca-operator \
   image.
 - Use `yq` carefully for nested keys and quoted strings.
 - `Chart.yaml` name stays in git and must match the subproject's service_name;
-  the release refuses to publish when they differ. Only the version is set at
-  packaging time, and `appVersion` is stamped from the nvca release the chart
-  installs.
+  the tag release fails when they differ. Only the version is set at
+  packaging time; `appVersion` is packaged as committed.
 - Never commit real service keys or rendered secret material.
