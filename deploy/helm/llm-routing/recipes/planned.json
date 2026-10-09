@@ -2,31 +2,6 @@
   "schemaVersion": 1,
   "recipes": [
     {
-      "id": "nemotron-5-nano-12b",
-      "name": "Nemotron 5 Nano 12B",
-      "servedModelId": null,
-      "availability": {
-        "status": "unavailable",
-        "deployable": false,
-        "reason": "No public artifact named Nemotron 5 Nano 12B exists. nvidia/Nemotron-5-Nano-12B returns HTTP 401, which is ambiguous between private and nonexistent. The closest public 12B model is nemotron-nano-12b-v2, which has its own executable recipe.",
-        "checkedAt": "2026-10-09",
-        "sources": [
-          "https://huggingface.co/api/models?author=nvidia&search=Nemotron&limit=1000",
-          "https://huggingface.co/nvidia",
-          "https://www.nvidia.com/en-us/ai-data-science/foundation-models/nemotron/",
-          "https://huggingface.co/api/models/nvidia/Nemotron-5-Nano-12B",
-          "https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-12B-v2"
-        ]
-      },
-      "precision": null,
-      "license": null,
-      "licenseNotice": null,
-      "model": null,
-      "runtime": null,
-      "profiles": [],
-      "upstreamCandidates": []
-    },
-    {
       "id": "nemotron-5-super-49b",
       "name": "Nemotron 5 Super 49B",
       "servedModelId": null,

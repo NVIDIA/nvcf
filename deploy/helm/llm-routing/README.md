@@ -85,7 +85,6 @@ Both models use the same gateway and caller credential. Each keeps its own Helm 
 | [Nemotron Nano 12B v2](recipes/values/nemotron-nano-12b-v2.yaml) | BF16 | One GB10. Cached Helm startup, gateway discovery, chat, streaming and authentication tested at context 8,192 and concurrency 1 with short prompts. The model prints its reasoning inline and no tool-call parser is configured. Context up to 16,384 and concurrency 2 are untested. |
 | [GLM-5.3](recipes/values/glm-5.3.yaml) | UD-IQ2_M | Two GB10s. Combined runtime tested. [Automatic Helm startup](ADVANCED.md#helm-glm-recipe) stopped at the host-memory guard. |
 | Qwen3.8-Flash-Next | NVFP4 | Automatic [one-node NVMe](recipes/values/qwen3.8-flash-next-nvme.yaml) startup and short-prompt inference tested at context 8,192 and concurrency 1. [Two-node tensor parallel](recipes/values/qwen3.8-flash-next-tp2.yaml) validation pending. [Installation](ADVANCED.md#helm-flash-next-recipes). |
-| Nemotron 5 Nano 12B | Unverified | Unavailable. No public artifact by this name. The closest public model is Nemotron Nano 12B v2 above. |
 | Nemotron 5 Super 49B | Unverified | Unavailable. Exact public model artifact not verified. |
 | Qwen3.8-4B | Unverified | Unavailable. Exact public model artifact not verified. |
 | DeepSeek V4 Flash | Upstream mixed FP4/FP8 | Planned. Public checkpoint and upstream four-GPU candidates recorded. Chart support and hardware qualification pending. |

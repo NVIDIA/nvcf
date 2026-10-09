@@ -158,8 +158,8 @@ class CommonCatalogTests(unittest.TestCase):
 
     def test_inventory_covers_seven_families_with_two_qwen_precisions(self):
         self.assertEqual(set(self.recipes), {"qwen3.8-27b", "qwen3.8-27b-nvfp4", "qwen3.8-flash-next",
-            "glm-5.3", "nemotron-nano-12b-v2", "nemotron-5-nano-12b", "nemotron-5-super-49b", "qwen3.8-4b", "deepseek-v4-flash"})
-        self.assertEqual(len({recipe["name"] for recipe in self.recipes.values()}), 8)
+            "glm-5.3", "nemotron-nano-12b-v2", "nemotron-5-super-49b", "qwen3.8-4b", "deepseek-v4-flash"})
+        self.assertEqual(len({recipe["name"] for recipe in self.recipes.values()}), 7)
         available = {recipe["id"] for recipe in self.recipes.values() if recipe["availability"]["deployable"]}
         self.assertEqual(available, {"qwen3.8-27b", "qwen3.8-27b-nvfp4", "qwen3.8-flash-next", "glm-5.3", "nemotron-nano-12b-v2"})
         for identifier in available:
@@ -168,7 +168,7 @@ class CommonCatalogTests(unittest.TestCase):
 
     def test_unavailable_entries_have_no_deployment_or_unverified_artifact_pins(self):
         source = catalog.read(ROOT / "planned.json")["recipes"]
-        self.assertEqual(len(source), 4)
+        self.assertEqual(len(source), 3)
         for recipe in source:
             exported = self.recipes[recipe["id"]]
             self.assertEqual(exported, {**recipe,
@@ -237,7 +237,6 @@ class CommonCatalogTests(unittest.TestCase):
 
     def test_availability_evidence_uses_exact_primary_research_sources(self):
         expected = {
-            "nemotron-5-nano-12b": "https://huggingface.co/api/models?author=nvidia&search=Nemotron&limit=1000",
             "nemotron-5-super-49b": "https://www.nvidia.com/en-us/ai-data-science/foundation-models/nemotron/",
             "qwen3.8-4b": "https://huggingface.co/api/models/Qwen/Qwen3.8-4B",
             "deepseek-v4-flash": "https://huggingface.co/api/models/deepseek-ai/DeepSeek-V4-Flash",
