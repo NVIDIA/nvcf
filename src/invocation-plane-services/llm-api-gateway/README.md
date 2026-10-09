@@ -31,9 +31,20 @@ The gateway currently serves:
 
 - `GET /healthz`
 - `GET /readyz`
+- `GET /info`
+- `GET /openapi.yaml`
+- `GET /docs`
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `POST /v1/embeddings`
+
+## API Specification
+
+An OpenAPI 3.1 specification describing the gateway transport contract, NVCF-specific headers, error format, and session affinity is published in [`api/openapi.yaml`](api/openapi.yaml).
+
+At runtime, the gateway serves:
+- Raw OpenAPI 3.1 YAML: `GET /openapi.yaml`
+- Interactive API documentation: `GET /docs`
 
 ## Request Routing
 

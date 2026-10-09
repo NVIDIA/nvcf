@@ -41,6 +41,8 @@ func RegisterRoutes(e *echo.Echo, handlers *Handlers) {
 		return c.NoContent(http.StatusOK)
 	})
 	e.GET("/info", echo.WrapHandler(golibversion.Handler()))
+	e.GET("/openapi.yaml", ServeOpenAPISpec)
+	e.GET("/docs", ServeOpenAPIDocs)
 	e.Match([]string{
 		http.MethodHead,
 		http.MethodPost,
