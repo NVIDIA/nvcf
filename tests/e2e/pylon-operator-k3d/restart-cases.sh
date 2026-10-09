@@ -121,13 +121,23 @@ count_above() {
   [ -n "${got}" ] && [ "${got}" -gt "${before}" ]
 }
 
-# event_count NAME [FIELD=VALUE]: Events on InferenceEndpoint NAME, counting
-# repeats of a deduplicated Event.
-event_count() {
+# event_times NAME [FIELD=VALUE]: lastTimestamp of each Event on
+# InferenceEndpoint NAME. A repeated Event moves its lastTimestamp forward.
+event_times() {
   kc -n "${E2E_MODELS_NAMESPACE}" get events \
     --field-selector "involvedObject.kind=InferenceEndpoint,involvedObject.name=$1${2:+,$2}" \
-    -o jsonpath='{range .items[*]}{.count}{"\n"}{end}' 2>/dev/null \
-    | awk '{ n += ($1 == "" ? 1 : $1) } END { print n + 0 }' || true
+    -o jsonpath='{range .items[*]}{.lastTimestamp}{"\n"}{end}' 2>/dev/null || true
+}
+
+# latest_event_time NAME: the newest Event time, read before a fault. Counting
+# from it keeps the checks independent of old Events expiring.
+latest_event_time() {
+  event_times "$1" | sort | tail -n 1
+}
+
+# events_after NAME TIME [FIELD=VALUE]: Events on NAME last seen after TIME.
+events_after() {
+  event_times "$1" "${3:-}" | awk -v t="$2" 'NF && $1 > t { n++ } END { print n + 0 }'
 }
 
 event_reasons() {
@@ -265,7 +275,7 @@ undo_faults() {
 # views.
 run_restart_cases() {
   local T="${E2E_TIMEOUT}"
-  local ids before restarts warnings registered_at events old_pod start ready_at selector
+  local ids before restarts events_from registered_at old_pod start ready_at selector
 
   section "C7a: backend process killed"
   ensure_context
@@ -273,7 +283,7 @@ run_restart_cases() {
   ids="$(server_ids)"
   before="$(router_log_count 'health check failed' "${ids}")"
   restarts="$(container_restarts "${E2E_MODELS_NAMESPACE}" "${SAMPLE_SELECTOR}")"
-  warnings="$(event_count "${ENDPOINT}" type=Warning)"
+  events_from="$(latest_event_time "${ENDPOINT}")"
   registered_at="$(transition_time Registered)"
   log "killing the backend process at $(date -u +%H:%M:%S) UTC"
   kill_backend_process
@@ -282,7 +292,7 @@ run_restart_cases() {
   log "router: $(router_log_last 'health check failed' "${ids}")"
   log "router: $(router_log_last 'skipping routing update' "${ids}")"
   expect "C7a operator: Warning Event for Ready=False" 60 \
-    count_above "Warning Events" "${warnings}" event_count "${ENDPOINT}" type=Warning || true
+    count_above "Warning Events after ${events_from:-<none>}" 0 events_after "${ENDPOINT}" "${events_from}" type=Warning || true
   expect "C7a backend container restarted in place" 60 \
     count_above restartCount "${restarts:-0}" container_restarts "${E2E_MODELS_NAMESPACE}" "${SAMPLE_SELECTOR}" || true
   expect "C7a recovered: steady state in both views" "${T}" steady_state || true
@@ -320,7 +330,7 @@ run_restart_cases() {
   section "C2: gateway pod deleted"
   ensure_context
   registered_at="$(transition_time Registered)"
-  events="$(event_count "${ENDPOINT}")"
+  events_from="$(latest_event_time "${ENDPOINT}")"
   selector="$(deployment_selector "${E2E_STACK_NAMESPACE}" "${GATEWAY_DEPLOYMENT}")"
   old_pod="$(first_pod "${E2E_STACK_NAMESPACE}" "${selector}")"
   kc -n "${E2E_STACK_NAMESPACE}" delete pod "${old_pod}" --wait=true --timeout=60s >/dev/null || true
@@ -334,7 +344,8 @@ run_restart_cases() {
   expect "C2 stack: new gateway serves the registry, Healthy, 1 registered, 1 healthy" 60 registry_is Healthy 1 1 || true
   expect "C2 operator: no transition (Registered lastTransitionTime unchanged)" 0 \
     value_is lastTransitionTime "${registered_at}" transition_time Registered || true
-  expect "C2 operator: no new Events" 0 value_is Events "${events}" event_count "${ENDPOINT}" || true
+  expect "C2 operator: no new Events" 0 \
+    value_is "Events after ${events_from:-<none>}" 0 events_after "${ENDPOINT}" "${events_from}" || true
   step_done
 
   section "C3: operator down during a stream (C3b: new endpoint while down)"
