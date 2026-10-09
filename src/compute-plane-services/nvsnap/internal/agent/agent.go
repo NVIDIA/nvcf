@@ -69,8 +69,8 @@ type Config struct {
 	// CaptureOptIn opts matching pods into the multi-pod instance capture
 	// (criu_group.go); NVSNAP_CRIU_CAPTURE_OPT_IN, JSON.
 	CaptureOptIn []CaptureOptIn
-	NodeName            string
-	LogLevel            string
+	NodeName     string
+	LogLevel     string
 
 	// AuthToken is the shared bearer token callers must present on the
 	// agent API. Sourced from a Secret rather than a flag so it does not

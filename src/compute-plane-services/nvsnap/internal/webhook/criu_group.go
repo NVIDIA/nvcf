@@ -30,6 +30,9 @@ const (
 	CRIUGroupAnnotation        = "nvsnap.io/criu-group"
 	CRIUGroupOrdinalAnnotation = "nvsnap.io/criu-group-ordinal"
 	CRIUGroupSizeAnnotation    = "nvsnap.io/criu-group-size"
+	// CRIURestoredAnnotation marks a placeholder the agent restored into, so
+	// an agent that restarts does not restore into it again.
+	CRIURestoredAnnotation = "nvsnap.io/criu-restored"
 )
 
 // CRIUGroup is a complete group capture: the checkpoint of each rank, in

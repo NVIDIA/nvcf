@@ -427,6 +427,9 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 	res, err := a.groupRestore(rctx, req, log)
 	if err == nil {
 		log.WithField("duration", time.Since(t0).Round(time.Millisecond).String()).Info("CRIU group restore: restored")
+		for _, p := range ranks {
+			a.markRestored(context.WithoutCancel(ctx), p.Namespace, p.Name, log)
+		}
 		return
 	}
 	if res != nil && len(res.DeletedPods) > 0 {

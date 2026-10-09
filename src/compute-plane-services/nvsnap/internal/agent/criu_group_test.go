@@ -146,3 +146,19 @@ func TestSetGroupRank(t *testing.T) {
 		t.Errorf("rank hashes: %s %s %s", a.Hash, b.Hash, a2.Hash)
 	}
 }
+
+// A placeholder restored before (by an agent that has since restarted) is
+// never a restore target again.
+func TestRestoredPlaceholderIsNoTarget(t *testing.T) {
+	p := stsRank("kimi-0", "0", "1", "sts-a", false)
+	p.Annotations[webhook.CRIURestoreAnnotation] = "a"
+	p.Annotations[webhook.CRIURestoreContainerAnnotation] = "engine"
+	p.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "engine", State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}
+	if _, _, ok := criuRestoreTarget(&p); !ok {
+		t.Fatal("an unrestored placeholder is not a target")
+	}
+	p.Annotations[webhook.CRIURestoredAnnotation] = "2026-10-09T21:00:00Z"
+	if _, _, ok := criuRestoreTarget(&p); ok {
+		t.Error("a restored pod would be restored into again after an agent restart")
+	}
+}

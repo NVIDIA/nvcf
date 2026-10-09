@@ -61,6 +61,10 @@ import (
 // read the images.
 const v2CheckpointsMountInContainer = "/checkpoints"
 
+// errNotPlaceholder marks a restore refused because the target already runs
+// a GPU workload: a pod restored before, or not a placeholder at all.
+var errNotPlaceholder = errors.New("refusing to restore into a non-placeholder")
+
 func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, checkpointDir string, placeholderInfo *containerd.ContainerInfo, startTime time.Time, group restoreV2Group, log *logrus.Entry) (*RestoreResult, error) {
 	if placeholderInfo == nil {
 		return nil, fmt.Errorf("criu-v2 restore requires a placeholder pod (placeholderPodName/placeholderNamespace)")
@@ -88,7 +92,7 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		return nil, fmt.Errorf("criu-v2: cannot verify target is a placeholder (GPU-process check failed): %w", gerr)
 	}
 	if gpuPID != 0 {
-		return nil, fmt.Errorf("criu-v2: target pod is running a GPU workload (pid %d) — refusing to restore into a non-placeholder", gpuPID)
+		return nil, fmt.Errorf("criu-v2: target pod is running a GPU workload (pid %d): %w", gpuPID, errNotPlaceholder)
 	}
 
 	// The images must be visible inside the placeholder at

@@ -13,6 +13,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -22,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
@@ -47,7 +49,8 @@ func criuIsDefault() bool { return !RootfsIsDefault() }
 func criuRestoreTarget(pod *corev1.Pod) (checkpointID, container string, ready bool) {
 	checkpointID = pod.Annotations[webhook.CRIURestoreAnnotation]
 	container = pod.Annotations[webhook.CRIURestoreContainerAnnotation]
-	if checkpointID == "" || container == "" || pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning {
+	if checkpointID == "" || container == "" || pod.DeletionTimestamp != nil || pod.Status.Phase != corev1.PodRunning ||
+		pod.Annotations[webhook.CRIURestoredAnnotation] != "" {
 		return checkpointID, container, false
 	}
 	for _, cs := range pod.Status.ContainerStatuses {
@@ -144,6 +147,13 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod, id, container s
 	}()
 	if err == nil {
 		log.WithField("duration", time.Since(t0).Round(time.Millisecond).String()).Info("CRIU auto-restore: restored")
+		a.markRestored(context.WithoutCancel(ctx), ns, pod, log)
+		return
+	}
+	if errors.Is(err, errNotPlaceholder) {
+		// Restored already (by this agent before a restart): leave it be.
+		log.WithError(err).Warn("CRIU auto-restore: the pod already runs its workload; not restoring, not deleting")
+		a.markRestored(context.WithoutCancel(ctx), ns, pod, log)
 		return
 	}
 	log.WithError(err).Error("CRIU auto-restore failed; blocking the checkpoint and deleting the pod so its replacement starts fresh")
@@ -258,4 +268,13 @@ func (a *Agent) recordCRIUCapture(ctx context.Context, hash, checkpointID string
 		return
 	}
 	log.WithFields(logrus.Fields{"hash": checkpointstore.ShortHash(hash), "checkpoint": checkpointID}).Info("CRIU capture recorded for restore")
+}
+
+// markRestored annotates a restored placeholder so a restarted agent does
+// not restore into it again (and, refused, delete it).
+func (a *Agent) markRestored(ctx context.Context, ns, pod string, log *logrus.Entry) {
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, webhook.CRIURestoredAnnotation, time.Now().UTC().Format(time.RFC3339))
+	if _, err := a.kubeClient.CoreV1().Pods(ns).Patch(ctx, pod, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		log.WithError(err).Warn("CRIU restore: could not mark the pod restored; an agent restart may try it again")
+	}
 }
