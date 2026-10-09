@@ -145,6 +145,16 @@ struct RetainedInputInterval {
     interval: RequestInputInterval,
     input_tokens: u64,
     input_tokens_explicit: bool,
+    cache_aware: bool,
+}
+
+pub(super) struct InputIntervalSample<'a> {
+    pub(super) request_id: &'a str,
+    pub(super) interval: RequestInputInterval,
+    pub(super) input_tokens: u64,
+    pub(super) input_tokens_explicit: bool,
+    pub(super) cache_aware: bool,
+    pub(super) deferred_until_usage: bool,
 }
 
 #[derive(Debug, Default)]
@@ -164,14 +174,23 @@ impl RequestInputIntervalWindow {
         self.has_observed_rate
     }
 
+    pub(super) fn all_intervals_cache_aware(&self) -> bool {
+        self.intervals.iter().all(|entry| entry.cache_aware)
+    }
+
     pub(super) fn observe(
         &mut self,
-        request_id: &str,
-        interval: RequestInputInterval,
-        input_tokens: u64,
-        input_tokens_explicit: bool,
+        sample: InputIntervalSample<'_>,
         config: &StatsCollectorConfig,
     ) -> Option<f64> {
+        let InputIntervalSample {
+            request_id,
+            interval,
+            input_tokens,
+            input_tokens_explicit,
+            cache_aware,
+            deferred_until_usage,
+        } = sample;
         if config.smoothing_window_size == 0
             || interval.first_generated_output_at <= interval.submitted_at
         {
@@ -200,36 +219,31 @@ impl RequestInputIntervalWindow {
             if entry.input_tokens_explicit && !input_tokens_explicit {
                 return None;
             }
-            let rate_changed = entry.interval != interval || entry.input_tokens != input_tokens;
+            let rate_changed = entry.interval != interval
+                || entry.input_tokens != input_tokens
+                || entry.cache_aware != cache_aware;
             entry.interval = interval;
             entry.input_tokens = input_tokens;
             entry.input_tokens_explicit |= input_tokens_explicit;
+            entry.cache_aware = cache_aware;
             if !rate_changed {
                 return None;
             }
         } else {
-            if self
-                .evicted_through
-                .is_some_and(|evicted| interval.first_generated_output_at <= evicted)
+            if !deferred_until_usage
+                && self
+                    .evicted_through
+                    .is_some_and(|evicted| interval.first_generated_output_at <= evicted)
             {
                 return None;
             }
-            let insertion_index = self
-                .intervals
-                .iter()
-                .position(|entry| {
-                    entry.interval.first_generated_output_at > interval.first_generated_output_at
-                })
-                .unwrap_or(self.intervals.len());
-            self.intervals.insert(
-                insertion_index,
-                RetainedInputInterval {
-                    request_id: request_id.to_string(),
-                    interval,
-                    input_tokens,
-                    input_tokens_explicit,
-                },
-            );
+            self.intervals.push_back(RetainedInputInterval {
+                request_id: request_id.to_string(),
+                interval,
+                input_tokens,
+                input_tokens_explicit,
+                cache_aware,
+            });
             while self.intervals.len() > config.smoothing_window_size {
                 let evicted = self
                     .intervals
@@ -1062,7 +1076,7 @@ pub(super) fn apply_input_throughput_sample(
     if model_state.last_mean_input_tps == mean_input_tps {
         return false;
     }
-    model_state.publish_mean_input_tps(mean_input_tps);
+    model_state.publish_mean_input_tps(mean_input_tps, true);
     true
 }
 
@@ -1091,12 +1105,18 @@ pub(super) struct ModelStatsSnapshotInputs {
 impl ModelMetricsState {
     // The maximum follows the published smoothed mean rather than raw samples,
     // so the mean dilutes a single outlier sample before it can raise the weight.
-    pub(super) fn publish_mean_input_tps(&mut self, input_tps: f64) {
+    pub(super) fn publish_mean_input_tps(&mut self, input_tps: f64, update_max: bool) -> bool {
+        let mean_changed = self.last_mean_input_tps != input_tps;
         self.last_mean_input_tps = input_tps;
-        self.max_input_tps = Some(
-            self.max_input_tps
-                .map_or(input_tps, |max| max.max(input_tps)),
-        );
+        if !update_max {
+            return mean_changed;
+        }
+        let next_max = self
+            .max_input_tps
+            .map_or(input_tps, |max| max.max(input_tps));
+        let max_changed = self.max_input_tps != Some(next_max);
+        self.max_input_tps = Some(next_max);
+        mean_changed || max_changed
     }
 
     pub(super) fn clear_live_output_tps(&mut self) -> bool {

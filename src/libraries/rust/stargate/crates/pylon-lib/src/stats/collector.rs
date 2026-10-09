@@ -2482,28 +2482,136 @@ mod tests {
             .enumerate()
         {
             let submitted_at = start + seconds(index as u64 * 3);
-            apply_fallback_observation_with_interval(
-                &mut aggregator,
-                &RequestObservation {
-                    input_tokens,
-                    ..observation(
-                        RequestObservationEndpoint::ChatCompletions,
-                        &format!("max-input-{index}"),
-                        RequestObservationState::OutputGeneration,
-                    )
-                },
-                crate::runtime_state::RequestInputInterval {
-                    submitted_at,
-                    first_generated_output_at: submitted_at + seconds(1),
-                },
-                true,
-            );
+            let observation = RequestObservation {
+                input_tokens,
+                ..observation(
+                    RequestObservationEndpoint::ChatCompletions,
+                    &format!("max-input-{index}"),
+                    RequestObservationState::OutputGeneration,
+                )
+            };
+            let mut event = aggregator
+                .runtime_state
+                .transition_request_observation(observation);
+            event.input_interval = Some(crate::runtime_state::RequestInputInterval {
+                submitted_at,
+                first_generated_output_at: submitted_at + seconds(1),
+            });
+            event.input_tokens_explicit = true;
+            event.uncached_input_tokens = Some(input_tokens);
+            aggregator.apply_fallback_observation(&event);
             let stats = aggregator.snapshot("model-a");
             assert_eq!(stats.last_mean_input_tps, input_tokens as f64);
             assert_eq!(stats.max_input_tps, Some(maximum));
         }
         aggregator.sweep(seconds(600));
         assert_eq!(aggregator.snapshot("model-a").max_input_tps, Some(300.0));
+    }
+
+    #[test]
+    fn fallback_total_token_observations_do_not_raise_max_input_tps() {
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 1));
+        let start = std::time::Instant::now();
+        for input_tokens in [100, 300] {
+            apply_fallback_observation_with_interval(
+                &mut aggregator,
+                &RequestObservation {
+                    input_tokens,
+                    ..observation(
+                        RequestObservationEndpoint::ChatCompletions,
+                        &format!("total-input-{input_tokens}"),
+                        RequestObservationState::OutputGeneration,
+                    )
+                },
+                crate::runtime_state::RequestInputInterval {
+                    submitted_at: start + milliseconds(input_tokens),
+                    first_generated_output_at: start + milliseconds(input_tokens + 1_000),
+                },
+                true,
+            );
+        }
+
+        let stats = aggregator.snapshot("model-a");
+        assert_eq!(stats.last_mean_input_tps, 300.0);
+        assert_eq!(stats.max_input_tps, None);
+
+        let input_tokens = 250;
+        let submitted_at = start + seconds(3);
+        let mut cache_aware =
+            aggregator
+                .runtime_state
+                .transition_request_observation(RequestObservation {
+                    input_tokens,
+                    ..observation(
+                        RequestObservationEndpoint::ChatCompletions,
+                        "cache-aware-input",
+                        RequestObservationState::Complete,
+                    )
+                });
+        cache_aware.input_interval = Some(crate::runtime_state::RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + seconds(1),
+        });
+        cache_aware.input_tokens_explicit = true;
+        cache_aware.uncached_input_tokens = Some(input_tokens);
+        aggregator.apply_fallback_observation(&cache_aware);
+
+        let stats = aggregator.snapshot("model-a");
+        assert_eq!(stats.last_mean_input_tps, 250.0);
+        assert_eq!(stats.max_input_tps, Some(250.0));
+    }
+
+    #[test]
+    fn delayed_usage_observation_is_retained_in_completion_order() {
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 4));
+        let start = std::time::Instant::now();
+        let mut pending = Vec::new();
+        for index in 0..6 {
+            let submitted_at = start + milliseconds(index * 100);
+            let mut event =
+                aggregator
+                    .runtime_state
+                    .transition_request_observation(RequestObservation {
+                        input_tokens: 100,
+                        time_to_first_output: Some(milliseconds(500)),
+                        ..observation(
+                            RequestObservationEndpoint::ChatCompletions,
+                            &format!("deferred-{index}"),
+                            RequestObservationState::OutputGeneration,
+                        )
+                    });
+            event.input_interval = Some(crate::runtime_state::RequestInputInterval {
+                submitted_at,
+                first_generated_output_at: submitted_at + milliseconds(500),
+            });
+            event.input_usage_expected = true;
+            aggregator.apply_fallback_observation(&event);
+            pending.push(event);
+        }
+
+        for pending_event in pending.iter().skip(1) {
+            let mut terminal = pending_event.clone();
+            terminal.observation.state = RequestObservationState::Complete;
+            terminal.input_tokens_explicit = true;
+            terminal.uncached_input_tokens = Some(100);
+            aggregator.apply_fallback_observation(&terminal);
+        }
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 500.0);
+
+        let mut delayed = pending[0].clone();
+        delayed.observation.state = RequestObservationState::Complete;
+        delayed.input_tokens_explicit = true;
+        delayed.uncached_input_tokens = Some(100);
+        aggregator.apply_fallback_observation(&delayed);
+
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 400.0);
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .request_input_intervals
+                .len(),
+            4
+        );
     }
 
     #[test]
@@ -2575,10 +2683,14 @@ mod tests {
             .metrics
             .request_input_intervals
             .observe(
-                &later_cumulative.request_id,
-                interval,
-                later_cumulative.input_tokens,
-                false,
+                super::super::aggregator::InputIntervalSample {
+                    request_id: &later_cumulative.request_id,
+                    interval,
+                    input_tokens: later_cumulative.input_tokens,
+                    input_tokens_explicit: false,
+                    cache_aware: false,
+                    deferred_until_usage: false,
+                },
                 &config,
             );
 
@@ -2820,7 +2932,7 @@ mod tests {
             )
         };
         apply_fallback_observation_with_interval(&mut aggregator, &estimated, old_interval, false);
-        assert_eq!(aggregator.snapshot("model-a").max_input_tps, Some(100.0));
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, None);
         let mut late_exact =
             aggregator
                 .runtime_state
@@ -2886,7 +2998,7 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 50.0);
-        assert_eq!(aggregator.snapshot("model-a").max_input_tps, Some(50.0));
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, None);
         assert_eq!(
             aggregator.per_model["model-a"]
                 .metrics
@@ -3947,7 +4059,13 @@ mod tests {
             )
             .expect("test model stats should initialize");
         let observation = completed_observation(20, 2, 10, seconds(2), seconds(4));
-        let updated_stats = apply_fallback_observation(&mut aggregator, &observation);
+        let mut event = aggregator
+            .runtime_state
+            .transition_request_observation(observation);
+        event = event_with_test_metadata(event);
+        event.input_tokens_explicit = true;
+        event.uncached_input_tokens = Some(20);
+        let updated_stats = aggregator.apply_fallback_observation(&event);
         for (model_id, stats) in updated_stats {
             publish_model_stats_update(&runtime_state, model_id, stats);
         }

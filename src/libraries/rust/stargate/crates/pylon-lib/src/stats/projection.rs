@@ -19,10 +19,10 @@ use crate::runtime_state::OutputCalibrationFacts;
 use crate::{CurrentModelStats, RequestObservation, RequestObservationEvent};
 
 use super::aggregator::{
-    EmbeddingThroughputSample, InputThroughputSample, KvCacheStatsSnapshot, ModelMetricsState,
-    ModelStatsSnapshotInputs, RequestIntervalKey, StatsAggregator, aggregate_model_state,
-    apply_input_throughput_sample, current_unix_millis, output_decode_duration, push_sample,
-    tps_for_units,
+    EmbeddingThroughputSample, InputIntervalSample, InputThroughputSample, KvCacheStatsSnapshot,
+    ModelMetricsState, ModelStatsSnapshotInputs, RequestIntervalKey, StatsAggregator,
+    aggregate_model_state, apply_input_throughput_sample, current_unix_millis,
+    output_decode_duration, push_sample, tps_for_units,
 };
 use super::collector::StatsCollectorConfig;
 
@@ -145,18 +145,23 @@ impl StatsAggregator {
         ) && (!event.input_usage_expected() || observation.is_terminal())
             && let Some(interval) = event.input_interval()
             && let Some(input_tps) = model_state.request_input_intervals.observe(
-                &observation.request_id,
-                interval,
-                event
-                    .uncached_input_tokens()
-                    .unwrap_or(observation.input_tokens),
-                event.input_tokens_explicit(),
+                InputIntervalSample {
+                    request_id: &observation.request_id,
+                    interval,
+                    input_tokens: event
+                        .uncached_input_tokens()
+                        .unwrap_or(observation.input_tokens),
+                    input_tokens_explicit: event.input_tokens_explicit(),
+                    cache_aware: event.uncached_input_tokens().is_some(),
+                    deferred_until_usage: event.input_usage_expected() && observation.is_terminal(),
+                },
                 config,
             )
-            && model_state.last_mean_input_tps != input_tps
         {
-            model_state.publish_mean_input_tps(input_tps);
-            input_tps_changed = true;
+            let update_max_input_tps = model_state
+                .request_input_intervals
+                .all_intervals_cache_aware();
+            input_tps_changed = model_state.publish_mean_input_tps(input_tps, update_max_input_tps);
         }
         let mut completed_sample_recorded = false;
         if observation.state == RequestObservationState::Complete {
