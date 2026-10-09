@@ -65,6 +65,10 @@ func registerUnauthenticatedRoutes(router *mux.Router, server *service.Server, i
 	router.Handle("/info", infoMiddleware(golibversion.Handler()))
 }
 
+// cacheDrainTimeout bounds the shutdown write of the cache's pending events. The
+// pod's grace period is 30 seconds by default, and the server may have used 5.
+const cacheDrainTimeout = 20 * time.Second
+
 func runService(cfg config.Config) error {
 	ctx := context.Background()
 
@@ -565,6 +569,16 @@ func runService(cfg config.Config) error {
 		logger.Error(errMsg)
 	} else {
 		logger.Warn("server exited properly")
+	}
+
+	// The server takes no more requests, so write what the cache still holds. The
+	// database stays open for the components that stop after this.
+	drainCtx, cancelDrain := context.WithTimeout(context.Background(), cacheDrainTimeout)
+	defer cancelDrain()
+	if err := conns.DrainWriteCache(drainCtx); err != nil {
+		logger.Error("failed to write the cache's pending events before exit", zap.Error(err))
+	} else if cfg.Cache.Enabled {
+		logger.Warn("write cache drained")
 	}
 
 	return nil

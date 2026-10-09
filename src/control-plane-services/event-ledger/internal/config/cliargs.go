@@ -148,9 +148,9 @@ func (c *CliArgs) SetupIndexer() {
 
 func (c *CliArgs) SetupCache() {
 	defaults := GetDefaultCacheConfig()
-	c.bool("cache.enabled", defaults.Enabled, "Reserved for the local stats write cache. It has no effect until the cache is applied to writes", true)
-	c.int("cache.max-size", defaults.MaxSize, "Maximum number of entries in the stats write cache", true)
-	c.int("cache.flush-interval-seconds", defaults.FlushIntervalSeconds, "Seconds a pending stats entry waits before it is flushed", true)
+	c.bool("cache.enabled", defaults.Enabled, "Enable the local events write cache", true)
+	c.int("cache.max-size", defaults.MaxSize, "Maximum number of entries in the events write cache", true)
+	c.int("cache.flush-interval-seconds", defaults.FlushIntervalSeconds, "Seconds a pending event waits before it is flushed", true)
 }
 
 func (c *CliArgs) SetupPublisher() {

@@ -30,6 +30,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/metric"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/data_access"
 )
@@ -51,28 +52,36 @@ func (h *CachingDBHandler) insert(cachedKey key, e entry) {
 	h.entries[cachedKey] = cachedEntry
 }
 
-// discardFlush is a FlushFunc that drops what it is given, for tests that do not
+// discardFlush is a FlushFunc that drops the records it is given, for tests that do not
 // look at what is written.
-func discardFlush(context.Context, data_access.EventV3UpsertRecord) error { return nil }
+func discardFlush(context.Context, []data_access.EventV3UpsertRecord) error { return nil }
 
 // flushRecorder is a FlushFunc that records what it is asked to write.
 type flushRecorder struct {
-	mu   sync.Mutex
-	recs []data_access.EventV3UpsertRecord
-	err  error
-	// failFirst makes that many of the first calls, counted across all keys, fail
-	// whatever err is.
+	mu    sync.Mutex
+	recs  []data_access.EventV3UpsertRecord
+	calls int
+	err   error
+	// failFirst makes that many of the first calls fail, whatever err is.
 	failFirst int
 }
 
-func (r *flushRecorder) flush(_ context.Context, rec data_access.EventV3UpsertRecord) error {
+func (r *flushRecorder) flush(_ context.Context, recs []data_access.EventV3UpsertRecord) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.recs = append(r.recs, rec)
-	if len(r.recs) <= r.failFirst {
+	r.calls++
+	r.recs = append(r.recs, recs...)
+	if r.calls <= r.failFirst {
 		return errors.New("database unavailable")
 	}
 	return r.err
+}
+
+// flushCalls returns how many times flush was called.
+func (r *flushRecorder) flushCalls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
 }
 
 func (r *flushRecorder) records() []data_access.EventV3UpsertRecord {
@@ -106,12 +115,19 @@ func newTestHandler(t *testing.T) *CachingDBHandler {
 	return h
 }
 
+// newHandlerOver returns a handler over inner that fails the test if it cannot be
+// created, for tests that are not about construction.
+func newHandlerOver(t *testing.T, inner data_access.DBHandlerV2, cfg Config, flush FlushFunc, meter metric.Meter) *CachingDBHandler {
+	t.Helper()
+	handler, err := NewCachingDBHandler(inner, cfg, flush, meter)
+	require.NoError(t, err)
+	return handler
+}
+
 func newTestHandlerWith(t *testing.T, cfg Config) (*CachingDBHandler, *flushRecorder) {
 	t.Helper()
-	rec := &flushRecorder{}
-	h, err := NewCachingDBHandler(&fakeDB{}, cfg, rec.flush, discardMeter())
-	require.NoError(t, err)
-	return h, rec
+	recorder := &flushRecorder{}
+	return newHandlerOver(t, &fakeDB{}, cfg, recorder.flush, discardMeter()), recorder
 }
 
 func TestLookup_EmptyCacheMisses(t *testing.T) {
@@ -684,7 +700,7 @@ func TestProcessEvent_FailedEvictionFlushStillEvicts(t *testing.T) {
 func TestFlushEvicted_RetriesWithDoublingDelays(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var attemptTimes []time.Time
-		flush := func(context.Context, data_access.EventV3UpsertRecord) error {
+		flush := func(context.Context, []data_access.EventV3UpsertRecord) error {
 			attemptTimes = append(attemptTimes, time.Now())
 			return errors.New("database unavailable")
 		}
@@ -711,7 +727,7 @@ func TestFlushEvicted_RetriesWithDoublingDelays(t *testing.T) {
 func TestFlushEvicted_StopsRetryingOnceAWriteSucceeds(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var calls int
-		flush := func(context.Context, data_access.EventV3UpsertRecord) error {
+		flush := func(context.Context, []data_access.EventV3UpsertRecord) error {
 			calls++
 			if calls < 3 {
 				return errors.New("database unavailable")
@@ -731,7 +747,7 @@ func TestFlushEvicted_StopsRetryingOnceAWriteSucceeds(t *testing.T) {
 func TestFlushEvicted_StopsRetryingWhenTheTimeoutEndsDuringTheFlush(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var calls int
-		flush := func(ctx context.Context, _ data_access.EventV3UpsertRecord) error {
+		flush := func(ctx context.Context, _ []data_access.EventV3UpsertRecord) error {
 			calls++
 			<-ctx.Done()
 			return ctx.Err()
@@ -749,9 +765,9 @@ func TestFlushEvicted_StopsRetryingWhenTheTimeoutEndsDuringTheFlush(t *testing.T
 func TestFlushEvicted_StopsRetryingWhenTheTimeoutEndsDuringAWait(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var calls int
-		flush := func(context.Context, data_access.EventV3UpsertRecord) error {
+		flush := func(context.Context, []data_access.EventV3UpsertRecord) error {
 			calls++
-			time.Sleep(evictionFlushTimeout - evictionRetryBaseDelay/2)
+			time.Sleep(flushTimeout - evictionRetryBaseDelay/2)
 			return errors.New("database unavailable")
 		}
 		handler, err := NewCachingDBHandler(&fakeDB{}, evictionConfig(1), flush, discardMeter())
@@ -764,47 +780,18 @@ func TestFlushEvicted_StopsRetryingWhenTheTimeoutEndsDuringAWait(t *testing.T) {
 	})
 }
 
-func TestFlushEvicted_AFailingRecordDoesNotStopTheNextOne(t *testing.T) {
+func TestFlushEvicted_RetriesTheWholeBatchTogether(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		written := map[string]int{}
-		flush := func(_ context.Context, rec data_access.EventV3UpsertRecord) error {
-			written[rec.EventName]++
-			if rec.EventName == keyN(1).eventName {
-				return errors.New("database unavailable")
-			}
-			return nil
-		}
-		handler, err := NewCachingDBHandler(&fakeDB{}, evictionConfig(1), flush, discardMeter())
-		require.NoError(t, err)
+		handler, recorder := newTestHandlerWith(t, evictionConfig(1))
+		recorder.failFirst = 2
 
 		handler.flushEvicted([]data_access.EventV3UpsertRecord{
 			{Namespace: "ns", Context: "ctx", EventName: keyN(1).eventName, Timestamp: at(1)},
 			{Namespace: "ns", Context: "ctx", EventName: keyN(2).eventName, Timestamp: at(2)},
 		})
 
-		assert.Equal(t, evictionFlushAttempts, written[keyN(1).eventName])
-		assert.Equal(t, 1, written[keyN(2).eventName])
-	})
-}
-
-func TestFlushEvicted_RecordsAfterTheTimeoutAreNotWritten(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		written := map[string]int{}
-		flush := func(ctx context.Context, rec data_access.EventV3UpsertRecord) error {
-			written[rec.EventName]++
-			<-ctx.Done()
-			return ctx.Err()
-		}
-		handler, err := NewCachingDBHandler(&fakeDB{}, evictionConfig(1), flush, discardMeter())
-		require.NoError(t, err)
-
-		handler.flushEvicted([]data_access.EventV3UpsertRecord{
-			{Namespace: "ns", Context: "ctx", EventName: keyN(1).eventName, Timestamp: at(1)},
-			{Namespace: "ns", Context: "ctx", EventName: keyN(2).eventName, Timestamp: at(2)},
-		})
-
-		assert.Equal(t, 1, written[keyN(1).eventName])
-		assert.Zero(t, written[keyN(2).eventName])
+		assert.Equal(t, 3, recorder.calls, "one call per try, not one per record")
+		assert.Len(t, recorder.records(), 6, "each try carries both records")
 	})
 }
 
@@ -832,7 +819,7 @@ func TestFlushWithRetry_ReportsHowManyWritesItMade(t *testing.T) {
 					cancel()
 				}
 
-				attempts, err := handler.flushWithRetry(ctx, data_access.EventV3UpsertRecord{EventName: "evt-1"})
+				attempts, err := handler.flushWithRetry(ctx, []data_access.EventV3UpsertRecord{{EventName: "evt-1"}})
 
 				assert.Equal(t, tt.wantAttempts, attempts)
 				assert.Equal(t, tt.wantErr, err != nil)
@@ -841,11 +828,16 @@ func TestFlushWithRetry_ReportsHowManyWritesItMade(t *testing.T) {
 	}
 }
 
-func TestWriteMiss_SuccessLeavesTheEntryClean(t *testing.T) {
+// singleMiss returns the one record of an event for cachedKey.
+func singleMiss(cachedKey key, ev event) []data_access.EventV3UpsertRecord {
+	return []data_access.EventV3UpsertRecord{recordOf(cachedKey, entry{timestamp: ev.timestamp, source: ev.source, details: ev.details})}
+}
+
+func TestWriteMisses_SuccessLeavesTheEntryClean(t *testing.T) {
 	handler, recorder := newTestHandlerWith(t, evictionConfig(10))
 	handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
 
-	err := handler.writeMiss(context.Background(), keyN(1), event{timestamp: at(1)})
+	err := handler.writeMisses(context.Background(), singleMiss(keyN(1), event{timestamp: at(1)}))
 
 	require.NoError(t, err)
 	assert.Len(t, recorder.records(), 1)
@@ -855,13 +847,13 @@ func TestWriteMiss_SuccessLeavesTheEntryClean(t *testing.T) {
 	assert.False(t, scheduled)
 }
 
-func TestWriteMiss_RetriesBeforeGivingUp(t *testing.T) {
+func TestWriteMisses_RetriesBeforeGivingUp(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		handler, recorder := newTestHandlerWith(t, evictionConfig(10))
 		recorder.failFirst = 2
 		handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
 
-		err := handler.writeMiss(context.Background(), keyN(1), event{timestamp: at(1)})
+		err := handler.writeMisses(context.Background(), singleMiss(keyN(1), event{timestamp: at(1)}))
 
 		require.NoError(t, err)
 		assert.Len(t, recorder.records(), 3)
@@ -870,14 +862,14 @@ func TestWriteMiss_RetriesBeforeGivingUp(t *testing.T) {
 	})
 }
 
-func TestWriteMiss_FailureKeepsTheEventPendingAndScheduled(t *testing.T) {
+func TestWriteMisses_FailureKeepsTheEventPendingAndScheduled(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		handler, recorder := newTestHandlerWith(t, evictionConfig(10))
 		recorder.err = errors.New("database unavailable")
 		probe := installLockProbe(handler)
 		handler.processEvent(keyN(1), event{timestamp: at(1), source: "src"}, at(1))
 
-		err := handler.writeMiss(context.Background(), keyN(1), event{timestamp: at(1), source: "src"})
+		err := handler.writeMisses(context.Background(), singleMiss(keyN(1), event{timestamp: at(1), source: "src"}))
 
 		require.ErrorIs(t, err, recorder.err)
 		assert.Len(t, recorder.records(), evictionFlushAttempts)
@@ -890,13 +882,13 @@ func TestWriteMiss_FailureKeepsTheEventPendingAndScheduled(t *testing.T) {
 	})
 }
 
-func TestWriteMiss_FailureStillKeepsTheEventWhenTheContextHasEnded(t *testing.T) {
+func TestWriteMisses_FailureStillKeepsTheEventWhenTheContextHasEnded(t *testing.T) {
 	handler, recorder := newTestHandlerWith(t, evictionConfig(10))
 	handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := handler.writeMiss(ctx, keyN(1), event{timestamp: at(1)})
+	err := handler.writeMisses(ctx, singleMiss(keyN(1), event{timestamp: at(1)}))
 
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Empty(t, recorder.records(), "no write is made once the context has ended")
@@ -904,7 +896,7 @@ func TestWriteMiss_FailureStillKeepsTheEventWhenTheContextHasEnded(t *testing.T)
 	assert.True(t, cachedEntry.pending)
 }
 
-func TestWriteMiss_FailureCreatesAgainAnEntryEvictedMeanwhile(t *testing.T) {
+func TestWriteMisses_FailureCreatesAgainAnEntryEvictedMeanwhile(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		handler, recorder := newTestHandlerWith(t, evictionConfig(1))
 		recorder.err = errors.New("database unavailable")
@@ -915,7 +907,7 @@ func TestWriteMiss_FailureCreatesAgainAnEntryEvictedMeanwhile(t *testing.T) {
 		recorder.recs = nil
 		recorder.mu.Unlock()
 
-		err := handler.writeMiss(context.Background(), keyN(1), event{timestamp: at(1)})
+		err := handler.writeMisses(context.Background(), singleMiss(keyN(1), event{timestamp: at(1)}))
 
 		require.Error(t, err)
 		cachedEntry, ok := handler.lookup(keyN(1))
@@ -927,12 +919,16 @@ func TestWriteMiss_FailureCreatesAgainAnEntryEvictedMeanwhile(t *testing.T) {
 	})
 }
 
-func TestWriteMiss_FailureWritesThePendingEntryItEvictsToMakeRoom(t *testing.T) {
+func TestWriteMisses_FailureWritesThePendingEntryItEvictsToMakeRoom(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		written := map[string]int{}
-		flush := func(_ context.Context, rec data_access.EventV3UpsertRecord) error {
-			written[rec.EventName]++
-			if rec.EventName == keyN(1).eventName {
+		flush := func(_ context.Context, recs []data_access.EventV3UpsertRecord) error {
+			var failed bool
+			for _, rec := range recs {
+				written[rec.EventName]++
+				failed = failed || rec.EventName == keyN(1).eventName
+			}
+			if failed {
 				return errors.New("database unavailable")
 			}
 			return nil
@@ -943,7 +939,7 @@ func TestWriteMiss_FailureWritesThePendingEntryItEvictsToMakeRoom(t *testing.T) 
 		makePending(handler, keyN(2), 2)
 		written = map[string]int{}
 
-		require.Error(t, handler.writeMiss(context.Background(), keyN(1), event{timestamp: at(1)}))
+		require.Error(t, handler.writeMisses(context.Background(), singleMiss(keyN(1), event{timestamp: at(1)})))
 
 		assert.Equal(t, 1, written[keyN(2).eventName], "the entry pushed out was written")
 		requireKeys(t, handler, []int{1}, []int{2})
@@ -951,11 +947,11 @@ func TestWriteMiss_FailureWritesThePendingEntryItEvictsToMakeRoom(t *testing.T) 
 	})
 }
 
-func TestKeepPending_IgnoresAnOlderEventThanTheStoredOne(t *testing.T) {
+func TestStoreAsPending_IgnoresAnOlderEventThanTheStoredOne(t *testing.T) {
 	handler := newTestHandler(t)
 	makePending(handler, keyN(1), 1)
 
-	evicted := handler.keepPending(keyN(1), event{timestamp: at(1), source: "old"}, at(10))
+	evicted := handler.storeAsPending(singleMiss(keyN(1), event{timestamp: at(1), source: "old"})[0], at(10))
 
 	assert.Empty(t, evicted)
 	cachedEntry, _ := handler.lookup(keyN(1))
@@ -963,11 +959,11 @@ func TestKeepPending_IgnoresAnOlderEventThanTheStoredOne(t *testing.T) {
 	assert.Empty(t, cachedEntry.source)
 }
 
-func TestKeepPending_ReplacesAnOlderStoredEntry(t *testing.T) {
+func TestStoreAsPending_ReplacesAnOlderStoredEntry(t *testing.T) {
 	handler := newTestHandler(t)
 	handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
 
-	handler.keepPending(keyN(1), event{timestamp: at(5), source: "new"}, at(10))
+	handler.storeAsPending(singleMiss(keyN(1), event{timestamp: at(5), source: "new"})[0], at(10))
 
 	cachedEntry, _ := handler.lookup(keyN(1))
 	assert.Equal(t, at(5), cachedEntry.timestamp)
@@ -977,13 +973,13 @@ func TestKeepPending_ReplacesAnOlderStoredEntry(t *testing.T) {
 	assert.True(t, scheduled)
 }
 
-func TestKeepPending_DoesNotScheduleAnEntryTwice(t *testing.T) {
+func TestStoreAsPending_DoesNotScheduleAnEntryTwice(t *testing.T) {
 	handler := newTestHandler(t)
 	probe := installLockProbe(handler)
 	makePending(handler, keyN(1), 1)
 	scheduledBefore := probe.scheduleCalls.Load()
 
-	handler.keepPending(keyN(1), event{timestamp: at(2)}, at(10))
+	handler.storeAsPending(singleMiss(keyN(1), event{timestamp: at(2)})[0], at(10))
 
 	assert.Equal(t, scheduledBefore, probe.scheduleCalls.Load())
 }
@@ -1004,13 +1000,13 @@ func TestEvictInactive_RetriesAFailedWrite(t *testing.T) {
 func TestProcessEvent_EvictionFlushRunsWithoutTheLock(t *testing.T) {
 	var h *CachingDBHandler
 	var lockWasFree, entryWasGone bool
-	flush := func(_ context.Context, rec data_access.EventV3UpsertRecord) error {
+	flush := func(_ context.Context, recs []data_access.EventV3UpsertRecord) error {
 		// Checking the lock first keeps a regression from deadlocking the lookup.
 		if lockWasFree = h.entriesMu.TryLock(); !lockWasFree {
 			return nil
 		}
 		h.entriesMu.Unlock()
-		_, inCache := h.lookup(key{namespace: rec.Namespace, context: rec.Context, eventName: rec.EventName})
+		_, inCache := h.lookup(key{namespace: recs[0].Namespace, context: recs[0].Context, eventName: recs[0].EventName})
 		entryWasGone = !inCache
 		return nil
 	}
@@ -1223,7 +1219,7 @@ func checkConcurrentEviction(t *testing.T, maxSize, evictEvery int) {
 // entry is still in flight. The cache keeps no record of an evicted key, so the
 // newer event is an ordinary miss and the caller writes it right away, possibly
 // before the older flush lands. The cache cannot order those two writes; the
-// database must, which the stats table does with its timestamp guard.
+// database must, which the guarded events write does with its timestamp check.
 func TestProcessEvent_NewerEventDuringEvictionFlushIsAMiss(t *testing.T) {
 	flushStarted := make(chan struct{})
 	releaseFlush := make(chan struct{})
@@ -1232,8 +1228,8 @@ func TestProcessEvent_NewerEventDuringEvictionFlushIsAMiss(t *testing.T) {
 	t.Cleanup(release)
 
 	var inFlight data_access.EventV3UpsertRecord
-	flush := func(_ context.Context, rec data_access.EventV3UpsertRecord) error {
-		inFlight = rec
+	flush := func(_ context.Context, recs []data_access.EventV3UpsertRecord) error {
+		inFlight = recs[0]
 		close(flushStarted)
 		<-releaseFlush
 		return nil

@@ -191,9 +191,10 @@ eventLedger:
     telemetry:
       servicename: "event-ledger-api"
       environmentname: "self-managed"
-    # Local write cache for stats events. Disabled by default. The service
-    # reads these keys, but the cache is not applied to writes yet, so setting
-    # enabled to true has no effect on current releases.
+    # Local write cache for the events table. Disabled by default. When enabled,
+    # a repeat of an event for the same namespace, context, and event name is held
+    # and written at most once per flush interval, so a crash can lose up to one
+    # interval of the latest events. Events with large payloads are not cached.
     cache:
       enabled: false
       # Maximum cached entries before the least recently updated is evicted.
