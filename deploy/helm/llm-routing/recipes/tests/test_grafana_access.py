@@ -50,14 +50,15 @@ class GrafanaAccessTests(unittest.TestCase):
             self.assertEqual(self.env[setting]['valueFrom']['secretKeyRef'], {'name': secret['metadata']['name'], 'key': key})
         self.assertEqual(secret['stringData'], {'admin-user': 'admin', 'admin-password': 'test-only-admin-password'})
 
-    def test_root_url_is_unset_by_default(self):
-        self.assertNotIn('GF_SERVER_ROOT_URL', self.env)
+    def test_configured_root_url_reaches_default_ingress_deployment(self):
+        self.assertEqual(self.env['GF_SERVER_ROOT_URL']['value'], self.values['grafana']['rootURL'])
 
     def test_root_url_reaches_grafana(self):
         for root_url in ('%(protocol)s://%(domain)s:%(http_port)s/grafana/', 'https://example.com/grafana/'):
             with self.subTest(root_url=root_url):
                 values = copy.deepcopy(self.values)
                 values['grafana']['rootURL'] = root_url
+                values['grafana']['ingress']['enabled'] = False
                 result = self.render_credentials(values)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 grafana = next(doc for doc in yaml.safe_load_all(result.stdout)
@@ -134,9 +135,23 @@ class GrafanaAccessTests(unittest.TestCase):
             result = subprocess.run(['helm', 'lint', str(CHART), '--strict', '-f', str(path)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
 
-    def test_no_ingress_by_default(self):
-        self.assertFalse(any(doc['kind'] == 'Ingress' for doc in self.docs))
-        self.assertNotIn('GF_SERVER_SERVE_FROM_SUB_PATH', self.env)
+    def test_ingress_enabled_by_default(self):
+        ingress, = [doc for doc in self.docs if doc['kind'] == 'Ingress']
+        self.assertEqual(ingress['spec']['rules'][0]['http']['paths'][0]['path'], '/grafana')
+        self.assertEqual(self.env['GF_SERVER_SERVE_FROM_SUB_PATH']['value'], 'true')
+
+    def test_ingress_can_be_disabled_without_a_root_url(self):
+        values = copy.deepcopy(self.values)
+        values['grafana']['ingress']['enabled'] = False
+        values['grafana']['rootURL'] = ''
+        result = self.render_credentials(values)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        docs = [doc for doc in yaml.safe_load_all(result.stdout) if doc]
+        self.assertFalse(any(doc['kind'] == 'Ingress' for doc in docs))
+        grafana = next(doc for doc in docs if doc['kind'] == 'Deployment' and doc['metadata']['name'].endswith('-grafana'))
+        env = {entry['name']: entry for entry in grafana['spec']['template']['spec']['containers'][0]['env']}
+        self.assertNotIn('GF_SERVER_ROOT_URL', env)
+        self.assertNotIn('GF_SERVER_SERVE_FROM_SUB_PATH', env)
 
     def test_ingress_serves_grafana_under_its_path(self):
         for path, host, ingress_class in (('/grafana', '', ''),

@@ -78,10 +78,10 @@
       }
     },
     "adminPassword": "",
-    "rootURL": "",
+    "rootURL": "http://demo.example.com/grafana/",
     "ingress": {
-      "enabled": false,
-      "className": "",
+      "enabled": true,
+      "className": "traefik",
       "host": "",
       "path": "/grafana"
     }
