@@ -636,6 +636,33 @@ impl CassandraServiceManager {
         Ok(())
     }
 
+    /// Delete a lock only when it is still owned by `node_id`.
+    /// Returns false when the lock has expired or another node owns it.
+    #[tracing::instrument(skip(self))]
+    pub async fn delete_owned_lock(&self, lock_name: &str, node_id: &str) -> Result<bool> {
+        let session = self.get_session().await?;
+        with_cassandra_timing("delete_owned_lock", || async {
+            let mut prepared = session
+                .prepare(get_delete_owned_lock_stmt(&self.config.keyspace))
+                .await?;
+            prepared.set_consistency(Consistency::LocalQuorum);
+            prepared.set_serial_consistency(Some(SerialConsistency::Serial));
+            prepared.set_is_idempotent(false);
+            let result = session
+                .execute_unpaged(&prepared, (lock_name, node_id))
+                .await?;
+            let rows = result.into_rows_result()?;
+            if rows.column_specs().get_by_name("node_id").is_some() {
+                return Ok(false);
+            }
+            if let Some(row) = rows.rows::<(bool,)>()?.next() {
+                return Ok(row?.0);
+            }
+            Ok(false)
+        })
+        .await
+    }
+
     #[tracing::instrument(skip(self))]
     pub async fn insert_to_nodes(&self, node: &NodeHealth) -> Result<()> {
         let session = self.get_session().await?;
@@ -943,6 +970,12 @@ mod tests {
         let put_result = manager.put_lock(&lock, ttl_seconds).await;
         assert!(put_result.is_ok());
         assert!(put_result.unwrap());
+
+        assert!(!manager
+            .delete_owned_lock(&lock.lock_name, "another-node")
+            .await
+            .unwrap());
+        assert!(manager.get_lock(&lock.lock_name).await.unwrap().is_some());
 
         // Test delete operation
         let delete_result = manager.delete_lock(&lock.lock_name).await;
