@@ -44,7 +44,7 @@ while [ $# -gt 0 ]; do
     --namespace) NAMESPACE="$2"; FORWARD+=("$1" "$2"); shift 2 ;;
     --base-image) BASE_IMAGE="$2"; FORWARD+=("$1" "$2"); shift 2 ;;
     --devel-image) DEVEL_IMAGE="$2"; FORWARD+=("$1" "$2"); shift 2 ;;
-    -h|--help) awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
+    -h|--help) awk 'NR>1 && /^# SPDX-/ {next} NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -54,8 +54,13 @@ done
 # or stdin-in-loop hazard in the checks themselves.
 if [ -n "$REMOTE" ]; then
   [ -z "$CONTEXT" ] || { echo "--context and --on cannot be combined; --on uses the k3s kubeconfig on HOST" >&2; exit 2; }
-  remote_path="/tmp/gpu-validate-$$.sh"
+  remote_path=$(ssh -n "$REMOTE" 'mktemp /tmp/gpu-validate.XXXXXX' 2>/dev/null || true)
+  if ! [[ "$remote_path" =~ ^/tmp/gpu-validate\.[A-Za-z0-9]+$ ]]; then
+    echo "could not create a temp file on $REMOTE. Check ssh access." >&2
+    exit 2
+  fi
   if ! scp -q "$0" "$REMOTE:$remote_path"; then
+    ssh -n "$REMOTE" rm -f "$remote_path" || true
     echo "could not scp to $REMOTE. Check ssh access." >&2
     exit 2
   fi
@@ -272,11 +277,14 @@ spec:
           nvidia.com/gpu: 99
 EOF
 sleep 10
-phase=$($KUBECTL -n "$NAMESPACE" get pod "$pod" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
-if [ "$phase" = "Pending" ]; then
-  pass "request for 99 GPUs stays Pending; capacity is enforced, not advisory"
+# Pending alone also covers a scheduled pod still pulling its image, so ask
+# the scheduler why the pod is not placed.
+reason=$($KUBECTL -n "$NAMESPACE" get pod "$pod" \
+  -o jsonpath='{.status.conditions[?(@.type=="PodScheduled")].reason}' 2>/dev/null || echo "")
+if [ "$reason" = "Unschedulable" ]; then
+  pass "request for 99 GPUs is Unschedulable; capacity is enforced, not advisory"
 else
-  fail "request for 99 GPUs reached phase '$phase'. GPU limits are not being enforced."
+  fail "request for 99 GPUs was not rejected by the scheduler (PodScheduled reason '${reason:-none}'). GPU limits are not being enforced."
 fi
 
 head2 "CUDA execution"

@@ -19,8 +19,9 @@
 #   --force           replace an existing file at PATH
 #   --no-check        skip the final kubectl get nodes check
 #
-# Reads the file as the ssh user, or with passwordless sudo when k3s left it
-# mode 600. The written file grants cluster-admin and is mode 600.
+# Reads the file as the ssh user, then with passwordless sudo. If both fail,
+# asks for your sudo password on the server and passes it to sudo -S over the
+# ssh session. The written file grants cluster-admin and is mode 600.
 
 set -euo pipefail
 
@@ -35,7 +36,7 @@ while [ $# -gt 0 ]; do
       OUTPUT="$2"; shift 2 ;;
     --force) FORCE=1; shift ;;
     --no-check) CHECK=0; shift ;;
-    -h|--help) awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
+    -h|--help) awk 'NR>1 && /^# SPDX-/ {next} NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; exit 0 ;;
     -*) echo "unknown argument: $1" >&2; exit 2 ;;
     *) ARGS+=("$1"); shift ;;
   esac
@@ -51,8 +52,8 @@ CONTEXT="${ARGS[2]}"
 
 name_re='^[a-z0-9][-a-z0-9]*$'
 host_re='^[A-Za-z0-9][-A-Za-z0-9.]*$'
-if ! [[ "$CONTEXT" =~ $name_re ]]; then
-  echo "CONTEXT must be lowercase letters, digits and dashes: $CONTEXT" >&2
+if ! [[ "$CONTEXT" =~ $name_re ]] || [ "$CONTEXT" = default ]; then
+  echo "CONTEXT must be lowercase letters, digits and dashes, and not 'default': $CONTEXT" >&2
   exit 2
 fi
 if ! [[ "$API_HOST" =~ $host_re ]]; then
@@ -87,10 +88,22 @@ RENAMED=$(mktemp "$OUT_DIR/.$CONTEXT.yaml.XXXXXX")
 cleanup() { rm -f "$FETCHED" "$RENAMED" "$RENAMED.lock"; }
 trap cleanup EXIT
 
-if ! ssh "$SSH_TARGET" 'cat /etc/rancher/k3s/k3s.yaml 2>/dev/null || sudo -n cat /etc/rancher/k3s/k3s.yaml' > "$FETCHED"; then
+# k3s leaves the file mode 600 unless installed with --write-kubeconfig-mode.
+# The password goes to sudo on stdin, never on a command line.
+fetched=0
+if ssh -n "$SSH_TARGET" 'cat /etc/rancher/k3s/k3s.yaml 2>/dev/null || sudo -n cat /etc/rancher/k3s/k3s.yaml 2>/dev/null' > "$FETCHED"; then
+  fetched=1
+else
+  printf 'sudo password on %s: ' "$SSH_TARGET" >&2
+  if IFS= read -rs password; then
+    echo >&2
+    printf '%s\n' "$password" | ssh "$SSH_TARGET" 'sudo -S -p "" cat /etc/rancher/k3s/k3s.yaml' > "$FETCHED" && fetched=1
+  fi
+  unset password
+fi
+if [ "$fetched" -ne 1 ]; then
   echo "could not read /etc/rancher/k3s/k3s.yaml on $SSH_TARGET" >&2
-  echo "check ssh access, that $SSH_TARGET is a k3s server, not an agent, and that" >&2
-  echo "your ssh user can read the file or run sudo without a password" >&2
+  echo "check ssh access, the sudo password, and that $SSH_TARGET is a k3s server, not an agent" >&2
   exit 2
 fi
 
