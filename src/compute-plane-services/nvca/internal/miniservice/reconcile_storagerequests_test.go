@@ -25,12 +25,18 @@ import (
 	"github.com/stretchr/testify/require"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
+	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
 	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 )
@@ -122,4 +128,46 @@ func TestMakeStorageRequests_BackendHandling(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, sts)
 	})
+}
+func TestDoStorageRequestsFailedSharedStorageSurfacesCause(t *testing.T) {
+	const instanceNamespace = "instance-ns"
+	const cause = "failed to create shared-storage object nvcf-smb-server: Pod is invalid: " +
+		"requests 500m must be less than or equal to cpu limit of 100m"
+
+	request := &nvcav2beta1.ICMSRequest{}
+	request.Spec.Action = common.FunctionCreationAction
+	fff := &featureflagmock.Fetcher{EnabledFFs: []*featureflag.FeatureFlag{&featureflag.HelmSharedStorage.FeatureFlag}}
+
+	failed := nvcastorage.NewSharedStorageRequest(request, fff, nvcaconfig.Config{}, nil)
+	failed.Namespace = instanceNamespace
+	failed.Status = nvcav2beta1.StorageRequestStatus{
+		Phase: nvcav2beta1.StorageFailed,
+		Conditions: []metav1.Condition{{
+			Type:    nvcastorage.ConditionTypeSharedStorageResourcesCreated,
+			Status:  metav1.ConditionFalse,
+			Reason:  nvcastorage.ConditionReasonAdmissionRejected,
+			Message: cause,
+		}},
+	}
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+	require.NoError(t, nvcav2beta1.AddToScheme(scheme))
+	r := &Reconciler{
+		ControllerOptions:     ControllerOptions{FeatureFlagFetcher: fff},
+		newPermissionsChecker: newFakePermissionsChecker,
+		Client: clientfake.NewClientBuilder().WithScheme(scheme).
+			WithRESTMapper(newTestRESTMapper(scheme)).
+			WithObjects(failed).Build(),
+	}
+	ms := &v1alpha1.MiniService{Spec: v1alpha1.MiniServiceSpec{Namespace: instanceNamespace}}
+
+	allReady, err := r.doStorageRequests(
+		t.Context(), ms, request, nil, nil,
+		&batchv1.Job{}, &corev1.PersistentVolumeClaim{}, nvcastorage.HelmCacheBackendNone)
+
+	require.Error(t, err)
+	assert.False(t, allReady)
+	assert.True(t, errors.Is(err, reconcile.TerminalError(nil)))
+	assert.ErrorContains(t, err, cause)
 }

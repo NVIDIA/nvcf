@@ -195,6 +195,9 @@ func NewRequeueableStorageError(message string) error {
 	return fmt.Errorf("%s - %s", message, requeableStorageErrorToken)
 }
 
+// GetStorageRequestErrorLog returns a user-facing explanation for a failed
+// StorageRequest, preferring the recorded cause of a rejected shared-storage
+// object over the generic phase message. It returns "" for healthy requests.
 func GetStorageRequestErrorLog(st *nvcav2beta1.StorageRequest) string {
 	// Check for shared storage failure condition
 	if st.Status.Phase == nvcav2beta1.StorageFailed || st.Status.Phase == nvcav2beta1.StorageRuntimeError {
@@ -204,6 +207,10 @@ func GetStorageRequestErrorLog(st *nvcav2beta1.StorageRequest) string {
 				return fmt.Sprintf("%s driver must be installed when %s feature flag is enabled. "+
 					"Please contact your cluster administrator to install the driver.",
 					SMBCSIDriverName, featureflag.HelmSharedStorage.Key)
+			}
+			if condition.Type == ConditionTypeSharedStorageResourcesCreated &&
+				condition.Status == metav1.ConditionFalse && condition.Message != "" {
+				return condition.Message
 			}
 		}
 		return fmt.Sprintf("storage request %s is in %s phase", st.Name, st.Status.Phase)
