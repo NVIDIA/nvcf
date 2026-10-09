@@ -78,7 +78,7 @@
       }
     },
     "adminPassword": "",
-    "rootURL": "http://demo.example.com/grafana/",
+    "rootURL": "",
     "ingress": {
       "enabled": true,
       "className": "traefik",

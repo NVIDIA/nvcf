@@ -37,7 +37,7 @@ Settings and defaults are in [values.yaml](charts/monitoring/values.yaml).
 | `imagePullPolicy` | Use `Never` only when every monitoring image is preloaded |
 | `collector.image`, `victoriaMetrics.image`, `grafana.image` | Versioned image references or mirrors |
 | `networkPolicy.enabled`, `networkPolicy.apiServerCIDRs` | Optional egress policy and API server addresses |
-| `grafana.rootURL` | Browser URL, set above to `http://NODE_IP/grafana/`. Must end in the ingress path plus `/`. |
+| `grafana.rootURL` | Required browser URL for ingress, set above to `http://NODE_IP/grafana/`. Must end in the ingress path plus `/`. |
 | `grafana.ingress.enabled` | Create the ingress, default `true` |
 | `grafana.ingress.className` | Ingress controller class, default `traefik` |
 | `grafana.ingress.host` | Empty by default for node IP access; use a hostname for DNS access |

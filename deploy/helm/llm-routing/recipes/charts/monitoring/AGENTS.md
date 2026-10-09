@@ -7,7 +7,7 @@ Run from `deploy/helm/llm-routing/recipes`:
 ```bash
 python3 -m pip install -r tests/requirements-monitoring.txt
 python3 -m unittest discover -s tests -p test_monitoring.py -v
-helm lint --strict charts/monitoring
+helm lint --strict charts/monitoring --set-string grafana.rootURL=http://192.0.2.10/grafana/
 ```
 
 Verify collector configuration with the pinned image's `validate --config` command. Keep the dashboard JSON provisioned from `files/dashboard.json`. Missing or stale data must remain distinguishable from healthy samples. Keep discovery namespace-scoped and monitor each selected pod once.

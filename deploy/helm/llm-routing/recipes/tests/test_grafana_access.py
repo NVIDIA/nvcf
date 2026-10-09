@@ -140,6 +140,13 @@ class GrafanaAccessTests(unittest.TestCase):
         self.assertEqual(ingress['spec']['rules'][0]['http']['paths'][0]['path'], '/grafana')
         self.assertEqual(self.env['GF_SERVER_SERVE_FROM_SUB_PATH']['value'], 'true')
 
+    def test_default_ingress_requires_an_explicit_public_url(self):
+        values = json.loads((CHART/'values.yaml').read_text())
+        self.assertTrue(values['grafana']['ingress']['enabled'])
+        result = self.render_credentials(values)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('grafana.rootURL must specify the public URL', result.stderr)
+
     def test_ingress_can_be_disabled_without_a_root_url(self):
         values = copy.deepcopy(self.values)
         values['grafana']['ingress']['enabled'] = False
