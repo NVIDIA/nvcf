@@ -4,7 +4,8 @@ This directory contains an end-to-end test of Pylon Operator with the LLM
 gateway stack on a local k3d cluster. `run.sh` installs the
 `llm-gateway-stack` and `pylon-operator` charts from this checkout, publishes
 an OpenAI-compatible sample backend through an `InferenceEndpoint`, and checks
-status, the gateway API and three failure paths. The
+status, the gateway API, failure paths, and restarts of the router, gateway,
+operator and Pylon pods. The
 [Inference Endpoints quickstart](../../../docs/dev/inference-endpoints-quickstart.md)
 walks through the same setup step by step.
 
@@ -126,12 +127,37 @@ Assertions, each polled for up to `E2E_TIMEOUT` seconds:
     Server-Sent Events `data:` lines ending in `data: [DONE]`.
   - The same request without a key returns 401.
 - Backend scaled to zero: `Ready=False/NoReadyEndpoints` while `Registered`
-  stays `True`. Scaled back: `Ready`, `TransportReady` and `Registered` return
-  to `True`.
+  stays `True`. `GET /v1/registry` shows the model `Unhealthy` with one
+  registered and no healthy server, `GET /v1/models` omits it, and a chat
+  returns 503 from the router. Scaled back: `Ready`, `TransportReady` and
+  `Registered` return to `True`.
 - `spec.modelName` patched to `wrong-model`: `Ready=False/ModelNameMismatch`,
   the transport Deployment at 0 replicas, and `TransportReady` and
   `Registered` `False/ScaledToZero`. Patched back: the transport returns to one
   replica and every condition to `True`.
+- Restart and failure cases. Each starts and ends in the steady state: every
+  condition `True` and the registry `Healthy` with one registered and one
+  healthy server. Assertion names start with the case ID; `stack` checks read
+  the gateway API, `operator` checks read the `InferenceEndpoint`.
+  - C7a, backend process killed with `kill 1`: the router logs a failed health
+    probe for the endpoint's server id, the operator records a Warning Event
+    for `Ready=False`, the container restarts in place, and `Registered`
+    keeps its `lastTransitionTime`.
+  - C1, router pod deleted: `Registered=False/RouterUnreachable` and
+    `TransportReady=False/TunnelNotConnected`, and `GET /v1/registry` returns
+    502 until a new router pod is Ready. The registry then shows the model
+    healthy within 15 seconds, with the same server id. The log reports the
+    time from the delete to the new router pod being Ready.
+  - C2, gateway pod deleted: the new pod serves the same registry, and the
+    `InferenceEndpoint` has no transition and no new Events.
+  - C3, operator scaled to 0: a stream started before the outage stays open
+    and ends with `data: [DONE]`, a new chat returns 200, the registry stays
+    healthy, and the Pylon pod keeps its UID. C3b applies a second
+    `InferenceEndpoint`, `test-model-b`, while the operator is down. It gets
+    no status and no transport until the operator returns, and is then
+    reconciled and deleted.
+  - C5, Pylon pod deleted: `status.servers` lists only the new pod's server id,
+    and the registry shows one registered server, not two.
 - `InferenceEndpoint` deleted: the transport Deployment is garbage-collected
   and `GET /v1/models` no longer lists `test-model`.
 
