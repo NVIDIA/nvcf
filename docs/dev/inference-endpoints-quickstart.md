@@ -142,6 +142,41 @@ the cluster, so every pod must use `imagePullPolicy: IfNotPresent`. With tag
 `latest`, Kubernetes otherwise defaults to `Always`, and the pull fails. The
 values below set `pullPolicy: IfNotPresent`.
 
+## Published artifacts
+
+Instead of building the images, you can use charts and images that your
+publishing pipeline pushed to a registry, such as an NGC registry
+`nvcr.io/<org>/<team>`. A published set has six images, `nvcf-pylon-operator`,
+`llm-api-gateway`, `stargate`, `pylon`, `stargate-k8s-router` and
+`openai-compatible-sample`, and four charts, `helm-nvcf-llm-api-gateway`,
+`helm-nvcf-llm-request-router`, `pylon-operator` and `llm-gateway-stack`. The
+versions file produced by your publishing pipeline names their exact tags and
+versions. The
+[end-to-end test README](https://github.com/NVIDIA/nvcf/blob/main/tests/e2e/inference-endpoints-k3d/README.md#versions-file)
+documents its format.
+
+Pulling needs an NGC API key that can read the registry, and a pull Secret in
+every namespace that runs one of the images: the stack namespace, the operator
+namespace and every namespace with an `InferenceEndpoint`. The operator does
+not copy the Secret; its chart passes it to the transport pods through
+`pylon.imagePullSecrets`.
+
+- To install the charts with `helm install` from the registry, see "Install
+  from a registry" in the
+  [LLM gateway stack chart README](https://github.com/NVIDIA/nvcf/blob/main/deploy/helm/llm-gateway-stack/README.md#install-from-a-registry)
+  and the
+  [Pylon Operator chart README](https://github.com/NVIDIA/nvcf/blob/main/deploy/helm/pylon-operator/README.md#install-from-a-registry).
+- To run the end-to-end workflow on this page against them:
+
+  ```bash
+  export NGC_API_KEY=<your NGC API key>
+  make -C tests/e2e/inference-endpoints-k3d all IMAGE_SOURCE=ngc PUBLISHED_VERSIONS_FILE=./versions.json
+  ```
+
+  `images` and `import` then do nothing, and the assertions are the same. See
+  [Published images](https://github.com/NVIDIA/nvcf/blob/main/tests/e2e/inference-endpoints-k3d/README.md#published-images)
+  in the end-to-end test README, including a dry run that needs no cluster.
+
 ## Create a local cluster and import images
 
 ```bash
@@ -377,7 +412,8 @@ kubectl -n models wait inferenceendpoint/test-model --for=condition=Registered -
 ```
 
 `tests/e2e/inference-endpoints-k3d/manifests/` has the same objects with resource
-limits and a restricted security context.
+limits and a restricted security context; `run.sh` fills in the sample's
+image and pull Secrets before it applies them.
 
 The `InferenceEndpoint` fields:
 

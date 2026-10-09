@@ -264,6 +264,7 @@ func podTemplate(ep *pylonv1alpha1.InferenceEndpoint, cfg config.Config) corev1.
 				RunAsGroup:     ptr.To(transportUser),
 				SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 			},
+			ImagePullSecrets: imagePullSecrets(cfg.PylonImagePullSecrets),
 			Containers: []corev1.Container{{
 				Name:            ContainerName,
 				Image:           cfg.PylonImage,
@@ -287,6 +288,21 @@ func podTemplate(ep *pylonv1alpha1.InferenceEndpoint, cfg config.Config) corev1.
 			Volumes: volumes,
 		},
 	}
+}
+
+// imagePullSecrets references the configured pull Secrets in the endpoint's
+// namespace. With none it returns nil, which the JSON form omits, so the spec
+// hash of a template without pull Secrets is the same as before they were
+// configurable and an operator upgrade does not roll the transport pods.
+func imagePullSecrets(names []string) []corev1.LocalObjectReference {
+	if len(names) == 0 {
+		return nil
+	}
+	refs := make([]corev1.LocalObjectReference, 0, len(names))
+	for _, name := range names {
+		refs = append(refs, corev1.LocalObjectReference{Name: name})
+	}
+	return refs
 }
 
 // specHash hashes the JSON form of the template. encoding/json writes struct

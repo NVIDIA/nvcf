@@ -120,6 +120,18 @@ Pylon transport image, passed as --pylon-image.
 {{- end -}}
 
 {{/*
+Names of the transport pods' image pull Secrets, comma-separated, passed as
+--pylon-image-pull-secrets. Empty when none are set.
+*/}}
+{{- define "pylon-operator.pylonImagePullSecrets" -}}
+{{- $names := list -}}
+{{- range .Values.pylon.imagePullSecrets -}}
+{{- $names = append $names .name -}}
+{{- end -}}
+{{- join "," $names -}}
+{{- end -}}
+
+{{/*
 Validate the values the operator needs to start. Every missing required value
 is reported at once. Renders nothing.
 */}}

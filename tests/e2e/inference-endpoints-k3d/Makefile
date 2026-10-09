@@ -7,6 +7,28 @@
 E2E_KUBE_CONTEXT ?= k3d-pylon-op-e2e
 export E2E_KUBE_CONTEXT
 
+# Where the charts and images come from. local builds the images from this
+# checkout (images), imports them into k3d (import), and run.sh installs the
+# charts from this checkout. ngc installs the published charts and images
+# named in PUBLISHED_VERSIONS_FILE, the versions file produced by your
+# publishing pipeline (README.md documents its format), and pulls them with
+# NGC_API_KEY from the environment or the command line; images and import do
+# nothing. run.sh reads all three.
+IMAGE_SOURCE ?= local
+PUBLISHED_VERSIONS_FILE ?=
+ifeq ($(filter $(IMAGE_SOURCE),local ngc),)
+$(error IMAGE_SOURCE must be local or ngc, got '$(IMAGE_SOURCE)')
+endif
+# make -C changes into this directory, while PWD stays the directory make was
+# started in, so a relative PUBLISHED_VERSIONS_FILE is resolved against the
+# latter.
+ifneq ($(PUBLISHED_VERSIONS_FILE),)
+ifeq ($(filter /%,$(PUBLISHED_VERSIONS_FILE)),)
+override PUBLISHED_VERSIONS_FILE := $(abspath $(or $(PWD),$(CURDIR))/$(PUBLISHED_VERSIONS_FILE))
+endif
+endif
+export IMAGE_SOURCE PUBLISHED_VERSIONS_FILE
+
 REPO_ROOT := $(abspath ../../..)
 K3D_CLUSTER ?= $(patsubst k3d-%,%,$(E2E_KUBE_CONTEXT))
 SAMPLE_DIR ?= ../../../examples/function-samples/openai-compatible-sample
@@ -44,8 +66,8 @@ CONFIRM ?= 0
 
 help:
 	@echo "make cluster       create k3d cluster $(K3D_CLUSTER) with one agent if it does not exist, then check the kube context"
-	@echo "make images        build the four images with Bazel and the sample image; BAZEL_FLAGS, DOCKER_CONFIG_DIR=<empty dir>"
-	@echo "make import        import the five images into k3d cluster $(K3D_CLUSTER)"
+	@echo "make images        build the four images with Bazel and the sample image; BAZEL_FLAGS, DOCKER_CONFIG_DIR=<empty dir>; nothing with IMAGE_SOURCE=ngc"
+	@echo "make import        import the five images into k3d cluster $(K3D_CLUSTER); nothing with IMAGE_SOURCE=ngc"
 	@echo "make deploy        install the stack and the InferenceEndpoint, stop when it is ready, print the curl commands"
 	@echo "make test          run the end-to-end test against $(E2E_KUBE_CONTEXT); leaves the releases installed"
 	@echo "make test-cleanup  run the test, then uninstall the releases and delete the namespaces"
@@ -55,6 +77,15 @@ help:
 	@echo "make destroy       print the k3d cluster delete command; CONFIRM=1 runs it"
 	@echo "make check         syntax-check run.sh and restart-cases.sh with bash -n, and shellcheck when installed"
 	@echo "make sample-image  build the in-repo OpenAI-compatible sample image and import it into $(E2E_KUBE_CONTEXT)"
+	@echo ""
+	@echo "Variables:"
+	@echo "  IMAGE_SOURCE=local       default: build and import the images, install the charts from this checkout"
+	@echo "  IMAGE_SOURCE=ngc         install the published charts and images named in PUBLISHED_VERSIONS_FILE; images and import do nothing"
+	@echo "  PUBLISHED_VERSIONS_FILE  the versions file produced by your publishing pipeline (format in README.md); required with IMAGE_SOURCE=ngc"
+	@echo "  NGC_API_KEY              NGC API key that pulls from the registry in that file; required with IMAGE_SOURCE=ngc, never printed"
+	@echo "  E2E_KUBE_CONTEXT         kube context of the cluster, default k3d-pylon-op-e2e; README.md lists the other E2E_* settings"
+	@echo ""
+	@echo "Example: make all IMAGE_SOURCE=ngc PUBLISHED_VERSIONS_FILE=./versions.json NGC_API_KEY=<key>"
 
 test:
 	./run.sh
@@ -92,6 +123,10 @@ cluster:
 	fi
 	kubectl --context $(E2E_KUBE_CONTEXT) get nodes
 
+ifeq ($(IMAGE_SOURCE),ngc)
+images import:
+	@echo "IMAGE_SOURCE=ngc: make $@ does nothing; the cluster pulls the published images named in PUBLISHED_VERSIONS_FILE"
+else
 images:
 	cd "$(REPO_ROOT)" && $(BAZEL) run $(BAZEL_ARGS) //src/compute-plane-services/pylon-operator:image_load
 	cd "$(REPO_ROOT)" && $(BAZEL) run $(BAZEL_ARGS) //src/invocation-plane-services/llm-api-gateway:image_load
@@ -101,6 +136,7 @@ images:
 
 import:
 	k3d image import -c $(K3D_CLUSTER) $(IMAGES)
+endif
 
 deploy:
 	E2E_DEPLOY_ONLY=1 ./run.sh
