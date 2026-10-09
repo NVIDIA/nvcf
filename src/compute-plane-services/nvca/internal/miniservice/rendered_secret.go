@@ -36,6 +36,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
+	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 )
 
 // The rendered Helm Chart of a MiniService is persisted in a Secret, similar to how Helm stores a
@@ -60,7 +61,10 @@ import (
 //nolint:gosec // These are Secret object names, keys, and annotation keys, not credentials (G101).
 const (
 	// RenderedSecretNamePrefix prefixes the per-MiniService Secret name in the agent system namespace.
-	RenderedSecretNamePrefix = "nvcf-miniservice-rendered-"
+	RenderedSecretNamePrefix = "nvcf-rendered-"
+	// renderedSecretMaxNameLen keeps the Secret name usable as a label value and well under the
+	// DNS subdomain limit. Longer names are truncated and suffixed with a hash of the MiniService name.
+	renderedSecretMaxNameLen = 63
 	// renderedSecretType versions the Secret format. Bump the suffix on incompatible changes, as Helm does.
 	renderedSecretType = corev1.SecretType("nvca.nvcf.nvidia.io/rendered-chart.v1")
 	// renderedSecretDataKey holds the gzipped ReVal render output.
@@ -84,23 +88,38 @@ const (
 )
 
 // renderInput mirrors the fields of HelmReValRenderInput that affect Helm template output.
-// Namespace is included because templates using .Release.Namespace render namespace-specific values.
+// Values are the effective values sent to ReVal (spec values plus the infrastructure values
+// derived from the ICMSRequest), and Namespace is included because templates using
+// .Release.Namespace render namespace-specific values. Credentials and cluster-wide settings
+// (registry auth, K8s version, validation policy) are deliberately excluded.
 type renderInput struct {
 	HelmChartURL         string          `json:"helmChartURL"`
 	HelmChartServicePort *int32          `json:"helmChartServicePort,omitempty"`
 	HelmChartServiceName string          `json:"helmChartServiceName,omitempty"`
 	Values               json.RawMessage `json:"values,omitempty"`
 	Namespace            string          `json:"namespace"`
+	InstanceType         string          `json:"instanceType,omitempty"`
+	GPUName              string          `json:"gpu,omitempty"`
 }
 
-// renderInputHash returns a hash identifying the render inputs of ms.
-func renderInputHash(ms *v1alpha1.MiniService) string {
+// renderInputHash returns a hash identifying the effective render inputs of ms for icmsReq.
+// icmsReq may be nil, in which case only the MiniService spec contributes to the hash.
+func renderInputHash(ms *v1alpha1.MiniService, icmsReq *nvcav2beta1.ICMSRequest) string {
 	in := renderInput{
 		HelmChartURL:         ms.Spec.HelmChartConfig.URL,
 		HelmChartServicePort: ms.Spec.HelmChartConfig.ServicePort,
 		HelmChartServiceName: ms.Spec.HelmChartConfig.ServiceName,
 		Values:               ms.Spec.HelmChartConfig.Values,
 		Namespace:            ms.Spec.Namespace,
+	}
+	if icmsReq != nil {
+		in.InstanceType = icmsReq.Spec.CreationMsgInfo.GetInstanceTypeLabelSelValue()
+		in.GPUName = icmsReq.Spec.CreationMsgInfo.GPUType
+		// Use the same effective values render() sends to ReVal. If they cannot be derived,
+		// render() fails for the same reason, so hashing the spec values is harmless.
+		if values, err := setInfraValues(ms.Spec.HelmChartConfig.Values, icmsReq); err == nil {
+			in.Values = values
+		}
 	}
 	if len(in.Values) == 0 {
 		in.Values = nil
@@ -132,16 +151,18 @@ func (r *Reconciler) saveRenderedData(ctx context.Context, ms *v1alpha1.MiniServ
 }
 
 // getRenderedData returns the rendered chart for ms from the rendered Secret. It returns false when
-// no render matching the current spec is available, in which case callers render via ReVal.
+// no render matching inputHash (see renderInputHash) is available, in which case callers render via
+// ReVal. An empty inputHash skips the input check and returns whatever render is stored for ms;
+// cleanup uses this when the ICMSRequest is already gone.
 //
 // A stored render is trusted when it was produced from identical inputs and its content matches
 // its recorded digest. The hash in status is informational and is resynced from the Secret, so a
 // lost or stale status patch (crash or conflict after the Secret was written) never forces a
 // re-render.
-func (r *Reconciler) getRenderedData(ctx context.Context, ms *v1alpha1.MiniService) ([]byte, bool, error) {
+func (r *Reconciler) getRenderedData(ctx context.Context, ms *v1alpha1.MiniService, inputHash string) ([]byte, bool, error) {
 	log := logf.FromContext(ctx)
 
-	data, found, err := r.loadRenderedSecret(ctx, ms, renderInputHash(ms))
+	data, found, err := r.loadRenderedSecret(ctx, ms, inputHash)
 	if err != nil || !found {
 		return nil, false, err
 	}
@@ -158,18 +179,27 @@ func (r *Reconciler) getRenderedData(ctx context.Context, ms *v1alpha1.MiniServi
 	return data, true, nil
 }
 
-// persistRenderedData ensures the rendered Secret in the instance namespace holds data. It is
+// persistRenderedData ensures the rendered Secret for ms holds data rendered from inputHash. It is
 // idempotent: when the stored Secret already matches, only an informer cache read is performed.
-// The instance namespace must exist. Like Helm, callers persist the record before applying objects.
-func (r *Reconciler) persistRenderedData(ctx context.Context, ms *v1alpha1.MiniService, data []byte) error {
-	return r.saveRenderedSecret(ctx, ms, data, renderInputHash(ms), renderOutputHash(data))
+// Like Helm, callers persist the record before applying objects.
+func (r *Reconciler) persistRenderedData(ctx context.Context, ms *v1alpha1.MiniService, data []byte, inputHash string) error {
+	return r.saveRenderedSecret(ctx, ms, data, inputHash, renderOutputHash(data))
 }
 
-// RenderedSecretName returns the name of the rendered Secret for a MiniService.
+// RenderedSecretName returns the name of the rendered Secret for a MiniService. Names that would
+// exceed renderedSecretMaxNameLen are truncated and suffixed with a hash of the MiniService name so
+// they stay unique and deterministic.
 func RenderedSecretName(ms *v1alpha1.MiniService) string {
-	return RenderedSecretNamePrefix + ms.Name
+	name := RenderedSecretNamePrefix + ms.Name
+	if len(name) <= renderedSecretMaxNameLen {
+		return name
+	}
+	sum := sha256.Sum256([]byte(ms.Name))
+	suffix := hex.EncodeToString(sum[:])[:8]
+	return name[:renderedSecretMaxNameLen-len(suffix)-1] + "-" + suffix
 }
 
+// renderedSecretKey returns the object key of the rendered Secret for ms in the agent system namespace.
 func (r *Reconciler) renderedSecretKey(ms *v1alpha1.MiniService) client.ObjectKey {
 	return client.ObjectKey{Namespace: r.SystemNamespace, Name: RenderedSecretName(ms)}
 }
@@ -297,8 +327,8 @@ func (r *Reconciler) saveRenderedSecret(ctx context.Context,
 }
 
 // loadRenderedSecret returns the rendered data stored for ms if it was rendered from inputs
-// matching inputHash. Like Flux's artifact verification, the content digest is verified before
-// it is trusted.
+// matching inputHash (an empty inputHash skips that check). Like Flux's artifact verification,
+// the content digest is verified before it is trusted.
 func (r *Reconciler) loadRenderedSecret(ctx context.Context,
 	ms *v1alpha1.MiniService,
 	inputHash string,
@@ -314,7 +344,7 @@ func (r *Reconciler) loadRenderedSecret(ctx context.Context,
 		return nil, false, fmt.Errorf("get rendered secret: %w", err)
 	}
 
-	if got := secret.Annotations[renderedSecretInputHashAnnotation]; got != inputHash {
+	if got := secret.Annotations[renderedSecretInputHashAnnotation]; inputHash != "" && got != inputHash {
 		log.V(1).Info("Rendered Secret was rendered from different inputs, ignoring", "storedInputHash", got)
 		return nil, false, nil
 	}
@@ -331,6 +361,7 @@ func (r *Reconciler) loadRenderedSecret(ctx context.Context,
 	return data, true, nil
 }
 
+// gzipBytes compresses data for storage in the rendered Secret.
 func gzipBytes(data []byte) ([]byte, error) {
 	buf := &bytes.Buffer{}
 	// Best compression, as Helm uses for release records, to stay within the object size limit.
@@ -347,6 +378,8 @@ func gzipBytes(data []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// gunzipBytes decompresses rendered Secret data, rejecting output larger than
+// renderedSecretMaxUncompressedBytes.
 func gunzipBytes(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("no data")

@@ -136,7 +136,7 @@ func TestDoStatus_WorkerTerminalBadStateForImagePullBackOff(t *testing.T) {
 		now:                   time.Now,
 	}
 
-	saveAndPersistRenderedData(t, ctx, r, ms, []byte("[]"))
+	saveAndPersistRenderedData(t, ctx, r, ms, icmsReq, []byte("[]"))
 
 	_, err := r.doStatus(ctx, ms, icmsReq)
 

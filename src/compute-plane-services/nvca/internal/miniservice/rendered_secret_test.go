@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
+	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 )
 
@@ -82,7 +83,7 @@ func TestRenderedSecret_PersistAndLoadAcrossReconcilers(t *testing.T) {
 
 	r.saveRenderedData(ctx, ms, rendered)
 	require.NotNil(t, ms.Status.RenderDetails)
-	require.NoError(t, r.persistRenderedData(ctx, ms, rendered))
+	require.NoError(t, r.persistRenderedData(ctx, ms, rendered, renderInputHash(ms, nil)))
 
 	secret := getRenderedSecret(t, c, ms)
 	assert.Equal(t, renderedSecretType, secret.Type)
@@ -90,7 +91,7 @@ func TestRenderedSecret_PersistAndLoadAcrossReconcilers(t *testing.T) {
 	assert.Equal(t, ms.Name, secret.Labels[miniserviceNameLabel])
 	assert.Equal(t, "0", secret.Labels[revisionLabel])
 	assert.Equal(t, ms.Status.RenderDetails.Hash, secret.Annotations[renderedSecretOutputHashAnnotation])
-	assert.Equal(t, renderInputHash(ms), secret.Annotations[renderedSecretInputHashAnnotation])
+	assert.Equal(t, renderInputHash(ms, nil), secret.Annotations[renderedSecretInputHashAnnotation])
 	assert.Equal(t, ms.Spec.HelmChartConfig.URL, secret.Annotations[renderedSecretChartURLAnnotation])
 	require.Len(t, secret.OwnerReferences, 1)
 	assert.Equal(t, miniServiceKind, secret.OwnerReferences[0].Kind)
@@ -101,12 +102,12 @@ func TestRenderedSecret_PersistAndLoadAcrossReconcilers(t *testing.T) {
 
 	// Persisting again is a no-op that does not error.
 	rv := secret.ResourceVersion
-	require.NoError(t, r.persistRenderedData(ctx, ms, rendered))
+	require.NoError(t, r.persistRenderedData(ctx, ms, rendered, renderInputHash(ms, nil)))
 	assert.Equal(t, rv, getRenderedSecret(t, c, ms).ResourceVersion)
 
 	// A fresh reconciler (simulating an agent restart) loads the render from the Secret.
 	r2 := newUpdateTestReconciler(t, c, mgrScheme)
-	got, found, err := r2.getRenderedData(ctx, ms)
+	got, found, err := r2.getRenderedData(ctx, ms, renderInputHash(ms, nil))
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, rendered, got)
@@ -122,7 +123,7 @@ func TestRenderedSecret_IgnoredWhenInputsOrHashDiffer(t *testing.T) {
 		r := newUpdateTestReconciler(t, c, mgrScheme)
 		ms := newUpdateMiniService(`{"key":"value"}`)
 		r.saveRenderedData(ctx, ms, rendered)
-		require.NoError(t, r.persistRenderedData(ctx, ms, rendered))
+		require.NoError(t, r.persistRenderedData(ctx, ms, rendered, renderInputHash(ms, nil)))
 		return c, ms
 	}
 
@@ -130,7 +131,7 @@ func TestRenderedSecret_IgnoredWhenInputsOrHashDiffer(t *testing.T) {
 		c, ms := persist(t)
 		ms.Spec.HelmChartConfig.Values = []byte(`{"key":"changed"}`)
 		r := newUpdateTestReconciler(t, c, mgrScheme)
-		_, found, err := r.getRenderedData(ctx, ms)
+		_, found, err := r.getRenderedData(ctx, ms, renderInputHash(ms, nil))
 		require.NoError(t, err)
 		assert.False(t, found)
 	})
@@ -139,7 +140,7 @@ func TestRenderedSecret_IgnoredWhenInputsOrHashDiffer(t *testing.T) {
 		c, ms := persist(t)
 		ms.Spec.Namespace = "other-ns"
 		r := newUpdateTestReconciler(t, c, mgrScheme)
-		_, found, err := r.getRenderedData(ctx, ms)
+		_, found, err := r.getRenderedData(ctx, ms, renderInputHash(ms, nil))
 		require.NoError(t, err)
 		assert.False(t, found, "a render for another namespace must not be reused")
 	})
@@ -149,7 +150,7 @@ func TestRenderedSecret_IgnoredWhenInputsOrHashDiffer(t *testing.T) {
 		storedHash := ms.Status.RenderDetails.Hash
 		ms.Status.RenderDetails.Hash = "sha256:0000"
 		r := newUpdateTestReconciler(t, c, mgrScheme)
-		got, found, err := r.getRenderedData(ctx, ms)
+		got, found, err := r.getRenderedData(ctx, ms, renderInputHash(ms, nil))
 		require.NoError(t, err)
 		require.True(t, found, "identical inputs and a verified digest are sufficient to reuse the render")
 		assert.Equal(t, rendered, got)
@@ -164,7 +165,7 @@ func TestRenderedSecret_IgnoredWhenInputsOrHashDiffer(t *testing.T) {
 		secret.Data[renderedSecretDataKey] = corrupted
 		require.NoError(t, c.Update(ctx, secret))
 		r := newUpdateTestReconciler(t, c, mgrScheme)
-		_, found, err := r.getRenderedData(ctx, ms)
+		_, found, err := r.getRenderedData(ctx, ms, renderInputHash(ms, nil))
 		require.NoError(t, err)
 		assert.False(t, found, "content not matching its hash must not be trusted")
 	})
@@ -174,9 +175,9 @@ func TestRenderedSecret_IgnoredWhenInputsOrHashDiffer(t *testing.T) {
 		r := newUpdateTestReconciler(t, c, mgrScheme)
 		ms := newUpdateMiniService(`{"key":"value"}`)
 		r.saveRenderedData(ctx, ms, rendered)
-		require.NoError(t, r.persistRenderedData(ctx, ms, rendered))
+		require.NoError(t, r.persistRenderedData(ctx, ms, rendered, renderInputHash(ms, nil)))
 		ms.Spec.HelmChartConfig.Values = []byte(`{"key":"changed"}`)
-		_, found, err := r.getRenderedData(ctx, ms)
+		_, found, err := r.getRenderedData(ctx, ms, renderInputHash(ms, nil))
 		require.NoError(t, err)
 		assert.False(t, found)
 	})
@@ -186,7 +187,7 @@ func TestRenderedSecret_IgnoredWhenInputsOrHashDiffer(t *testing.T) {
 		storedHash := ms.Status.RenderDetails.Hash
 		ms.Status.RenderDetails = nil
 		r := newUpdateTestReconciler(t, c, mgrScheme)
-		got, found, err := r.getRenderedData(ctx, ms)
+		got, found, err := r.getRenderedData(ctx, ms, renderInputHash(ms, nil))
 		require.NoError(t, err)
 		require.True(t, found)
 		assert.Equal(t, rendered, got)
@@ -198,7 +199,7 @@ func TestRenderedSecret_IgnoredWhenInputsOrHashDiffer(t *testing.T) {
 		c, _ := newFakeClient(mgrScheme, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: updateTestNamespace}})
 		ms := newUpdateMiniService(`{"key":"value"}`)
 		r := newUpdateTestReconciler(t, c, mgrScheme)
-		_, found, err := r.getRenderedData(ctx, ms)
+		_, found, err := r.getRenderedData(ctx, ms, renderInputHash(ms, nil))
 		require.NoError(t, err)
 		assert.False(t, found)
 		assert.Nil(t, ms.Status.RenderDetails)
@@ -214,20 +215,20 @@ func TestRenderedSecret_UpdateOverwritesPreviousRevision(t *testing.T) {
 	ms.Status.Revision = 0
 	v1Data := newUpdateRenderedData(t, "workload-cm", "v1")
 	r.saveRenderedData(ctx, ms, v1Data)
-	require.NoError(t, r.persistRenderedData(ctx, ms, v1Data))
+	require.NoError(t, r.persistRenderedData(ctx, ms, v1Data, renderInputHash(ms, nil)))
 	v1Hash := ms.Status.RenderDetails.Hash
 
 	// Simulate prepareUpdateIfNeeded followed by a new render.
 	ms.Status.RenderDetails = nil
 	ms.Status.Revision = 1
 	ms.Spec.HelmChartConfig.Values = []byte(`{"key":"v2"}`)
-	_, found, err := r.getRenderedData(ctx, ms)
+	_, found, err := r.getRenderedData(ctx, ms, renderInputHash(ms, nil))
 	require.NoError(t, err)
 	require.False(t, found)
 
 	v2Data := newUpdateRenderedData(t, "workload-cm", "v2")
 	r.saveRenderedData(ctx, ms, v2Data)
-	require.NoError(t, r.persistRenderedData(ctx, ms, v2Data))
+	require.NoError(t, r.persistRenderedData(ctx, ms, v2Data, renderInputHash(ms, nil)))
 	require.NotEqual(t, v1Hash, ms.Status.RenderDetails.Hash)
 
 	secrets := listRenderedSecrets(t, c)
@@ -253,7 +254,7 @@ func TestRenderedSecret_ReplacesSecretOfDifferentType(t *testing.T) {
 	rendered := newUpdateRenderedData(t, "workload-cm", "v1")
 
 	r.saveRenderedData(ctx, ms, rendered)
-	require.NoError(t, r.persistRenderedData(ctx, ms, rendered))
+	require.NoError(t, r.persistRenderedData(ctx, ms, rendered, renderInputHash(ms, nil)))
 
 	secret := getRenderedSecret(t, c, ms)
 	assert.Equal(t, renderedSecretType, secret.Type)
@@ -275,12 +276,12 @@ func TestRenderedSecret_TooLargeIsSkipped(t *testing.T) {
 	require.NoError(t, err)
 
 	r.saveRenderedData(ctx, ms, large)
-	require.NoError(t, r.persistRenderedData(ctx, ms, large), "oversize renders are skipped, not failed")
+	require.NoError(t, r.persistRenderedData(ctx, ms, large, renderInputHash(ms, nil)), "oversize renders are skipped, not failed")
 
 	assert.Empty(t, listRenderedSecrets(t, c))
 
 	// Nothing is retained in memory, so later reconciles fall back to rendering on demand.
-	_, found, err := r.getRenderedData(ctx, ms)
+	_, found, err := r.getRenderedData(ctx, ms, renderInputHash(ms, nil))
 	require.NoError(t, err)
 	assert.False(t, found)
 }
@@ -305,11 +306,11 @@ func TestRenderedSecret_FallsBackToAPIReaderWhenCacheLags(t *testing.T) {
 	ms := newUpdateMiniService(`{"key":"value"}`)
 	writer := newUpdateTestReconciler(t, direct, mgrScheme)
 	writer.saveRenderedData(ctx, ms, rendered)
-	require.NoError(t, writer.persistRenderedData(ctx, ms, rendered))
+	require.NoError(t, writer.persistRenderedData(ctx, ms, rendered, renderInputHash(ms, nil)))
 
 	t.Run("without api reader the lagging cache is a miss", func(t *testing.T) {
 		r := newUpdateTestReconciler(t, cached, mgrScheme)
-		_, found, err := r.getRenderedData(ctx, ms)
+		_, found, err := r.getRenderedData(ctx, ms, renderInputHash(ms, nil))
 		require.NoError(t, err)
 		assert.False(t, found)
 	})
@@ -317,7 +318,7 @@ func TestRenderedSecret_FallsBackToAPIReaderWhenCacheLags(t *testing.T) {
 	t.Run("api reader serves the read", func(t *testing.T) {
 		r := newUpdateTestReconciler(t, cached, mgrScheme)
 		r.APIReader = direct
-		got, found, err := r.getRenderedData(ctx, ms)
+		got, found, err := r.getRenderedData(ctx, ms, renderInputHash(ms, nil))
 		require.NoError(t, err)
 		require.True(t, found)
 		assert.Equal(t, rendered, got)
@@ -330,7 +331,7 @@ func TestRenderedSecret_FallsBackToAPIReaderWhenCacheLags(t *testing.T) {
 		ms.Status.Revision = 7
 		updated := newUpdateRenderedData(t, "workload-cm", "v2")
 		r.saveRenderedData(ctx, ms, updated)
-		require.NoError(t, r.persistRenderedData(ctx, ms, updated))
+		require.NoError(t, r.persistRenderedData(ctx, ms, updated, renderInputHash(ms, nil)))
 		secret := getRenderedSecret(t, direct, ms)
 		assert.Equal(t, "7", secret.Labels[revisionLabel])
 		assert.Equal(t, ms.Status.RenderDetails.Hash, secret.Annotations[renderedSecretOutputHashAnnotation])
@@ -349,7 +350,7 @@ func TestRenderedSecret_PersistErrorsAreReturned(t *testing.T) {
 	rendered := newUpdateRenderedData(t, "workload-cm", "v1")
 
 	r.saveRenderedData(ctx, ms, rendered)
-	err := r.persistRenderedData(ctx, ms, rendered)
+	err := r.persistRenderedData(ctx, ms, rendered, renderInputHash(ms, nil))
 	require.Error(t, err)
 	require.NotNil(t, ms.Status.RenderDetails, "the render hash stays in status so the write is retried next reconcile")
 }
@@ -367,8 +368,7 @@ func TestDoStatus_UsesPersistedRenderInsteadOfReVal(t *testing.T) {
 
 	// First process renders and persists.
 	r1 := newUpdateTestReconciler(t, c, mgrScheme)
-	r1.saveRenderedData(ctx, ms, []byte("[]"))
-	require.NoError(t, r1.persistRenderedData(ctx, ms, []byte("[]")))
+	saveAndPersistRenderedData(t, ctx, r1, ms, icmsReq, []byte("[]"))
 
 	for _, workerReadiness := range []bool{false, true} {
 		t.Run(map[bool]string{false: "aggressive status", true: "worker readiness status"}[workerReadiness], func(t *testing.T) {
@@ -463,7 +463,7 @@ func TestDoStatus_RenderFailureDoesNotFailRunningInstance(t *testing.T) {
 func TestRenderInputHash(t *testing.T) {
 	base := newUpdateMiniService(`{"a": 1}`)
 	same := newUpdateMiniService(`{"a": 1}`)
-	assert.Equal(t, renderInputHash(base), renderInputHash(same))
+	assert.Equal(t, renderInputHash(base, nil), renderInputHash(same, nil))
 
 	for name, mutate := range map[string]func(*v1alpha1.MiniService){
 		"values":       func(ms *v1alpha1.MiniService) { ms.Spec.HelmChartConfig.Values = []byte(`{"a": 2}`) },
@@ -475,21 +475,24 @@ func TestRenderInputHash(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			ms := newUpdateMiniService(`{"a": 1}`)
 			mutate(ms)
-			assert.NotEqual(t, renderInputHash(base), renderInputHash(ms))
+			assert.NotEqual(t, renderInputHash(base, nil), renderInputHash(ms, nil))
 		})
 	}
 
 	// Unrelated spec fields do not affect the hash.
 	other := newUpdateMiniService(`{"a": 1}`)
 	other.Spec.ICMSRequestName = "other-request"
-	assert.Equal(t, renderInputHash(base), renderInputHash(other))
+	assert.Equal(t, renderInputHash(base, nil), renderInputHash(other, nil))
 }
 
-// saveAndPersistRenderedData records and stores a render as a completed install would have.
-func saveAndPersistRenderedData(t *testing.T, ctx context.Context, r *Reconciler, ms *v1alpha1.MiniService, data []byte) {
+// saveAndPersistRenderedData records and stores a render as a completed install would have,
+// hashing the same effective inputs the controller derives from icmsReq (nil hashes the spec only).
+func saveAndPersistRenderedData(t *testing.T, ctx context.Context, r *Reconciler, ms *v1alpha1.MiniService,
+	icmsReq *nvcav2beta1.ICMSRequest, data []byte,
+) {
 	t.Helper()
 	r.saveRenderedData(ctx, ms, data)
-	require.NoError(t, r.persistRenderedData(ctx, ms, data))
+	require.NoError(t, r.persistRenderedData(ctx, ms, data, renderInputHash(ms, icmsReq)))
 }
 
 func TestRenderedSecret_LivesInSystemNamespace(t *testing.T) {
@@ -498,7 +501,7 @@ func TestRenderedSecret_LivesInSystemNamespace(t *testing.T) {
 	r := newUpdateTestReconciler(t, c, mgrScheme)
 	ms := newUpdateMiniService(`{"key":"value"}`)
 	rendered := newUpdateRenderedData(t, "workload-cm", "v1")
-	saveAndPersistRenderedData(t, ctx, r, ms, rendered)
+	saveAndPersistRenderedData(t, ctx, r, ms, nil, rendered)
 
 	// Nothing is written to the instance namespace, which the workload ServiceAccount can write to.
 	instanceSecrets := &corev1.SecretList{}
@@ -517,8 +520,8 @@ func TestRenderedSecret_LivesInSystemNamespace(t *testing.T) {
 	t.Run("system namespace is required", func(t *testing.T) {
 		r := newUpdateTestReconciler(t, c, mgrScheme)
 		r.SystemNamespace = ""
-		assert.Error(t, r.persistRenderedData(ctx, ms, rendered))
-		_, _, err := r.getRenderedData(ctx, ms)
+		assert.Error(t, r.persistRenderedData(ctx, ms, rendered, renderInputHash(ms, nil)))
+		_, _, err := r.getRenderedData(ctx, ms, renderInputHash(ms, nil))
 		assert.Error(t, err)
 	})
 }
@@ -537,4 +540,37 @@ func TestGunzipBytes_BoundsDecompression(t *testing.T) {
 	_, err = gunzipBytes(bomb)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "exceeds")
+}
+
+func TestRenderedSecretName_LengthGuard(t *testing.T) {
+	short := newUpdateMiniService(`{}`)
+	short.Name = "88c0921f-ce4c-4a9b-b83f-1b88234b58dc"
+	assert.Equal(t, "nvcf-rendered-88c0921f-ce4c-4a9b-b83f-1b88234b58dc", RenderedSecretName(short))
+
+	long := newUpdateMiniService(`{}`)
+	long.Name = strings.Repeat("a", 80)
+	name := RenderedSecretName(long)
+	assert.Len(t, name, renderedSecretMaxNameLen)
+	assert.True(t, strings.HasPrefix(name, RenderedSecretNamePrefix))
+	assert.Equal(t, name, RenderedSecretName(long), "deterministic")
+
+	other := newUpdateMiniService(`{}`)
+	other.Name = strings.Repeat("a", 79) + "b"
+	assert.NotEqual(t, name, RenderedSecretName(other), "distinct long names must not collide")
+}
+
+func TestRenderInputHash_EffectiveValues(t *testing.T) {
+	ms := newUpdateMiniService(`{"a": 1}`)
+	taskA := newUpdateICMSRequest(true)
+	taskB := newUpdateICMSRequest(true)
+	taskB.Spec.TaskDetails.TaskID = "task-2"
+
+	assert.Equal(t, renderInputHash(ms, taskA), renderInputHash(ms, newUpdateICMSRequest(true)))
+	assert.NotEqual(t, renderInputHash(ms, taskA), renderInputHash(ms, taskB),
+		"infrastructure values injected from the task must be part of the hash")
+	assert.NotEqual(t, renderInputHash(ms, taskA), renderInputHash(ms, nil))
+
+	gpu := newUpdateICMSRequest(true)
+	gpu.Spec.CreationMsgInfo.GPUType = "H100"
+	assert.NotEqual(t, renderInputHash(ms, taskA), renderInputHash(ms, gpu))
 }

@@ -601,7 +601,8 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		return reconcile.Result{}, err
 	}
 
-	objsData, isRendered, err := r.getRenderedData(ctx, ms)
+	renderInputHash := renderInputHash(ms, icmsReq)
+	objsData, isRendered, err := r.getRenderedData(ctx, ms, renderInputHash)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -665,7 +666,7 @@ func (r *Reconciler) doInstall(ctx context.Context,
 
 	// Persist the rendered chart before applying any objects, as Helm stores the release record
 	// before installing, so later reconciles never depend on ReVal for this render.
-	if err := r.persistRenderedData(ctx, ms, objsData); err != nil {
+	if err := r.persistRenderedData(ctx, ms, objsData, renderInputHash); err != nil {
 		return reconcile.Result{}, err
 	}
 
@@ -943,7 +944,8 @@ func (r *Reconciler) prepareUpdateWorkload(ctx context.Context,
 		return nil, nil, nil, "", "", reconcile.TerminalError(fmt.Errorf("failed to get function name and task name: %w", err))
 	}
 
-	objsData, isRendered, err := r.getRenderedData(ctx, ms)
+	renderInputHash := renderInputHash(ms, icmsReq)
+	objsData, isRendered, err := r.getRenderedData(ctx, ms, renderInputHash)
 	if err != nil {
 		return nil, nil, nil, "", "", err
 	}
@@ -989,7 +991,7 @@ func (r *Reconciler) prepareUpdateWorkload(ctx context.Context,
 
 	// Persist before applying, like Helm records the release before install. This is a no-op once the
 	// rendered Secret is in sync, and retries a previously failed Secret write on later reconciles.
-	if err := r.persistRenderedData(ctx, ms, objsData); err != nil {
+	if err := r.persistRenderedData(ctx, ms, objsData, renderInputHash); err != nil {
 		return nil, nil, nil, "", "", err
 	}
 
@@ -1325,7 +1327,9 @@ func (r *Reconciler) doCleanup(ctx context.Context, //nolint:gocyclo
 
 	// List objects for deletion and delete before the namespace.
 	var objs []client.Object
-	if objsData, isRendered, err := r.getRenderedData(ctx, ms); err != nil || !isRendered {
+	// The ICMSRequest may already be gone during cleanup, so accept whatever render is stored
+	// for this MiniService; it is only used to find objects to delete.
+	if objsData, isRendered, err := r.getRenderedData(ctx, ms, ""); err != nil || !isRendered {
 		if err != nil {
 			log.V(1).Error(err, "Failed to get rendered object data, falling back on list in cleanup")
 		} else {

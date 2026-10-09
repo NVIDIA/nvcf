@@ -130,7 +130,8 @@ func (r *Reconciler) collectObjectStatuses(
 ) (ObjectStatuses, []error, error) {
 	log := logf.FromContext(ctx)
 
-	objsData, isRendered, err := r.getRenderedData(ctx, ms)
+	renderInputHash := renderInputHash(ms, icmsReq)
+	objsData, isRendered, err := r.getRenderedData(ctx, ms, renderInputHash)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -152,7 +153,7 @@ func (r *Reconciler) collectObjectStatuses(
 	}
 	// Keep the rendered Secret in sync (no-op when already stored). A Secret write problem must not
 	// block health checks, so it is logged and retried on the next status reconcile.
-	if err := r.persistRenderedData(ctx, ms, objsData); err != nil {
+	if err := r.persistRenderedData(ctx, ms, objsData, renderInputHash); err != nil {
 		log.Error(err, "Failed to persist rendered Helm Chart data, will retry on next status reconcile")
 	}
 

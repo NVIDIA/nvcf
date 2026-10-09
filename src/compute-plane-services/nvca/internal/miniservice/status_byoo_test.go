@@ -178,7 +178,7 @@ func TestDoStatus_BYOOSidecarUnhealthy(t *testing.T) {
 			// Pre-save empty rendered objects so collectObjectStatuses does not
 			// attempt a full Helm render. The BYOO sidecar lives in the utils pod
 			// (not as a Helm-rendered object), so no Helm objects are needed.
-			saveAndPersistRenderedData(t, ctx, r, ms, []byte("[]"))
+			saveAndPersistRenderedData(t, ctx, r, ms, icmsReq, []byte("[]"))
 
 			_, err := r.doStatus(ctx, ms, icmsReq)
 

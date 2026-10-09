@@ -141,7 +141,7 @@ func TestReconcile_UpdateSecretWriteFailureIsRetried(t *testing.T) {
 	secret := getRenderedSecret(t, c, ms)
 	assert.Equal(t, "2", secret.Labels[revisionLabel])
 	assert.Equal(t, ms.Status.RenderDetails.Hash, secret.Annotations[renderedSecretOutputHashAnnotation])
-	assert.Equal(t, renderInputHash(ms), secret.Annotations[renderedSecretInputHashAnnotation])
+	assert.Equal(t, renderInputHash(ms, newUpdateICMSRequest(true)), secret.Annotations[renderedSecretInputHashAnnotation])
 
 	revCM := &corev1.ConfigMap{}
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Namespace: updateTestNamespace, Name: revisionConfigMapPrefix + "2"}, revCM))
@@ -159,8 +159,7 @@ func TestReconcile_UpdateReusesSecretWhenStatusHashIsMissing(t *testing.T) {
 	// Previous process: rendered and stored, but the status patch never happened.
 	previous := newUpdateTestReconciler(t, c, mgrScheme)
 	scratch := newUpdateMiniService(`{"key":"value-v2"}`)
-	previous.saveRenderedData(ctx, scratch, rendered)
-	require.NoError(t, previous.persistRenderedData(ctx, scratch, rendered))
+	saveAndPersistRenderedData(t, ctx, previous, scratch, newUpdateICMSRequest(true), rendered)
 	storedHash := getRenderedSecret(t, c, scratch).Annotations[renderedSecretOutputHashAnnotation]
 
 	ms := &v1alpha1.MiniService{}
@@ -215,7 +214,7 @@ func TestReconcile_ApplyFailureThenValuesRevertRerenders(t *testing.T) {
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: updateMSName}, ms))
 	assert.Equal(t, v1alpha1.MiniServiceInstalling, ms.Status.Phase)
 	assert.Equal(t, int64(2), ms.Status.Revision)
-	v2InputHash := renderInputHash(ms)
+	v2InputHash := renderInputHash(ms, newUpdateICMSRequest(true))
 	secret := getRenderedSecret(t, c, ms)
 	assert.Equal(t, "2", secret.Labels[revisionLabel])
 	assert.Equal(t, v2InputHash, secret.Annotations[renderedSecretInputHashAnnotation])
@@ -240,7 +239,7 @@ func TestReconcile_ApplyFailureThenValuesRevertRerenders(t *testing.T) {
 	assert.Equal(t, "v1", getWorkloadConfigMapValue(t, c))
 
 	secret = getRenderedSecret(t, c, ms)
-	assert.Equal(t, renderInputHash(ms), secret.Annotations[renderedSecretInputHashAnnotation])
+	assert.Equal(t, renderInputHash(ms, newUpdateICMSRequest(true)), secret.Annotations[renderedSecretInputHashAnnotation])
 	assert.NotEqual(t, v2InputHash, secret.Annotations[renderedSecretInputHashAnnotation])
 
 	revCM := &corev1.ConfigMap{}
@@ -296,8 +295,8 @@ func TestReconcile_UpdateInvalidRenderIsCachedUntilValuesChange(t *testing.T) {
 	// Revision 1 render stored for the previous values.
 	previous := newUpdateMiniService(`{"key":"value-v1"}`)
 	previous.Status.Revision = 1
-	saveAndPersistRenderedData(t, ctx, r, previous, newUpdateRenderedData(t, updateWorkloadObjectName, "v1"))
-	previousInputHash := renderInputHash(previous)
+	saveAndPersistRenderedData(t, ctx, r, previous, newUpdateICMSRequest(true), newUpdateRenderedData(t, updateWorkloadObjectName, "v1"))
+	previousInputHash := renderInputHash(previous, newUpdateICMSRequest(true))
 
 	invalid := &outputReValClient{output: HelmReValRenderOutput{Valid: newBool(false), ValidationErrors: []string{"bad"}}}
 	r.ReValClient = invalid

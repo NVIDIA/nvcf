@@ -959,7 +959,7 @@ rules:
 	assert.Equal(t, string(ms.Spec.HelmChartConfig.Values), revisionCM.Data["values"])
 	assert.Equal(t, ms.Name, revisionCM.Labels[miniserviceNameLabel])
 
-	gotData, found, err := r.getRenderedData(ctx, ms)
+	gotData, found, err := r.getRenderedData(ctx, ms, "")
 	require.NoError(t, err)
 	if assert.True(t, found) {
 		assert.JSONEq(t, string(objBytes), string(gotData))
@@ -2883,7 +2883,7 @@ rules:
 	assert.Equal(t, int64(0), ms.Status.Revision, "initial install should be revision 0")
 	assert.Equal(t, ms.Generation, ms.Status.ObservedGeneration, "observedGeneration should match generation after install")
 
-	gotData, found, err := r.getRenderedData(ctx, ms)
+	gotData, found, err := r.getRenderedData(ctx, ms, "")
 	require.NoError(t, err)
 	if assert.True(t, found) {
 		assert.JSONEq(t, string(objBytes), string(gotData))
@@ -4146,7 +4146,7 @@ func TestDoUpdateWorkload(t *testing.T) {
 		r := newReconciler(t, c)
 		ms := newMiniService()
 		icmsReq := newICMSRequest()
-		saveAndPersistRenderedData(t, ctx, r, ms, newRenderedObjectsData(t))
+		saveAndPersistRenderedData(t, ctx, r, ms, icmsReq, newRenderedObjectsData(t))
 
 		return r, ms, icmsReq
 	}

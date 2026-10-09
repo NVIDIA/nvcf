@@ -257,7 +257,7 @@ func TestDoUpdateWorkload_UnwrapsTerminalApplyError(t *testing.T) {
 	r := newUpdateTestReconciler(t, c, testScheme)
 	ms := newUpdateMiniService(`{"key":"value-v2"}`)
 	icmsReq := newUpdateICMSRequest(true)
-	saveAndPersistRenderedData(t, ctx, r, ms, newUpdateRenderedData(t, workloadObjectName, "v2"))
+	saveAndPersistRenderedData(t, ctx, r, ms, newUpdateICMSRequest(true), newUpdateRenderedData(t, workloadObjectName, "v2"))
 
 	gotRes, err := r.doUpdateWorkload(ctx, ms, icmsReq)
 	require.Error(t, err)
@@ -293,7 +293,7 @@ func TestDoUpdateWorkload_ApplyFailureRetainsRenderedCache(t *testing.T) {
 	ms := newUpdateMiniService(`{"key":"value-v2"}`)
 	icmsReq := newUpdateICMSRequest(true)
 	renderedData := newUpdateRenderedData(t, workloadObjectName, "v2")
-	saveAndPersistRenderedData(t, ctx, r, ms, renderedData)
+	saveAndPersistRenderedData(t, ctx, r, ms, newUpdateICMSRequest(true), renderedData)
 	require.NotNil(t, ms.Status.RenderDetails)
 	oldHash := ms.Status.RenderDetails.Hash
 
@@ -303,7 +303,7 @@ func TestDoUpdateWorkload_ApplyFailureRetainsRenderedCache(t *testing.T) {
 	require.NotNil(t, ms.Status.RenderDetails)
 	assert.Equal(t, oldHash, ms.Status.RenderDetails.Hash)
 
-	cachedData, found, err := r.getRenderedData(ctx, ms)
+	cachedData, found, err := r.getRenderedData(ctx, ms, renderInputHash(ms, newUpdateICMSRequest(true)))
 	require.NoError(t, err)
 	require.True(t, found, "rendered cache should be retained after failed workload apply")
 	assert.Equal(t, renderedData, cachedData)
@@ -343,7 +343,7 @@ func TestReconcile_UpdateFailureStaysInstalling(t *testing.T) {
 
 	ms := &v1alpha1.MiniService{}
 	require.NoError(t, r.Client.Get(ctx, client.ObjectKey{Name: updateMSName}, ms))
-	saveAndPersistRenderedData(t, ctx, r, ms, newUpdateRenderedData(t, workloadObjectName, "v2"))
+	saveAndPersistRenderedData(t, ctx, r, ms, newUpdateICMSRequest(true), newUpdateRenderedData(t, workloadObjectName, "v2"))
 	require.NoError(t, r.Client.Status().Update(ctx, ms))
 
 	req := reconcile.Request{NamespacedName: client.ObjectKey{Name: updateMSName}}
@@ -394,7 +394,7 @@ func TestReconcile_UpdateFailureThenNewUpdateSucceeds(t *testing.T) {
 	ms := &v1alpha1.MiniService{}
 	require.NoError(t, r.Client.Get(ctx, client.ObjectKey{Name: updateMSName}, ms))
 	oldRenderedData := newUpdateRenderedData(t, workloadObjectName, "v2")
-	saveAndPersistRenderedData(t, ctx, r, ms, oldRenderedData)
+	saveAndPersistRenderedData(t, ctx, r, ms, newUpdateICMSRequest(true), oldRenderedData)
 	require.NoError(t, r.Client.Status().Update(ctx, ms))
 
 	// First reconcile: update fails on object apply, but should remain in update state.
@@ -407,7 +407,7 @@ func TestReconcile_UpdateFailureThenNewUpdateSucceeds(t *testing.T) {
 	assert.Equal(t, v1alpha1.MiniServiceInstalling, ms.Status.Phase)
 	assert.Equal(t, int64(2), ms.Status.Revision)
 	assert.Equal(t, int64(2), ms.Status.ObservedGeneration)
-	cachedData, found, err := r.getRenderedData(ctx, ms)
+	cachedData, found, err := r.getRenderedData(ctx, ms, renderInputHash(ms, newUpdateICMSRequest(true)))
 	require.NoError(t, err)
 	require.True(t, found, "failed update should keep cached rendered data for retries")
 	assert.Equal(t, oldRenderedData, cachedData)
@@ -430,7 +430,7 @@ func TestReconcile_UpdateFailureThenNewUpdateSucceeds(t *testing.T) {
 	assert.Equal(t, v1alpha1.MiniServiceInstalled, ms.Status.Phase)
 	assert.Equal(t, int64(3), ms.Status.Revision)
 	assert.Equal(t, int64(3), ms.Status.ObservedGeneration)
-	newCachedData, found, err := r.getRenderedData(ctx, ms)
+	newCachedData, found, err := r.getRenderedData(ctx, ms, renderInputHash(ms, newUpdateICMSRequest(true)))
 	require.NoError(t, err)
 	require.True(t, found, "remediation update should cache new rendered data")
 	assert.Equal(t, newRenderedData, newCachedData)
@@ -478,7 +478,7 @@ func TestReconcile_FailedUpdateRetryReusesCache(t *testing.T) {
 
 	ms := &v1alpha1.MiniService{}
 	require.NoError(t, r.Client.Get(ctx, client.ObjectKey{Name: updateMSName}, ms))
-	saveAndPersistRenderedData(t, ctx, r, ms, newUpdateRenderedData(t, workloadObjectName, "v2"))
+	saveAndPersistRenderedData(t, ctx, r, ms, newUpdateICMSRequest(true), newUpdateRenderedData(t, workloadObjectName, "v2"))
 	require.NoError(t, r.Client.Status().Update(ctx, ms))
 
 	req := reconcile.Request{NamespacedName: client.ObjectKey{Name: updateMSName}}
@@ -565,7 +565,7 @@ func setupUpdateReconcileForWorkloadConfig(
 
 	existing := &v1alpha1.MiniService{}
 	require.NoError(t, r.Client.Get(ctx, client.ObjectKey{Name: updateMSName}, existing))
-	saveAndPersistRenderedData(t, ctx, r, existing, renderedData)
+	saveAndPersistRenderedData(t, ctx, r, existing, newUpdateICMSRequest(true), renderedData)
 	require.NoError(t, r.Client.Status().Update(ctx, existing))
 
 	return r, reconcile.Request{NamespacedName: client.ObjectKey{Name: updateMSName}}
@@ -603,7 +603,7 @@ func setupDoUpdateWorkloadForWorkloadConfig(
 	// render cache and persist the updated status so getRenderedData can find the hash.
 	stored := &v1alpha1.MiniService{}
 	require.NoError(t, r.Client.Get(ctx, client.ObjectKey{Name: updateMSName}, stored))
-	saveAndPersistRenderedData(t, ctx, r, stored, renderedData)
+	saveAndPersistRenderedData(t, ctx, r, stored, newUpdateICMSRequest(true), renderedData)
 	require.NoError(t, r.Client.Status().Update(ctx, stored))
 
 	// Return stored so the caller has an in-sync MS to pass to doUpdateWorkload.
@@ -723,7 +723,7 @@ func TestDoUpdateWorkload_FailedApply_RetainsPriorWorkloadConfig(t *testing.T) {
 	ms := newUpdateMiniService(`{"key":"value-v2"}`)
 	ms.Spec.WorkloadConfig = prior
 	icmsReq := newUpdateICMSRequest(true)
-	saveAndPersistRenderedData(t, ctx, r, ms, renderedData)
+	saveAndPersistRenderedData(t, ctx, r, ms, newUpdateICMSRequest(true), renderedData)
 
 	_, err := r.doUpdateWorkload(ctx, ms, icmsReq)
 	require.Error(t, err)
