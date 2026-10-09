@@ -41,7 +41,7 @@
         },
         "imagePullSecrets": {
             "type": "array",
-            "description": "Image pull Secrets for the operator pod",
+            "description": "Image pull Secrets for the operator pod, in the release namespace",
             "items": {
                 "type": "object",
                 "properties": {
@@ -102,6 +102,22 @@
                             "default": "IfNotPresent"
                         }
                     }
+                },
+                "imagePullSecrets": {
+                    "type": "array",
+                    "description": "Image pull Secrets for the transport pods. Each must exist in every namespace with an InferenceEndpoint",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+                                "maxLength": 253
+                            }
+                        },
+                        "required": ["name"]
+                    },
+                    "default": []
                 }
             }
         },

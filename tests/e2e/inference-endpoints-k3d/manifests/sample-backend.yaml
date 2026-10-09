@@ -4,7 +4,10 @@
 # OpenAI-compatible sample backend for the Pylon Operator k3d end-to-end test.
 # It serves GET /health, GET /v1/models (model id test-model) and
 # POST /v1/chat/completions on port 8000. run.sh applies this file with -n, so
-# it carries no namespace.
+# it carries no namespace. run.sh also fills in the two placeholders below
+# from E2E_SAMPLE_IMAGE, the sample image, and E2E_SAMPLE_IMAGE_PULL_SECRETS,
+# its pull Secrets as a YAML flow list: [] with IMAGE_SOURCE=local and
+# [{"name": "ngc-pull"}] with IMAGE_SOURCE=ngc.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,9 +28,10 @@ spec:
     spec:
       automountServiceAccountToken: false
       terminationGracePeriodSeconds: 5
+      imagePullSecrets: ${E2E_SAMPLE_IMAGE_PULL_SECRETS}
       containers:
         - name: backend
-          image: docker.io/library/openai-compatible-sample:e2e
+          image: ${E2E_SAMPLE_IMAGE}
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

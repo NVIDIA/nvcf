@@ -18,6 +18,7 @@ limitations under the License.
 package transport
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -176,6 +177,7 @@ func TestDeploymentGolden(t *testing.T) {
 	cfg.PylonImagePullPolicy = "IfNotPresent"
 	cfg.TrustBundleConfigMap = "router-ca"
 	cfg.DevInsecureTransport = true
+	cfg.PylonImagePullSecrets = []string{"ngc-pull", "team-pull"}
 
 	got := Deployment(ep, cfg, 2)
 	hash := got.Spec.Template.Annotations[SpecHashAnnotation]
@@ -221,6 +223,7 @@ func TestDeploymentGolden(t *testing.T) {
 						RunAsGroup:     ptr.To[int64](65532),
 						SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 					},
+					ImagePullSecrets: []corev1.LocalObjectReference{{Name: "ngc-pull"}, {Name: "team-pull"}},
 					Containers: []corev1.Container{{
 						Name:            "pylon",
 						Image:           testImage,
@@ -281,6 +284,31 @@ func TestDeploymentWithoutTrustBundle(t *testing.T) {
 	assert.Equal(t, minimalArgs, c.Args)
 	for _, v := range spec.Volumes {
 		assert.Nil(t, v.Projected, "no ServiceAccount token volume")
+	}
+	assert.Nil(t, spec.ImagePullSecrets, "no pull Secrets unless configured")
+}
+
+// TestImagePullSecrets checks that --pylon-image-pull-secrets reaches the pod
+// spec in order, and that without it the template's JSON form, and so its
+// spec hash, has no imagePullSecrets field: an operator upgrade that adds the
+// flag does not roll transport pods that do not use it.
+func TestImagePullSecrets(t *testing.T) {
+	cfg := testConfig()
+	cfg.PylonImagePullSecrets = []string{"ngc-pull", "team-pull"}
+	spec := Deployment(endpoint(), cfg, 1).Spec.Template.Spec
+	assert.Equal(t, []corev1.LocalObjectReference{{Name: "ngc-pull"}, {Name: "team-pull"}}, spec.ImagePullSecrets)
+
+	for name, secrets := range map[string][]string{"unset": nil, "empty": {}} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.PylonImagePullSecrets = secrets
+			template := Deployment(endpoint(), cfg, 1).Spec.Template
+			assert.Nil(t, template.Spec.ImagePullSecrets)
+			delete(template.Annotations, SpecHashAnnotation)
+			data, err := json.Marshal(template)
+			require.NoError(t, err)
+			assert.NotContains(t, string(data), "imagePullSecrets")
+		})
 	}
 }
 
@@ -382,6 +410,9 @@ func TestSpecHash(t *testing.T) {
 		}},
 		{"image", func(_ *pylonv1alpha1.InferenceEndpoint, c *config.Config) { c.PylonImage = "pylon:next" }},
 		{"image pull policy", func(_ *pylonv1alpha1.InferenceEndpoint, c *config.Config) { c.PylonImagePullPolicy = "Always" }},
+		{"image pull secrets", func(_ *pylonv1alpha1.InferenceEndpoint, c *config.Config) {
+			c.PylonImagePullSecrets = []string{"ngc-pull"}
+		}},
 		{"router address", func(_ *pylonv1alpha1.InferenceEndpoint, c *config.Config) { c.RouterGRPCAddress = "router:1" }},
 		{"cluster id", func(_ *pylonv1alpha1.InferenceEndpoint, c *config.Config) { c.ClusterID = "other" }},
 		{"insecure transport", func(_ *pylonv1alpha1.InferenceEndpoint, c *config.Config) { c.DevInsecureTransport = true }},

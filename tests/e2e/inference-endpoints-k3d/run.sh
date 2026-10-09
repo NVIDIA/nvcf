@@ -35,6 +35,16 @@ E2E_DEV_INSECURE_TRANSPORT="${E2E_DEV_INSECURE_TRANSPORT:-0}"
 E2E_ROTATE_CREDENTIALS="${E2E_ROTATE_CREDENTIALS:-0}"
 E2E_GATEWAY_LOCAL_PORT="${E2E_GATEWAY_LOCAL_PORT:-18443}"
 E2E_WORK_DIR="${E2E_WORK_DIR:-${TMPDIR:-/tmp}/pylon-operator-k3d-e2e}"
+E2E_SAMPLE_IMAGE="${E2E_SAMPLE_IMAGE:-docker.io/library/openai-compatible-sample:e2e}"
+E2E_DRY_RUN="${E2E_DRY_RUN:-0}"
+# Where the charts and images come from. local installs the charts from this
+# checkout with the images imported into k3d. ngc installs the published
+# charts and images named in PUBLISHED_VERSIONS_FILE, the versions file
+# produced by your publishing pipeline (README.md documents its format), and
+# pulls them with NGC_API_KEY.
+IMAGE_SOURCE="${IMAGE_SOURCE:-local}"
+PUBLISHED_VERSIONS_FILE="${PUBLISHED_VERSIONS_FILE:-}"
+NGC_API_KEY="${NGC_API_KEY:-}"
 
 readonly STACK_RELEASE="llm-gateway-stack"
 readonly OPERATOR_RELEASE="pylon-operator"
@@ -53,12 +63,35 @@ readonly WRONG_MODEL="wrong-model"
 readonly TRANSPORT_DEPLOYMENT="pylon-${ENDPOINT}"
 readonly TRANSPORT_SELECTOR="app.kubernetes.io/name=pylon,pylon.nvidia.com/endpoint=${ENDPOINT}"
 readonly OPERATOR_SELECTOR="app.kubernetes.io/instance=${OPERATOR_RELEASE}"
+readonly PULL_SECRET="ngc-pull"
 
 CA_FILE="${E2E_WORK_DIR}/ca.crt"
 AUTH_HEADER_FILE="${E2E_WORK_DIR}/auth-header"
 API_KEY_FILE="${E2E_WORK_DIR}/api-key"
 PF_LOG="${E2E_WORK_DIR}/port-forward.log"
 PF_PID=""
+REGISTRY_CONFIG="${E2E_WORK_DIR}/registry-config.json"
+
+# Chart sources and image settings, set by resolve_image_source. The defaults
+# are those of IMAGE_SOURCE=local. A chart source is the chart reference,
+# followed by --version for a published chart.
+STACK_SOURCE=("${STACK_CHART}")
+OPERATOR_SOURCE=("${OPERATOR_CHART}")
+STACK_ARGS=()
+OPERATOR_ARGS=()
+SAMPLE_IMAGE="${E2E_SAMPLE_IMAGE}"
+SAMPLE_IMAGE_PULL_SECRETS="[]"
+REGISTRY_HOST=""
+ROUTER_IMAGE_REGISTRY=""
+ROUTER_IMAGE_REPOSITORY=""
+ROUTER_IMAGE_TAG=""
+GATEWAY_IMAGE_REGISTRY=""
+GATEWAY_IMAGE_REPOSITORY=""
+GATEWAY_IMAGE_TAG=""
+OPERATOR_IMAGE_REPOSITORY=""
+OPERATOR_IMAGE_TAG=""
+PYLON_IMAGE_REPOSITORY=""
+PYLON_IMAGE_TAG=""
 
 RESULTS=()
 PASS_COUNT=0
@@ -138,6 +171,136 @@ sha256_hex() {
     printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1
   else
     printf '%s' "$1" | openssl dgst -sha256 -r | cut -d' ' -f1
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Image source
+
+# read_version VAR KEY...: sets VAR to the string at the key path KEY... of
+# PUBLISHED_VERSIONS_FILE, for example read_version tag images stargate tag.
+# Dies when it is missing or has characters that do not belong in an image or
+# chart reference, so the value is safe in YAML and sed.
+read_version() {
+  local var="$1" path="" key value label
+  shift
+  for key in "$@"; do
+    path="${path}${path:+,}\"${key}\""
+  done
+  label="$(IFS=.; printf '%s' "$*")"
+  # $path is a jq variable.
+  # shellcheck disable=SC2016
+  value="$(jq -r --argjson path "[${path}]" 'getpath($path) // empty | strings' "${PUBLISHED_VERSIONS_FILE}")" \
+    || die "cannot read ${label} from ${PUBLISHED_VERSIONS_FILE} with jq"
+  case "${value}" in
+    "") die "${PUBLISHED_VERSIONS_FILE}: ${label} is missing or not a string" ;;
+    *[!A-Za-z0-9._:/@+-]*) die "${PUBLISHED_VERSIONS_FILE}: ${label} has unexpected characters: ${value}" ;;
+  esac
+  printf -v "${var}" '%s' "${value}"
+}
+
+# split_repository REGISTRY_VAR REPOSITORY_VAR REGISTRY REPOSITORY: the
+# subcharts join image.registry and image.repository with a slash, so a
+# repository under REGISTRY is split into the two. Any other repository is
+# used whole, with an empty registry.
+split_repository() {
+  case "$4" in
+    "$3"/?*)
+      printf -v "$1" '%s' "$3"
+      printf -v "$2" '%s' "${4#"$3"/}"
+      ;;
+    *)
+      printf -v "$1" '%s' ""
+      printf -v "$2" '%s' "$4"
+      ;;
+  esac
+}
+
+resolve_image_source() {
+  case "${IMAGE_SOURCE}" in
+    local) return 0 ;;
+    ngc) ;;
+    *) die "IMAGE_SOURCE must be local or ngc, got '${IMAGE_SOURCE}'" ;;
+  esac
+  command -v jq >/dev/null 2>&1 || die "jq is required with IMAGE_SOURCE=ngc"
+  [ -n "${PUBLISHED_VERSIONS_FILE}" ] \
+    || die "PUBLISHED_VERSIONS_FILE is required with IMAGE_SOURCE=ngc: the versions file produced by your publishing pipeline"
+  [ -f "${PUBLISHED_VERSIONS_FILE}" ] && [ -r "${PUBLISHED_VERSIONS_FILE}" ] \
+    || die "PUBLISHED_VERSIONS_FILE '${PUBLISHED_VERSIONS_FILE}' is not a readable file"
+  if [ -z "${NGC_API_KEY}" ] && [ "${E2E_DRY_RUN}" != "1" ]; then
+    die "NGC_API_KEY is required with IMAGE_SOURCE=ngc"
+  fi
+  jq -e '.version == 1' "${PUBLISHED_VERSIONS_FILE}" >/dev/null 2>&1 \
+    || die "${PUBLISHED_VERSIONS_FILE}: expected a versions file with \"version\": 1"
+
+  local registry chart_ref chart_version repository tag
+  read_version registry registry
+  REGISTRY_HOST="${registry%%/*}"
+
+  read_version chart_ref charts llm-gateway-stack ref
+  read_version chart_version charts llm-gateway-stack version
+  case "${chart_ref}" in oci://?*) ;; *) die "${PUBLISHED_VERSIONS_FILE}: charts.llm-gateway-stack.ref must start with oci://" ;; esac
+  STACK_SOURCE=("${chart_ref}" --version "${chart_version}")
+  read_version chart_ref charts pylon-operator ref
+  read_version chart_version charts pylon-operator version
+  case "${chart_ref}" in oci://?*) ;; *) die "${PUBLISHED_VERSIONS_FILE}: charts.pylon-operator.ref must start with oci://" ;; esac
+  OPERATOR_SOURCE=("${chart_ref}" --version "${chart_version}")
+
+  read_version repository images stargate repository
+  split_repository ROUTER_IMAGE_REGISTRY ROUTER_IMAGE_REPOSITORY "${registry}" "${repository}"
+  read_version ROUTER_IMAGE_TAG images stargate tag
+  read_version repository images llm-api-gateway repository
+  split_repository GATEWAY_IMAGE_REGISTRY GATEWAY_IMAGE_REPOSITORY "${registry}" "${repository}"
+  read_version GATEWAY_IMAGE_TAG images llm-api-gateway tag
+  # The operator image is published under its service name,
+  # nvcf-pylon-operator, because the chart already takes pylon-operator in
+  # the same registry path. Its chart key stays pylon-operator.
+  if ! jq -e '.images | has("nvcf-pylon-operator")' "${PUBLISHED_VERSIONS_FILE}" >/dev/null 2>&1 \
+    && jq -e '.images | has("pylon-operator")' "${PUBLISHED_VERSIONS_FILE}" >/dev/null 2>&1; then
+    die "${PUBLISHED_VERSIONS_FILE}: the operator image key is images.nvcf-pylon-operator, but the file has only images.pylon-operator; see the versions file format in tests/e2e/inference-endpoints-k3d/README.md"
+  fi
+  read_version OPERATOR_IMAGE_REPOSITORY images nvcf-pylon-operator repository
+  read_version OPERATOR_IMAGE_TAG images nvcf-pylon-operator tag
+  read_version PYLON_IMAGE_REPOSITORY images pylon repository
+  read_version PYLON_IMAGE_TAG images pylon tag
+  read_version repository images openai-compatible-sample repository
+  read_version tag images openai-compatible-sample tag
+  SAMPLE_IMAGE="${repository}:${tag}"
+  SAMPLE_IMAGE_PULL_SECRETS="[{\"name\": \"${PULL_SECRET}\"}]"
+
+  log "IMAGE_SOURCE=ngc: ${PUBLISHED_VERSIONS_FILE}, run $(jq -r '.run // "?"' "${PUBLISHED_VERSIONS_FILE}"), commit $(jq -r '.commit // "?"' "${PUBLISHED_VERSIONS_FILE}" | cut -c1-12), registry ${registry}"
+}
+
+# IMAGE_SOURCE=ngc: writes REGISTRY_CONFIG, a Docker config file (mode 600)
+# with the NGC credential for REGISTRY_HOST. It is the .dockerconfigjson of
+# the pull Secret and Helm's registry config for the OCI charts, so Helm
+# neither reads nor changes your own registry login or credential store. The
+# API key never appears on a command line, and on_exit removes the file.
+write_registry_config() {
+  local auth
+  # $oauthtoken is the literal NGC user name, not a variable.
+  # shellcheck disable=SC2016
+  auth="$(printf '%s:%s' '$oauthtoken' "${NGC_API_KEY}" | base64 | tr -d '\n')"
+  (
+    umask 077
+    printf '{"auths":{"%s":{"auth":"%s"}}}\n' "${REGISTRY_HOST}" "${auth}" >"${REGISTRY_CONFIG}"
+  )
+  export HELM_REGISTRY_CONFIG="${REGISTRY_CONFIG}"
+}
+
+# sed_escape STRING: STRING as a sed replacement with | as the delimiter.
+sed_escape() {
+  printf '%s' "$1" | sed -e 's/[\\|&]/\\&/g'
+}
+
+# render_sample_backend OUTPUT: manifests/sample-backend.yaml with the sample
+# image and its pull Secrets filled in.
+render_sample_backend() {
+  sed -e "s|\${E2E_SAMPLE_IMAGE}|$(sed_escape "${SAMPLE_IMAGE}")|g" \
+    -e "s|\${E2E_SAMPLE_IMAGE_PULL_SECRETS}|$(sed_escape "${SAMPLE_IMAGE_PULL_SECRETS}")|g" \
+    "${MANIFESTS}/sample-backend.yaml" >"$1"
+  if grep -qF "\${" "$1"; then
+    die "$1 has a placeholder that run.sh does not fill in"
   fi
 }
 
@@ -443,6 +606,7 @@ step_done() {
 on_exit() {
   undo_faults
   stop_port_forward
+  rm -f "${REGISTRY_CONFIG}"
 }
 trap on_exit EXIT
 
@@ -512,6 +676,19 @@ create_namespaces() {
   pass "namespaces ${E2E_STACK_NAMESPACE}, ${E2E_OPERATOR_NAMESPACE}, ${E2E_MODELS_NAMESPACE}"
 }
 
+# IMAGE_SOURCE=ngc: the pull Secret in every namespace that runs a pod. The
+# operator does not copy it, so the transport pods need it in the models
+# namespace.
+create_pull_secrets() {
+  ensure_context
+  local ns
+  for ns in "${E2E_STACK_NAMESPACE}" "${E2E_OPERATOR_NAMESPACE}" "${E2E_MODELS_NAMESPACE}"; do
+    kc -n "${ns}" create secret generic "${PULL_SECRET}" --type=kubernetes.io/dockerconfigjson \
+      --from-file=.dockerconfigjson="${REGISTRY_CONFIG}" --dry-run=client -o yaml | kc apply -f - >/dev/null
+  done
+  log "image pull Secret ${PULL_SECRET} for ${REGISTRY_HOST} in ${E2E_STACK_NAMESPACE}, ${E2E_OPERATOR_NAMESPACE}, ${E2E_MODELS_NAMESPACE}"
+}
+
 reset_endpoint() {
   ensure_context
   if kc get crd inferenceendpoints.pylon.nvidia.com >/dev/null 2>&1 \
@@ -532,8 +709,10 @@ create_credential_secret() {
   pass "cluster credential Secret ${E2E_OPERATOR_NAMESPACE}/${CREDENTIAL_SECRET}"
 }
 
-install_stack() {
-  ensure_context
+# prepare_stack: writes the stack values files and sets STACK_ARGS, the helm
+# arguments after the chart source. With IMAGE_SOURCE=ngc a second values
+# file points the images at the registry and adds the pull Secret.
+prepare_stack() {
   local values="${E2E_WORK_DIR}/llm-gateway-stack-values.yaml"
   cat >"${values}" <<EOF
 clusterId: ${E2E_CLUSTER_ID}
@@ -562,11 +741,42 @@ llm-api-gateway:
     olric:
       env: local
 EOF
-  log "helm dependency build ${STACK_CHART}"
-  helm dependency build --skip-refresh "${STACK_CHART}" >/dev/null
+  STACK_ARGS=(--namespace "${E2E_STACK_NAMESPACE}" --values "${values}")
+  if [ "${IMAGE_SOURCE}" = "ngc" ]; then
+    local image_values="${E2E_WORK_DIR}/llm-gateway-stack-ngc-values.yaml"
+    cat >"${image_values}" <<EOF
+llm-request-router:
+  llmRequestRouter:
+    image:
+      registry: "${ROUTER_IMAGE_REGISTRY}"
+      repository: "${ROUTER_IMAGE_REPOSITORY}"
+      tag: "${ROUTER_IMAGE_TAG}"
+    imagePullSecrets:
+      - name: ${PULL_SECRET}
+llm-api-gateway:
+  llmApiGateway:
+    image:
+      registry: "${GATEWAY_IMAGE_REGISTRY}"
+      repository: "${GATEWAY_IMAGE_REPOSITORY}"
+      tag: "${GATEWAY_IMAGE_TAG}"
+    imagePullSecrets:
+      - name: ${PULL_SECRET}
+EOF
+    STACK_ARGS+=(--values "${image_values}")
+  fi
+}
+
+install_stack() {
+  ensure_context
+  prepare_stack
+  if [ "${IMAGE_SOURCE}" = "ngc" ]; then
+    log "chart ${STACK_SOURCE[*]}"
+  else
+    log "helm dependency build ${STACK_CHART}"
+    helm dependency build --skip-refresh "${STACK_CHART}" >/dev/null
+  fi
   log "helm upgrade --install ${STACK_RELEASE} (namespace ${E2E_STACK_NAMESPACE})"
-  if ! hm upgrade --install "${STACK_RELEASE}" "${STACK_CHART}" \
-    --namespace "${E2E_STACK_NAMESPACE}" --values "${values}" \
+  if ! hm upgrade --install "${STACK_RELEASE}" "${STACK_SOURCE[@]}" "${STACK_ARGS[@]}" \
     --wait --timeout "${E2E_HELM_TIMEOUT}" >"${E2E_WORK_DIR}/helm-stack.log" 2>&1; then
     cat "${E2E_WORK_DIR}/helm-stack.log"
     fail "helm install ${STACK_RELEASE}"
@@ -587,8 +797,10 @@ copy_trust_bundle() {
   pass "CA ConfigMap copied to ${E2E_OPERATOR_NAMESPACE}/${CA_CONFIGMAP}"
 }
 
-install_operator() {
-  ensure_context
+# prepare_operator: writes the operator values files and sets OPERATOR_ARGS,
+# like prepare_stack. With IMAGE_SOURCE=ngc the second values file also gives
+# the transport pods the pull Secret through pylon.imagePullSecrets.
+prepare_operator() {
   local values="${E2E_WORK_DIR}/pylon-operator-values.yaml"
   local insecure=false
   [ "${E2E_DEV_INSECURE_TRANSPORT}" = "1" ] && insecure=true
@@ -615,9 +827,36 @@ devInsecureTransport: ${insecure}
 transport:
   replicas: 1
 EOF
+  OPERATOR_ARGS=(--namespace "${E2E_OPERATOR_NAMESPACE}" --values "${values}")
+  if [ "${IMAGE_SOURCE}" = "ngc" ]; then
+    local image_values="${E2E_WORK_DIR}/pylon-operator-ngc-values.yaml"
+    cat >"${image_values}" <<EOF
+image:
+  repository: "${OPERATOR_IMAGE_REPOSITORY}"
+  tag: "${OPERATOR_IMAGE_TAG}"
+imagePullSecrets:
+  - name: ${PULL_SECRET}
+pylon:
+  image:
+    repository: "${PYLON_IMAGE_REPOSITORY}"
+    tag: "${PYLON_IMAGE_TAG}"
+  imagePullSecrets:
+    - name: ${PULL_SECRET}
+EOF
+    OPERATOR_ARGS+=(--values "${image_values}")
+  fi
+}
+
+install_operator() {
+  ensure_context
+  prepare_operator
+  local insecure=false
+  [ "${E2E_DEV_INSECURE_TRANSPORT}" = "1" ] && insecure=true
+  if [ "${IMAGE_SOURCE}" = "ngc" ]; then
+    log "chart ${OPERATOR_SOURCE[*]}"
+  fi
   log "helm upgrade --install ${OPERATOR_RELEASE} (namespace ${E2E_OPERATOR_NAMESPACE}), router ${E2E_ROUTER_GRPC_ADDRESS}, devInsecureTransport=${insecure}"
-  if ! hm upgrade --install "${OPERATOR_RELEASE}" "${OPERATOR_CHART}" \
-    --namespace "${E2E_OPERATOR_NAMESPACE}" --values "${values}" \
+  if ! hm upgrade --install "${OPERATOR_RELEASE}" "${OPERATOR_SOURCE[@]}" "${OPERATOR_ARGS[@]}" \
     --wait --timeout "${E2E_HELM_TIMEOUT}" >"${E2E_WORK_DIR}/helm-operator.log" 2>&1; then
     cat "${E2E_WORK_DIR}/helm-operator.log"
     fail "helm install ${OPERATOR_RELEASE}"
@@ -628,7 +867,9 @@ EOF
 
 deploy_backend() {
   ensure_context
-  kc -n "${E2E_MODELS_NAMESPACE}" apply -f "${MANIFESTS}/sample-backend.yaml" >/dev/null
+  local manifest="${E2E_WORK_DIR}/sample-backend.yaml"
+  render_sample_backend "${manifest}"
+  kc -n "${E2E_MODELS_NAMESPACE}" apply -f "${manifest}" >/dev/null
   if ! kc -n "${E2E_MODELS_NAMESPACE}" rollout status "deployment/${SAMPLE_DEPLOYMENT}" --timeout="${E2E_TIMEOUT}s" >/dev/null; then
     fail "sample backend ready"
     return 1
@@ -687,6 +928,61 @@ Then call it with the CA and the API key in ${E2E_WORK_DIR}:
 EOF
 }
 
+# print_command ARGS...: one shell-quoted command line.
+print_command() {
+  printf ' '
+  printf ' %q' "$@"
+  printf '\n'
+}
+
+# E2E_DRY_RUN=1: writes the values files and the sample manifest to the work
+# directory, renders both charts from this checkout with those values, and
+# prints the commands a run would use. It touches no cluster and reads or
+# writes no credential. With IMAGE_SOURCE=ngc a run installs the published
+# charts instead of the checkout's; they are the same charts with their
+# image tags set.
+dry_run() {
+  command -v helm >/dev/null 2>&1 || die "helm is required"
+  mkdir -p "${E2E_WORK_DIR}"
+  chmod 700 "${E2E_WORK_DIR}"
+  section "Dry run (E2E_DRY_RUN=1, IMAGE_SOURCE=${IMAGE_SOURCE}): no cluster access"
+  if [ "${IMAGE_SOURCE}" = "ngc" ] && [ -z "${NGC_API_KEY}" ]; then
+    log "NGC_API_KEY is not set; a run needs it"
+  fi
+  CLUSTER_TOKEN_SHA256="$(sha256_hex dry-run-cluster-token)"
+  API_KEY_SHA256="$(sha256_hex dry-run-api-key)"
+  prepare_stack
+  prepare_operator
+  local sample="${E2E_WORK_DIR}/sample-backend.yaml"
+  local stack_manifest="${E2E_WORK_DIR}/dry-run-${STACK_RELEASE}.yaml"
+  local operator_manifest="${E2E_WORK_DIR}/dry-run-${OPERATOR_RELEASE}.yaml"
+  render_sample_backend "${sample}"
+  helm dependency build --skip-refresh "${STACK_CHART}" >/dev/null
+  helm template "${STACK_RELEASE}" "${STACK_CHART}" "${STACK_ARGS[@]}" >"${stack_manifest}" \
+    || die "helm template ${STACK_RELEASE} failed"
+  helm template "${OPERATOR_RELEASE}" "${OPERATOR_CHART}" "${OPERATOR_ARGS[@]}" >"${operator_manifest}" \
+    || die "helm template ${OPERATOR_RELEASE} failed"
+
+  printf '\nA run with these settings installs:\n'
+  if [ "${IMAGE_SOURCE}" = "ngc" ]; then
+    printf '  (Helm reads the NGC credential from a registry config in %s)\n' "${E2E_WORK_DIR}"
+    printf '  (pull Secret %s in %s, %s and %s)\n' "${PULL_SECRET}" \
+      "${E2E_STACK_NAMESPACE}" "${E2E_OPERATOR_NAMESPACE}" "${E2E_MODELS_NAMESPACE}"
+  fi
+  print_command helm --kube-context "${E2E_KUBE_CONTEXT}" upgrade --install "${STACK_RELEASE}" \
+    "${STACK_SOURCE[@]}" "${STACK_ARGS[@]}" --wait --timeout "${E2E_HELM_TIMEOUT}"
+  print_command helm --kube-context "${E2E_KUBE_CONTEXT}" upgrade --install "${OPERATOR_RELEASE}" \
+    "${OPERATOR_SOURCE[@]}" "${OPERATOR_ARGS[@]}" --wait --timeout "${E2E_HELM_TIMEOUT}"
+  print_command kubectl --context "${E2E_KUBE_CONTEXT}" -n "${E2E_MODELS_NAMESPACE}" apply -f "${sample}"
+
+  printf '\nImages and pull Secrets in the rendered manifests:\n'
+  local file
+  for file in "${stack_manifest}" "${operator_manifest}" "${sample}"; do
+    printf '%s\n' "${file}"
+    grep -E -- "^ *image: |--pylon-image|^ *imagePullSecrets:|^ *- name: ${PULL_SECRET}\$" "${file}" || true
+  done
+}
+
 # Restart and failure cases: helpers, faults and run_restart_cases.
 # shellcheck source=restart-cases.sh
 source "${SCRIPT_DIR}/restart-cases.sh"
@@ -696,6 +992,11 @@ source "${SCRIPT_DIR}/restart-cases.sh"
 
 main() {
   local T="${E2E_TIMEOUT}"
+  resolve_image_source
+  if [ "${E2E_DRY_RUN}" = "1" ]; then
+    dry_run
+    return
+  fi
   if [ "${E2E_DEPLOY_ONLY}" = "1" ]; then
     if [ "${E2E_CLEANUP}" = "1" ]; then
       die "E2E_DEPLOY_ONLY=1 leaves everything installed and cannot be combined with E2E_CLEANUP=1"
@@ -708,8 +1009,14 @@ main() {
 
   section "Setup"
   preflight
+  if [ "${IMAGE_SOURCE}" = "ngc" ]; then
+    write_registry_config
+  fi
   generate_credentials
   create_namespaces
+  if [ "${IMAGE_SOURCE}" = "ngc" ]; then
+    create_pull_secrets
+  fi
   reset_endpoint
   create_credential_secret
   install_stack || abort

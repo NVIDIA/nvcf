@@ -10,6 +10,9 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
+# Image pull Secrets of the operator pod, as {name: <Secret>} entries. They
+# must exist in the release namespace. pylon.imagePullSecrets covers the
+# transport pods.
 imagePullSecrets: []
 
 nameOverride: ""
@@ -37,6 +40,12 @@ pylon:
     repository: ""
     tag: ""
     pullPolicy: IfNotPresent
+  # Image pull Secrets of the transport pods, as {name: <Secret>} entries.
+  # Transport pods run in the namespace of their InferenceEndpoint and
+  # reference the Secrets there, so each Secret must exist in every namespace
+  # with an InferenceEndpoint; the operator does not copy it. Passed as a
+  # comma-separated --pylon-image-pull-secrets.
+  imagePullSecrets: []
 
 # Namespaces whose InferenceEndpoints the operator watches. Empty watches all
 # namespaces. Passed as a comma-separated --watch-namespaces.
