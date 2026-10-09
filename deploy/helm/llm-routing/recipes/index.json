@@ -17,8 +17,8 @@
       "availability": {
         "status": "planned",
         "deployable": false,
-        "reason": "The verified checkpoint has upstream four-GPU candidates. Installation requires tensor-parallel chart support, model-specific startup/cache checks and hardware qualification.",
-        "checkedAt": "2026-10-07",
+        "reason": "The verified checkpoint has upstream four-GPU candidates. Installation requires tensor-parallel chart support, model-specific startup/cache checks and hardware qualification. Rechecked 2026-10-09: the checkpoint is about 160 GB, the SGLang cookbook lists only GB200, B200, GB300, B300 and H200 hardware with four or more GPUs, and no DGX Spark or GB10 guidance exists. The SGLang chart supports one or two nodes, so it cannot run this model on a three-GPU Spark cluster.",
+        "checkedAt": "2026-10-09",
         "sources": [
           "https://huggingface.co/api/models/deepseek-ai/DeepSeek-V4-Flash",
           "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/tree/60d8d70770c6776ff598c94bb586a859a38244f1",
@@ -291,27 +291,132 @@
       ]
     },
     {
-      "id": "nemotron-5-nano-12b",
-      "name": "Nemotron 5 Nano 12B",
-      "servedModelId": null,
+      "id": "nemotron-3.5-lightning",
+      "name": "Nemotron 3.5 Lightning 30B-A3B",
+      "servedModelId": "nemotron-3.5-lightning",
       "availability": {
-        "status": "unavailable",
-        "deployable": false,
-        "reason": "Exact-name public artifact and access status remain unverified.",
-        "checkedAt": "2026-10-07",
-        "sources": [
-          "https://huggingface.co/api/models?author=nvidia&search=Nemotron&limit=1000",
-          "https://huggingface.co/nvidia",
-          "https://www.nvidia.com/en-us/ai-data-science/foundation-models/nemotron/"
-        ]
+        "status": "available",
+        "deployable": true
       },
-      "precision": null,
-      "license": null,
-      "licenseNotice": null,
-      "model": null,
-      "runtime": null,
-      "profiles": [],
-      "upstreamCandidates": []
+      "precision": "NVFP4",
+      "license": "OpenMDW-1.1",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4",
+        "revision": "bee7596271d1495f6992ae224aefde4410e816b8",
+        "weightBytes": null
+      },
+      "runtime": {
+        "backend": "sglang",
+        "version": "SGLang dev-nemotron3-5-lightning (pinned multi-arch digest)",
+        "image": "lmsysorg/sglang@sha256:a04d9a1a7ffe371b05230aecab001d4ba2bfa0e5c137bc56409ecc4cbc3ac864"
+      },
+      "profiles": [
+        {
+          "id": "spark-nvfp4",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 107374182400,
+                "memoryLimitBytes": 120259084288,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 64424509440,
+                "minimumFreeBytesBeforeDownload": 42949672960
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 16384,
+            "maximumConcurrency": 2
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-09",
+              "profile": "spark-nvfp4",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "lifecycleIsolationVerified": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-09",
+              "profile": "spark-nvfp4",
+              "modelRevision": "bee7596271d1495f6992ae224aefde4410e816b8",
+              "runtimeImage": "lmsysorg/sglang@sha256:a04d9a1a7ffe371b05230aecab001d4ba2bfa0e5c137bc56409ecc4cbc3ac864",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "cacheMode": "fresh-download",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.2.0",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "repository": null,
+              "publication": "local"
+            },
+            "releaseName": "nemotron-lightning",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "nemotron-3.5-lightning",
+              "profileName": "spark-nvfp4"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../README.md"
+          }
+        }
+      ]
     },
     {
       "id": "nemotron-5-super-49b",
@@ -335,6 +440,263 @@
       "runtime": null,
       "profiles": [],
       "upstreamCandidates": []
+    },
+    {
+      "id": "nemotron-nano-12b-v2",
+      "name": "Nemotron Nano 12B v2",
+      "servedModelId": "nemotron-nano-12b-v2",
+      "availability": {
+        "status": "available",
+        "deployable": true
+      },
+      "precision": "BF16",
+      "license": "NVIDIA Open Model License",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "nvidia/NVIDIA-Nemotron-Nano-12B-v2",
+        "revision": "f428df0ec725fed457b89cfca54dc26500fb88c1",
+        "weightBytes": null
+      },
+      "runtime": {
+        "backend": "sglang",
+        "version": "SGLang v0.5.19",
+        "image": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513"
+      },
+      "profiles": [
+        {
+          "id": "spark-bf16",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 68719476736,
+                "memoryLimitBytes": 85899345920,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 64424509440,
+                "minimumFreeBytesBeforeDownload": 42949672960
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 16384,
+            "maximumConcurrency": 2
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-09",
+              "profile": "spark-bf16",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "lifecycleIsolationVerified": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-09",
+              "profile": "spark-bf16",
+              "modelRevision": "f428df0ec725fed457b89cfca54dc26500fb88c1",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "cacheMode": "retained-offline",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.2.0",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "repository": null,
+              "publication": "local"
+            },
+            "releaseName": "nemotron-nano",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "nemotron-nano-12b-v2",
+              "profileName": "spark-bf16"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../README.md"
+          }
+        }
+      ]
+    },
+    {
+      "id": "qwen3.5-4b",
+      "name": "Qwen3.5-4B",
+      "servedModelId": "qwen3.5-4b",
+      "availability": {
+        "status": "available",
+        "deployable": true
+      },
+      "precision": "BF16",
+      "license": "Apache-2.0",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "Qwen/Qwen3.5-4B",
+        "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+        "weightBytes": null
+      },
+      "runtime": {
+        "backend": "sglang",
+        "version": "SGLang v0.5.19",
+        "image": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513"
+      },
+      "profiles": [
+        {
+          "id": "spark-bf16",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 51539607552,
+                "memoryLimitBytes": 68719476736,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 32212254720,
+                "minimumFreeBytesBeforeDownload": 21474836480
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 32768,
+            "maximumConcurrency": 4
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-09",
+              "profile": "spark-bf16",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "lifecycleIsolationVerified": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-09",
+              "profile": "spark-bf16",
+              "modelRevision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "completionBudgetTokens": 2048,
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "cacheMode": "fresh-download",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.2.0",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "repository": null,
+              "publication": "local"
+            },
+            "releaseName": "qwen35-4b",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.5-4b",
+              "profileName": "spark-bf16"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../README.md"
+          }
+        }
+      ]
     },
     {
       "id": "qwen3.8-27b",
@@ -601,13 +963,15 @@
       "availability": {
         "status": "unavailable",
         "deployable": false,
-        "reason": "Exact-name public artifact and access status remain unverified. HTTP 401 is ambiguous between private and nonexistent repositories.",
-        "checkedAt": "2026-10-07",
+        "reason": "Exact-name public artifact and access status remain unverified. HTTP 401 is ambiguous between private and nonexistent repositories. Rechecked 2026-10-09: the Qwen3.8-4B, Qwen3.8-4B-FP8 and nvidia Qwen3.8-4B-NVFP4 repositories return 401 and no 4B model appears in the Qwen3.8 author listing. The public Qwen3.5-4B has its own executable recipe, qwen3.5-4b.",
+        "checkedAt": "2026-10-09",
         "sources": [
           "https://huggingface.co/collections/Qwen/qwen38",
           "https://huggingface.co/Qwen",
           "https://huggingface.co/api/models?author=Qwen&search=Qwen3.8&limit=100&full=true",
-          "https://huggingface.co/api/models/Qwen/Qwen3.8-4B"
+          "https://huggingface.co/api/models/Qwen/Qwen3.8-4B",
+          "https://huggingface.co/api/models/Qwen/Qwen3.8-4B-FP8",
+          "https://huggingface.co/api/models/nvidia/Qwen3.8-4B-NVFP4"
         ]
       },
       "precision": null,

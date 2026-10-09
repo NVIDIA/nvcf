@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# Replace the node names with available GB10 nodes.
+# Override runtimeClassName and storageClassName for your cluster.
+recipe: qwen3.5-4b
+profileName: spark-bf16
+nodes:
+- gpu-node-1
+runtimeClassName: nvidia
+storageClassName: local-path
+sharedCAConfigMap: llm-gateway-stack-ca

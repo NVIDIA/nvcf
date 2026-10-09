@@ -82,14 +82,16 @@ Both models use the same gateway and caller credential. Each keeps its own Helm 
 | --- | --- | --- |
 | [Qwen3.8-27B](recipes/values/qwen3.8-27b.yaml) | FP8 | One GB10. Cached Helm startup and inference tested. |
 | [Qwen3.8-27B](recipes/values/qwen3.8-27b-nvfp4.yaml) | NVIDIA NVFP4 | One GB10. Cached Helm startup, inference and model isolation tested. |
+| [Qwen3.5-4B](recipes/values/qwen3.5-4b.yaml) | BF16 | One GB10. Cached Helm startup, gateway discovery, chat, streaming and authentication tested at context 8,192 and concurrency 1 with short prompts. The model thinks by default and needs `recipes/verify.py --max-tokens 2048`. The default 512-token check ends before it answers. Context up to 32,768 and concurrency 4 are untested. |
+| [Nemotron Nano 12B v2](recipes/values/nemotron-nano-12b-v2.yaml) | BF16 | One GB10. Cached Helm startup, gateway discovery, chat, streaming and authentication tested at context 8,192 and concurrency 1 with short prompts. The model prints its reasoning inline and no tool-call parser is configured. Context up to 16,384 and concurrency 2 are untested. |
+| [Nemotron 3.5 Lightning](recipes/values/nemotron-3.5-lightning.yaml) | NVFP4 | One GB10. Fresh Helm startup, gateway discovery, chat, streaming and authentication tested at context 8,192 and concurrency 1 with short prompts, without speculative decoding. Context up to 16,384 and concurrency 2 are untested. The runtime is a pinned SGLang development image. |
 | [GLM-5.3](recipes/values/glm-5.3.yaml) | UD-IQ2_M | Two GB10s. Combined runtime tested. [Automatic Helm startup](ADVANCED.md#helm-glm-recipe) stopped at the host-memory guard. |
 | Qwen3.8-Flash-Next | NVFP4 | Automatic [one-node NVMe](recipes/values/qwen3.8-flash-next-nvme.yaml) startup and short-prompt inference tested at context 8,192 and concurrency 1. [Two-node tensor parallel](recipes/values/qwen3.8-flash-next-tp2.yaml) validation pending. [Installation](ADVANCED.md#helm-flash-next-recipes). |
-| Nemotron 5 Nano 12B | Unverified | Unavailable. Exact public model artifact not verified. |
 | Nemotron 5 Super 49B | Unverified | Unavailable. Exact public model artifact not verified. |
 | Qwen3.8-4B | Unverified | Unavailable. Exact public model artifact not verified. |
 | DeepSeek V4 Flash | Upstream mixed FP4/FP8 | Planned. Public checkpoint and upstream four-GPU candidates recorded. Chart support and hardware qualification pending. |
 
-The catalog covers seven model families and eight entries, including two Qwen3.8-27B precisions. Deploy entries with `availability.deployable: true`. Planned and unavailable entries have no deployment profiles. Their dated primary sources and upstream candidates are recorded in the catalog.
+The catalog covers nine model families and ten entries, including two Qwen3.8-27B precisions. Deploy entries with `availability.deployable: true`. Planned and unavailable entries have no deployment profiles. Their dated primary sources and upstream candidates are recorded in the catalog.
 
 The listed tests used short prompts. The catalog records validation for each hardware profile and workload separately. Additional hardware profiles use the same installation interface after qualification.
 
