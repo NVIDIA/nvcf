@@ -469,7 +469,8 @@ for path in .nats.container.merge.securityContext .nats.reloader.merge.securityC
     test "$(yq -r "$path.$field" "$work_dir/security-context-values.yaml")" = 2000 ||
       fail "nats security-context override must preserve $path.$field"
   done
-  assert_yaml_path_absent "$work_dir/security-context-values.yaml" "$path.runAsNonRoot" "nats chart-owned non-root default"
+  test "$(yq -r "$path | has(\"runAsNonRoot\")" "$work_dir/security-context-values.yaml")" = false ||
+    fail "nats chart-owned non-root default must not be overridden at $path"
 done
 test "$(yq -r '.nats.podTemplate.merge.spec.securityContext.fsGroup' "$work_dir/security-context-values.yaml")" = 2000 ||
   fail "nats pod filesystem-group override must be preserved"
