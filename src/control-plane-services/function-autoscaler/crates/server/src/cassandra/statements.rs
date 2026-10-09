@@ -18,7 +18,7 @@
 // locks table
 pub(crate) fn get_select_locks_stmt(keyspace: &str) -> String {
     format!(
-        "SELECT lock_name, node_id, acquired_at FROM {}.locks WHERE lock_name = ?;",
+        "SELECT lock_name, node_id, acquired_at, lock_token FROM {}.locks WHERE lock_name = ?;",
         keyspace
     )
 }
@@ -29,7 +29,7 @@ pub(crate) fn get_delete_locks_stmt(keyspace: &str) -> String {
 
 pub(crate) fn get_delete_owned_lock_stmt(keyspace: &str) -> String {
     format!(
-        "DELETE FROM {}.locks WHERE lock_name = ? IF node_id = ? AND acquired_at = ?;",
+        "DELETE FROM {}.locks WHERE lock_name = ? IF node_id = ? AND acquired_at = ? AND lock_token = ?;",
         keyspace
     )
 }
@@ -62,10 +62,10 @@ pub(crate) fn get_health_check_query_stmt(keyspace: &str) -> String {
 }
 
 // Inserts to the locks table must be done with a row TTL.
-// Bind order: (lock_name, node_id, acquired_at, ttl_seconds)
+// Bind order: (lock_name, node_id, acquired_at, lock_token, ttl_seconds)
 pub(crate) fn get_stmt_insert_to_locks(keyspace: &str) -> String {
     format!(
-        "INSERT INTO {}.locks (lock_name, node_id, acquired_at) VALUES (?, ?, ?) IF NOT EXISTS USING TTL ?",
+        "INSERT INTO {}.locks (lock_name, node_id, acquired_at, lock_token) VALUES (?, ?, ?, ?) IF NOT EXISTS USING TTL ?",
         keyspace,
     )
 }
@@ -75,10 +75,10 @@ pub(crate) fn get_stmt_insert_to_locks(keyspace: &str) -> String {
 // cannot leave a partially expired row behind. Keep acquired_at unchanged: it is
 // the generation token used to distinguish a reacquisition by the same node.
 // Returns [applied]=true if the row was updated, false if ownership changed.
-// Bind order: (ttl_seconds, node_id, acquired_at, lock_name, node_id, acquired_at)
+// Bind order: (ttl_seconds, node_id, acquired_at, lock_token, lock_name, node_id, acquired_at, lock_token)
 pub(crate) fn get_stmt_refresh_lock(keyspace: &str) -> String {
     format!(
-        "UPDATE {}.locks USING TTL ? SET node_id = ?, acquired_at = ? WHERE lock_name = ? IF node_id = ? AND acquired_at = ?",
+        "UPDATE {}.locks USING TTL ? SET node_id = ?, acquired_at = ?, lock_token = ? WHERE lock_name = ? IF node_id = ? AND acquired_at = ? AND lock_token = ?",
         keyspace,
     )
 }
@@ -115,15 +115,15 @@ mod tests {
     fn refresh_lock_renews_every_non_key_column() {
         let statement = get_stmt_refresh_lock("test_keyspace");
 
-        assert!(statement.contains("SET node_id = ?, acquired_at = ?"));
-        assert!(statement.contains("IF node_id = ? AND acquired_at = ?"));
+        assert!(statement.contains("SET node_id = ?, acquired_at = ?, lock_token = ?"));
+        assert!(statement.contains("IF node_id = ? AND acquired_at = ? AND lock_token = ?"));
     }
 
     #[test]
     fn delete_owned_lock_checks_node_and_acquisition_generation() {
         assert_eq!(
             get_delete_owned_lock_stmt("test_keyspace"),
-            "DELETE FROM test_keyspace.locks WHERE lock_name = ? IF node_id = ? AND acquired_at = ?;"
+            "DELETE FROM test_keyspace.locks WHERE lock_name = ? IF node_id = ? AND acquired_at = ? AND lock_token = ?;"
         );
     }
 

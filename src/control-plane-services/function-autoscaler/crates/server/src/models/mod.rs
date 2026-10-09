@@ -53,6 +53,7 @@ pub struct DistributedLock {
     pub lock_name: String,
     pub node_id: String,
     pub acquired_at: DateTime<Utc>,
+    pub lock_token: Option<String>,
 }
 
 #[derive(Debug, Clone, DeserializeRow)]
@@ -71,4 +72,5 @@ pub struct DistributedLockResult {
     pub lock_name: Option<String>,
     pub node_id: Option<String>,
     pub acquired_at: Option<DateTime<Utc>>,
+    pub lock_token: Option<String>,
 }

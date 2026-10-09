@@ -62,7 +62,8 @@ CREATE TABLE IF NOT EXISTS nvcf_autoscaler.running_functions_without_invocations
 CREATE TABLE IF NOT EXISTS nvcf_autoscaler.locks (
     lock_name   TEXT PRIMARY KEY,
     node_id     TEXT,
-    acquired_at TIMESTAMP
+    acquired_at TIMESTAMP,
+    lock_token  TEXT
 ) WITH default_time_to_live = 3600
   AND compaction = {'class': 'UnifiedCompactionStrategy', 'scaling_parameters': 'T4', 'target_sstable_size': '50MiB', 'base_shard_count': '4', 'expired_sstable_check_frequency_seconds': '300'}
   AND read_repair = 'NONE';

@@ -524,6 +524,7 @@ impl CassandraServiceManager {
                         &lock.lock_name,
                         &lock.node_id,
                         lock.acquired_at,
+                        &lock.lock_token,
                         ttl_seconds,
                     ),
                 )
@@ -606,9 +607,11 @@ impl CassandraServiceManager {
                         ttl_seconds,
                         node_id,
                         acquired_at.clone(),
+                        &lock.lock_token,
                         lock_name,
                         node_id,
                         acquired_at,
+                        &lock.lock_token,
                     ),
                 )
                 .await?;
@@ -661,6 +664,7 @@ impl CassandraServiceManager {
         lock_name: &str,
         node_id: &str,
         acquired_at: DateTime<Utc>,
+        lock_token: &str,
     ) -> Result<bool> {
         let session = self.get_session().await?;
         with_cassandra_timing("delete_owned_lock", || async {
@@ -671,7 +675,7 @@ impl CassandraServiceManager {
             prepared.set_serial_consistency(Some(SerialConsistency::Serial));
             prepared.set_is_idempotent(false);
             let result = session
-                .execute_unpaged(&prepared, (lock_name, node_id, acquired_at))
+                .execute_unpaged(&prepared, (lock_name, node_id, acquired_at, lock_token))
                 .await?;
             let rows = result.into_rows_result()?;
             if rows.column_specs().get_by_name("node_id").is_some()
@@ -929,6 +933,7 @@ mod tests {
             lock_name: "test_lock".to_string(),
             node_id: Uuid::new_v4().to_string(),
             acquired_at: Utc::now(),
+            lock_token: Some(Uuid::new_v4().to_string()),
         }
     }
 
@@ -995,6 +1000,7 @@ mod tests {
             lock_name: lock.lock_name.clone(),
             node_id: lock.node_id.clone(),
             acquired_at: Utc::now(),
+            lock_token: Some(Uuid::new_v4().to_string()),
         };
         let put_result = manager.put_lock(&reacquired_lock, ttl_seconds).await;
         assert!(put_result.is_ok());
@@ -1003,7 +1009,12 @@ mod tests {
         // A delayed guard for the previous generation must not delete this lease,
         // even though the node ID is unchanged.
         assert!(!manager
-            .delete_owned_lock(&lock.lock_name, &lock.node_id, lock.acquired_at.clone(),)
+            .delete_owned_lock(
+                &lock.lock_name,
+                &lock.node_id,
+                lock.acquired_at.clone(),
+                &lock.lock_token,
+            )
             .await
             .unwrap());
         let current_lock = manager.get_lock(&lock.lock_name).await.unwrap().unwrap();
@@ -1017,6 +1028,7 @@ mod tests {
                 &lock.lock_name,
                 "another-node",
                 reacquired_lock.acquired_at.clone(),
+                &reacquired_lock.lock_token,
             )
             .await
             .unwrap());
@@ -1073,6 +1085,7 @@ mod tests {
             lock_name: lock.lock_name.clone(),
             node_id: "contending-node".to_string(),
             acquired_at: Utc::now(),
+            lock_token: Some(Uuid::new_v4().to_string()),
         };
         assert!(!manager.put_lock(&contender, ttl_seconds).await.unwrap());
 
