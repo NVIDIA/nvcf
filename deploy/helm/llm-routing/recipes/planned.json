@@ -31,13 +31,15 @@
       "availability": {
         "status": "unavailable",
         "deployable": false,
-        "reason": "Exact-name public artifact and access status remain unverified. HTTP 401 is ambiguous between private and nonexistent repositories.",
-        "checkedAt": "2026-10-07",
+        "reason": "Exact-name public artifact and access status remain unverified. HTTP 401 is ambiguous between private and nonexistent repositories. Rechecked 2026-10-09: the Qwen3.8-4B, Qwen3.8-4B-FP8 and nvidia Qwen3.8-4B-NVFP4 repositories return 401 and no 4B model appears in the Qwen3.8 author listing.",
+        "checkedAt": "2026-10-09",
         "sources": [
           "https://huggingface.co/collections/Qwen/qwen38",
           "https://huggingface.co/Qwen",
           "https://huggingface.co/api/models?author=Qwen&search=Qwen3.8&limit=100&full=true",
-          "https://huggingface.co/api/models/Qwen/Qwen3.8-4B"
+          "https://huggingface.co/api/models/Qwen/Qwen3.8-4B",
+          "https://huggingface.co/api/models/Qwen/Qwen3.8-4B-FP8",
+          "https://huggingface.co/api/models/nvidia/Qwen3.8-4B-NVFP4"
         ]
       },
       "precision": null,
@@ -55,8 +57,8 @@
       "availability": {
         "status": "planned",
         "deployable": false,
-        "reason": "The verified checkpoint has upstream four-GPU candidates. Installation requires tensor-parallel chart support, model-specific startup/cache checks and hardware qualification.",
-        "checkedAt": "2026-10-07",
+        "reason": "The verified checkpoint has upstream four-GPU candidates. Installation requires tensor-parallel chart support, model-specific startup/cache checks and hardware qualification. Rechecked 2026-10-09: the checkpoint is about 160 GB, the SGLang cookbook lists only GB200, B200, GB300, B300 and H200 hardware with four or more GPUs, and no DGX Spark or GB10 guidance exists. The SGLang chart supports one or two nodes, so it cannot run this model on a three-GPU Spark cluster.",
+        "checkedAt": "2026-10-09",
         "sources": [
           "https://huggingface.co/api/models/deepseek-ai/DeepSeek-V4-Flash",
           "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/tree/60d8d70770c6776ff598c94bb586a859a38244f1",
