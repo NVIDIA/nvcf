@@ -6,6 +6,7 @@ require (
 	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260710034659-973443ac16c3
 	github.com/NVIDIA/nvcf/src/libraries/go/worker v0.0.0-20261005145207-d7357ccf38be
 	github.com/cenkalti/backoff/v4 v4.3.0
+	github.com/cenkalti/backoff/v7 v7.0.1
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/goccy/go-json v0.10.5
