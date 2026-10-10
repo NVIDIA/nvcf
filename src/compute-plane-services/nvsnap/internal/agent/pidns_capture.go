@@ -52,7 +52,45 @@ type pidNSCapture struct {
 	// UnixListeners are the workload's listening unix sockets bound to a
 	// path; the restore hands CRIU a fresh one for each.
 	UnixListeners []UnixListener `json:"unixListeners,omitempty"`
+	// StdoutPipe and StderrPipe are the inodes of the source container's
+	// stdout and stderr pipes (0: not a pipe). The restore hands CRIU the
+	// placeholder's own in their place, so the restored workload logs to
+	// the new pod (kubectl logs) instead of a pipe nobody reads.
+	StdoutPipe uint64 `json:"stdoutPipe,omitempty"`
+	StderrPipe uint64 `json:"stderrPipe,omitempty"`
 }
+
+// pipeInode returns the inode of pid's fd when it is a pipe, else 0.
+func pipeInode(procBase string, pid, fd int) uint64 {
+	l, err := os.Readlink(filepath.Join(procBase, strconv.Itoa(pid), "fd", strconv.Itoa(fd)))
+	if err != nil || !strings.HasPrefix(l, "pipe:[") {
+		return 0
+	}
+	n, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimPrefix(l, "pipe:["), "]"), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// stdioInheritFDs returns the --inherit-fd declarations for the source's
+// stdout and stderr pipes, on the fds the restore helper puts the
+// placeholder's own on: right after the unix listeners.
+func stdioInheritFDs(c pidNSCapture) []string {
+	var args []string
+	base := pidNSUnixListenerFD + len(c.UnixListeners)
+	if c.StdoutPipe != 0 {
+		args = append(args, "--inherit-fd", fmt.Sprintf("fd[%d]:pipe:[%d]", base, c.StdoutPipe))
+	}
+	if c.StderrPipe != 0 && c.StderrPipe != c.StdoutPipe {
+		args = append(args, "--inherit-fd", fmt.Sprintf("fd[%d]:pipe:[%d]", base+1, c.StderrPipe))
+	}
+	return args
+}
+
+// PIDNSStdioEnv tells the restore helper to put the placeholder's stdout
+// and stderr on the two fds after the listeners.
+const PIDNSStdioEnv = "NVSNAP_PIDNS_STDIO"
 
 // UnixListener is a listening unix socket bound to a filesystem path.
 type UnixListener struct {
@@ -441,7 +479,8 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 		return fmt.Errorf("criu-v2 pid-namespace dump: %w (output: %s; dump.log tail: %s)", err,
 			strings.TrimSpace(string(out)), tailOfFile(filepath.Join(checkpointDir, "dump.log"), 6))
 	}
-	return writePIDNSMarker(checkpointDir, pidNSCapture{Mounts: mounts, GPUMounts: gpuMounts, UnixListeners: listeners})
+	return writePIDNSMarker(checkpointDir, pidNSCapture{Mounts: mounts, GPUMounts: gpuMounts, UnixListeners: listeners,
+		StdoutPipe: pipeInode(procBase, hostPID, 1), StderrPipe: pipeInode(procBase, hostPID, 2)})
 }
 
 // pidNSRestoreHelperName is the agent binary staged into the placeholder's

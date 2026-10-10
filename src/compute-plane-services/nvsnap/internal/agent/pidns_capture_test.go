@@ -184,3 +184,19 @@ func TestParseListeningUnixSockets(t *testing.T) {
 		t.Errorf("encoded %q", enc)
 	}
 }
+
+// The restored workload logs to the placeholder's pipes, on the fds after
+// the listeners; one pipe for both is declared once.
+func TestStdioInheritFDs(t *testing.T) {
+	c := pidNSCapture{UnixListeners: []UnixListener{{Inode: 1}, {Inode: 2}}, StdoutPipe: 300, StderrPipe: 301}
+	if got := strings.Join(stdioInheritFDs(c), " "); got != "--inherit-fd fd[6]:pipe:[300] --inherit-fd fd[7]:pipe:[301]" {
+		t.Errorf("got %q", got)
+	}
+	same := pidNSCapture{StdoutPipe: 300, StderrPipe: 300}
+	if got := strings.Join(stdioInheritFDs(same), " "); got != "--inherit-fd fd[4]:pipe:[300]" {
+		t.Errorf("shared pipe: %q", got)
+	}
+	if got := stdioInheritFDs(pidNSCapture{}); got != nil {
+		t.Errorf("no pipes: %v", got)
+	}
+}

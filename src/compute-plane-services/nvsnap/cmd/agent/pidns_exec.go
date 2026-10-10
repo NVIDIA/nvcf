@@ -52,8 +52,24 @@ func pidNSRestoreExec(args []string) error {
 		}
 		_ = unix.Close(fd)
 	}
-	if err := bindUnixListeners(os.Getenv(agent.PIDNSUnixListenersEnv)); err != nil {
+	n, err := bindUnixListeners(os.Getenv(agent.PIDNSUnixListenersEnv))
+	if err != nil {
 		return err
+	}
+	if os.Getenv(agent.PIDNSStdioEnv) != "" {
+		// The placeholder's stdout and stderr (pid 1 here is the
+		// placeholder's own process): containerd reads them for the pod
+		// log. They go on the two fds after the listeners.
+		for i, src := range []string{"/proc/1/fd/1", "/proc/1/fd/2"} {
+			fd, err := unix.Open(src, unix.O_WRONLY, 0)
+			if err != nil {
+				return fmt.Errorf("open the placeholder's %s: %w", src, err)
+			}
+			if err := unix.Dup3(fd, 4+n+i, 0); err != nil {
+				return err
+			}
+			_ = unix.Close(fd)
+		}
 	}
 	return unix.Exec(args[0], args, os.Environ())
 }
@@ -63,7 +79,7 @@ func pidNSRestoreExec(args []string) error {
 // CRIU takes them in place of the workload's own (--inherit-fd), which it
 // cannot re-create in a restored pid namespace. A stale socket file from
 // the source is removed first.
-func bindUnixListeners(spec string) error {
+func bindUnixListeners(spec string) (int, error) {
 	type listener struct {
 		typ  int
 		path string
@@ -76,7 +92,7 @@ func bindUnixListeners(spec string) error {
 		typ, path, ok := strings.Cut(line, ":")
 		t, err := strconv.Atoi(typ)
 		if !ok || err != nil || path == "" {
-			return fmt.Errorf("bad listener %q", line)
+			return 0, fmt.Errorf("bad listener %q", line)
 		}
 		ls = append(ls, listener{t, path})
 	}
@@ -87,24 +103,24 @@ func bindUnixListeners(spec string) error {
 		_ = unix.Unlink(l.path)
 		fd, err := unix.Socket(unix.AF_UNIX, l.typ, 0)
 		if err != nil {
-			return fmt.Errorf("socket for %s: %w", l.path, err)
+			return 0, fmt.Errorf("socket for %s: %w", l.path, err)
 		}
 		if err := unix.Bind(fd, &unix.SockaddrUnix{Name: l.path}); err != nil {
-			return fmt.Errorf("bind %s: %w", l.path, err)
+			return 0, fmt.Errorf("bind %s: %w", l.path, err)
 		}
 		if err := unix.Listen(fd, 4096); err != nil {
-			return fmt.Errorf("listen %s: %w", l.path, err)
+			return 0, fmt.Errorf("listen %s: %w", l.path, err)
 		}
 		if err := unix.Dup3(fd, stage+i, 0); err != nil {
-			return err
+			return 0, err
 		}
 		_ = unix.Close(fd)
 	}
 	for i := range ls {
 		if err := unix.Dup3(stage+i, 4+i, 0); err != nil {
-			return err
+			return 0, err
 		}
 		_ = unix.Close(stage + i)
 	}
-	return nil
+	return len(ls), nil
 }
