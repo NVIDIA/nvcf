@@ -272,15 +272,22 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		resumePID := hostPID
 		if pidns {
 			// The restored processes live in the nested pid namespace; their
-			// saved pids are pids there.
+			// saved pids are pids there. They resume on the placeholder's
+			// GPUs, whose entries the dump left out.
 			p, err := nestedInitHostPID(procBase, hostPID)
 			if err != nil {
 				gsSpan.End()
 				return nil, fmt.Errorf("gpushare resume: %w", err)
 			}
 			resumePID = p
+			made, err := installPlaceholderGPUs(procBase, hostPID, p)
+			if err != nil {
+				gsSpan.End()
+				return nil, fmt.Errorf("gpushare resume: give the restored tree the pod's GPUs: %w", err)
+			}
+			log.WithField("gpuEntries", made).Info("criu-v2: the restored tree has the pod's GPUs")
 		}
-		if err := gpushareResume(ctx, resumePID, gs.PIDs, gpuMap, fabricDir, log); err != nil {
+		if err := gpushareResumeWithGPUsOf(ctx, resumePID, hostPID, gs.PIDs, gpuMap, fabricDir, log); err != nil {
 			gsSpan.RecordError(err)
 			gsSpan.SetStatus(codes.Error, "gpushare resume failed")
 			gsSpan.End()

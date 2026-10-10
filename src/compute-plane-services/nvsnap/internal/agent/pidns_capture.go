@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -45,6 +46,21 @@ type pidNSCapture struct {
 	// Mounts are the mountpoints declared external at dump, each keyed by
 	// its own path; restore binds the placeholder's mount at that path.
 	Mounts []string `json:"mounts"`
+	// GPUMounts are the GPU-identity mounts left out of the dump (see
+	// gpuIdentityMount); restore gives the tree the placeholder's own.
+	GPUMounts []string `json:"gpuMounts,omitempty"`
+}
+
+var gpuDeviceNode = regexp.MustCompile(`^/dev/nvidia[0-9]+$`)
+
+// gpuIdentityMount reports a mount that names one particular GPU: its
+// device node and the container toolkit's per-GPU entries. A restore
+// placeholder is usually given other GPUs, so these cannot be bound by
+// path; the restored tree gets the placeholder's GPUs instead.
+func gpuIdentityMount(mp string) bool {
+	return gpuDeviceNode.MatchString(mp) ||
+		strings.HasPrefix(mp, "/run/nvidia-container-devices/") ||
+		strings.HasPrefix(mp, "/proc/driver/nvidia/gpus/")
 }
 
 // criuNativeFS are filesystems CRIU recreates itself when they are mounted
@@ -108,29 +124,34 @@ func unescapeMountinfo(s string) string {
 // mount"). Those, the node's bind mounts (kubelet's /etc/hosts, volumes,
 // the CDI driver files) and the cgroup mount are external; restore binds
 // the placeholder's copy of each.
-func pidNSExternalMounts(entries []mountinfoEntry) []string {
+//
+// The GPU-identity mounts are returned apart, as gpu: the dump skips them.
+func pidNSExternalMounts(entries []mountinfoEntry) (external, gpu []string) {
 	rootOf := map[string]bool{} // devices mounted at their own root here
 	for _, e := range entries {
 		if e.Root == "/" {
 			rootOf[e.Dev] = true
 		}
 	}
-	var out []string
 	for _, e := range entries {
 		if e.MountPoint == "/" {
+			continue
+		}
+		if gpuIdentityMount(e.MountPoint) {
+			gpu = append(gpu, e.MountPoint)
 			continue
 		}
 		if criuNativeFS[e.FSType] && rootOf[e.Dev] {
 			continue
 		}
-		out = append(out, e.MountPoint)
+		external = append(external, e.MountPoint)
 	}
-	return out
+	return external, gpu
 }
 
 // pidNSDumpArgs is the criu dump argv for a pid-1 workload, run from the
 // agent's namespaces against the container's host pid.
-func pidNSDumpArgs(hostPID int, procBase, imgsDir, pluginDir string, netNSInode uint64, mounts, deviceExternals []string, leaveRunning, gpushare, directIO bool) []string {
+func pidNSDumpArgs(hostPID int, procBase, imgsDir, pluginDir string, netNSInode uint64, mounts, skipMounts, deviceExternals []string, leaveRunning, gpushare, directIO bool) []string {
 	args := []string{
 		"dump",
 		"-t", strconv.Itoa(hostPID),
@@ -158,6 +179,9 @@ func pidNSDumpArgs(hostPID int, procBase, imgsDir, pluginDir string, netNSInode 
 	}
 	for _, mp := range mounts {
 		args = append(args, "--external", fmt.Sprintf("mnt[%s]:%s", mp, mp))
+	}
+	for _, mp := range skipMounts {
+		args = append(args, "--skip-mnt", mp)
 	}
 	for _, e := range deviceExternals {
 		args = append(args, "--external", e)
@@ -305,13 +329,13 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 	if err != nil {
 		return fmt.Errorf("pid-namespace dump: read mounts: %w", err)
 	}
-	mounts := pidNSExternalMounts(parseMountinfo(string(mi)))
+	mounts, gpuMounts := pidNSExternalMounts(parseMountinfo(string(mi)))
 	var st syscall.Stat_t
 	if err := syscall.Stat(filepath.Join(procBase, strconv.Itoa(hostPID), "ns", "net"), &st); err != nil {
 		return fmt.Errorf("pid-namespace dump: network namespace: %w", err)
 	}
 	args := pidNSDumpArgs(hostPID, procBase, checkpointDir, resolveCRIUPluginDir(a.config.CRIUPath, log), st.Ino,
-		mounts, deviceExternals, leaveRunning, gpushare, gpushare && bundledSupportsDirectImageIO())
+		mounts, gpuMounts, deviceExternals, leaveRunning, gpushare, gpushare && bundledSupportsDirectImageIO())
 	log.WithFields(logrus.Fields{"argv": a.config.CRIUPath + " " + strings.Join(args, " "), "externalMounts": len(mounts)}).
 		Info("criu-v2: dumping the pid namespace from outside the container")
 	dctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
@@ -325,7 +349,7 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 		return fmt.Errorf("criu-v2 pid-namespace dump: %w (output: %s; dump.log tail: %s)", err,
 			strings.TrimSpace(string(out)), tailOfFile(filepath.Join(checkpointDir, "dump.log"), 6))
 	}
-	return writePIDNSMarker(checkpointDir, pidNSCapture{Mounts: mounts})
+	return writePIDNSMarker(checkpointDir, pidNSCapture{Mounts: mounts, GPUMounts: gpuMounts})
 }
 
 // pidNSRestoreHelperName is the agent binary staged into the placeholder's
@@ -422,4 +446,52 @@ func procStateThreads(procBase string, pid int) (string, int) {
 		}
 	}
 	return state, threads
+}
+
+// installPlaceholderGPUs gives the restored tree, whose pid 1 is nestedPID,
+// the placeholder's GPU-identity entries: the GPU device nodes the pod was
+// given (the pod's device cgroup admits exactly those) and the container
+// toolkit's per-GPU entries. They are created through the restored tree's
+// root, which the agent can write but not mount into.
+func installPlaceholderGPUs(procBase string, placeholderPID, nestedPID int) ([]string, error) {
+	mi, err := os.ReadFile(filepath.Join(procBase, strconv.Itoa(placeholderPID), "mountinfo"))
+	if err != nil {
+		return nil, err
+	}
+	_, gpu := pidNSExternalMounts(parseMountinfo(string(mi)))
+	src := filepath.Join(procBase, strconv.Itoa(placeholderPID), "root")
+	dst := filepath.Join(procBase, strconv.Itoa(nestedPID), "root")
+	var made []string
+	for _, mp := range gpu {
+		var st syscall.Stat_t
+		if err := syscall.Stat(filepath.Join(src, mp), &st); err != nil {
+			return made, fmt.Errorf("stat the placeholder's %s: %w", mp, err)
+		}
+		target := filepath.Join(dst, mp)
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return made, err
+		}
+		switch st.Mode & syscall.S_IFMT {
+		case syscall.S_IFCHR:
+			_ = os.Remove(target)
+			if err := syscall.Mknod(target, st.Mode, int(st.Rdev)); err != nil {
+				return made, fmt.Errorf("create %s: %w", mp, err)
+			}
+		case syscall.S_IFDIR:
+			if err := os.MkdirAll(target, os.FileMode(st.Mode&0o7777)); err != nil {
+				return made, err
+			}
+		default:
+			if _, err := os.Stat(target); err == nil {
+				continue
+			}
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, os.FileMode(st.Mode&0o7777))
+			if err != nil {
+				return made, err
+			}
+			_ = f.Close()
+		}
+		made = append(made, mp)
+	}
+	return made, nil
 }

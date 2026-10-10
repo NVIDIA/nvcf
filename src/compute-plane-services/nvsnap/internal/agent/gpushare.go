@@ -266,9 +266,16 @@ func gpushareSuspend(ctx context.Context, hostPID int, pids []int, fabricDir str
 // memory, re-creates the shared mappings and lets them run. gpuMap, when
 // set, maps the capture's GPUs onto the ones visible here.
 func gpushareResume(ctx context.Context, hostPID int, pids []int, gpuMap, fabricDir string, log *logrus.Entry) error {
+	return gpushareResumeWithGPUsOf(ctx, hostPID, hostPID, pids, gpuMap, fabricDir, log)
+}
+
+// gpushareResumeWithGPUsOf resumes pids, entered through hostPID, on the
+// GPUs of gpusPID's pod. They differ for a tree restored into a nested pid
+// namespace: its processes still carry the source pod's GPU environment.
+func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []int, gpuMap, fabricDir string, log *logrus.Entry) error {
 	args := gpushareResumeArgs(gpuMap, fabricDir, pids)
 	t0 := time.Now()
-	out, err := gpushareToolEnv(ctx, hostPID, podGPUEnv(hostPID), 60*time.Minute, args...)
+	out, err := gpushareToolEnv(ctx, hostPID, podGPUEnv(gpusPID), 60*time.Minute, args...)
 	if err != nil {
 		return err
 	}

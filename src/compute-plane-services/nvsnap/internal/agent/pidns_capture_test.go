@@ -32,20 +32,29 @@ const containerMountinfo = `100 90 0:300 / / rw - overlay overlay rw
 114 100 9:127 /kubelet/pods/u/volumes/my\040vol /data rw - xfs /dev/md127 rw
 115 102 0:5 /nvidia0 /dev/nvidia0 rw - devtmpfs udev rw
 116 100 0:99 /driver/lib/firmware/nvidia/610.57.04/gsp_tu10x.bin /lib/firmware/nvidia/610.57.04/gsp_tu10x.bin ro - tmpfs tmpfs rw
+117 102 0:5 /nvidiactl /dev/nvidiactl rw - devtmpfs udev rw
+118 100 0:310 / /run/nvidia-container-devices/GPU-7e1f1942 ro - tmpfs tmpfs rw
 `
 
 func TestPIDNSExternalMounts(t *testing.T) {
-	got := pidNSExternalMounts(parseMountinfo(containerMountinfo))
-	want := []string{"/sys/fs/cgroup", "/etc/hosts", "/dev/termination-log", "/etc/hostname", "/data", "/dev/nvidia0",
-		"/lib/firmware/nvidia/610.57.04/gsp_tu10x.bin"}
+	got, gpu := pidNSExternalMounts(parseMountinfo(containerMountinfo))
+	want := []string{"/sys/fs/cgroup", "/etc/hosts", "/dev/termination-log", "/etc/hostname", "/data",
+		"/lib/firmware/nvidia/610.57.04/gsp_tu10x.bin", "/dev/nvidiactl"}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("external mounts\\n got %v\\nwant %v", got, want)
+		t.Errorf("external mounts: got %v, want %v", got, want)
+	}
+	wantGPU := []string{"/dev/nvidia0", "/run/nvidia-container-devices/GPU-7e1f1942"}
+	if !reflect.DeepEqual(gpu, wantGPU) {
+		t.Errorf("GPU-identity mounts: got %v, want %v", gpu, wantGPU)
 	}
 }
 
 func TestPIDNSArgs(t *testing.T) {
 	dump := strings.Join(pidNSDumpArgs(4242, "/proc", "/ck/x", "/criu-bundle/plugins", 4026538391,
-		[]string{"/etc/hosts"}, []string{"dev[195/0]:nvidia0"}, true, true, false), " ")
+		[]string{"/etc/hosts"}, []string{"/dev/nvidia0"}, []string{"dev[195/0]:nvidia0"}, true, true, false), " ")
+	if !strings.Contains(dump, "--skip-mnt /dev/nvidia0") {
+		t.Errorf("GPU-identity mount not skipped: %s", dump)
+	}
 	for _, want := range []string{"dump -t 4242 --root /proc/4242/root -D /ck/x", "--external net[4026538391]:extNetNs",
 		"--external mnt[/etc/hosts]:/etc/hosts", "--external dev[195/0]:nvidia0", "--leave-running", "--tcp-established"} {
 		if !strings.Contains(dump, want) {
