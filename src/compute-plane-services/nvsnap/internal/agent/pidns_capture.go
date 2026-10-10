@@ -136,11 +136,23 @@ func pidNSExternalMounts(entries []mountinfoEntry) (external, gpu []string) {
 			rootOf[e.Dev] = true
 		}
 	}
+	// A mount bound out of a skipped one goes with it: the toolkit binds
+	// /proc/driver/nvidia/params out of its per-container hook tmpfs, and
+	// CRIU cannot rebuild it once that tmpfs is left out ("doesn't have a
+	// proper root mount").
+	// Device nodes all come from the node's devtmpfs; sharing it is normal
+	// and says nothing.
+	skippedDev := map[string]bool{}
+	for _, e := range entries {
+		if e.MountPoint != "/" && gpuIdentityMount(e.MountPoint) && e.FSType != "devtmpfs" {
+			skippedDev[e.Dev] = true
+		}
+	}
 	for _, e := range entries {
 		if e.MountPoint == "/" {
 			continue
 		}
-		if gpuIdentityMount(e.MountPoint) {
+		if gpuIdentityMount(e.MountPoint) || skippedDev[e.Dev] {
 			gpu = append(gpu, e.MountPoint)
 			continue
 		}
@@ -471,6 +483,14 @@ func installPlaceholderGPUs(procBase string, placeholderPID, nestedPID int) ([]s
 			return made, fmt.Errorf("stat the placeholder's %s: %w", mp, err)
 		}
 		target := filepath.Join(dst, mp)
+		// Only the restored /dev (a tmpfs of the restored tree) is the
+		// tree's own: elsewhere the root is the placeholder's filesystem,
+		// whose entries are already there. Create what is missing; never
+		// replace anything outside /dev.
+		inDev := strings.HasPrefix(mp, "/dev/")
+		if _, err := os.Lstat(target); err == nil && !inDev {
+			continue
+		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return made, err
 		}
