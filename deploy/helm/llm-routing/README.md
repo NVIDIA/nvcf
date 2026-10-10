@@ -159,8 +159,6 @@ These actions affect one model release. Keep the shared gateway and operator ins
 
 ### Stop and resume
 
-For older Spark `qwen-fp8` releases installed without `profileName`, add `--set profileName=spark-fp8` to stop, resume and upgrade commands.
-
 Stop the FP8 release installed above. Use the same chart version that installed the release:
 
 ```bash

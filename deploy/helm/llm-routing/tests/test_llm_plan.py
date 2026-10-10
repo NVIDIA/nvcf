@@ -381,9 +381,11 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(report['status'], 'blocked')
         self.assertIsNone(report['chosenProfile'])
         self.assertIsNone(report['deployment'])
-        self.assertIn("No compatible profile found for this model and the cluster's GPUs.", output)
-        for hidden in ('Needs (', '104.0 GiB RAM', 'Selected nodes:', 'helm install',
-                       'spark-fp8:', 'GPU product does not match', 'No distinct compatible node group'):
+        self.assertIn('DOES NOT FIT current requirements.', output)
+        self.assertEqual(output.count('spark-fp8: GPU product does not match this profile.'), 1)
+        for reason in report['blockers']:
+            self.assertEqual(output.count(reason), 1)
+        for hidden in ('Needs (', '104.0 GiB RAM', 'Selected nodes:', 'helm install'):
             self.assertNotIn(hidden, output)
         for expected in ('available-0', 'available-1', 'GPU allocation', 'No model cache claims found.'):
             self.assertIn(expected, output)

@@ -628,17 +628,7 @@ def print_capacity_plan(report, verbose=False):
         print_capacity_details(report)
     else:
         print(f"Model: {report['model']} | Cluster: {report['context']}")
-        profiles = report.get('profiles', [])
-        gpu_mismatch = report['status'] == 'blocked' and profiles and all(
-            profile.get('nodeBlockers')
-            and not any(candidate['nodes'] for candidate in profile.get('candidateNodes', []))
-            and all(blocker['reasons'] == ['GPU product does not match this profile.']
-                    for blocker in profile['nodeBlockers'])
-            for profile in profiles)
-        if gpu_mismatch:
-            print("No compatible profile found for this model and the cluster's GPUs.")
-        else:
-            print_capacity_status(report['status'])
+        print_capacity_status(report['status'])
         for profile in report.get('profiles', []):
             if report['status'] != 'fits' or profile['id'] != report['chosenProfile']:
                 continue
@@ -655,7 +645,7 @@ def print_capacity_plan(report, verbose=False):
                 print(text)
         if report['status'] == 'fits':
             print('Selected nodes: ' + ', '.join(report['chosenNodes']))
-        elif report['status'] in ('blocked', 'unsupported') and not gpu_mismatch:
+        elif report['status'] in ('blocked', 'unsupported'):
             reasons = [f"{profile['id']}: {reason}"
                        for profile in report.get('profiles', [])
                        for blocker in profile.get('nodeBlockers', [])

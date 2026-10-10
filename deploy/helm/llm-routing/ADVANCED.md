@@ -352,8 +352,6 @@ All supported recipes use the same Helm lifecycle. Preparation, startup and endp
 | Flash-Next, either profile | `qwen-flash` | `pylon-sglang-recipe-0.2.0.tgz` | `qwen3.8-flash-next` |
 | GLM | `glm` | `pylon-gguf-backend-0.2.0.tgz` | `GLM-5.3-UD-IQ2_M` |
 
-For older Spark `qwen-fp8` releases installed without `profileName`, add `--set profileName=spark-fp8` to the Helm upgrade commands below, including stop and resume.
-
 For the commands below, select the Kubernetes context, existing release and its chart. Use the chart version that installed it for stop and resume. For example:
 
 ```bash
