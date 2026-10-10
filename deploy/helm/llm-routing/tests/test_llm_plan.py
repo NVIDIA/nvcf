@@ -442,6 +442,23 @@ class PlanTests(unittest.TestCase):
         self.assertIn('Insufficient GPU', output)
         self.assertNotIn('No compatible profile found', output)
 
+    def test_gpu_mismatch_keeps_resource_shortages_visible(self):
+        for resource, amount, message in [('nvidia.com/gpu', '1', 'Insufficient GPU'),
+                                          ('memory', '64Gi', 'Insufficient memory')]:
+            with self.subTest(resource=resource):
+                data = snapshot()
+                data['nodes'][0]['metadata']['labels']['nvidia.com/gpu.product'] = 'NVIDIA-GB300'
+                data['pods'] = [{'metadata': {'name': 'busy', 'namespace': 'other'}, 'spec': {
+                    'nodeName': 'available-0', 'containers': [{'resources': {'requests': {resource: amount}}}]}}]
+                self.output.truncate(0)
+                self.output.seek(0)
+                report = self.plan(data, '--profile', 'spark-fp8')
+                self.assertEqual(report['status'], 'blocked')
+                output = self.output.getvalue()
+                self.assertIn('GPU product does not match this profile.', output)
+                self.assertIn(message, output)
+                self.assertNotIn('No compatible profile found', output)
+
     def test_too_few_matching_nodes_is_not_reported_as_missing_profile(self):
         data = snapshot(2)
         data['nodes'][0]['metadata']['labels']['nvidia.com/gpu.product'] = 'NVIDIA-GB300'

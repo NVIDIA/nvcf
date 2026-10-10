@@ -67,11 +67,13 @@ Options:
 
 - `--profile NAME` restricts the check to one catalog hardware profile.
 - `--context-length TOKENS --concurrency COUNT` checks a requested workload against the recipe's supported envelope. SGLang commands include these overrides. GGUF profiles use fixed recipe tuning and reject workload overrides.
-- `--capabilities FILE` supplies verified per-node NVMe, device-memory or fabric facts. Start from [capabilities.example.json](recipes/capabilities.example.json), replace example addresses and names, and save it outside the checkout.
+- `--capabilities FILE` supplies verified per-node NVMe, device-memory or fabric facts. Start from [capabilities.example.json](recipes/capabilities.example.json), replace example node names and values, and save it outside the checkout.
 - `--runtime-class NAME --storage-class NAME --shared-ca-configmap NAME` sets the installation's site values. The check requires the RuntimeClass and a StorageClass with `WaitForFirstConsumer` and unrestricted topology. It does not verify the CA or gateway connection.
 - `--release NAME` changes the name of a new release. It does not adopt or replace an existing deployment.
 - `--verbose` shows detailed diagnostics and an install command when all deployment checks pass.
 - `--json` prints the complete report, including storage measurements and errors, as JSON for other tools. Exit status is `0` when a new placement fits and `2` when blocked, unsupported or already deployed.
+
+For Station, set `cudaTotalMemoryGiB` to verified total CUDA device memory per GPU in GiB. Replace the example's `station-node-1` and illustrative `249.75` with the actual Kubernetes node name and measured value.
 
 The report checks GPU, CPU and memory reservations, hardware compatibility, node readiness, resource pressure and exclusive GPU requirements. NVMe offload also checks reserved ephemeral storage and the supplied local-NVMe fact. Distributed profiles require compatible fabric facts. Kubernetes still schedules the pods; this read-only snapshot is not a reservation. It does not measure physical free disk, live host memory, image availability or runtime health. Resolve storage shortages separately using the [cache cleanup procedure](#remove-downloaded-model-files).
 
@@ -350,6 +352,8 @@ All supported recipes use the same Helm lifecycle. Preparation, startup and endp
 | Flash-Next, either profile | `qwen-flash` | `pylon-sglang-recipe-0.2.0.tgz` | `qwen3.8-flash-next` |
 | GLM | `glm` | `pylon-gguf-backend-0.2.0.tgz` | `GLM-5.3-UD-IQ2_M` |
 
+For older Spark `qwen-fp8` releases installed without `profileName`, add `--set profileName=spark-fp8` to the Helm upgrade commands below, including stop and resume.
+
 For the commands below, select the Kubernetes context, existing release and its chart. Use the chart version that installed it for stop and resume. For example:
 
 ```bash
@@ -610,7 +614,7 @@ For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the
      --profile "$PROFILE_ID" --release "$MODEL_RELEASE" --verbose
    ```
 
-   Supply `--capabilities /path/to/private/capabilities.json` for profiles needing verified NVMe or fabric facts. Once placement and values are correct, deploy and verify. Registration can precede gateway discovery. The loop below waits for discovery and a healthy registry before testing inference. Each verification run needs a fresh output path:
+   Supply `--capabilities /path/to/private/capabilities.json` for profiles needing verified NVMe, device-memory or fabric facts. Once placement and values are correct, deploy and verify. Registration can precede gateway discovery. The loop below waits for discovery and a healthy registry before testing inference. Each verification run needs a fresh output path:
 
    ```bash
    VERIFY_DIR="$(mktemp -d)"

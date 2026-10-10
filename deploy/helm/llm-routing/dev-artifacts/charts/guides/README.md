@@ -69,6 +69,8 @@ Check current GPU allocation and downloaded model caches. Add `--json` for JSON 
 python3 llm.py plan --model qwen3.8-27b
 ```
 
+On Station, add `--capabilities FILE` with verified `cudaTotalMemoryGiB` for each node, as shown in the [model capacity guidance](ADVANCED.md#model-capacity-check).
+
 Install and register Qwen FP8 below, replacing `PROFILE_FROM_PLANNER` and `NODE_FROM_PLANNER` with your chosen profile and node. To reuse retained downloads, keep the original release name, namespace and cache node. Completed model files are verified and reused automatically; missing files are downloaded. No cache flag or values file is required. [Model values examples](recipes/README.md#committed-values) are available for optional overrides and other recipes.
 
 ```bash
@@ -156,6 +158,8 @@ Downloaded model weights are the model cache on disk. Choose what to retain:
 These actions affect one model release. Keep the shared gateway and operator installed so other models continue serving and endpoint cleanup can finish.
 
 ### Stop and resume
+
+For older Spark `qwen-fp8` releases installed without `profileName`, add `--set profileName=spark-fp8` to stop, resume and upgrade commands.
 
 Stop the FP8 release installed above. Use the same chart version that installed the release:
 

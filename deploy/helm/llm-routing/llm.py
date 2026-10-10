@@ -632,7 +632,7 @@ def print_capacity_plan(report, verbose=False):
         gpu_mismatch = report['status'] == 'blocked' and profiles and all(
             profile.get('nodeBlockers')
             and not any(candidate['nodes'] for candidate in profile.get('candidateNodes', []))
-            and all('GPU product does not match this profile.' in blocker['reasons']
+            and all(blocker['reasons'] == ['GPU product does not match this profile.']
                     for blocker in profile['nodeBlockers'])
             for profile in profiles)
         if gpu_mismatch:
