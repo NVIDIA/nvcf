@@ -20,6 +20,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -34,6 +35,8 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/criu/mountinfo"
@@ -767,6 +770,13 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 		criuSpan.RecordError(err)
 		criuSpan.SetStatus(codes.Error, "CRIU dump failed (criu-v2)")
 		criuSpan.End()
+		if errors.Is(err, errSourceLeftSuspended) && a.kubeClient != nil {
+			// Its controller replaces it with a pod that serves.
+			log.WithError(err).Error("the capture left the workload suspended; deleting its pod")
+			if derr := a.kubeClient.CoreV1().Pods(req.Namespace).Delete(context.WithoutCancel(ctx), req.PodName, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				log.WithError(derr).Error("cannot delete the suspended workload's pod")
+			}
+		}
 		return nil, fmt.Errorf("CRIU dump failed (criu-v2): %w", err)
 	}
 	criuSpan.End()
