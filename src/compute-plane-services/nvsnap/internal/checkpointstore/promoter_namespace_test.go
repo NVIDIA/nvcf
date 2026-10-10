@@ -143,13 +143,18 @@ func TestSharedVolume_DeleteReapsNamespacedClaims(t *testing.T) {
 			t.Errorf("%s: rox claim must be gone, err=%v", ns, err)
 		}
 	}
+	// The views go; the primary is handed back to its provisioner, which
+	// deletes the volume with it: deleting a Retain PV object would leave
+	// the volume on the storage.
 	pvs, _ := kc.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
-	if len(pvs.Items) != 0 {
-		names := []string{}
-		for _, pv := range pvs.Items {
-			names = append(names, pv.Name)
+	for _, pv := range pvs.Items {
+		if pv.Name != "pv-primary" {
+			t.Errorf("view %s must be gone after Delete", pv.Name)
+			continue
 		}
-		t.Errorf("all PVs must be gone after Delete, left %v", names)
+		if pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimDelete {
+			t.Errorf("primary reclaim policy = %q, want Delete", pv.Spec.PersistentVolumeReclaimPolicy)
+		}
 	}
 }
 
