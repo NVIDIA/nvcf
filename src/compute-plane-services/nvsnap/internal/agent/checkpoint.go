@@ -20,6 +20,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -34,6 +35,8 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/criu/mountinfo"
@@ -207,6 +210,21 @@ type CheckpointRequest struct {
 	// multi-GPU) — on those it returns an error rather than silently
 	// falling back. See resolveCheckpointRedirect.
 	CapturePath string `json:"capturePath,omitempty"`
+
+	// GPUShareFabricSession joins the capture to a multi-node gpushare
+	// session driven by another agent (see gpushare_fabric.go): the
+	// suspend and resume coordinate with the workload's other pods.
+	GPUShareFabricSession string `json:"gpushareFabricSession,omitempty"`
+	// GPUShareGroupIndex and GPUShareGroupSize place this pod in its
+	// session's group; a group restore maps each checkpoint back to a pod
+	// by them.
+	GPUShareGroupIndex int `json:"gpushareGroupIndex,omitempty"`
+	GPUShareGroupSize  int `json:"gpushareGroupSize,omitempty"`
+
+	// CaptureID names one instance capture (criu_group.go): the checkpoint
+	// gets an identity of its own instead of the content hash, which
+	// several captures of one configuration share.
+	CaptureID string `json:"captureId,omitempty"`
 }
 
 // CheckpointResult is the result of a checkpoint operation
@@ -362,6 +380,14 @@ type CheckpointMetadata struct {
 	// swrk/ExtMnt path.
 	CapturePath string `json:"capturePath,omitempty"`
 
+	// GPUShare is set when the workload ran under libnvsnap_gpushare.so and
+	// its GPU state was saved by nvsnap-gpu-suspend (see gpushare.go).
+	GPUShare *GPUShareInfo `json:"gpushare,omitempty"`
+	// GPUShareGroup is set when the pod was dumped with the other pods of
+	// its instance; with SourcePodIP it lets a group restore move the
+	// connections between those pods to the new pods' addresses.
+	GPUShareGroup *GPUShareGroupInfo `json:"gpushareGroup,omitempty"`
+
 	// Integrity (v1.6+): SHA-256 checksums for critical checkpoint files
 	Integrity *CheckpointIntegrity `json:"integrity,omitempty"`
 
@@ -399,7 +425,7 @@ type CheckpointIntegrity struct {
 }
 
 // Checkpoint creates a GPU-aware checkpoint of a container
-func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*CheckpointResult, error) {
+func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *CheckpointResult, retErr error) {
 	ctx, span := tracing.Tracer().Start(ctx, "checkpoint.full")
 	defer span.End()
 	span.SetAttributes(
@@ -407,6 +433,16 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 		attribute.String("nvsnap.pod", req.PodName),
 		attribute.String("nvsnap.container", req.ContainerName),
 	)
+
+	// One dump of a pod at a time: NVCA and the instance capture may both
+	// ask for the same pod.
+	if req.PodName != "" {
+		podKey := req.Namespace + "/" + req.PodName
+		if _, busy := a.checkpointing.LoadOrStore(podKey, struct{}{}); busy {
+			return nil, fmt.Errorf("%s is already being checkpointed", podKey)
+		}
+		defer a.checkpointing.Delete(podKey)
+	}
 
 	startTime := time.Now()
 	identifier := req.PodName
@@ -449,6 +485,10 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 		discoverSpan.End()
 		return nil, fmt.Errorf("failed to find container: %w", err)
 	}
+	if _, busy := a.capturing.LoadOrStore(containerInfo.ID, struct{}{}); busy {
+		return nil, fmt.Errorf("%w: container %s", ErrCaptureInProgress, containerInfo.ID)
+	}
+	defer a.capturing.Delete(containerInfo.ID)
 	discoverSpan.SetAttributes(
 		attribute.String("nvsnap.container_id", containerInfo.ID[:12]),
 		attribute.Int("nvsnap.container_pid", int(containerInfo.PID)),
@@ -548,12 +588,13 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	// NOTE: vLLM v0.11.2+ spawns multiple GPU processes for single-GPU (main + EngineCore),
 	// so len(gpuPIDs) > 1 doesn't mean multi-GPU. Count distinct /dev/nvidiaX devices instead.
 	distinctGPUs := countDistinctGPUDevices(gpuPIDs, log)
-	// Multi-GPU CRIU path is a dead end (cuda-checkpoint blocks on
-	// libcudart wall, D2H+intercept-lib path can't reconstruct CUDA
-	// context state on restore). Multi-GPU workloads MUST use the
-	// rootfs-only path (nvsnap.io/capture label → agent watcher →
-	// per-capture PVC). Reject CRIU API calls for multi-GPU early.
-	if distinctGPUs > 1 {
+	// Plain multi-GPU CRIU cannot work: cuda-checkpoint cannot restore GPU
+	// memory a process imported from another one (NCCL P2P and NVLS, CUDA
+	// IPC). Reject it early and point at the rootfs-only path (nvsnap.io/
+	// capture label, agent watcher, per-capture PVC).
+	// Unless the workload runs under libnvsnap_gpushare.so, which releases
+	// and re-creates the memory the GPUs share around the checkpoint.
+	if distinctGPUs > 1 && !gpushareLoadedBy(gpuPIDs) {
 		return nil, fmt.Errorf("multi-GPU CRIU is unsupported (distinctGPUs=%d, gpuPIDs=%v); use the rootfs-only path: label the source pod nvsnap.io/capture=true and apply a fresh pod with nvsnap.io/restore-from=<hash>", distinctGPUs, gpuPIDs)
 	}
 
@@ -585,12 +626,30 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	catalogCtx, catalogCancel := context.WithTimeout(ctx, 5*time.Second)
 	catalog := a.CollectCatalogInfo(catalogCtx, req.Namespace, req.PodName, req.ContainerName, a.config.NodeName, "")
 	catalogCancel()
+	if req.GPUShareGroupSize > 0 || req.CaptureID != "" {
+		// An instance capture: each rank, and each capture, is its own
+		// checkpoint (the ranks share the configuration hash, and a
+		// re-capture must replace the previous one, not resolve to it).
+		catalog.setCaptureIdentity(req.GPUShareGroupIndex, req.GPUShareGroupSize, req.GPUShareFabricSession+"/"+req.CaptureID)
+		// Only the agent's own instance capture (CaptureID) is recorded in
+		// a group record; a group checkpoint asked for through the API is
+		// the caller's to keep.
+		catalog.InstanceCapture = req.CaptureID != ""
+	}
 
 	checkpointID := buildCheckpointID(catalog, time.Now())
 	checkpointDir := filepath.Join(a.config.CheckpointDir, checkpointID)
 	if mkErr := os.MkdirAll(checkpointDir, 0o755); mkErr != nil {
 		return nil, fmt.Errorf("failed to create checkpoint dir: %w", mkErr)
 	}
+	defer func() {
+		// A failed capture leaves nothing a restore could use.
+		if retErr != nil {
+			if err := os.RemoveAll(checkpointDir); err != nil {
+				log.WithError(err).WithField("dir", checkpointDir).Warn("cannot remove the failed capture's directory")
+			}
+		}
+	}()
 	log.WithField("checkpointDir", checkpointDir).Info("Created checkpoint directory")
 	log.WithFields(logrus.Fields{
 		"gpuPIDs":      gpuPIDs,
@@ -607,6 +666,11 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	// Step 4.7: Get pod IP for stable network identity (MUST be before CRIU dump)
 	// After CRIU dump, the process may be gone and /proc/<pid> won't exist.
 	podIP := a.getPodIP(int(containerInfo.PID))
+	if req.GPUShareFabricSession != "" && podIP == "" {
+		// A group restore maps each pod's old address to its new one; a
+		// member without one would leave its peers' connections unmapped.
+		return nil, fmt.Errorf("gpushare: fabric session %s: cannot determine the pod IP of %s/%s", req.GPUShareFabricSession, req.Namespace, req.PodName)
+	}
 	if podIP != "" {
 		log.WithField("podIP", podIP).Info("Captured pod IP for restore compatibility")
 	} else {
@@ -705,10 +769,20 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	// legacy path — the artifact contract is identical.
 	_, criuSpan := tracing.Tracer().Start(ctx, "checkpoint.criu_dump")
 	criuSpan.SetAttributes(attribute.String("nvsnap.criu.mode", "v2-inns"))
-	if err := a.dumpV2(ctx, containerInfo, checkpointDir, sourceUpperdir, gpuPIDs, req.LeaveRunning, log); err != nil {
+	gpushareInfo, err := a.dumpV2(ctx, containerInfo, checkpointDir, sourceUpperdir, gpuPIDs, req.LeaveRunning, req.GPUShareFabricSession, log)
+	if err != nil {
 		criuSpan.RecordError(err)
 		criuSpan.SetStatus(codes.Error, "CRIU dump failed (criu-v2)")
 		criuSpan.End()
+		// A rank of a group capture is one engine with its peers: the
+		// group's driver replaces the whole instance.
+		if errors.Is(err, errSourceLeftSuspended) && a.kubeClient != nil && req.GPUShareGroupSize == 0 {
+			// Its controller replaces it with a pod that serves.
+			log.WithError(err).Error("the capture left the workload suspended; deleting its pod")
+			if derr := a.kubeClient.CoreV1().Pods(req.Namespace).Delete(context.WithoutCancel(ctx), req.PodName, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				log.WithError(derr).Error("cannot delete the suspended workload's pod")
+			}
+		}
 		return nil, fmt.Errorf("CRIU dump failed (criu-v2): %w", err)
 	}
 	criuSpan.End()
@@ -801,6 +875,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 		RootFS:         containerInfo.RootFS,
 		PodLabels:      containerInfo.Labels,
 		SourcePodIP:    podIP,
+		GPUShareGroup:  gpushareGroupInfo(req),
 		Skipped:        skippedResources,
 		CUDA: &CUDACheckpointInfo{
 			// criu-v2: cuda_plugin locks, checkpoints and (leave-running) resumes
@@ -822,6 +897,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 		GPUPID: gpuPID,
 	}
 	metadata.CapturePath = CapturePathCRIUV2
+	metadata.GPUShare = gpushareInfo
 
 	// Calculate checkpoint size (skip integrity checksums — too slow for 28 GB+)
 	var checkpointSize int64
@@ -917,21 +993,25 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	// outage doesn't fail the capture itself.
 	if a.config.CatalogURL != "" {
 		regCtx, regCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := a.registerCheckpointInCatalog(regCtx, checkpointID, req.Namespace, req.PodName,
-			req.ContainerName, containerInfo.Image, checkpointSize, duration, len(gpuPIDs) > 0, catalog); err != nil {
-			log.WithError(err).Warn("catalog register failed (non-fatal — peer-add and blob-uploaded callbacks will 404 until reconciled)")
-		}
+		canonical, err := a.registerCheckpointInCatalog(regCtx, checkpointID, req.Namespace, req.PodName,
+			req.ContainerName, containerInfo.Image, checkpointSize, duration, len(gpuPIDs) > 0, catalog)
 		regCancel()
-		// Capture node advertises itself as a peer. Without this, the
-		// first cross-node restore sees an empty peers list and falls
-		// back to the blob store (slow path) — defeating the entire
-		// cascade. Restore-side already registers on successful fetch
-		// in EnsureLocal; capture-side wasn't doing the symmetric step.
-		peerCtx, peerCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := a.registerAsPeer(peerCtx, checkpointID); err != nil {
-			log.WithError(err).Warn("capture-side peer-add failed (non-fatal — first cross-node restore will fall back to blob store)")
+		switch {
+		case err != nil:
+			log.WithError(err).Error("catalog register failed: other nodes cannot find this checkpoint, so it restores only on this node")
+		case canonical != checkpointID:
+			// The catalog holds this content under an older capture's id;
+			// this copy is not under that name, so it is no source for it.
+			log.WithField("catalogID", canonical).Warn("catalog holds this content under another checkpoint id; not advertising this copy to other nodes")
+		default:
+			// Advertise this node as the checkpoint's first source, so
+			// another node's restore can fetch it.
+			peerCtx, peerCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if err := a.registerAsPeer(peerCtx, checkpointID); err != nil {
+				log.WithError(err).Error("capture-side peer-add failed: other nodes cannot fetch this checkpoint from here")
+			}
+			peerCancel()
 		}
-		peerCancel()
 	}
 
 	// nvsnap#166: L2 per-capture PVC promote runs ASYNC in a background
@@ -951,6 +1031,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	// CatalogStateWriter — see l2_catalog_writer.go) is the source of
 	// truth for L2 progress, independent of CRD Phase or HTTP response
 	// timing.
+	a.recordCRIUCapture(ctx, catalog.Hash, checkpointID, req, containerInfo.Image, gpushareInfo != nil, log)
 	if a.l2Backend != nil {
 		hostDumpPath, hostPathErr := a.checkpointHostPath(checkpointDir)
 		if hostPathErr != nil {
@@ -959,6 +1040,8 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 			runL2PromoteAsync(a.l2Backend, log, l2PromoteInput{
 				Hash:        catalog.Hash,
 				HostDumpDir: hostDumpPath,
+				NodeName:    a.config.NodeName,
+				SizeBytes:   diskUsage(checkpointDir),
 				PodMeta: map[string]string{
 					"namespace":     req.Namespace,
 					"pod":           req.PodName,

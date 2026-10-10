@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Builds CRIU (source copied to /ckpt/criu-src by the caller) into the
+# node-local checkpoint dir (/ckpt/criu) using the vLLM image, so the
+# binary and its bundled libs match the runtime environment.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: criu-build
+spec:
+  restartPolicy: Never
+  containers:
+  - name: build
+    image: vllm/vllm-openai:v0.20.0
+    command: ["/bin/bash", "-ec"]
+    args:
+    - |
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq
+      apt-get install -y -qq build-essential pkg-config git libprotobuf-dev libprotobuf-c-dev \
+        protobuf-c-compiler protobuf-compiler python3-protobuf libnl-3-dev libnet-dev \
+        libcap-dev libbsd-dev libnftables-dev libgnutls28-dev uuid-dev libaio-dev iproute2 curl >/dev/null
+      until [ -f /ckpt/criu-src/.ready ]; do sleep 2; done  # kubectl cp source in
+      cd /ckpt/criu-src && make -j16 criu >/dev/null
+      mkdir -p /ckpt/criu/lib
+      cp criu/criu /ckpt/criu/criu
+      ldd criu/criu | awk '/=> \//{print $3}' | grep -v -E 'libc\.so|libm\.so|ld-linux|libpthread|libdl\.so|librt\.so' \
+        | xargs -I{} cp -L {} /ckpt/criu/lib/
+      LD_LIBRARY_PATH=/ckpt/criu/lib /ckpt/criu/criu --version
+      ls /ckpt/criu/lib
+    volumeMounts:
+    - {name: ckpt, mountPath: /ckpt}
+  volumes:
+  - name: ckpt
+    # Node-local disk shared by every pod on the node (dump and restore pods
+    # must run on the same node). Remove /var/lib/nvsnap-gpushare when done.
+    hostPath: {path: /var/lib/nvsnap-gpushare, type: DirectoryOrCreate}

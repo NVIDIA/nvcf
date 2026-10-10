@@ -20,6 +20,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelid"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 )
@@ -1091,8 +1092,27 @@ func TestModelVolume_DefaultHFCache_PinsHFHomeToLanding(t *testing.T) {
 	if v.env["HOME"] != "/opt/nvsnap/cache" {
 		t.Fatalf("precondition: HOME is moved to the cachedir, got %q (env %v)", v.env["HOME"], v.env)
 	}
-	if v.env["HF_HOME"] != "/root/.cache/huggingface" {
+	if v.env["HF_HOME"] != modelid.NVSnapHFHome {
 		t.Errorf("HF_HOME must pin the cache to the mounted model, got %q (env %v)", v.env["HF_HOME"], v.env)
+	}
+	// Mounted outside /root (0700): an engine running as another user
+	// (uid 1000) must reach it.
+	mounted := false
+	for _, vm := range pod.Spec.Containers[0].VolumeMounts {
+		mounted = mounted || vm.MountPath == modelid.NVSnapHFHome
+	}
+	for _, p := range patches {
+		if strings.HasSuffix(p.Path, "/volumeMounts/-") {
+			if vm, ok := p.Value.(corev1.VolumeMount); ok && vm.MountPath == modelid.NVSnapHFHome {
+				mounted = true
+			}
+			if vm, ok := p.Value.(corev1.VolumeMount); ok && strings.HasPrefix(vm.MountPath, "/root/") {
+				t.Errorf("the model is mounted under /root: %s", vm.MountPath)
+			}
+		}
+	}
+	if !mounted {
+		t.Errorf("the model is not mounted at %s", modelid.NVSnapHFHome)
 	}
 	if v.env["HF_MODULES_CACHE"] != "/opt/nvsnap/cache/hf_modules" {
 		t.Errorf("a pinned HF_HOME is on the read-only landing; HF_MODULES_CACHE must leave it, got %q", v.env["HF_MODULES_CACHE"])

@@ -54,6 +54,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -429,10 +430,12 @@ func (p *SharedVolumePromoter) Delete(ctx context.Context, hash, ns string) erro
 	if err := p.deletePV(ctx, secName); err != nil {
 		errs = append(errs, fmt.Sprintf("secondary PV %s: %v", secName, err))
 	}
-	// Delete the Retain'd primary PV last — this releases the backing
-	// CSI volume (its reclaim is Retain, so it would otherwise orphan).
+	// The primary last. It is Retain, and deleting a Retain PV object
+	// leaves its volume on the storage for good: hand the volume back to
+	// the provisioner instead, which deletes it with the PV once the PV
+	// is released.
 	if primaryPVName != "" {
-		if err := p.deletePV(ctx, primaryPVName); err != nil {
+		if err := p.reclaimPV(ctx, primaryPVName); err != nil {
 			errs = append(errs, fmt.Sprintf("primary PV %s: %v", primaryPVName, err))
 		}
 	}
@@ -482,6 +485,17 @@ func (p *SharedVolumePromoter) deletePVC(ctx context.Context, ns, name string) e
 
 func (p *SharedVolumePromoter) deletePV(ctx context.Context, name string) error {
 	err := p.KubeClient.CoreV1().PersistentVolumes().Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+// reclaimPV sets the PV's reclaim policy to Delete, so its provisioner
+// deletes the volume (and the PV) once it is released.
+func (p *SharedVolumePromoter) reclaimPV(ctx context.Context, name string) error {
+	patch := []byte(`{"spec":{"persistentVolumeReclaimPolicy":"Delete"}}`)
+	_, err := p.KubeClient.CoreV1().PersistentVolumes().Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}

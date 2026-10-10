@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Injected by NVCF for Helm functions.
+helmChartServiceName: nvsnap-criu-matrix
+ngcImagePullSecretName: ""
+
+# The controller that owns the pods: StatefulSet, Deployment, Pod (bare) or
+# LeaderWorkerSet (needs the LWS CRD on the cluster).
+kind: StatefulSet
+# Pods per instance. More than one makes a multi-node engine: one rank per
+# pod, tensor parallel across them.
+podsPerInstance: 1
+gpusPerPod: 1
+
+# How the container starts the engine:
+#   shell  - the engine is a child of the container's shell
+#   setsid - the engine is detached from the shell with setsid
+#   exec   - the engine is the container's pid 1
+launch: exec
+
+# vllm or sglang.
+engine: vllm
+image: docker.io/vllm/vllm-openai:v0.20.0
+model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+maxModelLen: 2048
+gpuMemoryUtilization: 0.1
+port: 8000
+
+# Run the engine as this user (unset: the image's user, root for the stock
+# vLLM image).
+runAsUser: null
+# Set HF_HOME in the engine's env (empty: the engine uses the Hugging Face
+# default, and nvsnap mounts the model for it).
+hfHome: ""
+
+# Multi-pod instances are captured only on request.
+criuCapture: false
+
+# Anything else the case needs in the engine's env.
+extraEnv: []
+
+resources:
+  requests: {cpu: "4", memory: 32Gi}
+  limits: {cpu: "16", memory: 128Gi}

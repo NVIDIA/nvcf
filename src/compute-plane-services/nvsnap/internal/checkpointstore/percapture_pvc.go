@@ -195,8 +195,10 @@ type PerCapturePVCBackend struct {
 	SizeBytesFor func(hash string, m Manifest) int64
 
 	// LeaseDuration is how long a Put holds the hash-keyed lease.
-	// Should be bounded by 2× estimated writer-Job duration. Default
-	// 15 min. A lost holder (Put goroutine crashed) frees the lease
+	// It must outlast the promote (l2PromoteTimeout): the lease is not
+	// renewed, and a 1.1 TB checkpoint copies for about 10 minutes at
+	// NVMesh rates, so 15 minutes left a slow copy open to a second
+	// agent. Default 100 min. A lost holder (Put goroutine crashed) frees the lease
 	// after this elapses, allowing a fresh attempt.
 	LeaseDuration time.Duration
 
@@ -263,7 +265,7 @@ func (b *PerCapturePVCBackend) targetNamespace(m Manifest) string {
 // applyDefaults fills in unset timing knobs.
 func (b *PerCapturePVCBackend) applyDefaults() {
 	if b.LeaseDuration == 0 {
-		b.LeaseDuration = 15 * time.Minute
+		b.LeaseDuration = 100 * time.Minute
 	}
 	if b.PollInterval == 0 {
 		b.PollInterval = 2 * time.Second

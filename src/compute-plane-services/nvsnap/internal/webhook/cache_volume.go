@@ -51,13 +51,26 @@ const (
 	cacheSubdir         = "cache"
 	lwsWorkerIndexLabel = "leaderworkerset.sigs.k8s.io/worker-index"
 	lwsSizeAnnotation   = "leaderworkerset.sigs.k8s.io/size"
+	// A Grove scaling group replica is one multi-pod engine instance (a
+	// Dynamo multi-node worker: leader and workers); the pod index is its
+	// rank, and the template's pod count is in the pods' environment.
+	GroveScalingGroupLabel        = "grove.io/podcliquescalinggroup"
+	GroveScalingGroupReplicaLabel = "grove.io/podcliquescalinggroup-replica-index"
+	GroveScalingGroupPodLabel     = "grove.io/podcliquescalinggroup-pod-index"
+	groveScalingGroupSizeEnv      = "GROVE_PCSG_TEMPLATE_NUM_PODS"
 )
 
 var ordinalSuffix = regexp.MustCompile(`-(\d+)$`)
 
-// podOrdinal is the pod's index in its group: the LeaderWorkerSet worker
-// index, else a StatefulSet-style numeric name suffix, else 0.
+// podOrdinal is the pod's index in its group: the Grove scaling group pod
+// index, else the LeaderWorkerSet worker index, else a StatefulSet-style
+// numeric name suffix, else 0.
 func podOrdinal(pod *corev1.Pod) int {
+	if v, ok := pod.Labels[GroveScalingGroupPodLabel]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
 	if v, ok := pod.Labels[lwsWorkerIndexLabel]; ok {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
@@ -81,10 +94,22 @@ func (m *Mutator) cacheURI(pod *corev1.Pod) (string, bool) {
 	return "cache://" + key, true
 }
 
-// groupSize is how many ranks the pod's group has: the LeaderWorkerSet
-// size annotation, else the owning StatefulSet's replicas, else 1. A set
-// is only collected once every rank is ready, so this must not guess low.
+// groupSize is how many ranks the pod's group has: the Grove scaling
+// group's pod count, else the LeaderWorkerSet size annotation, else the
+// owning StatefulSet's replicas, else 1. A set is only collected once every
+// rank is ready, so this must not guess low.
 func (m *Mutator) groupSize(ctx context.Context, pod *corev1.Pod) int {
+	if _, ok := pod.Labels[GroveScalingGroupLabel]; ok {
+		for _, c := range pod.Spec.Containers {
+			for _, e := range c.Env {
+				if e.Name == groveScalingGroupSizeEnv {
+					if n, err := strconv.Atoi(e.Value); err == nil && n > 0 {
+						return n
+					}
+				}
+			}
+		}
+	}
 	if v, ok := pod.Annotations[lwsSizeAnnotation]; ok {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n

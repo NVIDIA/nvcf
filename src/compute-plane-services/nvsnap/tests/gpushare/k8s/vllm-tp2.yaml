@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# vLLM TP=2 pod for validating nvsnap-gpu-suspend on a real workload.
+#   kubectl create ns nvsnap-gpushare
+#   (copy nvsnap-pull-secret into it: docs/PULL-SECRET-SETUP.md)
+#   kubectl apply -n nvsnap-gpushare -f tests/gpushare/k8s/vllm-tp2.yaml
+#   tests/gpushare/k8s/vllm_ckpt_cycle.sh nvsnap-gpushare vllm-tp2
+#
+# vLLM runs with default settings. The TP ranks share GPU memory (custom
+# all-reduce, NCCL cuMem P2P), which the driver cannot restore on its own:
+# libnvsnap_gpushare.so (LD_PRELOAD) releases and re-maps it around the
+# checkpoint. It and nvsnap-gpu-suspend come from the agent base image's
+# /criu-bundle (the binaries nvsnap ships; keep the tag in step with
+# NVSNAP_BASE_VERSION in scripts/versions.sh).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-tp2
+  labels:
+    app: vllm-tp2
+spec:
+  restartPolicy: Never
+  imagePullSecrets: [{name: nvsnap-pull-secret}]
+  initContainers:
+  - name: gpushare
+    image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent-base:v0.0.28
+    command: [cp, /criu-bundle/libnvsnap_gpushare.so, /criu-bundle/nvsnap-gpu-suspend, /opt/gpushare/]
+    volumeMounts:
+    - {name: gpushare, mountPath: /opt/gpushare}
+  containers:
+  - name: vllm
+    image: vllm/vllm-openai:v0.20.0
+    command: ["/bin/bash", "-c"]
+    args:
+    - |
+      LD_PRELOAD=/opt/gpushare/libnvsnap_gpushare.so exec vllm serve --model=Qwen/Qwen2.5-7B-Instruct \
+        --tensor-parallel-size=2 --gpu-memory-utilization=0.3 --max-model-len=4096 --port=8000
+    ports:
+    - containerPort: 8000
+    readinessProbe:
+      httpGet: {path: /health, port: 8000}
+      periodSeconds: 5
+    resources:
+      requests: {nvidia.com/gpu: 2, cpu: "8", memory: 64Gi}
+      # Checkpointed GPU memory lives in the process's host RAM: about
+      # utilization x GPU memory per rank (2 x 0.3 x 288 GB on GB300).
+      limits: {nvidia.com/gpu: 2, memory: 400Gi}
+    securityContext:
+      capabilities:
+        add: [SYS_PTRACE]  # suspend freezes the vLLM threads via ptrace
+    volumeMounts:
+    - {name: dshm, mountPath: /dev/shm}
+    - {name: gpushare, mountPath: /opt/gpushare}
+  volumes:
+  - name: gpushare
+    emptyDir: {}
+  - name: dshm
+    emptyDir: {medium: Memory, sizeLimit: 16Gi}

@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -107,6 +108,23 @@ var mergeableArrayRe = regexp.MustCompile(`^/spec/containers/\d+/(volumeMounts|e
 // that multiple builders may bootstrap (so the plan must be normalized).
 func isMergeableArray(path string) bool {
 	return path == "/spec/volumes" || path == "/spec/initContainers" || mergeableArrayRe.MatchString(path)
+}
+
+// sliceElems returns the elements of a slice value of any element type:
+// patchers write typed slices ([]corev1.EnvVar, []corev1.Volume), and a
+// second whole-array add of the same path must become appends, not replace
+// the first (the gpushare variables were lost to the debug variables on a
+// container with no env of its own).
+func sliceElems(v any) ([]any, bool) {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Slice {
+		return nil, false
+	}
+	out := make([]any, rv.Len())
+	for i := range out {
+		out[i] = rv.Index(i).Interface()
+	}
+	return out, true
 }
 
 // patchElementName pulls the "name" field out of a patch value (volume,
@@ -198,7 +216,7 @@ func mergePatchPlan(patches []PatchOp) []PatchOp {
 		}
 		// Whole-array bootstrap form: /spec/volumes with a slice value.
 		if isMergeableArray(p.Path) {
-			elems, ok := p.Value.([]any)
+			elems, ok := sliceElems(p.Value)
 			if !ok {
 				out = append(out, p) // not the bootstrap shape we manage
 				continue
@@ -353,6 +371,10 @@ type Mutator struct {
 	// config value can't safely span all three.
 	HostBundleRoot string
 
+	// GPUShareHostRoot is the node directory holding per-pod gpushare chunk
+	// stores (gpushare.go). Empty = DefaultGPUShareHostRoot.
+	GPUShareHostRoot string
+
 	// Composer translates a pod spec to a checkpointstore.HashInput when
 	// the annotation value is "auto". Required for "auto" handling; if
 	// nil and the annotation is "auto", Mutate fails open (returns nil,
@@ -362,6 +384,23 @@ type Mutator struct {
 	// MainContainer is the index of the container the cache is injected
 	// into. Most nvsnap workloads are single-container (0).
 	MainContainer int
+
+	// CheckpointHostRoot is the node directory holding CRIU checkpoints;
+	// a CRIU restore pod mounts it at /checkpoints.
+	CheckpointHostRoot string
+	// CRIURestoreBlocked reports a checkpoint that failed to restore; its
+	// pods start fresh instead. Nil: none is blocked.
+	CRIURestoreBlocked func(ctx context.Context, checkpointID string) bool
+	// GPUShareByDefault puts every GPU pod under the gpushare library
+	// unless it is annotated nvsnap.io/gpushare: "false" (CRIU clusters).
+	GPUShareByDefault bool
+	// CRIUGroups returns the complete group capture recorded under a
+	// configuration key (criu_group.go). Nil: multi-pod instances are not
+	// restored with CRIU.
+	CRIUGroups func(ctx context.Context, namespace, cacheURI string) (CRIUGroup, bool)
+	// DebugEnv sets debug variables on the GPU containers of matching
+	// pods (debug_env.go).
+	DebugEnv []DebugEnv
 
 	// EnsureLocal makes the capture's bytes available to the local
 	// Backend BEFORE Backend.Mount is called. Without this, a webhook
@@ -489,6 +528,10 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	// Patches accumulated by the model-volume and cachedir branches below,
 	// merged ahead of the restore-from patches.
 	var injectPatches []PatchOp
+	// gpushare placement is independent of every other decision below and
+	// rides along with whichever patches they return.
+	injectPatches = append(injectPatches, m.gpusharePatches(ctx, pod)...)
+	injectPatches = append(injectPatches, m.debugEnvPatches(pod)...)
 
 	raw, ok := pod.Annotations[RestoreFromAnnotation]
 	if !ok || raw == "" {
@@ -497,6 +540,11 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 		// the label-driven capture inject below keeps its behaviour. An
 		// error is logged and admits the pod unchanged: the election is
 		// an optimisation, never a gate.
+		// A rank of an instance whose group capture exists becomes its
+		// restore placeholder; that carries the model volume too.
+		if gp := m.criuGroupRestorePatches(ctx, pod); gp != nil {
+			return gp, nil
+		}
 		if vp, err := m.modelVolumePatches(ctx, pod); err != nil {
 			m.logger().WithError(err).WithField("pod", election.PodIdentity(pod)).
 				Warn("model volume decision failed; admitting pod unchanged")
@@ -521,8 +569,9 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 			m.logger().WithField("pod", pod.Namespace+"/"+pod.Name).
 				WithField("patches", len(injectPatches)).
 				Info("inject only")
+			return mergePatchPlan(injectPatches), nil
 		}
-		return injectPatches, nil
+		return nil, nil
 	}
 
 	span.SetAttributes(attribute.Bool("nvsnap.restore", true))
@@ -538,6 +587,21 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 		return nil, nil
 	}
 	span.SetAttributes(attribute.String("nvsnap.hash", hash))
+
+	// A CRIU capture: the pod becomes the placeholder the agent restores
+	// the captured process into.
+	plog := m.logger().WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "hash": checkpointstore.ShortHash(hash)})
+	if id, cman := m.criuRestoreFor(ctx, pod, hash, plog); id != "" {
+		cp, err := m.criuRestorePatches(pod, id, cman)
+		if err != nil {
+			plog.WithError(err).Warn("CRIU restore: cannot prepare the pod; cold start")
+			return mergePatchPlan(injectPatches), nil
+		}
+		plog.WithField("checkpoint", id).Info("CRIU restore: pod admitted as the restore placeholder")
+		// Not injectPatches: a gpushare restore mounts the checkpoint's
+		// chunk store, not the pod's own empty one.
+		return mergePatchPlan(cp), nil
+	}
 
 	// Resolve the manifest so the L2 dispatch can branch on the capture
 	// TYPE, not merely on "does a rox PVC exist". A rootfs capture

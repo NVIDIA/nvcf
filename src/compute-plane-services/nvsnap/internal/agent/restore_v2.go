@@ -38,6 +38,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -60,9 +61,18 @@ import (
 // read the images.
 const v2CheckpointsMountInContainer = "/checkpoints"
 
-func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, checkpointDir string, placeholderInfo *containerd.ContainerInfo, startTime time.Time, log *logrus.Entry) (*RestoreResult, error) {
+// errNotPlaceholder marks a restore refused because the target already runs
+// a GPU workload: a pod restored before, or not a placeholder at all.
+var errNotPlaceholder = errors.New("refusing to restore into a non-placeholder")
+
+func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, checkpointDir string, placeholderInfo *containerd.ContainerInfo, startTime time.Time, group restoreV2Group, log *logrus.Entry) (*RestoreResult, error) {
 	if placeholderInfo == nil {
 		return nil, fmt.Errorf("criu-v2 restore requires a placeholder pod (placeholderPodName/placeholderNamespace)")
+	}
+	if group.InetAddrMap != "" && group.Session == "" {
+		// --keep-network-lock with nobody to release it would leave the pod
+		// unable to send.
+		return nil, errors.New("criu-v2: an address map needs a group restore session to unlock the network")
 	}
 	hostPID := int(placeholderInfo.PID)
 	procBase := "/proc"
@@ -82,7 +92,7 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		return nil, fmt.Errorf("criu-v2: cannot verify target is a placeholder (GPU-process check failed): %w", gerr)
 	}
 	if gpuPID != 0 {
-		return nil, fmt.Errorf("criu-v2: target pod is running a GPU workload (pid %d) — refusing to restore into a non-placeholder", gpuPID)
+		return nil, fmt.Errorf("criu-v2: target pod is running a GPU workload (pid %d): %w", gpuPID, errNotPlaceholder)
 	}
 
 	// The images must be visible inside the placeholder at
@@ -117,10 +127,20 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	// starts, but the reservation only lands after that shell finishes sourcing
 	// its login profile, a few hundred forks in these images. Sampling once
 	// races that window and rejects a placeholder that was about to be fine.
-	if maxPID, perr := awaitPlaceholderPIDReservation(procBase, hostPID, log); perr != nil {
-		return nil, perr
-	} else if maxPID > 0 {
-		log.WithField("maxNSPID", maxPID).Info("criu-v2: placeholder reserved its pid range")
+	// A checkpoint that carries its pid namespace is restored into a nested
+	// one, where every pid is free (pidns_capture.go).
+	pidns, pidnsCapture, err := readPIDNSMarkerOrFalse(checkpointDir)
+	if err != nil {
+		return nil, err
+	}
+	if !pidns {
+		if maxPID, perr := awaitPlaceholderPIDReservation(procBase, hostPID, log); perr != nil {
+			return nil, perr
+		} else if maxPID > 0 {
+			log.WithField("maxNSPID", maxPID).Info("criu-v2: placeholder reserved its pid range")
+		}
+	} else if err := a.stagePIDNSRestoreHelper(root); err != nil {
+		return nil, err
 	}
 
 	log.WithFields(logrus.Fields{
@@ -131,25 +151,50 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	// Same execution shape as dumpV2: minimal env, PATH covers the bundle
 	// (cuda_plugin execs cuda-checkpoint and CRIU network-lock execs
 	// iptables-restore from PATH), no LD_LIBRARY_PATH.
-	args := []string{
-		"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
-		v2BinDirInContainer + "/criu", "restore",
-		"-D", imgsInContainer,
-		"-o", "restore.log", "-v4",
-		"--shell-job", "--tcp-established", "--ext-unix-sk", "--link-remap",
-		"--libdir", v2BinDirInContainer,
-		// Match the dump: unlock TCP in-process via libnftables (workload
-		// images ship no iptables binary).
-		"--network-lock", "nftables",
-		// Never restore cgroup membership: the dumped paths are the SOURCE
-		// pod's kubepods slice, which kubelet has already torn down.
-		// Recreating it puts the restored tree into an orphaned pod cgroup
-		// that kubelet housekeeping SIGKILLs (instantly on quick retries,
-		// ~90s in otherwise — killing the target mid GPU-resume, which
-		// surfaced as CUDA "OS call failed"). Same setting the legacy
-		// engine uses (ManageCgroups: ignore).
-		"--manage-cgroups=ignore",
-		"--restore-detached",
+	gs := metadata.GPUShare
+	if gs != nil {
+		// The restored processes re-map the shim from the path they had and
+		// load their GPU memory from the store path they saved to; the
+		// placeholder has to provide both (its manifest mounts them).
+		if gs.LibPath != "" && !fileExists(filepath.Join(root, strings.TrimPrefix(gs.LibPath, "/"))) {
+			return nil, fmt.Errorf("gpushare: placeholder has no %s; mount the node bundle there", gs.LibPath)
+		}
+		if !fileExists(filepath.Join(root, strings.TrimPrefix(gs.StorePath, "/"), "chunks")) {
+			return nil, fmt.Errorf("gpushare: placeholder has no chunk store at %s; mount the checkpoint's %s directory there",
+				gs.StorePath, GPUShareCheckpointSubdir)
+		}
+		if !fileExists(filepath.Join(root, strings.TrimPrefix(v2BinDirInContainer, "/"), gpushareToolName)) {
+			if serr := a.stageV2Bundle(root, log); serr != nil {
+				return nil, fmt.Errorf("gpushare: stage %s into placeholder: %w", gpushareToolName, serr)
+			}
+		}
+	}
+	// A group restore's session: the driver learns from it that this pod
+	// is restored, and answers with the unlock (and, for gpushare, the
+	// handle exchange of the resume).
+	var sess *restoreSession
+	if group.Session != "" {
+		if group.InetAddrMap != "" && !bundledSupportsNetMigration() {
+			return nil, errors.New("criu-v2: the bundled CRIU has no --inet-addr-map/net-unlock; the agent base image predates them")
+		}
+		s, err := a.openRestoreSession(group, checkpointDir, gs != nil)
+		if err != nil {
+			return nil, err
+		}
+		sess = s
+		defer sess.close()
+		log = log.WithField("fabricSession", group.Session)
+	}
+	args := restoreV2Args(hostPID, imgsInContainer, gs != nil, gs != nil && bundledSupportsDirectImageIO(), group.InetAddrMap)
+	if pidns {
+		// -n: CRIU's TCP lock and unlock act on the network namespace it
+		// runs in, which must be the pod's, never the node's (the agent
+		// runs on the node's network).
+		args = append([]string{"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-r", "-w", "--",
+			v2BinDirInContainer + "/" + pidNSRestoreHelperName, "pidns-restore-exec", v2BinDirInContainer + "/criu"},
+			append(pidNSRestoreArgs(imgsInContainer, pidnsCapture.Mounts, pidnsCapture.UnixListeners, gs != nil, gs != nil && bundledSupportsDirectImageIO(), group.InetAddrMap),
+				stdioInheritFDs(pidnsCapture)...)...)
+		log.WithField("externalMounts", len(pidnsCapture.Mounts)).Info("criu-v2: restoring into a nested pid namespace")
 	}
 	rctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
@@ -178,6 +223,12 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		"PATH=" + v2BinDirInContainer + ":/usr/sbin:/usr/bin:/sbin:/bin",
 		"HOME=/root",
 	}
+	if pidns && len(pidnsCapture.UnixListeners) > 0 {
+		cmd.Env = append(cmd.Env, PIDNSUnixListenersEnv+"="+encodeUnixListeners(pidnsCapture.UnixListeners))
+	}
+	if pidns && (pidnsCapture.StdoutPipe != 0 || pidnsCapture.StderrPipe != 0) {
+		cmd.Env = append(cmd.Env, PIDNSStdioEnv+"=1")
+	}
 	// Place criu — and therefore the restored tree, which inherits its
 	// cgroup (--manage-cgroups=ignore) — into the PLACEHOLDER's cgroup via
 	// clone3(CLONE_INTO_CGROUP). Without this the restored workload lives
@@ -201,6 +252,56 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		return nil, fmt.Errorf("criu-v2 restore: %w (output: %s; restore.log tail: %s)", err, strings.TrimSpace(string(out)), tail)
 	}
 	criuSpan.End()
+
+	fabricDir := ""
+	if sess != nil {
+		// Every pod of the instance must be restored before any of them
+		// sends: hold the lock until the driver says so, then release it in
+		// this pod's network namespace.
+		verdict, err := sess.awaitUnlock(ctx, log)
+		if err != nil {
+			return nil, err
+		}
+		if verdict != "unlock" {
+			return nil, fmt.Errorf("criu-v2: group restore %s aborted: another pod of the instance failed to restore; this pod stays locked until it is deleted", group.Session)
+		}
+		if group.InetAddrMap != "" {
+			if err := netUnlock(ctx, hostPID, checkpointDir, log); err != nil {
+				return nil, err
+			}
+		}
+		fabricDir = sess.containerDir
+	}
+
+	if gs != nil {
+		_, gsSpan := tracing.Tracer().Start(ctx, "restore.gpushare_resume")
+		gpuMap := gs.StorePath + "/" + gpushareGPUMapFile
+		resumePID := hostPID
+		if pidns {
+			// The restored processes live in the nested pid namespace; their
+			// saved pids are pids there. They resume on the placeholder's
+			// GPUs, whose entries the dump left out.
+			p, err := nestedInitHostPID(procBase, hostPID)
+			if err != nil {
+				gsSpan.End()
+				return nil, fmt.Errorf("gpushare resume: %w", err)
+			}
+			resumePID = p
+			made, err := installPlaceholderGPUs(procBase, hostPID, p)
+			if err != nil {
+				gsSpan.End()
+				return nil, fmt.Errorf("gpushare resume: give the restored tree the pod's GPUs: %w", err)
+			}
+			log.WithField("gpuEntries", made).Info("criu-v2: the restored tree has the pod's GPUs")
+		}
+		if err := gpushareResumeWithGPUsOf(ctx, resumePID, hostPID, gs.PIDs, gpuMap, fabricDir, log); err != nil {
+			gsSpan.RecordError(err)
+			gsSpan.SetStatus(codes.Error, "gpushare resume failed")
+			gsSpan.End()
+			return nil, fmt.Errorf("gpushare resume: %w", err)
+		}
+		gsSpan.End()
+	}
 
 	duration := time.Since(startTime).Seconds()
 	log.WithField("duration", fmt.Sprintf("%.2fs", duration)).Info("criu-v2: restore completed")
@@ -241,8 +342,10 @@ func placeholderCgroupDirFD(procBase string, pid int) (int, error) {
 	return -1, fmt.Errorf("open cgroup dir %s: %w", cgPath, err)
 }
 
-// gpuProcessInSamePidNS returns the host pid of any GPU-using process that
-// shares the target container's pid namespace, or 0 if none.
+// gpuProcessInSamePidNS returns the host pid of any GPU-using process in
+// the target container, or 0 if none: one in its pid namespace, or one
+// descended from it in a nested namespace (where a pid-1 workload's
+// restore puts the restored tree).
 func (a *Agent) gpuProcessInSamePidNS(ctx context.Context, procBase string, containerPID int) (int, error) {
 	targetNS, err := os.Readlink(filepath.Join(procBase, strconv.Itoa(containerPID), "ns", "pid"))
 	if err != nil {
@@ -252,9 +355,19 @@ func (a *Agent) gpuProcessInSamePidNS(ctx context.Context, procBase string, cont
 	if err != nil {
 		return 0, err
 	}
+	var tree map[int]bool
 	for _, p := range gpuPIDs {
 		ns, rerr := os.Readlink(filepath.Join(procBase, strconv.Itoa(p), "ns", "pid"))
 		if rerr == nil && ns == targetNS {
+			return p, nil
+		}
+		if tree == nil {
+			tree = map[int]bool{}
+			for _, q := range processTree(procBase, containerPID) {
+				tree[q] = true
+			}
+		}
+		if tree[p] {
 			return p, nil
 		}
 	}
@@ -429,4 +542,42 @@ func cancelWhenRestoreFailed(ctx context.Context, logPath string, grace time.Dur
 			return
 		}
 	}
+}
+
+// restoreV2Args builds the nsenter + criu restore argv. A gpushare restore
+// omits the CUDA plugin: nvsnap-gpu-suspend restores the GPU state after
+// CRIU. directIO reads the pages image with O_DIRECT.
+func restoreV2Args(hostPID int, imgsInContainer string, gpushare, directIO bool, inetAddrMap string) []string {
+	args := []string{
+		"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
+		v2BinDirInContainer + "/criu", "restore",
+		"-D", imgsInContainer,
+		"-o", "restore.log", "-v4",
+		"--shell-job", "--tcp-established", "--ext-unix-sk", "--link-remap",
+	}
+	if !gpushare {
+		args = append(args, "--libdir", v2BinDirInContainer)
+	}
+	args = append(args,
+		// Match the dump: unlock TCP in-process via libnftables (workload
+		// images ship no iptables binary).
+		"--network-lock", "nftables",
+		// Never restore cgroup membership: the dumped paths are the SOURCE
+		// pod's kubepods slice, which kubelet has already torn down; the
+		// restored tree would land in an orphaned cgroup kubelet kills.
+		"--manage-cgroups=ignore",
+		"--restore-detached",
+	)
+	if directIO {
+		args = append(args, "--image-io-mode", "direct")
+	}
+	if inetAddrMap != "" {
+		// A group restore: the connections between the instance's pods
+		// move to the new pods' addresses, and stay locked after CRIU
+		// exits, so a pod restored early cannot reach a peer that is not
+		// restored yet (its kernel would answer with a reset). The driver
+		// unlocks every pod once all of them are restored.
+		args = append(args, "--inet-addr-map", inetAddrMap, "--keep-network-lock")
+	}
+	return args
 }

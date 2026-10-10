@@ -101,6 +101,9 @@ type MountHolder struct {
 	// gets stuck in ImagePullBackOff and never reaches Running, so the
 	// copy times out. Empty = no secrets (preserves prior behavior).
 	pullSecrets []string
+	// readOnly mounts the claim read-only, as a ReadOnlyMany claim must
+	// be on drivers that attach it to several nodes at once.
+	readOnly bool
 
 	podUID string // populated by Create
 	pvName string // populated by WaitRunning
@@ -132,6 +135,13 @@ func NewMountHolder(kube kubernetes.Interface, log *logrus.Entry,
 		hostRoot:    hostRoot,
 		pullSecrets: pullSecrets,
 	}
+}
+
+// ReadOnly makes the holder mount its claim read-only. Call before
+// Create.
+func (h *MountHolder) ReadOnly() *MountHolder {
+	h.readOnly = true
+	return h
 }
 
 // Spec returns the corev1.Pod manifest the holder posts. Exposed so
@@ -249,6 +259,7 @@ func (h *MountHolder) Spec() *corev1.Pod {
 				VolumeMounts: []corev1.VolumeMount{{
 					Name:      "dest",
 					MountPath: MountHolderDestPath,
+					ReadOnly:  h.readOnly,
 				}},
 			}},
 			Volumes: []corev1.Volume{{
@@ -256,6 +267,7 @@ func (h *MountHolder) Spec() *corev1.Pod {
 				VolumeSource: corev1.VolumeSource{
 					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 						ClaimName: h.rwxPVCName,
+						ReadOnly:  h.readOnly,
 					},
 				},
 			}},

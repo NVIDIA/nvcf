@@ -19,6 +19,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strconv"
@@ -46,6 +48,9 @@ type CatalogInfo struct {
 	// Content identity (the restore-from key).
 	Hash      string `json:"hash,omitempty"`
 	ShortHash string `json:"shortHash,omitempty"`
+	// InstanceCapture marks one rank of a workload instance's capture:
+	// it restores only with its instance, never on its own.
+	InstanceCapture bool `json:"instanceCapture,omitempty"`
 
 	// Source identity.
 	FunctionName      string `json:"functionName,omitempty"`
@@ -321,4 +326,16 @@ const catalogFormatVersion = 1
 // remain as separate filterable fields in metadata.json.
 func buildCheckpointID(catalog CatalogInfo, t time.Time) string {
 	return fmt.Sprintf("%s__%s", catalog.ShortHash, t.Format("20060102-150405"))
+}
+
+// setCaptureIdentity makes the identity that of one capture of an
+// instance: the configuration hash, the rank's place in the group and the
+// capture itself. The catalog and the L2 volume keep one checkpoint per
+// identity, so without the capture in it a re-capture of the same
+// configuration kept resolving to the first one, even after that one was
+// found unrestorable.
+func (c *CatalogInfo) setCaptureIdentity(index, size int, capture string) {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|group-rank|%d/%d|%s", c.Hash, index, size, capture)))
+	c.Hash = hex.EncodeToString(sum[:])
+	c.ShortHash = checkpointstore.ShortHash(c.Hash)
 }

@@ -22,6 +22,16 @@ RUN gcc -O2 -o /src/nvsnap-cuda-checkpoint /src/nvsnap-cuda-checkpoint.c \
     strings /src/nvsnap-cuda-checkpoint | grep -q "nvsnap-cuda-checkpoint" \
         || (echo "provenance marker missing" && exit 1)
 
+# gpushare: libnvsnap_gpushare.so, an LD_PRELOAD shim that releases and
+# re-maps GPU memory shared between a workload's processes (NCCL P2P and NVLS,
+# CUDA IPC, page-locked host memory) around a CUDA checkpoint, and
+# nvsnap-gpu-suspend, which drives it. Needs CUDA 13 headers
+# (CUcheckpointGpuPair). Built on ubuntu 22.04: the shim is loaded into
+# workload containers, which need glibc >= 2.35.
+FROM nvidia/cuda:13.0.3-devel-ubuntu22.04 AS gpushare-builder
+COPY gpushare /src/gpushare
+RUN make -C /src/gpushare
+
 FROM ubuntu:22.04 AS criu-builder
 
 # Install build dependencies
@@ -164,6 +174,9 @@ COPY --from=cuda-cli-builder /src/nvsnap-cuda-checkpoint /criu-bundle/cuda-check
 # (set by the nvsnap-agent) + a fallback list of known driver layouts.
 COPY cuda-checkpoint-wrapper.sh /criu-bundle/cuda-checkpoint
 RUN chmod +x /criu-bundle/cuda-checkpoint
+
+# gpushare (see gpushare-builder above).
+COPY --from=gpushare-builder /src/gpushare/libnvsnap_gpushare.so /src/gpushare/nvsnap-gpu-suspend /criu-bundle/
 
 # Make everything executable
 RUN chmod +x /criu-bundle/*

@@ -260,6 +260,20 @@ spec:
             {{- end }}
             - name: PATH
               value: "/criu-bundle:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            {{- $method := .Values.agent.captureMethod | default "cachedir" }}
+            {{- if not (has $method (list "criu" "cachedir")) }}
+            {{- fail (printf "agent.captureMethod must be criu or cachedir, got %q" $method) }}
+            {{- end }}
+            - name: NVSNAP_DEFAULT_CAPTURE_PATH
+              value: {{ $method | quote }}
+            {{- with .Values.agent.criuCaptureOptIn }}
+            - name: NVSNAP_CRIU_CAPTURE_OPT_IN
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- with .Values.webhook.debugEnv }}
+            - name: NVSNAP_WEBHOOK_DEBUG_ENV
+              value: {{ toJson . | quote }}
+            {{- end }}
             {{- with .Values.agent.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

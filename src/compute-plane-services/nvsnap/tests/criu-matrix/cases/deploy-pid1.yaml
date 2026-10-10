@@ -1,0 +1,5 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# One Deployment pod; the engine is the container's pid 1 (pid-namespace capture).
+kind: Deployment
+launch: exec

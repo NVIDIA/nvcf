@@ -144,10 +144,14 @@ type ModelVolumeController struct {
 	// mount holder on this node.
 	markFailed func(ctx context.Context, uri, sysNS, claim, reason string) error
 
-	mu       sync.Mutex
-	holders  map[string]*checkpointstore.MountHolder
-	inflight map[string]bool
-	attempts map[string]int
+	mu      sync.Mutex
+	holders map[string]*checkpointstore.MountHolder
+	// idleSince is when each bound volume was first seen unused.
+	idleSince map[string]time.Time
+	// bindLocks serializes binding and releasing one volume key.
+	bindLocks sync.Map
+	inflight  map[string]bool
+	attempts  map[string]int
 }
 
 // stagingBindTimeout bounds the wait for a freshly created primary
@@ -182,6 +186,9 @@ func (c *ModelVolumeController) Run(ctx context.Context) error {
 		return fmt.Errorf("model volume informers did not sync")
 	}
 	c.log().WithFields(logrus.Fields{"node": c.NodeName, "mode": c.Provisioner.Cfg.Mode, "host_root": c.HostRoot}).Info("model volume controller started")
+	if c.Provisioner.Cfg.ReaderMode() == modelvolume.ReaderHostPath {
+		go c.runBindRelease(ctx)
+	}
 	<-ctx.Done()
 	return nil
 }
@@ -1388,6 +1395,9 @@ func (c *ModelVolumeController) handlePendingReader(ctx context.Context, pod *co
 		return
 	}
 	dst := filepath.Join(c.HostRoot, modelvolume.Key(uri))
+	// The release of unused binds (modelvolume_release.go) must not unbind
+	// what is being bound for this reader.
+	defer c.lockBind(modelvolume.Key(uri))()
 	// The mount table is the truth, not memory: the agent may have
 	// restarted, the volume may have been replaced by a re-download of the
 	// same identity, or an operator may have unmounted by hand. A bind is
@@ -1460,7 +1470,7 @@ func (c *ModelVolumeController) attachWithHolder(ctx context.Context, ns, claim 
 		if entry == nil {
 			entry = logrus.NewEntry(logrus.New())
 		}
-		name := "nvsnap-model-holder-" + strings.TrimPrefix(claim, "nvsnap-model-") + "-" + shortNode(c.NodeName)
+		name := modelHolderPrefix + strings.TrimPrefix(claim, "nvsnap-model-") + "-" + shortNode(c.NodeName)
 		h = checkpointstore.NewMountHolder(c.Kube, entry, ns, name, c.NodeName, claim, pvc.UID, c.HolderImage, "/host", c.HolderPullSecrets)
 		if err := h.Create(ctx); err != nil {
 			return "", fmt.Errorf("create mount-holder: %w", err)

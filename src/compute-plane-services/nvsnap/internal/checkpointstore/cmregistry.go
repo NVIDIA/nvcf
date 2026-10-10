@@ -274,6 +274,18 @@ func (c *ConfigMapBackend) Mount(ctx context.Context, hash string, vol VolumeMet
 	return c.inner.Mount(ctx, hash, vol)
 }
 
+// RecordManifest stores a capture record without data: the capture's bytes
+// live elsewhere (a CRIU checkpoint dir), and only the record has to be
+// readable cluster-wide, so a restore can find it by hash.
+func (c *ConfigMapBackend) RecordManifest(ctx context.Context, hash string, m Manifest) error {
+	return c.writeManifestCM(ctx, hash, m)
+}
+
+// ManifestRecorder stores a capture record without data.
+type ManifestRecorder interface {
+	RecordManifest(ctx context.Context, hash string, m Manifest) error
+}
+
 func (c *ConfigMapBackend) writeManifestCM(ctx context.Context, hash string, m Manifest) error {
 	data, err := json.Marshal(m)
 	if err != nil {

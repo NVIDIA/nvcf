@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# As sts-tp2, from a LeaderWorkerSet (needs the LWS CRD).
+kind: LeaderWorkerSet
+launch: exec
+podsPerInstance: 2
+criuCapture: true

@@ -19,8 +19,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
@@ -185,6 +188,14 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// default "/var/lib/nvsnap/bundle" (matches the agent
 		// DaemonSet's nvsnap-bundle-stage initContainer destination).
 		HostBundleRoot: a.config.Webhook.HostBundleRoot,
+		// gpushare: per-pod chunk stores live on the node-local checkpoint
+		// disk, next to the checkpoints they are collected into.
+		GPUShareHostRoot: filepath.Join(a.checkpointHostRoot(), GPUSharePodStoresSubdir),
+		// CRIU captures restore into their pods (criu_auto_restore.go).
+		CheckpointHostRoot: a.checkpointHostRoot(),
+		// On a CRIU cluster every GPU pod runs under the gpushare library,
+		// which keeps GPU memory out of the CRIU image.
+		GPUShareByDefault: criuIsDefault(),
 		// nvsnap#202: restore-prep strategy. When "init-container",
 		// the webhook emits a nvsnap-mount-prep init container instead
 		// of doing the OverlayFS mount syscalls during admission.
@@ -192,6 +203,20 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		MountPrepInitImage:  cfg.MountPrepInitImage,
 		AgentHostPort:       cfg.AgentHostPort,
 		AgentBaseURL:        cfg.AgentBaseURL,
+	}
+	if raw := os.Getenv("NVSNAP_WEBHOOK_DEBUG_ENV"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &mut.DebugEnv); err != nil {
+			a.log.WithError(err).Warn("webhook: NVSNAP_WEBHOOK_DEBUG_ENV is not a valid debug env list; ignoring it")
+			mut.DebugEnv = nil
+		}
+	}
+	if a.kubeClient != nil {
+		// A checkpoint that failed to restore starts its next pods fresh.
+		mut.CRIURestoreBlocked = a.criuRestorer().Blocked
+		if criuIsDefault() {
+			// Helm instances restore from their group captures.
+			mut.CRIUGroups = a.lookupCRIUGroupFor
+		}
 	}
 	handler := &webhook.Handler{
 		Mutator: mut,

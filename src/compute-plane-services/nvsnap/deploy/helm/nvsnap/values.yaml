@@ -333,6 +333,20 @@ agent:
       # reserve node memory. Set NVSNAP_PREWARM=0 to disable prewarm.
       memory: "96Gi"
 
+  # How workloads are captured and restored: "cachedir" (the engine's
+  # caches and model, restored into a fresh start) or "criu" (the whole
+  # process, restored in place of a fresh start). Applies to every capture
+  # on the cluster, including NVCA functions.
+  captureMethod: cachedir
+  # Multi-pod instances (a Helm StatefulSet, LeaderWorkerSet or Grove group)
+  # are captured only on request: their pods annotated
+  # nvsnap.io/criu-capture: "true", or matched here, for pods whose spec
+  # nvsnap does not own (NVCF functions):
+  #   criuCaptureOptIn:
+  #     - label: function-id
+  #       values: ["<function id>"]
+  criuCaptureOptIn: []
+
   # Extra env injected verbatim into the agent container. The chart
   # auto-wires OTEL_EXPORTER_OTLP_ENDPOINT when .Values.jaeger.enabled
   # is true (see daemonset.yaml); use this block for custom OTel
@@ -489,6 +503,14 @@ server:
 # ─── Admission webhook (mutating, in-agent) ────────────────────────────
 
 webhook:
+  # Debug variables for the GPU containers of pods whose label matches,
+  # for workloads whose spec nvsnap does not own (NVCF function pods):
+  #   debugEnv:
+  #     - label: function-id
+  #       values: ["<function id>"]
+  #       env: {NVSNAP_GPUSHARE_DEBUG: "1", NCCL_DEBUG: INFO}
+  # A variable the container already sets is left as it is.
+  debugEnv: []
   # The webhook is served BY the agent DaemonSet, not by a separate Pod.
   # This block controls only the Service + MutatingWebhookConfiguration +
   # cert-manager Certificate that point the apiserver at the agent's

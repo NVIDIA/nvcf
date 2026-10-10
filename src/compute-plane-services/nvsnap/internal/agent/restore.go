@@ -147,6 +147,22 @@ type RestoreRequest struct {
 	PlaceholderContainerID string `json:"placeholderContainerId,omitempty"` // Container to restore into
 	PlaceholderPodName     string `json:"placeholderPodName,omitempty"`     // Pod name of placeholder
 	PlaceholderNamespace   string `json:"placeholderNamespace,omitempty"`   // Namespace of placeholder
+
+	// GPUShareFabricSession joins the restore to a group restore driven by
+	// another agent (see gpushare_fabric.go). InetAddrMap ("OLD=NEW,...",
+	// every pod of the instance) moves the connections between the pods
+	// to their new addresses; the restore then holds them locked until the
+	// driver reports every pod restored.
+	GPUShareFabricSession string `json:"gpushareFabricSession,omitempty"`
+	InetAddrMap           string `json:"inetAddrMap,omitempty"`
+
+	// PlaceholderContainerName picks the container in a multi-container
+	// placeholder pod; empty takes the first one.
+	PlaceholderContainerName string `json:"placeholderContainerName,omitempty"`
+	// ReservePIDs raises the placeholder's next pid above the dumped range
+	// before the restore. Needed for a placeholder the webhook made from
+	// the workload's own pod: it is not privileged, so it cannot do it.
+	ReservePIDs bool `json:"reservePids,omitempty"`
 }
 
 // RestoreResult is the result of a restore operation
@@ -210,6 +226,12 @@ func (a *Agent) GeneratePlaceholderManifest(ctx context.Context, req Placeholder
 	// The placeholder runs a bash reaper; the agent restores into it on POST /v1/restore
 	containerImage := metadata.ContainerImage
 
+	gpus := 1
+	if metadata.GPUShare != nil {
+		gpus = gpushareGPUCount(filepath.Join(checkpointDir, GPUShareCheckpointSubdir, gpushareGPUMapFile))
+	}
+	gsMounts, gsVolumes := a.gpushareRestoreMounts(&metadata, req.CheckpointID)
+
 	// criu-v2 placeholder: same image as the source (CRIU's path-based file
 	// checks resolve against an identical rootfs), bash pid1 reaps orphans,
 	// the pod keeps its own fresh pid namespace and bumps ns_last_pid so the
@@ -248,10 +270,10 @@ spec:
         - name: checkpoints
           mountPath: /checkpoints
         - name: dev-shm
-          mountPath: /dev/shm
+          mountPath: /dev/shm%s
       resources:
         limits:
-          nvidia.com/gpu: 1
+          nvidia.com/gpu: %d
   volumes:
     - name: checkpoints
       hostPath:
@@ -259,7 +281,7 @@ spec:
         type: Directory
     - name: dev-shm
       emptyDir:
-        medium: Memory
+        medium: Memory%s
 `,
 		podName,
 		namespace,
@@ -268,7 +290,10 @@ spec:
 		targetNode,
 		containerImage,
 		req.CheckpointID,
-		a.config.CheckpointDir,
+		gsMounts,
+		gpus,
+		a.checkpointHostRoot(),
+		gsVolumes,
 	)
 
 	return manifest, nil
@@ -308,7 +333,7 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		if err := a.EnsureLocal(ctx, req.CheckpointID); err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "ensure-local cascade failed")
-			return nil, fmt.Errorf("ensure-local cascade failed: %w", err)
+			return nil, fmt.Errorf("%w: ensure-local cascade failed: %w", errCheckpointUnavailable, err)
 		}
 		log.WithField("ensureLocalElapsed", time.Since(ensureStart).String()).
 			Info("Checkpoint materialized locally (same-node or cascade)")
@@ -343,7 +368,7 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 	if req.PlaceholderPodName != "" && req.PlaceholderNamespace != "" {
 		log.Info("Looking for placeholder container to restore into")
 		var findErr error
-		placeholderInfo, findErr = a.runtime.FindContainerByPod(ctx, req.PlaceholderNamespace, req.PlaceholderPodName, "")
+		placeholderInfo, findErr = a.runtime.FindContainerByPod(ctx, req.PlaceholderNamespace, req.PlaceholderPodName, req.PlaceholderContainerName)
 		if findErr != nil {
 			return nil, fmt.Errorf("failed to find placeholder container: %w", findErr)
 		}
@@ -352,6 +377,11 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 			"placeholderPid": placeholderInfo.PID,
 		})
 		log.Info("Found placeholder container")
+		if req.ReservePIDs {
+			if out, err := exec.CommandContext(ctx, "nsenter", criuReservePIDArgs(int(placeholderInfo.PID))...).CombinedOutput(); err != nil { //nolint:gosec // fixed command; the pid comes from the runtime
+				return nil, fmt.Errorf("reserve the pid range: %w (%s)", err, strings.TrimSpace(string(out)))
+			}
+		}
 
 		// Run CRIU inside the placeholder's mount namespace. The helper
 		// subcommand grafts the criu bundle + checkpoints dir into the
@@ -460,7 +490,10 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 	// applies. The shared placeholder prep above (pod-IP alias, unix-sk
 	// dirs, rootfs-diff + mount replay) has already run.
 	if metadata.CapturePath == CapturePathCRIUV2 {
-		return a.restoreV2(ctx, &metadata, checkpointDir, placeholderInfo, startTime, log)
+		return a.restoreV2(ctx, &metadata, checkpointDir, placeholderInfo, startTime, restoreV2Group{
+			Session: req.GPUShareFabricSession, InetAddrMap: req.InetAddrMap,
+			Namespace: req.PlaceholderNamespace, Pod: req.PlaceholderPodName,
+		}, log)
 	}
 
 	// Every checkpoint this agent writes is criu-v2 (Checkpoint stamps

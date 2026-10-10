@@ -271,6 +271,12 @@ func (c *Copier) Copy(ctx context.Context, src, dst string) (bytesCopied, entrie
 		// Walk error supersedes a worker error: walk failure usually
 		// indicates the source tree is gone or the agent's cgroup is
 		// being killed. Either way, walk-error is more diagnostic.
+		// Except the cancellation a worker's own error caused: then the
+		// worker's error is the cause ("no space left on device" was
+		// reported as "context canceled").
+		if e := firstErr.Load(); e != nil && errors.Is(walkErr, context.Canceled) && ctx.Err() == nil {
+			return c.bytesCopied.Load(), c.filesCopied.Load(), e.(error)
+		}
 		return c.bytesCopied.Load(), c.filesCopied.Load(), walkErr
 	}
 	if e := firstErr.Load(); e != nil {

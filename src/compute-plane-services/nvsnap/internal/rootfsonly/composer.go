@@ -119,7 +119,7 @@ func resolvedImageDigest(pod *corev1.Pod, mainContainer int) string {
 // slice but we keep the per-namespace order via the prefix sort.
 func composeEngineCompatFlags(c corev1.Container) []string {
 	flags := make([]string, 0, len(c.Command)+len(c.Args))
-	for i, cmd := range c.Command {
+	for i, cmd := range stripRoleFlags(c.Command) {
 		flags = append(flags, "cmd["+itoa(i)+"]:"+cmd)
 	}
 	for i, a := range stripRoleFlags(c.Args) {
@@ -300,6 +300,7 @@ var (
 	roleFlagsNoValue = map[string]bool{
 		"--is-prefill-worker": true, // dynamo.vllm
 		"--is-decode-worker":  true,
+		"--headless":          true, // vLLM: the ranks of a multi-node engine other than the first
 	}
 	roleFlagsWithValue = map[string]bool{
 		"--disaggregation-mode":             true, // dynamo.sglang, dynamo.trtllm
@@ -308,17 +309,27 @@ var (
 		"--disaggregation-transfer-backend": true,
 		"--kv-transfer-config":              true, // vLLM connector JSON, carries kv_role
 		"--kv-events-config":                true, // KV event publishing, prefill side only
+		// The rank of a pod in a multi-node engine: every rank shares
+		// the configuration, and the instance's ranks share its caches.
+		"--node-rank":                true, // vLLM, SGLang
+		"--node_rank":                true,
+		"--data-parallel-start-rank": true,
+		"--data-parallel-rank":       true,
 	}
 	// GROVE_*: Grove gang-scheduling env the Dynamo operator injects, with
 	// the component name and the pod index in it.
 	roleEnvPrefixes = []string{"DYN_", "DYNAMO_", "GROVE_"}
-	roleEnvExact    = []string{"ETCD_ENDPOINTS", "NATS_SERVER", "NATS_URL"}
+	// The rank and instance placement a controller injects: a pod's index
+	// in its instance (LeaderWorkerSet, indexed Job, torchrun) and the
+	// address of its instance's leader.
+	roleEnvExact = []string{"ETCD_ENDPOINTS", "NATS_SERVER", "NATS_URL", "NODE_RANK", "RANK", "GROUP_RANK",
+		"LOCAL_RANK", "LWS_WORKER_INDEX", "LWS_LEADER_ADDRESS", "JOB_COMPLETION_INDEX"}
 
 	// roleFlagInString removes the same flags from a shell-script arg (the
 	// bash -lc "vllm serve ..." convention), value quoted or bare.
 	roleFlagInString = regexp.MustCompile(
-		`\s--(?:is-prefill-worker|is-decode-worker)\b` +
-			`|\s--(?:disaggregation-mode|disaggregation-strategy|disaggregation-bootstrap-port|disaggregation-transfer-backend|kv-transfer-config|kv-events-config)(?:=|\s+)(?:'[^']*'|"[^"]*"|\S+)`)
+		`\s--(?:is-prefill-worker|is-decode-worker|headless)\b` +
+			`|\s--(?:disaggregation-mode|disaggregation-strategy|disaggregation-bootstrap-port|disaggregation-transfer-backend|kv-transfer-config|kv-events-config|node-rank|node_rank|data-parallel-start-rank|data-parallel-rank)(?:=|\s+)(?:'[^']*'|"[^"]*"|\S+)`)
 )
 
 // stripRoleFlags returns args without the role flags, in both the

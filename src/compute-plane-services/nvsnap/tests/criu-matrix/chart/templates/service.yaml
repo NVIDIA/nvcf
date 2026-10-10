@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+{{- $name := include "matrix.name" . }}
+# The function's endpoint: rank 0 serves.
+apiVersion: v1
+kind: Service
+metadata: {name: {{ $name }}}
+spec:
+  selector:
+    app: {{ $name }}
+    {{- if and (eq .Values.kind "StatefulSet") (gt (int .Values.podsPerInstance) 1) }}
+    statefulset.kubernetes.io/pod-name: {{ $name }}-0
+    {{- else if eq .Values.kind "LeaderWorkerSet" }}
+    leaderworkerset.sigs.k8s.io/worker-index: "0"
+    {{- end }}
+  ports: [{name: http, port: {{ .Values.port }}, targetPort: http}]
+---
+# The ranks find each other by name.
+apiVersion: v1
+kind: Service
+metadata: {name: {{ $name }}-ranks}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector: {app: {{ $name }}}
+  ports: [{name: dist, port: 29501}, {name: sglang-dist, port: 5000}]

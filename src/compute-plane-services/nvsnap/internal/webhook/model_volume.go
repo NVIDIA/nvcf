@@ -706,7 +706,7 @@ func (m *Mutator) modelCacheEnvPatches(ctx context.Context, pod *corev1.Pod, mai
 // Face default cache, which nvsnap mounted at the default path: the
 // container names no cache location of its own, by value or by reference.
 func pinsHFHome(main *corev1.Container, land modelid.Landing) bool {
-	if path.Clean(land.Path) != modelid.DefaultHFHome {
+	if p := path.Clean(land.Path); p != modelid.DefaultHFHome && p != modelid.NVSnapHFHome {
 		return false
 	}
 	return !hasEnv(main, "HF_HOME") && !hasEnv(main, "HF_HUB_CACHE")

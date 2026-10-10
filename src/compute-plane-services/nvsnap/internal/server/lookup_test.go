@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/db"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 func seedLookupRow(t *testing.T, s *Server, id string, c db.Checkpoint) {
@@ -232,5 +234,52 @@ func TestRegister_Then_Lookup_RoundTrip(t *testing.T) {
 	}
 	if m.ImageDigest != "sha256:deadbeef" {
 		t.Errorf("ImageDigest = %q", m.ImageDigest)
+	}
+}
+
+func registerForTest(t *testing.T, s *Server, req registerCheckpointRequest) *httptest.ResponseRecorder {
+	t.Helper()
+	body, _ := json.Marshal(req)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/checkpoints/register", bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	s.router.ServeHTTP(rr, r)
+	if rr.Code != http.StatusNoContent {
+		t.Fatalf("register: %d %s", rr.Code, rr.Body.String())
+	}
+	return rr
+}
+
+// One rank of an instance capture restores only with its instance: a
+// lookup never returns it.
+func TestLookup_SkipsInstanceCaptureRanks(t *testing.T) {
+	s := newTestServerWithCatalog(t)
+	base := registerCheckpointRequest{Namespace: "fn", PodName: "kimi-0", NodeName: "n1", ImageRef: "nvcr.io/foo:1.2"}
+	rank := base
+	rank.CheckpointID, rank.Hash, rank.WorkloadType = "ck-rank0", "aaaa", checkpointstore.InstanceCaptureWorkloadType
+	registerForTest(t, s, rank)
+	plain := base
+	plain.CheckpointID, plain.Hash = "ck-plain", "bbbb"
+	registerForTest(t, s, plain)
+
+	rr := postLookup(t, s, lookupCheckpointRequest{ImageRef: "nvcr.io/foo:1.2"})
+	var resp lookupCheckpointResponse
+	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
+	if len(resp.Matches) != 1 || resp.Matches[0].CheckpointID != "ck-plain" {
+		t.Errorf("matches = %+v, want only ck-plain", resp.Matches)
+	}
+}
+
+// Register names the id the catalog holds the content under, so the
+// agent advertises a copy only under that id.
+func TestRegister_ReturnsCanonicalID(t *testing.T) {
+	s := newTestServerWithCatalog(t)
+	req := registerCheckpointRequest{CheckpointID: "ck-first", Namespace: "fn", PodName: "p", NodeName: "n1", ImageRef: "nvcr.io/foo:1.2", Hash: "cccc"}
+	if got := registerForTest(t, s, req).Header().Get(checkpointstore.CatalogCheckpointIDHeader); got != "ck-first" {
+		t.Errorf("first register: id %q, want ck-first", got)
+	}
+	req.CheckpointID = "ck-again"
+	if got := registerForTest(t, s, req).Header().Get(checkpointstore.CatalogCheckpointIDHeader); got != "ck-first" {
+		t.Errorf("re-capture of the same content: id %q, want the existing ck-first", got)
 	}
 }

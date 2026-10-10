@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "capture_write.go",
         "main.go",
+        "pidns_exec.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/agent",
     visibility = ["//visibility:private"],
@@ -13,6 +14,7 @@ go_library(
         "//src/compute-plane-services/nvsnap/internal/checkpointstore",
         "//src/compute-plane-services/nvsnap/internal/treecopy",
         "@com_github_sirupsen_logrus//:logrus",
+        "@org_golang_x_sys//unix",
     ],
 )
 
@@ -24,7 +26,13 @@ go_binary(
 
 go_test(
     name = "agent_test",
-    srcs = ["capture_write_test.go"],
+    srcs = [
+        "capture_write_test.go",
+        "pidns_exec_test.go",
+    ],
     embed = [":agent_lib"],
-    deps = ["@com_github_sirupsen_logrus//:logrus"],
+    deps = [
+        "@com_github_sirupsen_logrus//:logrus",
+        "@org_golang_x_sys//unix",
+    ],
 )

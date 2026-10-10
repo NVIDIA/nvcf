@@ -285,6 +285,14 @@ func defaultL2Size(_ string, m checkpointstore.Manifest) int64 {
 		const floor = 2 * oneGiB
 		return max(m.TotalSizeBytes*12/10, floor)
 	}
+	// A CRIU capture measured on disk (the agent passes the checkpoint's
+	// allocated size): size from that. The vRAM estimate below asked
+	// 384 GiB (80 GiB x 4 GPUs x 1.2) for a 1.1 TB checkpoint of a model
+	// filling four 288 GB GPUs, and the copy ran out of space.
+	if m.CaptureMethod == "criu" && m.TotalSizeBytes > 0 {
+		const floor = 2 * oneGiB
+		return max(m.TotalSizeBytes*11/10, floor)
+	}
 
 	// CRIU/GPU-state path: dump ≈ vRAM. Manifest doesn't carry vRAM
 	// directly; the agent's CollectCatalogInfo populates SourcePodMeta

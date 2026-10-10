@@ -21,7 +21,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"strings"
@@ -45,6 +47,12 @@ func main() {
 	// still works. New code paths use "capture-write".
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
+		case "pidns-restore-exec":
+			if err := pidNSRestoreExec(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, "pidns-restore-exec:", err)
+				os.Exit(1)
+			}
+			return
 		case "capture-write", "capture-copy":
 			log := logrus.New()
 			log.SetFormatter(&logrus.TextFormatter{FullTimestamp: true})
@@ -226,6 +234,12 @@ func main() {
 		"imagePullSecret name for the mount-holder pod (created by operators in the workload namespace). Defaults to nvsnap-agent-pull; set to '-' to disable.")
 
 	flag.Parse()
+	if raw := os.Getenv("NVSNAP_CRIU_CAPTURE_OPT_IN"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &config.CaptureOptIn); err != nil {
+			fmt.Fprintln(os.Stderr, "NVSNAP_CRIU_CAPTURE_OPT_IN is not a valid opt-in list; ignoring it:", err)
+			config.CaptureOptIn = nil
+		}
+	}
 
 	// Fail startup on a bad mode rather than falling back to disabled: an
 	// operator who typo'd --auth-mode should hear about it now, not discover
