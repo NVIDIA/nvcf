@@ -99,6 +99,54 @@ reviews:
         These are the source of truth for the API. Generated output lives in
         ui/src/generated/ and must never be edited directly. Flag any PR that touches
         ui/src/generated/ without a corresponding spec change that justifies it.
+    - path: "src/uis/nvcf-spark-ui/ui/src/features/**/*.tsx"
+      instructions: >-
+        Route views use the Suspense hook variants (useGetFooSuspense), prefetched by route
+        loaders with ensureQueryData and revalidateIfStale: true; regular useQuery is fine for
+        secondary data that must not block or fail the view.
+        No manual fetch calls for endpoints that have generated hooks in ui/src/generated/;
+        streaming chat in ui/src/lib/sse.ts is the one exception.
+        The shell's GatewayStatus is the only registry poller: flag any other refetchInterval.
+        Model names are opaque and may contain "/": flag code that splits or parses them, or
+        passes them as path params instead of ?model=.
+        Layout reflows from 320px up through CSS (mobile-first breakpoints, container queries):
+        flag reads of window.innerWidth and user-agent sniffing.
+        Prefer KUI components from @nvidia/foundations-react-core over plain HTML where a
+        natural fit exists — flag clear misses but use judgment.
+        New components should have co-located tests.
+    - path: "src/uis/nvcf-spark-ui/ui/src/**/*.test.tsx"
+      instructions: >-
+        Route-level views must use renderWithRouter from ~/testing/render, not standard render.
+        Tests should cover loading, empty, and error states through MSW scenarios — not just the
+        happy path. Prefer accessible queries (getByRole with a name) and userEvent over test IDs
+        and fireEvent. happy-dom computes no layout: size, overflow, and breakpoint behavior
+        belong in the Playwright suite (ui/e2e/), not here.
+    - path: "src/uis/nvcf-spark-ui/ui/e2e/**"
+      instructions: >-
+        Pick mock data with the scenario fixture from e2e/fixtures.ts, never page.route(): MSW's
+        service worker answers first. Use web-first assertions, never fixed sleeps.
+        Page specs cover the primary journey, a deep link and refresh, loading, empty, and error
+        states, no horizontal overflow and working navigation at every viewport, and zero
+        serious or critical axe violations.
+        e2e/prod/ runs the production build behind the real BFF and a fake gateway; checks that
+        need the BFF (CSP, security headers, key injection, streaming) belong there.
+    - path: "src/uis/nvcf-spark-ui/ui/src/generated/**"
+      instructions: >-
+        This is generated code (from spec/bff-openapi.yaml / spec/llm-gateway-openapi.yaml).
+        Do NOT comment on code style, naming, or general best practices — Biome enforces
+        formatting via CI. ONLY flag spec-consistency issues: generated code that doesn't match
+        the current spec (e.g., missing or renamed fields, changed types, endpoints absent from
+        codegen output), OR generated files that appear to have been manually edited without a
+        corresponding spec change.
+    - path: "src/uis/nvcf-spark-ui/spec/*.yaml"
+      instructions: >-
+        These are the source of truth for the API. Generated output lives in
+        ui/src/generated/ and must never be edited directly. Flag any PR that touches
+        ui/src/generated/ without a corresponding spec change that justifies it.
+        llm-gateway-openapi.yaml lists exactly the gateway routes the BFF forwards: a path added
+        or removed there needs the same change in backend/cmd/server/gateway.go, and vice versa.
+        bff-openapi.yaml describes the BFF's own /api/v1 routes, and the Go tests validate the
+        BFF's responses against it.
   tools:
     shellcheck:
       enabled: true

@@ -1,0 +1,7 @@
+# Synced from @nvidia/foundations-react-core by kui-sync-skills on pnpm install.
+.claude/skills/kaizen-ui/
+# Personal Claude Code settings.
+.claude/settings.local.json
+# Isolated checkouts for background Claude Code sessions.
+.claude/worktrees/
+node_modules/

@@ -1,0 +1,186 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- $values := .Values.nvcfSparkUi }}
+{{- $gateway := $values.gateway }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nvcf-spark-ui.fullname" . }}
+  labels:
+    {{- include "nvcf-spark-ui.labels" . | nindent 4 }}
+spec:
+  replicas: {{ $values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "nvcf-spark-ui.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- $apiKeyChecksum := include "nvcf-spark-ui.apiKeyChecksum" . }}
+      {{- if or $apiKeyChecksum $values.podAnnotations }}
+      annotations:
+        {{- with $apiKeyChecksum }}
+        # Rolls the pod when the gateway key rotates; the BFF reads it once.
+        checksum/api-key: {{ . | quote }}
+        {{- end }}
+        {{- with $values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      labels:
+        {{- include "nvcf-spark-ui.labels" . | nindent 8 }}
+        {{- with $values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with $values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "nvcf-spark-ui.serviceAccountName" . }}
+      # The BFF doesn't call the Kubernetes API yet, so it gets no token.
+      automountServiceAccountToken: false
+      {{- with $values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ include "nvcf-spark-ui.name" . }}
+          {{- with $values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ $values.image.repository }}:{{ $values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ $values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ $values.service.port }}
+              protocol: TCP
+          env:
+            - name: SERVER_PORT
+              value: {{ $values.service.port | quote }}
+            - name: GATEWAY_URL
+              value: {{ required "nvcfSparkUi.gateway.url is required" $gateway.url | quote }}
+            - name: GATEWAY_API_KEY_PATH
+              value: {{ printf "%s/%s" (include "nvcf-spark-ui.apiKeyDir" .) $gateway.apiKey.key | quote }}
+            {{- if $gateway.ca.configMap }}
+            - name: GATEWAY_CA_PATH
+              value: {{ printf "%s/%s" (include "nvcf-spark-ui.caDir" .) $gateway.ca.key | quote }}
+            {{- end }}
+            {{- if not (kindIs "invalid" $gateway.timeoutSeconds) }}
+            - name: GATEWAY_TIMEOUT_SECONDS
+              value: {{ $gateway.timeoutSeconds | quote }}
+            {{- end }}
+            {{- if not (kindIs "invalid" $gateway.chatTimeoutSeconds) }}
+            - name: CHAT_TIMEOUT_SECONDS
+              value: {{ $gateway.chatTimeoutSeconds | quote }}
+            {{- end }}
+            {{- with $values.ui.gatewayPublicUrl }}
+            - name: GATEWAY_PUBLIC_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $values.ui.grafanaUrl }}
+            - name: GRAFANA_URL
+              value: {{ . | quote }}
+            {{- end }}
+            - name: RECIPE_CATALOG_PATH
+              value: {{ printf "%s/%s" (include "nvcf-spark-ui.recipesDir" .) $values.recipes.key | quote }}
+            # Server connection timeouts, in whole seconds. Tested for nil rather
+            # than truthiness so that 0 (deadline disabled) is still passed
+            # through; a null entry is omitted and the server default applies.
+            {{- $timeouts := $values.config.timeouts | default dict }}
+            {{- if not (kindIs "invalid" $timeouts.readHeaderSeconds) }}
+            - name: READ_HEADER_TIMEOUT_SECONDS
+              value: {{ $timeouts.readHeaderSeconds | quote }}
+            {{- end }}
+            {{- if not (kindIs "invalid" $timeouts.readSeconds) }}
+            - name: READ_TIMEOUT_SECONDS
+              value: {{ $timeouts.readSeconds | quote }}
+            {{- end }}
+            {{- if not (kindIs "invalid" $timeouts.writeSeconds) }}
+            - name: WRITE_TIMEOUT_SECONDS
+              value: {{ $timeouts.writeSeconds | quote }}
+            {{- end }}
+            {{- if not (kindIs "invalid" $timeouts.idleSeconds) }}
+            - name: IDLE_TIMEOUT_SECONDS
+              value: {{ $timeouts.idleSeconds | quote }}
+            {{- end }}
+          # HTTP probes against /status, the server's dependency-free 200
+          # handler. The probe action is fixed; timing comes from values.
+          livenessProbe:
+            httpGet:
+              path: /status
+              port: http
+            {{- toYaml $values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /status
+              port: http
+            {{- toYaml $values.readinessProbe | nindent 12 }}
+          {{- with $values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: api-key
+              mountPath: {{ include "nvcf-spark-ui.apiKeyDir" . }}
+              readOnly: true
+            {{- if $gateway.ca.configMap }}
+            - name: gateway-ca
+              mountPath: {{ include "nvcf-spark-ui.caDir" . }}
+              readOnly: true
+            {{- end }}
+            # The whole directory, never a subPath: the kubelet only updates
+            # directory mounts, and the BFF reads the catalog again on change.
+            - name: recipes
+              mountPath: {{ include "nvcf-spark-ui.recipesDir" . }}
+              readOnly: true
+      volumes:
+        - name: api-key
+          secret:
+            secretName: {{ required "nvcfSparkUi.gateway.apiKey.secret is required" $gateway.apiKey.secret }}
+            items:
+              - key: {{ $gateway.apiKey.key }}
+                path: {{ $gateway.apiKey.key }}
+            defaultMode: 0440
+        {{- if $gateway.ca.configMap }}
+        - name: gateway-ca
+          configMap:
+            name: {{ $gateway.ca.configMap }}
+            items:
+              - key: {{ $gateway.ca.key }}
+                path: {{ $gateway.ca.key }}
+        {{- end }}
+        # Optional, so the pod starts before the catalog exists; the recipes
+        # page says it is unavailable until then.
+        - name: recipes
+          configMap:
+            name: {{ include "nvcf-spark-ui.recipesConfigMap" . }}
+            optional: true
+            items:
+              - key: {{ $values.recipes.key }}
+                path: {{ $values.recipes.key }}
+      {{- with $values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
