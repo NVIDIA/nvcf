@@ -50,7 +50,12 @@ func (a *Agent) criuGroupScope(ctx context.Context, ns string) (string, error) {
 		return "", err
 	}
 	scope := criuScopeOf(ns, n.Labels)
-	criuScopeCache.Store(ns, criuScopeEntry{scope: scope, at: time.Now()})
+	if strings.HasPrefix(scope, "function-version/") {
+		// Only the label is cached: it may be put on after the namespace
+		// is created, and a capture filed under the namespace would never
+		// be found by its function's next deploy.
+		criuScopeCache.Store(ns, criuScopeEntry{scope: scope, at: time.Now()})
+	}
 	return scope, nil
 }
 

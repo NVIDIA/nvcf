@@ -309,6 +309,16 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	if err != nil {
 		log.WithError(err).Error("CRIU group capture failed; this configuration starts fresh")
 		data["state"], data["reason"] = criuGroupStateFailed, truncate(err.Error(), 1024)
+		if strings.Contains(err.Error(), errSourceLeftSuspended.Error()) {
+			// A rank could not be resumed: the instance serves nothing.
+			// Its controllers replace every pod of it.
+			log.Error("CRIU group capture left a rank suspended; deleting the instance's pods")
+			for _, r := range ranks {
+				if derr := a.kubeClient.CoreV1().Pods(r.Namespace).Delete(context.WithoutCancel(ctx), r.Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+					log.WithError(derr).WithField("pod", r.Name).Error("cannot delete a pod of the suspended instance")
+				}
+			}
+		}
 	} else {
 		data["state"] = criuGroupStateComplete
 		for i, r := range results {
@@ -320,8 +330,19 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		}
 		log.WithField("duration", time.Since(t0).Round(time.Second).String()).Info("CRIU group capture: recorded")
 	}
-	record.Data = data
-	if _, err := cms.Update(context.WithoutCancel(ctx), record, metav1.UpdateOptions{}); err != nil {
+	started := record.Data["startedAt"]
+	if err := c.updateGroupRecord(context.WithoutCancel(ctx), key, func(d map[string]string) bool {
+		if d["state"] != criuGroupStateCapturing || d["startedAt"] != started {
+			return false // another capture took the record over
+		}
+		for k := range d {
+			delete(d, k)
+		}
+		for k, v := range data {
+			d[k] = v
+		}
+		return true
+	}); err != nil {
 		log.WithError(err).Error("CRIU group capture: cannot update the group record")
 	}
 	return false
@@ -382,8 +403,9 @@ func (c *criuAutoRestorer) claimGroupRecord(ctx context.Context, key string, lea
 	return updated, err
 }
 
-// updateGroupRecord applies change to the group record of key.
-func (c *criuAutoRestorer) updateGroupRecord(ctx context.Context, key string, change func(map[string]string)) error {
+// updateGroupRecord applies change to the group record of key; change
+// returns false to leave the record as it is.
+func (c *criuAutoRestorer) updateGroupRecord(ctx context.Context, key string, change func(map[string]string) bool) error {
 	cms := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace())
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		cm, err := cms.Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{})
@@ -393,10 +415,26 @@ func (c *criuAutoRestorer) updateGroupRecord(ctx context.Context, key string, ch
 		if cm.Data == nil {
 			cm.Data = map[string]string{}
 		}
-		change(cm.Data)
+		if !change(cm.Data) {
+			return nil
+		}
 		_, err = cms.Update(ctx, cm, metav1.UpdateOptions{})
 		return err
 	})
+}
+
+// recordOf reports whether the group record data is of the capture
+// checkpoint id belongs to.
+func recordOf(d map[string]string, id string) bool {
+	if id == "" {
+		return false
+	}
+	for k, v := range d {
+		if strings.HasPrefix(k, "checkpoint.") && v == id {
+			return true
+		}
+	}
+	return false
 }
 
 // checkpointInstance checkpoints the ranks in place and returns their
@@ -524,6 +562,8 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 		for _, p := range ranks {
 			a.markRestored(context.WithoutCancel(ctx), p.Namespace, p.Name, log)
 		}
+		id := leader.Annotations[webhook.CRIURestoreAnnotation]
+		_ = c.updateGroupRecord(context.WithoutCancel(ctx), key, func(d map[string]string) bool { return recordRestored(d, id) })
 		return
 	}
 	if ctx.Err() != nil && !errors.As(err, new(*groupRestoreFailure)) {
@@ -546,14 +586,22 @@ func (c *criuAutoRestorer) failGroup(ctx context.Context, leader *corev1.Pod, ke
 func (c *criuAutoRestorer) endGroup(ctx context.Context, leader *corev1.Pod, key string, restoreFailed, includeRestored bool, cause error, log *logrus.Entry) {
 	ctx = context.WithoutCancel(ctx)
 	log = log.WithField("restoreRan", restoreFailed)
+	pods, err := c.a.kubeClient.CoreV1().Pods(leader.Namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		log.WithError(err).Error("CRIU group restore: cannot list the instance's pods")
+		return
+	}
+	members := groupPlaceholders(pods.Items, leader, key, includeRestored)
+	// The checkpoints these pods restore from: the record may since name
+	// another capture of the configuration, which this failure says
+	// nothing about.
+	leaderID := leader.Annotations[webhook.CRIURestoreAnnotation]
+	ids := map[string]bool{leaderID: true}
+	for _, p := range members {
+		ids[p.Annotations[webhook.CRIURestoreAnnotation]] = true
+	}
 	if restoreFailed {
 		log.WithError(cause).Error("CRIU group restore failed; blocking its checkpoints and deleting its pods so their replacements start fresh")
-		ids := map[string]bool{leader.Annotations[webhook.CRIURestoreAnnotation]: true}
-		if g, ok := c.a.lookupCRIUGroup(ctx, key); ok {
-			for _, id := range g.Checkpoints {
-				ids[id] = true
-			}
-		}
 		for id := range ids {
 			if id == "" {
 				continue
@@ -565,26 +613,42 @@ func (c *criuAutoRestorer) endGroup(ctx context.Context, leader *corev1.Pod, key
 	} else {
 		log.WithError(cause).Warn("CRIU group restore did not run; deleting its pods so their replacements try again")
 	}
-	if err := c.updateGroupRecord(ctx, key, func(d map[string]string) {
-		if restoreFailed {
-			d["state"], d["reason"] = criuGroupStateRestoreFailed, truncate(cause.Error(), 1024)
-			return
-		}
-		n, _ := strconv.Atoi(d["stalls"])
-		d["stalls"], d["lastStall"] = strconv.Itoa(n+1), truncate(cause.Error(), 1024)
-	}); err != nil {
+	if err := c.updateGroupRecord(ctx, key, func(d map[string]string) bool {
+		return recordFailure(d, leaderID, restoreFailed, cause)
+	}); err != nil && !apierrors.IsNotFound(err) {
 		log.WithError(err).Warn("CRIU group restore: cannot update the group record")
 	}
-	pods, err := c.a.kubeClient.CoreV1().Pods(leader.Namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		log.WithError(err).Error("CRIU group restore: cannot list the instance's pods to delete them")
-		return
-	}
-	for _, p := range groupPlaceholders(pods.Items, leader, key, includeRestored) {
+	for _, p := range members {
 		if err := c.a.kubeClient.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 			log.WithError(err).WithField("placeholder", p.Name).Error("CRIU group restore: could not delete the placeholder")
 		}
 	}
+}
+
+// recordFailure records on group record d a restore of checkpoint id that
+// failed (restoreFailed) or did not get to run. A record of another
+// capture is left as it is.
+func recordFailure(d map[string]string, id string, restoreFailed bool, cause error) bool {
+	if d["state"] != criuGroupStateComplete || !recordOf(d, id) {
+		return false
+	}
+	if restoreFailed {
+		d["state"], d["reason"] = criuGroupStateRestoreFailed, truncate(cause.Error(), 1024)
+		return true
+	}
+	n, _ := strconv.Atoi(d["stalls"])
+	d["stalls"], d["lastStall"] = strconv.Itoa(n+1), truncate(cause.Error(), 1024)
+	return true
+}
+
+// recordRestored clears the stalls of the capture checkpoint id belongs to:
+// its restores run.
+func recordRestored(d map[string]string, id string) bool {
+	if d["stalls"] == "" || !recordOf(d, id) {
+		return false
+	}
+	delete(d, "stalls")
+	return true
 }
 
 // groupPlaceholders returns the pods of leader's instance admitted as

@@ -159,3 +159,36 @@ func TestAllRefusedAsRestored(t *testing.T) {
 		t.Error("a member that failed to restore must fail the group")
 	}
 }
+
+// The record was captured again since these pods were admitted: their
+// failure blocks only their own checkpoints and leaves the new capture be.
+func TestFailGroup_RecordOfAnotherCapture(t *testing.T) {
+	c, kc, leader := groupFixture(t)
+	ctx := context.Background()
+	cm, _ := kc.CoreV1().ConfigMaps("nvsnap-system").Get(ctx, criuGroupConfigMapName("k1"), metav1.GetOptions{})
+	cm.Data["checkpoint.0"], cm.Data["checkpoint.1"] = "n0", "n1"
+	if _, err := kc.CoreV1().ConfigMaps("nvsnap-system").Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	c.failGroup(ctx, leader, "k1", true, errors.New("criu restore: exit status 1"), logrus.NewEntry(logrus.New()))
+	if !c.Blocked(ctx, "c0") || !c.Blocked(ctx, "c1") {
+		t.Error("the pods' own checkpoints must be blocked")
+	}
+	if c.Blocked(ctx, "n0") || c.Blocked(ctx, "n1") {
+		t.Error("a newer capture's checkpoints were blocked")
+	}
+	cm, _ = kc.CoreV1().ConfigMaps("nvsnap-system").Get(ctx, criuGroupConfigMapName("k1"), metav1.GetOptions{})
+	if cm.Data["state"] != "complete" {
+		t.Errorf("the newer capture's record became %q", cm.Data["state"])
+	}
+}
+
+func TestRecordRestored_ClearsStallsOfItsCapture(t *testing.T) {
+	d := map[string]string{"state": "complete", "checkpoint.0": "c0", "stalls": "2"}
+	if recordRestored(d, "other") || d["stalls"] != "2" {
+		t.Error("a restore of another capture cleared the stalls")
+	}
+	if !recordRestored(d, "c0") || d["stalls"] != "" {
+		t.Error("a restore did not clear its capture's stalls")
+	}
+}

@@ -78,6 +78,7 @@ func criuReservePIDArgs(hostPID int) []string {
 type criuAutoRestorer struct {
 	a         *Agent
 	attempted sync.Map // pod UID -> struct{}
+	goneSince sync.Map // restored pod UID -> when its engine was first seen gone
 
 	mu        sync.Mutex
 	blocked   map[string]bool
@@ -131,8 +132,13 @@ func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 	if _, done := c.attempted.LoadOrStore(pod.UID, struct{}{}); done {
 		return
 	}
-	go c.restore(ctx, pod.Namespace, pod.Name, id, container)
+	go c.restore(ctx, pod.Namespace, pod.Name, id, container, pod.Annotations[webhook.CRIUGroupAnnotation])
 }
+
+// errCheckpointUnavailable marks a restore that did not run: the
+// checkpoint could not be brought to the node. It says nothing about the
+// checkpoint itself.
+var errCheckpointUnavailable = errors.New("the checkpoint could not be brought to this node")
 
 // prefetch starts fetching the checkpoint of a placeholder scheduled on
 // this node, while its containers start: the restore finds it local.
@@ -161,7 +167,7 @@ func (c *criuAutoRestorer) prefetch(ctx context.Context, pod *corev1.Pod) {
 	}()
 }
 
-func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod, id, container string) {
+func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod, id, container, groupKey string) {
 	a := c.a
 	log := a.log.WithFields(logrus.Fields{"pod": ns + "/" + pod, "checkpoint": id, "container": container})
 	rctx, cancel := context.WithTimeout(ctx, criuAutoRestoreTimeout)
@@ -177,10 +183,21 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod, id, container s
 		})
 		return err
 	}()
+	record := func(change func(map[string]string) bool) {
+		if groupKey != "" {
+			if err := c.updateGroupRecord(context.WithoutCancel(ctx), groupKey, change); err != nil && !apierrors.IsNotFound(err) {
+				log.WithError(err).Warn("CRIU auto-restore: cannot update the group record")
+			}
+		}
+	}
 	if err == nil {
 		log.WithField("duration", time.Since(t0).Round(time.Millisecond).String()).Info("CRIU auto-restore: restored")
 		a.markRestored(context.WithoutCancel(ctx), ns, pod, log)
+		record(func(d map[string]string) bool { return recordRestored(d, id) })
 		return
+	}
+	if ctx.Err() != nil {
+		return // the agent stops; the next one restores the pod
 	}
 	if errors.Is(err, errNotPlaceholder) {
 		// Restored already (by this agent before a restart): leave it be.
@@ -188,9 +205,15 @@ func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod, id, container s
 		a.markRestored(context.WithoutCancel(ctx), ns, pod, log)
 		return
 	}
-	log.WithError(err).Error("CRIU auto-restore failed; blocking the checkpoint and deleting the pod so its replacement starts fresh")
-	if merr := c.markFailed(context.WithoutCancel(ctx), id, err); merr != nil {
-		log.WithError(merr).Error("CRIU auto-restore: could not record the failed checkpoint; its next pods will try it again")
+	if errors.Is(err, errCheckpointUnavailable) {
+		log.WithError(err).Warn("CRIU auto-restore did not run; deleting the pod so its replacement tries again")
+		record(func(d map[string]string) bool { return recordFailure(d, id, false, err) })
+	} else {
+		log.WithError(err).Error("CRIU auto-restore failed; blocking the checkpoint and deleting the pod so its replacement starts fresh")
+		if merr := c.markFailed(context.WithoutCancel(ctx), id, err); merr != nil {
+			log.WithError(merr).Error("CRIU auto-restore: could not record the failed checkpoint; its next pods will try it again")
+		}
+		record(func(d map[string]string) bool { return recordFailure(d, id, true, err) })
 	}
 	if derr := a.kubeClient.CoreV1().Pods(ns).Delete(context.WithoutCancel(ctx), pod, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
 		log.WithError(derr).Error("CRIU auto-restore: could not delete the failed pod")

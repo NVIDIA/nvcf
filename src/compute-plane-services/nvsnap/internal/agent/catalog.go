@@ -335,7 +335,6 @@ func buildCheckpointID(catalog CatalogInfo, t time.Time) string {
 // configuration kept resolving to the first one, even after that one was
 // found unrestorable.
 func (c *CatalogInfo) setCaptureIdentity(index, size int, capture string) {
-	c.InstanceCapture = true
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s|group-rank|%d/%d|%s", c.Hash, index, size, capture)))
 	c.Hash = hex.EncodeToString(sum[:])
 	c.ShortHash = checkpointstore.ShortHash(c.Hash)

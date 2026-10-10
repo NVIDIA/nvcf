@@ -148,6 +148,8 @@ type ModelVolumeController struct {
 	holders map[string]*checkpointstore.MountHolder
 	// idleSince is when each bound volume was first seen unused.
 	idleSince map[string]time.Time
+	// bindLocks serializes binding and releasing one volume key.
+	bindLocks sync.Map
 	inflight  map[string]bool
 	attempts  map[string]int
 }
@@ -1393,6 +1395,9 @@ func (c *ModelVolumeController) handlePendingReader(ctx context.Context, pod *co
 		return
 	}
 	dst := filepath.Join(c.HostRoot, modelvolume.Key(uri))
+	// The release of unused binds (modelvolume_release.go) must not unbind
+	// what is being bound for this reader.
+	defer c.lockBind(modelvolume.Key(uri))()
 	// The mount table is the truth, not memory: the agent may have
 	// restarted, the volume may have been replaced by a re-download of the
 	// same identity, or an operator may have unmounted by hand. A bind is
@@ -1465,7 +1470,7 @@ func (c *ModelVolumeController) attachWithHolder(ctx context.Context, ns, claim 
 		if entry == nil {
 			entry = logrus.NewEntry(logrus.New())
 		}
-		name := "nvsnap-model-holder-" + strings.TrimPrefix(claim, "nvsnap-model-") + "-" + shortNode(c.NodeName)
+		name := modelHolderPrefix + strings.TrimPrefix(claim, "nvsnap-model-") + "-" + shortNode(c.NodeName)
 		h = checkpointstore.NewMountHolder(c.Kube, entry, ns, name, c.NodeName, claim, pvc.UID, c.HolderImage, "/host", c.HolderPullSecrets)
 		if err := h.Create(ctx); err != nil {
 			return "", fmt.Errorf("create mount-holder: %w", err)

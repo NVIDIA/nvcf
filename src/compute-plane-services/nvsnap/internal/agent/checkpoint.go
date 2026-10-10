@@ -631,6 +631,10 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 		// checkpoint (the ranks share the configuration hash, and a
 		// re-capture must replace the previous one, not resolve to it).
 		catalog.setCaptureIdentity(req.GPUShareGroupIndex, req.GPUShareGroupSize, req.GPUShareFabricSession+"/"+req.CaptureID)
+		// Only the agent's own instance capture (CaptureID) is recorded in
+		// a group record; a group checkpoint asked for through the API is
+		// the caller's to keep.
+		catalog.InstanceCapture = req.CaptureID != ""
 	}
 
 	checkpointID := buildCheckpointID(catalog, time.Now())
@@ -770,7 +774,9 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 		criuSpan.RecordError(err)
 		criuSpan.SetStatus(codes.Error, "CRIU dump failed (criu-v2)")
 		criuSpan.End()
-		if errors.Is(err, errSourceLeftSuspended) && a.kubeClient != nil {
+		// A rank of a group capture is one engine with its peers: the
+		// group's driver replaces the whole instance.
+		if errors.Is(err, errSourceLeftSuspended) && a.kubeClient != nil && req.GPUShareGroupSize == 0 {
 			// Its controller replaces it with a pod that serves.
 			log.WithError(err).Error("the capture left the workload suspended; deleting its pod")
 			if derr := a.kubeClient.CoreV1().Pods(req.Namespace).Delete(context.WithoutCancel(ctx), req.PodName, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {

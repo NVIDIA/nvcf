@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
@@ -43,35 +44,55 @@ func (c *criuAutoRestorer) considerRestored(ctx context.Context, pod *corev1.Pod
 	}
 	go func() {
 		defer c.attempted.Delete("watch/" + string(pod.UID))
-		reason := c.restoredEngineGone(ctx, pod, container)
+		reason, sure := c.restoredEngineGone(ctx, pod, container)
 		if reason == "" {
+			c.goneSince.Delete(pod.UID)
 			return
 		}
+		if !sure {
+			// Seen once is not enough: act on it only when it holds a
+			// while later.
+			first, seen := c.goneSince.LoadOrStore(pod.UID, time.Now())
+			if !seen || time.Since(first.(time.Time)) < restoredGoneConfirm {
+				return
+			}
+		}
+		c.goneSince.Delete(pod.UID)
 		c.failRestored(ctx, pod, fmt.Errorf("the restored engine is gone: %s", reason))
 	}()
 }
 
+// restoredGoneConfirm is how long an engine must stay gone before its pod
+// is ended.
+const restoredGoneConfirm = time.Minute
+
 // restoredEngineGone returns why the pod's restored engine is gone, or ""
-// while it runs or when that cannot be told.
-func (c *criuAutoRestorer) restoredEngineGone(ctx context.Context, pod *corev1.Pod, container string) string {
+// while it runs or when that cannot be told; sure when no second look is
+// needed (the container restarted).
+func (c *criuAutoRestorer) restoredEngineGone(ctx context.Context, pod *corev1.Pod, container string) (reason string, sure bool) {
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Name == container && cs.RestartCount > 0 && cs.LastTerminationState.Terminated != nil &&
 			cs.LastTerminationState.Terminated.FinishedAt.After(restoredAt(pod).Time) {
-			return fmt.Sprintf("container %s restarted after the restore", container)
+			return fmt.Sprintf("container %s restarted after the restore", container), true
 		}
 	}
 	info, err := c.a.runtime.FindContainerByPod(ctx, pod.Namespace, pod.Name, container)
 	if err != nil || info == nil || info.PID == 0 {
-		return ""
+		return "", false
 	}
 	procBase := "/proc"
 	if _, err := os.Stat("/host/proc"); err == nil {
 		procBase = "/host/proc"
 	}
-	if onlyPlaceholderLeft(procBase, int(info.PID)) {
-		return "only the placeholder's shell runs in container " + container
+	if !onlyPlaceholderLeft(procBase, int(info.PID)) {
+		return "", false
 	}
-	return ""
+	// A GPU process of the pod anywhere (the restored tree may hang off
+	// another parent) means the engine runs.
+	if gpuPID, err := c.a.gpuProcessInSamePidNS(ctx, procBase, int(info.PID)); err != nil || gpuPID != 0 {
+		return "", false
+	}
+	return "only the placeholder's shell runs in container " + container + " and it has no GPU process", false
 }
 
 func restoredAt(pod *corev1.Pod) (t metav1.Time) {
@@ -108,8 +129,12 @@ func (c *criuAutoRestorer) failRestored(ctx context.Context, pod *corev1.Pod, ca
 		return
 	}
 	log.WithError(cause).Error("CRIU restore failed after it ran; blocking the checkpoint and deleting the pod so its replacement starts fresh")
-	if err := c.markFailed(ctx, pod.Annotations[webhook.CRIURestoreAnnotation], cause); err != nil {
+	id := pod.Annotations[webhook.CRIURestoreAnnotation]
+	if err := c.markFailed(ctx, id, cause); err != nil {
 		log.WithError(err).Error("CRIU restore: could not block the checkpoint")
+	}
+	if key := pod.Annotations[webhook.CRIUGroupAnnotation]; key != "" {
+		_ = c.updateGroupRecord(ctx, key, func(d map[string]string) bool { return recordFailure(d, id, true, cause) })
 	}
 	if err := c.a.kubeClient.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		log.WithError(err).Error("CRIU restore: could not delete the pod")

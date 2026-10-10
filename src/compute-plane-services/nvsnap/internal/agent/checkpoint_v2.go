@@ -143,6 +143,17 @@ func (a *Agent) stageV2Bundle(root string, log *logrus.Entry) error {
 
 // dumpV2 stages the bundle and runs CRIU dump inside the container's
 // namespaces. On success the image files have been moved into checkpointDir.
+// resumeSource brings a source back after its dump, under its own deadline:
+// the capture's may have run out, which is often why the dump failed.
+func resumeSource(ctx context.Context, hostPID int, pids []int, fabricDir string, log *logrus.Entry) error {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gpushareResumeTimeout)
+	defer cancel()
+	return gpushareResume(rctx, hostPID, pids, "", fabricDir, log)
+}
+
+// gpushareResumeTimeout bounds bringing a source back after its dump.
+const gpushareResumeTimeout = 10 * time.Minute
+
 // errSourceLeftSuspended marks a capture whose source workload could not
 // be resumed: it holds no GPU memory and serves nothing, while its pod
 // still reads Ready.
@@ -258,7 +269,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		_ = os.RemoveAll(imgsDir)
 		if err := a.dumpPIDNamespace(ctx, procBase, targetHostPID, checkpointDir, externals, leaveRunning, gsOn, log); err != nil {
 			if gsOn {
-				if rerr := gpushareResume(ctx, hostPID, gsPIDs, "", fabricDir, log); rerr != nil {
+				if rerr := resumeSource(ctx, hostPID, gsPIDs, fabricDir, log); rerr != nil {
 					return nil, errors.Join(err, fmt.Errorf("%w: %w", errSourceLeftSuspended, rerr))
 				}
 			}
@@ -266,7 +277,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		}
 		if gsOn {
 			if leaveRunning {
-				if err := gpushareResume(ctx, hostPID, gsPIDs, "", fabricDir, log); err != nil {
+				if err := resumeSource(ctx, hostPID, gsPIDs, fabricDir, log); err != nil {
 					return nil, fmt.Errorf("%w: resume after the dump: %w", errSourceLeftSuspended, err)
 				}
 			}
@@ -344,7 +355,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		// CRIU puts a failed dump's tasks back as they were: stopped, GPU
 		// state checkpointed. Bring the workload back rather than leave it
 		// frozen; the capture still fails.
-		if rerr := gpushareResume(ctx, hostPID, gsPIDs, "", fabricDir, log); rerr != nil {
+		if rerr := resumeSource(ctx, hostPID, gsPIDs, fabricDir, log); rerr != nil {
 			runErr = errors.Join(runErr, fmt.Errorf("%w: %w", errSourceLeftSuspended, rerr))
 		}
 	}
@@ -371,7 +382,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}
 	if gsOn {
 		if leaveRunning {
-			if err := gpushareResume(ctx, hostPID, gsPIDs, "", fabricDir, log); err != nil {
+			if err := resumeSource(ctx, hostPID, gsPIDs, fabricDir, log); err != nil {
 				return nil, fmt.Errorf("%w: resume after the dump: %w", errSourceLeftSuspended, err)
 			}
 		}

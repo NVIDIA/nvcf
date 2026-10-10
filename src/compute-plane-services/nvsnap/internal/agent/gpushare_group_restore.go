@@ -171,10 +171,18 @@ func (a *Agent) groupRestore(ctx context.Context, req GroupRestoreRequest, log *
 	// its rank's GPU memory.
 	fetchErrs := make([]error, len(req.Members))
 	var fetches sync.WaitGroup
+	fctx, cancelFetches := context.WithCancel(ctx)
+	defer cancelFetches()
 	for i, m := range req.Members {
 		fetches.Add(1)
 		go func(i int, m GroupRestoreMember) {
 			defer fetches.Done()
+			ctx := fctx
+			defer func() {
+				if fetchErrs[i] != nil {
+					cancelFetches() // the instance cannot restore without this rank
+				}
+			}()
 			name := m.PlaceholderNamespace + "/" + m.PlaceholderPodName
 			base, err := a.peerAgentURL(ctx, nodes[i])
 			if err != nil {

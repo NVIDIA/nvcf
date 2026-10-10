@@ -333,7 +333,7 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		if err := a.EnsureLocal(ctx, req.CheckpointID); err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "ensure-local cascade failed")
-			return nil, fmt.Errorf("ensure-local cascade failed: %w", err)
+			return nil, fmt.Errorf("%w: ensure-local cascade failed: %w", errCheckpointUnavailable, err)
 		}
 		log.WithField("ensureLocalElapsed", time.Since(ensureStart).String()).
 			Info("Checkpoint materialized locally (same-node or cascade)")

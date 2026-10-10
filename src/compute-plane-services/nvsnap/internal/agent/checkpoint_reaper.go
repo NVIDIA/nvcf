@@ -98,7 +98,10 @@ func (a *Agent) reapCheckpoints(ctx context.Context, pods []corev1.Pod, now time
 	backend, _ := a.l2Backend.(*checkpointstore.PerCapturePVCBackend)
 	for id, md := range dead {
 		log := a.log.WithField("checkpoint", id)
-		if backend != nil && backend.Promoter != nil && md.Hash != "" {
+		// Only an instance capture's L2 copy is its alone: a lone capture's
+		// is keyed by its configuration, which a later capture may share.
+		instance := md.CatalogInfo != nil && md.CatalogInfo.InstanceCapture
+		if instance && backend != nil && backend.Promoter != nil && md.Hash != "" {
 			ns := md.PodNamespace
 			if ns == "" {
 				ns = backend.Namespace
