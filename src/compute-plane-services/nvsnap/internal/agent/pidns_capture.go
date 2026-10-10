@@ -49,23 +49,31 @@ type pidNSCapture struct {
 	// GPUMounts are the GPU-identity mounts left out of the dump (see
 	// gpuIdentityMount); restore gives the tree the placeholder's own.
 	GPUMounts []string `json:"gpuMounts,omitempty"`
-	// UnixSockets are the external declarations of listening unix sockets
-	// bound to a path ("unix[<inode>]"); restore repeats them.
-	UnixSockets []string `json:"unixSockets,omitempty"`
+	// UnixListeners are the workload's listening unix sockets bound to a
+	// path; the restore hands CRIU a fresh one for each.
+	UnixListeners []UnixListener `json:"unixListeners,omitempty"`
 }
 
-// listeningUnixSocketExternals returns the external declarations
-// ("unix[<inode>]") of the listening unix sockets bound to a filesystem
-// path in the network namespace of hostPID. CRIU recreates such a socket
-// by entering the mount namespace of its path, which a restore of a
-// whole pid namespace cannot do:
+// UnixListener is a listening unix socket bound to a filesystem path.
+type UnixListener struct {
+	Inode uint64 `json:"inode"`
+	Type  int    `json:"type"` // SOCK_STREAM (1) or SOCK_SEQPACKET (5)
+	Path  string `json:"path"`
+}
+
+// listeningUnixSockets returns the listening unix sockets bound to a
+// filesystem path in the network namespace of hostPID. CRIU re-creates
+// such a socket by entering the mount namespace of its path, which a
+// restore of a whole pid namespace cannot do:
 //
 //	Error (criu/namespaces.c:260): Can't setns 13/mnt: Invalid argument
 //	Error (criu/files.c:1334): Unable to open fd=33 id=0x14b
 //
-// Abstract sockets (a leading @) have no path and restore as they are;
-// connected sockets carry the workload's IPC and are restored.
-func listeningUnixSocketExternals(procBase string, hostPID int) ([]string, error) {
+// and declaring it external does not help: CRIU only honours that for a
+// socket whose peer is outside the tree. So the restore binds a fresh one
+// at the same path and hands it to CRIU (--inherit-fd). Abstract sockets
+// (a leading @) and connected ones restore as they are.
+func listeningUnixSockets(procBase string, hostPID int) ([]UnixListener, error) {
 	data, err := os.ReadFile(filepath.Join(procBase, strconv.Itoa(hostPID), "net", "unix"))
 	if err != nil {
 		return nil, err
@@ -73,17 +81,38 @@ func listeningUnixSocketExternals(procBase string, hostPID int) ([]string, error
 	return parseListeningUnixSockets(string(data)), nil
 }
 
-func parseListeningUnixSockets(data string) []string {
-	var out []string
+func parseListeningUnixSockets(data string) []UnixListener {
+	var out []UnixListener
 	for i, line := range strings.Split(data, "\n") {
 		f := strings.Fields(line)
 		// Num RefCount Protocol Flags Type St Inode Path
 		if i == 0 || len(f) < 8 || f[3] != "00010000" || strings.HasPrefix(f[7], "@") {
 			continue
 		}
-		out = append(out, "unix["+f[6]+"]")
+		typ, err1 := strconv.ParseInt(f[4], 16, 32)
+		ino, err2 := strconv.ParseUint(f[6], 10, 64)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		out = append(out, UnixListener{Inode: ino, Type: int(typ), Path: f[7]})
 	}
 	return out
+}
+
+// pidNSUnixListenerFD is the first fd the restore helper hands CRIU a
+// listener on (fd 3 is the network namespace).
+const pidNSUnixListenerFD = 4
+
+// PIDNSUnixListenersEnv passes the listeners to the restore helper:
+// "<type>:<path>" per line, in fd order from pidNSUnixListenerFD.
+const PIDNSUnixListenersEnv = "NVSNAP_PIDNS_UNIX_LISTENERS"
+
+func encodeUnixListeners(ls []UnixListener) string {
+	var b strings.Builder
+	for _, l := range ls {
+		fmt.Fprintf(&b, "%d:%s\n", l.Type, l.Path)
+	}
+	return b.String()
 }
 
 var gpuDeviceNode = regexp.MustCompile(`^/dev/nvidia[0-9]+$`)
@@ -246,7 +275,7 @@ const pidNSExtNetKey = "extNetNs"
 // its pid namespace, run inside the placeholder's mount and pid namespaces
 // (behind the pidns-restore-exec helper, which hands it the network
 // namespace on fd 3).
-func pidNSRestoreArgs(imgsInContainer string, mounts, unixSockets []string, gpushare, directIO bool, inetAddrMap string) []string {
+func pidNSRestoreArgs(imgsInContainer string, mounts []string, listeners []UnixListener, gpushare, directIO bool, inetAddrMap string) []string {
 	args := []string{
 		"restore",
 		"-D", imgsInContainer,
@@ -273,8 +302,8 @@ func pidNSRestoreArgs(imgsInContainer string, mounts, unixSockets []string, gpus
 	for _, mp := range mounts {
 		args = append(args, "--external", fmt.Sprintf("mnt[%s]:%s", mp, mp))
 	}
-	for _, u := range unixSockets {
-		args = append(args, "--external", u)
+	for i, l := range listeners {
+		args = append(args, "--inherit-fd", fmt.Sprintf("fd[%d]:socket:[%d]", pidNSUnixListenerFD+i, l.Inode))
 	}
 	return args
 }
@@ -389,11 +418,10 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 		return fmt.Errorf("pid-namespace dump: %s is bound from a deleted directory on the node; restart the pod to capture it", mp)
 	}
 	mounts, gpuMounts := pidNSExternalMounts(entries)
-	unixSockets, err := listeningUnixSocketExternals(procBase, hostPID)
+	listeners, err := listeningUnixSockets(procBase, hostPID)
 	if err != nil {
 		return fmt.Errorf("pid-namespace dump: listening unix sockets: %w", err)
 	}
-	deviceExternals = append(append([]string{}, deviceExternals...), unixSockets...)
 	var st syscall.Stat_t
 	if err := syscall.Stat(filepath.Join(procBase, strconv.Itoa(hostPID), "ns", "net"), &st); err != nil {
 		return fmt.Errorf("pid-namespace dump: network namespace: %w", err)
@@ -413,7 +441,7 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 		return fmt.Errorf("criu-v2 pid-namespace dump: %w (output: %s; dump.log tail: %s)", err,
 			strings.TrimSpace(string(out)), tailOfFile(filepath.Join(checkpointDir, "dump.log"), 6))
 	}
-	return writePIDNSMarker(checkpointDir, pidNSCapture{Mounts: mounts, GPUMounts: gpuMounts, UnixSockets: unixSockets})
+	return writePIDNSMarker(checkpointDir, pidNSCapture{Mounts: mounts, GPUMounts: gpuMounts, UnixListeners: listeners})
 }
 
 // pidNSRestoreHelperName is the agent binary staged into the placeholder's

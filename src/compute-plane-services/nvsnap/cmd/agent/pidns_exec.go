@@ -7,8 +7,12 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strconv"
+	"strings"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/agent"
 )
 
 // pidNSRestoreExec runs inside a restore placeholder's mount and pid
@@ -48,5 +52,59 @@ func pidNSRestoreExec(args []string) error {
 		}
 		_ = unix.Close(fd)
 	}
+	if err := bindUnixListeners(os.Getenv(agent.PIDNSUnixListenersEnv)); err != nil {
+		return err
+	}
 	return unix.Exec(args[0], args, os.Environ())
+}
+
+// bindUnixListeners binds a fresh listening socket at each path in spec
+// ("<type>:<path>" per line) and places them on fds 4, 5, ... in order:
+// CRIU takes them in place of the workload's own (--inherit-fd), which it
+// cannot re-create in a restored pid namespace. A stale socket file from
+// the source is removed first.
+func bindUnixListeners(spec string) error {
+	type listener struct {
+		typ  int
+		path string
+	}
+	var ls []listener
+	for _, line := range strings.Split(strings.TrimSpace(spec), "\n") {
+		if line == "" {
+			continue
+		}
+		typ, path, ok := strings.Cut(line, ":")
+		t, err := strconv.Atoi(typ)
+		if !ok || err != nil || path == "" {
+			return fmt.Errorf("bad listener %q", line)
+		}
+		ls = append(ls, listener{t, path})
+	}
+	// Create every socket on a high fd first, so placing one never
+	// clobbers another that happened to land on a target fd.
+	const stage = 1000
+	for i, l := range ls {
+		_ = unix.Unlink(l.path)
+		fd, err := unix.Socket(unix.AF_UNIX, l.typ, 0)
+		if err != nil {
+			return fmt.Errorf("socket for %s: %w", l.path, err)
+		}
+		if err := unix.Bind(fd, &unix.SockaddrUnix{Name: l.path}); err != nil {
+			return fmt.Errorf("bind %s: %w", l.path, err)
+		}
+		if err := unix.Listen(fd, 4096); err != nil {
+			return fmt.Errorf("listen %s: %w", l.path, err)
+		}
+		if err := unix.Dup3(fd, stage+i, 0); err != nil {
+			return err
+		}
+		_ = unix.Close(fd)
+	}
+	for i := range ls {
+		if err := unix.Dup3(stage+i, 4+i, 0); err != nil {
+			return err
+		}
+		_ = unix.Close(stage + i)
+	}
+	return nil
 }

@@ -67,9 +67,13 @@ func TestPIDNSArgs(t *testing.T) {
 	if strings.Contains(dump, "--libdir") {
 		t.Error("a gpushare dump must not load the CUDA plugin")
 	}
-	restore := strings.Join(pidNSRestoreArgs("/checkpoints/x", []string{"/etc/hosts"}, []string{"unix[719101449]"}, false, false, "10.0.0.1=10.0.0.2"), " ")
-	if !strings.Contains(restore, "--external unix[719101449]") {
-		t.Errorf("restore does not repeat the unix socket declaration: %s", restore)
+	restore := strings.Join(pidNSRestoreArgs("/checkpoints/x", []string{"/etc/hosts"},
+		[]UnixListener{{Inode: 719101449, Type: 1, Path: "/tmp/ipc-a"}, {Inode: 719101460, Type: 5, Path: "/tmp/ipc-b"}},
+		false, false, "10.0.0.1=10.0.0.2"), " ")
+	for _, want := range []string{"--inherit-fd fd[4]:socket:[719101449]", "--inherit-fd fd[5]:socket:[719101460]"} {
+		if !strings.Contains(restore, want) {
+			t.Errorf("restore lacks %q: %s", want, restore)
+		}
 	}
 	for _, want := range []string{"restore -D /checkpoints/x", "--root /", "--inherit-fd fd[3]:extNetNs",
 		"--join-ns ipc:/proc/1/ns/ipc", "--external mnt[/etc/hosts]:/etc/hosts", "--restore-detached",
@@ -172,7 +176,11 @@ func TestParseListeningUnixSockets(t *testing.T) {
 0000000000000000: 00000002 00000000 00000000 0001 03 719101452
 `
 	got := parseListeningUnixSockets(data)
-	if !reflect.DeepEqual(got, []string{"unix[719101449]"}) {
+	want := []UnixListener{{Inode: 719101449, Type: 1, Path: "/tmp/vllm-ipc-7f3a"}}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v", got)
+	}
+	if enc := encodeUnixListeners(want); enc != "1:/tmp/vllm-ipc-7f3a\n" {
+		t.Errorf("encoded %q", enc)
 	}
 }

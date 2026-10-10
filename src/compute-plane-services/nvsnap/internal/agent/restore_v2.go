@@ -192,7 +192,7 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		// runs on the node's network).
 		args = append([]string{"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-r", "-w", "--",
 			v2BinDirInContainer + "/" + pidNSRestoreHelperName, "pidns-restore-exec", v2BinDirInContainer + "/criu"},
-			pidNSRestoreArgs(imgsInContainer, pidnsCapture.Mounts, pidnsCapture.UnixSockets, gs != nil, gs != nil && bundledSupportsDirectImageIO(), group.InetAddrMap)...)
+			pidNSRestoreArgs(imgsInContainer, pidnsCapture.Mounts, pidnsCapture.UnixListeners, gs != nil, gs != nil && bundledSupportsDirectImageIO(), group.InetAddrMap)...)
 		log.WithField("externalMounts", len(pidnsCapture.Mounts)).Info("criu-v2: restoring into a nested pid namespace")
 	}
 	rctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
@@ -221,6 +221,9 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	cmd.Env = []string{
 		"PATH=" + v2BinDirInContainer + ":/usr/sbin:/usr/bin:/sbin:/bin",
 		"HOME=/root",
+	}
+	if pidns && len(pidnsCapture.UnixListeners) > 0 {
+		cmd.Env = append(cmd.Env, PIDNSUnixListenersEnv+"="+encodeUnixListeners(pidnsCapture.UnixListeners))
 	}
 	// Place criu — and therefore the restored tree, which inherits its
 	// cgroup (--manage-cgroups=ignore) — into the PLACEHOLDER's cgroup via

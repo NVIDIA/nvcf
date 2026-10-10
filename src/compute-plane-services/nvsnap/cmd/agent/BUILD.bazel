@@ -26,7 +26,10 @@ go_binary(
 
 go_test(
     name = "agent_test",
-    srcs = ["capture_write_test.go"],
+    srcs = [
+        "capture_write_test.go",
+        "pidns_exec_test.go",
+    ],
     embed = [":agent_lib"],
     deps = ["@com_github_sirupsen_logrus//:logrus"],
 )
