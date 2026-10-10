@@ -93,6 +93,7 @@ func (a *Agent) startCRIUAutoRestore(ctx context.Context) error {
 		return fmt.Errorf("CRIU auto-restore needs the kube client and the node name")
 	}
 	c := a.criuRestorer()
+	c.recoverInterruptedCaptures(ctx, time.Now())
 	factory := informers.NewSharedInformerFactoryWithOptions(a.kubeClient, 30*time.Second,
 		informers.WithTweakListOptions(func(o *metav1.ListOptions) { o.FieldSelector = "spec.nodeName=" + a.config.NodeName }))
 	informer := factory.Core().V1().Pods().Informer()

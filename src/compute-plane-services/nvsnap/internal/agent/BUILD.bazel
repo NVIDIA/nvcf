@@ -17,6 +17,7 @@ go_library(
         "criu_auto_restore.go",
         "criu_group.go",
         "criu_group_guard.go",
+        "criu_group_recover.go",
         "criu_group_scope.go",
         "criu_plugin.go",
         "external_tcp.go",

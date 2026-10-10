@@ -12,6 +12,7 @@ import (
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
@@ -190,5 +191,53 @@ func TestRecordRestored_ClearsStallsOfItsCapture(t *testing.T) {
 	}
 	if !recordRestored(d, "c0") || d["stalls"] != "" {
 		t.Error("a restore did not clear its capture's stalls")
+	}
+}
+
+// An agent restarted during a capture of an instance with a rank on its
+// node fails the capture and replaces the instance; captures elsewhere and
+// captures begun since it started are left alone.
+func TestRecoverInterruptedCaptures(t *testing.T) {
+	kc := fake.NewSimpleClientset()
+	a := &Agent{kubeClient: kc, log: logrus.New(), config: Config{NodeName: "n1"}}
+	c := a.criuRestorer()
+	ctx := context.Background()
+	started := time.Now()
+	rec := func(key, source string, at time.Time) {
+		cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: criuGroupConfigMapName(key), Namespace: "nvsnap-system",
+			Labels: map[string]string{"app.kubernetes.io/managed-by": "nvsnap"}},
+			Data: map[string]string{"state": "capturing", "source": source, "startedAt": at.UTC().Format(time.RFC3339)}}
+		if _, err := kc.CoreV1().ConfigMaps("nvsnap-system").Create(ctx, cm, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pod := func(name, owner, node string) {
+		p := stsRank(name, "0", "2", types.UID(owner), true)
+		p.Spec.NodeName = node
+		if _, err := kc.CoreV1().Pods("fn").Create(ctx, &p, metav1.CreateOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pod("here-0", "sts-a", "n2")
+	pod("here-1", "sts-a", "n1") // a rank on this node
+	pod("away-0", "sts-b", "n3")
+	pod("new-0", "sts-c", "n1")
+	rec("here", "fn/here-0", started.Add(-time.Minute))
+	rec("away", "fn/away-0", started.Add(-time.Minute))
+	rec("new", "fn/new-0", started.Add(time.Minute))
+	c.recoverInterruptedCaptures(ctx, started)
+
+	left := map[string]bool{}
+	for _, n := range remainingPods(t, kc) {
+		left[n] = true
+	}
+	if left["here-0"] || left["here-1"] || !left["away-0"] || !left["new-0"] {
+		t.Errorf("pods left = %v; want the interrupted instance replaced, the others kept", left)
+	}
+	for key, want := range map[string]string{"here": "failed", "away": "capturing", "new": "capturing"} {
+		cm, _ := kc.CoreV1().ConfigMaps("nvsnap-system").Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{})
+		if cm.Data["state"] != want {
+			t.Errorf("record %s = %q, want %q", key, cm.Data["state"], want)
+		}
 	}
 }
