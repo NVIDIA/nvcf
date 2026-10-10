@@ -65,7 +65,7 @@ class CommittedValuesTests(unittest.TestCase):
             path = self.chart_path(chart)
             with self.subTest(recipe=recipe_id, chart=str(path)):
                 command = ['helm', 'template', 'default-model', str(path), '--namespace', 'llm-stack',
-                           '--set', 'recipe=' + recipe_id]
+                           '--set', 'recipe=' + recipe_id, '--set', 'profileName=' + profile['id']]
                 for i in range(profile['modelNodeCount']):
                     command += ['--set', f'nodes[{i}]=selected-node-{i}']
                 result = subprocess.run(command, capture_output=True, text=True)

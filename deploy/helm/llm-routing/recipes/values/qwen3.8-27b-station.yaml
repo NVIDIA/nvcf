@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# Select an available ARM64 GB300 node with an exclusive GPU.
+# See the catalog for validation results and remaining gaps.
+recipe: qwen3.8-27b
+profileName: station-fp8
+nodes:
+- station-node-1
+runtimeClassName: nvidia
+storageClassName: local-path
+sharedCAConfigMap: llm-gateway-stack-ca

@@ -291,52 +291,6 @@
       ]
     },
     {
-      "id": "nemotron-5-nano-12b",
-      "name": "Nemotron 5 Nano 12B",
-      "servedModelId": null,
-      "availability": {
-        "status": "unavailable",
-        "deployable": false,
-        "reason": "Exact-name public artifact and access status remain unverified.",
-        "checkedAt": "2026-10-07",
-        "sources": [
-          "https://huggingface.co/api/models?author=nvidia&search=Nemotron&limit=1000",
-          "https://huggingface.co/nvidia",
-          "https://www.nvidia.com/en-us/ai-data-science/foundation-models/nemotron/"
-        ]
-      },
-      "precision": null,
-      "license": null,
-      "licenseNotice": null,
-      "model": null,
-      "runtime": null,
-      "profiles": [],
-      "upstreamCandidates": []
-    },
-    {
-      "id": "nemotron-5-super-49b",
-      "name": "Nemotron 5 Super 49B",
-      "servedModelId": null,
-      "availability": {
-        "status": "unavailable",
-        "deployable": false,
-        "reason": "Exact-name public artifact and access status remain unverified.",
-        "checkedAt": "2026-10-07",
-        "sources": [
-          "https://huggingface.co/api/models?author=nvidia&search=Nemotron&limit=1000",
-          "https://huggingface.co/nvidia",
-          "https://www.nvidia.com/en-us/ai-data-science/foundation-models/nemotron/"
-        ]
-      },
-      "precision": null,
-      "license": null,
-      "licenseNotice": null,
-      "model": null,
-      "runtime": null,
-      "profiles": [],
-      "upstreamCandidates": []
-    },
-    {
       "id": "qwen3.8-27b",
       "name": "Qwen3.8-27B",
       "servedModelId": "qwen3.8-27b",
@@ -452,6 +406,138 @@
             "values": {
               "recipe": "qwen3.8-27b",
               "profileName": "spark-fp8"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "guides/README.md"
+          }
+        },
+        {
+          "id": "station-fp8",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB300",
+              "NVIDIA GB300"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB300"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "discrete",
+            "minDeviceMemoryGiB": 64
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 68719476736,
+                "memoryLimitBytes": 137438953472,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 85899345920,
+                "minimumFreeBytesBeforeDownload": 42949672960
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 8192,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-09",
+              "profile": "station-fp8",
+              "modelRevision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "promptTokens": [
+                47,
+                56
+              ],
+              "maximumObservedTotalTokens": 126,
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-09",
+              "profile": "station-fp8",
+              "modelRevision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "status": "smoke-tested",
+              "reason": "Fresh packaged Helm installation, registration, discovery, short arithmetic chat and streaming passed. The earlier 8160-token context-boundary request returned HTTP 502 and has not been retested. Full-context and lifecycle validation remain pending.",
+              "cacheMode": "fresh-download",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "packaged-helm-install",
+                "readiness",
+                "registration",
+                "discovery",
+                "chat",
+                "streaming",
+                "arithmetic-smoke"
+              ],
+              "failedChecks": [
+                "context-boundary"
+              ],
+              "failedWorkload": {
+                "requestType": "context-boundary-smoke",
+                "tokenizerPromptTokens": 8160,
+                "maxOutputTokens": 32,
+                "httpStatus": 502,
+                "backendExecutionConfirmed": false
+              },
+              "pendingChecks": [
+                "context-boundary-retest",
+                "authentication-rejection",
+                "stop-resume",
+                "uninstall-reinstall",
+                "final-package-live-verification"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.2.0",
+              "localPath": "pylon-sglang-recipe-0.2.0.tgz",
+              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "repository": null,
+              "publication": "local"
+            },
+            "releaseName": "qwen-fp8",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.8-27b",
+              "profileName": "station-fp8"
             },
             "requiredSiteValues": [
               "nodes",
@@ -593,30 +679,6 @@
           }
         }
       ]
-    },
-    {
-      "id": "qwen3.8-4b",
-      "name": "Qwen3.8-4B",
-      "servedModelId": null,
-      "availability": {
-        "status": "unavailable",
-        "deployable": false,
-        "reason": "Exact-name public artifact and access status remain unverified. HTTP 401 is ambiguous between private and nonexistent repositories.",
-        "checkedAt": "2026-10-07",
-        "sources": [
-          "https://huggingface.co/collections/Qwen/qwen38",
-          "https://huggingface.co/Qwen",
-          "https://huggingface.co/api/models?author=Qwen&search=Qwen3.8&limit=100&full=true",
-          "https://huggingface.co/api/models/Qwen/Qwen3.8-4B"
-        ]
-      },
-      "precision": null,
-      "license": null,
-      "licenseNotice": null,
-      "model": null,
-      "runtime": null,
-      "profiles": [],
-      "upstreamCandidates": []
     },
     {
       "id": "qwen3.8-flash-next",

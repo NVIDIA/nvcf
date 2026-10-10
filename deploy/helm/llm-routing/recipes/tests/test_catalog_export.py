@@ -156,19 +156,18 @@ class CommonCatalogTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "pins changed"):
             self.export_flash(stale)
 
-    def test_inventory_covers_seven_families_with_two_qwen_precisions(self):
+    def test_inventory_keeps_executable_recipes_and_planned_demo_target(self):
         self.assertEqual(set(self.recipes), {"qwen3.8-27b", "qwen3.8-27b-nvfp4", "qwen3.8-flash-next",
-            "glm-5.3", "nemotron-5-nano-12b", "nemotron-5-super-49b", "qwen3.8-4b", "deepseek-v4-flash"})
-        self.assertEqual(len({recipe["name"] for recipe in self.recipes.values()}), 7)
+            "glm-5.3", "deepseek-v4-flash"})
         available = {recipe["id"] for recipe in self.recipes.values() if recipe["availability"]["deployable"]}
         self.assertEqual(available, {"qwen3.8-27b", "qwen3.8-27b-nvfp4", "qwen3.8-flash-next", "glm-5.3"})
         for identifier in available:
             self.assertEqual(self.recipes[identifier]["availability"]["status"], "available")
             self.assertTrue(self.recipes[identifier]["profiles"])
 
-    def test_unavailable_entries_have_no_deployment_or_unverified_artifact_pins(self):
+    def test_planned_entries_have_no_deployment_or_unverified_artifact_pins(self):
         source = catalog.read(ROOT / "planned.json")["recipes"]
-        self.assertEqual(len(source), 4)
+        self.assertEqual({recipe["id"] for recipe in source}, {"deepseek-v4-flash"})
         for recipe in source:
             exported = self.recipes[recipe["id"]]
             self.assertEqual(exported, {**recipe,
@@ -179,9 +178,6 @@ class CommonCatalogTests(unittest.TestCase):
             for key in ("model", "runtime", "license", "precision"):
                 self.assertIsNone(exported[key])
             self.assertNotIn("deployment", exported)
-            if exported["availability"]["status"] == "unavailable":
-                self.assertIsNone(exported["licenseNotice"])
-                self.assertEqual(exported["upstreamCandidates"], [])
 
     def test_planned_export_rejects_accidentally_executable_metadata(self):
         original = catalog.read(ROOT / "planned.json")
@@ -237,9 +233,6 @@ class CommonCatalogTests(unittest.TestCase):
 
     def test_availability_evidence_uses_exact_primary_research_sources(self):
         expected = {
-            "nemotron-5-nano-12b": "https://huggingface.co/api/models?author=nvidia&search=Nemotron&limit=1000",
-            "nemotron-5-super-49b": "https://www.nvidia.com/en-us/ai-data-science/foundation-models/nemotron/",
-            "qwen3.8-4b": "https://huggingface.co/api/models/Qwen/Qwen3.8-4B",
             "deepseek-v4-flash": "https://huggingface.co/api/models/deepseek-ai/DeepSeek-V4-Flash",
         }
         for identifier, source in expected.items():
@@ -247,7 +240,6 @@ class CommonCatalogTests(unittest.TestCase):
             self.assertIn(source, evidence["sources"])
             self.assertRegex(evidence["checkedAt"], r"^\d{4}-\d{2}-\d{2}$")
             self.assertTrue(evidence["reason"])
-        self.assertIn("HTTP 401 is ambiguous", self.recipes["qwen3.8-4b"]["availability"]["reason"])
 
     def test_chart_references_resolve_to_local_packages(self):
         for recipe in self.recipes.values():

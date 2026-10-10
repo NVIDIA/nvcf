@@ -95,7 +95,9 @@ class ChartPackageTests(unittest.TestCase):
                 self.assertEqual(actual, expected)
         sums = (self.output/'SHA256SUMS').read_text().splitlines()
         self.assertEqual(len(sums), 7)
-        self.assertEqual({recipe['licenseNotice'] for recipe in index['recipes']}, {None, 'NOTICE'})
+        source_index = json.loads((self.source/'recipes/index.json').read_text())
+        self.assertEqual({recipe['licenseNotice'] for recipe in index['recipes']},
+                         {recipe['licenseNotice'] for recipe in source_index['recipes']})
         self.assertFalse((self.output/'notices').exists())
         notice = (self.output/'NOTICE').read_bytes()
         for relative in ('NOTICE', 'glm-5.3/NOTICE', 'NOTICE.deepseek-v4-flash'):

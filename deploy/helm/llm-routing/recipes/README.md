@@ -2,7 +2,7 @@
 
 Follow the [LLM routing guide](../README.md) to install shared infrastructure once and deploy models directly with Helm. The [common catalog](index.json) includes both SGLang and llama.cpp recipes, precise per-node resources, pinned artifacts, supported profiles, workload limits, validation and local chart references.
 
-The catalog contains seven model families and eight entries. `availability.deployable: true` identifies executable recipes, with validation recorded separately for each profile. Nemotron 5 Nano 12B, Nemotron 5 Super 49B and Qwen3.8-4B are unavailable because their exact public artifacts were not verified. DeepSeek V4 Flash is planned, with verified upstream checkpoint and runtime candidates under `upstreamCandidates`. These four entries have no served model ID or installable profile. [planned.json](planned.json) records the dated evidence and remaining gaps.
+`availability.deployable: true` identifies executable recipes, with validation recorded separately for each profile. DeepSeek V4 Flash is planned, with verified upstream checkpoint and runtime candidates under `upstreamCandidates`. It has no served model ID or installable profile. [planned.json](planned.json) records the dated evidence and remaining gaps.
 
 ## Committed values
 
