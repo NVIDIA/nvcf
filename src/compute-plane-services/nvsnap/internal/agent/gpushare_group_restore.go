@@ -167,19 +167,33 @@ func (a *Agent) groupRestore(ctx context.Context, req GroupRestoreRequest, log *
 	res := &GroupRestoreResult{Members: make([]GroupRestoreMemberResult, len(req.Members))}
 	entries := make([]groupRestoreEntry, len(req.Members))
 	bases := make([]string, len(req.Members))
+	// Every node fetches its rank's checkpoint at once: each is the size of
+	// its rank's GPU memory.
+	fetchErrs := make([]error, len(req.Members))
+	var fetches sync.WaitGroup
 	for i, m := range req.Members {
-		name := m.PlaceholderNamespace + "/" + m.PlaceholderPodName
-		base, err := a.peerAgentURL(ctx, nodes[i])
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", name, err)
-		}
-		bases[i] = base
-		md, err := fetchCheckpointMetadata(ctx, fabricHTTPClient, base, m.CheckpointID)
-		if err != nil {
-			return nil, fmt.Errorf("%s: checkpoint %s: %w", name, m.CheckpointID, err)
-		}
-		entries[i] = groupRestoreEntry{Name: name, OldIP: md.SourcePodIP, NewIP: newIPs[i], Group: md.GPUShareGroup}
-		res.Members[i] = GroupRestoreMemberResult{CheckpointID: m.CheckpointID, Pod: name, OldIP: md.SourcePodIP, NewIP: newIPs[i]}
+		fetches.Add(1)
+		go func(i int, m GroupRestoreMember) {
+			defer fetches.Done()
+			name := m.PlaceholderNamespace + "/" + m.PlaceholderPodName
+			base, err := a.peerAgentURL(ctx, nodes[i])
+			if err != nil {
+				fetchErrs[i] = fmt.Errorf("%s: %w", name, err)
+				return
+			}
+			bases[i] = base
+			md, err := fetchCheckpointMetadata(ctx, fabricHTTPClient, base, m.CheckpointID)
+			if err != nil {
+				fetchErrs[i] = fmt.Errorf("%s: checkpoint %s: %w", name, m.CheckpointID, err)
+				return
+			}
+			entries[i] = groupRestoreEntry{Name: name, OldIP: md.SourcePodIP, NewIP: newIPs[i], Group: md.GPUShareGroup}
+			res.Members[i] = GroupRestoreMemberResult{CheckpointID: m.CheckpointID, Pod: name, OldIP: md.SourcePodIP, NewIP: newIPs[i]}
+		}(i, m)
+	}
+	fetches.Wait()
+	if err := errors.Join(fetchErrs...); err != nil {
+		return nil, err
 	}
 	addrMap, err := planGroupRestore(entries)
 	if err != nil {

@@ -81,6 +81,19 @@ var peerFetchConcurrency = func() int {
 // the peer is degraded and we'd rather fail fast.
 const peerFetchTimeoutPerFile = 5 * time.Minute
 
+// peerFetchFloorRate is the slowest transfer a peer may keep up on a large
+// file before it is abandoned: the per-file limit grows with the file, so
+// a multi-GB chunk is not cut off at the small-file limit.
+const peerFetchFloorRate = 50 << 20 // bytes per second
+
+// peerFetchTimeout is the time one file of size bytes may take.
+func peerFetchTimeout(size int64) time.Duration {
+	if d := time.Duration(size/peerFetchFloorRate) * time.Second; d > peerFetchTimeoutPerFile {
+		return d
+	}
+	return peerFetchTimeoutPerFile
+}
+
 // peerHTTPClient is the HTTP client used for peer + blob-store fetches.
 // http.DefaultClient's default Transport has MaxIdleConnsPerHost: 2,
 // which forces a fresh TCP handshake on most concurrent requests when
@@ -191,6 +204,26 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 			}
 			return nil
 		}
+	}
+
+	// Tier 3: the checkpoint's L2 copy, read from durable storage on this
+	// node. Unavailable (no ready copy, no L2) falls through to the peers;
+	// so does a failed read, which keeps the peers as the last resort.
+	l2Start := time.Now()
+	if err := a.fetchFromL2(ctx, checkpointID, localDir); err == nil {
+		fetched = true
+		span.SetAttributes(attribute.String("nvsnap.cascade.tier", "L2-volume"))
+		a.log.WithFields(map[string]interface{}{"checkpoint_id": checkpointID, "elapsed": time.Since(l2Start).String()}).
+			Info("EnsureLocal: fetched from the L2 volume")
+		if err := a.registerAsPeer(ctx, checkpointID); err != nil {
+			a.log.WithError(err).Warn("peer-add to catalog failed (non-fatal)")
+		}
+		return nil
+	} else if errors.Is(err, errL2Unavailable) {
+		a.log.WithError(err).WithField("checkpoint_id", checkpointID).Info("EnsureLocal: no L2 copy to read; trying the peers")
+	} else {
+		a.log.WithError(err).WithField("checkpoint_id", checkpointID).Warn("EnsureLocal: L2 read failed; trying the peers")
+		_ = clearFiles(localDir)
 	}
 
 	if a.config.CatalogURL == "" {
@@ -420,7 +453,7 @@ func (a *Agent) fetchOneFile(ctx context.Context, peerURL string, alternateURLs 
 		urls = append(urls, fmt.Sprintf("%s/v1/checkpoints/%s/file?path=%s",
 			alt, url.PathEscape(checkpointID), url.QueryEscape(relPath)))
 	}
-	fileCtx, cancel := context.WithTimeout(ctx, peerFetchTimeoutPerFile)
+	fileCtx, cancel := context.WithTimeout(ctx, peerFetchTimeout(expectedSize))
 	defer cancel()
 	// relPath is an entry in the manifest the peer served, so it decides
 	// where we write. Confine it to destDir.

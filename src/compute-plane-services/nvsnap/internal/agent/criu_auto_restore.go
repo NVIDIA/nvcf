@@ -36,8 +36,11 @@ const (
 	// criuRestoreFailedConfigMap lists checkpoints that failed to restore
 	// (key: checkpoint id, value: when and why).
 	criuRestoreFailedConfigMap = "nvsnap-criu-restore-failed"
-	criuAutoRestoreTimeout     = 30 * time.Minute
-	criuBlockedCacheTTL        = 10 * time.Second
+	// criuAutoRestoreTimeout bounds a restore, the fetch of a checkpoint
+	// from another node's copy included (a rank of a large model holds
+	// its GPU memory: a TB and more).
+	criuAutoRestoreTimeout = 60 * time.Minute
+	criuBlockedCacheTTL    = 10 * time.Second
 )
 
 // criuIsDefault reports whether CRIU is this cluster's capture method
@@ -116,6 +119,7 @@ func (a *Agent) criuRestorer() *criuAutoRestorer {
 func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 	c.considerGroupCapture(ctx, pod)
 	c.considerRestored(ctx, pod)
+	c.prefetch(ctx, pod)
 	if isGroupPlaceholder(pod) {
 		c.considerGroupRestore(ctx, pod)
 		return
@@ -128,6 +132,33 @@ func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 		return
 	}
 	go c.restore(ctx, pod.Namespace, pod.Name, id, container)
+}
+
+// prefetch starts fetching the checkpoint of a placeholder scheduled on
+// this node, while its containers start: the restore finds it local.
+func (c *criuAutoRestorer) prefetch(ctx context.Context, pod *corev1.Pod) {
+	id := pod.Annotations[webhook.CRIURestoreAnnotation]
+	if id == "" || pod.Annotations[webhook.CRIURestoredAnnotation] != "" || pod.DeletionTimestamp != nil || pod.Spec.NodeName == "" {
+		return
+	}
+	if localCheckpointComplete(c.a.config.CheckpointDir, id) {
+		return
+	}
+	if _, busy := c.attempted.LoadOrStore("fetch/"+id, struct{}{}); busy {
+		return
+	}
+	go func() {
+		defer c.attempted.Delete("fetch/" + id)
+		fctx, cancel := context.WithTimeout(ctx, criuAutoRestoreTimeout)
+		defer cancel()
+		log := c.a.log.WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "checkpoint": id})
+		t0 := time.Now()
+		if err := c.a.EnsureLocal(fctx, id); err != nil {
+			log.WithError(err).Warn("CRIU restore: prefetch of the checkpoint failed; the restore fetches it again")
+			return
+		}
+		log.WithField("duration", time.Since(t0).Round(time.Second).String()).Info("CRIU restore: checkpoint fetched to this node")
+	}()
 }
 
 func (c *criuAutoRestorer) restore(ctx context.Context, ns, pod, id, container string) {

@@ -595,7 +595,7 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 		cp, err := m.criuRestorePatches(pod, id, cman)
 		if err != nil {
 			plog.WithError(err).Warn("CRIU restore: cannot prepare the pod; cold start")
-			return injectPatches, nil
+			return mergePatchPlan(injectPatches), nil
 		}
 		plog.WithField("checkpoint", id).Info("CRIU restore: pod admitted as the restore placeholder")
 		// Not injectPatches: a gpushare restore mounts the checkpoint's

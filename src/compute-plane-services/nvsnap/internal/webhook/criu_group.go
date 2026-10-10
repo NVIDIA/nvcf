@@ -100,6 +100,10 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 		log.WithError(err).Warn("CRIU group restore: model volume decision failed; cold start")
 		return nil
 	}
+	if vp == nil {
+		// A pod without a model volume got the cache directory at capture.
+		vp = m.cacheDirCapturePatches(pod)
+	}
 	log.WithFields(logrus.Fields{"checkpoint": id, "ordinal": ordinal, "size": size}).Info("CRIU group restore: pod admitted as its rank's restore placeholder")
 	return mergePatchPlan(append(cp, vp...))
 }
