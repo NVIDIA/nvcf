@@ -1,11 +1,21 @@
 -- Multi-tenant API Keys tables. 03_init_tables.up.sql stays the original schema.
 -- New and existing clusters apply this file. Statements are idempotent.
--- Keep keys_by_owner_and_service until the dual-write migration stops using it.
--- Hash lookup stays keyed by api_key_hash. nca_id is a regular column.
+-- keys and keys_by_owner_and_service stay as legacy tables until the migration completes.
+-- keys_v2 holds keys issued to an account. Hash lookup stays keyed by api_key_hash, and
+-- nca_id is a regular column that the application always sets.
 
-ALTER TABLE api_keys_api.keys ADD IF NOT EXISTS nca_id TEXT;
+CREATE TABLE IF NOT EXISTS api_keys_api.keys_v2
+(
+    api_key_hash TEXT,
+    nca_id       TEXT,
+    status       TEXT,
+    expires_at   TIMESTAMP,
+    deletes_at   TIMESTAMP,
+    key_details  TEXT,
+    PRIMARY KEY ((api_key_hash))
+);
 
-CREATE TABLE IF NOT EXISTS api_keys_api.keys_by_account_owner_and_service
+CREATE TABLE IF NOT EXISTS api_keys_api.keys_by_owner_and_account_and_service
 (
     nca_id            TEXT,
     owner_type        TEXT,
@@ -21,27 +31,27 @@ CREATE TABLE IF NOT EXISTS api_keys_api.keys_by_account_owner_and_service
 );
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_nca_idx
-    ON api_keys_api.keys_by_account_owner_and_service (nca_id)
+    ON api_keys_api.keys_by_owner_and_account_and_service (nca_id)
     USING 'StorageAttachedIndex';
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_owner_idx
-    ON api_keys_api.keys_by_account_owner_and_service (owner_id)
+    ON api_keys_api.keys_by_owner_and_account_and_service (owner_id)
     USING 'StorageAttachedIndex';
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_owner_type_idx
-    ON api_keys_api.keys_by_account_owner_and_service (owner_type)
+    ON api_keys_api.keys_by_owner_and_account_and_service (owner_type)
     USING 'StorageAttachedIndex';
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_service_idx
-    ON api_keys_api.keys_by_account_owner_and_service (issuer_service_id)
+    ON api_keys_api.keys_by_owner_and_account_and_service (issuer_service_id)
     USING 'StorageAttachedIndex';
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_status_idx
-    ON api_keys_api.keys_by_account_owner_and_service (key_status)
+    ON api_keys_api.keys_by_owner_and_account_and_service (key_status)
     USING 'StorageAttachedIndex';
 
 CREATE CUSTOM INDEX IF NOT EXISTS keys_by_scope_created_at_idx
-    ON api_keys_api.keys_by_account_owner_and_service (created_at)
+    ON api_keys_api.keys_by_owner_and_account_and_service (created_at)
     USING 'StorageAttachedIndex';
 
 CREATE TABLE IF NOT EXISTS api_keys_api.owner_status_by_account

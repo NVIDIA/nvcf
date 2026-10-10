@@ -44,7 +44,7 @@ import org.springframework.test.context.ContextConfiguration;
 @ContextConfiguration(initializers = IntegrationTestConfiguration.Initializer.class)
 class MultiTenantSchemaIntegrationTest {
 
-    private static final String MANAGEMENT_TABLE = "keys_by_account_owner_and_service";
+    private static final String MANAGEMENT_TABLE = "keys_by_owner_and_account_and_service";
 
     private static final List<String> SAI_INDEXES = List.of(
             "keys_by_scope_nca_idx",
@@ -55,11 +55,19 @@ class MultiTenantSchemaIntegrationTest {
             "keys_by_scope_created_at_idx");
 
     @Test
-    void keysTableKeepsHashPartitionKeyAndAddsNcaId() {
+    void keysV2TableUsesHashPartitionKeyWithNcaIdColumn() {
+        assertThat(partitionKeyColumns("keys_v2")).containsExactly("api_key_hash");
+        assertThat(clusteringColumns("keys_v2")).isEmpty();
+        assertThat(regularColumns("keys_v2")).containsExactlyInAnyOrder(
+                "nca_id", "status", "expires_at", "deletes_at", "key_details");
+    }
+
+    @Test
+    void legacyKeysTableIsUnchanged() {
         assertThat(partitionKeyColumns("keys")).containsExactly("api_key_hash");
         assertThat(clusteringColumns("keys")).isEmpty();
-        assertThat(regularColumns("keys")).contains("nca_id", "status", "expires_at", "deletes_at",
-                                                    "key_details");
+        assertThat(regularColumns("keys")).containsExactlyInAnyOrder(
+                "status", "expires_at", "deletes_at", "key_details");
     }
 
     @Test
@@ -103,7 +111,7 @@ class MultiTenantSchemaIntegrationTest {
     }
 
     @Test
-    void legacyOwnerIndexTableRemainsForDualWrite() {
+    void legacyOwnerIndexTableIsUnchanged() {
         assertThat(partitionKeyColumns("keys_by_owner_and_service"))
                 .containsExactly("owner_type", "owner_id");
         assertThat(clusteringColumns("keys_by_owner_and_service"))

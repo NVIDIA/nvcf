@@ -41,6 +41,7 @@ import com.nvidia.apikeys.vo.KeyOwnerStatus;
 import com.nvidia.apikeys.vo.KeyOwnerType;
 import com.nvidia.apikeys.vo.KeyOwnerVo;
 import com.nvidia.apikeys.vo.KeyStatus;
+import com.nvidia.apikeys.vo.KeyV2Vo;
 import com.nvidia.apikeys.vo.KeyVo;
 import com.nvidia.apikeys.vo.ListKeysRequestVo;
 import com.nvidia.apikeys.vo.ServiceVo;
@@ -133,6 +134,25 @@ public class TestData {
 
     public static final KeyVo KEY_VO_1 = KeyVo.builder()
             .keyStatus(KeyStatus.ACTIVE)
+            .ownerType(KeyOwnerType.USER)
+            .ownerId(USER_KEY_OWNER_ID_1)
+            .issuerServiceId(SERVICE_ID_1)
+            .audienceServiceIds(Set.of(SERVICE_ID_1))
+            .keyId(KEY_ID_1)
+            .keyHash(API_KEY_HASH_1)
+            .createdAt(TEST_TIME)
+            .expiresAt(KEY_EXPIRES_AT_1)
+            .deletesAt(KEY_DELETES_AT_1)
+            .apiKeySuffix(API_KEY_SUFFIX_1)
+            .authorizations(KEY_AUTHZ_1)
+            .description(KEY_DESCRIPTION_1)
+            .build();
+
+    public static final String NCA_ID_1 = "nca-1";
+
+    public static final KeyV2Vo KEY_V2_VO_1 = KeyV2Vo.builder()
+            .keyStatus(KeyStatus.ACTIVE)
+            .ncaId(NCA_ID_1)
             .ownerType(KeyOwnerType.USER)
             .ownerId(USER_KEY_OWNER_ID_1)
             .issuerServiceId(SERVICE_ID_1)

@@ -291,14 +291,15 @@ if ! grep -F -q 'ALTER TABLE nvct_api.tasks_v2 ADD IF NOT EXISTS health TEXT;' \
 fi
 
 api_keys_schema="${keyspaces}/api_keys_api/03_init_tables.up.sql"
-if grep -F -q 'keys_by_account_owner_and_service' "${api_keys_schema}"; then
+if grep -F -q 'keys_by_owner_and_account_and_service' "${api_keys_schema}"; then
   fail "api_keys_api 03_init_tables.up.sql must stay the original single-tenant schema"
 fi
 
 api_keys_mt_migration="${keyspaces}/api_keys_api/04_add_multi_tenant_schema.up.sql"
-if ! grep -F -q 'ALTER TABLE api_keys_api.keys ADD IF NOT EXISTS nca_id TEXT;' \
+if ! grep -F -q 'CREATE TABLE IF NOT EXISTS api_keys_api.keys_v2' \
   "${api_keys_mt_migration}" ||
-  ! grep -F -q 'CREATE TABLE IF NOT EXISTS api_keys_api.keys_by_account_owner_and_service' \
+  grep -F -q 'ALTER TABLE api_keys_api.keys ' "${api_keys_mt_migration}" ||
+  ! grep -F -q 'CREATE TABLE IF NOT EXISTS api_keys_api.keys_by_owner_and_account_and_service' \
     "${api_keys_mt_migration}"; then
   fail "api_keys_api upgrade migration does not add the multi-tenant schema idempotently"
 fi
