@@ -192,7 +192,7 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		// runs on the node's network).
 		args = append([]string{"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-r", "-w", "--",
 			v2BinDirInContainer + "/" + pidNSRestoreHelperName, "pidns-restore-exec", v2BinDirInContainer + "/criu"},
-			pidNSRestoreArgs(imgsInContainer, pidnsCapture.Mounts, gs != nil, gs != nil && bundledSupportsDirectImageIO(), group.InetAddrMap)...)
+			pidNSRestoreArgs(imgsInContainer, pidnsCapture.Mounts, pidnsCapture.UnixSockets, gs != nil, gs != nil && bundledSupportsDirectImageIO(), group.InetAddrMap)...)
 		log.WithField("externalMounts", len(pidnsCapture.Mounts)).Info("criu-v2: restoring into a nested pid namespace")
 	}
 	rctx, cancel := context.WithTimeout(ctx, 20*time.Minute)

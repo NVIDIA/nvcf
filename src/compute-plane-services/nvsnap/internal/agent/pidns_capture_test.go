@@ -67,7 +67,10 @@ func TestPIDNSArgs(t *testing.T) {
 	if strings.Contains(dump, "--libdir") {
 		t.Error("a gpushare dump must not load the CUDA plugin")
 	}
-	restore := strings.Join(pidNSRestoreArgs("/checkpoints/x", []string{"/etc/hosts"}, false, false, "10.0.0.1=10.0.0.2"), " ")
+	restore := strings.Join(pidNSRestoreArgs("/checkpoints/x", []string{"/etc/hosts"}, []string{"unix[719101449]"}, false, false, "10.0.0.1=10.0.0.2"), " ")
+	if !strings.Contains(restore, "--external unix[719101449]") {
+		t.Errorf("restore does not repeat the unix socket declaration: %s", restore)
+	}
 	for _, want := range []string{"restore -D /checkpoints/x", "--root /", "--inherit-fd fd[3]:extNetNs",
 		"--join-ns ipc:/proc/1/ns/ipc", "--external mnt[/etc/hosts]:/etc/hosts", "--restore-detached",
 		"--inet-addr-map 10.0.0.1=10.0.0.2 --keep-network-lock", "--libdir"} {
@@ -156,5 +159,20 @@ func TestDeletedMount(t *testing.T) {
 	gone := parseMountinfo("1 0 0:1 / / rw - overlay o rw\n2 1 9:1 /var/lib/nvsnap/bundle/nvsnap//deleted /nvsnap ro - xfs x rw\n")
 	if mp := deletedMount(gone); mp != "/nvsnap" {
 		t.Errorf("deleted mount not found: %q", mp)
+	}
+}
+
+// From a vLLM pod: the engine's ZMQ IPC listener (path-bound), the CUDA
+// driver's abstract socket, and a connected one.
+func TestParseListeningUnixSockets(t *testing.T) {
+	data := `Num       RefCount Protocol Flags    Type St Inode Path
+0000000000000000: 00000002 00000000 00010000 0001 01 719101449 /tmp/vllm-ipc-7f3a
+0000000000000000: 00000002 00000000 00010000 0001 01 719101450 @cuda-uvmfd-4026531836
+0000000000000000: 00000003 00000000 00000000 0001 03 719101451 /tmp/vllm-ipc-7f3a
+0000000000000000: 00000002 00000000 00000000 0001 03 719101452
+`
+	got := parseListeningUnixSockets(data)
+	if !reflect.DeepEqual(got, []string{"unix[719101449]"}) {
+		t.Errorf("got %v", got)
 	}
 }

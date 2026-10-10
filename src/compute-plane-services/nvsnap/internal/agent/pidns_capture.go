@@ -49,6 +49,41 @@ type pidNSCapture struct {
 	// GPUMounts are the GPU-identity mounts left out of the dump (see
 	// gpuIdentityMount); restore gives the tree the placeholder's own.
 	GPUMounts []string `json:"gpuMounts,omitempty"`
+	// UnixSockets are the external declarations of listening unix sockets
+	// bound to a path ("unix[<inode>]"); restore repeats them.
+	UnixSockets []string `json:"unixSockets,omitempty"`
+}
+
+// listeningUnixSocketExternals returns the external declarations
+// ("unix[<inode>]") of the listening unix sockets bound to a filesystem
+// path in the network namespace of hostPID. CRIU recreates such a socket
+// by entering the mount namespace of its path, which a restore of a
+// whole pid namespace cannot do:
+//
+//	Error (criu/namespaces.c:260): Can't setns 13/mnt: Invalid argument
+//	Error (criu/files.c:1334): Unable to open fd=33 id=0x14b
+//
+// Abstract sockets (a leading @) have no path and restore as they are;
+// connected sockets carry the workload's IPC and are restored.
+func listeningUnixSocketExternals(procBase string, hostPID int) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(procBase, strconv.Itoa(hostPID), "net", "unix"))
+	if err != nil {
+		return nil, err
+	}
+	return parseListeningUnixSockets(string(data)), nil
+}
+
+func parseListeningUnixSockets(data string) []string {
+	var out []string
+	for i, line := range strings.Split(data, "\n") {
+		f := strings.Fields(line)
+		// Num RefCount Protocol Flags Type St Inode Path
+		if i == 0 || len(f) < 8 || f[3] != "00010000" || strings.HasPrefix(f[7], "@") {
+			continue
+		}
+		out = append(out, "unix["+f[6]+"]")
+	}
+	return out
 }
 
 var gpuDeviceNode = regexp.MustCompile(`^/dev/nvidia[0-9]+$`)
@@ -211,7 +246,7 @@ const pidNSExtNetKey = "extNetNs"
 // its pid namespace, run inside the placeholder's mount and pid namespaces
 // (behind the pidns-restore-exec helper, which hands it the network
 // namespace on fd 3).
-func pidNSRestoreArgs(imgsInContainer string, mounts []string, gpushare, directIO bool, inetAddrMap string) []string {
+func pidNSRestoreArgs(imgsInContainer string, mounts, unixSockets []string, gpushare, directIO bool, inetAddrMap string) []string {
 	args := []string{
 		"restore",
 		"-D", imgsInContainer,
@@ -237,6 +272,9 @@ func pidNSRestoreArgs(imgsInContainer string, mounts []string, gpushare, directI
 	}
 	for _, mp := range mounts {
 		args = append(args, "--external", fmt.Sprintf("mnt[%s]:%s", mp, mp))
+	}
+	for _, u := range unixSockets {
+		args = append(args, "--external", u)
 	}
 	return args
 }
@@ -351,6 +389,11 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 		return fmt.Errorf("pid-namespace dump: %s is bound from a deleted directory on the node; restart the pod to capture it", mp)
 	}
 	mounts, gpuMounts := pidNSExternalMounts(entries)
+	unixSockets, err := listeningUnixSocketExternals(procBase, hostPID)
+	if err != nil {
+		return fmt.Errorf("pid-namespace dump: listening unix sockets: %w", err)
+	}
+	deviceExternals = append(append([]string{}, deviceExternals...), unixSockets...)
 	var st syscall.Stat_t
 	if err := syscall.Stat(filepath.Join(procBase, strconv.Itoa(hostPID), "ns", "net"), &st); err != nil {
 		return fmt.Errorf("pid-namespace dump: network namespace: %w", err)
@@ -370,7 +413,7 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 		return fmt.Errorf("criu-v2 pid-namespace dump: %w (output: %s; dump.log tail: %s)", err,
 			strings.TrimSpace(string(out)), tailOfFile(filepath.Join(checkpointDir, "dump.log"), 6))
 	}
-	return writePIDNSMarker(checkpointDir, pidNSCapture{Mounts: mounts, GPUMounts: gpuMounts})
+	return writePIDNSMarker(checkpointDir, pidNSCapture{Mounts: mounts, GPUMounts: gpuMounts, UnixSockets: unixSockets})
 }
 
 // pidNSRestoreHelperName is the agent binary staged into the placeholder's
