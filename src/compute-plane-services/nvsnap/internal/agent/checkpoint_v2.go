@@ -154,6 +154,54 @@ func resumeSource(ctx context.Context, hostPID int, pids []int, fabricDir string
 // gpushareResumeTimeout bounds bringing a source back after its dump.
 const gpushareResumeTimeout = 10 * time.Minute
 
+// ownGPUShareStore makes the workload's chunk store (and the fabric
+// session directory in it, when there is one) owned by the user the
+// workload's process runs as, so it can write its GPU memory there.
+func ownGPUShareStore(procBase string, hostPID int, root, fabricDir string) error {
+	uid, gid, err := procOwner(procBase, hostPID)
+	if err != nil {
+		return err
+	}
+	dirs := []string{filepath.Join(root, strings.TrimPrefix(GPUShareStoreInContainer, "/"))}
+	if fabricDir != "" {
+		dirs = append(dirs, filepath.Join(root, strings.TrimPrefix(fabricDir, "/")))
+	}
+	for _, d := range dirs {
+		if err := os.Lchown(d, uid, gid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// procOwner returns the real uid and gid of process pid.
+func procOwner(procBase string, pid int) (uid, gid int, err error) {
+	b, err := os.ReadFile(filepath.Join(procBase, strconv.Itoa(pid), "status"))
+	if err != nil {
+		return 0, 0, err
+	}
+	uid, gid = -1, -1
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		switch f[0] {
+		case "Uid:":
+			uid, err = strconv.Atoi(f[1])
+		case "Gid:":
+			gid, err = strconv.Atoi(f[1])
+		}
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	if uid < 0 || gid < 0 {
+		return 0, 0, fmt.Errorf("no Uid/Gid in %d/status", pid)
+	}
+	return uid, gid, nil
+}
+
 // errSourceLeftSuspended marks a capture whose source workload could not
 // be resumed: it holds no GPU memory and serves nothing, while its pod
 // still reads Ready.
@@ -254,6 +302,11 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		}
 		if !fileExists(filepath.Join(root, strings.TrimPrefix(v2BinDirInContainer, "/"), gpushareToolName)) {
 			return nil, fmt.Errorf("gpushare: %s is not in the agent bundle; the agent base image predates gpushare", gpushareToolName)
+		}
+		// The store is created by the kubelet, as root: an engine that runs
+		// as another user cannot write its GPU memory there.
+		if err := ownGPUShareStore(procBase, targetHostPID, root, fabricDir); err != nil {
+			return nil, fmt.Errorf("gpushare: give the workload its chunk store: %w", err)
 		}
 		gm, err := gpushareSuspend(ctx, hostPID, gsPIDs, fabricDir, log)
 		if err != nil {

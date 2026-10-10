@@ -115,6 +115,7 @@ go_test(
         "fsstore_test.go",
         "gpushare_fabric_test.go",
         "gpushare_group_restore_test.go",
+        "gpushare_store_owner_test.go",
         "gpushare_store_reaper_test.go",
         "gpushare_test.go",
         "l2_copy_test.go",
