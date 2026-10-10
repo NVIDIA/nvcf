@@ -34,6 +34,7 @@ const containerMountinfo = `100 90 0:300 / / rw - overlay overlay rw
 116 100 0:99 /driver/lib/firmware/nvidia/610.57.04/gsp_tu10x.bin /lib/firmware/nvidia/610.57.04/gsp_tu10x.bin ro - tmpfs tmpfs rw
 117 102 0:5 /nvidiactl /dev/nvidiactl rw - devtmpfs udev rw
 118 100 0:310 / /run/nvidia-container-devices/GPU-7e1f1942 ro - tmpfs tmpfs rw
+119 100 0:311 / /run/nvidia-ctk-hook6f67b50e-15fd-49c9-b22e-4204d3a555de ro - tmpfs tmpfs rw
 `
 
 func TestPIDNSExternalMounts(t *testing.T) {
@@ -43,7 +44,8 @@ func TestPIDNSExternalMounts(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("external mounts: got %v, want %v", got, want)
 	}
-	wantGPU := []string{"/dev/nvidia0", "/run/nvidia-container-devices/GPU-7e1f1942"}
+	wantGPU := []string{"/dev/nvidia0", "/run/nvidia-container-devices/GPU-7e1f1942",
+		"/run/nvidia-ctk-hook6f67b50e-15fd-49c9-b22e-4204d3a555de"}
 	if !reflect.DeepEqual(gpu, wantGPU) {
 		t.Errorf("GPU-identity mounts: got %v, want %v", gpu, wantGPU)
 	}

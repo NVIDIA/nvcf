@@ -53,13 +53,16 @@ type pidNSCapture struct {
 
 var gpuDeviceNode = regexp.MustCompile(`^/dev/nvidia[0-9]+$`)
 
-// gpuIdentityMount reports a mount that names one particular GPU: its
-// device node and the container toolkit's per-GPU entries. A restore
-// placeholder is usually given other GPUs, so these cannot be bound by
-// path; the restored tree gets the placeholder's GPUs instead.
+// gpuIdentityMount reports a mount that belongs to one particular GPU or
+// container: the GPU's device node, the container toolkit's per-GPU entries,
+// and its hook mounts, named with a fresh UUID per container
+// (/run/nvidia-ctk-hook<uuid>). A restore placeholder has other GPUs and
+// its own hook mounts, so these cannot be bound by path; the restored tree
+// gets the placeholder's instead.
 func gpuIdentityMount(mp string) bool {
 	return gpuDeviceNode.MatchString(mp) ||
 		strings.HasPrefix(mp, "/run/nvidia-container-devices/") ||
+		strings.HasPrefix(mp, "/run/nvidia-ctk-hook") ||
 		strings.HasPrefix(mp, "/proc/driver/nvidia/gpus/")
 }
 
