@@ -29,25 +29,28 @@ if [[ ! -d /criu-bundle ]]; then
   exit 1
 fi
 
-# Atomic rename of a populated TMP into DST. Caller MUST have already
-# populated TMP. Stale `.new` / `.old` siblings from a prior crashed
-# run are cleaned first; the post-mv cleanup of `.old` may race a
-# very recently-scheduled pod still holding the old inode, which is
-# fine — the kernel only frees the inode once that pod's mount goes
-# away.
+# Install a populated TMP as DST. DST keeps its directory: pods bind-mount
+# it (/nvsnap in every GPU pod under gpushare), and replacing the
+# directory left every such mount pointing at a deleted one. A CRIU
+# capture of those pods then recorded the mount as deleted and could not
+# be restored ("Can't stat : Bad file descriptor" re-creating it). So each
+# file is renamed over its old copy inside DST: atomic per file, and a
+# running process keeps the file it already mapped.
 atomic_swap() {
   local dst="$1"
   local tmp="$2"
-  if [[ -d "$dst" ]]; then
-    local old="${dst}.old"
-    rm -rf "$old"
-    mv "$dst" "$old"
-    mv "$tmp" "$dst"
-    rm -rf "$old" || true
-  else
+  if [[ ! -d "$dst" ]]; then
     mkdir -p "$(dirname "$dst")"
     mv "$tmp" "$dst"
+    return
   fi
+  (cd "$tmp" && find . -mindepth 1 -type d -printf '%P\n') | while IFS= read -r d; do
+    mkdir -p "$dst/$d"
+  done
+  (cd "$tmp" && find . -mindepth 1 ! -type d -printf '%P\n') | while IFS= read -r f; do
+    mv -f "$tmp/$f" "$dst/$f"
+  done
+  rm -rf "$tmp"
 }
 
 # ─── Phase 1: tools tree ──────────────────────────────────────────────
