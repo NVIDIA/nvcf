@@ -273,9 +273,21 @@ func gpushareResume(ctx context.Context, hostPID int, pids []int, gpuMap, fabric
 // GPUs of gpusPID's pod. They differ for a tree restored into a nested pid
 // namespace: its processes still carry the source pod's GPU environment.
 func gpushareResumeWithGPUsOf(ctx context.Context, hostPID, gpusPID int, pids []int, gpuMap, fabricDir string, log *logrus.Entry) error {
+	env := podGPUEnv(gpusPID)
+	if env == nil && gpusPID != hostPID {
+		// No UUIDs in NVIDIA_VISIBLE_DEVICES (GPUs given as device nodes,
+		// e.g. CDI): the pod's GPUs are the nodes in its own /dev. The
+		// restored tree's /dev can also hold the node's other GPUs, which
+		// the tool would map onto first and the pod may not open.
+		gpus, err := gpushareTool(ctx, gpusPID, time.Minute, "gpus")
+		if err != nil {
+			return err
+		}
+		env = cudaVisibleEnv(gpus)
+	}
 	args := gpushareResumeArgs(gpuMap, fabricDir, pids)
 	t0 := time.Now()
-	out, err := gpushareToolEnv(ctx, hostPID, podGPUEnv(gpusPID), 60*time.Minute, args...)
+	out, err := gpushareToolEnv(ctx, hostPID, env, 60*time.Minute, args...)
 	if err != nil {
 		return err
 	}
@@ -400,6 +412,15 @@ func podGPUEnv(hostPID int) []string {
 	}
 	if v := visibleGPUUUIDs(filepath.Join(procBase, strconv.Itoa(hostPID), "environ")); v != "" {
 		return []string{"CUDA_VISIBLE_DEVICES=" + v}
+	}
+	return nil
+}
+
+// cudaVisibleEnv limits the tool to the GPUs of `nvsnap-gpu-suspend gpus`
+// output (one UUID per line), or is nil when it lists none.
+func cudaVisibleEnv(gpus string) []string {
+	if uuids := strings.Fields(gpus); len(uuids) > 0 {
+		return []string{"CUDA_VISIBLE_DEVICES=" + strings.Join(uuids, ",")}
 	}
 	return nil
 }

@@ -265,6 +265,15 @@ func TestVisibleGPUUUIDs(t *testing.T) {
 	}
 }
 
+func TestCUDAVisibleEnv(t *testing.T) {
+	if got := cudaVisibleEnv("GPU-a1\nGPU-b2\n"); len(got) != 1 || got[0] != "CUDA_VISIBLE_DEVICES=GPU-a1,GPU-b2" {
+		t.Errorf("two GPUs: got %q", got)
+	}
+	if got := cudaVisibleEnv("\n"); got != nil {
+		t.Errorf("no GPUs: got %q, want nil", got)
+	}
+}
+
 // Collecting the store moves the pod's chunks and chunk lists into the
 // checkpoint and writes the GPU map there. The pod's own directory stays
 // (the workload's mount points at it) but is left empty, so a later capture
