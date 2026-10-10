@@ -82,7 +82,9 @@ func (m *Mutator) criuRestoreFor(ctx context.Context, pod *corev1.Pod, hash stri
 // container before the restored process answers them. The readiness probe
 // stays, so the pod becomes Ready when the restored engine serves.
 func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man checkpointstore.Manifest) ([]PatchOp, error) {
-	i := m.MainContainer
+	// The capture checkpoints the first container with GPUs; that one
+	// becomes the placeholder, wherever the chart put it.
+	i := gpuContainerIndex(pod, m.MainContainer)
 	if i < 0 || i >= len(pod.Spec.Containers) {
 		return nil, fmt.Errorf("MainContainer index %d out of range (have %d containers)", i, len(pod.Spec.Containers))
 	}
@@ -107,14 +109,18 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 	if c.StartupProbe != nil {
 		patches = append(patches, PatchOp{Op: "remove", Path: base + "/startupProbe"})
 	}
-	dir := corev1.HostPathDirectory
+	// Only this checkpoint's directory: the node's other checkpoints hold
+	// other workloads' memory. It need not exist yet: on a node without
+	// the checkpoint the pod starts, and the agent fetches the checkpoint
+	// into the directory before it restores.
+	dir, orCreate := corev1.HostPathDirectory, corev1.HostPathDirectoryOrCreate
 	vols := []corev1.Volume{{
 		Name:         criuCheckpointsVolume,
-		VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: m.CheckpointHostRoot, Type: &dir}},
+		VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: m.CheckpointHostRoot + "/" + checkpointID, Type: &orCreate}},
 	}}
 	mounts := []corev1.VolumeMount{
 		// Writable: CRIU writes restore.log into the images directory.
-		{Name: criuCheckpointsVolume, MountPath: criuCheckpointsMount},
+		{Name: criuCheckpointsVolume, MountPath: criuCheckpointsMount + "/" + checkpointID},
 	}
 	if man.SourcePodMeta["gpushare"] == "true" {
 		// The restored processes re-map the library from where it was and
@@ -125,7 +131,7 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 			bundleRoot = DefaultHostBundleRoot
 		}
 		vols = append(vols, corev1.Volume{Name: gpushareStoreVolume, VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
-			Path: m.CheckpointHostRoot + "/" + checkpointID + "/gpushare", Type: &dir}}})
+			Path: m.CheckpointHostRoot + "/" + checkpointID + "/gpushare", Type: &orCreate}}})
 		mounts = append(mounts, corev1.VolumeMount{Name: gpushareStoreVolume, MountPath: GPUShareStorePath})
 		libMounted := false
 		for _, vm := range c.VolumeMounts {
@@ -148,6 +154,17 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 	)
 	patches = append(patches, criuNodePreference(pod, man.CapturedOnNodes)...)
 	return patches, nil
+}
+
+// gpuContainerIndex is the index of the first container with GPUs, else
+// fallback.
+func gpuContainerIndex(pod *corev1.Pod, fallback int) int {
+	for i, c := range pod.Spec.Containers {
+		if _, ok := c.Resources.Limits["nvidia.com/gpu"]; ok {
+			return i
+		}
+	}
+	return fallback
 }
 
 // criuNodePreference prefers the nodes that already hold the checkpoint.

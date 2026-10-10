@@ -6,6 +6,7 @@ package webhook
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -78,16 +79,19 @@ func TestCRIURestore_PodBecomesThePlaceholder(t *testing.T) {
 	}
 	var mounted bool
 	for _, vm := range c.VolumeMounts {
-		mounted = mounted || (vm.MountPath == "/checkpoints" && !vm.ReadOnly) // CRIU writes restore.log there
+		mounted = mounted || (vm.MountPath == "/checkpoints/abc123__20261008-101010" && !vm.ReadOnly) // CRIU writes restore.log there
 	}
-	var hostRoot string
+	var hostDir string
+	var hostType corev1.HostPathType
 	for _, v := range got.Spec.Volumes {
 		if v.Name == criuCheckpointsVolume && v.HostPath != nil {
-			hostRoot = v.HostPath.Path
+			hostDir, hostType = v.HostPath.Path, *v.HostPath.Type
 		}
 	}
-	if !mounted || hostRoot != "/var/lib/containers/nvsnap-checkpoints" {
-		t.Errorf("checkpoints not mounted at /checkpoints from the host root (mounted=%v root=%q)", mounted, hostRoot)
+	// Only this checkpoint, never the node's others; created if missing so
+	// the pod starts on a node the checkpoint has yet to be fetched to.
+	if !mounted || hostDir != "/var/lib/containers/nvsnap-checkpoints/abc123__20261008-101010" || hostType != corev1.HostPathDirectoryOrCreate {
+		t.Errorf("checkpoint not mounted alone at /checkpoints/<id> (mounted=%v dir=%q type=%q)", mounted, hostDir, hostType)
 	}
 	if got.Annotations[CRIURestoreAnnotation] != "abc123__20261008-101010" || got.Annotations[CRIURestoreContainerAnnotation] != "inference" {
 		t.Errorf("restore annotations = %v", got.Annotations)
@@ -236,5 +240,26 @@ func TestCRIURestore_GPUShareCheckpoint(t *testing.T) {
 	}
 	if !store || !lib {
 		t.Errorf("mounts: store=%v lib=%v (store must not be the per-pod subpath)", store, lib)
+	}
+}
+
+// The placeholder is the container the capture checkpointed: the first
+// with GPUs, even when the chart puts it before a sidecar.
+func TestCRIURestore_PlaceholderIsTheGPUContainer(t *testing.T) {
+	pod := criuFunctionPod()
+	pod.Spec.Containers = []corev1.Container{pod.Spec.Containers[1], pod.Spec.Containers[0]}
+	pod.Spec.Containers[0].Resources.Limits = corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("1")}
+	m := criuMutator(t, criuCaptureRecord())
+	patches, err := m.criuRestorePatches(pod, "abc123__20261008-101010", criuCaptureRecord())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range patches {
+		if strings.HasPrefix(p.Path, "/spec/containers/1/") {
+			t.Errorf("patched the sidecar: %s %s", p.Op, p.Path)
+		}
+	}
+	if gpuContainerIndex(criuFunctionPod(), 1) != 1 {
+		t.Error("a pod with no GPU limit keeps the configured main container")
 	}
 }

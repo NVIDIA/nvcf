@@ -138,11 +138,12 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 	}
 
 	localDir := filepath.Join(a.config.CheckpointDir, checkpointID)
+	// One fetch per checkpoint: the others wait for it and find it local.
+	defer lockLocalFetch(checkpointID)()
 
-	// Tier 1: same-node short-circuit. If inventory.img exists locally,
-	// the checkpoint is already here — capture-source node, or a
-	// previous restore deposited it.
-	if fi, err := os.Stat(filepath.Join(localDir, "inventory.img")); err == nil && fi.Size() > 0 {
+	// Tier 1: same-node short-circuit: the capture node, or a finished
+	// earlier fetch.
+	if localCheckpointComplete(a.config.CheckpointDir, checkpointID) {
 		span.SetAttributes(attribute.String("nvsnap.cascade.tier", "L1-local"))
 		a.log.WithField("checkpoint_id", checkpointID).Info("EnsureLocal: same-node hit, skipping cascade")
 		// Still register as peer in case we somehow weren't tracked.
@@ -155,6 +156,16 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 	// the shared mount and skips the network cascade entirely. Probed
 	// before catalog lookup so DFS-equipped clusters don't even hit
 	// nvsnap-server for already-published checkpoints.
+	if err := beginLocalFetch(a.config.CheckpointDir, checkpointID); err != nil {
+		return fmt.Errorf("prepare %s for the fetch: %w", localDir, err)
+	}
+	fetched := false
+	defer func() {
+		if err := endLocalFetch(a.config.CheckpointDir, checkpointID, fetched); err != nil {
+			a.log.WithError(err).WithField("checkpoint_id", checkpointID).Error("EnsureLocal: cannot mark the fetch done; the next restore fetches again")
+		}
+	}()
+
 	if a.fsStore.hasCheckpoint(checkpointID) {
 		fsCtx, fsSpan := tracing.Tracer().Start(ctx, "cascade.fsstore_fetch")
 		fsSpan.SetAttributes(attribute.String("nvsnap.cascade.tier", "L2-fsstore"))
@@ -166,7 +177,7 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 			fsSpan.End()
 			a.log.WithError(err).WithField("checkpoint_id", checkpointID).
 				Warn("FSStore copy failed; falling through to peer cascade")
-			_ = os.RemoveAll(localDir)
+			_ = clearFiles(localDir)
 		} else {
 			fsSpan.End()
 			span.SetAttributes(attribute.String("nvsnap.cascade.tier", "L2-fsstore"))
@@ -174,6 +185,7 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 				"checkpoint_id": checkpointID,
 				"elapsed":       time.Since(fsStart).String(),
 			}).Info("EnsureLocal: FSStore copy complete")
+			fetched = true
 			if err := a.registerAsPeer(ctx, checkpointID); err != nil {
 				a.log.WithError(err).Warn("peer-add to catalog failed (non-fatal)")
 			}
@@ -256,12 +268,13 @@ func (a *Agent) EnsureLocal(ctx context.Context, checkpointID string) error {
 			peerSpan.SetStatus(codes.Error, "peer fetch failed")
 			peerSpan.End()
 			log.WithError(peerErr).Warn("peer fetch failed; trying next")
-			// Best-effort cleanup of partial download.
-			_ = os.RemoveAll(localDir)
+			// Clear the partial download, keeping the directories.
+			_ = clearFiles(localDir)
 			continue
 		}
 		peerSpan.End()
 		span.SetAttributes(attribute.String("nvsnap.cascade.tier", "L2-peer"))
+		fetched = true
 		log.WithField("elapsed", time.Since(start).String()).Info("EnsureLocal: peer fetch complete")
 		// Register self as a new peer so future fanouts can use us.
 		if regErr := a.registerAsPeer(ctx, checkpointID); regErr != nil {
