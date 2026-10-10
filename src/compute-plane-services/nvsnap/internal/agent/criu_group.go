@@ -312,9 +312,10 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 // checkpointInstance checkpoints the ranks in place and returns their
 // results in rank order.
 func (c *criuAutoRestorer) checkpointInstance(ctx context.Context, ranks []*corev1.Pod, log *logrus.Entry) ([]*CheckpointResult, error) {
+	capture := time.Now().UTC().Format("20060102T150405.000000000")
 	reqs := make([]CheckpointRequest, len(ranks))
 	for i, p := range ranks {
-		reqs[i] = CheckpointRequest{Namespace: p.Namespace, PodName: p.Name, ContainerName: gpuContainer(p), LeaveRunning: true}
+		reqs[i] = CheckpointRequest{Namespace: p.Namespace, PodName: p.Name, ContainerName: gpuContainer(p), LeaveRunning: true, CaptureID: capture}
 	}
 	if len(reqs) == 1 {
 		r, err := c.a.Checkpoint(ctx, reqs[0])

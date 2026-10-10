@@ -217,6 +217,11 @@ type CheckpointRequest struct {
 	// by them.
 	GPUShareGroupIndex int `json:"gpushareGroupIndex,omitempty"`
 	GPUShareGroupSize  int `json:"gpushareGroupSize,omitempty"`
+
+	// CaptureID names one instance capture (criu_group.go): the checkpoint
+	// gets an identity of its own instead of the content hash, which
+	// several captures of one configuration share.
+	CaptureID string `json:"captureId,omitempty"`
 }
 
 // CheckpointResult is the result of a checkpoint operation
@@ -618,12 +623,11 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	catalogCtx, catalogCancel := context.WithTimeout(ctx, 5*time.Second)
 	catalog := a.CollectCatalogInfo(catalogCtx, req.Namespace, req.PodName, req.ContainerName, a.config.NodeName, "")
 	catalogCancel()
-	if req.GPUShareGroupSize > 0 {
-		// The ranks of one instance share its configuration, so they share
-		// its hash. Each rank's checkpoint needs its own identity: the
-		// catalog keeps one checkpoint per hash, and a restore of another
-		// rank would fetch this one.
-		catalog.setGroupRank(req.GPUShareGroupIndex, req.GPUShareGroupSize)
+	if req.GPUShareGroupSize > 0 || req.CaptureID != "" {
+		// An instance capture: each rank, and each capture, is its own
+		// checkpoint (the ranks share the configuration hash, and a
+		// re-capture must replace the previous one, not resolve to it).
+		catalog.setCaptureIdentity(req.GPUShareGroupIndex, req.GPUShareGroupSize, req.GPUShareFabricSession+"/"+req.CaptureID)
 	}
 
 	checkpointID := buildCheckpointID(catalog, time.Now())

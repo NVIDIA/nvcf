@@ -136,14 +136,18 @@ func TestGroupPlaceholders(t *testing.T) {
 	}
 }
 
-func TestSetGroupRank(t *testing.T) {
+func TestSetCaptureIdentity(t *testing.T) {
 	base := CatalogInfo{Hash: "abc"}
-	a, b, a2 := base, base, base
-	a.setGroupRank(0, 2)
-	b.setGroupRank(1, 2)
-	a2.setGroupRank(0, 2)
+	a, b, a2, again := base, base, base, base
+	a.setCaptureIdentity(0, 2, "s1")
+	b.setCaptureIdentity(1, 2, "s1")
+	a2.setCaptureIdentity(0, 2, "s1")
+	again.setCaptureIdentity(0, 2, "s2")
 	if a.Hash == b.Hash || a.Hash != a2.Hash || a.Hash == base.Hash || len(a.ShortHash) != 32 {
 		t.Errorf("rank hashes: %s %s %s", a.Hash, b.Hash, a2.Hash)
+	}
+	if again.Hash == a.Hash {
+		t.Error("a re-capture of the same rank resolves to the first capture")
 	}
 }
 
