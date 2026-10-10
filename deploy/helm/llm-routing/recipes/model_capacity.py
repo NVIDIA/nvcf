@@ -193,9 +193,13 @@ def candidate_blockers(node, usage, profile, role, facts):
         elif usage['memory']['allocatableBytes'] is None or usage['memory']['allocatableBytes'] < minimum_host * GIB:
             reasons.append('Host memory capacity meeting the hardware profile minimum is unverified.')
     if hardware.get('memoryMode') == 'discrete':
-        measured, minimum = facts.get('cudaTotalMemoryGiB'), hardware.get('minDeviceMemoryGiB')
-        if not positive_number(minimum) or not positive_number(measured) or measured < minimum:
-            reasons.append('Verified device memory is missing or insufficient.')
+        memory_gib, minimum = facts.get('cudaTotalMemoryGiB'), hardware.get('minDeviceMemoryGiB')
+        if 'cudaTotalMemoryGiB' not in facts:
+            memory_mib = labels.get('nvidia.com/gpu.memory', '')
+            if isinstance(memory_mib, str) and re.fullmatch(r'[0-9]+', memory_mib):
+                memory_gib = int(memory_mib) / 1024
+        if not positive_number(minimum) or not positive_number(memory_gib) or memory_gib < minimum:
+            reasons.append('GPU device memory is missing or insufficient.')
     for field, free_key, required, label in [('gpu', 'free', role['gpuRequest'], 'GPU'),
                                            ('cpu', 'freeMillicores', role['cpuRequestMillicores'], 'CPU millicores'),
                                            ('memory', 'freeBytes', role['memoryRequestBytes'], 'memory bytes'),

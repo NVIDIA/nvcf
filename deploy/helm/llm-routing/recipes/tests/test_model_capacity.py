@@ -251,7 +251,47 @@ class CapacityPrimitiveTests(unittest.TestCase):
                 model_capacity.inventory(invalid)
             run.assert_not_called()
 
-    def test_alternate_discrete_hardware_requires_explicit_device_memory(self):
+    def test_station_memory_labels_select_nodes_meeting_the_profile_minimum(self):
+        profile = next(recipe for recipe in CATALOG['recipes'] if recipe['id'] == 'qwen3.8-27b')
+        profile = next(item for item in profile['profiles'] if item['id'] == 'station-fp8')
+        minimum_mib = int(profile['hardware']['minDeviceMemoryGiB'] * 1024)
+        snapshot = inventory(2)
+        for i, memory in enumerate((minimum_mib - 1, minimum_mib)):
+            snapshot['nodes'][i]['metadata']['labels'].update({
+                'nvidia.com/gpu.product': 'NVIDIA-GB300', 'nvidia.com/gpu.memory': str(memory)})
+        before = copy.deepcopy(snapshot)
+        result = check(snapshot, profile_id='station-fp8')
+        self.assertEqual(result['status'], 'fits')
+        self.assertEqual(result['chosenNodes'], ['node-1'])
+        self.assertEqual(snapshot, before)
+        snapshot['nodes'].pop()
+        result = check(snapshot, profile_id='station-fp8')
+        self.assertEqual(result['status'], 'blocked')
+        self.assertIn('device memory', str(result['profiles'][0]['nodeBlockers']))
+
+    def test_station_requires_valid_gpu_memory_independently_of_host_memory(self):
+        snapshot = inventory(1)
+        gpu_node = snapshot['nodes'][0]
+        gpu_node['metadata']['labels']['nvidia.com/gpu.product'] = 'NVIDIA-GB300'
+        gpu_node['status']['capacity'] = {'memory': '1Ti'}
+        gpu_node['status']['allocatable']['memory'] = '1Ti'
+        self.assertEqual(check(snapshot, profile_id='station-fp8')['status'], 'blocked')
+        for memory in (None, '', '0', '-1', '65536.0', '6.5536e4', '65536Mi',
+                       ' 65536', '65536 ', '\u0666\u0665\u0665\u0663\u0666', True, 65536):
+            with self.subTest(memory=memory):
+                gpu_node['metadata']['labels']['nvidia.com/gpu.memory'] = memory
+                result = check(snapshot, profile_id='station-fp8')
+                self.assertEqual(result['status'], 'blocked')
+                self.assertIn('device memory', str(result['profiles'][0]['nodeBlockers']))
+
+    def test_unified_spark_does_not_require_the_gpu_memory_label(self):
+        snapshot = inventory(1)
+        for memory in (None, '0', 'bad', True):
+            with self.subTest(memory=memory):
+                snapshot['nodes'][0]['metadata']['labels']['nvidia.com/gpu.memory'] = memory
+                self.assertEqual(check(snapshot, profile_id='spark-fp8')['status'], 'fits')
+
+    def test_explicit_device_memory_takes_precedence_over_gpu_memory_labels(self):
         catalog = copy.deepcopy(CATALOG)
         profile = next(recipe for recipe in catalog['recipes'] if recipe['id'] == 'qwen3.8-27b')['profiles'][0]
         profile['hardware'] = {'os': 'linux', 'architecture': 'amd64', 'gpuCount': 1,
@@ -259,11 +299,14 @@ class CapacityPrimitiveTests(unittest.TestCase):
         snapshot = inventory(1)
         snapshot['nodes'][0]['metadata']['labels'].update({
             'kubernetes.io/arch': 'amd64', 'nvidia.com/gpu.product': 'NVIDIA Test GPU'})
-        for measured, expected in [(None, 'blocked'), (79, 'blocked'), (80, 'fits'), (True, 'blocked')]:
-            with self.subTest(measured=measured):
-                report = model_capacity.analyze(snapshot, catalog, 'qwen3.8-27b',
-                    capabilities={'nodes': {'node-0': {'cudaTotalMemoryGiB': measured}}})
-                self.assertEqual(report['status'], expected)
+        for label in (None, '81920', 'bad'):
+            snapshot['nodes'][0]['metadata']['labels']['nvidia.com/gpu.memory'] = label
+            for measured, expected in [(None, 'blocked'), (79, 'blocked'), (80, 'fits'),
+                                       (True, 'blocked'), ('80', 'blocked')]:
+                with self.subTest(label=label, measured=measured):
+                    report = model_capacity.analyze(snapshot, catalog, 'qwen3.8-27b',
+                        capabilities={'nodes': {'node-0': {'cudaTotalMemoryGiB': measured}}})
+                    self.assertEqual(report['status'], expected)
 
 
 if __name__ == '__main__':

@@ -82,6 +82,21 @@ class PlanTests(unittest.TestCase):
         self.assertIn('suspended=True', self.output.getvalue())
         self.assertIn('resume its existing release', self.output.getvalue())
 
+    def test_station_discovers_memory_and_selects_free_node_without_capabilities(self):
+        data = snapshot(2)
+        for node in data['nodes']:
+            node['metadata']['labels'].update({
+                'nvidia.com/gpu.product': 'NVIDIA-GB300', 'nvidia.com/gpu.memory': '256703'})
+        data['pods'] = [{'metadata': {'name': 'busy', 'namespace': 'other'}, 'spec': {
+            'nodeName': 'available-0', 'containers': [{'resources': {'requests': {'nvidia.com/gpu': '1'}}}]}}]
+        report = self.plan(data, '--verbose')
+        self.assertEqual(report['status'], 'fits')
+        self.assertEqual(report['chosenProfile'], 'station-fp8')
+        self.assertEqual(report['chosenNodes'], ['available-1'])
+        command = shlex.split(report['deployment']['command'])
+        self.assertIn('profileName=station-fp8', command)
+        self.assertIn('nodes[0]=available-1', command)
+
     def test_retained_owned_cache_selects_original_node_and_blocks_busy_or_unknown_placement(self):
         claim = retained_claim()
         self.storage.return_value['claims'] = [claim]

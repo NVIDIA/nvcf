@@ -73,8 +73,6 @@ Options:
 - `--verbose` shows detailed diagnostics and an install command when all deployment checks pass.
 - `--json` prints the complete report, including storage measurements and errors, as JSON for other tools. Exit status is `0` when a new placement fits and `2` when blocked, unsupported or already deployed.
 
-For Station, set `cudaTotalMemoryGiB` to verified total CUDA device memory per GPU in GiB. Replace the example's `station-node-1` and illustrative `249.75` with the actual Kubernetes node name and measured value.
-
 The report checks GPU, CPU and memory reservations, hardware compatibility, node readiness, resource pressure and exclusive GPU requirements. NVMe offload also checks reserved ephemeral storage and the supplied local-NVMe fact. Distributed profiles require compatible fabric facts. Kubernetes still schedules the pods; this read-only snapshot is not a reservation. It does not measure physical free disk, live host memory, image availability or runtime health. Resolve storage shortages separately using the [cache cleanup procedure](#remove-downloaded-model-files).
 
 For Flash-Next, the printed Helm command includes the selected profile and verified node capabilities. Its [automatic startup](#helm-flash-next-recipes) runs preparation and serving in Kubernetes. For GLM, the scheduling check does not close the documented automatic-startup validation gap. Plan and install each independent recipe through this same Helm workflow.
@@ -612,7 +610,7 @@ For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the
      --profile "$PROFILE_ID" --release "$MODEL_RELEASE" --verbose
    ```
 
-   Supply `--capabilities /path/to/private/capabilities.json` for profiles needing verified NVMe, device-memory or fabric facts. Once placement and values are correct, deploy and verify. Registration can precede gateway discovery. The loop below waits for discovery and a healthy registry before testing inference. Each verification run needs a fresh output path:
+   Supply `--capabilities /path/to/private/capabilities.json` for NVMe or fabric facts, or to override GPU memory from node labels. Once placement and values are correct, deploy and verify. Registration can precede gateway discovery. The loop below waits for discovery and a healthy registry before testing inference. Each verification run needs a fresh output path:
 
    ```bash
    VERIFY_DIR="$(mktemp -d)"
