@@ -143,7 +143,7 @@ class PreflightClusterTests(PreflightTest):
         self.assertIn('1 of 2 GPU node(s)', report['checks'][6]['detail'])
 
     def test_unmatched_gpu_product_architecture_or_count_has_no_recipes(self):
-        for fields in ({'product': 'NVIDIA-GB300'}, {'arch': 'amd64'}, {'gpus': '4'}):
+        for fields in ({'product': 'NVIDIA-Test-Unsupported'}, {'arch': 'amd64'}, {'gpus': '4'}):
             with self.subTest(fields=fields):
                 self.cluster.nodes = [node('station-a', **fields)]
                 report = self.preflight()

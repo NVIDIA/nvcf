@@ -44,7 +44,9 @@ class HelmSGLangTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), source.read_bytes())
 
     def values(self, recipe='qwen3.8-27b'):
-        return {'recipe': recipe, 'nodes': ['gpu-node-1'], 'storageClassName': 'local-path',
+        model = next(model for model in json.loads((ROOT/'catalog.json').read_text())['models'] if model['id'] == recipe)
+        return {'recipe': recipe, 'profileName': model['profiles'][0]['id'],
+                'nodes': ['gpu-node-1'], 'storageClassName': 'local-path',
                 'runtimeClassName': 'nvidia', 'sharedCAConfigMap': 'routing-ca'}
 
     def render(self, values, success=True, release='test-model', upgrade=False):
@@ -102,6 +104,7 @@ class HelmSGLangTests(unittest.TestCase):
             with self.subTest(recipe=recipe):
                 result = subprocess.run(['helm', 'template', 'test-model', str(CHART),
                                          '--namespace', 'test-stack', '--set', 'recipe=' + recipe,
+                                         '--set', 'profileName=' + self.values(recipe)['profileName'],
                                          '--set', 'nodes[0]=selected-node'], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 docs = [doc for doc in yaml.safe_load_all(result.stdout) if doc]

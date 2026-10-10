@@ -67,7 +67,7 @@ Options:
 
 - `--profile NAME` restricts the check to one catalog hardware profile.
 - `--context-length TOKENS --concurrency COUNT` checks a requested workload against the recipe's supported envelope. SGLang commands include these overrides. GGUF profiles use fixed recipe tuning and reject workload overrides.
-- `--capabilities FILE` supplies verified per-node NVMe, device-memory or fabric facts. Start from [capabilities.example.json](recipes/capabilities.example.json), replace example addresses and names, and save it outside the checkout.
+- `--capabilities FILE` supplies verified per-node NVMe, device-memory or fabric facts. Start from [capabilities.example.json](recipes/capabilities.example.json), replace example node names and values, and save it outside the checkout.
 - `--runtime-class NAME --storage-class NAME --shared-ca-configmap NAME` sets the installation's site values. The check requires the RuntimeClass and a StorageClass with `WaitForFirstConsumer` and unrestricted topology. It does not verify the CA or gateway connection.
 - `--release NAME` changes the name of a new release. It does not adopt or replace an existing deployment.
 - `--verbose` shows detailed diagnostics and an install command when all deployment checks pass.
@@ -610,7 +610,7 @@ For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the
      --profile "$PROFILE_ID" --release "$MODEL_RELEASE" --verbose
    ```
 
-   Supply `--capabilities /path/to/private/capabilities.json` for profiles needing verified NVMe or fabric facts. Once placement and values are correct, deploy and verify. Registration can precede gateway discovery. The loop below waits for discovery and a healthy registry before testing inference. Each verification run needs a fresh output path:
+   Supply `--capabilities /path/to/private/capabilities.json` for NVMe or fabric facts, or to override GPU memory from node labels. Once placement and values are correct, deploy and verify. Registration can precede gateway discovery. The loop below waits for discovery and a healthy registry before testing inference. Each verification run needs a fresh output path:
 
    ```bash
    VERIFY_DIR="$(mktemp -d)"
@@ -675,7 +675,8 @@ RENDER_DIR="$(mktemp -d)"
 helm template llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
   --namespace llm-stack --values dev-artifacts/values.yaml > "$RENDER_DIR/shared.yaml"
 helm template qwen-fp8 recipes/charts/sglang --namespace llm-stack \
-  --set recipe=qwen3.8-27b --set 'nodes[0]=offline-gpu-node' > "$RENDER_DIR/model.yaml"
+  --set recipe=qwen3.8-27b --set profileName=spark-fp8 \
+  --set 'nodes[0]=offline-gpu-node' > "$RENDER_DIR/model.yaml"
 ```
 
 Offline rendering cannot inspect live ownership or prove credential reuse. Use [package-charts.sh](dev-artifacts/package-charts.sh) to build archives in a fresh output directory, then check catalog paths, bundled source equality and `SHA256SUMS`. Package generation and developer image builds do not install or upgrade a release.

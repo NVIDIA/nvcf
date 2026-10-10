@@ -488,11 +488,23 @@ def print_preflight(report):
                   else 'Fix each FAIL above, then rerun. See README.md#prerequisites.'))
 
 
-def print_capacity_details(report):
-    print(f"Model: {report['model']} | Cluster: {report['context']} | Namespace: {report['namespace']}")
+def print_capacity_status(status):
     statuses = {'fits': 'FITS current scheduling allocations.', 'blocked': 'DOES NOT FIT current requirements.',
                 'unsupported': 'NO DEPLOYABLE RECIPE.', 'existing': 'EXISTING DEPLOYMENT found in this namespace; inspect it before creating another.'}
-    print(statuses[report['status']])
+    print(statuses[status])
+
+
+def validation_summary(validation):
+    status = validation.get('automaticHelmStatus', 'pending')
+    failed = (validation.get('automaticHelmWorkload') or {}).get('failedChecks', [])
+    return status + (' (failed: ' + ', '.join(failed) + ')' if failed else '')
+
+
+def print_capacity_details(report):
+    print(f"Model: {report['model']} | Cluster: {report['context']} | Namespace: {report['namespace']}")
+    print_capacity_status(report['status'])
+    detected_products = sorted({node.get('gpuProduct') or 'unknown' for node in report.get('nodes', [])
+                                if (node['gpu']['allocatable'] or 0) > 0})
     for existing in report['existingDeployments']:
         if existing.get('endpoint'):
             print(f"Endpoint {existing['endpoint']}: Ready={existing['ready']}, Registered={existing['registered']}")
@@ -504,10 +516,22 @@ def print_capacity_details(report):
         print('If stopped, resume its existing release with the original chart and retained cache placement. See README.md#stop-and-resume.')
     for profile in report.get('profiles', []):
         requirements = profile.get('requirements', {})
-        print(f"Profile: {profile['id']} ({requirements['modelNodeCount']} node(s))")
-        validation = profile.get('validation', {}).get('automaticHelmStatus')
-        if validation and validation != 'smoke-tested':
-            print('  Automatic startup validation: ' + validation + '. See the recipe validation notes before deploying.')
+        print(f"Evaluated profile: {profile['id']} ({requirements['modelNodeCount']} node(s))")
+        products = dict.fromkeys(planning_modules().gpu_product(product)
+                                 for product in requirements['hardware']['gpuProducts'])
+        print('  Required GPU: ' + ', '.join(products))
+        if detected_products and 'unknown' not in detected_products and not set(products).intersection(detected_products):
+            print('  Result: incompatible with detected ' + ', '.join(detected_products) + ' GPUs')
+        else:
+            print('  Detected GPUs: ' + (', '.join(detected_products) or 'none advertised'))
+            print('  Result: ' + profile['status'])
+        validation = profile.get('validation', {})
+        summary = validation_summary(validation)
+        if validation.get('automaticHelmStatus') and summary != 'smoke-tested':
+            print('  Automatic startup validation: ' + summary + '. See the recipe validation notes before deploying.')
+        workload = validation.get('automaticHelmWorkload') or {}
+        if workload.get('failedChecks') and workload.get('reason'):
+            print('  Validation notes: ' + workload['reason'])
         for rank in requirements.get('perNode', []):
             resources = rank.get('resources', rank)
             print(f"  Rank {rank.get('rank', 0)}: {resources.get('gpuRequest', 0):g} GPU, "
@@ -581,11 +605,13 @@ def print_recipe_catalog(catalog):
                          recipe['availability']['status']])
             continue
         for profile in profiles:
-            lifecycle = profile['deployment']['lifecycle']
-            validation = profile.get('validation', {}).get('automaticHelmStatus', 'pending')
+            validation = validation_summary(profile.get('validation', {}))
+            products = dict.fromkeys(planning_modules().gpu_product(product)
+                                    for product in profile.get('hardware', {}).get('gpuProducts', []))
+            gpu = ', '.join(products) or '-'
             rows.append([recipe['id'], recipe.get('precision') or '-', profile['id'],
-                         profile['modelNodeCount'], lifecycle, validation])
-    print_table(['RECIPE', 'PRECISION', 'PROFILE', 'NODES', 'LIFECYCLE', 'VALIDATION'], rows)
+                         gpu, profile['modelNodeCount'], validation])
+    print_table(['RECIPE', 'PRECISION', 'PROFILE', 'GPU', 'NODES', 'VALIDATION'], rows)
     print('Use a RECIPE with plan --model. Validation records prior tests. Plan checks current cluster capacity.')
 
 
@@ -602,7 +628,10 @@ def print_capacity_plan(report, verbose=False):
         print_capacity_details(report)
     else:
         print(f"Model: {report['model']} | Cluster: {report['context']}")
+        print_capacity_status(report['status'])
         for profile in report.get('profiles', []):
+            if report['status'] != 'fits' or profile['id'] != report['chosenProfile']:
+                continue
             requirements = profile['requirements']
             print(f"Needs ({profile['id']}): {requirements['modelNodeCount']} node(s)")
             for rank in requirements.get('perNode', []):
@@ -614,8 +643,15 @@ def print_capacity_plan(report, verbose=False):
                 if cache:
                     text += f", {cache / 1024**3:g} GiB cache required"
                 print(text)
-        if report['status'] == 'unsupported':
-            print('No deployable recipe.')
+        if report['status'] == 'fits':
+            print('Selected nodes: ' + ', '.join(report['chosenNodes']))
+        elif report['status'] in ('blocked', 'unsupported'):
+            reasons = [f"{profile['id']}: {reason}"
+                       for profile in report.get('profiles', [])
+                       for blocker in profile.get('nodeBlockers', [])
+                       for reason in blocker['reasons']]
+            for reason in dict.fromkeys(reasons + report.get('blockers', [])):
+                print('  - ' + reason)
         print('\nGPU allocation (Kubernetes reservations)')
         def quantity(value):
             return 'unknown' if value is None else f'{value:g}'
