@@ -167,6 +167,9 @@ func (r *Reconciler) ingestCM(cm *corev1.ConfigMap) bool {
 		Message:        fmt.Sprintf("rootfs-only capture (%d files)", m.FileCount),
 		CreatedAt:      m.CapturedAt,
 	}
+	if m.SourcePodMeta[checkpointstore.InstanceCaptureMetaKey] == "true" {
+		c.WorkloadType = checkpointstore.InstanceCaptureWorkloadType
+	}
 	// GPU count + driver major (agent records these in SourcePodMeta at
 	// capture time; older manifests omit them → stay zero).
 	if n, err := strconv.Atoi(m.SourcePodMeta["gpu_count"]); err == nil {

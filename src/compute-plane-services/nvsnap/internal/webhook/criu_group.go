@@ -14,7 +14,6 @@ package webhook
 import (
 	"context"
 	"strconv"
-	"strings"
 
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
@@ -44,9 +43,6 @@ type CRIUGroup struct {
 	GPUShare    bool
 }
 
-// CRIUGroupKey is the group record key of a cache URI ("cache://<key>").
-func CRIUGroupKey(cacheURI string) string { return strings.TrimPrefix(cacheURI, "cache://") }
-
 // criuGroupRestorePatches admits pod as its rank's restore placeholder when
 // a group capture of its configuration and size exists, else returns nil.
 func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) []PatchOp {
@@ -57,11 +53,11 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 	if !ok {
 		return nil
 	}
-	key := CRIUGroupKey(uri)
-	g, ok := m.CRIUGroups(ctx, key)
+	g, ok := m.CRIUGroups(ctx, pod.Namespace, uri)
 	if !ok {
 		return nil
 	}
+	key := g.Key
 	log := m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "criuGroup": key})
 	ordinal, size := podOrdinal(pod), m.groupSize(ctx, pod)
 	if size != len(g.Checkpoints) || ordinal >= size {

@@ -397,7 +397,7 @@ type Mutator struct {
 	// CRIUGroups returns the complete group capture recorded under a
 	// configuration key (criu_group.go). Nil: multi-pod instances are not
 	// restored with CRIU.
-	CRIUGroups func(ctx context.Context, key string) (CRIUGroup, bool)
+	CRIUGroups func(ctx context.Context, namespace, cacheURI string) (CRIUGroup, bool)
 	// DebugEnv sets debug variables on the GPU containers of matching
 	// pods (debug_env.go).
 	DebugEnv []DebugEnv

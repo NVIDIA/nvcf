@@ -249,8 +249,17 @@ func (a *Agent) groupRestore(ctx context.Context, req GroupRestoreRequest, log *
 			res.DeletedPods = append(res.DeletedPods, name)
 		}
 	}
-	return res, fmt.Errorf("group restore %s: %d of %d members failed: %s", res.Session, len(failed), len(res.Members), strings.Join(failed, "; "))
+	return res, &groupRestoreFailure{fmt.Errorf("group restore %s: %d of %d members failed: %s", res.Session, len(failed), len(res.Members), strings.Join(failed, "; "))}
 }
+
+// groupRestoreFailure is a group restore that ran and failed: the
+// checkpoints themselves are suspect. Any other error of groupRestore
+// (a pod without an IP, a fetch that did not finish) says nothing about
+// them.
+type groupRestoreFailure struct{ err error }
+
+func (e *groupRestoreFailure) Error() string { return e.err.Error() }
+func (e *groupRestoreFailure) Unwrap() error { return e.err }
 
 // awaitTargetPods waits until every member's pod is scheduled and has an
 // IP, and returns the IPs and nodes in member order.

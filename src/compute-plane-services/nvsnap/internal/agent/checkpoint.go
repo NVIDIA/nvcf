@@ -969,21 +969,25 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	// outage doesn't fail the capture itself.
 	if a.config.CatalogURL != "" {
 		regCtx, regCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := a.registerCheckpointInCatalog(regCtx, checkpointID, req.Namespace, req.PodName,
-			req.ContainerName, containerInfo.Image, checkpointSize, duration, len(gpuPIDs) > 0, catalog); err != nil {
-			log.WithError(err).Warn("catalog register failed (non-fatal — peer-add and blob-uploaded callbacks will 404 until reconciled)")
-		}
+		canonical, err := a.registerCheckpointInCatalog(regCtx, checkpointID, req.Namespace, req.PodName,
+			req.ContainerName, containerInfo.Image, checkpointSize, duration, len(gpuPIDs) > 0, catalog)
 		regCancel()
-		// Capture node advertises itself as a peer. Without this, the
-		// first cross-node restore sees an empty peers list and falls
-		// back to the blob store (slow path) — defeating the entire
-		// cascade. Restore-side already registers on successful fetch
-		// in EnsureLocal; capture-side wasn't doing the symmetric step.
-		peerCtx, peerCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		if err := a.registerAsPeer(peerCtx, checkpointID); err != nil {
-			log.WithError(err).Warn("capture-side peer-add failed (non-fatal — first cross-node restore will fall back to blob store)")
+		switch {
+		case err != nil:
+			log.WithError(err).Error("catalog register failed: other nodes cannot find this checkpoint, so it restores only on this node")
+		case canonical != checkpointID:
+			// The catalog holds this content under an older capture's id;
+			// this copy is not under that name, so it is no source for it.
+			log.WithField("catalogID", canonical).Warn("catalog holds this content under another checkpoint id; not advertising this copy to other nodes")
+		default:
+			// Advertise this node as the checkpoint's first source, so
+			// another node's restore can fetch it.
+			peerCtx, peerCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if err := a.registerAsPeer(peerCtx, checkpointID); err != nil {
+				log.WithError(err).Error("capture-side peer-add failed: other nodes cannot fetch this checkpoint from here")
+			}
+			peerCancel()
 		}
-		peerCancel()
 	}
 
 	// nvsnap#166: L2 per-capture PVC promote runs ASYNC in a background

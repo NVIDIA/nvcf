@@ -83,7 +83,7 @@ func TestInstanceRanks(t *testing.T) {
 
 func TestCRIUGroupCaptureLeader(t *testing.T) {
 	r0 := stsRank("kimi-0", "0", "2", "sts-a", true)
-	if key, size, ok := criuGroupCaptureLeader(&r0); !ok || key != "k1" || size != 2 {
+	if key, size, ok := criuGroupCaptureLeader(&r0); !ok || key != "cache://k1" || size != 2 {
 		t.Errorf("rank 0: %q %d %v", key, size, ok)
 	}
 	a := &Agent{}
@@ -164,5 +164,21 @@ func TestRestoredPlaceholderIsNoTarget(t *testing.T) {
 	p.Annotations[webhook.CRIURestoredAnnotation] = "2026-10-09T21:00:00Z"
 	if _, _, ok := criuRestoreTarget(&p); ok {
 		t.Error("a restored pod would be restored into again after an agent restart")
+	}
+}
+
+func TestCRIUGroupKey_ScopedByTenant(t *testing.T) {
+	a := criuGroupKey("cache://k1", criuScopeOf("sr-1", map[string]string{"function-version-id": "v1"}))
+	if b := criuGroupKey("cache://k1", criuScopeOf("sr-2", map[string]string{"function-version-id": "v1"})); a != b {
+		t.Error("a redeploy of the same function version (a new namespace) must find its capture")
+	}
+	if b := criuGroupKey("cache://k1", criuScopeOf("sr-3", map[string]string{"function-version-id": "v2"})); a == b {
+		t.Error("another function on the same configuration must not restore this capture")
+	}
+	if criuGroupKey("cache://k1", criuScopeOf("ns-a", nil)) == criuGroupKey("cache://k1", criuScopeOf("ns-b", nil)) {
+		t.Error("unlabelled namespaces must not share captures")
+	}
+	if len(a) != 16 {
+		t.Errorf("key %q is not 16 hex characters", a)
 	}
 }

@@ -31,9 +31,10 @@ func groupMutator(t *testing.T, g CRIUGroup, blocked string) (*Mutator, *string)
 	var asked string
 	m := &Mutator{Backend: newBackend(t), Composer: &rootfsonly.HashInputComposer{CUDADriverMajor: 610},
 		CheckpointHostRoot: "/var/lib/containerd/nvsnap-checkpoints",
-		CRIUGroups: func(_ context.Context, key string) (CRIUGroup, bool) {
-			asked = key
-			return g, key != ""
+		CRIUGroups: func(_ context.Context, ns, uri string) (CRIUGroup, bool) {
+			asked = "key-of/" + ns + "/" + uri
+			g.Key = asked
+			return g, uri != ""
 		},
 		CRIURestoreBlocked: func(_ context.Context, id string) bool { return id == blocked },
 	}

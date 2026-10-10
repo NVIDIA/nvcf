@@ -215,7 +215,7 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		mut.CRIURestoreBlocked = a.criuRestorer().Blocked
 		if criuIsDefault() {
 			// Helm instances restore from their group captures.
-			mut.CRIUGroups = a.lookupCRIUGroup
+			mut.CRIUGroups = a.lookupCRIUGroupFor
 		}
 	}
 	handler := &webhook.Handler{

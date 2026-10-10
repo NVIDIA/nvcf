@@ -28,6 +28,8 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/db"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 )
 
 // Phase 5d.1 catalog-routing handlers.
@@ -206,6 +208,7 @@ type registerCheckpointRequest struct {
 	CPUArchitecture   string   `json:"cpu_architecture,omitempty"`
 	FunctionName      string   `json:"function_name,omitempty"`
 	FunctionVersionID string   `json:"function_version_id,omitempty"`
+	WorkloadType      string   `json:"workload_type,omitempty"`
 }
 
 // registerCheckpoint upserts a catalog row keyed by checkpoint_id. The
@@ -253,6 +256,7 @@ func (s *Server) registerCheckpoint(w http.ResponseWriter, r *http.Request) {
 		CPUArchitecture:   req.CPUArchitecture,
 		FunctionName:      req.FunctionName,
 		FunctionVersionID: req.FunctionVersionID,
+		WorkloadType:      req.WorkloadType,
 		ContainerImage:    req.ContainerImage,
 		NodeName:          req.NodeName,
 		CheckpointPath:    req.CheckpointPath,
@@ -270,6 +274,7 @@ func (s *Server) registerCheckpoint(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("upsert checkpoint: %v", err), http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set(checkpointstore.CatalogCheckpointIDHeader, cp.ID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

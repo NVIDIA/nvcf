@@ -260,6 +260,9 @@ func (a *Agent) recordCRIUCapture(ctx context.Context, hash, checkpointID string
 		// The restore mounts the checkpoint's chunk store and the library.
 		m.SourcePodMeta["gpushare"] = "true"
 	}
+	if req.CaptureID != "" {
+		m.SourcePodMeta[checkpointstore.InstanceCaptureMetaKey] = "true"
+	}
 	if a.config.NodeName != "" {
 		m.CapturedOnNodes = []string{a.config.NodeName}
 	}

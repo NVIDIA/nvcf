@@ -21,6 +21,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -30,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
@@ -49,6 +51,17 @@ const (
 	criuGroupStateCapturing = "capturing"
 	criuGroupStateComplete  = "complete"
 	criuGroupStateFailed    = "failed"
+	// criuGroupStateRestoreFailed is a capture whose restore failed: its
+	// checkpoints are blocked and the next Ready instance captures anew.
+	criuGroupStateRestoreFailed = "restore-failed"
+
+	// criuGroupMaxCaptures bounds the captures of one configuration, so a
+	// workload that cannot be captured or restored stops paying for it.
+	criuGroupMaxCaptures = 3
+	// criuGroupMaxStalls bounds the restores of one capture that did not
+	// get to run (a rank never scheduled, a checkpoint never fetched).
+	// Past it the configuration starts cold, keeping its checkpoints.
+	criuGroupMaxStalls = 3
 
 	lwsGroupKeyLabel = "leaderworkerset.sigs.k8s.io/group-key"
 
@@ -63,6 +76,9 @@ func criuGroupConfigMapName(key string) string { return criuGroupConfigMapPrefix
 // parseCRIUGroup reads a complete group record.
 func parseCRIUGroup(key string, data map[string]string) (webhook.CRIUGroup, bool) {
 	if data["state"] != criuGroupStateComplete {
+		return webhook.CRIUGroup{}, false
+	}
+	if n, _ := strconv.Atoi(data["stalls"]); n >= criuGroupMaxStalls {
 		return webhook.CRIUGroup{}, false
 	}
 	size, err := strconv.Atoi(data["size"])
@@ -170,17 +186,17 @@ func gpuContainer(pod *corev1.Pod) string {
 }
 
 // criuGroupCaptureLeader reports whether pod is rank 0 of a Ready instance
-// that has not been captured from, and returns its configuration key.
-func criuGroupCaptureLeader(pod *corev1.Pod) (key string, size int, ok bool) {
-	uri := pod.Annotations[cacheURIAnnotation]
+// that has not been captured from, and returns its cache URI.
+func criuGroupCaptureLeader(pod *corev1.Pod) (uri string, size int, ok bool) {
+	uri = pod.Annotations[cacheURIAnnotation]
 	if uri == "" || pod.DeletionTimestamp != nil || pod.Annotations[webhook.CRIURestoreAnnotation] != "" {
 		return "", 0, false
 	}
-	o, s, ok := podRank(pod, modelvolume.CacheOrdinalAnnotation, modelvolume.CacheGroupSizeAnnotation)
-	if !ok || o != 0 || !rootfsonly.IsPodReady(pod) || gpuContainer(pod) == "" || !hasInstance(pod) {
+	o, s, isRank := podRank(pod, modelvolume.CacheOrdinalAnnotation, modelvolume.CacheGroupSizeAnnotation)
+	if !isRank || o != 0 || !rootfsonly.IsPodReady(pod) || gpuContainer(pod) == "" || !hasInstance(pod) {
 		return "", 0, false
 	}
-	return webhook.CRIUGroupKey(uri), s, true
+	return uri, s, true
 }
 
 // CaptureOptIn opts the pods whose Label has one of Values into the
@@ -213,10 +229,16 @@ func (a *Agent) captureOptedIn(pod *corev1.Pod) bool {
 }
 
 func (c *criuAutoRestorer) considerGroupCapture(ctx context.Context, pod *corev1.Pod) {
-	key, size, ok := criuGroupCaptureLeader(pod)
+	uri, size, ok := criuGroupCaptureLeader(pod)
 	if !ok || (size > 1 && !c.a.captureOptedIn(pod)) {
 		return
 	}
+	scope, err := c.a.criuGroupScope(ctx, pod.Namespace)
+	if err != nil {
+		c.a.log.WithError(err).WithField("namespace", pod.Namespace).Warn("CRIU group capture: cannot read the namespace's scope")
+		return
+	}
+	key := criuGroupKey(uri, scope)
 	if _, busy := c.attempted.LoadOrStore("capture/"+string(pod.UID), struct{}{}); busy {
 		return
 	}
@@ -234,8 +256,8 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	a := c.a
 	log := a.log.WithFields(logrus.Fields{"criuGroup": key, "pod": leader.Namespace + "/" + leader.Name, "size": size})
 	cms := a.kubeClient.CoreV1().ConfigMaps(a.criuFailedNamespace())
-	if _, err := cms.Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{}); err == nil {
-		return false // captured, being captured, or failed before
+	if prev, err := cms.Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{}); err == nil && !criuGroupRecaptures(prev.Data, time.Now()) {
+		return false // captured, being captured, or out of attempts
 	}
 	select {
 	case <-ctx.Done():
@@ -269,16 +291,12 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		log.WithError(err).Warn("CRIU group capture: skipped; the instance is not the whole engine")
 		return false
 	}
-	record := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{Name: criuGroupConfigMapName(key), Labels: map[string]string{"app.kubernetes.io/managed-by": "nvsnap"}},
-		Data: map[string]string{"state": criuGroupStateCapturing, "size": strconv.Itoa(size),
-			"source": leader.Namespace + "/" + leader.Name, "startedAt": time.Now().UTC().Format(time.RFC3339)},
+	record, err := c.claimGroupRecord(ctx, key, leader, size)
+	if err != nil {
+		log.WithError(err).Warn("CRIU group capture: cannot claim the group record")
+		return true
 	}
-	if _, err := cms.Create(ctx, record, metav1.CreateOptions{}); err != nil {
-		if !apierrors.IsAlreadyExists(err) {
-			log.WithError(err).Warn("CRIU group capture: cannot create the group record")
-			return true
-		}
+	if record == nil {
 		return false // another agent captures it
 	}
 
@@ -307,6 +325,78 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		log.WithError(err).Error("CRIU group capture: cannot update the group record")
 	}
 	return false
+}
+
+// criuGroupRecaptures reports whether a group record lets its
+// configuration be captured again: its capture failed or its restore did,
+// and attempts remain, or its capture stopped without finishing.
+func criuGroupRecaptures(data map[string]string, now time.Time) bool {
+	n, _ := strconv.Atoi(data["captures"])
+	switch data["state"] {
+	case criuGroupStateFailed, criuGroupStateRestoreFailed:
+		return n < criuGroupMaxCaptures
+	case criuGroupStateCapturing:
+		started, err := time.Parse(time.RFC3339, data["startedAt"])
+		return n < criuGroupMaxCaptures && (err != nil || now.Sub(started) > criuGroupCaptureTimeout+10*time.Minute)
+	}
+	return false
+}
+
+// claimGroupRecord makes the agent the capturer of key: it creates the
+// record, or takes over one that may be captured again. It returns nil
+// when another agent holds it.
+func (c *criuAutoRestorer) claimGroupRecord(ctx context.Context, key string, leader *corev1.Pod, size int) (*corev1.ConfigMap, error) {
+	cms := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace())
+	data := map[string]string{"state": criuGroupStateCapturing, "size": strconv.Itoa(size), "captures": "1",
+		"source": leader.Namespace + "/" + leader.Name, "startedAt": time.Now().UTC().Format(time.RFC3339)}
+	record := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: criuGroupConfigMapName(key), Labels: map[string]string{"app.kubernetes.io/managed-by": "nvsnap"}},
+		Data:       data,
+	}
+	created, err := cms.Create(ctx, record, metav1.CreateOptions{})
+	if err == nil {
+		return created, nil
+	}
+	if !apierrors.IsAlreadyExists(err) {
+		return nil, err
+	}
+	prev, err := cms.Get(ctx, record.Name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	if !criuGroupRecaptures(prev.Data, time.Now()) {
+		return nil, nil
+	}
+	n, _ := strconv.Atoi(prev.Data["captures"])
+	data["captures"] = strconv.Itoa(n + 1)
+	if prev.Data["reason"] != "" {
+		data["previousReason"] = truncate(prev.Data["reason"], 1024)
+	}
+	prev.Data = data
+	// The resource version makes the takeover a compare-and-swap: of two
+	// agents taking over, one gets a conflict.
+	updated, err := cms.Update(ctx, prev, metav1.UpdateOptions{})
+	if apierrors.IsConflict(err) {
+		return nil, nil
+	}
+	return updated, err
+}
+
+// updateGroupRecord applies change to the group record of key.
+func (c *criuAutoRestorer) updateGroupRecord(ctx context.Context, key string, change func(map[string]string)) error {
+	cms := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace())
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		cm, err := cms.Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+		if cm.Data == nil {
+			cm.Data = map[string]string{}
+		}
+		change(cm.Data)
+		_, err = cms.Update(ctx, cm, metav1.UpdateOptions{})
+		return err
+	})
 }
 
 // checkpointInstance checkpoints the ranks in place and returns their
@@ -405,8 +495,11 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 		} else {
 			waitErr = err
 		}
-		if time.Since(t0) > criuGroupPlaceholderWait || ctx.Err() != nil {
-			c.failGroup(ctx, leader, ranks, fmt.Errorf("placeholders not running after %s: %w", criuGroupPlaceholderWait, waitErr), log)
+		if ctx.Err() != nil {
+			return // the agent stops; the next one drives the restore
+		}
+		if time.Since(t0) > criuGroupPlaceholderWait {
+			c.failGroup(ctx, leader, key, false, fmt.Errorf("placeholders not running after %s: %w", criuGroupPlaceholderWait, waitErr), log)
 			return
 		}
 		time.Sleep(5 * time.Second)
@@ -425,7 +518,7 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 	log.Info("CRIU group restore: every placeholder runs; restoring the instance")
 	rctx, cancel := context.WithTimeout(ctx, criuAutoRestoreTimeout)
 	defer cancel()
-	res, err := a.groupRestore(rctx, req, log)
+	_, err := a.groupRestore(rctx, req, log)
 	if err == nil {
 		log.WithField("duration", time.Since(t0).Round(time.Millisecond).String()).Info("CRIU group restore: restored")
 		for _, p := range ranks {
@@ -433,43 +526,73 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 		}
 		return
 	}
-	if res != nil && len(res.DeletedPods) > 0 {
-		ranks = nil // groupRestore deleted them
+	if ctx.Err() != nil && !errors.As(err, new(*groupRestoreFailure)) {
+		return // the agent stops before the restore ran
 	}
-	c.failGroup(ctx, leader, ranks, err, log)
+	c.failGroup(ctx, leader, key, errors.As(err, new(*groupRestoreFailure)), err, log)
 }
 
-// failGroup blocks the group's checkpoints and deletes its placeholders,
-// so their replacements start fresh.
-func (c *criuAutoRestorer) failGroup(ctx context.Context, leader *corev1.Pod, ranks []*corev1.Pod, cause error, log *logrus.Entry) {
-	log.WithError(cause).Error("CRIU group restore failed; blocking its checkpoints and deleting its pods so their replacements start fresh")
+// failGroup ends a group restore that did not succeed: it deletes every
+// pod of the instance admitted for it, so their replacements start again.
+// A restore that ran and failed (restoreFailed) also blocks the
+// checkpoints and lets the configuration be captured again; any other
+// failure keeps them, and counts toward criuGroupMaxStalls.
+func (c *criuAutoRestorer) failGroup(ctx context.Context, leader *corev1.Pod, key string, restoreFailed bool, cause error, log *logrus.Entry) {
 	ctx = context.WithoutCancel(ctx)
-	ids := map[string]bool{leader.Annotations[webhook.CRIURestoreAnnotation]: true}
-	if g, ok := c.a.lookupCRIUGroup(ctx, leader.Annotations[webhook.CRIUGroupAnnotation]); ok {
-		for _, id := range g.Checkpoints {
-			ids[id] = true
+	log = log.WithField("restoreRan", restoreFailed)
+	if restoreFailed {
+		log.WithError(cause).Error("CRIU group restore failed; blocking its checkpoints and deleting its pods so their replacements start fresh")
+		ids := map[string]bool{leader.Annotations[webhook.CRIURestoreAnnotation]: true}
+		if g, ok := c.a.lookupCRIUGroup(ctx, key); ok {
+			for _, id := range g.Checkpoints {
+				ids[id] = true
+			}
 		}
+		for id := range ids {
+			if id == "" {
+				continue
+			}
+			if err := c.markFailed(ctx, id, cause); err != nil {
+				log.WithError(err).WithField("checkpoint", id).Error("CRIU group restore: could not block the checkpoint")
+			}
+		}
+	} else {
+		log.WithError(cause).Warn("CRIU group restore did not run; deleting its pods so their replacements try again")
 	}
-	for id := range ids {
-		if id == "" {
-			continue
+	if err := c.updateGroupRecord(ctx, key, func(d map[string]string) {
+		if restoreFailed {
+			d["state"], d["reason"] = criuGroupStateRestoreFailed, truncate(cause.Error(), 1024)
+			return
 		}
-		if err := c.markFailed(ctx, id, cause); err != nil {
-			log.WithError(err).WithField("checkpoint", id).Error("CRIU group restore: could not block the checkpoint")
-		}
+		n, _ := strconv.Atoi(d["stalls"])
+		d["stalls"], d["lastStall"] = strconv.Itoa(n+1), truncate(cause.Error(), 1024)
+	}); err != nil {
+		log.WithError(err).Warn("CRIU group restore: cannot update the group record")
 	}
-	victims := ranks
-	if victims == nil {
-		victims = []*corev1.Pod{leader}
+	pods, err := c.a.kubeClient.CoreV1().Pods(leader.Namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		log.WithError(err).Error("CRIU group restore: cannot list the instance's pods to delete them")
+		return
 	}
-	for _, p := range victims {
-		if p == nil {
-			continue
-		}
+	for _, p := range groupPlaceholders(pods.Items, leader, key) {
 		if err := c.a.kubeClient.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 			log.WithError(err).WithField("placeholder", p.Name).Error("CRIU group restore: could not delete the placeholder")
 		}
 	}
+}
+
+// groupPlaceholders returns the pods of leader's instance admitted as
+// placeholders of group key, leader included, whether running or not.
+func groupPlaceholders(pods []corev1.Pod, leader *corev1.Pod, key string) []*corev1.Pod {
+	var out []*corev1.Pod
+	for i := range pods {
+		p := &pods[i]
+		if p.DeletionTimestamp == nil && p.Annotations[webhook.CRIUGroupAnnotation] == key &&
+			p.Annotations[webhook.CRIURestoredAnnotation] == "" && sameInstance(leader, p) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func truncate(s string, n int) string {
