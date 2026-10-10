@@ -63,7 +63,7 @@ import (
 // enough for the largest checkpoints (deepseek-v4-flash tier on
 // Hyperdisk-ML snap+clone) without leaking goroutines if the writer
 // Job hangs.
-const l2PromoteTimeout = 35 * time.Minute
+const l2PromoteTimeout = 90 * time.Minute
 
 // l2PromoteInput is the immutable subset of capture state the
 // background goroutine needs. Passing a single struct (instead of

@@ -344,7 +344,13 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 	if err != nil {
 		return fmt.Errorf("pid-namespace dump: read mounts: %w", err)
 	}
-	mounts, gpuMounts := pidNSExternalMounts(parseMountinfo(string(mi)))
+	entries := parseMountinfo(string(mi))
+	if mp := deletedMount(entries); mp != "" {
+		// Its restore cannot rebuild it; refuse rather than record a
+		// capture that will never restore.
+		return fmt.Errorf("pid-namespace dump: %s is bound from a deleted directory on the node; restart the pod to capture it", mp)
+	}
+	mounts, gpuMounts := pidNSExternalMounts(entries)
 	var st syscall.Stat_t
 	if err := syscall.Stat(filepath.Join(procBase, strconv.Itoa(hostPID), "ns", "net"), &st); err != nil {
 		return fmt.Errorf("pid-namespace dump: network namespace: %w", err)
@@ -517,4 +523,16 @@ func installPlaceholderGPUs(procBase string, placeholderPID, nestedPID int) ([]s
 		made = append(made, mp)
 	}
 	return made, nil
+}
+
+// deletedMount returns a mountpoint whose source was deleted on the node
+// after the container started ("//deleted" in mountinfo), or "". CRIU
+// records such a mount as deleted, and the restore cannot re-create it.
+func deletedMount(entries []mountinfoEntry) string {
+	for _, e := range entries {
+		if strings.HasSuffix(e.Root, "//deleted") {
+			return e.MountPoint
+		}
+	}
+	return ""
 }

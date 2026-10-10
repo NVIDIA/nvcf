@@ -147,3 +147,14 @@ func TestAwaitSettledZombies(t *testing.T) {
 		t.Error("dumped with an exiting zombie in the container")
 	}
 }
+
+func TestDeletedMount(t *testing.T) {
+	ok := parseMountinfo("1 0 0:1 / / rw - overlay o rw\n2 1 9:1 /var/lib/nvsnap/bundle/nvsnap /nvsnap ro - xfs x rw\n")
+	if mp := deletedMount(ok); mp != "" {
+		t.Errorf("flagged %s", mp)
+	}
+	gone := parseMountinfo("1 0 0:1 / / rw - overlay o rw\n2 1 9:1 /var/lib/nvsnap/bundle/nvsnap//deleted /nvsnap ro - xfs x rw\n")
+	if mp := deletedMount(gone); mp != "/nvsnap" {
+		t.Errorf("deleted mount not found: %q", mp)
+	}
+}
