@@ -3,35 +3,35 @@ module ai-api-gateway-service
 go 1.25.0
 
 require (
-	github.com/NVIDIA/nvcf-go v1.0.1
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
+	github.com/NVIDIA/nvcf-go v1.0.17
+	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20261009233424-e19ac175fc72
 	github.com/carlmjohnson/versioninfo v0.22.5
-	github.com/felixge/httpsnoop v1.0.4
-	github.com/fsnotify/fsnotify v1.9.0
-	github.com/go-chi/chi/v5 v5.2.2
+	github.com/felixge/httpsnoop v1.1.0
+	github.com/fsnotify/fsnotify v1.10.1
+	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-chi/cors v1.2.2
 	github.com/go-logr/zapr v1.3.0
-	github.com/goccy/go-json v0.10.5
+	github.com/goccy/go-json v0.11.2
 	github.com/hellofresh/health-go/v5 v5.5.5
-	github.com/magiconair/properties v1.8.10
+	github.com/magiconair/properties v1.18.12
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
-	github.com/stretchr/testify v1.11.1
+	github.com/stretchr/testify v1.12.1
 	github.com/valyala/bytebufferpool v1.0.0
-	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.65.0
-	go.opentelemetry.io/otel v1.44.0
-	go.opentelemetry.io/otel/exporters/prometheus v0.65.0
-	go.opentelemetry.io/otel/metric v1.44.0
-	go.opentelemetry.io/otel/sdk v1.44.0
-	go.opentelemetry.io/otel/sdk/metric v1.44.0
-	go.opentelemetry.io/otel/trace v1.44.0
-	go.uber.org/zap v1.27.0
-	golang.org/x/exp v0.0.0-20250718183923-645b1fa84792
-	golang.org/x/net v0.55.0
-	golang.org/x/sync v0.20.0
-	google.golang.org/grpc v1.79.3
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0
+	go.opentelemetry.io/otel v1.47.0
+	go.opentelemetry.io/otel/exporters/prometheus v0.69.0
+	go.opentelemetry.io/otel/metric v1.47.0
+	go.opentelemetry.io/otel/sdk v1.47.0
+	go.opentelemetry.io/otel/sdk/metric v1.47.0
+	go.opentelemetry.io/otel/trace v1.47.0
+	go.uber.org/zap v1.28.0
+	golang.org/x/exp v0.0.0-20261009195045-ca0d7ba23607
+	golang.org/x/net v0.61.0
+	golang.org/x/sync v0.24.0
+	google.golang.org/grpc v1.84.0
 	gopkg.in/yaml.v3 v3.0.1
-	sigs.k8s.io/controller-runtime v0.21.0
+	sigs.k8s.io/controller-runtime v0.25.2
 	sigs.k8s.io/yaml v1.6.0
 )
 
