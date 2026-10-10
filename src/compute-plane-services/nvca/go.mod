@@ -3,59 +3,59 @@ module github.com/NVIDIA/nvcf/src/compute-plane-services/nvca
 go 1.25.10
 
 require (
-	github.com/NVIDIA/KAI-scheduler v0.12.6
-	github.com/NVIDIA/k8s-dra-driver-gpu v0.0.0-20251017125642-cfe35ffd3d2c
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260722095202-f5e2792f5630
-	github.com/aws/aws-sdk-go v1.55.5
-	github.com/bombsimon/logrusr/v4 v4.1.0
+	github.com/NVIDIA/KAI-scheduler v0.18.3
+	github.com/NVIDIA/k8s-dra-driver-gpu v0.5.0
+	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20261009233424-e19ac175fc72
+	github.com/aws/aws-sdk-go v1.55.8
+	github.com/bombsimon/logrusr/v4 v4.2.0
 	github.com/evanphx/json-patch/v5 v5.9.11
-	github.com/go-jose/go-jose/v4 v4.1.4
-	github.com/go-logr/logr v1.4.3
-	github.com/google/cel-go v0.26.0
+	github.com/go-jose/go-jose/v4 v4.1.5
+	github.com/go-logr/logr v1.4.4
+	github.com/google/cel-go v0.30.0
 	github.com/google/go-cmp v0.7.0
-	github.com/google/go-containerregistry v0.21.6
+	github.com/google/go-containerregistry v0.22.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/handlers v1.5.2
 	github.com/gorilla/mux v1.8.1
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/imdario/mergo v0.3.16
-	github.com/nats-io/nats-server/v2 v2.12.12
-	github.com/nats-io/nats.go v1.51.0
+	github.com/nats-io/nats-server/v2 v2.15.1
+	github.com/nats-io/nats.go v1.54.0
 	github.com/nats-io/nkeys v0.4.16
-	github.com/prometheus/client_golang v1.23.2
-	github.com/prometheus/client_model v0.6.2
-	github.com/prometheus/common v0.67.5
-	github.com/run-ai/karta v0.0.13-0.20260430123819-87c2ae849880
-	github.com/sirupsen/logrus v1.9.4
-	github.com/sony/gobreaker/v2 v2.2.1
+	github.com/prometheus/client_golang v1.25.0
+	github.com/prometheus/client_model v0.6.3
+	github.com/prometheus/common v0.72.0
+	github.com/run-ai/karta v0.2.8
+	github.com/sirupsen/logrus v1.10.2
+	github.com/sony/gobreaker/v2 v2.4.0
 	github.com/sourcegraph/conc v0.3.1-0.20240121214520-5f936abd7ae8
 	github.com/spf13/cobra v1.10.2
-	github.com/spiffe/go-spiffe/v2 v2.7.0
-	github.com/stretchr/testify v1.11.1
+	github.com/spiffe/go-spiffe/v2 v2.9.0
+	github.com/stretchr/testify v1.12.1
 	github.com/undefinedlabs/go-mpatch v1.0.7
 	github.com/urfave/cli/v2 v2.27.7
-	go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace v0.65.0
-	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.65.0
-	go.opentelemetry.io/otel v1.44.0
-	go.opentelemetry.io/otel/exporters/prometheus v0.66.0
-	go.opentelemetry.io/otel/metric v1.44.0
-	go.opentelemetry.io/otel/sdk v1.44.0
-	go.opentelemetry.io/otel/sdk/metric v1.44.0
-	go.opentelemetry.io/otel/trace v1.44.0
-	golang.org/x/time v0.15.0
+	go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace v0.72.0
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0
+	go.opentelemetry.io/otel v1.47.0
+	go.opentelemetry.io/otel/exporters/prometheus v0.69.0
+	go.opentelemetry.io/otel/metric v1.47.0
+	go.opentelemetry.io/otel/sdk v1.47.0
+	go.opentelemetry.io/otel/sdk/metric v1.47.0
+	go.opentelemetry.io/otel/trace v1.47.0
+	golang.org/x/time v0.16.0
 	gomodules.xyz/jsonpatch/v2 v2.5.0
 	gopkg.in/inf.v0 v0.9.1
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1
-	k8s.io/api v0.35.4
-	k8s.io/apiextensions-apiserver v0.35.1
-	k8s.io/apimachinery v0.35.4
+	k8s.io/api v0.37.1
+	k8s.io/apiextensions-apiserver v0.37.1
+	k8s.io/apimachinery v0.37.1
 	k8s.io/client-go v11.0.0+incompatible
-	k8s.io/klog/v2 v2.130.1
-	k8s.io/kube-openapi v0.0.0-20260127142750-a19766b6e2d4
-	k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2
-	sigs.k8s.io/controller-runtime v0.23.1
+	k8s.io/klog/v2 v2.140.0
+	k8s.io/kube-openapi v0.0.0-20261007072838-e2e80c32a35f
+	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3
+	sigs.k8s.io/controller-runtime v0.25.2
 	sigs.k8s.io/yaml v1.6.0
 )
 
@@ -184,12 +184,12 @@ require (
 
 replace (
 	github.com/NVIDIA/nvcf/src/libraries/go/lib => ../../libraries/go/lib
-	k8s.io/api => k8s.io/api v0.35.4
-	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.35.4
-	k8s.io/apimachinery => k8s.io/apimachinery v0.35.4
-	k8s.io/client-go => k8s.io/client-go v0.35.4
-	k8s.io/component-base => k8s.io/component-base v0.35.4
-	sigs.k8s.io/controller-runtime => sigs.k8s.io/controller-runtime v0.22.5
+	k8s.io/api => k8s.io/api v0.37.1
+	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.37.1
+	k8s.io/apimachinery => k8s.io/apimachinery v0.37.1
+	k8s.io/client-go => k8s.io/client-go v0.37.1
+	k8s.io/component-base => k8s.io/component-base v0.37.1
+	sigs.k8s.io/controller-runtime => sigs.k8s.io/controller-runtime v0.25.2
 )
 
-replace golang.org/x/crypto => golang.org/x/crypto v0.54.0
+replace golang.org/x/crypto => golang.org/x/crypto v0.58.0

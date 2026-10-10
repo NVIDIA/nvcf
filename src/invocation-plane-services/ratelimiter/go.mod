@@ -3,32 +3,32 @@ module ratelimiter
 go 1.25.0
 
 require (
-	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
-	github.com/auth0/go-jwt-middleware/v2 v2.3.0
+	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20261009233424-e19ac175fc72
+	github.com/auth0/go-jwt-middleware/v2 v2.3.1
 	github.com/carlmjohnson/versioninfo v0.22.5
-	github.com/fsnotify/fsnotify v1.9.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/golang-jwt/jwt/v4 v4.5.2
 	github.com/google/uuid v1.6.0
-	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.1.0
-	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.2
-	github.com/jellydator/ttlcache/v3 v3.4.0
+	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.1.1
+	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.4
+	github.com/jellydator/ttlcache/v3 v3.4.1
 	github.com/lestrrat-go/jwx v1.2.31
-	github.com/olric-data/olric v0.7.3
-	github.com/prometheus/client_golang v1.23.2
+	github.com/olric-data/olric v0.7.4
+	github.com/prometheus/client_golang v1.25.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
-	github.com/stretchr/testify v1.11.1
+	github.com/stretchr/testify v1.12.1
 	github.com/ulule/limiter/v3 v3.11.2
-	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.62.0
-	go.opentelemetry.io/otel v1.44.0
-	go.opentelemetry.io/otel/trace v1.44.0
-	go.uber.org/zap v1.27.0
-	golang.org/x/exp v0.0.0-20250718183923-645b1fa84792
-	golang.org/x/sync v0.20.0
-	google.golang.org/grpc v1.79.3
-	google.golang.org/protobuf v1.36.11
-	k8s.io/api v0.34.2
-	k8s.io/apimachinery v0.34.2
+	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.72.0
+	go.opentelemetry.io/otel v1.47.0
+	go.opentelemetry.io/otel/trace v1.47.0
+	go.uber.org/zap v1.28.0
+	golang.org/x/exp v0.0.0-20261009195045-ca0d7ba23607
+	golang.org/x/sync v0.24.0
+	google.golang.org/grpc v1.84.0
+	google.golang.org/protobuf v1.36.12
+	k8s.io/api v0.37.1
+	k8s.io/apimachinery v0.37.1
 	k8s.io/client-go v11.0.0+incompatible
 )
 
@@ -161,4 +161,4 @@ replace k8s.io/client-go v11.0.0+incompatible => k8s.io/client-go v0.34.2
 // timeout and crashloop. The fork keeps upstream's module path, so this must
 // stay identical to the replace in llm-api-gateway/go.mod; the Bazel build
 // resolves one olric for the whole workspace.
-replace github.com/olric-data/olric => github.com/max007-008/olric v0.0.0-20260904024039-0e35b781a2f3
+replace github.com/olric-data/olric => github.com/max007-008/olric 792bb41fc287
