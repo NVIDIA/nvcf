@@ -144,10 +144,12 @@ type ModelVolumeController struct {
 	// mount holder on this node.
 	markFailed func(ctx context.Context, uri, sysNS, claim, reason string) error
 
-	mu       sync.Mutex
-	holders  map[string]*checkpointstore.MountHolder
-	inflight map[string]bool
-	attempts map[string]int
+	mu      sync.Mutex
+	holders map[string]*checkpointstore.MountHolder
+	// idleSince is when each bound volume was first seen unused.
+	idleSince map[string]time.Time
+	inflight  map[string]bool
+	attempts  map[string]int
 }
 
 // stagingBindTimeout bounds the wait for a freshly created primary
@@ -182,6 +184,9 @@ func (c *ModelVolumeController) Run(ctx context.Context) error {
 		return fmt.Errorf("model volume informers did not sync")
 	}
 	c.log().WithFields(logrus.Fields{"node": c.NodeName, "mode": c.Provisioner.Cfg.Mode, "host_root": c.HostRoot}).Info("model volume controller started")
+	if c.Provisioner.Cfg.ReaderMode() == modelvolume.ReaderHostPath {
+		go c.runBindRelease(ctx)
+	}
 	<-ctx.Done()
 	return nil
 }
