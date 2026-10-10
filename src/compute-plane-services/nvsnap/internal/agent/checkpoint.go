@@ -1013,6 +1013,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 				Hash:        catalog.Hash,
 				HostDumpDir: hostDumpPath,
 				NodeName:    a.config.NodeName,
+				SizeBytes:   diskUsage(checkpointDir),
 				PodMeta: map[string]string{
 					"namespace":     req.Namespace,
 					"pod":           req.PodName,

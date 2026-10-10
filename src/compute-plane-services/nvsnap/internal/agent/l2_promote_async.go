@@ -46,7 +46,10 @@ package agent
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"path/filepath"
 	"runtime/debug"
+	"syscall"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -73,6 +76,9 @@ type l2PromoteInput struct {
 	CapturedAt  time.Time
 	// NodeName holds the checkpoint locally; a CRIU restore prefers it.
 	NodeName string
+	// SizeBytes is what the checkpoint occupies on disk; the L2 volume is
+	// sized from it.
+	SizeBytes int64
 }
 
 // runL2PromoteAsync runs the per-capture-PVC promote in a background
@@ -131,7 +137,8 @@ func runL2PromoteAsync(backend checkpointstore.Backend, log *logrus.Entry, in l2
 			SourcePodMeta: in.PodMeta,
 			// The restore side dispatches on the method: a CRIU capture
 			// restores into its pod as a placeholder (webhook criu_restore.go).
-			CaptureMethod: "criu",
+			CaptureMethod:  "criu",
+			TotalSizeBytes: in.SizeBytes,
 		}
 		if in.NodeName != "" {
 			manifest.CapturedOnNodes = []string{in.NodeName}
@@ -159,4 +166,21 @@ func runL2PromoteAsync(backend checkpointstore.Backend, log *logrus.Entry, in l2
 			"duration": fmt.Sprintf("%.1fs", time.Since(start).Seconds()),
 		}).Info("L2 promote complete — multi-node restore can mount rox PVC")
 	}()
+}
+
+// diskUsage is the space a directory tree occupies on disk (allocated
+// blocks, so holes do not count), the size an L2 copy of it needs.
+func diskUsage(dir string) int64 {
+	var total int64
+	_ = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		var st syscall.Stat_t
+		if syscall.Lstat(p, &st) == nil {
+			total += st.Blocks * 512
+		}
+		return nil
+	})
+	return total
 }
