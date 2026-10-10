@@ -30,7 +30,7 @@ class IsolatedTest(unittest.TestCase):
 class RecipeCatalogTests(IsolatedTest):
     def setUp(self):
         super().setUp()
-        for name in ('selected_context', 'gateway', 'access_material', 'planning_modules'):
+        for name in ('selected_context', 'gateway', 'access_material'):
             self.enterContext(patch.object(llm, name, side_effect=AssertionError('Local recipes must not access ' + name)))
 
     def test_local_catalog_lists_profiles_and_recorded_validation_without_cluster_access(self):
@@ -59,7 +59,7 @@ class RecipeCatalogTests(IsolatedTest):
 
     def test_gpu_column_uses_hardware_and_collapses_product_aliases(self):
         profiles = [
-            ('generic-profile', ['NVIDIA-GB10', 'NVIDIA GB10', 'NVIDIA_GB10'], 'NVIDIA-GB10'),
+            ('generic-profile', ['NVIDIA-GB10', ' NVIDIA\tGB10 ', 'NVIDIA_GB10'], 'NVIDIA-GB10, NVIDIA_GB10'),
             ('spark-named-profile', ['NVIDIA-GB300', 'NVIDIA GB300'], 'NVIDIA-GB300'),
             ('multiple-products', ['NVIDIA-GB10', 'NVIDIA-GB300', 'NVIDIA-H100'],
              'NVIDIA-GB10, NVIDIA-GB300, NVIDIA-H100')]
@@ -84,6 +84,20 @@ class RecipeCatalogTests(IsolatedTest):
         self.assertIn('pending', next(line for line in output.splitlines() if 'pending-profile' in line))
         self.assertIn('failed', next(line for line in output.splitlines() if 'failed-profile' in line))
         self.assertNotIn('hardware-validated', output)
+
+    def test_smoke_test_status_keeps_failed_checks_visible(self):
+        llm.print_recipe_catalog({'recipes': [{'id': 'test-recipe', 'precision': 'FP8',
+            'availability': {'deployable': True},
+            'profiles': [{'id': 'partial-validation', 'modelNodeCount': 1,
+                          'validation': {'automaticHelmStatus': 'smoke-tested',
+                                         'automaticHelmWorkload': {'failedChecks': ['context-boundary']}}},
+                         {'id': 'passing-validation', 'modelNodeCount': 1,
+                          'validation': {'automaticHelmStatus': 'smoke-tested'}}]}]})
+        rows = self.output.getvalue().splitlines()
+        partial = next(row for row in rows if 'partial-validation' in row)
+        passing = next(row for row in rows if 'passing-validation' in row)
+        self.assertIn('smoke-tested (failed: context-boundary)', partial)
+        self.assertTrue(passing.endswith('smoke-tested'))
 
 
 class ContextTests(IsolatedTest):

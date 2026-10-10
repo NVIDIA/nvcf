@@ -415,6 +415,21 @@ class PlanTests(unittest.TestCase):
                 self.assertNotIn('Result: incompatible', output)
                 self.assertNotIn('ignored-cpu-node', output)
 
+    def test_verbose_warns_about_failed_checks_after_successful_smoke_test(self):
+        report = self.plan(None, '--profile', 'spark-fp8')
+        self.assertEqual(report['status'], 'fits')
+        report['profiles'][0]['validation'] = {
+            'automaticHelmStatus': 'smoke-tested',
+            'automaticHelmWorkload': {'failedChecks': ['context-boundary'],
+                                      'reason': 'Short prompts passed. Long-context request returned HTTP 502.'}}
+        self.output.truncate(0)
+        self.output.seek(0)
+        llm.print_capacity_plan(report, verbose=True)
+        output = self.output.getvalue()
+        self.assertIn('Automatic startup validation: smoke-tested (failed: context-boundary).', output)
+        self.assertIn('Validation notes: Short prompts passed. Long-context request returned HTTP 502.', output)
+        self.assertIn('FITS current scheduling allocations.', output)
+
     def test_busy_matching_gpu_is_not_reported_as_missing_profile(self):
         data = snapshot(2)
         data['nodes'][0]['metadata']['labels']['nvidia.com/gpu.product'] = 'NVIDIA-GB300'

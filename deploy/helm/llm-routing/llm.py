@@ -494,6 +494,12 @@ def print_capacity_status(status):
     print(statuses[status])
 
 
+def validation_summary(validation):
+    status = validation.get('automaticHelmStatus', 'pending')
+    failed = (validation.get('automaticHelmWorkload') or {}).get('failedChecks', [])
+    return status + (' (failed: ' + ', '.join(failed) + ')' if failed else '')
+
+
 def print_capacity_details(report):
     print(f"Model: {report['model']} | Cluster: {report['context']} | Namespace: {report['namespace']}")
     print_capacity_status(report['status'])
@@ -511,7 +517,7 @@ def print_capacity_details(report):
     for profile in report.get('profiles', []):
         requirements = profile.get('requirements', {})
         print(f"Evaluated profile: {profile['id']} ({requirements['modelNodeCount']} node(s))")
-        products = dict.fromkeys(re.sub(r'\s+', '-', product.strip())
+        products = dict.fromkeys(planning_modules().gpu_product(product)
                                  for product in requirements['hardware']['gpuProducts'])
         print('  Required GPU: ' + ', '.join(products))
         if detected_products and 'unknown' not in detected_products and not set(products).intersection(detected_products):
@@ -519,9 +525,13 @@ def print_capacity_details(report):
         else:
             print('  Detected GPUs: ' + (', '.join(detected_products) or 'none advertised'))
             print('  Result: ' + profile['status'])
-        validation = profile.get('validation', {}).get('automaticHelmStatus')
-        if validation and validation != 'smoke-tested':
-            print('  Automatic startup validation: ' + validation + '. See the recipe validation notes before deploying.')
+        validation = profile.get('validation', {})
+        summary = validation_summary(validation)
+        if validation.get('automaticHelmStatus') and summary != 'smoke-tested':
+            print('  Automatic startup validation: ' + summary + '. See the recipe validation notes before deploying.')
+        workload = validation.get('automaticHelmWorkload') or {}
+        if workload.get('failedChecks') and workload.get('reason'):
+            print('  Validation notes: ' + workload['reason'])
         for rank in requirements.get('perNode', []):
             resources = rank.get('resources', rank)
             print(f"  Rank {rank.get('rank', 0)}: {resources.get('gpuRequest', 0):g} GPU, "
@@ -595,8 +605,8 @@ def print_recipe_catalog(catalog):
                          recipe['availability']['status']])
             continue
         for profile in profiles:
-            validation = profile.get('validation', {}).get('automaticHelmStatus', 'pending')
-            products = dict.fromkeys(re.sub(r'[ _]+', '-', product)
+            validation = validation_summary(profile.get('validation', {}))
+            products = dict.fromkeys(planning_modules().gpu_product(product)
                                     for product in profile.get('hardware', {}).get('gpuProducts', []))
             gpu = ', '.join(products) or '-'
             rows.append([recipe['id'], recipe.get('precision') or '-', profile['id'],
