@@ -237,6 +237,12 @@ func (a *Agent) groupRestore(ctx context.Context, req GroupRestoreRequest, log *
 	if len(failed) == 0 {
 		return res, nil
 	}
+	if allRefusedAsRestored(res.Members) {
+		// Every member already runs its restored engine: an agent that
+		// restarted after the restore, before it marked the pods.
+		log.Warn("group restore: every member already runs a restored engine; nothing to do")
+		return res, nil
+	}
 	// f. One member failed: the instance cannot run. Its peers hold their
 	// lock until their network namespace goes away with the pod.
 	if !req.KeepFailedPods {
@@ -260,6 +266,17 @@ type groupRestoreFailure struct{ err error }
 
 func (e *groupRestoreFailure) Error() string { return e.err.Error() }
 func (e *groupRestoreFailure) Unwrap() error { return e.err }
+
+// allRefusedAsRestored reports whether every member refused the restore
+// because its pod already runs a GPU workload.
+func allRefusedAsRestored(members []GroupRestoreMemberResult) bool {
+	for _, m := range members {
+		if !strings.Contains(m.Error, errNotPlaceholder.Error()) {
+			return false
+		}
+	}
+	return len(members) > 0
+}
 
 // awaitTargetPods waits until every member's pod is scheduled and has an
 // IP, and returns the IPs and nodes in member order.

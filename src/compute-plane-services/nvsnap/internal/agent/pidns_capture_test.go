@@ -52,6 +52,23 @@ func TestPIDNSExternalMounts(t *testing.T) {
 	}
 }
 
+// A GPU-identity mount bound out of a filesystem the container's other
+// mounts also come from (the node's /run) skips only what lies under it.
+func TestPIDNSExternalMounts_SharedFilesystem(t *testing.T) {
+	mi := `100 90 0:300 / / rw - overlay overlay rw
+101 100 0:26 /nvidia-container-devices/GPU-7e1f1942 /run/nvidia-container-devices/GPU-7e1f1942 ro - tmpfs tmpfs rw
+102 100 0:26 /containerd/s/resolv.conf /etc/resolv.conf rw - tmpfs tmpfs rw
+103 100 0:26 /nvidia-container-devices/GPU-7e1f1942/caps /run/caps ro - tmpfs tmpfs rw
+`
+	got, gpu := pidNSExternalMounts(parseMountinfo(mi))
+	if !reflect.DeepEqual(got, []string{"/etc/resolv.conf"}) {
+		t.Errorf("external mounts: got %v, want only /etc/resolv.conf", got)
+	}
+	if !reflect.DeepEqual(gpu, []string{"/run/nvidia-container-devices/GPU-7e1f1942", "/run/caps"}) {
+		t.Errorf("GPU-identity mounts: got %v", gpu)
+	}
+}
+
 func TestPIDNSArgs(t *testing.T) {
 	dump := strings.Join(pidNSDumpArgs(4242, "/proc", "/ck/x", "/criu-bundle/plugins", 4026538391,
 		[]string{"/etc/hosts"}, []string{"/dev/nvidia0"}, []string{"dev[195/0]:nvidia0"}, true, true, false), " ")
@@ -198,5 +215,50 @@ func TestStdioInheritFDs(t *testing.T) {
 	}
 	if got := stdioInheritFDs(pidNSCapture{}); got != nil {
 		t.Errorf("no pipes: %v", got)
+	}
+}
+
+// A pod's other containers share its network namespace: their listeners
+// are in /proc/<pid>/net/unix too, but not the dumped tree's to restore.
+func TestListeningUnixSockets_OnlyTheTreesOwn(t *testing.T) {
+	proc := t.TempDir()
+	proc1 := func(pid, ppid int, sockets ...uint64) {
+		dir := filepath.Join(proc, strconv.Itoa(pid))
+		if err := os.MkdirAll(filepath.Join(dir, "fd"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "status"), []byte("Name:\tx\nPPid:\t"+strconv.Itoa(ppid)+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for i, ino := range sockets {
+			if err := os.Symlink("socket:["+strconv.FormatUint(ino, 10)+"]", filepath.Join(dir, "fd", strconv.Itoa(3+i))); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	proc1(100, 50)      // the dumped container's pid 1
+	proc1(101, 100, 11) // its engine, holding listener 11
+	proc1(102, 101, 12) // a worker of the engine, holding listener 12
+	proc1(200, 50, 21)  // a sidecar, holding listener 21
+	unix := "Num       RefCount Protocol Flags    Type St Inode Path\n" +
+		"0: 00000002 00000000 00010000 0001 01 11 /tmp/engine.sock\n" +
+		"0: 00000002 00000000 00010000 0005 01 12 /tmp/worker.sock\n" +
+		"0: 00000002 00000000 00010000 0001 01 21 /var/run/sidecar.sock\n"
+	if err := os.MkdirAll(filepath.Join(proc, "100", "net"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proc, "100", "net", "unix"), []byte(unix), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := listeningUnixSockets(proc, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, l := range got {
+		paths = append(paths, l.Path)
+	}
+	if !reflect.DeepEqual(paths, []string{"/tmp/engine.sock", "/tmp/worker.sock"}) {
+		t.Errorf("listeners = %v, want the engine's and its worker's only", paths)
 	}
 }

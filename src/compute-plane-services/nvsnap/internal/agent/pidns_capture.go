@@ -24,6 +24,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -111,12 +112,73 @@ type UnixListener struct {
 // socket whose peer is outside the tree. So the restore binds a fresh one
 // at the same path and hands it to CRIU (--inherit-fd). Abstract sockets
 // (a leading @) and connected ones restore as they are.
+//
+// /proc/<pid>/net/unix lists the whole network namespace, the pod's other
+// containers included; only the sockets the dumped processes hold are
+// theirs to restore.
 func listeningUnixSockets(procBase string, hostPID int) ([]UnixListener, error) {
 	data, err := os.ReadFile(filepath.Join(procBase, strconv.Itoa(hostPID), "net", "unix"))
 	if err != nil {
 		return nil, err
 	}
-	return parseListeningUnixSockets(string(data)), nil
+	held := heldSocketInodes(procBase, processTree(procBase, hostPID))
+	var out []UnixListener
+	for _, l := range parseListeningUnixSockets(string(data)) {
+		if held[l.Inode] {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+// processTree returns root and every process descended from it.
+func processTree(procBase string, root int) []int {
+	ents, err := os.ReadDir(procBase)
+	if err != nil {
+		return []int{root}
+	}
+	parent := map[int]int{}
+	for _, e := range ents {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		if pp, err := parentPID(procBase, pid); err == nil {
+			parent[pid] = pp
+		}
+	}
+	out := []int{root}
+	for pid := range parent {
+		for p, hops := parent[pid], 0; p > 1 && hops < 64; p, hops = parent[p], hops+1 {
+			if p == root {
+				out = append(out, pid)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// heldSocketInodes returns the inodes of the sockets pids hold open.
+func heldSocketInodes(procBase string, pids []int) map[uint64]bool {
+	held := map[uint64]bool{}
+	for _, pid := range pids {
+		dir := filepath.Join(procBase, strconv.Itoa(pid), "fd")
+		fds, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, fd := range fds {
+			l, err := os.Readlink(filepath.Join(dir, fd.Name()))
+			if err != nil || !strings.HasPrefix(l, "socket:[") {
+				continue
+			}
+			if n, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimPrefix(l, "socket:["), "]"), 10, 64); err == nil {
+				held[n] = true
+			}
+		}
+	}
+	return held
 }
 
 func parseListeningUnixSockets(data string) []UnixListener {
@@ -242,19 +304,29 @@ func pidNSExternalMounts(entries []mountinfoEntry) (external, gpu []string) {
 	// /proc/driver/nvidia/params out of its per-container hook tmpfs, and
 	// CRIU cannot rebuild it once that tmpfs is left out ("doesn't have a
 	// proper root mount").
-	// Device nodes all come from the node's devtmpfs; sharing it is normal
-	// and says nothing.
-	skippedDev := map[string]bool{}
+	// Bound out of means the same filesystem at or under the skipped
+	// mount's root: sharing a filesystem alone (the node's /run, its
+	// root disk) says nothing. Device nodes all come from the node's
+	// devtmpfs, so it never carries a skip.
+	var skipped []mountinfoEntry
 	for _, e := range entries {
 		if e.MountPoint != "/" && gpuIdentityMount(e.MountPoint) && e.FSType != "devtmpfs" {
-			skippedDev[e.Dev] = true
+			skipped = append(skipped, e)
 		}
+	}
+	boundOutOfSkipped := func(e mountinfoEntry) bool {
+		for _, s := range skipped {
+			if s.Dev == e.Dev && pathUnder(e.Root, s.Root) {
+				return true
+			}
+		}
+		return false
 	}
 	for _, e := range entries {
 		if e.MountPoint == "/" {
 			continue
 		}
-		if gpuIdentityMount(e.MountPoint) || skippedDev[e.Dev] {
+		if gpuIdentityMount(e.MountPoint) || boundOutOfSkipped(e) {
 			gpu = append(gpu, e.MountPoint)
 			continue
 		}
@@ -264,6 +336,26 @@ func pidNSExternalMounts(entries []mountinfoEntry) (external, gpu []string) {
 		external = append(external, e.MountPoint)
 	}
 	return external, gpu
+}
+
+// entriesAt returns the entries mounted at mountpoints.
+func entriesAt(entries []mountinfoEntry, mountpoints []string) []mountinfoEntry {
+	want := map[string]bool{}
+	for _, mp := range mountpoints {
+		want[mp] = true
+	}
+	var out []mountinfoEntry
+	for _, e := range entries {
+		if want[e.MountPoint] {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// pathUnder reports whether p is dir or lies under it.
+func pathUnder(p, dir string) bool {
+	return dir == "/" || p == dir || strings.HasPrefix(p, strings.TrimSuffix(dir, "/")+"/")
 }
 
 // pidNSDumpArgs is the criu dump argv for a pid-1 workload, run from the
@@ -450,20 +542,28 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 		return fmt.Errorf("pid-namespace dump: read mounts: %w", err)
 	}
 	entries := parseMountinfo(string(mi))
-	if mp := deletedMount(entries); mp != "" {
+	mounts, gpuMounts := pidNSExternalMounts(entries)
+	if mp := deletedMount(entriesAt(entries, mounts)); mp != "" {
 		// Its restore cannot rebuild it; refuse rather than record a
 		// capture that will never restore.
 		return fmt.Errorf("pid-namespace dump: %s is bound from a deleted directory on the node; restart the pod to capture it", mp)
 	}
-	mounts, gpuMounts := pidNSExternalMounts(entries)
 	listeners, err := listeningUnixSockets(procBase, hostPID)
 	if err != nil {
 		return fmt.Errorf("pid-namespace dump: listening unix sockets: %w", err)
 	}
-	var st syscall.Stat_t
+	var st, hostNet syscall.Stat_t
 	if err := syscall.Stat(filepath.Join(procBase, strconv.Itoa(hostPID), "ns", "net"), &st); err != nil {
 		return fmt.Errorf("pid-namespace dump: network namespace: %w", err)
 	}
+	if err := syscall.Stat(filepath.Join(procBase, "1", "ns", "net"), &hostNet); err == nil && hostNet.Ino == st.Ino {
+		// The dump locks the network of the namespace it runs in: here,
+		// the node's.
+		return errors.New("pid-namespace dump: the pod runs on the node's network; it cannot be captured")
+	}
+	// The source's stdout and stderr, read while the tree still holds them:
+	// a dump that stops the tree closes them.
+	stdout, stderr := pipeInode(procBase, hostPID, 1), pipeInode(procBase, hostPID, 2)
 	args := pidNSDumpArgs(hostPID, procBase, checkpointDir, resolveCRIUPluginDir(a.config.CRIUPath, log), st.Ino,
 		mounts, gpuMounts, deviceExternals, leaveRunning, gpushare, gpushare && bundledSupportsDirectImageIO())
 	log.WithFields(logrus.Fields{"argv": a.config.CRIUPath + " " + strings.Join(args, " "), "externalMounts": len(mounts)}).
@@ -480,7 +580,7 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 			strings.TrimSpace(string(out)), tailOfFile(filepath.Join(checkpointDir, "dump.log"), 6))
 	}
 	return writePIDNSMarker(checkpointDir, pidNSCapture{Mounts: mounts, GPUMounts: gpuMounts, UnixListeners: listeners,
-		StdoutPipe: pipeInode(procBase, hostPID, 1), StderrPipe: pipeInode(procBase, hostPID, 2)})
+		StdoutPipe: stdout, StderrPipe: stderr})
 }
 
 // pidNSRestoreHelperName is the agent binary staged into the placeholder's

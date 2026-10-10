@@ -115,6 +115,7 @@ func (a *Agent) criuRestorer() *criuAutoRestorer {
 
 func (c *criuAutoRestorer) consider(ctx context.Context, pod *corev1.Pod) {
 	c.considerGroupCapture(ctx, pod)
+	c.considerRestored(ctx, pod)
 	if isGroupPlaceholder(pod) {
 		c.considerGroupRestore(ctx, pod)
 		return

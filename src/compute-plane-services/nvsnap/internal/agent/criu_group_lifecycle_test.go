@@ -149,3 +149,13 @@ func TestFailGroup_SparesRestoredPods(t *testing.T) {
 		t.Errorf("pods left = %v; a restored pod must never be deleted", got)
 	}
 }
+
+func TestAllRefusedAsRestored(t *testing.T) {
+	refused := GroupRestoreMemberResult{Error: "restore: criu-v2: target pod is running a GPU workload (pid 7): " + errNotPlaceholder.Error()}
+	if !allRefusedAsRestored([]GroupRestoreMemberResult{refused, refused}) {
+		t.Error("every member already restored must read as done")
+	}
+	if allRefusedAsRestored([]GroupRestoreMemberResult{refused, {Error: "criu restore: exit status 1"}}) {
+		t.Error("a member that failed to restore must fail the group")
+	}
+}

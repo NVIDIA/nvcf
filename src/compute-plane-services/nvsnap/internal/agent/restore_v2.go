@@ -342,8 +342,10 @@ func placeholderCgroupDirFD(procBase string, pid int) (int, error) {
 	return -1, fmt.Errorf("open cgroup dir %s: %w", cgPath, err)
 }
 
-// gpuProcessInSamePidNS returns the host pid of any GPU-using process that
-// shares the target container's pid namespace, or 0 if none.
+// gpuProcessInSamePidNS returns the host pid of any GPU-using process in
+// the target container, or 0 if none: one in its pid namespace, or one
+// descended from it in a nested namespace (where a pid-1 workload's
+// restore puts the restored tree).
 func (a *Agent) gpuProcessInSamePidNS(ctx context.Context, procBase string, containerPID int) (int, error) {
 	targetNS, err := os.Readlink(filepath.Join(procBase, strconv.Itoa(containerPID), "ns", "pid"))
 	if err != nil {
@@ -353,9 +355,19 @@ func (a *Agent) gpuProcessInSamePidNS(ctx context.Context, procBase string, cont
 	if err != nil {
 		return 0, err
 	}
+	var tree map[int]bool
 	for _, p := range gpuPIDs {
 		ns, rerr := os.Readlink(filepath.Join(procBase, strconv.Itoa(p), "ns", "pid"))
 		if rerr == nil && ns == targetNS {
+			return p, nil
+		}
+		if tree == nil {
+			tree = map[int]bool{}
+			for _, q := range processTree(procBase, containerPID) {
+				tree[q] = true
+			}
+		}
+		if tree[p] {
 			return p, nil
 		}
 	}

@@ -538,6 +538,12 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 // checkpoints and lets the configuration be captured again; any other
 // failure keeps them, and counts toward criuGroupMaxStalls.
 func (c *criuAutoRestorer) failGroup(ctx context.Context, leader *corev1.Pod, key string, restoreFailed bool, cause error, log *logrus.Entry) {
+	c.endGroup(ctx, leader, key, restoreFailed, false, cause, log)
+}
+
+// endGroup is failGroup, also deleting the instance's restored pods when
+// includeRestored (their engine died).
+func (c *criuAutoRestorer) endGroup(ctx context.Context, leader *corev1.Pod, key string, restoreFailed, includeRestored bool, cause error, log *logrus.Entry) {
 	ctx = context.WithoutCancel(ctx)
 	log = log.WithField("restoreRan", restoreFailed)
 	if restoreFailed {
@@ -574,7 +580,7 @@ func (c *criuAutoRestorer) failGroup(ctx context.Context, leader *corev1.Pod, ke
 		log.WithError(err).Error("CRIU group restore: cannot list the instance's pods to delete them")
 		return
 	}
-	for _, p := range groupPlaceholders(pods.Items, leader, key) {
+	for _, p := range groupPlaceholders(pods.Items, leader, key, includeRestored) {
 		if err := c.a.kubeClient.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 			log.WithError(err).WithField("placeholder", p.Name).Error("CRIU group restore: could not delete the placeholder")
 		}
@@ -582,13 +588,14 @@ func (c *criuAutoRestorer) failGroup(ctx context.Context, leader *corev1.Pod, ke
 }
 
 // groupPlaceholders returns the pods of leader's instance admitted as
-// placeholders of group key, leader included, whether running or not.
-func groupPlaceholders(pods []corev1.Pod, leader *corev1.Pod, key string) []*corev1.Pod {
+// placeholders of group key, leader included, whether running or not;
+// restored ones only when includeRestored.
+func groupPlaceholders(pods []corev1.Pod, leader *corev1.Pod, key string, includeRestored bool) []*corev1.Pod {
 	var out []*corev1.Pod
 	for i := range pods {
 		p := &pods[i]
 		if p.DeletionTimestamp == nil && p.Annotations[webhook.CRIUGroupAnnotation] == key &&
-			p.Annotations[webhook.CRIURestoredAnnotation] == "" && sameInstance(leader, p) {
+			(includeRestored || p.Annotations[webhook.CRIURestoredAnnotation] == "") && sameInstance(leader, p) {
 			out = append(out, p)
 		}
 	}
