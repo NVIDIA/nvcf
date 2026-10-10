@@ -402,6 +402,21 @@ func TestCompose_RanksOfOneEngineHashTheSame(t *testing.T) {
 	if sh("0") != sh("1") {
 		t.Error("ranks of one SGLang multi-node engine in a shell string must hash the same")
 	}
+	lws := func(idx, leader string) string {
+		return hashOf(base, corev1.EnvVar{Name: "LWS_WORKER_INDEX", Value: idx}, corev1.EnvVar{Name: "LWS_LEADER_ADDRESS", Value: leader},
+			corev1.EnvVar{Name: "LOCAL_RANK", Value: idx})
+	}
+	if lws("0", "kimi-0.kimi") != lws("1", "kimi-1.kimi") {
+		t.Error("the ranks of LeaderWorkerSet groups must hash the same")
+	}
+	cmd := func(rank string) string {
+		p := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Image: "vllm/vllm-openai:v0.20.0",
+			Command: []string{"vllm", "serve", "m", "--node-rank", rank}}}}}
+		return checkpointstore.ComputeHash(c.Compose(p, 0))
+	}
+	if cmd("0") != cmd("1") {
+		t.Error("a rank flag in the command must not split the hash")
+	}
 	if hashOf(base) == hashOf([]string{"serve", "m", "--tensor-parallel-size", "4", "--nnodes", "2", "--master-addr", "vllm-0.vllm"}) {
 		t.Error("a different parallel layout must hash differently")
 	}

@@ -119,7 +119,7 @@ func resolvedImageDigest(pod *corev1.Pod, mainContainer int) string {
 // slice but we keep the per-namespace order via the prefix sort.
 func composeEngineCompatFlags(c corev1.Container) []string {
 	flags := make([]string, 0, len(c.Command)+len(c.Args))
-	for i, cmd := range c.Command {
+	for i, cmd := range stripRoleFlags(c.Command) {
 		flags = append(flags, "cmd["+itoa(i)+"]:"+cmd)
 	}
 	for i, a := range stripRoleFlags(c.Args) {
@@ -319,7 +319,11 @@ var (
 	// GROVE_*: Grove gang-scheduling env the Dynamo operator injects, with
 	// the component name and the pod index in it.
 	roleEnvPrefixes = []string{"DYN_", "DYNAMO_", "GROVE_"}
-	roleEnvExact    = []string{"ETCD_ENDPOINTS", "NATS_SERVER", "NATS_URL", "NODE_RANK", "RANK", "GROUP_RANK"}
+	// The rank and instance placement a controller injects: a pod's index
+	// in its instance (LeaderWorkerSet, indexed Job, torchrun) and the
+	// address of its instance's leader.
+	roleEnvExact = []string{"ETCD_ENDPOINTS", "NATS_SERVER", "NATS_URL", "NODE_RANK", "RANK", "GROUP_RANK",
+		"LOCAL_RANK", "LWS_WORKER_INDEX", "LWS_LEADER_ADDRESS", "JOB_COMPLETION_INDEX"}
 
 	// roleFlagInString removes the same flags from a shell-script arg (the
 	// bash -lc "vllm serve ..." convention), value quoted or bare.
