@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.3
 	github.com/cenkalti/backoff/v4 v4.3.0
+	github.com/cenkalti/backoff/v7 v7.0.1
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-viper/mapstructure/v2 v2.5.0
 	github.com/goccy/go-json v0.10.5
