@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# One Deployment pod running SGLang as pid 1. Pick an image tag built for the cluster architecture (arm64 on GB300).
+kind: Deployment
+launch: exec
+engine: sglang
+image: docker.io/lmsysorg/sglang:latest
