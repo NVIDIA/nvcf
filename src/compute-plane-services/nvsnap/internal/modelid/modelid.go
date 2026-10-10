@@ -127,6 +127,14 @@ type Result struct {
 // neither HF_HOME nor HF_HUB_CACHE, assuming the image's HOME is /root.
 const DefaultHFHome = defaultHFHome
 
+// NVSnapHFHome is where nvsnap mounts a Hugging Face model the engine
+// would fetch into the default cache, when nothing is mounted there; the
+// webhook points HF_HOME at it. Not under /root: /root is 0700, and an
+// engine running as another user (the Dynamo vLLM runtime runs as uid
+// 1000) cannot reach a model below it, so under HF_HUB_OFFLINE the model
+// reads as missing.
+const NVSnapHFHome = "/opt/nvsnap/hf"
+
 const (
 	defaultHFHome = "/root/.cache/huggingface"
 	kserveDest    = "/mnt/models"
@@ -170,7 +178,7 @@ func Resolve(pod *corev1.Pod, mainContainer int) (Result, bool) {
 	}
 	// 3. The engine downloads itself.
 	if id, src, ok := fromEngine(&main); ok {
-		land := landingFor(pod, &main, engineCachePath(&main), DownloaderEngine, "")
+		land := engineLanding(pod, &main, engineCachePath(&main))
 		return Result{Identity: id, Landing: land, Source: src}, true
 	}
 	return Result{}, false
@@ -268,6 +276,21 @@ func parseURI(s string) (Identity, bool) {
 		}
 	}
 	return Identity{}, false
+}
+
+// engineLanding is the landing of a model the engine fetches into dest.
+// When dest is the Hugging Face default and nothing is mounted there,
+// nvsnap mounts the model itself and points HF_HOME at it: outside /root
+// (0700), where an engine of any user reaches it.
+func engineLanding(pod *corev1.Pod, main *corev1.Container, dest string) Landing {
+	if dest == NVSnapHFHome {
+		dest = defaultHFHome // a leader's landing, re-landed on its worker
+	}
+	land := landingFor(pod, main, dest, DownloaderEngine, "")
+	if land.Path == defaultHFHome && land.Kind == VolumeRootfs {
+		land.Path = NVSnapHFHome
+	}
+	return land
 }
 
 // engineCachePath is where an engine-internal download lands.
