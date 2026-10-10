@@ -32,7 +32,6 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/treecopy"
 )
 
 // errL2Unavailable reports that the checkpoint has no ready L2 copy, or
@@ -309,8 +308,8 @@ func copyL2Tree(ctx context.Context, src, localDir string, log *logrus.Entry) (i
 	start := time.Now()
 	log.WithFields(logrus.Fields{"src": src, "dst": localDir}).Info("L2 fetch: copy starting")
 	// lost+found is the volume's filesystem, not the checkpoint.
-	tc := treecopy.NewCopier([]string{"/lost+found"}, log)
-	bytes, files, err := tc.Copy(ctx, src, localDir)
+	workers := l2CopyWorkers()
+	bytes, files, err := copyTreeDirect(ctx, src, localDir, []string{"/lost+found"}, workers)
 	elapsed := time.Since(start)
 	if err != nil {
 		return bytes, fmt.Errorf("copy %s -> %s (%d bytes in %.1fs): %w", src, localDir, bytes, elapsed.Seconds(), err)
@@ -318,6 +317,7 @@ func copyL2Tree(ctx context.Context, src, localDir string, log *logrus.Entry) (i
 	log.WithFields(logrus.Fields{
 		"bytes":   bytes,
 		"files":   files,
+		"workers": workers,
 		"elapsed": fmt.Sprintf("%.1fs", elapsed.Seconds()),
 		"gbps":    fmt.Sprintf("%.2f", float64(bytes)/1e9/max(elapsed.Seconds(), 1e-3)),
 	}).Info("L2 fetch: copy complete")
