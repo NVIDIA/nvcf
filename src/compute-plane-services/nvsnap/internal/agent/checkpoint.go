@@ -422,7 +422,7 @@ type CheckpointIntegrity struct {
 }
 
 // Checkpoint creates a GPU-aware checkpoint of a container
-func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*CheckpointResult, error) {
+func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *CheckpointResult, retErr error) {
 	ctx, span := tracing.Tracer().Start(ctx, "checkpoint.full")
 	defer span.End()
 	span.SetAttributes(
@@ -635,6 +635,14 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 	if mkErr := os.MkdirAll(checkpointDir, 0o755); mkErr != nil {
 		return nil, fmt.Errorf("failed to create checkpoint dir: %w", mkErr)
 	}
+	defer func() {
+		// A failed capture leaves nothing a restore could use.
+		if retErr != nil {
+			if err := os.RemoveAll(checkpointDir); err != nil {
+				log.WithError(err).WithField("dir", checkpointDir).Warn("cannot remove the failed capture's directory")
+			}
+		}
+	}()
 	log.WithField("checkpointDir", checkpointDir).Info("Created checkpoint directory")
 	log.WithFields(logrus.Fields{
 		"gpuPIDs":      gpuPIDs,

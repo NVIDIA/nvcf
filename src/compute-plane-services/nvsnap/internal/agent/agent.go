@@ -693,6 +693,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.startCRIUAutoRestore(ctx); err != nil {
 		a.log.WithError(err).Error("CRIU auto-restore failed to start; CRIU captures will not restore into new pods")
 	}
+	a.startGPUShareStoreReaper(ctx)
 	if a.modelVolume != nil {
 		// Completes writer volumes and binds them into pending readers on
 		// this node (docs/proposals/helm-shared-model-volume.md).
