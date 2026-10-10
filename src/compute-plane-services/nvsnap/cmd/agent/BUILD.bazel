@@ -31,5 +31,8 @@ go_test(
         "pidns_exec_test.go",
     ],
     embed = [":agent_lib"],
-    deps = ["@com_github_sirupsen_logrus//:logrus"],
+    deps = [
+        "@com_github_sirupsen_logrus//:logrus",
+        "@org_golang_x_sys//unix",
+    ],
 )

@@ -61,14 +61,13 @@ func pidNSRestoreExec(args []string) error {
 		// placeholder's own process): containerd reads them for the pod
 		// log. They go on the two fds after the listeners.
 		for i, src := range []string{"/proc/1/fd/1", "/proc/1/fd/2"} {
-			fd, err := unix.Open(src, unix.O_WRONLY, 0)
+			fd, err := unix.Open(src, unix.O_WRONLY|unix.O_CLOEXEC, 0)
 			if err != nil {
 				return fmt.Errorf("open the placeholder's %s: %w", src, err)
 			}
-			if err := unix.Dup3(fd, 4+n+i, 0); err != nil {
-				return err
+			if err := placeFD(fd, 4+n+i); err != nil {
+				return fmt.Errorf("place the placeholder's %s: %w", src, err)
 			}
-			_ = unix.Close(fd)
 		}
 	}
 	return unix.Exec(args[0], args, os.Environ())
@@ -123,4 +122,17 @@ func bindUnixListeners(spec string) (int, error) {
 		_ = unix.Close(stage + i)
 	}
 	return len(ls), nil
+}
+
+// placeFD moves fd to target, inheritable. dup3 refuses fd == target
+// (EINVAL), which happens when target was the lowest free fd.
+func placeFD(fd, target int) error {
+	if fd == target {
+		_, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, 0)
+		return err
+	}
+	if err := unix.Dup3(fd, target, 0); err != nil {
+		return err
+	}
+	return unix.Close(fd)
 }
