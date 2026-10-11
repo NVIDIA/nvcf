@@ -25,12 +25,16 @@ RUN gcc -O2 -o /src/nvsnap-cuda-checkpoint /src/nvsnap-cuda-checkpoint.c \
 # gpushare: libnvsnap_gpushare.so, an LD_PRELOAD shim that releases and
 # re-maps GPU memory shared between a workload's processes (NCCL P2P and NVLS,
 # CUDA IPC, page-locked host memory) around a CUDA checkpoint, and
-# nvsnap-gpu-suspend, which drives it. Needs CUDA 13 headers
-# (CUcheckpointGpuPair). Built on ubuntu 22.04: the shim is loaded into
-# workload containers, which need glibc >= 2.35.
-FROM nvidia/cuda:13.0.3-devel-ubuntu22.04 AS gpushare-builder
+# nvsnap-gpu-suspend, which drives it. Both run inside workload containers,
+# so they are built against an old glibc (Rocky Linux 8): they then load in
+# any image with glibc 2.17 or later. They need only the CUDA 13 driver API
+# header (CUcheckpointGpuPair); libcuda is the workload's, at run time.
+FROM nvidia/cuda:13.0.3-devel-ubuntu22.04 AS cuda-headers
+FROM rockylinux:8 AS gpushare-builder
+RUN dnf -y install gcc make && dnf clean all
+COPY --from=cuda-headers /usr/local/cuda/include/cuda.h /cuda/include/cuda.h
 COPY gpushare /src/gpushare
-RUN make -C /src/gpushare
+RUN make -C /src/gpushare CUDA_INC=/cuda/include
 
 FROM ubuntu:22.04 AS criu-builder
 

@@ -35,7 +35,6 @@ SPDX-License-Identifier: Apache-2.0
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
-#include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -1266,7 +1265,7 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
             continue;
         }
         if (r != CUDA_SUCCESS && strncmp(rep, "ok", 2)) {
-            snprintf(reply, n, "err export of id %llu from pid %d: %s", im->key, im->peer, rep);
+            snprintf(reply, n, "err export of id %llu from pid %d: %.160s", im->key, im->peer, rep);
             goto out;
         }
         for (int j = 0; r == CUDA_SUCCESS && j < n_maps; j++) {
@@ -1325,7 +1324,7 @@ static void do_remap(char *reply, size_t n, const char *fabmap_path)
         r = m->peer > 0 ? refetch(m->peer, m->key, m->fab, &h, rep, sizeof(rep))
                         : remote_fetch(&m->fh, &h, rep, sizeof(rep));
         if (r != CUDA_SUCCESS && strncmp(rep, "ok", 2)) {
-            snprintf(reply, n, "err export of multicast id %llu from pid %d: %s", m->key, m->peer, rep);
+            snprintf(reply, n, "err export of multicast id %llu from pid %d: %.160s", m->key, m->peer, rep);
             goto out;
         }
         for (int d = 0; r == CUDA_SUCCESS && d < m->ndev; d++)
@@ -2152,7 +2151,9 @@ static int chunk_write(char *path, size_t len)
     int fd = -1;
     for (int i = 0; fd < 0 && i < 8; i++) {
         uint64_t r;
-        if (getrandom(&r, sizeof(r), 0) != sizeof(r)) return -1;
+        /* the system call, not the glibc 2.25 wrapper: the binaries run in
+         * workload images back to glibc 2.17 */
+        if (syscall(SYS_getrandom, &r, sizeof(r), 0) != (long)sizeof(r)) return -1;
         snprintf(tmp, sizeof(tmp), "%s.%016llx.tmp", path, (unsigned long long)r);
         if ((fd = chunk_open(tmp, O_WRONLY | O_CREAT | O_EXCL, len)) < 0 && errno != EEXIST) return -1;
     }

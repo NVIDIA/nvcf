@@ -364,8 +364,11 @@ Limits of the move:
 - `hostNetwork`: such pods share the node's abstract socket names. If two of
   them run a process with the same pid, the second cannot bind its control
   socket, and its checkpoint is refused.
-- glibc: the shim is built on Ubuntu 22.04 and needs glibc 2.35 or later in
-  the workload image.
+- glibc: the shim and `nvsnap-gpu-suspend` run inside the workload's
+  container and need glibc 2.17 or later in the workload image (they are
+  built on Rocky Linux 8 against the oldest symbol versions; the build check
+  enforces the floor). Images without glibc (musl, distroless static) cannot
+  load the shim.
 - Held calls: while suspended, the shim holds the CUDA calls that use device
   memory: launches, copies, memsets and stream memory operations, made
   through the CUDA runtime or the driver's entry-point lookup (PyTorch,

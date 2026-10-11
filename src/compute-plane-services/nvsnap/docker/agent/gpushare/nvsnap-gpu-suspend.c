@@ -84,7 +84,7 @@ SPDX-License-Identifier: Apache-2.0
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ptrace.h>
-#include <sys/random.h>
+#include <sys/syscall.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -1142,7 +1142,9 @@ static int open_tmp(const char *dst, char *tmp, size_t n, int direct)
 {
     for (int i = 0; i < 8; i++) {
         unsigned long long r;
-        if (getrandom(&r, sizeof(r), 0) != sizeof(r)) return -1;
+        /* the system call, not the glibc 2.25 wrapper: the binaries run in
+         * workload images back to glibc 2.17 */
+        if (syscall(SYS_getrandom, &r, sizeof(r), 0) != (long)sizeof(r)) return -1;
         snprintf(tmp, n, "%s.%016llx.tmp", dst, r);
         int fd = direct ? open_direct(tmp, O_WRONLY | O_CREAT | O_EXCL)
                         : open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
