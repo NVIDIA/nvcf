@@ -192,6 +192,13 @@ Feature: Event ledger records SIS deployment events on a running self-managed st
       """
     Then the HTTP status should be 401 or 403
 
+    # The other write route is registered separately, so check it too. The scope
+    # check runs before the body is read, so no payload is needed.
+    Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
+    And the HTTP request header "Content-Type" is "application/x-protobuf"
+    When I send a "POST" request to "http://events.localhost:8080/v3/ledger/k8s-events"
+    Then the HTTP status should be 403
+
     Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
     And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
     And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
@@ -245,6 +252,14 @@ Feature: Event ledger records SIS deployment events on a running self-managed st
     Then the HTTP status should be 200
     And the HTTP response JSON field "status" should equal "accepted"
     And the HTTP response JSON field "success_count" should be at least 1
+
+    # An empty OTLP body is rejected by the handler, so a 400 here shows the key
+    # passed the scope check on this route without writing anything.
+    Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_WRITE_KEY}"
+    And the HTTP request header "Content-Type" is "application/x-protobuf"
+    When I send a "POST" request to "http://events.localhost:8080/v3/ledger/k8s-events"
+    Then the HTTP status should be 400
+    And the HTTP response body should contain "No events found in request"
 
     Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_WRITE_KEY}"
     When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/bdd-write-scope/events"

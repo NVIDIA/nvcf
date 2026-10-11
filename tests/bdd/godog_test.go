@@ -2945,6 +2945,8 @@ func (f *eventLedgerHTTPFake) Do(_ context.Context, method, rawURL string, heade
 		return harness.HTTPResponse{Status: 404}, nil
 	case auth == "", strings.HasPrefix(auth, "Bearer eyJ"):
 		return harness.HTTPResponse{Status: 401}, nil
+	case writer && method == "POST" && path == "/v3/ledger/k8s-events":
+		return harness.HTTPResponse{Status: 400, Body: `{"title":"Bad Request","status":400,"detail":"No events found in request"}`}, nil
 	case writer && method == "POST":
 		return harness.HTTPResponse{Status: 200, Body: `{"status":"accepted","success_count":1,"failure_count":0,"total_processed":1}`}, nil
 	case !reader:
