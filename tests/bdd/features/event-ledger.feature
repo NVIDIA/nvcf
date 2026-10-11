@@ -199,6 +199,68 @@ Feature: Event ledger records SIS deployment events on a running self-managed st
     When I send a "DELETE" request to "http://api-keys.localhost:8080/v1/keys/${BDD_EL_READ_KEY_ID}"
     Then the HTTP status should be 204
 
+  # The positive control for the scope checks: a key with only the write scope
+  # may write, which shows the rejections above are specific and not an outage,
+  # and it must not be able to read. The event is fixed, so reruns update one row.
+  Scenario: A write-scoped key can write events but cannot read them
+    When I successfully run command:
+      """
+      /bin/bash -c 'date -u -d "+1 day" +%Y-%m-%dT%H:%M:%S.000Z'
+      """
+    And I export command output to environment variable "BDD_EL_KEY_EXPIRES"
+    Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
+    And the HTTP request header "Content-Type" is "application/json"
+    And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
+    And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
+    And the HTTP request header "Key-Owner-Id" is "svc@nvcf-api.local"
+    When I send a "POST" request to "http://api-keys.localhost:8080/v1/keys" with body:
+      """
+      {
+        "description": "bdd-event-ledger-write-only",
+        "expires_at": "${BDD_EL_KEY_EXPIRES}",
+        "authorizations": {
+          "policies": [
+            {
+              "aud": "nvidia-event-ledger-ncp-service-id-ckozoh6f",
+              "auds": ["nvidia-event-ledger-ncp-service-id-ckozoh6f"],
+              "product": "nv-cloud-functions",
+              "resources": [{"id": "*", "type": "account-functions"}],
+              "scopes": ["fnds:createEvent"]
+            }
+          ]
+        },
+        "audience_service_ids": ["nvidia-event-ledger-ncp-service-id-ckozoh6f"]
+      }
+      """
+    Then the HTTP status should be 200
+    When I export the HTTP response JSON field "value" to environment variable "BDD_EL_WRITE_KEY"
+    And I export the HTTP response JSON field "id" to environment variable "BDD_EL_WRITE_KEY_ID"
+
+    Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_WRITE_KEY}"
+    And the HTTP request header "Content-Type" is "application/cloudevents+json"
+    When I send a "POST" request to "http://events.localhost:8080/v3/ledger/cloudevents" with body:
+      """
+      {"specversion":"1.0","id":"bdd-write-scope-1","type":"BddWriteScope","source":"bdd","namespace":"bdd-write-scope"}
+      """
+    Then the HTTP status should be 200
+    And the HTTP response JSON field "status" should equal "accepted"
+    And the HTTP response JSON field "success_count" should be at least 1
+
+    Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_WRITE_KEY}"
+    When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/bdd-write-scope/events"
+    Then the HTTP status should be 403
+
+    Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_WRITE_KEY}"
+    When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/bdd-write-scope/stats"
+    Then the HTTP status should be 403
+
+    Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
+    And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
+    And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
+    And the HTTP request header "Key-Owner-Id" is "svc@nvcf-api.local"
+    When I send a "DELETE" request to "http://api-keys.localhost:8080/v1/keys/${BDD_EL_WRITE_KEY_ID}"
+    Then the HTTP status should be 204
+
   @function-lifecycle
   Scenario: A function deployment produces SIS events that can be read back
     When I successfully run command:

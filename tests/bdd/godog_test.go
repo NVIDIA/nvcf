@@ -2916,7 +2916,7 @@ type eventLedgerHTTPFake struct {
 	requests  []string
 }
 
-func (f *eventLedgerHTTPFake) Do(_ context.Context, method, rawURL string, headers map[string]string, _ string) (harness.HTTPResponse, error) {
+func (f *eventLedgerHTTPFake) Do(_ context.Context, method, rawURL string, headers map[string]string, body string) (harness.HTTPResponse, error) {
 	f.requests = append(f.requests, method+" "+rawURL)
 	hostAndPath := strings.TrimPrefix(rawURL, "http://")
 	host, rest, _ := strings.Cut(hostAndPath, "/")
@@ -2924,11 +2924,14 @@ func (f *eventLedgerHTTPFake) Do(_ context.Context, method, rawURL string, heade
 	auth := headers["Authorization"]
 	admin := auth == "Bearer admin-jwt"
 	reader := auth == "Bearer nvapi-test"
+	writer := auth == "Bearer nvapi-write"
 
 	if strings.HasPrefix(host, "api-keys.") {
 		switch {
 		case !admin || headers["Key-Issuer-Id"] == "":
 			return harness.HTTPResponse{Status: 401}, nil
+		case method == "POST" && strings.Contains(body, "fnds:createEvent"):
+			return harness.HTTPResponse{Status: 200, Body: `{"id":"key-w","value":"nvapi-write"}`}, nil
 		case method == "POST":
 			return harness.HTTPResponse{Status: 200, Body: `{"id":"key-1","value":"nvapi-test"}`}, nil
 		default:
@@ -2942,6 +2945,8 @@ func (f *eventLedgerHTTPFake) Do(_ context.Context, method, rawURL string, heade
 		return harness.HTTPResponse{Status: 404}, nil
 	case auth == "", strings.HasPrefix(auth, "Bearer eyJ"):
 		return harness.HTTPResponse{Status: 401}, nil
+	case writer && method == "POST":
+		return harness.HTTPResponse{Status: 200, Body: `{"status":"accepted","success_count":1,"failure_count":0,"total_processed":1}`}, nil
 	case !reader:
 		return harness.HTTPResponse{Status: 403}, nil
 	case method == "POST":
@@ -3040,18 +3045,21 @@ func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanThatContains(runs, " function delete --deployment-only") {
 		t.Fatal("function undeploy command was never invoked")
 	}
-	for _, secret := range []string{"admin-jwt", "nvapi-test"} {
+	for _, secret := range []string{"admin-jwt", "nvapi-test", "nvapi-write"} {
 		if commandRanThatContains(runs, secret) {
 			t.Fatalf("secret %q leaked into a command line", secret)
 		}
 	}
-	deletes := 0
+	readKeyDeletes, writeKeyDeletes := 0, 0
 	for _, request := range httpFake.requests {
-		if request == "DELETE http://api-keys.localhost:8080/v1/keys/key-1" {
-			deletes++
+		switch request {
+		case "DELETE http://api-keys.localhost:8080/v1/keys/key-1":
+			readKeyDeletes++
+		case "DELETE http://api-keys.localhost:8080/v1/keys/key-w":
+			writeKeyDeletes++
 		}
 	}
-	if deletes != 3 {
-		t.Fatalf("read keys deleted = %d, want 3", deletes)
+	if readKeyDeletes != 3 || writeKeyDeletes != 1 {
+		t.Fatalf("keys deleted: read = %d (want 3), write = %d (want 1)", readKeyDeletes, writeKeyDeletes)
 	}
 }
