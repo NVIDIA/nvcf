@@ -66,6 +66,7 @@ with the cold deploy of the same case.
 | `sts-tp2` | StatefulSet | 2 | `exec`, TP=2 over the network | group capture, address remap of the ranks' connections | restored | Known broken: the test engine's rendezvous times out |
 | `lws-tp2` | LeaderWorkerSet | 2 | `exec`, TP=2 | LWS grouping and rank | restored | New (needs the LWS CRD) |
 | `deploy-sglang` | Deployment | 1 | SGLang, pid 1 | a second engine | restored | New (needs an image for the node architecture) |
+| `deploy-noshell` | Deployment | 1 | `exec`, image with no shell | every injected step (model wait, cache seed, prewarm, placeholder) runs without `/bin/sh` | restored | New (needs a GPU image without a shell) |
 
 Real models, deployed as their own functions:
 
@@ -95,6 +96,18 @@ Run on any case that restores; the 1-pod Deployment cases are the cheapest.
 | Hugging Face, fetched by the engine, no `HF_HOME` | every default case | `/opt/nvsnap/hf`, `HF_HOME` set to it |
 | Hugging Face, chart sets `HF_HOME` | `deploy-hfhome` | the chart's path |
 | NGC download in an init container | the 2-pod TP=8 model | the chart's volume |
+
+## Injected steps
+
+Every step nvsnap adds to a pod (model wait and download, cache seed, prewarm)
+runs `nvsnap-helper`, and restore placeholders and staging pods run
+`nvsnap-idle`, both from the node's nvsnap bundle, which the agent stages and
+the pod mounts read-only through a hostPath volume. `nvsnap-idle` is
+single-threaded: a placeholder must hold no pid or thread id the checkpoint
+uses. The
+steps need nothing from the workload image, not even a shell. A cluster that
+enforces a Kyverno policy against hostPath volumes needs an exception for the
+bundle directory (`agent.l2.hostBundleRoot`, `/nvsnap` below it).
 
 ## Not covered
 

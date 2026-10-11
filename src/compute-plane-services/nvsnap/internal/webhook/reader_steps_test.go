@@ -18,6 +18,7 @@ limitations under the License.
 package webhook
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -83,7 +84,8 @@ func TestReaderSteps_PostureAndResources(t *testing.T) {
 	if !ok {
 		t.Fatal("no profile: the sweep is on")
 	}
-	if sweep.Image != "img:1" || len(sweep.VolumeMounts) != 1 || !sweep.VolumeMounts[0].ReadOnly || !strings.Contains(sweep.Command[2], "/ro") {
+	if sweep.Image != "img:1" || len(sweep.VolumeMounts) != 2 || !sweep.VolumeMounts[0].ReadOnly || sweep.VolumeMounts[1] != helperMount() ||
+		!strings.HasPrefix(strings.Join(sweep.Command, " "), HelperBin+" prewarm --root /ro ") {
 		t.Errorf("sweep reads the source read-only in the engine image: %+v", sweep)
 	}
 	if _, limited := sweep.Resources.Limits[corev1.ResourceMemory]; limited || sweep.Resources.Limits.Cpu().MilliValue() < 1000 {
@@ -94,13 +96,12 @@ func TestReaderSteps_PostureAndResources(t *testing.T) {
 	}
 
 	seed := seedStep("seed", main, src, "3", volumeAt{Volume: "rw", Path: "/rw"}, "cache", "rank 3", rootPosture)
-	if !strings.Contains(seed.Args[0], "cp -a /ro/3/. /rw/cache/") || !strings.Contains(seed.Args[0], "chmod -R a+rwX /rw/cache") || !strings.HasSuffix(seed.Args[0], "exit 0") {
-		t.Errorf("seed copies the subdirectory into the destination and never fails: %q", seed.Args[0])
+	// Copy, open to every user, index for the refresh delta scan, never
+	// fail: the helper's tests cover each.
+	if !reflect.DeepEqual(seed.Command, []string{HelperBin, "seed", "--from", "/ro/3", "--to", "/rw/cache", "--label", "rank 3", "--index", SeedIndexFile}) || len(seed.Args) != 0 {
+		t.Errorf("seed copies the subdirectory into the destination: %v %v", seed.Command, seed.Args)
 	}
-	if !strings.Contains(seed.Args[0], "sort > "+SeedIndexFile) || !strings.Contains(seed.Args[0], "! -name "+SeedIndexFile) {
-		t.Errorf("seed writes the index of seeded paths for the refresh delta scan: %q", seed.Args[0])
-	}
-	if len(seed.VolumeMounts) != 2 || !seed.VolumeMounts[0].ReadOnly || seed.VolumeMounts[1].ReadOnly {
+	if len(seed.VolumeMounts) != 3 || !seed.VolumeMounts[0].ReadOnly || seed.VolumeMounts[1].ReadOnly || seed.VolumeMounts[2] != helperMount() {
 		t.Errorf("seed mounts the source read-only and the destination writable: %+v", seed.VolumeMounts)
 	}
 	if _, limited := seed.Resources.Limits[corev1.ResourceMemory]; limited {

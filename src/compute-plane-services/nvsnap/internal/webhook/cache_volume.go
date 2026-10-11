@@ -179,7 +179,7 @@ func (m *Mutator) cacheVolumePatches(ctx context.Context, pod *corev1.Pod, main 
 		// the same path, writable.
 		seed := seedStep(cacheSeedInitName, main, volumeAt{Volume: cacheSeedVolumeName, Path: cacheSeedMount}, strconv.Itoa(ordinal),
 			volumeAt{Volume: cacheDirVolumeName, Path: m.CacheDir}, cacheSubdir, fmt.Sprintf("rank %d", ordinal), inheritPosture)
-		patches = appendInits(pod, patches, seed)
+		patches = m.withHelperVolume(pod, appendInits(pod, patches, seed))
 		log.WithField("claim", claim).Info("cache volume: complete; seeding the cachedir from the read-only claim")
 		return patches
 	case st.Failed:

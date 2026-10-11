@@ -252,7 +252,7 @@ The full endpoint list (including agent-side cascade endpoints) is in
 ## Project layout
 
 ```text
-cmd/                    binary entry points (agent, server, mount-prep, rootfs-restore, l2-wait, CLI)
+cmd/                    binary entry points (agent, server, mount-prep, rootfs-restore, l2-wait, helper, CLI)
 internal/               agent, server, webhook, CRIU, checkpointstore (Go)
 deploy/helm/nvsnap/     Helm chart
 deploy/k8s/             manifests + sample workloads

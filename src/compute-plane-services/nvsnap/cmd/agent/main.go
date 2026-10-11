@@ -195,6 +195,9 @@ func main() {
 	// default "/var/lib/nvsnap/bundle" (matches the DaemonSet's
 	// nvsnap-bundle-stage initContainer destination). Tests / dev
 	// overrides only — production should keep the default.
+	flag.StringVar(&config.Webhook.AgentPlacement, "webhook-agent-placement", "",
+		"The agent DaemonSet's nodeSelector and nodeAffinity as JSON; pods nvsnap creates without a GPU request run within it.")
+
 	flag.StringVar(&config.Webhook.HostBundleRoot, "webhook-host-bundle-root", "",
 		"On-host path the nvsnap-agent DaemonSet stages the restore bundle into (default /var/lib/nvsnap/bundle). Function pods mount {root}/nvsnap + {root}/nvsnap-lib via hostPath.")
 

@@ -55,6 +55,10 @@ type WebhookConfig struct {
 	// retry cadence and snap+clone wall time).
 	L2WaitImage string
 
+	// AgentPlacement is the agent DaemonSet's nodeSelector and node
+	// affinity as JSON (webhook.AgentPlacement), set by the chart.
+	AgentPlacement string
+
 	// CacheSalt is folded into every cache identity the webhook composes
 	// (rootfsonly.HashInputComposer.Salt). Bump it to start fresh captures
 	// cluster-wide; empty leaves identities unchanged.
@@ -127,8 +131,16 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		return fmt.Errorf("webhook: cert and key files required")
 	}
 
+	var placement webhook.AgentPlacement
+	if cfg.AgentPlacement != "" {
+		if err := json.Unmarshal([]byte(cfg.AgentPlacement), &placement); err != nil {
+			return fmt.Errorf("webhook: agent placement: %w", err)
+		}
+	}
+
 	mut := &webhook.Mutator{
-		Backend: backend,
+		Backend:        backend,
+		AgentPlacement: placement,
 		// nvsnap#194 + #88: per-pod OverlayFS unions over every captured
 		// volume (rootfs-extract subpaths AND hostPath/emptyDir user-data
 		// volumes). The Mutator calls PrepareOverlay synchronously during

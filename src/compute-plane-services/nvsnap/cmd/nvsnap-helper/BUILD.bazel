@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "nvsnap-helper_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap-helper",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "nvsnap-helper",
+    embed = [":nvsnap-helper_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "nvsnap-helper_test",
+    srcs = ["main_test.go"],
+    embed = [":nvsnap-helper_lib"],
+)

@@ -381,24 +381,34 @@ func (a *Agent) gpuProcessInSamePidNS(ctx context.Context, procBase string, cont
 // the floor is set well clear of both rather than tuned.
 const reservedPIDFloor = 50000
 
-// placeholderMaxNSPID returns the highest in-container pid currently live in
-// the placeholder's pid namespace.
+// placeholderPIDs returns the highest in-container pid live in the
+// placeholder's pid namespace, and the lowest one other than its init's
+// (0 when init is alone). Threads count: CRIU recreates every thread at its
+// dumped id, so a placeholder thread holding a low id collides as surely as
+// a process does.
 //
 // Read from the host rather than by exec'ing into the pod: entering the
 // namespace to measure it would itself allocate a pid there, which is the very
 // resource under test.
-func placeholderMaxNSPID(procBase string, hostPID int) (int, error) {
+func placeholderPIDs(procBase string, hostPID int) (max, low int, err error) {
 	want, err := os.Readlink(filepath.Join(procBase, strconv.Itoa(hostPID), "ns", "pid"))
 	if err != nil {
-		return 0, fmt.Errorf("read placeholder pid namespace: %w", err)
+		return 0, 0, fmt.Errorf("read placeholder pid namespace: %w", err)
 	}
 
 	entries, err := os.ReadDir(procBase)
 	if err != nil {
-		return 0, fmt.Errorf("read %s: %w", procBase, err)
+		return 0, 0, fmt.Errorf("read %s: %w", procBase, err)
 	}
 
-	max := 0
+	see := func(nspid int) {
+		if nspid > max {
+			max = nspid
+		}
+		if nspid != 1 && (low == 0 || nspid < low) {
+			low = nspid
+		}
+	}
 	for _, e := range entries {
 		pid, aerr := strconv.Atoi(e.Name())
 		if aerr != nil {
@@ -409,18 +419,28 @@ func placeholderMaxNSPID(procBase string, hostPID int) (int, error) {
 		if rerr != nil || ns != want {
 			continue
 		}
-		nspid, nerr := nsPIDOf(procBase, pid)
-		if nerr != nil {
+		tasks, terr := os.ReadDir(filepath.Join(procBase, e.Name(), "task"))
+		if terr != nil || len(tasks) == 0 {
+			if nspid, nerr := nsPIDOf(procBase, pid); nerr == nil {
+				see(nspid)
+			}
 			continue
 		}
-		if nspid > max {
-			max = nspid
+		for _, task := range tasks {
+			if nspid, nerr := nsPIDOf(filepath.Join(procBase, e.Name(), "task"), atoiOr0(task.Name())); nerr == nil {
+				see(nspid)
+			}
 		}
 	}
 	if max == 0 {
-		return 0, fmt.Errorf("no processes found in the placeholder's pid namespace")
+		return 0, 0, fmt.Errorf("no processes found in the placeholder's pid namespace")
 	}
-	return max, nil
+	return max, low, nil
+}
+
+func atoiOr0(s string) int {
+	n, _ := strconv.Atoi(s)
+	return n
 }
 
 // nsPIDOf returns a process's pid as seen from the innermost namespace it
@@ -452,7 +472,10 @@ func nsPIDOf(procBase string, pid int) (int, error) {
 const pidReservationTimeout = 90 * time.Second
 
 // awaitPlaceholderPIDReservation blocks until the placeholder's pid allocations
-// clear the dumped range, and returns the highest pid it saw.
+// clear the dumped range: one live task at or above the floor shows the
+// ns_last_pid bump landed, and none other than init below it shows nothing
+// the placeholder started before the bump still holds a pid CRIU may need.
+// It returns the highest pid it saw.
 //
 // Returns an error only when the reservation never lands, which means the
 // restore would fail partway through with a clone3 EEXIST that reads as
@@ -469,15 +492,15 @@ func awaitPlaceholderPIDReservation(procBase string, hostPID int, log *logrus.En
 // tests can exercise the timeout path without waiting it out.
 func awaitPlaceholderPIDReservationFor(procBase string, hostPID int, timeout time.Duration, log *logrus.Entry) (int, error) {
 	deadline := time.Now().Add(timeout)
-	var lastSeen int
+	var lastSeen, lastLow int
 	var lastErr error
 	warned := false
 
 	for {
-		maxPID, err := placeholderMaxNSPID(procBase, hostPID)
+		maxPID, low, err := placeholderPIDs(procBase, hostPID)
 		if err == nil {
-			lastSeen = maxPID
-			if maxPID >= reservedPIDFloor {
+			lastSeen, lastLow = maxPID, low
+			if maxPID >= reservedPIDFloor && (low == 0 || low >= reservedPIDFloor) {
 				return maxPID, nil
 			}
 		} else {
@@ -489,7 +512,7 @@ func awaitPlaceholderPIDReservationFor(procBase string, hostPID int, timeout tim
 		}
 		if !warned {
 			// One line, not one per poll: this is the normal startup window.
-			log.WithFields(logrus.Fields{"maxNSPID": lastSeen, "want": reservedPIDFloor}).
+			log.WithFields(logrus.Fields{"maxNSPID": lastSeen, "lowNSPID": lastLow, "want": reservedPIDFloor}).
 				Info("criu-v2: waiting for the placeholder to reserve its pid range")
 			warned = true
 		}
@@ -499,6 +522,11 @@ func awaitPlaceholderPIDReservationFor(procBase string, hostPID int, timeout tim
 	if lastSeen == 0 && lastErr != nil {
 		return 0, fmt.Errorf("criu-v2: could not read the placeholder's pid namespace "+
 			"to verify its pid range was reserved: %w", lastErr)
+	}
+	if lastSeen >= reservedPIDFloor {
+		return lastSeen, fmt.Errorf(
+			"criu-v2: placeholder still holds pid %d below its reserved range after %s: "+
+				"CRIU's exact-pid forks could collide with it", lastLow, timeout)
 	}
 	return lastSeen, fmt.Errorf(
 		"criu-v2: placeholder never reserved its pid range (highest pid %d < %d after %s): "+

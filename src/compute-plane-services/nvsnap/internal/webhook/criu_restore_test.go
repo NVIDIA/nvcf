@@ -65,8 +65,19 @@ func TestCRIURestore_PodBecomesThePlaceholder(t *testing.T) {
 	}
 	got := applyPatches(t, pod, patches)
 	c := got.Spec.Containers[1]
-	if !reflect.DeepEqual(c.Command, []string{"/bin/sh", "-c"}) || len(c.Args) != 1 || c.Args[0] != criuPlaceholderScript {
+	// Idled by nvsnap-idle, which needs nothing from the engine's image.
+	if !reflect.DeepEqual(c.Command, []string{IdleBin}) || len(c.Args) != 0 {
 		t.Errorf("engine container not idled: %v %v", c.Command, c.Args)
+	}
+	helperMounted, helperVolume := false, false
+	for _, vm := range c.VolumeMounts {
+		helperMounted = helperMounted || vm == helperMount()
+	}
+	for _, v := range got.Spec.Volumes {
+		helperVolume = helperVolume || (v.Name == helperVolumeName && v.HostPath != nil)
+	}
+	if !helperMounted || !helperVolume {
+		t.Errorf("the placeholder must mount the helper read-only from the node bundle: mounted=%v volume=%v", helperMounted, helperVolume)
 	}
 	if c.LivenessProbe != nil || c.StartupProbe != nil {
 		t.Error("liveness/startup probes would kill the placeholder before the restore")

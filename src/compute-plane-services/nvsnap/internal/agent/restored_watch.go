@@ -29,8 +29,9 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
 
-// placeholderComms are the processes of an idle placeholder.
-var placeholderComms = map[string]bool{"sh": true, "sleep": true}
+// placeholderComms are the processes of an idle placeholder: nvsnap-idle
+// and its children, or the shell loop of placeholders admitted before it.
+var placeholderComms = map[string]bool{"nvsnap-idle": true, "sh": true, "sleep": true}
 
 // considerRestored checks a restored pod's engine.
 func (c *criuAutoRestorer) considerRestored(ctx context.Context, pod *corev1.Pod) {

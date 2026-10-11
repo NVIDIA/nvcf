@@ -32,11 +32,6 @@ const (
 	// criuCheckpointsMount is where the restore reads the images
 	// (/checkpoints/<id>), the same path the agent's placeholder uses.
 	criuCheckpointsMount = "/checkpoints"
-
-	// criuPlaceholderScript keeps the container alive until the restored
-	// process takes over. The sleeps fork, so once the agent raises the
-	// namespace's next pid the shell shows the reserved range.
-	criuPlaceholderScript = "trap 'exit 0' TERM; while true; do sleep 2; done"
 )
 
 // criuCheckpointID returns the CRIU checkpoint a capture record points to,
@@ -99,9 +94,15 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 		}
 		return "add"
 	}
+	// The container idles until the restored process takes over: the
+	// helper (helper.go) runs a short child every two seconds, so once the
+	// agent raises the namespace's next pid the reserved range shows, and
+	// it reaps what the restore reparents to it.
 	patches := []PatchOp{
-		{Op: setOp(c.Command != nil), Path: base + "/command", Value: []string{"/bin/sh", "-c"}},
-		{Op: setOp(c.Args != nil), Path: base + "/args", Value: []string{criuPlaceholderScript}},
+		{Op: setOp(c.Command != nil), Path: base + "/command", Value: []string{IdleBin}},
+	}
+	if c.Args != nil {
+		patches = append(patches, PatchOp{Op: "remove", Path: base + "/args"})
 	}
 	if c.LivenessProbe != nil {
 		patches = append(patches, PatchOp{Op: "remove", Path: base + "/livenessProbe"})
@@ -121,6 +122,7 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 	mounts := []corev1.VolumeMount{
 		// Writable: CRIU writes restore.log into the images directory.
 		{Name: criuCheckpointsVolume, MountPath: criuCheckpointsMount + "/" + checkpointID},
+		helperMount(),
 	}
 	if man.SourcePodMeta["gpushare"] == "true" {
 		// The restored processes re-map the library from where it was and
@@ -144,6 +146,7 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 		}
 	}
 	patches = append(patches, addVolumes(pod, vols)...)
+	patches = m.withHelperVolume(pod, patches)
 	patches = append(patches, addContainerMounts(i, c, mounts)...)
 	if pod.Annotations == nil {
 		patches = append(patches, PatchOp{Op: "add", Path: "/metadata/annotations", Value: map[string]string{}})

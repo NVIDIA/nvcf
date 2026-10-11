@@ -345,6 +345,10 @@ type Mutator struct {
 	// hashes but stalls on in-flight ones.
 	L2WaitImage string
 
+	// AgentPlacement is the agent DaemonSet's node placement; the download
+	// Job runs within it.
+	AgentPlacement AgentPlacement
+
 	// NvSnapServerURL is the in-cluster URL the nvsnap-l2-wait init
 	// container POSTs to. Typically
 	// http://nvsnap-server.<ns>.svc.cluster.local:8080. Empty

@@ -5,6 +5,7 @@ package webhook
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -55,8 +56,8 @@ func TestCRIUGroupRestore_EachRankRestoresItsCheckpoint(t *testing.T) {
 		if a[CRIURestoreAnnotation] != want || a[CRIUGroupOrdinalAnnotation] != []string{"0", "1"}[i] || a[CRIUGroupSizeAnnotation] != "2" || a[CRIUGroupAnnotation] != *asked {
 			t.Fatalf("rank %d annotations: %v", i, a)
 		}
-		if got.Spec.Containers[0].Args[0] != criuPlaceholderScript {
-			t.Errorf("rank %d engine not idled", i)
+		if c := got.Spec.Containers[0]; !reflect.DeepEqual(c.Command, []string{IdleBin}) || len(c.Args) != 0 {
+			t.Errorf("rank %d engine not idled: %v %v", i, c.Command, c.Args)
 		}
 		var store string
 		for _, v := range got.Spec.Volumes {

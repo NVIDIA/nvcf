@@ -66,7 +66,7 @@ type procEntry = struct {
 	nspid string
 }
 
-func TestPlaceholderMaxNSPID(t *testing.T) {
+func TestPlaceholderPIDs_Max(t *testing.T) {
 	tests := []struct {
 		name    string
 		procs   map[int]procEntry
@@ -121,7 +121,7 @@ func TestPlaceholderMaxNSPID(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			base := fakeProc(t, tt.procs)
-			got, err := placeholderMaxNSPID(base, tt.hostPID)
+			got, _, err := placeholderPIDs(base, tt.hostPID)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected an error, got max=%d", got)
@@ -224,4 +224,48 @@ func TestAwaitPlaceholderPIDReservation(t *testing.T) {
 			t.Errorf("want a read-failure message distinct from a missing reservation, got: %v", err)
 		}
 	})
+}
+
+// fakeThreads adds task entries (thread id -> NSpid) under a fake process.
+func fakeThreads(t *testing.T, base string, pid int, threads map[int]string) {
+	t.Helper()
+	for tid, nspid := range threads {
+		dir := filepath.Join(base, strconv.Itoa(pid), "task", strconv.Itoa(tid))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "status"), []byte("Name:\tx\nNSpid:\t"+nspid+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A task left below the floor (a child started before the bump, or a thread
+// of a multi-threaded init) holds a pid CRIU may recreate: the reservation is
+// not complete until it is gone, even with a task already above the floor.
+func TestAwaitPlaceholderPIDReservation_LowTaskBlocks(t *testing.T) {
+	log := logrus.NewEntry(logrus.New())
+	log.Logger.SetOutput(io.Discard)
+
+	base := fakeProc(t, map[int]procEntry{
+		5000: {ns: "pid:[111]", nspid: "1"},
+		5001: {ns: "pid:[111]", nspid: "100002"},
+	})
+	fakeThreads(t, base, 5000, map[int]string{5000: "1", 5003: "9"})
+	fakeThreads(t, base, 5001, map[int]string{5001: "100002"})
+	if max, low, err := placeholderPIDs(base, 5000); err != nil || max != 100002 || low != 9 {
+		t.Fatalf("placeholderPIDs = %d, %d, %v; want 100002, 9 (the init's thread)", max, low, err)
+	}
+	_, err := awaitPlaceholderPIDReservationFor(base, 5000, 600*time.Millisecond, log)
+	if err == nil || !strings.Contains(err.Error(), "still holds pid 9") {
+		t.Fatalf("a low thread must block the restore with its pid named, got %v", err)
+	}
+
+	// Single-threaded init, nothing else below the floor: ready.
+	if err := os.RemoveAll(filepath.Join(base, "5000", "task", "5003")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := awaitPlaceholderPIDReservationFor(base, 5000, 600*time.Millisecond, log); err != nil || got != 100002 {
+		t.Fatalf("got %d, %v; want 100002", got, err)
+	}
 }

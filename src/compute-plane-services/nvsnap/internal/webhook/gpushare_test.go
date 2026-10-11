@@ -29,19 +29,26 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// patchInto applies one JSON-patch op (add or replace) at parts below node
-// and returns the updated node. Arrays support appending ("-") and
-// addressing an element by index.
+// patchInto applies one JSON-patch op (add, replace or remove) at parts
+// below node and returns the updated node. Arrays support appending ("-"),
+// inserting at an index (add) and addressing an element by index.
 func patchInto(t *testing.T, node any, parts []string, op string, v any) any {
 	t.Helper()
 	key := parts[0]
 	switch c := node.(type) {
 	case map[string]any:
 		if len(parts) == 1 {
-			if _, exists := c[key]; exists && op == "add" {
+			_, exists := c[key]
+			switch {
+			case op == "add" && exists:
 				t.Fatalf("add would overwrite existing member %q", key)
+			case op != "add" && !exists:
+				t.Fatalf("%s of missing member %q", op, key)
+			case op == "remove":
+				delete(c, key)
+			default:
+				c[key] = v
 			}
-			c[key] = v
 			return c
 		}
 		child, ok := c[key]
@@ -58,12 +65,16 @@ func patchInto(t *testing.T, node any, parts []string, op string, v any) any {
 			return append(c, v)
 		}
 		i, err := strconv.Atoi(key)
-		if err != nil || i < 0 || i >= len(c) {
+		insert := len(parts) == 1 && op == "add"
+		if err != nil || i < 0 || i > len(c) || (i == len(c) && !insert) {
 			t.Fatalf("bad array index %q", key)
 		}
 		if len(parts) == 1 {
-			if op != "replace" {
-				t.Fatalf("only replace may address an existing element")
+			switch op {
+			case "add":
+				return append(c[:i], append([]any{v}, c[i:]...)...)
+			case "remove":
+				return append(c[:i], c[i+1:]...)
 			}
 			c[i] = v
 			return c

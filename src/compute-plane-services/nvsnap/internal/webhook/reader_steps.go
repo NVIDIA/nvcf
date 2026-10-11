@@ -18,7 +18,7 @@ limitations under the License.
 package webhook
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -116,19 +116,18 @@ func (m *Mutator) sweepStep(name string, main *corev1.Container, src volumeAt, p
 	if !want {
 		return corev1.Container{}, false
 	}
-	cmd := prewarmCommand(src.Path, m.prewarmWorkers())
 	c := corev1.Container{
-		Name:         name,
-		Image:        main.Image,
-		Command:      []string{"sh", "-c", cmd},
-		VolumeMounts: []corev1.VolumeMount{{Name: src.Volume, MountPath: src.Path, ReadOnly: true}},
+		Name:  name,
+		Image: main.Image,
+		Command: []string{HelperBin, "prewarm", "--root", src.Path, "--workers", strconv.Itoa(m.prewarmWorkers()),
+			"--chunk", strconv.FormatInt(prewarmChunkBytes, 10)},
+		VolumeMounts: []corev1.VolumeMount{{Name: src.Volume, MountPath: src.Path, ReadOnly: true}, helperMount()},
 	}
 	if gate != nil {
 		// NVSNAP_PREWARM comes from a ConfigMap or Secret the webhook cannot
-		// resolve at admission; hand the same reference to the step and let
-		// it decide at run time.
+		// resolve at admission; hand the same reference to the step, which
+		// does nothing when it is "0".
 		c.Env = []corev1.EnvVar{*gate}
-		c.Command = []string{"sh", "-c", `[ "${NVSNAP_PREWARM:-1}" != "0" ] || exit 0; ` + cmd}
 	}
 	harden(&c, sweepResources, posture, main)
 	return c, true
@@ -148,16 +147,15 @@ func seedStep(name string, main *corev1.Container, src volumeAt, srcSubdir strin
 		to = dst.Path + "/" + dstSubdir
 	}
 	c := corev1.Container{
-		Name:    name,
-		Image:   main.Image,
-		Command: []string{"/bin/sh", "-c"},
+		Name:  name,
+		Image: main.Image,
 		// The index of seeded paths lets the agent tell what the engine
 		// adds later (docs/proposals/helm-chart-cache-refresh.md).
-		Args: []string{fmt.Sprintf("if [ -d %[1]s ]; then cp -a %[1]s/. %[2]s/ 2>/dev/null; chmod -R a+rwX %[2]s 2>/dev/null; fi; mkdir -p %[2]s && (cd %[2]s && find . -type f ! -name %[4]s | sed 's|^\\./||' | sort > %[4]s) 2>/dev/null; echo \"nvsnap: seeded %[3]s, $(find %[2]s -type f 2>/dev/null | wc -l) files\"; exit 0",
-			from, to, label, SeedIndexFile)},
+		Command: []string{HelperBin, "seed", "--from", from, "--to", to, "--label", label, "--index", SeedIndexFile},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: src.Volume, MountPath: src.Path, ReadOnly: true},
 			{Name: dst.Volume, MountPath: dst.Path},
+			helperMount(),
 		},
 	}
 	harden(&c, copyResources, posture, main)
