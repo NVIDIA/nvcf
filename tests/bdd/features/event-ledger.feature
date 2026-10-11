@@ -255,20 +255,30 @@ Feature: Event ledger records SIS deployment events on a running self-managed st
       | --timeout       | 900             |
     And I export the function selected by NVCF CLI to environment variables "BDD_EL_FUNCTION_ID" and "BDD_EL_VERSION_ID"
 
-    # SIS writes InstanceReady once the instance is running.
+    # SIS writes InstanceReady once the instance is running. Stats list every
+    # context in the namespace, so poll stats first. Events are stored per context,
+    # so the events query needs the context ids that stats reports.
     Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
-    When I poll "GET" "http://events.localhost:8080/v3/ledger/namespace/${BDD_EL_VERSION_ID}/events" for up to 120 seconds until the HTTP response body contains "InstanceReady"
-    Then the HTTP status should be 200
-    And the HTTP response body should contain "nvidia-spot"
-    And the HTTP response body should not contain "InstanceDestroyed"
-    # The NVCA collector is disabled, so nothing else writes to this namespace.
-    And the HTTP response body should not contain "ICMSRequest."
-
-    Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
-    When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/${BDD_EL_VERSION_ID}/stats"
+    When I poll "GET" "http://events.localhost:8080/v3/ledger/namespace/${BDD_EL_VERSION_ID}/stats" for up to 300 seconds until the HTTP response body contains "InstanceReady"
     Then the HTTP status should be 200
     And the HTTP response JSON field "namespace" should equal "${BDD_EL_VERSION_ID}"
     And the HTTP response JSON field "summary.by_event.InstanceReady" should be at least 1
+    When I export the HTTP response JSON field "contexts.0.context" to environment variable "BDD_EL_CONTEXT"
+    And I successfully run command:
+      """
+      /bin/bash -c 'echo "${BDD_EL_CONTEXT}" | tr "," "&"'
+      """
+    And I export command output to environment variable "BDD_EL_CONTEXT_QUERY"
+
+    Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
+    When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/${BDD_EL_VERSION_ID}/events?${BDD_EL_CONTEXT_QUERY}"
+    Then the HTTP status should be 200
+    And the HTTP response body should contain "InstanceReady"
+    And the HTTP response body should contain "nvidia-spot"
+    And the HTTP response body should contain "${BDD_EL_FUNCTION_ID}"
+    And the HTTP response body should not contain "InstanceDestroyed"
+    # The NVCA collector is disabled, so nothing else writes to this namespace.
+    And the HTTP response body should not contain "ICMSRequest."
 
     Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
     When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/${BDD_EL_VERSION_ID}/stats?eventFilter=InstanceReady"
@@ -280,15 +290,19 @@ Feature: Event ledger records SIS deployment events on a running self-managed st
     Then the HTTP status should be 200
     And the HTTP response body should not contain "InstanceReady"
 
-    # Undeploy removes the instance; SIS then reports it destroyed.
+    # Undeploy removes the instance; SIS then reports it destroyed. Stats keep only
+    # the latest event per context, while events keep the whole history.
     When I successfully undeploy the function selected by NVCF CLI
     Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
-    When I poll "GET" "http://events.localhost:8080/v3/ledger/namespace/${BDD_EL_VERSION_ID}/events" for up to 180 seconds until the HTTP response body contains "InstanceDestroyed"
+    When I poll "GET" "http://events.localhost:8080/v3/ledger/namespace/${BDD_EL_VERSION_ID}/stats" for up to 180 seconds until the HTTP response body contains "InstanceDestroyed"
     Then the HTTP status should be 200
+    And the HTTP response JSON field "summary.by_event.InstanceDestroyed" should be at least 1
 
     Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
-    When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/${BDD_EL_VERSION_ID}/stats"
-    Then the HTTP response JSON field "summary.by_event.InstanceDestroyed" should be at least 1
+    When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/${BDD_EL_VERSION_ID}/events?${BDD_EL_CONTEXT_QUERY}"
+    Then the HTTP status should be 200
+    And the HTTP response body should contain "InstanceReady"
+    And the HTTP response body should contain "InstanceDestroyed"
 
     Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
     And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
