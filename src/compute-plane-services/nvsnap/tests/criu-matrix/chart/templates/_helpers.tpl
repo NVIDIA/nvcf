@@ -67,12 +67,19 @@ containers:
       {{- end }}
     ports: [{containerPort: {{ $v.port }}, name: http}]
     readinessProbe:
-      exec: {command: ["/bin/sh", "-c", "R=${HOSTNAME##*-}; case \"$R\" in ''|*[!0-9]*) R=${LWS_WORKER_INDEX:-0};; esac; if [ \"$R\" = 0 ]; then curl -sf localhost:{{ $v.port }}/v1/models >/dev/null || curl -sf localhost:{{ $v.port }}/health >/dev/null; else pgrep -f \"{{ $v.engine }}\" >/dev/null; fi"]}
+      # Every rank is ready when rank 0 serves: a rank that lost its peers
+      # must not look ready.
+      exec: {command: ["/bin/sh", "-c", "R=${HOSTNAME##*-}; case \"$R\" in ''|*[!0-9]*) R=${LWS_WORKER_INDEX:-0};; esac; H=localhost; [ \"$R\" = 0 ] || H=${LWS_LEADER_ADDRESS:-{{ include "matrix.name" . }}-0.{{ include "matrix.name" . }}-ranks}; curl -sf $H:{{ $v.port }}/v1/models >/dev/null || curl -sf $H:{{ $v.port }}/health >/dev/null"]}
       periodSeconds: 5
       failureThreshold: 720
+    # NCCL keeps its buffers in /dev/shm; the container default of 64 MiB
+    # does not fit even two ranks.
+    volumeMounts: [{name: dshm, mountPath: /dev/shm}]
     resources:
       requests: {{- toYaml $v.resources.requests | nindent 8 }}
       limits:
         {{- toYaml $v.resources.limits | nindent 8 }}
         nvidia.com/gpu: {{ $v.gpusPerPod | quote }}
+volumes:
+  - {name: dshm, emptyDir: {medium: Memory, sizeLimit: {{ $v.shmSize }}}}
 {{- end -}}

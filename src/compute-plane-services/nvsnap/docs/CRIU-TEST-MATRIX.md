@@ -63,7 +63,7 @@ with the cold deploy of the same case.
 | `deploy-pid1-nonroot` | Deployment | 1 | `exec`, uid 1000 | chunk store and model reachable by a non-root engine | restored | New |
 | `deploy-hfhome` | Deployment | 1 | `exec`, chart sets `HF_HOME` | model lands where the chart says | restored | New |
 | `pod-bare` | Pod | 1 | `exec` | no controller, no instance | never captured | Verified |
-| `sts-tp2` | StatefulSet | 2 | `exec`, TP=2 over the network | group capture, address remap of the ranks' connections | restored | Known broken: the test engine's rendezvous times out |
+| `sts-tp2` | StatefulSet | 2 | `exec`, TP=2 over the network | group capture, address remap of the ranks' connections | restored | Verified: cold 150 s, restored 39 s |
 | `lws-tp2` | LeaderWorkerSet | 2 | `exec`, TP=2 | LWS grouping and rank | restored | New (needs the LWS CRD) |
 | `deploy-sglang` | Deployment | 1 | SGLang, pid 1 | a second engine | restored | New (needs an image for the node architecture) |
 | `deploy-noshell` | Deployment | 1 | `exec`, image with no shell | every injected step (model wait, cache seed, prewarm, placeholder) runs without `/bin/sh` | restored | New (needs a GPU image without a shell) |
@@ -108,6 +108,10 @@ uses. The
 steps need nothing from the workload image, not even a shell. A cluster that
 enforces a Kyverno policy against hostPath volumes needs an exception for the
 bundle directory (`agent.l2.hostBundleRoot`, `/nvsnap` below it).
+
+Every case mounts a memory-backed `/dev/shm` (`shmSize`): NCCL keeps its
+buffers there, and the container default of 64 MiB does not fit two ranks.
+Without it rank 0 fails at startup and the other ranks wait for it forever.
 
 ## Not covered
 

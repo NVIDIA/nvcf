@@ -37,6 +37,9 @@ hfHome: ""
 # Multi-pod instances are captured only on request.
 criuCapture: false
 
+# Memory-backed /dev/shm for NCCL (the container default is 64 MiB).
+shmSize: 8Gi
+
 # Anything else the case needs in the engine's env.
 extraEnv: []
 
