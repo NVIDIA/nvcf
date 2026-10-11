@@ -149,6 +149,7 @@ go_test(
         "restoreoverlay_test.go",
         "rootfs_diff_test.go",
         "rootfs_wholerootfs_guard_test.go",
+        "client_limits_test.go",
         "rootfsonly_integration_test.go",
     ],
     embed = [":agent"],

@@ -74,6 +74,8 @@ func main() {
 	var config agent.Config
 
 	flag.StringVar(&config.NodeName, "node-name", os.Getenv("NODE_NAME"), "Node name")
+	kubeQPS := flag.Float64("kube-client-qps", float64(agent.KubeClientQPS), "Requests per second for each Kubernetes client the agent builds")
+	flag.IntVar(&agent.KubeClientBurst, "kube-client-burst", agent.KubeClientBurst, "Request burst for each Kubernetes client the agent builds")
 	// Phase 5d.1: catalog URL + node IP for peer-fanout cascade.
 	flag.StringVar(&config.CatalogURL, "catalog-url", os.Getenv("NVSNAP_CATALOG_URL"),
 		"NvSnap-server base URL for peer-fanout catalog lookups (e.g. http://nvsnap-server.nvsnap-system.svc.cluster.local:8080). Empty disables cross-node cascade.")
@@ -237,6 +239,7 @@ func main() {
 		"imagePullSecret name for the mount-holder pod (created by operators in the workload namespace). Defaults to nvsnap-agent-pull; set to '-' to disable.")
 
 	flag.Parse()
+	agent.KubeClientQPS = float32(*kubeQPS)
 	if raw := os.Getenv("NVSNAP_CRIU_CAPTURE_OPT_IN"); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &config.CaptureOptIn); err != nil {
 			fmt.Fprintln(os.Stderr, "NVSNAP_CRIU_CAPTURE_OPT_IN is not a valid opt-in list; ignoring it:", err)

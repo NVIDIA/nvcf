@@ -152,6 +152,7 @@ func (a *Agent) startL2Backend(_ context.Context, cfg L2BackendConfig) (checkpoi
 	if err != nil {
 		return nil, fmt.Errorf("L2: in-cluster config: %w", err)
 	}
+	restCfg = withClientLimits(restCfg)
 	kc, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		return nil, fmt.Errorf("L2: kube client: %w", err)

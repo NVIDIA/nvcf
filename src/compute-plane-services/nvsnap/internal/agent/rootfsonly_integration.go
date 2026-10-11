@@ -241,8 +241,28 @@ func buildKubeClient() (kubernetes.Interface, error) {
 
 func loadKubeConfig() (*rest.Config, error) {
 	if cfg, err := rest.InClusterConfig(); err == nil {
-		return cfg, nil
+		return withClientLimits(cfg), nil
 	}
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
-	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, nil).ClientConfig()
+	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, nil).ClientConfig()
+	if err != nil {
+		return nil, err
+	}
+	return withClientLimits(cfg), nil
+}
+
+// KubeClientQPS and KubeClientBurst bound every Kubernetes client the
+// agent builds. The admission webhook shares its client with the reapers
+// and watchers; at client-go's default of 5 requests a second a burst of
+// background lists queues admission calls past the apiserver's webhook
+// timeout, and the pod is then admitted without nvsnap. The apiserver's
+// own priority and fairness still protects it.
+var (
+	KubeClientQPS   float32 = 50
+	KubeClientBurst         = 100
+)
+
+func withClientLimits(cfg *rest.Config) *rest.Config {
+	cfg.QPS, cfg.Burst = KubeClientQPS, KubeClientBurst
+	return cfg
 }
