@@ -21,7 +21,9 @@ package bdd_tmp
 
 import (
 	"context"
+	"encoding/json"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -2955,29 +2957,85 @@ func (f *eventLedgerHTTPFake) Do(_ context.Context, method, rawURL string, heade
 		return harness.HTTPResponse{Status: 403}, nil
 	}
 	namespace := strings.Split(path, "/")[4]
-	const eventContext = "deployment_id=d1,gpu_specification_id=g1,instance_id=i1"
+	params, _ := url.ParseQuery(query)
 	switch {
-	case strings.Contains(query, "attribute_key"), strings.Contains(query, "instance_id=bad"), strings.Contains(query, "view=bogus"):
+	case params.Has("attribute_key") || strings.HasPrefix(params.Get("instance_id"), "bad") || params.Has("view"):
 		return harness.HTTPResponse{Status: 400}, nil
 	case strings.HasSuffix(path, "/stats"):
-		if namespace != "version-1" || strings.Contains(query, "NoSuchEvent") {
-			return harness.HTTPResponse{Status: 200, Body: `{"namespace":"` + namespace + `","contexts":[]}`}, nil
-		}
-		latest := "InstanceReady"
-		if *f.destroyed {
-			latest = "InstanceDestroyed"
-		}
-		return harness.HTTPResponse{Status: 200, Body: `{"namespace":"version-1","summary":{"by_event":{"` + latest + `":1}},"contexts":[{"context":"` + eventContext + `","event_name":"` + latest + `"}]}`}, nil
-	case namespace == "version-1" && strings.Contains(query, "instance_id=i1"):
-		body := `{"namespace":"version-1","context":"` + eventContext + `","events":[{"event_name":"InstanceReady","source":"nvidia-spot","details":{"attributes":{"functionid":"function-1"}}}`
-		if *f.destroyed {
-			body += `,{"event_name":"InstanceDestroyed","source":"nvidia-spot"}`
-		}
-		return harness.HTTPResponse{Status: 200, Body: body + `]}`}, nil
+		return f.stats(namespace, params.Get("eventFilter")), nil
 	default:
-		// Events read without a context only see context-less events.
-		return harness.HTTPResponse{Status: 200, Body: `{"namespace":"` + namespace + `","context":"","events":[]}`}, nil
+		return f.events(namespace, params), nil
 	}
+}
+
+// Contexts the fake keeps for the function version "version-1": the SIS one
+// and an NVCA one that sorts before it, as the ledger lists them when the NVCA
+// collector is enabled. The scenario must still pick the SIS context.
+const (
+	fakeNVCAContext = "cluster_id=c1,instance_id=i1,resource_id=r1"
+	fakeSISContext  = "deployment_id=d1,gpu_specification_id=g1,instance_id=i1"
+)
+
+type fakeEvent struct{ name, source string }
+
+func (f *eventLedgerHTTPFake) contextEvents() map[string][]fakeEvent {
+	sis := []fakeEvent{{"InstanceReady", "nvidia-spot"}}
+	if *f.destroyed {
+		sis = append(sis, fakeEvent{"InstanceDestroyed", "nvidia-spot"})
+	}
+	return map[string][]fakeEvent{
+		fakeNVCAContext: {{"ICMSRequest.InstanceStatusUpdate.running", "nvca"}},
+		fakeSISContext:  sis,
+	}
+}
+
+func (f *eventLedgerHTTPFake) stats(namespace, eventFilter string) harness.HTTPResponse {
+	type row struct {
+		Context   string `json:"context"`
+		EventName string `json:"event_name"`
+	}
+	contexts := []row{}
+	byEvent := map[string]int{}
+	if namespace == "version-1" {
+		events := f.contextEvents()
+		for _, ctx := range []string{fakeNVCAContext, fakeSISContext} {
+			latest := events[ctx][len(events[ctx])-1].name
+			if eventFilter != "" && !strings.Contains(","+eventFilter+",", ","+latest+",") {
+				continue
+			}
+			contexts = append(contexts, row{ctx, latest})
+			byEvent[latest]++
+		}
+	}
+	body, _ := json.Marshal(map[string]any{
+		"namespace": namespace,
+		"summary":   map[string]any{"by_event": byEvent},
+		"contexts":  contexts,
+	})
+	return harness.HTTPResponse{Status: 200, Body: string(body)}
+}
+
+func (f *eventLedgerHTTPFake) events(namespace string, params url.Values) harness.HTTPResponse {
+	var parts []string
+	for _, key := range []string{"cluster_id", "deployment_id", "gpu_specification_id", "instance_id", "resource_id"} {
+		if value := params.Get(key); value != "" {
+			parts = append(parts, key+"="+value)
+		}
+	}
+	eventContext := strings.Join(parts, ",")
+	type event struct {
+		Name    string         `json:"event_name"`
+		Source  string         `json:"source"`
+		Details map[string]any `json:"details"`
+	}
+	events := []event{}
+	if namespace == "version-1" {
+		for _, e := range f.contextEvents()[eventContext] {
+			events = append(events, event{e.name, e.source, map[string]any{"attributes": map[string]string{"functionid": "function-1", "function_id": "function-1"}}})
+		}
+	}
+	body, _ := json.Marshal(map[string]any{"namespace": namespace, "context": eventContext, "events": events})
+	return harness.HTTPResponse{Status: 200, Body: string(body)}
 }
 
 func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
@@ -2999,7 +3057,7 @@ func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
 			Stdout:   `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`,
 		},
 		`/bin/bash -c 'date -u -d "+1 day" +%Y-%m-%dT%H:%M:%S.000Z'`: {ExitCode: 0, Stdout: "2030-01-01T00:00:00.000Z\n"},
-		`/bin/bash -c 'echo "deployment_id=d1,gpu_specification_id=g1,instance_id=i1" | tr "," "&"'`: {
+		`/bin/bash -c 'echo "` + fakeSISContext + `" | tr "," "&"'`: {
 			ExitCode: 0,
 			Stdout:   "deployment_id=d1&gpu_specification_id=g1&instance_id=i1\n",
 		},

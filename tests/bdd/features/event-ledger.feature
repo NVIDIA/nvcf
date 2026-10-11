@@ -6,8 +6,8 @@ Feature: Event ledger records SIS deployment events on a running self-managed st
 
   # This feature does not install anything. It expects the single-cluster
   # ncp-local stack to be running with addons.eventLedger.enabled=true and
-  # nvcf-cli initialized for tests/bdd/fixtures/nvcf-cli-local.yaml. The
-  # NVCA OTel collector is disabled, so SIS is the only event writer.
+  # nvcf-cli initialized for tests/bdd/fixtures/nvcf-cli-local.yaml. It checks
+  # the SIS events only and does not depend on the NVCA OTel collector.
   Background:
     Given these environment variables are set:
       | name            |
@@ -329,14 +329,21 @@ Feature: Event ledger records SIS deployment events on a running self-managed st
       | --timeout       | 900             |
     And I export the function selected by NVCF CLI to environment variables "BDD_EL_FUNCTION_ID" and "BDD_EL_VERSION_ID"
 
-    # SIS writes InstanceReady once the instance is running. Stats list every
-    # context in the namespace, so poll stats first. Events are stored per context,
-    # so the events query needs the context ids that stats reports.
+    # Events are stored per context, and stats list every context in the
+    # namespace with its latest event. The NVCA collector, when enabled, adds
+    # contexts of its own that sort before SIS's, so find the SIS context with
+    # an event filter, then read its events.
+
+    # SIS writes InstanceReady once the instance is running.
     Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
     When I poll "GET" "http://events.localhost:8080/v3/ledger/namespace/${BDD_EL_VERSION_ID}/stats" for up to 300 seconds until the HTTP response body contains "InstanceReady"
     Then the HTTP status should be 200
     And the HTTP response JSON field "namespace" should equal "${BDD_EL_VERSION_ID}"
     And the HTTP response JSON field "summary.by_event.InstanceReady" should be at least 1
+
+    Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
+    When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/${BDD_EL_VERSION_ID}/stats?eventFilter=InstanceReady"
+    Then the HTTP status should be 200
     When I export the HTTP response JSON field "contexts.0.context" to environment variable "BDD_EL_CONTEXT"
     And I successfully run command:
       """
@@ -351,21 +358,14 @@ Feature: Event ledger records SIS deployment events on a running self-managed st
     And the HTTP response body should contain "nvidia-spot"
     And the HTTP response body should contain "${BDD_EL_FUNCTION_ID}"
     And the HTTP response body should not contain "InstanceDestroyed"
-    # The NVCA collector is disabled, so nothing else writes to this namespace.
-    And the HTTP response body should not contain "ICMSRequest."
-
-    Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
-    When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/${BDD_EL_VERSION_ID}/stats?eventFilter=InstanceReady"
-    Then the HTTP status should be 200
-    And the HTTP response body should contain "InstanceReady"
 
     Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
     When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/${BDD_EL_VERSION_ID}/stats?eventFilter=NoSuchEvent"
     Then the HTTP status should be 200
     And the HTTP response body should not contain "InstanceReady"
 
-    # Undeploy removes the instance; SIS then reports it destroyed. Stats keep only
-    # the latest event per context, while events keep the whole history.
+    # Undeploy removes the instance and SIS then reports it destroyed. Stats keep
+    # only the latest event per context, while events keep the whole history.
     When I successfully undeploy the function selected by NVCF CLI
     Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
     When I poll "GET" "http://events.localhost:8080/v3/ledger/namespace/${BDD_EL_VERSION_ID}/stats" for up to 180 seconds until the HTTP response body contains "InstanceDestroyed"
