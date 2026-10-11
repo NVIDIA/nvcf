@@ -695,19 +695,17 @@ func TestModelVolume_EngineDownload_JobRunsHF(t *testing.T) {
 	if ienv["HF_HOME"] != downloadMount || ienv["HOME"] != downloadMount || v.newInits[0].VolumeMounts[0].MountPath != downloadMount || !strings.Contains(v.newInits[0].Args[0], "/nvsnap-model/.nvsnap-complete") {
 		t.Errorf("the injected init mounts the landing at %s and waits for the marker there: env=%v mounts=%v", downloadMount, ienv, v.newInits[0].VolumeMounts)
 	}
-	// The wait init plus the cachedir init: compile caches stay local in
-	// every mode because the shared claim is read-only for readers.
-	var wait, cachedir bool
+	// The wait init only: compile caches stay local in every mode (the
+	// shared claim is read-only for readers), in the cachedir, whose
+	// subtrees the kubelet creates as subPath mounts.
+	var wait bool
 	for _, c := range v.newInits {
-		switch c.Name {
-		case "nvsnap-model-download":
+		if c.Name == "nvsnap-model-download" {
 			wait = strings.Contains(c.Args[0], "while [ ! -f")
-		case "nvsnap-cachedir-init":
-			cachedir = true
 		}
 	}
-	if !wait || !cachedir || len(v.newInits) != 2 {
-		t.Errorf("the pod gets a wait init and the cachedir init, got %v", v.newInits)
+	if !wait || len(v.newInits) != 1 {
+		t.Errorf("the pod gets the wait init only, got %v", v.newInits)
 	}
 	if v.env["HF_HUB_OFFLINE"] != "1" {
 		t.Error("engine must start offline and read the volume")
@@ -975,9 +973,7 @@ func TestModelVolume_EngineNGCDownload_FirstPodCapturedAfterReady(t *testing.T) 
 		t.Errorf("the pod keeps its own writable claim: volumes=%v ro=%v", v.volumes, v.roMounts)
 	}
 	for _, init := range v.newInits {
-		if init.Name != "nvsnap-cachedir-init" {
-			t.Errorf("a capture source gets no wait or download init, only the cachedir: %s", init.Name)
-		}
+		t.Errorf("a capture source gets no init container: %s", init.Name)
 	}
 	// The compile caches are collected from the capture source like from
 	// any reader, so the first warm deployment does not profile again.

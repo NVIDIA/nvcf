@@ -58,12 +58,10 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/tracing"
 )
 
@@ -284,43 +282,36 @@ func (m *Mutator) cacheDirCapturePatchesFor(pod *corev1.Pod, elected bool) []Pat
 	for _, e := range envs {
 		patches = append(patches, appendEnv(m.MainContainer, e))
 	}
-	patches = append(patches, m.cacheDirInitPatches(pod, &main)...)
+	patches = append(patches, m.cacheDirSubdirMounts(&main)...)
 	return patches
 }
 
-// cacheDirInitName is the init container that creates the cache and model
-// subdirectories of a fresh cachedir emptyDir.
-const cacheDirInitName = "nvsnap-cachedir-init"
-
-// cacheDirInitPatches injects an init that creates <CacheDir>/cache and
-// <CacheDir>/model, world-writable with the sticky bit. An emptyDir starts
-// empty; engines that create their own cache tree (vLLM, HF) never noticed,
-// but NIM refuses to start when NIM_CACHE_PATH does not exist ("Unable to
-// read from NIM_CACHE_PATH", dev1 2026-09-28). The init runs the workload's
-// own image so no extra pull is needed, inherits its user posture and is
-// hardened for enforced function namespaces.
-func (m *Mutator) cacheDirInitPatches(pod *corev1.Pod, main *corev1.Container) []PatchOp {
-	for i := range pod.Spec.InitContainers {
-		if pod.Spec.InitContainers[i].Name == cacheDirInitName {
-			return nil
+// cacheDirSubdirMounts mounts <CacheDir>/cache and <CacheDir>/model of the
+// cachedir emptyDir into the main container as subPath mounts. An emptyDir
+// starts empty, and NIM refuses to start when NIM_CACHE_PATH does not exist
+// ("Unable to read from NIM_CACHE_PATH", dev1 2026-09-28). The kubelet
+// creates a subPath directory before the container starts, with the mode of
+// the volume's root: world-writable for an emptyDir, so an engine of any
+// user can write there.
+//
+// This replaces an init container that ran mkdir in the workload's image:
+// that borrowed the image's limits, and an image without a shell, or built
+// for another architecture, crash-looped in the init. A mount runs nothing.
+func (m *Mutator) cacheDirSubdirMounts(main *corev1.Container) []PatchOp {
+	var patches []PatchOp
+	for _, sub := range []string{cacheSubdir, "model"} {
+		path := filepath.Join(m.CacheDir, sub)
+		taken := false
+		for _, vm := range main.VolumeMounts {
+			taken = taken || filepath.Clean(vm.MountPath) == path
 		}
+		if taken {
+			continue // the pod mounts its own volume there
+		}
+		patches = append(patches, PatchOp{Op: "add", Path: fmt.Sprintf("/spec/containers/%d/volumeMounts/-", m.MainContainer),
+			Value: corev1.VolumeMount{Name: cacheDirVolumeName, MountPath: path, SubPath: sub}})
 	}
-	cache, model := filepath.Join(m.CacheDir, "cache"), filepath.Join(m.CacheDir, "model")
-	init := corev1.Container{
-		Name:         cacheDirInitName,
-		Image:        main.Image,
-		Command:      []string{"/bin/sh", "-c"},
-		Args:         []string{fmt.Sprintf("mkdir -p %s %s && chmod 1777 %s %s", cache, model, cache, model)},
-		VolumeMounts: []corev1.VolumeMount{{Name: cacheDirVolumeName, MountPath: m.CacheDir}},
-	}
-	modelvolume.Harden(&init, cacheDirInitResources, main.SecurityContext)
-	return prependInit(pod, nil, init)
-}
-
-// cacheDirInitResources: two mkdirs.
-var cacheDirInitResources = corev1.ResourceRequirements{
-	Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m"), corev1.ResourceMemory: resource.MustParse("64Mi")},
-	Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("200m"), corev1.ResourceMemory: resource.MustParse("128Mi")},
+	return patches
 }
 
 // tryL2CacheDir injects a cachedir RESTORE: the rox PVC mounted
