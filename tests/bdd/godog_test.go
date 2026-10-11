@@ -2666,8 +2666,9 @@ func TestObservabilityDisabled(t *testing.T) {
 }
 
 // TestEventLedger is the live entry point for the event-ledger feature. It
-// runs against an already-running single-cluster ncp-local stack and installs
-// nothing. Skipped under -short.
+// brings up a single-cluster ncp-local cluster, installs the stack with the
+// event ledger enabled, registers the cluster and installs NVCA, then checks
+// the ledger. Skipped under -short.
 func TestEventLedger(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live run skipped under -short")
@@ -2675,14 +2676,15 @@ func TestEventLedger(t *testing.T) {
 	runLiveFeature(t, "event-ledger.feature")
 }
 
-// TestEventLedgerReadOnly runs the event-ledger feature without the function
-// lifecycle scenario, so it needs no GPU capacity or image pull access.
+// TestEventLedgerControlPlane runs the event-ledger feature without the
+// compute-plane scenarios (NVCA registration and the function deployment), so
+// it needs no GPU capacity or image pull access. It still installs the stack.
 // Skipped under -short.
-func TestEventLedgerReadOnly(t *testing.T) {
+func TestEventLedgerControlPlane(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live run skipped under -short")
 	}
-	runLiveFeatureTags(t, "event-ledger.feature", "~@function-lifecycle")
+	runLiveFeatureTags(t, "event-ledger.feature", "~@compute-plane")
 }
 
 // TestMultiClusterHelmfile is the live entry point for the
@@ -3038,6 +3040,21 @@ func (f *eventLedgerHTTPFake) events(namespace string, params url.Values) harnes
 	return harness.HTTPResponse{Status: 200, Body: string(body)}
 }
 
+func eventLedgerHelmListJSON() string {
+	return `[
+{"name":"nats","namespace":"nats-system","status":"deployed"},
+{"name":"cert-manager","namespace":"cert-manager","status":"deployed"},
+{"name":"openbao-server","namespace":"vault-system","status":"deployed"},
+{"name":"cassandra","namespace":"cassandra-system","status":"deployed"},
+{"name":"api-keys","namespace":"api-keys","status":"deployed"},
+{"name":"sis","namespace":"sis","status":"deployed"},
+{"name":"api","namespace":"nvcf","status":"deployed"},
+{"name":"event-ledger","namespace":"nvcf","status":"deployed"},
+{"name":"ingress","namespace":"envoy-gateway-system","status":"deployed"},
+{"name":"nvca-operator","namespace":"nvca-operator","status":"deployed"}
+]`
+}
+
 func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
 	const selectedFunctionStatusCommand = `/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml status --json`
 	home := t.TempDir()
@@ -3052,6 +3069,12 @@ func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	destroyed := false
 	runner := newFakeRunner(map[string]harness.Result{
+		// Conflict precheck: the multi-cluster control plane must be absent.
+		"k3d cluster get ncp-local-cp": {ExitCode: 1},
+		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {
+			ExitCode: 0,
+			Stdout:   eventLedgerHelmListJSON(),
+		},
 		selectedFunctionStatusCommand: {
 			ExitCode: 0,
 			Stdout:   `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`,
@@ -3079,6 +3102,11 @@ func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
 	suite := newWiringSuite(t, runner)
 	httpFake := &eventLedgerHTTPFake{destroyed: &destroyed}
 	suite.HTTP = httpFake
+	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
+	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
 
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, "event-ledger.feature")
@@ -3099,6 +3127,16 @@ func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
 		t.Fatalf("godog suite status = %d\n%s", status, out.String())
 	}
 	runs := suite.Runner.(*fakeRunner).runs
+	for _, command := range []string{
+		"make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-event-ledger",
+		"make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local",
+		"make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-event-ledger",
+		"nvcf-cli-local.yaml init",
+	} {
+		if !commandRanThatContains(runs, command) {
+			t.Fatalf("install flow command was never invoked: %s", command)
+		}
+	}
 	if !commandRanThatContains(runs, " function deploy create ") {
 		t.Fatal("function deploy command was never invoked")
 	}
