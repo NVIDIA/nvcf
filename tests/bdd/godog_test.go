@@ -2949,22 +2949,28 @@ func (f *eventLedgerHTTPFake) Do(_ context.Context, method, rawURL string, heade
 		return harness.HTTPResponse{Status: 403}, nil
 	}
 	namespace := strings.Split(path, "/")[4]
+	const eventContext = "deployment_id=d1,gpu_specification_id=g1,instance_id=i1"
 	switch {
 	case strings.Contains(query, "attribute_key"), strings.Contains(query, "instance_id=bad"), strings.Contains(query, "view=bogus"):
 		return harness.HTTPResponse{Status: 400}, nil
 	case strings.HasSuffix(path, "/stats"):
-		if strings.Contains(query, "NoSuchEvent") {
+		if namespace != "version-1" || strings.Contains(query, "NoSuchEvent") {
 			return harness.HTTPResponse{Status: 200, Body: `{"namespace":"` + namespace + `","contexts":[]}`}, nil
 		}
-		return harness.HTTPResponse{Status: 200, Body: `{"namespace":"` + namespace + `","summary":{"by_event":{"InstanceReady":1,"InstanceDestroyed":1}}}`}, nil
-	case namespace == "version-1":
-		body := `{"namespace":"version-1","events":[{"event_name":"InstanceReady","source":"nvidia-spot"}`
+		latest := "InstanceReady"
+		if *f.destroyed {
+			latest = "InstanceDestroyed"
+		}
+		return harness.HTTPResponse{Status: 200, Body: `{"namespace":"version-1","summary":{"by_event":{"` + latest + `":1}},"contexts":[{"context":"` + eventContext + `","event_name":"` + latest + `"}]}`}, nil
+	case namespace == "version-1" && strings.Contains(query, "instance_id=i1"):
+		body := `{"namespace":"version-1","context":"` + eventContext + `","events":[{"event_name":"InstanceReady","source":"nvidia-spot","details":{"attributes":{"functionid":"function-1"}}}`
 		if *f.destroyed {
 			body += `,{"event_name":"InstanceDestroyed","source":"nvidia-spot"}`
 		}
 		return harness.HTTPResponse{Status: 200, Body: body + `]}`}, nil
 	default:
-		return harness.HTTPResponse{Status: 200, Body: `{"namespace":"` + namespace + `","events":[]}`}, nil
+		// Events read without a context only see context-less events.
+		return harness.HTTPResponse{Status: 200, Body: `{"namespace":"` + namespace + `","context":"","events":[]}`}, nil
 	}
 }
 
@@ -2987,6 +2993,10 @@ func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
 			Stdout:   `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`,
 		},
 		`/bin/bash -c 'date -u -d "+1 day" +%Y-%m-%dT%H:%M:%S.000Z'`: {ExitCode: 0, Stdout: "2030-01-01T00:00:00.000Z\n"},
+		`/bin/bash -c 'echo "deployment_id=d1,gpu_specification_id=g1,instance_id=i1" | tr "," "&"'`: {
+			ExitCode: 0,
+			Stdout:   "deployment_id=d1&gpu_specification_id=g1&instance_id=i1\n",
+		},
 		"kubectl --context k3d-ncp-local --namespace nvcf get service event-ledger -o jsonpath={.spec.ports[*].name}": {
 			ExitCode: 0,
 			Stdout:   "api-port metrics",
