@@ -148,11 +148,8 @@ Feature: Event ledger records SIS deployment events on a running self-managed st
     When I send a "DELETE" request to "http://api-keys.localhost:8080/v1/keys/${BDD_EL_READ_KEY_ID}"
     Then the HTTP status should be 204
 
-  # Design: write access needs an OpenBao JWT with the FnDS write scope. A
-  # read-scoped api key must not be able to write. Tagged because this
-  # currently returns 200 and stores the event; the scenario writes data, so
-  # the read-only live entry point excludes it.
-  @known-defect
+  # Write access needs an OpenBao JWT with the FnDS write scope, so a
+  # read-scoped api key must be rejected on the write route.
   Scenario: A read-scoped key cannot write events
     When I successfully run command:
       """

@@ -2674,14 +2674,13 @@ func TestEventLedger(t *testing.T) {
 }
 
 // TestEventLedgerReadOnly runs the event-ledger feature without the function
-// lifecycle scenario (no GPU capacity or image pull access needed) and without
-// the known-defect scenario (it writes an event).
+// lifecycle scenario, so it needs no GPU capacity or image pull access.
 // Skipped under -short.
 func TestEventLedgerReadOnly(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live run skipped under -short")
 	}
-	runLiveFeatureTags(t, "event-ledger.feature", "~@function-lifecycle && ~@known-defect")
+	runLiveFeatureTags(t, "event-ledger.feature", "~@function-lifecycle")
 }
 
 // TestMultiClusterHelmfile is the live entry point for the
