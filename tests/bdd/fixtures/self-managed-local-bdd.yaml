@@ -101,3 +101,8 @@ ingress:
         enabled: true
       ess: 
         enabled: true
+
+# API Keys can take longer than its default 3 minute startup window on a slow host.
+apikeys:
+  startupProbe:
+    failureThreshold: 120
