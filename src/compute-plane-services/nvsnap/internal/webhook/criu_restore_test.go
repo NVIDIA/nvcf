@@ -175,6 +175,18 @@ func TestGPUShareByDefault(t *testing.T) {
 	if p := (&Mutator{}).gpusharePatches(context.Background(), gpushareTestPod(false, nil)); p != nil {
 		t.Error("cachedir cluster: unannotated pod patched")
 	}
+	// A Job's or a task's pod runs to completion and is never captured.
+	for _, rp := range []corev1.RestartPolicy{corev1.RestartPolicyNever, corev1.RestartPolicyOnFailure} {
+		task := gpushareTestPod(false, nil)
+		task.Spec.RestartPolicy = rp
+		if p := m.gpusharePatches(context.Background(), task); p != nil {
+			t.Errorf("restartPolicy %s: a pod that runs to completion got the library", rp)
+		}
+		task.Annotations = map[string]string{GPUShareAnnotation: "true"}
+		if got := applyPatches(t, task, m.gpusharePatches(context.Background(), task)); envOf(got.Spec.Containers[1], "LD_PRELOAD") == nil {
+			t.Errorf("restartPolicy %s: the annotation must still opt the pod in", rp)
+		}
+	}
 }
 
 // An engine that spans pods runs under the library with fabric sharing on,

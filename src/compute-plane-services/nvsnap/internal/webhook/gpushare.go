@@ -74,7 +74,9 @@ func (m *Mutator) gpushareMode(ctx context.Context, pod *corev1.Pod) (wanted, fa
 	case "false":
 		return false, false
 	default:
-		wanted = m.GPUShareByDefault
+		// A pod that runs to completion (a Job's, an NVCF task's) is never
+		// captured: the library would only add risk to it.
+		wanted = m.GPUShareByDefault && !runsToCompletion(pod)
 	}
 	if !wanted {
 		return false, false
@@ -91,6 +93,13 @@ func (m *Mutator) gpushareMode(ctx context.Context, pod *corev1.Pod) (wanted, fa
 		return true, true
 	}
 	return true, false
+}
+
+// runsToCompletion reports a pod that is not restarted when it exits: a
+// Job's or a task's, not a server's (every serving controller runs its
+// pods with restartPolicy Always, the default).
+func runsToCompletion(pod *corev1.Pod) bool {
+	return pod.Spec.RestartPolicy == corev1.RestartPolicyNever || pod.Spec.RestartPolicy == corev1.RestartPolicyOnFailure
 }
 
 // multiNodeEngineFlags only appear on an engine that spans nodes.
