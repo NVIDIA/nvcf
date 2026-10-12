@@ -28,6 +28,7 @@ go_test(
     name = "agent_test",
     srcs = [
         "capture_write_test.go",
+        "describe_exec_test.go",
         "pidns_exec_test.go",
     ],
     embed = [":agent_lib"],

@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -70,7 +71,34 @@ func pidNSRestoreExec(args []string) error {
 			}
 		}
 	}
-	return unix.Exec(args[0], args, os.Environ())
+	if err := unix.Exec(args[0], args, os.Environ()); err != nil {
+		return fmt.Errorf("exec %s: %w (%s)", args[0], err, describeExecPath(args[0]))
+	}
+	return nil
+}
+
+// describeExecPath reports what execve checks along path: each component's
+// mode and owner, and whether its filesystem is mounted noexec. An exec that
+// fails with EACCES says nothing about which of them refused it.
+func describeExecPath(path string) string {
+	var parts []string
+	for p := path; ; p = filepath.Dir(p) {
+		var st unix.Stat_t
+		if err := unix.Stat(p, &st); err != nil {
+			parts = append(parts, fmt.Sprintf("%s: %v", p, err))
+		} else {
+			d := fmt.Sprintf("%s %o %d:%d", p, st.Mode&0o7777, st.Uid, st.Gid)
+			var fs unix.Statfs_t
+			if unix.Statfs(p, &fs) == nil && fs.Flags&unix.ST_NOEXEC != 0 {
+				d += " noexec"
+			}
+			parts = append(parts, d)
+		}
+		if p == "/" || p == "." {
+			break
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // bindUnixListeners binds a fresh listening socket at each path in spec
