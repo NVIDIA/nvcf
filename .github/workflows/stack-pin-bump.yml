@@ -72,13 +72,18 @@ jobs:
 
       - name: Select the tag
         id: tag
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          tag="${{ github.event.inputs.tag || github.event.release.tag_name }}"
+          tag="${INPUT_TAG:-${RELEASE_TAG}}"
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           # Only chart releases move stack pins. Everything else is a normal
           # release and is not this job's business.
           case "${tag}" in
+            *-sm.[0-9]*)      echo "applies=false" >> "${GITHUB_OUTPUT}"
+                              echo "${tag} requires an explicit maintenance pin review" ;;
             deploy/helm/*/v*) echo "applies=true"  >> "${GITHUB_OUTPUT}" ;;
             *)                echo "applies=false" >> "${GITHUB_OUTPUT}"
                               echo "${tag} is not a chart release; nothing to do" ;;
