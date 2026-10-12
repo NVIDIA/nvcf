@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -3053,6 +3054,78 @@ func eventLedgerHelmListJSON() string {
 {"name":"ingress","namespace":"envoy-gateway-system","status":"deployed"},
 {"name":"nvca-operator","namespace":"nvca-operator","status":"deployed"}
 ]`
+}
+
+// recordingHTTP is an HTTPClient that records requests and answers every one
+// with a fixed status.
+type recordingHTTP struct {
+	status   int
+	requests []string
+	headers  []map[string]string
+}
+
+func (r *recordingHTTP) Do(_ context.Context, method, url string, headers map[string]string, _ string) (harness.HTTPResponse, error) {
+	r.requests = append(r.requests, method+" "+url)
+	r.headers = append(r.headers, headers)
+	return harness.HTTPResponse{Status: r.status}, nil
+}
+
+func runTeardownFeature(t *testing.T, body string, httpClient harness.HTTPClient) int {
+	t.Helper()
+	feature := filepath.Join(t.TempDir(), "teardown.feature")
+	if err := os.WriteFile(feature, []byte(body), 0o644); err != nil {
+		t.Fatalf("write feature: %v", err)
+	}
+	suite := newWiringSuite(t, newFakeRunner(nil))
+	suite.HTTP = httpClient
+	sc := steps.NewScenarioContext(suite)
+	return godog.TestSuite{
+		Name: "teardown-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format:        "pretty",
+			Paths:         []string{feature},
+			Strict:        true,
+			StopOnFailure: true,
+			Output:        io.Discard,
+		},
+	}.Run()
+}
+
+// TestScenarioTeardownRunsAfterAFailedStep guards the live runner stopping at
+// the first failed step: cleanup written as a later step would be skipped, a
+// teardown must not be.
+func TestScenarioTeardownRunsAfterAFailedStep(t *testing.T) {
+	recorder := &recordingHTTP{status: http.StatusNoContent}
+	status := runTeardownFeature(t, `Feature: teardown
+  Scenario: cleanup survives a failed step
+    Given the HTTP request header "Key-Owner-Id" is "owner"
+    And I send a "DELETE" request to "http://api-keys/v1/keys/key-1" at scenario teardown expecting status 204
+    Then the HTTP status should be 200
+`, recorder)
+	if status == 0 {
+		t.Fatal("the scenario should fail on its assertion")
+	}
+	if len(recorder.requests) != 1 || recorder.requests[0] != "DELETE http://api-keys/v1/keys/key-1" {
+		t.Fatalf("teardown requests = %v", recorder.requests)
+	}
+	if recorder.headers[0]["Key-Owner-Id"] != "owner" {
+		t.Fatalf("teardown headers = %v", recorder.headers[0])
+	}
+}
+
+func TestScenarioTeardownFailureFailsAnOtherwisePassingScenario(t *testing.T) {
+	recorder := &recordingHTTP{status: http.StatusInternalServerError}
+	status := runTeardownFeature(t, `Feature: teardown
+  Scenario: cleanup that fails is reported
+    When I send a "GET" request to "http://example/ok"
+    And I send a "DELETE" request to "http://api-keys/v1/keys/key-1" at scenario teardown expecting status 204
+`, recorder)
+	if status == 0 {
+		t.Fatal("a failed teardown should fail the scenario")
+	}
 }
 
 func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {

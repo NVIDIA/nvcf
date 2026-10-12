@@ -258,7 +258,11 @@ func isTransientVanityRouteNotFound(stderr string) bool {
 }
 
 func (sc *ScenarioContext) iSuccessfullyUndeploySelectedFunction(ctx context.Context) error {
-	return sc.runNVCFCLI(ctx, "function", "delete", "--deployment-only")
+	if err := sc.runNVCFCLI(ctx, "function", "delete", "--deployment-only"); err != nil {
+		return err
+	}
+	sc.FunctionUndeployed = true
+	return nil
 }
 
 func (sc *ScenarioContext) runNVCFCLIWithOptions(

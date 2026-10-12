@@ -177,6 +177,12 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
       Then the HTTP status should be 200
       When I export the HTTP response JSON field "value" to environment variable "BDD_EL_READ_KEY"
       And I export the HTTP response JSON field "id" to environment variable "BDD_EL_READ_KEY_ID"
+      # Delete the key when the scenario ends, even if it fails.
+      Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
+      And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
+      And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
+      And the HTTP request header "Key-Owner-Id" is "svc@nvcf-api.local"
+      And I send a "DELETE" request to "http://api-keys.localhost:8080/v1/keys/${BDD_EL_READ_KEY_ID}" at scenario teardown expecting status 204
 
       Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
       When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/bdd-no-such-namespace/stats"
@@ -201,12 +207,6 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
       When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/bdd-no-such-namespace/stats?view=bogus"
       Then the HTTP status should be 400
 
-      Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
-      And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
-      And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
-      And the HTTP request header "Key-Owner-Id" is "svc@nvcf-api.local"
-      When I send a "DELETE" request to "http://api-keys.localhost:8080/v1/keys/${BDD_EL_READ_KEY_ID}"
-      Then the HTTP status should be 204
 
     # Write access needs an OpenBao JWT with the FnDS write scope, so a
     # read-scoped api key must be rejected on the write route.
@@ -243,6 +243,12 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
       Then the HTTP status should be 200
       When I export the HTTP response JSON field "value" to environment variable "BDD_EL_READ_KEY"
       And I export the HTTP response JSON field "id" to environment variable "BDD_EL_READ_KEY_ID"
+      # Delete the key when the scenario ends, even if it fails.
+      Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
+      And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
+      And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
+      And the HTTP request header "Key-Owner-Id" is "svc@nvcf-api.local"
+      And I send a "DELETE" request to "http://api-keys.localhost:8080/v1/keys/${BDD_EL_READ_KEY_ID}" at scenario teardown expecting status 204
 
       Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
       And the HTTP request header "Content-Type" is "application/cloudevents+json"
@@ -259,12 +265,6 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
       When I send a "POST" request to "http://events.localhost:8080/v3/ledger/k8s-events"
       Then the HTTP status should be 403
 
-      Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
-      And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
-      And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
-      And the HTTP request header "Key-Owner-Id" is "svc@nvcf-api.local"
-      When I send a "DELETE" request to "http://api-keys.localhost:8080/v1/keys/${BDD_EL_READ_KEY_ID}"
-      Then the HTTP status should be 204
 
     # The positive control for the scope checks: a key with only the write scope
     # may write, which shows the rejections above are specific and not an outage,
@@ -302,6 +302,12 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
       Then the HTTP status should be 200
       When I export the HTTP response JSON field "value" to environment variable "BDD_EL_WRITE_KEY"
       And I export the HTTP response JSON field "id" to environment variable "BDD_EL_WRITE_KEY_ID"
+      # Delete the key when the scenario ends, even if it fails.
+      Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
+      And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
+      And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
+      And the HTTP request header "Key-Owner-Id" is "svc@nvcf-api.local"
+      And I send a "DELETE" request to "http://api-keys.localhost:8080/v1/keys/${BDD_EL_WRITE_KEY_ID}" at scenario teardown expecting status 204
 
       Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_WRITE_KEY}"
       And the HTTP request header "Content-Type" is "application/cloudevents+json"
@@ -329,12 +335,6 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
       When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/bdd-write-scope/stats"
       Then the HTTP status should be 403
 
-      Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
-      And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
-      And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
-      And the HTTP request header "Key-Owner-Id" is "svc@nvcf-api.local"
-      When I send a "DELETE" request to "http://api-keys.localhost:8080/v1/keys/${BDD_EL_WRITE_KEY_ID}"
-      Then the HTTP status should be 204
 
   Rule: Helmfile installs NVCA on the same local cluster after registration
 
@@ -424,6 +424,12 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
       Then the HTTP status should be 200
       When I export the HTTP response JSON field "value" to environment variable "BDD_EL_READ_KEY"
       And I export the HTTP response JSON field "id" to environment variable "BDD_EL_READ_KEY_ID"
+      # Delete the key when the scenario ends, even if it fails.
+      Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
+      And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
+      And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
+      And the HTTP request header "Key-Owner-Id" is "svc@nvcf-api.local"
+      And I send a "DELETE" request to "http://api-keys.localhost:8080/v1/keys/${BDD_EL_READ_KEY_ID}" at scenario teardown expecting status 204
 
       When I successfully create function "bdd-event-ledger" from image "nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8" with CLI options:
         | option           | value   |
@@ -441,6 +447,8 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
         | --min-instances | 1               |
         | --max-instances | 1               |
         | --timeout       | 900             |
+      # Undeploy when the scenario ends if it has not already, even if it fails.
+      And the function selected by NVCF CLI is undeployed at scenario teardown
       And I export the function selected by NVCF CLI to environment variables "BDD_EL_FUNCTION_ID" and "BDD_EL_VERSION_ID"
 
       # Events are stored per context, and stats list every context in the
@@ -491,10 +499,3 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
       Then the HTTP status should be 200
       And the HTTP response body should contain "InstanceReady"
       And the HTTP response body should contain "InstanceDestroyed"
-
-      Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
-      And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
-      And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
-      And the HTTP request header "Key-Owner-Id" is "svc@nvcf-api.local"
-      When I send a "DELETE" request to "http://api-keys.localhost:8080/v1/keys/${BDD_EL_READ_KEY_ID}"
-      Then the HTTP status should be 204

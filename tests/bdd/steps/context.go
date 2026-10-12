@@ -56,6 +56,17 @@ type ScenarioContext struct {
 	Manifests     map[string]string
 	HTTPHeaders   map[string]string
 	LastHTTP      *harness.HTTPResponse
+
+	// FunctionUndeployed is set once the scenario has undeployed the selected
+	// function, so the teardown does not undeploy it again.
+	FunctionUndeployed bool
+	teardown           []teardownAction
+}
+
+// teardownAction is cleanup queued for the end of the scenario.
+type teardownAction struct {
+	description string
+	run         func(context.Context) error
 }
 
 // NewScenarioContext wraps suite in a fresh per-scenario state. The
@@ -76,7 +87,14 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 		sc.Manifests = nil
 		sc.HTTPHeaders = nil
 		sc.LastHTTP = nil
+		sc.FunctionUndeployed = false
+		sc.teardown = nil
 		return c, nil
+	})
+	// Godog runs After hooks for failed scenarios too, which is what lets
+	// cleanup survive the live runner stopping at the first failed step.
+	ctx.After(func(c context.Context, _ *godog.Scenario, _ error) (context.Context, error) {
+		return c, sc.runTeardown(c)
 	})
 	// Godog's default pretty formatter buffers the scenario block until
 	// every step finishes, which makes hangs invisible during a live
@@ -106,6 +124,7 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	registerManifestSteps(ctx, sc)
 	registerCommandSteps(ctx, sc)
 	registerHTTPSteps(ctx, sc)
+	registerTeardownSteps(ctx, sc)
 	registerNVCFCLISteps(ctx, sc)
 	registerRegistrationSteps(ctx, sc)
 	registerAssertionSteps(ctx, sc)
