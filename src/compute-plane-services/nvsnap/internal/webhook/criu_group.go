@@ -65,6 +65,14 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 			Info("CRIU group restore: the capture is of a different instance size; cold start")
 		return nil
 	}
+	// Only an instance of several ranks waits for all of them; one pod
+	// restores alone whatever its controller.
+	if size > 1 && m.CRIUGroupAdmits != nil {
+		if ok, why := m.CRIUGroupAdmits(ctx, pod); !ok {
+			log.WithField("reason", why).Info("CRIU group restore: the instance cannot restore as a group; cold start")
+			return nil
+		}
+	}
 	if m.CRIURestoreBlocked != nil {
 		for _, id := range g.Checkpoints {
 			if m.CRIURestoreBlocked(ctx, id) {

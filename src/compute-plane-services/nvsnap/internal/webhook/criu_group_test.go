@@ -101,3 +101,48 @@ func TestGroveRankAndSize(t *testing.T) {
 		t.Errorf("ordinal %d size %d, want 1 and 2", o, s)
 	}
 }
+
+// A pod whose instance cannot restore as a group (one rank replaced while
+// the others run, or ranks created in order) is not a placeholder: it
+// starts cold, with the reason logged.
+func TestCRIUGroupRestore_RefusedInstanceStartsCold(t *testing.T) {
+	g := CRIUGroup{Checkpoints: []string{"r0__1", "r1__1"}, Nodes: []string{"n0", "n1"}}
+	m, _ := groupMutator(t, g, "")
+	var asked string
+	m.CRIUGroupAdmits = func(_ context.Context, pod *corev1.Pod) (bool, string) {
+		asked = pod.Name
+		return false, "pod kimi-0-0 of the instance already runs"
+	}
+	pod := lwsRank("1")
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asked != pod.Name {
+		t.Fatalf("admission check not consulted for %s", pod.Name)
+	}
+	if got := applyPatches(t, pod, patches); got.Annotations[CRIURestoreAnnotation] != "" || got.Annotations[CRIUGroupAnnotation] != "" {
+		t.Errorf("refused pod must start cold, got annotations %v", got.Annotations)
+	}
+}
+
+// A single-pod instance restores alone: the group admission check, which
+// is about ranks arriving together, is not consulted, so an ordered
+// StatefulSet of one pod still restores.
+func TestCRIUGroupRestore_SinglePodSkipsGroupAdmission(t *testing.T) {
+	g := CRIUGroup{Checkpoints: []string{"r0__1"}, Nodes: []string{"n0"}}
+	m, _ := groupMutator(t, g, "")
+	m.CRIUGroupAdmits = func(context.Context, *corev1.Pod) (bool, string) {
+		t.Error("group admission consulted for a single pod")
+		return false, "ordered"
+	}
+	pod := lwsRank("0")
+	pod.Annotations[lwsSizeAnnotation] = "1"
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := applyPatches(t, pod, patches); got.Annotations[CRIURestoreAnnotation] != "r0__1" {
+		t.Errorf("single pod must restore, got annotations %v", got.Annotations)
+	}
+}

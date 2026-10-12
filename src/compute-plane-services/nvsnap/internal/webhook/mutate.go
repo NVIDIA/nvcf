@@ -402,6 +402,12 @@ type Mutator struct {
 	// configuration key (criu_group.go). Nil: multi-pod instances are not
 	// restored with CRIU.
 	CRIUGroups func(ctx context.Context, namespace, cacheURI string) (CRIUGroup, bool)
+
+	// CRIUGroupAdmits reports whether pod's instance of several ranks can
+	// restore as a group, and why not: a group restore needs every rank to
+	// arrive as a placeholder together. Not asked for a single pod. nil
+	// admits.
+	CRIUGroupAdmits func(ctx context.Context, pod *corev1.Pod) (bool, string)
 	// DebugEnv sets debug variables on the GPU containers of matching
 	// pods (debug_env.go).
 	DebugEnv []DebugEnv

@@ -7,10 +7,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
@@ -84,4 +87,43 @@ func (a *Agent) lookupCRIUGroupFor(ctx context.Context, ns, uri string) (webhook
 		return webhook.CRIUGroup{}, false
 	}
 	return a.lookupCRIUGroup(ctx, criuGroupKey(uri, scope))
+}
+
+// criuGroupAdmits reports whether pod, a rank of an instance of several
+// pods, can be admitted as its rank's group restore placeholder. The restore runs once every rank of the instance
+// is a placeholder, driven by rank 0, so it needs all of them created
+// together and none already running:
+//   - a rank replaced while the others run (a node lost, a pod deleted)
+//     would wait for a restore no one starts;
+//   - a StatefulSet that creates its pods in order waits for rank 0 to be
+//     Ready before it creates rank 1, and rank 0's placeholder is not
+//     Ready until the instance is restored.
+//
+// A pod that cannot restore as a group starts cold.
+func (a *Agent) criuGroupAdmits(ctx context.Context, pod *corev1.Pod) (bool, string) {
+	if c := metav1.GetControllerOf(pod); c != nil && c.Kind == "StatefulSet" && groveInstance(pod) == "" && pod.Labels[lwsGroupKeyLabel] == "" {
+		sts, err := a.kubeClient.AppsV1().StatefulSets(pod.Namespace).Get(ctx, c.Name, metav1.GetOptions{})
+		if err != nil {
+			return false, fmt.Sprintf("cannot read StatefulSet %s: %v", c.Name, err)
+		}
+		if sts.Spec.PodManagementPolicy != appsv1.ParallelPodManagement {
+			return false, fmt.Sprintf("StatefulSet %s creates its pods in order (%s); a group restore needs them together (Parallel)",
+				c.Name, appsv1.OrderedReadyPodManagement)
+		}
+	}
+	pods, err := a.kubeClient.CoreV1().Pods(pod.Namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, fmt.Sprintf("cannot list the instance's pods: %v", err)
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Name == pod.Name || p.DeletionTimestamp != nil || !sameInstance(pod, p) {
+			continue
+		}
+		if p.Annotations[webhook.CRIUGroupAnnotation] != "" && p.Annotations[webhook.CRIURestoredAnnotation] == "" {
+			continue // another placeholder of this restore
+		}
+		return false, fmt.Sprintf("pod %s of the instance already runs; this pod replaces one rank", p.Name)
+	}
+	return true, ""
 }
