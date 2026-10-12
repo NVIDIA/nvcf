@@ -166,6 +166,13 @@ const NVCF_API_REQUEST_DURATION: Metric = Metric {
     description: "Duration of NVCF API requests in milliseconds (includes count via _count)",
 };
 
+// Raw gRPC result of each completed NVCF API call, independent of the function status in the
+// response body.
+const NVCF_API_RPC_REQUESTS_TOTAL: Metric = Metric {
+    name: "nvcf_autoscaler.nvcf_api.rpc_requests_total",
+    description: "Total number of completed NVCF API gRPC calls by returned gRPC status code",
+};
+
 const OAUTH2_API_REQUEST_DURATION: Metric = Metric {
     name: "nvcf_autoscaler.oauth2_api.request_duration_milliseconds",
     description: "Duration of OAuth2 API requests in milliseconds (includes count via _count)",
@@ -185,7 +192,7 @@ const GAUGES: [Metric; 11] = [
     AUTOSCALING_HEALTH_COMPONENT_STATUS,
 ];
 
-const COUNTERS: [Metric; 10] = [
+const COUNTERS: [Metric; 11] = [
     AUTOSCALING_REQUESTS_QUEUED_TOTAL,
     AUTOSCALING_REQUESTS_REJECTED_TOTAL,
     AUTOSCALING_REQUESTS_PROCESSED_TOTAL,
@@ -196,6 +203,7 @@ const COUNTERS: [Metric; 10] = [
     AUTOSCALING_DISTRIBUTED_LOCK_ACQUISITION_FAILURES_TOTAL,
     AUTOSCALING_TSDB_REQUESTS_TOTAL,
     AUTOSCALING_MISSING_CURRENT_INSTANCES_TOTAL,
+    NVCF_API_RPC_REQUESTS_TOTAL,
 ];
 
 const HISTOGRAMS: [Metric; 5] = [
@@ -371,6 +379,38 @@ pub fn record_nvcf_api_request(endpoint: &str, status: &str, duration_millisecon
     histogram!(NVCF_API_REQUEST_DURATION.name, &labels).record(duration_milliseconds);
 }
 
+pub fn record_nvcf_api_rpc(endpoint: &str, code: tonic::Code) {
+    let labels = [
+        ("endpoint", endpoint.to_string()),
+        ("grpc_code", grpc_code_label(code).to_string()),
+    ];
+
+    counter!(NVCF_API_RPC_REQUESTS_TOTAL.name, &labels).increment(1);
+}
+
+/// Canonical gRPC status code name, matching the server-side `grpc_status_code` label values.
+fn grpc_code_label(code: tonic::Code) -> &'static str {
+    match code {
+        tonic::Code::Ok => "OK",
+        tonic::Code::Cancelled => "CANCELLED",
+        tonic::Code::Unknown => "UNKNOWN",
+        tonic::Code::InvalidArgument => "INVALID_ARGUMENT",
+        tonic::Code::DeadlineExceeded => "DEADLINE_EXCEEDED",
+        tonic::Code::NotFound => "NOT_FOUND",
+        tonic::Code::AlreadyExists => "ALREADY_EXISTS",
+        tonic::Code::PermissionDenied => "PERMISSION_DENIED",
+        tonic::Code::ResourceExhausted => "RESOURCE_EXHAUSTED",
+        tonic::Code::FailedPrecondition => "FAILED_PRECONDITION",
+        tonic::Code::Aborted => "ABORTED",
+        tonic::Code::OutOfRange => "OUT_OF_RANGE",
+        tonic::Code::Unimplemented => "UNIMPLEMENTED",
+        tonic::Code::Internal => "INTERNAL",
+        tonic::Code::Unavailable => "UNAVAILABLE",
+        tonic::Code::DataLoss => "DATA_LOSS",
+        tonic::Code::Unauthenticated => "UNAUTHENTICATED",
+    }
+}
+
 pub fn record_oauth2_api_request(status: &str, duration_milliseconds: f64) {
     let labels = [("status", status.to_string())];
 
@@ -461,4 +501,68 @@ fn register_counter(metric: Metric) {
 
 fn register_histogram(metric: Metric) {
     metrics::describe_histogram!(metric.name, metric.description);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+    #[test]
+    fn grpc_code_label_uses_canonical_names() {
+        assert_eq!(grpc_code_label(tonic::Code::Ok), "OK");
+        assert_eq!(grpc_code_label(tonic::Code::NotFound), "NOT_FOUND");
+        assert_eq!(
+            grpc_code_label(tonic::Code::InvalidArgument),
+            "INVALID_ARGUMENT"
+        );
+        assert_eq!(grpc_code_label(tonic::Code::Unavailable), "UNAVAILABLE");
+        assert_eq!(
+            grpc_code_label(tonic::Code::Unauthenticated),
+            "UNAUTHENTICATED"
+        );
+        assert_eq!(
+            grpc_code_label(tonic::Code::DeadlineExceeded),
+            "DEADLINE_EXCEEDED"
+        );
+    }
+
+    #[test]
+    fn record_nvcf_api_rpc_counts_by_endpoint_and_grpc_code() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            record_nvcf_api_rpc("scale_function", tonic::Code::Ok);
+            record_nvcf_api_rpc("scale_function", tonic::Code::Ok);
+            record_nvcf_api_rpc("scale_function", tonic::Code::Unavailable);
+        });
+
+        let mut counts: Vec<(Vec<(String, String)>, u64)> = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter(|(key, ..)| key.key().name() == NVCF_API_RPC_REQUESTS_TOTAL.name)
+            .map(|(key, _, _, value)| {
+                let labels = key
+                    .key()
+                    .labels()
+                    .map(|l| (l.key().to_string(), l.value().to_string()))
+                    .collect();
+                let DebugValue::Counter(count) = value else {
+                    panic!("expected a counter");
+                };
+                (labels, count)
+            })
+            .collect();
+        counts.sort();
+
+        let labels = |code: &str| {
+            vec![
+                ("endpoint".to_string(), "scale_function".to_string()),
+                ("grpc_code".to_string(), code.to_string()),
+            ]
+        };
+        assert_eq!(counts, vec![(labels("OK"), 2), (labels("UNAVAILABLE"), 1)]);
+    }
 }
