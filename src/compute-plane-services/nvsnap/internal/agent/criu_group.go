@@ -21,8 +21,11 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"k8s.io/apimachinery/pkg/types"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +43,9 @@ import (
 
 const (
 	criuGroupConfigMapPrefix = "nvsnap-criu-group-"
+	// criuGroupStateAlias marks a record that only names the record of the
+	// instance a rank belongs to (data "alias").
+	criuGroupStateAlias = "alias"
 	// criuGroupWarmup is how long an instance serves before it is
 	// captured: the engine's first requests finish its lazy setup.
 	criuGroupWarmup = 60 * time.Second
@@ -105,6 +111,15 @@ func (a *Agent) lookupCRIUGroup(ctx context.Context, key string) (webhook.CRIUGr
 			a.log.WithError(err).WithField("criuGroup", key).Warn("CRIU group restore: cannot read the group record")
 		}
 		return webhook.CRIUGroup{}, false
+	}
+	if cm.Data["state"] == criuGroupStateAlias {
+		// A rank of an instance whose ranks differ in configuration finds
+		// the instance's record through the alias of its own.
+		target := cm.Data["alias"]
+		if cm, err = a.kubeClient.CoreV1().ConfigMaps(a.criuFailedNamespace()).Get(ctx, criuGroupConfigMapName(target), metav1.GetOptions{}); err != nil {
+			return webhook.CRIUGroup{}, false
+		}
+		return parseCRIUGroup(target, cm.Data)
 	}
 	return parseCRIUGroup(key, cm.Data)
 }
@@ -238,12 +253,18 @@ func (c *criuAutoRestorer) considerGroupCapture(ctx context.Context, pod *corev1
 		c.a.log.WithError(err).WithField("namespace", pod.Namespace).Warn("CRIU group capture: cannot read the namespace's scope")
 		return
 	}
-	key := criuGroupKey(uri, scope)
+	if size == 1 {
+		// One pod: its record is known now, so a captured configuration
+		// is not waited on again.
+		if prev, err := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace()).Get(ctx, criuGroupConfigMapName(criuGroupKey(uri, scope)), metav1.GetOptions{}); err == nil && !criuGroupRecaptures(prev.Data, time.Now()) {
+			return
+		}
+	}
 	if _, busy := c.attempted.LoadOrStore("capture/"+string(pod.UID), struct{}{}); busy {
 		return
 	}
 	go func() {
-		if retry := c.captureGroup(ctx, pod, key, size); retry {
+		if retry := c.captureGroup(ctx, pod, scope, size); retry {
 			// Not ready yet: a later event of the pod tries again.
 			c.attempted.Delete("capture/" + string(pod.UID))
 		}
@@ -252,13 +273,10 @@ func (c *criuAutoRestorer) considerGroupCapture(ctx context.Context, pod *corev1
 
 // captureGroup captures leader's instance. retry is true when the
 // instance was not ready for it yet.
-func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod, key string, size int) (retry bool) {
+func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod, scope string, size int) (retry bool) {
 	a := c.a
-	log := a.log.WithFields(logrus.Fields{"criuGroup": key, "pod": leader.Namespace + "/" + leader.Name, "size": size})
+	log := a.log.WithFields(logrus.Fields{"pod": leader.Namespace + "/" + leader.Name, "size": size})
 	cms := a.kubeClient.CoreV1().ConfigMaps(a.criuFailedNamespace())
-	if prev, err := cms.Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{}); err == nil && !criuGroupRecaptures(prev.Data, time.Now()) {
-		return false // captured, being captured, or out of attempts
-	}
 	select {
 	case <-ctx.Done():
 		return false
@@ -269,13 +287,23 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		log.WithError(err).Warn("CRIU group capture: cannot list the instance's pods")
 		return true
 	}
-	uri := leader.Annotations[cacheURIAnnotation]
+	// The ranks need not share one configuration: a Grove leader and its
+	// workers come from different templates. Pods of one template must.
 	ranks, err := instanceRanks(pods.Items, leader, size, modelvolume.CacheOrdinalAnnotation, modelvolume.CacheGroupSizeAnnotation, func(p *corev1.Pod) bool {
-		return p.Annotations[cacheURIAnnotation] == uri && p.Annotations[webhook.CRIURestoreAnnotation] == "" && rootfsonly.IsPodReady(p)
+		return p.Annotations[cacheURIAnnotation] != "" && p.Annotations[webhook.CRIURestoreAnnotation] == "" && rootfsonly.IsPodReady(p)
 	})
+	if err == nil {
+		err = ranksAgreePerTemplate(ranks)
+	}
 	if err != nil {
 		log.WithError(err).Info("CRIU group capture: waiting for the whole instance")
 		return true
+	}
+	key := criuGroupKey(instanceConfigURI(ranks), scope)
+	log = log.WithField("criuGroup", key)
+	if prev, err := cms.Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{}); err == nil && !criuGroupRecaptures(prev.Data, time.Now()) {
+		c.writeGroupAliases(ctx, key, scope, ranks, log)
+		return false // captured, being captured, or out of attempts
 	}
 	for _, r := range ranks {
 		if !a.gpushareEnabledFor(r) {
@@ -344,8 +372,84 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		return true
 	}); err != nil {
 		log.WithError(err).Error("CRIU group capture: cannot update the group record")
+	} else if data["state"] == criuGroupStateComplete {
+		c.writeGroupAliases(context.WithoutCancel(ctx), key, scope, ranks, log)
 	}
 	return false
+}
+
+// instanceConfigURI is the configuration of an instance: its ranks' shared
+// configuration, or, when they differ, one derived from all of them in rank
+// order.
+func instanceConfigURI(ranks []*corev1.Pod) string {
+	uris := make([]string, len(ranks))
+	for i, r := range ranks {
+		uris[i] = r.Annotations[cacheURIAnnotation]
+	}
+	if instanceUniform(uris) {
+		return uris[0]
+	}
+	sum := sha256.Sum256([]byte(strings.Join(uris, "\n")))
+	return "cache://group-" + hex.EncodeToString(sum[:16])
+}
+
+func instanceUniform(uris []string) bool {
+	for _, u := range uris {
+		if u != uris[0] {
+			return false
+		}
+	}
+	return true
+}
+
+// ranksAgreePerTemplate refuses an instance whose pods of one template
+// (one controller) differ in configuration: a rollout in progress, which a
+// capture must not mix.
+func ranksAgreePerTemplate(ranks []*corev1.Pod) error {
+	seen := map[types.UID]*corev1.Pod{}
+	for _, r := range ranks {
+		ctrl := metav1.GetControllerOf(r)
+		if ctrl == nil {
+			continue
+		}
+		if prev, ok := seen[ctrl.UID]; ok && prev.Annotations[cacheURIAnnotation] != r.Annotations[cacheURIAnnotation] {
+			return fmt.Errorf("pods %s and %s of %s %s differ in configuration (a rollout in progress)", prev.Name, r.Name, ctrl.Kind, ctrl.Name)
+		}
+		seen[ctrl.UID] = r
+	}
+	return nil
+}
+
+// writeGroupAliases lets each rank of an instance whose ranks differ in
+// configuration find the instance's record from its own configuration, as
+// admission looks it up. A real record already under a rank's key (a
+// uniform instance of that configuration) is left alone.
+func (c *criuAutoRestorer) writeGroupAliases(ctx context.Context, key, scope string, ranks []*corev1.Pod, log *logrus.Entry) {
+	cms := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace())
+	done := map[string]bool{key: true}
+	for _, r := range ranks {
+		akey := criuGroupKey(r.Annotations[cacheURIAnnotation], scope)
+		if done[akey] {
+			continue
+		}
+		done[akey] = true
+		alias := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: criuGroupConfigMapName(akey), Labels: map[string]string{"app.kubernetes.io/managed-by": "nvsnap"}},
+			Data:       map[string]string{"state": criuGroupStateAlias, "alias": key},
+		}
+		_, err := cms.Create(ctx, alias, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			prev, gerr := cms.Get(ctx, alias.Name, metav1.GetOptions{})
+			if gerr != nil || prev.Data["state"] != criuGroupStateAlias || prev.Data["alias"] == key {
+				continue
+			}
+			prev.Data["alias"] = key
+			_, err = cms.Update(ctx, prev, metav1.UpdateOptions{})
+		}
+		if err != nil {
+			log.WithError(err).WithField("rank", r.Name).Warn("CRIU group capture: cannot record the rank's alias; it will start cold")
+		}
+	}
 }
 
 // criuGroupRecaptures reports whether a group record lets its

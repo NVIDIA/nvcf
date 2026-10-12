@@ -23,6 +23,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
@@ -46,6 +47,19 @@ func (a *Agent) retirableCheckpoints(ctx context.Context, pods []corev1.Pod, now
 		return nil, err // without the records nothing reads as unreferenced
 	}
 	named := map[string]bool{}
+	present := map[string]bool{}
+	for _, r := range records.Items {
+		present[r.Name] = true
+	}
+	for _, r := range records.Items {
+		// An alias outlives nothing: once its instance's record is gone it
+		// would only send a rank to a lookup that fails.
+		if strings.HasPrefix(r.Name, criuGroupConfigMapPrefix) && r.Data["state"] == criuGroupStateAlias && !present[criuGroupConfigMapName(r.Data["alias"])] {
+			if err := cms.Delete(ctx, r.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+				a.log.WithError(err).WithField("record", r.Name).Warn("checkpoint reaper: cannot delete an orphaned group alias")
+			}
+		}
+	}
 	for _, r := range records.Items {
 		if !strings.HasPrefix(r.Name, criuGroupConfigMapPrefix) || r.Data["state"] != criuGroupStateComplete {
 			continue

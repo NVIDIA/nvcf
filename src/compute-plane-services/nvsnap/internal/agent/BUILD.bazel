@@ -114,6 +114,7 @@ go_test(
         "criu_auto_restore_test.go",
         "criu_group_admit_test.go",
         "criu_group_guard_test.go",
+        "criu_group_hetero_test.go",
         "criu_group_lifecycle_test.go",
         "criu_group_test.go",
         "fsstore_test.go",
