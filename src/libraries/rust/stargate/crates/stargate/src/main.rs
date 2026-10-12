@@ -161,8 +161,10 @@ struct Args {
         value_name = "MS"
     )]
     registration_update_max_idle_timeout_ms: u64,
-    /// Minimum backend RTT-based routing reservation lifetime.
-    #[arg(long, default_value_t = 1, value_name = "MS")]
+    /// Minimum backend RTT-based routing reservation lifetime. The default
+    /// matches Pylon's default stats update coalescing interval, so a request
+    /// stays counted until the first change-driven update that can include it.
+    #[arg(long, default_value_t = 10, value_name = "MS")]
     routing_reservation_ttl_min_ms: u64,
     /// Maximum backend RTT-based routing reservation lifetime.
     #[arg(long, default_value_t = 1000, value_name = "MS")]
@@ -689,7 +691,7 @@ mod tests {
     #[test]
     fn routing_reservation_ttl_defaults_and_bounds_are_validated() {
         let args = parse_args("");
-        assert_eq!(args.routing_reservation_ttl_min_ms, 1);
+        assert_eq!(args.routing_reservation_ttl_min_ms, 10);
         assert_eq!(args.routing_reservation_ttl_max_ms, 1000);
         let args =
             parse_args("--routing-reservation-ttl-min-ms 20 --routing-reservation-ttl-max-ms 200");

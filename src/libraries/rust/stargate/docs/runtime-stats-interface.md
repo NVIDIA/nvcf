@@ -43,9 +43,12 @@ delay of the backend's actual load, instead of up to one heartbeat behind.
 Each dispatched request adds a local reservation until one health-check RTT
 for the selected backend has elapsed. The TTL uses that backend's RTT (not the
 cluster mean), fixed at dispatch, and is bounded by
-`--routing-reservation-ttl-min-ms` (default `1`) and
-`--routing-reservation-ttl-max-ms` (default `1000`). Registration updates do not
-clear reservations. If an update includes the request before its reservation
+`--routing-reservation-ttl-min-ms` (default `10`) and
+`--routing-reservation-ttl-max-ms` (default `1000`). The minimum matches Pylon's
+default `--stats-update-coalesce-ms`; on low-RTT links a smaller floor lets a
+reservation expire before the change-driven update that includes its request
+arrives, so routing undercounts in-flight work. Keep the minimum at or above the
+Pylon coalescing interval. Registration updates do not clear reservations. If an update includes the request before its reservation
 expires, routing temporarily counts it in both reported stats and the local
 reservation. Deploy Pylons with change-driven stats updates before deploying
 this Stargate version; the RTT-based expiry can otherwise leave a short gap
