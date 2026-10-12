@@ -247,11 +247,7 @@ impl NatsService {
                 let last_failure = event_last_failure.clone();
                 async move {
                     record_nats_event(&event);
-                    if let Some(reason) = classify_event(&event) {
-                        last_failure.set(reason);
-                    } else if matches!(event, Event::Connected) {
-                        last_failure.clear();
-                    }
+                    last_failure.observe(&event);
                     let _ = tx.send(event).await;
                 }
             });
@@ -417,10 +413,7 @@ impl NatsService {
             State::Connected => Ok(()),
             _ => {
                 record_nats_error_total();
-                match self.last_failure.get() {
-                    NatsFailureReason::None => Err(anyhow::anyhow!("nats not connected")),
-                    reason => Err(anyhow::anyhow!("nats not connected: {}", reason.as_str())),
-                }
+                Err(self.last_failure.not_connected_error())
             }
         }
     }

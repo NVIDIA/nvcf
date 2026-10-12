@@ -72,8 +72,19 @@ impl LastNatsFailure {
         self.0.store(reason as u8, Ordering::Relaxed);
     }
 
-    pub fn clear(&self) {
-        self.set(NatsFailureReason::None);
+    pub fn observe(&self, event: &Event) {
+        if let Some(reason) = classify_event(event) {
+            self.set(reason);
+        } else if matches!(event, Event::Connected) {
+            self.set(NatsFailureReason::None);
+        }
+    }
+
+    pub fn not_connected_error(&self) -> anyhow::Error {
+        match self.get() {
+            NatsFailureReason::None => anyhow::anyhow!("nats not connected"),
+            reason => anyhow::anyhow!("nats not connected: {}", reason.as_str()),
+        }
     }
 
     pub fn get(&self) -> NatsFailureReason {
@@ -265,7 +276,27 @@ mod tests {
         assert_eq!(last.get(), NatsFailureReason::None);
         last.set(NatsFailureReason::Timeout);
         assert_eq!(last.get(), NatsFailureReason::Timeout);
-        last.clear();
+    }
+
+    #[test]
+    fn last_failure_tracks_events() {
+        let last = LastNatsFailure::default();
+        last.observe(&Event::ServerError(ServerError::AuthorizationViolation));
+        assert_eq!(last.get(), NatsFailureReason::Authentication);
+        last.observe(&Event::Disconnected);
+        assert_eq!(last.get(), NatsFailureReason::Authentication);
+        last.observe(&Event::Connected);
         assert_eq!(last.get(), NatsFailureReason::None);
+    }
+
+    #[test]
+    fn not_connected_error_includes_reason() {
+        let last = LastNatsFailure::default();
+        assert_eq!(last.not_connected_error().to_string(), "nats not connected");
+        last.set(NatsFailureReason::TlsCertExpired);
+        assert_eq!(
+            last.not_connected_error().to_string(),
+            "nats not connected: tls_cert_expired"
+        );
     }
 }
