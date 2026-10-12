@@ -18,7 +18,7 @@ The chart values are organized into two layers:
    node placement, network policies, observability, agent resources, and agent runtime config.
    Examples: `image`, `ngcConfig`, `nodeSelector`, `networkPolicy`, `agent`,
    `agentConfig`.
-2. **\`\`selfManaged.\*\`\`**: Used when `ngcConfig.clusterSource` is `"self-managed"`.
+2. \`\`selfManaged.\*\`\`: Used when `ngcConfig.clusterSource` is `"self-managed"`.
    These define the backend configuration including NVCA version, feature gates, cluster
    attributes, and manual GPU config.
 
@@ -31,7 +31,7 @@ The key field is \`\`ngcConfig.clusterSource\`\`:
 image:
   repository: "nvcr.io/nvidia/nvcf-byoc/nvca-operator"
 ngcConfig:
-  clusterSource: "helm-managed"    # ← This determines which section below is used
+  clusterSource: "helm-managed"    # This determines which section below is used
   serviceKey: "<your-key>"
 nodeSelector:
   key: "node.kubernetes.io/instance-type"
