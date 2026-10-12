@@ -14,7 +14,7 @@
 # limitations under the License.
 
 # Helm hook Job that provisions the OpenBao JWT signing roles the nvcf-ui BFF
-# server needs to mint cluster, NVCF API, and NVCT tokens. Runs pre-install and
+# server needs to mint SIS, NVCF API, and NVCT tokens. Runs pre-install and
 # pre-upgrade so the auth role and sign policies exist before the server pods
 # come up and the Vault Agent tries to log in.
 {{- $bao := .Values.nvcfUi.openbaoMigrations }}

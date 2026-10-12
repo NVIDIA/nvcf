@@ -14,13 +14,8 @@
 # limitations under the License.
 
 apiVersion: v2
-name: helm-nvcf-ui
+appVersion: 1.1.2
 description: NVCF UI — Graphical User Interface for NVIDIA Cloud Foundation
+name: helm-nvcf-ui
 type: application
-
-# Chart version. Autoversioned by the release pipeline.
-version: 0.1.0
-
-# The nvcf-ui image tag defaults to this appVersion; the release pipeline stamps
-# it to the release version at package time.
-appVersion: "0.1.0"
+version: 1.1.2
