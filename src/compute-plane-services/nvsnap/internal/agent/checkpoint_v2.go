@@ -589,13 +589,31 @@ func moveDirContents(src, dst string) error {
 func tailOfFile(path string, n int) string {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return "(no dump.log)"
+		return "(no " + filepath.Base(path) + ")"
 	}
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+	// CRIU's first errors name the cause; the tail is how it gave up
+	// ("Unfreezing tasks", "Dumping FAILED"). Report both.
+	var first []string
+	for i, l := range lines {
+		if i >= len(lines)-n {
+			break
+		}
+		if strings.Contains(l, "Error (") {
+			first = append(first, l)
+			if len(first) == 3 {
+				break
+			}
+		}
+	}
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
-	return strings.Join(lines, " | ")
+	tail := strings.Join(lines, " | ")
+	if len(first) > 0 {
+		return "first errors: " + strings.Join(first, " | ") + " ... " + tail
+	}
+	return tail
 }
 
 // criuCompressBlockFlag returns the block-compression option the given

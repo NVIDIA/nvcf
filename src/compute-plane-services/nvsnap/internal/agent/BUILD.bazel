@@ -109,6 +109,7 @@ go_test(
         "catalog_test.go",
         "checkpoint_reaper_test.go",
         "checkpoint_v2_test.go",
+        "client_limits_test.go",
         "copy_file_exec_test.go",
         "criu_auto_restore_test.go",
         "criu_group_admit_test.go",
@@ -151,8 +152,8 @@ go_test(
         "restoreoverlay_test.go",
         "rootfs_diff_test.go",
         "rootfs_wholerootfs_guard_test.go",
-        "client_limits_test.go",
         "rootfsonly_integration_test.go",
+        "tail_of_file_test.go",
     ],
     embed = [":agent"],
     deps = [
