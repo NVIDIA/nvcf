@@ -48,7 +48,9 @@ assert_kind_count "${rendered}" PodDisruptionBudget 1
 assert_contains "${rendered}" '- "*.grpc-worker.example.com"'
 assert_contains "${rendered}" '- "*.grpc-headless.nvcf.svc.cluster.local"'
 assert_contains "${rendered}" 'regex: '"'"'^\d+-\d+-\d+-\d+\.invocation\.nvcf\.svc\.cluster\.local:8080$'"'"
+assert_contains "${rendered}" 'domain ~= "grpc-worker.example.com"'
 assert_contains "${rendered}" 'drain_listeners?graceful'
+assert_contains "${rendered}" '- gradual'
 assert_contains "${rendered}" 'readOnlyRootFilesystem: true'
 
 rendered="$(render --set-string workerCallbackProxy.tls.frontend.existingSecret=worker-tls)"

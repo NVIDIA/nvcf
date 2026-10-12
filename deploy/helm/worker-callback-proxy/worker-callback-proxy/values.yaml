@@ -106,9 +106,10 @@ workerCallbackProxy:
   logLevel: info
 
   # Seconds Envoy spends draining listeners. The preStop hook starts the drain
-  # and then waits preStopSleepSeconds before Kubernetes sends SIGTERM.
+  # and then waits preStopSleepSeconds before Kubernetes sends SIGTERM, which
+  # ends Envoy at once, so keep the sleep at least drainTimeSeconds.
   drainTimeSeconds: 30
-  preStopSleepSeconds: 15
+  preStopSleepSeconds: 30
   terminationGracePeriodSeconds: 60
 
   timeouts:

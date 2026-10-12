@@ -62,7 +62,7 @@ spec:
             - --drain-time-s
             - {{ $c.drainTimeSeconds | quote }}
             - --drain-strategy
-            - immediate
+            - gradual
             - --disable-hot-restart
             - -l
             - {{ $c.logLevel | quote }}
