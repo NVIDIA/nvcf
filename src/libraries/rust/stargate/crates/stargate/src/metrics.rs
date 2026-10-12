@@ -111,11 +111,11 @@ define_stargate_metrics! {
         proxy_replay_buffer_bytes("proxy_replay_buffer_bytes", "Bytes currently retained for proxied request body replay", ["model"], [0.0, 1024.0, 4096.0, 16_384.0, 65_536.0, 262_144.0, 1_048_576.0, 4_194_304.0, 16_777_216.0, 67_108_864.0]);
         proxy_duration_seconds("proxy_duration_seconds", "Time to first byte from upstream", ["routing_key", "model", "inference_server_id"], [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0]);
         routing_duration_seconds("routing_duration_seconds", "Time spent selecting an inference server", ["routing_key", "model"], [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0]);
-        routing_reservation_ttl_seconds("routing_reservation_ttl_seconds", "Configured lifetime of routing reservations", ["routing_key", "model"], [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]);
+        routing_reservation_ttl_seconds("routing_reservation_ttl_seconds", "Lifetime assigned to each routing reservation at dispatch", ["routing_key", "model"], [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]);
     }
     gauges {
         active_inference_servers("active_inference_servers", "Active inference servers available for a routing target", ["routing_key", "model"]);
-        routing_reservations_active("routing_reservations_active", "Active in-flight routing reservations", ["routing_key", "model"]);
+        routing_reservations_active("routing_reservations_active", "Routing reservations not yet released or pruned; expired reservations count until the next snapshot read or update prunes them", ["routing_key", "model"]);
         tls_certificate_expiry_seconds("tls_certificate_expiry_seconds", "Unix timestamp when the active TLS certificate expires", ["material_type"]);
     }
 }
