@@ -277,6 +277,12 @@
       "id": "nvcf-ui",
       "path": "src/uis/nvcf-ui",
       "service_name": "nvcf-ui"
+    },
+    {
+      "id": "nvcf-ui-helm",
+      "path": "src/uis/nvcf-ui/helm",
+      "service_name": "helm-nvcf-ui",
+      "initial_version": "1.1.3"
     }
   ]
 }
