@@ -72,6 +72,12 @@ kind: DynamoGraphDeployment
 metadata: {name: {{ $name }}}
 spec:
   backendFramework: vllm
+  {{- if $v.dynamo.etcdNats }}
+  envs:
+    - {name: NATS_SERVER, value: "nats://mini-service-nats:4222"}
+    - {name: ETCD_ENDPOINTS, value: "mini-service-etcd:2379"}
+    - {name: DYN_REQUEST_PLANE, value: nats}
+  {{- end }}
   services:
     Frontend:
       componentType: frontend

@@ -5,6 +5,8 @@
 # turns into Grove PodCliques. Multi-pod capture is opt-in.
 kind: DynamoGraphDeployment
 podsPerInstance: 2
+dynamo:
+  etcdNats: true
 criuCapture: true
 function:
   inferenceUrl: /v1/chat/completions
