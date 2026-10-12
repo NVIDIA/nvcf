@@ -72,6 +72,10 @@ impl LastNatsFailure {
         self.0.store(reason as u8, Ordering::Relaxed);
     }
 
+    pub fn clear(&self) {
+        self.set(NatsFailureReason::None);
+    }
+
     pub fn get(&self) -> NatsFailureReason {
         NatsFailureReason::from_u8(self.0.load(Ordering::Relaxed))
     }
@@ -151,14 +155,14 @@ fn classify_rustls(err: &RustlsError) -> NatsFailureReason {
 // Runtime events only carry the error as a string.
 fn classify_message(msg: &str) -> NatsFailureReason {
     let msg = msg.to_ascii_lowercase();
-    if msg.contains("expired") {
+    if msg.contains("authorization") || msg.contains("authentication") {
+        NatsFailureReason::Authentication
+    } else if msg.contains("certificate") && msg.contains("expired") {
         NatsFailureReason::TlsCertExpired
     } else if msg.contains("certificate") || msg.contains("unknownissuer") {
         NatsFailureReason::TlsVerification
     } else if msg.contains("tls") || msg.contains("handshake") {
         NatsFailureReason::Tls
-    } else if msg.contains("authorization") || msg.contains("authentication") {
-        NatsFailureReason::Authentication
     } else if msg.contains("timed out") || msg.contains("timeout") {
         NatsFailureReason::Timeout
     } else if msg.contains("connection") || msg.contains("io error") || msg.contains("dns") {
@@ -242,6 +246,10 @@ mod tests {
             NatsFailureReason::TlsVerification
         );
         assert_eq!(
+            classify_server_error(&ServerError::Other("authentication token expired".into())),
+            NatsFailureReason::Authentication
+        );
+        assert_eq!(
             classify_client_error(&ClientError::MaxReconnects),
             NatsFailureReason::Connection
         );
@@ -257,5 +265,7 @@ mod tests {
         assert_eq!(last.get(), NatsFailureReason::None);
         last.set(NatsFailureReason::Timeout);
         assert_eq!(last.get(), NatsFailureReason::Timeout);
+        last.clear();
+        assert_eq!(last.get(), NatsFailureReason::None);
     }
 }

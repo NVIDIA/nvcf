@@ -249,6 +249,8 @@ impl NatsService {
                     record_nats_event(&event);
                     if let Some(reason) = classify_event(&event) {
                         last_failure.set(reason);
+                    } else if matches!(event, Event::Connected) {
+                        last_failure.clear();
                     }
                     let _ = tx.send(event).await;
                 }
