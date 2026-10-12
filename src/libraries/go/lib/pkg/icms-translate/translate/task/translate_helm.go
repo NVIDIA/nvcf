@@ -348,6 +348,7 @@ func translateHelmChart(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 			essDataVolumeMount,
 		}
 		utilsPod.Spec.InitContainers = append(utilsPod.Spec.InitContainers, essInitContainer)
+		common.EnsureESSFSGroup(&utilsPod.Spec)
 	}
 
 	utilsContainer := corev1.Container{

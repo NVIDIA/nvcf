@@ -311,6 +311,7 @@ func translateHelmChartUtilsDeploy(t CreationQueueMessage, tcfg TranslateConfig)
 			essDataVolumeMount,
 		}
 		utilsPod.Spec.InitContainers = append(utilsPod.Spec.InitContainers, essInitContainer)
+		common.EnsureESSFSGroup(&utilsPod.Spec)
 	}
 
 	utilsContainer := corev1.Container{
@@ -341,6 +342,7 @@ func translateHelmChartUtilsDeploy(t CreationQueueMessage, tcfg TranslateConfig)
 					Labels: translateutil.MergeMaps(utilsPod.Labels, commonLabels),
 				},
 				Spec: corev1.PodSpec{
+					SecurityContext:               utilsPod.Spec.SecurityContext,
 					AutomountServiceAccountToken:  translateutil.NewBoolPtr(false),
 					TerminationGracePeriodSeconds: new(int64),
 					Affinity:                      &corev1.Affinity{},

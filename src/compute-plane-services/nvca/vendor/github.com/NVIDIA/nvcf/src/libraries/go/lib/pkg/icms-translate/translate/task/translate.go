@@ -427,6 +427,7 @@ func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 				essDataVolumeMount,
 			}
 			pod.Spec.InitContainers = append(pod.Spec.InitContainers, essInitContainer)
+			common.EnsureESSFSGroup(&pod.Spec)
 		}
 
 		utilsContainer := corev1.Container{

@@ -541,6 +541,7 @@ func getUtilsDeploymentAndSecrets(t CreationQueueMessage, tcfg TranslateConfig) 
 			essDataVolumeMount,
 		}
 		utilsPod.Spec.InitContainers = append(utilsPod.Spec.InitContainers, essInitContainer)
+		common.EnsureESSFSGroup(&utilsPod.Spec)
 	}
 
 	utilsContainer := corev1.Container{
@@ -572,6 +573,7 @@ func getUtilsDeploymentAndSecrets(t CreationQueueMessage, tcfg TranslateConfig) 
 					Annotations: commonAnnotations,
 				},
 				Spec: corev1.PodSpec{
+					SecurityContext:               utilsPod.Spec.SecurityContext,
 					AutomountServiceAccountToken:  translateutil.NewBoolPtr(false),
 					TerminationGracePeriodSeconds: new(int64),
 					Affinity:                      &corev1.Affinity{},
