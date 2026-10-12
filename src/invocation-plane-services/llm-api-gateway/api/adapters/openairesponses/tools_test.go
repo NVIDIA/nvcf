@@ -970,12 +970,26 @@ func TestBrowserSearchTool_Validate(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "valid web_search tool",
+			tool: &BrowserSearchTool{
+				ToolBase: ToolBase{Type: "web_search"},
+			},
+			wantErr: false,
+		},
+		{
+			name: "valid dated web_search tool",
+			tool: &BrowserSearchTool{
+				ToolBase: ToolBase{Type: "web_search_2025_08_26"},
+			},
+			wantErr: false,
+		},
+		{
 			name: "invalid type",
 			tool: &BrowserSearchTool{
 				ToolBase: ToolBase{Type: "function"},
 			},
 			wantErr: true,
-			errMsg:  "must be 'browser_search' or 'web_search_preview*'",
+			errMsg:  "must be 'browser_search' or 'web_search*'",
 		},
 	}
 
@@ -1421,4 +1435,63 @@ func TestCustomToolCall_OutputItemMarshal(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(out), `"call_id":"c1"`)
 	require.Contains(t, string(out), `"namespace":"editor"`)
+}
+
+func TestUnmarshalTool_WebSearch(t *testing.T) {
+	tool, err := UnmarshalTool([]byte(`{
+		"type": "web_search",
+		"external_web_access": false,
+		"filters": {"allowed_domains": ["example.com"]},
+		"user_location": {"type": "approximate", "country": "US"},
+		"search_context_size": "low"
+	}`))
+	require.NoError(t, err)
+	require.NoError(t, tool.Validate())
+
+	browserTool, ok := tool.(*BrowserSearchTool)
+	require.True(t, ok)
+	require.Equal(t, "web_search", browserTool.Type)
+	require.Equal(t, "low", ptr.Deref(browserTool.SearchContextSize))
+}
+
+func TestCreateRequest_CodexToolSet(t *testing.T) {
+	var req CreateRequest
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"model": "m",
+		"instructions": "x",
+		"tool_choice": "auto",
+		"parallel_tool_calls": false,
+		"reasoning": null,
+		"store": false,
+		"stream": true,
+		"include": [],
+		"prompt_cache_key": "k",
+		"client_metadata": {"x-codex-installation-id": "i"},
+		"tools": [
+			{"type":"function","name":"exec_command","parameters":{"type":"object","properties":{"cmd":{"type":"string"}}}},
+			`+namespaceToolJSON+`,
+			{"type":"custom","name":"apply_patch","format":{"type":"grammar","syntax":"lark","definition":"start: /.+/"}},
+			{"type":"web_search","external_web_access":false},
+			{"type":"tool_search","execution":"client","description":"Find tools.","parameters":{"type":"object"}}
+		],
+		"input": [{"role":"user","content":[{"type":"input_text","text":"hi"}]}]
+	}`), &req))
+	require.NoError(t, req.Validate())
+	require.Len(t, req.Tools, 5)
+}
+
+func TestUnmarshalTool_ToolSearch(t *testing.T) {
+	tool, err := UnmarshalTool([]byte(`{
+		"type": "tool_search",
+		"execution": "client",
+		"description": "Search for tools.",
+		"parameters": {"type": "object", "properties": {"query": {"type": "string"}}}
+	}`))
+	require.NoError(t, err)
+	require.NoError(t, tool.Validate())
+
+	search, ok := tool.(*ToolSearchTool)
+	require.True(t, ok)
+	require.Equal(t, "client", search.Execution)
+	require.Equal(t, "Search for tools.", ptr.Deref(search.Description))
 }

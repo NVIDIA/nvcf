@@ -36,6 +36,7 @@ const (
 	ToolTypeMCP             = "mcp"
 	ToolTypeNamespace       = "namespace"
 	ToolTypeCustom          = "custom"
+	ToolTypeToolSearch      = "tool_search"
 
 	// Tool choice options
 	ToolChoiceNone     = "none"
@@ -68,11 +69,14 @@ var (
 	_ Tool = (*MCPTool)(nil)
 	_ Tool = (*NamespaceTool)(nil)
 	_ Tool = (*CustomTool)(nil)
+	_ Tool = (*ToolSearchTool)(nil)
 )
 
-// isBrowserSearchType checks if a tool type is a browser search variant
+// isBrowserSearchType checks if a tool type is a browser search variant:
+// browser_search, web_search, and the web_search_preview and dated web_search_*
+// variants.
 func isBrowserSearchType(toolType string) bool {
-	return toolType == ToolTypeBrowserSearch || strings.HasPrefix(toolType, "web_search_preview")
+	return toolType == ToolTypeBrowserSearch || strings.HasPrefix(toolType, "web_search")
 }
 
 // Tool interface represents different types of tools
@@ -154,6 +158,29 @@ func (t *CustomTool) Validate() error {
 		return &UnmarshalError{
 			Field: "name",
 			Msg:   "is required for custom tools",
+		}
+	}
+	return nil
+}
+
+// ToolSearchTool lets the model search for tools to load. Execution says whether
+// the client or the server runs the search.
+type ToolSearchTool struct {
+	ToolBase
+
+	Execution   string         `json:"execution,omitempty"`
+	Description *string        `json:"description,omitempty"`
+	Parameters  map[string]any `json:"parameters,omitempty"`
+}
+
+func (t *ToolSearchTool) Validate() error {
+	if err := t.ValidateType(); err != nil {
+		return err
+	}
+	if t.Type != ToolTypeToolSearch {
+		return &UnmarshalError{
+			Field: "type",
+			Msg:   "must be 'tool_search' for ToolSearchTool",
 		}
 	}
 	return nil
@@ -270,7 +297,7 @@ func (t *BrowserSearchTool) Validate() error {
 	if !isBrowserSearchType(t.Type) {
 		return &UnmarshalError{
 			Field: "type",
-			Msg:   "must be 'browser_search' or 'web_search_preview*' for BrowserSearchTool",
+			Msg:   "must be 'browser_search' or 'web_search*' for BrowserSearchTool",
 		}
 	}
 	return nil
@@ -607,6 +634,12 @@ func UnmarshalTool(data []byte) (Tool, error) {
 		return &tool, nil
 	case typeOnly.Type == ToolTypeMCP:
 		var tool MCPTool
+		if err := json.Unmarshal(data, &tool); err != nil {
+			return nil, err
+		}
+		return &tool, nil
+	case typeOnly.Type == ToolTypeToolSearch:
+		var tool ToolSearchTool
 		if err := json.Unmarshal(data, &tool); err != nil {
 			return nil, err
 		}
