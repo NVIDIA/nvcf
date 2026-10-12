@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# vLLM-Omni, Qwen-Image 2512 (as bench-qwen-image-2512). The image is amd64 only.
+kind: Deployment
+launch: exec
+engine: command
+command: vllm serve Qwen/Qwen-Image-2512 --omni --host 0.0.0.0 --port 8000 --tensor-parallel-size 1
+image: docker.io/vllm/vllm-omni:v0.20.0
+healthPath: /health
+function:
+  inferenceUrl: /v1/chat/completions
+  secrets: [HF_TOKEN]
+  arch: [amd64]
