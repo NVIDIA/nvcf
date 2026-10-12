@@ -933,7 +933,19 @@ static int holder(const int *pids, int n, unsigned timeout_ms, int report_fd)
     }
     ok = 1;
 
-out:
+out:;
+    /* Block the control signals before anyone can learn this holder exists:
+     * a resume or stop sent between the success report and the block would
+     * take its default action and kill the holder, losing the freeze while
+     * GPU state stays checkpointed. Blocked, they wait for sigwait below. */
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    sigaddset(&set, SIGUSR2);
+    sigaddset(&set, SIGTERM);
+    sigaddset(&set, SIGINT);
+    sigprocmask(SIG_BLOCK, &set, NULL);
+
     snprintf(buf, sizeof(buf), "%d\n", ok ? (int)getpid() : 0);
     for (int i = 0; ok && i < n; i++) {
         state_path(path, sizeof(path), pids[i], "holder");
@@ -944,13 +956,6 @@ out:
     if (!ok) { free(fz); return 1; }
 
     /* Hold the freeze until resume (SIGUSR1/SIGTERM/SIGINT) or stop (SIGUSR2). */
-    sigset_t set;
-    sigemptyset(&set);
-    sigaddset(&set, SIGUSR1);
-    sigaddset(&set, SIGUSR2);
-    sigaddset(&set, SIGTERM);
-    sigaddset(&set, SIGINT);
-    sigprocmask(SIG_BLOCK, &set, NULL);
 
     char result[256];
     state_path(result, sizeof(result), pids[0], "result");
