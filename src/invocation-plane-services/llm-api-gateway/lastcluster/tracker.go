@@ -36,12 +36,28 @@ import (
 // DefaultWriteTimeout bounds one background store write.
 const DefaultWriteTimeout = time.Second
 
+// Default caps on store calls still running in the background. The Olric
+// client does not always honor context cancellation, so a lookup can outlive
+// its deadline and a write can outlive its timeout. The caps bound the
+// goroutines, and the request contexts they hold, when the store is slow or
+// stuck. At the cap, lookups and writes are skipped instead of queued.
+const (
+	DefaultMaxInflightLookups = 1024
+	DefaultMaxInflightWrites  = 1024
+)
+
+var errCapacity = errors.New("last-cluster store has too many calls in flight")
+
 // Options configures a Tracker.
 type Options struct {
 	TTL           time.Duration
 	LookupTimeout time.Duration
 	// WriteTimeout bounds one background write. Zero uses DefaultWriteTimeout.
 	WriteTimeout time.Duration
+	// MaxInflightLookups and MaxInflightWrites cap store calls still running.
+	// Zero uses the defaults.
+	MaxInflightLookups int
+	MaxInflightWrites  int
 }
 
 // Tracker looks up and records the last cluster per session. A nil Tracker is
@@ -50,19 +66,35 @@ type Tracker struct {
 	store Store
 	opts  Options
 
-	// inflight counts background writes. idle is closed when it drops to
-	// zero. A WaitGroup is not used because writes may start while Drain is
-	// waiting during shutdown.
-	mu       sync.Mutex
-	inflight int
-	idle     chan struct{}
+	// lookupSlots holds one token per lookup whose store call has not
+	// returned yet.
+	lookupSlots chan struct{}
+
+	// writes counts background writes. idle is closed when it drops to zero.
+	// A WaitGroup is not used because writes may start while Drain waits.
+	mu     sync.Mutex
+	writes int
+	idle   chan struct{}
+
+	// drainWaitHook runs each time Drain is about to wait. Tests only.
+	drainWaitHook func()
 }
 
 func NewTracker(store Store, opts Options) *Tracker {
 	if opts.WriteTimeout <= 0 {
 		opts.WriteTimeout = DefaultWriteTimeout
 	}
-	return &Tracker{store: store, opts: opts}
+	if opts.MaxInflightLookups <= 0 {
+		opts.MaxInflightLookups = DefaultMaxInflightLookups
+	}
+	if opts.MaxInflightWrites <= 0 {
+		opts.MaxInflightWrites = DefaultMaxInflightWrites
+	}
+	return &Tracker{
+		store:       store,
+		opts:        opts,
+		lookupSlots: make(chan struct{}, opts.MaxInflightLookups),
+	}
 }
 
 // eligibleSource reports whether a session source yields a key that stays
@@ -113,29 +145,19 @@ func (t *Tracker) Lookup(
 	setFunctionID(span, reqCtx.RoutingKey)
 	lookupCtx = trace.ContextWithSpan(lookupCtx, span)
 
-	// The store call runs in its own goroutine so a store that ignores
-	// context cancellation still cannot hold the request past the deadline.
-	done := make(chan lookupResult, 1)
-	go func() {
-		value, ok, err := t.store.Get(lookupCtx, key)
-		done <- lookupResult{value: value, ok: ok, err: err}
-	}()
-
 	var res lookupResult
 	select {
-	case res = <-done:
-	case <-lookupCtx.Done():
-		// Prefer a result that landed at the deadline.
-		select {
-		case res = <-done:
-		default:
-			res.err = lookupCtx.Err()
-		}
+	case t.lookupSlots <- struct{}{}:
+		res = t.runLookup(lookupCtx, key)
+	default:
+		res.err = errCapacity
 	}
 
 	result := telemetry.LastClusterLookupMiss
 	switch {
-	case errors.Is(res.err, context.DeadlineExceeded), errors.Is(res.err, context.Canceled):
+	case errors.Is(res.err, context.DeadlineExceeded),
+		errors.Is(res.err, context.Canceled),
+		errors.Is(res.err, errCapacity):
 		result = telemetry.LastClusterLookupTimeout
 	case res.err != nil:
 		result = telemetry.LastClusterLookupError
@@ -156,8 +178,7 @@ func (t *Tracker) Lookup(
 	if result == telemetry.LastClusterLookupTimeout {
 		// A slow store times out every lookup at once; the counter and span
 		// already count each one, so sample the log.
-		sampled := logger.Sample(zerolog.Often)
-		logger = &sampled
+		logger = sampled(logger)
 	}
 	logger.Warn().
 		Err(res.err).
@@ -167,6 +188,45 @@ func (t *Tracker) Lookup(
 		Str("result", result).
 		Msg("stargate last-cluster lookup failed")
 	return key, clusterID
+}
+
+// runLookup calls the store in its own goroutine so a store that ignores
+// context cancellation still cannot hold the request past the deadline. The
+// caller has taken a lookup slot; the goroutine frees it when the store call
+// returns, not at the deadline.
+func (t *Tracker) runLookup(ctx context.Context, key string) lookupResult {
+	done := make(chan lookupResult, 1)
+	go func() {
+		defer func() { <-t.lookupSlots }()
+		value, ok, err := t.store.Get(ctx, key)
+		done <- lookupResult{value: value, ok: ok, err: err}
+	}()
+
+	select {
+	case res := <-done:
+		return res
+	case <-ctx.Done():
+		// Prefer a result that landed at the deadline.
+		select {
+		case res := <-done:
+			return res
+		default:
+			return lookupResult{err: ctx.Err()}
+		}
+	}
+}
+
+// InflightLookups returns the number of store lookups that have not returned.
+func (t *Tracker) InflightLookups() int {
+	if t == nil {
+		return 0
+	}
+	return len(t.lookupSlots)
+}
+
+func sampled(logger *zerolog.Logger) *zerolog.Logger {
+	l := logger.Sample(zerolog.Often)
+	return &l
 }
 
 // setFunctionID tags the span with the function ID, which the gateway takes
@@ -179,7 +239,8 @@ func setFunctionID(span trace.Span, routingKey string) {
 
 // Remember records clusterID for the session in the background when status is
 // 2xx. key and model are the values Lookup used. It never blocks the caller.
-// Empty, oversized, or non-printable cluster IDs are ignored.
+// Empty, oversized, or non-printable cluster IDs are ignored. When the write
+// cap is reached, the write is dropped and counted as an error.
 func (t *Tracker) Remember(
 	ctx context.Context,
 	reqCtx *requestctx.RequestContext,
@@ -199,11 +260,25 @@ func (t *Tracker) Remember(
 	if reqCtx != nil {
 		requestID, routingKey = reqCtx.RequestID, reqCtx.RoutingKey
 	}
+	logFailure := func(logger *zerolog.Logger, err error) {
+		logger.Warn().
+			Err(err).
+			Str("request_id", requestID).
+			Str("model", model).
+			Str("routing_key", routingKey).
+			Msg("stargate last-cluster write failed")
+	}
+
+	if !t.beginWrite() {
+		telemetry.RecordLastClusterWrite(ctx, telemetry.LastClusterWriteError)
+		logFailure(sampled(telemetry.Logger(ctx)), errCapacity)
+		return
+	}
 
 	// The write outlives the request: keep the trace and logger from ctx but
-	// not its cancellation.
+	// not its cancellation. The goroutine, and the context it holds, end when
+	// the store call returns.
 	writeCtx := context.WithoutCancel(ctx)
-	t.beginWrite()
 	go func() {
 		defer t.endWrite()
 		writeCtx, cancel := context.WithTimeout(writeCtx, t.opts.WriteTimeout)
@@ -218,50 +293,67 @@ func (t *Tracker) Remember(
 			result = telemetry.LastClusterWriteError
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "last cluster write failed")
-			telemetry.Logger(writeCtx).Warn().
-				Err(err).
-				Str("request_id", requestID).
-				Str("model", model).
-				Str("routing_key", routingKey).
-				Msg("stargate last-cluster write failed")
+			logFailure(telemetry.Logger(writeCtx), err)
 		}
 		span.SetAttributes(attribute.String("result", result))
 		telemetry.RecordLastClusterWrite(writeCtx, result)
 	}()
 }
 
-func (t *Tracker) beginWrite() {
+// beginWrite reserves a write slot. It returns false at the write cap.
+func (t *Tracker) beginWrite() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.inflight == 0 {
+	if t.writes >= t.opts.MaxInflightWrites {
+		return false
+	}
+	if t.writes == 0 {
 		t.idle = make(chan struct{})
 	}
-	t.inflight++
+	t.writes++
+	return true
 }
 
 func (t *Tracker) endWrite() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.inflight--
-	if t.inflight == 0 {
+	t.writes--
+	if t.writes == 0 {
 		close(t.idle)
 	}
 }
 
-// Drain waits until no background write is in flight or ctx is done.
+// InflightWrites returns the number of store writes that have not returned.
+func (t *Tracker) InflightWrites() int {
+	if t == nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.writes
+}
+
+// Drain waits until no background write is in flight or ctx is done. Writes
+// that start while Drain waits are waited for too.
 func (t *Tracker) Drain(ctx context.Context) {
 	if t == nil {
 		return
 	}
-	t.mu.Lock()
-	if t.inflight == 0 {
+	for {
+		t.mu.Lock()
+		if t.writes == 0 {
+			t.mu.Unlock()
+			return
+		}
+		idle := t.idle
 		t.mu.Unlock()
-		return
-	}
-	idle := t.idle
-	t.mu.Unlock()
-	select {
-	case <-idle:
-	case <-ctx.Done():
+		if t.drainWaitHook != nil {
+			t.drainWaitHook()
+		}
+		select {
+		case <-idle:
+		case <-ctx.Done():
+			return
+		}
 	}
 }

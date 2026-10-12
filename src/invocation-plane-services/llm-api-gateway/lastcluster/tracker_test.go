@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -51,6 +52,7 @@ type fakeStore struct {
 	getErr   error
 	setErr   error
 	blockGet chan struct{}
+	blockSet chan struct{}
 }
 
 func newFakeStore() *fakeStore {
@@ -73,6 +75,12 @@ func (s *fakeStore) Get(_ context.Context, key string) (string, bool, error) {
 }
 
 func (s *fakeStore) Set(_ context.Context, key, value string, _ time.Duration) error {
+	s.mu.Lock()
+	block := s.blockSet
+	s.mu.Unlock()
+	if block != nil {
+		<-block
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sets++
@@ -520,4 +528,146 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+func TestTrackerCapsStuckStoreCalls(t *testing.T) {
+	reader := installMetricReader(t)
+	ctx := context.Background()
+	store := newFakeStore()
+	unblock := make(chan struct{})
+	store.blockGet = unblock
+	store.blockSet = unblock
+	const maxInflight = 4
+	const calls = 50
+	tracker := NewTracker(store, Options{
+		TTL:                time.Minute,
+		LookupTimeout:      5 * time.Millisecond,
+		MaxInflightLookups: maxInflight,
+		MaxInflightWrites:  maxInflight,
+	})
+	reqCtx := sessionCtx(requestctx.SessionSourceHeader)
+	baseline := runtime.NumGoroutine()
+
+	start := time.Now()
+	for i := 0; i < calls; i++ {
+		key, clusterID := tracker.Lookup(ctx, reqCtx, reqCtx.Model)
+		if key == "" || clusterID != "" {
+			t.Fatalf("Lookup() = %q, %q; want key and no cluster", key, clusterID)
+		}
+		tracker.Remember(ctx, reqCtx, reqCtx.Model, key, http.StatusOK, "cluster-b")
+	}
+	// Only the first maxInflight lookups wait for their deadline.
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("%d calls against a stuck store took %s", calls, elapsed)
+	}
+	if got := tracker.InflightLookups(); got != maxInflight {
+		t.Fatalf("InflightLookups() = %d, want %d", got, maxInflight)
+	}
+	if got := tracker.InflightWrites(); got != maxInflight {
+		t.Fatalf("InflightWrites() = %d, want %d", got, maxInflight)
+	}
+	if delta := runtime.NumGoroutine() - baseline; delta > 2*maxInflight+4 {
+		t.Fatalf("goroutines grew by %d, want at most %d", delta, 2*maxInflight+4)
+	}
+	lookups := counterValues(t, reader, "llm_api_gateway_last_cluster_lookups_total")
+	if lookups["timeout"] != calls {
+		t.Fatalf("lookups = %v, want timeout=%d", lookups, calls)
+	}
+	writes := counterValues(t, reader, "llm_api_gateway_last_cluster_writes_total")
+	if writes["error"] != calls-maxInflight {
+		t.Fatalf("writes = %v, want error=%d for dropped writes", writes, calls-maxInflight)
+	}
+
+	close(unblock)
+	tracker.Drain(ctx)
+	deadline := time.Now().Add(2 * time.Second)
+	for tracker.InflightLookups() != 0 || tracker.InflightWrites() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("slots not released: lookups=%d writes=%d", tracker.InflightLookups(), tracker.InflightWrites())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := counterValues(t, reader, "llm_api_gateway_last_cluster_writes_total"); got["ok"] != maxInflight {
+		t.Fatalf("writes = %v, want ok=%d once unblocked", got, maxInflight)
+	}
+	// Freed slots serve new calls.
+	if _, clusterID := tracker.Lookup(ctx, reqCtx, reqCtx.Model); clusterID != "cluster-b" {
+		t.Fatalf("Lookup() after unblock cluster = %q, want cluster-b", clusterID)
+	}
+}
+
+func TestDrainWaitsForWritesStartedWhileWaiting(t *testing.T) {
+	ctx := context.Background()
+	store := &gatedStore{fakeStore: newFakeStore(), gates: map[string]chan struct{}{}}
+	tracker := newTestTracker(store)
+	reqCtx := sessionCtx(requestctx.SessionSourceHeader)
+	gate1, gate2 := store.gate("k1"), store.gate("k2")
+
+	tracker.Remember(ctx, reqCtx, reqCtx.Model, "k1", http.StatusOK, "cluster-a")
+
+	// The hook stops Drain after it captured the idle channel of W1 and
+	// before it waits on it.
+	captured := make(chan struct{})
+	resume := make(chan struct{})
+	var once sync.Once
+	tracker.drainWaitHook = func() {
+		once.Do(func() {
+			close(captured)
+			<-resume
+		})
+	}
+	drained := make(chan struct{})
+	go func() {
+		tracker.Drain(ctx)
+		close(drained)
+	}()
+	<-captured
+
+	// W1 finishes and W2 starts before Drain resumes.
+	close(gate1)
+	for tracker.InflightWrites() != 0 {
+		time.Sleep(time.Millisecond)
+	}
+	tracker.Remember(ctx, reqCtx, reqCtx.Model, "k2", http.StatusOK, "cluster-b")
+	close(resume)
+
+	select {
+	case <-drained:
+		t.Fatal("Drain returned while W2 was still in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(gate2)
+	select {
+	case <-drained:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Drain did not return after W2 finished")
+	}
+	if got := store.value("k2"); got != "cluster-b" {
+		t.Fatalf("stored k2 = %q, want cluster-b", got)
+	}
+}
+
+// gatedStore blocks Set for each key until its gate is closed.
+type gatedStore struct {
+	*fakeStore
+	gateMu sync.Mutex
+	gates  map[string]chan struct{}
+}
+
+func (s *gatedStore) gate(key string) chan struct{} {
+	s.gateMu.Lock()
+	defer s.gateMu.Unlock()
+	ch := make(chan struct{})
+	s.gates[key] = ch
+	return ch
+}
+
+func (s *gatedStore) Set(ctx context.Context, key, value string, ttl time.Duration) error {
+	s.gateMu.Lock()
+	ch := s.gates[key]
+	s.gateMu.Unlock()
+	if ch != nil {
+		<-ch
+	}
+	return s.fakeStore.Set(ctx, key, value, ttl)
 }

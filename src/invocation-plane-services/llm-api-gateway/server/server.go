@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	echo "github.com/labstack/echo/v4"
@@ -36,11 +37,60 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/util"
 )
 
+// Gateway is the gateway's Echo server plus the shared state that must
+// outlive in-flight handlers. Shut it down with Shutdown, not Echo.Shutdown.
+type Gateway struct {
+	*echo.Echo
+	state     stateShutdown
+	stateOnce sync.Once
+}
+
+// Shutdown stops the HTTP server and waits for in-flight handlers, then
+// releases the shared state: pending last-cluster writes are drained and the
+// Olric node leaves the cluster. Both steps are bounded by
+// OLRIC_SHUTDOWN_TIMEOUT.
+func (g *Gateway) Shutdown(ctx context.Context) error {
+	err := g.Echo.Shutdown(ctx)
+	g.stateOnce.Do(g.state.run)
+	return err
+}
+
+// stateShutdown releases shared state after the HTTP server has stopped.
+type stateShutdown struct {
+	// limiterStopped is closed by the server's shutdown hook once the
+	// rate-limit sync runtime has stopped. Nil when there is no hook.
+	limiterStopped <-chan struct{}
+	drain          func(context.Context)
+	stopOlric      func(context.Context)
+	timeout        time.Duration
+}
+
+// run drains last-cluster writes and then stops Olric. Olric stops only
+// after the rate limiter has stopped and the drain has finished, so neither
+// writes to a node that already left the cluster.
+func (s stateShutdown) run() {
+	if s.limiterStopped != nil {
+		<-s.limiterStopped
+	}
+	if s.drain != nil {
+		timeout := s.timeout
+		if timeout <= 0 {
+			timeout = util.DefaultOlricShutdownTimeout
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		s.drain(ctx)
+		cancel()
+	}
+	if s.stopOlric != nil {
+		s.stopOlric(context.Background())
+	}
+}
+
 func New(
 	cfg *config.Config,
 	inferenceProvider provider.InferenceProvider,
 	authClient api.InvocationAuthClient,
-) (*echo.Echo, error) {
+) (*Gateway, error) {
 	if cfg != nil && cfg.Telemetry.ServiceName != "" {
 		telemetry.SetServiceName(cfg.Telemetry.ServiceName)
 	}
@@ -91,20 +141,22 @@ func New(
 		aware.SetLastClusterTracker(tracker)
 	}
 
-	if olric.node != nil || tracker != nil {
-		// One hook keeps the order fixed: stop the limiter, wait briefly for
-		// pending last-cluster writes, then leave the Olric cluster. This is
-		// best effort: http.Server.Shutdown does not wait for its hooks, so
-		// writes still pending when the process exits are dropped. A lost
-		// hint only costs that session one affinity miss.
+	state := stateShutdown{
+		stopOlric: olric.stop,
+		timeout:   cfg.Olric.ShutdownTimeout,
+	}
+	if tracker != nil {
+		state.drain = tracker.Drain
+	}
+	if olric.node != nil {
+		// The rate-limit sync runtime still stops when shutdown begins, as
+		// before. The Olric node and pending last-cluster writes outlive the
+		// in-flight handlers and are released by Gateway.Shutdown.
+		limiterStopped := make(chan struct{})
+		state.limiterStopped = limiterStopped
 		e.Server.RegisterOnShutdown(func() {
+			defer close(limiterStopped)
 			stopLimiter()
-			if tracker != nil {
-				drainCtx, cancel := contextWithOptionalTimeout(cfg.Olric.ShutdownTimeout)
-				tracker.Drain(drainCtx)
-				cancel()
-			}
-			olric.stop(context.Background())
 		})
 	}
 
@@ -115,7 +167,7 @@ func New(
 	)
 	api.RegisterRoutes(e, handlers)
 
-	return e, nil
+	return &Gateway{Echo: e, state: state}, nil
 }
 
 // Start serves e on addr until the server is shut down. Use it instead of
@@ -258,15 +310,6 @@ func newLastClusterTracker(
 		TTL:           lcCfg.TTL,
 		LookupTimeout: lcCfg.LookupTimeout,
 	}), nil
-}
-
-// contextWithOptionalTimeout returns a context without a deadline when
-// timeout <= 0.
-func contextWithOptionalTimeout(timeout time.Duration) (context.Context, context.CancelFunc) {
-	if timeout <= 0 {
-		return context.WithCancel(context.Background())
-	}
-	return context.WithTimeout(context.Background(), timeout)
 }
 
 // timeAfterOrForever returns a channel that never fires when timeout <= 0,

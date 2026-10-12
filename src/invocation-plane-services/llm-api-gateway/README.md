@@ -91,6 +91,13 @@ uses the hint only for models whose routing algorithm sets
   and never delay or fail the client response.
 - The lookup is bounded by `STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT`. On a miss,
   error, or timeout the request proceeds without the hint.
+- At most 1024 lookups and 1024 writes may wait on the store at once, counting
+  calls that outlived their timeout. When a cap is reached, a lookup returns at
+  once without the hint and counts as `timeout`, and a write is dropped and
+  counts as `error`. Requests never wait for a slot.
+- On shutdown the gateway stops serving, waits for in-flight requests, drains
+  pending writes, and then stops the Olric node. The drain and the Olric
+  shutdown are each bounded by `OLRIC_SHUTDOWN_TIMEOUT`.
 - Store keys are `lc:v1:` plus the hex SHA-256 of the length-prefixed routing
   key, model, and cache affinity key. Raw routing keys never appear in store
   keys. Affinity keys and session IDs never appear in store keys or logs.

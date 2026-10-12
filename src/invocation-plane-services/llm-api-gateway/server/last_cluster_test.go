@@ -18,6 +18,7 @@ limitations under the License.
 package server
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/olrictest"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 )
 
 // hintingStargate answers like Stargate with x-stargate-cluster-id set and
@@ -173,5 +175,64 @@ func TestStargateClusterIDStrippedFromClientResponses(t *testing.T) {
 		if hint := upstream.lastHint(); hint == "client-forged" {
 			t.Fatalf("%s forwarded the client-supplied last-cluster hint", tc.path)
 		}
+	}
+}
+
+func TestStateShutdownOrder(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		order []string
+	)
+	record := func(step string) {
+		mu.Lock()
+		defer mu.Unlock()
+		order = append(order, step)
+	}
+	limiterStopped := make(chan struct{})
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		record("limiter")
+		close(limiterStopped)
+	}()
+	state := stateShutdown{
+		limiterStopped: limiterStopped,
+		drain: func(ctx context.Context) {
+			if _, ok := ctx.Deadline(); !ok {
+				t.Error("drain context has no deadline")
+			}
+			record("drain")
+		},
+		stopOlric: func(context.Context) { record("olric") },
+	}
+
+	state.run()
+
+	if got := strings.Join(order, ","); got != "limiter,drain,olric" {
+		t.Fatalf("shutdown order = %s, want limiter,drain,olric", got)
+	}
+}
+
+func TestGatewayShutdownReleasesStateOnceAfterHTTPShutdown(t *testing.T) {
+	upstream := newHintingStargate(t, "cluster-b")
+	cfg := testConfig(upstream.URL)
+	cfg.Stargate.LastCluster.Enabled = true
+	inferenceProvider, err := provider.NewStargateProvider(cfg.Stargate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := New(cfg, inferenceProvider, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := 0
+	g.state.stopOlric = func(context.Context) { runs++ }
+
+	for i := 0; i < 2; i++ {
+		if err := g.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown() error = %v", err)
+		}
+	}
+	if runs != 1 {
+		t.Fatalf("state released %d times, want 1", runs)
 	}
 }
