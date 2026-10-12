@@ -510,9 +510,13 @@ spec:
     name: init
     resources: {}
     securityContext:
+      allowPrivilegeEscalation: false
       capabilities:
         drop:
-        - NET_RAW
+        - ALL
+      runAsGroup: 1000
+      runAsNonRoot: true
+      runAsUser: 1000
     volumeMounts:
     - mountPath: /config/models
       name: model-data
