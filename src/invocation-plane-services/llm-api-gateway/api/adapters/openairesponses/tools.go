@@ -19,6 +19,7 @@ package openairesponses
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -33,6 +34,8 @@ const (
 	ToolTypeBrowserSearch   = "browser_search"
 	ToolTypeCodeInterpreter = "code_interpreter"
 	ToolTypeMCP             = "mcp"
+	ToolTypeNamespace       = "namespace"
+	ToolTypeCustom          = "custom"
 
 	// Tool choice options
 	ToolChoiceNone     = "none"
@@ -63,6 +66,8 @@ var (
 	_ Tool = (*BrowserSearchTool)(nil)
 	_ Tool = (*CodeInterpreterTool)(nil)
 	_ Tool = (*MCPTool)(nil)
+	_ Tool = (*NamespaceTool)(nil)
+	_ Tool = (*CustomTool)(nil)
 )
 
 // isBrowserSearchType checks if a tool type is a browser search variant
@@ -121,6 +126,131 @@ func (t *FunctionTool) Validate() error {
 			Field: "name",
 			Msg:   "is required for function tools",
 		}
+	}
+	return nil
+}
+
+// CustomTool represents a custom tool, whose calls carry free-form text input
+// instead of JSON arguments. Format is the optional text or grammar constraint.
+type CustomTool struct {
+	ToolBase
+
+	Name        string          `json:"name"`
+	Description *string         `json:"description,omitempty"`
+	Format      json.RawMessage `json:"format,omitempty"`
+}
+
+func (t *CustomTool) Validate() error {
+	if err := t.ValidateType(); err != nil {
+		return err
+	}
+	if t.Type != ToolTypeCustom {
+		return &UnmarshalError{
+			Field: "type",
+			Msg:   "must be 'custom' for CustomTool",
+		}
+	}
+	if t.Name == "" {
+		return &UnmarshalError{
+			Field: "name",
+			Msg:   "is required for custom tools",
+		}
+	}
+	return nil
+}
+
+// NamespaceTool groups function and custom tools under a namespace. Calls to its tools
+// carry the namespace so same-named tools in different namespaces stay distinct.
+type NamespaceTool struct {
+	ToolBase
+
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Tools       []Tool `json:"tools"`
+}
+
+func (t *NamespaceTool) Validate() error {
+	if err := t.ValidateType(); err != nil {
+		return err
+	}
+	if t.Type != ToolTypeNamespace {
+		return &UnmarshalError{
+			Field: "type",
+			Msg:   "must be 'namespace' for NamespaceTool",
+		}
+	}
+	if t.Name == "" {
+		return &UnmarshalError{
+			Field: "name",
+			Msg:   "is required for namespace tools",
+		}
+	}
+	if t.Description == "" {
+		return &UnmarshalError{
+			Field: "description",
+			Msg:   "is required for namespace tools",
+		}
+	}
+	if len(t.Tools) == 0 {
+		return &UnmarshalError{
+			Field: "tools",
+			Msg:   "must contain at least one tool for namespace tools",
+		}
+	}
+	for i, tool := range t.Tools {
+		if err := tool.Validate(); err != nil {
+			return &UnmarshalError{
+				Field: fmt.Sprintf("tools[%d]", i),
+				Msg:   err.Error(),
+			}
+		}
+	}
+	return nil
+}
+
+// UnmarshalJSON decodes nested tools, rejecting types other than function with
+// a clear error instead of silently dropping them.
+func (t *NamespaceTool) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		ToolBase
+
+		Name        string            `json:"name"`
+		Description string            `json:"description"`
+		Tools       []json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	tools := make([]Tool, 0, len(raw.Tools))
+	for i, rawTool := range raw.Tools {
+		var base ToolBase
+		if err := json.Unmarshal(rawTool, &base); err != nil {
+			return fmt.Errorf("failed to unmarshal namespace tool at index %d: %w", i, err)
+		}
+		var tool Tool
+		switch base.Type {
+		case ToolTypeFunction:
+			tool = &FunctionTool{}
+		case ToolTypeCustom:
+			tool = &CustomTool{}
+		default:
+			return fmt.Errorf("failed to unmarshal namespace tool at index %d: %w", i, &UnmarshalError{
+				Field: "type",
+				Msg:   fmt.Sprintf("unsupported namespace tool type: %s", base.Type),
+			})
+		}
+		if err := json.Unmarshal(rawTool, tool); err != nil {
+			return fmt.Errorf("failed to unmarshal namespace tool at index %d: %w", i, err)
+		}
+		tools = append(tools, tool)
+	}
+
+	*t = NamespaceTool{
+		ToolBase:    raw.ToolBase,
+		Name:        raw.Name,
+		Description: raw.Description,
+		Tools:       tools,
 	}
 	return nil
 }
@@ -481,6 +611,18 @@ func UnmarshalTool(data []byte) (Tool, error) {
 			return nil, err
 		}
 		return &tool, nil
+	case typeOnly.Type == ToolTypeCustom:
+		var tool CustomTool
+		if err := json.Unmarshal(data, &tool); err != nil {
+			return nil, err
+		}
+		return &tool, nil
+	case typeOnly.Type == ToolTypeNamespace:
+		var tool NamespaceTool
+		if err := json.Unmarshal(data, &tool); err != nil {
+			return nil, err
+		}
+		return &tool, nil
 	default:
 		return nil, &UnmarshalError{
 			Field: "type",
@@ -581,6 +723,7 @@ type FunctionToolCall struct {
 	ID        *string `json:"id,omitempty"`
 	Type      string  `json:"type"`
 	CallID    string  `json:"call_id"`
+	Namespace *string `json:"namespace,omitempty"`
 	Name      string  `json:"name"`
 	Arguments string  `json:"arguments"`
 	Status    *string `json:"status,omitempty"`
@@ -588,11 +731,68 @@ type FunctionToolCall struct {
 
 // FunctionCallOutput represents function call output
 type FunctionCallOutput struct {
-	ID     *string `json:"id,omitempty"`
-	CallID string  `json:"call_id"`
-	Type   string  `json:"type"`
-	Output string  `json:"output"`
-	Status *string `json:"status,omitempty"`
+	ID     *string    `json:"id,omitempty"`
+	CallID string     `json:"call_id"`
+	Type   string     `json:"type"`
+	Output ToolOutput `json:"output"`
+	Status *string    `json:"status,omitempty"`
+}
+
+// ToolOutput is a function call output: a string or an array of input_text,
+// input_image, and input_file content parts.
+type ToolOutput struct {
+	Text    string
+	Content []InputContent
+	// IsContent records that the wire form was an array, so an empty array
+	// round-trips as an array.
+	IsContent bool
+}
+
+// NewTextToolOutput returns a string tool output.
+func NewTextToolOutput(text string) ToolOutput {
+	return ToolOutput{Text: text}
+}
+
+func (o *ToolOutput) UnmarshalJSON(data []byte) error {
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		*o = ToolOutput{Text: text}
+		return nil
+	}
+
+	var content []InputContent
+	if err := json.Unmarshal(data, &content); err != nil {
+		var unmarshalErr *UnmarshalError
+		if errors.As(err, &unmarshalErr) {
+			return err
+		}
+		return &UnmarshalError{
+			Field: "output",
+			Msg:   "must be string or array of input_text, input_image, or input_file",
+		}
+	}
+	for i, part := range content {
+		switch part.Discriminator() {
+		case ContentTypeInputText, ContentTypeInputImage, ContentTypeInputFile:
+		default:
+			return &UnmarshalError{
+				Field: fmt.Sprintf("output[%d]", i),
+				Msg:   fmt.Sprintf("unsupported content type: %s", part.Discriminator()),
+			}
+		}
+	}
+	*o = ToolOutput{Content: content, IsContent: true}
+	return nil
+}
+
+func (o ToolOutput) MarshalJSON() ([]byte, error) {
+	if o.IsContent || o.Content != nil {
+		if o.Content == nil {
+			return []byte("[]"), nil
+		}
+		return json.Marshal(o.Content)
+	}
+	return json.Marshal(o.Text)
 }
 
 // WebSearchToolCall represents a web search tool call
