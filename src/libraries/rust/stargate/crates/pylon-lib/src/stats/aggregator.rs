@@ -275,8 +275,10 @@ impl RequestInputIntervalWindow {
             if pending && !entry.pending {
                 return None;
             }
-            let keep_values = (entry.input_tokens_explicit && !input_tokens_explicit)
-                || (entry.max_input_tps_eligible && !max_input_tps_eligible);
+            // Only an event without engine-reported usage defers to earlier
+            // usage. Explicit usage is authoritative for tokens and eligibility,
+            // including invalid details that revoke an inferred cache miss.
+            let keep_values = entry.input_tokens_explicit && !input_tokens_explicit;
             let resolves = entry.pending && !pending;
             if keep_values && !resolves {
                 return None;
@@ -2051,15 +2053,27 @@ mod request_input_interval_window_tests {
                 .is_none(),
             "an evicted live request must not re-enter"
         );
-        let downgrade = InputIntervalSample {
+        assert!(
+            window
+                .observe(live("d1", interval(start, 100)), &config)
+                .is_none(),
+            "an event without reported usage must not replace reported usage"
+        );
+        assert!(window.intervals[0].max_input_tps_eligible);
+
+        let invalidated = InputIntervalSample {
             input_tokens: TOTAL,
             max_input_tps_eligible: false,
             ..usage("d1", interval(start, 100))
         };
-        assert!(
-            window.observe(downgrade, &config).is_none(),
-            "usage without cached-token data must not downgrade a resolved entry"
+        assert_tps(
+            window.observe(invalidated, &config),
+            (TOTAL + TOTAL) as f64 / 0.6,
+            false,
         );
-        assert!(window.intervals[0].max_input_tps_eligible);
+        assert!(
+            !window.intervals[0].max_input_tps_eligible,
+            "later reported usage is authoritative, including a downgrade"
+        );
     }
 }

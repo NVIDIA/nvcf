@@ -1803,21 +1803,26 @@ mod tests {
         );
     }
 
-    // Drives one Chat request through a real observer and the fallback
-    // projection, with usage reports given as (uncached, invalid details).
-    fn observe_chat_usage_reports(
-        aggregator: &mut StatsAggregator,
-        request_id: &str,
-        submitted_at: std::time::Instant,
-        prefill: Duration,
-        reports: &[(Option<u64>, bool)],
-    ) -> CurrentModelStats {
-        let (runtime_state, rx) = PylonRuntimeState::observed(
+    fn observed_runtime_state() -> (
+        PylonRuntimeState,
+        flume::Receiver<crate::RequestObservationEvent>,
+    ) {
+        PylonRuntimeState::observed(
             stargate_proto::pb::InferenceServerStatus::Unknown,
             &["model-a".to_string()],
             64,
             None,
-        );
+        )
+    }
+
+    // A Chat request that expects usage and has produced its first output.
+    fn chat_request_after_first_output(
+        aggregator: &StatsAggregator,
+        runtime_state: &PylonRuntimeState,
+        request_id: &str,
+        submitted_at: std::time::Instant,
+        prefill: Duration,
+    ) -> crate::request_observer::RequestObserver {
         let generation = aggregator
             .current_generation("model-a")
             .cloned()
@@ -1833,21 +1838,48 @@ mod tests {
                 accepted_at: submitted_at,
             },
             Some(generation),
-            runtime_state,
+            runtime_state.clone(),
         );
         observer.set_input_usage_expected(true);
         observer.on_backend_submission(submitted_at);
         observer.on_upstream_response_headers(200);
         observer.observe_generated_output(submitted_at + prefill, true, 0, false);
-        for (uncached, invalid) in reports {
-            observer.observe_input_usage_details(8_000, *uncached, *invalid);
-        }
-        observer.complete();
-        drop(observer);
+        observer
+    }
+
+    fn apply_observed_events(
+        aggregator: &mut StatsAggregator,
+        rx: &flume::Receiver<crate::RequestObservationEvent>,
+    ) -> CurrentModelStats {
         for event in rx.drain() {
             aggregator.apply_fallback_observation(&event);
         }
         aggregator.snapshot("model-a")
+    }
+
+    // Drives one Chat request through a real observer and the fallback
+    // projection, with usage reports given as (prompt, uncached, invalid).
+    fn observe_chat_usage_reports(
+        aggregator: &mut StatsAggregator,
+        request_id: &str,
+        submitted_at: std::time::Instant,
+        prefill: Duration,
+        reports: &[(u64, Option<u64>, bool)],
+    ) -> CurrentModelStats {
+        let (runtime_state, rx) = observed_runtime_state();
+        let mut observer = chat_request_after_first_output(
+            aggregator,
+            &runtime_state,
+            request_id,
+            submitted_at,
+            prefill,
+        );
+        for (prompt, uncached, invalid) in reports {
+            observer.observe_input_usage_details(*prompt, *uncached, *invalid);
+        }
+        observer.complete();
+        drop(observer);
+        apply_observed_events(aggregator, &rx)
     }
 
     #[test]
@@ -1860,7 +1892,7 @@ mod tests {
             "unique",
             start,
             milliseconds(100),
-            &[(Some(8_000), false)],
+            &[(8_000, Some(8_000), false)],
         );
         assert_tps_near(stats.last_mean_input_tps, unique_tps, "unique request");
         assert!(
@@ -1876,7 +1908,7 @@ mod tests {
             "hit-then-omitted",
             start + seconds(1),
             milliseconds(50),
-            &[(Some(14), false), (None, false)],
+            &[(8_000, Some(14), false), (8_000, None, false)],
         );
         assert_tps_near(stats.last_mean_input_tps, unique_tps, "excluded hit");
         assert_eq!(stats.max_input_tps, Some(unique_tps));
@@ -1887,7 +1919,7 @@ mod tests {
             "invalid-then-omitted",
             start + seconds(2),
             milliseconds(50),
-            &[(None, true), (None, false)],
+            &[(8_000, None, true), (8_000, None, false)],
         );
         assert_tps_near(stats.last_mean_input_tps, 8_000.0 / 0.05, "invalid request");
         assert_eq!(
@@ -1895,6 +1927,77 @@ mod tests {
             Some(unique_tps),
             "invalid details must not become a trusted miss"
         );
+    }
+
+    #[test]
+    fn growing_prompt_without_details_is_not_a_cache_hit() {
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 1));
+        let start = std::time::Instant::now();
+        let stats = observe_chat_usage_reports(
+            &mut aggregator,
+            "trust",
+            start,
+            seconds(1),
+            &[(1_000, Some(1_000), false)],
+        );
+        assert_tps_near(stats.last_mean_input_tps, 1_000.0, "trusted Chat details");
+
+        // Early usage counts 128 prompt tokens with none cached; the final
+        // usage counts the whole 8000-token prompt and omits details.
+        let stats = observe_chat_usage_reports(
+            &mut aggregator,
+            "growing",
+            start + seconds(2),
+            milliseconds(100),
+            &[(128, Some(128), false), (8_000, None, false)],
+        );
+        assert_tps_near(stats.last_mean_input_tps, 80_000.0, "full prompt miss");
+        assert_eq!(stats.max_input_tps, Some(80_000.0));
+    }
+
+    #[test]
+    fn invalid_details_revoke_an_inferred_miss_held_in_the_window() {
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 2));
+        let start = std::time::Instant::now();
+        let stats = observe_chat_usage_reports(
+            &mut aggregator,
+            "trust",
+            start,
+            seconds(1),
+            &[(1_000, Some(1_000), false)],
+        );
+        assert_eq!(stats.max_input_tps, Some(1_000.0));
+
+        let (runtime_state, rx) = observed_runtime_state();
+        let base = start + seconds(10);
+        let mut pending = chat_request_after_first_output(
+            &aggregator,
+            &runtime_state,
+            "r-pending",
+            base,
+            seconds(1),
+        );
+        let mut inferred = chat_request_after_first_output(
+            &aggregator,
+            &runtime_state,
+            "q-inferred",
+            base + seconds(1),
+            seconds(1),
+        );
+        // Q is an inferred miss, then reports invalid details; it waits behind R.
+        inferred.observe_input_usage_details(8_000, None, false);
+        inferred.observe_input_usage_details(8_000, None, true);
+        apply_observed_events(&mut aggregator, &rx);
+
+        pending.observe_input_usage_details(1_000, Some(1_000), false);
+        let stats = apply_observed_events(&mut aggregator, &rx);
+        assert_tps_near(stats.last_mean_input_tps, 9_000.0 / 2.0, "R and Q");
+        assert_eq!(
+            stats.max_input_tps,
+            Some(1_000.0),
+            "a window holding invalid details must not publish an eligible rate"
+        );
+        drop((pending, inferred));
     }
 
     #[test]

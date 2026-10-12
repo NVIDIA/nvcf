@@ -162,6 +162,30 @@ enum ChatChoiceState {
     Finished,
 }
 
+// Cached-prompt evidence for one request, kept as the cached count so a later
+// larger prompt total recomputes the uncached remainder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InputCacheEvidence {
+    Omitted,
+    Cached(u64),
+    Invalid,
+}
+
+impl InputCacheEvidence {
+    // Returns the uncached prompt tokens for `input_tokens`, and whether the
+    // details are invalid, including cached tokens above the prompt total.
+    fn usage(self, input_tokens: u64) -> (Option<u64>, bool) {
+        match self {
+            Self::Omitted => (None, false),
+            Self::Cached(cached) => match input_tokens.checked_sub(cached) {
+                Some(uncached) => (Some(uncached), false),
+                None => (None, true),
+            },
+            Self::Invalid => (None, true),
+        }
+    }
+}
+
 pub(crate) struct RequestObserver {
     endpoint: RequestObservationEndpoint,
     request_id: String,
@@ -172,8 +196,7 @@ pub(crate) struct RequestObserver {
     request_input_tokens: u64,
     input_tokens: u64,
     input_tokens_explicit: bool,
-    uncached_input_tokens: Option<u64>,
-    input_cache_details_invalid: bool,
+    input_cache_evidence: InputCacheEvidence,
     input_usage_expected: bool,
     generation: Option<ModelGeneration>,
     embedding_items: Option<u64>,
@@ -209,8 +232,7 @@ impl RequestObserver {
             request_input_tokens: input_tokens,
             input_tokens,
             input_tokens_explicit: false,
-            uncached_input_tokens: None,
-            input_cache_details_invalid: false,
+            input_cache_evidence: InputCacheEvidence::Omitted,
             input_usage_expected: false,
             generation,
             embedding_items: None,
@@ -336,20 +358,22 @@ impl RequestObserver {
             );
             return;
         }
-        let (uncached_input_tokens, cache_details_invalid) =
-            if uncached_input_tokens.is_none() && !cache_details_invalid {
-                (self.uncached_input_tokens, self.input_cache_details_invalid)
-            } else {
-                (uncached_input_tokens, cache_details_invalid)
-            };
+        let input_cache_evidence = if cache_details_invalid {
+            InputCacheEvidence::Invalid
+        } else if let Some(uncached_input_tokens) = uncached_input_tokens {
+            input_tokens
+                .checked_sub(uncached_input_tokens)
+                .map_or(InputCacheEvidence::Invalid, InputCacheEvidence::Cached)
+        } else {
+            self.input_cache_evidence
+        };
         let changed = input_tokens != self.input_tokens
             || !self.input_tokens_explicit
-            || self.uncached_input_tokens != uncached_input_tokens
-            || self.input_cache_details_invalid != cache_details_invalid;
+            || input_cache_evidence.usage(input_tokens)
+                != self.input_cache_evidence.usage(self.input_tokens);
         self.input_tokens = input_tokens;
         self.input_tokens_explicit = true;
-        self.uncached_input_tokens = uncached_input_tokens;
-        self.input_cache_details_invalid = cache_details_invalid;
+        self.input_cache_evidence = input_cache_evidence;
         if changed {
             self.emit();
         }
@@ -543,6 +567,8 @@ impl RequestObserver {
     }
     fn emit(&mut self) {
         let backend = self.state.backend();
+        let (uncached_input_tokens, input_cache_details_invalid) =
+            self.input_cache_evidence.usage(self.input_tokens);
         let input_interval = backend.and_then(|backend| {
             backend
                 .first_generated_output_at
@@ -589,8 +615,8 @@ impl RequestObserver {
                 changed_generations: Vec::new(),
                 input_interval,
                 input_tokens_explicit: self.input_tokens_explicit,
-                uncached_input_tokens: self.uncached_input_tokens,
-                input_cache_details_invalid: self.input_cache_details_invalid,
+                uncached_input_tokens,
+                input_cache_details_invalid,
                 input_usage_expected: self.input_usage_expected,
                 output_calibration: backend
                     .map_or_else(OutputCalibrationFacts::default, |backend| {
@@ -1387,7 +1413,11 @@ mod tests {
                 .recv_async()
                 .await
                 .expect("a larger prompt count should be emitted");
-            assert_eq!(later.uncached_input_tokens(), earlier_uncached);
+            assert_eq!(
+                later.uncached_input_tokens(),
+                earlier_uncached.map(|uncached| uncached + 1),
+                "the kept cached count applies to the larger prompt"
+            );
             assert_eq!(later.input_cache_details_invalid(), earlier_invalid);
 
             observer.observe_input_usage_details(8_001, Some(300), false);
@@ -1398,6 +1428,29 @@ mod tests {
             assert_eq!(valid.uncached_input_tokens(), Some(300));
             assert!(!valid.input_cache_details_invalid());
         }
+    }
+
+    #[tokio::test]
+    async fn omitted_details_recompute_uncached_from_a_growing_prompt() {
+        let (mut observer, rx, _) = responding_observer("req-growing-prompt").await;
+        observer.observe_input_usage_details(128, Some(128), false);
+        let early = rx
+            .recv_async()
+            .await
+            .expect("early usage should be emitted");
+        assert_eq!(early.uncached_input_tokens(), Some(128));
+
+        observer.observe_input_usage(8_000, None);
+        let full = rx
+            .recv_async()
+            .await
+            .expect("full prompt usage should be emitted");
+        assert_eq!(
+            full.uncached_input_tokens(),
+            Some(8_000),
+            "zero cached tokens still mean zero cached tokens for the full prompt"
+        );
+        assert!(!full.input_cache_details_invalid());
     }
 
     #[tokio::test]
