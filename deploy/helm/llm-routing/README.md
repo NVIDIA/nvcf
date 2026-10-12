@@ -180,6 +180,8 @@ helm upgrade qwen-fp8 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
   --reuse-values --set suspended=false --wait --timeout 120m
 ```
 
+To stop or start a model without Helm, scale its deployments with `python3 llm.py stop --model MODEL` and `python3 llm.py start --model MODEL`. A start checks that the GPUs and memory are free first and names the model holding them when they are not. See [Start and stop an installed model](ADVANCED.md#start-and-stop-an-installed-model-by-replica-count).
+
 ### Uninstall, keep downloads
 
 ```bash
