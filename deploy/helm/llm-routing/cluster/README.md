@@ -113,13 +113,7 @@ It runs `nvidia-smi` in a pod on each node and checks that every node reports a 
 
 ## Continue
 
-Check the cluster against the shared stack prerequisites:
-
-```bash
-python3 llm.py --context my-cluster preflight --values dev-artifacts/values.yaml
-```
-
-k3s provides the `nvidia` RuntimeClass, the `local-path` StorageClass and Traefik ingress. The preflight still fails until you [prepare and preload](../dev-artifacts/README.md) the shared stack images on each node. Then continue with [1. Install shared infrastructure](../README.md#1-install-shared-infrastructure).
+k3s provides the `nvidia` RuntimeClass, the `local-path` StorageClass and Traefik ingress. The shared stack images are not on the nodes yet. Continue with [Check the cluster](../README.md#check-the-cluster), using `my-cluster` as the context, to load the images and run the preflight.
 
 ## Two-node models
 
