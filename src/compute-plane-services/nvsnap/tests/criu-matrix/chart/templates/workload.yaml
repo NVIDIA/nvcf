@@ -65,48 +65,45 @@ spec:
        Dynamo functions run. The operator adds probes and /dev/shm. */}}
 {{- $v := .Values }}
 {{- $tp := mul $v.podsPerInstance $v.gpusPerPod }}
-apiVersion: nvidia.com/v1beta1
+{{- /* v1alpha1: the version NVCF accepts in a Helm function; the operator
+       stores it as v1beta1. */}}
+apiVersion: nvidia.com/v1alpha1
 kind: DynamoGraphDeployment
 metadata: {name: {{ $name }}}
 spec:
   backendFramework: vllm
-  components:
-    - name: Frontend
-      type: frontend
+  services:
+    Frontend:
+      componentType: frontend
       replicas: 1
-      podTemplate:
-        spec:
-          containers:
-            - name: main
-              image: {{ $v.dynamo.image }}
-              command: ["python3", "-m", "dynamo.frontend", "--http-port", "{{ $v.port }}"]
-    - name: VllmWorker
-      type: worker
+      extraPodSpec:
+        mainContainer:
+          image: {{ $v.dynamo.image }}
+    VllmWorker:
+      componentType: worker
       replicas: 1
       {{- if gt (int $v.podsPerInstance) 1 }}
       multinode: {nodeCount: {{ $v.podsPerInstance }}}
       {{- end }}
-      podTemplate:
-        metadata:
-          annotations:
-            nvidia.com/vllm-distributed-executor-backend: mp
-            {{- range $k, $val := $ann }}
-            {{ $k }}: {{ $val | quote }}
+      resources:
+        limits:
+          gpu: {{ $v.gpusPerPod | quote }}
+      extraPodMetadata:
+        annotations:
+          nvidia.com/vllm-distributed-executor-backend: mp
+          {{- range $k, $val := $ann }}
+          {{ $k }}: {{ $val | quote }}
+          {{- end }}
+      extraPodSpec:
+        mainContainer:
+          image: {{ $v.dynamo.image }}
+          command: ["python3", "-m", "dynamo.vllm"]
+          args: ["--model", "{{ $v.model }}", "--tensor-parallel-size", "{{ $tp }}", "--max-model-len", "{{ $v.maxModelLen }}", "--gpu-memory-utilization", "{{ $v.gpuMemoryUtilization }}"]
+          env:
+            - {name: HF_HUB_DISABLE_XET, value: "1"}
+            {{- with $v.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
-        spec:
-          containers:
-            - name: main
-              image: {{ $v.dynamo.image }}
-              command: ["python3", "-m", "dynamo.vllm"]
-              args: ["--model", "{{ $v.model }}", "--tensor-parallel-size", "{{ $tp }}", "--max-model-len", "{{ $v.maxModelLen }}", "--gpu-memory-utilization", "{{ $v.gpuMemoryUtilization }}"]
-              env:
-                - {name: HF_HUB_DISABLE_XET, value: "1"}
-                {{- with $v.extraEnv }}
-                {{- toYaml . | nindent 16 }}
-                {{- end }}
-              resources:
-                limits:
-                  nvidia.com/gpu: {{ $v.gpusPerPod | quote }}
 {{- else }}
 {{- fail (printf "kind %q: want StatefulSet, Deployment, Pod, LeaderWorkerSet or DynamoGraphDeployment" .Values.kind) }}
 {{- end }}
