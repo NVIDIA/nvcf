@@ -14,8 +14,9 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use sfv::TokenRef;
+use serde::Serialize;
 
 use super::power_of_n::PowerOfNLoadBalancer;
 use super::pulsar::PulsarLoadBalancer;
@@ -23,7 +24,10 @@ use super::pulsar_wait_and_widen::{PulsarWaitAndWidenConfig, PulsarWaitAndWidenL
 use super::random::RandomLoadBalancer;
 use super::round_robin::RoundRobinLoadBalancer;
 use super::wait_and_widen::{WaitAndWidenConfig, WaitAndWidenLoadBalancer};
-use super::{LoadBalancer, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig};
+use super::{
+    LoadBalancer, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, PowerOfNAlgorithmConfig,
+    PulsarRendezvousWeight, WaitAndWidenAlgorithmConfig,
+};
 
 pub fn create_load_balancer_with_config(
     config: &LoadBalancerAlgorithmConfig,
@@ -73,162 +77,101 @@ pub fn create_load_balancer_with_config(
     }
 }
 
-/// Every routing-expression parameter the algorithm uses, with the value it routes with,
-/// in the expression grammar. Defaults come from the constructors' default-filling functions.
-pub(super) fn effective_routing_expression(
-    config: &LoadBalancerAlgorithmConfig,
-) -> anyhow::Result<String> {
+/// Every value the algorithm routes with, as static load-balancer config JSON. Defaults come
+/// from the constructors' default-filling functions.
+pub(super) fn effective_config(config: &LoadBalancerAlgorithmConfig) -> anyhow::Result<String> {
     let algorithm = config.algorithm();
-    let mut expression = EffectiveExpression(algorithm.to_string());
+    let mut effective = EffectiveConfig {
+        algorithm,
+        power_of_n: None,
+        wait_and_widen: None,
+        seed: None,
+        consider_kv_free_tokens: None,
+        rendezvous_weight: None,
+        require_cache_affinity_key: config.requires_cache_affinity_key(),
+        require_input_tokens: config.requires_input_tokens(),
+        max_input_work_seconds: config.max_input_work_seconds,
+    };
     match algorithm {
         LoadBalancerAlgorithm::PowerOfN => {
             let settings = PowerOfNLoadBalancer::from_algorithm_config(config)?;
-            expression.integer("sample_count", settings.sample_count);
-            expression.push("comparator", settings.comparator.as_str());
+            effective.power_of_n = Some(PowerOfNAlgorithmConfig {
+                sample_count: settings.sample_count,
+                comparator: settings.comparator,
+            });
         }
         LoadBalancerAlgorithm::WaitAndWiden => {
             let settings = WaitAndWidenConfig::from_algorithm_config(config)?;
-            expression.wait_and_widen(&settings, None);
+            effective.wait_and_widen = Some(filled_wait_and_widen(&settings, None));
         }
         LoadBalancerAlgorithm::RoundRobin | LoadBalancerAlgorithm::Random => {}
         LoadBalancerAlgorithm::Pulsar => {
-            if let Some(seed) = config.seed() {
-                expression.text("seed", seed);
-            }
+            effective.seed = config.seed().map(ToOwned::to_owned);
+            effective.consider_kv_free_tokens = Some(config.considers_kv_free_tokens());
+            effective.rendezvous_weight = Some(config.rendezvous_weight);
         }
         LoadBalancerAlgorithm::PulsarWaitAndWiden => {
             let settings = PulsarWaitAndWidenConfig::from_algorithm_config(config)?;
-            expression.wait_and_widen(&settings.wait_and_widen, Some(&settings));
+            effective.wait_and_widen = Some(filled_wait_and_widen(
+                &settings.wait_and_widen,
+                Some(&settings),
+            ));
+            effective.consider_kv_free_tokens = Some(config.considers_kv_free_tokens());
+            effective.rendezvous_weight = Some(config.rendezvous_weight);
         }
     }
-    if matches!(
-        algorithm,
-        LoadBalancerAlgorithm::Pulsar | LoadBalancerAlgorithm::PulsarWaitAndWiden
-    ) {
-        expression.boolean("consider_kv_free_tokens", config.considers_kv_free_tokens());
-    }
-    expression.boolean(
-        "require_cache_affinity_key",
-        config.requires_cache_affinity_key(),
-    );
-    expression.boolean("require_input_tokens", config.requires_input_tokens());
-    if let Some(seconds) = config.max_input_work_seconds {
-        expression.decimal("max_input_work_seconds", seconds);
-    }
-    Ok(expression.0)
+    Ok(serde_json::to_string(&effective)?)
 }
 
-struct EffectiveExpression(String);
+#[derive(Serialize)]
+struct EffectiveConfig {
+    algorithm: LoadBalancerAlgorithm,
+    #[serde(flatten)]
+    power_of_n: Option<PowerOfNAlgorithmConfig>,
+    #[serde(flatten)]
+    wait_and_widen: Option<WaitAndWidenAlgorithmConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    seed: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    consider_kv_free_tokens: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rendezvous_weight: Option<PulsarRendezvousWeight>,
+    require_cache_affinity_key: bool,
+    require_input_tokens: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_input_work_seconds: Option<f64>,
+}
 
-impl EffectiveExpression {
-    fn wait_and_widen(
-        &mut self,
-        settings: &WaitAndWidenConfig,
-        pulsar: Option<&PulsarWaitAndWidenConfig>,
-    ) {
-        self.integer("n", settings.sample_count);
-        self.integer("max_queued", settings.max_queued);
-        if let Some(queue_slo) = &settings.queue_slo {
-            self.integer("max_queue_time_floor_ms", queue_slo.start().as_millis());
-            self.integer("max_queue_time_ceil_ms", queue_slo.end().as_millis());
-        }
-        if let Some(comparator) = settings.comparator {
-            self.push("comparator", comparator.as_str());
-        }
-        self.integer("ttft_bucket_size_ms", settings.ttft_bucket_size.as_millis());
-        self.decimal(
-            "next_bucket_unlock_factor",
-            settings.next_bucket_unlock_factor,
-        );
-        if let Some(seed) = &settings.seed {
-            self.text("seed", seed);
-        }
-        match pulsar {
-            None => {
-                self.integer(
-                    "cache_affinity_virtual_nodes",
-                    settings.cache_affinity_virtual_nodes,
-                );
-                if let Some(count) = settings.cache_affinity_backend_selection_count {
-                    self.integer("cache_affinity_backend_selection_count", count);
-                }
-            }
-            Some(pulsar) => self.integer(
-                "cache_affinity_backend_selection_count",
-                pulsar.affinity_group_size,
-            ),
-        }
-        self.decimal(
-            "cache_affinity_input_tokens_scale",
-            settings.cache_affinity_input_tokens_scale,
-        );
-        self.integer(
-            "cache_affinity_wait_ms",
-            settings.cache_affinity_wait.as_millis(),
-        );
-        if let Some(pulsar) = pulsar {
-            self.integer(
-                "band_widen_interval_ms",
-                pulsar.band_widen_interval.as_millis(),
-            );
-            self.integer("fallback_max_queued", pulsar.fallback_max_queued);
-        }
-        self.boolean("ignore_queue_time", settings.ignore_queue_time);
-        self.boolean(
-            "ignore_input_processing_time",
-            settings.ignore_input_processing_time,
-        );
-    }
-
-    fn push(&mut self, key: &str, value: &str) {
-        self.0.push(';');
-        self.0.push_str(key);
-        self.0.push('=');
-        self.0.push_str(value);
-    }
-
-    fn boolean(&mut self, key: &str, value: bool) {
-        self.push(key, if value { "true" } else { "false" });
-    }
-
-    fn text(&mut self, key: &str, value: &str) {
-        if TokenRef::from_str(value).is_ok() {
-            self.push(key, value);
-        } else {
-            self.quoted(key, value);
-        }
-    }
-
-    // RFC 8941 integers have at most 15 digits; the parser reads quoted plain numbers.
-    fn integer(&mut self, key: &str, value: impl ToString) {
-        let value = value.to_string();
-        if value.len() <= 15 {
-            self.push(key, &value);
-        } else {
-            self.quoted(key, &value);
-        }
-    }
-
-    // RFC 8941 decimals have at most 12 integer and 3 fractional digits.
-    fn decimal(&mut self, key: &str, value: f64) {
-        let mut value = value.to_string();
-        if !value.contains('.') {
-            value.push_str(".0");
-        }
-        let (whole, fraction) = value
-            .trim_start_matches('-')
-            .split_once('.')
-            .unwrap_or_default();
-        if whole.len() <= 12 && fraction.len() <= 3 {
-            self.push(key, &value);
-        } else {
-            self.quoted(key, &value);
-        }
-    }
-
-    fn quoted(&mut self, key: &str, value: &str) {
-        let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-        self.push(key, &format!("\"{escaped}\""));
+/// Writes the constructor's values back into config fields; fields the algorithm does not use stay
+/// unset.
+fn filled_wait_and_widen(
+    settings: &WaitAndWidenConfig,
+    pulsar: Option<&PulsarWaitAndWidenConfig>,
+) -> WaitAndWidenAlgorithmConfig {
+    // Durations were built from u64 milliseconds, so the conversion cannot overflow.
+    let millis = |duration: Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+    WaitAndWidenAlgorithmConfig {
+        seed: settings.seed.clone(),
+        comparator: settings.comparator,
+        cache_affinity_virtual_nodes: pulsar
+            .is_none()
+            .then_some(settings.cache_affinity_virtual_nodes),
+        cache_affinity_backend_selection_count: pulsar
+            .map_or(settings.cache_affinity_backend_selection_count, |pulsar| {
+                Some(pulsar.affinity_group_size)
+            }),
+        cache_affinity_input_tokens_scale: Some(settings.cache_affinity_input_tokens_scale),
+        cache_affinity_wait_ms: Some(millis(settings.cache_affinity_wait)),
+        band_widen_interval_ms: pulsar.map(|pulsar| millis(pulsar.band_widen_interval)),
+        fallback_max_queued: pulsar.map(|pulsar| pulsar.fallback_max_queued),
+        max_queue_time_floor_ms: settings.queue_slo.as_ref().map(|slo| millis(*slo.start())),
+        max_queue_time_ceil_ms: settings.queue_slo.as_ref().map(|slo| millis(*slo.end())),
+        ttft_bucket_size_ms: Some(millis(settings.ttft_bucket_size)),
+        next_bucket_unlock_factor: Some(settings.next_bucket_unlock_factor),
+        n: Some(settings.sample_count),
+        max_queued: Some(settings.max_queued),
+        ignore_queue_time: Some(settings.ignore_queue_time),
+        ignore_input_processing_time: Some(settings.ignore_input_processing_time),
     }
 }
 
@@ -236,19 +179,22 @@ impl EffectiveExpression {
 mod tests {
     use std::collections::HashMap;
 
+    use serde_json::{Value, json};
+
     use super::*;
     use crate::load_balancer::expression::RoutingExpression;
+    use crate::load_balancer::target_state::LoadBalancerDefinition;
     use crate::load_balancer::{LoadBalancerConfig, LoadBalancerModelConfig, LoadBalancerRouter};
 
     fn effective(router: &LoadBalancerRouter, raw: &str) -> String {
         RoutingExpression::parse(raw)
             .and_then(|expression| expression.compile(router, "model"))
             .unwrap_or_else(|error| panic!("{raw}: {error}"))
-            .effective_expression()
+            .effective_config()
     }
 
     #[test]
-    fn test_effective_routing_expression_lists_routed_values() {
+    fn test_effective_config_lists_routed_values() {
         let permissive =
             LoadBalancerRouter::from_config(&LoadBalancerConfig::permissive_default()).unwrap();
         let mut static_base =
@@ -266,67 +212,108 @@ mod tests {
             models: HashMap::new(),
         })
         .unwrap();
+        let wait_and_widen_defaults = json!({
+            "algorithm": "wait-and-widen", "n": 2, "max_queued": 0, "comparator": "ttft",
+            "ttft_bucket_size_ms": 20, "next_bucket_unlock_factor": 0.25,
+            "cache_affinity_virtual_nodes": 150, "cache_affinity_input_tokens_scale": 1.0,
+            "cache_affinity_wait_ms": 0, "ignore_queue_time": false,
+            "ignore_input_processing_time": false, "require_cache_affinity_key": false,
+            "require_input_tokens": false,
+        });
+        let with = |changes: Value| {
+            let mut value = wait_and_widen_defaults.clone();
+            for (key, change) in changes.as_object().unwrap() {
+                value[key] = change.clone();
+            }
+            value
+        };
 
         let cases = [
             (
                 "power-of-n defaults",
                 &permissive,
                 "power-of-n;sample_count=3",
-                "power-of-n;sample_count=3;comparator=ttft;require_cache_affinity_key=false;require_input_tokens=false",
+                json!({"algorithm": "power-of-n", "sample_count": 3, "comparator": "ttft",
+                    "require_cache_affinity_key": false, "require_input_tokens": false}),
             ),
             (
                 "round-robin with optional work limit",
                 &permissive,
                 "round-robin;max_input_work_seconds=2.5",
-                "round-robin;require_cache_affinity_key=false;require_input_tokens=false;max_input_work_seconds=2.5",
+                json!({"algorithm": "round-robin", "require_cache_affinity_key": false,
+                    "require_input_tokens": false, "max_input_work_seconds": 2.5}),
             ),
             (
                 "random",
                 &permissive,
                 "random;require_input_tokens=true",
-                "random;require_cache_affinity_key=false;require_input_tokens=true",
+                json!({"algorithm": "random", "require_cache_affinity_key": false,
+                    "require_input_tokens": true}),
             ),
             (
-                "pulsar token seed",
+                "pulsar seed",
                 &permissive,
-                "pulsar;seed=x",
-                "pulsar;seed=x;consider_kv_free_tokens=false;require_cache_affinity_key=false;require_input_tokens=false",
+                r#"pulsar;seed="a b""#,
+                json!({"algorithm": "pulsar", "seed": "a b", "consider_kv_free_tokens": false,
+                    "rendezvous_weight": "max-input-tps",
+                    "require_cache_affinity_key": false, "require_input_tokens": false}),
             ),
             (
-                "pulsar string seed; KV check requires input tokens",
+                "pulsar KV check requires input tokens",
                 &permissive,
-                r#"pulsar;seed="a b";consider_kv_free_tokens=true"#,
-                r#"pulsar;seed="a b";consider_kv_free_tokens=true;require_cache_affinity_key=false;require_input_tokens=true"#,
+                "pulsar;consider_kv_free_tokens=true",
+                json!({"algorithm": "pulsar", "consider_kv_free_tokens": true,
+                    "rendezvous_weight": "max-input-tps",
+                    "require_cache_affinity_key": false, "require_input_tokens": true}),
             ),
             (
                 "wait-and-widen defaults",
                 &permissive,
                 "wait-and-widen;n=3",
-                "wait-and-widen;n=3;max_queued=0;comparator=ttft;ttft_bucket_size_ms=20;next_bucket_unlock_factor=0.25;cache_affinity_virtual_nodes=150;cache_affinity_input_tokens_scale=1.0;cache_affinity_wait_ms=0;ignore_queue_time=false;ignore_input_processing_time=false;require_cache_affinity_key=false;require_input_tokens=false",
+                with(json!({"n": 3})),
             ),
             (
-                "wait-and-widen optional fields and fine decimal",
+                "wait-and-widen optional fields",
                 &permissive,
                 r#"wait-and-widen;seed=s;max_queue_time_floor_ms=100;max_queue_time_ceil_ms=500;next_bucket_unlock_factor="0.0625";cache_affinity_backend_selection_count=2"#,
-                r#"wait-and-widen;n=2;max_queued=0;max_queue_time_floor_ms=100;max_queue_time_ceil_ms=500;comparator=ttft;ttft_bucket_size_ms=20;next_bucket_unlock_factor="0.0625";seed=s;cache_affinity_virtual_nodes=150;cache_affinity_backend_selection_count=2;cache_affinity_input_tokens_scale=1.0;cache_affinity_wait_ms=0;ignore_queue_time=false;ignore_input_processing_time=false;require_cache_affinity_key=false;require_input_tokens=false"#,
+                with(json!({"seed": "s", "max_queue_time_floor_ms": 100,
+                    "max_queue_time_ceil_ms": 500, "next_bucket_unlock_factor": 0.0625,
+                    "cache_affinity_backend_selection_count": 2})),
             ),
             (
                 "wait-and-widen inherits the static base",
                 &configured,
                 "wait-and-widen;max_queued=1",
-                "wait-and-widen;n=4;max_queued=1;comparator=ttft;ttft_bucket_size_ms=50;next_bucket_unlock_factor=0.25;cache_affinity_virtual_nodes=150;cache_affinity_input_tokens_scale=1.0;cache_affinity_wait_ms=0;ignore_queue_time=false;ignore_input_processing_time=false;require_cache_affinity_key=false;require_input_tokens=false;max_input_work_seconds=9.0",
+                with(json!({"n": 4, "max_queued": 1, "ttft_bucket_size_ms": 50,
+                    "max_input_work_seconds": 9.0})),
             ),
             (
                 "pulsar-wait-and-widen widen interval follows the affinity wait",
                 &permissive,
                 "pulsar-wait-and-widen;cache_affinity_wait_ms=40",
-                "pulsar-wait-and-widen;n=2;max_queued=0;ttft_bucket_size_ms=20;next_bucket_unlock_factor=0.25;cache_affinity_backend_selection_count=1;cache_affinity_input_tokens_scale=1.0;cache_affinity_wait_ms=40;band_widen_interval_ms=40;fallback_max_queued=0;ignore_queue_time=false;ignore_input_processing_time=false;consider_kv_free_tokens=false;require_cache_affinity_key=false;require_input_tokens=false",
+                json!({"algorithm": "pulsar-wait-and-widen", "n": 2, "max_queued": 0,
+                    "ttft_bucket_size_ms": 20, "next_bucket_unlock_factor": 0.25,
+                    "cache_affinity_backend_selection_count": 1,
+                    "cache_affinity_input_tokens_scale": 1.0, "cache_affinity_wait_ms": 40,
+                    "band_widen_interval_ms": 40, "fallback_max_queued": 0,
+                    "ignore_queue_time": false, "ignore_input_processing_time": false,
+                    "consider_kv_free_tokens": false, "rendezvous_weight": "max-input-tps",
+                    "require_cache_affinity_key": false, "require_input_tokens": false}),
             ),
         ];
         for (label, router, raw, expected) in cases {
             let actual = effective(router, raw);
-            assert_eq!(actual, expected, "{label}");
-            assert_eq!(effective(router, &actual), actual, "{label}: round trip");
+            let value: Value = serde_json::from_str(&actual).unwrap();
+            assert_eq!(value, expected, "{label}");
+            let parsed: LoadBalancerAlgorithmConfig = serde_json::from_str(&actual)
+                .unwrap_or_else(|error| panic!("{label}: not static config: {error}"));
+            assert_eq!(
+                LoadBalancerDefinition::new(parsed)
+                    .unwrap()
+                    .effective_config(),
+                actual,
+                "{label}: parse back"
+            );
         }
     }
 }
