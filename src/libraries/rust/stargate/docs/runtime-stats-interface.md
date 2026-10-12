@@ -123,18 +123,21 @@ client sets `stream_options.include_usage=true` or the deployment opts in to
 `--force-chat-completions-include-usage` (off by default). When usage reports
 `cached_tokens` (Chat `prompt_tokens_details` or Responses
 `input_tokens_details`), input throughput counts only uncached prompt tokens.
-Without cached details, it counts total prompt tokens. Text peeking is last
-resort.
+Without cached details, it counts total prompt tokens. A fully cached request
+counts as zero uncached tokens. It stays in the window, and a window with no
+uncached tokens publishes nothing. Text peeking is last resort.
 
 Fallback input throughput divides the input tokens of the latest
 smoothing-window requests (8 by default) by the union of their
 submit-to-first-output intervals. Requests are ordered by first output. A
 request expected to report usage reserves a pending slot at first output. The
-rate covers the latest resolved requests before the oldest pending one, and
-newer requests wait. A long decode therefore delays the published mean until
-its usage arrives. Pylon drops the oldest pending request from the rate when a
-newer first output is more than 120 seconds past its own, or when more than
-1024 requests (or 8 windows, if larger) are retained. Its late usage can still
+slot resolves when usage arrives, even before the request completes. The rate
+covers the latest resolved requests before the oldest pending one, and newer
+requests wait. A long decode therefore delays the published mean until its
+usage arrives. Pylon drops the oldest pending request from the rate when a
+newer first output, or the stats sweep clock while traffic is idle, is more
+than 120 seconds past its first output. It also drops one when more than 1024
+requests (or 8 windows, if larger) are retained. Its late usage can still
 re-enter the rate unless newer resolved requests have already left the window.
 Requests that do not request usage resolve at first output with total prompt
 tokens.

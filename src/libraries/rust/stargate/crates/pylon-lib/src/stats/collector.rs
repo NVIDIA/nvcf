@@ -1464,6 +1464,139 @@ mod tests {
         assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 100.0);
     }
 
+    // An earlier request publishes 10 TPS. A and B are pending when A's usage
+    // arrives on a non-terminal event; A's terminal event is then lost.
+    fn lost_terminal_after_usage(
+        a_usage: TestInputUsage,
+    ) -> (TestAggregator, crate::runtime_state::RequestInputInterval) {
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 2));
+        let start = std::time::Instant::now();
+        let stats = apply_input_usage_observation(
+            &mut aggregator,
+            &input_usage_observation("earlier", 10, RequestObservationState::Complete),
+            prefill_interval(start, Duration::ZERO, seconds(1)),
+            TestInputUsage::Cached { uncached: 10 },
+            true,
+        );
+        assert_tps_near(stats.last_mean_input_tps, 10.0, "earlier request");
+
+        let a_interval = prefill_interval(start, seconds(10), seconds(1));
+        let b_interval = prefill_interval(start, seconds(10) + milliseconds(100), seconds(1));
+        for (request_id, interval) in [("a", a_interval), ("b", b_interval)] {
+            let stats = apply_input_usage_observation(
+                &mut aggregator,
+                &input_usage_observation(
+                    request_id,
+                    100,
+                    RequestObservationState::OutputGeneration,
+                ),
+                interval,
+                TestInputUsage::Absent,
+                true,
+            );
+            assert_tps_near(stats.last_mean_input_tps, 10.0, "pending requests");
+        }
+        apply_input_usage_observation(
+            &mut aggregator,
+            &input_usage_observation("a", 100, RequestObservationState::OutputGeneration),
+            a_interval,
+            a_usage,
+            true,
+        );
+        (aggregator, b_interval)
+    }
+
+    #[test]
+    fn non_terminal_usage_resolves_a_slot_whose_terminal_is_lost() {
+        let (mut aggregator, b_interval) =
+            lost_terminal_after_usage(TestInputUsage::Cached { uncached: 40 });
+        assert_tps_near(
+            aggregator.snapshot("model-a").last_mean_input_tps,
+            50.0 / 2.0,
+            "usage resolves A",
+        );
+
+        let stats = apply_input_usage_observation(
+            &mut aggregator,
+            &input_usage_observation("b", 100, RequestObservationState::Complete),
+            b_interval,
+            TestInputUsage::Cached { uncached: 80 },
+            true,
+        );
+        assert_tps_near(stats.last_mean_input_tps, 120.0 / 1.1, "A and B");
+        assert_tps_near(
+            stats
+                .max_input_tps
+                .expect("eligible window should raise the maximum"),
+            120.0 / 1.1,
+            "maximum",
+        );
+    }
+
+    #[test]
+    fn non_terminal_usage_without_cached_details_resolves_with_total_tokens() {
+        let (mut aggregator, b_interval) = lost_terminal_after_usage(TestInputUsage::TotalOnly);
+        assert_tps_near(
+            aggregator.snapshot("model-a").last_mean_input_tps,
+            110.0 / 2.0,
+            "total-only usage resolves A",
+        );
+
+        let stats = apply_input_usage_observation(
+            &mut aggregator,
+            &input_usage_observation("b", 100, RequestObservationState::Complete),
+            b_interval,
+            TestInputUsage::Cached { uncached: 80 },
+            true,
+        );
+        assert_tps_near(stats.last_mean_input_tps, 180.0 / 1.1, "A and B");
+        assert_eq!(
+            stats.max_input_tps,
+            Some(10.0),
+            "a total-token entry must not raise the maximum"
+        );
+    }
+
+    #[test]
+    fn idle_sweep_releases_a_slot_whose_usage_is_lost() {
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 2));
+        let start = std::time::Instant::now();
+        apply_input_usage_observation(
+            &mut aggregator,
+            &input_usage_observation("earlier", 10, RequestObservationState::Complete),
+            prefill_interval(start, Duration::ZERO, seconds(1)),
+            TestInputUsage::Cached { uncached: 10 },
+            true,
+        );
+        apply_input_usage_observation(
+            &mut aggregator,
+            &input_usage_observation("lost", 100, RequestObservationState::OutputGeneration),
+            prefill_interval(start, seconds(10), seconds(1)),
+            TestInputUsage::Absent,
+            true,
+        );
+        let stats = apply_input_usage_observation(
+            &mut aggregator,
+            &input_usage_observation("b", 100, RequestObservationState::Complete),
+            prefill_interval(start, seconds(10) + milliseconds(100), seconds(1)),
+            TestInputUsage::Cached { uncached: 80 },
+            true,
+        );
+        assert_tps_near(
+            stats.last_mean_input_tps,
+            10.0,
+            "B waits for the lost request",
+        );
+
+        assert!(aggregator.sweep(seconds(60)).is_empty());
+        let updates = aggregator.sweep(seconds(200));
+        assert_tps_near(
+            published_stats(updates).last_mean_input_tps,
+            90.0 / 2.0,
+            "sweep releases B",
+        );
+    }
+
     /// Prompt usage carried by one fallback chat observation.
     #[derive(Clone, Copy, Debug)]
     enum TestInputUsage {
@@ -3204,6 +3337,7 @@ mod tests {
                 super::super::aggregator::InputIntervalSample {
                     request_id: &later_cumulative.request_id,
                     interval,
+                    prompt_tokens: later_cumulative.input_tokens,
                     input_tokens: later_cumulative.input_tokens,
                     input_tokens_explicit: false,
                     max_input_tps_eligible: false,

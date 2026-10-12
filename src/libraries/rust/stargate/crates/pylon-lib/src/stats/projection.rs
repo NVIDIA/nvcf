@@ -147,6 +147,7 @@ impl StatsAggregator {
                 InputIntervalSample {
                     request_id: &observation.request_id,
                     interval,
+                    prompt_tokens: observation.input_tokens,
                     input_tokens: event
                         .uncached_input_tokens()
                         .unwrap_or(observation.input_tokens),
@@ -154,7 +155,11 @@ impl StatsAggregator {
                     max_input_tps_eligible: event.uncached_input_tokens().is_some()
                         || generated_request_kind(&observation.request_id)
                             == Some(GeneratedRequestKind::Calibration),
-                    pending: event.input_usage_expected() && !observation.is_terminal(),
+                    // Engine-reported usage resolves the slot even if the
+                    // terminal event is later dropped.
+                    pending: event.input_usage_expected()
+                        && !observation.is_terminal()
+                        && !event.input_tokens_explicit(),
                 },
                 config,
             )
