@@ -143,10 +143,15 @@ impl StatsAggregator {
             observation.endpoint,
             RequestObservationEndpoint::ChatCompletions | RequestObservationEndpoint::Responses
         );
-        model_state.prompt_cache_details_observed |=
-            generation_endpoint && event.uncached_input_tokens().is_some();
+        let calibration = generated_request_kind(&observation.request_id)
+            == Some(GeneratedRequestKind::Calibration);
+        let streamed_chat =
+            observation.endpoint == RequestObservationEndpoint::ChatCompletions && !calibration;
+        model_state.chat_cache_details_observed |=
+            streamed_chat && event.uncached_input_tokens().is_some();
         let uncached_input_tokens = event.uncached_input_tokens().or_else(|| {
-            (model_state.prompt_cache_details_observed
+            (streamed_chat
+                && model_state.chat_cache_details_observed
                 && event.input_tokens_explicit()
                 && !event.input_cache_details_invalid())
             .then_some(observation.input_tokens)
@@ -160,9 +165,7 @@ impl StatsAggregator {
                     prompt_tokens: observation.input_tokens,
                     input_tokens: uncached_input_tokens.unwrap_or(observation.input_tokens),
                     input_tokens_explicit: event.input_tokens_explicit(),
-                    max_input_tps_eligible: uncached_input_tokens.is_some()
-                        || generated_request_kind(&observation.request_id)
-                            == Some(GeneratedRequestKind::Calibration),
+                    max_input_tps_eligible: uncached_input_tokens.is_some() || calibration,
                     // Engine-reported usage resolves the slot even if the
                     // terminal event is later dropped.
                     pending: event.input_usage_expected()

@@ -50,10 +50,11 @@ pub(super) struct ModelMetricsState {
     aggregate_state_counted: bool,
     pub(super) counter_output_tps_authoritative: bool,
     pub(super) chunk_usage_stats_observed: bool,
-    // Set once usage for this generation reports cached-token details. Engines
-    // that report them omit Chat details on a cache miss, so later explicit
-    // usage without details then means no cached tokens.
-    pub(super) prompt_cache_details_observed: bool,
+    // Set once streamed Chat Completions usage for this generation reports valid
+    // cached-token details. Engines that report them omit Chat details on a
+    // cache miss, so later Chat usage without details then means no cached
+    // tokens. Responses and calibration usage never set or use it.
+    pub(super) chat_cache_details_observed: bool,
     pub(super) kv_cache_stats_observed: bool,
     pub(super) engine_stream_stats_observed: bool,
     pub(super) last_stats_event_at: Option<TokioInstant>,

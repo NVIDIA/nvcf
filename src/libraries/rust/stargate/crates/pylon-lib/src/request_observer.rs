@@ -319,6 +319,8 @@ impl RequestObserver {
 
     // `cache_details_invalid` marks cached-token details that were present but
     // malformed or larger than the prompt, as distinct from omitted details.
+    // A later report that omits details keeps the earlier valid or invalid
+    // details; it is not evidence that nothing was cached.
     pub(crate) fn observe_input_usage_details(
         &mut self,
         input_tokens: u64,
@@ -334,6 +336,12 @@ impl RequestObserver {
             );
             return;
         }
+        let (uncached_input_tokens, cache_details_invalid) =
+            if uncached_input_tokens.is_none() && !cache_details_invalid {
+                (self.uncached_input_tokens, self.input_cache_details_invalid)
+            } else {
+                (uncached_input_tokens, cache_details_invalid)
+            };
         let changed = input_tokens != self.input_tokens
             || !self.input_tokens_explicit
             || self.uncached_input_tokens != uncached_input_tokens
@@ -1342,22 +1350,54 @@ mod tests {
     async fn invalid_cached_details_are_distinct_from_omitted_details() {
         let (mut observer, rx, _) = responding_observer("req-invalid-details").await;
 
-        observer.observe_input_usage_details(100, None, true);
-        let invalid = rx
-            .recv_async()
-            .await
-            .expect("invalid details should be emitted");
-        assert!(invalid.input_tokens_explicit());
-        assert_eq!(invalid.uncached_input_tokens(), None);
-        assert!(invalid.input_cache_details_invalid());
-
         observer.observe_input_usage(100, None);
         let omitted = rx
             .recv_async()
             .await
             .expect("omitted details should be emitted");
+        assert!(omitted.input_tokens_explicit());
         assert_eq!(omitted.uncached_input_tokens(), None);
         assert!(!omitted.input_cache_details_invalid());
+
+        observer.observe_input_usage_details(100, None, true);
+        let invalid = rx
+            .recv_async()
+            .await
+            .expect("invalid details should be emitted");
+        assert_eq!(invalid.uncached_input_tokens(), None);
+        assert!(invalid.input_cache_details_invalid());
+    }
+
+    #[tokio::test]
+    async fn omitted_details_keep_earlier_cache_evidence() {
+        for (earlier_uncached, earlier_invalid) in [(Some(14), false), (None, true)] {
+            let (mut observer, rx, _) = responding_observer("req-kept-details").await;
+            observer.observe_input_usage_details(8_000, earlier_uncached, earlier_invalid);
+            rx.recv_async()
+                .await
+                .expect("earlier details should be emitted");
+
+            observer.observe_input_usage(8_000, None);
+            assert!(
+                rx.try_recv().is_err(),
+                "omitted details must not change the request's usage"
+            );
+            observer.observe_input_usage(8_001, None);
+            let later = rx
+                .recv_async()
+                .await
+                .expect("a larger prompt count should be emitted");
+            assert_eq!(later.uncached_input_tokens(), earlier_uncached);
+            assert_eq!(later.input_cache_details_invalid(), earlier_invalid);
+
+            observer.observe_input_usage_details(8_001, Some(300), false);
+            let valid = rx
+                .recv_async()
+                .await
+                .expect("a later valid report should be emitted");
+            assert_eq!(valid.uncached_input_tokens(), Some(300));
+            assert!(!valid.input_cache_details_invalid());
+        }
     }
 
     #[tokio::test]

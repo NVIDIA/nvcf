@@ -790,6 +790,8 @@ fn exact_usage(
         },
         _ => (None, false),
     };
+    // Only an omitted or null details field means "not reported". A present
+    // details value without a numeric cached_tokens is invalid.
     let cached_input_tokens_invalid = invalid_cached_input_tokens
         || cached_input_exceeds_total
         || [
@@ -797,7 +799,7 @@ fn exact_usage(
             &response_usage["input_tokens_details"],
         ]
         .into_iter()
-        .any(|details| !details.is_null() && details.as_object().is_none());
+        .any(|details| !details.is_null() && details["cached_tokens"].as_u64().is_none());
     let (output_tokens, invalid_output_tokens) = merge_u64_fields([
         &usage["completion_tokens"],
         &response_usage["output_tokens"],
@@ -1600,6 +1602,31 @@ mod tests {
                 r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3,"prompt_tokens_details":5}}"#,
                 None,
                 true,
+            ),
+            (
+                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3,"prompt_tokens_details":{}}}"#,
+                None,
+                true,
+            ),
+            (
+                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":null}}}"#,
+                None,
+                true,
+            ),
+            (
+                r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"input_tokens":100,"output_tokens":2,"input_tokens_details":{}}}}"#,
+                None,
+                true,
+            ),
+            (
+                r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"input_tokens":100,"output_tokens":2,"input_tokens_details":{"cached_tokens":null}}}}"#,
+                None,
+                true,
+            ),
+            (
+                r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"input_tokens":100,"output_tokens":2,"input_tokens_details":null}}}"#,
+                None,
+                false,
             ),
         ] {
             let usage = parse_data(data)

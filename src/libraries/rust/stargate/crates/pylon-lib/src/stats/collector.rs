@@ -1742,6 +1742,162 @@ mod tests {
     }
 
     #[test]
+    fn only_streamed_chat_details_make_chat_usage_without_details_a_miss() {
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 1));
+        let generation = aggregator
+            .current_generation("model-a")
+            .cloned()
+            .expect("test model generation should exist");
+        let start = std::time::Instant::now();
+        let calibration_id =
+            next_generated_request_id(GeneratedRequestKind::Calibration, &generation);
+        let reports = [
+            (
+                RequestObservation {
+                    endpoint: RequestObservationEndpoint::Responses,
+                    ..input_usage_observation(
+                        "responses-details",
+                        2_000,
+                        RequestObservationState::Complete,
+                    )
+                },
+                TestInputUsage::Cached { uncached: 2_000 },
+            ),
+            (
+                input_usage_observation(&calibration_id, 2_000, RequestObservationState::Complete),
+                TestInputUsage::Cached { uncached: 2_000 },
+            ),
+        ];
+        for (index, (observation, usage)) in reports.iter().enumerate() {
+            let stats = apply_input_usage_observation(
+                &mut aggregator,
+                observation,
+                prefill_interval(start, seconds(2 * index as u64), seconds(1)),
+                *usage,
+                true,
+            );
+            assert_eq!(stats.max_input_tps, Some(2_000.0));
+        }
+        assert!(
+            !aggregator.per_model["model-a"]
+                .metrics
+                .chat_cache_details_observed
+        );
+
+        let stats = apply_input_usage_observation(
+            &mut aggregator,
+            &input_usage_observation(
+                "chat-without-details",
+                9_000,
+                RequestObservationState::Complete,
+            ),
+            prefill_interval(start, seconds(4), seconds(1)),
+            TestInputUsage::TotalOnly,
+            true,
+        );
+        assert_tps_near(stats.last_mean_input_tps, 9_000.0, "chat without details");
+        assert_eq!(
+            stats.max_input_tps,
+            Some(2_000.0),
+            "Responses and calibration details must not make Chat totals eligible"
+        );
+    }
+
+    // Drives one Chat request through a real observer and the fallback
+    // projection, with usage reports given as (uncached, invalid details).
+    fn observe_chat_usage_reports(
+        aggregator: &mut StatsAggregator,
+        request_id: &str,
+        submitted_at: std::time::Instant,
+        prefill: Duration,
+        reports: &[(Option<u64>, bool)],
+    ) -> CurrentModelStats {
+        let (runtime_state, rx) = PylonRuntimeState::observed(
+            stargate_proto::pb::InferenceServerStatus::Unknown,
+            &["model-a".to_string()],
+            64,
+            None,
+        );
+        let generation = aggregator
+            .current_generation("model-a")
+            .cloned()
+            .expect("test model generation should exist");
+        let mut observer = crate::request_observer::RequestObserver::from_required(
+            RequestObservationEndpoint::ChatCompletions,
+            crate::request_observer::RequiredTunnelHeaders {
+                request_id: request_id.to_string(),
+                routing_key: None,
+                model_id: "model-a".to_string(),
+                priority: None,
+                input_tokens: 8_000,
+                accepted_at: submitted_at,
+            },
+            Some(generation),
+            runtime_state,
+        );
+        observer.set_input_usage_expected(true);
+        observer.on_backend_submission(submitted_at);
+        observer.on_upstream_response_headers(200);
+        observer.observe_generated_output(submitted_at + prefill, true, 0, false);
+        for (uncached, invalid) in reports {
+            observer.observe_input_usage_details(8_000, *uncached, *invalid);
+        }
+        observer.complete();
+        drop(observer);
+        for event in rx.drain() {
+            aggregator.apply_fallback_observation(&event);
+        }
+        aggregator.snapshot("model-a")
+    }
+
+    #[test]
+    fn omitted_details_after_cache_evidence_do_not_reenter_at_full_prompt() {
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 1));
+        let start = std::time::Instant::now();
+        let unique_tps = 8_000.0 / 0.1;
+        let stats = observe_chat_usage_reports(
+            &mut aggregator,
+            "unique",
+            start,
+            milliseconds(100),
+            &[(Some(8_000), false)],
+        );
+        assert_tps_near(stats.last_mean_input_tps, unique_tps, "unique request");
+        assert!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .chat_cache_details_observed
+        );
+
+        // A near-full hit, then a repeat of its usage without details. Treating
+        // the repeat as a miss would publish 8000 tokens over 50 ms.
+        let stats = observe_chat_usage_reports(
+            &mut aggregator,
+            "hit-then-omitted",
+            start + seconds(1),
+            milliseconds(50),
+            &[(Some(14), false), (None, false)],
+        );
+        assert_tps_near(stats.last_mean_input_tps, unique_tps, "excluded hit");
+        assert_eq!(stats.max_input_tps, Some(unique_tps));
+
+        // Invalid details, then a report without details, stay ineligible.
+        let stats = observe_chat_usage_reports(
+            &mut aggregator,
+            "invalid-then-omitted",
+            start + seconds(2),
+            milliseconds(50),
+            &[(None, true), (None, false)],
+        );
+        assert_tps_near(stats.last_mean_input_tps, 8_000.0 / 0.05, "invalid request");
+        assert_eq!(
+            stats.max_input_tps,
+            Some(unique_tps),
+            "invalid details must not become a trusted miss"
+        );
+    }
+
+    #[test]
     fn generation_replacement_clears_the_cached_details_report() {
         let mut aggregator = test_aggregator(config!(smoothing_window_size: 1));
         apply_one_second_usage(
@@ -1753,7 +1909,7 @@ mod tests {
         assert!(
             aggregator.per_model["model-a"]
                 .metrics
-                .prompt_cache_details_observed
+                .chat_cache_details_observed
         );
 
         let retired = aggregator
