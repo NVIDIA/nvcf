@@ -94,10 +94,7 @@ pub(super) fn effective_config(config: &LoadBalancerAlgorithmConfig) -> anyhow::
     match algorithm {
         LoadBalancerAlgorithm::PowerOfN => {
             let settings = PowerOfNLoadBalancer::from_algorithm_config(config)?;
-            effective.power_of_n = Some(PowerOfNAlgorithmConfig {
-                sample_count: settings.sample_count,
-                comparator: settings.comparator,
-            });
+            effective.power_of_n = Some(settings.to_algorithm_config());
         }
         LoadBalancerAlgorithm::WaitAndWiden => {
             let settings = WaitAndWidenConfig::from_algorithm_config(config)?;

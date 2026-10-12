@@ -21,13 +21,13 @@ use tracing::{Span, debug};
 use super::tests::LoadBalancerTestChoiceExt;
 use super::{
     ClusterComparator, LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice,
-    LoadBalancerRequest, MAX_POWER_OF_N_SAMPLE_COUNT,
+    LoadBalancerRequest, MAX_POWER_OF_N_SAMPLE_COUNT, PowerOfNAlgorithmConfig,
 };
 use crate::routing_state::RoutedClusterSnapshot;
 
 pub(super) struct PowerOfNLoadBalancer {
-    pub(super) sample_count: usize,
-    pub(super) comparator: ClusterComparator,
+    sample_count: usize,
+    comparator: ClusterComparator,
 }
 
 impl PowerOfNLoadBalancer {
@@ -44,6 +44,14 @@ impl PowerOfNLoadBalancer {
             sample_count,
             comparator: settings.comparator,
         })
+    }
+
+    /// The inverse of `from_algorithm_config`: the values this algorithm routes with, as config.
+    pub(super) fn to_algorithm_config(&self) -> PowerOfNAlgorithmConfig {
+        PowerOfNAlgorithmConfig {
+            sample_count: self.sample_count,
+            comparator: self.comparator,
+        }
     }
 
     fn choose_candidate_with_rng<R: Rng + ?Sized>(
