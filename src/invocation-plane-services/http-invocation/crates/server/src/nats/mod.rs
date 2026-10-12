@@ -13,14 +13,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod failure;
 mod retry;
+
+pub use failure::{classify_event, NatsFailureReason};
 
 use crate::{
     metrics::{
-        record_nats_error_total, record_nats_event, record_nats_jetstream_publish,
-        register_nats_statistics,
+        record_nats_error_total, record_nats_event, record_nats_failure,
+        record_nats_jetstream_publish, register_nats_statistics,
     },
-    nats::retry::{jitter, retry, ExponentialBackoff},
+    nats::{
+        failure::{classify_connect_error, LastNatsFailure},
+        retry::{jitter, retry, ExponentialBackoff},
+    },
     nvcf_api::nvcf::{WorkerInvokeFunctionRequest, WorkerResultTracking},
     nvcf_api::oauth2_client::TokenProducer,
     request_id::RequestId,
@@ -71,6 +77,7 @@ pub struct NatsService {
     jetstream: Context,
     nats_properties: NatsProperties,
     invocation_region_headers: HashMap<String, HeaderValue>,
+    last_failure: Arc<LastNatsFailure>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -221,6 +228,8 @@ impl NatsService {
         let invocation_region_headers = Self::invocation_region_headers(nats_properties)?;
         tracing::info!("connecting to nats {}", nats_properties.nats_address);
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let last_failure = Arc::new(LastNatsFailure::default());
+        let event_last_failure = last_failure.clone();
 
         let auth_callback = Self::create_auth_callback(
             secrets_provider.clone(),
@@ -235,15 +244,26 @@ impl NatsService {
             ))
             .event_callback(move |event| {
                 let tx = tx.clone();
+                let last_failure = event_last_failure.clone();
                 async move {
                     record_nats_event(&event);
+                    if let Some(reason) = classify_event(&event) {
+                        last_failure.set(reason);
+                    }
                     let _ = tx.send(event).await;
                 }
             });
         let client = builder
             .connect(&nats_properties.nats_address)
             .await
-            .inspect_err(|_err| {
+            .inspect_err(|err| {
+                let reason = classify_connect_error(err);
+                tracing::error!(
+                    reason = reason.as_str(),
+                    "failed to connect to nats: {}",
+                    err
+                );
+                record_nats_failure(reason, "connect");
                 record_nats_error_total();
             })?;
         tracing::info!("connected to nats");
@@ -278,6 +298,7 @@ impl NatsService {
             jetstream,
             nats_properties: nats_properties.clone(),
             invocation_region_headers,
+            last_failure,
         };
         // NATS will time out instead of returning a 404 if the stream does not exist and we do a direct get.
         // create the stream eagerly to prevent timeouts.
@@ -394,7 +415,10 @@ impl NatsService {
             State::Connected => Ok(()),
             _ => {
                 record_nats_error_total();
-                Err(anyhow::anyhow!("nats not connected"))
+                match self.last_failure.get() {
+                    NatsFailureReason::None => Err(anyhow::anyhow!("nats not connected")),
+                    reason => Err(anyhow::anyhow!("nats not connected: {}", reason.as_str())),
+                }
             }
         }
     }

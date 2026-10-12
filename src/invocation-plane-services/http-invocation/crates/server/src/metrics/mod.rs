@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::nats::{classify_event, NatsFailureReason};
 use crate::telemetry::settings::MetricsSettings;
 use async_nats::{Event, Statistics};
 use axum_prometheus::AXUM_HTTP_REQUESTS_DURATION_SECONDS;
@@ -35,7 +36,7 @@ struct Metric {
 /// client. Defined once here and reused so the value stays consistent.
 pub const CLIENT_EARLY_DISCONNECT_STATUS: &str = "499";
 
-const COUNTERS: [Metric; 19] = [
+const COUNTERS: [Metric; 20] = [
     FUNCTION_INVOCATION_ERROR,
     FUNCTION_REQUEST,
     NATS_IN_BYTES,
@@ -44,6 +45,7 @@ const COUNTERS: [Metric; 19] = [
     NATS_OUT_MESSAGES,
     NATS_CONNECTS,
     TOTAL_NATS_ERRORS,
+    NATS_FAILURES,
     NATS_EVENT_CONNECTED,
     NATS_EVENT_DISCONNECTED,
     NATS_EVENT_LAMEDUCK_MODE,
@@ -117,6 +119,11 @@ const NATS_CONNECTS: Metric = Metric {
 const TOTAL_NATS_ERRORS: Metric = Metric {
     name: "total.nats.errors",
     description: "Total errors of NATS.",
+};
+
+const NATS_FAILURES: Metric = Metric {
+    name: "nats.failures",
+    description: "NATS connection failures by normalized reason.",
 };
 
 const NATS_EVENT_CONNECTED: Metric = Metric {
@@ -294,7 +301,15 @@ pub fn record_nats_error_total() {
     counter!(TOTAL_NATS_ERRORS.name).increment(1);
 }
 
+pub fn record_nats_failure(reason: NatsFailureReason, source: &'static str) {
+    let labels = [("reason", reason.as_str()), ("source", source)];
+    counter!(NATS_FAILURES.name, &labels).increment(1);
+}
+
 pub fn record_nats_event(event: &Event) {
+    if let Some(reason) = classify_event(event) {
+        record_nats_failure(reason, "event");
+    }
     match event {
         Event::Connected => {
             counter!(NATS_EVENT_CONNECTED.name).increment(1);
