@@ -89,6 +89,8 @@ jobs:
           # a tag that names no known service fails below rather than here, so
           # a service missing from the release metadata is visible.
           case "${tag}" in
+            *-sm.[0-9]*)      echo "applies=false" >> "${GITHUB_OUTPUT}"
+                              echo "${tag} requires an explicit maintenance pin review" ;;
             deploy/helm/*/v*) echo "applies=false" >> "${GITHUB_OUTPUT}"
                               echo "${tag} is a chart release; stack-pin-bump.yml handles it" ;;
             */v*)             echo "applies=true"  >> "${GITHUB_OUTPUT}" ;;
