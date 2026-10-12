@@ -987,3 +987,64 @@ type stubProxyCall struct {
 	Header   http.Header
 	Body     []byte
 }
+
+func TestCreateResponseForwardsNamespaceCustomToolsAndContentOutputUnchanged(t *testing.T) {
+	t.Parallel()
+
+	const input = `[
+		{"role":"user","content":[{"type":"input_text","text":"call echo"}]},
+		{"type":"function_call","namespace":"diagnostics","name":"echo","call_id":"c1","arguments":"{}"},
+		{"type":"function_call_output","call_id":"c1","output":[{"type":"input_text","text":"NAMESPACE_OK"}]},
+		{"type":"custom_tool_call","call_id":"c2","name":"apply_patch","input":"*** Begin Patch"},
+		{"type":"custom_tool_call_output","call_id":"c2","output":[{"type":"input_text","text":"applied"}]}]`
+	const tools = `[{"type":"namespace","name":"diagnostics","description":"Compatibility test tools.","tools":[
+		{"type":"function","name":"echo","parameters":{"type":"object"}},
+		{"type":"custom","name":"apply_patch","format":{"type":"text"}}]},
+		{"type":"custom","name":"apply_patch","format":{"type":"text"}}]`
+
+	proxyProvider := &stubResponsesProvider{}
+	cfg := config.Default()
+	e := echo.New()
+	e.Use(NewContextMiddleware(cfg))
+	RegisterRoutes(e, NewHandlers(cfg, proxyProvider, nil))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(
+		`{"model":"fn-chat/company-name/model-name","tool_choice":"auto","tools":`+tools+`,"input":`+input+`}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	calls := proxyProvider.proxyRequestCalls()
+	if len(calls) != 1 {
+		t.Fatalf("proxy calls = %d, want 1", len(calls))
+	}
+	var forwarded struct {
+		Tools json.RawMessage `json:"tools"`
+		Input json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(calls[0].Body, &forwarded); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONEqual(t, forwarded.Tools, tools)
+	assertJSONEqual(t, forwarded.Input, input)
+}
+
+func assertJSONEqual(t *testing.T, got json.RawMessage, want string) {
+	t.Helper()
+	var g, w any
+	if err := json.Unmarshal(got, &g); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(want), &w); err != nil {
+		t.Fatal(err)
+	}
+	gb, _ := json.Marshal(g)
+	wb, _ := json.Marshal(w)
+	if string(gb) != string(wb) {
+		t.Fatalf("forwarded JSON changed:\n got: %s\nwant: %s", gb, wb)
+	}
+}
