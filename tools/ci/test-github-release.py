@@ -44,6 +44,22 @@ class GithubReleaseTest(unittest.TestCase):
     def setUp(self):
         self.github_release = load_github_release()
 
+    def test_ui_chart_maintenance_tags_are_separate_from_application(self):
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        chart = self.github_release.find_service(metadata, "nvcf-ui-helm")
+        application = self.github_release.find_service(metadata, "nvcf-ui")
+        version = "9.8.7"
+        chart_tag = self.github_release.tag_for_version(chart, version)
+        application_tag = self.github_release.tag_for_version(application, version)
+        self.assertEqual(chart_tag, "src/uis/nvcf-ui/helm/v" + version)
+        self.assertEqual(self.github_release.version_from_tag(chart, chart_tag), version)
+        self.assertEqual(self.github_release.version_from_tag(application, chart_tag), "")
+        self.assertEqual(self.github_release.version_from_tag(chart, application_tag), "")
+        self.assertEqual(
+            self.github_release.release_branch(self.github_release.parse_release_tag(chart_tag, metadata)),
+            "release-src/uis/nvcf-ui/helm/v9.8",
+        )
+
     def init_repo(self, root):
         git(root, "init")
         git(root, "config", "user.email", "test@example.com")
