@@ -543,7 +543,13 @@ func copyFileExec(src, dst string) error {
 		_ = out.Close()
 		return err
 	}
-	return out.Close()
+	if err := out.Close(); err != nil {
+		return err
+	}
+	// OpenFile's mode applies only when it creates the file; a file already
+	// at dst (a rootfs diff replayed into the placeholder carries one) keeps
+	// its own, and exec of a 0644 criu fails with EACCES.
+	return os.Chmod(dst, 0o755)
 }
 
 // moveDirContents moves every entry of src into dst (rename with copy

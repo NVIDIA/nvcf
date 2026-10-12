@@ -809,7 +809,11 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 	if sourceUpperdir != "" {
 		_, mirrorSpan := tracing.Tracer().Start(ctx, "checkpoint.mirror_rootfs_diff")
 		diffDst := filepath.Join(checkpointDir, "rootfs-diff")
-		if mErr := mirrorOverlayDir(sourceUpperdir, diffDst, sourceMountPoints, rootfsDiffExcludeGlobs(), log); mErr != nil {
+		// nvsnap's own staging in the container (the criu bundle, the
+		// images directory) is not the workload's state: leave it out, or
+		// a restore replays it over what the agent stages for itself.
+		diffExcludes := append(append([]string{}, sourceMountPoints...), v2BinDirInContainer, v2ImagesDirInContainer)
+		if mErr := mirrorOverlayDir(sourceUpperdir, diffDst, diffExcludes, rootfsDiffExcludeGlobs(), log); mErr != nil {
 			mirrorSpan.RecordError(mErr)
 			log.WithError(mErr).Warn("Failed to mirror overlay upperdir; restore may fail on missing files")
 		}

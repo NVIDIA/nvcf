@@ -109,6 +109,7 @@ go_test(
         "catalog_test.go",
         "checkpoint_reaper_test.go",
         "checkpoint_v2_test.go",
+        "copy_file_exec_test.go",
         "criu_auto_restore_test.go",
         "criu_group_admit_test.go",
         "criu_group_guard_test.go",
