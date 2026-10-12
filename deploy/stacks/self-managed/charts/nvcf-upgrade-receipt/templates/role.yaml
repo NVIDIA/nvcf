@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+rules:
+  # Scoped to the receipt itself. get and patch cover the upgrade case where a
+  # receipt already exists, and naming the resource keeps this identity from
+  # reaching any other ConfigMap in the namespace.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: [{{ .Values.configMapName | quote }}]
+    verbs: ["get", "patch"]
+  # create cannot be scoped: RBAC matches resourceNames against an object that
+  # does not exist yet, so a create rule naming one is never satisfied. It is
+  # kept in its own rule so the unscoped verb is visible rather than buried
+  # alongside the scoped ones, and it is only reachable on a first install.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]

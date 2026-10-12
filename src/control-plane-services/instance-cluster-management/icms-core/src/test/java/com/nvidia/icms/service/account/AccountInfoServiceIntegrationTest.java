@@ -92,6 +92,12 @@ class AccountInfoServiceIntegrationTest extends IntegrationTest {
 
     String ncaId = DUMMY_BYOC_NCA_ID;
 
+    // Declared under icms.gpu-gating in application-test.yaml.
+    private static final String GATED_NCA_ID = "DummyGatedNcaId1aBcDeF";
+    private static final String GATED_ALLOWED_GPU = "DUMMY_GPU_1";
+    private static final String GATED_ALLOWED_INSTANCE_TYPE = "dummy_gpu_1.large";
+    private static final String GATED_DENIED_INSTANCE_TYPE = "dummy_gpu_1.2xlarge";
+
     @Test
     void getAvailableRegions_getAvailableAttributes_getAllGpusForAccount_withoutReservation_considerFallbackCapacity() {
         // Prepare
@@ -172,6 +178,62 @@ class AccountInfoServiceIntegrationTest extends IntegrationTest {
 
         // cleanup
         cleanupClusterEntityFromDb(Set.of(nonByocEntity1, nonByocEntity2, nvcaEntity1));
+    }
+
+    /**
+     * End-to-end check of {@code icms.gpu-gating}, which application-test.yaml declares for
+     * {@link #GATED_NCA_ID} as DUMMY_GPU_1 limited to dummy_gpu_1.large and dummy_gpu_1.xlarge.
+     * The same clusters are visible to both accounts, so any difference is gating.
+     */
+    @Test
+    void accountInfo_forGatedNca_returnsOnlyAllowedGpusAndInstanceTypes() {
+        // Prepare: one compute-platform cluster carrying an allowed GPU with one allowed and one
+        // withheld instance type, plus a second GPU that is not on the allowlist at all.
+        GpuV5Udt gatedGpu1 = getDummyGpuV5(GATED_ALLOWED_INSTANCE_TYPE, GATED_ALLOWED_GPU);
+        gatedGpu1.getInstanceTypes().add(instanceTypeV5(GATED_DENIED_INSTANCE_TYPE));
+        GpuV5Udt gatedGpu2 = getDummyGpuV5("dummy_gpu_2.large", "DUMMY_GPU_2");
+
+        ClusterEntity cluster = getNonByocClusterEntity(nonByocClusterId1, nonByocCluster1Region,
+                Set.of(gatedGpu1, gatedGpu2), Set.of(nonByocCluster1Attribute));
+        saveClusterEntityInDb(Set.of(cluster));
+        saveHealthEntityInDb(Set.of(getDummyHealthEntity(nonByocClusterId1,
+                                                         Set.of(GATED_ALLOWED_GPU, "DUMMY_GPU_2"))));
+
+        GpuUsageFilter filter = GpuUsageFilter.builder()
+                .instanceTypeUsageFilter(InstanceTypeUsageEnum.DEFAULT)
+                .build();
+
+        // Act
+        Map<String, Set<String>> gatedGpus =
+                accountInfoService.getAllGpusForAccount(GATED_NCA_ID, filter);
+        Map<String, Set<InstanceTypeDetails>> gatedInstanceTypes =
+                accountInfoService.getAvailableInstanceTypes(GATED_NCA_ID, filter);
+        InstanceTypeAvailabilityResponse gatedAvailability =
+                accountInfoService.getInstanceTypeAvailability(GATED_NCA_ID);
+
+        Map<String, Set<String>> ungatedGpus =
+                accountInfoService.getAllGpusForAccount(ncaId, filter);
+
+        // Assert
+        validateResponse(AccountInfoService.GPUS_RESPONSE_FIELD_NAME, gatedGpus,
+                         Set.of(GATED_ALLOWED_GPU), Set.of("DUMMY_GPU_2"));
+        validateInstanceTypeResponse(gatedInstanceTypes, GATED_ALLOWED_GPU,
+                                     Set.of(GATED_ALLOWED_INSTANCE_TYPE),
+                                     Set.of(GATED_DENIED_INSTANCE_TYPE));
+
+        assertEquals(Set.of(GATED_ALLOWED_GPU), gatedAvailability.getGpus().stream()
+                .map(InstanceTypeAvailabilityResponse.Gpu::getGpuName)
+                .collect(Collectors.toSet()));
+        assertEquals(Set.of(GATED_ALLOWED_INSTANCE_TYPE), gatedAvailability.getGpus().stream()
+                .flatMap(gpu -> gpu.getInstanceTypes().stream())
+                .map(InstanceTypeAvailabilityResponse.InstanceType::getInstanceName)
+                .collect(Collectors.toSet()));
+
+        validateResponse(AccountInfoService.GPUS_RESPONSE_FIELD_NAME, ungatedGpus,
+                         Set.of(GATED_ALLOWED_GPU, "DUMMY_GPU_2"), Set.of());
+
+        // cleanup
+        cleanupClusterEntityFromDb(Set.of(cluster));
     }
 
     @Test
@@ -451,12 +513,16 @@ class AccountInfoServiceIntegrationTest extends IntegrationTest {
         return clusterEntity;
     }
 
-    private GpuV5Udt getDummyGpuV5(String instanceTypeName, String gpuName) {
-        Set<InstanceTypeV5Udt> instanceTypes = new HashSet<>();
+    private InstanceTypeV5Udt instanceTypeV5(String instanceTypeName) {
         InstanceTypeV5Udt instanceType = new InstanceTypeV5Udt();
         instanceType.setName(instanceTypeName);
         instanceType.setGpuCount(1);
-        instanceTypes.add(instanceType);
+        return instanceType;
+    }
+
+    private GpuV5Udt getDummyGpuV5(String instanceTypeName, String gpuName) {
+        Set<InstanceTypeV5Udt> instanceTypes = new HashSet<>();
+        instanceTypes.add(instanceTypeV5(instanceTypeName));
 
         GpuV5Udt gpuV5Udt = new GpuV5Udt();
         gpuV5Udt.setName(gpuName);

@@ -19,6 +19,8 @@ package cmd
 
 import (
 	"encoding/base64"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -33,6 +35,7 @@ import (
 // command group and its subcommands (NVCF-10082 renamed `registry` ->
 // `registry-credential`).
 
+// TestRegistryCredentialCommandStructure verifies the registry-credential command structure, subcommands, and flags.
 func TestRegistryCredentialCommandStructure(t *testing.T) {
 	t.Run("top-level command uses registry-credential", func(t *testing.T) {
 		assert.Equal(t, "registry-credential", registryCmd.Use)
@@ -66,7 +69,7 @@ func TestRegistryCredentialCommandStructure(t *testing.T) {
 	})
 
 	t.Run("add command exposes secret/username/password flags", func(t *testing.T) {
-		for _, name := range []string{"hostname", "username", "password", "secret", "artifact-type", "description", "tag"} {
+		for _, name := range []string{"hostname", "username", "password", "secret", "secret-file", "artifact-type", "description", "tag"} {
 			assert.NotNilf(t, registryAddCmd.Flag(name), "expected --%s flag on add command", name)
 		}
 	})
@@ -84,6 +87,7 @@ func TestRegistryCredentialCommandStructure(t *testing.T) {
 
 // --- validateAndEncodeCredentials ---
 
+// TestValidateAndEncodeCredentials tests credential flag combinations and base64 encoding.
 func TestValidateAndEncodeCredentials(t *testing.T) {
 	t.Run("returns secret as-is when only --secret provided", func(t *testing.T) {
 		got, err := validateAndEncodeCredentials("preencoded==", "", "")
@@ -115,19 +119,19 @@ func TestValidateAndEncodeCredentials(t *testing.T) {
 	t.Run("rejects when no auth flags provided", func(t *testing.T) {
 		_, err := validateAndEncodeCredentials("", "", "")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "must provide either --secret OR both --username and --password")
+		assert.Contains(t, err.Error(), "must provide either --secret, --secret-file, OR both --username and --password")
 	})
 
 	t.Run("rejects when only --username provided", func(t *testing.T) {
 		_, err := validateAndEncodeCredentials("", "alice", "")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "must provide either --secret OR both --username and --password")
+		assert.Contains(t, err.Error(), "must provide either --secret, --secret-file, OR both --username and --password")
 	})
 
 	t.Run("rejects when only --password provided", func(t *testing.T) {
 		_, err := validateAndEncodeCredentials("", "", "s3cret")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "must provide either --secret OR both --username and --password")
+		assert.Contains(t, err.Error(), "must provide either --secret, --secret-file, OR both --username and --password")
 	})
 
 	t.Run("encodes passwords containing colons correctly", func(t *testing.T) {
@@ -140,6 +144,207 @@ func TestValidateAndEncodeCredentials(t *testing.T) {
 		decoded, decodeErr := base64.StdEncoding.DecodeString(got)
 		require.NoError(t, decodeErr)
 		assert.Equal(t, "alice:p:a:s:s", string(decoded))
+	})
+
+	t.Run("rejects invalid base64 in --secret", func(t *testing.T) {
+		_, err := validateAndEncodeCredentials("not-valid-base64!@#$", "", "")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid base64 credential")
+	})
+}
+
+// --- trimTrailingLineEnding ---
+
+// TestTrimTrailingLineEnding verifies trailing line ending removal behavior for files and stdin.
+func TestTrimTrailingLineEnding(t *testing.T) {
+	t.Run("trims single LF line ending", func(t *testing.T) {
+		assert.Equal(t, "secret", trimTrailingLineEnding("secret\n"))
+	})
+
+	t.Run("trims single CRLF line ending", func(t *testing.T) {
+		assert.Equal(t, "secret", trimTrailingLineEnding("secret\r\n"))
+	})
+
+	t.Run("trims single CR line ending", func(t *testing.T) {
+		assert.Equal(t, "secret", trimTrailingLineEnding("secret\r"))
+	})
+
+	t.Run("returns unchanged when no trailing line ending", func(t *testing.T) {
+		assert.Equal(t, "secret", trimTrailingLineEnding("secret"))
+	})
+
+	t.Run("preserves leading whitespace", func(t *testing.T) {
+		assert.Equal(t, "  secret", trimTrailingLineEnding("  secret\n"))
+	})
+
+	t.Run("preserves trailing whitespace before line ending", func(t *testing.T) {
+		assert.Equal(t, "secret  ", trimTrailingLineEnding("secret  \n"))
+	})
+
+	t.Run("trims only the last line ending when multiple exist", func(t *testing.T) {
+		assert.Equal(t, "secret\n", trimTrailingLineEnding("secret\n\n"))
+	})
+
+	t.Run("returns empty string unchanged", func(t *testing.T) {
+		assert.Equal(t, "", trimTrailingLineEnding(""))
+	})
+}
+
+// --- validateBase64Secret ---
+
+// TestValidateBase64Secret verifies base64 encoding validation.
+func TestValidateBase64Secret(t *testing.T) {
+	t.Run("accepts standard base64", func(t *testing.T) {
+		encoded := base64.StdEncoding.EncodeToString([]byte("alice:s3cret"))
+		assert.NoError(t, validateBase64Secret(encoded))
+	})
+
+	t.Run("accepts raw unpadded base64", func(t *testing.T) {
+		encoded := base64.RawStdEncoding.EncodeToString([]byte("alice:s3cret"))
+		assert.NoError(t, validateBase64Secret(encoded))
+	})
+
+	t.Run("rejects empty string", func(t *testing.T) {
+		err := validateBase64Secret("")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "secret cannot be empty")
+	})
+
+	t.Run("rejects non-base64 content", func(t *testing.T) {
+		err := validateBase64Secret("this is not base64!")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid base64 credential")
+	})
+}
+
+// --- resolveAndValidateCredentials ---
+
+// TestResolveAndValidateCredentials tests credential resolution from inline flags, files, and stdin.
+func TestResolveAndValidateCredentials(t *testing.T) {
+	validSecret := base64.StdEncoding.EncodeToString([]byte("user:pass"))
+
+	t.Run("resolves secret from file with trailing newline", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		filePath := filepath.Join(tmpDir, "secret.b64")
+		require.NoError(t, os.WriteFile(filePath, []byte(validSecret+"\n"), 0600))
+
+		got, err := resolveAndValidateCredentials("", filePath, "", "", nil)
+		require.NoError(t, err)
+		assert.Equal(t, validSecret, got)
+	})
+
+	t.Run("resolves secret from file with CRLF", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		filePath := filepath.Join(tmpDir, "secret.b64")
+		require.NoError(t, os.WriteFile(filePath, []byte(validSecret+"\r\n"), 0600))
+
+		got, err := resolveAndValidateCredentials("", filePath, "", "", nil)
+		require.NoError(t, err)
+		assert.Equal(t, validSecret, got)
+	})
+
+	t.Run("resolves secret from stdin using hyphen", func(t *testing.T) {
+		stdin := strings.NewReader(validSecret + "\n")
+		got, err := resolveAndValidateCredentials("", "-", "", "", stdin)
+		require.NoError(t, err)
+		assert.Equal(t, validSecret, got)
+	})
+
+	t.Run("rejects empty secret file", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		filePath := filepath.Join(tmpDir, "empty.b64")
+		require.NoError(t, os.WriteFile(filePath, []byte(""), 0600))
+
+		_, err := resolveAndValidateCredentials("", filePath, "", "", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "secret cannot be empty")
+	})
+
+	t.Run("rejects empty stdin", func(t *testing.T) {
+		stdin := strings.NewReader("")
+		_, err := resolveAndValidateCredentials("", "-", "", "", stdin)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "secret cannot be empty")
+	})
+
+	t.Run("rejects stdin with only newline", func(t *testing.T) {
+		stdin := strings.NewReader("\n")
+		_, err := resolveAndValidateCredentials("", "-", "", "", stdin)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "secret cannot be empty")
+	})
+
+	t.Run("rejects non-existent file", func(t *testing.T) {
+		_, err := resolveAndValidateCredentials("", "/path/to/nonexistent/secret.b64", "", "", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to read secret file")
+	})
+
+	t.Run("rejects invalid base64 in file", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		filePath := filepath.Join(tmpDir, "invalid.b64")
+		require.NoError(t, os.WriteFile(filePath, []byte("plain-text-credentials\n"), 0600))
+
+		_, err := resolveAndValidateCredentials("", filePath, "", "", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid secret from file")
+		assert.Contains(t, err.Error(), "invalid base64 credential")
+	})
+
+	t.Run("rejects invalid base64 in stdin", func(t *testing.T) {
+		stdin := strings.NewReader("plain-text-credentials\n")
+		_, err := resolveAndValidateCredentials("", "-", "", "", stdin)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid secret from stdin")
+		assert.Contains(t, err.Error(), "invalid base64 credential")
+	})
+
+	t.Run("rejects secret-file with leading space that breaks base64", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		filePath := filepath.Join(tmpDir, "space.b64")
+		require.NoError(t, os.WriteFile(filePath, []byte(" "+validSecret+"\n"), 0600))
+
+		_, err := resolveAndValidateCredentials("", filePath, "", "", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid secret from file")
+	})
+
+	t.Run("rejects --secret combined with --secret-file", func(t *testing.T) {
+		_, err := resolveAndValidateCredentials(validSecret, "/path/to/file", "", "", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot use both --secret and --secret-file")
+	})
+
+	t.Run("rejects --secret-file combined with --username", func(t *testing.T) {
+		_, err := resolveAndValidateCredentials("", "/path/to/file", "alice", "", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot use --secret-file with --username/--password")
+	})
+
+	t.Run("rejects --secret-file combined with --password", func(t *testing.T) {
+		_, err := resolveAndValidateCredentials("", "/path/to/file", "", "s3cret", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot use --secret-file with --username/--password")
+	})
+
+	t.Run("rejects --secret-file combined with both --username and --password", func(t *testing.T) {
+		_, err := resolveAndValidateCredentials("", "/path/to/file", "alice", "s3cret", nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot use --secret-file with --username/--password")
+	})
+
+	t.Run("resolves valid base64 --secret", func(t *testing.T) {
+		got, err := resolveAndValidateCredentials(validSecret, "", "", "", nil)
+		require.NoError(t, err)
+		assert.Equal(t, validSecret, got)
+	})
+
+	t.Run("resolves username and password", func(t *testing.T) {
+		got, err := resolveAndValidateCredentials("", "", "alice", "s3cret", nil)
+		require.NoError(t, err)
+		decoded, decodeErr := base64.StdEncoding.DecodeString(got)
+		require.NoError(t, decodeErr)
+		assert.Equal(t, "alice:s3cret", string(decoded))
 	})
 }
 
@@ -244,6 +449,7 @@ func TestFormatTimestamp(t *testing.T) {
 
 // --- Sanity check: top-level Use constant matches help text ---
 
+// TestRegistryCredentialUseMatchesHelp verifies subcommand and top-level long help reference the new command name.
 func TestRegistryCredentialUseMatchesHelp(t *testing.T) {
 	// Quick sanity that all subcommand long-help references use the new
 	// command name. This catches drift if anyone re-introduces "registry "
@@ -260,4 +466,14 @@ func TestRegistryCredentialUseMatchesHelp(t *testing.T) {
 	// And the top-level Long should reference the new name.
 	assert.True(t, strings.Contains(registryCmd.Long, "nvcf-cli registry-credential"),
 		"top-level command long help missing `nvcf-cli registry-credential` reference")
+}
+
+// TestRegistryCredentialAddHelp verifies --secret-file documentation and examples in help text.
+func TestRegistryCredentialAddHelp(t *testing.T) {
+	assert.Contains(t, registryAddCmd.Long, "--secret-file",
+		"registry add command help should describe --secret-file")
+	assert.Contains(t, registryAddCmd.Long, "--secret-file /path/to/secret.b64",
+		"registry add command help should provide file example")
+	assert.Contains(t, registryAddCmd.Long, "--secret-file -",
+		"registry add command help should provide stdin example")
 }

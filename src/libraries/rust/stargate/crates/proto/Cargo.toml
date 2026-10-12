@@ -34,7 +34,6 @@ serde = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
-tonic-prost-build = { workspace = true }
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }

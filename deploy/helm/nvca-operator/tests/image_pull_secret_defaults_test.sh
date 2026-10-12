@@ -29,13 +29,16 @@ manifest_disabled="${tmp_dir}/manifest-disabled.yaml"
 
 image_repository="stg.nvcr.io/nvidia/nvcf-byoc/nvca-operator"
 
-# Render with vendored defaults. An ngc-managed install derives its registry
-# credentials from ngcConfig.serviceKey, so the chart must generate the pull
-# secret without the operator passing an extra flag.
+# Render as an ngc-managed install does: the operator supplies its own NGC
+# service key, and the chart generates the pull secret from it without any
+# extra flag. The chart ships no default key, so the key is set here.
 helm template nvca-operator "${repo_root}/nvca-operator" \
   --namespace nvca-operator \
   --values "${repo_root}/nvca-operator/values.yaml" \
   --set-string "image.repository=${image_repository}" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   > "${manifest_default}"
 
 # Render with the generated secret turned off, as self-hosted installs do when
@@ -44,6 +47,8 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
   --namespace nvca-operator \
   --values "${repo_root}/nvca-operator/values.yaml" \
   --set-string "image.repository=${image_repository}" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   --set generateImagePullSecret=false \
   > "${manifest_disabled}"
 

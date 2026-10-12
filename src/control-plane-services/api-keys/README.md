@@ -27,7 +27,7 @@ NOTICE, executable jar, and Docker workflow.
 On Linux, if Bazel tests fail because
 TestContainers are not starting, you may see an error like:
 
-```
+```text
 ContainerLaunchException: Timed out waiting for container port to open
 ```
 

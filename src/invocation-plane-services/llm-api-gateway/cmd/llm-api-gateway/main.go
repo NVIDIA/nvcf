@@ -89,7 +89,7 @@ func main() {
 		ctx,
 		cfg.Server.Addr,
 		shutdownTimeout(cfg.Server.WriteTimeout),
-		e.Start,
+		func(addr string) error { return server.Start(e, addr) },
 		e.Shutdown,
 	); err != nil {
 		zlog.Fatal().Err(err).Msg("gateway exited unexpectedly")

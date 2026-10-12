@@ -15,95 +15,38 @@ See the License for the specific language governing permissions and
 limitations under the License.
 -->
 
-# 1. Application inputs
+# Application settings
 
-Inputs are important for configuring your run-time application.  When it comes to providing inputs, 
-you have a lot of flexibility.  You can define configuration settings or command-line arguments.
-Consequently, you can specify their values from any of the source below, in order of precedence:
+The function autoscaler loads settings from an optional YAML, JSON, or TOML
+file and then applies environment-variable overrides. Environment variables
+have the highest precedence.
 
- 1. Config file (supported formats are Json, Toml, Yaml)
- 2. Environment variable override config file
- 3. Command line parameters override environment variables and config file
+## Configuration file
 
-We provide a helper function to parse all of these input sources at once and resolve their precedence
-order.
-```
-let (args, settings) = parse_args::<AppCliArgs, AppSettings>().unwrap();
-```
-where `AppCliArgs` and `AppSettings` are custom structs that you define.  We describe these in more
-detail below.
+Pass a settings file with `--config` or the `CONFIG` environment variable:
 
-- [Configuration settings](#11-configuration-settings)
-- [Environment variables](#12-environment-variables)
-- [Command-line arguments](#13-command-line-arguments)
-
-## 1.1. Configuration settings
-
-Configuration settings are created via a struct definition.  In this example:
-```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct AppSettings {
-    // Basic server settings
-    pub(crate) server: ServerSettings,
-    // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-    // Add your own settings below. These are just a few examples.
-    // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-    pub(crate) custom_1: Option<String>,
-    pub(crate) custom_2: Option<Vec<f64>>,
-}
-```
-We import the basic settings for a server app, `ServerSettings`, then add two
-custom settings, `custom_1` and `custom_2`.  To specify default values, implement
-the default trait for `AppSettings`.
-
-Calling `parse_args` returns the setting values from merging all input sources. 
-
-To export settings into a config file, run the app with the `generate` option:
-```
-cargo run --bin server -- -g settings.toml
-```
-To import settings form a config file, run the app with the `config` option:
-```
-cargo run --bin server -- -c settings.toml
+```bash
+cargo run --bin server -- --config crates/server/resources/settings-local.yaml
 ```
 
-## 1.2. Environment variables
+The bundled `resources/settings-local.yaml` shows the supported structure.
+Settings omitted from a file use their Rust defaults when the corresponding
+settings type defines one.
 
-Any setting can be overridden by an environment variable with the same path name.  In this
-example,
-```
-SERVER__TONIC__INITIAL_STREAM_WINDOW_SIZE=1234 cargo run --bin server
-```
-the environment variable `SERVER__TONIC__INITIAL_STREAM_WINDOW_SIZE` is
-translated into the setting `server.tonic.initial_stream_window_size`.  If such a
-setting exists (it does because it's provided as a default server setting), then
-its value is set to `1234`.
+## Environment variables
 
-## 1.3. Command-line arguments
+Use uppercase field names and `__` between nested keys. For example:
 
-Command-line args similarly created via a struct definition.  
+```bash
+SCALING__LOOKBACK_SECONDS=90 \
+SCALING__SCALE_TO_ZERO_IDLE_TIMEOUT_SECONDS=300 \
+SERVER__PORT=8083 \
+cargo run --bin server
 ```
-#[derive(Parser, Debug, Serialize, Deserialize)]
-#[command(version, about, long_about = None)]
-pub(crate) struct AppCliArgs {
-    // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-    // Add your own CLI args below.  These are just a few example types.
-    // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-    #[arg(long, value_name = "STRING", help = "A string")]
-    pub(crate) string_arg: Option<String>,
 
-    #[arg(long, value_name = "BOOL", help = "A boolean flag")]
-    pub(crate) flag_arg: Option<bool>,
+These values map to `scaling.lookback_seconds`,
+`scaling.scale_to_zero_idle_timeout_seconds`, and `server.port`. Environment
+variables override values loaded from the configuration file.
 
-    #[arg(long, value_name = "FLOAT", help = "A 3D vector", num_args = 3)]
-    pub(crate) vector_arg: Option<Vec<f32>>,
-}
-```
-We use the standard `clap` crate to parse the command line.  Thus, you can use the `clap arg`
-decorator to interpret the struct attributes as cli args.  See [docs](https://docs.rs/clap/latest/clap/#macros).
-
-```
-Any setting can be overridden on the command line by passing it as an override at the end of the command:
-```
-cargo run --bin server -- --port 50002 -c settings.toml -- tonic_settings.request_timeout=100
-```
+The command-line interface selects the configuration file; it does not accept
+arbitrary setting overrides. Use environment variables for per-run overrides.

@@ -122,3 +122,55 @@ func TestNewPromoterFromProfile(t *testing.T) {
 		t.Error("unknown strategy should error")
 	}
 }
+
+// The prewarm policy defaults to on with six readers when a profile says
+// nothing, and a ConfigMap entry can turn it off or resize it.
+func TestStorageProfile_PrewarmPolicy(t *testing.T) {
+	var unset StorageProfile
+	if !unset.PrewarmEnabled() || unset.PrewarmWorkers() != DefaultPrewarmParallelism {
+		t.Errorf("zero profile: enabled=%v workers=%d, want on/%d", unset.PrewarmEnabled(), unset.PrewarmWorkers(), DefaultPrewarmParallelism)
+	}
+	off := false
+	if (StorageProfile{Prewarm: &off}).PrewarmEnabled() {
+		t.Error("prewarm: false must disable")
+	}
+	on := true
+	if !(StorageProfile{Prewarm: &on}).PrewarmEnabled() {
+		t.Error("prewarm: true must enable")
+	}
+	if got := (StorageProfile{PrewarmParallelism: 12}).PrewarmWorkers(); got != 12 {
+		t.Errorf("parallelism 12 -> %d", got)
+	}
+	if got := (StorageProfile{PrewarmParallelism: -3}).PrewarmWorkers(); got != DefaultPrewarmParallelism {
+		t.Errorf("negative parallelism must fall back to the default, got %d", got)
+	}
+
+	m, err := ParseConfigMapProfiles(`
+nvmesh-csi.excelero.com:
+  strategy: shared-volume
+  volumeHandleTransform: nvmesh
+  prewarm: false
+pd.csi.storage.gke.io/hyperdisk-ml:
+  strategy: snapshot-clone
+  snapshotClass: hdml-images-snapshot-class
+  readOnlyMany: true
+  prewarmParallelism: 16
+`)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if m["nvmesh-csi.excelero.com"].PrewarmEnabled() {
+		t.Error("ConfigMap prewarm: false not honoured")
+	}
+	hd := m["pd.csi.storage.gke.io/hyperdisk-ml"]
+	if !hd.PrewarmEnabled() || hd.PrewarmWorkers() != 16 {
+		t.Errorf("hyperdisk entry: enabled=%v workers=%d, want on/16", hd.PrewarmEnabled(), hd.PrewarmWorkers())
+	}
+	// Every built-in ships with the prewarm on: nothing measured so far
+	// justifies turning it off by default anywhere.
+	for k, p := range builtinProfiles {
+		if !p.PrewarmEnabled() {
+			t.Errorf("built-in %s ships with prewarm off", k)
+		}
+	}
+}

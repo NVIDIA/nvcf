@@ -52,7 +52,7 @@ a local Bazel push target.
 
 ## Project Structure
 
-```
+```text
 ├── backend/       # Go BFF — proxy, control-plane, static SPA serving
 ├── ui/            # React SPA — Vite, TanStack Router/Query, Tailwind, KUI
 ├── spec/          # OpenAPI specification (source of truth for codegen)

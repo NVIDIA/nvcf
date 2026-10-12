@@ -30,6 +30,7 @@ import (
 type NvcaV2beta1Interface interface {
 	RESTClient() rest.Interface
 	ICMSRequestsGetter
+	ModelCacheBindingsGetter
 	StorageRequestsGetter
 }
 
@@ -40,6 +41,10 @@ type NvcaV2beta1Client struct {
 
 func (c *NvcaV2beta1Client) ICMSRequests(namespace string) ICMSRequestInterface {
 	return newICMSRequests(c, namespace)
+}
+
+func (c *NvcaV2beta1Client) ModelCacheBindings(namespace string) ModelCacheBindingInterface {
+	return newModelCacheBindings(c, namespace)
 }
 
 func (c *NvcaV2beta1Client) StorageRequests(namespace string) StorageRequestInterface {

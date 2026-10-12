@@ -26,6 +26,7 @@ import com.nvidia.icms.outbound.cassandra.instance.entity.InstanceV2Entity;
 import com.nvidia.icms.outbound.cassandra.request.InstanceRequestV2Repository;
 import com.nvidia.icms.outbound.cassandra.request.entity.InstanceRequestV2Entity;
 import com.nvidia.icms.service.byoc.ClustersService.ReadyClusterInfo;
+import com.nvidia.icms.service.gating.GpuGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import jakarta.annotation.Nullable;
 import jakarta.validation.constraints.NotNull;
@@ -49,6 +50,7 @@ public class GpuUsageService {
     private final IcmsConfigurationProperties icmsConfigurationProperties;
     private final ClusterGpuInfoHelper clusterGpuInfoHelper;
     private final ComputePlatformService computePlatformService;
+    private final GpuGatingService gpuGatingService;
 
     /**
      * Retrieves GPU usage information for a specific NCA ID.
@@ -70,6 +72,8 @@ public class GpuUsageService {
                     requestIds);
 
             List<GpuUsageResponse.Gpu> gpus = processInstances(requestIdToInstances, clusterGpuInfoHelper.getReadyClusterInfo(ncaId));
+
+            gpuGatingService.removeGatedGpusFromGpuUsage(gpus, ncaId);
 
             return GpuUsageResponse.builder()
                     .gpus(gpus)
@@ -103,6 +107,8 @@ public class GpuUsageService {
                     requestIds);
 
             List<GpuUsageResponse.Gpu> gpus = processInstances(requestIdToInstances, clusterGpuInfoHelper.getReadyClusterInfo(ncaId));
+
+            gpuGatingService.removeGatedGpusFromGpuUsage(gpus, ncaId);
 
             return DeploymentGpuUsageResponse.builder()
                     .deployments(List.of(DeploymentGpuUsageResponse.Deployment.builder()

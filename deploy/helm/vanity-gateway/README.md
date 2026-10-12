@@ -85,7 +85,8 @@ Important settings to review before deployment:
   only by models that set `functionType: LLM`
 - `vanityGateway.config.otelExporterOtlpEndpoint` for trace export, empty by
   default
-- `vanityGateway.mappingConfig.v2config` for the OpenAI and vanity route tables
+- `vanityGateway.mappingConfig.v2config` for the OpenAI, Anthropic, and vanity
+  route tables
 - `vanityGateway.serviceMonitor.enabled` for Prometheus Operator scraping
 
 ### Ports
@@ -105,29 +106,30 @@ or the pod is killed mid-drain.
 
 ## Route mapping
 
-`vanityGateway.mappingConfig.v2config` has two sections:
+`vanityGateway.mappingConfig.v2config` has three sections:
 
 - `openai`: per-endpoint model routes, keyed by endpoint (`chatCompletions`,
   `completions`, `embeddings`, `responses`, and the image endpoints). Each route
-  requires `modelName` and `functionID`, and supports shadow-traffic fields such
-  as `shadowModelName`, `shadowPercentage`, and
-  `shadowCancelOnClientDisconnect`.
+  requires `modelName` and `functionID`.
+- `anthropicMessages`: native Anthropic Messages model routes, served on
+  `POST /v1/messages`. Routes use the same fields as `openai.chatCompletions`
+  and share the API host set by `openai.host`.
 - `vanity`: host-based routes, each requiring a `host` and a `paths` map. Each
   path requires `path` and `functionID`.
 
-Both sections are empty by default.
+All sections are empty by default.
 `vanityGateway.config.shadowMaxConcurrent` bounds concurrent shadow requests
 across all routes.
 
-An `openai` model may set `functionType: LLM` to be served by the LLM Gateway
-instead of the invocation service, supported in `chatCompletions`, `responses`,
-and `embeddings`. Callers still send the public `modelName`; the gateway
+A model may set `functionType: LLM` to be served by the LLM Gateway instead of
+the invocation service, supported in `openai.chatCompletions`,
+`openai.responses`, `openai.embeddings`, and `anthropicMessages`. Callers still send the public `modelName`; the gateway
 rewrites the request model to `functionID/modelName` before forwarding.
 
 The values schema enforces what the gateway checks at startup, so a values file
 that would fail the container fails the render instead:
 
-- `functionType` is rejected outside those three endpoints
+- `functionType` is rejected outside those four endpoints
 - `usePexec`, `outgoingPathOverride`, and `sessionTimeout` are rejected on such
   a model, since the LLM Gateway ignores them. An explicit `false`, `""`, or `0`
   is accepted, because that is what an absent key produces
@@ -135,6 +137,30 @@ that would fail the container fails the render instead:
   answers `400 Bad Request` for any request carrying it
 - `vanityGateway.config.llmGatewayEndpoint` must be set, and must be an `http`
   or `https` origin with no path
+
+A Messages route that targets the LLM Gateway:
+
+```yaml
+vanityGateway:
+  config:
+    llmGatewayEndpoint: http://llm-api-gateway.nvcf.svc.cluster.local:8080
+  mappingConfig:
+    v2config:
+      openai:
+        host: api.example.com
+      anthropicMessages:
+        example_native-model:
+          modelName: example/native-model
+          functionID: <function-id>
+          functionType: LLM
+```
+
+Clients call `POST /v1/messages` on the shared host with the public
+`modelName`. Messages aliases appear in the shared `/v1/models` list with
+`supported_endpoints`, so OpenAI clients can tell which models accept only
+Messages. Upgrade Pylon workers, the Stargate router, and the LLM Gateway
+before enabling Messages routes. See `docs/overview/llm-gateway.md` for the
+request, accounting, and Claude Code details.
 
 Shadow traffic is supported. Each shadow target is resolved from the same model
 table and routed by its own `functionType`, so a shadow of an LLM model reaches
@@ -145,6 +171,34 @@ service.
 not put credentials in `customHeaders` on any route. Caller `Authorization`
 headers are forwarded to the upstream untouched, so a static credential is not
 needed for authenticated routes.
+
+An `openai` route may mirror traffic to other routes in the same endpoint with
+`shadows`, one entry per target:
+
+```yaml
+primary:
+  modelName: example/primary
+  functionID: primary-function-id
+  shadows:
+    - modelName: private/example/shadow-a
+      percentage: 10                  # 1-100, default 100
+      samplingMethod: perBearerKey    # random (default) or perBearerKey
+      cancelOnClientDisconnect: true  # default false
+    - modelName: private/example/shadow-b
+shadow-a:
+  modelName: private/example/shadow-a
+  functionID: shadow-a-function-id
+shadow-b:
+  modelName: private/example/shadow-b
+  functionID: shadow-b-function-id
+```
+
+- a route with both legacy form and new form is rejected
+- an entry needs `modelName`; unknown entry keys are rejected
+
+The legacy route-level fields `shadowModelName`, `shadowModelNames`,
+`shadowPercentage`, `shadowSamplingMethod`, and `shadowCancelOnClientDisconnect`
+keep working unchanged; they apply one policy to every target on the route.
 
 ## Notes
 

@@ -161,7 +161,7 @@ optional webhook). Full guide, options, and troubleshooting:
 
 ## Architecture
 
-```
+```text
 ┌──────────────────┐     ┌───────────────────────────────────────┐
 │  nvsnap-server   │     │            GPU Node                   │
 │  REST API + UI   │◄───►│  nvsnap-agent (DaemonSet)             │
@@ -254,7 +254,7 @@ The full endpoint list (including agent-side cascade endpoints) is in
 
 ## Project layout
 
-```
+```text
 cmd/                    binary entry points (agent, server, restore-entrypoint, gpu-restore, CLI)
 internal/               agent, server, webhook, CRIU, checkpointstore (Go)
 lib/nvsnap_intercept/   LD_PRELOAD interception library (C)

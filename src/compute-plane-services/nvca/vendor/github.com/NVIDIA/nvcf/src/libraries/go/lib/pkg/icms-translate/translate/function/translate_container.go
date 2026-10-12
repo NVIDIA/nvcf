@@ -33,6 +33,8 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig"
 )
 
+// translateContainer converts a container function request into Kubernetes resources.
+//
 //nolint:gocyclo // complex function with many conditional branches
 func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []metav1.Object, err error) {
 	if err := tcfg.ValidateContainer(); err != nil {
@@ -390,10 +392,11 @@ func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 			Image:           initContainerImage,
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			Env:             common.SortEnvs(initEnvs),
-			SecurityContext: common.NewInfraContainerSecurityContext(),
+			SecurityContext: common.NewWorkerInitContainerSecurityContext(),
 			VolumeMounts:    initContainerVolumeMounts,
 		}
 		pod.Spec.InitContainers = append(pod.Spec.InitContainers, initContainer)
+		common.EnsureWorkerInitFSGroup(&pod.Spec)
 
 		// The ESS init container needs to be added after the init container,
 		// since the init container creates config.hcl.
@@ -415,6 +418,7 @@ func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 				essDataVolumeMount,
 			}
 			pod.Spec.InitContainers = append(pod.Spec.InitContainers, essInitContainer)
+			common.EnsureESSFSGroup(&pod.Spec)
 		}
 
 		if !isLLM {
@@ -431,7 +435,7 @@ func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 				VolumeMounts:    utilsContainerVolumeMounts,
 			}
 			// mutate startup / liveness / readiness probes
-			common.MutateUtilsProbes(&utilsContainer)
+			common.MutateUtilsContainer(&utilsContainer)
 			pod.Spec.Containers = append(pod.Spec.Containers, utilsContainer)
 		} else {
 			// llm functions don't have a utils container. they have a router client container instead.

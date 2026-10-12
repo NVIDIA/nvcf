@@ -127,6 +127,7 @@ NVCF_E2E=1 go test -tags=e2e -v -timeout=60m -run 'TestE2E_T(8|9|10)' ./test/e2e
 ```
 
 Prerequisites:
+
 - `k3d` on PATH
 - ~2 GB free RAM per cluster
 - Network: clusters need to reach each other (default k3d setup is fine on the same host)

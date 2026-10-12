@@ -143,6 +143,31 @@ func estimatedInputTokensForNormalizedRequest(
 	return max(0, estimatedTokenCountForRequest(model, request))
 }
 
+// estimatedTokenCountForUnmodeledChatFields estimates members of the raw chat
+// body that ChatCompletionRequest and ChatMessage do not declare. They are
+// forwarded upstream and can carry prompt text (for example
+// chat_template_kwargs or messages[].reasoning_content), so their JSON text is
+// counted as a conservative admission estimate.
+func estimatedTokenCountForUnmodeledChatFields(rawBody []byte) int {
+	totalTokens := 0
+	for _, value := range models.UnmodeledMembers(rawBody, models.ChatCompletionRequest{}) {
+		totalTokens += estimatedTokenCountForText(string(value))
+	}
+
+	var body struct {
+		Messages []json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(rawBody, &body); err != nil {
+		return totalTokens
+	}
+	for _, message := range body.Messages {
+		for _, value := range models.UnmodeledMembers(message, models.ChatMessage{}) {
+			totalTokens += estimatedTokenCountForText(string(value))
+		}
+	}
+	return totalTokens
+}
+
 func estimatedTokenCountForText(text string) int {
 	if text == "" {
 		return 0

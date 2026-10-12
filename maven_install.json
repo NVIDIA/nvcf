@@ -22,7 +22,9 @@
     "io.cloudevents:cloudevents-core": -2103567774,
     "io.cloudevents:cloudevents-json-jackson": -1197487309,
     "io.grpc:grpc-api": -737365848,
+    "io.grpc:grpc-netty-shaded": 274412824,
     "io.grpc:grpc-protobuf": -466239409,
+    "io.grpc:grpc-services": -115027108,
     "io.grpc:grpc-stub": -132420852,
     "io.micrometer:micrometer-registry-prometheus": 1865600799,
     "io.micrometer:micrometer-tracing-bridge-otel": -754588172,
@@ -38,7 +40,6 @@
     "io.projectreactor:reactor-tools": -256363469,
     "jakarta.servlet:jakarta.servlet-api": 2120044853,
     "javax.annotation:javax.annotation-api": 1286517389,
-    "net.devh:grpc-server-spring-boot-starter": -1304967214,
     "net.javacrumbs.shedlock:shedlock-bom": -1349087148,
     "net.javacrumbs.shedlock:shedlock-provider-cassandra": -1200872,
     "net.javacrumbs.shedlock:shedlock-spring": -326290089,
@@ -78,6 +79,7 @@
     "org.springdoc:springdoc-openapi-starter-webmvc-api": -14368753,
     "org.springframework.boot:spring-boot-actuator": 763411999,
     "org.springframework.boot:spring-boot-dependencies": 98615043,
+    "org.springframework.boot:spring-boot-grpc-server": -1458036628,
     "org.springframework.boot:spring-boot-jarmode-tools": 1339984806,
     "org.springframework.boot:spring-boot-loader": 1745496505,
     "org.springframework.boot:spring-boot-micrometer-metrics": -782059807,
@@ -269,8 +271,6 @@
     "io.grpc:grpc-context:jar:sources": -1752417529,
     "io.grpc:grpc-core": -1469366084,
     "io.grpc:grpc-core:jar:sources": 1281949285,
-    "io.grpc:grpc-inprocess": -420391709,
-    "io.grpc:grpc-inprocess:jar:sources": -1730699069,
     "io.grpc:grpc-netty-shaded": 81577163,
     "io.grpc:grpc-netty-shaded:jar:sources": -1752417529,
     "io.grpc:grpc-protobuf": -701039798,
@@ -459,10 +459,6 @@
     "net.bytebuddy:byte-buddy-agent": 1417924741,
     "net.bytebuddy:byte-buddy-agent:jar:sources": -787991893,
     "net.bytebuddy:byte-buddy:jar:sources": -1268480470,
-    "net.devh:grpc-common-spring-boot": -2114767952,
-    "net.devh:grpc-common-spring-boot:jar:sources": 1655513026,
-    "net.devh:grpc-server-spring-boot-starter": -562394424,
-    "net.devh:grpc-server-spring-boot-starter:jar:sources": 1954333860,
     "net.java.dev.jna:jna": -1951542637,
     "net.java.dev.jna:jna:jar:sources": -545183654,
     "net.javacrumbs.shedlock:shedlock-core": -175027771,
@@ -642,6 +638,8 @@
     "org.springframework.boot:spring-boot-data-cassandra:jar:sources": 1936949638,
     "org.springframework.boot:spring-boot-data-commons": -1253640842,
     "org.springframework.boot:spring-boot-data-commons:jar:sources": -231363385,
+    "org.springframework.boot:spring-boot-grpc-server": -4214037,
+    "org.springframework.boot:spring-boot-grpc-server:jar:sources": -1241221099,
     "org.springframework.boot:spring-boot-health": 647147663,
     "org.springframework.boot:spring-boot-health:jar:sources": -1508488097,
     "org.springframework.boot:spring-boot-http-client": -1590771096,
@@ -789,6 +787,8 @@
     "org.springframework.data:spring-data-cassandra:jar:sources": 391758847,
     "org.springframework.data:spring-data-commons": 90438957,
     "org.springframework.data:spring-data-commons:jar:sources": -1300568264,
+    "org.springframework.grpc:spring-grpc-core": 1441504312,
+    "org.springframework.grpc:spring-grpc-core:jar:sources": 2134561805,
     "org.springframework.retry:spring-retry": -2038056656,
     "org.springframework.retry:spring-retry:jar:sources": -870799349,
     "org.springframework.security:spring-security-config": -1375347982,
@@ -1402,13 +1402,6 @@
       "shasums": {
         "jar": "e417d5fe3b273aba8e24c5bf8edaf400297ae88a2ede828a2b75c3403b3d13e3",
         "sources": "0983669905c391b0e064f719824faffa5348902144bd34587ba48f79dc475a5d"
-      },
-      "version": "1.83.1"
-    },
-    "io.grpc:grpc-inprocess": {
-      "shasums": {
-        "jar": "f819e6020c68db67fb03415060aab9d66303e81427d1e4730b61cf753b0ba8ce",
-        "sources": "a69e444c3f32a4ce0a97771bda4ee27b404a80e430947ba42fe584c53e54689e"
       },
       "version": "1.83.1"
     },
@@ -2060,20 +2053,6 @@
       },
       "version": "1.18.11"
     },
-    "net.devh:grpc-common-spring-boot": {
-      "shasums": {
-        "jar": "951fd28aa9dce0cfc5be8ff9eba6d7dc616b2998e920a7b6acc05e11f4064f94",
-        "sources": "157991de7c495e40c1b18f8ef274e5ff1e2c0393b75642e7308457b866b3096a"
-      },
-      "version": "3.1.0.RELEASE"
-    },
-    "net.devh:grpc-server-spring-boot-starter": {
-      "shasums": {
-        "jar": "289b7b45fe511d14f54801745ac3de7602bf7d7eef0fb75890bef7fbedb94ec4",
-        "sources": "e0ddd0872ffbbc48c322ba617035bafd0f5bc656e91eec0bda876d3f07d9f3f1"
-      },
-      "version": "3.1.0.RELEASE"
-    },
     "net.java.dev.jna:jna": {
       "shasums": {
         "jar": "260c4b1e22b1db9e110ee441c4f13ce115f841fa48c41d78750986214b395557",
@@ -2704,6 +2683,13 @@
       },
       "version": "4.1.1"
     },
+    "org.springframework.boot:spring-boot-grpc-server": {
+      "shasums": {
+        "jar": "9ae3ee3d60980503f91a8a5b4d2aeddca7a47c6637cd4cc69659f72816e111cf",
+        "sources": "11ffc94d8fb0cdb695f75d099fa47ea863405b7ff8fb06c92601598b6318f6c1"
+      },
+      "version": "4.1.1"
+    },
     "org.springframework.boot:spring-boot-health": {
       "shasums": {
         "jar": "f60151e1f014b40761d0644be1cb04f82df7fc3e9b7bf6e946848547eec399e7",
@@ -3219,6 +3205,13 @@
         "sources": "6e9eb53b144f73cb75b76b9b963dd6cfa7afc0c61dd40755a24cf484202cda16"
       },
       "version": "4.1.1"
+    },
+    "org.springframework.grpc:spring-grpc-core": {
+      "shasums": {
+        "jar": "a7a4dc46438c9cb1574b929dedeb5cf6f397f317832454b3529b7975a4f915c1",
+        "sources": "c31160681a0abfe7d8694b8d90ed92f89e06d96ed7e4f82a4999b1620fb2ff6b"
+      },
+      "version": "1.1.1"
     },
     "org.springframework.retry:spring-retry": {
       "shasums": {
@@ -3875,11 +3868,6 @@
       "io.perfmark:perfmark-api",
       "org.codehaus.mojo:animal-sniffer-annotations"
     ],
-    "io.grpc:grpc-inprocess": [
-      "com.google.guava:guava",
-      "io.grpc:grpc-api",
-      "io.grpc:grpc-core"
-    ],
     "io.grpc:grpc-netty-shaded": [
       "com.google.errorprone:error_prone_annotations",
       "com.google.guava:guava",
@@ -4316,20 +4304,6 @@
     "jakarta.xml.bind:jakarta.xml.bind-api": [
       "jakarta.activation:jakarta.activation-api"
     ],
-    "net.devh:grpc-common-spring-boot": [
-      "io.grpc:grpc-core",
-      "org.springframework.boot:spring-boot-starter"
-    ],
-    "net.devh:grpc-server-spring-boot-starter": [
-      "io.grpc:grpc-api",
-      "io.grpc:grpc-inprocess",
-      "io.grpc:grpc-netty-shaded",
-      "io.grpc:grpc-protobuf",
-      "io.grpc:grpc-services",
-      "io.grpc:grpc-stub",
-      "net.devh:grpc-common-spring-boot",
-      "org.springframework.boot:spring-boot-starter"
-    ],
     "net.javacrumbs.shedlock:shedlock-core": [
       "org.slf4j:slf4j-api"
     ],
@@ -4583,6 +4557,10 @@
       "org.springframework.boot:spring-boot",
       "org.springframework.boot:spring-boot-persistence",
       "org.springframework.data:spring-data-commons"
+    ],
+    "org.springframework.boot:spring-boot-grpc-server": [
+      "org.springframework.boot:spring-boot",
+      "org.springframework.grpc:spring-grpc-core"
     ],
     "org.springframework.boot:spring-boot-health": [
       "org.springframework.boot:spring-boot"
@@ -4971,6 +4949,12 @@
       "org.slf4j:slf4j-api",
       "org.springframework:spring-beans",
       "org.springframework:spring-core"
+    ],
+    "org.springframework.grpc:spring-grpc-core": [
+      "io.grpc:grpc-core",
+      "io.grpc:grpc-protobuf",
+      "org.jspecify:jspecify",
+      "org.springframework:spring-context"
     ],
     "org.springframework.security:spring-security-config": [
       "org.springframework.security:spring-security-core",
@@ -6166,9 +6150,6 @@
     "io.grpc:grpc-core": [
       "io.grpc.internal"
     ],
-    "io.grpc:grpc-inprocess": [
-      "io.grpc.inprocess"
-    ],
     "io.grpc:grpc-netty-shaded": [
       "io.grpc.netty.shaded.io.grpc.netty",
       "io.grpc.netty.shaded.io.netty.bootstrap",
@@ -6942,29 +6923,6 @@
     "net.bytebuddy:byte-buddy-agent": [
       "net.bytebuddy.agent",
       "net.bytebuddy.agent.utility.nullability"
-    ],
-    "net.devh:grpc-common-spring-boot": [
-      "net.devh.boot.grpc.common.autoconfigure",
-      "net.devh.boot.grpc.common.codec",
-      "net.devh.boot.grpc.common.security",
-      "net.devh.boot.grpc.common.util"
-    ],
-    "net.devh:grpc-server-spring-boot-starter": [
-      "net.devh.boot.grpc.server.advice",
-      "net.devh.boot.grpc.server.autoconfigure",
-      "net.devh.boot.grpc.server.condition",
-      "net.devh.boot.grpc.server.config",
-      "net.devh.boot.grpc.server.error",
-      "net.devh.boot.grpc.server.event",
-      "net.devh.boot.grpc.server.interceptor",
-      "net.devh.boot.grpc.server.metrics",
-      "net.devh.boot.grpc.server.nameresolver",
-      "net.devh.boot.grpc.server.scope",
-      "net.devh.boot.grpc.server.security.authentication",
-      "net.devh.boot.grpc.server.security.check",
-      "net.devh.boot.grpc.server.security.interceptors",
-      "net.devh.boot.grpc.server.serverfactory",
-      "net.devh.boot.grpc.server.service"
     ],
     "net.java.dev.jna:jna": [
       "com.sun.jna",
@@ -8909,6 +8867,15 @@
       "org.springframework.boot.data.autoconfigure.web",
       "org.springframework.boot.data.metrics"
     ],
+    "org.springframework.boot:spring-boot-grpc-server": [
+      "org.springframework.boot.grpc.server",
+      "org.springframework.boot.grpc.server.autoconfigure",
+      "org.springframework.boot.grpc.server.autoconfigure.health",
+      "org.springframework.boot.grpc.server.autoconfigure.security",
+      "org.springframework.boot.grpc.server.autoconfigure.security.web.reactive",
+      "org.springframework.boot.grpc.server.autoconfigure.security.web.servlet",
+      "org.springframework.boot.grpc.server.health"
+    ],
     "org.springframework.boot:spring-boot-health": [
       "org.springframework.boot.health.actuate.endpoint",
       "org.springframework.boot.health.application",
@@ -9324,6 +9291,20 @@
       "org.springframework.data.web.aot",
       "org.springframework.data.web.config",
       "org.springframework.data.web.querydsl"
+    ],
+    "org.springframework.grpc:spring-grpc-core": [
+      "org.springframework.grpc",
+      "org.springframework.grpc.client",
+      "org.springframework.grpc.client.aot",
+      "org.springframework.grpc.client.interceptor",
+      "org.springframework.grpc.client.interceptor.security",
+      "org.springframework.grpc.internal",
+      "org.springframework.grpc.server",
+      "org.springframework.grpc.server.advice",
+      "org.springframework.grpc.server.exception",
+      "org.springframework.grpc.server.lifecycle",
+      "org.springframework.grpc.server.security",
+      "org.springframework.grpc.server.service"
     ],
     "org.springframework.retry:spring-retry": [
       "org.springframework.classify",
@@ -11370,8 +11351,6 @@
       "io.grpc:grpc-context:jar:sources",
       "io.grpc:grpc-core",
       "io.grpc:grpc-core:jar:sources",
-      "io.grpc:grpc-inprocess",
-      "io.grpc:grpc-inprocess:jar:sources",
       "io.grpc:grpc-netty-shaded",
       "io.grpc:grpc-netty-shaded:jar:sources",
       "io.grpc:grpc-protobuf",
@@ -11560,10 +11539,6 @@
       "net.bytebuddy:byte-buddy-agent",
       "net.bytebuddy:byte-buddy-agent:jar:sources",
       "net.bytebuddy:byte-buddy:jar:sources",
-      "net.devh:grpc-common-spring-boot",
-      "net.devh:grpc-common-spring-boot:jar:sources",
-      "net.devh:grpc-server-spring-boot-starter",
-      "net.devh:grpc-server-spring-boot-starter:jar:sources",
       "net.java.dev.jna:jna",
       "net.java.dev.jna:jna:jar:sources",
       "net.javacrumbs.shedlock:shedlock-core",
@@ -11743,6 +11718,8 @@
       "org.springframework.boot:spring-boot-data-cassandra:jar:sources",
       "org.springframework.boot:spring-boot-data-commons",
       "org.springframework.boot:spring-boot-data-commons:jar:sources",
+      "org.springframework.boot:spring-boot-grpc-server",
+      "org.springframework.boot:spring-boot-grpc-server:jar:sources",
       "org.springframework.boot:spring-boot-health",
       "org.springframework.boot:spring-boot-health:jar:sources",
       "org.springframework.boot:spring-boot-http-client",
@@ -11890,6 +11867,8 @@
       "org.springframework.data:spring-data-cassandra:jar:sources",
       "org.springframework.data:spring-data-commons",
       "org.springframework.data:spring-data-commons:jar:sources",
+      "org.springframework.grpc:spring-grpc-core",
+      "org.springframework.grpc:spring-grpc-core:jar:sources",
       "org.springframework.retry:spring-retry",
       "org.springframework.retry:spring-retry:jar:sources",
       "org.springframework.security:spring-security-config",
@@ -12161,8 +12140,6 @@
       "io.grpc:grpc-context:jar:sources",
       "io.grpc:grpc-core",
       "io.grpc:grpc-core:jar:sources",
-      "io.grpc:grpc-inprocess",
-      "io.grpc:grpc-inprocess:jar:sources",
       "io.grpc:grpc-netty-shaded",
       "io.grpc:grpc-netty-shaded:jar:sources",
       "io.grpc:grpc-protobuf",
@@ -12351,10 +12328,6 @@
       "net.bytebuddy:byte-buddy-agent",
       "net.bytebuddy:byte-buddy-agent:jar:sources",
       "net.bytebuddy:byte-buddy:jar:sources",
-      "net.devh:grpc-common-spring-boot",
-      "net.devh:grpc-common-spring-boot:jar:sources",
-      "net.devh:grpc-server-spring-boot-starter",
-      "net.devh:grpc-server-spring-boot-starter:jar:sources",
       "net.java.dev.jna:jna",
       "net.java.dev.jna:jna:jar:sources",
       "net.javacrumbs.shedlock:shedlock-core",
@@ -12534,6 +12507,8 @@
       "org.springframework.boot:spring-boot-data-cassandra:jar:sources",
       "org.springframework.boot:spring-boot-data-commons",
       "org.springframework.boot:spring-boot-data-commons:jar:sources",
+      "org.springframework.boot:spring-boot-grpc-server",
+      "org.springframework.boot:spring-boot-grpc-server:jar:sources",
       "org.springframework.boot:spring-boot-health",
       "org.springframework.boot:spring-boot-health:jar:sources",
       "org.springframework.boot:spring-boot-http-client",
@@ -12681,6 +12656,8 @@
       "org.springframework.data:spring-data-cassandra:jar:sources",
       "org.springframework.data:spring-data-commons",
       "org.springframework.data:spring-data-commons:jar:sources",
+      "org.springframework.grpc:spring-grpc-core",
+      "org.springframework.grpc:spring-grpc-core:jar:sources",
       "org.springframework.retry:spring-retry",
       "org.springframework.retry:spring-retry:jar:sources",
       "org.springframework.security:spring-security-config",

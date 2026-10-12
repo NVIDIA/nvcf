@@ -14,6 +14,8 @@ helm package task-helmchart-test/
 
 Push the resulting `task-helmchart-test-<version>.tgz` to a chart registry your cluster can pull from (for example `nvcr.io`) and register Helm pull credentials with `nvcf-cli registry-credential add --artifact-type HELM`.
 
+The chart declares CPU and memory requests and limits because self-managed NVCF validates resource limits before admitting Helm task workloads. Override `resources` in a values file if the task container needs different amounts.
+
 ## Launch on self-hosted NVCF
 
 Resolve the cluster gateway and generate an invocation API key via `nvcf-cli`:

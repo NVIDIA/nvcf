@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /*
  *
  * Copyright 2017 gRPC authors.
@@ -124,8 +121,7 @@ func (b *baseBalancer) UpdateClientConnState(s balancer.ClientConnState) error {
 			sc.Connect()
 		}
 	}
-	for _, a := range b.subConns.Keys() {
-		sc, _ := b.subConns.Get(a)
+	for a, sc := range b.subConns.All() {
 		// a was removed by resolver.
 		if _, ok := addrsSet.Get(a); !ok {
 			sc.Shutdown()
@@ -174,8 +170,7 @@ func (b *baseBalancer) regeneratePicker() {
 	readySCs := make(map[balancer.SubConn]SubConnInfo)
 
 	// Filter out all ready SCs from full subConn map.
-	for _, addr := range b.subConns.Keys() {
-		sc, _ := b.subConns.Get(addr)
+	for addr, sc := range b.subConns.All() {
 		if st, ok := b.scStates[sc]; ok && st == connectivity.Ready {
 			readySCs[sc] = SubConnInfo{Address: addr}
 		}

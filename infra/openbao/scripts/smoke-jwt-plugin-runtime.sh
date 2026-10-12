@@ -50,14 +50,14 @@ decode_or_verify_jwt() {
   fi
 }
 
-printf "%s\n" "plugin_directory = \"/openbao/plugins\"" > $smoke_tmp/openbao-dev.hcl
-bao server -dev -dev-root-token-id="${BAO_TOKEN}" -dev-listen-address=127.0.0.1:8200 -config=$smoke_tmp/openbao-dev.hcl >$smoke_tmp/openbao.log 2>&1 &
+printf "%s\n" "plugin_directory = \"/openbao/plugins\"" > "$smoke_tmp/openbao-dev.hcl"
+bao server -dev -dev-root-token-id="${BAO_TOKEN}" -dev-listen-address=127.0.0.1:8200 -config="$smoke_tmp/openbao-dev.hcl" >"$smoke_tmp/openbao.log" 2>&1 &
 server_pid=$!
 trap 'kill "${server_pid}" >/dev/null 2>&1 || true' EXIT
 
 ready=0
 for _ in $(seq 1 30); do
-  if bao status >$smoke_tmp/bao-status.txt 2>&1; then
+  if bao status >"$smoke_tmp/bao-status.txt" 2>&1; then
     ready=1
     break
   fi
@@ -65,8 +65,8 @@ for _ in $(seq 1 30); do
 done
 
 if [ "${ready}" != "1" ]; then
-  cat $smoke_tmp/openbao.log
-  cat $smoke_tmp/bao-status.txt 2>/dev/null || true
+  cat "$smoke_tmp/openbao.log"
+  cat "$smoke_tmp/bao-status.txt" 2>/dev/null || true
   exit 1
 fi
 

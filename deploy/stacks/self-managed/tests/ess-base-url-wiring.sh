@@ -89,6 +89,8 @@ assert_value "$default_values" '.nvctApi.env.NVCT_ESS_BASE_URL' "$public_url" \
   "default: NVCT_ESS_BASE_URL tracks essServiceURL"
 assert_value "$default_values" '.nvctApi.env.NVCT_ESS_WORKER_BASE_URL' "$public_url" \
   "default: NVCT_ESS_WORKER_BASE_URL tracks essServiceURL"
+assert_value "$default_values" '.nvctApi.image.tag' null \
+  "default: NVCT image tag is supplied by the chart"
 
 # ---------------------------------------------------------------------------
 # 2. Override: essServiceURL is the public URL for workers; essBaseURL points

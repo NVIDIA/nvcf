@@ -102,6 +102,18 @@ spec:
               containerPort: {{ .Values.invocation.metrics.port }}
               protocol: TCP
             {{- end }}
+          {{- with .Values.invocation.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.invocation.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.invocation.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.invocation.resources | nindent 12 }}
       {{- with .Values.invocation.nodeSelector }}
@@ -110,6 +122,10 @@ spec:
       {{- end }}
       {{- with .Values.invocation.affinity }}
       affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.invocation.topologySpreadConstraints }}
+      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.invocation.tolerations }}

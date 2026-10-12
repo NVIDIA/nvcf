@@ -99,6 +99,40 @@ func TestSelectHelmCacheBackend(t *testing.T) {
 		assert.Equal(t, nvcastorage.HelmCacheBackendNVMesh, got)
 	})
 
+	t.Run("matching persisted shared-filesystem StorageRequest is adopted", func(t *testing.T) {
+		// Weka and OCI FSS persist a ReadWriteMany selection that routes to the
+		// shared-filesystem backend. The StorageRequest it creates must validate
+		// on the next reconcile instead of being rejected as a backend that
+		// creates none.
+		request := requestWithRWXModelCacheSelection(t)
+		raw := request.Annotations[nvcastorage.ModelCacheStorageSelectionAnnotationKey]
+		existing := &nvcav2beta1.StorageRequest{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      nvcav2beta1.ModelCacheRequest.Name(),
+				Namespace: instanceNamespace,
+				Annotations: map[string]string{
+					nvcastorage.ModelCacheStorageSelectionAnnotationKey: raw,
+					nvcastorage.ICMSRequestUIDAnnotationKey:             string(request.UID),
+				},
+			},
+			Spec: nvcav2beta1.StorageRequestSpec{
+				Type:             nvcav2beta1.ModelCacheRequest,
+				RequestName:      request.Name,
+				RequestNamespace: request.Namespace,
+				ModelCache: &nvcav2beta1.ModelCacheSpec{
+					Backend:     string(nvcastorage.HelmCacheBackendSharedFS),
+					CacheHandle: helmModelCacheHandle(request),
+				},
+			},
+		}
+		r := newModelCacheSelectionReconciler(t, existing)
+
+		got, err := r.selectHelmCacheBackend(t.Context(), request, instanceNamespace)
+
+		require.NoError(t, err)
+		assert.Equal(t, nvcastorage.HelmCacheBackendSharedFS, got)
+	})
+
 	t.Run("ephemeral selection rejects a stale durable StorageRequest", func(t *testing.T) {
 		existing := &nvcav2beta1.StorageRequest{
 			ObjectMeta: metav1.ObjectMeta{
@@ -367,4 +401,28 @@ func (c *getErrorClient) Get(
 	_ ...client.GetOption,
 ) error {
 	return c.err
+}
+
+// requestWithRWXModelCacheSelection is a Helm request whose persisted selection
+// is the ReadWriteMany shape a shared filesystem such as Weka resolves to.
+func requestWithRWXModelCacheSelection(t *testing.T) *nvcav2beta1.ICMSRequest {
+	t.Helper()
+	resolved := &nvcastorage.ModelCacheStorageSelection{
+		StorageClassName:    nvcastorage.DefaultModelCacheStorageClassName,
+		StorageClassUID:     types.UID("storage-class-uid"),
+		StorageClassDigest:  "storage-class-digest",
+		ProfileDigest:       "catalog-digest",
+		Provider:            "weka",
+		Provisioner:         "csi.weka.io",
+		Transition:          nvcastorage.ModelCacheTransitionRWXReadOnly,
+		RequiredAccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+	}
+	selection, err := nvcastorage.NewPersistedModelCacheStorageSelection(
+		nvcastorage.ModelCacheWorkflowHelm, nvcastorage.ModelCacheSelectionDurable, resolved)
+	require.NoError(t, err)
+	payload, err := selection.Marshal()
+	require.NoError(t, err)
+	request := requestWithModelCacheSelection(t, nvcastorage.ModelCacheWorkflowHelm, nvcastorage.ModelCacheSelectionEphemeral)
+	request.Annotations[nvcastorage.ModelCacheStorageSelectionAnnotationKey] = payload
+	return request
 }

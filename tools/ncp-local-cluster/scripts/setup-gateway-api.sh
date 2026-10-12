@@ -63,6 +63,21 @@ helm upgrade --install ${ENVOY_GATEWAY_RELEASE_NAME} ${ENVOY_GATEWAY_CHART} \
     --wait
 log_info "OK Envoy Gateway Helm chart applied successfully."
 
+# Helm can report the release ready before the API server starts serving newly
+# installed CRDs. Wait for BackendTrafficPolicy discovery before inspecting its
+# schema so a fresh cluster does not fail on a transient NotFound response.
+for attempt in {1..30}; do
+    if kubectl get crd backendtrafficpolicies.gateway.envoyproxy.io &> /dev/null; then
+        break
+    fi
+
+    if [ "${attempt}" -eq 30 ]; then
+        log_error "Timeout waiting for the BackendTrafficPolicy CRD to become available."
+        exit 1
+    fi
+    sleep 2
+done
+
 # Secure LLM worker streams require this field to disable Envoy's default
 # 15-second request timeout. Older CRDs silently prune the field on a regular
 # apply, so check the installed schema before creating Gateway resources.

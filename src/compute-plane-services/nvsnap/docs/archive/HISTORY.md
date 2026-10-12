@@ -7,6 +7,7 @@ readable in one place, so the individual time-capsule files can be skimmed
 rather than excavated.
 
 **Canonical current-state docs live in `docs/`**, not here:
+
 - `docs/architecture/NVSNAP-ARCHITECTURE.md` — current system architecture
 - `docs/architecture/04-RUNTIME-AGNOSTIC.md` — `/proc`+cgroup discovery mechanics (still as-built)
 - `docs/architecture/06-CUDA-CHECKPOINT-CALL-FLOW.md` — the two cuda-checkpoint invocation paths (as-built; debugging reference)
@@ -39,6 +40,7 @@ are unverified design figures.
 
 **`ARCHITECTURE.md`** (top-level archive) is the polished pre-rename writeup of
 the system as actually built. Durable content not in the current arch doc:
+
 - the full **Python injection** mechanism (sitecustomize.py on `PYTHONPATH`,
   per-ABI `site-packages-cpXY/` shadowing) — superseded as primary reference by
   `GENERIC-PYTHON-INJECTION-DESIGN.md` (see §2);
@@ -81,7 +83,7 @@ the parent/engine holds no comms — the "parent-skip" assumption here was wrong
   (kernel ring empty, libuv still holds non-zero) — origin of the `uv__cryo.c` work.
 - **libzmq fork origin** (from the deleted `TOMORROW.md`, 2026-02-03): the ZMQ
   C/R system began as a forked libzmq adding `zmq_ctx_checkpoint`/`zmq_ctx_restore`
-  + a CRIU ZMQ plugin; post-restore `zmq_msg_send` returned EINVAL because sockets
+  - a CRIU ZMQ plugin; post-restore `zmq_msg_send` returned EINVAL because sockets
   weren't re-bound. pyzmq must be forced off its bundled libzmq
   (`pip install pyzmq --no-binary pyzmq`). Now tracked as `libzmq v4.3.6-criu-epoll-*`.
 - **Stale-binary incident** (from deleted `STATUS-TOMORROW.md`, 2026-02-06):
@@ -146,6 +148,7 @@ on-disk caches.
 
 `L2-PVC-CRIU-DESIGN.md` — land each dump in a per-capture PVC so N restore pods
 mount it ReadOnly in parallel instead of bottlenecking on the source node:
+
 - writer Job mounts `rwx-<hash>` RWO (lease-serialized, one writer per content
   hash via `coordination.k8s.io/v1.Lease nvsnap-promote-<hash>`) → VolumeSnapshot
   → clone to `rox-<hash>` ReadOnlyMany → delete the rwx PVC. Two-name convention;
@@ -183,7 +186,7 @@ This SnapshotClone mechanism was **generalized into a pluggable `Promoter`**
     P2 locality placement → P3 seed pre-staging → P4 EROFS shared-mount.
 - **Cross-cluster replication** — two designs, the second supersedes the first:
   - `CROSS-CLUSTER-REPLICATION-DESIGN.md` (2026-05-12): single canonical S3 bucket
-    + SNS/SQS notification fan-out + per-cluster replicator with sidecar-manifest
+    - SNS/SQS notification fan-out + per-cluster replicator with sidecar-manifest
     filter; keeps the custom blobstore. **Superseded.**
   - `design/cross-cluster-replication.md` (newer, canonical): **per-cluster home
     buckets + lazy pull-through cache + content-addressed bucket-probe discovery**

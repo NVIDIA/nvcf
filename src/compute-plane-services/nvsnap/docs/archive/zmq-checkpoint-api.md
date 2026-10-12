@@ -440,6 +440,7 @@ New error codes added to ZMQ namespace:
 ```
 
 Usage in error messages:
+
 ```c
 errno = ECKPTBUSY;
 return -1;  // zmq_ctx_checkpoint() returns -1
@@ -636,6 +637,7 @@ ZMQ_EXPORT int zmq_get_all_contexts(void ***contexts, int *count) {
 ```
 
 **CRIU plugin uses this:**
+
 ```c
 void **contexts;
 int count;
@@ -679,10 +681,12 @@ typedef struct {
 ```
 
 **Compatibility Rules:**
+
 - **Major version change**: Breaking changes (old checkpoints invalid)
 - **Minor version change**: Backward compatible (old checkpoints work)
 
 **Example:**
+
 - v1.0 checkpoint can be restored by v1.1 library ✅
 - v1.0 checkpoint CANNOT be restored by v2.0 library ❌
 - v1.1 checkpoint CANNOT be restored by v1.0 library ❌ (future features unknown)
@@ -701,6 +705,7 @@ typedef struct {
 ```
 
 Add to `zmq.h`:
+
 ```c
 #define ZMQ_HAS_CHECKPOINT 1  // Defined when checkpoint API available
 ```
@@ -712,11 +717,13 @@ Add to `zmq.h`:
 ### Checkpoint
 
 **NOT thread-safe**. Caller MUST ensure:
+
 - No concurrent `zmq_send()` / `zmq_recv()` calls
 - No concurrent socket creation/destruction
 - No concurrent context options changes
 
 **Enforcement:**
+
 ```c
 int zmq_ctx_checkpoint(void *ctx_, void **checkpoint_, int flags_) {
     ctx_t *ctx = (ctx_t*)ctx_;
@@ -756,6 +763,7 @@ int zmq_ctx_checkpoint(void *ctx_, void **checkpoint_, int flags_) {
 | **Total** | **~5-10 ms** |
 
 **Optimization Opportunities:**
+
 - Skip empty message queues
 - Compress checkpoint data (zlib/lz4)
 - Parallel serialization of independent sockets
@@ -775,6 +783,7 @@ int zmq_ctx_checkpoint(void *ctx_, void **checkpoint_, int flags_) {
 **Critical Path:** Endpoint reconnection
 
 **Optimization:**
+
 - Parallel endpoint reconnection
 - Skip reconnect for disconnected peers (flag)
 
@@ -790,6 +799,7 @@ int zmq_ctx_checkpoint(void *ctx_, void **checkpoint_, int flags_) {
 | **Total** | ~1-5 KB for typical socket |
 
 **vLLM Example:**
+
 - 2 sockets × 2 KB = 4 KB
 - 10 messages × 100 bytes = 1 KB
 - **Total: ~5 KB**
@@ -803,11 +813,13 @@ Negligible compared to CRIU checkpoint size (typically MBs to GBs).
 ### Sensitive Data in Checkpoints
 
 Checkpoints may contain:
+
 - PLAIN credentials (username/password)
 - CURVE secret keys
 - Application messages (potentially sensitive)
 
 **Recommendations:**
+
 1. Encrypt checkpoint data at rest
 2. Set proper file permissions (0600)
 3. Clear checkpoint from memory after restore
@@ -818,6 +830,7 @@ Checkpoints may contain:
 **Risk:** Attacker modifies checkpoint file
 
 **Mitigation:**
+
 1. Checksum validation (SHA256 of checkpoint data)
 2. Optional signature verification
 3. Fail restore on checksum mismatch
@@ -836,6 +849,7 @@ typedef struct zmq_checkpoint_data {
 ## 12. API Evolution Roadmap
 
 ### v1.0 (MVP - Phase 1)
+
 - ✅ `zmq_ctx_checkpoint()` - Basic context checkpoint
 - ✅ `zmq_ctx_restore()` - Basic context restore
 - ✅ `zmq_ctx_checkpoint_resume()` - Resume after checkpoint
@@ -845,22 +859,26 @@ typedef struct zmq_checkpoint_data {
 - ❌ No ROUTER/DEALER/REQ/REP
 
 ### v1.1 (Message Support - Phase 2)
+
 - ✅ Serialize/restore pending messages
 - ✅ Handle HWM state correctly
 - ✅ Message ordering guarantees
 
 ### v1.2 (Complex Sockets - Phase 3)
+
 - ✅ ROUTER socket (routing tables)
 - ✅ DEALER socket
 - ✅ SUB socket (subscription filters)
 - ✅ REQ/REP state machines
 
 ### v1.3 (Serialization - Phase 4)
+
 - ✅ `zmq_checkpoint_serialize()` - Save to buffer
 - ✅ `zmq_checkpoint_deserialize()` - Load from buffer
 - ✅ `zmq_checkpoint_get()` - Query metadata
 
 ### v2.0 (Advanced Features)
+
 - ✅ `zmq_socket_checkpoint()` - Per-socket checkpoint
 - ✅ `zmq_socket_restore()` - Per-socket restore
 - ✅ Async checkpoint (non-blocking)
@@ -921,10 +939,12 @@ zmq-checkpoint --action=restore --input=/tmp/zmq.ckpt --pid=1234
 ```
 
 **Pros:**
+
 - Separates concerns (plugin is thin)
 - Can be developed independently
 
 **Cons:**
+
 - Requires ptrace to inject code into target process
 - More complex than library integration
 - Extra dependency
@@ -935,17 +955,19 @@ zmq-checkpoint --action=restore --input=/tmp/zmq.ckpt --pid=1234
 
 Force all ZMQ communication through a proxy:
 
-```
+```text
 App <-> ZMQ Proxy <-> Peer
 ```
 
 Checkpoint only the proxy, apps reconnect after restore.
 
 **Pros:**
+
 - Only checkpoint one process (proxy)
 - Apps automatically reconnect
 
 **Cons:**
+
 - Requires application changes (use proxy)
 - Not transparent
 - Defeats "universal C/R" goal
@@ -957,9 +979,11 @@ Checkpoint only the proxy, apps reconnect after restore.
 Implement ZMQ in kernel space.
 
 **Pros:**
+
 - CRIU can see all state
 
 **Cons:**
+
 - Complete rewrite of ZMQ
 - Performance concerns
 - Maintenance nightmare
@@ -1054,7 +1078,7 @@ curl localhost:8000/v1/completions -d '{"prompt": "Hello", "max_tokens": 100}'
 
 ## Appendix B: Checkpoint Format Versioning
 
-```
+```text
 Byte Offset | Field          | Size    | Description
 ------------|----------------|---------|---------------------------
 0-3         | Magic          | 4       | 0x5A4D5143 ("ZMQC")
@@ -1072,4 +1096,3 @@ Byte Offset | Field          | Size    | Description
 
 **Document Status:** ✅ Complete
 **Next Steps:** Implement prototype in libzmq fork
-

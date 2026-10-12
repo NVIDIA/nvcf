@@ -21,6 +21,14 @@
 #   ReadWriteMany              one shared claim; readers mount it read-only
 #   ReadWriteOnce+ReadOnlyMany writer takes the claim; readers get their own
 #
+# writerIdentity is the one optional override. The Job that populates a shared
+# claim runs non-root and relies on the pod fsGroup, which Kubernetes applies
+# to a ReadWriteMany claim only when the driver's CSIDriver fsGroupPolicy is
+# File. NVCA reads that object when it selects storage and runs the writer as
+# root only when the policy is ReadWriteOnceWithFSType or None. Set
+# writerIdentity to fsGroup to forbid root on a driver, or to root to require
+# it when no CSIDriver object is registered. Leave it unset otherwise.
+#
 # An access mode a driver merely accepts is not a qualification. A claim that
 # binds is not either. An empty accessModes list means nothing is qualified
 # yet, so caching stays off for that driver, and a provisioner absent from this
@@ -45,16 +53,36 @@ drivers:
       - nouuid
   - name: csi.weka.io
     provider: weka
-    # Fresh ReadWriteMany and ReadOnlyMany claims were tested, but a cache
-    # workflow was not, so nothing is qualified yet.
-    accessModes: []
+    # Weka is a shared filesystem: one ReadWriteMany claim per cache handle,
+    # populated once and mounted read-only by every reader, with no derived
+    # reader PV, so readerMountOptions stays empty. Enabled so the cache
+    # workflows can be exercised; record the qualification run in the pull
+    # request that flips this entry.
+    accessModes:
+      - ReadWriteMany
     readerMountOptions: []
   - name: fss.csi.oraclecloud.com
     provider: ociFss
-    # A ReadWriteMany claim was tested; its readers used read-only Pod mounts,
-    # which is not evidence for a ReadOnlyMany claim. No cache workflow was
-    # qualified.
-    accessModes: []
+    # OCI File Storage is NFS: one ReadWriteMany claim per cache handle,
+    # populated once and mounted read-only by every reader, with no derived
+    # reader PV, so readerMountOptions stays empty. Enabled so the cache
+    # workflows can be exercised; record the qualification run in the pull
+    # request that flips this entry.
+    accessModes:
+      - ReadWriteMany
+    readerMountOptions: []
+  - name: csi.trident.netapp.io
+    provider: netappTrident
+    # NetApp Trident fronting ONTAP NAS is NFS: one ReadWriteMany claim per
+    # cache handle, populated once and mounted read-only by every reader, with
+    # no derived reader PV, so readerMountOptions stays empty. The NFS mount
+    # options belong on the StorageClass, not here; the target class uses
+    # vers=4.1,nconnect=8,rsize=262144,wsize=262144,sec=sys. Enabled so the
+    # cache workflows can be exercised; record the qualification run in the
+    # pull request that flips this entry. ONTAP SAN backends behind the same
+    # provisioner are not covered.
+    accessModes:
+      - ReadWriteMany
     readerMountOptions: []
   - name: lustre.csi.oraclecloud.com
     provider: ociLustre

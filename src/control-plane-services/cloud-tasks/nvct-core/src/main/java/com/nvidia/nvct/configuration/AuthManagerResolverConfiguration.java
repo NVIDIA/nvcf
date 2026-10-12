@@ -24,8 +24,10 @@ import com.nvidia.nvct.service.apikeys.ApiKeysService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Instant;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpHeaders;
@@ -46,6 +48,7 @@ import org.springframework.security.oauth2.server.resource.authentication.Opaque
 import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
 import org.springframework.util.CollectionUtils;
+import org.springframework.util.StringUtils;
 
 @Configuration(proxyBeanMethods = false)
 public class AuthManagerResolverConfiguration {
@@ -54,20 +57,25 @@ public class AuthManagerResolverConfiguration {
     private final String issuerUri;
     private final String jwkSetUri;
     private final SignatureAlgorithm jwsAlgorithm;
+    private final TrustedJwtIssuerProperties trustedIssuerProperties;
 
 
     public AuthManagerResolverConfiguration(
             ApiKeysService apiKeysService,
             @Value("${spring.security.oauth2.resourceserver.jwt.jws-algorithms}") String jwsAlgorithm,
             @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri}") String issuerUri,
-            @Value("${spring.security.oauth2.resourceserver.jwt.jwk-set-uri}") String jwkSetUri) {
+            @Value("${spring.security.oauth2.resourceserver.jwt.jwk-set-uri}") String jwkSetUri,
+            TrustedJwtIssuerProperties trustedIssuerProperties) {
         this.apiKeysService = apiKeysService;
         this.issuerUri = issuerUri;
         this.jwkSetUri = jwkSetUri;
         this.jwsAlgorithm = SignatureAlgorithm.valueOf(jwsAlgorithm); // Fail-fast if invalid.
+        this.trustedIssuerProperties = trustedIssuerProperties;
     }
 
+    // Refresh-scoped so trusted-issuers[] changes take effect without a restart.
     @Bean
+    @RefreshScope
     AuthenticationManagerResolver<HttpServletRequest> authenticationManagerResolver() {
         var jwtResolver = jwtResolver();
         return request -> {
@@ -99,23 +107,35 @@ public class AuthManagerResolverConfiguration {
         };
     }
 
+    // The primary issuer wins: a trusted-issuers[] entry naming it again is ignored.
     private JwtIssuerAuthenticationManagerResolver jwtResolver() {
-        var managers = Map.of(issuerUri, jwtAuthenticationManager());
+        Map<String, AuthenticationManager> managers = new LinkedHashMap<>();
+        managers.put(issuerUri, jwtAuthenticationManager(issuerUri, jwkSetUri));
+        for (TrustedJwtIssuerProperties.TrustedIssuer entry
+                : trustedIssuerProperties.getTrustedIssuers()) {
+            if (!StringUtils.hasText(entry.getIssuerUri())
+                    || !StringUtils.hasText(entry.getJwkSetUri())) {
+                continue;
+            }
+            managers.putIfAbsent(
+                    entry.getIssuerUri(),
+                    jwtAuthenticationManager(entry.getIssuerUri(), entry.getJwkSetUri()));
+        }
         return new JwtIssuerAuthenticationManagerResolver(managers::get);
     }
 
-    private AuthenticationManager jwtAuthenticationManager() {
-        var provider = new JwtAuthenticationProvider(jwtDecoder());
+    private AuthenticationManager jwtAuthenticationManager(String issuer, String jwkSet) {
+        var provider = new JwtAuthenticationProvider(jwtDecoder(issuer, jwkSet));
         provider.setJwtAuthenticationConverter(jwtAuthenticationConverter());
         return provider::authenticate;
     }
 
-    private JwtDecoder jwtDecoder() {
+    private JwtDecoder jwtDecoder(String issuer, String jwkSet) {
         var decoder = NimbusJwtDecoder
-                .withJwkSetUri(jwkSetUri)
+                .withJwkSetUri(jwkSet)
                 .jwsAlgorithm(jwsAlgorithm)
                 .build();
-        decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(issuerUri));
+        decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(issuer));
         return decoder;
     }
 

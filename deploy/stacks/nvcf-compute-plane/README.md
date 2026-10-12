@@ -147,6 +147,19 @@ Override KAI component resources under `addons.kaiScheduler.<component>.resource
 (for example `addons.kaiScheduler.scheduler.resources.requests.memory`). Defaults
 are set in `helmfile.d/01-dependencies.yaml.gotmpl`.
 
+Dynamo's bundled NATS server defaults to
+`docker.io/library/nats:2.10.21-alpine`. Redirect it to a private mirror with:
+
+```yaml
+addons:
+  dynamoOperator:
+    nats:
+      image:
+        registry: nvcr.io
+        repository: YOUR_ORG/YOUR_TEAM/nats
+        tag: 2.10.21-alpine
+```
+
 `addons.topologyAwareScheduling` installs cluster-scoped KAI `Topology`
 resources from `topologyAwareScheduling.topologies` when KAI is enabled.
 When Grove is also enabled, the same toggle sets Grove
@@ -158,11 +171,11 @@ Enabling `addons.kaiScheduler.enabled` or `addons.dynamoOperator.enabled` also
 adds the matching NVCA feature gate. Enabling KAI, Grove, or Dynamo permits
 their workload resource types in the NVCA validation policy.
 
-See [Gang Scheduling](../../../docs/user/cluster-management/gang-scheduling.md)
+See [Gang Scheduling](../../../docs/compute-plane/cluster-management/gang-scheduling.md)
 for atomic workload placement and
-[Topology-Aware Scheduling](../../../docs/user/cluster-management/topology-aware-scheduling.md)
+[Topology-Aware Scheduling](../../../docs/compute-plane/cluster-management/topology-aware-scheduling.md)
 for GPU clique placement. See
-[KAI Scheduler](../../../docs/user/cluster-management/kai-scheduler.md) for
+[KAI Scheduler](../../../docs/compute-plane/cluster-management/kai-scheduler.md) for
 queue configuration and standalone installation.
 
 ## Multi-Cluster Example

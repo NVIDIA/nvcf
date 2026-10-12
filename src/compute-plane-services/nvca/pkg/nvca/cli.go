@@ -139,6 +139,9 @@ func newCobraCommand(
 			if err := setFlag(&featureflag.CLIFlag{}, strings.Join(cfg.Agent.FeatureFlags, ",")); err != nil {
 				return fmt.Errorf("set featureflag CLI flag for config: %v", err)
 			}
+			if err := featureflag.ConfigureHelmInternalPersistentStorage(ctx, cfg.Agent.InternalPersistentStorage); err != nil {
+				return fmt.Errorf("configure internal persistent storage: %w", err)
+			}
 			// Cluster attributes shim
 			if err := setFlag(&featureflag.AttrCLIFlag{}, strings.Join(cfg.Cluster.Attributes, ",")); err != nil {
 				return fmt.Errorf("set attribute CLI flag for config: %v", err)
@@ -247,8 +250,8 @@ func newCobraCommand(
 					FailingObjectsBackoffTimeout:              cfg.Workload.FailingObjectsBackoffTimeout,
 					FailingObjectsBackoffRequeueInterval:      cfg.Workload.FailingObjectsBackoffRequeueInterval,
 				},
-				FunctionEnvOverrides: cfg.Workload.FunctionEnvOverrides,
-				TaskEnvOverrides:     cfg.Workload.TaskEnvOverrides,
+				FunctionEnvOverrides: cfg.Workload.EffectiveFunctionEnvOverrides(),
+				TaskEnvOverrides:     cfg.Workload.EffectiveTaskEnvOverrides(),
 			}
 
 			// The operator injects OTEL_EXPORTER via the otel-nvca-config secret, but Viper

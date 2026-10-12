@@ -561,7 +561,6 @@ public class ClusterReconfigurationService {
                         .customAttributes(clusterUpdateRequest.getCustomAttributes())
                         .gpus(clusterUpdateRequest.getGpus())
                         .nvcaVersion(clusterUpdateRequest.getNvcaVersion())
-                        .ssaClientId(existingClusterEntity.getAuthClientId())
                         .oAuthClientId(existingClusterEntity.getAuthClientId())
                         .region(clusterUpdateRequest.getRegion())
                         .clusterKeyId(clusterUpdateRequest.getClusterKeyId())

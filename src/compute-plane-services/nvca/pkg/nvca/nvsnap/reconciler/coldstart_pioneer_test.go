@@ -167,7 +167,7 @@ func TestWriteStatusReleasesPioneerClaim(t *testing.T) {
 		CheckpointHash:  "feedface",
 		CapturedHere:    true,
 		LocalCacheState: nvsnapv1alpha1.LocalCacheStateWarm,
-	}); err != nil {
+	}, claimToken{}); err != nil {
 		t.Fatalf("writeStatus: %v", err)
 	}
 	st := readStatus(mustGet(t, dyn, fvID))

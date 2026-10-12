@@ -34,6 +34,8 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 )
 
+// TestTranslateContainer_AppliesConfiguredTolerations verifies configured
+// tolerations on container function pods.
 func TestTranslateContainer_AppliesConfiguredTolerations(t *testing.T) {
 	customToleration := corev1.Toleration{
 		Key:      "dedicated",
@@ -68,6 +70,8 @@ func TestTranslateContainer_AppliesConfiguredTolerations(t *testing.T) {
 	)
 }
 
+// TestTranslateContainerUtilsDeploy_AppliesConfiguredTolerations verifies
+// tolerations and metrics in split deployment mode.
 func TestTranslateContainerUtilsDeploy_AppliesConfiguredTolerations(t *testing.T) {
 	customToleration := corev1.Toleration{
 		Key:      "workload-type",
@@ -104,8 +108,13 @@ func TestTranslateContainerUtilsDeploy_AppliesConfiguredTolerations(t *testing.T
 			Effect:   corev1.TaintEffectNoSchedule,
 		},
 	)
+	assertUtilsMetricsPort(t, findContainerByName(
+		t, utilsDeployment.Spec.Template.Spec.Containers, common.UtilsContainerName,
+	))
 }
 
+// TestTranslateHelmChartUtilsDeploy_AppliesConfiguredTolerations verifies Helm
+// tolerations and worker metrics.
 func TestTranslateHelmChartUtilsDeploy_AppliesConfiguredTolerations(t *testing.T) {
 	customToleration := corev1.Toleration{
 		Key:      "workload-type",
@@ -132,8 +141,56 @@ func TestTranslateHelmChartUtilsDeploy_AppliesConfiguredTolerations(t *testing.T
 			Effect:   corev1.TaintEffectNoSchedule,
 		},
 	)
+	assertUtilsMetricsPort(t, findContainerByName(
+		t, utilsDeployment.Spec.Template.Spec.Containers, common.UtilsContainerName,
+	))
 }
 
+// TestTranslateUtilsDeployment_PreservesFSGroup verifies that emitted utils
+// Deployment templates retain the shared-volume permissions set during translation.
+func TestTranslateUtilsDeployment_PreservesFSGroup(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		newMessage  func() CreationQueueMessage
+		withSecrets bool
+	}{
+		{name: "container", newMessage: newContainerFunctionMessage},
+		{name: "container with secrets", newMessage: newContainerFunctionMessage, withSecrets: true},
+		{name: "helm", newMessage: newHelmFunctionMessage},
+		{name: "helm with secrets", newMessage: newHelmFunctionMessage, withSecrets: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := tc.newMessage()
+			if tc.withSecrets {
+				msg.LaunchSpecification.EnvironmentB64 = encodeTextEnv(map[string]string{
+					common.ContainerFunctionImageEnv: "function:latest",
+					common.UtilsImageEnv:             "utils:latest",
+					common.InitImageEnv:              "init:latest",
+					common.ESSAgentContainerEnv:      "ess:latest",
+					common.SecretsAssertionTokenEnv:  "assertion-token",
+					common.FunctionSecretsPresentEnv: "true",
+				})
+			}
+
+			objs, err := Translate(msg, TranslateConfig{
+				TranslateConfig:     newFunctionTranslateConfig(nil),
+				SidecarAsDeployment: true,
+			})
+			require.NoError(t, err)
+
+			deployment := findDeploymentByName(t, objs, "request-utils")
+			securityContext := deployment.Spec.Template.Spec.SecurityContext
+			require.NotNil(t, securityContext)
+			require.NotNil(t, securityContext.FSGroup)
+			assert.Equal(t, int64(1000), *securityContext.FSGroup)
+			require.NotNil(t, securityContext.FSGroupChangePolicy)
+			assert.Equal(t, corev1.FSGroupChangeOnRootMismatch, *securityContext.FSGroupChangePolicy)
+		})
+	}
+}
+
+// TestTranslateHelmChartLLM_AddsRouterAndCredentialContainers verifies the Helm
+// LLM sidecars and metrics port.
 func TestTranslateHelmChartLLM_AddsRouterAndCredentialContainers(t *testing.T) {
 	msg := newHelmFunctionMessage()
 	msg.Details.FunctionType = FunctionTypeLLM
@@ -169,6 +226,7 @@ func TestTranslateHelmChartLLM_AddsRouterAndCredentialContainers(t *testing.T) {
 	require.Len(t, utilsPod.Spec.Containers, 2)
 
 	router := findContainerByName(t, utilsPod.Spec.Containers, LLMWorkerContainerName)
+	assertLLMMetricsPort(t, router)
 	assert.Equal(t, "nvcr.io/nvidia/router:latest", router.Image)
 	assert.Contains(t, router.Args, "--upstream-http-base-url=http://inference-svc:8080")
 	assert.Contains(t, router.Args, "--stargate-address=llm-router.example.com:443")
@@ -194,6 +252,8 @@ func TestTranslateHelmChartLLM_AddsRouterAndCredentialContainers(t *testing.T) {
 	require.NotNil(t, findVolumeByName(t, utilsPod.Spec.Volumes, "llm").EmptyDir)
 }
 
+// TestTranslateContainerLLM_AddsRouterAndCredentialContainers verifies the
+// container LLM sidecars and metrics port.
 func TestTranslateContainerLLM_AddsRouterAndCredentialContainers(t *testing.T) {
 	msg := newContainerFunctionMessage()
 	msg.Details.FunctionType = FunctionTypeLLM
@@ -228,6 +288,7 @@ func TestTranslateContainerLLM_AddsRouterAndCredentialContainers(t *testing.T) {
 	assert.Equal(t, "nvcr.io/nvidia/function:latest", findContainerByName(t, pod.Spec.Containers, inferenceContainerName).Image)
 
 	router := findContainerByName(t, pod.Spec.Containers, LLMWorkerContainerName)
+	assertLLMMetricsPort(t, router)
 	assert.Equal(t, "nvcr.io/nvidia/router:latest", router.Image)
 	assert.Contains(t, router.Args, "--upstream-http-base-url=http://127.0.0.1:8080")
 	assert.Contains(t, router.Args, "--stargate-address=llm-router.example.com:443")
@@ -328,6 +389,7 @@ func TestTranslateContainerLLMWithSecretsSharesAssertionTokenWithCredentialManag
 	require.NotNil(t, findVolumeByName(t, pod.Spec.Volumes, common.EssDataVolumeName).EmptyDir)
 }
 
+// TestTranslateNonLLMFunctionsDoNotAddCredentialManager verifies non-LLM workloads omit LLM sidecars.
 func TestTranslateNonLLMFunctionsDoNotAddCredentialManager(t *testing.T) {
 	for _, functionType := range []string{FunctionTypeDefault, FunctionTypeStreaming} {
 		t.Run(functionType, func(t *testing.T) {
@@ -350,6 +412,8 @@ func TestTranslateNonLLMFunctionsDoNotAddCredentialManager(t *testing.T) {
 	}
 }
 
+// TestTranslateContainerWithCacheAndSecrets verifies cache, secret, and
+// worker-utils resources for container functions.
 func TestTranslateContainerWithCacheAndSecrets(t *testing.T) {
 	msg := newContainerFunctionMessage()
 	msg.LaunchSpecification.EnvironmentB64 = encodeTextEnv(map[string]string{
@@ -376,14 +440,29 @@ func TestTranslateContainerWithCacheAndSecrets(t *testing.T) {
 	require.NoError(t, err)
 
 	pod := findPodByName(t, objs, "0-request")
+	assertUtilsMetricsPort(t, findContainerByName(t, pod.Spec.Containers, common.UtilsContainerName))
 	assert.Equal(t, "value", envSliceToMap(findContainerByName(t, pod.Spec.Containers, inferenceContainerName).Env)["INFERENCE_ENV"])
-	assert.Equal(t, "ess", findContainerByName(t, pod.Spec.Containers, "ess").Name)
+	essContainer := findContainerByName(t, pod.Spec.Containers, "ess")
+	assert.Equal(t, "ess", essContainer.Name)
+	require.NotNil(t, essContainer.SecurityContext)
+	assert.Equal(t, common.EssAgentUID, *essContainer.SecurityContext.RunAsUser)
+	assert.True(t, *essContainer.SecurityContext.RunAsNonRoot)
 	require.Len(t, pod.Spec.InitContainers, 2)
-	assert.Equal(t, "ess-init", pod.Spec.InitContainers[1].Name)
+	assert.Equal(t, common.WorkerInitUID, *pod.Spec.InitContainers[0].SecurityContext.RunAsUser)
+	assert.True(t, *pod.Spec.InitContainers[0].SecurityContext.RunAsNonRoot)
+	essInitContainer := pod.Spec.InitContainers[1]
+	assert.Equal(t, "ess-init", essInitContainer.Name)
+	require.NotNil(t, essInitContainer.SecurityContext)
+	assert.Equal(t, common.EssAgentUID, *essInitContainer.SecurityContext.RunAsUser)
+	require.NotNil(t, pod.Spec.SecurityContext)
+	assert.Equal(t, common.EssAgentUID, *pod.Spec.SecurityContext.FSGroup)
+	assert.Equal(t, common.WorkerInitUID, *pod.Spec.SecurityContext.FSGroup)
 	assert.NotNil(t, findObjectByName(t, objs, "rw-pvc-function-cache"))
 	assert.NotNil(t, findObjectByName(t, objs, "writer-job-function-cache"))
 }
 
+// TestTranslateHelmChartWithCacheAndSecrets verifies cache, secret, and
+// worker-utils resources for Helm functions.
 func TestTranslateHelmChartWithCacheAndSecrets(t *testing.T) {
 	msg := newHelmFunctionMessage()
 	msg.LaunchSpecification.EnvironmentB64 = encodeTextEnv(map[string]string{
@@ -409,7 +488,7 @@ func TestTranslateHelmChartWithCacheAndSecrets(t *testing.T) {
 
 	pod := findPodByName(t, objs, common.UtilsPodName)
 	assert.Equal(t, "ess", findContainerByName(t, pod.Spec.Containers, "ess").Name)
-	assert.Equal(t, common.UtilsContainerName, findContainerByName(t, pod.Spec.Containers, common.UtilsContainerName).Name)
+	assertUtilsMetricsPort(t, findContainerByName(t, pod.Spec.Containers, common.UtilsContainerName))
 	require.Len(t, pod.Spec.InitContainers, 2)
 	assert.Equal(t, "ess-init", pod.Spec.InitContainers[1].Name)
 	assert.NotNil(t, findObjectByName(t, objs, "rw-pvc-helm-function-cache"))
@@ -676,4 +755,24 @@ func findObjectByName(t *testing.T, objs []metav1.Object, name string) metav1.Ob
 func assertTolerationsMatch(t *testing.T, got []corev1.Toleration, want ...corev1.Toleration) {
 	t.Helper()
 	assert.ElementsMatch(t, want, got)
+}
+
+// assertUtilsMetricsPort verifies the named worker-utils metrics port.
+func assertUtilsMetricsPort(t *testing.T, container corev1.Container) {
+	t.Helper()
+	assert.Equal(t, []corev1.ContainerPort{{
+		Name:          common.WorkerMetricsPortName,
+		ContainerPort: common.UtilsMetricsPort,
+		Protocol:      corev1.ProtocolTCP,
+	}}, container.Ports)
+}
+
+// assertLLMMetricsPort verifies the named Pylon metrics port.
+func assertLLMMetricsPort(t *testing.T, container corev1.Container) {
+	t.Helper()
+	assert.Equal(t, []corev1.ContainerPort{{
+		Name:          common.WorkerMetricsPortName,
+		ContainerPort: llmMetricsPort,
+		Protocol:      corev1.ProtocolTCP,
+	}}, container.Ports)
 }

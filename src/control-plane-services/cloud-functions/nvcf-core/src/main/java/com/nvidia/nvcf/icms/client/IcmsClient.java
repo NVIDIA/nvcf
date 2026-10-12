@@ -323,11 +323,12 @@ public class IcmsClient {
             String cacheHandle,
             String secretsAssertionToken) {
         var telemetries = base64EncodeTelemetryDetails(function);
-        var env = getEnvironment(function, gpuSpec, secretsAssertionToken);
+        var maxRequestConcurrency = requireNonNullElse(gpuSpec.getMaxRequestConcurrency(), 1);
+        var env = getEnvironment(function, maxRequestConcurrency, secretsAssertionToken);
         var helmValidationPolicy = getHelmValidationPolicy(gpuSpec);
         return scheduleSingleInstanceType(function, deploymentId, env, count, gpuSpec,
                                           artifactSize, telemetries, cacheHandle,
-                                          helmValidationPolicy);
+                                          helmValidationPolicy, maxRequestConcurrency);
     }
 
     private String base64EncodeTelemetryDetails(FunctionEntity function) {
@@ -349,7 +350,8 @@ public class IcmsClient {
             long cacheSize,
             String telemetries,
             String cacheHandle,
-            String helmValidationPolicy) {
+            String helmValidationPolicy,
+            int maxRequestConcurrency) {
         var functionId = function.getFunctionId();
         var versionId = function.getFunctionVersionId();
         var functionName = function.getFunctionName();
@@ -396,6 +398,7 @@ public class IcmsClient {
                                               cacheSize != 0 ? cacheSize : null,
                                               deploymentId,
                                               gpuSpecificationId,
+                                              maxRequestConcurrency,
                                               functionId,
                                               versionId,
                                               ownerNcaId,
@@ -415,7 +418,7 @@ public class IcmsClient {
 
     private String getEnvironment(
             FunctionEntity function,
-            GpuSpecificationEntity gpuSpec,
+            int maxRequestConcurrency,
             String secretsAssertionToken) {
         var functionId = function.getFunctionId();
         var versionId = function.getFunctionVersionId();
@@ -426,7 +429,6 @@ public class IcmsClient {
         var cenv = isNotBlank(containerEnv) ? containerEnv : DEFAULT_CONTAINER_ENV;
         var inferencePort = function.getInferencePort() != null ?
                 function.getInferencePort() : DEFAULT_INFERENCE_PORT;
-        var maxRequestConcurrency = requireNonNullElse(gpuSpec.getMaxRequestConcurrency(), 1);
         var helmChartServiceName = getHelmChartServiceName(function);
         var functionSecretsPresent = function.hasSecrets();
         var containerRegistryCredentialsEncoded =

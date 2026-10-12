@@ -106,10 +106,22 @@ refactor in every consumer; that is a feature.
 | Step | Notes |
 |------|-------|
 | `And I copy the file {string} to {string}` | Both paths are repo-relative. |
+| `And I write yaml file {string} with values:` (two-column table of dotted-path and value) | Creates a new YAML file from the visible table. The destination must not already exist; the step fails instead of overwriting so an authored file is never silently replaced. Parent directories are created. Path syntax and `${VAR}` expansion match `I update yaml file`. Boolean literals and collection literals such as `[]` are written as native YAML types, not quoted strings, because Helm treats the string `"false"` as truthy. Numbers stay as strings. The destination is ledger-backed and removed at teardown. |
 | `And I update yaml file {string} with keys:` (two-column table of dotted-path and value) | Path supports dotted notation and `[n]` indices (e.g. `global.imagePullSecrets[0].name`). Missing intermediate maps and missing list indices are upserted: writing `global.imagePullSecrets[0].name` against a file that has neither `global.imagePullSecrets` nor any list entry creates both. Existing scalars at intermediate positions cause the step to fail rather than silently overwrite a non-map. Value cells expand `${VAR}` from `os.Environ`. |
 | `And I prepare Helmfile environment {string} for stack {string} from fixture {string} with values:` (two-column table of dotted-path and value) | Validates the stack and environment names, derives `deploy/stacks/<stack>/environments/<environment>.yaml` from the absolute repository root, copies the explicit fixture, and applies the visible values table with the same YAML update and `${VAR}` interpolation behavior. Supported stacks are `self-managed`, `observability`, and `nvcf-compute-plane`. The destination is ledger-backed. |
 | `And I prepare self-managed secrets file {string} from template {string} using the current NGC registry credential` | The destination and template are explicit repo-relative paths with `${VAR}` interpolation. Replaces the template's registry credential placeholder with base64 of the current `$oauthtoken:<NGC_API_KEY>` credential and writes the destination with mode `0600`. The destination is ledger-backed, and secret material never enters Gherkin, command logs, or failure messages. |
 | `And I substitute a block in file {string}:` (docstring) | The docstring contains an old block and replacement block separated by exactly one `---` line. `${VAR}` interpolation applies before an exact, ledger-backed replacement. Missing or malformed old blocks fail. |
+
+### Kubernetes manifests (Given / When)
+
+The Given keeps every manifest field visible in the feature file. The When
+hides only the repeated `kubectl --context <ctx> apply -f <file>` mechanics
+and the target contexts stay visible as table rows.
+
+| Step | Notes |
+|------|-------|
+| `Given Kubernetes manifest {string} is:` (YAML docstring) | Stores the raw docstring under the visible name in scenario state. The name must be non-empty and declared at most once per scenario. No interpolation, validation, or I/O happens here, so the manifest may reference an env var that a later step exports. |
+| `When I successfully apply Kubernetes manifest {string} using contexts:` (table) | Requires a `context` header and one or more contexts. Interpolates `${VAR}` in the named manifest at apply time, writes the rendered body once to a file under the run's `out/<run-id>/` directory, and runs one explicit-context `kubectl apply -f <file>` per row in order. Each apply must exit 0 and is recorded like any successful command. Failures name the row, manifest, and context. The rendered file is a run artifact, not a ledger-backed working-tree path. |
 
 ### Command execution (When)
 
@@ -121,6 +133,7 @@ refactor in every consumer; that is a feature.
 | `When I successfully run command:` (docstring) | Multi-line form for commands that must exit 0. Uses the same result recording, interpolation, logging, and cache semantics as the single-line form. |
 | `When I run command with a terminal:` (docstring) | Same as the docstring form, but stdin is attached to a pseudo-terminal so the child sees a TTY on fd 0. For commands that gate interactive-only behavior on a TTY, such as `nvcf-cli self-hosted up` (its auth-gate mints the admin token only when stdin is a terminal). No input is written; stdout and stderr are captured separately as usual. |
 | `When I export command output to environment variable {string}` | Exports the previous command's trimmed stdout under the named env var. Fails the step unless the prior command exited 0 and produced non-empty stdout. Snapshotted by the env Ledger; restored at suite teardown. |
+| `When I export the function selected by NVCF CLI to environment variables {string} and {string}` | Runs one `nvcf-cli status --json` for the selected config and exports the selected function ID and version ID under the two named env vars, in that order. Fails when no function is selected or either ID is empty. Both names stay visible in Gherkin. Snapshotted by the env Ledger; restored at suite teardown. |
 
 #### Registration observability command adapters
 
@@ -154,6 +167,7 @@ original order. Repeated options and empty values are preserved.
 |------|---------|
 | `Given I use NVCF CLI config {string}` | Interpolates and stores the supplied config argument without resolving or checking the path. Later lifecycle steps pass it to `--config`. |
 | `When I successfully create function {string} from image {string} with CLI options:` | Runs `function create --name <name> --image <image>` followed by the option rows. |
+| `When I successfully create function {string} from Helm chart {string} with CLI options:` | Runs `function create --name <name> --helm-chart <chart>` followed by the option rows. |
 | `When I successfully deploy the function selected by NVCF CLI with options:` | Runs `function deploy create` followed by the option rows. Function selection remains owned by CLI state. |
 | `When I successfully generate a function API key with CLI options:` | Runs `api-key generate --for function` followed by the option rows and suppresses secret-bearing stdout. |
 | `When I successfully invoke the function selected by NVCF CLI over HTTP with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke` with the exact request body, timeout, and poll duration. |
@@ -187,15 +201,20 @@ original order. Repeated options and empty values are preserved.
 | `Then Kubernetes resource {string} in namespace {string} using context {string} should contain:` (YAML docstring) | The resource is explicit `kind/name`. Runs one `kubectl get -o yaml` against the named context and asserts that the resource YAML contains the supplied YAML subset. Extra map keys are allowed; lists remain order- and length-sensitive. Failure messages name the resource and first differing path without printing resource values. |
 | `Then the rendered manifests in {string} should contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string is absent. `${VAR}` expansion applies to the path and table values. |
 | `Then the rendered manifests in {string} should contain Kubernetes resource {string}` | Parses rendered YAML documents and requires an actual top-level resource matching the explicit `kind/name`. Nested references such as `Certificate.spec.issuerRef` do not satisfy the assertion. `${VAR}` expansion applies to the path, kind, and name. |
+| `Then the rendered workloads in {string} should have valid container images` | Parses Pods, Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs, and CronJobs. Every regular, init, and ephemeral container image must include a repository name instead of being empty or tag-only. `${VAR}` expansion applies to the path. |
 | `Then the rendered manifests in {string} under directories matching {string} should contain:` (table) | Positive rendered-manifest assertion scoped to files below a directory whose name matches the supplied shell pattern, such as `*-nats`. The render directory, directory-name pattern, and table values support `${VAR}` expansion. |
 | `Then the rendered manifests in {string} should not contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string appears. `${VAR}` expansion applies to the path and table values. |
 | `Then these Helm releases should be deployed using context {string}:` (table) | Requires `name` and `namespace` headers, with an optional `revision` header. Runs one explicit-context, all-namespaces `helm list` and asserts that every listed release has status `deployed`; non-empty revision cells are also matched. |
 | `Then these Kubernetes resources should exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with the explicit namespace and context, and reports the row whose resource is missing. |
 | `Then these Kubernetes resources should not exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with `--ignore-not-found` and requires empty name output, so absence does not depend on human-readable error text. |
 | `Then deployment {string} in namespace {string} using context {string} should complete rollout within {string}` | Runs `kubectl rollout status` for the named deployment with the explicit namespace, context, and timeout. Failure messages name the deployment without printing command output. |
+| `Then these Kubernetes workloads should complete rollout using context {string} within {string}:` (table) | Requires `kind`, `name`, and `namespace` headers. Runs one explicit-context `kubectl rollout status <kind>/<name>` per row in order with the shared context and timeout. The kind is lowercased and passed through without an allowlist, so Deployment, StatefulSet, and DaemonSet rows all work. Failures name the row, kind, name, and namespace without printing command output. Prefer this over a raw `kubectl rollout status` command step. |
 | `Then NVCFBackend {string} in namespace {string} using context {string} should report agent status {string} within {string}` | Waits for the named backend's `status.agentStatus` to equal the visible value using the explicit namespace, context, and timeout. Failure messages name the backend without printing resource output. |
 | `Then these Gateway API routes should be accepted and resolved using context {string} within {string}:` (table) | Requires `kind`, `name`, `namespace`, and `parent` headers. Waits for every named route to report both `Accepted=True` and `ResolvedRefs=True` for the named Gateway parent using the explicit context and timeout. The route kind is passed through without an allowlist. Failures name the table row, route, namespace, parent, and unmet condition without printing resource output. |
 | `Then every Pylon for function {string} using container {string} and context {string} should report metrics within {string}:` (table) | Requires `metric`, `comparison`, and `count` headers. Polls every running pod selected by the visible `function-name` annotation and container name. Each pod must expose non-empty metrics, and each metric row counts connected series whose sample value is `1`; `comparison` is `exactly` or `at least`, and the expected non-negative count remains visible. Discovery, parsing, and scrape failures remain failures rather than zero metric counts. |
+| `Then DNS name {string} should resolve within {string} seconds` | Waits for the explicit DNS name to resolve through the host resolver within the explicit timeout. `${VAR}` interpolation applies to the name and timeout. Resolution must remain successful for three consecutive checks. Failures report the unresolved name and timeout without printing resolver output. |
+| `Then the function selected by NVCF CLI should have no scheduled compute-plane instances using context {string} and kubeconfig {string}` | Resolves the selected function identity from `nvcf-cli status --json`, then reads `cluster agent list-functions --json` with the explicit compute-plane context and kubeconfig. The compute-plane CLI lists only scheduled functions, so no matching row and a matching row reporting zero instances both satisfy the assertion. |
+| `Then the function selected by NVCF CLI should report {string} compute-plane instances with status {string} using context {string} and kubeconfig {string} within {string}` | Resolves the selected function identity from `nvcf-cli status --json`, then polls `cluster agent get-function --json` with the explicit compute-plane context and kubeconfig until the reported instance count matches and that many instances report the visible status, compared case-insensitively. The expected count, status, and timeout stay visible. Each attempt is a separate runner invocation, so every poll is logged. |
 
 #### YAML comparison semantics
 
@@ -241,39 +260,50 @@ Reference argv shapes used by the CLI features (matches the current CLI
 contract verified in `src/clis/nvcf-cli/cmd/`):
 
 - `self-hosted up`:
-  ```
+
+  ```bash
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain up --cluster-name <name> --region us-west-1 --nca-id nvcf-default
   ```
+
 - `self-hosted install --control-plane` (multi-cluster):
-  ```
+
+  ```bash
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain --control-plane-context k3d-<cp> --compute-plane-context k3d-<compute> install --control-plane --cluster-name <cp> --region us-west-1 --nca-id nvcf-default
   ```
+
 - `self-hosted control-plane profile validate`:
-  ```
+
+  ```bash
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain control-plane profile validate --file <profile-path> --require in-cluster
   ```
+
 - `self-hosted compute-plane register`:
-  ```
+
+  ```bash
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain compute-plane register --control-plane-profile <profile-path> --cluster-name <compute> --kube-context k3d-<compute> --region us-west-1 --output <values-path>
   ```
+
 - Helmfile control-plane profile handoff (single cluster):
-  ```
+
+  ```bash
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --env <env> control-plane profile export --cluster-name <control>
   make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=<compute> CONTROL_PLANE_PROFILE=<profile-path> COMPUTE_KUBE_CONTEXT=k3d-<compute> NVCF_CLI=${NVCF_CLI}
   ```
+
   The profile export runs after the selected Helmfile environment is installed
   so endpoint and PKI trust data describe that deployment. A single-cluster
   export omits both persistent context flags; the CLI accepts a split-cluster
   pair or neither, and the bootstrap has already selected the local context.
 - `self-hosted compute-plane install`:
-  ```
+
+  ```bash
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain compute-plane install --values <values-path> --kube-context k3d-<compute> --cluster-name <compute>
   ```
 
 ## File restoration
 
 Every step that writes into a path under the repo working tree
-(`I copy the file ... to ...`, `I update yaml file ...`,
+(`I copy the file ... to ...`, `I write yaml file ...`, `I update yaml file ...`,
 `I prepare self-managed secrets file ...`, `I substitute a block ...`)
 registers that path with the runner's
 restoration ledger:
@@ -372,7 +402,7 @@ old `tests/bdd` tree.
 
 ### Package layout
 
-```
+```text
 tests/bdd/
   features/                      (Gherkin, already committed)
   fixtures/                      (sample env + CLI config, already committed)
@@ -614,6 +644,7 @@ Each `*_steps.go` file holds a small registrar (`registerFileSteps`,
 ### Phase 1 (MR 1): foundation, no Godog
 
 Files:
+
 - `tests/bdd/harness/config.go`
 - `tests/bdd/harness/runner.go`
 - `tests/bdd/harness/ledger.go`
@@ -625,6 +656,7 @@ Files:
 - Unit tests next to each source file.
 
 Acceptance:
+
 - `go test ./tests/bdd/harness ./tests/bdd/dsl` passes.
 - Ledger snapshot/restore roundtrip is covered including the
   did-not-exist-becomes-deleted case.
@@ -637,6 +669,7 @@ Acceptance:
 ### Phase 2 (MR 2): step handlers
 
 Files:
+
 - `tests/bdd/steps/context.go`
 - `tests/bdd/steps/file_steps.go`
 - `tests/bdd/steps/command_steps.go`
@@ -646,6 +679,7 @@ Files:
   fake CommandRunner and a real Ledger backed by a t.TempDir.
 
 Acceptance:
+
 - `go test ./tests/bdd/steps` passes.
 - Each handler validates argument shape and propagates results into
   ScenarioContext fields. No domain logic; everything routes through
@@ -657,12 +691,14 @@ Acceptance:
 ### Phase 3 (MR 3): suite entry points and first feature
 
 Files:
+
 - `tests/bdd/godog_test.go` adds `TestSingleClusterUp` plus
   `TestSingleClusterUpFeatureFileWiresToSteps`.
 - Wiring test uses a fake CommandRunner that returns canned
   exit-code-0 results so every step resolves.
 
 Acceptance:
+
 - `go test ./tests/bdd -run TestSingleClusterUpFeatureFileWiresToSteps`
   passes.
 - The handler chain resolves every step in
@@ -673,10 +709,12 @@ Acceptance:
 ### Phase 4 (MR 4): remaining features wired
 
 Files:
+
 - `tests/bdd/godog_test.go` gains `TestMultiClusterUp` and
   `TestSingleClusterHelmfile`, plus their wiring tests.
 
 Acceptance:
+
 - Both new wiring tests pass against the same fake CommandRunner shape.
 - Live run of either feature is exercisable; the documented argv path
   matches what `harness/cli.go` produced in the old suite (verified by
@@ -685,6 +723,7 @@ Acceptance:
 ### Phase 5 (MR 5, optional, gated on live verification)
 
 Files:
+
 - Delete `tests/bdd/operator/`, `tests/bdd/stack/`, the now-unused
   `tests/bdd/steps/*.go` handlers, and the feature files that have a
   `bdd` counterpart.
@@ -692,6 +731,7 @@ Files:
 - Update `tests/bdd/AGENTS.md` and any `.gitlab-ci.yml` references.
 
 Acceptance:
+
 - Live `make` invocations in the project root that reference the BDD
   suite still resolve.
 - One green live run of each feature on the contributor's k3d.

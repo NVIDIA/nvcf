@@ -24,6 +24,10 @@ spec:
   {{- if not .Values.ess.autoscaling.enabled }}
   replicas: {{ .Values.ess.replicaCount }}
   {{- end }}
+  {{- with .Values.ess.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "ess-api.selectorLabels" . | nindent 6 }}
@@ -52,6 +56,14 @@ spec:
         {{- toYaml .Values.ess.podSecurityContext | nindent 8 }}
       {{- with .Values.ess.nodeSelector }}
       nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.ess.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.ess.topologySpreadConstraints }}
+      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       volumes:

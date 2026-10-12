@@ -47,6 +47,48 @@ var (
 	EssContainerArgs = []string{fmt.Sprintf("-config=%s", path.Join(EssConfigDir, "config.hcl"))}
 )
 
+// EssAgentUID is the numeric identity used by the ess-agent image.
+const EssAgentUID int64 = 1000
+
+// NewESSContainerSecurityContext matches the ess-agent OCI image's declared
+// user. Unlike the worker-init context, this keeps CAP_CHOWN: ess-agent's
+// consul-template-derived renderer calls os.Chown to preserve and set file
+// ownership across re-renders, so dropping it would break that path.
+func NewESSContainerSecurityContext() *corev1.SecurityContext {
+	uid := EssAgentUID
+	nonRoot := true
+	allowPrivilegeEscalation := false
+	return &corev1.SecurityContext{
+		RunAsUser:                &uid,
+		RunAsGroup:               &uid,
+		RunAsNonRoot:             &nonRoot,
+		AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+			Add:  []corev1.Capability{"CHOWN"},
+		},
+	}
+}
+
+// EnsureESSFSGroup makes pod volumes shared with ESS containers writable by
+// the ess-agent identity while preserving an explicitly configured fsGroup.
+// Idempotent and safe to call alongside other callers that set the same
+// field (eg worker-init's own fsGroup helper): both only act when fsGroup is
+// still unset.
+func EnsureESSFSGroup(spec *corev1.PodSpec) {
+	if spec.SecurityContext == nil {
+		spec.SecurityContext = &corev1.PodSecurityContext{}
+	}
+	if spec.SecurityContext.FSGroup == nil {
+		group := EssAgentUID
+		spec.SecurityContext.FSGroup = &group
+		if spec.SecurityContext.FSGroupChangePolicy == nil {
+			policy := corev1.FSGroupChangeOnRootMismatch
+			spec.SecurityContext.FSGroupChangePolicy = &policy
+		}
+	}
+}
+
 func NewESSInitContainer(image string, envs []corev1.EnvVar) corev1.Container {
 	container := corev1.Container{
 		Name:            "ess-init",
@@ -54,7 +96,7 @@ func NewESSInitContainer(image string, envs []corev1.EnvVar) corev1.Container {
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Args:            EssContainerArgs,
 		Env:             SortEnvs(envs),
-		SecurityContext: NewInfraContainerSecurityContext(),
+		SecurityContext: NewESSContainerSecurityContext(),
 		Resources:       GetContainerResourcesESS(),
 	}
 	return container
@@ -67,7 +109,7 @@ func NewESSContainer(image string, envs []corev1.EnvVar) corev1.Container {
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Args:            EssContainerArgs,
 		Env:             SortEnvs(envs),
-		SecurityContext: NewInfraContainerSecurityContext(),
+		SecurityContext: NewESSContainerSecurityContext(),
 		Resources:       GetContainerResourcesESS(),
 	}
 	return container

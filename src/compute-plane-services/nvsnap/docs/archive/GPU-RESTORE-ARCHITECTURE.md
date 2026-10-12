@@ -11,7 +11,7 @@
 
 ### Checkpoint Flow
 
-```
+```text
 1. NvSnap agent freezes cgroup
 2. NvSnap agent writes trigger files, unfreezes
 3. libnvsnap_intercept (each process):
@@ -32,7 +32,7 @@
 
 ### Restore Flow
 
-```
+```text
 1. CRIU restore (processes frozen, RM state from cuda-checkpoint)
 2. PostRestore hook: cuda-checkpoint --action restore --pid <each TP worker>
    This fixes the RM state so CUDA APIs work (validated: cudaMalloc works post-CRIU)
@@ -54,6 +54,7 @@
 Currently uses VMM APIs (cuMemAddressReserve + cuMemCreate + cuMemMap) which fail post-CRIU with error 304.
 
 **New approach**: Use standard cudaMalloc + cudaMemcpy:
+
 1. For each saved allocation: `cudaMalloc(size)` — returns new VA (may differ from original)
 2. `cudaMemcpy(new_ptr, host_data, size, H2D)` — copy data back
 3. If VA differs from original: report VA mismatch (PyTorch pointers may be invalid)
@@ -63,6 +64,7 @@ Currently uses VMM APIs (cuMemAddressReserve + cuMemCreate + cuMemMap) which fai
 ### Environment Variables
 
 At checkpoint time (set in workload pod manifest):
+
 - `CHECKPOINT_PATH=/checkpoints` — hostPath mount
 - `CHECKPOINT_ID` — set by agent at runtime
 - `NVSNAP_GPU_INTERPOSE=1` — enables NvSnap interposition mode
@@ -70,6 +72,7 @@ At checkpoint time (set in workload pod manifest):
 - `NVSNAP_GPU_LOG_LEVEL=3` — NvSnap logging
 
 At restore time (set in restore pod manifest):
+
 - `CHECKPOINT_PATH=/checkpoints`
 - `CHECKPOINT_ID=<from checkpoint>`
 - Remove `NVSNAP_SKIP_CUDA_CHECKPOINT` — let cuda-checkpoint resume run
@@ -106,6 +109,7 @@ At restore time (set in restore pod manifest):
 The spin-poll on RM ioctls happened even after NCCL destruction. If it happens after NvSnap save too, we need Plan B:
 
 **Plan B**: Skip cuda-checkpoint lock/checkpoint entirely. Instead:
+
 - Accept that VMM APIs don't work post-CRIU
 - Use cudaMalloc (standard API, works) for restore
 - Accept potential VA mismatch
@@ -147,6 +151,7 @@ This means Path A (cuda-checkpoint for RM state) doesn't work for multi-GPU with
 ### Recommended: Plan B
 
 Since `cudaMalloc` works post-CRIU without any cuda-checkpoint:
+
 - Checkpoint: NvSnap saves D2H data (existing, works)
 - Checkpoint: CRIU dump with `NVSNAP_SKIP_CUDA_CHECKPOINT=1` (existing, works)
 - Restore: CRIU restore (existing, works)

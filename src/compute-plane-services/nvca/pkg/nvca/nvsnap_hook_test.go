@@ -355,3 +355,67 @@ func TestStampWarm_ArtifactExists_StampsRestoreFrom(t *testing.T) {
 		t.Error("checkpoint-on-warm must NOT be stamped when restoring")
 	}
 }
+
+// A function whose model is served from the NVCA model cache is neither
+// checkpointed nor restored: the capture would download and store a
+// second copy of the model next to the cache claim.
+func TestStampModelServedFromCacheDoesNothing(t *testing.T) {
+	defer withFlagEnabled(t, "NvSnapCheckpointRestore")()
+
+	c := newHookTestBackend(t,
+		nvsnapFunctionStateUnstructured("fv-1", false, "deadbeef", nvsnapv1alpha1.LocalCacheStateWarm),
+	)
+	pod := &corev1.Pod{Spec: corev1.PodSpec{Volumes: []corev1.Volume{{
+		Name:         ModelVolumeName,
+		VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "fn-abc-" + ROPVCSuffix, ReadOnly: true}},
+	}}}}
+	c.stampNvSnapAnnotations(context.Background(), pod, newReq("fv-1"), logrus.NewEntry(logrus.New()))
+	for _, k := range []string{NvSnapRestoreFromAnnotation, NvSnapCheckpointOnWarmAnnotation, NvSnapFunctionVersionIDAnnotation} {
+		if _, ok := pod.Annotations[k]; ok {
+			t.Errorf("%s must not be stamped when the model comes from the NVCA model cache", k)
+		}
+	}
+	// The recorded cache reference identifies the claim exactly.
+	refReq := newReq("fv-1")
+	refReq.Status.CacheReferenceName = "shared-cache-claim"
+	refPod := &corev1.Pod{Spec: corev1.PodSpec{Volumes: []corev1.Volume{{
+		Name:         ModelVolumeName,
+		VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "shared-cache-claim", ReadOnly: true}},
+	}}}}
+	c.stampNvSnapAnnotations(context.Background(), refPod, refReq, logrus.NewEntry(logrus.New()))
+	if len(refPod.Annotations) != 0 {
+		t.Errorf("the request's recorded cache claim is the NVCA cache, got %v", refPod.Annotations)
+	}
+	// A user's own claim on the model volume is not the NVCA cache.
+	userPod := &corev1.Pod{Spec: corev1.PodSpec{Volumes: []corev1.Volume{{
+		Name:         ModelVolumeName,
+		VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "my-models"}},
+	}}}}
+	c.stampNvSnapAnnotations(context.Background(), userPod, newReq("fv-1"), logrus.NewEntry(logrus.New()))
+	if userPod.Annotations[NvSnapRestoreFromAnnotation] == "" {
+		t.Error("a user-provided model claim keeps NvSnap on")
+	}
+	// The same pod with an emptyDir model volume (no cache) is stamped.
+	plain := &corev1.Pod{Spec: corev1.PodSpec{Volumes: []corev1.Volume{{
+		Name: ModelVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	}}}}
+	c.stampNvSnapAnnotations(context.Background(), plain, newReq("fv-1"), logrus.NewEntry(logrus.New()))
+	if plain.Annotations[NvSnapRestoreFromAnnotation] == "" {
+		t.Error("a pod without the model cache is still stamped")
+	}
+	// Caching requested but declined or failed: the request still carries
+	// the model cache launch artifacts while the pod kept its emptyDir
+	// model. NvSnap is the mechanism that applies, so the pod is stamped.
+	cachingReq := newReq("fv-1")
+	cachingReq.Spec.CreationMsgInfo.LaunchArtifacts = append(cachingReq.Spec.CreationMsgInfo.LaunchArtifacts,
+		function.LaunchArtifact{Type: function.LaunchArtifactTypeInitCacheJob, Specification: "apiVersion: batch/v1"},
+		function.LaunchArtifact{Type: function.LaunchArtifactTypeBlockDevice, Specification: "apiVersion: v1"},
+	)
+	intent := &corev1.Pod{Spec: corev1.PodSpec{Volumes: []corev1.Volume{{
+		Name: ModelVolumeName, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	}}}}
+	c.stampNvSnapAnnotations(context.Background(), intent, cachingReq, logrus.NewEntry(logrus.New()))
+	if intent.Annotations[NvSnapRestoreFromAnnotation] == "" {
+		t.Errorf("a cache request that fell back to an emptyDir model is still stamped, got %v", intent.Annotations)
+	}
+}

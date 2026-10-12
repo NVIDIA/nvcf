@@ -341,7 +341,7 @@ public class CreateFunctionRequest {
                     throw new BadRequestException(MESG_MISSING_LLM_MODEL_URIS);
                 }
                 if (isLlmFunction) {
-                    LlmConfigValidator.validateRoutingMethod(
+                    LlmRoutingMethodValidator.validate(
                             model.getName(), model.getLlmConfig().getRoutingMethod());
                     LlmConfigValidator.validateTokenRateLimit(
                             model.getName(), model.getLlmConfig().getTokenRateLimit());

@@ -32,12 +32,8 @@ import (
 	translateutil "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"
 )
 
-/*
-Container Functions will be translated as the following set of artifacts
-  - an inference Pod
-  - a utils deployment
-  - a service endpoint for inference
-*/
+// translateContainerUtilsDeploy converts a container function request into an
+// inference pod, a worker-utils deployment, and an inference service.
 func translateContainerUtilsDeploy(t CreationQueueMessage, tcfg TranslateConfig) (objs []metav1.Object, err error) {
 	if err := tcfg.ValidateContainer(); err != nil {
 		return nil, fmt.Errorf("invalid container translate config: %v", err)
@@ -237,10 +233,11 @@ func translateContainerUtilsDeploy(t CreationQueueMessage, tcfg TranslateConfig)
 			Image:           initContainerImage,
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			Env:             common.SortEnvs(initEnvs),
-			SecurityContext: common.NewInfraContainerSecurityContext(),
+			SecurityContext: common.NewWorkerInitContainerSecurityContext(),
 			VolumeMounts:    initContainerVolumeMounts,
 		}
 		inferencePod.Spec.InitContainers = append(inferencePod.Spec.InitContainers, initContainer)
+		common.EnsureWorkerInitFSGroup(&inferencePod.Spec)
 
 		objs = append(objs, inferencePod)
 	}
@@ -285,6 +282,7 @@ func translateContainerUtilsDeploy(t CreationQueueMessage, tcfg TranslateConfig)
 	return objs, nil
 }
 
+// getUtilsDeploymentAndSecrets builds the worker-utils deployment and registry secrets.
 func getUtilsDeploymentAndSecrets(t CreationQueueMessage, tcfg TranslateConfig) (objs []metav1.Object, err error) {
 	// Fail if LLS is enabled for utils pod as a separate pod from the inference pod
 	if t.Details.FunctionType == FunctionTypeStreaming {
@@ -520,10 +518,11 @@ func getUtilsDeploymentAndSecrets(t CreationQueueMessage, tcfg TranslateConfig) 
 		Image:           initContainerImage,
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Env:             common.SortEnvs(initEnvs),
-		SecurityContext: common.NewInfraContainerSecurityContext(),
+		SecurityContext: common.NewWorkerInitContainerSecurityContext(),
 		VolumeMounts:    initContainerVolumeMounts,
 	}
 	utilsPod.Spec.InitContainers = append(utilsPod.Spec.InitContainers, initContainer)
+	common.EnsureWorkerInitFSGroup(&utilsPod.Spec)
 
 	// The ESS init container needs to be added after the init container,
 	// since the init container creates config.hcl.
@@ -542,6 +541,7 @@ func getUtilsDeploymentAndSecrets(t CreationQueueMessage, tcfg TranslateConfig) 
 			essDataVolumeMount,
 		}
 		utilsPod.Spec.InitContainers = append(utilsPod.Spec.InitContainers, essInitContainer)
+		common.EnsureESSFSGroup(&utilsPod.Spec)
 	}
 
 	utilsContainer := corev1.Container{
@@ -553,7 +553,7 @@ func getUtilsDeploymentAndSecrets(t CreationQueueMessage, tcfg TranslateConfig) 
 		VolumeMounts:    utilsContainerVolumeMounts,
 	}
 	// mutate startup / liveness / readiness probes
-	common.MutateUtilsProbes(&utilsContainer)
+	common.MutateUtilsContainer(&utilsContainer)
 	utilsPod.Spec.Containers = append(utilsPod.Spec.Containers, utilsContainer)
 
 	replicas := int32(1)
@@ -573,6 +573,7 @@ func getUtilsDeploymentAndSecrets(t CreationQueueMessage, tcfg TranslateConfig) 
 					Annotations: commonAnnotations,
 				},
 				Spec: corev1.PodSpec{
+					SecurityContext:               utilsPod.Spec.SecurityContext,
 					AutomountServiceAccountToken:  translateutil.NewBoolPtr(false),
 					TerminationGracePeriodSeconds: new(int64),
 					Affinity:                      &corev1.Affinity{},

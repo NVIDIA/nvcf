@@ -84,9 +84,13 @@ func (s *Service) Initialize(ctx context.Context) error {
 
 // Refresh submits every closed segment to the backend.
 //
-// Sources are never deleted here. Deletion waits on durable lifecycle state and
-// confirmed terminal success, which is a later increment. A segment that fails
-// is logged and left in place, so the next scan retries it.
+// A segment is deleted only after the backend confirms success and declares
+// that a successful submit is a real export (backend.Capabilities.Exports). A
+// diagnostic backend, such as debug, reports success without exporting and
+// never loses its source. A segment that fails, or that a backend reports as
+// still pending, is logged and left in place, so the next scan retries it.
+// Durable lifecycle state and fault scoping across restarts are a later
+// increment.
 func (s *Service) Refresh(ctx context.Context) error {
 	segments, err := segment.Discover(s.config.SourceDir, s.config.SegmentPrefix)
 	if err != nil {
@@ -122,6 +126,12 @@ func (s *Service) submit(ctx context.Context, item segment.Segment) error {
 		"segment", item.Index,
 		"bytes", item.Size,
 		"status", status)
+	if status != backend.StatusSuccess || !s.backend.Capabilities().Exports {
+		return nil
+	}
+	if err := os.Remove(item.Path); err != nil {
+		return fmt.Errorf("delete uploaded segment: %w", err)
+	}
 	return nil
 }
 

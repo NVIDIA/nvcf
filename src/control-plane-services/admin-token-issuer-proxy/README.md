@@ -284,6 +284,7 @@ them with the `--version` flag. Release tags use the monorepo path format
 `src/control-plane-services/admin-token-issuer-proxy/vX.Y.Z`.
 
 When you pull `registry.example.com/project:1.2.3`, Docker/Kubernetes automatically selects the image matching your platform:
+
 ```bash
 # On amd64 node
 docker pull registry.example.com/project:1.2.3
@@ -295,6 +296,7 @@ docker pull registry.example.com/project:1.2.3
 ```
 
 **Inspect Multi-Arch Manifest:**
+
 ```bash
 # With Buildah
 buildah manifest inspect registry.example.com/project:1.2.3

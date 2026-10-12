@@ -33,6 +33,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 )
 
+// TestTranslateContainerCreatesTaskPod verifies resources generated for a container task.
 func TestTranslateContainerCreatesTaskPod(t *testing.T) {
 	objs, err := Translate(
 		newTaskMessage(false),
@@ -44,6 +45,9 @@ func TestTranslateContainerCreatesTaskPod(t *testing.T) {
 	require.Len(t, pod.Spec.InitContainers, 1)
 	assert.Equal(t, common.InitContainerName, pod.Spec.InitContainers[0].Name)
 	assert.Equal(t, "nvcr.io/nvidia/init:latest", pod.Spec.InitContainers[0].Image)
+	assert.Equal(t, common.WorkerInitUID, *pod.Spec.InitContainers[0].SecurityContext.RunAsUser)
+	assert.True(t, *pod.Spec.InitContainers[0].SecurityContext.RunAsNonRoot)
+	assert.Equal(t, common.WorkerInitUID, *pod.Spec.SecurityContext.FSGroup)
 
 	taskContainer := findTaskContainerByName(t, pod.Spec.Containers, taskContainerName)
 	assert.Equal(t, "nvcr.io/nvidia/task:latest", taskContainer.Image)
@@ -51,10 +55,12 @@ func TestTranslateContainerCreatesTaskPod(t *testing.T) {
 	assert.Equal(t, corev1.RestartPolicyNever, pod.Spec.RestartPolicy)
 
 	utilsContainer := findTaskContainerByName(t, pod.Spec.Containers, common.UtilsContainerName)
+	assertTaskUtilsMetricsPort(t, utilsContainer)
 	assert.Equal(t, "nvcr.io/nvidia/utils:latest", utilsContainer.Image)
 	assert.Equal(t, string(common.UploadResult), envValue(utilsContainer.Env, resultHandlingStratEnvKey))
 }
 
+// TestTranslateContainerWithCacheAndSecrets verifies cache and secret resources for a container task.
 func TestTranslateContainerWithCacheAndSecrets(t *testing.T) {
 	msg := newTaskMessage(false)
 	msg.LaunchSpecification.EnvironmentB64 = encodeTaskTextEnv(map[string]string{
@@ -87,6 +93,7 @@ func TestTranslateContainerWithCacheAndSecrets(t *testing.T) {
 	assert.NotNil(t, findTaskJobByName(t, objs, "writer-job-cache-handle"))
 }
 
+// TestTranslateHelmChartCreatesUtilsPod verifies resources generated for a Helm task.
 func TestTranslateHelmChartCreatesUtilsPod(t *testing.T) {
 	objs, err := Translate(
 		newTaskMessage(true),
@@ -105,8 +112,12 @@ func TestTranslateHelmChartCreatesUtilsPod(t *testing.T) {
 	require.Len(t, pod.Spec.InitContainers, 1)
 	assert.Equal(t, common.InitContainerName, pod.Spec.InitContainers[0].Name)
 	assert.Equal(t, "nvcr.io/nvidia/init:latest", pod.Spec.InitContainers[0].Image)
+	assert.Equal(t, common.WorkerInitUID, *pod.Spec.InitContainers[0].SecurityContext.RunAsUser)
+	assert.True(t, *pod.Spec.InitContainers[0].SecurityContext.RunAsNonRoot)
+	assert.Equal(t, common.WorkerInitUID, *pod.Spec.SecurityContext.FSGroup)
 
 	utilsContainer := findTaskContainerByName(t, pod.Spec.Containers, common.UtilsContainerName)
+	assertTaskUtilsMetricsPort(t, utilsContainer)
 	assert.Equal(t, "nvcr.io/nvidia/utils:latest", utilsContainer.Image)
 	assert.Equal(t, "request-task", envValue(utilsContainer.Env, "INSTANCE_ID"))
 	assert.Equal(t, string(common.UploadResult), envValue(utilsContainer.Env, resultHandlingStratEnvKey))
@@ -341,6 +352,17 @@ func findTaskContainerByName(t *testing.T, containers []corev1.Container, name s
 	return corev1.Container{}
 }
 
+// assertTaskUtilsMetricsPort verifies the named worker-utils metrics port for tasks.
+func assertTaskUtilsMetricsPort(t *testing.T, container corev1.Container) {
+	t.Helper()
+	assert.Equal(t, []corev1.ContainerPort{{
+		Name:          common.WorkerMetricsPortName,
+		ContainerPort: common.UtilsMetricsPort,
+		Protocol:      corev1.ProtocolTCP,
+	}}, container.Ports)
+}
+
+// findTaskVolumeByName returns the named task volume source or fails the test.
 func findTaskVolumeByName(t *testing.T, volumes []corev1.Volume, name string) corev1.VolumeSource {
 	t.Helper()
 

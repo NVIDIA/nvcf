@@ -31,6 +31,8 @@ import (
 	translateutil "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"
 )
 
+// translateHelmChart converts a Helm function request into Kubernetes resources.
+//
 //nolint:gocyclo // complex function with many conditional branches
 func translateHelmChart(t CreationQueueMessage, tcfg TranslateConfig) (objs []metav1.Object, err error) {
 	// Fail if LLS is enabled for utils pod as a separate pod from the inference pod
@@ -314,10 +316,11 @@ func translateHelmChart(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 		Image:           initContainerImage,
 		ImagePullPolicy: corev1.PullIfNotPresent,
 		Env:             common.SortEnvs(initEnvs),
-		SecurityContext: common.NewInfraContainerSecurityContext(),
+		SecurityContext: common.NewWorkerInitContainerSecurityContext(),
 		VolumeMounts:    initContainerVolumeMounts,
 	}
 	utilsPod.Spec.InitContainers = append(utilsPod.Spec.InitContainers, initContainer)
+	common.EnsureWorkerInitFSGroup(&utilsPod.Spec)
 
 	// The ESS init container needs to be added after the init container,
 	// since the init container creates config.hcl.
@@ -339,6 +342,7 @@ func translateHelmChart(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 			essDataVolumeMount,
 		}
 		utilsPod.Spec.InitContainers = append(utilsPod.Spec.InitContainers, essInitContainer)
+		common.EnsureESSFSGroup(&utilsPod.Spec)
 	}
 
 	if !isLLM {
@@ -351,7 +355,7 @@ func translateHelmChart(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 			VolumeMounts:    utilsContainerVolumeMounts,
 		}
 		// mutate startup / liveness / readiness probes
-		common.MutateUtilsProbes(&utilsContainer)
+		common.MutateUtilsContainer(&utilsContainer)
 		utilsPod.Spec.Containers = append(utilsPod.Spec.Containers, utilsContainer)
 	} else {
 		// llm functions don't have a utils container. they have a router client container instead.

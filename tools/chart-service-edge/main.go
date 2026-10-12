@@ -33,6 +33,11 @@
 //
 //	"deploys": ["<service id>", ...]
 //
+// A multi-image chart instead uses an object with values_paths to identify the
+// exact fields owned by each service. It can use values_files for repeated pins
+// in additional values files and sets app_version when that service also owns
+// Chart.yaml's appVersion.
+//
 // listing the release-metadata ids of the services whose images it ships. A
 // chart that ships no first-party image (an upstream dependency, or resources
 // only) declares "deploys": [] to say so deliberately.
@@ -101,9 +106,9 @@ func Audit(meta *Metadata, strict bool, out, errOut io.Writer) int {
 			continue
 		}
 		var unknown []string
-		for _, s := range c.Deploys {
-			if !serviceIDs[s] {
-				unknown = append(unknown, s)
+		for _, d := range c.Deploys {
+			if !serviceIDs[d.Service] {
+				unknown = append(unknown, d.Service)
 			}
 		}
 		if len(unknown) > 0 {
@@ -116,7 +121,11 @@ func Audit(meta *Metadata, strict bool, out, errOut io.Writer) int {
 	for _, c := range declared {
 		target := "(no first-party image)"
 		if len(c.Deploys) > 0 {
-			target = strings.Join(c.Deploys, ", ")
+			names := make([]string, len(c.Deploys))
+			for i, d := range c.Deploys {
+				names[i] = d.Service
+			}
+			target = strings.Join(names, ", ")
 		}
 		fmt.Fprintf(out, "  %-26s -> %s\n", c.ID, target)
 	}

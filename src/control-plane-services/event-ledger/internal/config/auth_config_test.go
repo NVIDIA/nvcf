@@ -92,6 +92,19 @@ func TestValidateAuthConfig_JWTProvider(t *testing.T) {
 			},
 			expectedErr: ErrMissingJWTTenantClaim,
 		},
+		{
+			name: "jwt with introspection enabled fails startup",
+			cfg: AuthConfig{
+				Enabled:       true,
+				Provider:      "jwt",
+				JWKSetUrl:     "https://example.com/.well-known/jwks.json",
+				Issuer:        "https://issuer.example.com",
+				Audience:      "event-ledger",
+				TenantClaim:   "tenant_id",
+				Introspection: IntrospectionConfig{Enabled: true, URL: "https://sis.example.com/v1/nvca/tokens/introspect"},
+			},
+			expectedErr: ErrIntrospectionRequiresPolicyProvider,
+		},
 	}
 
 	for _, tt := range tests {
@@ -109,10 +122,10 @@ func TestValidateAuthConfig_JWTProvider(t *testing.T) {
 
 func TestValidateAuthConfig_PolicyProvider(t *testing.T) {
 	tests := []struct {
-		name                 string
-		cfg                  AuthConfig
+		name        string
+		cfg         AuthConfig
 		selfManaged bool
-		expectedErr          error
+		expectedErr error
 	}{
 		{
 			name: "valid policy config",
@@ -253,7 +266,7 @@ func TestValidateAuthConfig_PolicyProvider(t *testing.T) {
 		},
 		{
 			// In self-managed mode, OAuth2 fields are not required.
-			name:                 "valid config in self-managed mode - oauth2 fields not required",
+			name:        "valid config in self-managed mode - oauth2 fields not required",
 			selfManaged: true,
 			cfg: AuthConfig{
 				Enabled:   true,
@@ -269,7 +282,7 @@ func TestValidateAuthConfig_PolicyProvider(t *testing.T) {
 		},
 		{
 			// Even in self-managed mode, always-required fields are still checked.
-			name:                 "self-managed mode does not bypass namespace check",
+			name:        "self-managed mode does not bypass namespace check",
 			selfManaged: true,
 			cfg: AuthConfig{
 				Enabled:   true,
@@ -369,4 +382,61 @@ func TestValidateEndpointAuthConfig(t *testing.T) {
 			assert.ErrorIs(t, ValidateEndpointAuthConfig(tt.cfg), tt.expectedErr)
 		})
 	}
+}
+
+func TestValidateAuthConfig_PolicyProviderIntrospection(t *testing.T) {
+	baseCfg := func() AuthConfig {
+		return AuthConfig{
+			Enabled:   true,
+			Provider:  "policy",
+			JWKSetUrl: "https://example.com/.well-known/jwks.json",
+			Policy: PolicyConfig{
+				PolicyEvaluatorAddr: "https://pdp.example.com",
+				Namespace:           "test",
+				PolicyFQDN:          "test.policy",
+			},
+		}
+	}
+
+	t.Run("introspection disabled requires no url", func(t *testing.T) {
+		cfg := baseCfg()
+		assert.NoError(t, ValidateAuthConfig(cfg, true))
+	})
+
+	t.Run("introspection enabled without url fails startup", func(t *testing.T) {
+		cfg := baseCfg()
+		cfg.Introspection.Enabled = true
+		err := ValidateAuthConfig(cfg, true)
+		require.Error(t, err)
+		assert.Equal(t, ErrMissingIntrospectionURL, err)
+	})
+
+	t.Run("introspection enabled with url is valid", func(t *testing.T) {
+		cfg := baseCfg()
+		cfg.Introspection.Enabled = true
+		cfg.Introspection.URL = "https://sis.example.com/v1/nvca/tokens/introspect"
+		assert.NoError(t, ValidateAuthConfig(cfg, true))
+	})
+
+	t.Run("introspection enabled in managed deployment fails startup", func(t *testing.T) {
+		cfg := baseCfg()
+		cfg.Policy.CredsFile = "/vault/secrets/creds.json"
+		cfg.Policy.TokenIssuerAddr = "https://issuer.example.com"
+		cfg.Policy.CredentialsRefreshInterval = 300
+		cfg.Introspection.Enabled = true
+		cfg.Introspection.URL = "https://sis.example.com/v1/nvca/tokens/introspect"
+		err := ValidateAuthConfig(cfg, false)
+		require.Error(t, err)
+		assert.Equal(t, ErrIntrospectionRequiresSelfManaged, err)
+	})
+}
+
+func TestIntrospectionConfigWithDefaults(t *testing.T) {
+	cfg := IntrospectionConfig{}.WithDefaults()
+	assert.Equal(t, 10, cfg.TimeoutSeconds)
+	assert.Equal(t, 300, cfg.CacheTTLSeconds)
+
+	cfg = IntrospectionConfig{TimeoutSeconds: 5, CacheTTLSeconds: 60}.WithDefaults()
+	assert.Equal(t, 5, cfg.TimeoutSeconds)
+	assert.Equal(t, 60, cfg.CacheTTLSeconds)
 }

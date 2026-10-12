@@ -48,6 +48,9 @@ done
 helmfile_common=(
   --file "$test_stack_dir/helmfile.d"
   --environment default
+  # This test covers the non-HA PDB passthrough / escape-hatch paths, which only
+  # apply when HA is off. Pin mode none so it is independent of the base default.
+  --state-values-set highAvailability.mode=none
   --state-values-set ingress.gatewayApi.controllerNamespace=envoy-gateway-system
   --state-values-set ingress.gatewayApi.gateways.shared.name=shared-gw
   --state-values-set ingress.gatewayApi.gateways.shared.namespace=envoy-gateway-system

@@ -31,7 +31,7 @@ Feature: Bring up a local single-cluster NVCF stack with the CLI
       # --env local also reads operator-authored environment values from
       # both split stacks: deploy/stacks/<stack>/environments/local.yaml.
       # Neither file is tracked, so author both from the BDD fixtures.
-      # observability.profile is disabled because this workflow runs
+      # The fixtures disable observability because this workflow runs
       # 'helmfile apply', whose diff phase validates rendered manifests
       # against the live cluster (--dry-run=server); on a fresh cluster
       # the ServiceMonitor CRDs do not exist yet and the diff fails
@@ -41,12 +41,10 @@ Feature: Bring up a local single-cluster NVCF stack with the CLI
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-        | observability.profile           | disabled                             |
       And I prepare Helmfile environment "local" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-        | observability.profile           | disabled                             |
       # Conflict precheck: ncp-local-cp's k3d serverlb claims
       # 0.0.0.0:8080/8443/10081, NATS on 4222, and the worker
       # callback port 10086, overlapping host ports single-cluster
@@ -184,8 +182,8 @@ Feature: Bring up a local single-cluster NVCF stack with the CLI
         """
         clusterName: ncp-local
         ncaID: nvcf-default
-        region: us-west-1
         selfManaged:
+          region: us-west-1
           icmsServiceURL: http://api.sis.svc.cluster.local:8080
           revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
           natsURL: nats://nats.nats-system.svc.cluster.local:4222

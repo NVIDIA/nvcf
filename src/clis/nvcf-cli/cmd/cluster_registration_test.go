@@ -440,9 +440,9 @@ func TestHelmValuesYAMLSchema(t *testing.T) {
 		ClusterID:      "cl-123",
 		ClusterGroupID: "cg-456",
 		NcaID:          "nca-789",
-		Region:         "us-west-1",
 		SelfManaged: selfManagedValues{
 			IdentitySource:  "psat",
+			Region:          "us-west-1",
 			ICMSServiceURL:  "http://sis.localhost:18080",
 			ReValServiceURL: "http://reval.localhost:18080",
 			NATSURL:         "nats://nats.localhost:4222",
@@ -457,9 +457,10 @@ func TestHelmValuesYAMLSchema(t *testing.T) {
 	assert.Contains(t, got, "clusterID: cl-123")
 	assert.Contains(t, got, "clusterGroupID: cg-456")
 	assert.Contains(t, got, "ncaID: nca-789")
-	assert.Contains(t, got, "region: us-west-1")
-	// identitySource stays nested under selfManaged.
-	assert.Contains(t, got, "selfManaged:\n    identitySource: psat")
+	assert.NotContains(t, got, "\nregion: us-west-1")
+	// Region is chart configuration and identitySource is CLI lifecycle
+	// metadata; both stay nested under selfManaged.
+	assert.Contains(t, got, "selfManaged:\n    identitySource: psat\n    region: us-west-1")
 	assert.Contains(t, got, "icmsServiceURL: http://sis.localhost:18080")
 	assert.Contains(t, got, "revalServiceURL: http://reval.localhost:18080")
 	assert.Contains(t, got, "natsURL: nats://nats.localhost:4222")

@@ -1,10 +1,11 @@
 # BYOO Metrics Validator CLI
 
 > Limitations
+>
 > - Only supports the metrics from Grafana Cloud
 > - Only supports the platform metrics (does not include the OTLP metrics collected from users' applications)
 
-### Introduction
+## Introduction
 
 The BYOO Metrics Validator CLI is a tool designed to validate metrics collected by the byoo-otel-collector. It helps ensure that your metrics are being properly collected and reported according to expected specifications.
 
@@ -26,7 +27,7 @@ Key features:
     - [ERROR] Attribute is not in the allow list
     - [ERROR] Required metadata attributes is missing
 
-### Run the validator locally
+## Run the validator locally
 
 Prerequisite
 
@@ -140,7 +141,9 @@ INFO     ###########################################################
 ```
 
 Validate the metrics against to the golden metrics
+
 - Check the golden metrics in ../golden for reference
+
 ``` bash
 > uv run -m src.validator --cloud-provider=non-gfn --wrapper-type=function --workload-type=container --golden aadb8822-7992-4d63-a771-76bdb7d2f402
 INFO     ###########################################################                                                    
@@ -249,7 +252,7 @@ Use customized configuration
 > uv run -m src.validator --config=<file_path> --cloud-provider=non-gfn --wrapper-type=function --workload-type=helm ef5356e3-afe4-47c3-9ad9-7b4402f84456
 ```
 
-### Run the validator through Docker
+## Run the validator through Docker
 
 Prerequisite
 
@@ -266,7 +269,7 @@ export GRAFANA_CLOUD_PROMETHEUS_PASSWORD="xxx"
 
 Validate the metrics
 
-```
+```bash
 docker run \
   -t \
   -e GRAFANA_CLOUD_PROMETHEUS_URL="$GRAFANA_CLOUD_PROMETHEUS_URL" \
@@ -281,7 +284,7 @@ docker run \
 
 Use the config file locally
 
-```
+```bash
 docker run \
   -t \
   --mount type=bind,src="<file_path>",dst=/app/validator-config.yaml,readonly \

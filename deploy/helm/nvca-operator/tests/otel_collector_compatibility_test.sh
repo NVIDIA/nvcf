@@ -7,7 +7,6 @@ set -euo pipefail
 chart_root="$(cd "$(dirname "$0")/.." && pwd)"
 workspace_root="$(cd "${chart_root}/../../.." && pwd)"
 config_template="${workspace_root}/src/compute-plane-services/nvca/pkg/operator/reconcile/manifests/otel_collector_config.yaml"
-compatible_tag="0.157.0-nv-0.2.1"
 tmp_dir="$(mktemp -d)"
 
 # Remove rendered test inputs even when image validation fails.
@@ -21,6 +20,9 @@ config="${tmp_dir}/config.yaml"
 token_file="${tmp_dir}/service-api-key"
 
 helm template nvca-operator "${chart_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --values "${chart_root}/nvca-operator/values.yaml" \
   --values "${chart_root}/values.release-sbom.yaml" \
@@ -54,6 +56,13 @@ if [[ "${operator_repository}" != "${expected_repository}" ]]; then
   exit 1
 fi
 
+# The source of truth for the compatible tag is the chart itself, not a
+# literal here: otelCollector.imageTag, agent.byooOtelCollector.imageTag,
+# helmManaged.otelCollector.imageTag, and selfManaged.otelCollector.imageTag
+# move together on every collector release (tools/chart-version-bumper
+# refuses rather than bump them if they ever disagree), so any one of them is
+# the value every path below must resolve to.
+compatible_tag="$(yq -r '.otelCollector.imageTag' "${chart_root}/nvca-operator/values.yaml")"
 for selected_tag in "${operator_tag}" "${backend_tag}" "${helm_managed_tag}"; do
   if [[ "${selected_tag}" != "${compatible_tag}" ]]; then
     echo "expected every collector path to select ${compatible_tag}, got ${selected_tag}" >&2
@@ -65,8 +74,10 @@ collector_image="${operator_repository}:${operator_tag}"
 
 # Select the service API key branch from the same Go template that NVCA renders
 # into its collector ConfigMap. This leaves runtime env substitutions intact for
-# the collector's env provider to resolve below.
+# the collector's env provider to resolve below. The UsePSAT blocks only drop
+# statements in PSAT mode, so keeping their contents validates the superset.
 awk '
+  /^\{\{- (if not \.UsePSAT|end) \}\}$/ { next }
   /^\{\{ if \.UseOAuth2 \}\}$/ { in_auth = 1; include = 0; next }
   /^\{\{ else \}\}$/ && in_auth { include = 1; next }
   /^\{\{ end \}\}$/ && in_auth { in_auth = 0; include = 0; next }
@@ -78,7 +89,7 @@ awk '
 
 printf 'test-token\n' > "${token_file}"
 docker run --rm --pull=always \
-  --env NGC_SERVICE_API_KEY_FILE=/etc/otelcol/service-api-key \
+  --env NVCA_OTEL_COLLECTOR_BEARER_TOKEN_FILE=/etc/otelcol/service-api-key \
   --env NVCA_OTEL_COLLECTOR_MEMORY_LIMIT_PERCENTAGE=75 \
   --env NVCA_OTEL_COLLECTOR_SPIKE_LIMIT_PERCENTAGE=20 \
   --env NVCA_OTEL_COLLECTOR_HEALTH_CHECK_PORT=13133 \

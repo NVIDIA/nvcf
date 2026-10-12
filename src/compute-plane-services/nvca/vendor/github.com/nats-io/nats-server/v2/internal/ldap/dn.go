@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright (c) 2011-2015 Michael Mitton (mmitton@gmail.com)
 // Portions copyright (c) 2015-2016 go-ldap Authors
 package ldap

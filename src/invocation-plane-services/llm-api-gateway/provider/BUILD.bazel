@@ -48,7 +48,10 @@ alias(
 
 go_test(
     name = "provider_test",
-    srcs = ["stargate_test.go"],
+    srcs = [
+        "chat_passthrough_test.go",
+        "stargate_test.go",
+    ],
     embed = [":provider"],
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/config",

@@ -93,4 +93,3 @@ Read more about using the invocation API in the Function Invocation section.
 | Get Queue Length for Version id | GET | `/v2/nvcf/queues/functions/{functionId}/versions/{functionVersionId}` | Returns a list containing a single element with corresponding queue length for the specified Function version id. |
 | Get Available GPUs | GET | `/v2/nvcf/supportedGpus` | Returns a list of GPU types you have access too. |
 | Get Queue Position for Request id | GET | `/v2/nvcf/queues/{requestId}/position` | Returns estimated position in queue, up to 1000, for a specific request id of a function invocation request. |
-

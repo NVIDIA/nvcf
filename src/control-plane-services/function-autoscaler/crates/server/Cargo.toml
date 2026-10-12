@@ -84,6 +84,7 @@ hyper = "1"
 hyper-util = "0.1"
 http-body-util = "0.1"
 mockito = "1.5"
+tower = { version = "0.5", default-features = false, features = ["util"] }
 
 [build-dependencies]
 tonic-build = "0.13.1"

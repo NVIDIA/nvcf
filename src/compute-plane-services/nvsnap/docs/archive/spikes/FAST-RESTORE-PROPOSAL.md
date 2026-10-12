@@ -58,6 +58,7 @@ So: a revolutionary scheme can't just be a faster pipe. It has to **collapse sta
 ### 4. Purpose-built artifact format
 
 Three properties enable the above:
+
 - **Page-aligned chunks** so userfaultfd can pull exactly one page.
 - **Self-describing index at the head** so any chunk is reachable in O(1) — no sequential deserialization, no read-the-whole-thing-to-restore.
 - **Content-type aware compression**: skip lz4/zstd for `safetensors` (T7 finding: incompressible, no point), use them for sparse CRIU image data; one artifact, multiple internal encodings.
@@ -71,17 +72,20 @@ This is **not EROFS** — that's optimized for read-everything-once mount semant
 We do not build all four at once. Each phase is demonstrably useful on its own.
 
 ### Phase 1 — "instant ready, slow first inference"
+
 - Userfaultfd in the restored process; file-backed (no RDMA yet).
 - Readiness probe passes as soon as the address space is mapped.
 - First inference is slow (faults everything in) but pod is "ready" in 10–20 s.
 - **Measurable:** time-to-ready 233 s → ~20 s; time-to-first-token: ~unchanged.
 
 ### Phase 2 — "instant ready, fast first inference (warm pool)"
+
 - Hot-pool service maintains base models on standby GPUs.
 - Restore = clone-base + apply-delta.
 - **Measurable:** time-to-first-token 233 s → ~10 s for matching base.
 
 ### Phase 3 — "RDMA-GPUDirect data plane"
+
 - s3-rdma + GPUDirect for the L2 leg + the non-warm-pool case.
 - Stream weights NIC → GPU at fabric rate.
 - **Measurable:** time-to-first-token for non-pooled 233 s → ~30 s.
@@ -107,20 +111,24 @@ CRIU already has lazy-restore support: `criu restore --lazy-pages` + a `criu laz
 **Goal:** vllm-small restores via lazy-pages on a single node, with the page-server local. Forget remote-page-server for now.
 
 ### Setup
+
 1. On 1sd6 (where we have a fresh vllm-small dump), build the `criu lazy-pages` daemon: it's the same `criu` binary, just `criu lazy-pages -D <images-dir> --address /tmp/lp.sock`.
 2. Modify a copy of the vllm-small restore manifest to launch `criu lazy-pages` as a sidecar in the restore pod, then have restore-entrypoint invoke `criu restore --lazy-pages --address /tmp/lp.sock ...`.
 3. Verify the pod comes up. Initial expectation: it works exactly like normal restore (CRIU does the heavy lifting at restore time, lazy-pages just streams pages on demand thereafter).
 
 ### Measure
+
 - Time-to-ready vs baseline T1 (42 s for vllm-small).
 - Number of pages faulted in during the first inference (CRIU `lazy-pages` daemon logs this).
 - Memory residency after warmup vs after first 10 inferences.
 
 ### Success criterion
+
 - Pod becomes Ready, inference works, output matches.
 - Some pages are demonstrably absent at Ready time (visible via `/proc/<pid>/smaps` or `pagemap` reading).
 
 ### Risk
+
 - CUDA plugin in CRIU may not be compatible with lazy-pages mode. GPU memory restore wants all pages eagerly. If so: Day-1 result is "lazy-pages works for CPU state, GPU restored eagerly" — still useful, smaller win.
 
 ## Day 2 — measure where the wins are, and where they aren't
@@ -128,18 +136,21 @@ CRIU already has lazy-restore support: `criu restore --lazy-pages` + a `criu laz
 **Goal:** quantify what lazy-pages buys us, by what metric, for which workloads.
 
 ### Tests
+
 - **T-LP-1:** vllm-small lazy-pages restore — time-to-ready, time-to-first-token, residency at ready.
 - **T-LP-2:** Same, but force-touch every page after Ready (`madvise(MADV_WILLNEED)` on the whole mapping) → measure how long until all pages are present. This is the "background prefetch" cost.
 - **T-LP-3:** vllm-small lazy-pages with the page-server on a different node, served over plain HTTP TCP. Measures the "remote page-server" overhead — sets a baseline for how much RDMA would later buy.
 - **T-LP-4:** Same as T-LP-3 but read-many-pages-per-fault (CRIU has a knob: `--page-bunch`). Measures effective bandwidth of the fault path.
 
 ### Measure
+
 - Per-fault latency (microseconds)
 - Page-fault rate during first inference (faults/sec)
 - Aggregate bandwidth during prefetch (MiB/s)
 - Total wall-clock to "warm" (all pages present)
 
 ### Decision points
+
 - **If time-to-ready drops to <10 s** for vllm-small: lazy-pages is the right Phase-1 direction. Recommend proceeding to integration.
 - **If per-fault latency >100 μs** and the access pattern is random-heavy: page-fault overhead dominates and lazy-pages might not be a win for inference workloads. Reconsider.
 - **If CUDA plugin forces eager GPU restore:** lazy-pages buys us only the CPU-side; the win is smaller. Document and decide if it's still worth pursuing.
@@ -149,13 +160,16 @@ CRIU already has lazy-restore support: `criu restore --lazy-pages` + a `criu laz
 **Goal:** crisp answer to "should we build Phase 1 for real, or is the win not worth it?"
 
 ### Deliverable
+
 A short addendum to this doc with:
+
 - Measured numbers from Day 1 + Day 2
 - Comparison table: baseline vs lazy-pages, time-to-ready, time-to-first-token, time-to-warm
 - Concrete integration plan if green-lit: where in `cmd/restore-entrypoint/main.go` to add `--lazy-pages` invocation, what new flags on agent CRD, what new init container (or sidecar) for the lazy-pages daemon
 - Concrete reason for "no" if red-lit
 
 ### Stretch (only if Day 1-2 went smoothly)
+
 - Probe the **rootfs path**: rootfs captures don't go through CRIU, so userfaultfd would need a different vehicle (FUSE that lazy-fetches files, or a custom loader in the container that streams weights). Not in scope to build, but in scope to think through whether the same lazy-hydration shape applies. A workable rootfs lazy path means Phase 1 covers BOTH the CRIU and rootfs flows; no workable rootfs path means Phase 1 is single-GPU-only and the multi-GPU case needs a different strategy.
 
 ---
@@ -256,6 +270,7 @@ CRIU's default page-bunch already groups ~445 pages per fault. Tuning `page-bunc
 ## Day 3 — decision: **GREEN-LIGHT for production integration**
 
 Lazy-pages on the single-GPU CRIU path:
+
 - Works end-to-end with the existing CUDA plugin
 - Reproducible 25–27% restore-time reduction on vllm-small
 - No correctness regressions (inference output identical)
@@ -347,14 +362,17 @@ Reasoning: 5/6 of OUR tested workloads benefit, but we don't know how unknown / 
 1. **Bench both modes:** capture once, restore with `NVSNAP_LAZY_PAGES=0`, restore with `NVSNAP_LAZY_PAGES=1`, compare wall-clock. Repeat 2–3× for noise.
 2. **Decision rule:** enable if lazy=1 is faster OR within 5 s (noise threshold). Don't enable if lazy=1 is slower than eager.
 3. **Flip the env var** in `deploy/k8s/workloads/<workload>-restore.yaml`:
+
    ```yaml
    - { name: NVSNAP_LAZY_PAGES, value: "1" }
    ```
+
 4. **NIM exception:** NIM containers will auto-disable via runtime detection regardless of env setting. No action needed for those.
 
 ### Future workload onboarding checklist
 
 For any new workload added to `deploy/k8s/workloads/`:
+
 - [ ] Run `./scripts/test-e2e.sh <workload>` with default (eager) — record restore-Ready time
 - [ ] Set `NVSNAP_LAZY_PAGES=1` in the workload's restore manifest, run again — record time
 - [ ] If lazy faster: keep `value: "1"` and document the win

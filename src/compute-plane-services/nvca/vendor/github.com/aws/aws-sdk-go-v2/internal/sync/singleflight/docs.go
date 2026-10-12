@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Package singleflight provides a duplicate function call suppression
 // mechanism. This package is a fork of the Go golang.org/x/sync/singleflight
 // package. The package is forked, because the package a part of the unstable

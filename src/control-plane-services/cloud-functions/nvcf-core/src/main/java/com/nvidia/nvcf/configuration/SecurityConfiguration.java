@@ -58,6 +58,7 @@ public class SecurityConfiguration {
                                 // via management port.
                                 .requestMatchers("/actuator/**").permitAll()
                                 .requestMatchers("/v2/nvcf/webhook/**").permitAll()
+                                .requestMatchers("/info").permitAll()
                                 .anyRequest().authenticated());
         return http.build();
     }

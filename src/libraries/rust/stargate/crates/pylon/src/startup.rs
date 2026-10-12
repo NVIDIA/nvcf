@@ -39,7 +39,7 @@ use stargate_runtime::wait_for_termination_signal;
 use tokio::task::JoinError;
 use tracing::{error, info, warn};
 
-use super::Args;
+use super::{Args, OutputTokenCalibrationMode};
 
 type TaskExit = std::result::Result<(), JoinError>;
 
@@ -107,9 +107,13 @@ pub(crate) struct PylonStartupPlan {
     queue_mismatch_retry: PylonQueueMismatchRetryConfig,
     upstream_backend: UpstreamBackend,
     priority_ceiling: u32,
+    first_output_timeout: Duration,
+    output_chunk_timeout: Duration,
     model_initialization: ModelInitialization,
     bringup: BringupConfig,
     request_quality_monitor: RequestQualityMonitorConfig,
+    force_chat_completions_include_usage: bool,
+    output_token_calibration: OutputTokenCalibrationMode,
     health_paths: UpstreamHealthPaths,
     startup_health_wait: Duration,
     metrics_addr: SocketAddr,
@@ -157,6 +161,8 @@ impl PylonStartupPlan {
             queue_mismatch_retry: pylon_queue_mismatch_retry_config_from_args(args)?,
             upstream_backend: args.pylon_upstream_backend,
             priority_ceiling: args.pylon_priority_ceiling,
+            first_output_timeout: Duration::from_millis(args.pylon_first_output_timeout_ms),
+            output_chunk_timeout: Duration::from_millis(args.pylon_output_chunk_timeout_ms),
             model_initialization,
             bringup: BringupConfig {
                 enabled: !args.disable_bringup,
@@ -165,6 +171,8 @@ impl PylonStartupPlan {
                 canary_max_generation_threshold: args.canary_max_generation_threshold,
             },
             request_quality_monitor: request_quality_monitor_config_from_args(args),
+            force_chat_completions_include_usage: args.force_chat_completions_include_usage,
+            output_token_calibration: args.output_token_calibration,
             health_paths: UpstreamHealthPaths::new(args.upstream_health_paths.clone()),
             startup_health_wait: Duration::from_millis(args.upstream_health_wait_ms),
             metrics_addr: format!("{}:{}", args.metrics_host, args.metrics_port).parse()?,
@@ -349,6 +357,16 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
         stats_config.observation_channel_capacity,
         Some(metrics.clone()),
     );
+    let runtime_state = if plan.output_token_calibration == OutputTokenCalibrationMode::SinglePylon
+    {
+        info!(
+            cluster_id = %plan.cluster_id,
+            "enabling output-token calibration under the single-Pylon deployment assertion"
+        );
+        runtime_state.with_single_pylon_output_token_calibration()
+    } else {
+        runtime_state
+    };
     let (engine_stats_stream, stats_update_rx) = start_engine_stats_runtime(
         args,
         plan,
@@ -538,6 +556,7 @@ fn registration_config_from_plan(
         cluster_id: plan.cluster_id.clone(),
         inference_server_url,
         min_update_interval: Duration::from_millis(args.min_update_interval_ms),
+        stats_update_coalesce: Duration::from_millis(args.stats_update_coalesce_ms),
         reverse_tunnel: plan.backend_tunnel.is_reverse(),
         tls_cert_pem,
         grpc_tls_ca_cert_pem,
@@ -589,6 +608,7 @@ fn tunnel_forwarding_config_from_plan(
     metrics: Arc<PylonMetrics>,
 ) -> TunnelForwardingConfig {
     TunnelForwardingConfig {
+        force_chat_completions_include_usage: plan.force_chat_completions_include_usage,
         runtime_state,
         request_quality_monitor: plan.request_quality_monitor.clone(),
         metrics: Some(metrics),
@@ -596,6 +616,8 @@ fn tunnel_forwarding_config_from_plan(
         queue_mismatch_retry: plan.queue_mismatch_retry.clone(),
         upstream_backend: plan.upstream_backend,
         priority_ceiling: plan.priority_ceiling,
+        first_output_timeout: plan.first_output_timeout,
+        output_chunk_timeout: plan.output_chunk_timeout,
         upstream_health_paths: plan.health_paths.clone(),
         ..Default::default()
     }
@@ -607,6 +629,7 @@ pub(crate) fn stats_collector_config_from_args(
 ) -> StatsCollectorConfig {
     StatsCollectorConfig {
         openai_fallback_stats_enabled: args.engine_stats_stream == EngineStatsStreamMode::Off,
+        fallback_max_engine_concurrency: args.max_engine_concurrency,
         // Mock benchmark backends can expose live KV-cache occupancy over HTTP;
         // real upstreams usually do not, so polling is explicit.
         kv_cache_stats_url: args.kv_cache_stats_path.as_deref().map(|path| {
@@ -674,10 +697,6 @@ fn model_initialization_from_args(args: &Args) -> Result<ModelInitialization> {
             .is_none_or(|input_tps| input_tps.is_finite() && input_tps > 0.0),
         "initial input TPS must be finite and positive"
     );
-    ensure!(
-        !args.benchmark_pin_input_tps || args.initial_input_tps.is_some(),
-        "--benchmark-pin-input-tps requires --initial-input-tps"
-    );
     if args.do_calibration {
         ensure!(
             args.calibration_requests > 0,
@@ -693,10 +712,7 @@ fn model_initialization_from_args(args: &Args) -> Result<ModelInitialization> {
     }
 
     Ok(match args.initial_input_tps {
-        Some(input_tps) => ModelInitialization::ConfiguredInputTps {
-            input_tps,
-            pin: args.benchmark_pin_input_tps,
-        },
+        Some(input_tps) => ModelInitialization::ConfiguredInputTps { input_tps },
         None => ModelInitialization::Uncalibrated,
     })
 }
@@ -1044,6 +1060,43 @@ mod tests {
         tunnel_forwarding_config_from_plan(plan, PylonRuntimeState::default(), metrics)
     }
 
+    #[test]
+    fn exact_chat_usage_cli_is_disabled_by_default_and_accepts_opt_in() {
+        let (_, default_plan) = startup(&[]);
+        assert!(!default_plan.force_chat_completions_include_usage);
+        assert!(!test_forwarding(&default_plan).force_chat_completions_include_usage);
+
+        let (_, enabled_plan) = startup(&["--force-chat-completions-include-usage"]);
+        assert!(enabled_plan.force_chat_completions_include_usage);
+        assert!(test_forwarding(&enabled_plan).force_chat_completions_include_usage);
+    }
+
+    #[test]
+    fn output_token_calibration_defaults_off_and_accepts_single_pylon() {
+        let (_, default_plan) = startup(&[]);
+        assert_eq!(
+            default_plan.output_token_calibration,
+            OutputTokenCalibrationMode::Off
+        );
+
+        let (_, enabled_plan) = startup(&["--output-token-calibration", "single-pylon"]);
+        assert_eq!(
+            enabled_plan.output_token_calibration,
+            OutputTokenCalibrationMode::SinglePylon
+        );
+
+        let (_, reverse_plan) = startup(&[
+            "--backend-connectivity",
+            "reverse",
+            "--output-token-calibration",
+            "single-pylon",
+        ]);
+        assert_eq!(
+            reverse_plan.output_token_calibration,
+            OutputTokenCalibrationMode::SinglePylon
+        );
+    }
+
     fn test_observation() -> RequestObservation {
         RequestObservation {
             endpoint: RequestObservationEndpoint::ChatCompletions,
@@ -1092,10 +1145,7 @@ mod tests {
             ModelLifecycleConfig {
                 upstream_http_base_url: "http://127.0.0.1:1".to_string(),
                 source: ModelSource::Static(BTreeSet::new()),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 1.0,
-                    pin: false,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 1.0 },
                 bringup: BringupConfig {
                     enabled: false,
                     ..BringupConfig::default()
@@ -1229,6 +1279,30 @@ mod tests {
         let forwarding = test_forwarding(&passthrough_plan);
         assert_eq!(forwarding.upstream_backend, UpstreamBackend::Passthrough);
         assert_eq!(forwarding.priority_ceiling, 600);
+    }
+
+    #[test]
+    fn stream_timeouts_flow_from_args_to_forwarding_config() {
+        let (_, default_plan) = startup(&[]);
+        let forwarding = test_forwarding(&default_plan);
+        assert_eq!(
+            forwarding.first_output_timeout,
+            pylon_lib::DEFAULT_FIRST_OUTPUT_TIMEOUT
+        );
+        assert_eq!(
+            forwarding.output_chunk_timeout,
+            pylon_lib::DEFAULT_OUTPUT_CHUNK_TIMEOUT
+        );
+
+        let (_, custom_plan) = startup(&[
+            "--pylon-first-output-timeout-ms",
+            "45000",
+            "--pylon-output-chunk-timeout-ms",
+            "7000",
+        ]);
+        let forwarding = test_forwarding(&custom_plan);
+        assert_eq!(forwarding.first_output_timeout, Duration::from_secs(45));
+        assert_eq!(forwarding.output_chunk_timeout, Duration::from_secs(7));
     }
 
     #[test]
@@ -1652,10 +1726,7 @@ mod tests {
             ModelLifecycleConfig {
                 upstream_http_base_url: plan.upstream.clone(),
                 source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 1_000.0,
-                    pin: false,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 1_000.0 },
                 bringup: BringupConfig {
                     enabled: false,
                     ..BringupConfig::default()
@@ -1672,7 +1743,7 @@ mod tests {
         let mut observation = test_observation();
         observation.input_tokens = 1000;
 
-        runtime_state.observe_request(observation);
+        runtime_state.observe_request_for_test(observation);
         let stats = receive_queued_model_stats(&runtime_state, "model-a").await;
 
         assert_eq!(stats.queue_size, 1);
@@ -2016,6 +2087,42 @@ mod tests {
         runtime.shutdown().await;
         upstream.shutdown().await;
         control_plane.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn concurrency_fallback_is_in_the_first_registration_without_a_stats_endpoint() {
+        let upstream = TestUpstream::spawn(false).await;
+        for mode in [EngineStatsStreamMode::Off, EngineStatsStreamMode::Auto] {
+            let mut control_plane = TestControlPlane::spawn().await;
+            let mut args = runtime_args(
+                &upstream.base_url,
+                control_plane.addr,
+                &["model-a", "model-b"],
+                &["--max-engine-concurrency", "25"],
+            );
+            args.engine_stats_stream = mode;
+            let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+            let runtime = start_pylon_runtime(&args, &plan)
+                .await
+                .expect("pylon startup should succeed without engine stats");
+
+            let registration = control_plane.first_registration().await;
+            for model_id in ["model-a", "model-b"] {
+                assert_eq!(
+                    registration.models[model_id]
+                        .stats
+                        .as_ref()
+                        .expect("first registration should contain stats")
+                        .max_engine_concurrency,
+                    25,
+                    "{model_id} should advertise the fallback in {mode} mode"
+                );
+            }
+            runtime.shutdown().await;
+            control_plane.shutdown().await;
+        }
+        assert_eq!(upstream.calibration_requests.load(Ordering::SeqCst), 0);
+        upstream.shutdown().await;
     }
 
     #[test]

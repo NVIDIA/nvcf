@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS sis_api.requests (
     nca_id                text,
     reservation_id        uuid,
     gpu_count_per_instance int,
+    creation_bucket        timestamp,
     PRIMARY KEY (request_id)
 );
 
@@ -149,6 +150,8 @@ CREATE CUSTOM INDEX IF NOT EXISTS idx_requests_by_deployment_id
     ON sis_api.requests (deployment_id) USING 'StorageAttachedIndex';
 CREATE CUSTOM INDEX IF NOT EXISTS idx_requests_by_nca_id
     ON sis_api.requests (nca_id) USING 'StorageAttachedIndex';
+CREATE CUSTOM INDEX IF NOT EXISTS idx_requests_by_creation_day
+    ON sis_api.requests (creation_bucket) USING 'StorageAttachedIndex';
 
 -- Time-bucketed request tombstone tracker (for cleanup jobs).
 CREATE TABLE IF NOT EXISTS sis_api.requests_by_day (
@@ -192,6 +195,7 @@ CREATE TABLE IF NOT EXISTS sis_api.instances (
     capacity_type                       text,
     instance_expiration_time            timestamp,
     backup_to_primary_migration_scheduled boolean,
+    creation_bucket                     timestamp,
     PRIMARY KEY (instance_id)
 );
 
@@ -203,6 +207,8 @@ CREATE CUSTOM INDEX IF NOT EXISTS idx_instances_by_nca_id
     ON sis_api.instances (nca_id) USING 'StorageAttachedIndex';
 CREATE CUSTOM INDEX IF NOT EXISTS idx_instances_by_zone
     ON sis_api.instances (zone) USING 'StorageAttachedIndex';
+CREATE CUSTOM INDEX IF NOT EXISTS idx_instances_by_creation_day
+    ON sis_api.instances (creation_bucket) USING 'StorageAttachedIndex';
 
 -- Time-bucketed instance tombstone tracker (for cleanup jobs).
 CREATE TABLE IF NOT EXISTS sis_api.instances_by_day (
@@ -402,6 +408,14 @@ CREATE TABLE IF NOT EXISTS sis_api.cluster_by_cluster_id (
     healthy_heartbeat_report_time      timestamp,
     PRIMARY KEY (cluster_id)
 );
+
+-- Indexes used to serve cluster reads from cluster_by_cluster_id.
+CREATE CUSTOM INDEX IF NOT EXISTS idx_cluster_by_authorized_nca_ids
+    ON sis_api.cluster_by_cluster_id (authorized_nca_ids) USING 'StorageAttachedIndex';
+CREATE CUSTOM INDEX IF NOT EXISTS idx_cluster_by_nca_id
+    ON sis_api.cluster_by_cluster_id (nca_id) USING 'StorageAttachedIndex';
+CREATE CUSTOM INDEX IF NOT EXISTS idx_cluster_by_cluster_group_id
+    ON sis_api.cluster_by_cluster_id (cluster_group_id) USING 'StorageAttachedIndex';
 
 -- Per-cluster advanced configuration blobs (BYOC).
 CREATE TABLE IF NOT EXISTS sis_api.cluster_configuration_by_cluster_id (

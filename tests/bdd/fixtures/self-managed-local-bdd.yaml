@@ -11,29 +11,35 @@
 # substitution, helmfile pulls images from a path that obviously
 # does not resolve, which is the intended failure mode.
 
-global:
-  nodeSelectors:
-    enabled: false
+# Single-node BDD fixture: keep HA off so the pinned single-replica values below apply.
+highAvailability:
+  mode: none
 
+global:
   storageClass: local-path
   storageSize: 2Gi
 
   helm:
     sources:
-      registry: "nvcr.io"
       repository: "REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM"
 
   image:
-    registry: nvcr.io
     repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
-
-  workerEndpoints:
-    essServiceURL: http://ess-api.ess.svc.cluster.local:8080
-    invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
 
 # Local BDD does not install the optional observability stack.
 observability:
   profile: disabled
+
+# The published chart defaults target production-sized nodes. Keep the local
+# single-cluster fixture schedulable after the core services are placed.
+stateMetrics:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
 
 cassandra:
   replicaCount: 1
@@ -68,26 +74,8 @@ addons:
     enabled: true
     gateway:
       replicaCount: 1
-      auth:
-        grpcInsecure: true
-      metrics:
-        serviceMonitor:
-          enabled: false
     requestRouter:
       replicaCount: 1
-      metrics:
-        serviceMonitor:
-          enabled: false
-      loadBalancer:
-        config: |
-          {
-            "default": "power-of-two",
-            "request_algorithms": {
-              "power-of-two": "power-of-two",
-              "round-robin": "round-robin",
-              "random": "random"
-            }
-          }
   vanityGateway:
     enabled: true
     replicaCount: 1
@@ -97,7 +85,6 @@ addons:
 # Expects Cluster Operator to provision Gateway resource
 ingress:
   gatewayApi:
-    enabled: true
     controllerNamespace: envoy-gateway-system
     gateways:
       shared:
@@ -109,7 +96,6 @@ ingress:
       nats:
         name: shared-gw
         namespace: envoy-gateway-system
-        listenerName: nats
     routes:
       nats:
         enabled: true

@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -97,6 +98,62 @@ func TestCreateResponseAggregatesNativeResponsesThroughProxy(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"hello from gateway"`) {
 		t.Fatalf("response body missing assistant text: %s", rec.Body.String())
+	}
+}
+
+func TestCreateResponseUsesOnlyMetadataRoutingMethod(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		metadata string
+		want     []string
+	}{
+		{"unset", "", nil},
+		{"blank", "   ", nil},
+		{"metadata", " pulsar;seed=a ", []string{"pulsar;seed=a"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			proxyProvider := &stubResponsesProvider{}
+			authClient := &stubInvocationAuthClient{
+				authResponse: &nvcf.InvocationAuthResponse{
+					RoutingKey:   "fn-chat",
+					ClientAuthID: "subject-123",
+					RateLimitKey: "nca-456",
+					ModelSpecs: map[string]nvcf.ModelSpec{
+						"company-name/model-name": {RoutingMethod: tt.metadata},
+					},
+				},
+			}
+			cfg := config.Default()
+			e := echo.New()
+			e.Use(NewContextMiddleware(cfg))
+			e.Use(NewNVCFAuthMiddleware(authClient))
+			RegisterRoutes(e, NewHandlers(cfg, proxyProvider, nil))
+
+			req := httptest.NewRequest(http.MethodPost, "/v1/responses",
+				strings.NewReader(`{"model":"fn-chat/company-name/model-name","input":"hello"}`))
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			req.Header.Set(echo.HeaderAuthorization, "Bearer sk-live")
+			req.Header[headerResponsesMethod] = []string{"client-method", "another-client-method"}
+			rec := httptest.NewRecorder()
+
+			e.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+			}
+			calls := proxyProvider.proxyRequestCalls()
+			if len(calls) != 1 {
+				t.Fatalf("proxy calls = %d, want 1", len(calls))
+			}
+			if got := calls[0].Header.Values(headerResponsesMethod); !slices.Equal(got, tt.want) {
+				t.Fatalf("routing method = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -663,12 +720,10 @@ func TestCreateResponseRejectsModelWithoutResponsesURI(t *testing.T) {
 func TestChatUsageFromResponsesClampsInvalidCounts(t *testing.T) {
 	t.Parallel()
 
-	usage := chatUsageFromResponses(&openairesponses.Response{
-		Usage: &openairesponses.ResponseUsage{
-			InputTokens:  -1,
-			OutputTokens: 3,
-			TotalTokens:  int(^uint32(0)) + 1,
-		},
+	usage := chatUsageFromResponses(&openairesponses.ResponseUsage{
+		InputTokens:  -1,
+		OutputTokens: 3,
+		TotalTokens:  int(^uint32(0)) + 1,
 	})
 
 	if usage == nil {
@@ -931,4 +986,65 @@ type stubProxyCall struct {
 	RawQuery string
 	Header   http.Header
 	Body     []byte
+}
+
+func TestCreateResponseForwardsNamespaceCustomToolsAndContentOutputUnchanged(t *testing.T) {
+	t.Parallel()
+
+	const input = `[
+		{"role":"user","content":[{"type":"input_text","text":"call echo"}]},
+		{"type":"function_call","namespace":"diagnostics","name":"echo","call_id":"c1","arguments":"{}"},
+		{"type":"function_call_output","call_id":"c1","output":[{"type":"input_text","text":"NAMESPACE_OK"}]},
+		{"type":"custom_tool_call","call_id":"c2","name":"apply_patch","input":"*** Begin Patch"},
+		{"type":"custom_tool_call_output","call_id":"c2","output":[{"type":"input_text","text":"applied"}]}]`
+	const tools = `[{"type":"namespace","name":"diagnostics","description":"Compatibility test tools.","tools":[
+		{"type":"function","name":"echo","parameters":{"type":"object"}},
+		{"type":"custom","name":"apply_patch","format":{"type":"text"}}]},
+		{"type":"custom","name":"apply_patch","format":{"type":"text"}}]`
+
+	proxyProvider := &stubResponsesProvider{}
+	cfg := config.Default()
+	e := echo.New()
+	e.Use(NewContextMiddleware(cfg))
+	RegisterRoutes(e, NewHandlers(cfg, proxyProvider, nil))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(
+		`{"model":"fn-chat/company-name/model-name","tool_choice":"auto","tools":`+tools+`,"input":`+input+`}`))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	calls := proxyProvider.proxyRequestCalls()
+	if len(calls) != 1 {
+		t.Fatalf("proxy calls = %d, want 1", len(calls))
+	}
+	var forwarded struct {
+		Tools json.RawMessage `json:"tools"`
+		Input json.RawMessage `json:"input"`
+	}
+	if err := json.Unmarshal(calls[0].Body, &forwarded); err != nil {
+		t.Fatal(err)
+	}
+	assertJSONEqual(t, forwarded.Tools, tools)
+	assertJSONEqual(t, forwarded.Input, input)
+}
+
+func assertJSONEqual(t *testing.T, got json.RawMessage, want string) {
+	t.Helper()
+	var g, w any
+	if err := json.Unmarshal(got, &g); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(want), &w); err != nil {
+		t.Fatal(err)
+	}
+	gb, _ := json.Marshal(g)
+	wb, _ := json.Marshal(w)
+	if string(gb) != string(wb) {
+		t.Fatalf("forwarded JSON changed:\n got: %s\nwant: %s", gb, wb)
+	}
 }

@@ -37,13 +37,13 @@ func TestResolveManifestEntriesRejectsUnclassifiedArtifact(t *testing.T) {
 		Artifact{
 			Name:     "new-unclassified-service",
 			Type:     ArtifactTypeImage,
-			Registry: "staging",
+			Registry: defaultImageRegistry,
 			Version:  "1.0.0",
 		},
 		Artifact{
 			Name:     "another-unclassified-service",
 			Type:     ArtifactTypeImage,
-			Registry: "staging",
+			Registry: defaultImageRegistry,
 			Version:  "1.0.0",
 		},
 	)
@@ -55,24 +55,28 @@ func TestResolveManifestEntriesRejectsUnclassifiedArtifact(t *testing.T) {
 	}
 }
 
-func TestResolveManifestEntriesKeepsCassandraOnlyInEASection(t *testing.T) {
+func TestResolveManifestEntriesListsCassandraMigrationsAsServiceImage(t *testing.T) {
 	entries, err := resolveManifestEntries(loadMainCatalog(t))
 	if err != nil {
 		t.Fatalf("resolveManifestEntries failed: %v", err)
 	}
 
 	var eaIDs []string
+	foundMigrations := false
 	for _, entry := range entries {
 		if entry.Kind == ManifestKindEACVE {
 			eaIDs = append(eaIDs, entry.ID)
 		}
-		if entry.Kind == ManifestKindServiceImage && (entry.ID == "bitnami-cassandra" || entry.ID == "nvcf-cassandra-migrations") {
-			t.Fatalf("EA artifact %s also appears as a service image", entry.ID)
+		if entry.Kind == ManifestKindServiceImage && entry.ID == "nvcf-cassandra-migrations" {
+			foundMigrations = true
 		}
 	}
 	sort.Strings(eaIDs)
-	if got, want := strings.Join(eaIDs, ","), "bitnami-cassandra,nvcf-cassandra-migrations"; got != want {
-		t.Fatalf("EA entries = %q, want %q", got, want)
+	if len(eaIDs) != 0 {
+		t.Fatalf("EA entries = %v, want none", eaIDs)
+	}
+	if !foundMigrations {
+		t.Fatal("nvcf-cassandra-migrations must be listed as a control plane service image")
 	}
 }
 
@@ -87,8 +91,10 @@ func TestRenderManifestTable(t *testing.T) {
 		"### Control plane services and images",
 		"### Compute plane Helm charts",
 		"### Compute plane services and images",
-		"### EA-only CVE-impacted artifacts",
 		"### Tools and deployment resources",
+	}
+	if strings.Contains(got, "### EA-only CVE-impacted artifacts") {
+		t.Fatalf("rendered manifest shows an EA-only CVE section with no entries:\n%s", got)
 	}
 	last := -1
 	for _, want := range wantInOrder {
@@ -103,14 +109,13 @@ func TestRenderManifestTable(t *testing.T) {
 	}
 
 	for _, want := range []string{
-		"| Artifact | Version | Required | Description | Distribution | Source code |",
-		"These Early Access artifacts have known CVE impact.",
+		"| Artifact | Version | Stack | Required | Description | Distribution | Source code |",
 		"[GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nats)",
 		"[Upstream](https://github.com/nats-io/k8s)",
-		"`bitnami-cassandra`",
 		"`nvcf-cassandra-migrations`",
 		"`nvcf-self-managed-stack`",
 		"`nvcf-compute-plane-stack`",
+		"`nvcf-observability-stack`",
 		"`nvcf-cli`",
 	} {
 		if !strings.Contains(got, want) {

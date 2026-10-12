@@ -17,7 +17,13 @@ Container image that runs Apache Cassandra for NVCF, built on the official
   metrics agent. To enable metrics on port 9500, supply a jar under `files/` and
   pass both `--build-arg EXPORTER_JAR=files/<jar>` and
   `--build-arg EXPORTER_JAVAAGENT=-javaagent:/opt/cassandra/lib/cassandra-exporter-agent.jar`.
-  Both args are required together; either alone runs without metrics.
+  Both args are required together; the build rejects either mismatched
+  combination. It replaces the jar's exact shaded Netty module set with
+  checksum-pinned artifacts through `scripts/repack-exporter-netty.sh` and fails
+  on an unexpected layout.
+- Maven downloads default to Maven Central. To route them through a caching
+  repository manager pass `--build-arg MAVEN_REPOSITORY_BASE=<base>`; the
+  artifact paths from `java-libraries.lock` and the SHA-256 checks are unchanged.
 
 ## Build
 
@@ -27,6 +33,15 @@ docker build -t nvcf-cassandra:dev infra/cassandra
 
 # multi-arch
 docker buildx build --platform linux/amd64,linux/arm64 -t <ref> infra/cassandra
+
+# download retry and checksum policy unit test (local server, no network)
+infra/cassandra/scripts/fetch-verified-test.sh
+
+# repository-base override and lock handling unit test (local server, no network)
+infra/cassandra/scripts/fetch-java-libraries-test.sh
+
+# exporter dependency unit test (downloads checksum-pinned Netty jars)
+infra/cassandra/scripts/repack-exporter-netty-test.sh
 ```
 
 The `--platform=$BUILDPLATFORM` on the yq stage is intentional: it lets yq

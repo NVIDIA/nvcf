@@ -63,7 +63,7 @@ rules:
   resources: ["icmsrequests/status"]
   verbs: ["get", "update", "patch"]
 - apiGroups: ["nvca.nvcf.nvidia.io"]
-  resources: ["storagerequests", "storagerequests/status"]
+  resources: ["modelcachebindings", "modelcachebindings/status", "storagerequests", "storagerequests/status"]
   verbs: ["get", "list", "watch", "patch", "create", "update", "delete"]
 - apiGroups: ["batch"]
   resources: ["jobs", "cronjobs"]

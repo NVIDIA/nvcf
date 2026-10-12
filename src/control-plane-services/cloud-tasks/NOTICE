@@ -1,5 +1,5 @@
 
-Lists of 262 third-party dependencies.
+Lists of 261 third-party dependencies.
      (Apache License, Version 2.0) LZ4 Java Compression (at.yawk.lz4:lz4-java:1.11.2 - https://github.com/yawkat/lz4-java)
      (EPL-2.0) (LGPL-2.1-only) Logback Classic Module (ch.qos.logback:logback-classic:1.5.38 - http://logback.qos.ch)
      (EPL-2.0) (LGPL-2.1-only) Logback Core Module (ch.qos.logback:logback-core:1.5.38 - http://logback.qos.ch)
@@ -51,7 +51,6 @@ Lists of 262 third-party dependencies.
      (Apache 2.0) io.grpc:grpc-api (io.grpc:grpc-api:1.83.1 - https://github.com/grpc/grpc-java)
      (Apache 2.0) io.grpc:grpc-context (io.grpc:grpc-context:1.83.1 - https://github.com/grpc/grpc-java)
      (Apache 2.0) io.grpc:grpc-core (io.grpc:grpc-core:1.83.1 - https://github.com/grpc/grpc-java)
-     (Apache 2.0) io.grpc:grpc-inprocess (io.grpc:grpc-inprocess:1.83.1 - https://github.com/grpc/grpc-java)
      (Apache 2.0) io.grpc:grpc-netty-shaded (io.grpc:grpc-netty-shaded:1.83.1 - https://github.com/grpc/grpc-java)
      (Apache 2.0) io.grpc:grpc-protobuf (io.grpc:grpc-protobuf:1.83.1 - https://github.com/grpc/grpc-java)
      (Apache 2.0) io.grpc:grpc-protobuf-lite (io.grpc:grpc-protobuf-lite:1.83.1 - https://github.com/grpc/grpc-java)
@@ -128,8 +127,6 @@ Lists of 262 third-party dependencies.
      (Apache License 2.0) Jakarta Validation API (jakarta.validation:jakarta.validation-api:3.1.1 - https://beanvalidation.org)
      (Eclipse Distribution License - v 1.0) Jakarta XML Binding API (jakarta.xml.bind:jakarta.xml.bind-api:4.0.5 - https://github.com/jakartaee/jaxb-api)
      (CDDL + GPLv2 with classpath exception) javax.annotation API (javax.annotation:javax.annotation-api:1.3.2 - http://jcp.org/en/jsr/detail?id=250)
-     (Apache 2.0) gRPC Spring Boot Starter (net.devh:grpc-common-spring-boot:3.1.0.RELEASE - https://github.com/yidongnan/grpc-spring-boot-starter)
-     (Apache 2.0) gRPC Spring Boot Starter (net.devh:grpc-server-spring-boot-starter:3.1.0.RELEASE - https://github.com/yidongnan/grpc-spring-boot-starter)
      (The Apache Software License, Version 2.0) net.javacrumbs.shedlock:shedlock-core (net.javacrumbs.shedlock:shedlock-core:7.9.0 - https://github.com/lukas-krecan/ShedLock)
      (The Apache Software License, Version 2.0) net.javacrumbs.shedlock:shedlock-provider-cassandra (net.javacrumbs.shedlock:shedlock-provider-cassandra:7.9.0 - https://github.com/lukas-krecan/ShedLock)
      (The Apache Software License, Version 2.0) net.javacrumbs.shedlock:shedlock-spring (net.javacrumbs.shedlock:shedlock-spring:7.9.0 - https://github.com/lukas-krecan/ShedLock)
@@ -178,6 +175,7 @@ Lists of 262 third-party dependencies.
      (Apache License, Version 2.0) spring-boot-cassandra (org.springframework.boot:spring-boot-cassandra:4.1.1 - https://spring.io/projects/spring-boot)
      (Apache License, Version 2.0) spring-boot-data-cassandra (org.springframework.boot:spring-boot-data-cassandra:4.1.1 - https://spring.io/projects/spring-boot)
      (Apache License, Version 2.0) spring-boot-data-commons (org.springframework.boot:spring-boot-data-commons:4.1.1 - https://spring.io/projects/spring-boot)
+     (Apache License, Version 2.0) spring-boot-grpc-server (org.springframework.boot:spring-boot-grpc-server:4.1.1 - https://spring.io/projects/spring-boot)
      (Apache License, Version 2.0) spring-boot-health (org.springframework.boot:spring-boot-health:4.1.1 - https://spring.io/projects/spring-boot)
      (Apache License, Version 2.0) spring-boot-http-client (org.springframework.boot:spring-boot-http-client:4.1.1 - https://spring.io/projects/spring-boot)
      (Apache License, Version 2.0) spring-boot-http-codec (org.springframework.boot:spring-boot-http-codec:4.1.1 - https://spring.io/projects/spring-boot)
@@ -222,6 +220,7 @@ Lists of 262 third-party dependencies.
      (Apache License, Version 2.0) Spring Cloud Kubernetes :: Kubernetes Native Starter :: Config (org.springframework.cloud:spring-cloud-starter-kubernetes-client-config:5.0.3 - https://cloud.spring.io/spring-cloud-starter-kubernetes-client-config)
      (Apache License, Version 2.0) Spring Data for Apache Cassandra Core (org.springframework.data:spring-data-cassandra:5.1.1 - https://projects.spring.io/spring-data-cassandra/)
      (Apache License, Version 2.0) Spring Data Core (org.springframework.data:spring-data-commons:4.1.1 - https://spring.io/projects/spring-data)
+     (Apache 2.0) Spring gRPC Core (org.springframework.grpc:spring-grpc-core:1.1.1 - https://github.com/spring-projects/spring-grpc/spring-grpc-core)
      (Apache 2.0) Spring Retry (org.springframework.retry:spring-retry:2.0.13 - https://github.com/spring-projects/spring-retry)
      (Apache License, Version 2.0) spring-security-config (org.springframework.security:spring-security-config:7.1.1 - https://spring.io/projects/spring-security)
      (Apache License, Version 2.0) spring-security-core (org.springframework.security:spring-security-core:7.1.1 - https://spring.io/projects/spring-security)

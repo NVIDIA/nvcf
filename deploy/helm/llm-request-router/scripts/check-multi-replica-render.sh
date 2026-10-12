@@ -7,7 +7,7 @@ set -eu
 chart_dir="${1:-./llm-request-router}"
 release="${RELEASE:-llm-request-router}"
 namespace="${NAMESPACE:-nvcf}"
-compatible_stargate_version="0.16.2"
+compatible_stargate_version="0.18.0"
 tmp_dir="$(mktemp -d)"
 
 cleanup() {

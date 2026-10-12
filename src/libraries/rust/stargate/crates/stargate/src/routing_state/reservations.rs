@@ -88,13 +88,52 @@ pub(super) fn apply_pending_cluster_reservations(
         .iter()
         .filter(|pending| pending.is_active())
     {
-        // Pending reservations are advisory routing stats; saturate rather than wrap.
-        stats.queue_size = stats.queue_size.saturating_add(1);
-        stats.queued_input_size = stats.queued_input_size.saturating_add(pending.input_tokens);
-        stats.num_running_queries = stats.num_running_queries.saturating_add(1);
-        stats.total_query_input_size = stats
-            .total_query_input_size
-            .saturating_add(pending.input_tokens);
-        update_reserved_priority_queue_time(stats, pending.input_tokens, pending.priority);
+        apply_reservation(stats, pending.input_tokens, pending.priority);
+    }
+}
+
+/// Counts one routed request that the backend's stats do not yet include.
+pub fn apply_reservation(stats: &mut ModelStats, input_tokens: u64, priority: u32) {
+    // Pending reservations are advisory routing stats; saturate rather than wrap.
+    stats.queue_size = stats.queue_size.saturating_add(1);
+    stats.queued_input_size = stats.queued_input_size.saturating_add(input_tokens);
+    stats.num_running_queries = stats.num_running_queries.saturating_add(1);
+    stats.total_query_input_size = stats.total_query_input_size.saturating_add(input_tokens);
+    update_reserved_priority_queue_time(stats, input_tokens, priority);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+
+    #[test]
+    fn filling_last_slot_restores_queue_estimate_and_release_frees_it() {
+        for priorities in [HashMap::new(), HashMap::from([(0, 10_000)])] {
+            let base = ModelStats {
+                last_mean_input_tps: 8_000.0,
+                queued_input_size: 80_000,
+                num_running_queries: 24,
+                max_engine_concurrency: 25,
+                queue_time_estimate_ms_by_priority: priorities,
+                ..Default::default()
+            };
+            let estimate = |stats: &ModelStats| {
+                crate::queue_estimate::queue_time_estimate_ms_for_priority(stats, 0)
+            };
+            assert_eq!(estimate(&base), Some(0));
+            let pending = PendingClusterReservation::new("backend".to_string(), 8_000, 0);
+            let reservations = [pending.clone()];
+            let mut full = base.clone();
+            apply_pending_cluster_reservations(&mut full, &reservations);
+            assert_eq!(full.num_running_queries, 25);
+            assert_eq!(full.queued_input_size, 88_000);
+            assert_eq!(estimate(&full), Some(11_000));
+            RoutingReservation(pending).release();
+            let mut recovered = base;
+            apply_pending_cluster_reservations(&mut recovered, &reservations);
+            assert_eq!(estimate(&recovered), Some(0));
+        }
     }
 }

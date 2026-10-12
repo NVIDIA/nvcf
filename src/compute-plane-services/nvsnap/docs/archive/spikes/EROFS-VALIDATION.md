@@ -184,10 +184,12 @@ trigger** — see "Revisit triggers" below.
 ### F5 — Lazy decompression is real, but invisible on 1.9 TiB nodes
 
 T6 vllm-small full sequential read of the EROFS mount:
+
 - Cached grew by **+35 GiB** (raw EROFS layer + decompressed pages, both cached)
 - MemAvailable dropped only **−0.4 GiB** (kernel correctly accounts cache as reclaimable)
 
 T7 vllm-70b full read of 132 GiB EROFS:
+
 - Cached grew by **+95 GiB**
 - MemAvailable dropped only **−1.8 GiB**
 
@@ -244,6 +246,7 @@ successfully for a 4-GPU tensor-parallel workload.
 **Don't ship EROFS as a primary path.**
 
 Reasons:
+
 1. The compression win (5.2× on CRIU dumps) is real but narrow —
    single-GPU workloads only. The cases where bytes actually matter
    (multi-GPU rootfs, 100s of GiB of safetensors) get 1.01×.

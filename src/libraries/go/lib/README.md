@@ -79,6 +79,7 @@ module's `.golangci.yml`. `make lint` still runs the same module-scoped
 ### Test Coverage
 
 To view coverage results locally:
+
 1. `cd _output/cover && python3 -m http.server 8000`
 2. Open browser: `http://<machine_ip>:8000/coverage.html`
 

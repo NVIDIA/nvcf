@@ -74,7 +74,9 @@ public class CreateInstanceApiModelConverter {
                     .terminationGracePeriodDuration(createRequest.getLaunchSpecification()
                                                             .getTerminationGracePeriodDuration())
                     .resultHandlingStrategy(createRequest.getLaunchSpecification()
-                                                    .getResultHandlingStrategy());
+                                                    .getResultHandlingStrategy())
+                    .maxRequestConcurrency(createRequest.getLaunchSpecification()
+                                                   .getMaxRequestConcurrency());
 
             if (createRequest.getLaunchSpecification().getDeploymentId() != null) {
                 builder.deploymentId(createRequest.getLaunchSpecification().getDeploymentId());

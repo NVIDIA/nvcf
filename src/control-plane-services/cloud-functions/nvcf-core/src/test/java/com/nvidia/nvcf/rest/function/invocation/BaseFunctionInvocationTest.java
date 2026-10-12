@@ -333,6 +333,12 @@ public class BaseFunctionInvocationTest {
         return functionsRepository.save(entity);
     }
 
+    protected void createFunctionVersion(UUID functionId, UUID functionVersionId) {
+        testService.createTestFunctionEntity(functionId, functionVersionId,
+                                             TEST_NCA_ID, TEST_FUNCTION_NAME,
+                                             FunctionStatus.DEPLOYING);
+    }
+
     protected FunctionEntity setFunctionActive(UUID functionId, UUID functionVersionId) {
         return setFunctionStatus(functionId, functionVersionId, FunctionStatus.ACTIVE);
     }

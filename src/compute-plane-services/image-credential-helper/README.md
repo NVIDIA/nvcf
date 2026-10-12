@@ -194,10 +194,12 @@ To create a release:
 
 1. Ensure all changes are merged to the main branch
 2. Create and push a version tag:
+
    ```bash
    git tag -a v1.0.0 -m "Release v1.0.0"
    git push origin v1.0.0
    ```
+
 3. The CI pipeline will automatically build, test, and publish the release
 
 ## Troubleshooting

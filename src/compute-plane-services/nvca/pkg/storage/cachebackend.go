@@ -57,9 +57,10 @@ const (
 )
 
 const (
-	// HelmCacheSharedStorageClassName is the shared storage class used for
-	// non-NVMesh cross-namespace model caching. It is either pre-provisioned
-	// by the operator or created by NVCA pointing at a Samba server.
+	// HelmCacheSharedStorageClassName is a legacy detection signal only: its
+	// presence tells SelectHelmCacheBackend that an operator provided a shared
+	// filesystem. Model cache volumes are provisioned on the model cache class,
+	// not on this one.
 	HelmCacheSharedStorageClassName = "nvcf-miniservice-sc"
 )
 

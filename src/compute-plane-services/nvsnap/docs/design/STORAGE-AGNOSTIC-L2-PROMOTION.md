@@ -13,7 +13,7 @@ that N restored pods mount read-only. It works **only on GCP Hyperdisk-ML** toda
 because the rwx→rox transition is hard-coded to the CSI `VolumeSnapshot` +
 clone-from-snapshot flow:
 
-```
+```text
 lease → create rwx PVC (RWO) → mount-holder copy → wait detach
       → VolumeSnapshot(rwx) → clone rox PVC (ROX) from snapshot → delete rwx → ready
 ```
@@ -184,6 +184,7 @@ SC is configured separately and defaults to a ROX-capable class, never `nvcf-sc`
 
 Why a profile map and not pure SC introspection: `.provisioner` gives the driver,
 but two things it can't tell us must live in the profile —
+
 - **snapshotClass** is a cluster-specific object name, not derivable from the
   driver (discover by listing VolumeSnapshotClasses for the driver as a fallback,
   but prefer the explicit value);
@@ -214,6 +215,9 @@ data:
       strategy: shared-volume
       volumeHandleTransform: nvmesh
       mountOptions: [ro, norecovery, nouuid]  # xfs RO multi-mount needs nouuid
+      prewarm: false                       # ConfigMap override only: the built-in
+                                           # NVMesh profile leaves prewarm on; one
+                                           # reader saturates the volume
     efs.csi.aws.com:                       # EFS — shared RWX filesystem
       strategy: shared-volume
       volumeHandleTransform: none
@@ -228,6 +232,20 @@ disables L2.
 
 The built-in table carries these same defaults so a stock install needs no
 ConfigMap; the ConfigMap exists for new/3rd-party backends and overrides.
+
+Two optional keys tune the cachedir restore's page-cache prewarm per storage
+class, because whether the parallel read-ahead helps depends on the volume,
+not the model (see the 70B A/B in `docs/BENCHMARK.md`):
+
+- `prewarm` (default `true`): add the `nvsnap-prewarm` init container that
+  reads the whole rox tree before the engine starts. Set `false` where a
+  single reader already saturates the volume.
+- `prewarmParallelism` (default 6): concurrent readers in the sweep. Raise it
+  on volumes whose throughput scales with parallel readers (Hyperdisk ML).
+
+A pod's own `NVSNAP_PREWARM=0` or `NVSNAP_PREWARM=1` overrides the profile.
+The agent resolves the profile once at startup and hands it to the webhook,
+so a ConfigMap edit takes effect on the next agent restart.
 
 ## What stays put (no change)
 

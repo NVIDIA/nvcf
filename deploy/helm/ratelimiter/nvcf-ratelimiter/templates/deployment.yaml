@@ -22,6 +22,10 @@ metadata:
     {{- include "nvcf-ratelimiter.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.rateLimiter.replicaCount }}
+  {{- with .Values.rateLimiter.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "nvcf-ratelimiter.selectorLabels" . | nindent 6 }}
@@ -105,6 +109,10 @@ spec:
       {{- end }}
       {{- with .Values.rateLimiter.affinity }}
       affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.rateLimiter.topologySpreadConstraints }}
+      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.rateLimiter.tolerations }}

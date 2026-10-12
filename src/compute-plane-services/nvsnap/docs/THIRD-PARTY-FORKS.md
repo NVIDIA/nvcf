@@ -196,7 +196,7 @@ Checkpoint flow:
    - shared ghost files tolerating EEXIST (3).
    - io_uring VMAs as MAP_ANONYMOUS in stream mode (2).
 4. Agent saves the dump + the source pod's overlay upperdir mirror
-   + metadata.json (incl. `StdoutPipeID`, `StderrPipeID`,
+   - metadata.json (incl. `StdoutPipeID`, `StderrPipeID`,
    `SourcePodIP` for restore).
 
 Restore flow (legacy / agent-driven):
@@ -217,6 +217,7 @@ Restore flow (legacy / agent-driven):
    loops that haven't iterated yet to wake.
 
 If any one of these patches is missing, you get a specific symptom:
+
 - Without the libzmq epoll rebuild: `zmq.error.ZMQError: No such
   file or directory` in `process_input_sockets` on first request.
 - Without the libuv equivalent: API server hangs on first HTTP

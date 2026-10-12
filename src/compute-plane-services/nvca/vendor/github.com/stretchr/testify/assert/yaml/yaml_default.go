@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 //go:build !testify_yaml_fail && !testify_yaml_custom
 
 // Package yaml is just an indirection to handle YAML deserialization.

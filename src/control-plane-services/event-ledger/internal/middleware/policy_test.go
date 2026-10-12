@@ -30,6 +30,8 @@ import (
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/config"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/nvca"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/observability/logging"
 	policyclient "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/policy"
 	pdpv1 "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
 	"github.com/golang-jwt/jwt/v5"
@@ -38,7 +40,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -141,11 +146,11 @@ func signTokenWithClaims(t *testing.T, key *ecdsa.PrivateKey, claims jwt.MapClai
 	return signed
 }
 
-func newAuthTestHandler(t *testing.T, jwtOpts *JWTParserOptions, jwkCache *jwk.Cache, client *stubPolicyClient, selfManaged bool, requiredScopes Scopes) http.Handler {
+func newAuthTestHandler(t *testing.T, jwtOpts *JWTParserOptions, jwkCache *jwk.Cache, client *stubPolicyClient, requireLocalScopeCheck bool, requiredScopes Scopes) http.Handler {
 	t.Helper()
 	logger := testLogger(t)
-	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", jwtOpts, jwkCache, selfManaged, logger)
-	scoped := MaybeRequireScopes(logger, true, requiredScopes, RequireAnyScopes)
+	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", jwtOpts, jwkCache, nil, logger)
+	scoped := MaybeRequireScopes(logger, requireLocalScopeCheck, requiredScopes, RequireAnyScopes)
 	return authMiddleware(scoped(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})))
@@ -553,7 +558,7 @@ func TestNewAuthMiddlewareRejectsJWTShapedTokenWhenParsingFails(t *testing.T) {
 		&config.HTTPClientConfig{},
 	)
 
-	authMiddleware := NewAuthMiddleware(client, "test-service", &jwtOpts, jwk.NewCache(context.Background()), true, testLogger(t))
+	authMiddleware := NewAuthMiddleware(client, "test-service", &jwtOpts, jwk.NewCache(context.Background()), nil, testLogger(t))
 	handlerCalled := false
 	handler := authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		handlerCalled = true
@@ -571,7 +576,7 @@ func TestNewAuthMiddlewareRejectsJWTShapedTokenWhenParsingFails(t *testing.T) {
 }
 
 func TestNewAuthMiddlewareRejectsRequestsWithNilClientAndLogger(t *testing.T) {
-	authMiddleware := NewAuthMiddleware(nil, "test-service", nil, nil, true, nil)
+	authMiddleware := NewAuthMiddleware(nil, "test-service", nil, nil, nil, nil)
 
 	handlerCalled := false
 	handler := authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -668,7 +673,7 @@ func TestSelfManagedJWTTenantClaimEnforced(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			client := &stubPolicyClient{result: allowResult(nil)}
 			logger := testLogger(t)
-			authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, true, logger)
+			authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, nil, logger)
 			pathTenant := MaybeRequirePathTenant(true)
 			scoped := MaybeRequireScopes(logger, true, ReadScopes, RequireAnyScopes)
 			handler := authMiddleware(pathTenant(scoped(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -692,11 +697,12 @@ func TestSelfManagedJWTTenantClaimEnforced(t *testing.T) {
 	}
 }
 
-func TestAPIKeySkipsJWTVerificationAndScopeCheck(t *testing.T) {
+func TestAPIKeySkipsJWTVerification(t *testing.T) {
 	client := &stubPolicyClient{result: map[string]interface{}{
 		"allowed": true,
 		"ncaId":   "nca-1",
 		"ownerId": "owner-1",
+		"policy":  map[string]interface{}{"scopes": []interface{}{"fnds:getEvents"}},
 	}}
 	handler := newAuthTestHandler(t, nil, nil, client, true, ReadScopes)
 
@@ -708,6 +714,184 @@ func TestAPIKeySkipsJWTVerificationAndScopeCheck(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.True(t, client.called, "API key must be authorized by api-keys-api")
+}
+
+// TestSelfManagedAPIKeyScopesEnforcedByRoute guards against a read-scoped key
+// writing: the API Keys service returns allowed for any valid key and does not
+// evaluate scopes, so the route must check the policy scopes itself.
+func TestSelfManagedAPIKeyScopesEnforcedByRoute(t *testing.T) {
+	tests := []struct {
+		name       string
+		policy     interface{}
+		required   Scopes
+		wantStatus int
+	}{
+		{"read scope on read route", map[string]interface{}{"scopes": []interface{}{"fnds:getEvents", "fnds:getStats"}}, ReadScopes, http.StatusOK},
+		{"write scope on write route", map[string]interface{}{"scopes": []interface{}{"fnds:createEvent"}}, WriteScopes, http.StatusOK},
+		{"read scope on write route", map[string]interface{}{"scopes": []interface{}{"fnds:getEvents", "fnds:getStats"}}, WriteScopes, http.StatusForbidden},
+		{"write scope on read route", map[string]interface{}{"scopes": []interface{}{"fnds:createEvent"}}, ReadScopes, http.StatusForbidden},
+		{"unrelated scopes on read route", map[string]interface{}{"scopes": []interface{}{"invoke_function"}}, ReadScopes, http.StatusForbidden},
+		{"empty scopes", map[string]interface{}{"scopes": []interface{}{}}, ReadScopes, http.StatusForbidden},
+		{"policy without scopes", map[string]interface{}{"aud": "event-ledger"}, ReadScopes, http.StatusForbidden},
+		{"no policy", nil, ReadScopes, http.StatusForbidden},
+		{"malformed scopes", map[string]interface{}{"scopes": "fnds:getEvents"}, ReadScopes, http.StatusForbidden},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := map[string]interface{}{"allowed": true, "ncaId": "nca-1", "ownerId": "owner-1"}
+			if tc.policy != nil {
+				result["policy"] = tc.policy
+			}
+			client := &stubPolicyClient{result: result}
+			handler := newAuthTestHandler(t, nil, nil, client, true, tc.required)
+
+			req := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+			req.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+			recorder := httptest.NewRecorder()
+
+			handler.ServeHTTP(recorder, req)
+
+			assert.Equal(t, tc.wantStatus, recorder.Code, recorder.Body.String())
+			assert.True(t, client.called)
+		})
+	}
+}
+
+// newAPIKeyRouter pairs a read route and a write route behind the auth
+// middleware the way cmd/api/startup/run_service.go does.
+func newAPIKeyRouter(t *testing.T, client *stubPolicyClient, requireLocalScopeCheck bool) http.Handler {
+	t.Helper()
+	logger := testLogger(t)
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+
+	router := mux.NewRouter()
+	router.Use(NewAuthMiddleware(client, "nv-cloud-functions", nil, nil, nil, logger))
+	router.Handle("/v3/ledger/namespace/{namespace}/events",
+		MaybeRequireScopes(logger, requireLocalScopeCheck, ReadScopes, RequireAnyScopes)(ok)).Methods(http.MethodGet)
+	router.Handle("/v3/ledger/cloudevents",
+		MaybeRequireScopes(logger, requireLocalScopeCheck, WriteScopes, RequireAnyScopes)(ok)).Methods(http.MethodPost)
+	return router
+}
+
+func apiKeyPolicyResult(scopes ...interface{}) map[string]interface{} {
+	return map[string]interface{}{
+		"allowed": true,
+		"ncaId":   "nca-1",
+		"ownerId": "owner-1",
+		"policy":  map[string]interface{}{"aud": "event-ledger", "scopes": scopes},
+	}
+}
+
+func TestSelfManagedAPIKeyReadAndWriteRoutes(t *testing.T) {
+	tests := []struct {
+		name      string
+		scopes    []interface{}
+		wantRead  int
+		wantWrite int
+	}{
+		{"read-only key", []interface{}{"fnds:getEvents", "fnds:getStats"}, http.StatusOK, http.StatusForbidden},
+		{"write-only key", []interface{}{"fnds:createEvent"}, http.StatusForbidden, http.StatusOK},
+		{"read and write key", []interface{}{"fnds:getEvents", "fnds:createEvent"}, http.StatusOK, http.StatusOK},
+		{"key with no scopes", []interface{}{}, http.StatusForbidden, http.StatusForbidden},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			router := newAPIKeyRouter(t, &stubPolicyClient{result: apiKeyPolicyResult(tc.scopes...)}, true)
+
+			read := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/ns/events", nil)
+			read.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+			readRecorder := httptest.NewRecorder()
+			router.ServeHTTP(readRecorder, read)
+			assert.Equal(t, tc.wantRead, readRecorder.Code, "read route")
+
+			write := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+			write.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+			writeRecorder := httptest.NewRecorder()
+			router.ServeHTTP(writeRecorder, write)
+			assert.Equal(t, tc.wantWrite, writeRecorder.Code, "write route")
+		})
+	}
+}
+
+func TestSelfManagedAPIKeyRequireAllScopes(t *testing.T) {
+	tests := []struct {
+		name       string
+		scopes     []interface{}
+		wantStatus int
+	}{
+		{"has every required scope", []interface{}{"fnds:getEvents", "fnds:getStats"}, http.StatusOK},
+		{"missing one required scope", []interface{}{"fnds:getEvents"}, http.StatusForbidden},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &stubPolicyClient{result: apiKeyPolicyResult(tc.scopes...)}
+			logger := testLogger(t)
+			handler := NewAuthMiddleware(client, "nv-cloud-functions", nil, nil, nil, logger)(
+				MaybeRequireScopes(logger, true, "fnds:getEvents fnds:getStats", RequireAllScopes)(
+					http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })))
+
+			req := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/ns/stats", nil)
+			req.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+
+			assert.Equal(t, tc.wantStatus, recorder.Code)
+		})
+	}
+}
+
+// TestManagedAPIKeyScopesNotCheckedLocally pins the managed behavior: the
+// local route scope check is off, so an api key is authorized by the policy
+// decision point alone, even when its result carries no scopes.
+func TestManagedAPIKeyScopesNotCheckedLocally(t *testing.T) {
+	for _, result := range []map[string]interface{}{
+		apiKeyPolicyResult(),
+		{"allowed": true, "ncaId": "nca-1", "ownerId": "owner-1"},
+	} {
+		router := newAPIKeyRouter(t, &stubPolicyClient{result: result}, false)
+
+		write := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+		write.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, write)
+
+		assert.Equal(t, http.StatusOK, recorder.Code)
+	}
+}
+
+func TestPolicyMiddlewareStoresAPIKeyScopesInContext(t *testing.T) {
+	tests := []struct {
+		name   string
+		result map[string]interface{}
+		want   []string
+	}{
+		{"policy scopes", apiKeyPolicyResult("fnds:getEvents", "fnds:getStats"), []string{"fnds:getEvents", "fnds:getStats"}},
+		{"empty scopes", apiKeyPolicyResult(), []string{}},
+		{"no policy", map[string]interface{}{"allowed": true, "ncaId": "nca-1", "ownerId": "owner-1"}, nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/ns/events", nil)
+			req.Header.Set("Authorization", "Bearer nvapi-opaque-key")
+
+			recorder, ctx := servePolicy(t, &stubPolicyClient{result: tc.result}, req)
+
+			require.Equal(t, http.StatusOK, recorder.Code)
+			assert.Equal(t, tc.want, apiKeyScopesFromContext(ctx))
+		})
+	}
+}
+
+func TestPolicyScopes(t *testing.T) {
+	assert.Equal(t, []string{"a", "b"}, policyScopes(json.RawMessage(`{"aud":"x","scopes":["a","b"]}`)))
+	assert.Nil(t, policyScopes(nil))
+	assert.Nil(t, policyScopes(json.RawMessage(`"not-an-object"`)))
+	assert.Nil(t, policyScopes(json.RawMessage(`{"scopes":"a"}`)))
+	assert.Nil(t, policyScopes(json.RawMessage(`{"scopes":[1,2]}`)))
 }
 
 func TestAPIKeyDeniedByPolicyDecisionPoint(t *testing.T) {
@@ -729,30 +913,236 @@ func TestAPIKeyDeniedByPolicyDecisionPoint(t *testing.T) {
 	assert.True(t, client.called)
 }
 
-func TestManagedJWTStillDelegatesToPolicyDecisionPoint(t *testing.T) {
+func TestManagedJWTUsesLocalScopesWithoutPolicy(t *testing.T) {
 	key, jwksURL, closeServer := newSigningKeyAndJWKS(t)
 	defer closeServer()
 
 	jwtOpts := NewJWTParserOptions(jwksURL, nil, time.Minute, &config.HTTPClientConfig{})
 	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
 
+	tests := []struct {
+		name       string
+		tokenScope []string
+		required   Scopes
+		wantStatus int
+	}{
+		{"read scope on read route", []string{"read"}, ReadScopes, http.StatusOK},
+		{"write scope on write route", []string{"write"}, WriteScopes, http.StatusOK},
+		{"write scope on read route", []string{"write"}, ReadScopes, http.StatusForbidden},
+		{"no scope on read route", nil, ReadScopes, http.StatusForbidden},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &stubPolicyClient{result: allowResult(nil)}
+			handler := newAuthTestHandler(t, &jwtOpts, jwkCache, client, false, tc.required)
+			req := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/nvcf/events", nil)
+			req.Header.Set("Authorization", "Bearer "+signToken(t, key, tc.tokenScope))
+			recorder := httptest.NewRecorder()
+
+			handler.ServeHTTP(recorder, req)
+
+			assert.Equal(t, tc.wantStatus, recorder.Code, recorder.Body.String())
+			assert.False(t, client.called)
+		})
+	}
+}
+
+func TestJWTWithoutExpirationIsRejected(t *testing.T) {
+	key, jwksURL, closeServer := newSigningKeyAndJWKS(t)
+	defer closeServer()
+
+	jwtOpts := NewJWTParserOptions(jwksURL, nil, time.Minute, &config.HTTPClientConfig{})
+	jwtOpts.RequireExpiration = true
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
 	client := &stubPolicyClient{result: allowResult(nil)}
-	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, false, testLogger(t))
-
-	var capturedCtx context.Context
-	handler := authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedCtx = r.Context()
-		w.WriteHeader(http.StatusOK)
-	}))
-
+	handler := newAuthTestHandler(t, &jwtOpts, jwkCache, client, false, ReadScopes)
+	token := jwt.NewWithClaims(jwt.SigningMethodES256, jwt.MapClaims{"sub": "sis-api", "scopes": []string{"read"}})
+	token.Header[jwk.KeyIDKey] = "test-key"
+	signed, err := token.SignedString(key)
+	require.NoError(t, err)
 	req := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/nvcf/events", nil)
-	req.Header.Set("Authorization", "Bearer "+signToken(t, key, []string{"fnds:getEvents"}))
+	req.Header.Set("Authorization", "Bearer "+signed)
 	recorder := httptest.NewRecorder()
 
 	handler.ServeHTTP(recorder, req)
 
-	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.True(t, client.called, "managed deployments must still consult the PDP")
-	require.NotNil(t, capturedCtx)
-	assert.Equal(t, "sis-api", GetClaims(capturedCtx)["sub"])
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+	assert.False(t, client.called)
+}
+
+type stubIntrospector struct {
+	result *nvca.IntrospectResult
+	err    error
+	called bool
+}
+
+func (s *stubIntrospector) Introspect(_ context.Context, _ string) (*nvca.IntrospectResult, error) {
+	s.called = true
+	return s.result, s.err
+}
+
+// psatShapedToken is not a real JWT - it just has the three dot-separated,
+// non-empty parts isJWTShapedToken looks for, so the dispatcher routes it to
+// the JWT chain, where local OpenBao verification must fail before the SIS
+// introspection fallback is tried.
+const psatShapedToken = "psat.header.payload"
+
+func TestNVCAIntrospectionAuthorizesWriteRoute(t *testing.T) {
+	jwtOpts := NewJWTParserOptions("https://issuer.test/.well-known/jwks.json", nil, time.Minute, &config.HTTPClientConfig{})
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
+
+	introspector := &stubIntrospector{result: &nvca.IntrospectResult{
+		Active:    true,
+		Sub:       "system:serviceaccount:customer-ns:nvca",
+		ClusterID: "cluster-a",
+	}}
+	client := &stubPolicyClient{result: allowResult(nil)}
+	logger := testLogger(t)
+
+	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, introspector, logger)
+	scoped := MaybeRequireScopesAllowNVCA(logger, true, WriteScopes, RequireAnyScopes)
+
+	var capturedCtx context.Context
+	handler := authMiddleware(scoped(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedCtx = r.Context()
+		w.WriteHeader(http.StatusOK)
+	})))
+
+	req := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+	req.Header.Set("Authorization", "Bearer "+psatShapedToken)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.True(t, introspector.called)
+	assert.False(t, client.called, "an NVCA PSAT must not be sent to the API-key evaluator")
+
+	identity, ok := NVCAIdentityFromContext(capturedCtx)
+	require.True(t, ok)
+	assert.Equal(t, "cluster-a", identity.ClusterID)
+}
+
+func TestNVCAIntrospectionValidPSATDoesNotLogAtWarnOrAbove(t *testing.T) {
+	jwtOpts := NewJWTParserOptions("https://issuer.test/.well-known/jwks.json", nil, time.Minute, &config.HTTPClientConfig{})
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
+
+	introspector := &stubIntrospector{result: &nvca.IntrospectResult{
+		Active:    true,
+		Sub:       "system:serviceaccount:customer-ns:nvca",
+		ClusterID: "cluster-a",
+	}}
+	client := &stubPolicyClient{result: allowResult(nil)}
+
+	observedCore, observedLogs := observer.New(zapcore.DebugLevel)
+	logger := otelzap.New(zap.New(observedCore))
+
+	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, introspector, logger)
+	scoped := MaybeRequireScopesAllowNVCA(logger, true, WriteScopes, RequireAnyScopes)
+	handler := authMiddleware(scoped(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})))
+
+	req := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+	req.Header.Set("Authorization", "Bearer "+psatShapedToken)
+	ctx := context.WithValue(req.Context(), logging.LoggerKey, logging.NewTraceLogger(req.Context(), logger))
+	req = req.WithContext(ctx)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+
+	for _, entry := range observedLogs.All() {
+		assert.Lessf(t, entry.Level, zapcore.WarnLevel, "expected local-verification-failure path for a valid PSAT must not log at warn or above, got %q at %s", entry.Message, entry.Level)
+	}
+}
+
+func TestNVCAIntrospectionDeniesReadRoute(t *testing.T) {
+	jwtOpts := NewJWTParserOptions("https://issuer.test/.well-known/jwks.json", nil, time.Minute, &config.HTTPClientConfig{})
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
+
+	introspector := &stubIntrospector{result: &nvca.IntrospectResult{
+		Active:    true,
+		Sub:       "system:serviceaccount:customer-ns:nvca",
+		ClusterID: "cluster-a",
+	}}
+	client := &stubPolicyClient{result: allowResult(nil)}
+	logger := testLogger(t)
+
+	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, introspector, logger)
+	scoped := MaybeRequireScopes(logger, true, ReadScopes, RequireAnyScopes)
+	handler := authMiddleware(scoped(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})))
+
+	req := httptest.NewRequest(http.MethodGet, "/v3/ledger/namespace/nvcf/events", nil)
+	req.Header.Set("Authorization", "Bearer "+psatShapedToken)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusForbidden, recorder.Code, "an NVCA identity must not stand in for a read scope it was never issued, but it is authenticated so this is 403, not 401")
+}
+
+func TestNVCAIntrospectionRejectsInactiveToken(t *testing.T) {
+	jwtOpts := NewJWTParserOptions("https://issuer.test/.well-known/jwks.json", nil, time.Minute, &config.HTTPClientConfig{})
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
+
+	introspector := &stubIntrospector{result: &nvca.IntrospectResult{Active: false}}
+	client := &stubPolicyClient{result: allowResult(nil)}
+	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, introspector, testLogger(t))
+
+	handler := authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+	req.Header.Set("Authorization", "Bearer "+psatShapedToken)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+}
+
+func TestNVCAIntrospectionRejectsNonNVCASubject(t *testing.T) {
+	jwtOpts := NewJWTParserOptions("https://issuer.test/.well-known/jwks.json", nil, time.Minute, &config.HTTPClientConfig{})
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
+
+	introspector := &stubIntrospector{result: &nvca.IntrospectResult{
+		Active:    true,
+		Sub:       "system:serviceaccount:customer-ns:some-other-workload",
+		ClusterID: "cluster-a",
+	}}
+	client := &stubPolicyClient{result: allowResult(nil)}
+	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, introspector, testLogger(t))
+
+	handler := authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+	req.Header.Set("Authorization", "Bearer "+psatShapedToken)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+}
+
+func TestNVCAIntrospectionFailsClosedWhenSISUnavailable(t *testing.T) {
+	jwtOpts := NewJWTParserOptions("https://issuer.test/.well-known/jwks.json", nil, time.Minute, &config.HTTPClientConfig{})
+	jwkCache := jwk.NewCache(context.Background(), jwk.WithRefreshWindow(time.Minute))
+
+	introspector := &stubIntrospector{err: errors.New("dial tcp: connection refused")}
+	client := &stubPolicyClient{result: allowResult(nil)}
+	authMiddleware := NewAuthMiddleware(client, "nv-cloud-functions", &jwtOpts, jwkCache, introspector, testLogger(t))
+
+	handler := authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/v3/ledger/cloudevents", nil)
+	req.Header.Set("Authorization", "Bearer "+psatShapedToken)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
 }

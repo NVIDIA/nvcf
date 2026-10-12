@@ -1000,8 +1000,7 @@ backends:
   count: 1
   profile:
     name: balanced
-    service_time_ms: { ttft_mean: 150, ttft_jitter_ms: 10, decode_tokens_per_s: 50 }
-    registration: { last_mean_input_tps: 100.0 }
+    service_time_ms: { ttft_mean: 150, ttft_jitter_ms: 10, decode_tokens_per_s: 50, prefill_tokens_per_s: 100.0 }
 traffic_pattern:
   kind: uniform
   routing_keys: 1
@@ -1092,6 +1091,7 @@ algorithms:
             cache_affinity_key: Some("cache-key-0".to_string()),
             input_tokens: 128,
             output_tokens: 16,
+            observed_output_tokens: Some(16),
             scheduled_offset_ms: 0,
             status_code: 200,
             selected_backend_id: Some("backend-0".to_string()),

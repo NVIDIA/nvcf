@@ -126,14 +126,14 @@ pub(super) fn render_manifest(render: RenderManifestConfig<'_>) -> RenderedManif
             ));
         }
         backends.push_str(&format!(
-            "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {inference_server_id}-pylon\n  namespace: {backends_ns}\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: {inference_server_id}-pylon\n  template:\n    metadata:\n      labels:\n        app: {inference_server_id}-pylon\n        benchmark.stargate/profile: {profile_name}\n    spec:\n      containers:\n        - name: pylon\n          image: {pylon_image}\n          imagePullPolicy: IfNotPresent\n          args:\n            - --upstream-http-base-url=http://{upstream_backend_name}-http.{backends_ns}.svc.cluster.local:8090\n            - --model-name={model}\n            - --stargate-address=stargate.{stargate_ns}.svc.cluster.local:50071\n            - --inference-server-id={inference_server_id}\n{cluster_id_arg}            - --backend-connectivity=reverse\n            - --quic-insecure\n            - --tunnel-protocol={tunnel_protocol}\n            - --kv-cache-stats-path=/kv-cache/stats\n            - --min-update-interval-ms=100\n            - --disable-bringup\n            - --active-canary-interval-ms=0\n            - --initial-input-tps={last_mean_input_tps}\n            - --benchmark-pin-input-tps\n",
+            "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: {inference_server_id}-pylon\n  namespace: {backends_ns}\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: {inference_server_id}-pylon\n  template:\n    metadata:\n      labels:\n        app: {inference_server_id}-pylon\n        benchmark.stargate/profile: {profile_name}\n    spec:\n      containers:\n        - name: pylon\n          image: {pylon_image}\n          imagePullPolicy: IfNotPresent\n          args:\n            - --upstream-http-base-url=http://{upstream_backend_name}-http.{backends_ns}.svc.cluster.local:8090\n            - --model-name={model}\n            - --stargate-address=stargate.{stargate_ns}.svc.cluster.local:50071\n            - --inference-server-id={inference_server_id}\n{cluster_id_arg}            - --backend-connectivity=reverse\n            - --quic-insecure\n            - --tunnel-protocol={tunnel_protocol}\n            - --kv-cache-stats-path=/kv-cache/stats\n            - --min-update-interval-ms=100\n            - --disable-bringup\n            - --active-canary-interval-ms=0\n            - --initial-input-tps={initial_input_tps}\n",
             upstream_backend_name = pylon.upstream_backend_name,
             inference_server_id = pylon.inference_server_id,
             profile_name = pylon.profile_slug,
             pylon_image = image_refs.pylon,
             model = config.model,
             tunnel_protocol = config.tunnel_protocol,
-            last_mean_input_tps = pylon.last_mean_input_tps,
+            initial_input_tps = pylon.initial_input_tps,
         ));
         backends.push_str(&pylon_queue_admission_args);
         backends.push_str("---\n");

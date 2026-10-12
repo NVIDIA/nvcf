@@ -15,14 +15,65 @@
 
 mod mocks;
 
-use axum::body::Body;
+use axum::body::{to_bytes, Body};
 use axum::response::Response;
 use axum::Router;
-use http::{Method, StatusCode};
+use http::{header, Method, StatusCode};
 use mocks::{fixtures, nvcf_api_mock::HEALTH_CACHE_TTL};
 use nvcf_invocation_service::app::app;
 use std::time::Duration;
 use tower::{Service, ServiceExt};
+
+#[tokio::test]
+async fn test_info_route() -> anyhow::Result<()> {
+    let (_localstack, _nats, _mock_nvcf_api, config) = fixtures().await;
+
+    let mut app = app(config, None).await?;
+    let app = ServiceExt::<http::Request<Body>>::ready(&mut app).await?;
+
+    let request = http::Request::builder()
+        .method(Method::GET)
+        .uri("/info?build=true")
+        .body(Body::empty())?;
+    let response = app.call(request).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await?;
+    let body: serde_json::Value = serde_json::from_slice(&body)?;
+    assert_eq!(body["service"], "nvcf-invocation-service");
+    assert!(!body["version"].as_str().unwrap().is_empty());
+    assert!(!body["commit"].as_str().unwrap().is_empty());
+
+    for method in [
+        Method::HEAD,
+        Method::POST,
+        Method::PUT,
+        Method::PATCH,
+        Method::DELETE,
+        Method::OPTIONS,
+        Method::TRACE,
+        Method::CONNECT,
+        Method::from_bytes(b"CUSTOM")?,
+    ] {
+        let mut request = http::Request::builder().method(method.clone()).uri("/info");
+        if method == Method::OPTIONS {
+            request = request
+                .header(header::ORIGIN, "http://localhost")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, Method::GET.as_str());
+        }
+        let request = request.body(Body::empty())?;
+        let response = app.call(request).await?;
+        assert_eq!(
+            response.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{method}"
+        );
+        assert_eq!(response.headers()[header::ALLOW], "GET", "{method}");
+        let body = to_bytes(response.into_body(), usize::MAX).await?;
+        assert!(body.is_empty(), "{method}");
+    }
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn test_health_cache() -> anyhow::Result<()> {

@@ -119,6 +119,7 @@ phases can be skipped via nvsnap's rootfs-restore and which are floor.
 **Predicted restore floor: ~13 min (vs 22 min cold) — 40% reduction.**
 
 Breakdown:
+
 - 4 min container + python (mandatory)
 - 0 min model download (skipped via mount)
 - 3 min weight load (mandatory)
@@ -150,6 +151,7 @@ Cuda graph capture is the remaining floor (NVIDIA cuda-checkpoint is
 single-GPU only — closed upstream).
 
 **Admission overhead on the 357-mount restore (the nvsnap#202 promise):**
+
 - `kubectl apply` (webhook patches only, no kernel work): 2.91 s
 - Async agent prep (16 workers): 78 ms for 311 overlay mounts after
   cache-root coalescing

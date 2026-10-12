@@ -204,7 +204,7 @@ The chart can pass a Stargate load-balancer config in either of two ways:
 See the
 [Stargate load balancer configuration](../../../src/libraries/rust/stargate/docs/load-balancer-configuration.md)
 for the JSON schema, algorithm behavior, and tuning fields. See
-[LLM Request Router Load Balancing](../../../docs/user/llm-request-router-load-balancing.md)
+[LLM Request Router Load Balancing](../../../docs/self-managed/llm-request-router-load-balancing.md)
 for stack ownership, trusted headers, rollout checks, and troubleshooting.
 
 ## Local Render

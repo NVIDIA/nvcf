@@ -116,6 +116,8 @@ func main() {
 		"Directory the Local backend writes captures into")
 	flag.StringVar(&config.RootfsCapture.PodCacheDir, "pod-cache-dir", os.Getenv("NVSNAP_POD_CACHE_DIR"),
 		"In-pod cache mount path (e.g. /opt/nvsnap) for cachedir mode: capture ONLY this dir as the PVC root, restore RO-mounts the rox here (no overlayfs). Empty = standard whole-rootfs capture. Must match the webhook's cacheDir.")
+	flag.BoolVar(&config.RootfsCapture.AllowWholeRootfs, "allow-whole-rootfs", os.Getenv("NVSNAP_ALLOW_WHOLE_ROOTFS") == "1",
+		"Permit capture without --pod-cache-dir, i.e. capture the whole container rootfs. Off by default: whole-rootfs capture succeeds silently and only diverges later, at restore, from the cachedir behaviour every workload and benchmark assumes. Set only to run that path deliberately.")
 	flag.StringVar(&config.RootfsCapture.PodCacheEnvFile, "cachedir-env-file", os.Getenv("NVSNAP_CACHEDIR_ENV_FILE"),
 		"Path to a mounted ConfigMap file with the cachedir env template (NAME=value lines; {root}/{cache}/{model} placeholders). Read on capture inject only — edit the ConfigMap to add/remove cache env vars without an agent rebuild. Empty/unreadable = built-in default. Restore replays the env stamped in the manifest.")
 	flag.StringVar(&config.OverlayRoot, "overlay-root", "/var/lib/nvsnap/overlays",

@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::num::NonZeroU64;
+
 use anyhow::Result;
 use pylon_lib::{
     EngineStatsStreamMode, ModelDiscoveryProvider, TunnelTransportProtocol, UpstreamBackend,
@@ -25,6 +27,13 @@ const DEFAULT_PYLON_UPSTREAM_RETRY_HEADER: &str = HEADER_STARGATE_UPSTREAM_RETRY
 const DEFAULT_OTEL_SERVICE_NAME: &str = "pylon";
 
 mod startup;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
+enum OutputTokenCalibrationMode {
+    #[default]
+    Off,
+    SinglePylon,
+}
 
 #[derive(clap::Parser, Debug)]
 #[command(name = "pylon")]
@@ -89,10 +98,16 @@ struct Args {
     /// Bootstrap input TPS for every configured model instead of running calibration
     #[arg(long, value_name = "TPS")]
     initial_input_tps: Option<f64>,
-    /// Interval between active canary requests in milliseconds. `0` disables active canaries
+    /// Force exact usage in streaming Chat Completions requests sent upstream
+    #[arg(long, default_value_t = false)]
+    force_chat_completions_include_usage: bool,
+    /// Output-token estimate calibration. single-pylon asserts one active Pylon per cluster ID
+    #[arg(long, value_enum, default_value = "off", value_name = "MODE")]
+    output_token_calibration: OutputTokenCalibrationMode,
+    /// Interval between active canary requests in milliseconds. Models with request progress within the interval skip the canary. `0` disables active canaries
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     active_canary_interval_ms: u64,
-    /// Treat canary responses that generate this many tokens as runaway generation
+    /// Canary `max_tokens`. Generating more tokens than this is runaway generation; exact usage overrides the output estimate
     #[arg(long, default_value_t = 237, value_name = "TOKENS")]
     canary_max_generation_threshold: u32,
     /// Initial calibration request count; doubles after each completed load step
@@ -104,7 +119,7 @@ struct Args {
     /// Maximum concurrent requests used during calibration
     #[arg(long, default_value_t = 4, value_name = "N")]
     calibration_max_concurrency: usize,
-    /// Timeout for canary requests in milliseconds
+    /// Timeout for canary requests in milliseconds. An active canary that times out while other requests make progress does not mark the model unavailable
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     bringup_canary_timeout_ms: u64,
     /// Timeout for calibration requests in milliseconds
@@ -119,12 +134,15 @@ struct Args {
     /// Upstream HTTP path for the engine stats stream
     #[arg(long, default_value = "/pylon/v1/stats/stream", value_name = "PATH")]
     engine_stats_stream_path: String,
-    /// Keep --initial-input-tps fixed for deterministic benchmark/test experiments
-    #[arg(long, default_value_t = false, hide = true)]
-    benchmark_pin_input_tps: bool,
-    /// Minimum interval between registration/stat updates to stargate
+    /// Fallback maximum engine concurrency for every model until the engine reports a limit
+    #[arg(long, value_name = "N")]
+    max_engine_concurrency: Option<NonZeroU64>,
+    /// Heartbeat interval: the longest gap between registration updates to stargate
     #[arg(long, default_value_t = 1000, value_name = "MS")]
     min_update_interval_ms: u64,
+    /// Minimum interval between stat updates triggered by request state changes
+    #[arg(long, default_value_t = 10, value_name = "MS")]
+    stats_update_coalesce_ms: u64,
     /// Static auth token for registration and reverse tunnel handshake
     #[arg(long, env = "STARGATE_AUTH_TOKEN", value_name = "TOKEN")]
     auth_token: Option<String>,
@@ -199,7 +217,7 @@ struct Args {
     /// Minimum additive delta above Stargate's queue estimate before local retry
     #[arg(
         long,
-        default_value_t = 25,
+        default_value_t = pylon_lib::DEFAULT_QUEUE_MISMATCH_MIN_DELTA_MS,
         env = "PYLON_QUEUE_MISMATCH_MIN_DELTA_MS",
         value_name = "MS"
     )]
@@ -207,7 +225,7 @@ struct Args {
     /// Multiplicative tolerance above Stargate's queue estimate before local retry
     #[arg(
         long,
-        default_value_t = 1.25,
+        default_value_t = pylon_lib::DEFAULT_QUEUE_MISMATCH_TOLERANCE_FACTOR,
         env = "PYLON_QUEUE_MISMATCH_TOLERANCE_FACTOR",
         value_name = "FACTOR"
     )]
@@ -234,6 +252,26 @@ struct Args {
         value_name = "RANK"
     )]
     pylon_priority_ceiling: u32,
+    /// Longest wait for the first streamed output after upstream response
+    /// headers. Engines queue requests here, so set it above the longest
+    /// queue wait callers should tolerate
+    #[arg(
+        long,
+        default_value_t = pylon_lib::DEFAULT_FIRST_OUTPUT_TIMEOUT.as_millis() as u64,
+        value_parser = clap::value_parser!(u64).range(1..),
+        env = "PYLON_FIRST_OUTPUT_TIMEOUT_MS",
+        value_name = "MS"
+    )]
+    pylon_first_output_timeout_ms: u64,
+    /// Longest gap between streamed outputs once generation has started
+    #[arg(
+        long,
+        default_value_t = pylon_lib::DEFAULT_OUTPUT_CHUNK_TIMEOUT.as_millis() as u64,
+        value_parser = clap::value_parser!(u64).range(1..),
+        env = "PYLON_OUTPUT_CHUNK_TIMEOUT_MS",
+        value_name = "MS"
+    )]
+    pylon_output_chunk_timeout_ms: u64,
     /// Collect post-stream output quality metrics (gibberish checks)
     #[arg(long, default_value_t = false)]
     collect_quality_metrics: bool,
@@ -480,6 +518,20 @@ mod tests {
 
         assert_eq!(args.pylon_upstream_backend, defaults.upstream_backend);
         assert_eq!(args.pylon_priority_ceiling, defaults.priority_ceiling);
+        assert_eq!(
+            std::time::Duration::from_millis(args.pylon_first_output_timeout_ms),
+            defaults.first_output_timeout
+        );
+        assert_eq!(
+            std::time::Duration::from_millis(args.pylon_output_chunk_timeout_ms),
+            defaults.output_chunk_timeout
+        );
+    }
+
+    #[test]
+    fn pylon_stream_timeouts_reject_zero() {
+        assert!(try_parse_argv(&["--pylon-first-output-timeout-ms", "0"]).is_err());
+        assert!(try_parse_argv(&["--pylon-output-chunk-timeout-ms", "0"]).is_err());
     }
 
     #[test]
@@ -569,17 +621,6 @@ mod tests {
     }
 
     #[test]
-    fn benchmark_pin_requires_initial_input_tps() {
-        let uncalibrated = parse_args("--benchmark-pin-input-tps");
-        let calibration = parse_args("--do-calibration --benchmark-pin-input-tps");
-        let initial = parse_args("--initial-input-tps 2200 --benchmark-pin-input-tps");
-
-        assert!(startup::PylonStartupPlan::from_args(&uncalibrated).is_err());
-        assert!(startup::PylonStartupPlan::from_args(&calibration).is_err());
-        assert!(startup::PylonStartupPlan::from_args(&initial).is_ok());
-    }
-
-    #[test]
     fn engine_stats_stream_defaults_to_auto_mode_and_v1_path() {
         let args = parse_args("");
         let upstream = normalize_base_url(&args.upstream_http_base_url);
@@ -587,6 +628,7 @@ mod tests {
 
         assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Auto);
         assert_eq!(args.engine_stats_stream_path, "/pylon/v1/stats/stream");
+        assert!(metrics_config.fallback_max_engine_concurrency.is_none());
         assert!(metrics_config.kv_cache_stats_url.is_none());
         assert!(
             !metrics_config.openai_fallback_stats_enabled,
@@ -603,6 +645,31 @@ mod tests {
         assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Off);
         assert!(metrics_config.kv_cache_stats_url.is_none());
         assert!(metrics_config.openai_fallback_stats_enabled);
+    }
+
+    #[test]
+    fn max_engine_concurrency_fallback_is_configured_in_every_stats_mode() {
+        for mode in ["auto", "off", "required"] {
+            let args = parse_argv(&[
+                "--engine-stats-stream",
+                mode,
+                "--max-engine-concurrency",
+                "25",
+            ]);
+            let config = stats_collector_config_from_args(&args, &args.upstream_http_base_url);
+
+            assert_eq!(config.fallback_max_engine_concurrency, NonZeroU64::new(25));
+        }
+    }
+
+    #[test]
+    fn invalid_max_engine_concurrency_is_rejected() {
+        for value in ["0", "-1", "1.5", "18446744073709551616"] {
+            assert!(
+                try_parse_argv(&[&format!("--max-engine-concurrency={value}")]).is_err(),
+                "{value} must be rejected"
+            );
+        }
     }
 
     #[test]

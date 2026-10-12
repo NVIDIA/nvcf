@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -91,11 +92,30 @@ func captureStdout(t *testing.T, fn func()) string {
 // another.
 func configureAdminTest(t *testing.T, srvURL string) {
 	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("NVCF_API_KEY", "")
+	t.Setenv("NVCF_TOKEN", "")
+
+	oldCfgFile := cfgFile
+	oldStateManager := configStateManager
+	oldStateManagerKey := configStateManagerKey
+	oldDefaultStateManager := state.DefaultStateManager
 	viper.Reset()
 	viper.Set("base_http_url", srvURL)
 	viper.Set("base_grpc_url", "localhost:50051")
 	viper.Set("token", "test-admin-token")
-	t.Cleanup(func() { viper.Reset() })
+	cfgFile = filepath.Join(home, "admin-test.yaml")
+	configStateManager = nil
+	configStateManagerKey = ""
+	state.DefaultStateManager = state.NewStateManager()
+	t.Cleanup(func() {
+		cfgFile = oldCfgFile
+		configStateManager = oldStateManager
+		configStateManagerKey = oldStateManagerKey
+		state.DefaultStateManager = oldDefaultStateManager
+		viper.Reset()
+	})
 }
 
 // isolateCredentialState prevents a developer's real ~/.nvcf-cli.state (or
