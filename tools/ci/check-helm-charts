@@ -56,6 +56,7 @@ chart_map=(
     "openbao                  openbao/helm"
     "ratelimiter              ratelimiter/nvcf-ratelimiter"
     "vanity-gateway           vanity-gateway/helm-nvcf-vanity-gateway"
+    "worker-callback-proxy    worker-callback-proxy/worker-callback-proxy"
 )
 
 chart_for() {  # chart_for <values stem> -> chart directory relative to chart_root
