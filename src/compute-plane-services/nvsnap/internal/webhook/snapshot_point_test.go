@@ -37,8 +37,17 @@ func TestSnapshotPointStaysOnRankZero(t *testing.T) {
 	pod := groveRankPod("1", corev1.EnvVar{Name: "A", Value: "a"}, point, corev1.EnvVar{Name: "B", Value: "b"})
 	got := applyPatches(t, pod, m.snapshotPointPatches(context.Background(), pod))
 	env := got.Spec.Containers[0].Env
-	if len(env) != len(pod.Spec.Containers[0].Env) {
-		t.Fatalf("env length changed: %v", env)
+	if len(env) != len(pod.Spec.Containers[0].Env)+len(snapshotPointNCCLEnv) {
+		t.Fatalf("env = %v, want the original plus rank 0's NCCL settings", env)
+	}
+	vals := map[string]string{}
+	for _, e := range env {
+		vals[e.Name] = e.Value
+	}
+	for _, w := range snapshotPointNCCLEnv {
+		if vals[w.Name] != w.Value {
+			t.Errorf("%s = %q, want %q as on rank 0", w.Name, vals[w.Name], w.Value)
+		}
 	}
 	for _, e := range env {
 		if e.Name == SnapshotControlDirEnv && e.Value != "" {
