@@ -56,9 +56,11 @@ kubectl rollout status deployment/<name> -n <namespace> --timeout=120s
 
 **Restarting a StatefulSet:**
 
-StatefulSets perform a rolling restart, terminating and recreating one pod at a time in
-reverse ordinal order (highest first). For clustered services like NATS, OpenBao, and
-Cassandra, this preserves quorum as long as a majority of replicas remain available.
+StatefulSets using `RollingUpdate` restart one pod at a time in reverse ordinal
+order. Check the update strategy before using the commands below. OpenBao uses
+`OnDelete`, so `kubectl rollout restart` alone does not replace its pods. For
+OpenBao 2.6.2 to 2.6.3, use the
+[OpenBao patch upgrade runbook](./runbooks/openbao-patch-upgrade.md).
 
 ```bash
 kubectl rollout restart statefulset/<name> -n <namespace>
@@ -71,11 +73,12 @@ kubectl rollout status statefulset/<name> -n <namespace> --timeout=300s
 ```
 
 <Note>
-For OpenBao, verify the seal status after the rollout completes. Each pod must unseal
-before it can serve requests:
+For OpenBao, verify every member's seal state after each replacement, not just
+Kubernetes readiness. For example:
 
 ```bash
-kubectl exec -n vault-system openbao-server-0 -- bao status
+kubectl exec -n vault-system openbao-server-0 -c openbao -- sh -c \
+  'BAO_ADDR=http://127.0.0.1:8200 bao status'
 ```
 
 </Note>
@@ -238,7 +241,8 @@ have the original values file, back up the current values first with `helm get v
 ### Upgrading StatefulSet-Based Services
 
 Cassandra, NATS, and OpenBao are deployed as StatefulSets. The `helm upgrade` command is the
-same, but the rollout behavior differs:
+same, but rollout depends on the update strategy. The following rolling-update
+description does not apply to OpenBao's `OnDelete` strategy:
 
 - **Rolling update:** StatefulSets restart pods one at a time in reverse ordinal order,
   waiting for each pod to become ready before proceeding to the next.
@@ -260,10 +264,13 @@ kubectl rollout status statefulset/<name> -n <namespace> --timeout=300s
 
 | **Cassandra** | After upgrading, check if the new version requires a schema migration. If a `cassandra-migrations` job exists in the chart, it will run automatically as a Helm post-upgrade hook. Verify it completes: `kubectl get jobs -n cassandra-system`. |
 | --- | --- |
-| **OpenBao** | After each pod restarts, verify it unseals successfully: `kubectl exec -n vault-system openbao-server-0 -- bao status`. If auto-unseal is configured, this happens automatically. Otherwise, you must unseal each pod manually. |
+| **OpenBao** | Helm success does not replace existing `OnDelete` pods. Use the [OpenBao patch upgrade runbook](./runbooks/openbao-patch-upgrade.md) for 2.6.2 to 2.6.3. Replace standbys first, transfer leadership, and verify each member is unsealed before proceeding. |
 | **NATS** | The NATS cluster maintains message availability during rolling updates as long as a majority of nodes remain online. Monitor the cluster state: `kubectl logs -n nats-system nats-0 --tail=10`. |
 
 ### Rolling Back
+
+The commands below are not a data-downgrade procedure for OpenBao. Use a
+separately validated recovery plan for stateful data services.
 
 If an upgrade causes issues, roll back to the previous Helm revision:
 
@@ -290,4 +297,4 @@ rollback.
 
 ## Observability
 
-For observability configuration and reference architecture, see [self-hosted-observability](/nvcf/observability/observability).
+For observability configuration and reference architecture, see [self-hosted-observability](../observability/observability.md).

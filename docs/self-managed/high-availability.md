@@ -454,7 +454,7 @@ in this order:
    (`nvcr.io` / `helm.ngc.nvidia.com`), no action is needed. If you mirror to a
    private registry, re-mirror the stack's charts and images **before** syncing —
    otherwise pods fail with `ImagePullBackOff`. See
-   [Image Mirroring](/nvcf/overview/image-mirroring) and the [Artifact Manifest](/nvcf/overview/manifest).
+   [Image Mirroring](../overview/image-mirroring.md) and the [Artifact Manifest](../overview/manifest.md).
 3. **Choose the mode.** HA is on by default (`preferred`), so an environment
    file that does not set `highAvailability.mode` **activates HA on upgrade**.
    Confirm the [cluster prerequisites](#cluster-prerequisites) first — `preferred`
@@ -499,7 +499,7 @@ in this order:
 
 - [Control Plane Operations](./control-plane-operations.md) — service reference,
   key rotation, and upgrade runbooks.
-- [Infrastructure Sizing](/nvcf/overview/infrastructure-sizing) — node pool sizing
+- [Infrastructure Sizing](../overview/infrastructure-sizing.md) — node pool sizing
   guidance.
 - [Helmfile Installation](./helmfile-installation.md) — how environment values
   and `global.yaml.gotmpl` are applied.

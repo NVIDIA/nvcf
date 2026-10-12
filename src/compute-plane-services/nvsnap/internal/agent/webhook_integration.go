@@ -149,6 +149,9 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 		// restore-side RO mount agree. Empty = standard paths.
 		CacheDir:     a.config.RootfsCapture.PodCacheDir,
 		CacheEnvFile: a.config.RootfsCapture.PodCacheEnvFile,
+		// Storage profile of the L2 StorageClass: the cachedir restore
+		// reads its prewarm policy (on/off, reader count). nil = defaults.
+		StorageProfile: a.l2Profile,
 		Composer: &rootfsonly.HashInputComposer{
 			CUDADriverMajor: a.config.RootfsCapture.CUDADriverMajor,
 		},

@@ -127,7 +127,7 @@ The following artifacts must be mirrored for LLS deployment:
 
 - Streaming application images (e.g., `usd-composer`)
 
-For detailed instructions on pulling these artifacts from NGC and pushing to your registry, see [self-hosted-image-mirroring](/nvcf/overview/image-mirroring). The [LLS-specific artifacts](/nvcf/overview/image-mirroring) section lists exactly what you need.
+For detailed instructions on pulling these artifacts from NGC and pushing to your registry, see [self-hosted-image-mirroring](../overview/image-mirroring.md). The [LLS-specific artifacts](../overview/image-mirroring.md) section lists exactly what you need.
 
 <Info>
 When mirroring to ECR, the repository path must match your Helm values configuration. Ensure your `registryName` in Step 4 includes the same repository path you used when mirroring the chart.

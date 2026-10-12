@@ -28,9 +28,9 @@ use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
 use tracing::warn;
 
 use super::grpc_endpoint::{
-    StargateGrpcEndpoint, log_stargate_grpc_certificate_failure, log_stargate_grpc_connect_attempt,
+    StargateGrpcEndpoint, classify_stargate_grpc_certificate_failure, grpc_error_chain,
+    log_stargate_grpc_certificate_failure,
 };
-use super::reconnect::StreamOpenFailureLog;
 use super::topology::{RegistrationRouterTopology, publish_registration_router_topology};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -53,8 +53,6 @@ pub(super) struct WatchedEndpoint {
 }
 
 const INITIAL_WATCH_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
-/// Delay before reopening a WatchStargates stream after it fails or ends.
-pub(super) const WATCH_RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
 pub(super) async fn run_watch_stargate_discovery(
     seeds: Vec<String>,
@@ -163,13 +161,18 @@ async fn watch_stargate_endpoint(
     let target = StargateGrpcEndpoint::new(watch_url.clone(), "")
         .expect("normalized watch URL should be non-empty");
     let mut last_certificate_failure = None;
-    let mut open_failures = StreamOpenFailureLog::new("watch_stargates");
     loop {
         if stop.is_cancelled() {
             return;
         }
 
-        log_stargate_grpc_connect_attempt(&target, "watch_stargates", "lazy");
+        tracing::debug!(
+            transport = "grpc",
+            operation = "watch_stargates",
+            endpoint = %target,
+            connect_mode = "lazy",
+            "attempting Stargate gRPC connection"
+        );
         let stream = match target.channel_endpoint(grpc_tls_ca_cert_pem.as_deref()) {
             Ok(endpoint) => {
                 let mut client = StargateControlPlaneClient::new(endpoint.connect_lazy());
@@ -177,22 +180,21 @@ async fn watch_stargate_endpoint(
                     response = client.watch_stargates(WatchStargatesRequest {}) => {
                         match response {
                             Ok(response) => {
-                                last_certificate_failure = None;
-                                open_failures.record_opened();
                                 Some(response.into_inner())
                             }
                             Err(error) => {
                                 last_certificate_failure = log_stargate_grpc_certificate_failure(
-                                    &target,
-                                    "watch_stargates",
-                                    &error,
-                                    last_certificate_failure,
+                                    &target, "watch_stargates", &error, last_certificate_failure,
                                 );
-                                open_failures.record(
-                                    target.authority_addr(),
-                                    &error,
-                                    WATCH_RECONNECT_DELAY,
-                                );
+                                if classify_stargate_grpc_certificate_failure(&error).is_none() {
+                                    warn!(
+                                        transport = "grpc",
+                                        operation = "watch_stargates",
+                                        endpoint = %target,
+                                        error = %grpc_error_chain(&error),
+                                        "Stargate gRPC operation failed"
+                                    );
+                                }
                                 None
                             }
                         }
@@ -207,11 +209,15 @@ async fn watch_stargate_endpoint(
                     error.as_ref(),
                     last_certificate_failure,
                 );
-                open_failures.record(
-                    target.authority_addr(),
-                    error.as_ref(),
-                    WATCH_RECONNECT_DELAY,
-                );
+                if classify_stargate_grpc_certificate_failure(error.as_ref()).is_none() {
+                    warn!(
+                        transport = "grpc",
+                        operation = "watch_stargates",
+                        endpoint = %target,
+                        error = %grpc_error_chain(error.as_ref()),
+                        "Stargate gRPC operation failed"
+                    );
+                }
                 None
             }
         };
@@ -221,16 +227,26 @@ async fn watch_stargate_endpoint(
                     return;
                 };
                 let snapshot = match message {
-                    Ok(response) => response.map(|response| {
+                    Ok(Some(response)) => {
                         last_certificate_failure = None;
-                        watch_endpoint_snapshot_from_response(&watch_url, response)
-                    }),
+                        Some(watch_endpoint_snapshot_from_response(&watch_url, response))
+                    }
+                    Ok(None) => {
+                        warn!(
+                            transport = "grpc",
+                            operation = "watch_stargates_stream",
+                            endpoint = %target,
+                            "Stargate discovery response stream ended"
+                        );
+                        None
+                    }
                     Err(error) => {
-                        last_certificate_failure = log_stargate_grpc_certificate_failure(
-                            &target,
-                            "watch_stargates_stream",
-                            &error,
-                            last_certificate_failure,
+                        warn!(
+                            transport = "grpc",
+                            operation = "watch_stargates_stream",
+                            endpoint = %target,
+                            error = %grpc_error_chain(&error),
+                            "Stargate gRPC operation failed"
                         );
                         None
                     }
@@ -256,7 +272,7 @@ async fn watch_stargate_endpoint(
         }
 
         if stop
-            .run_until_cancelled(tokio::time::sleep(WATCH_RECONNECT_DELAY))
+            .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
             .await
             .is_none()
         {

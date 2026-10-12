@@ -6,7 +6,7 @@ large model and resource files. The first workload downloads an artifact set,
 and later workloads can mount the populated cache instead of downloading
 another copy.
 
-This page describes the Helm model cache behavior in NVCA 3.2.
+This page describes the Helm model cache behavior in NVCA 3.13.
 
 ## Before You Begin
 
@@ -36,14 +36,12 @@ or tasks that request the same artifacts should receive the same handle.
 
 For a durable backend, the flow is:
 
-```text
-Function A ----> writer Job ----> populated cache for one cacheHandle
-                                         |
-Function A <---- read-only attachment ----+
-Function B <---- read-only attachment ----+
-```
+![NVCA model cache architecture](../../dev/assets/nvca-model-cache-architecture.svg)
 
-1. NVCA selects the first available storage backend.
+1. NVCA selects the backend when it creates the request: from the storage
+   capability catalog on NVCA 3.12.5 and later, or by the legacy first-match
+   order for requests created by earlier releases. See
+   [Backend Selection](#backend-selection).
 1. NVCA creates a model-cache `StorageRequest` in the workload namespace.
 1. A Kubernetes Lease selects one request as the writer for the cache handle.
 1. NVCA creates one writer Job in the `nvca-modelcache-init` namespace.
@@ -59,7 +57,26 @@ ready.
 
 ## Backend Selection
 
-NVCA uses the first matching backend in this order:
+NVCA 3.12.5 and later decide the backend when the request is created and
+persist the decision on it. The decision comes from the storage capability
+catalog entry for the provisioner of the model cache StorageClass (`nvcf-sc`
+unless overridden):
+
+| Catalog access modes | Backend | Reuse behavior |
+| --- | --- | --- |
+| `ReadWriteMany` (Weka, OCI File Storage, NetApp Trident) | Shared filesystem: one claim per cache handle, readers mount it read-only | Durable reuse across namespaces |
+| `ReadWriteOnce` and `ReadOnlyMany` (NVMesh) | NVMesh: writer claim, one derived reader PV per namespace | Durable reuse across namespaces |
+| No qualified mode, or the class is absent | `emptyDir` with a `model-cache-init` container | Pod-local caching only |
+| Class present with a reclaim policy other than `Retain` | None: NVCA does not create the request and logs a storage resolution error. Set `reclaimPolicy: Retain` on the class | Not applicable |
+
+On a `ReadWriteMany` backend the writer Job runs as root only when the
+driver's `CSIDriver` declares a `fsGroupPolicy` that skips `ReadWriteMany`
+volumes, such as OCI File Storage; on drivers that apply `fsGroup`, such as
+Weka, it keeps its non-root identity. The catalog entry can pin either choice
+with `writerIdentity`.
+
+A request created before persisted selections existed uses the first
+matching backend in this order:
 
 | Priority | Cluster condition | Backend | Reuse behavior |
 | --- | --- | --- | --- |

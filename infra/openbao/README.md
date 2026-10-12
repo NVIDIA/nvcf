@@ -24,11 +24,6 @@ dependency pins in this directory.
 
 ## Plugin binaries
 
-The image expects an OS-specific plugin binary at build time, placed at:
-
-- `files/plugins/vault-plugin-secrets-jwt-linux-amd64` (for `--platform linux/amd64`)
-- `files/plugins/vault-plugin-secrets-jwt-linux-arm64` (for `--platform linux/arm64`)
-
 The plugin is built from source in this repository, at
 `plugins/vault-plugin-secrets-jwt`. Nothing needs to be cloned or placed by
 hand, and no binaries are committed.
@@ -51,9 +46,27 @@ scripts/verify-jwt-plugin.sh    # asserts module path, target, toolchain, deps
 `files/plugins/` is gitignored apart from `.gitkeep`; see
 `files/plugins/PROVENANCE.md` for the dependency floors the verifier enforces.
 
+## Upgrading to OpenBao 2.6.3
+
+This source update addresses the security advisories in the
+[OpenBao 2.6.3 release notes](https://github.com/openbao/openbao/releases/tag/v2.6.3).
+The JWT plugin source and dependency pins are unchanged. The default NVCF
+configuration needs no HCL, policy, JWT role, or agent-template changes for
+the 2.6.2-to-2.6.3 upgrade.
+
+The OpenBao runtime version, NVCF image release, chart version, and stack
+version are separate. Publish the server and migrations images before updating
+chart references. Keep the chart's server and injected-agent image tags aligned;
+update the migrations image tag from its own release stream.
+
+The chart uses `OnDelete`: applying new values does not replace existing
+server pods or agents already injected into application pods. Follow the
+[OpenBao patch upgrade runbook](../../docs/self-managed/runbooks/openbao-patch-upgrade.md)
+when the target stack release includes the new images.
+
 ## OpenBao server binary
 
-The server build downloads the official OpenBao 2.6.2 distribution source,
+The server build downloads the official OpenBao 2.6.3 distribution source,
 checks its SHA-256 digest, applies the reviewed Go module floors, and builds
 the same UI-enabled command for Linux amd64 and arm64:
 
@@ -74,7 +87,7 @@ archive does not contain those assets.
 
 ## Building the container
 
-The `Dockerfile` defaults to the digest-pinned `openbao/openbao:2.6.2` base
+The `Dockerfile` defaults to the digest-pinned `openbao/openbao:2.6.3` base
 image and the matching checksum-pinned distribution source. A version update
 must also pin the runtime digest, source commit, source checksum, and commit
 date.
@@ -82,7 +95,7 @@ date.
 ```bash
 docker build \
   --build-arg TARGETARCH=amd64 \
-  --build-arg BAO_VERSION=2.6.2 \
+  --build-arg BAO_VERSION=2.6.3 \
   -t <your-registry>/<your-org>/nvcf-openbao:<version> .
 ```
 
@@ -91,7 +104,7 @@ For multi-arch builds:
 ```bash
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  --build-arg BAO_VERSION=2.6.2 \
+  --build-arg BAO_VERSION=2.6.3 \
   -t <your-registry>/<your-org>/nvcf-openbao:<version> \
   --push .
 ```
@@ -100,6 +113,6 @@ docker buildx build \
 
 At runtime the image provides:
 
-- The OpenBao server at `/usr/bin/bao`, built from the upstream 2.6.2 source
+- The OpenBao server at `/usr/bin/bao`, built from the upstream 2.6.3 source
 - Alpine packages `curl`, `jq`, and `bash` (used by entrypoint scripts in consumers such as the migrations Job)
 - `/openbao/plugins/vault-plugin-secrets-jwt` - the JWT secrets plugin built from `github.com/NVIDIA/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt`

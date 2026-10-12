@@ -66,11 +66,18 @@ releases:
       - template: service
 
   - name: sis
+    {{- $sisChartPath := dig "sis" "chartPath" "" .Values }}
+    chart: {{ $sisChartPath | default "nvcf/helm-nvcf-sis" | quote }}
+    {{- if not $sisChartPath }}
     version: 2.6.0
+    {{- end }}
     namespace: sis
-    inherit:
-      - template: service
     condition: icms.enabled
+    values:
+      - ../global.yaml.gotmpl
+      - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
+    labels:
+      release-group: services
 
   - name: api
     version: 1.28.0
@@ -232,7 +239,7 @@ releases:
     {{- $llmRequestRouterChartPath := dig "addons" "llm" "requestRouter" "chartPath" "" .Values }}
     chart: {{ $llmRequestRouterChartPath | default "nvcf/helm-nvcf-llm-request-router" | quote }}
     {{- if not $llmRequestRouterChartPath }}
-    version: 1.14.1
+    version: 1.15.0
     {{- end }}
     namespace: nvcf
     condition: addons.llm.enabled
@@ -276,12 +283,22 @@ releases:
     labels:
       release-group: services
 
+  - name: event-ledger
+    chart: nvcf/helm-nvcf-event-ledger
+    version: 0.5.0
+    namespace: nvcf
+    condition: addons.eventLedger.enabled
+    values:
+      - ../global.yaml.gotmpl
+    labels:
+      release-group: services
+
   # --- Gateway API Ingress ---
   - name: ingress
     {{- $gatewayRoutesChartPath := dig "ingress" "gatewayApi" "chartPath" "" .Values }}
     chart: {{ $gatewayRoutesChartPath | default "nvcf/nvcf-gateway-routes" | quote }}
     {{- if not $gatewayRoutesChartPath }}
-    version: 1.18.2
+    version: 1.18.3
     {{- end }}
     needs:
       - nvcf/notary-service

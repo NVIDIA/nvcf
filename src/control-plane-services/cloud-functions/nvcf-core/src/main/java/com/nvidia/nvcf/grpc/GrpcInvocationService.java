@@ -105,6 +105,8 @@ public class GrpcInvocationService extends InvocationImplBase {
                                         .setFunctionId(request.getFunctionId())
                                         .setClientAuthSubject(first.subject())
                                         .setClientNcaId(first.ncaId())
+                                        .setClientOwnerNcaId(
+                                                accountService.getOwnerNcaId(authentication, first.ncaId()))
                                         .addAllFunctionVersions(versions)
                                         .build());
         responseObserver.onCompleted();

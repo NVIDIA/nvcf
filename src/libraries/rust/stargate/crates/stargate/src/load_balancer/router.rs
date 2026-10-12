@@ -46,8 +46,8 @@ pub struct LoadBalancerCandidateSelection {
 
 #[derive(Clone, Debug)]
 pub struct LoadBalancerAlgorithmResolution {
-    definition: LoadBalancerDefinition,
-    requested_algorithm: Option<String>,
+    pub(crate) definition: LoadBalancerDefinition,
+    pub(crate) requested_algorithm: Option<String>,
 }
 
 impl LoadBalancerAlgorithmResolution {

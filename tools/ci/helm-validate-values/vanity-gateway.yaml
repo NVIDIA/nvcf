@@ -17,4 +17,9 @@ vanityGateway:
             functionType: LLM
             customHeaders:
               X-Provider-Feature: enabled
+      anthropicMessages:
+        example_native-model:
+          modelName: example/native-model
+          functionID: 00000000-0000-0000-0000-000000000002
+          functionType: LLM
       vanity: {}

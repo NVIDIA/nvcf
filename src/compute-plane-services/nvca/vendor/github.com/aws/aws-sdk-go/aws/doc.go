@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Package aws provides the core SDK's utilities and shared types. Use this package's
 // utilities to simplify setting and reading API operations parameters.
 //

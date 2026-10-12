@@ -980,93 +980,12 @@ func TestValidateTargetRejectsNonMainTargets(t *testing.T) {
 	}
 }
 
-func TestRunRejectsFreezeFlagsWithoutEachOther(t *testing.T) {
-	err := run([]string{"--freeze-stack", "observability"})
-	if err == nil || !strings.Contains(err.Error(), "must be used together") {
-		t.Fatalf("run error = %v, want paired flag rejection", err)
-	}
-	err = run([]string{"--freeze-stack", "observability", "--freeze-version", "1.1.0", "--update-catalog"})
-	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
-		t.Fatalf("run error = %v, want combination rejection", err)
-	}
-}
-
-func TestFreezeStackDocumentationWritesQualifiedSnapshotForOneStack(t *testing.T) {
-	tmp := t.TempDir()
-	catalogPath := filepath.Join(tmp, "docs", "version-catalog", "main.yaml")
-	catalog := testCatalogWithReleaseSet()
-	if err := WriteCatalog(catalogPath, catalog); err != nil {
-		t.Fatal(err)
-	}
-
-	snapshotPath, err := freezeStackDocumentation(tmp, catalogPath, "observability", "3.4.5")
-	if err != nil {
-		t.Fatalf("freezeStackDocumentation failed: %v", err)
-	}
-	if filepath.Base(snapshotPath) != "observability-3.4.5.yaml" {
-		t.Fatalf("snapshot path = %s, want observability-3.4.5.yaml", snapshotPath)
-	}
-	snapshot, err := LoadCatalog(snapshotPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snapshot.ReleaseSet.Stacks.Observability.Status != ReleaseSetQualified || snapshot.ReleaseSet.Stacks.Observability.DocumentationVersion != "3.4.5" {
-		t.Fatalf("snapshot observability = %#v, want qualified 3.4.5", snapshot.ReleaseSet.Stacks.Observability)
-	}
-	if snapshot.ReleaseSet.Stacks.ControlPlane.Status != ReleaseSetDevelopment || snapshot.ReleaseSet.Stacks.ComputePlane.Status != ReleaseSetDevelopment {
-		t.Fatalf("snapshot froze other stacks: %#v", snapshot.ReleaseSet.Stacks)
-	}
-	main, err := LoadCatalog(catalogPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if main.ReleaseSet.Stacks.Observability.Status != ReleaseSetDevelopment {
-		t.Fatalf("main catalog was modified by freeze: %#v", main.ReleaseSet.Stacks.Observability)
-	}
-
-	if _, err := freezeStackDocumentation(tmp, catalogPath, "observability", "3.4.5"); err == nil || !strings.Contains(err.Error(), "refusing to overwrite") {
-		t.Fatalf("second freeze error = %v, want overwrite refusal", err)
-	}
-}
-
-func TestFreezeStackDocumentationRejectsVersionMismatch(t *testing.T) {
-	tmp := t.TempDir()
-	catalogPath := filepath.Join(tmp, "docs", "version-catalog", "main.yaml")
-	catalog := testCatalogWithReleaseSet()
-	if err := WriteCatalog(catalogPath, catalog); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := freezeStackDocumentation(tmp, catalogPath, "compute-plane", "2.3.5"); err == nil || !strings.Contains(err.Error(), "version is 2.3.4, not 2.3.5") {
-		t.Fatalf("freeze error = %v, want version mismatch", err)
-	}
-	if _, err := freezeStackDocumentation(tmp, catalogPath, "control-plane", "1.2"); err == nil || !strings.Contains(err.Error(), "must use "+documentationVersionFormat) {
-		t.Fatalf("freeze error = %v, want version format rejection", err)
-	}
-	if _, err := freezeStackDocumentation(tmp, catalogPath, "self-managed", "1.2.3"); err == nil || !strings.Contains(err.Error(), "unknown release_set stack") {
-		t.Fatalf("freeze error = %v, want unknown stack rejection", err)
-	}
-
-}
-
-func TestFreezeStackDocumentationAllowsPendingPublications(t *testing.T) {
-	tmp := t.TempDir()
-	catalogPath := filepath.Join(tmp, "docs", "version-catalog", "main.yaml")
-	catalog := testCatalogWithReleaseSet()
-	catalog.PublicationPending = []string{"llm-api-gateway"}
-	if err := WriteCatalog(catalogPath, catalog); err != nil {
-		t.Fatal(err)
-	}
-	snapshot, err := freezeStackDocumentation(tmp, catalogPath, "control-plane", "1.2.3")
-	if err != nil {
-		t.Fatalf("freeze with pending publications failed: %v", err)
-	}
-	frozen, err := LoadCatalog(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(frozen.PublicationPending) != 1 || frozen.PublicationPending[0] != "llm-api-gateway" {
-		t.Fatalf("frozen snapshot lost publication_pending: %#v", frozen.PublicationPending)
+func TestRunRejectsRetiredFreezeFlags(t *testing.T) {
+	for _, flag := range []string{"--freeze-stack", "--freeze-version"} {
+		err := run([]string{flag, "unused"})
+		if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+			t.Fatalf("retired flag %s was accepted: %v", flag, err)
+		}
 	}
 }
 

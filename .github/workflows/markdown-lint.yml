@@ -10,7 +10,7 @@
 #
 # If this fails on your change, run the same command locally:
 #
-#   git ls-files '*.md' > /tmp/tracked.txt
+#   git ls-files '*.md' '*.mdx' > /tmp/tracked.txt
 #   tr '\n' '\0' < /tmp/tracked.txt | xargs -0 markdownlint
 #
 # markdownlint --fix handles most findings. Check what it rewrote before
@@ -21,16 +21,18 @@ name: Markdown Lint
 
 on:
   push:
-    branches: [main, 'release-**']
+    branches: [main, 'release-**', 'docs/**']
     paths:
       - '**/*.md'
+      - '**/*.mdx'
       - '.markdownlint.json'
       - '.markdownlintignore'
       - '.github/workflows/markdown-lint.yml'
   pull_request:
-    branches: [main, 'release-**']
+    branches: [main, 'release-**', 'docs/**']
     paths:
       - '**/*.md'
+      - '**/*.mdx'
       - '.markdownlint.json'
       - '.markdownlintignore'
       - '.github/workflows/markdown-lint.yml'
@@ -101,7 +103,7 @@ jobs:
           # The file list goes through stdin rather than xargs -a so this is
           # the same command contributors can run on macOS, where BSD xargs
           # has no -a. -0 keeps paths containing whitespace intact.
-          git ls-files '*.md' > "${RUNNER_TEMP}/tracked.txt"
+          git ls-files '*.md' '*.mdx' > "${RUNNER_TEMP}/tracked.txt"
           tr '\n' '\0' < "${RUNNER_TEMP}/tracked.txt" \
             | xargs -0 "${RUNNER_TEMP}/mdl.sh" > "${RUNNER_TEMP}/out.txt" 2>&1
 

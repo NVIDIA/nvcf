@@ -16,8 +16,9 @@ resource.
 - Each stack releases from its own `release-deploy/stacks/<stack>/vX.Y`
   branch and advances its trains independently. All three started at `1.0.0`.
 - Each stack has its own documentation tree (`docs/self-managed/`,
-  `docs/compute-plane/`, `docs/observability/`) published as a Fern product
-  with its own version list. Shared pages live in `docs/overview/`.
+  `docs/compute-plane/`, `docs/observability/`) published as a Fern tab. One
+  docs release selector records the qualified combination. Shared pages live
+  in `docs/overview/`. Follow `docs/dev/docs-editions.md` for docs releases.
 - Do not reference another stack's Helmfile state from an inventory config.
 - Keep a dependency in the stack that installs or creates it.
 - Follow the nearest nested `AGENTS.md` when it adds stack-specific guidance.

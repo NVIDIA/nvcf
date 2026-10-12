@@ -45,7 +45,11 @@ src/libraries/python
 # @stargate_crates from the nested module) do not resolve against the
 # umbrella root MODULE.bazel.
 src/libraries/ts
-deploy
+# deploy is deliberately NOT ignored. The nvca-operator chart lives there and
+# its storage-capability catalog is a data dependency of Go tests under src/.
+# An ignored directory contributes no files to the sandbox, so the tests fail
+# to read it. deploy contains no BUILD files, so leaving it loadable adds no
+# packages: `bazel query //...` reports the same target count either way.
 docs
 fern
 infra

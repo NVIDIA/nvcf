@@ -126,5 +126,10 @@ end
 BackendCli -> Service: registration stream closes / errors
 Service -> State: end_registration(id)
 State --> Service: remove routable backend state
+note right of BackendCli
+  On response EOF or error, clear connected metrics.
+  Wait one second before reopening registration.
+  Shutdown cancels the reconnect wait.
+end note
 
 @enduml

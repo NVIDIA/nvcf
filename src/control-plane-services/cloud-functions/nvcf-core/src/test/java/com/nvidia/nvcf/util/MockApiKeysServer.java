@@ -63,9 +63,23 @@ public class MockApiKeysServer {
             List<Resource> resources,
             List<String> scopes,
             boolean allowed) {
+        setApiKeyValidationResponse(ncaId, ncaId, ownerId, resources, scopes, allowed);
+    }
+
+    // ownerNcaId is set separately from ncaId for keys whose owner account differs from the
+    // account they're authorized against.
+    @SneakyThrows
+    public static void setApiKeyValidationResponse(
+            String ncaId,
+            String ownerNcaId,
+            String ownerId,
+            List<Resource> resources,
+            List<String> scopes,
+            boolean allowed) {
         var response = new ApiKeyValidationResponse("nvcf", "apikey.allow",
                                                        new ApiKeyValidationResult(allowed,
                                                               ncaId,
+                                                              ownerNcaId,
                                                               ownerId,
                                                               new ApiKeyValidationResult.Policy(resources,
                                                                                          scopes,
@@ -88,6 +102,17 @@ public class MockApiKeysServer {
             List<ApiKeyValidationResult.Resource> resources,
             List<String> scopes) {
         setApiKeyValidationResponse(ncaId, ownerId, resources, scopes, true);
+    }
+
+    // See setApiKeyValidationResponse(ncaId, ownerNcaId, ...).
+    @SneakyThrows
+    public static void setResponse(
+            String ncaId,
+            String ownerNcaId,
+            String ownerId,
+            List<ApiKeyValidationResult.Resource> resources,
+            List<String> scopes) {
+        setApiKeyValidationResponse(ncaId, ownerNcaId, ownerId, resources, scopes, true);
     }
 
     public static void resetToDefault() {

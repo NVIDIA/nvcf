@@ -40,8 +40,6 @@ backends:
       decode_jitter_ms: 4
       prefill_tokens_per_s: 4000
       decode_tokens_per_s: 90
-    registration:
-      last_mean_input_tps: 120
   profiles:
     - count: 2
       profile:
@@ -55,8 +53,6 @@ backends:
           decode_jitter_ms: 2
           prefill_tokens_per_s: 8000
           decode_tokens_per_s: 160
-        registration:
-          last_mean_input_tps: 260
     - count: 3
       profile:
         name: balanced
@@ -69,8 +65,6 @@ backends:
           decode_jitter_ms: 4
           prefill_tokens_per_s: 4000
           decode_tokens_per_s: 90
-        registration:
-          last_mean_input_tps: 120
     - count: 1
       profile:
         name: small-cache
@@ -83,8 +77,6 @@ backends:
           decode_jitter_ms: 6
           prefill_tokens_per_s: 2600
           decode_tokens_per_s: 70
-        registration:
-          last_mean_input_tps: 80
 
 traffic_pattern:
   kind: mixed_size

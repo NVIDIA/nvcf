@@ -65,6 +65,9 @@ type ProxyRequest struct {
 	RawQuery string
 	Header   http.Header
 	Body     io.ReadCloser
+	// ContentLength is the Body length in bytes. Zero or less leaves the
+	// framing to net/http, which sends a non-empty unknown-length body chunked.
+	ContentLength int64
 	// InputTokens and TokenEstimate are forwarded as Stargate proxy headers when
 	// known. Stargate requires X-Input-Tokens for native /v1/responses and
 	// /v1/embeddings routing metadata.

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Package jsonrpc provides JSON RPC utilities for serialization of AWS
 // requests and responses.
 package jsonrpc

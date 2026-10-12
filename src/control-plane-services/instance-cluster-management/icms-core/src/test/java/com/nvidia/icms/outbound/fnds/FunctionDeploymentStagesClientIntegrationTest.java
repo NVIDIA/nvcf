@@ -24,6 +24,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -44,10 +45,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.mock.web.MockHttpServletRequest;
-import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.web.context.request.RequestContextHolder;
-import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.reactive.function.client.WebClient;
 
 /**
@@ -100,16 +98,13 @@ class FunctionDeploymentStagesClientIntegrationTest {
                 .withHeader("Authorization", equalTo("Bearer " + staticToken)));
     }
 
-    // ServletOAuth2AuthorizedClientExchangeFilterFunction only attempts a token exchange if it can
-    // resolve the current HttpServletRequest/HttpServletResponse (via Spring Security's global
-    // Reactor-context hook, wired through RequestContextHolder). Registering mock servlet
-    // attributes here reproduces that request-scoped context so the OAuth2 client-credentials
-    // fallback actually runs, letting us stub /oauth/token and assert the returned bearer token is
-    // attached - while still proving the static token is not used.
+    // Regression guard for spring-projects/spring-security#19405: no servlet request context is
+    // registered here, matching how ICMS reaches these clients from @Async listeners and @Scheduled
+    // tasks. The client-credentials exchange must still run and attach the bearer token - while
+    // still proving the static token is not used.
     @Test
-    void noStaticTokenConfigured_fallsBackToOAuth2BearerToken() {
-        RequestContextHolder.setRequestAttributes(
-                new ServletRequestAttributes(new MockHttpServletRequest(), new MockHttpServletResponse()));
+    void noStaticTokenConfigured_fallsBackToOAuth2BearerTokenWithoutServletContext() {
+        assertNull(RequestContextHolder.getRequestAttributes());
 
         String oauthToken = "test-oauth2-access-token";
         fndsServer.stubFor(post(urlPathEqualTo("/oauth/token"))
