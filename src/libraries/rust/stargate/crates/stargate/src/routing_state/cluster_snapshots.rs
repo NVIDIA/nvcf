@@ -410,6 +410,19 @@ impl RoutedClusterState {
         self.generation.lock().routing_snapshot()
     }
 
+    /// Settles pending reservations when a retired generation leaves its
+    /// routing target. In-flight selections can keep this state alive past
+    /// the TTL, so clearing the snapshot also refuses new reservations.
+    pub(super) fn detach(&self) {
+        let snapshot_state = self.generation.lock().snapshot_state.take();
+        for pending in snapshot_state
+            .into_iter()
+            .flat_map(|state| state.pending_cluster_reservations)
+        {
+            pending.deactivate();
+        }
+    }
+
     #[cfg(test)]
     pub(super) fn routing_snapshot_at(&self, now: Instant) -> Option<RoutedClusterSnapshot> {
         self.generation.lock().routing_snapshot_at(now)

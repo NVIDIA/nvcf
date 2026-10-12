@@ -1141,6 +1141,104 @@ async fn removing_retired_cluster_generation_settles_reservation_gauge() {
     .await;
 }
 
+async fn assert_detaching_retired_cluster_settles_held_reservations(
+    name: &str,
+    replacement_kind: RetiredClusterReplacement,
+) {
+    let scenario = RegistrationScenario::new(Some(&format!("rk-{name}")));
+    let model_id = format!("model-{name}");
+    let inference_server_id = format!("inst-{name}");
+    let cluster_id = format!("cluster-{name}");
+    let target = scenario.target(&model_id);
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    let old = scenario.start_in(&inference_server_id, &cluster_id, 1111);
+    scenario.activate(&old, &model_id).await;
+
+    // An in-flight request keeps both its selected cluster and its
+    // reservation token until the upstream response arrives.
+    let selected_cluster = scenario.selected_cluster(&model_id).await;
+    let reservation = selected_cluster
+        .reserve_backend_with_ttl(
+            &old.generation(),
+            37,
+            4,
+            UNEXPIRING_TEST_RESERVATION_TTL,
+            metrics.clone(),
+            &target,
+        )
+        .expect("active backend should accept reservation");
+    assert_eq!(routing_reservations_active(&metrics, &target), 1);
+
+    let ended = scenario
+        .state
+        .registrations
+        .end_registration(old)
+        .expect("exact old registration should be removed");
+    assert!(ended.registration.cluster_generation.is_retired());
+    let replacement = scenario.start_in(&inference_server_id, &cluster_id, 2222);
+    let status = match replacement_kind {
+        RetiredClusterReplacement::ActiveUpsert => Active,
+        RetiredClusterReplacement::InactiveRemoval => Inactive,
+    };
+    scenario
+        .publish_default_stats(&replacement, &model_id, status, Some(6))
+        .await;
+
+    assert_eq!(
+        routing_reservations_active(&metrics, &target),
+        0,
+        "detaching a retired cluster generation must settle reservations still held in flight"
+    );
+    assert!(
+        selected_cluster
+            .reserve_backend_with_ttl(
+                &ended.registration,
+                37,
+                4,
+                UNEXPIRING_TEST_RESERVATION_TTL,
+                metrics.clone(),
+                &target,
+            )
+            .is_none(),
+        "a detached cluster generation must not accept new reservations"
+    );
+    assert_eq!(routing_reservations_active(&metrics, &target), 0);
+
+    // The old registration's cleanup finds the replacement generation and
+    // returns without touching it.
+    scenario
+        .state
+        .routing
+        .remove_inference_server_targets(&ended.registration, &HashSet::from([target.clone()]))
+        .await;
+    drop(reservation);
+    drop(selected_cluster);
+    assert_eq!(
+        routing_reservations_active(&metrics, &target),
+        0,
+        "dropping the last owner must not decrement a settled reservation again"
+    );
+    scenario.state.end_registration(replacement).await;
+}
+
+#[tokio::test]
+async fn replacing_retired_cluster_generation_settles_held_reservations() {
+    assert_detaching_retired_cluster_settles_held_reservations(
+        "res-held-upsert",
+        RetiredClusterReplacement::ActiveUpsert,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn removing_retired_cluster_generation_settles_held_reservations() {
+    assert_detaching_retired_cluster_settles_held_reservations(
+        "res-held-remove",
+        RetiredClusterReplacement::InactiveRemoval,
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn dropping_retired_cluster_generation_decrements_active_reservation_gauge() {
     let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
