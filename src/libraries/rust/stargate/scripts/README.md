@@ -76,8 +76,10 @@ scripts/e2e-last-cluster.sh --algorithm pulsar-wait-and-widen --mode on
 Mode `on` sets `STARGATE_LAST_CLUSTER_ENABLED=true` in the gateway and
 `last_cluster_affinity: true` in Stargate. Mode `off` disables both. The
 script builds release binaries and the gateway first unless `--no-build` is
-set. It attributes each request to a cluster through the mock-dynamo
-`/test-control` counters, checks
+set. With `--no-build`, set `E2E_GATEWAY_BIN` to a prebuilt gateway to run
+without the gateway source or `go`. It attributes each request to a cluster
+through the mock-dynamo `/test-control` counters, checks
 `stargate_routing_session_selections_total`, and exits non-zero on any
-mismatch. It needs `cargo`, `go`, `curl`, and `jq`, uses 32 loopback ports
-starting at `E2E_PORT_BASE` (default `27100`), and keeps logs on failure.
+mismatch. It needs `curl` and `jq` (plus `cargo` and `go` to build), uses 32
+loopback ports starting at `E2E_PORT_BASE` (default `27100`), and keeps logs
+on failure.

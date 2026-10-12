@@ -46,13 +46,15 @@ Environment:
   E2E_PORT_BASE     First loopback port, default 27100. Uses 32 ports.
   E2E_WORK_DIR      Logs and configs, default a new mktemp directory.
   E2E_KEEP_WORK_DIR Set to 1 to keep the work directory after success.
+  E2E_GATEWAY_BIN   Prebuilt llm-api-gateway binary to use with --no-build.
+                    Without it, --no-build still builds the gateway.
 
-Requires cargo, go, curl, and jq.
+Requires curl and jq. Building also needs cargo and go.
 EOF
 }
 
 stargate_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-gateway_root="$(cd "${stargate_root}/../../../invocation-plane-services/llm-api-gateway" && pwd)"
+gateway_root="${stargate_root}/../../../invocation-plane-services/llm-api-gateway"
 release_dir="${stargate_root}/target/release"
 
 algorithms=()
@@ -89,7 +91,7 @@ done
 port_base="${E2E_PORT_BASE:-27100}"
 work_dir="${E2E_WORK_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/stargate-e2e-last-cluster.XXXXXX")}"
 mkdir -p "${work_dir}"
-gateway_bin="${work_dir}/llm-api-gateway"
+gateway_bin="${E2E_GATEWAY_BIN:-${work_dir}/llm-api-gateway}"
 
 model="e2e-model"
 routing_key="e2e"
@@ -167,11 +169,16 @@ wait_for() {
     done
 }
 
+build_gateway() {
+    [[ -d "${gateway_root}" ]] || fail "missing gateway source at ${gateway_root}; set E2E_GATEWAY_BIN"
+    echo "building llm-api-gateway"
+    (cd "${gateway_root}" && go build -o "${gateway_bin}" ./cmd/llm-api-gateway)
+}
+
 build_binaries() {
     echo "building stargate, pylon, mock-dynamo, and the worker-auth fixture (release)"
     (cd "${stargate_root}" && cargo build --locked --release -q -p stargate -p pylon -p mock-dynamo)
-    echo "building llm-api-gateway"
-    (cd "${gateway_root}" && go build -o "${gateway_bin}" ./cmd/llm-api-gateway)
+    build_gateway
 }
 
 write_lb_config() {
@@ -445,7 +452,7 @@ run_case() {
 if [[ ${build} -eq 1 ]]; then
     build_binaries
 else
-    [[ -x "${gateway_bin}" ]] || (cd "${gateway_root}" && go build -o "${gateway_bin}" ./cmd/llm-api-gateway)
+    [[ -x "${gateway_bin}" ]] || build_gateway
 fi
 for binary in stargate pylon mock-dynamo stargate-worker-auth-gateway; do
     [[ -x "${release_dir}/${binary}" ]] || fail "missing ${release_dir}/${binary}; run without --no-build"
