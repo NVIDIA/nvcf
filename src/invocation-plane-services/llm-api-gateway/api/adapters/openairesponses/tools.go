@@ -208,8 +208,8 @@ func (t *NamespaceTool) Validate() error {
 	return nil
 }
 
-// UnmarshalJSON decodes nested tools, rejecting types other than function with
-// a clear error instead of silently dropping them.
+// UnmarshalJSON decodes nested tools, rejecting types other than function and
+// custom with a clear error instead of silently dropping them.
 func (t *NamespaceTool) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		ToolBase

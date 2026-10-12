@@ -230,3 +230,25 @@ func TestConvertToChatCompletionRequestCustomTools(t *testing.T) {
 		t.Fatal("expected a positive token estimate")
 	}
 }
+
+func TestCustomToolFormatText(t *testing.T) {
+	var request openairesponses.CreateRequest
+	body := `{"model":"model","input":"hi","tools":[
+		{"type":"custom","name":"a","format":{"type":"text"}},
+		{"type":"custom","name":"b"},
+		{"type":"namespace","name":"ns","description":"d","tools":[
+			{"type":"custom","name":"c","format":{"type":"grammar","syntax":"lark","definition":"start: /x/"}},
+			{"type":"function","name":"f"}]}]}`
+	if err := json.Unmarshal([]byte(body), &request); err != nil {
+		t.Fatal(err)
+	}
+
+	got := customToolFormatText(request.Tools)
+	want := `{"type":"text"}{"type":"grammar","syntax":"lark","definition":"start: /x/"}`
+	if got != want {
+		t.Fatalf("format text = %s, want %s", got, want)
+	}
+	if estimatedTokenCountForText(got) <= 0 {
+		t.Fatal("expected format text to contribute tokens")
+	}
+}

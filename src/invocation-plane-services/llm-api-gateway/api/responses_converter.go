@@ -19,6 +19,7 @@ package api
 
 import (
 	"maps"
+	"strings"
 
 	openairesponses "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api/adapters/openairesponses"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
@@ -315,6 +316,22 @@ func chatCustomTool(t *openairesponses.CustomTool) models.ChatTool {
 			Description: t.Description,
 		},
 	}
+}
+
+// customToolFormatText returns the format definitions of custom tools, including
+// those nested in namespaces. chatCustomTool omits them from the chat tool, but
+// they are forwarded upstream and can be large grammars.
+func customToolFormatText(reqTools []openairesponses.Tool) string {
+	var text strings.Builder
+	for _, tool := range reqTools {
+		switch t := tool.(type) {
+		case *openairesponses.CustomTool:
+			text.Write(t.Format)
+		case *openairesponses.NamespaceTool:
+			text.WriteString(customToolFormatText(t.Tools))
+		}
+	}
+	return text.String()
 }
 
 func convertTools(reqTools openairesponses.ToolSlice) []models.ChatTool {

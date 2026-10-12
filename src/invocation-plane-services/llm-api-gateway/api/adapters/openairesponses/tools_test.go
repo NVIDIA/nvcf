@@ -1351,12 +1351,32 @@ func TestNamespaceTool_NestedCustomTool(t *testing.T) {
 	require.IsType(t, &FunctionTool{}, ns.Tools[0])
 	require.IsType(t, &CustomTool{}, ns.Tools[1])
 
-	_, err = UnmarshalTool([]byte(
+	bad, err := UnmarshalTool([]byte(
 		`{"type":"namespace","name":"n","description":"d","tools":[{"type":"custom"}]}`))
 	require.NoError(t, err)
-	bad, _ := UnmarshalTool([]byte(
-		`{"type":"namespace","name":"n","description":"d","tools":[{"type":"custom"}]}`))
 	require.Error(t, bad.Validate())
+}
+
+func TestCreateRequest_BadToolOutputReportsOutputError(t *testing.T) {
+	for name, item := range map[string]string{
+		"function number": `{"type":"function_call_output","call_id":"c1","output":42}`,
+		"function audio": `{"type":"function_call_output","call_id":"c1",` +
+			`"output":[{"type":"input_audio","input_audio":{"format":"wav","data":"AAAA"}}]}`,
+		"custom object": `{"type":"custom_tool_call_output","call_id":"c1","output":{"text":"x"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var req CreateRequest
+			err := json.Unmarshal([]byte(`{"model":"m","input":[`+item+`]}`), &req)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "output")
+			require.NotContains(t, err.Error(), "must be string or array of input items")
+		})
+	}
+
+	var req CreateRequest
+	err := json.Unmarshal([]byte(`{"model":"m","input":42}`), &req)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "must be string or array of input items")
 }
 
 func TestCustomToolCall_InputItems(t *testing.T) {
