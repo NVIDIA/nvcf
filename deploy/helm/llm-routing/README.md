@@ -42,7 +42,6 @@ python3 llm.py preflight --values dev-artifacts/values.yaml
 
 ## 1. Install shared infrastructure
 
-
 ```bash
 helm upgrade --install llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
   --namespace llm-stack --create-namespace \
