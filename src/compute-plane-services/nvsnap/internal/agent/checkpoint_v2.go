@@ -154,6 +154,15 @@ func resumeSource(ctx context.Context, hostPID int, pids []int, fabricDir string
 // gpushareResumeTimeout bounds bringing a source back after its dump.
 const gpushareResumeTimeout = 10 * time.Minute
 
+// ownSessionDir makes dir owned by the user the process pid runs as.
+func ownSessionDir(procBase string, pid int, dir string) error {
+	uid, gid, err := procOwner(procBase, pid)
+	if err != nil {
+		return err
+	}
+	return os.Lchown(dir, uid, gid)
+}
+
 // ownGPUShareStore makes the workload's chunk store (and the fabric
 // session directory in it, when there is one) owned by the user the
 // workload's process runs as, so it can write its GPU memory there.

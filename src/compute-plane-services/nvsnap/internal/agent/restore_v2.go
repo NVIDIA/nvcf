@@ -294,6 +294,15 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 			}
 			log.WithField("gpuEntries", made).Info("criu-v2: the restored tree has the pod's GPUs")
 		}
+		if sess != nil {
+			// The restored processes write their handle lists into the
+			// session directory, as the user they run as; the agent made it
+			// as root. The capture side hands its session over the same way.
+			if err := ownSessionDir(procBase, resumePID, sess.hostDir); err != nil {
+				gsSpan.End()
+				return nil, fmt.Errorf("gpushare resume: hand the fabric session to the restored processes' user: %w", err)
+			}
+		}
 		if err := gpushareResumeWithGPUsOf(ctx, resumePID, hostPID, gs.PIDs, gpuMap, fabricDir, log); err != nil {
 			gsSpan.RecordError(err)
 			gsSpan.SetStatus(codes.Error, "gpushare resume failed")

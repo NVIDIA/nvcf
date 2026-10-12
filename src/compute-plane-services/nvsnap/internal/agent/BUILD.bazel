@@ -154,6 +154,7 @@ go_test(
         "rootfs_diff_test.go",
         "rootfs_wholerootfs_guard_test.go",
         "rootfsonly_integration_test.go",
+        "session_owner_test.go",
         "tail_of_file_test.go",
     ],
     embed = [":agent"],
