@@ -414,7 +414,7 @@ async fn test_control_http_api_updates_one_model_and_reports_request_counters() 
     assert_eq!(
         body,
         serde_json::from_str::<serde_json::Value>(
-            r#"{"id":"chatcmpl-mock-id","object":"chat.completion","model":"model-a","choices":[{"index":0,"message":{"role":"assistant","content":"Hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens":1,"total_tokens":2}}"#,
+            r#"{"id":"chatcmpl-mock-id","object":"chat.completion","model":"model-a","choices":[{"index":0,"message":{"role":"assistant","content":"Hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#,
         )
         .expect("expected chat response fixture should be valid JSON")
     );

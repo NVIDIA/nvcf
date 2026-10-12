@@ -139,20 +139,28 @@ impl StatsAggregator {
         };
 
         let mut input_tps_changed = false;
-        if matches!(
+        let generation_endpoint = matches!(
             observation.endpoint,
             RequestObservationEndpoint::ChatCompletions | RequestObservationEndpoint::Responses
-        ) && let Some(interval) = event.input_interval()
+        );
+        model_state.prompt_cache_details_observed |=
+            generation_endpoint && event.uncached_input_tokens().is_some();
+        let uncached_input_tokens = event.uncached_input_tokens().or_else(|| {
+            (model_state.prompt_cache_details_observed
+                && event.input_tokens_explicit()
+                && !event.input_cache_details_invalid())
+            .then_some(observation.input_tokens)
+        });
+        if generation_endpoint
+            && let Some(interval) = event.input_interval()
             && let Some(window_rate) = model_state.request_input_intervals.observe(
                 InputIntervalSample {
                     request_id: &observation.request_id,
                     interval,
                     prompt_tokens: observation.input_tokens,
-                    input_tokens: event
-                        .uncached_input_tokens()
-                        .unwrap_or(observation.input_tokens),
+                    input_tokens: uncached_input_tokens.unwrap_or(observation.input_tokens),
                     input_tokens_explicit: event.input_tokens_explicit(),
-                    max_input_tps_eligible: event.uncached_input_tokens().is_some()
+                    max_input_tps_eligible: uncached_input_tokens.is_some()
                         || generated_request_kind(&observation.request_id)
                             == Some(GeneratedRequestKind::Calibration),
                     // Engine-reported usage resolves the slot even if the

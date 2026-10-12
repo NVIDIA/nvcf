@@ -173,6 +173,7 @@ pub(crate) struct RequestObserver {
     input_tokens: u64,
     input_tokens_explicit: bool,
     uncached_input_tokens: Option<u64>,
+    input_cache_details_invalid: bool,
     input_usage_expected: bool,
     generation: Option<ModelGeneration>,
     embedding_items: Option<u64>,
@@ -209,6 +210,7 @@ impl RequestObserver {
             input_tokens,
             input_tokens_explicit: false,
             uncached_input_tokens: None,
+            input_cache_details_invalid: false,
             input_usage_expected: false,
             generation,
             embedding_items: None,
@@ -312,6 +314,17 @@ impl RequestObserver {
         input_tokens: u64,
         uncached_input_tokens: Option<u64>,
     ) {
+        self.observe_input_usage_details(input_tokens, uncached_input_tokens, false);
+    }
+
+    // `cache_details_invalid` marks cached-token details that were present but
+    // malformed or larger than the prompt, as distinct from omitted details.
+    pub(crate) fn observe_input_usage_details(
+        &mut self,
+        input_tokens: u64,
+        uncached_input_tokens: Option<u64>,
+        cache_details_invalid: bool,
+    ) {
         if self.input_tokens_explicit && input_tokens < self.input_tokens {
             tracing::warn!(
                 request_id = self.request_id,
@@ -323,10 +336,12 @@ impl RequestObserver {
         }
         let changed = input_tokens != self.input_tokens
             || !self.input_tokens_explicit
-            || self.uncached_input_tokens != uncached_input_tokens;
+            || self.uncached_input_tokens != uncached_input_tokens
+            || self.input_cache_details_invalid != cache_details_invalid;
         self.input_tokens = input_tokens;
         self.input_tokens_explicit = true;
         self.uncached_input_tokens = uncached_input_tokens;
+        self.input_cache_details_invalid = cache_details_invalid;
         if changed {
             self.emit();
         }
@@ -567,6 +582,7 @@ impl RequestObserver {
                 input_interval,
                 input_tokens_explicit: self.input_tokens_explicit,
                 uncached_input_tokens: self.uncached_input_tokens,
+                input_cache_details_invalid: self.input_cache_details_invalid,
                 input_usage_expected: self.input_usage_expected,
                 output_calibration: backend
                     .map_or_else(OutputCalibrationFacts::default, |backend| {
@@ -1320,6 +1336,28 @@ mod tests {
             42,
             "exact response usage must not replace request-side live queue work"
         );
+    }
+
+    #[tokio::test]
+    async fn invalid_cached_details_are_distinct_from_omitted_details() {
+        let (mut observer, rx, _) = responding_observer("req-invalid-details").await;
+
+        observer.observe_input_usage_details(100, None, true);
+        let invalid = rx
+            .recv_async()
+            .await
+            .expect("invalid details should be emitted");
+        assert!(invalid.input_tokens_explicit());
+        assert_eq!(invalid.uncached_input_tokens(), None);
+        assert!(invalid.input_cache_details_invalid());
+
+        observer.observe_input_usage(100, None);
+        let omitted = rx
+            .recv_async()
+            .await
+            .expect("omitted details should be emitted");
+        assert_eq!(omitted.uncached_input_tokens(), None);
+        assert!(!omitted.input_cache_details_invalid());
     }
 
     #[tokio::test]

@@ -30,6 +30,7 @@ use super::aggregator::{ENGINE_STATS_SOURCE, KvCacheStatsSnapshot, StatsAggregat
 const DEFAULT_OBSERVATION_CHANNEL_CAPACITY: usize = 1024;
 const DEFAULT_SMOOTHING_WINDOW_SIZE: usize = 8;
 const DEFAULT_MIN_INPUT_TOKENS: u64 = 1;
+const DEFAULT_MIN_CACHE_HIT_UNCACHED_INPUT_TOKENS: u64 = 256;
 const DEFAULT_MIN_OUTPUT_TOKENS: u64 = 1;
 const DEFAULT_DURATION_FLOOR: Duration = Duration::from_millis(10);
 const DEFAULT_KV_CACHE_POLL_INTERVAL: Duration = Duration::from_secs(1);
@@ -43,6 +44,9 @@ pub struct StatsCollectorConfig {
     pub observation_channel_capacity: usize,
     pub smoothing_window_size: usize,
     pub min_input_tokens: u64,
+    // Cache hits with fewer uncached prompt tokens are left out of fallback input
+    // TPS: a short remainder's submit-to-first-output time is mostly fixed overhead.
+    pub min_cache_hit_uncached_input_tokens: u64,
     pub min_output_tokens: u64,
     pub duration_floor: Duration,
     pub kv_cache_stats_url: Option<String>,
@@ -62,6 +66,7 @@ impl Default for StatsCollectorConfig {
             observation_channel_capacity: DEFAULT_OBSERVATION_CHANNEL_CAPACITY,
             smoothing_window_size: DEFAULT_SMOOTHING_WINDOW_SIZE,
             min_input_tokens: DEFAULT_MIN_INPUT_TOKENS,
+            min_cache_hit_uncached_input_tokens: DEFAULT_MIN_CACHE_HIT_UNCACHED_INPUT_TOKENS,
             min_output_tokens: DEFAULT_MIN_OUTPUT_TOKENS,
             duration_floor: DEFAULT_DURATION_FLOOR,
             kv_cache_stats_url: None,
@@ -808,6 +813,7 @@ mod tests {
                 input_interval,
                 input_tokens_explicit: false,
                 uncached_input_tokens: None,
+                input_cache_details_invalid: false,
                 input_usage_expected: false,
                 output_calibration,
                 upstream_duration: None,
@@ -1356,7 +1362,8 @@ mod tests {
 
     #[test]
     fn fallback_input_tps_uses_uncached_tokens_when_usage_reports_them() {
-        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        // Small partial cache hits stay in the window; exclusion is tested separately.
+        let mut aggregator = test_aggregator(config!(min_cache_hit_uncached_input_tokens: 0));
         let submitted_at = std::time::Instant::now();
         let observation = completed_observation(100, 1, 10, seconds(1), seconds(2));
         let mut event = aggregator
@@ -1376,7 +1383,8 @@ mod tests {
 
     #[test]
     fn fallback_input_tps_waits_for_expected_terminal_usage() {
-        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        // Small partial cache hits stay in the window; exclusion is tested separately.
+        let mut aggregator = test_aggregator(config!(min_cache_hit_uncached_input_tokens: 0));
         let submitted_at = std::time::Instant::now();
         let interval = crate::runtime_state::RequestInputInterval {
             submitted_at,
@@ -1469,7 +1477,10 @@ mod tests {
     fn lost_terminal_after_usage(
         a_usage: TestInputUsage,
     ) -> (TestAggregator, crate::runtime_state::RequestInputInterval) {
-        let mut aggregator = test_aggregator(config!(smoothing_window_size: 2));
+        // Small partial cache hits stay in the window; exclusion is tested separately.
+        let mut aggregator = test_aggregator(
+            config!(smoothing_window_size: 2, min_cache_hit_uncached_input_tokens: 0),
+        );
         let start = std::time::Instant::now();
         let stats = apply_input_usage_observation(
             &mut aggregator,
@@ -1549,17 +1560,24 @@ mod tests {
             TestInputUsage::Cached { uncached: 80 },
             true,
         );
+        // The earlier request reported cached-token details, so A's usage
+        // without them is a cache miss: uncached equals total and stays eligible.
         assert_tps_near(stats.last_mean_input_tps, 180.0 / 1.1, "A and B");
-        assert_eq!(
-            stats.max_input_tps,
-            Some(10.0),
-            "a total-token entry must not raise the maximum"
+        assert_tps_near(
+            stats
+                .max_input_tps
+                .expect("eligible window should raise the maximum"),
+            180.0 / 1.1,
+            "maximum",
         );
     }
 
     #[test]
     fn idle_sweep_releases_a_slot_whose_usage_is_lost() {
-        let mut aggregator = test_aggregator(config!(smoothing_window_size: 2));
+        // Small partial cache hits stay in the window; exclusion is tested separately.
+        let mut aggregator = test_aggregator(
+            config!(smoothing_window_size: 2, min_cache_hit_uncached_input_tokens: 0),
+        );
         let start = std::time::Instant::now();
         apply_input_usage_observation(
             &mut aggregator,
@@ -1606,6 +1624,8 @@ mod tests {
         TotalOnly,
         /// Usage reports a cached-token breakdown.
         Cached { uncached: u64 },
+        /// Usage reports malformed or inconsistent cached-token details.
+        InvalidDetails,
     }
 
     fn input_usage_observation(
@@ -1648,11 +1668,169 @@ mod tests {
         event.input_usage_expected = input_usage_expected;
         (event.input_tokens_explicit, event.uncached_input_tokens) = match usage {
             TestInputUsage::Absent => (false, None),
-            TestInputUsage::TotalOnly => (true, None),
+            TestInputUsage::TotalOnly | TestInputUsage::InvalidDetails => (true, None),
             TestInputUsage::Cached { uncached } => (true, Some(uncached)),
         };
+        event.input_cache_details_invalid = matches!(usage, TestInputUsage::InvalidDetails);
         aggregator.apply_fallback_observation(&event);
         aggregator.snapshot("model-a")
+    }
+
+    // One-entry window with disjoint one-second prefills: each mean is the
+    // request's own token count.
+    fn apply_one_second_usage(
+        aggregator: &mut StatsAggregator,
+        index: u64,
+        input_tokens: u64,
+        usage: TestInputUsage,
+    ) -> CurrentModelStats {
+        apply_input_usage_observation(
+            aggregator,
+            &input_usage_observation(
+                &format!("one-second-{index}"),
+                input_tokens,
+                RequestObservationState::Complete,
+            ),
+            prefill_interval(std::time::Instant::now(), seconds(2 * index), seconds(1)),
+            usage,
+            true,
+        )
+    }
+
+    #[test]
+    fn chat_usage_without_details_is_a_miss_after_the_first_details_report() {
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 1));
+        for (index, (input_tokens, usage, maximum, context)) in [
+            (
+                1_000,
+                TestInputUsage::TotalOnly,
+                None,
+                "miss before any details report",
+            ),
+            (
+                2_000,
+                TestInputUsage::Cached { uncached: 2_000 },
+                Some(2_000.0),
+                "details report",
+            ),
+            (
+                3_000,
+                TestInputUsage::TotalOnly,
+                Some(3_000.0),
+                "miss after a details report",
+            ),
+            (
+                5_000,
+                TestInputUsage::InvalidDetails,
+                Some(3_000.0),
+                "invalid details",
+            ),
+            (
+                7_000,
+                TestInputUsage::Absent,
+                Some(3_000.0),
+                "request-side estimate",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let stats = apply_one_second_usage(&mut aggregator, index as u64, input_tokens, usage);
+            assert_tps_near(stats.last_mean_input_tps, input_tokens as f64, context);
+            assert_eq!(stats.max_input_tps, maximum, "{context}");
+        }
+    }
+
+    #[test]
+    fn generation_replacement_clears_the_cached_details_report() {
+        let mut aggregator = test_aggregator(config!(smoothing_window_size: 1));
+        apply_one_second_usage(
+            &mut aggregator,
+            0,
+            2_000,
+            TestInputUsage::Cached { uncached: 2_000 },
+        );
+        assert!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .prompt_cache_details_observed
+        );
+
+        let retired = aggregator
+            .current_generation("model-a")
+            .expect("initial generation should exist")
+            .clone();
+        assert!(aggregator.retire_generation(&retired));
+        assert!(
+            aggregator
+                .runtime_state
+                .retire_generation(&retired)
+                .is_some()
+        );
+        let replacement = ModelGeneration::new("model-a", retired.sequence() + 1);
+        assert!(
+            aggregator
+                .runtime_state
+                .begin_generation(replacement.clone())
+        );
+        assert!(
+            aggregator
+                .begin_generation(replacement, ModelStatsInitialization::Empty)
+                .is_some()
+        );
+
+        let stats = apply_one_second_usage(&mut aggregator, 1, 3_000, TestInputUsage::TotalOnly);
+        assert_tps_near(
+            stats.last_mean_input_tps,
+            3_000.0,
+            "miss in the new generation",
+        );
+        assert_eq!(stats.max_input_tps, None);
+    }
+
+    #[test]
+    fn near_full_cache_hits_keep_the_unique_traffic_rate() {
+        // 8 unique 8014-token prompts with 65 ms prefill, then 20 repeats that
+        // hit all but 14 tokens in 50 ms, as observed on a prefix-caching engine.
+        let unique_tps = 8_014.0 / 0.065;
+        for (miss_usage, maximum) in [
+            (TestInputUsage::TotalOnly, None),
+            (TestInputUsage::Cached { uncached: 8_014 }, Some(unique_tps)),
+        ] {
+            let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+            let start = std::time::Instant::now();
+            for index in 0..28_u64 {
+                let (usage, prefill) = if index < 8 {
+                    (miss_usage, milliseconds(65))
+                } else {
+                    (TestInputUsage::Cached { uncached: 14 }, milliseconds(50))
+                };
+                apply_input_usage_observation(
+                    &mut aggregator,
+                    &input_usage_observation(
+                        &format!("live-{index}"),
+                        8_014,
+                        RequestObservationState::Complete,
+                    ),
+                    prefill_interval(start, seconds(index), prefill),
+                    usage,
+                    true,
+                );
+            }
+            let stats = aggregator.snapshot("model-a");
+            assert_tps_near(
+                stats.last_mean_input_tps,
+                unique_tps,
+                &format!("{miss_usage:?}"),
+            );
+            assert_eq!(
+                stats
+                    .max_input_tps
+                    .map(|max| (max - unique_tps).abs() < 1e-6),
+                maximum.map(|_| true),
+                "{miss_usage:?} maximum"
+            );
+        }
     }
 
     #[track_caller]
@@ -1694,9 +1872,11 @@ mod tests {
             "usage without cached_tokens must not raise max_input_tps"
         );
 
-        // A one-entry window isolates the total-token rule from mixed windows:
-        // the prior cache-aware maximum stays while total-token means exceed it.
-        let mut aggregator = test_aggregator(config!(smoothing_window_size: 1));
+        // A one-entry window isolates the total-token rule from mixed windows.
+        // Small partial cache hits stay in the window; exclusion is tested separately.
+        let mut aggregator = test_aggregator(
+            config!(smoothing_window_size: 1, min_cache_hit_uncached_input_tokens: 0),
+        );
         let stats = apply_input_usage_observation(
             &mut aggregator,
             &input_usage_observation("cached", 100, RequestObservationState::Complete),
@@ -1707,9 +1887,11 @@ mod tests {
         assert_tps_near(stats.last_mean_input_tps, 40.0, "cache-aware mean");
         assert_eq!(stats.max_input_tps, Some(40.0));
 
-        for (index, (input_tokens, usage)) in [
-            (500, TestInputUsage::TotalOnly),
-            (900, TestInputUsage::Absent),
+        // After a cached-token report, usage without details is a cache miss and
+        // raises the maximum; a request-side estimate still does not.
+        for (index, (input_tokens, usage, maximum)) in [
+            (500, TestInputUsage::TotalOnly, 500.0),
+            (900, TestInputUsage::Absent, 500.0),
         ]
         .into_iter()
         .enumerate()
@@ -1730,11 +1912,7 @@ mod tests {
                 input_tokens as f64,
                 &format!("{usage:?} mean"),
             );
-            assert_eq!(
-                stats.max_input_tps,
-                Some(40.0),
-                "{usage:?} observation must keep the prior cache-aware maximum"
-            );
+            assert_eq!(stats.max_input_tps, Some(maximum), "{usage:?} maximum");
         }
     }
 
@@ -1754,7 +1932,7 @@ mod tests {
             ),
             (
                 100,
-                TestInputUsage::TotalOnly,
+                TestInputUsage::Absent,
                 250.0,
                 400.0,
                 "total-token entry lowers the mean",

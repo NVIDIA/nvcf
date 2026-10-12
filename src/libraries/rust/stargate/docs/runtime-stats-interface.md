@@ -123,9 +123,14 @@ client sets `stream_options.include_usage=true` or the deployment opts in to
 `--force-chat-completions-include-usage` (off by default). When usage reports
 `cached_tokens` (Chat `prompt_tokens_details` or Responses
 `input_tokens_details`), input throughput counts only uncached prompt tokens.
-Without cached details, it counts total prompt tokens. A fully cached request
-counts as zero uncached tokens. It stays in the window, and a window with no
-uncached tokens publishes nothing. Text peeking is last resort.
+Without cached details, it counts total prompt tokens. Engines that report
+cached tokens may omit Chat details on a cache miss. Once any usage for a model
+generation reports cached-token details, later usage that reports prompt tokens
+without details counts as zero cached tokens. Malformed details, or cached
+tokens above the prompt count, never count as zero. A cache hit that leaves
+fewer than 256 uncached prompt tokens (the default minimum) is left out of the
+window, because its submit-to-first-output time is mostly fixed overhead. Text
+peeking is last resort.
 
 Fallback input throughput divides the input tokens of the latest
 smoothing-window requests (8 by default) by the union of their
@@ -177,19 +182,20 @@ counter-derived output window.
 
 If request stats go stale, volatile output TPS is cleared. Sticky input TPS
 stays until a later valid sample replaces it.
-The maximum is the greatest max-eligible `last_mean_input_tps` published for
-the current model generation. A configured `--initial-input-tps` seeds it.
-Engine stats stream counters and embeddings samples raise it. An OpenAI
-fallback mean raises it only when every request in the rate window is
-max-eligible: usage reported cached-token details, or the request is a Pylon
-calibration request. Other fallback means still update `last_mean_input_tps`
-but do not raise the maximum, because cached input may be counted as prefill.
-The maximum follows the smoothed mean rather than individual samples, so the
-mean dilutes one outlier sample. Lower means do not reduce it, and generation
-replacement clears it. It is absent until the first max-eligible mean. A
-fallback-only backend with no `--initial-input-tps` and no calibration never
-reports one unless its usage includes cached-token details. Chat traffic
-without `include_usage`, or an engine that omits those details, is not enough.
+The maximum is the greatest max-eligible `last_mean_input_tps` published for the
+current model generation. A configured `--initial-input-tps` seeds it. Engine
+stats stream counters and embeddings samples raise it. An OpenAI fallback mean
+raises it only when every request in the rate window is max-eligible: usage
+reported cached-token details (or omitted them after the generation's first
+details report), or the request is a Pylon calibration request. Other fallback
+means still update `last_mean_input_tps` but do not raise the maximum, because
+cached input may be counted as prefill. The maximum follows the smoothed mean
+rather than individual samples, so the mean dilutes one outlier sample. Lower
+means do not reduce it, and generation replacement clears it. It is absent until
+the first max-eligible mean. A fallback-only backend with no
+`--initial-input-tps` and no calibration never reports one unless its usage
+includes cached-token details. Chat traffic without `include_usage`, or an
+engine that never reports those details, is not enough.
 Its cluster then has no maximum capacity, which default Pulsar ranking requires
 (see below).
 

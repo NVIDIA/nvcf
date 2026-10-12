@@ -50,6 +50,10 @@ pub(super) struct ModelMetricsState {
     aggregate_state_counted: bool,
     pub(super) counter_output_tps_authoritative: bool,
     pub(super) chunk_usage_stats_observed: bool,
+    // Set once usage for this generation reports cached-token details. Engines
+    // that report them omit Chat details on a cache miss, so later explicit
+    // usage without details then means no cached tokens.
+    pub(super) prompt_cache_details_observed: bool,
     pub(super) kv_cache_stats_observed: bool,
     pub(super) engine_stream_stats_observed: bool,
     pub(super) last_stats_event_at: Option<TokioInstant>,
@@ -164,10 +168,10 @@ struct RetainedInputInterval {
 pub(super) struct InputIntervalSample<'a> {
     pub(super) request_id: &'a str,
     pub(super) interval: RequestInputInterval,
-    // Total prompt tokens; the minimum-size filter applies to this count so a
-    // fully cached request keeps its window position.
+    // Total prompt tokens; the minimum-size filter applies to this count.
     pub(super) prompt_tokens: u64,
-    // Rate numerator: uncached prompt tokens when reported, else the total.
+    // Rate numerator: uncached prompt tokens when known, else the total. It is
+    // below `prompt_tokens` only when usage reported cached tokens.
     pub(super) input_tokens: u64,
     pub(super) input_tokens_explicit: bool,
     // True when `input_tokens` is known to count prefill work: usage split out
@@ -233,6 +237,22 @@ impl RequestInputIntervalWindow {
         let existing = self.intervals.iter().position(|entry| {
             entry.request_id == request_id && entry.interval.submitted_at == interval.submitted_at
         });
+        // A cache hit with a short uncached remainder measures request overhead,
+        // not prefill. It leaves the window entirely; removing its slot neither
+        // advances the eviction guard nor marks it dropped.
+        if input_tokens < prompt_tokens && input_tokens < config.min_cache_hit_uncached_input_tokens
+        {
+            if let Some(index) = self.dropped_pending.iter().position(|key| {
+                key.request_id == request_id && key.submitted_at == interval.submitted_at
+            }) {
+                self.dropped_pending.remove(index);
+            }
+            if let Some(index) = existing {
+                self.intervals.remove(index);
+                return self.refresh(config);
+            }
+            return None;
+        }
         let min_input_tokens = config.min_input_tokens.max(1);
         if prompt_tokens < min_input_tokens {
             let resolves_pending =
@@ -1469,9 +1489,12 @@ mod request_input_interval_window_tests {
     const UNCACHED: u64 = 100;
     const TOTAL: u64 = 150;
 
+    // The fixtures use small partial cache hits; cache-hit exclusion has its own
+    // tests with the default minimum.
     fn config(smoothing_window_size: usize) -> StatsCollectorConfig {
         StatsCollectorConfig {
             smoothing_window_size,
+            min_cache_hit_uncached_input_tokens: 0,
             ..Default::default()
         }
     }
@@ -1828,15 +1851,17 @@ mod request_input_interval_window_tests {
         );
         assert!(window.dropped_pending.is_empty());
     }
+    // Usage with a cached-token breakdown over a one-second prefill.
     fn prompt(
         request_id: &str,
         start: Instant,
         submitted_ms: u64,
+        prompt_tokens: u64,
         uncached: u64,
     ) -> InputIntervalSample<'_> {
         let submitted_at = start + Duration::from_millis(submitted_ms);
         InputIntervalSample {
-            prompt_tokens: 100,
+            prompt_tokens,
             input_tokens: uncached,
             ..usage(
                 request_id,
@@ -1848,52 +1873,93 @@ mod request_input_interval_window_tests {
         }
     }
 
-    #[test]
-    fn fully_cached_request_keeps_its_window_position() {
-        let config = config(2);
-        let start = Instant::now();
-        let mut window = RequestInputIntervalWindow::default();
-        assert_tps(
-            window.observe(prompt("a", start, 0, 100), &config),
-            100.0,
-            true,
-        );
-        assert_tps(
-            window.observe(prompt("b", start, 100, 0), &config),
-            100.0 / 1.1,
-            true,
-        );
-        assert!(
-            window
-                .observe(prompt("c", start, 200, 100), &config)
-                .is_none(),
-            "the window of B and C has the same rate as A and B"
-        );
-        assert_eq!(retained(&window), [("b", false), ("c", false)]);
-        assert_tps(current(&window), 100.0 / 1.1, true);
+    fn cache_hit_config(smoothing_window_size: usize) -> StatsCollectorConfig {
+        StatsCollectorConfig {
+            smoothing_window_size,
+            ..Default::default()
+        }
     }
 
     #[test]
-    fn fully_cached_window_never_publishes() {
-        let config = config(1);
+    fn cache_hits_with_a_short_remainder_leave_the_window() {
+        let config = cache_hit_config(2);
         let start = Instant::now();
         let mut window = RequestInputIntervalWindow::default();
-        assert!(window.observe(prompt("a", start, 0, 0), &config).is_none());
-        assert!(!window.has_observed_rate());
-        assert_eq!(window.len(), 1);
-
         assert_tps(
-            window.observe(prompt("b", start, 2_000, 100), &config),
+            window.observe(prompt("a", start, 0, 100, 100), &config),
             100.0,
             true,
         );
         assert!(
             window
-                .observe(prompt("c", start, 4_000, 0), &config)
+                .observe(prompt("b", start, 100, 100, 0), &config)
                 .is_none()
         );
-        assert_eq!(retained(&window), [("c", false)]);
-        assert_tps(window.published, 100.0, true);
+        // B's submit-to-first-output time was not prefill work, so the window is
+        // A and C even though B is between them.
+        assert_tps(
+            window.observe(prompt("c", start, 200, 100, 100), &config),
+            200.0 / 1.2,
+            true,
+        );
+        assert_eq!(retained(&window), [("a", false), ("c", false)]);
+    }
+
+    #[test]
+    fn partial_cache_hits_at_the_minimum_remainder_still_count() {
+        let config = cache_hit_config(1);
+        let min = config.min_cache_hit_uncached_input_tokens;
+        let start = Instant::now();
+        let mut window = RequestInputIntervalWindow::default();
+        assert!(
+            window
+                .observe(prompt("short", start, 0, 8_000, min - 1), &config)
+                .is_none()
+        );
+        assert!(!window.has_observed_rate());
+        assert_eq!(window.len(), 0);
+
+        assert_tps(
+            window.observe(prompt("partial", start, 2_000, 8_000, min), &config),
+            min as f64,
+            true,
+        );
+    }
+
+    #[test]
+    fn pending_slot_resolved_as_a_cache_hit_releases_newer_entries() {
+        let config = cache_hit_config(2);
+        let start = Instant::now();
+        let mut window = RequestInputIntervalWindow::default();
+        window.observe(prompt("z", start, 0, 400, 400), &config);
+        let a_interval = RequestInputInterval {
+            submitted_at: start + Duration::from_secs(2),
+            first_generated_output_at: start + Duration::from_secs(3),
+        };
+        window.observe(placeholder("a", a_interval), &config);
+        assert!(
+            window
+                .observe(prompt("b", start, 4_000, 800, 800), &config)
+                .is_none()
+        );
+
+        let hit = InputIntervalSample {
+            prompt_tokens: 8_000,
+            input_tokens: 10,
+            ..usage("a", a_interval)
+        };
+        assert_tps(window.observe(hit, &config), 1_200.0 / 2.0, true);
+        assert_eq!(retained(&window), [("z", false), ("b", false)]);
+        assert!(window.evicted_through.is_none());
+        assert!(window.dropped_pending.is_empty());
+
+        let terminal = InputIntervalSample {
+            prompt_tokens: 8_000,
+            input_tokens: 10,
+            ..usage("a", a_interval)
+        };
+        assert!(window.observe(terminal, &config).is_none());
+        assert_eq!(window.len(), 2);
     }
 
     #[test]

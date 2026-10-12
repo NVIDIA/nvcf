@@ -37,6 +37,9 @@ pub(crate) struct GeneratedOutput {
 pub(crate) struct ExactUsage {
     pub(crate) input_tokens: Option<u64>,
     pub(crate) uncached_input_tokens: Option<u64>,
+    // Cached-token details were present but malformed or larger than the
+    // prompt. Distinct from omitted details, which some engines use on a miss.
+    pub(crate) cached_input_tokens_invalid: bool,
     pub(crate) output_tokens: Option<u64>,
     pub(crate) reasoning_tokens: Option<u64>,
 }
@@ -787,6 +790,14 @@ fn exact_usage(
         },
         _ => (None, false),
     };
+    let cached_input_tokens_invalid = invalid_cached_input_tokens
+        || cached_input_exceeds_total
+        || [
+            &usage["prompt_tokens_details"],
+            &response_usage["input_tokens_details"],
+        ]
+        .into_iter()
+        .any(|details| !details.is_null() && details.as_object().is_none());
     let (output_tokens, invalid_output_tokens) = merge_u64_fields([
         &usage["completion_tokens"],
         &response_usage["output_tokens"],
@@ -797,6 +808,7 @@ fn exact_usage(
             (input_tokens.is_some() || output_tokens.is_some()).then_some(ExactUsage {
                 input_tokens,
                 uncached_input_tokens,
+                cached_input_tokens_invalid,
                 output_tokens,
                 reasoning_tokens: None,
             }),
@@ -861,6 +873,7 @@ fn exact_usage(
             .then_some(ExactUsage {
                 input_tokens,
                 uncached_input_tokens,
+                cached_input_tokens_invalid,
                 output_tokens,
                 reasoning_tokens,
             }),
@@ -1463,6 +1476,7 @@ mod tests {
                 ExactUsage {
                     input_tokens: Some(8),
                     uncached_input_tokens: None,
+                    cached_input_tokens_invalid: false,
                     output_tokens: Some(3),
                     reasoning_tokens: Some(2),
                 },
@@ -1473,6 +1487,7 @@ mod tests {
                 ExactUsage {
                     input_tokens: Some(5),
                     uncached_input_tokens: None,
+                    cached_input_tokens_invalid: false,
                     output_tokens: Some(2),
                     reasoning_tokens: Some(1),
                 },
@@ -1483,6 +1498,7 @@ mod tests {
                 ExactUsage {
                     input_tokens: Some(100),
                     uncached_input_tokens: Some(36),
+                    cached_input_tokens_invalid: false,
                     output_tokens: Some(3),
                     reasoning_tokens: None,
                 },
@@ -1493,6 +1509,7 @@ mod tests {
                 ExactUsage {
                     input_tokens: Some(80),
                     uncached_input_tokens: Some(50),
+                    cached_input_tokens_invalid: false,
                     output_tokens: Some(2),
                     reasoning_tokens: None,
                 },
@@ -1503,6 +1520,7 @@ mod tests {
                 ExactUsage {
                     input_tokens: Some(5),
                     uncached_input_tokens: None,
+                    cached_input_tokens_invalid: true,
                     output_tokens: Some(3),
                     reasoning_tokens: None,
                 },
@@ -1513,6 +1531,7 @@ mod tests {
                 ExactUsage {
                     input_tokens: Some(5),
                     uncached_input_tokens: None,
+                    cached_input_tokens_invalid: true,
                     output_tokens: Some(2),
                     reasoning_tokens: None,
                 },
@@ -1523,6 +1542,7 @@ mod tests {
                 ExactUsage {
                     input_tokens: Some(100),
                     uncached_input_tokens: None,
+                    cached_input_tokens_invalid: true,
                     output_tokens: Some(3),
                     reasoning_tokens: None,
                 },
@@ -1533,6 +1553,7 @@ mod tests {
                 ExactUsage {
                     input_tokens: None,
                     uncached_input_tokens: None,
+                    cached_input_tokens_invalid: false,
                     output_tokens: Some(7),
                     reasoning_tokens: None,
                 },
@@ -1543,6 +1564,7 @@ mod tests {
                 ExactUsage {
                     input_tokens: Some(8),
                     uncached_input_tokens: None,
+                    cached_input_tokens_invalid: false,
                     output_tokens: None,
                     reasoning_tokens: Some(2),
                 },
@@ -1553,6 +1575,39 @@ mod tests {
             assert_eq!(parsed.facts.exact_usage, Some(expected));
             assert_eq!(parsed.facts.generated_output, None);
             assert_eq!(parsed.facts.calibration_ineligible, calibration_ineligible);
+        }
+    }
+
+    #[test]
+    fn cached_details_are_omitted_valid_or_invalid() {
+        for (data, uncached, invalid) in [
+            (
+                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3}}"#,
+                None,
+                false,
+            ),
+            (
+                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3,"prompt_tokens_details":null}}"#,
+                None,
+                false,
+            ),
+            (
+                r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"input_tokens":100,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}}"#,
+                Some(100),
+                false,
+            ),
+            (
+                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3,"prompt_tokens_details":5}}"#,
+                None,
+                true,
+            ),
+        ] {
+            let usage = parse_data(data)
+                .facts
+                .exact_usage
+                .expect("usage should parse");
+            assert_eq!(usage.uncached_input_tokens, uncached, "{data}");
+            assert_eq!(usage.cached_input_tokens_invalid, invalid, "{data}");
         }
     }
 
@@ -1630,6 +1685,7 @@ mod tests {
                 Some(ExactUsage {
                     input_tokens: None,
                     uncached_input_tokens: None,
+                    cached_input_tokens_invalid: false,
                     output_tokens: Some(5),
                     reasoning_tokens: None,
                 })
