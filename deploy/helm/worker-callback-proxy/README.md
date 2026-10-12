@@ -46,10 +46,11 @@ Wildcard DNS for `*.<workerDomain>` must resolve to the Service.
 
 ## Shutdown
 
-The preStop hook asks Envoy to drain its listeners, then waits
-`preStopSleepSeconds` before Kubernetes sends SIGTERM. Envoy keeps serving
-open connections for `drainTimeSeconds`. Keep
-`terminationGracePeriodSeconds` larger than the sum of both.
+The preStop hook asks Envoy to drain its listeners gradually over
+`drainTimeSeconds`, then waits `preStopSleepSeconds` before Kubernetes sends
+SIGTERM. Envoy exits on SIGTERM, so keep `preStopSleepSeconds` at least
+`drainTimeSeconds`, and `terminationGracePeriodSeconds` larger than
+`preStopSleepSeconds`.
 
 ## Usage
 

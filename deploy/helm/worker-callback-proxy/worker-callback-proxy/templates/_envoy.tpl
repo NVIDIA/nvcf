@@ -99,8 +99,9 @@ static_resources:
                 route_config:
                   name: grpc_worker
                   virtual_hosts:
-                    # Only grpc-proxy pods can complete the upstream TLS
-                    # handshake, so any other rewritten target fails there.
+                    # The Lua filter only rewrites <dashed-ip>.<workerDomain>,
+                    # and only grpc-proxy pods can complete the upstream TLS
+                    # handshake.
                     - name: grpc_worker
                       domains: ["*"]
                       routes:
@@ -115,9 +116,10 @@ static_resources:
                       default_source_code:
                         inline_string: |
                           function envoy_on_request(h)
-                            local host = h:headers():get(":authority") or ""
-                            local a, b, c, d = host:match("^(%d+)%-(%d+)%-(%d+)%-(%d+)%.")
-                            if a == nil then
+                            local host = string.lower(h:headers():get(":authority") or "")
+                            host = (host:gsub(":%d+$", ""))
+                            local a, b, c, d, domain = host:match("^(%d+)%-(%d+)%-(%d+)%-(%d+)%.(.+)$")
+                            if a == nil or domain ~= "{{ include "wcp.workerDomain" . }}" then
                               h:respond({[":status"] = "404"}, "unknown callback host")
                               return
                             end
