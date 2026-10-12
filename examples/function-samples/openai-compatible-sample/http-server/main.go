@@ -119,9 +119,11 @@ type benchmarkBodyControls struct {
 }
 
 type responsesRequest struct {
-	Model  string          `json:"model"`
-	Stream bool            `json:"stream"`
-	Input  json.RawMessage `json:"input"`
+	Model      string            `json:"model"`
+	Stream     bool              `json:"stream"`
+	Input      json.RawMessage   `json:"input"`
+	Tools      []json.RawMessage `json:"tools"`
+	ToolChoice json.RawMessage   `json:"tool_choice"`
 	benchmarkBodyControls
 }
 
@@ -406,6 +408,27 @@ func handleResponses(w http.ResponseWriter, r *http.Request, config serverConfig
 		writeAPIError(w, http.StatusBadRequest, "model is required", "model")
 		return
 	}
+	plan, err := planResponsesTools(&request)
+	if err != nil {
+		writeToolRequestError(w, err)
+		return
+	}
+	if plan.call != nil {
+		output := newToolCallOutput(&request, *plan.call, mockToolInput(*plan.call, plan.userText))
+		if request.Stream {
+			streamToolCall(r.Context(), w, output, tuning)
+			return
+		}
+		if !waitFor(r.Context(), tuning.TTFT, tuning.TTFTJitter) {
+			return
+		}
+		writeJSON(w, http.StatusOK, output.response)
+		return
+	}
+	if plan.hasReply {
+		tuning.Chunk, tuning.ChunkBytes, tuning.OutputChunks = plan.replyText, 0, 1
+	}
+
 	if request.Stream {
 		streamResponses(r.Context(), w, newResponsesResponse(request.Model, ""), tuning)
 		return
