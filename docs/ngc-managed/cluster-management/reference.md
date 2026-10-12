@@ -19,7 +19,7 @@ The chart values are organized into three layers:
    resources, and agent runtime config. Examples: `image`, `ngcConfig`, `nodeSelector`,
    `networkPolicy`, `agent`, `agentConfig`.
 
-2. **`helmManaged.*`**: Only used when `ngcConfig.clusterSource` is `"helm-managed"`.
+2. `helmManaged.*`: Only used when `ngcConfig.clusterSource` is `"helm-managed"`.
    These define the cluster identity and backend configuration that would otherwise come from
    the NGC UI. Includes cloud provider, region, cluster group, NVCA version, feature gates,
    cluster attributes, and manual GPU config.
@@ -36,7 +36,7 @@ The key field is `ngcConfig.clusterSource`:
  image:
    repository: "nvcr.io/nvidia/nvcf-byoc/nvca-operator"
  ngcConfig:
-   clusterSource: "helm-managed"    # ← This determines which section below is used
+   clusterSource: "helm-managed"    # This determines which section below is used
    serviceKey: "<your-key>"
  nodeSelector:
    key: "node.kubernetes.io/instance-type"
