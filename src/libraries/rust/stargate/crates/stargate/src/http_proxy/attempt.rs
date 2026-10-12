@@ -48,7 +48,9 @@ fn clamp_routing_reservation_ttl(
     min: std::time::Duration,
     max: std::time::Duration,
 ) -> std::time::Duration {
-    rtt.clamp(min, max)
+    // Startup rejects min > max; `Duration::clamp` would panic on every
+    // dispatch if a programmatic config bypassed that check, so max wins.
+    rtt.max(min).min(max)
 }
 
 #[derive(Default)]
@@ -579,6 +581,16 @@ mod tests {
             clamp_routing_reservation_ttl(Duration::from_secs(5), min, max),
             max
         );
+    }
+
+    #[test]
+    fn reservation_ttl_clamp_does_not_panic_on_inverted_bounds() {
+        let min = Duration::from_millis(20);
+        let max = Duration::from_millis(10);
+
+        for rtt in [Duration::ZERO, Duration::from_millis(15), Duration::MAX] {
+            assert_eq!(clamp_routing_reservation_ttl(rtt, min, max), max);
+        }
     }
 
     #[tokio::test]

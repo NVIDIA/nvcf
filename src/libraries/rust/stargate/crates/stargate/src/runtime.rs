@@ -258,6 +258,10 @@ impl StargateRuntime {
     }
 
     pub async fn start(self) -> Result<StargateHandle> {
+        ensure!(
+            self.config.routing_reservation_ttl_min <= self.config.routing_reservation_ttl_max,
+            "routing reservation TTL minimum must not exceed maximum"
+        );
         if let Some(grpc_pylon_dial_addr) = self
             .config
             .grpc_pylon_dial_addr
@@ -824,6 +828,41 @@ mod tests {
             error
                 .to_string()
                 .contains("Pylon gRPC dial address must be an explicit http:// or https:// URI"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_rejects_routing_reservation_ttl_minimum_above_maximum() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+        let mut config = test_runtime_config("test-invalid-reservation-ttl");
+        config.routing_reservation_ttl_min = Duration::from_millis(20);
+        config.routing_reservation_ttl_max = Duration::from_millis(10);
+        let listeners =
+            BoundStargateListeners::bind(&mut config).expect("test listeners should bind");
+        let runtime = StargateRuntime::new(
+            config,
+            Box::new(BlockingDiscovery {
+                active_calls: Arc::new(AtomicUsize::new(0)),
+                self_info: StargateInfo::default(),
+            }),
+            listeners,
+            None,
+        );
+
+        let error = match runtime.start().await {
+            Ok(handle) => {
+                handle.begin_shutdown();
+                let _ = handle.wait_for_shutdown(Duration::from_secs(2)).await;
+                panic!("reservation TTL minimum above maximum should fail startup")
+            }
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("routing reservation TTL minimum must not exceed maximum"),
             "unexpected error: {error}"
         );
     }
