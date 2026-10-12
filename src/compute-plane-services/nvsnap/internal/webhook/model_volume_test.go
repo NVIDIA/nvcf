@@ -56,7 +56,7 @@ func mvMutatorReader(t *testing.T, mode modelvolume.Mode, reader modelvolume.Rea
 	}, el
 }
 
-// The prd11 function shape: NGC init download into an emptyDir, engine
+// A production function shape: NGC init download into an emptyDir, engine
 // from a positional MODEL_PATH, two pods per instance.
 func ngcFunctionPod() *corev1.Pod {
 	gpu := corev1.ResourceRequirements{Limits: corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("4")}}

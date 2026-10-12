@@ -430,7 +430,7 @@ func (p *Provisioner) EnsureSizedClaim(ctx context.Context, uri, ns string, size
 // of any number of agents racing for one identity exactly one sees
 // created and owns the copy; the rest get AlreadyExists and back off. A
 // Get before the Create is not an election (five agents once passed
-// through that gap together, ct1 2026-09-30), so there is none.
+// through that gap together, 2026-09-30), so there is none.
 func (p *Provisioner) ClaimSizedClaim(ctx context.Context, uri, ns string, size resource.Quantity) (name string, created bool, err error) {
 	return p.ClaimSizedClaimNamed(ctx, p.Cfg.ClaimName(uri), uri, ns, size)
 }
