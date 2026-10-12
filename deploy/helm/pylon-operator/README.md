@@ -49,7 +49,8 @@ Omitted fields use Pylon's defaults and leave other endpoints unchanged. The tim
   release namespace with that CA in key `ca.crt`. See
   [Router TLS trust](#router-tls-trust).
 - The operator and Pylon images in a registry the cluster can pull from. The
-  chart sets no image repository.
+  chart sets no image repository. For a private registry, see
+  [Image pull Secrets](#image-pull-secrets).
 
 ## Install
 
@@ -88,6 +89,75 @@ helm upgrade pylon-operator pylon-operator --namespace pylon-operator --values p
 helm uninstall pylon-operator --namespace pylon-operator
 ```
 
+## Install from a registry
+
+To install a published build, use the chart and the operator and Pylon images
+that your publishing pipeline pushed to a registry. `<registry>` below is that
+registry path, for example `nvcr.io/<org>/<team>`. The examples use NGC: for
+another registry, use its host and credentials for the login and the Secret.
+
+The versions file produced by your publishing pipeline names the exact
+versions: `charts.pylon-operator.version` is the chart version and
+`charts.pylon-operator.ref` its OCI reference. The
+[end-to-end test README](../../../tests/e2e/inference-endpoints-k3d/README.md#versions-file)
+documents the file. The published chart already sets `image.tag` and
+`pylon.image.tag` to `images.nvcf-pylon-operator.tag` and `images.pylon.tag`,
+but leaves the repositories empty, so set them at install time. The operator
+image is published as `nvcf-pylon-operator`, its service name, because the
+chart takes `pylon-operator` in the same registry path.
+
+1. Log in to the registry with an NGC API key. Helm uses the login to pull
+   the chart:
+
+   ```bash
+   export NGC_API_KEY=<your NGC API key>
+   printf '%s' "${NGC_API_KEY}" | helm registry login nvcr.io --username '$oauthtoken' --password-stdin
+   ```
+
+2. Create the pull Secret in the release namespace, for the operator pod, and
+   in every namespace that will hold an `InferenceEndpoint`, for the transport
+   pods:
+
+   ```bash
+   for ns in pylon-operator models; do
+     kubectl create namespace "${ns}" --dry-run=client -o yaml | kubectl apply -f -
+     kubectl -n "${ns}" create secret docker-registry ngc-pull \
+       --docker-server=nvcr.io \
+       --docker-username='$oauthtoken' \
+       --docker-password="${NGC_API_KEY}"
+   done
+   ```
+
+3. Install the chart with the repositories and the pull Secrets:
+
+   ```yaml
+   # pylon-operator-registry-values.yaml
+   image:
+     repository: <registry>/nvcf-pylon-operator
+   imagePullSecrets:
+     - name: ngc-pull
+   clusterId: spark-berlin
+   router:
+     grpcAddress: llm-request-router.nvcf.svc.cluster.local:50071
+   pylon:
+     image:
+       repository: <registry>/pylon
+     imagePullSecrets:
+       - name: ngc-pull
+   ```
+
+   ```bash
+   helm install pylon-operator oci://<registry>/pylon-operator \
+     --version <version> \
+     --namespace pylon-operator \
+     --values pylon-operator-registry-values.yaml \
+     --wait
+   ```
+
+Then continue with [Cluster credential](#cluster-credential). To install the
+gateway stack from the same registry, see the
+[LLM gateway stack chart](../llm-gateway-stack/README.md#install-from-a-registry).
+
 ## Values
 
 Rendering fails when a required value is empty. `values.schema.json` checks
@@ -98,12 +168,13 @@ types, the `clusterId` and namespace formats and the durations.
 | `image.repository` | `""` | Operator image repository. Required. |
 | `image.tag` | `""` | Operator image tag. Defaults to the chart `appVersion`. A `sha256:` value is used as a digest. |
 | `image.pullPolicy` | `IfNotPresent` | Operator image pull policy. |
-| `imagePullSecrets` | `[]` | Pull Secrets for the operator pod. |
+| `imagePullSecrets` | `[]` | Pull Secrets for the operator pod, as `{name: <Secret>}` entries. They must exist in the release namespace. |
 | `clusterId` | `""` | Cluster name, a DNS label. Required. `--cluster-id`. |
 | `router.grpcAddress` | `""` | Router gRPC address that transport pods register with. Required. `--router-grpc-address`. |
 | `pylon.image.repository` | `""` | Pylon transport image repository. Required. |
 | `pylon.image.tag` | `""` | Pylon transport image tag or `sha256:` digest. Required. With the repository, `--pylon-image`. |
 | `pylon.image.pullPolicy` | `IfNotPresent` | Transport container pull policy. `--pylon-image-pull-policy`. |
+| `pylon.imagePullSecrets` | `[]` | Pull Secrets for the transport pods, as `{name: <Secret>}` entries. Each must exist in every namespace with an `InferenceEndpoint`. `--pylon-image-pull-secrets`, comma-separated. |
 | `watchNamespaces` | `[]` | Namespaces to watch. Empty watches all. `--watch-namespaces`, comma-separated. |
 | `transport.replicas` | `1` | Replicas of each transport Deployment. `--transport-replicas`. |
 | `transport.initialInputTPS` | `100` | Input tokens per second Pylon assumes until it has measured the backend. `--initial-input-tps`. |
@@ -133,6 +204,24 @@ The operator always receives `--cluster-credential-secret` with the Secret name
 the chart resolved. `POD_NAMESPACE`, set from the downward API, gives the
 operator its own namespace (`--operator-namespace`), where it reads the
 credential Secret and the trust bundle ConfigMap.
+
+## Image pull Secrets
+
+The operator pod and the transport pods pull from different namespaces, so
+they have separate pull Secret values:
+
+- `imagePullSecrets` applies to the operator pod. The Secrets must exist in
+  the release namespace.
+- `pylon.imagePullSecrets` reaches the operator as
+  `--pylon-image-pull-secrets`, and the operator sets them on every transport
+  Deployment. Transport pods run in the namespace of their `InferenceEndpoint`,
+  so each Secret must exist in every such namespace. The operator does not
+  copy pull Secrets, unlike the cluster credential and the trust bundle.
+  Without the Secret, the transport pods cannot pull the Pylon image, and the
+  endpoint reports `TransportReady=False` with reason
+  `TransportPodsNotRunning`.
+
+Changing `pylon.imagePullSecrets` rolls every transport Deployment once.
 
 ## Cluster credential
 

@@ -67,7 +67,7 @@ Options:
 
 - `--profile NAME` restricts the check to one catalog hardware profile.
 - `--context-length TOKENS --concurrency COUNT` checks a requested workload against the recipe's supported envelope. SGLang commands include these overrides. GGUF profiles use fixed recipe tuning and reject workload overrides.
-- `--capabilities FILE` supplies verified per-node NVMe, device-memory or fabric facts. Start from [capabilities.example.json](recipes/capabilities.example.json), replace example addresses and names, and save it outside the checkout.
+- `--capabilities FILE` supplies verified per-node NVMe, device-memory or fabric facts. Start from [capabilities.example.json](recipes/capabilities.example.json), replace example node names and values, and save it outside the checkout.
 - `--runtime-class NAME --storage-class NAME --shared-ca-configmap NAME` sets the installation's site values. The check requires the RuntimeClass and a StorageClass with `WaitForFirstConsumer` and unrestricted topology. It does not verify the CA or gateway connection.
 - `--release NAME` changes the name of a new release. It does not adopt or replace an existing deployment.
 - `--verbose` shows detailed diagnostics and an install command when all deployment checks pass.
@@ -119,30 +119,15 @@ Tested in October 2026 with Pi 1.0.4 and Codex 0.161.0 against `glm-5.3` on one 
 
 #### Open the gateway
 
-Use the shared `llm-stack` installation. Set `LLM_CONTEXT` to your kubeconfig context and keep a port-forward running in its own terminal:
+Use the shared `llm-stack` installation. Keep the gateway connection open in its own terminal, replacing `my-cluster` with your kubeconfig context:
 
 ```bash
-LLM_CONTEXT=my-cluster
-kubectl --context "$LLM_CONTEXT" -n llm-stack port-forward svc/llm-api-gateway 18443:8080 --address 127.0.0.1
+python3 llm.py --context my-cluster connect
 ```
 
-In the terminal where you run the agent, select the same context and retrieve the existing gateway CA and caller key:
+The command reads the gateway CA and caller key from the installed release, as `llm.py models` does, writes them to a private temporary directory and forwards the gateway to local port 18443. It uses the shared chart defaults and accepts the [connection overrides](#shared-cli-connection-options) `--context`, `--ca-configmap` and `--api-key-file`. With `--port`, change the agent configuration below to match. Run the printed `export` lines in the terminal where you start the agent. They set `LLM_GATEWAY_URL`, `LLM_GATEWAY_CA` and `LLM_API_KEY`.
 
-```bash
-LLM_CONTEXT=my-cluster
-LLM_CA_CONFIGMAP=llm-gateway-stack-ca
-LLM_CALLER_SECRET=llm-shared-caller-key
-umask 077
-LLM_WORK="$(mktemp -d)"
-kubectl --context "$LLM_CONTEXT" -n llm-stack get configmap "$LLM_CA_CONFIGMAP" \
-  -o 'jsonpath={.data.ca\.crt}' > "$LLM_WORK/gateway-ca.crt"
-export GLM_API_KEY="$(kubectl --context "$LLM_CONTEXT" -n llm-stack get secret "$LLM_CALLER_SECRET" \
-  -o 'go-template={{index .data "api-key" | base64decode}}')"
-```
-
-These are the shared chart defaults. If the installation overrides them, use `operator.trustBundle.configMap` for `LLM_CA_CONFIGMAP` and `callerKey.existingSecret` (or `callerKey.secretName` when empty) for `LLM_CALLER_SECRET`. Read the installed names with `helm --kube-context "$LLM_CONTEXT" -n llm-stack get values llm-stack --all`. An existing caller key file can instead supply `GLM_API_KEY` with `export GLM_API_KEY="$(cat /path/to/api-key)"`.
-
-The default gateway certificate covers `127.0.0.1`, so the agents connect to `https://127.0.0.1:18443/v1` and trust `$LLM_WORK/gateway-ca.crt`. When finished, stop the port-forward, unset `GLM_API_KEY` and remove the temporary CA file.
+The default gateway certificate covers `127.0.0.1`, so the agents connect to `https://127.0.0.1:18443/v1` and trust `$LLM_GATEWAY_CA`. When finished, press Ctrl-C in the `connect` terminal to close the connection and remove the credential files, then unset `LLM_API_KEY`.
 
 #### Pi
 
@@ -153,14 +138,14 @@ npm install -g --ignore-scripts @earendil-works/pi-coding-agent
 mkdir -p ~/.pi/agent
 cat > ~/.pi/agent/models.json <<'EOF'
 {"providers": {"llm-routing": {
-  "baseUrl": "https://127.0.0.1:18443/v1", "api": "openai-completions", "apiKey": "$GLM_API_KEY",
+  "baseUrl": "https://127.0.0.1:18443/v1", "api": "openai-completions", "apiKey": "$LLM_API_KEY",
   "compat": {"supportsStore": false, "supportsDeveloperRole": false, "supportsReasoningEffort": false,
              "supportsUsageInStreaming": true, "supportsStrictMode": false, "maxTokensField": "max_tokens"},
   "models": [{"id": "GLM-5.3-UD-IQ2_M", "name": "GLM-5.3", "reasoning": false,
               "input": ["text"], "contextWindow": 65536, "maxTokens": 8192}]}}}
 EOF
 echo '{"defaultProvider": "llm-routing", "defaultModel": "GLM-5.3-UD-IQ2_M"}' > ~/.pi/agent/settings.json
-NODE_EXTRA_CA_CERTS="$LLM_WORK/gateway-ca.crt" pi
+NODE_EXTRA_CA_CERTS="$LLM_GATEWAY_CA" pi
 ```
 
 - Set `contextWindow` to the selected recipe tuning's `contextPerSlot`. Pi sizes `max_tokens` from it and compacts the conversation before it fills.
@@ -185,7 +170,7 @@ show_raw_agent_reasoning = true
 [model_providers.llm-routing]
 name = "LLM routing gateway"
 base_url = "https://127.0.0.1:18443/v1"
-env_key = "GLM_API_KEY"
+env_key = "LLM_API_KEY"
 wire_api = "responses"
 stream_idle_timeout_ms = 600000
 
@@ -201,7 +186,7 @@ experimental_request_user_input = { enabled = false }
 [skills]
 include_instructions = false
 EOF
-CODEX_CA_CERTIFICATE="$LLM_WORK/gateway-ca.crt" codex --profile glm
+CODEX_CA_CERTIFICATE="$LLM_GATEWAY_CA" codex --profile glm
 ```
 
 - Set `model_context_window` to the selected recipe tuning's `contextPerSlot`. Without it, Codex assumes a much larger context and requests fail when the conversation grows.
@@ -219,7 +204,6 @@ CODEX_CA_CERTIFICATE="$LLM_WORK/gateway-ca.crt" codex --profile glm
 Automatic SGLang startup checks its cache before downloading. Reinstalling the same release in the same namespace on the original node reuses its retained claim without extra flags. Completed files are verified locally, including complete Hugging Face snapshots without a recipe completion marker. Missing files are downloaded into that cache. A cache marked complete but failing validation stops startup instead of silently replacing its contents.
 
 To use a differently named claim in the same namespace, set `cache.existingClaim`. To require a complete offline cache and prohibit model downloads, also set `reuseCaches: true`:
-
 
 ```yaml
 reuseCaches: true
@@ -629,7 +613,7 @@ For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the
      --profile "$PROFILE_ID" --release "$MODEL_RELEASE" --verbose
    ```
 
-   Supply `--capabilities /path/to/private/capabilities.json` for profiles needing verified NVMe or fabric facts. Once placement and values are correct, deploy and verify. Registration can precede gateway discovery. The loop below waits for discovery and a healthy registry before testing inference. Each verification run needs a fresh output path:
+   Supply `--capabilities /path/to/private/capabilities.json` for NVMe or fabric facts, or to override GPU memory from node labels. Once placement and values are correct, deploy and verify. Registration can precede gateway discovery. The loop below waits for discovery and a healthy registry before testing inference. Each verification run needs a fresh output path:
 
    ```bash
    VERIFY_DIR="$(mktemp -d)"
@@ -694,7 +678,8 @@ RENDER_DIR="$(mktemp -d)"
 helm template llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
   --namespace llm-stack --values dev-artifacts/values.yaml > "$RENDER_DIR/shared.yaml"
 helm template qwen-fp8 recipes/charts/sglang --namespace llm-stack \
-  --set recipe=qwen3.8-27b --set 'nodes[0]=offline-gpu-node' > "$RENDER_DIR/model.yaml"
+  --set recipe=qwen3.8-27b --set profileName=spark-fp8 \
+  --set 'nodes[0]=offline-gpu-node' > "$RENDER_DIR/model.yaml"
 ```
 
 Offline rendering cannot inspect live ownership or prove credential reuse. Use [package-charts.sh](dev-artifacts/package-charts.sh) to build archives in a fresh output directory, then check catalog paths, bundled source equality and `SHA256SUMS`. Package generation and developer image builds do not install or upgrade a release.

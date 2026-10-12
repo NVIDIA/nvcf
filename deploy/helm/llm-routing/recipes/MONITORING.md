@@ -6,12 +6,26 @@ Run commands from `deploy/helm/llm-routing`.
 
 ## Install and upgrade
 
+List the nodes and choose an IP reachable from your computer. Traefik must serve HTTP on port 80 at that address.
+
 ```bash
-helm upgrade --install llm-monitoring recipes/charts/monitoring \
-  --namespace llm-stack --wait --timeout 10m
+kubectl get nodes -o wide
 ```
 
-For placement, storage or ingress overrides, add `--values /path/to/private/monitoring-values.yaml`. Keep these environment settings outside the checkout. Resource defaults, scrape selectors and image versions are in [values.yaml](charts/monitoring/values.yaml).
+Set `NODE_IP` to that address, then install monitoring:
+
+```bash
+NODE_IP=YOUR_NODE_IP
+
+helm upgrade --install llm-monitoring recipes/charts/monitoring \
+  --namespace llm-stack \
+  --set-string grafana.rootURL="http://${NODE_IP}/grafana/" \
+  --wait --timeout 10m
+```
+
+Open `http://NODE_IP/grafana/d/llm-demo` using the same IP. Dashboard viewing is anonymous.
+
+Settings and defaults are in [values.yaml](charts/monitoring/values.yaml).
 
 | Setting | Purpose |
 | --- | --- |
@@ -23,8 +37,11 @@ For placement, storage or ingress overrides, add `--values /path/to/private/moni
 | `imagePullPolicy` | Use `Never` only when every monitoring image is preloaded |
 | `collector.image`, `victoriaMetrics.image`, `grafana.image` | Versioned image references or mirrors |
 | `networkPolicy.enabled`, `networkPolicy.apiServerCIDRs` | Optional egress policy and API server addresses |
-| `grafana.rootURL` | Public URL ending in `/`, required when ingress is enabled |
-| `grafana.ingress` | Optional `enabled`, `className`, `host` and `path` settings |
+| `grafana.rootURL` | Required browser URL for ingress, set above to `http://NODE_IP/grafana/`. Must end in the ingress path plus `/`. |
+| `grafana.ingress.enabled` | Create the ingress, default `true` |
+| `grafana.ingress.className` | Ingress controller class, default `traefik` |
+| `grafana.ingress.host` | Empty by default for node IP access; use a hostname for DNS access |
+| `grafana.ingress.path` | URL prefix, default `/grafana`; the controller forwards it unchanged |
 
 Override `targets` if shared-stack labels or metric ports differ from the defaults. Helm replaces the entire list, so include all targets you want to scrape. Each target needs a unique `name`, pod-label `selector` and `portName`. Optional fields are `path`, `port` and `runtime: llama.cpp`.
 
@@ -32,34 +49,9 @@ The chart generates the Grafana admin credential and reuses it on upgrades. A mi
 
 For disconnected environments, distribute the pinned monitoring images using your normal registry or node-preload process. Review [image licenses](NOTICE) before distributing bundles.
 
-## Ingress
+## Admin login
 
-To expose Grafana through your cluster's ingress controller, add these Helm values:
-
-```yaml
-grafana:
-  rootURL: http://demo.example.com/grafana/
-  ingress:
-    enabled: true
-    className: traefik
-    host: demo.example.com
-    path: /grafana
-```
-
-Use your public scheme, host and port in `grafana.rootURL` so shared dashboard links resolve correctly. Its path must match `grafana.ingress.path` with a trailing `/`. The chart rejects mismatches. `className` and `host` are optional. An empty host matches all hosts. The chart does not configure ingress TLS.
-
-Open `/grafana/d/llm-demo` through the ingress. Grafana serves the prefix itself, so configure the controller to forward it unchanged. Dashboard viewing is anonymous. Administrative access requires the Grafana credential.
-
-## Local access and admin login
-
-```bash
-kubectl --namespace llm-stack port-forward \
-  svc/llm-monitoring-grafana 13000:3000 --address 127.0.0.1
-```
-
-Open `http://127.0.0.1:13000/d/llm-demo`. With ingress enabled, include its path, for example `http://127.0.0.1:13000/grafana/d/llm-demo`.
-
-For administration, open Grafana's login page. The generated username is `admin`. Retrieve its password from the release's Secret in your own terminal:
+For administration, open `/grafana/login` at the same ingress address. The generated username is `admin`. Retrieve its password from the release's Secret in your own terminal:
 
 ```bash
 kubectl --namespace llm-stack get secret llm-monitoring-grafana-admin \
@@ -67,8 +59,6 @@ kubectl --namespace llm-stack get secret llm-monitoring-grafana-admin \
 ```
 
 Use the corresponding Secret and username if `grafana.adminSecret` is set. Save lasting dashboards and data sources in the chart. Grafana's local data directory is temporary.
-
-For an existing reverse proxy that strips `/grafana/`, set `grafana.rootURL` to its public URL and leave `grafana.ingress.enabled` false. Access that setup through the proxy.
 
 ## Integration verification
 

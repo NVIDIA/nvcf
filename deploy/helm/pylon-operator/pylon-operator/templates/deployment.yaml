@@ -48,6 +48,9 @@ spec:
             {{- with .Values.pylon.image.pullPolicy }}
             - {{ printf "--pylon-image-pull-policy=%s" . | quote }}
             {{- end }}
+            {{- with include "pylon-operator.pylonImagePullSecrets" . }}
+            - {{ printf "--pylon-image-pull-secrets=%s" . | quote }}
+            {{- end }}
             {{- with .Values.watchNamespaces }}
             - {{ printf "--watch-namespaces=%s" (join "," .) | quote }}
             {{- end }}

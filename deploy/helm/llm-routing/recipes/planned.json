@@ -2,55 +2,6 @@
   "schemaVersion": 1,
   "recipes": [
     {
-      "id": "nemotron-5-super-49b",
-      "name": "Nemotron 5 Super 49B",
-      "servedModelId": null,
-      "availability": {
-        "status": "unavailable",
-        "deployable": false,
-        "reason": "Exact-name public artifact and access status remain unverified.",
-        "checkedAt": "2026-10-07",
-        "sources": [
-          "https://huggingface.co/api/models?author=nvidia&search=Nemotron&limit=1000",
-          "https://huggingface.co/nvidia",
-          "https://www.nvidia.com/en-us/ai-data-science/foundation-models/nemotron/"
-        ]
-      },
-      "precision": null,
-      "license": null,
-      "licenseNotice": null,
-      "model": null,
-      "runtime": null,
-      "profiles": [],
-      "upstreamCandidates": []
-    },
-    {
-      "id": "qwen3.8-4b",
-      "name": "Qwen3.8-4B",
-      "servedModelId": null,
-      "availability": {
-        "status": "unavailable",
-        "deployable": false,
-        "reason": "Exact-name public artifact and access status remain unverified. HTTP 401 is ambiguous between private and nonexistent repositories. Rechecked 2026-10-09: the Qwen3.8-4B, Qwen3.8-4B-FP8 and nvidia Qwen3.8-4B-NVFP4 repositories return 401 and no 4B model appears in the Qwen3.8 author listing. The public Qwen3.5-4B has its own executable recipe, qwen3.5-4b.",
-        "checkedAt": "2026-10-09",
-        "sources": [
-          "https://huggingface.co/collections/Qwen/qwen38",
-          "https://huggingface.co/Qwen",
-          "https://huggingface.co/api/models?author=Qwen&search=Qwen3.8&limit=100&full=true",
-          "https://huggingface.co/api/models/Qwen/Qwen3.8-4B",
-          "https://huggingface.co/api/models/Qwen/Qwen3.8-4B-FP8",
-          "https://huggingface.co/api/models/nvidia/Qwen3.8-4B-NVFP4"
-        ]
-      },
-      "precision": null,
-      "license": null,
-      "licenseNotice": null,
-      "model": null,
-      "runtime": null,
-      "profiles": [],
-      "upstreamCandidates": []
-    },
-    {
       "id": "deepseek-v4-flash",
       "name": "DeepSeek V4 Flash",
       "servedModelId": null,

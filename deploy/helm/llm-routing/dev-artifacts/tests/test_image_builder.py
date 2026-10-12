@@ -189,6 +189,14 @@ class ImageDiscoveryTests(unittest.TestCase):
         nodes[0]['status']['nodeInfo']['kubeletVersion'] = 'v1.34.1'
         self.assertNotIn('socketPath', self.discover(nodes)['containerd'])
 
+    def test_load_discovery_respects_values_architecture_before_selecting_nodes(self):
+        nodes = [self.node('a-x86', 'amd64'), self.node('b-arm')]
+        with patch.object(images.subprocess, 'check_output', return_value=json.dumps({'items': nodes})):
+            config = images.discover_config('test-context', 'test-models', architecture='arm64')
+        self.assertEqual(config['imagePlatform'], 'linux/arm64')
+        self.assertEqual(config['controlNode'], 'b-arm')
+        self.assertEqual(config['containerd']['nodeUIDs'], {'b-arm': 'uid-b-arm'})
+
 
 if __name__ == '__main__':
     unittest.main()

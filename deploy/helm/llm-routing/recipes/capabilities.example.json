@@ -13,6 +13,9 @@
       "gbps": 200,
       "interface": "enp1s0",
       "address": "192.0.2.2"
+    },
+    "station-node-1": {
+      "cudaTotalMemoryGiB": 249.75
     }
   }
 }

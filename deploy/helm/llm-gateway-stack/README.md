@@ -51,7 +51,8 @@ To run this chart with Pylon Operator on a local k3d cluster, see the
 - The request router and gateway images in a registry the cluster can pull
   from. The chart sets no image registry or repository. The router image must
   support `--worker-auth-file` with the YAML worker auth file, and the gateway image must support
-  `API_KEYS_PATH`, `PUBLIC_READ_ENDPOINTS` and `TLS_CERT_FILE`.
+  `API_KEYS_PATH`, `PUBLIC_READ_ENDPOINTS` and `TLS_CERT_FILE`. For a private
+  registry, see [Install from a registry](#install-from-a-registry).
 - The Pylon Operator chart, `deploy/helm/pylon-operator`, installed first: its
   generated cluster token is an input to this chart.
 
@@ -154,6 +155,115 @@ helm upgrade llm-gateway-stack deploy/helm/llm-gateway-stack/llm-gateway-stack \
 helm uninstall llm-gateway-stack --namespace llm-gateway
 ```
 
+## Install from a registry
+
+To install a published build, use the charts and images that your publishing
+pipeline pushed to a registry. `<registry>` below is that registry path, for
+example `nvcr.io/<org>/<team>`. The examples use NGC: for another registry,
+use its host and credentials for the login and the Secret.
+
+The versions file produced by your publishing pipeline names the exact
+versions: `charts.llm-gateway-stack.version` is this chart's version and
+`charts.llm-gateway-stack.ref` its OCI reference. The
+[end-to-end test README](../../../tests/e2e/inference-endpoints-k3d/README.md#versions-file)
+documents the file. The published chart bundles both subcharts and already
+sets their image tags to `images.stargate.tag` and `images.llm-api-gateway.tag`,
+but leaves the registries and repositories empty. Neither subchart reads a
+`global.image.registry`, so set `image.registry` and `image.repository` per
+subchart, and a pull Secret, at install time.
+
+These steps follow [Install](#install), with both releases in namespace
+`llm-gateway` and the models in namespace `models`:
+
+1. Log in to the registry with an NGC API key, and create the pull Secret in
+   the stack namespace and in every namespace that will hold an
+   `InferenceEndpoint`, where the transport pods pull the Pylon image. Helm
+   uses the login to pull the charts:
+
+   ```bash
+   export NGC_API_KEY=<your NGC API key>
+   printf '%s' "${NGC_API_KEY}" | helm registry login nvcr.io --username '$oauthtoken' --password-stdin
+   for ns in llm-gateway models; do
+     kubectl create namespace "${ns}" --dry-run=client -o yaml | kubectl apply -f -
+     kubectl -n "${ns}" create secret docker-registry ngc-pull \
+       --docker-server=nvcr.io \
+       --docker-username='$oauthtoken' \
+       --docker-password="${NGC_API_KEY}"
+   done
+   ```
+
+   When Pylon Operator runs in its own namespace, create the Secret there too.
+
+2. Install Pylon Operator from the registry, as in its
+   [README](../pylon-operator/README.md#install-from-a-registry),
+   with the router and trust bundle of step 1 of [Install](#install):
+
+   ```yaml
+   # pylon-operator-values.yaml
+   image:
+     repository: <registry>/nvcf-pylon-operator
+   imagePullSecrets:
+     - name: ngc-pull
+   clusterId: spark-berlin
+   router:
+     grpcAddress: llm-request-router.llm-gateway.svc.cluster.local:50071
+   pylon:
+     image:
+       repository: <registry>/pylon
+     imagePullSecrets:
+       - name: ngc-pull
+   trustBundle:
+     configMap: llm-gateway-stack-ca
+   ```
+
+   ```bash
+   helm install pylon-operator oci://<registry>/pylon-operator \
+     --version <pylon-operator version> \
+     --namespace llm-gateway --values pylon-operator-values.yaml --wait
+   ```
+
+3. Compute the token and API key digests as in steps 2 and 3 of
+   [Install](#install).
+
+4. Install the stack from the registry:
+
+   ```yaml
+   # llm-gateway-stack-values.yaml
+   clusterId: spark-berlin
+   llm-request-router:
+     llmRequestRouter:
+       image:
+         registry: <registry>
+         repository: stargate
+       imagePullSecrets:
+         - name: ngc-pull
+   llm-api-gateway:
+     llmApiGateway:
+       image:
+         registry: <registry>
+         repository: llm-api-gateway
+       imagePullSecrets:
+         - name: ngc-pull
+   ```
+
+   ```bash
+   helm install llm-gateway-stack oci://<registry>/llm-gateway-stack \
+     --version <llm-gateway-stack version> \
+     --namespace llm-gateway \
+     --values llm-gateway-stack-values.yaml \
+     --set clusterCredential.sha256="${TOKEN_SHA256}" \
+     --set 'apiKeys[0].id=demo' \
+     --set "apiKeys[0].sha256=${API_KEY_SHA256}" \
+     --wait
+   ```
+
+   The published chart needs no `helm dependency build`. The Stargate image
+   also contains `stargate-k8s-router`, so a router with more than one replica
+   runs its backend router from the same image and pull Secrets; the separately
+   published `stargate-k8s-router` image is not needed.
+
+Then call the gateway as in step 5 of [Install](#install).
+
 ## Values
 
 | Value | Default | Description |
@@ -197,6 +307,12 @@ reads the names of the Secrets it renders, so change them there.
 | `llm-api-gateway.llmApiGateway.vault.enabled` | `false` |
 | `llm-api-gateway.llmApiGateway.tls.enabled` | `true` |
 | `llm-api-gateway.llmApiGateway.tls.existingSecret` | `llm-gateway-stack-gateway-tls` |
+
+Image pull Secrets go in `llm-request-router.llmRequestRouter.imagePullSecrets`
+and `llm-api-gateway.llmApiGateway.imagePullSecrets`, as `{name: <Secret>}`
+entries in the release namespace. The router's list also applies to its
+backend router. The router chart's optional PKI hook Job, which this chart
+leaves off, has its own `llm-request-router.llmRequestRouter.pki.imagePullSecrets`.
 
 Both subcharts must run in the release namespace; setting their `namespace`
 value to another namespace fails the render. The image tags are pinned in this

@@ -295,6 +295,43 @@ render "${multi_manifest}" --set llm-request-router.llmRequestRouter.replicaCoun
   fail "the backend router must mount the router TLS Secret"
 
 # ---------------------------------------------------------------------------
+# Images from a private registry: pull Secrets pass through to every pod, and
+# a registry with a path joins the repository. The tags stay the chart's.
+# ---------------------------------------------------------------------------
+
+pull_secrets() {  # pull_secrets <manifest> <deployment>: imagePullSecrets as compact JSON
+  deployment "$1" "$2" '.spec.template.spec.imagePullSecrets // []' | yq -o=json -I=0
+}
+
+[ "$(pull_secrets "${manifest}" "${router}")" = "[]" ] || fail "router must not set pull Secrets by default"
+[ "$(pull_secrets "${manifest}" "${gateway}")" = "[]" ] || fail "gateway must not set pull Secrets by default"
+
+private_registry="registry.example.com/org/team"
+private_manifest="${tmp_dir}/private-registry.yaml"
+render "${private_manifest}" \
+  --set llm-request-router.llmRequestRouter.replicaCount=2 \
+  --set "llm-request-router.llmRequestRouter.image.registry=${private_registry}" \
+  --set llm-request-router.llmRequestRouter.image.repository=stargate \
+  --set 'llm-request-router.llmRequestRouter.imagePullSecrets[0].name=ngc-pull' \
+  --set "llm-api-gateway.llmApiGateway.image.registry=${private_registry}" \
+  --set llm-api-gateway.llmApiGateway.image.repository=llm-api-gateway \
+  --set 'llm-api-gateway.llmApiGateway.imagePullSecrets[0].name=ngc-pull'
+for workload in "${router}" "${router}-backend-router" "${gateway}"; do
+  [ "$(pull_secrets "${private_manifest}" "${workload}")" = '[{"name":"ngc-pull"}]' ] ||
+    fail "imagePullSecrets must reach the ${workload} pods"
+done
+for workload in "${router}" "${router}-backend-router"; do
+  case "$(deployment "${private_manifest}" "${workload}" '.spec.template.spec.containers[0].image')" in
+    "${private_registry}/stargate:"?*) ;;
+    *) fail "${workload} image must be <registry>/<repository>:<tag>" ;;
+  esac
+done
+case "$(deployment "${private_manifest}" "${gateway}" '.spec.template.spec.containers[0].image')" in
+  "${private_registry}/llm-api-gateway:"?*) ;;
+  *) fail "gateway image must be <registry>/<repository>:<tag>" ;;
+esac
+
+# ---------------------------------------------------------------------------
 # Invalid values fail the render.
 # ---------------------------------------------------------------------------
 

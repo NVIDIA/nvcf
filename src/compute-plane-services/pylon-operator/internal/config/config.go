@@ -89,6 +89,11 @@ type Config struct {
 	// Empty leaves the Kubernetes default, which is Always for a :latest or
 	// untagged image and IfNotPresent otherwise.
 	PylonImagePullPolicy string
+	// PylonImagePullSecrets names the image pull Secrets of the transport
+	// pods. The pods reference them in their own namespace, so each Secret
+	// must exist in every namespace with an InferenceEndpoint; the operator
+	// does not replicate them. Empty references none.
+	PylonImagePullSecrets []string
 	// WatchNamespaces restricts the namespaced caches. Empty means all.
 	WatchNamespaces []string
 	// TransportReplicas is the replica count of each transport Deployment.
@@ -126,6 +131,7 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.RouterGRPCAddress, "router-grpc-address", "", "gRPC address of the LLM request router that transport pods register with. Required.")
 	fs.StringVar(&c.PylonImage, "pylon-image", "", "Container image of the Pylon transport pods. Required.")
 	fs.StringVar(&c.PylonImagePullPolicy, "pylon-image-pull-policy", "", "imagePullPolicy of the Pylon transport container: Always, IfNotPresent or Never. Empty uses the Kubernetes default.")
+	fs.Var((*nameList)(&c.PylonImagePullSecrets), "pylon-image-pull-secrets", "Comma-separated image pull Secrets of the Pylon transport pods. Each must exist in every namespace with an InferenceEndpoint. Empty uses none.")
 	fs.Var((*namespaceList)(&c.WatchNamespaces), "watch-namespaces", "Comma-separated namespaces to watch. Empty watches all namespaces.")
 	c.TransportReplicas = 1
 	fs.Var((*int32Value)(&c.TransportReplicas), "transport-replicas", "Replicas of each transport Deployment.")
@@ -172,6 +178,11 @@ func (c *Config) Validate() error {
 	case "", corev1.PullAlways, corev1.PullIfNotPresent, corev1.PullNever:
 	default:
 		errs = append(errs, fmt.Errorf("--pylon-image-pull-policy must be Always, IfNotPresent or Never, got %q", c.PylonImagePullPolicy))
+	}
+	for _, name := range c.PylonImagePullSecrets {
+		if msgs := validation.IsDNS1123Subdomain(name); len(msgs) > 0 {
+			errs = append(errs, fmt.Errorf("--pylon-image-pull-secrets entry %q is not a Secret name: %s", name, strings.Join(msgs, "; ")))
+		}
 	}
 	if c.OperatorNamespace == "" {
 		errs = append(errs, fmt.Errorf("--operator-namespace is required; set it or %s", PodNamespaceEnv))
@@ -285,6 +296,35 @@ func (l *namespaceList) Set(value string) error {
 		out = append(out, ns)
 	}
 	sort.Strings(out)
+	*l = out
+	return nil
+}
+
+// nameList is a flag.Value for a comma-separated, de-duplicated list of
+// object names. The order of first appearance is kept.
+type nameList []string
+
+func (l *nameList) String() string {
+	if l == nil {
+		return ""
+	}
+	return strings.Join(*l, ",")
+}
+
+func (l *nameList) Set(value string) error {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, name := range strings.Split(value, ",") {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
 	*l = out
 	return nil
 }
