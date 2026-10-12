@@ -5,3 +5,5 @@ kind: LeaderWorkerSet
 launch: exec
 podsPerInstance: 2
 criuCapture: true
+function:
+  requires: [LeaderWorkerSet]

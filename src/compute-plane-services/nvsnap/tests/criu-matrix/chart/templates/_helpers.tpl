@@ -6,21 +6,27 @@ SPDX-License-Identifier: Apache-2.0 */}}
 {{/* The engine's command line, for this pod's rank ($R in the shell). */}}
 {{- define "matrix.serve" -}}
 {{- $v := .Values -}}
-{{- if eq $v.engine "sglang" -}}
-python3 -m sglang.launch_server --model-path {{ $v.model }} --host 0.0.0.0 --port {{ $v.port }} --context-length {{ $v.maxModelLen }} --mem-fraction-static {{ $v.gpuMemoryUtilization }} --tp {{ mul $v.podsPerInstance $v.gpusPerPod }}{{ if gt (int $v.podsPerInstance) 1 }} --nnodes {{ $v.podsPerInstance }} --node-rank $R --dist-init-addr $MASTER:5000{{ end }}
+{{- if eq $v.engine "command" -}}
+{{ required "engine command needs .Values.command" $v.command }}{{ with $v.extraArgs }} {{ . }}{{ end }}
+{{- else if eq $v.engine "sglang" -}}
+python3 -m sglang.launch_server --model-path {{ $v.model }}{{ with $v.servedModelName }} --served-model-name {{ . }}{{ end }} --host 0.0.0.0 --port {{ $v.port }} --context-length {{ $v.maxModelLen }} --mem-fraction-static {{ $v.gpuMemoryUtilization }} --tp {{ mul $v.podsPerInstance $v.gpusPerPod }}{{ if gt (int $v.podsPerInstance) 1 }} --nnodes {{ $v.podsPerInstance }} --node-rank $R --dist-init-addr $MASTER:5000{{ end }}{{ with $v.extraArgs }} {{ . }}{{ end }}
 {{- else -}}
-vllm serve {{ $v.model }} --host 0.0.0.0 --port {{ $v.port }} --max-model-len {{ $v.maxModelLen }} --gpu-memory-utilization {{ $v.gpuMemoryUtilization }} --tensor-parallel-size {{ mul $v.podsPerInstance $v.gpusPerPod }}{{ if gt (int $v.podsPerInstance) 1 }} --nnodes {{ $v.podsPerInstance }} --node-rank $R --master-addr $MASTER --master-port 29501{{ end }}
+vllm serve {{ $v.model }}{{ with $v.servedModelName }} --served-model-name {{ . }}{{ end }} --host 0.0.0.0 --port {{ $v.port }} --max-model-len {{ $v.maxModelLen }} --gpu-memory-utilization {{ $v.gpuMemoryUtilization }} --tensor-parallel-size {{ mul $v.podsPerInstance $v.gpusPerPod }}{{ if gt (int $v.podsPerInstance) 1 }} --nnodes {{ $v.podsPerInstance }} --node-rank $R --master-addr $MASTER --master-port 29501{{ end }}{{ with $v.extraArgs }} {{ . }}{{ end }}
 {{- end -}}
 {{- end -}}
 
 {{/* The container's shell script: start the engine the way .Values.launch says. */}}
 {{- define "matrix.script" -}}
+# NVCF mounts the function's secrets here; export the ones engines read.
+if [ -f /var/secrets/secrets.json ] && command -v python3 >/dev/null; then
+  eval "$(python3 -c 'import json,shlex; d=json.load(open("/var/secrets/secrets.json")); [print("export %s=%s" % (k, shlex.quote(str(d[k])))) for k in ("HF_TOKEN","NGC_API_KEY") if d.get(k)]' 2>/dev/null)"
+fi
 R=${HOSTNAME##*-}; case "$R" in ''|*[!0-9]*) R=${LWS_WORKER_INDEX:-0};; esac
 MASTER=${LWS_LEADER_ADDRESS:-{{ include "matrix.name" . }}-0.{{ include "matrix.name" . }}-ranks}
 {{- $serve := include "matrix.serve" . }}
 {{- $rank0 := $serve }}
-{{- $other := printf "%s --headless" $serve }}
-{{- if eq .Values.engine "sglang" }}{{ $other = $serve }}{{ end }}
+{{- $other := $serve }}
+{{- if eq .Values.engine "vllm" }}{{ $other = printf "%s --headless" $serve }}{{ end }}
 {{- if eq .Values.launch "exec" }}
 if [ "$R" = 0 ]; then exec {{ $rank0 }}; else exec {{ $other }}; fi
 {{- else if eq .Values.launch "setsid" }}
@@ -69,7 +75,7 @@ containers:
     readinessProbe:
       # Every rank is ready when rank 0 serves: a rank that lost its peers
       # must not look ready.
-      exec: {command: ["/bin/sh", "-c", "R=${HOSTNAME##*-}; case \"$R\" in ''|*[!0-9]*) R=${LWS_WORKER_INDEX:-0};; esac; H=localhost; [ \"$R\" = 0 ] || H=${LWS_LEADER_ADDRESS:-{{ include "matrix.name" . }}-0.{{ include "matrix.name" . }}-ranks}; curl -sf $H:{{ $v.port }}/v1/models >/dev/null || curl -sf $H:{{ $v.port }}/health >/dev/null"]}
+      exec: {command: ["/bin/sh", "-c", "R=${HOSTNAME##*-}; case \"$R\" in ''|*[!0-9]*) R=${LWS_WORKER_INDEX:-0};; esac; H=localhost; [ \"$R\" = 0 ] || H=${LWS_LEADER_ADDRESS:-{{ include "matrix.name" . }}-0.{{ include "matrix.name" . }}-ranks}; {{ if $v.healthPath }}curl -sf $H:{{ $v.port }}{{ $v.healthPath }} >/dev/null{{ else }}curl -sf $H:{{ $v.port }}/v1/models >/dev/null || curl -sf $H:{{ $v.port }}/health >/dev/null{{ end }}"]}
       periodSeconds: 5
       failureThreshold: 720
     # NCCL keeps its buffers in /dev/shm; the container default of 64 MiB

@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Dynamo on Grove, as production kimi-k3 runs: a DynamoGraphDeployment with a
+# frontend and a vLLM worker over two nodes (TP=2), which the Dynamo operator
+# turns into Grove PodCliques. Multi-pod capture is opt-in.
+kind: DynamoGraphDeployment
+podsPerInstance: 2
+criuCapture: true
+function:
+  inferenceUrl: /v1/chat/completions
+  healthUri: /health
+  requires: [DynamoGraphDeployment]

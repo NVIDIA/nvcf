@@ -7,13 +7,18 @@ kind: Service
 metadata: {name: {{ $name }}}
 spec:
   selector:
+    {{- if eq .Values.kind "DynamoGraphDeployment" }}
+    nvidia.com/dynamo-component-type: frontend
+    {{- else }}
     app: {{ $name }}
     {{- if and (eq .Values.kind "StatefulSet") (gt (int .Values.podsPerInstance) 1) }}
     statefulset.kubernetes.io/pod-name: {{ $name }}-0
     {{- else if eq .Values.kind "LeaderWorkerSet" }}
     leaderworkerset.sigs.k8s.io/worker-index: "0"
     {{- end }}
+    {{- end }}
   ports: [{name: http, port: {{ .Values.port }}, targetPort: http}]
+{{- if ne .Values.kind "DynamoGraphDeployment" }}
 ---
 # The ranks find each other by name.
 apiVersion: v1
@@ -24,3 +29,4 @@ spec:
   publishNotReadyAddresses: true
   selector: {app: {{ $name }}}
   ports: [{name: dist, port: 29501}, {name: sglang-dist, port: 5000}]
+{{- end }}

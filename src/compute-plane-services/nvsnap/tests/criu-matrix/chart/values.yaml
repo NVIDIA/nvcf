@@ -19,13 +19,20 @@ gpusPerPod: 1
 #   exec   - the engine is the container's pid 1
 launch: exec
 
-# vllm or sglang.
+# vllm, sglang, or command: run .Values.command, the image's own server
+# (a NIM's start script, for example).
 engine: vllm
+command: ""
 image: docker.io/vllm/vllm-openai:v0.20.0
 model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+servedModelName: ""
+# Appended to the engine's command line.
+extraArgs: ""
 maxModelLen: 2048
 gpuMemoryUtilization: 0.1
 port: 8000
+# Readiness path on rank 0 (empty: /v1/models, else /health).
+healthPath: ""
 
 # Run the engine as this user (unset: the image's user, root for the stock
 # vLLM image).
@@ -36,6 +43,11 @@ hfHome: ""
 
 # Multi-pod instances are captured only on request.
 criuCapture: false
+
+# kind DynamoGraphDeployment: the Dynamo runtime image, matching the
+# cluster's Dynamo operator.
+dynamo:
+  image: nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.4.1
 
 # Memory-backed /dev/shm for NCCL (the container default is 64 MiB).
 shmSize: 8Gi
