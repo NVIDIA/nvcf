@@ -48,11 +48,11 @@
       "threads": 8
     },
     "discrete": {
-      "contextPerSlot": 65536,
-      "slots": 2,
-      "batchSize": 2048,
-      "ubatchSize": 512,
-      "defaultMaxTokens": 8192,
+      "contextPerSlot": 8192,
+      "slots": 1,
+      "batchSize": 512,
+      "ubatchSize": 128,
+      "defaultMaxTokens": 512,
       "threads": 8
     }
   },
@@ -70,8 +70,8 @@
     },
     "discrete": {
       "gpuHeadroomGiB": 6,
-      "hostRequestGiB": 32,
-      "hostLimitGiB": 64
+      "hostRequestGiB": 128,
+      "hostLimitGiB": 320
     }
   }
 }

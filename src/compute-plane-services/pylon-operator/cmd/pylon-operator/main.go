@@ -63,6 +63,7 @@ func main() {
 		"operatorNamespace", cfg.OperatorNamespace,
 		"watchNamespaces", cfg.WatchNamespaces,
 		"pylonImagePullSecrets", cfg.PylonImagePullSecrets,
+		"pylonDisableQuicGSO", cfg.PylonDisableQuicGSO,
 		"probeInterval", cfg.ProbeInterval.String(),
 		"scrapeInterval", cfg.ScrapeInterval.String(),
 		"leaderElect", cfg.LeaderElect)...)

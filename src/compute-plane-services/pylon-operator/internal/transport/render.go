@@ -225,6 +225,9 @@ func podTemplate(ep *pylonv1alpha1.InferenceEndpoint, cfg config.Config) corev1.
 			FieldRef: &corev1.ObjectFieldSelector{APIVersion: "v1", FieldPath: "metadata.name"},
 		},
 	}}
+	if cfg.PylonDisableQuicGSO {
+		env = append(env, corev1.EnvVar{Name: "STARGATE_QUIC_DISABLE_GSO", Value: "true"})
+	}
 	mounts := []corev1.VolumeMount{{Name: credentialVolume, MountPath: CredentialMountPath, ReadOnly: true}}
 	volumes := []corev1.Volume{{
 		Name: credentialVolume,

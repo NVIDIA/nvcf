@@ -113,7 +113,7 @@ Change `model` to `qwen3.8-27b-nvfp4` to call the other precision. Add `"stream"
 
 ### Connect a coding agent
 
-Coding agents such as [Pi](https://github.com/badlogic/pi-mono) and [Codex](https://github.com/openai/codex) can use the model through the gateway. They need a large context: their first request is 1,500 to 6,500 tokens before any file contents. For GLM, the GB300 profile uses `tuning.discrete` in [recipe.json](recipes/glm-5.3/recipe.json), including 65,536 tokens per slot. The GB10 default of 2048 tokens is too small. See [Recipe resources and tuning](#recipe-resources-and-tuning) before changing these settings.
+Coding agents such as [Pi](https://github.com/badlogic/pi-mono) and [Codex](https://github.com/openai/codex) can use the model through the gateway. They need a large context: their first request is 1,500 to 6,500 tokens before any file contents. The automatic GLM Station profile uses `tuning.discrete` in [recipe.json](recipes/glm-5.3/recipe.json), configured for one 8,192-token slot. Larger contexts require separate qualification. See [Recipe resources and tuning](#recipe-resources-and-tuning) before changing these settings.
 
 Tested in October 2026 with Pi 1.0.4 and Codex 0.161.0 against `glm-5.3` on one GB300 with two 65,536-token slots. Each agent found and fixed a one-line bug by running a test, editing the file and running the test again, using tool calls through the gateway. Pi took 7 seconds and Codex 33 seconds. Automatic Helm profile validation is recorded separately in the [catalog](recipes/index.json).
 
@@ -203,6 +203,8 @@ CODEX_CA_CERTIFICATE="$LLM_GATEWAY_CA" codex --profile glm
 
 Automatic SGLang startup checks its cache before downloading. Reinstalling the same release in the same namespace on the original node reuses its retained claim without extra flags. Completed files are verified locally, including complete Hugging Face snapshots without a recipe completion marker. Missing files are downloaded into that cache. A cache marked complete but failing validation stops startup instead of silently replacing its contents.
 
+SGLang and TVM-FFI compiled kernels also live on the model cache volume. Their runtime-specific cache keys allow compatible restarts to reuse compilation results.
+
 To use a differently named claim in the same namespace, set `cache.existingClaim`. To require a complete offline cache and prohibit model downloads, also set `reuseCaches: true`:
 
 ```yaml
@@ -265,7 +267,7 @@ Complete uninstall combines [removing the model release](README.md#uninstall-kee
 
 ### Helm GLM recipe
 
-The committed [GLM values](recipes/values/glm-5.3.yaml) select the automatic two-node GB10 profile. Replace `gpu-node-1` and `gpu-node-2` below with distinct available nodes. Override `runtimeClassName` and `storageClassName` if your cluster uses different names.
+The committed [Spark values](recipes/values/glm-5.3.yaml) select the automatic two-node GB10 profile. For two GB300 nodes, use the [Station values](recipes/values/glm-5.3-station.yaml) instead. Replace `gpu-node-1` and `gpu-node-2` below with distinct available nodes. Override `runtimeClassName` and `storageClassName` if your cluster uses different names.
 
 Install it with the shared stack already running:
 
@@ -280,7 +282,7 @@ kubectl --namespace llm-stack wait \
 echo 'Model installed and registered.'
 ```
 
-Kubernetes checks placement, builds the pinned llama.cpp runtime, starts the worker RPC server and qualifies both GPUs. It then verifies or downloads the pinned GGUF cache and starts the model server. The served model ID is `GLM-5.3-UD-IQ2_M`. Use that ID for [gateway verification](#verification). The common catalog lists its per-node resource and storage requirements. The current cached two-node Helm trial stopped at the host-memory guard during loading. Automatic serving validation remains open.
+Kubernetes checks placement, builds the pinned llama.cpp runtime, starts the worker RPC server and qualifies both GPUs. It then verifies or downloads the pinned GGUF cache and starts the model server. The served model ID is `GLM-5.3-UD-IQ2_M`. Use that ID for [gateway verification](#verification). The common catalog lists per-node resource and storage requirements and each profile's validation status.
 
 By default (`reuseCaches: false`), a changed image, llama.cpp revision or CUDA architecture rebuilds compiled runtime state while preserving model files and cached source archives. Unchanged runtimes are verified and reused.
 
@@ -431,6 +433,15 @@ The upgrade also updates the CRD schema when `operator.installCRDs=true`. Review
 The post-upgrade Job checks gateway access, discovery and authentication. Check model health and inference separately with `llm.py models` and `llm.py chat`. A successful Helm hook does not establish model readiness or validate a distributed runtime.
 
 Before rolling back, inspect the saved values and the manifests for the target revision. A Helm rollback restores that revision's templates and may also revert its templated CRD schema. Only use a revision compatible with current InferenceEndpoint objects, credentials and runtime contracts.
+
+If a pod network drops UDP segmentation offload (GSO) batches, large requests
+can time out in the QUIC tunnel while short requests and direct backend HTTP
+succeed. With images built from the matching sources, set
+`gatewayStack.llm-request-router.llmRequestRouter.transport.disableQuicGso: true`
+and `operator.pylon.disableQuicGso: true` in private site values, then upgrade
+the shared release. Both peers use ordinary UDP packets with the same TLS and
+authentication. The default keeps GSO enabled. Retest cross-node chat and
+streaming after applying this network-specific workaround.
 
 ## Shared-stack uninstall
 
@@ -640,7 +651,7 @@ For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the
 
    Confirm the deployed revision and pod configuration match the intended chart and pins. Check logs, memory and restarts. Exercise the intended context/concurrency and [cache-preserving lifecycle](#independent-model-lifecycle). If a check fails, adjust maintained metadata, repeat steps 2-4, then upgrade and retest. Preserve caches and other models.
 
-6. Record the tested profile, artifact pins, date, workload and passed checks in the existing validation fields. Update the README validation summary. Repeat synchronization, export, checks and packaging above, using a fresh `PACKAGE_DIR`. Compare the final rendered pod templates with the tested deployment. Metadata can change the configuration checksum and trigger a rollout, so repeat affected live checks with the final archive when that happens. Then refresh the distribution from that verified package:
+6. Record the tested profile, artifact pins, date, workload and passed checks in recipe metadata. Keep hardware and installation links in the README. Repeat synchronization, export, checks and packaging above, using a fresh `PACKAGE_DIR`. Compare the final rendered pod templates with the tested deployment. Metadata can change the configuration checksum and trigger a rollout, so repeat affected live checks with the final archive when that happens. Then refresh the distribution from that verified package:
 
    ```bash
    cp -R "$PACKAGE_DIR/." dev-artifacts/charts/ &&

@@ -86,6 +86,44 @@ class AutomaticChartTests(unittest.TestCase):
         self.assertEqual(len(split.split(',')), self.config['profile']['nodes'])
         self.assertEqual(args[:len(self.config['recipe']['serverArgs'])], self.config['recipe']['serverArgs'])
 
+    def test_validation_metadata_does_not_roll_models_but_hardware_changes_do(self):
+        baseline = render(values(profileName='gb300-x2'))
+        with tempfile.TemporaryDirectory() as directory:
+            chart = pathlib.Path(directory) / 'chart'
+            shutil.copytree(CHART, chart)
+            source = chart / 'files/recipes/glm-5.3/profiles.json'
+            metadata = json.loads(source.read_text())
+            profile = next(p for p in metadata['profiles'] if p['id'] == 'gb300-x2')
+            profile['validation'] = {'helmAutomatic': 'smoke-tested', 'date': '2026-10-11'}
+            source.write_text(json.dumps(metadata))
+            with patch(__name__ + '.CHART', chart):
+                self.assertEqual(render(values(profileName='gb300-x2')), baseline)
+                profile['hardware']['minDeviceMemoryGiB'] += 1
+                source.write_text(json.dumps(metadata))
+                changed = render(values(profileName='gb300-x2'))
+            original = object_named(baseline, 'Deployment', 'gguf-test')['spec']['template']
+            current = object_named(changed, 'Deployment', 'gguf-test')['spec']['template']
+            self.assertNotEqual(current, original)
+
+    def test_station_profile_selects_discrete_tuning_resources_and_gpu_guards(self):
+        objects = render(values(profileName='gb300-x2'))
+        config = json.loads(object_named(objects, 'ConfigMap', 'gguf-test-automatic')['data']['automatic.json'])
+        self.assertEqual(config['profile']['id'], 'gb300-x2')
+        self.assertEqual(config['profile']['hardware']['memoryMode'], 'discrete')
+        self.assertGreater(config['profile']['hardware']['minDeviceMemoryGiB'], config['lock']['weightGiB'] / 2)
+        self.assertEqual(config['tuning'], config['recipe']['tuning']['discrete'])
+        leader = object_named(objects, 'Deployment', 'gguf-test')['spec']['template']['spec']
+        env = {entry['name']: entry['value'] for entry in leader['containers'][0]['env']}
+        args = json.loads(env['SERVER_ARGS'])
+        self.assertEqual(int(args[args.index('--ctx-size') + 1]), config['profile']['contextLength'] * config['profile']['concurrency'])
+        self.assertEqual(int(args[args.index('--parallel') + 1]), config['profile']['concurrency'])
+        for rank, suffix in enumerate(('', '-rpc-n1')):
+            pod = object_named(objects, 'Deployment', 'gguf-test' + suffix)['spec']['template']['spec']
+            self.assertEqual(pod['containers'][0]['resources'], config['profile']['roles'][rank]['resources'])
+            self.assertIn('hardware', [container['name'] for container in pod['initContainers']])
+            self.assertIn('runtime_guard.py', self.configmap['data'])
+        self.assertIn('profileName does not belong', render(values(profileName='missing-station'), check=False).stderr)
+
     def test_recipe_tuning_matches_server_arguments_and_catalog_workload(self):
         profile = self.config['profile']
         tuning = self.config['recipe']['tuning'][profile['hardware']['memoryMode']]
@@ -481,6 +519,28 @@ class RuntimeTests(unittest.TestCase):
                 patch.object(auto.subprocess, 'run') as run, self.assertRaisesRegex(RuntimeError, 'available host memory'):
             auto.hardware(self.config, cuda)
         run.assert_not_called()
+
+    def test_discrete_hardware_rejects_insufficient_actual_gpu_memory(self):
+        profile = next(p for p in json.loads((ROOT / 'glm-5.3/profiles.json').read_text())['profiles'] if p['id'] == 'gb300-x2')
+        self.config['profile'] = profile
+        cuda = MagicMock()
+        cuda.is_available.return_value = True
+        cuda.device_count.return_value = 1
+        cuda.get_device_name.return_value = 'NVIDIA GB300'
+        cuda.get_device_capability.return_value = (10, 3)
+        minimum = profile['hardware']['minDeviceMemoryGiB']
+        memory = 'MemTotal: 805306368 kB\nMemAvailable: 536870912 kB\n'
+        with patch.object(auto.platform, 'system', return_value='Linux'), patch.object(auto.platform, 'machine', return_value='aarch64'), \
+                patch.object(auto.pathlib.Path, 'read_text', return_value=memory), patch.object(auto.subprocess, 'run'):
+            cuda.get_device_properties.return_value.total_memory = minimum * 1024**3
+            auto.hardware(self.config, cuda)
+            cuda.get_device_properties.return_value.total_memory -= 1
+            with self.assertRaisesRegex(RuntimeError, 'Insufficient CUDA device memory'):
+                auto.hardware(self.config, cuda)
+            for invalid in (None, 0, -1, True, float('nan')):
+                profile['hardware']['minDeviceMemoryGiB'] = invalid
+                with self.assertRaisesRegex(RuntimeError, 'positive minDeviceMemoryGiB'):
+                    auto.hardware(self.config, cuda)
 
     def test_prebuilt_runtime_bundle_corruption_blocks_cached_start(self):
         with (self.root / 'runtime.tar.gz').open('ab') as stream:

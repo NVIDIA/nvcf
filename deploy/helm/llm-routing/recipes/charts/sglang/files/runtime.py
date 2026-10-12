@@ -39,9 +39,13 @@ def host_memory():
 
 def command(config, model_path, rank):
     profile = config['profile']
+    workload_tokens = config['contextLength'] * config['concurrency']
+    token_capacity = profile.get('maxTotalTokens', workload_tokens)
+    if type(token_capacity) is not int or token_capacity < workload_tokens:
+        raise RuntimeError('maxTotalTokens must cover the configured context and concurrency')
     flags = ['--model-path', str(model_path), '--served-model-name', config['model']['id'],
              '--tp', str(profile['nodes']), '--context-length', str(config['contextLength']),
-             '--max-running-requests', str(config['concurrency']), '--max-total-tokens', str(config['contextLength'] * config['concurrency']),
+             '--max-running-requests', str(config['concurrency']), '--max-total-tokens', str(token_capacity),
              '--host', '0.0.0.0', '--port', str(config['ports']['http'])] + profile['flags']
     if profile['nodes'] > 1:
         flags += ['--nnodes', str(profile['nodes']), '--node-rank', str(rank),
@@ -298,6 +302,28 @@ def completed_checkpoint(model, cache):
     return complete
 
 
+def cached_blob(path, repository, cache):
+    """Resolve Hub files, preserving the ETag when Xet uses a shared blob store."""
+    resolved = path.resolve()
+    if path.is_file() and resolved.is_relative_to(repository.resolve()):
+        return resolved, resolved.name
+    if path.is_file() and path.is_symlink():
+        # Hub 1.33 links snapshot -> repository/blobs/<ETag> ->
+        # hub/blobs/<prefix>/<Xet hash>. The Xet hash is NOT a SHA256 digest.
+        alias = pathlib.Path(os.path.abspath(path.parent.resolve() / os.readlink(path)))
+        store = repository.resolve().parent / 'blobs'
+        if (alias.parent == repository.resolve() / 'blobs' and alias.parent.resolve() == alias.parent
+                and alias.is_symlink() and len(alias.name) == 64
+                and all(c in '0123456789abcdef' for c in alias.name)):
+            target = pathlib.Path(os.path.abspath(alias.parent / os.readlink(alias)))
+            if (target.parent.parent == store and target.parent.name == target.name[:2]
+                    and len(target.name) == 64 and all(c in '0123456789abcdef' for c in target.name)
+                    and store.resolve().is_relative_to(cache.resolve()) and target.resolve() == target
+                    and target == resolved and not target.is_symlink()):
+                return resolved, alias.name
+    raise RuntimeError('Cached snapshot has a missing file or invalid link: ' + path.name)
+
+
 def reuse_snapshot(model, cache=pathlib.Path('/cache'), require_complete=True, write_marker=True):
     """Validate retained Hugging Face files directly; never import a download client."""
     complete = completed_checkpoint(model, cache) if require_complete else cache / (model['revision'] + '.complete')
@@ -309,20 +335,18 @@ def reuse_snapshot(model, cache=pathlib.Path('/cache'), require_complete=True, w
     for path in snapshot.rglob('*'):
         if path.is_dir():
             continue
-        resolved = path.resolve()
-        if not path.is_file() or not resolved.is_relative_to(repository.resolve()):
-            raise RuntimeError('Cached snapshot has a missing file or invalid link: ' + path.name)
+        resolved, expected = cached_blob(path, repository, cache)
         # Hub blobs use SHA256 for LFS files and Git blob SHA1 for other files.
-        if resolved not in checked and len(resolved.name) in (40, 64) and all(c in '0123456789abcdef' for c in resolved.name):
-            digest = hashlib.sha256() if len(resolved.name) == 64 else hashlib.sha1(usedforsecurity=False)
-            if len(resolved.name) == 40:
+        if (resolved, expected) not in checked and len(expected) in (40, 64) and all(c in '0123456789abcdef' for c in expected):
+            digest = hashlib.sha256() if len(expected) == 64 else hashlib.sha1(usedforsecurity=False)
+            if len(expected) == 40:
                 digest.update(('blob ' + str(path.stat().st_size) + '\0').encode())
             with path.open('rb') as stream:
                 for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
                     digest.update(chunk)
-            if digest.hexdigest() != resolved.name:
+            if digest.hexdigest() != expected:
                 raise RuntimeError('Cached model blob checksum differs: ' + path.name)
-            checked.add(resolved)
+            checked.add((resolved, expected))
     def read_json(name):
         try:
             value = json.loads((snapshot / name).read_text())
@@ -396,6 +420,58 @@ def prepare_checkpoint(config, cache):
     return snapshot
 
 
+def release_checkpoint_file_cache(config, snapshot):
+    enabled = config['profile'].get('releaseCheckpointFileCache', False)
+    if type(enabled) is not bool:
+        raise RuntimeError('releaseCheckpointFileCache must be a boolean')
+    if not enabled:
+        return
+    # On Grace Blackwell, Linux can cache file pages in GPU NUMA memory.
+    # Release only this validated checkpoint's pages before runtime memory sizing.
+    # Retain all files and leave other workloads and the global page cache alone.
+    count = 0
+    for path in snapshot.glob('*.safetensors'):
+        with path.open('rb') as stream:
+            os.posix_fadvise(stream.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+        count += 1
+    log('checkpoint_file_cache_released', files=count)
+
+
+MMAP_LOADER_SOURCE_SHA256 = '0d16696a77496a5cfbfb4ed2fdfab0654420af57610c46d24ec455b83dfc8e22'
+MMAP_LOADER_PATCHED_SHA256 = 'f67cc84d53317a5fcbcea1d837424eae0494339c5846c02d208b3493d2291fe9'
+MMAP_LOADER_ANCHOR = '        def device_aware_wrapper(*args, **kwargs):\n'
+MMAP_LOADER_REPLACEMENT = MMAP_LOADER_ANCHOR + '''            # Fault mmap pages before entering the CUDA driver's copy lock.
+            def materialize(value):
+                if isinstance(value, torch.Tensor) and value.device.type == "cpu":
+                    return value.clone()
+                return value
+            args = tuple(materialize(value) for value in args)
+            kwargs = {key: materialize(value) for key, value in kwargs.items()}
+'''
+
+
+def patch_mmap_weight_loader(config, path=pathlib.Path('/sgl-workspace/sglang/python/sglang/srt/model_loader/utils.py')):
+    """Apply the pinned workaround for upstream sgl-project/sglang#29268."""
+    enabled = config['profile'].get('materializeMmapWeights', False)
+    if type(enabled) is not bool:
+        raise RuntimeError('materializeMmapWeights must be a boolean')
+    if not enabled:
+        return
+    source = path.read_bytes()
+    digest = hashlib.sha256(source).hexdigest()
+    if digest == MMAP_LOADER_PATCHED_SHA256:
+        return
+    if digest != MMAP_LOADER_SOURCE_SHA256:
+        raise RuntimeError('Mmap loader workaround requires its exact pinned runtime source')
+    updated = source.decode().replace(MMAP_LOADER_ANCHOR, MMAP_LOADER_REPLACEMENT).encode()
+    if hashlib.sha256(updated).hexdigest() != MMAP_LOADER_PATCHED_SHA256:
+        raise RuntimeError('Mmap loader workaround does not match its pinned result')
+    # Each pod has its own writable image layer. Neither checkpoint nor image
+    # content in the node cache is modified. Spawned workers import this file.
+    path.write_bytes(updated)
+    log('runtime_patch_applied', patch='deepseek-mmap-materialize', sha256=MMAP_LOADER_PATCHED_SHA256)
+
+
 def automatic(config, rank, cache=pathlib.Path('/cache')):
     world = config['profile']['nodes']
     if world not in (1, 2) or rank not in range(world):
@@ -424,6 +500,8 @@ def automatic(config, rank, cache=pathlib.Path('/cache')):
                 barrier.qualified()
             else:
                 model_path = prepare_checkpoint(config, cache)
+            release_checkpoint_file_cache(config, model_path)
+            patch_mmap_weight_loader(config)
             prepare_offload(config)
             if host_memory() < config['profile']['memoryGiB'] * GIB:
                 raise RuntimeError('Insufficient host MemAvailable after checkpoint preparation')

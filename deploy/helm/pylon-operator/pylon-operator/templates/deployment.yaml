@@ -45,6 +45,9 @@ spec:
             - {{ printf "--cluster-id=%s" .Values.clusterId | quote }}
             - {{ printf "--router-grpc-address=%s" .Values.router.grpcAddress | quote }}
             - {{ printf "--pylon-image=%s" (include "pylon-operator.pylonImage" .) | quote }}
+            {{- if .Values.pylon.disableQuicGso }}
+            - --pylon-disable-quic-gso
+            {{- end }}
             {{- with .Values.pylon.image.pullPolicy }}
             - {{ printf "--pylon-image-pull-policy=%s" . | quote }}
             {{- end }}

@@ -40,10 +40,13 @@ class HardwareProfileTests(unittest.TestCase):
         for release in all_profile_releases():
             device = release['config']['profile']['hardware']['cudaDeviceNames'][0]
             self.cuda.get_device_name.return_value = device
+            minimum = release['config']['profile']['hardware'].get('minDeviceMemoryGiB', 0)
+            available = max(80, minimum)
+            self.cuda.get_device_properties.return_value.total_memory = available * runtime.GIB
             with self.subTest(profile=release['profile']), patch.object(runtime.platform, 'machine', return_value='aarch64'):
                 result = runtime.check_hardware(release['config'], self.cuda)
             self.assertEqual(result['gpu'], device)
-            self.assertEqual(result['cudaTotalMemoryGiB'], 80)
+            self.assertEqual(result['cudaTotalMemoryGiB'], available)
 
     def test_wrong_device_or_gpu_count_fails_before_collective(self):
         for count, name in ((0, 'NVIDIA Example GPU'), (2, 'NVIDIA Example GPU'), (1, 'NVIDIA GB10'),
@@ -93,11 +96,59 @@ class HardwareProfileTests(unittest.TestCase):
             runtime.check_hardware(self.config, self.cuda)
 
 
+class MmapLoaderPatchTests(unittest.TestCase):
+    def test_opt_in_patch_checks_both_pins_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / 'utils.py'
+            source = 'fixture\n' + runtime.MMAP_LOADER_ANCHOR + '            return func(*args, **kwargs)\n'
+            patched = source.replace(runtime.MMAP_LOADER_ANCHOR, runtime.MMAP_LOADER_REPLACEMENT)
+            path.write_text(source)
+            runtime.patch_mmap_weight_loader({'profile': {}}, path)
+            self.assertEqual(path.read_text(), source)
+            config = {'profile': {'materializeMmapWeights': True}}
+            with self.assertRaisesRegex(RuntimeError, 'exact pinned runtime'):
+                runtime.patch_mmap_weight_loader(config, path)
+            self.assertEqual(path.read_text(), source)
+            with patch.object(runtime, 'MMAP_LOADER_SOURCE_SHA256', hashlib.sha256(source.encode()).hexdigest()):
+                with self.assertRaisesRegex(RuntimeError, 'pinned result'):
+                    runtime.patch_mmap_weight_loader(config, path)
+                self.assertEqual(path.read_text(), source)
+                with patch.object(runtime, 'MMAP_LOADER_PATCHED_SHA256', hashlib.sha256(patched.encode()).hexdigest()):
+                    runtime.patch_mmap_weight_loader(config, path)
+                    runtime.patch_mmap_weight_loader(config, path)
+                    self.assertEqual(path.read_text(), patched)
+
+    def test_worker_materializes_cpu_inputs_without_changing_gpu_parameters(self):
+        import textwrap
+        from types import SimpleNamespace
+        class Tensor:
+            def __init__(self, device, value):
+                self.device = SimpleNamespace(type=device)
+                self.value = value
+            def clone(self):
+                return Tensor(self.device.type, self.value)
+        source = textwrap.dedent(runtime.MMAP_LOADER_REPLACEMENT + '            return func(*args, **kwargs)\n')
+        namespace = {'torch': SimpleNamespace(Tensor=Tensor), 'func': lambda *args, **kwargs: (args, kwargs)}
+        exec(compile(source, '<pinned-worker-patch>', 'exec'), namespace)
+        cpu, gpu = Tensor('cpu', b'weights'), Tensor('cuda', b'parameter')
+        args, kwargs = namespace['device_aware_wrapper'](gpu, cpu, 7, scale=cpu)
+        self.assertIs(args[0], gpu)
+        self.assertIsNot(args[1], cpu)
+        self.assertEqual(args[1].value, cpu.value)
+        self.assertEqual(args[2], 7)
+        self.assertIsNot(kwargs['scale'], cpu)
+        self.assertEqual(kwargs['scale'].value, cpu.value)
+
+    def test_nonboolean_opt_in_is_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, 'must be a boolean'):
+            runtime.patch_mmap_weight_loader({'profile': {'materializeMmapWeights': 'true'}})
+
+
 class CacheReuseTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.cache = pathlib.Path(self.temp.name)
+        self.cache = pathlib.Path(self.temp.name).resolve()
         self.model = {'id': 'test-model', 'repository': 'example/model', 'revision': 'a' * 40}
         self.config = {'model': self.model, 'profile': {'minFreeDiskGiB': 1000}, 'reuseCaches': True}
         self.repository = self.cache / 'huggingface/hub/models--example--model'
@@ -175,6 +226,88 @@ class CacheReuseTests(unittest.TestCase):
         path.write_bytes(self.blob.read_bytes()[:-1])
         with self.assertRaisesRegex(RuntimeError, 'corrupt cached weight shard'):
             runtime.reuse_snapshot(self.model, self.cache)
+
+    def shared_blob(self):
+        # Xet's file hash differs from the LFS SHA256 ETag in the repository.
+        shared = self.repository.parent / 'blobs' / 'ab' / ('ab' * 32)
+        shared.parent.mkdir(parents=True)
+        self.blob.rename(shared)
+        self.blob.symlink_to(pathlib.Path('../../blobs/ab') / shared.name)
+        path = self.snapshot / 'model-00001.safetensors'
+        path.unlink()
+        path.symlink_to(pathlib.Path('../../blobs') / self.blob.name)
+        return shared
+
+    def test_shared_xet_blob_uses_repository_sha256_without_download_client(self):
+        self.shared_blob()
+        with patch.dict(sys.modules, {'huggingface_hub': None}):
+            self.assertEqual(runtime.prepare_checkpoint(self.config, self.cache), self.snapshot)
+
+    def test_corrupt_shared_xet_blob_is_rejected(self):
+        shared = self.shared_blob()
+        shared.write_bytes(shared.read_bytes()[:-1] + b'X')
+        with self.assertRaisesRegex(RuntimeError, 'checksum differs'):
+            runtime.reuse_snapshot(self.model, self.cache)
+
+    def test_shared_xet_aliases_each_require_matching_checksums(self):
+        shared = self.shared_blob()
+        alias = self.blob.with_name('c' * 64)
+        alias.symlink_to(shared)
+        (self.snapshot / 'duplicate.safetensors').symlink_to(alias)
+        with self.assertRaisesRegex(RuntimeError, 'checksum differs'):
+            runtime.reuse_snapshot(self.model, self.cache)
+
+    def test_shared_xet_target_must_have_exact_store_layout(self):
+        shared = self.shared_blob()
+        for target in (self.cache / shared.name, shared.parent / 'bad-hash',
+                       shared.parent.with_name('cd') / shared.name):
+            with self.subTest(target=target):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(shared.read_bytes())
+                self.blob.unlink()
+                self.blob.symlink_to(target)
+                with self.assertRaisesRegex(RuntimeError, 'invalid link'):
+                    runtime.reuse_snapshot(self.model, self.cache)
+
+    def test_shared_xet_store_cannot_escape_cache_through_symlinks(self):
+        shared = self.shared_blob()
+        external = self.cache / 'outside-store'
+        shared.parent.rename(external)
+        shared.parent.symlink_to(external, target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError, 'invalid link'):
+            runtime.reuse_snapshot(self.model, self.cache)
+
+    def test_shared_xet_snapshot_cannot_bypass_repository_etag(self):
+        shared = self.shared_blob()
+        path = self.snapshot / 'model-00001.safetensors'
+        path.unlink()
+        path.symlink_to(shared)
+        with self.assertRaisesRegex(RuntimeError, 'invalid link'):
+            runtime.reuse_snapshot(self.model, self.cache)
+
+    def test_file_cache_release_is_opt_in_and_preserves_checkpoint(self):
+        before = {p.name: p.read_bytes() for p in self.snapshot.iterdir()}
+        advised = []
+        def advise(fd, offset, length, advice):
+            self.assertEqual((offset, length, advice), (0, 0, 4))
+            advised.append(runtime.os.read(fd, 1024))
+        with patch.object(runtime.os, 'posix_fadvise', side_effect=advise, create=True) as call, \
+                patch.object(runtime.os, 'POSIX_FADV_DONTNEED', 4, create=True):
+            runtime.release_checkpoint_file_cache(self.config, self.snapshot)
+            call.assert_not_called()
+            self.config['profile']['releaseCheckpointFileCache'] = True
+            runtime.release_checkpoint_file_cache(self.config, self.snapshot)
+        self.assertEqual(advised, [self.blob.read_bytes()])
+        self.assertEqual(before, {p.name: p.read_bytes() for p in self.snapshot.iterdir()})
+
+    def test_file_cache_release_rejects_nonboolean_and_propagates_io_failure(self):
+        self.config['profile']['releaseCheckpointFileCache'] = 'true'
+        with self.assertRaisesRegex(RuntimeError, 'must be a boolean'):
+            runtime.release_checkpoint_file_cache(self.config, self.snapshot)
+        self.config['profile']['releaseCheckpointFileCache'] = True
+        with patch.object(runtime.os, 'posix_fadvise', side_effect=OSError('read error'), create=True), \
+                patch.object(runtime.os, 'POSIX_FADV_DONTNEED', 4, create=True), self.assertRaises(OSError):
+            runtime.release_checkpoint_file_cache(self.config, self.snapshot)
 
     def test_missing_sharded_weight_index_refuses_partial_snapshot(self):
         (self.snapshot / 'model.safetensors.index.json').unlink()

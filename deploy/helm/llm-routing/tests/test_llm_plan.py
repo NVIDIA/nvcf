@@ -288,14 +288,14 @@ class PlanTests(unittest.TestCase):
 
     def test_planned_and_unavailable_recipes_never_suggest_installation(self):
         catalog = json.loads((HERE / 'recipes/index.json').read_text())
-        for recipe in catalog['recipes']:
-            if recipe['availability']['deployable']:
-                continue
-            with self.subTest(recipe=recipe['id']):
+        recipe = copy.deepcopy(catalog['recipes'][0])
+        recipe.update(id='future-model', profiles=[], servedModelId=None, runtime=None)
+        for status in ('planned', 'unavailable'):
+            recipe['availability'] = {'status': status, 'deployable': False, 'reason': 'Test fixture'}
+            with self.subTest(status=status), patch.object(Path, 'read_text', return_value=json.dumps({'recipes': [recipe]})):
                 self.output.truncate(0)
                 self.output.seek(0)
                 report = self.plan(None, '--verbose', model=recipe['id'])
-                self.assertEqual(recipe['profiles'], [])
                 self.assertEqual(report['status'], 'unsupported')
                 self.assertIsNone(report['deployment'])
                 self.assertIn('NO DEPLOYABLE RECIPE', self.output.getvalue())

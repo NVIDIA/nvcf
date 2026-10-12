@@ -42,8 +42,9 @@
 {{- end -}}
 {{- $_ := required "sharedCAConfigMap is required for automatic mode" $v.sharedCAConfigMap -}}
 {{- $_ := required "storageClassName is required for automatic mode" $v.storageClassName -}}
-{{- $_ := set $v "model" (omit $model "profiles") -}}
-{{- $_ := set $v "profile" $profile -}}
+{{/* Qualification records stay in the catalog, outside serving config and its rollout checksum. */}}
+{{- $_ := set $v "model" (omit $model "profiles" "validation" "validatedWorkload" "automaticHelmValidation" "qualification" "artifactEvidence") -}}
+{{- $_ := set $v "profile" (omit $profile "validation" "validatedWorkload" "automaticHelmValidation" "qualification" "artifactEvidence") -}}
 {{- $_ := set $v "image" $model.image -}}
 {{- $_ := set $v "gpu" (dict "product" (index $profile.hardware.gpuProducts 0)) -}}
 {{- $_ := set $v "targets" $targets -}}

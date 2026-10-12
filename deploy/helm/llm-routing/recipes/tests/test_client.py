@@ -45,8 +45,8 @@ class ClientTests(unittest.TestCase):
             result = c.completion(MODEL, 'calculate', True)
         payload = request.call_args.args[1]
         self.assertEqual(payload['model'], MODEL)
-        self.assertEqual(payload['reasoning_effort'], 'low')
-        self.assertEqual(payload['chat_template_kwargs'], {'clear_thinking': True})
+        self.assertNotIn('reasoning_effort', payload)
+        self.assertNotIn('chat_template_kwargs', payload)
         self.assertEqual(payload['max_tokens'], 512)
         self.assertEqual(payload['stream_options'], {'include_usage': True})
         self.assertEqual(result['content'], '323')

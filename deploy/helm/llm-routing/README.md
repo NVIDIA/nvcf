@@ -111,13 +111,16 @@ Both models use the same gateway and caller credential. Each keeps its own Helm 
 
 | Recipe | Precision | Hardware |
 | --- | --- | --- |
+| [Qwen3.5-4B](#2-install-a-model) | BF16 | [1 GB300 (Station)](recipes/values/qwen3.5-4b-station.yaml) |
+| [Nemotron Nano 12B v2](#2-install-a-model) | BF16 | [1 GB300 (Station)](recipes/values/nemotron-nano-12b-v2-station.yaml) |
+| [Nemotron 3.5 Lightning](#2-install-a-model) | NVIDIA NVFP4 | [1 GB300 (Station)](recipes/values/nemotron3.5-lightning-station.yaml) |
 | [Qwen3.8-27B](#2-install-a-model) | FP8 | [1 GB10 (Spark)](recipes/values/qwen3.8-27b.yaml) or [1 GB300 (Station)](recipes/values/qwen3.8-27b-station.yaml) |
 | [Qwen3.8-27B](#add-a-second-model) | NVIDIA NVFP4 | [1 GB10 (Spark)](recipes/values/qwen3.8-27b-nvfp4.yaml) |
-| [GLM-5.3](ADVANCED.md#helm-glm-recipe) | UD-IQ2_M | [2 GB10s (Spark)](recipes/values/glm-5.3.yaml) |
+| [GLM-5.3](ADVANCED.md#helm-glm-recipe) | UD-IQ2_M | [2 GB10s (Spark)](recipes/values/glm-5.3.yaml) or [2 GB300s (Station)](recipes/values/glm-5.3-station.yaml) |
 | [Qwen3.8-Flash-Next](ADVANCED.md#helm-flash-next-recipes) | NVFP4 | [1 GB10 (Spark) with local NVMe](recipes/values/qwen3.8-flash-next-nvme.yaml) or [2 GB10s (Spark) with a 200 Gbps link](recipes/values/qwen3.8-flash-next-tp2.yaml) |
-| [DeepSeek V4 Flash](recipes/planned.json) | Upstream mixed FP4/FP8 | No recipe profile yet |
+| [DeepSeek V4 Flash](#2-install-a-model) | Mixed FP4/FP8 | [2 GB300s (Station), link >=200 Gbps](recipes/values/deepseek-v4-flash-station.yaml) |
 
-Planned recipes have no installable profile. See the [catalog](recipes/index.json) for profile details and the [Flash-Next guide](ADVANCED.md#helm-flash-next-recipes) for NVMe and two-node setup.
+See the [catalog](recipes/index.json) for profile details and validation scope. Two-node SGLang profiles require verified fabric addresses and interfaces in their values files.
 
 ## 3. Discover and call models
 

@@ -94,8 +94,7 @@ class Client:
             raise ValueError('max_tokens must be a positive integer.')
         payload = {'model': model, 'messages': [{'role': 'user', 'content': prompt}], 'stream': stream}
         if strict:
-            payload.update(max_tokens=512, temperature=0, seed=7,
-                           reasoning_effort='low', chat_template_kwargs={'clear_thinking': True})
+            payload.update(max_tokens=512, temperature=0, seed=7)
         if max_tokens is not None:
             payload['max_tokens'] = max_tokens
         if stream:

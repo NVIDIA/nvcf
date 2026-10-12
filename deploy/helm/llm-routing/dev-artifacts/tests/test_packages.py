@@ -202,6 +202,11 @@ class ChartPackageTests(unittest.TestCase):
         self.assertEqual(list(self.output.iterdir()), [])
 
     def test_missing_candidate_notice_does_not_fall_back_to_qwen_terms(self):
+        path = self.source/'recipes/index.json'
+        index = json.loads(path.read_text())
+        candidate = next(recipe for recipe in index['recipes'] if recipe['id'] == 'deepseek-v4-flash')
+        candidate.update(runtime=None, profiles=[], availability={'status': 'planned', 'deployable': False})
+        path.write_text(json.dumps(index))
         (self.source/'recipes/NOTICE.deepseek-v4-flash').unlink()
         result = self.package(success=False)
         self.assertIn('Missing model notice for deepseek-v4-flash', result.stderr)

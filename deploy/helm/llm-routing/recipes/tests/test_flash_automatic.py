@@ -212,9 +212,10 @@ class FlashRuntimeTests(unittest.TestCase):
              patch.object(runtime, 'check_fabric', side_effect=lambda *args: events.append('fabric')), patch.object(runtime, 'check_hardware'), \
              patch.object(runtime, 'StartupBarrier', return_value=barrier), patch.object(runtime, 'prepare_checkpoint', side_effect=lambda *args: events.append('cache') or self.fixture.snapshot), \
              patch.object(runtime, 'qualify', side_effect=lambda *args: events.append('qualify')), patch.object(runtime, 'prepare_offload', side_effect=lambda *args: events.append('offload')), \
+             patch.object(runtime, 'release_checkpoint_file_cache', side_effect=lambda *args: events.append('file-cache-release')), \
              patch.object(runtime, 'supervise', side_effect=serve), patch.object(runtime, 'log'):
             self.assertEqual(runtime.automatic(self.config, 1, self.cache), 0)
-        self.assertEqual(events, ['fabric', 'start', 'cache', 'pair', 'qualify', 'qualified', 'offload', 'serve', 'close'])
+        self.assertEqual(events, ['fabric', 'start', 'cache', 'pair', 'qualify', 'qualified', 'file-cache-release', 'offload', 'serve', 'close'])
 
     def test_failed_rank_qualification_closes_barrier_without_starting_server(self):
         self.tp2()

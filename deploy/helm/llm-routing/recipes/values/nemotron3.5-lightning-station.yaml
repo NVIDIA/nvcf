@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# Select an available ARM64 GB300 node with an exclusive GPU.
+recipe: nemotron3.5-lightning
+profileName: station-nvfp4
+nodes:
+- station-node-1
+runtimeClassName: nvidia
+storageClassName: local-path
+sharedCAConfigMap: llm-gateway-stack-ca

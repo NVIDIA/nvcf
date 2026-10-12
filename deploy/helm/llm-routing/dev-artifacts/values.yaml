@@ -17,7 +17,7 @@
       "llmRequestRouter": {
         "image": {
           "repository": "localhost/llm-stack/router",
-          "tag": "dev-20261007215000-790207",
+          "tag": "dev-20261011050719-7b10c0",
           "pullPolicy": "Never"
         },
         "nodeSelector": {
@@ -30,7 +30,7 @@
   "operator": {
     "image": {
       "repository": "localhost/llm-stack/operator",
-      "tag": "dev-20261007215000-790207",
+      "tag": "dev-20261011050719-7b10c0",
       "pullPolicy": "Never"
     },
     "nodeSelector": {
@@ -40,7 +40,7 @@
     "pylon": {
       "image": {
         "repository": "localhost/llm-stack/pylon",
-        "tag": "dev-20261007215000-790207",
+        "tag": "dev-20261011050719-7b10c0",
         "pullPolicy": "Never"
       }
     }

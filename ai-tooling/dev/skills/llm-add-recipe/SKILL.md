@@ -82,7 +82,7 @@ an independent model release. Keep preparation and serving in the model chart.
   data, and complete safetensors weights. Other layouts need runtime support.
 - GGUF: use [glm-5.3](../../../../deploy/helm/llm-routing/recipes/glm-5.3/recipe.json)
   as a structural example. Check `recipes/charts/gguf-backend/templates/_automatic.tpl`
-  and `files/automatic.py`. The current chart selects the first profile and
+  and `files/automatic.py`. The chart selects `profileName`, or the first profile when omitted, and
   constructs a leader plus one RPC worker. Additional topologies need chart
   and runtime changes before they can be advertised as executable profiles.
   Also update the exporter's GGUF license and guide mapping, which currently
@@ -230,13 +230,14 @@ Repeat the chart-copy synchronization in step 3, regenerate `recipes/index.json`
 with `python3 recipes/export_catalog.py`, then run the affected tests and
 `--check`. Repackage through `dev-artifacts/package-charts.sh` and refresh the
 packaged catalog, changed archives, guides, combined notice and checksums from
-that output. Update the README validation summary to match the recorded result.
+that output. Keep hardware and installation links in the README and validation
+records in recipe metadata.
 Verify the final archives match source and compare the rendered pod templates
-with the tested deployment. SGLang hashes model metadata into its configuration
-checksum, so even a validation-record update can trigger a rollout. If executable
-content or pod templates changed after the live pass, upgrade with the final
-package and rerun the affected readiness and inference checks. Metadata changes
-that leave pod templates and runtime behavior unchanged need only local checks.
+with the tested deployment. Both model charts exclude profile qualification records from serving
+configuration and rollout checksums. If executable content or pod templates changed after the live
+pass, upgrade with the final package and rerun the affected readiness and
+inference checks. Metadata changes that leave pod templates and runtime
+behavior unchanged need only local checks.
 
 Finish with the tested model/profile, artifact pins, workload, check results,
 remaining gaps and final release/cache state. Commit and publish only within

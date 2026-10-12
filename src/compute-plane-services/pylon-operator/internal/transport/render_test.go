@@ -409,6 +409,7 @@ func TestSpecHash(t *testing.T) {
 			ep.Spec.MaxEngineConcurrency = ptr.To[int32](2)
 		}},
 		{"image", func(_ *pylonv1alpha1.InferenceEndpoint, c *config.Config) { c.PylonImage = "pylon:next" }},
+		{"quic GSO", func(_ *pylonv1alpha1.InferenceEndpoint, c *config.Config) { c.PylonDisableQuicGSO = true }},
 		{"image pull policy", func(_ *pylonv1alpha1.InferenceEndpoint, c *config.Config) { c.PylonImagePullPolicy = "Always" }},
 		{"image pull secrets", func(_ *pylonv1alpha1.InferenceEndpoint, c *config.Config) {
 			c.PylonImagePullSecrets = []string{"ngc-pull"}
@@ -454,5 +455,17 @@ func TestSpecHash(t *testing.T) {
 			replicas := tt.mutate(ep, &cfg)
 			assert.Equal(t, base, Deployment(ep, cfg, replicas).Spec.Template.Annotations[SpecHashAnnotation])
 		})
+	}
+}
+
+func TestDisableQuicGSOEnvironment(t *testing.T) {
+	cfg := testConfig()
+	cfg.PylonDisableQuicGSO = true
+	d := Deployment(endpoint(), cfg, 1)
+	assert.Contains(t, d.Spec.Template.Spec.Containers[0].Env, corev1.EnvVar{Name: "STARGATE_QUIC_DISABLE_GSO", Value: "true"})
+	cfg.PylonDisableQuicGSO = false
+	d = Deployment(endpoint(), cfg, 1)
+	for _, env := range d.Spec.Template.Spec.Containers[0].Env {
+		assert.NotEqual(t, "STARGATE_QUIC_DISABLE_GSO", env.Name)
 	}
 }

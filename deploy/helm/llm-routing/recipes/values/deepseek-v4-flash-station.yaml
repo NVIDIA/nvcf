@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Select two available ARM64 GB300 nodes with exclusive GPUs.
+# Replace placeholder nodes in both nodes and nodeCapabilities.
+# Replace documentation IP addresses and interfaces with a verified link of at least 200 Gbps.
+# Each node needs a 220 GiB persistent model cache.
+recipe: deepseek-v4-flash
+profileName: station-fp4-tp2
+nodes:
+- gpu-node-1
+- gpu-node-2
+nodeCapabilities:
+  gpu-node-1:
+    fabric: model-pair
+    address: 192.0.2.1
+    interface: eth1
+    linkGbps: 400
+  gpu-node-2:
+    fabric: model-pair
+    address: 192.0.2.2
+    interface: eth1
+    linkGbps: 400
+runtimeClassName: nvidia
+storageClassName: local-path
+sharedCAConfigMap: llm-gateway-stack-ca

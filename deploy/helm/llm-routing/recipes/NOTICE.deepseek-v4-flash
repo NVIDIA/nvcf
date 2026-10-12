@@ -1,6 +1,6 @@
-DeepSeek V4 Flash upstream candidate
+DeepSeek V4 Flash
 
-The catalog records an upstream checkpoint and runtime candidates as research metadata. DeepSeek installation remains planned.
+Weights are downloaded separately at the pinned revision. The recipe uses the original Flash checkpoint. Container contents retain their upstream licenses.
 
 Model source: https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/tree/60d8d70770c6776ff598c94bb586a859a38244f1
 License source: https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/raw/60d8d70770c6776ff598c94bb586a859a38244f1/LICENSE

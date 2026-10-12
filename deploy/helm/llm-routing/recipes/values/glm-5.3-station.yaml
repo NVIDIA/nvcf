@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# Select two available ARM64 GB300 nodes. Keep retained caches on their original nodes.
+recipe: glm-5.3
+profileName: gb300-x2
+nodes:
+- station-node-1
+- station-node-2
+runtimeClassName: nvidia
+storageClassName: local-path
+sharedCAConfigMap: llm-gateway-stack-ca

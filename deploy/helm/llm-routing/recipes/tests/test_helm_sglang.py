@@ -65,22 +65,64 @@ class HelmSGLangTests(unittest.TestCase):
     def configuration(self, docs):
         return json.loads(next(doc for doc in docs if doc['kind'] == 'ConfigMap')['data']['config.json'])
 
+    def test_qualification_records_do_not_roll_out_but_execution_settings_do(self):
+        with tempfile.TemporaryDirectory() as directory:
+            chart = pathlib.Path(directory) / 'sglang'
+            shutil.copytree(CHART, chart)
+            path = chart / 'files/profiles.json'
+            data = json.loads(path.read_text())
+            with patch(__name__ + '.CHART', chart):
+                before = self.render(self.values('qwen3.5-4b'))
+                for owner in (data['qwen3.5-4b'], data['qwen3.5-4b']['profiles'][0]):
+                    for key in ('validation', 'validatedWorkload', 'automaticHelmValidation', 'qualification', 'artifactEvidence'):
+                        owner[key] = {'new': 'qualification evidence'}
+                path.write_text(json.dumps(data))
+                recorded = self.render(self.values('qwen3.5-4b'))
+                self.assertEqual(before, recorded)
+                data['qwen3.5-4b']['profiles'][0]['maxTotalTokens'] += 1024
+                path.write_text(json.dumps(data))
+                changed = self.render(self.values('qwen3.5-4b'))
+                def checksum(objects):
+                    return next(o for o in objects if o['kind'] == 'Deployment')['spec']['template']['metadata']['annotations']['checksum/config']
+                self.assertNotEqual(checksum(before), checksum(changed))
+
     def test_bundled_profiles_match_catalog_pins_and_workload_envelopes(self):
         bundled = json.loads((CHART/'files/profiles.json').read_text())
         catalog = {model['id']: model for model in json.loads((ROOT/'catalog.json').read_text())['models']}
-        self.assertEqual(set(bundled), {'qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'qwen3.8-flash-next'})
+        self.assertEqual(set(bundled), {'qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'qwen3.8-flash-next', 'qwen3.5-4b', 'nemotron-nano-12b-v2', 'nemotron3.5-lightning', 'deepseek-v4-flash'})
         for name, model in bundled.items():
             for field in ('id', 'repository', 'revision', 'image', 'profiles'):
                 self.assertEqual(model[field], catalog[name][field])
 
+    def test_deepseek_tp2_uses_fabric_and_preserves_each_cache(self):
+        values = yaml.safe_load((ROOT / 'values/deepseek-v4-flash-station.yaml').read_text())
+        docs = self.render(values)
+        config = self.configuration(docs)
+        self.assertEqual(config['profile']['nodes'], 2)
+        self.assertEqual(config['profile']['maxTotalTokens'], 16384)
+        self.assertEqual(len([d for d in docs if d['kind'] == 'PersistentVolumeClaim']), 2)
+        ranks = [d for d in docs if d['kind'] == 'Deployment']
+        self.assertEqual(len(ranks), 2)
+        for rank, deployment in enumerate(ranks):
+            pod = deployment['spec']['template']['spec']
+            self.assertTrue(pod['hostNetwork'])
+            main = pod['containers'][0]
+            self.assertEqual(main['resources']['requests']['nvidia.com/gpu'], '1')
+            env = {v['name']: v.get('value') for v in main['env']}
+            self.assertEqual(env['NCCL_SOCKET_IFNAME'], '=eth1')
+            self.assertEqual(env['NCCL_IB_DISABLE'], '1')
+        values.pop('nodeCapabilities')
+        self.assertIn('nodeCapabilities.fabric', self.render(values, success=False))
+
     def test_small_values_install_both_pinned_profiles_with_automatic_startup(self):
         pins = json.loads((CHART/'files/profiles.json').read_text())
-        for name in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4'):
+        for name in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'qwen3.5-4b', 'nemotron-nano-12b-v2', 'nemotron3.5-lightning'):
             with self.subTest(recipe=name):
                 docs = self.render(self.values(name))
                 config = self.configuration(docs)
                 self.assertEqual(config['model']['revision'], pins[name]['revision'])
-                self.assertEqual(config['profile'], pins[name]['profiles'][0])
+                self.assertEqual(config['profile'], {k: v for k, v in pins[name]['profiles'][0].items()
+                    if k not in ('validation', 'validatedWorkload', 'automaticHelmValidation', 'qualification', 'artifactEvidence')})
                 self.assertFalse(any(doc['kind'] == 'Job' for doc in docs))
                 deployment = next(doc for doc in docs if doc['kind'] == 'Deployment')
                 self.assertEqual(deployment['spec']['strategy'], {'type': 'Recreate'})
@@ -100,7 +142,7 @@ class HelmSGLangTests(unittest.TestCase):
                 self.assertEqual(endpoint['spec']['modelName'], name)
 
     def test_each_automatic_recipe_installs_without_a_values_file_or_cache_flag(self):
-        for recipe in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4'):
+        for recipe in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'qwen3.5-4b', 'nemotron-nano-12b-v2', 'nemotron3.5-lightning'):
             with self.subTest(recipe=recipe):
                 result = subprocess.run(['helm', 'template', 'test-model', str(CHART),
                                          '--namespace', 'test-stack', '--set', 'recipe=' + recipe,
@@ -161,6 +203,7 @@ class HelmSGLangTests(unittest.TestCase):
         env = {value['name']: value.get('value') for value in pod['containers'][0]['env']}
         self.assertEqual(env['HF_HUB_OFFLINE'], '1')
         self.assertEqual(env['TRANSFORMERS_OFFLINE'], '1')
+        self.assertEqual(env['TVM_FFI_CACHE_DIR'], '/cache/tvm-ffi')
         self.assertEqual(self.configuration(docs)['claimName'], 'previous-model-cache')
 
     def test_automatic_suspend_withdraws_endpoint_and_keeps_cache_service_and_pins(self):
@@ -257,6 +300,17 @@ class AutomaticRuntimeTests(unittest.TestCase):
         self.config = copy.deepcopy(fixture.config)
         self.config['profile'].update(nodes=1, memoryGiB=4, flags=[], offload=False)
         self.config.update(contextLength=128, concurrency=1, ports={'http': 30000})
+
+    def test_token_cache_headroom_preserves_request_limits_and_rejects_undersizing(self):
+        self.config['profile']['maxTotalTokens'] = 256
+        args = runtime.command(self.config, self.fixture.snapshot, 0)
+        self.assertEqual(args[args.index('--max-total-tokens') + 1], '256')
+        self.assertEqual(args[args.index('--context-length') + 1], '128')
+        self.assertEqual(args[args.index('--max-running-requests') + 1], '1')
+        for value in (127, 0, True, '256'):
+            self.config['profile']['maxTotalTokens'] = value
+            with self.assertRaisesRegex(RuntimeError, 'must cover'):
+                runtime.command(self.config, self.fixture.snapshot, 0)
 
     def test_existing_cache_is_validated_locally_and_partial_shards_fail_before_serve(self):
         with patch.dict('sys.modules', {'huggingface_hub': None}), patch.object(runtime, 'log'):

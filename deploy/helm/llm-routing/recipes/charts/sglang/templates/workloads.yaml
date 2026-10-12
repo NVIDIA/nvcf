@@ -134,6 +134,7 @@ spec:
             - {name: TRANSFORMERS_OFFLINE, value: '1'}
 {{- end }}
             - {name: SGLANG_CACHE_DIR, value: /cache/sglang}
+            - {name: TVM_FFI_CACHE_DIR, value: /cache/tvm-ffi}
             - {name: PYTHONDONTWRITEBYTECODE, value: '1'}
             - {name: PYTORCH_CUDA_ALLOC_CONF, value: 'expandable_segments:True'}
 {{- if $v.hfTokenSecret }}

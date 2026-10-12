@@ -5,7 +5,13 @@
 {{- $metadata := .Files.Get (printf "%sprofiles.json" $base) | fromJson -}}
 {{- if not $metadata }}{{ fail "Automatic mode supports the bundled glm-5.3 recipe" }}{{ end -}}
 {{- $profile := index $metadata.profiles 0 -}}
-{{- if and $v.profileName (ne $v.profileName $profile.id) }}{{ fail "profileName does not belong to the selected recipe" }}{{ end -}}
+{{- if $v.profileName -}}
+{{- $matches := list -}}
+{{- range $candidate := $metadata.profiles }}{{ if eq $candidate.id $v.profileName }}{{ $matches = append $matches $candidate }}{{ end }}{{ end -}}
+{{- if ne (len $matches) 1 }}{{ fail "profileName does not belong to the selected recipe" }}{{ end -}}
+{{- $profile = index $matches 0 -}}
+{{- end -}}
+{{- if ne (int $profile.nodes) 2 }}{{ fail "Automatic GGUF serving requires a leader and one RPC worker" }}{{ end -}}
 {{- if ne (len $v.nodes) (int $profile.nodes) }}{{ fail "Automatic GLM profile requires exactly two explicit nodes" }}{{ end -}}
 {{- if eq (index $v.nodes 0) (index $v.nodes 1) }}{{ fail "Automatic GLM nodes must be distinct" }}{{ end -}}
 {{- range $node := $v.nodes }}{{- if or (not (kindIs "string" $node)) (not (regexMatch "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$" $node)) }}{{ fail "nodes must contain Kubernetes node names" }}{{ end }}{{ end -}}
@@ -24,7 +30,8 @@
 {{- if and $v.image (ne $v.image $image) }}{{ fail "Automatic runtime image is pinned by the recipe profile" }}{{ end -}}
 {{- $leaderClaim := default (printf "%s-artifacts" .Release.Name) $v.artifacts.existingClaim -}}
 {{- $workerClaim := default (printf "%s-rpc-cache-n1" .Release.Name) $v.rpc.cache.existingClaim -}}
-{{- dict "recipe" $recipe "tuning" $tuning "lock" $lock "profile" $profile "image" $image "reuseCaches" $v.reuseCaches "claims" (list $leaderClaim $workerClaim) "runtimeURL" (printf "http://%s-artifacts:8080/runtime.tar.gz" .Release.Name) "rpcEndpoints" (list (printf "%s-rpc-n1:50052" .Release.Name)) | toJson -}}
+{{- $runtimeProfile := omit $profile "validation" "validatedWorkload" "automaticHelmValidation" "qualification" "artifactEvidence" -}}
+{{- dict "recipe" $recipe "tuning" $tuning "lock" $lock "profile" $runtimeProfile "image" $image "reuseCaches" $v.reuseCaches "claims" (list $leaderClaim $workerClaim) "runtimeURL" (printf "http://%s-artifacts:8080/runtime.tar.gz" .Release.Name) "rpcEndpoints" (list (printf "%s-rpc-n1:50052" .Release.Name)) | toJson -}}
 {{- end -}}
 
 {{- define "gguf.nodeRole" -}}
