@@ -20,5 +20,6 @@ package com.nvidia.apikeys.vo;
 public enum KeyStatus {
     ACTIVE,
     EXPIRED,
-    SUSPENDED
+    SUSPENDED,
+    REVOKED
 }

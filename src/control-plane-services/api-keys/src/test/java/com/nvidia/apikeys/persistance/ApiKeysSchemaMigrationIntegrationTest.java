@@ -33,7 +33,7 @@ import org.junit.jupiter.api.Test;
 class ApiKeysSchemaMigrationIntegrationTest {
 
     @Test
-    void migrationAddsOwnerIndexesAndPreservesLegacyKeysWhenReapplied() throws IOException {
+    void migrationAddsOwnerIndexesAndKeysV2AndPreservesLegacyKeysWhenReapplied() throws IOException {
         Session session = IntegrationTestConfiguration.CQL_SESSION;
         String keyspace = "api_keys_test_" + UUID.randomUUID().toString().replace("-", "");
         session.execute("CREATE KEYSPACE " + keyspace + " WITH replication = "
@@ -79,7 +79,7 @@ class ApiKeysSchemaMigrationIntegrationTest {
     }
 
     private static void assertStatusesDiscoverable(Session session, String keyspace) {
-        assertThat(session.execute("SELECT * FROM " + keyspace + ".keys_by_account_owner_and_service")
+        assertThat(session.execute("SELECT * FROM " + keyspace + ".keys_by_owner_and_account_and_service")
                 .all()).isEmpty();
         assertThat(session.execute("SELECT nca_id, owner_type, owner_status FROM "
                 + keyspace + ".owner_status_by_account WHERE owner_id = 'alice'").all())
@@ -107,11 +107,14 @@ class ApiKeysSchemaMigrationIntegrationTest {
     }
 
     private static void assertLegacyKeysPreserved(Session session, String keyspace) {
-        assertThat(session.execute("SELECT api_key_hash, status, key_details, nca_id"
+        assertThat(session.execute("SELECT api_key_hash, status, key_details"
                 + " FROM " + keyspace + ".keys").all())
                 .extracting(row -> row.getString("api_key_hash"), row -> row.getString("status"),
-                        row -> row.getString("key_details"), row -> row.getString("nca_id"))
-                .containsExactly(tuple("legacy-hash", "ACTIVE", "legacy-details", null));
+                        row -> row.getString("key_details"))
+                .containsExactly(tuple("legacy-hash", "ACTIVE", "legacy-details"));
+        assertThat(session.getCluster().getMetadata().getKeyspace(keyspace).getTable("keys")
+                .getColumn("nca_id")).isNull();
+        assertThat(session.execute("SELECT * FROM " + keyspace + ".keys_v2").all()).isEmpty();
         assertThat(session.execute("SELECT owner_type, owner_id, issuer_service_id, key_id, key_status"
                 + " FROM " + keyspace + ".keys_by_owner_and_service").all())
                 .extracting(row -> row.getString("owner_type"), row -> row.getString("owner_id"),
