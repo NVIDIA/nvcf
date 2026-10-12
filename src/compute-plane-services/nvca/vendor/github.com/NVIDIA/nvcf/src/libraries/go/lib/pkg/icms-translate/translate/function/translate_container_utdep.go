@@ -539,6 +539,7 @@ func getUtilsDeploymentAndSecrets(t CreationQueueMessage, tcfg TranslateConfig) 
 			essDataVolumeMount,
 		}
 		utilsPod.Spec.InitContainers = append(utilsPod.Spec.InitContainers, essInitContainer)
+		common.EnsureESSFSGroup(&utilsPod.Spec)
 	}
 
 	utilsContainer := corev1.Container{

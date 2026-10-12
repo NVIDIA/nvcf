@@ -141,9 +141,15 @@ spec:
         cpu: 125m
         memory: 64Mi
     securityContext:
+      allowPrivilegeEscalation: false
       capabilities:
+        add:
+        - CHOWN
         drop:
-        - NET_RAW
+        - ALL
+      runAsGroup: 1000
+      runAsNonRoot: true
+      runAsUser: 1000
     volumeMounts:
     - mountPath: /var/secrets
       name: secret-data
@@ -381,15 +387,24 @@ spec:
         cpu: 125m
         memory: 64Mi
     securityContext:
+      allowPrivilegeEscalation: false
       capabilities:
+        add:
+        - CHOWN
         drop:
-        - NET_RAW
+        - ALL
+      runAsGroup: 1000
+      runAsNonRoot: true
+      runAsUser: 1000
     volumeMounts:
     - mountPath: /var/secrets
       name: secret-data
     - mountPath: /config/ess-agent
       name: ess-data
   restartPolicy: Always
+  securityContext:
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
   serviceAccountName: my-sa
   terminationGracePeriodSeconds: 120
   tolerations:
