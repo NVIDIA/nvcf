@@ -14,7 +14,6 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use serde::Serialize;
 
@@ -102,7 +101,7 @@ pub(super) fn effective_config(config: &LoadBalancerAlgorithmConfig) -> anyhow::
         }
         LoadBalancerAlgorithm::WaitAndWiden => {
             let settings = WaitAndWidenConfig::from_algorithm_config(config)?;
-            effective.wait_and_widen = Some(filled_wait_and_widen(&settings, None));
+            effective.wait_and_widen = Some(settings.to_algorithm_config());
         }
         LoadBalancerAlgorithm::RoundRobin | LoadBalancerAlgorithm::Random => {}
         LoadBalancerAlgorithm::Pulsar => {
@@ -112,10 +111,7 @@ pub(super) fn effective_config(config: &LoadBalancerAlgorithmConfig) -> anyhow::
         }
         LoadBalancerAlgorithm::PulsarWaitAndWiden => {
             let settings = PulsarWaitAndWidenConfig::from_algorithm_config(config)?;
-            effective.wait_and_widen = Some(filled_wait_and_widen(
-                &settings.wait_and_widen,
-                Some(&settings),
-            ));
+            effective.wait_and_widen = Some(settings.to_algorithm_config());
             effective.consider_kv_free_tokens = Some(config.considers_kv_free_tokens());
             effective.rendezvous_weight = Some(config.rendezvous_weight);
         }
@@ -140,39 +136,6 @@ struct EffectiveConfig {
     require_input_tokens: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_input_work_seconds: Option<f64>,
-}
-
-/// Writes the constructor's values back into config fields; fields the algorithm does not use stay
-/// unset.
-fn filled_wait_and_widen(
-    settings: &WaitAndWidenConfig,
-    pulsar: Option<&PulsarWaitAndWidenConfig>,
-) -> WaitAndWidenAlgorithmConfig {
-    // Durations were built from u64 milliseconds, so the conversion cannot overflow.
-    let millis = |duration: Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
-    WaitAndWidenAlgorithmConfig {
-        seed: settings.seed.clone(),
-        comparator: settings.comparator,
-        cache_affinity_virtual_nodes: pulsar
-            .is_none()
-            .then_some(settings.cache_affinity_virtual_nodes),
-        cache_affinity_backend_selection_count: pulsar
-            .map_or(settings.cache_affinity_backend_selection_count, |pulsar| {
-                Some(pulsar.affinity_group_size)
-            }),
-        cache_affinity_input_tokens_scale: Some(settings.cache_affinity_input_tokens_scale),
-        cache_affinity_wait_ms: Some(millis(settings.cache_affinity_wait)),
-        band_widen_interval_ms: pulsar.map(|pulsar| millis(pulsar.band_widen_interval)),
-        fallback_max_queued: pulsar.map(|pulsar| pulsar.fallback_max_queued),
-        max_queue_time_floor_ms: settings.queue_slo.as_ref().map(|slo| millis(*slo.start())),
-        max_queue_time_ceil_ms: settings.queue_slo.as_ref().map(|slo| millis(*slo.end())),
-        ttft_bucket_size_ms: Some(millis(settings.ttft_bucket_size)),
-        next_bucket_unlock_factor: Some(settings.next_bucket_unlock_factor),
-        n: Some(settings.sample_count),
-        max_queued: Some(settings.max_queued),
-        ignore_queue_time: Some(settings.ignore_queue_time),
-        ignore_input_processing_time: Some(settings.ignore_input_processing_time),
-    }
 }
 
 #[cfg(test)]

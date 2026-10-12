@@ -16,10 +16,10 @@
 use std::time::Duration;
 
 use super::pulsar::PulsarLoadBalancer;
-use super::wait_and_widen::{WaitAndWidenConfig, WaitAndWidenLoadBalancer};
+use super::wait_and_widen::{WaitAndWidenConfig, WaitAndWidenLoadBalancer, millis};
 use super::{
     LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice, LoadBalancerDecision,
-    LoadBalancerRequest,
+    LoadBalancerRequest, WaitAndWidenAlgorithmConfig,
 };
 use crate::routing_state::RoutedClusterSnapshot;
 
@@ -77,6 +77,18 @@ impl PulsarWaitAndWidenConfig {
             fallback_max_queued: settings.fallback_max_queued.unwrap_or(0),
             wait_and_widen,
         })
+    }
+
+    /// The inverse of `from_algorithm_config`: the values this algorithm routes with, as config.
+    pub(super) fn to_algorithm_config(&self) -> WaitAndWidenAlgorithmConfig {
+        WaitAndWidenAlgorithmConfig {
+            // The Pulsar ranking replaces the affinity ring, so virtual nodes do not route.
+            cache_affinity_virtual_nodes: None,
+            cache_affinity_backend_selection_count: Some(self.affinity_group_size),
+            band_widen_interval_ms: Some(millis(self.band_widen_interval)),
+            fallback_max_queued: Some(self.fallback_max_queued),
+            ..self.wait_and_widen.to_algorithm_config()
+        }
     }
 }
 

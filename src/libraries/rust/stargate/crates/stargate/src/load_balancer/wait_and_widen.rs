@@ -25,7 +25,7 @@ use rand::Rng;
 
 use super::{
     ClusterComparator, LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice,
-    LoadBalancerDecision, LoadBalancerRequest, Ttft, ttft,
+    LoadBalancerDecision, LoadBalancerRequest, Ttft, WaitAndWidenAlgorithmConfig, ttft,
 };
 use crate::routing_state::RoutedClusterSnapshot;
 use cache_affinity::CacheAffinitySelector;
@@ -103,6 +103,28 @@ impl WaitAndWidenConfig {
         })
     }
 
+    /// The inverse of `from_algorithm_config`: the values this algorithm routes with, as config.
+    pub(super) fn to_algorithm_config(&self) -> WaitAndWidenAlgorithmConfig {
+        WaitAndWidenAlgorithmConfig {
+            seed: self.seed.clone(),
+            comparator: self.comparator,
+            cache_affinity_virtual_nodes: Some(self.cache_affinity_virtual_nodes),
+            cache_affinity_backend_selection_count: self.cache_affinity_backend_selection_count,
+            cache_affinity_input_tokens_scale: Some(self.cache_affinity_input_tokens_scale),
+            cache_affinity_wait_ms: Some(millis(self.cache_affinity_wait)),
+            band_widen_interval_ms: None,
+            fallback_max_queued: None,
+            max_queue_time_floor_ms: self.queue_slo.as_ref().map(|slo| millis(*slo.start())),
+            max_queue_time_ceil_ms: self.queue_slo.as_ref().map(|slo| millis(*slo.end())),
+            ttft_bucket_size_ms: Some(millis(self.ttft_bucket_size)),
+            next_bucket_unlock_factor: Some(self.next_bucket_unlock_factor),
+            n: Some(self.sample_count),
+            max_queued: Some(self.max_queued),
+            ignore_queue_time: Some(self.ignore_queue_time),
+            ignore_input_processing_time: Some(self.ignore_input_processing_time),
+        }
+    }
+
     pub(super) fn max_queue_time(&self, request: &LoadBalancerRequest<'_>) -> Option<Duration> {
         let queue_slo = self.queue_slo.as_ref()?;
         let floor_ms = queue_slo.start().as_secs_f64() * 1000.0;
@@ -146,6 +168,11 @@ impl WaitAndWidenConfig {
             Some(comparator) => comparator.compare(request, candidate_a, candidate_b),
         }
     }
+}
+
+// Config durations are built from u64 milliseconds, so the conversion back cannot overflow.
+pub(super) fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 impl_display!(WaitAndWidenLoadBalancer, "wait-and-widen");
