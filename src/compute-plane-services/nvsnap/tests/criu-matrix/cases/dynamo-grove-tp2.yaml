@@ -7,6 +7,7 @@ kind: DynamoGraphDeployment
 podsPerInstance: 2
 dynamo:
   etcdNats: true
+  snapshotPoint: true
 criuCapture: true
 function:
   inferenceUrl: /v1/chat/completions
