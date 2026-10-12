@@ -664,5 +664,92 @@
         "authentication"
       ]
     }
+  },
+  "deepseek-v4-flash": {
+    "id": "deepseek-v4-flash",
+    "name": "DeepSeek V4 Flash",
+    "precision": "FP4 experts, FP8 attention",
+    "repository": "deepseek-ai/DeepSeek-V4-Flash",
+    "revision": "60d8d70770c6776ff598c94bb586a859a38244f1",
+    "image": "lmsysorg/sglang@sha256:b1259f3ea3275f66237c498ea388919729018bc9f01c3d638391e06e2cf3f469",
+    "runtime": "SGLang v0.5.21 (cu130, pinned multi-arch digest)",
+    "license": "MIT",
+    "source": "https://docs.sglang.io/cookbook/autoregressive/DeepSeek/DeepSeek-V4",
+    "validation": "spark-smoke-tested",
+    "profiles": [
+      {
+        "id": "spark-tp2",
+        "nodes": 2,
+        "memoryGiB": 100,
+        "memoryLimitGiB": 112,
+        "cpu": 4,
+        "cacheGiB": 200,
+        "minFreeDiskGiB": 180,
+        "maxContext": 8192,
+        "maxConcurrency": 1,
+        "offload": false,
+        "fabric": true,
+        "flags": [
+          "--moe-runner-backend",
+          "marlin",
+          "--mem-fraction-static",
+          "0.80",
+          "--chunked-prefill-size",
+          "2048",
+          "--reasoning-parser",
+          "deepseek-v4",
+          "--tool-call-parser",
+          "deepseekv4"
+        ],
+        "hardware": {
+          "os": "linux",
+          "architecture": "arm64",
+          "gpuProducts": [
+            "NVIDIA-GB10",
+            "NVIDIA GB10"
+          ],
+          "cudaDeviceNames": [
+            "NVIDIA GB10"
+          ],
+          "gpuCount": 1,
+          "memoryMode": "unified"
+        },
+        "minFabricGbps": 200
+      }
+    ],
+    "validatedWorkload": {
+      "date": "2026-10-12",
+      "profile": "spark-tp2",
+      "contextLength": 8192,
+      "concurrency": 1,
+      "requestType": "short-prompt-smoke",
+      "fullContextExercised": false,
+      "lifecycleIsolationVerified": false,
+      "performanceBenchmarked": false,
+      "qualityEvaluated": false
+    },
+    "automaticHelmValidation": {
+      "date": "2026-10-12",
+      "profile": "spark-tp2",
+      "modelRevision": "60d8d70770c6776ff598c94bb586a859a38244f1",
+      "runtimeImage": "lmsysorg/sglang@sha256:b1259f3ea3275f66237c498ea388919729018bc9f01c3d638391e06e2cf3f469",
+      "contextLength": 8192,
+      "concurrency": 1,
+      "requestType": "short-prompt-smoke",
+      "fullContextExercised": false,
+      "performanceBenchmarked": false,
+      "qualityEvaluated": false,
+      "cacheMode": "fresh-download-then-retained",
+      "checks": [
+        "placement",
+        "gpu-qualification",
+        "cache-integrity",
+        "readiness",
+        "discovery",
+        "chat",
+        "streaming",
+        "authentication"
+      ]
+    }
   }
 }

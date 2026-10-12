@@ -68,7 +68,7 @@ class HelmSGLangTests(unittest.TestCase):
     def test_bundled_profiles_match_catalog_pins_and_workload_envelopes(self):
         bundled = json.loads((CHART/'files/profiles.json').read_text())
         catalog = {model['id']: model for model in json.loads((ROOT/'catalog.json').read_text())['models']}
-        self.assertEqual(set(bundled), {'qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'nemotron-nano-12b-v2', 'nemotron-3.5-lightning', 'qwen3.5-4b', 'qwen3.8-flash-next'})
+        self.assertEqual(set(bundled), {'qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'nemotron-nano-12b-v2', 'nemotron-3.5-lightning', 'qwen3.5-4b', 'qwen3.8-flash-next', 'deepseek-v4-flash'})
         for name, model in bundled.items():
             for field in ('id', 'repository', 'revision', 'image', 'profiles'):
                 self.assertEqual(model[field], catalog[name][field])

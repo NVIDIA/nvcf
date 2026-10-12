@@ -350,6 +350,7 @@ All supported recipes use the same Helm lifecycle. Preparation, startup and endp
 | Qwen3.5-4B | `qwen35-4b` | `pylon-sglang-recipe-0.2.0.tgz` | `qwen3.5-4b` |
 | Nemotron Nano 12B v2 | `nemotron-nano` | `pylon-sglang-recipe-0.2.0.tgz` | `nemotron-nano-12b-v2` |
 | Nemotron 3.5 Lightning | `nemotron-lightning` | `pylon-sglang-recipe-0.2.0.tgz` | `nemotron-3.5-lightning` |
+| DeepSeek V4 Flash | `deepseek-v4` | `pylon-sglang-recipe-0.2.0.tgz` | `deepseek-v4-flash` |
 | Flash-Next, either profile | `qwen-flash` | `pylon-sglang-recipe-0.2.0.tgz` | `qwen3.8-flash-next` |
 | GLM | `glm` | `pylon-gguf-backend-0.2.0.tgz` | `GLM-5.3-UD-IQ2_M` |
 

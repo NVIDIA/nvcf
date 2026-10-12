@@ -118,7 +118,7 @@ Both models use the same gateway and caller credential. Each keeps its own Helm 
 | [Nemotron Nano 12B v2](recipes/values/nemotron-nano-12b-v2.yaml) | BF16 | [1 GB10 (Spark)](recipes/values/nemotron-nano-12b-v2.yaml). No tool-call parser configured |
 | [Nemotron 3.5 Lightning](recipes/values/nemotron-3.5-lightning.yaml) | NVFP4 | [1 GB10 (Spark)](recipes/values/nemotron-3.5-lightning.yaml). Pinned SGLang development image |
 | [Qwen3.8-Flash-Next](ADVANCED.md#helm-flash-next-recipes) | NVFP4 | [1 GB10 (Spark) with local NVMe](recipes/values/qwen3.8-flash-next-nvme.yaml) or [2 GB10s (Spark) with a 200 Gbps link](recipes/values/qwen3.8-flash-next-tp2.yaml) |
-| [DeepSeek V4 Flash](recipes/planned.json) | Upstream mixed FP4/FP8 | No recipe profile yet |
+| [DeepSeek V4 Flash](recipes/values/deepseek-v4-flash.yaml) | FP4 experts, FP8 attention | [2 GB10s (Spark) with a 200 Gbps link](recipes/values/deepseek-v4-flash.yaml). A three-way split is not valid for this model. Needs 200 GiB of cache per node |
 
 Planned recipes have no installable profile. See the [catalog](recipes/index.json) for profile details and the [Flash-Next guide](ADVANCED.md#helm-flash-next-recipes) for NVMe and two-node setup.
 

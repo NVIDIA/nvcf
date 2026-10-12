@@ -40,6 +40,7 @@ Model weights and runtime images are referenced by immutable revisions/digests. 
 
 Qwen3.8-27B-FP8: Apache-2.0, https://huggingface.co/Qwen/Qwen3.8-27B-FP8 .
 NVIDIA Qwen3.8-27B-NVFP4: Apache-2.0, https://huggingface.co/nvidia/Qwen3.8-27B-NVFP4 .
+DeepSeek V4 Flash: MIT, https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash .
 Qwen3.5-4B: Apache-2.0, https://huggingface.co/Qwen/Qwen3.5-4B .
 NVIDIA Nemotron Nano 12B v2: NVIDIA Open Model License, https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/ , https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-12B-v2 . This license is outside the repository standard allowlist. Review its terms before downloading or redistributing weights.
 NVIDIA Nemotron 3.5 Lightning 30B-A3B NVFP4: OpenMDW-1.1, https://openmdw.ai/license/1-1/ , https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4 . This license is outside the repository standard allowlist. Review its terms before downloading or redistributing weights.

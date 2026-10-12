@@ -13,96 +13,146 @@
     {
       "id": "deepseek-v4-flash",
       "name": "DeepSeek V4 Flash",
-      "servedModelId": null,
+      "servedModelId": "deepseek-v4-flash",
       "availability": {
-        "status": "planned",
-        "deployable": false,
-        "reason": "The verified checkpoint has upstream four-GPU candidates. Installation requires tensor-parallel chart support, model-specific startup/cache checks and hardware qualification. Rechecked 2026-10-09: the checkpoint is about 160 GB, the SGLang cookbook lists only GB200, B200, GB300, B300 and H200 hardware with four or more GPUs, and no DGX Spark or GB10 guidance exists. The SGLang chart supports one or two nodes, so it cannot run this model on a three-GPU Spark cluster.",
-        "checkedAt": "2026-10-09",
-        "sources": [
-          "https://huggingface.co/api/models/deepseek-ai/DeepSeek-V4-Flash",
-          "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/tree/60d8d70770c6776ff598c94bb586a859a38244f1",
-          "https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/raw/60d8d70770c6776ff598c94bb586a859a38244f1/config.json",
-          "https://docs.sglang.io/cookbook/autoregressive/DeepSeek/DeepSeek-V4",
-          "https://github.com/ai-dynamo/dynamo/blob/main/recipes/deepseek-v4/deepseek-v4-flash/README.md",
-          "https://raw.githubusercontent.com/ai-dynamo/dynamo/main/recipes/deepseek-v4/container/sglang/Dockerfile.dsv4.sglang.b200",
-          "https://raw.githubusercontent.com/ai-dynamo/dynamo/main/recipes/deepseek-v4/container/sglang/Dockerfile.dsv4.sglang.gb200",
-          "https://hub.docker.com/v2/repositories/lmsysorg/sglang/tags/deepseek-v4-blackwell",
-          "https://hub.docker.com/v2/repositories/lmsysorg/sglang/tags/deepseek-v4-grace-blackwell",
-          "https://github.com/sgl-project/sglang/issues/39277"
-        ]
+        "status": "available",
+        "deployable": true
       },
-      "precision": null,
-      "license": null,
+      "precision": "FP4 experts, FP8 attention",
+      "license": "MIT",
       "licenseNotice": "NOTICE",
-      "model": null,
-      "runtime": null,
-      "profiles": [],
-      "upstreamCandidates": [
+      "model": {
+        "repository": "deepseek-ai/DeepSeek-V4-Flash",
+        "revision": "60d8d70770c6776ff598c94bb586a859a38244f1",
+        "weightBytes": null
+      },
+      "runtime": {
+        "backend": "sglang",
+        "version": "SGLang v0.5.21 (cu130, pinned multi-arch digest)",
+        "image": "lmsysorg/sglang@sha256:b1259f3ea3275f66237c498ea388919729018bc9f01c3d638391e06e2cf3f469"
+      },
+      "profiles": [
         {
-          "id": "b200-tp4",
-          "model": {
-            "repository": "deepseek-ai/DeepSeek-V4-Flash",
-            "revision": "60d8d70770c6776ff598c94bb586a859a38244f1",
-            "weightBytes": 159617149040,
-            "weightShards": 46,
-            "architecture": "DeepseekV4ForCausalLM",
-            "modelType": "deepseek_v4",
-            "totalParametersBillions": 284,
-            "activeParametersBillions": 13,
-            "maximumContextTokens": 1048576
-          },
-          "license": "MIT",
-          "precision": "FP4 MoE experts, FP8 attention/dense with BF16/F32 auxiliary tensors",
-          "runtime": {
-            "backend": "sglang",
-            "image": "lmsysorg/sglang@sha256:940f7652dd16b04e82ecc57c4dcb6a3ae7d7283bc38db1ce3c4aa6ae3685c4aa",
-            "upstreamTag": "deepseek-v4-blackwell"
-          },
-          "hardware": {
-            "os": "linux",
-            "architecture": "amd64",
-            "gpuProduct": "NVIDIA-B200",
-            "modelNodeCount": 1,
-            "gpusPerNode": 4,
-            "tensorParallelSize": 4
-          },
-          "validation": {
-            "status": "unqualified",
-            "scope": "Upstream documentation and image metadata only. No local container launch, model download, inference, recovery or isolation test."
-          }
-        },
-        {
-          "id": "gb200-tp4",
-          "model": {
-            "repository": "deepseek-ai/DeepSeek-V4-Flash",
-            "revision": "60d8d70770c6776ff598c94bb586a859a38244f1",
-            "weightBytes": 159617149040,
-            "weightShards": 46,
-            "architecture": "DeepseekV4ForCausalLM",
-            "modelType": "deepseek_v4",
-            "totalParametersBillions": 284,
-            "activeParametersBillions": 13,
-            "maximumContextTokens": 1048576
-          },
-          "license": "MIT",
-          "precision": "FP4 MoE experts, FP8 attention/dense with BF16/F32 auxiliary tensors",
-          "runtime": {
-            "backend": "sglang",
-            "image": "lmsysorg/sglang@sha256:e0a0ebb70572a70d2a90759de96482e7f482d501283c48c3393b1e62198051ef",
-            "upstreamTag": "deepseek-v4-grace-blackwell"
-          },
+          "id": "spark-tp2",
           "hardware": {
             "os": "linux",
             "architecture": "arm64",
-            "gpuProduct": "NVIDIA-GB200",
-            "modelNodeCount": 1,
-            "gpusPerNode": 4,
-            "tensorParallelSize": 4
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 2,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 107374182400,
+                "memoryLimitBytes": 120259084288,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 214748364800,
+                "minimumFreeBytesBeforeDownload": 193273528320
+              }
+            },
+            {
+              "rank": 1,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 107374182400,
+                "memoryLimitBytes": 120259084288,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 214748364800,
+                "minimumFreeBytesBeforeDownload": 193273528320
+              }
+            }
+          ],
+          "fabric": {
+            "minimumGbps": 200
+          },
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 8192,
+            "maximumConcurrency": 1
           },
           "validation": {
-            "status": "unqualified",
-            "scope": "Upstream documentation and image metadata only. No local container launch, model download, inference, recovery or isolation test."
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-12",
+              "profile": "spark-tp2",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "lifecycleIsolationVerified": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-12",
+              "profile": "spark-tp2",
+              "modelRevision": "60d8d70770c6776ff598c94bb586a859a38244f1",
+              "runtimeImage": "lmsysorg/sglang@sha256:b1259f3ea3275f66237c498ea388919729018bc9f01c3d638391e06e2cf3f469",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "cacheMode": "fresh-download-then-retained",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.2.0",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "repository": null,
+              "publication": "local"
+            },
+            "releaseName": "deepseek-v4",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "deepseek-v4-flash",
+              "profileName": "spark-tp2"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap",
+              "nodeCapabilities"
+            ],
+            "guide": "../README.md"
           }
         }
       ]
