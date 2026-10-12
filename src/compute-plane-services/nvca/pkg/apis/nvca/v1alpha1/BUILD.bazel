@@ -19,6 +19,7 @@ go_library(
     deps = [
         "//src/compute-plane-services/nvca/pkg/apis/nvca/internal/compat",
         "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",

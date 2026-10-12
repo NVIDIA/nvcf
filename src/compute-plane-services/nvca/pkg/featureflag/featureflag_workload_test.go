@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 )
@@ -77,11 +78,60 @@ func TestDecodeWorkloadConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "DisableNVLinkComputeDomain flag enabled",
+			cm:   workloadConfigCM("featureFlags:\n  " + DisableNVLinkComputeDomain + ": true\n"),
+			want: &v1alpha1.WorkloadConfig{
+				FeatureFlags: map[string]bool{DisableNVLinkComputeDomain: true},
+			},
+		},
+		{
 			name: "unknown feature flag is dropped",
 			cm:   workloadConfigCM("featureFlags:\n  " + StatusByWorkerReadiness + ": true\n  SomeUnknownFlag: true\n"),
 			want: &v1alpha1.WorkloadConfig{
 				FeatureFlags: map[string]bool{StatusByWorkerReadiness: true},
 			},
+		},
+		{
+			name: "valid byooResources override is kept",
+			cm: workloadConfigCM("byooResources:\n" +
+				"  requests:\n    cpu: \"1\"\n    memory: 4Gi\n" +
+				"  limits:\n    cpu: \"1\"\n    memory: 4Gi\n"),
+			want: &v1alpha1.WorkloadConfig{
+				BYOOResources: &corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("1"),
+						corev1.ResourceMemory: resource.MustParse("4Gi"),
+					},
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("1"),
+						corev1.ResourceMemory: resource.MustParse("4Gi"),
+					},
+				},
+			},
+		},
+		{
+			name: "byooResources below 1Gi memory floor returns error",
+			cm: workloadConfigCM("byooResources:\n" +
+				"  limits:\n    memory: 512Mi\n"),
+			wantErr: true,
+		},
+		{
+			name: "byooResources with non-positive cpu returns error",
+			cm: workloadConfigCM("byooResources:\n" +
+				"  requests:\n    cpu: \"0\"\n    memory: 2Gi\n"),
+			wantErr: true,
+		},
+		{
+			name: "byooResources with malformed cpu returns error",
+			cm: workloadConfigCM("byooResources:\n" +
+				"  requests:\n    cpu: \"abc\"\n    memory: 2Gi\n"),
+			wantErr: true,
+		},
+		{
+			name: "byooResources with malformed memory returns error",
+			cm: workloadConfigCM("byooResources:\n" +
+				"  limits:\n    memory: \"notaquantity\"\n"),
+			wantErr: true,
 		},
 		{
 			name:    "invalid yaml returns error",
@@ -125,4 +175,77 @@ func TestWorkloadConfigIsFeatureFlagEnabled(t *testing.T) {
 	}
 	assert.True(t, cfg.IsFeatureFlagEnabled(StatusByWorkerReadiness))
 	assert.False(t, cfg.IsFeatureFlagEnabled("SomeOtherFlag"))
+}
+
+func TestWorkloadConfigGetBYOOResources(t *testing.T) {
+	var nilCfg *v1alpha1.WorkloadConfig
+	assert.Nil(t, nilCfg.GetBYOOResources())
+
+	empty := &v1alpha1.WorkloadConfig{}
+	assert.Nil(t, empty.GetBYOOResources())
+
+	rr := &corev1.ResourceRequirements{
+		Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("4Gi")},
+	}
+	cfg := &v1alpha1.WorkloadConfig{BYOOResources: rr}
+	assert.Equal(t, rr, cfg.GetBYOOResources())
+}
+
+func TestValidateBYOOResources(t *testing.T) {
+	tests := []struct {
+		name    string
+		rr      *corev1.ResourceRequirements
+		wantErr bool
+	}{
+		{
+			name: "valid requests and limits",
+			rr: &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("1"),
+					corev1.ResourceMemory: resource.MustParse("4Gi"),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("1"),
+					corev1.ResourceMemory: resource.MustParse("4Gi"),
+				},
+			},
+		},
+		{
+			name: "memory exactly at 1Gi floor is valid",
+			rr: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
+			},
+		},
+		{
+			name: "memory below 1Gi floor is rejected",
+			rr: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("512Mi")},
+			},
+			wantErr: true,
+		},
+		{
+			name: "zero cpu is rejected",
+			rr: &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("0")},
+			},
+			wantErr: true,
+		},
+		{
+			name: "negative memory is rejected",
+			rr: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("-1Gi")},
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateBYOOResources(tt.rr)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
 }

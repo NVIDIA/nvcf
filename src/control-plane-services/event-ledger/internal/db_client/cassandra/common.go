@@ -526,6 +526,10 @@ func (p *CassandraProvider) NewConnection(config config.DBConfig) (data_access.D
 	default:
 		cluster.Consistency = gocql.LocalQuorum
 	}
+	// LWT (IF NOT EXISTS) uses serial consistency for Paxos coordination.
+	// LOCAL_SERIAL keeps Paxos within the local datacenter, avoiding
+	// cross-region round-trips that make LWT writes expensive in non-US regions.
+	cluster.SerialConsistency = gocql.LocalSerial
 
 	if config.CassandraConfig.Username != "" && config.CassandraConfig.Password != "" {
 		cluster.Authenticator = gocql.PasswordAuthenticator{

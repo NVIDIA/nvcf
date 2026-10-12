@@ -191,29 +191,13 @@ func (sc *ScenarioContext) pullSecretInNamespacesAtContext(
 	return nil
 }
 
-// applyManifest writes body to a temp file inside the run's OutDir and
-// runs kubectl apply against it. Routing through OutDir (rather than
-// /tmp) means failed runs leave the artifacts in the run directory
-// alongside command logs for post-mortem inspection.
+// applyManifest writes body to a file inside the run's OutDir and runs
+// kubectl apply against it. The pull-secret Given is cached and does not
+// record its result, so it bypasses the scenario's LastResult bookkeeping.
 func (sc *ScenarioContext) applyManifest(ctx context.Context, body []byte, kubeContext string) error {
-	dir := sc.Suite.Config.OutDir
-	if dir == "" {
-		dir = os.TempDir()
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("ensure manifest dir: %w", err)
-	}
-	file, err := os.CreateTemp(dir, "manifest-*.yaml")
+	path, err := sc.writeManifestFile("pull-secret", body)
 	if err != nil {
-		return fmt.Errorf("create manifest file: %w", err)
-	}
-	path := file.Name()
-	if _, err := file.Write(body); err != nil {
-		_ = file.Close()
-		return fmt.Errorf("write manifest: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close manifest: %w", err)
+		return err
 	}
 	command, err := dsl.KubectlApplyCommand(path, kubeContext)
 	if err != nil {

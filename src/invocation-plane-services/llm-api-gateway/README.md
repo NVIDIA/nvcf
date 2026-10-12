@@ -142,8 +142,14 @@ the default local config, that is `default/bootstrap-echo`.
 Useful overrides:
 
 - `NVCF_GATEWAY_ADDR` to bind a specific listen address
+- `NVCF_GATEWAY_MAX_REQUEST_BODY_BYTES` to reject larger request bodies with
+  413 (default `0`, no limit)
 - `STARGATE_CONNECT_TIMEOUT` to control Stargate dial timeout
 - `STARGATE_REQUEST_TIMEOUT` to cap end-to-end Stargate request time
+- `NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT` to cap how long one response write
+  may stall on a client that stopped reading (default `60s`, `0s` disables).
+  It applies only while a write is in progress, so long streams, long
+  generations, and upstream pauses are not cut off.
 - `NVCF_GRPC_ADDR` to enable NVCF gRPC auth
 - `SECRETS_PATH` for the gateway-to-NVCF secrets file. Use `nvcfApiToken` for
   fixed bearer-token auth, or `id` and `secret` with `OAUTH2_PROVIDER_HOST` for

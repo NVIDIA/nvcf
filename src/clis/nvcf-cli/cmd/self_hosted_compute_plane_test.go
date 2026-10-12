@@ -21,6 +21,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,8 +120,9 @@ func TestComputePlaneInstallTemplatesUserValuesFile(t *testing.T) {
 	assert.Contains(t, out, "env:CLUSTER_NAME=gpu-from-values")
 	assert.Contains(t, out, "env:NCA_ID=nca-from-values")
 	// The worker helmfile reads $OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml,
-	// so install must point OUTPUT_DIR at the directory of --values.
-	assert.Contains(t, out, "env:OUTPUT_DIR="+filepath.Dir(valuesFile))
+	// which must be the --values file whatever it is named.
+	assert.Contains(t, out, "registration:clusterName: gpu-from-values")
+	assert.NotContains(t, out, "registration missing")
 	assert.Contains(t, out, "arg="+stackDir)
 	assert.FileExists(t, fakeBin)
 }
@@ -148,6 +151,137 @@ func TestComputePlaneInstallAppliesByDefault(t *testing.T) {
 	out := stdout.String()
 	assert.Contains(t, out, "verb=apply")
 	assert.Contains(t, out, "env:CLUSTER_NAME=gpu-a")
+}
+
+// register --output=gpu2.yaml then install --values=gpu2.yaml installs
+// gpu2.yaml, not a gpu2-register-values.yaml left beside it by an earlier
+// registration, and leaves no copy behind.
+func TestComputePlaneInstall_ValuesUnderAnyNameWinOverAStaleNeighbour(t *testing.T) {
+	resetComputePlaneFlags(t)
+
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	dir := t.TempDir()
+	valuesFile := filepath.Join(dir, "gpu2.yaml")
+	require.NoError(t, os.WriteFile(valuesFile, []byte("clusterName: gpu2\nclusterID: fresh-id\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "gpu2-register-values.yaml"),
+		[]byte("clusterName: gpu2\nclusterID: stale-id\n"), 0o644))
+	installFakeComputePlaneHelmfile(t)
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "install",
+		"--compute-plane-stack", stackDir,
+		"--values", valuesFile,
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	out := stdout.String()
+	assert.Contains(t, out, "registration:clusterID: fresh-id")
+	assert.NotContains(t, out, "stale-id")
+	outputDir := fakeHelmfileEnv(t, out, "OUTPUT_DIR")
+	assert.NotEqual(t, dir, outputDir)
+	assert.NoDirExists(t, outputDir, "the staged copy must be removed after the install")
+}
+
+// A --cluster-name that overrides the values file's own name still installs
+// that file, not the overriding name's file beside it.
+func TestComputePlaneInstall_ClusterNameOverrideDoesNotSwapTheValuesFile(t *testing.T) {
+	resetComputePlaneFlags(t)
+
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	dir := t.TempDir()
+	valuesFile := filepath.Join(dir, "gpu2-register-values.yaml")
+	require.NoError(t, os.WriteFile(valuesFile, []byte("clusterID: given-id\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "gpu3-register-values.yaml"),
+		[]byte("clusterID: other-id\n"), 0o644))
+	installFakeComputePlaneHelmfile(t)
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "install",
+		"--compute-plane-stack", stackDir,
+		"--values", valuesFile,
+		"--cluster-name", "gpu3",
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	out := stdout.String()
+	assert.Contains(t, out, "env:CLUSTER_NAME=gpu3")
+	assert.Contains(t, out, "registration:clusterID: given-id")
+	assert.NotContains(t, out, "other-id")
+}
+
+// A values file already named for its cluster is read in place.
+func TestComputePlaneInstall_ReadsARegisterValuesFileInPlace(t *testing.T) {
+	resetComputePlaneFlags(t)
+
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	dir := t.TempDir()
+	valuesFile := filepath.Join(dir, "gpu2-register-values.yaml")
+	require.NoError(t, os.WriteFile(valuesFile, []byte("clusterName: gpu2\nclusterID: in-place\n"), 0o644))
+	installFakeComputePlaneHelmfile(t)
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "install",
+		"--compute-plane-stack", stackDir,
+		"--values", valuesFile,
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	out := stdout.String()
+	assert.Equal(t, dir, fakeHelmfileEnv(t, out, "OUTPUT_DIR"))
+	assert.Contains(t, out, "registration:clusterID: in-place")
+}
+
+// A cluster name that is not a single path element cannot name the file the
+// helmfile reads, so install refuses it instead of writing outside its
+// private directory.
+func TestComputePlaneInstall_RejectsAClusterNameWithAPathSeparator(t *testing.T) {
+	resetComputePlaneFlags(t)
+
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	valuesFile := filepath.Join(t.TempDir(), "gpu2.yaml")
+	require.NoError(t, os.WriteFile(valuesFile, []byte("clusterID: x\n"), 0o644))
+	installFakeComputePlaneHelmfile(t)
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "install",
+		"--compute-plane-stack", stackDir,
+		"--values", valuesFile,
+		"--cluster-name", "../gpu2",
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cluster name")
+	assert.NotContains(t, stdout.String(), "verb=", "helmfile must not run")
+}
+
+// fakeHelmfileEnv returns the value installFakeComputePlaneHelmfile printed
+// for the environment variable key.
+func fakeHelmfileEnv(t *testing.T, out, key string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if v, ok := strings.CutPrefix(line, "env:"+key+"="); ok {
+			return v
+		}
+	}
+	t.Fatalf("the fake helmfile printed no %s in:\n%s", key, out)
+	return ""
 }
 
 func TestComputePlaneRegisterDryRunPrintsClusterIdentity(t *testing.T) {
@@ -336,6 +470,9 @@ func TestComputePlaneRegisterDryRunRunsReachabilityCheck(t *testing.T) {
 	resetComputePlaneFlags(t)
 
 	profileFile := writeTestControlPlaneProfile(t, "cp-cluster")
+	updateTestControlPlaneProfile(t, profileFile, func(profile *controlplaneprofile.ControlPlaneProfile) {
+		profile.ControlPlane.Endpoints.ComputeReachable.NATSURL = "tls://api.example.test:4222"
+	})
 
 	prevFetcher := fetchClusterIdentity
 	t.Cleanup(func() { fetchClusterIdentity = prevFetcher })
@@ -361,11 +498,13 @@ func TestComputePlaneRegisterDryRunRunsReachabilityCheck(t *testing.T) {
 
 	require.NoError(t, rootCmd.Execute())
 	assert.Equal(t, "gpu-a", got.TargetClusterName)
+	assert.Equal(t, "https://api.example.test", got.GatewayHTTPURL)
 	assert.Equal(t, "https://sis.example.test", got.ICMSURL)
 	assert.Equal(t, "https://reval.example.test", got.ReValURL)
-	assert.Equal(t, "tls://nats.example.test:4222", got.NATSURL)
+	assert.Equal(t, "tls://api.example.test:4222", got.NATSURL)
 	assert.Equal(t, "sis.example.test", got.SISHost)
 	assert.Equal(t, "reval.example.test", got.ReValHost)
+	assert.Equal(t, "nats.example.test", got.NATSHost)
 	assert.False(t, got.ProbeHTTP)
 }
 
@@ -430,6 +569,141 @@ func TestComputePlaneRegisterDryRunStopsOnReachabilityFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.Equal(t, 0, fetchCalls, "identity discovery must not run after reachability failure")
+}
+
+func TestComputePlaneRegisterDryRunRejectsMissingSharedGatewayHostsBeforeIdentity(t *testing.T) {
+	resetComputePlaneFlags(t)
+
+	profileFile := writeTestControlPlaneProfile(t, "cp-cluster")
+	updateTestControlPlaneProfile(t, profileFile, func(profile *controlplaneprofile.ControlPlaneProfile) {
+		profile.ControlPlane.Endpoints.ComputeReachable.ICMSURL = profile.ControlPlane.Gateway.HTTPURL
+		profile.ControlPlane.Endpoints.ComputeReachable.ReValURL = profile.ControlPlane.Gateway.HTTPURL
+		profile.ControlPlane.Endpoints.ComputeReachable.NATSURL = "tls://api.example.test:4222"
+		profile.ControlPlane.Hosts.API = ""
+		profile.ControlPlane.Hosts.SIS = ""
+		profile.ControlPlane.Hosts.ReVal = ""
+		profile.ControlPlane.Hosts.NATS = ""
+	})
+
+	fetchCalls := 0
+	prevFetcher := fetchClusterIdentity
+	t.Cleanup(func() { fetchClusterIdentity = prevFetcher })
+	fetchClusterIdentity = func(context.Context, string) (string, string, string, error) {
+		fetchCalls++
+		return "", "", "", nil
+	}
+
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "register",
+		"--dry-run",
+		"--control-plane-profile", profileFile,
+		"--cluster-name", "gpu-a",
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controlPlane.gateway.httpURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.api")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.icmsURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.sis")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.revalURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.reval")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.natsURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.nats")
+	assert.Equal(t, 0, fetchCalls, "identity discovery must not run after profile validation failure")
+}
+
+func TestComputePlaneRegisterDryRunRejectsNotFoundBeforeIdentity(t *testing.T) {
+	resetComputePlaneFlags(t)
+	selfHostedEnv = "prd"
+	computePlaneRegisterReachabilityCheck = reachability.Check
+
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+	selfHostedICMSURL = server.URL
+
+	profileFile := writeTestControlPlaneProfile(t, "cp-cluster")
+	updateTestControlPlaneProfile(t, profileFile, func(profile *controlplaneprofile.ControlPlaneProfile) {
+		profile.ControlPlane.Gateway.HTTPURL = server.URL
+		profile.ControlPlane.Endpoints.ComputeReachable.ICMSURL = server.URL
+		profile.ControlPlane.Endpoints.ComputeReachable.ReValURL = server.URL
+	})
+
+	fetchCalls := 0
+	prevFetcher := fetchClusterIdentity
+	t.Cleanup(func() { fetchClusterIdentity = prevFetcher })
+	fetchClusterIdentity = func(context.Context, string) (string, string, string, error) {
+		fetchCalls++
+		return "", "", "", nil
+	}
+
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "register",
+		"--dry-run",
+		"--control-plane-profile", profileFile,
+		"--cluster-name", "gpu-a",
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.icmsURL")
+	assert.Contains(t, err.Error(), "/health")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.sis")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.revalURL")
+	assert.Contains(t, err.Error(), "/info")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.reval")
+	assert.Contains(t, err.Error(), "status 404")
+	assert.Equal(t, 0, fetchCalls, "identity discovery must not run after HTTP reachability failure")
+}
+
+func TestComputePlaneRegisterDryRunAcceptsValidServiceRoutes(t *testing.T) {
+	resetComputePlaneFlags(t)
+	selfHostedEnv = "prd"
+	computePlaneRegisterReachabilityCheck = reachability.Check
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			w.WriteHeader(http.StatusOK)
+		case "/info":
+			w.WriteHeader(http.StatusUnauthorized)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	selfHostedICMSURL = server.URL
+
+	profileFile := writeTestControlPlaneProfile(t, "cp-cluster")
+	updateTestControlPlaneProfile(t, profileFile, func(profile *controlplaneprofile.ControlPlaneProfile) {
+		profile.ControlPlane.Gateway.HTTPURL = server.URL
+		profile.ControlPlane.Endpoints.ComputeReachable.ICMSURL = server.URL
+		profile.ControlPlane.Endpoints.ComputeReachable.ReValURL = server.URL
+	})
+
+	prevFetcher := fetchClusterIdentity
+	t.Cleanup(func() { fetchClusterIdentity = prevFetcher })
+	fetchClusterIdentity = func(context.Context, string) (string, string, string, error) {
+		return "https://k8s.example/issuer", `{"keys":[]}`, "psat", nil
+	}
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "register",
+		"--dry-run",
+		"--control-plane-profile", profileFile,
+		"--cluster-name", "gpu-a",
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	assert.Contains(t, stdout.String(), "dryRun: true")
+	assert.Contains(t, stdout.String(), "sisMutation: skipped")
 }
 
 func TestComputePlaneRegisterCallsSISAfterValidation(t *testing.T) {
@@ -923,15 +1197,19 @@ func installFakeComputePlaneHelmfile(t *testing.T) string {
 	t.Helper()
 	fakeBin := filepath.Join(t.TempDir(), "helmfile")
 	body := `#!/bin/sh
-last=
+verb=
 for arg in "$@"; do
   printf 'arg=%s\n' "$arg"
-  last="$arg"
+  case "$arg" in
+    apply|template) verb="$arg" ;;
+  esac
 done
-printf 'verb=%s\n' "$last"
+printf 'verb=%s\n' "$verb"
 printf 'env:CLUSTER_NAME=%s\n' "$CLUSTER_NAME"
 printf 'env:NCA_ID=%s\n' "$NCA_ID"
 printf 'env:OUTPUT_DIR=%s\n' "$OUTPUT_DIR"
+reg="$OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml"
+if [ -f "$reg" ]; then sed 's/^/registration:/' "$reg"; else printf 'registration missing: %s\n' "$reg"; fi
 `
 	require.NoError(t, os.WriteFile(fakeBin, []byte(body), 0o755))
 	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))
@@ -975,6 +1253,16 @@ func writeTestControlPlaneProfile(t *testing.T, controlPlaneCluster string) stri
 		},
 	}))
 	return path
+}
+
+func updateTestControlPlaneProfile(t *testing.T, path string, update func(*controlplaneprofile.ControlPlaneProfile)) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var profile controlplaneprofile.ControlPlaneProfile
+	require.NoError(t, yaml.Unmarshal(body, &profile))
+	update(&profile)
+	require.NoError(t, controlplaneprofile.WriteFile(path, profile))
 }
 
 func writeComputePlaneStack(t *testing.T) string {

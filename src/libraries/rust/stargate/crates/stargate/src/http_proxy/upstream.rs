@@ -15,10 +15,9 @@
 
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
-use stargate_protocol::common::is_hop_by_hop_header;
+use stargate_protocol::common::{connection_header_names, is_hop_by_hop_header};
 use stargate_protocol::tunnel_contract::{
-    HEADER_STARGATE_EXPECTED_QUEUE_MS, HEADER_STARGATE_RETRY_AFTER_MS,
-    HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE,
+    HEADER_STARGATE_EXPECTED_QUEUE_MS, is_internal_control_header,
 };
 use tracing::{Span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -26,7 +25,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use crate::routing_state::RegistrationGeneration;
 use crate::telemetry::inject_trace_context;
 
-use super::{HEADER_ROUTING_METHOD, HEADER_STARGATE_ERROR_CODE, ProxyAppState};
+use super::{HEADER_ROUTING_METHOD, ProxyAppState};
 
 pub(super) struct UpstreamStreamingResponse {
     pub(super) status: StatusCode,
@@ -61,10 +60,28 @@ pub(super) async fn proxy_via_quic_streaming(
     let status = streaming_resp.status;
     let headers = streaming_resp.headers;
     let mut body_stream = streaming_resp.body_stream;
+    // Arc clone, not a String copy: this runs on every successful response.
+    let registration = registration.clone();
+    // The body is polled after the request handler returns, so keep the attempt
+    // span to attach its request context to a mid-stream failure log.
+    let attempt_span = Span::current();
 
     let body = Body::from_stream(async_stream::stream! {
         while let Some(chunk) = body_stream.recv_body().await.transpose() {
             let failed = chunk.is_err();
+            if let Err(error) = &chunk {
+                // A mid-stream failure is the only router-side signal that an
+                // in-flight request died with its backend.
+                attempt_span.in_scope(|| {
+                    warn!(
+                        inference_server_id = %registration.inference_server_id(),
+                        cluster_id = %registration.cluster_id(),
+                        status = status.as_u16(),
+                        error = %error,
+                        "upstream response body stream failed"
+                    )
+                });
+            }
             yield chunk.map_err(|error| std::io::Error::other(error.to_string()));
             if failed {
                 break;
@@ -105,21 +122,14 @@ pub(super) fn headers_for_upstream_attempt(
 
 fn should_forward_header(name: &HeaderName) -> bool {
     !is_hop_by_hop_header(name)
-        && !matches!(
-            name.as_str(),
-            "host"
-                | HEADER_ROUTING_METHOD
-                | HEADER_STARGATE_RETRYABLE
-                | HEADER_STARGATE_RETRY_REASON
-                | HEADER_STARGATE_RETRY_AFTER_MS
-                | HEADER_STARGATE_EXPECTED_QUEUE_MS
-                | HEADER_STARGATE_ERROR_CODE
-        )
+        && !is_internal_control_header(name)
+        && !matches!(name.as_str(), "host" | HEADER_ROUTING_METHOD)
 }
 
 pub(super) fn copy_forwardable_headers(from: &HeaderMap, to: &mut HeaderMap) {
+    let connection_headers = connection_header_names(from);
     for (name, value) in from {
-        if should_forward_header(name) {
+        if should_forward_header(name) && !connection_headers.contains(name) {
             to.append(name, value.clone());
         }
     }
@@ -127,7 +137,11 @@ pub(super) fn copy_forwardable_headers(from: &HeaderMap, to: &mut HeaderMap) {
 
 #[cfg(test)]
 mod tests {
-    use stargate_protocol::tunnel_contract::HEADER_MODEL;
+    use super::super::HEADER_STARGATE_ERROR_CODE;
+    use stargate_protocol::tunnel_contract::{
+        HEADER_MODEL, HEADER_STARGATE_RETRY_AFTER_MS, HEADER_STARGATE_RETRY_REASON,
+        HEADER_STARGATE_RETRYABLE,
+    };
 
     use crate::routing_state::{RegistrationIdentity, test_registration_generation};
 
@@ -204,6 +218,53 @@ mod tests {
         assert!(!downstream.contains_key(HEADER_STARGATE_RETRY_AFTER_MS));
         assert!(!downstream.contains_key(HEADER_STARGATE_EXPECTED_QUEUE_MS));
         assert_eq!(downstream.get("x-upstream-header").unwrap(), "preserved");
+    }
+
+    #[test]
+    fn control_namespace_is_filtered_in_both_directions() {
+        let mut headers = HeaderMap::new();
+        for name in [
+            "X-Stargate-Upstream-Retryable",
+            "X-Stargate-Auth-Token",
+            "X-Stargate-Max-Wait-Ms",
+            "X-Stargate-Additional-Control",
+        ] {
+            let name = HeaderName::from_bytes(name.as_bytes()).unwrap();
+            headers.append(name.clone(), HeaderValue::from_static("one"));
+            headers.append(name, HeaderValue::from_static("two"));
+        }
+        headers.insert("x-request-id", HeaderValue::from_static("request-a"));
+        headers.insert("retry-after", HeaderValue::from_static("1"));
+        for forwarded in [prepare_forwarded_headers(&headers), {
+            let mut response = HeaderMap::new();
+            copy_forwardable_headers(&headers, &mut response);
+            response
+        }] {
+            assert_eq!(forwarded.len(), 2);
+            assert_eq!(forwarded["x-request-id"], "request-a");
+            assert_eq!(forwarded["retry-after"], "1");
+        }
+    }
+
+    #[test]
+    fn connection_nominated_headers_are_filtered_in_both_directions() {
+        let mut headers = headers([
+            ("x-hop-one", "private-one"),
+            ("x-hop-two", "private-two"),
+            ("x-end-to-end", "preserved"),
+        ]);
+        for value in ["", " X-Hop-One, keep-alive", "x-HOP-two\t"] {
+            headers.append("connection", HeaderValue::from_static(value));
+        }
+        headers.append("x-hop-one", HeaderValue::from_static("private-three"));
+        for forwarded in [prepare_forwarded_headers(&headers), {
+            let mut response = HeaderMap::new();
+            copy_forwardable_headers(&headers, &mut response);
+            response
+        }] {
+            assert_eq!(forwarded.len(), 1);
+            assert_eq!(forwarded["x-end-to-end"], "preserved");
+        }
     }
 
     #[tokio::test]

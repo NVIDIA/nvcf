@@ -13,16 +13,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 use tokio_util::sync::CancellationToken;
 use tonic::Status;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::auth::AuthResult;
-use crate::routing_state::{RunningRegistration, StargateState};
+use crate::routing_state::{RegistrationIdentity, RunningRegistration, StargateState};
 use crate::tunnel::{EnsureConnectedResult, QuicHttpProxy, RegistrationTunnel};
 
 use stargate_proto::REGISTRATION_HEARTBEAT_MS_METADATA;
@@ -65,6 +66,35 @@ enum ApplyUpdateOutcome {
     Shutdown,
 }
 
+/// Why a registration session ended other than by router shutdown. Logged with
+/// the backend identity so a worker loss is attributable from router logs alone.
+#[derive(Debug, thiserror::Error)]
+enum RegistrationError {
+    #[error("registration stream idle for {0:?}")]
+    IdleTimeout(Duration),
+    #[error("registration stream closed")]
+    StreamClosed,
+    #[error("registration stream read failed: {0}")]
+    StreamRead(Status),
+    #[error("registration ack channel closed")]
+    AckChannelClosed,
+    #[error("registration update rejected: {0}")]
+    UpdateRejected(Status),
+}
+
+impl RegistrationError {
+    /// Stable label for log queries; the Display text is for humans.
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::IdleTimeout(_) => "idle_timeout",
+            Self::StreamClosed => "stream_closed",
+            Self::StreamRead(_) => "stream_read",
+            Self::AckChannelClosed => "ack_channel_closed",
+            Self::UpdateRejected(_) => "update_rejected",
+        }
+    }
+}
+
 pub(super) async fn process_registration_stream(
     mut stream: impl Stream<Item = Result<InferenceServerRegistration, Status>> + Unpin,
     state: Arc<StargateState>,
@@ -74,10 +104,17 @@ pub(super) async fn process_registration_stream(
     idle_timeout: Option<Duration>,
     stop: CancellationToken,
 ) {
-    let Some(first_update) = next_registration_update(&mut stream, idle_timeout, &stop).await
-    else {
-        debug!("register inference servers stream exited before admission");
-        return;
+    let first_update = match next_registration_update(&mut stream, idle_timeout, &stop).await {
+        Ok(Some(update)) => update,
+        Ok(None) => return,
+        Err(error) => {
+            warn!(
+                error = %error,
+                reason = error.kind(),
+                "register inference servers stream exited before admission"
+            );
+            return;
+        }
     };
     let session = match RegistrationSession::start(
         &first_update,
@@ -101,36 +138,29 @@ async fn next_registration_update(
     stream: &mut (impl Stream<Item = Result<InferenceServerRegistration, Status>> + Unpin),
     idle_timeout: Option<Duration>,
     stop: &CancellationToken,
-) -> Option<InferenceServerRegistration> {
+) -> Result<Option<InferenceServerRegistration>, RegistrationError> {
     let next = if let Some(idle_timeout) = idle_timeout {
         // Once shutdown begins, cleanup must win over another ready stream update.
         tokio::select! {
             biased;
-            _ = stop.cancelled() => return None,
+            _ = stop.cancelled() => return Ok(None),
             next = stream.next() => next,
             _ = tokio::time::sleep(idle_timeout) => {
-                warn!(
-                    idle_timeout_ms = idle_timeout.as_millis(),
-                    "registration stream idle timeout; closing registration"
-                );
-                return None;
+                return Err(RegistrationError::IdleTimeout(idle_timeout));
             }
         }
     } else {
         tokio::select! {
             biased;
-            _ = stop.cancelled() => return None,
+            _ = stop.cancelled() => return Ok(None),
             next = stream.next() => next,
         }
     };
-    let next = next?;
 
     let update = match next {
-        Ok(update) => update,
-        Err(error) => {
-            warn!(error = %error, "inference servers stream read failed or closed");
-            return None;
-        }
+        None => return Err(RegistrationError::StreamClosed),
+        Some(Err(status)) => return Err(RegistrationError::StreamRead(status)),
+        Some(Ok(update)) => update,
     };
     debug!(
         inference_server_id = %update.inference_server_id,
@@ -138,7 +168,36 @@ async fn next_registration_update(
         model_ids = ?sorted_model_ids(&update),
         "received inference servers update"
     );
-    Some(update)
+    Ok(Some(update))
+}
+
+fn log_deregistration(
+    identity: &RegistrationIdentity,
+    outcome: &Result<(), RegistrationError>,
+    removed_model_ids: &BTreeSet<String>,
+) {
+    // Router shutdown is a normal state transition; any error means a worker was lost.
+    match outcome {
+        Ok(()) => info!(
+            inference_server_id = %identity.inference_server_id,
+            cluster_id = %identity.cluster_id,
+            routing_key = ?identity.routing_key,
+            reverse_tunnel = identity.reverse_tunnel,
+            reason = "shutdown",
+            removed_model_ids = ?removed_model_ids,
+            "inference server deregistered; removed from routing"
+        ),
+        Err(error) => warn!(
+            inference_server_id = %identity.inference_server_id,
+            cluster_id = %identity.cluster_id,
+            routing_key = ?identity.routing_key,
+            reverse_tunnel = identity.reverse_tunnel,
+            reason = error.kind(),
+            error = %error,
+            removed_model_ids = ?removed_model_ids,
+            "inference server deregistered; removed from routing"
+        ),
+    }
 }
 
 fn sorted_model_ids(update: &InferenceServerRegistration) -> Vec<&str> {
@@ -235,27 +294,31 @@ impl RegistrationSession {
         idle_timeout: Option<Duration>,
         stop: &CancellationToken,
     ) {
-        loop {
+        let outcome = loop {
             match self.apply_update(&update, stop).await {
                 Ok(ApplyUpdateOutcome::Ack(ack)) => {
                     if !send_registration_response(responses, stop, Ok(ack)).await {
-                        break;
+                        break if stop.is_cancelled() {
+                            Ok(())
+                        } else {
+                            Err(RegistrationError::AckChannelClosed)
+                        };
                     }
                 }
                 Ok(ApplyUpdateOutcome::Skip) => {}
-                Ok(ApplyUpdateOutcome::Shutdown) => break,
+                Ok(ApplyUpdateOutcome::Shutdown) => break Ok(()),
                 Err(status) => {
-                    let _ = send_registration_response(responses, stop, Err(status)).await;
-                    break;
+                    let _ = send_registration_response(responses, stop, Err(status.clone())).await;
+                    break Err(RegistrationError::UpdateRejected(status));
                 }
             }
-            let Some(next_update) = next_registration_update(stream, idle_timeout, stop).await
-            else {
-                break;
-            };
-            update = next_update;
-        }
-        self.close().await;
+            match next_registration_update(stream, idle_timeout, stop).await {
+                Ok(Some(next_update)) => update = next_update,
+                Ok(None) => break Ok(()),
+                Err(error) => break Err(error),
+            }
+        };
+        self.close(outcome).await;
     }
 
     async fn apply_update(
@@ -301,7 +364,7 @@ impl RegistrationSession {
         )))
     }
 
-    async fn close(self) {
+    async fn close(self, outcome: Result<(), RegistrationError>) {
         let Self {
             state,
             registration,
@@ -309,8 +372,10 @@ impl RegistrationSession {
             health_check,
             ..
         } = self;
+        let identity = registration.identity().clone();
         health_check.shutdown().await;
-        state.end_registration(registration).await;
+        let removed_model_ids = state.end_registration(registration).await;
+        log_deregistration(&identity, &outcome, &removed_model_ids);
         // Routing teardown must finish before the exact tunnel generation is released.
         drop(tunnel);
     }
@@ -339,7 +404,6 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::auth::OpenAuthenticator;
-    use crate::routing_state::RegistrationIdentity;
     use crate::tunnel::QuicTunnelConfig;
     use stargate_proto::pb::{InferenceServerModelRegistration, InferenceServerStatus, ModelStats};
 
@@ -497,7 +561,7 @@ mod tests {
         let target = crate::routing_state::RoutingTargetKey::new(None, "model-idle");
         assert_eq!(state.candidates_for_target(&target).await.len(), 1);
 
-        session.close().await;
+        session.close(Err(RegistrationError::StreamClosed)).await;
 
         assert!(state.candidates_for_target(&target).await.is_empty());
         let replacement = state
@@ -581,7 +645,7 @@ mod tests {
 
         assert!(matches!(outcome, ApplyUpdateOutcome::Skip));
         assert!(state.candidates_for_target(&target).await.is_empty());
-        session.close().await;
+        session.close(Err(RegistrationError::StreamClosed)).await;
     }
 
     #[tokio::test]
@@ -598,7 +662,7 @@ mod tests {
             .expect("admitted session health check should publish initial pending status")
             .expect("health check sender should remain open");
 
-        tokio::time::timeout(Duration::from_millis(200), session.close())
+        tokio::time::timeout(Duration::from_millis(200), session.close(Ok(())))
             .await
             .expect("session close should cancel the health-check interval wait");
     }

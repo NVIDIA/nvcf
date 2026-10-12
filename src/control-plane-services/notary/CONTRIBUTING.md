@@ -27,7 +27,7 @@ contributors to certify that they wrote or otherwise have the right to submit
 the contribution under the project's open-source license. The full text of
 the DCO is available at <https://developercertificate.org/>:
 
-```
+```text
 Developer Certificate of Origin
 Version 1.1
 
@@ -67,7 +67,7 @@ By making a contribution to this project, I certify that:
 
 Add a `Signed-off-by` line to each of your commit messages:
 
-```
+```text
 Signed-off-by: Your Name <your.email@example.com>
 ```
 
@@ -84,19 +84,23 @@ The name and email used must match those configured in `git config`.
 1. Fork the repository on GitHub.
 2. Create a feature branch (`git checkout -b feature/my-feature`).
 3. Make your changes. Ensure the code builds and all tests pass:
+
    ```bash
    bazel test //src/control-plane-services/notary/... --cache_test_results=no
    ```
+
 4. Ensure all new files include the standard NVIDIA SPDX Apache-2.0 header.
    See any existing source file in the repository for the canonical header
    format (Java sources use the javadoc-style block comment).
 5. If you add or upgrade a dependency, regenerate the runtime-derived
    component `NOTICE` from the monorepo root and run its drift test:
+
    ```bash
    bazel run //src/control-plane-services/notary:generate_notice -- \
      --update-metadata --write
    bazel test //src/control-plane-services/notary:notice_check_test
    ```
+
    Commit `NOTICE`, `notice_metadata.json`, and dependency lock changes
    together.
 6. Commit your changes with DCO sign-off (`git commit -s`).

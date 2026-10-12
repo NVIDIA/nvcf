@@ -119,15 +119,36 @@ public class XAccountAuthorizedPartiesController {
                                                   authentication, request);
     }
 
+    @GetMapping("authorizations/functions")
+    @Operation(
+            summary = "List Functions Authorized/Shared With Other Accounts",
+            description = """
+                    Lists all the function versions in an account that have been shared/authorized
+                     with/to other accounts. Response includes the nca-ids of the authorized
+                     accounts. If a function version is not shared/authorized, then it is not
+                     included in the response.
+                    """ + AUTH_DESCRIPTION
+    )
+    @PreAuthorize("hasAuthority('admin:authorize_clients')")
+    public ListAuthorizedPartiesResponse getAuthorizedPartiesForAllFunctions(
+            @Parameter(description = NCA_ID_DESCRIPTION, required = true)
+            @NotBlank @PathVariable String ncaId,
+            Authentication authentication) {
+        NvcfUtils.addTagsToCurrentSpan(tracer, Map.of(SPAN_TAG_NCA_ID, ncaId));
+        rateLimiterService.verifyLimits(ncaId);
+        accountService.assertAccountExistsOrThrow(ncaId);
+        accountService.assertAccountIdFromPathMatches(ncaId, authentication);
+        return azpsFacade.getAuthorizedPartiesForAllFunctions(ncaId, authentication);
+    }
+
     @GetMapping("authorizations/functions/{functionId}")
     @Operation(
-            summary = "List Account Authorizations For Function",
+            summary = "List Function Versions with Authorized Accounts For Specified Function",
             description = """
-                    Lists NVIDIA Cloud Account IDs that are authorized to invoke any version of the
-                     specified function. The response includes an array showing authorized accounts
-                     for each version. Individual versions of a function can have their own
-                     authorized accounts. So, each object in the array can have different
-                     authorized accounts listed.
+                    Lists function versions of the specified function and their corresponding
+                     authorized accounts allowed to invoke the function version. Individual
+                     versions of a function can have their own authorized accounts. So, each
+                     object in the array can have different authorized accounts listed.
                     """ + AUTH_DESCRIPTION
     )
     @PreAuthorize("hasAuthority('admin:authorize_clients')")

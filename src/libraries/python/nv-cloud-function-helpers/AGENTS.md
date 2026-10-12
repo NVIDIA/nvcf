@@ -14,7 +14,7 @@ License: Apache-2.0, covered by the umbrella repo-root `LICENSE`.
 
 From a local checkout of this umbrella repo:
 
-```
+```bash
 pip3 install setuptools
 pip3 install ./src/libraries/python/nv-cloud-function-helpers
 ```
@@ -32,5 +32,11 @@ Declared in `setup.py`:
 
 ## Tests
 
-No test suite is present yet. Add pytest coverage alongside changes when
-modifying helpers.
+Run the helper tests from this directory with pytest installed:
+
+```sh
+python3 -m pytest -q tests
+```
+
+Add regression coverage alongside helper changes. Tests use local fixtures and
+do not need a running Triton or NVCF service.

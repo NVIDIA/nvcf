@@ -41,6 +41,7 @@ type Handlers struct {
 }
 
 type observabilityMetrics struct {
+	messagesUsage               otelmetric.Int64Counter
 	llmTokens                   otelmetric.Int64Counter
 	providerTime                otelmetric.Float64Histogram
 	streamFirstToken            otelmetric.Float64Histogram
@@ -50,6 +51,7 @@ type observabilityMetrics struct {
 
 func newObservabilityMetrics() observabilityMetrics {
 	return observabilityMetrics{
+		messagesUsage:               telemetry.MessagesUsage(),
 		llmTokens:                   telemetry.LLMTokens(),
 		providerTime:                telemetry.ProviderTime(),
 		streamFirstToken:            telemetry.StreamFirstToken(),
@@ -72,6 +74,14 @@ type OpenAIChatHandlers struct {
 
 type ResponsesHandlers struct {
 	handlers *Handlers
+}
+
+type MessagesHandlers struct {
+	handlers *Handlers
+}
+
+func (h *Handlers) AsMessagesHandlers() *MessagesHandlers {
+	return &MessagesHandlers{handlers: h}
 }
 
 type OpenAIProxyHandlers struct {
@@ -117,6 +127,7 @@ func (h *Handlers) AsOpenAIProxyHandlers() *OpenAIProxyHandlers {
 func (h *Handlers) normalizeChatRequest(
 	c *GatewayContext,
 	request *models.ChatCompletionRequest,
+	rawBody []byte,
 ) (*provider.NormalizedRequest, error) {
 	reqCtx := c.RequestContext()
 	if reqCtx == nil {
@@ -154,7 +165,7 @@ func (h *Handlers) normalizeChatRequest(
 	estimatedInputTokens := estimatedInputTokensForNormalizedRequest(
 		request.Model,
 		request,
-	)
+	) + estimatedTokenCountForUnmodeledChatFields(rawBody)
 	inputTokens := estimatedInputTokens
 	maxOutputTokens := maxOutputTokensForRequest(request)
 	checkRequest := ratelimit.ResourceRequest{
@@ -194,6 +205,7 @@ func (h *Handlers) normalizeChatRequest(
 
 	return &provider.NormalizedRequest{
 		ChatRequest:     request,
+		RawBody:         rawBody,
 		InputTokens:     inputTokens,
 		MaxOutputTokens: maxOutputTokens,
 		AdmissionPlan:   admissionPlan,

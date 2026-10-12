@@ -24,7 +24,7 @@ Each example is self-contained. Common flows:
 
 ### Python / FastAPI / gRPC containers
 
-```
+```bash
 cd examples/function-samples/<sample>
 docker build -t <sample> .
 docker run --rm -p 8000:8000 <sample>
@@ -34,7 +34,7 @@ Smoke-test with `curl`. See each sample's `README.md` for endpoint paths and pay
 
 ### Python task containers
 
-```
+```bash
 cd examples/task-samples/<sample>
 docker build -t <sample> .
 docker run --rm -v ${PWD}:/tmp/output -e NVCT_RESULTS_DIR=/tmp/output <sample>
@@ -46,7 +46,7 @@ environment variables.
 
 ### Helm charts
 
-```
+```bash
 cd examples/function-samples/helmchart-samples/<chart>
 helm lint <chart-subdir>
 helm install <release> <chart-subdir> -f <override>.yaml
@@ -56,7 +56,7 @@ Multi-node helm charts use `override.yaml` for cluster-specific tuning; keep exa
 
 ### Go binaries (load tester)
 
-```
+```bash
 cd examples/function-samples/load-tester-supreme/http-server
 go build ./...
 ```
@@ -65,7 +65,7 @@ Stay on Go versions listed in each `go.mod`. Do not tie load-tester build config
 
 ### k6 load tests
 
-```
+```bash
 cd examples/load-tests
 k6 run functions/<test>.js
 k6 run tasks/<test>.js
@@ -75,7 +75,7 @@ k6 scripts accept endpoint URLs and keys through environment variables. Do not h
 
 ### NVCT task samples
 
-```
+```bash
 cd examples/task-samples/<sample>
 docker build -t <sample> .
 ```

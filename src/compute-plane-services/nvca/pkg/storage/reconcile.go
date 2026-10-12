@@ -62,12 +62,14 @@ var (
 )
 
 const (
-	defaultRequeueDelay                       = 100 * time.Millisecond
-	deletingStorageRequestRequeueDelay        = 5 * time.Second
-	ConditionTypeSMBCSIDriverInstalled        = "SMBCSIDriverInstalled"
-	ConditionTypeCleanupSuccessful            = "CleanupSuccessful"
-	ConditionReasonSomeObjectsPendingDeletion = "SomeObjectsPendingDeletion"
-	ConditionReasonAllObjectsDeleted          = "AllObjectsDeleted"
+	defaultRequeueDelay                        = 100 * time.Millisecond
+	deletingStorageRequestRequeueDelay         = 5 * time.Second
+	ConditionTypeSMBCSIDriverInstalled         = "SMBCSIDriverInstalled"
+	ConditionTypeSharedStorageResourcesCreated = "SharedStorageResourcesCreated"
+	ConditionReasonAdmissionRejected           = "AdmissionRejected"
+	ConditionTypeCleanupSuccessful             = "CleanupSuccessful"
+	ConditionReasonSomeObjectsPendingDeletion  = "SomeObjectsPendingDeletion"
+	ConditionReasonAllObjectsDeleted           = "AllObjectsDeleted"
 
 	// DefaultModelCacheStorageClassName is the storage class whose provisioner
 	// decides which mount option defaults model cache volumes need.
@@ -304,6 +306,13 @@ func (r *Reconciler) tryRemoveFinalizerInTerminatingNamespace(ctx context.Contex
 	if !controllerutil.ContainsFinalizer(st, StorageRequestFinalizer) {
 		return false, reconcile.Result{}, nil
 	}
+	// A persisted durable model cache owns objects in the global init
+	// namespace and cluster-scoped PVs. Namespace termination does not prove
+	// those resources are gone, so it cannot bypass cleanup. Annotation-free
+	// legacy requests keep the historical escape hatch.
+	if requiresStrictModelCacheCleanup(st) {
+		return false, reconcile.Result{}, nil
+	}
 	ns := &corev1.Namespace{}
 	if err := r.Client.Get(ctx, client.ObjectKey{Name: namespace}, ns); err != nil || ns.DeletionTimestamp == nil {
 		return false, reconcile.Result{}, nil
@@ -321,6 +330,22 @@ func (r *Reconciler) tryRemoveFinalizerInTerminatingNamespace(ctx context.Contex
 	}
 	log.V(1).Info("Removed finalizer from StorageRequest in terminating namespace")
 	return true, reconcile.Result{}, nil
+}
+
+func requiresStrictModelCacheCleanup(st *nvcav1new.StorageRequest) bool {
+	if st == nil || st.Spec.Type != nvcav1new.ModelCacheRequest {
+		return false
+	}
+	raw := st.Annotations[ModelCacheStorageSelectionAnnotationKey]
+	if raw == "" {
+		return false
+	}
+	selection, err := ParsePersistedModelCacheStorageSelection(raw)
+	if err != nil {
+		// An invalid persisted decision must not bypass cleanup protection.
+		return true
+	}
+	return selection.Mode == ModelCacheSelectionDurable
 }
 
 // getICMSRequestName returns the ICMS request name from the StorageRequest.
@@ -494,9 +519,12 @@ func (r *Reconciler) doReconcile(
 		res  reconcile.Result
 		rerr error
 	)
-	if stCopy.DeletionTimestamp == nil {
+	if stCopy.DeletionTimestamp == nil && !controllerutil.ContainsFinalizer(stCopy, StorageRequestFinalizer) {
+		// Persist cleanup ownership before any provider resource is created. The
+		// next reconcile performs provisioning only after observing the finalizer.
 		controllerutil.AddFinalizer(stCopy, StorageRequestFinalizer)
-
+		res = reconcile.Result{Requeue: true}
+	} else if stCopy.DeletionTimestamp == nil {
 		switch stCopy.Spec.Type {
 		case nvcav1new.ModelCacheRequest:
 			res, rerr = r.doModelCache(ctx, *st, stCopy, icmsReq)
@@ -905,6 +933,8 @@ func (r *Reconciler) setControlledObjectMeta(_ context.Context,
 	return nil
 }
 
+// applyControlledOne creates or updates obj under st. The returned error wraps
+// the API error so callers can still classify it with the k8serrors helpers.
 func (r *Reconciler) applyControlledOne(ctx context.Context,
 	st *nvcav1new.StorageRequest,
 	obj client.Object,
@@ -915,7 +945,7 @@ func (r *Reconciler) applyControlledOne(ctx context.Context,
 
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error { return nil })
 	if err != nil {
-		return controllerutil.OperationResultNone, fmt.Errorf("create or update %s %s: %v",
+		return controllerutil.OperationResultNone, fmt.Errorf("create or update %s %s: %w",
 			obj.GetObjectKind().GroupVersionKind(), client.ObjectKeyFromObject(obj), err)
 	}
 	return op, nil

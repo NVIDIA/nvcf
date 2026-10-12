@@ -164,6 +164,18 @@ struct ProcessRequestCtx<'a> {
     dry_run: bool,
 }
 
+fn cached_state_after_request(
+    required_number_of_instances: i32,
+    error_code: Option<String>,
+) -> FunctionCachedState {
+    FunctionCachedState {
+        last_predicted_desired_instance_count: error_code
+            .is_none()
+            .then_some(required_number_of_instances),
+        last_predicted_error_code: error_code,
+    }
+}
+
 pub struct NvcfApiService {
     pub nvcf_api_grpc_address: String,
     nvcf_api_channel: Channel,
@@ -639,16 +651,12 @@ impl NvcfApiService {
                 }
             }
 
-            // Update in-memory cache with the latest prediction result
+            // Only successful requests become the last applied prediction. Retain failures so
+            // permanent errors can still be suppressed explicitly by the scaling loop.
             if let Some(cache) = function_state_cache {
                 cache.insert(
                     (info.function_id, info.function_version_id),
-                    FunctionCachedState {
-                        last_predicted_desired_instance_count: Some(
-                            info.required_number_of_instances,
-                        ),
-                        last_predicted_error_code: error_code,
-                    },
+                    cached_state_after_request(info.required_number_of_instances, error_code),
                 );
             }
         }
@@ -701,6 +709,23 @@ mod tests {
         assert_eq!(parse_function_status(""), None);
         assert_eq!(parse_function_status("SOME_NEW_STATUS"), None);
         assert_eq!(parse_function_status("active"), None);
+    }
+
+    #[test]
+    fn successful_request_caches_desired_instance_count() {
+        let state = cached_state_after_request(5, None);
+
+        assert_eq!(state.last_predicted_desired_instance_count, Some(5));
+        assert_eq!(state.last_predicted_error_code, None);
+    }
+
+    #[test]
+    fn failed_request_does_not_cache_desired_instance_count() {
+        let error_code = NvcfApiError::UnknownError.to_string();
+        let state = cached_state_after_request(5, Some(error_code.clone()));
+
+        assert_eq!(state.last_predicted_desired_instance_count, None);
+        assert_eq!(state.last_predicted_error_code, Some(error_code));
     }
 
     #[test]

@@ -18,11 +18,40 @@ limitations under the License.
 package api
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api/adapters/openairesponses"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 )
+
+func TestMediaInputContributesToTokenEstimate(t *testing.T) {
+	for _, kind := range []string{"audio_url", "video_url", "input_audio"} {
+		t.Run(kind, func(t *testing.T) {
+			estimate := func(data string) int {
+				var request *models.ChatCompletionRequest
+				if kind == "input_audio" {
+					var responseRequest openairesponses.CreateRequest
+					body := `{"model":"model","input":[{"role":"user","content":[{"type":"input_audio","input_audio":{"format":"ogg","data":"` + data + `"}}]}]}`
+					if err := json.Unmarshal([]byte(body), &responseRequest); err != nil {
+						t.Fatal(err)
+					}
+					request = ConvertToChatCompletionRequest(&responseRequest)
+				} else {
+					body := `{"model":"model","messages":[{"role":"user","content":[{"type":"` + kind + `","` + kind + `":{"url":"data:media;base64,` + data + `"}}]}]}`
+					if err := json.Unmarshal([]byte(body), &request); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return estimatedInputTokensForNormalizedRequest(request.Model, request)
+			}
+			if short, long := estimate("AAAA"), estimate(strings.Repeat("AAAA", 128)); long <= short {
+				t.Fatalf("media omitted from estimate: short=%d long=%d", short, long)
+			}
+		})
+	}
+}
 
 func TestEstimatedInputTokensIncludesForwardedToolPayloads(t *testing.T) {
 	t.Parallel()

@@ -23,14 +23,14 @@ output="$(PATH="${workdir}/bin:${PATH}" "${checker}" 2>&1)"
 status=$?
 set -e
 
-if [ "${status}" -ne 0 ]; then
-  echo "expected docs version sync check to warn and exit zero, got ${status}" >&2
+if [ "${status}" -ne 7 ]; then
+  echo "expected docs version sync check to propagate status 7, got ${status}" >&2
   echo "${output}" >&2
   exit 1
 fi
 
-if ! grep -q "WARNING: docs version sync check failed" <<<"${output}"; then
-  echo "expected advisory warning in output" >&2
+if grep -q "WARNING: docs version sync check failed" <<<"${output}"; then
+  echo "unexpected advisory warning in output" >&2
   echo "${output}" >&2
   exit 1
 fi

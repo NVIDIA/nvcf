@@ -170,6 +170,16 @@ impl RoutingLifecycle {
         }
     }
 
+    pub(super) fn forget_load_balancer_instance(
+        &self,
+        target: &RoutingTargetKey,
+        definition: &crate::load_balancer::LoadBalancerDefinition,
+    ) {
+        self.targets.read_sync(target, |_key, state| {
+            state.load_balancers.forget(definition);
+        });
+    }
+
     pub(super) async fn target_state(
         &self,
         target: &RoutingTargetKey,
@@ -375,6 +385,20 @@ impl RoutingLifecycle {
 
     pub(super) async fn list_active_models_for_debug(&self) -> Vec<String> {
         active_model_ids(self.targets().await)
+    }
+
+    /// Returns the total number of active backends across all routing targets.
+    /// Used by the startup warmup stabilization sampler.
+    pub(super) async fn total_active_backend_count(&self) -> usize {
+        let mut total = 0usize;
+        let _ = self
+            .targets
+            .iter_async(|_key, state| {
+                total = total.saturating_add(state.active_backend_count());
+                true
+            })
+            .await;
+        total
     }
 }
 

@@ -1,17 +1,18 @@
 # Vault Plugin: JWT Secrets
-### A [Hashicorp Vault](https://www.github.com/hashicorp/vault) secrets plugin for generating and verifying JSON Web Tokens  
 
-* [Overview](#overview)
-* [Encryption And Key Managment](#encryption-and-key-management)
-* [Usage](#usage)
-  * [Quick Start](#quick-start)
-  * [Container](#container)
-  * [Configuration](#configuration)
-  * [Roles](#roles)
-  * [Signing](#signing)
-* [Implementation Notes](#implementation-notes)
-* [Contributors](#contributors)
-* [Links](#quick-links)
+## A [Hashicorp Vault](https://www.github.com/hashicorp/vault) secrets plugin for generating and verifying JSON Web Tokens  
+
+- [Overview](#overview)
+- [Encryption And Key Managment](#encryption-and-key-management)
+- [Usage](#usage)
+  - [Quick Start](#quick-start)
+  - [Container](#container)
+  - [Configuration](#configuration)
+  - [Roles](#roles)
+  - [Signing](#signing)
+- [Implementation Notes](#implementation-notes)
+- [Contributors](#contributors)
+- [Links](#quick-links)
 
 # Overview
 
@@ -26,7 +27,8 @@ The plugin explicitly does not support verifying JWTs as a service; instead rely
 fetch the verification keys via HTTP and verify JWTs locally. This dramatically reduces traffic to
 Vault as well as allows clients to use standard client libraries for verification.
 
-### ⚠️ Early Access 
+## ⚠️ Early Access
+
 The plugin is still under early development and should be tested thoroughly before being used in
 any environment.
 
@@ -43,23 +45,23 @@ verification as long as any JWTs signed with them are valid.
 The plugin supports a subset of the asymmetric encryption algorithms outlined in the JWT
 specification.
 
-* ES256
-* ES384
-* ES512
-* RS256
-* RS384
-* RS512
+- ES256
+- ES384
+- ES512
+- RS256
+- RS384
+- RS512
 
 Note: Due to its reliance on asymmetric encryption, the plugin will not support symmetric algorithms.
 
 # Usage
 
 ## Quick Start
+
 The plugin needs to be built and installed into your Vault instance's plugin directory prior
 to any attempt at usage. A prepackaged container is available see [Container](#container).
 
 1. Register the plugin
-
 
 ```bash
 export PLUGIN_SHA=$(sha256sum $VAULT_PLUGIN_PATH/vault-plugin-secrets-jwt | cut -d ' ' -f1)
@@ -69,25 +71,25 @@ export PLUGIN_SHA=$(sha256sum $VAULT_PLUGIN_PATH/vault-plugin-secrets-jwt | cut 
 vault plugin register -sha256=$PLUGIN_SHA -command=vault-plugin-secrets-jwt secret jwt
 ```
 
-2. Enable the plugin
+1. Enable the plugin
 
 ```bash
 vault secrets enable jwt
 ```
 
-3. Create a role specifying the issuer (`iss`) claim of generated JWTs
+1. Create a role specifying the issuer (`iss`) claim of generated JWTs
 
 ```bash
 vault write jwt/roles/test-role issuer=test.example.com
 ```
-    
-4. Sign a JWT (with default claims)
-    
+
+1. Sign a JWT (with default claims)
+
 ```bash
 vault write -f jwt/sign/test-role
 ```
 
-5. Retrieve JWKs for verification
+1. Retrieve JWKs for verification
 
 ```bash
 curl https://$VAULT_ADDRESS/v1/jwt/jwks
@@ -99,6 +101,7 @@ A containerized version of Vault with the plugin pre-packaged inside is availabl
 `https://hub.docker.com/r/outfoxx/vault`.
 
 You can easily start a server in dev mode, that has the plugin enabled, using:
+
 ```bash
 docker run --rm -P -e VAULT_DEV_ROOT_TOKEN_ID=root outfoxx/vault
 ```
@@ -279,6 +282,7 @@ Signing a JWT requires a role be configured and is easily done using the `sign` 
 providing the role name.
 
 Sign a JWT with default configured claims.
+
 ```bash
 vault write -f jwt/sign/test-role
 ```
@@ -295,7 +299,7 @@ be overridden during the sign request.
 
 # Implementation Notes
 
-## `keysutil` Usage 
+## `keysutil` Usage
 
 The plugin uses the same mechanism as the builtin `Transit` secrets engine. Using `keysutil`
 ensures the key management and rotation is built on a solid cryptographic engine.  
@@ -310,6 +314,7 @@ We have taken the original proof-of-concept and rewrote it in hopes of providing
 can be used in production.
 
 # Quick Links
-    - Vault Website: https://www.vaultproject.io
-    - Main Project Github: https://www.github.com/hashicorp/vault
-    - JWT docs: https://jwt.io
+
+- Vault Website: https://www.vaultproject.io
+- Main Project Github: https://www.github.com/hashicorp/vault
+- JWT docs: https://jwt.io

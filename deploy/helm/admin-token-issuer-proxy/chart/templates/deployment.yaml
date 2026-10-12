@@ -22,6 +22,10 @@ metadata:
     {{- include "admin-issuer-proxy.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.adminIssuerProxy.replicaCount }}
+  {{- with .Values.adminIssuerProxy.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "admin-issuer-proxy.selectorLabels" . | nindent 6 }}
@@ -89,6 +93,10 @@ spec:
       {{- end }}
       {{- with .Values.adminIssuerProxy.affinity }}
       affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.adminIssuerProxy.topologySpreadConstraints }}
+      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- with .Values.adminIssuerProxy.tolerations }}

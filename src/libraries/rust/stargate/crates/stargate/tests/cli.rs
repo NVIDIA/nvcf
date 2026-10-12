@@ -15,6 +15,31 @@
 
 use std::process::Command;
 
+#[allow(dead_code)]
+mod built_info {
+    include!(concat!(env!("OUT_DIR"), "/built.rs"));
+}
+
+#[test]
+fn native_stargate_version_reports_source_identity() {
+    let expected_version = built_info::GIT_COMMIT_HASH.unwrap_or("unknown");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_stargate"))
+        .arg("--version")
+        .output()
+        .expect("stargate process should start");
+
+    assert!(
+        output.status.success(),
+        "stargate --version failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("version output should be UTF-8"),
+        format!("stargate {expected_version}\n"),
+    );
+}
+
 #[test]
 fn invalid_stargate_runtime_listen_addr_exits_nonzero() {
     let status = Command::new(env!("CARGO_BIN_EXE_stargate"))

@@ -189,7 +189,8 @@ func RunShutdownCleanup(ctx context.Context, opts ShutdownHandlerOptions) Shutdo
 		log.Infof("Processing NVCFBackend %s/%s", nb.Namespace, nb.Name)
 
 		// Get namespaces for this backend
-		systemNS, requestsNS := BackendNamespaces(nb)
+		systemNS, _ := BackendNamespaces(nb)
+		requestsNS := AgentRequestsNamespace(ctx, opts.K8sClient, nb)
 
 		// Check if there are any ICMSRequest CRs (active workloads)
 		requestCount, err := CountICMSRequests(ctx, opts.DynamicClient, requestsNS)
@@ -223,6 +224,11 @@ func RunShutdownCleanup(ctx context.Context, opts ShutdownHandlerOptions) Shutdo
 		// Use shared cleanup to delete all managed resources
 		if err := CleanupBackendResources(ctx, opts.K8sClient, opts.DynamicClient, nb); err != nil {
 			log.WithError(err).Errorf("Failed to cleanup resources for NVCFBackend %s/%s", nb.Namespace, nb.Name)
+			return ShutdownResponse{
+				Cleanup: true,
+				Message: "failed to cleanup NVCFBackend resources",
+				Error:   err.Error(),
+			}
 		}
 
 		// Remove the finalizer from the NVCFBackend to allow it to be garbage collected

@@ -14,7 +14,7 @@
 # limitations under the License.
 
 # Pull base image.
-FROM nvcr.io/nvidia/distroless/java:25-jdk-v4.0.8
+FROM nvcr.io/nvidia/distroless/java:25-jdk-v4.1.2
 
 # Add the service jar
 ARG APP_JAR=app.jar
@@ -27,4 +27,5 @@ ENV ULIMIT_FLAG=1
 ENV JDK_JAVA_OPTIONS=""
 
 WORKDIR /home/app
+USER 1000:1000
 CMD ["java", "-jar", "/usr/share/app.jar"]

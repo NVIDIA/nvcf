@@ -66,7 +66,7 @@ import org.springframework.test.context.ContextConfiguration;
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {
                 "spring.profiles.active=test",
-                "grpc.server.port=9090"
+                "spring.grpc.server.port=9090"
         })
 @ContextConfiguration(initializers = IntegrationTestConfiguration.Initializer.class)
 class GrpcSkywayServiceTest {

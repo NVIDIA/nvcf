@@ -5,6 +5,10 @@ global:
 openbao:
   global:
     imagePullSecrets: []
+  server:
+    image:
+      registry: example.com
+      repository: nvcf/nvcf-openbao
   migrations:
     image:
       registry: example.com

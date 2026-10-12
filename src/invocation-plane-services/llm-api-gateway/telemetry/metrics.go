@@ -78,6 +78,7 @@ func InitializeMetrics() {
 	_ = UpstreamRequestDuration()
 	_ = ModelURIAllowlistRejections()
 	_ = LLMTokens()
+	_ = MessagesUsage()
 	_ = ProviderTime()
 	_ = StreamFirstToken()
 	_ = StreamDuration()
@@ -193,6 +194,10 @@ func LLMTokens() otelmetric.Int64Counter {
 		metricPrefix+"llm_tokens_total",
 		otelmetric.WithDescription("LLM token counts reported by upstream providers."),
 	))
+}
+
+func MessagesUsage() otelmetric.Int64Counter {
+	return must.Get(Meter().Int64Counter(metricPrefix+"messages_usage_observations_total", otelmetric.WithDescription("Messages usage accounting outcomes; estimates are not reported as actual tokens.")))
 }
 
 func ProviderTime() otelmetric.Float64Histogram {

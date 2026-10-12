@@ -51,6 +51,9 @@ func New(
 	e.Use(api.NewContextMiddleware(cfg))
 	e.Use(api.NewNVCFAuthMiddleware(authClient))
 
+	// Start replaces e.Start, which would overwrite this handler.
+	e.Server.Handler = api.WithFinalWriteDeadline(e, cfg.Server.InferenceWriteTimeout)
+	e.Server.ErrorLog = e.StdLogger
 	e.Server.ReadHeaderTimeout = cfg.Server.ReadHeaderTimeout
 	e.Server.ReadTimeout = cfg.Server.ReadTimeout
 	e.Server.WriteTimeout = cfg.Server.WriteTimeout
@@ -75,6 +78,14 @@ func New(
 	api.RegisterRoutes(e, handlers)
 
 	return e, nil
+}
+
+// Start serves e on addr until the server is shut down. Use it instead of
+// e.Start, which resets e.Server.Handler to e and drops the handler New
+// installs around it.
+func Start(e *echo.Echo, addr string) error {
+	e.Server.Addr = addr
+	return e.Server.ListenAndServe()
 }
 
 func newRateLimiter(cfg *config.Config, e *echo.Echo) (ratelimit.RateLimiter, error) {

@@ -77,6 +77,7 @@ source (above) for a fully public path.
 ## Reporting bugs
 
 File an issue with:
+
 - Agent image tag: `kubectl -n nvsnap-system get ds nvsnap-agent -o jsonpath='{.spec.template.spec.containers[0].image}'`
 - Workload (vLLM, SGLang, TRT-LLM, etc.), model, and GPU count
 - Agent log: `kubectl -n nvsnap-system logs ds/nvsnap-agent`

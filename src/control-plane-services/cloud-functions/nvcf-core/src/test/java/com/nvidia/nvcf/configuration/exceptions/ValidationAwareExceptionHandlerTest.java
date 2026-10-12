@@ -103,10 +103,10 @@ class ValidationAwareExceptionHandlerTest {
         var responseEntity = testRestTemplate.exchange(requestEntity, String.class);
 
         assertThat(responseEntity.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        // the error message should contain the failed value, the max correct value, and the field in error
-        assertThat(responseEntity.getBody()).contains(Integer.toString(MAX_REQUEST_CONCURRENCY + 1),
-                                                      Integer.toString(MAX_REQUEST_CONCURRENCY),
-                                                      "maxRequestConcurrency");
+        // The response identifies the field and constraint without reflecting the submitted value.
+        assertThat(responseEntity.getBody())
+                .contains(Integer.toString(MAX_REQUEST_CONCURRENCY), "maxRequestConcurrency")
+                .doesNotContain(Integer.toString(MAX_REQUEST_CONCURRENCY + 1));
 
     }
 }

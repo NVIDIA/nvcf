@@ -24,7 +24,6 @@ Feature: Install local Helmfile observability with the compute profile
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | addons.llm.enabled              | false                                |
-      | observability.profile           | disabled                             |
     # Configure the shared observability stack for compute-plane monitors.
     And I prepare Helmfile environment "local-bdd-observability-compute" for stack "observability" from fixture "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
@@ -154,6 +153,7 @@ Feature: Install local Helmfile observability with the compute profile
     Then these Kubernetes resources should not exist in namespace "monitoring" using context "k3d-ncp-local-compute-1":
       | kind           | name                                             |
       | ServiceMonitor | nvcf-default-monitors-state-metrics              |
+      | ServiceMonitor | nvcf-default-monitors-function-autoscaler        |
       | ServiceMonitor | nvcf-default-monitors-grpc-proxy                  |
       | ServiceMonitor | nvcf-default-monitors-llm-api-gateway             |
       | ServiceMonitor | nvcf-default-monitors-invocation-service          |

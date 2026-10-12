@@ -182,6 +182,13 @@ func convertMessageContentToChatContent(inputContent []openairesponses.InputCont
 				URL:    url,
 				Detail: detail,
 			})
+		case openairesponses.ContentTypeInputAudio:
+			if audio, ok := item.GetAudioContent(); ok {
+				// This conversion is for admission estimates; native input is forwarded unchanged.
+				content = append(content, &models.ContentPartAudioURL{
+					URL: "data:audio/" + audio.InputAudio.Format + ";base64," + audio.InputAudio.Data,
+				})
+			}
 		}
 	}
 
@@ -372,7 +379,7 @@ func setResponseFormat(
 			Name:        req.Text.Format.Name,
 			Description: ptr.Deref(req.Text.Format.Description),
 			Schema:      req.Text.Format.Schema,
-			Strict:      ptr.Deref(req.Text.Format.Strict),
+			Strict:      req.Text.Format.Strict,
 		}
 	}
 

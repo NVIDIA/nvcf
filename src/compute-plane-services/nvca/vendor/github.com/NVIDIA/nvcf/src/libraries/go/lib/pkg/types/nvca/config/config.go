@@ -19,11 +19,13 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 	"go.yaml.in/yaml/v3"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
@@ -41,9 +43,20 @@ func Init(configFile string) (Config, error) {
 func NewViperDecoderConfig() viper.DecoderConfigOption {
 	return func(dc *mapstructure.DecoderConfig) {
 		dc.DecodeHook = mapstructure.ComposeDecodeHookFunc(
+			stringToResourceQuantityHookFunc(),
 			mapstructure.StringToTimeDurationHookFunc(),
 			mapstructure.StringToSliceHookFunc(","),
 		)
+	}
+}
+
+func stringToResourceQuantityHookFunc() mapstructure.DecodeHookFuncType {
+	quantityType := reflect.TypeFor[resource.Quantity]()
+	return func(from reflect.Type, to reflect.Type, data any) (any, error) {
+		if from.Kind() != reflect.String || to != quantityType {
+			return data, nil
+		}
+		return resource.ParseQuantity(reflect.ValueOf(data).String())
 	}
 }
 

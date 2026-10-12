@@ -27,8 +27,6 @@ import com.nvidia.nvcf.rest.account.dto.AccountDetailsDto;
 import com.nvidia.nvcf.rest.account.dto.AccountDto;
 import com.nvidia.nvcf.rest.account.dto.CreateAccountRequest;
 import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDetailsDto;
-import com.nvidia.nvcf.rest.registry.dto.TempRegistryCredentialDetailsDto;
-import com.nvidia.nvcf.service.registry.RegistryFunctionMapperService;
 import com.nvidia.nvcf.service.telemetry.TelemetryMapperService;
 import com.nvidia.nvcf.configuration.account.AccountLimitsProperties;
 import com.nvidia.nvcf.util.NvcfConstants;
@@ -52,7 +50,6 @@ public class AccountMapperService {
     private static final String MESG_MISSING_REGISTRY_CREDENTIALS =
             "Account '%s': Missing registry credentials";
 
-    private final RegistryFunctionMapperService registryFunctionMapperService;
     private final TelemetryMapperService telemetryMapperService;
     private final FunctionsRepository functionsRepository;
 
@@ -141,15 +138,13 @@ public class AccountMapperService {
     }
 
     @Nullable
-    private List<TempRegistryCredentialDetailsDto> toRegistryCredentialDetailsDtos(
+    private List<RegistryCredentialDetailsDto> toRegistryCredentialDetailsDtos(
             List<RegistryCredentialDetailsDto> registryCredentialDetailsDtos) {
-        var registryCredentials = registryCredentialDetailsDtos.stream()
-                .map(registryFunctionMapperService::toTempRegistryCredentialDetailsDto)
-                .filter(Objects::nonNull)
-                .toList();
-
+        // Account details no longer resolve the registry secret from ESS. The caller
+        // (NVCT) fetches and caches the secret using the returned registry credential id.
         // Accounts can be setup with no registry credentials.
-        return CollectionUtils.isNotEmpty(registryCredentials) ? registryCredentials : null;
+        return CollectionUtils.isNotEmpty(registryCredentialDetailsDtos)
+                ? registryCredentialDetailsDtos : null;
     }
 
 }

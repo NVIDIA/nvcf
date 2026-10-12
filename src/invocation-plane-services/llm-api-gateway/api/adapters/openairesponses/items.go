@@ -27,6 +27,7 @@ import (
 const (
 	ContentTypeInputText  = "input_text"
 	ContentTypeInputImage = "input_image"
+	ContentTypeInputAudio = "input_audio"
 	ContentTypeInputFile  = "input_file"
 )
 
@@ -599,6 +600,18 @@ func (c *InputImageContent) inputContentDiscriminator() string {
 	return c.Type
 }
 
+type InputAudioContent struct {
+	Type       string `json:"type"`
+	InputAudio struct {
+		Data   string `json:"data"`
+		Format string `json:"format"`
+	} `json:"input_audio"`
+}
+
+func (c *InputAudioContent) inputContentDiscriminator() string {
+	return c.Type
+}
+
 // InputFileContent represents file input content
 type InputFileContent struct {
 	Type     string  `json:"type"`
@@ -704,6 +717,15 @@ func (ic *InputContent) UnmarshalJSON(data []byte) error {
 		}
 		image.Type = ContentTypeInputImage
 		ic.Data = &image
+	case ContentTypeInputAudio:
+		var audio InputAudioContent
+		if err := json.Unmarshal(data, &audio); err != nil {
+			return err
+		}
+		if audio.InputAudio.Data == "" || audio.InputAudio.Format == "" {
+			return &UnmarshalError{Field: "input_audio", Msg: "data and format are required"}
+		}
+		ic.Data = &audio
 	case ContentTypeInputFile:
 		var file InputFileContent
 		if err := json.Unmarshal(data, &file); err != nil {
@@ -768,6 +790,11 @@ func (ic *InputContent) GetImageContent() (*InputImageContent, bool) {
 		return image, true
 	}
 	return nil, false
+}
+
+func (ic *InputContent) GetAudioContent() (*InputAudioContent, bool) {
+	audio, ok := ic.Data.(*InputAudioContent)
+	return audio, ok
 }
 
 // GetFileContent returns the file content data if this is a file content item

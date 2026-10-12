@@ -18,13 +18,21 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use reqwest::header::HeaderMap;
-use stargate_protocol::common::{queue_time_delta_ms, valid_last_mean_input_tps};
+use stargate_protocol::common::{
+    has_available_engine_slot, queue_time_delta_ms, valid_last_mean_input_tps,
+};
 use stargate_protocol::tunnel_contract::HEADER_STARGATE_EXPECTED_QUEUE_MS;
 
 use crate::request_observer::{RequestObservation, RequestObservationState, RequiredTunnelHeaders};
 use crate::runtime_state::ModelGeneration;
 
-pub(crate) const RETRY_REASON_QUEUE_ESTIMATE_MISMATCH: &str = "queue_estimate_mismatch";
+/// Stargate's queue estimate comes from a snapshot that is up to about a
+/// second old, and several Stargates can release requests to one backend at
+/// once, so Pylon's local queue routinely runs ahead of it under load. Only
+/// reroute when the estimate is clearly wrong: at least this much longer...
+pub const DEFAULT_QUEUE_MISMATCH_MIN_DELTA_MS: u64 = 10_000;
+/// ...and at least this many times Stargate's estimate.
+pub const DEFAULT_QUEUE_MISMATCH_TOLERANCE_FACTOR: f64 = 4.0;
 
 #[derive(Debug, Clone)]
 pub struct PylonQueueMismatchRetryConfig {
@@ -34,12 +42,25 @@ pub struct PylonQueueMismatchRetryConfig {
     pub retry_after_ms: Option<u64>,
 }
 
+#[cfg(test)]
+impl PylonQueueMismatchRetryConfig {
+    /// Thresholds small enough that tests trigger a mismatch with a few queued
+    /// tokens.
+    pub(crate) fn strict() -> Self {
+        Self {
+            min_delta_ms: 25,
+            tolerance_factor: 1.25,
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for PylonQueueMismatchRetryConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            min_delta_ms: 25,
-            tolerance_factor: 1.25,
+            min_delta_ms: DEFAULT_QUEUE_MISMATCH_MIN_DELTA_MS,
+            tolerance_factor: DEFAULT_QUEUE_MISMATCH_TOLERANCE_FACTOR,
             retry_after_ms: None,
         }
     }
@@ -271,6 +292,7 @@ impl LiveRequestState {
             required,
             Some(&ModelGeneration::new(required.model_id.clone(), 0)),
             headers,
+            None,
         )
     }
 
@@ -280,6 +302,7 @@ impl LiveRequestState {
         required: &RequiredTunnelHeaders,
         generation: Option<&ModelGeneration>,
         headers: &HeaderMap,
+        max_engine_concurrency: Option<u64>,
     ) -> QueueAdmissionDecision {
         if !config.enabled {
             return QueueAdmissionDecision::Disabled;
@@ -306,6 +329,7 @@ impl LiveRequestState {
                     model.queue_estimate_ms_for_priority_excluding(
                         required.queue_priority(),
                         excluded_request,
+                        max_engine_concurrency,
                     )
                 })
             })
@@ -697,7 +721,19 @@ impl QueueModelState {
         &self,
         priority: u32,
         excluded_request: Option<&TrackedPromptRequest>,
+        max_engine_concurrency: Option<u64>,
     ) -> Option<u64> {
+        let active_requests = self
+            .phase_requests
+            .iter()
+            .try_fold(0usize, |total, count| total.checked_add(*count))
+            .expect("model running request count overflowed")
+            .saturating_sub(usize::from(excluded_request.is_some()));
+        if max_engine_concurrency
+            .is_some_and(|limit| has_available_engine_slot(saturated_u64(active_requests), limit))
+        {
+            return Some(0);
+        }
         let last_mean_input_tps = self.last_mean_input_tps?;
         let mut input_tokens = self
             .prompt_work_by_priority
@@ -767,7 +803,7 @@ impl TrackedPromptPhase {
 }
 
 impl QueueTrackedRequestGuard {
-    pub(crate) fn on_upstream_response_headers(&mut self) {
+    pub(crate) fn on_backend_submission(&mut self) {
         let mut state = self.live_requests.inner.lock();
         state.advance_request_phase(&self.request_id, TrackedPromptPhase::InputProcessing);
     }
@@ -1006,8 +1042,74 @@ mod tests {
     }
 
     #[test]
+    fn admission_uses_live_capacity_including_decode_and_excludes_its_own_reservation() {
+        let runtime = crate::PylonRuntimeState::new(
+            stargate_proto::pb::InferenceServerStatus::Active,
+            &["model-a".to_string()],
+        );
+        runtime.set_model_stats(
+            "model-a",
+            crate::CurrentModelStats {
+                last_mean_input_tps: 8_000.0,
+                max_engine_concurrency: Some(25),
+                ..Default::default()
+            },
+        );
+        let mut prefill = runtime.track_request(&required("prefill", 0, 80_000));
+        prefill.on_backend_submission();
+        let _decode: Vec<_> = (0..23)
+            .map(|index| {
+                let mut guard = runtime.track_request(&required(&format!("decode-{index}"), 0, 10));
+                guard.observe_output();
+                guard
+            })
+            .collect();
+        let incoming = required("incoming", 0, 120_000);
+        let _incoming = runtime.track_request(&incoming);
+        let generation = runtime.current_generation("model-a").unwrap();
+        let evaluate = || {
+            runtime.evaluate_generation_queue_admission(
+                &PylonQueueMismatchRetryConfig::strict(),
+                &incoming,
+                Some(&generation),
+                &headers_with_expected("0"),
+            )
+        };
+        assert_eq!(evaluate().actual_ms(), Some(0));
+        assert!(matches!(
+            evaluate(),
+            QueueAdmissionDecision::Accepted { .. }
+        ));
+
+        // The next pending assignment consumes the last free slot. Decode
+        // requests still occupy slots even though they have no prompt backlog.
+        let pending = runtime.track_request(&required("pending", 0, 8_000));
+        assert_eq!(evaluate(), rejected(11_000));
+        drop(pending);
+        assert_eq!(evaluate().actual_ms(), Some(0));
+
+        // A withdrawn capacity report must restore conservative queue handling.
+        runtime.set_model_stats(
+            "model-a",
+            crate::CurrentModelStats {
+                last_mean_input_tps: 8_000.0,
+                ..Default::default()
+            },
+        );
+        assert_eq!(evaluate(), rejected(10_000));
+    }
+
+    #[test]
+    fn default_threshold_tolerates_stale_router_estimates() {
+        let config = PylonQueueMismatchRetryConfig::default();
+        assert_eq!(mismatch_threshold_ms(0, &config), 10_000);
+        assert_eq!(mismatch_threshold_ms(1_000, &config), 11_000);
+        assert_eq!(mismatch_threshold_ms(5_000, &config), 20_000);
+    }
+
+    #[test]
     fn threshold_helper_accepts_at_threshold_and_rejects_above() {
-        let mut config = PylonQueueMismatchRetryConfig::default();
+        let mut config = PylonQueueMismatchRetryConfig::strict();
         let threshold = mismatch_threshold_ms(100, &config);
         assert_eq!(threshold, 125);
         assert!(126 > threshold);
@@ -1025,10 +1127,10 @@ mod tests {
         let _priority_two = live_requests.track_request(&required("req-p2", 2, 20));
         let mut priority_four = live_requests.track_request(&required("req-p4", 4, 30));
         let mut zero_input = live_requests.track_request(&required("req-zero", 1, 0));
-        priority_four.on_upstream_response_headers();
+        priority_four.on_backend_submission();
 
         assert_eq!(live_requests.snapshot_model("model-a").queue_size, 3);
-        zero_input.on_upstream_response_headers();
+        zero_input.on_backend_submission();
         let snapshot = live_requests.snapshot_model("model-a");
 
         assert_eq!(snapshot.queue_size, 3);
@@ -1148,7 +1250,7 @@ mod tests {
         let live_requests = LiveRequestState::default();
         let mut request = live_requests.track_request(&required("req-output", 0, 100));
         request.observe_output();
-        request.on_upstream_response_headers();
+        request.on_backend_submission();
 
         let snapshot = live_requests.snapshot_model("model-a");
         assert_eq!(snapshot.queue_size, 0);
@@ -1168,7 +1270,7 @@ mod tests {
         );
         assert_eq!(
             live_requests.evaluate(
-                &PylonQueueMismatchRetryConfig::default(),
+                &PylonQueueMismatchRetryConfig::strict(),
                 &required("req-new", 0, 1),
                 &headers_with_expected("0"),
             ),
@@ -1188,7 +1290,7 @@ mod tests {
         assert_eq!(snapshot.queued_input_size, u64::MAX);
         assert_eq!(
             live_requests.evaluate(
-                &PylonQueueMismatchRetryConfig::default(),
+                &PylonQueueMismatchRetryConfig::strict(),
                 &current,
                 &headers_with_expected("0"),
             ),
@@ -1197,11 +1299,11 @@ mod tests {
     }
 
     #[test]
-    fn upstream_response_headers_do_not_apply_retired_progress_contract() {
+    fn backend_submission_does_not_apply_retired_progress_contract() {
         let live_requests = LiveRequestState::default();
         let mut request = live_requests.track_request(&required("req-progress", 0, 100));
 
-        request.on_upstream_response_headers();
+        request.on_backend_submission();
 
         let snapshot = live_requests.snapshot_model("model-a");
         assert_eq!(snapshot.queued_input_size, 100);
@@ -1211,14 +1313,14 @@ mod tests {
     #[test]
     fn admission_transitions_from_unknown_to_rejected_after_throughput_update() {
         let live_requests = LiveRequestState::default();
-        let config = PylonQueueMismatchRetryConfig::default();
+        let config = PylonQueueMismatchRetryConfig::strict();
         let request = required("req-inflight", 0, 100);
         let _guard = live_requests.track_request(&request);
         let incoming = required("req-new", 0, 1);
         let headers = headers_with_expected("0");
 
         assert_eq!(
-            live_requests.evaluate_generation(&config, &incoming, None, &headers),
+            live_requests.evaluate_generation(&config, &incoming, None, &headers, None),
             QueueAdmissionDecision::UnknownLocalEstimate { expected_ms: 0 }
         );
         assert_eq!(
@@ -1236,7 +1338,7 @@ mod tests {
     #[test]
     fn admission_excludes_current_request_even_when_observed_before_evaluation() {
         let live_requests = LiveRequestState::default();
-        let config = PylonQueueMismatchRetryConfig::default();
+        let config = PylonQueueMismatchRetryConfig::strict();
         let current = required("req-current", 0, 10);
         let _guard = live_requests.track_request(&current);
         live_requests.update_model_throughput("model-a", 100.0);
@@ -1259,7 +1361,7 @@ mod tests {
         let _guard = live_requests.track_request(&inflight);
         let config = PylonQueueMismatchRetryConfig {
             enabled: false,
-            ..PylonQueueMismatchRetryConfig::default()
+            ..PylonQueueMismatchRetryConfig::strict()
         };
 
         let decision = live_requests.evaluate(
@@ -1274,7 +1376,7 @@ mod tests {
     #[test]
     fn admission_accepts_missing_or_invalid_expected_queue_header() {
         let live_requests = LiveRequestState::default();
-        let config = PylonQueueMismatchRetryConfig::default();
+        let config = PylonQueueMismatchRetryConfig::strict();
         let incoming = required("req-new", 0, 1);
         for headers in [HeaderMap::new(), headers_with_expected("nope")] {
             assert_eq!(

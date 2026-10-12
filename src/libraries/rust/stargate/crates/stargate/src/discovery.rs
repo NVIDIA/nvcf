@@ -104,7 +104,7 @@ impl Discovery for HeadlessDnsDiscovery {
     }
 
     // StatefulSet-backed headless Service SRV records carry canonical pod
-    // hostnames and are backed by ready EndpointSlices.
+    // hostnames. The Service controls whether warming endpoints are published.
     async fn discover_stargates(&self) -> Vec<StargateInfo> {
         let config = &self.config;
         let srv_lookup_name = format!("_grpc._tcp.{}", config.discovery_dns_name);

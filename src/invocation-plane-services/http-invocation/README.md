@@ -69,6 +69,7 @@ cargo run --package nvcf-invocation-service --bin server -- -c crates/server/res
 ```
 
 This command will:
+
 1. Start ngrok in the background to forward port 8080
 2. Extract the public ngrok URL
 3. Run the service with the `WORKER_STREAM_PROPERTIES__SELF_ADDRESS` config set to the ngrok URL
@@ -222,27 +223,35 @@ worker --> nats: ack work request
 The service supports multiple memory allocator and profiling configurations:
 
 ### Default: jemalloc with Profiling Support
+
 The service uses `jemalloc` by default with integrated pprof server for memory profiling:
+
 ```shell
 cargo run --package nvcf-invocation-service --bin server  # Uses jemalloc + profiling (default)
 ```
 
 ### jemalloc without Profiling
+
 Use jemalloc allocator but disable the pprof HTTP server:
+
 ```shell
 cargo run --package nvcf-invocation-service --bin server --no-default-features --features jemalloc
 ```
 
 ### Alternative: mimalloc
+
 For high-performance allocation without profiling, you can use `mimalloc`:
+
 ```shell
 cargo run --package nvcf-invocation-service --bin server --no-default-features --features mimalloc
 ```
 
 When using both the `jemalloc` and `profiling` features, the service automatically starts a pprof HTTP server on port 6060 with this endpoint:
+
 - `http://localhost:6060/debug/pprof/allocs` - Current heap profile (protobuf format)
 
 Example usage:
+
 ```shell
 # Get heap profile (protobuf format for go tool pprof)
 curl -o heap.pb.gz http://localhost:6060/debug/pprof/allocs
@@ -263,11 +272,13 @@ Generate a coverage report in a format VS Code can read:
 ```
 
 Install the Coverage Gutters extension.  From Vscode:
+
 1. Ctl-Shift-p
 1. Type then select, `Coverage gutters: watch`
 
 From the code editor, see that covered lines have green sidebars, otherwise red.
 To see entire lines highlighted in green and red:
+
 1. Right click the extension and select settings
 1. In the settings pane, select `Show line coverage`
 1. Open (or re-open) any file

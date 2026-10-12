@@ -19,26 +19,21 @@ package com.nvidia.nvcf.configuration.exceptions;
 import com.nvidia.boot.exceptions.BootResponseException;
 import jakarta.annotation.Nonnull;
 import java.util.List;
-import org.jspecify.annotations.Nullable;
 import org.springframework.context.MessageSourceResolvable;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
-import org.springframework.util.ObjectUtils;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
-import tools.jackson.databind.JsonNode;
 
 @Configuration
 @ControllerAdvice
 public class ValidationAwareExceptionHandler extends ExceptionTracingExceptionHandler {
-
-    private static final int MAX_REJECTED_VALUE_LOG_CHARS = 256;
 
     private static String toCleanMessage(HandlerMethodValidationException ex) {
         StringBuilder sb = new StringBuilder("Validation failed with ");
@@ -51,13 +46,9 @@ public class ValidationAwareExceptionHandler extends ExceptionTracingExceptionHa
         for (MessageSourceResolvable error : errors) {
             sb.append('[');
             if (error instanceof FieldError fieldError) {
-                sb.append("Field error in object '")
-                        .append(fieldError.getObjectName())
-                        .append("' on field '")
+                sb.append("Field error on field '")
                         .append(fieldError.getField())
-                        .append("': rejected value [")
-                        .append(truncateRejectedValueForLog(fieldError.getRejectedValue()))
-                        .append("]; ")
+                        .append("': ")
                         .append(fieldError.getDefaultMessage());
             } else {
                 sb.append(error);
@@ -67,10 +58,6 @@ public class ValidationAwareExceptionHandler extends ExceptionTracingExceptionHa
         sb.deleteCharAt(sb.length() - 1);
     }
 
-    /**
-     * Keeps validation problem responses and framework DEBUG logs bounded when rejected values are
-     * very large (e.g. secret value length integration tests).
-     */
     @Override
     protected ResponseEntity<Object> handleMethodArgumentNotValid(
             MethodArgumentNotValidException ex,
@@ -89,42 +76,13 @@ public class ValidationAwareExceptionHandler extends ExceptionTracingExceptionHa
         }
         StringBuilder sb = new StringBuilder("Validation failed: ");
         for (FieldError fe : errors) {
-            sb.append("[object=")
-                    .append(fe.getObjectName())
-                    .append(", field=")
+            sb.append("[field=")
                     .append(fe.getField())
-                    .append(", rejected=")
-                    .append(truncateRejectedValueForLog(fe.getRejectedValue()))
                     .append(", message=")
                     .append(fe.getDefaultMessage())
                     .append("] ");
         }
         return sb.toString().trim();
-    }
-
-    private static String truncateRejectedValueForLog(@Nullable Object rejected) {
-        if (rejected == null) {
-            return "null";
-        }
-        String raw;
-        if (rejected instanceof JsonNode node) {
-            if (node.isString()) {
-                raw = node.asString();
-            } else {
-                raw = node.toString();
-            }
-        } else if (rejected instanceof CharSequence seq) {
-            raw = seq.toString();
-        } else {
-            raw = ObjectUtils.nullSafeConciseToString(rejected);
-        }
-        if (raw.length() <= MAX_REJECTED_VALUE_LOG_CHARS) {
-            return raw;
-        }
-        return raw.substring(0, MAX_REJECTED_VALUE_LOG_CHARS)
-                + "... (truncated for log/response, total length "
-                + raw.length()
-                + " chars)";
     }
 
     @Override

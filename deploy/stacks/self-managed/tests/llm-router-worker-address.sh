@@ -160,7 +160,15 @@ assert_llm_request_router_grpc_port() {
   test "$actual_port" = "$expected_port"
 }
 
-invalid_worker_address_error='global.workerEndpoints.llmRequestRouterAddress must use DNS-or-IPv4:port or [IPv6]:port with port 1-65535'
+assert_backend_router_grpc_port() {
+  local values_file="$1"
+  local expected_port="$2"
+
+  test "$(yq -r '.llmRequestRouter.backendRouter.service.grpcPort' "$values_file")" = \
+    "$expected_port"
+}
+
+invalid_worker_address_error='global.workerEndpoints.llmRequestRouterAddress must use optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port with port 1-65535'
 
 assert_worker_address_rejected() {
   local case_name="$1"
@@ -218,6 +226,9 @@ printf '%s\n' \
   'addons:' \
   '  llm:' \
   '    enabled: true' \
+  '    requestRouter:' \
+  '      backendRouter:' \
+  '        enabled: false' \
   >"$environment_file"
 render_api_values "$work_dir/local-api-values.yaml" >/dev/null
 assert_remote_config_address "$work_dir/local-api-values.yaml" \
@@ -230,11 +241,6 @@ fi
 
 custom_router_grpc_port='51071'
 custom_port_worker_address="llm-request-router.nvcf.svc.cluster.local:$custom_router_grpc_port"
-printf '%s\n' \
-  'addons:' \
-  '  llm:' \
-  '    enabled: true' \
-  >"$environment_file"
 render_api_values \
   "$work_dir/custom-port-api-values.yaml" \
   --state-values-set \
@@ -242,10 +248,37 @@ render_api_values \
   >/dev/null
 assert_remote_config_address "$work_dir/custom-port-api-values.yaml" \
   "$custom_port_worker_address" ||
-  fail "enabled local LLM did not use the configured request-router gRPC port"
+  fail "disabled backend routing did not use the configured request-router gRPC port"
 assert_llm_request_router_grpc_port "$work_dir/custom-port-api-values.yaml" \
   "$custom_router_grpc_port" ||
   fail "enabled LLM did not pass the configured gRPC port to the request-router chart"
+
+backend_router_address='llm-request-router-backend-router.nvcf.svc.cluster.local:50071'
+printf '%s\n' \
+  'addons:' \
+  '  llm:' \
+  '    enabled: true' \
+  >"$environment_file"
+render_api_values "$work_dir/backend-api-values.yaml" >/dev/null
+assert_remote_config_address "$work_dir/backend-api-values.yaml" \
+  "$backend_router_address" ||
+  fail "enabled backend routing did not use the backend-router address"
+assert_backend_router_grpc_port "$work_dir/backend-api-values.yaml" 50071 ||
+  fail "enabled backend routing did not pass the default gRPC port to the chart"
+
+custom_backend_router_grpc_port='51072'
+custom_backend_router_address="llm-request-router-backend-router.nvcf.svc.cluster.local:$custom_backend_router_grpc_port"
+render_api_values \
+  "$work_dir/backend-custom-port-api-values.yaml" \
+  --state-values-set \
+  "addons.llm.requestRouter.backendRouter.service.grpcPort=$custom_backend_router_grpc_port" \
+  >/dev/null
+assert_remote_config_address "$work_dir/backend-custom-port-api-values.yaml" \
+  "$custom_backend_router_address" ||
+  fail "enabled backend routing did not use the configured backend-router gRPC port"
+assert_backend_router_grpc_port "$work_dir/backend-custom-port-api-values.yaml" \
+  "$custom_backend_router_grpc_port" ||
+  fail "enabled LLM did not pass the configured backend-router gRPC port to the chart"
 
 external_worker_address='router.example.com:443'
 render_api_values \
@@ -256,6 +289,20 @@ render_api_values \
 assert_remote_config_address "$work_dir/external-api-values.yaml" \
   "$external_worker_address" ||
   fail "enabled LLM did not honor an explicit external worker address"
+
+https_worker_address='https://router.example.com:443'
+write_environment true "$https_worker_address"
+render_api_values "$work_dir/https-api-values.yaml" >/dev/null
+assert_remote_config_address "$work_dir/https-api-values.yaml" \
+  "$https_worker_address" ||
+  fail "enabled LLM did not preserve an explicit HTTPS worker URI"
+
+http_worker_address='http://router.example.com:50071'
+write_environment true "$http_worker_address"
+render_api_values "$work_dir/http-api-values.yaml" >/dev/null
+assert_remote_config_address "$work_dir/http-api-values.yaml" \
+  "$http_worker_address" ||
+  fail "enabled LLM did not preserve an explicit development HTTP worker URI"
 
 ipv4_worker_address='192.0.2.10:50071'
 write_environment true "$ipv4_worker_address"
@@ -303,13 +350,16 @@ assert_remote_config_address "$work_dir/maximum-port-api-values.yaml" \
 write_environment true ''
 render_api_values "$work_dir/default-api-values.yaml" >/dev/null
 assert_remote_config_address "$work_dir/default-api-values.yaml" \
-  "$local_worker_address" ||
-  fail "enabled LLM did not default the worker address to the cluster-local service"
+  "$backend_router_address" ||
+  fail "enabled LLM did not default the worker address to the backend-router service"
 
 invalid_address_cases=(
   'missing-port|router'
   'missing-host|:50071'
   'non-numeric-port|router:not-a-port'
+  'unsupported-scheme|ftp://router.example.com:50071'
+  'userinfo|https://user@router.example.com:50071'
+  'path|https://router.example.com:50071/watch'
   'port-zero|router:0'
   'port-too-large|router:65536'
   'port-too-long|router:99999999999999999999999999999999999999'

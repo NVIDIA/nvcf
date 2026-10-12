@@ -150,6 +150,7 @@ func CreateClient(nvcfFqdn string, nvcfFqdnNats *string, nvcfWorkerToken string,
 
 		js, err := jetstream.New(nc, jetstream.WithPublishAsyncErrHandler(func(stream jetstream.JetStream, msg *nats.Msg, err error) {
 			nvcfMetrics.NatsErrorCounter.Inc()
+			nvcfMetrics.NatsErrorByTypeCounter.WithLabelValues("jetstream_publish").Inc()
 			zap.L().Warn("jetstream error", zap.Error(err))
 		}))
 		if err != nil {
@@ -430,10 +431,12 @@ func newNatsConnection(nvcfFqdnNats string, nkeySeed *string, nvcfTokenProvider 
 			// Permission violations are rejected asynchronously (Subscribe/Publish return nil),
 			// so log loudly to expose a subject missing from the worker's NATS allow-list.
 			if errors.Is(err, nats.ErrPermissionViolation) {
+				nvcfMetrics.NatsErrorByTypeCounter.WithLabelValues("permission_violation").Inc()
 				zap.L().Error("nats permission violation; a subject is likely missing from the worker allow-list",
 					append(fields, utils.PublicLogMarker)...)
 				return
 			}
+			nvcfMetrics.NatsErrorByTypeCounter.WithLabelValues("async_error").Inc()
 			zap.L().Warn("nats connection error", fields...)
 		}),
 		nats.ConnectHandler(func(conn *nats.Conn) {
@@ -441,11 +444,17 @@ func newNatsConnection(nvcfFqdnNats string, nkeySeed *string, nvcfTokenProvider 
 		}),
 		nats.DisconnectErrHandler(func(conn *nats.Conn, err error) {
 			if err != nil {
+				nvcfMetrics.NatsErrorCounter.Inc()
+				nvcfMetrics.NatsErrorByTypeCounter.WithLabelValues("disconnect_error").Inc()
 				zap.L().Warn("disconnected from nats server", zap.Error(err))
 			}
 			nvcfMetrics.NatsDisconnectCounter.Inc()
 		}),
 		nats.ClosedHandler(func(conn *nats.Conn) {
+			if err := conn.LastError(); err != nil {
+				nvcfMetrics.NatsErrorCounter.Inc()
+				nvcfMetrics.NatsErrorByTypeCounter.WithLabelValues("terminal_close").Inc()
+			}
 			zap.L().Info("nats connection closed.", zap.Error(conn.LastError()))
 		}),
 	)
@@ -457,6 +466,8 @@ func natsAuthOption(nkeySeed *string, nvcfTokenProvider *auth.SettableTokenSourc
 		return nats.TokenHandler(func() string {
 			token, err := nvcfTokenProvider.Token()
 			if err != nil {
+				nvcfMetrics.NatsErrorCounter.Inc()
+				nvcfMetrics.NatsErrorByTypeCounter.WithLabelValues("auth_token").Inc()
 				zap.L().Warn("failed to fetch nvcf token for nats", zap.Error(err))
 				return ""
 			}
@@ -471,6 +482,8 @@ func natsAuthOption(nkeySeed *string, nvcfTokenProvider *auth.SettableTokenSourc
 				Payload:    token.AccessToken,
 			})
 			if err != nil {
+				nvcfMetrics.NatsErrorCounter.Inc()
+				nvcfMetrics.NatsErrorByTypeCounter.WithLabelValues("auth_token").Inc()
 				zap.L().Warn("failed to marshal nvcf token for nats", zap.Error(err))
 				return ""
 			}

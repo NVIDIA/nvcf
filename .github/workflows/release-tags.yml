@@ -7,6 +7,9 @@ on:
   push:
     branches:
       - main
+      # Maintenance branches for the subprojects that release from a branch
+      # rather than from main -- currently the three deploy/stacks subprojects.
+      # A push here cuts the next patch on that branch's train.
       - 'release-**/v*'
     tags:
       - '*-v*'
@@ -16,14 +19,26 @@ on:
       operation:
         description: Release operation to run.
         required: false
-        default: branch-cut
+        default: auto
         type: choice
         options:
-          - branch-cut
-          - self-managed-branch-cut
           - auto
+          - branch-cut
+          - release-candidate
       service:
-        description: Optional service id or service_name for operation=auto. Branch-cut operations select a fixed service.
+        description: >-
+          Service id or service_name. Optional for operation=auto, where it
+          scopes the run and otherwise defaults to every registered service.
+          Required for branch-cut and release-candidate, which act on one
+          subproject.
+        required: false
+        type: string
+      inventory_tag:
+        description: Optional stack tag to render and validate without publishing.
+        required: false
+        type: string
+      release_tag:
+        description: Optional existing release tag to replay, including an unpublished Helm chart.
         required: false
         type: string
 
@@ -35,15 +50,26 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Keep GitHub release automation inert until the migration cutover is ready.
-  # Set the repository variable NVCF_GITHUB_AUTO_TAGGING_ENABLED=true after
-  # GitHub has the required path-format release anchors.
+  # Release automation is live. This repository is the sole tag and release
+  # authority, and both variables are set in repository settings
+  # (NVCF_GITHUB_AUTO_TAGGING_ENABLED=true, NVCF_GITHUB_RELEASE_DRY_RUN=false).
+  #
+  # The literals below are NOT the behavior here. They are the fallback for a
+  # context that has neither variable set -- a fork, or a re-created repository
+  # -- where defaulting to dry-run keeps a misconfigured checkout from cutting
+  # real releases against someone else's registries. Read the repository
+  # variables to see what actually runs; do not read these defaults as the
+  # current mode.
   NVCF_GITHUB_AUTO_TAGGING_ENABLED: ${{ vars.NVCF_GITHUB_AUTO_TAGGING_ENABLED || 'false' }}
   NVCF_GITHUB_RELEASE_DRY_RUN: ${{ vars.NVCF_GITHUB_RELEASE_DRY_RUN || 'true' }}
   NVCF_GITHUB_RELEASE_DRAFT: ${{ vars.NVCF_GITHUB_RELEASE_DRAFT || 'false' }}
   NV_GITHUB_TOKEN_CONFIGURED: ${{ secrets.NV_GITHUB_TOKEN != '' }}
   GH_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
   GITHUB_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+  HELM_VERSION: "3.21.4"
+  HELM_SHA256: "61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14"
+  HELMFILE_VERSION: "1.1.9"
+  HELMFILE_SHA256: "ee71196bb12460905b8cbe0ef67b28db51ef681b777cc212d8c0956475b51905"
 
 jobs:
   # NVIDIA self-hosted runners. Eligible without a conditional because this
@@ -58,11 +84,14 @@ jobs:
   # work.
   service-release:
     name: service release automation
-    if: github.ref_type != 'tag' && (github.event_name != 'workflow_dispatch' || inputs.operation == 'auto')
+    if: github.ref_type != 'tag' && (github.event_name != 'workflow_dispatch' || (inputs.operation == 'auto' && inputs.inventory_tag == '' && inputs.release_tag == ''))
     runs-on: linux-amd64-cpu4
     permissions:
       contents: write
       packages: read
+      # Releases comment the version they shipped on the pull requests that went
+      # into them. Needed for the github.token fallback; a PAT carries its own.
+      pull-requests: write
     steps:
       # ref is the branch, not the pushed SHA. Two reasons, both about the gap
       # between when a push happens and when this job actually runs:
@@ -92,20 +121,24 @@ jobs:
 
       - name: Run service release automation
         env:
-          NVCF_GITHUB_RELEASE_SERVICE: ${{ github.event_name == 'workflow_dispatch' && inputs.service || '' }}
+          NVCF_GITHUB_RELEASE_SERVICE: ${{ inputs.service || '' }}
         run: |
           set -euo pipefail
           if [ "${NVCF_GITHUB_AUTO_TAGGING_ENABLED}" = "true" ] && \
              [ "${NVCF_GITHUB_RELEASE_DRY_RUN}" = "false" ] && \
              [ "${NV_GITHUB_TOKEN_CONFIGURED}" != "true" ]; then
             echo "ERROR: set secret NV_GITHUB_TOKEN before enabling GitHub auto-tag publish mode." >&2
-            echo "The default GITHUB_TOKEN cannot trigger the release-branch/tag workflows that publish release artifacts." >&2
+            echo "The default GITHUB_TOKEN cannot trigger the tag workflow that publishes release notes." >&2
             exit 1
           fi
           ./tools/ci/github-release auto
 
+  # Opens the next train for a subproject that releases from a branch: creates
+  # release-<tag-prefix>X.Y holding the default branch's content, and opens the
+  # pull request advancing that subproject's VERSION to X.Y+1.0 on the default
+  # branch. Dispatch from any ref; the cut always uses the default branch.
   release-branch-cut:
-    name: NVCA release branch cut
+    name: release branch cut
     if: github.event_name == 'workflow_dispatch' && inputs.operation == 'branch-cut'
     runs-on: linux-amd64-cpu4
     permissions:
@@ -115,13 +148,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          fetch-tags: true
           ref: ${{ github.event.repository.default_branch }}
           token: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
 
       - name: Cut release branch
         env:
-          NVCF_GITHUB_RELEASE_SERVICE: nvca
-          NV_GITHUB_TOKEN_CONFIGURED: ${{ secrets.NV_GITHUB_TOKEN != '' }}
+          NVCF_GITHUB_RELEASE_SERVICE: ${{ inputs.service }}
           GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
@@ -136,37 +169,141 @@ jobs:
           fi
           ./tools/ci/github-release branch-cut --service "${NVCF_GITHUB_RELEASE_SERVICE}"
 
-  self-managed-release-branch-cut:
-    name: self-managed stack release branch cut
-    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'self-managed-branch-cut'
+  # Cuts X.Y.Z-rc.N at the dispatched ref. This is how an unreleased tree gets a
+  # real artifact now that the stacks do not tag on main: the internal publish
+  # lanes accept -rc.N, so selecting a pull request's branch in the run dialog
+  # builds and publishes that tree without putting a version on the stack's
+  # stable line.
+  #
+  # Same-repository branches only, which is what workflow_dispatch offers. A
+  # fork's branch cannot be selected, so release credentials never run against
+  # unreviewed code.
+  release-candidate:
+    name: release candidate
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'release-candidate'
     runs-on: linux-amd64-cpu4
     permissions:
       contents: write
-      pull-requests: write
+    steps:
+      # fetch-tags because the rc counter is derived from the rc tags already
+      # published for this base version. Without them it restarts at rc.0 and
+      # the push fails on a tag name that is already taken.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+
+      - name: Cut release candidate
+        env:
+          NVCF_GITHUB_RELEASE_SERVICE: ${{ inputs.service }}
+        run: |
+          set -euo pipefail
+          if [ "${NV_GITHUB_TOKEN_CONFIGURED}" != "true" ]; then
+            echo "ERROR: set secret NV_GITHUB_TOKEN before cutting a release candidate." >&2
+            echo "The default GITHUB_TOKEN cannot trigger the tag workflow that publishes release notes." >&2
+            exit 1
+          fi
+          if [ -z "${NVCF_GITHUB_RELEASE_SERVICE}" ]; then
+            echo "ERROR: service is required when operation=release-candidate." >&2
+            exit 1
+          fi
+          ./tools/ci/github-release release-candidate --service "${NVCF_GITHUB_RELEASE_SERVICE}"
+
+  inventory-preflight:
+    name: stack inventory preflight
+    if: github.event_name == 'workflow_dispatch' && inputs.inventory_tag != ''
+    runs-on: linux-amd64-cpu4
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.repository.default_branch }}
-          token: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+          fetch-tags: true
+          token: ${{ github.token }}
 
-      - name: Cut release branch
-        env:
-          NVCF_GITHUB_RELEASE_SERVICE: nvcf-self-managed-stack
-          NV_GITHUB_TOKEN_CONFIGURED: ${{ secrets.NV_GITHUB_TOKEN != '' }}
-          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      - name: Install inventory rendering tools
         run: |
           set -euo pipefail
-          if [ "${NV_GITHUB_TOKEN_CONFIGURED}" != "true" ]; then
-            echo "ERROR: set secret NV_GITHUB_TOKEN before cutting a GitHub release branch." >&2
-            echo "The default GITHUB_TOKEN cannot trigger CI for the generated VERSION bump PR." >&2
-            exit 1
+          cd "${RUNNER_TEMP}"
+          curl -sSL --retry 3 -o helm.tar.gz \
+            "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm.tar.gz" | sha256sum -c -
+          tar xzf helm.tar.gz linux-amd64/helm
+
+          curl -sSL --retry 3 -o helmfile.tar.gz \
+            "https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz"
+          echo "${HELMFILE_SHA256}  helmfile.tar.gz" | sha256sum -c -
+          tar xzf helmfile.tar.gz helmfile
+
+          mkdir -p "${RUNNER_TEMP}/bin"
+          mv linux-amd64/helm helmfile "${RUNNER_TEMP}/bin/"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Build inventory renderer
+        working-directory: tools/docs-version-sync
+        run: go build -o "${RUNNER_TEMP}/docs-version-sync" .
+
+      - name: Render tagged inventory without publishing
+        env:
+          INVENTORY_TAG: ${{ inputs.inventory_tag }}
+          NVCF_RELEASE_HELM_REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
+          NVCF_RELEASE_NGC_API_KEY: ${{ secrets.NGC_NCP_DEV_KEY }}
+        run: |
+          set -euo pipefail
+          case "${INVENTORY_TAG}" in
+            deploy/stacks/self-managed/v*|deploy/stacks/nvcf-compute-plane/v*|deploy/stacks/observability/v*) ;;
+            *)
+              echo "ERROR: inventory_tag must identify a registered deploy/stacks/*/v* release." >&2
+              exit 1
+              ;;
+          esac
+          case "${INVENTORY_TAG}" in
+            deploy/stacks/self-managed/v*) inventory_config="deploy/stacks/self-managed/release-inventory.yaml" ;;
+            deploy/stacks/nvcf-compute-plane/v*) inventory_config="deploy/stacks/nvcf-compute-plane/release-inventory.yaml" ;;
+            deploy/stacks/observability/v*) inventory_config="deploy/stacks/observability/release-inventory.yaml" ;;
+          esac
+          bootstrap_config="${GITHUB_WORKSPACE}/${inventory_config}"
+          version="${INVENTORY_TAG##*/v}"
+          commit="$(git rev-list -n 1 "${INVENTORY_TAG}")"
+          test -n "${commit}"
+          git worktree add --detach "${RUNNER_TEMP}/inventory-source" "${INVENTORY_TAG}"
+          cd "${RUNNER_TEMP}/inventory-source"
+          inventory_args=()
+          if [ -f "${inventory_config}" ] && grep -q '^states:' "${inventory_config}"; then
+            inventory_config="${RUNNER_TEMP}/inventory-source/${inventory_config}"
+          else
+            echo "WARNING: ${INVENTORY_TAG} predates its per-stack inventory states; using ${bootstrap_config}." >&2
+            inventory_config="${bootstrap_config}"
+            inventory_args+=(--allow-unavailable-source-charts)
           fi
-          ./tools/ci/github-release branch-cut --service "${NVCF_GITHUB_RELEASE_SERVICE}"
+          "${RUNNER_TEMP}/docs-version-sync" \
+            --generate-stack-inventory "${RUNNER_TEMP}/stack-inventory.json" \
+            --inventory-config "${inventory_config}" \
+            --stack-version "${version}" \
+            --stack-source-tag "${INVENTORY_TAG}" \
+            --stack-source-commit "${commit}" \
+            "${inventory_args[@]}"
+
+      - name: Upload rendered inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: stack-inventory
+          path: ${{ runner.temp }}/stack-inventory.json
+          if-no-files-found: error
 
   tag-release-notes:
-    name: tag release notes
-    if: github.ref_type == 'tag'
+    name: tag release
+    if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     runs-on: linux-amd64-cpu4
     permissions:
       contents: write
@@ -176,5 +313,62 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Prepare existing chart tag for replay
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          case "${RELEASE_TAG}" in
+            deploy/helm/*/v*) ;;
+            *) echo "ERROR: release_tag must be a deploy/helm/*/v* tag." >&2; exit 1 ;;
+          esac
+          if ! git show-ref --verify --quiet "refs/tags/${RELEASE_TAG}"; then
+            echo "ERROR: release_tag does not identify an existing tag." >&2
+            exit 1
+          fi
+          git worktree add --detach \
+            "${RUNNER_TEMP}/release-source" \
+            "refs/tags/${RELEASE_TAG}"
+          echo "NVCF_RELEASE_SOURCE_ROOT=${RUNNER_TEMP}/release-source" >> "${GITHUB_ENV}"
+
+      - uses: actions/setup-go@v5
+        if: startsWith(inputs.release_tag || github.ref_name, 'deploy/stacks/')
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      - name: Install Helm release tool
+        if: startsWith(inputs.release_tag || github.ref_name, 'deploy/stacks/') || startsWith(inputs.release_tag || github.ref_name, 'deploy/helm/')
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -sSL --retry 3 -o helm.tar.gz \
+            "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm.tar.gz" | sha256sum -c -
+          tar xzf helm.tar.gz linux-amd64/helm
+
+          mkdir -p "${RUNNER_TEMP}/bin"
+          mv linux-amd64/helm "${RUNNER_TEMP}/bin/"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Install Helmfile inventory tool
+        if: startsWith(inputs.release_tag || github.ref_name, 'deploy/stacks/')
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -sSL --retry 3 -o helmfile.tar.gz \
+            "https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz"
+          echo "${HELMFILE_SHA256}  helmfile.tar.gz" | sha256sum -c -
+          tar xzf helmfile.tar.gz helmfile
+
+          mkdir -p "${RUNNER_TEMP}/bin"
+          mv helmfile "${RUNNER_TEMP}/bin/"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
       - name: Validate tag and create release notes
-        run: ./tools/ci/github-release tag "$GITHUB_REF_NAME"
+        env:
+          HELM_REGISTRY_CONFIG: ${{ runner.temp }}/helm-registry-config.json
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+          NVCF_RELEASE_HELM_REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
+          NVCF_RELEASE_NGC_API_KEY: ${{ secrets.NGC_NCP_DEV_KEY }}
+        run: ./tools/ci/github-release tag "$RELEASE_TAG"

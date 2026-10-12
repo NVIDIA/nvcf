@@ -21,7 +21,7 @@ import io.opentelemetry.sdk.trace.SpanProcessor;
 import io.opentelemetry.sdk.trace.export.SimpleSpanProcessor;
 import io.opentelemetry.sdk.trace.export.SpanExporter;
 import java.util.concurrent.atomic.AtomicInteger;
-import net.devh.boot.grpc.server.event.GrpcServerStartedEvent;
+import org.springframework.grpc.server.lifecycle.GrpcServerStartedEvent;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;

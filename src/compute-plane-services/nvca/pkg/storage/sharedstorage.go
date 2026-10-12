@@ -62,8 +62,16 @@ const (
 	readOnlyDirMode   = "0555"
 	readOnlyFileMode  = "0444"
 	smbGID            = uint16(1000)
+
+	conditionTypeTaskDataStorageClassAvailable = "TaskDataStorageClassAvailable"
+	conditionReasonStorageClassFound           = "StorageClassFound"
+	conditionReasonStorageClassNotFound        = "StorageClassNotFound"
 )
 
+// doSharedStorageSMB advances a shared-storage StorageRequest one phase. Permanent
+// API rejections of the objects it creates fail the request with a terminal error;
+// other errors are returned or requeued for retry.
+//
 //nolint:gocyclo
 func (r *Reconciler) doSharedStorageSMB(ctx context.Context,
 	st, stCopy *nvcav1new.StorageRequest,
@@ -152,6 +160,37 @@ func (r *Reconciler) doSharedStorageSMB(ctx context.Context,
 		stCopy.Status.Phase = nvcav1new.StoragePending
 	case nvcav1new.StoragePending:
 		var objsToCreate []client.Object
+		if taskData := st.Spec.SharedStorage.TaskData; taskData != nil && taskData.StorageClassName != nil &&
+			*taskData.StorageClassName != "" {
+			storageClassName := *taskData.StorageClassName
+			found, err := storageClassExists(ctx, r.Client, storageClassName)
+			if err != nil {
+				if nvcak8sutil.IsTransientK8sError(err) {
+					log.V(1).Info("Transient error checking task-data StorageClass, will retry",
+						"storage_class", storageClassName, "error", err)
+					return reconcile.Result{RequeueAfter: defaultRequeueDelay}, nil
+				}
+				log.Error(err, "Non-transient error checking task-data StorageClass",
+					"storage_class", storageClassName)
+				return reconcile.Result{}, err
+			}
+			condition := metav1.Condition{
+				Type:    conditionTypeTaskDataStorageClassAvailable,
+				Status:  metav1.ConditionTrue,
+				Reason:  conditionReasonStorageClassFound,
+				Message: fmt.Sprintf("task-data StorageClass %q exists", storageClassName),
+			}
+			if !found {
+				condition.Status = metav1.ConditionFalse
+				condition.Reason = conditionReasonStorageClassNotFound
+				condition.Message = fmt.Sprintf("task-data StorageClass %q does not exist", storageClassName)
+				meta.SetStatusCondition(&stCopy.Status.Conditions, condition)
+				rerr = reconcile.TerminalError(fmt.Errorf("task-data StorageClass %q not found", storageClassName))
+				stCopy.Status.Phase = nvcav1new.StorageFailed
+				goto done
+			}
+			meta.SetStatusCondition(&stCopy.Status.Conditions, condition)
+		}
 
 		configureSMBPod(smbPod, st)
 
@@ -172,8 +211,7 @@ func (r *Reconciler) doSharedStorageSMB(ctx context.Context,
 				log.Error(err, "failed to create shared-storage object", "name", obj.GetName())
 				// If the error is forbidden, fail
 				if k8serrors.IsForbidden(err) || k8serrors.IsInvalid(err) {
-					rerr = fmt.Errorf("failed to create shared-storage object %s: %w", obj.GetName(), err)
-					stCopy.Status.Phase = nvcav1new.StorageFailed
+					rerr = failSharedStorageObjectCreate(stCopy, obj, err)
 					goto done
 				}
 				// Otherwise, requeue and retry
@@ -253,8 +291,7 @@ func (r *Reconciler) doSharedStorageSMB(ctx context.Context,
 				log.Error(err, "failed to create shared-storage object", "name", obj.GetName())
 				// If the error is forbidden, fail
 				if k8serrors.IsForbidden(err) || k8serrors.IsInvalid(err) {
-					rerr = fmt.Errorf("failed to create shared-storage object %s: %w", obj.GetName(), err)
-					stCopy.Status.Phase = nvcav1new.StorageFailed
+					rerr = failSharedStorageObjectCreate(stCopy, obj, err)
 					goto done
 				}
 				// Otherwise, requeue and retry
@@ -308,6 +345,10 @@ func (r *Reconciler) doSharedStorageSMB(ctx context.Context,
 							phaseOp.AccessMode,
 							phaseOp.Capacity)
 						if err := r.applyControlled(ctx, st, pvc); err != nil && !k8serrors.IsAlreadyExists(err) {
+							if k8serrors.IsForbidden(err) || k8serrors.IsInvalid(err) {
+								rerr = failSharedStorageObjectCreate(stCopy, pvc, err)
+								goto done
+							}
 							return reconcile.Result{}, err
 						}
 					}
@@ -367,6 +408,21 @@ done:
 	}
 
 	return reconcile.Result{}, rerr
+}
+
+// failSharedStorageObjectCreate marks the request failed after the API server
+// permanently rejected a shared-storage object, and records the rejection on a
+// condition so it can be surfaced without access to the agent logs.
+func failSharedStorageObjectCreate(stCopy *nvcav1new.StorageRequest, obj client.Object, err error) error {
+	rerr := fmt.Errorf("failed to create shared-storage object %s: %w", obj.GetName(), err)
+	meta.SetStatusCondition(&stCopy.Status.Conditions, metav1.Condition{
+		Type:    ConditionTypeSharedStorageResourcesCreated,
+		Status:  metav1.ConditionFalse,
+		Reason:  ConditionReasonAdmissionRejected,
+		Message: rerr.Error(),
+	})
+	stCopy.Status.Phase = nvcav1new.StorageFailed
+	return reconcile.TerminalError(rerr)
 }
 
 type storageCreatingPhaseOp struct {

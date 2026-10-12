@@ -39,6 +39,7 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
 import com.nvidia.icms.service.InstanceServiceHelper;
 import com.nvidia.icms.service.extensions.api.ClusterAuthorizationService;
+import com.nvidia.icms.service.gating.GpuGatingService;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.util.GsonCompatMapper;
 import io.micrometer.observation.annotation.Observed;
@@ -85,6 +86,8 @@ public class ClustersService {
     private final ComputePlatformService computePlatformService;
 
     private final ClusterAuthorizationService clusterAuthorizationService;
+
+    private final GpuGatingService gpuGatingService;
 
     /**
      * This is a static class to store READY cluster information per GPU from a cluster
@@ -136,6 +139,9 @@ public class ClustersService {
             // OLD: non-BYOC from BART tables
             clusterGroupsSet.addAll(fetchClusterGroupsForBart(ncaId));
         }
+
+        // Applied last so every branch above (NVCA, detailed targeting, BART) is covered once.
+        gpuGatingService.removeGatedClusterGroups(clusterGroupsSet, ncaId);
 
         return ClusterGroupResponse.builder()
                 .clusterGroup(clusterGroupsSet)

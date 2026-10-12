@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use futures::StreamExt;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
+use kube::runtime::WatchStreamExt;
 use kube::runtime::watcher::{self, Event};
 use kube::{Api, Client, ResourceExt};
 use tokio::sync::watch;
@@ -40,10 +41,13 @@ pub async fn run_endpoint_slice_watcher(
         "{}={}",
         ENDPOINT_SLICE_SERVICE_NAME_LABEL, build_config.service_name
     );
-    let mut events = Box::pin(watcher::watcher(
-        Api::<EndpointSlice>::namespaced(client, &namespace),
-        watcher::Config::default().labels(&selector),
-    ));
+    let mut events = Box::pin(
+        watcher::watcher(
+            Api::<EndpointSlice>::namespaced(client, &namespace),
+            watcher::Config::default().labels(&selector),
+        )
+        .default_backoff(),
+    );
     let mut state = WatcherState::new(build_config);
 
     loop {
@@ -79,9 +83,15 @@ pub async fn run_endpoint_slice_watcher(
 }
 
 struct WatcherState {
-    store: BTreeMap<String, EndpointSlice>,
-    init_store: BTreeMap<String, EndpointSlice>,
+    store: BTreeMap<String, ObservedSlice>,
+    init_store: BTreeMap<String, ObservedSlice>,
+    next_revision: u64,
     build_config: TargetBuildConfig,
+}
+
+struct ObservedSlice {
+    revision: u64,
+    slice: EndpointSlice,
 }
 
 impl WatcherState {
@@ -89,6 +99,7 @@ impl WatcherState {
         Self {
             store: BTreeMap::new(),
             init_store: BTreeMap::new(),
+            next_revision: 0,
             build_config,
         }
     }
@@ -100,20 +111,39 @@ impl WatcherState {
                 return None;
             }
             Event::InitApply(slice) => {
-                self.init_store.insert(slice_key(&slice), slice);
+                let key = slice_key(&slice);
+                let observed = self.observe(slice);
+                self.init_store.insert(key, observed);
                 return None;
             }
             Event::InitDone => {
                 self.store = std::mem::take(&mut self.init_store);
             }
             Event::Apply(slice) => {
-                self.store.insert(slice_key(&slice), slice);
+                let key = slice_key(&slice);
+                let observed = self.observe(slice);
+                self.store.insert(key, observed);
             }
             Event::Delete(slice) => {
                 self.store.remove(&slice_key(&slice));
             }
         }
-        Some(snapshot(self.store.values(), &self.build_config))
+        Some(self.snapshot())
+    }
+
+    fn observe(&mut self, slice: EndpointSlice) -> ObservedSlice {
+        let revision = self.next_revision;
+        self.next_revision = self.next_revision.wrapping_add(1);
+        ObservedSlice { revision, slice }
+    }
+
+    fn snapshot(&self) -> TargetSnapshot {
+        let mut observed = self.store.values().collect::<Vec<_>>();
+        observed.sort_unstable_by_key(|item| item.revision);
+        snapshot(
+            observed.into_iter().map(|item| &item.slice),
+            &self.build_config,
+        )
     }
 }
 
@@ -171,6 +201,63 @@ mod tests {
         }
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn persistent_api_errors_back_off_before_retrying() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use std::time::Duration;
+        use tokio::sync::Notify;
+
+        let requests = Arc::new(AtomicUsize::new(0));
+        let first = Arc::new(Notify::new());
+        let second = Arc::new(Notify::new());
+        let service = tower::service_fn({
+            let requests = requests.clone();
+            let first = first.clone();
+            let second = second.clone();
+            move |_request: http::Request<kube::client::Body>| {
+                match requests.fetch_add(1, Ordering::SeqCst) {
+                    0 => first.notify_one(),
+                    1 => second.notify_one(),
+                    _ => {}
+                }
+                async {
+                    Ok::<_, std::io::Error>(http::Response::builder().status(403)
+                        .header("content-type", "application/json")
+                        .body(kube::client::Body::from(bytes::Bytes::from_static(
+                            br#"{"status":"Failure","message":"denied","reason":"Forbidden","code":403}"#,
+                        ))).unwrap())
+                }
+            }
+        });
+        let client = Client::new(service, "test");
+        let (tx, _rx) = watch::channel(TargetSnapshot::default());
+        let stop = CancellationToken::new();
+        let task = tokio::spawn(run_endpoint_slice_watcher(
+            client,
+            "test".into(),
+            TargetBuildConfig {
+                service_name: "stargate".into(),
+                grpc_port_name: "grpc".into(),
+                quic_port_name: "quic".into(),
+            },
+            tx,
+            stop.clone(),
+        ));
+        first.notified().await;
+        let immediate_retry =
+            tokio::time::timeout(Duration::from_millis(100), second.notified()).await;
+        stop.cancel();
+        task.await.unwrap().unwrap();
+        assert!(
+            immediate_retry.is_err(),
+            "persistent authorization errors must not immediately repoll the API"
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn init_apply_does_not_publish_before_init_done() {
         let mut state = WatcherState::new(config());
@@ -220,5 +307,84 @@ mod tests {
         assert_eq!(snapshot.ready_count(), 1);
         assert!(snapshot.target_for_pod("stargate-0").is_none());
         assert!(snapshot.target_for_pod("stargate-1").is_some());
+    }
+
+    #[test]
+    fn apply_replaces_rolled_pod_without_leaving_stale_target() {
+        let mut state = WatcherState::new(config());
+        state
+            .apply(Event::Apply(slice(
+                "slice-a",
+                "request-router-old",
+                "10.0.0.10",
+            )))
+            .expect("initial Apply should publish a snapshot");
+
+        let snapshot = state
+            .apply(Event::Apply(slice(
+                "slice-a",
+                "request-router-new",
+                "10.0.0.11",
+            )))
+            .expect("replacement Apply should publish a snapshot");
+
+        assert_eq!(snapshot.ready_count(), 1);
+        assert!(snapshot.target_for_pod("request-router-old").is_none());
+        assert_eq!(
+            snapshot
+                .target_for_pod("request-router-new")
+                .map(|target| target.grpc_addr),
+            Some("10.0.0.11:50071".to_string())
+        );
+    }
+
+    #[test]
+    fn apply_and_delete_track_scale_up_and_scale_down() {
+        let mut state = WatcherState::new(config());
+        let first = slice("slice-a", "request-router-a", "10.0.0.10");
+        let second = slice("slice-b", "request-router-b", "10.0.0.11");
+        state
+            .apply(Event::Apply(first.clone()))
+            .expect("first Apply should publish a snapshot");
+        let scaled_up = state
+            .apply(Event::Apply(second.clone()))
+            .expect("second Apply should publish a snapshot");
+
+        assert_eq!(scaled_up.ready_count(), 2);
+
+        let scaled_down = state
+            .apply(Event::Delete(first))
+            .expect("Delete should publish a snapshot");
+        assert_eq!(scaled_down.ready_count(), 1);
+        assert!(scaled_down.target_for_pod("request-router-a").is_none());
+        assert!(scaled_down.target_for_pod("request-router-b").is_some());
+    }
+
+    #[test]
+    fn latest_slice_observation_wins_for_duplicate_pod_identity() {
+        let mut state = WatcherState::new(config());
+        state
+            .apply(Event::Apply(slice(
+                "slice-z",
+                "request-router-0",
+                "10.0.0.10",
+            )))
+            .expect("initial Apply should publish a snapshot");
+
+        let snapshot = state
+            .apply(Event::Apply(slice(
+                "slice-a",
+                "request-router-0",
+                "10.0.0.11",
+            )))
+            .expect("replacement Apply should publish a snapshot");
+
+        assert_eq!(snapshot.ready_count(), 1);
+        assert_eq!(
+            snapshot
+                .target_for_pod("request-router-0")
+                .map(|target| target.grpc_addr),
+            Some("10.0.0.11:50071".to_string())
+        );
     }
 }

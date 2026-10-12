@@ -128,8 +128,10 @@ kind renders all targets from values.
 
 All default monitors carry
 `nvcf.nvidia.com/observability-target: "true"` for Target Allocator discovery.
-Compute defaults select NVCA in `nvca-system`, DCGM pods by their NVCA metrics
-label, and NVCA-managed workload pods by `icms-request-id`.
+Control-plane defaults scrape `state-metrics`, `invocation-service`,
+`grpc-proxy`, `llm-api-gateway`, and `function-autoscaler` in `nvcf`.
+Compute defaults select NVCA in `nvca-system`, DCGM pods by their NVCA
+metrics label, and NVCA-managed workload pods by `icms-request-id`.
 
 The default observability namespace is `monitoring`. A different namespace
 also requires NetworkPolicy reachability to the collector.
@@ -141,3 +143,16 @@ make template HELMFILE_ENV=local
 make test
 git diff --check
 ```
+
+The profile test compares resolved release names and rendered monitor resource
+names with `tests/golden/profile-matrix.txt`. It does not snapshot third-party
+chart output. After an intentional profile or monitor change, update the
+fixture and review its diff:
+
+```sh
+make generate-test-golden
+git diff -- tests/golden/profile-matrix.txt
+```
+
+Confirm that every changed row matches the intended profile contract before
+committing the fixture.

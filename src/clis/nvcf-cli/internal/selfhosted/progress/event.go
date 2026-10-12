@@ -21,7 +21,11 @@ limitations under the License.
 // (bubbletea TTY, plain streaming, JSONL).
 package progress
 
-import "time"
+import (
+	"time"
+
+	"nvcf-cli/internal/selfhosted/severity"
+)
 
 // Event is the sealed interface every progress event implements. The
 // `kind()` method returns a stable string used in --json mode and by the
@@ -184,10 +188,15 @@ type Final struct {
 
 	// Check-mode terminal fields (M+8.11, REQ-19): set by `nvcf self-hosted check`
 	// to surface the verdict + tally. Zero values for other modes (omit on wire).
-	Verdict     string // "ok" | "warnings" | "failed" | "error"
-	TotalChecks int
-	PassedCount int
-	FailedCount int
+	// FailedCount counts blocking failures only; WarningCount the other misses.
+	Verdict      string // "ok" | "warnings" | "failed" | "timeout"
+	TotalChecks  int
+	PassedCount  int
+	FailedCount  int
+	WarningCount int
+	// Cleanup lists the commands that remove what the checks left in the
+	// cluster, on every outcome, interrupt included.
+	Cleanup []string
 }
 
 func (Final) kind() eventKind { return "final" }
@@ -269,16 +278,26 @@ type CheckStarted struct {
 
 func (CheckStarted) kind() eventKind { return "check_started" }
 
-// CheckCompleted carries the result of a single check. Severity is one of
-// "info" | "warning" | "error". HintURL points to remediation docs when set.
+// CheckCompleted carries the result of a single check. Severity is graded by
+// severity.Of. HintURL points to remediation docs when set.
 type CheckCompleted struct {
 	Category string
 	ID       string
 	Passed   bool
-	Severity string
+	Severity severity.Severity
 	Message  string
 	Detail   string // optional: short version string or extra context
 	HintURL  string // optional: remediation-docs link
+	// Transient marks a warning expected to clear by itself, such as a
+	// rollout in progress; --wait keeps polling while one remains.
+	Transient bool
+	// CutShort marks a check the run's time budget stopped before it
+	// finished, or before it started. Its severity is the worst the check
+	// could have found.
+	CutShort bool
+	// Cleanup is the command that removes what the check left in the
+	// cluster, when it left anything.
+	Cleanup string
 }
 
 func (CheckCompleted) kind() eventKind { return "check_completed" }
@@ -288,8 +307,11 @@ func (CheckCompleted) kind() eventKind { return "check_completed" }
 type CategoryCompleted struct {
 	Category    string
 	PassedCount int
-	FailedCount int
-	DurationSec float64
+	// FailedCount counts error-severity failures only, the ones that fail the
+	// run; WarningCount counts the non-passing rest.
+	FailedCount  int
+	WarningCount int
+	DurationSec  float64
 }
 
 func (CategoryCompleted) kind() eventKind { return "category_completed" }

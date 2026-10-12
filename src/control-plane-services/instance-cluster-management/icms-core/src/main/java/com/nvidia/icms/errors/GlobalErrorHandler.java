@@ -39,6 +39,7 @@ import java.util.Map;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.MessageSourceResolvable;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.dao.DataAccessException;
@@ -49,12 +50,14 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.context.annotation.RequestScope;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 
 import static com.nvidia.icms.service.telemetry.model.Events.INTERNAL_SERVER_ERROR_EVENT;
 
@@ -137,6 +140,44 @@ public class GlobalErrorHandler {
         error.setError(errMsg);
 
         return new ResponseEntity<>(error, HttpStatus.BAD_REQUEST);
+    }
+
+    @ExceptionHandler(HandlerMethodValidationException.class)
+    public ResponseEntity<Object> handleHandlerMethodValidationException(
+            HandlerMethodValidationException exception) {
+
+        sendTelemetryEvent(exception, Events.ERROR_EVENT.toString());
+        CustomErrorResponse error = new CustomErrorResponse();
+        error.setError(toCleanMessage(exception));
+
+        return new ResponseEntity<>(error, exception.getStatusCode());
+    }
+
+    private static String toCleanMessage(HandlerMethodValidationException exception) {
+        StringBuilder message = new StringBuilder("Validation failed with ");
+        appendErrors(message, exception.getAllErrors());
+        return message.toString();
+    }
+
+    private static void appendErrors(
+            StringBuilder message, List<? extends MessageSourceResolvable> errors) {
+        for (MessageSourceResolvable error : errors) {
+            message.append('[');
+            if (error instanceof FieldError fieldError) {
+                message.append("Field error in object '")
+                        .append(fieldError.getObjectName())
+                        .append("' on field '")
+                        .append(fieldError.getField())
+                        .append("': rejected value [")
+                        .append(fieldError.getRejectedValue())
+                        .append("]; ")
+                        .append(fieldError.getDefaultMessage());
+            } else {
+                message.append(error);
+            }
+            message.append("] ");
+        }
+        message.deleteCharAt(message.length() - 1);
     }
 
     @ExceptionHandler(IcmsBadRequestException.class)

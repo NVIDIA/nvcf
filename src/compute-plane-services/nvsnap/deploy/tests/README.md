@@ -5,6 +5,7 @@ Test manifests for GPU checkpoint/restore testing.
 ## Prerequisites
 
 1. **CRIU Bundle deployed on GPU nodes:**
+
    ```bash
    # Build the bundle
    ./scripts/build-criu-bundle.sh
@@ -14,6 +15,7 @@ Test manifests for GPU checkpoint/restore testing.
    ```
 
 2. **NVSNAP Agent running on GPU nodes:**
+
    ```bash
    # The agent provides the checkpoint API
    curl http://<node-ip>:8081/health
@@ -85,12 +87,14 @@ curl http://<NODE_IP>:8000/v1/models
 Before applying, update these fields in the YAML files:
 
 1. **nodeName**: Set to your GPU node hostname
+
    ```yaml
    spec:
      nodeName: your-gpu-node-name
    ```
 
 2. **Checkpoint path** (restore pods only):
+
    ```yaml
    volumes:
    - name: checkpoint
@@ -103,11 +107,13 @@ Before applying, update these fields in the YAML files:
 ### CRIU Restore Fails
 
 Check the restore log:
+
 ```bash
 kubectl exec gpu-restore -- cat /tmp/restore.log | grep -i error
 ```
 
 Common issues:
+
 - **LSM mismatch**: Add `--skip-lsm` (already included in templates)
 - **File not found**: The checkpoint may reference files not in the container
 - **Network errors**: Using `--empty-ns net` to create fresh network namespace
@@ -115,6 +121,7 @@ Common issues:
 ### GPU Restore Fails
 
 Check cuda-checkpoint state:
+
 ```bash
 kubectl exec gpu-restore -- /criu-bundle/cuda-checkpoint --get-state --pid <PID>
 ```
@@ -124,5 +131,6 @@ States: `running`, `checkpointed`, `locked`
 ### Process Exits Immediately
 
 The restored process may exit if:
+
 - stdout/stderr pipes are broken (process should handle SIGPIPE)
 - Required files are missing in the container filesystem

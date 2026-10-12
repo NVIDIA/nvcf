@@ -46,7 +46,7 @@ pub struct RequestQualityRecorder {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RequestOutputTokenProgress {
     Delta(u64),
-    Cumulative { tokens: u64, delta: u64 },
+    Cumulative { tokens: u64 },
 }
 
 impl RequestQualityRecorder {
@@ -118,7 +118,8 @@ impl RequestQualityRecorder {
                     *tokens = tokens.saturating_add(delta);
                 }
             }
-            RequestOutputTokenProgress::Cumulative { tokens, delta } => {
+            RequestOutputTokenProgress::Cumulative { tokens } => {
+                let delta = tokens.saturating_sub(self.output_tokens);
                 self.output_tokens = tokens;
                 if self.choices.len() == 1
                     && let Some(choice) = self.choices.values_mut().next()
@@ -411,7 +412,7 @@ mod tests {
         let (_metrics, result) = evaluate!(
             config!(output_tokens_threshold_min: Some(4));
             r#"{"choices":[{"index":0,"delta":{"content":"alpha beta gamma delta epsilon"}}]}"# => delta(5),
-            r#"{"choices":[{"index":0,"delta":{},"usage":{"completion_tokens":3}}]}"# => Some(RequestOutputTokenProgress::Cumulative { tokens: 3, delta: 0 })
+            r#"{"choices":[{"index":0,"delta":{},"usage":{"completion_tokens":3}}]}"# => Some(RequestOutputTokenProgress::Cumulative { tokens: 3 })
         );
 
         assert!(result.evaluated);
@@ -419,15 +420,15 @@ mod tests {
     }
 
     #[test]
-    fn recorder_cumulative_progress_uses_delta_for_multi_choice_attribution() {
+    fn recorder_cumulative_progress_derives_multi_choice_attribution_delta() {
         let (_metrics, result) = evaluate!(
             config!(
                 collect_quality_metrics: true,
                 collect_quality_metrics_min_tokens: 3,
                 output_repetition_1gram_threshold_min: Some(0.3),
             );
-            r#"{"choices":[{"index":0,"delta":{"content":"alpha beta gamma"}}]}"# => Some(RequestOutputTokenProgress::Cumulative { tokens: 3, delta: 3 }),
-            r#"{"choices":[{"index":1,"delta":{"content":"loop loop loop loop"}}]}"# => Some(RequestOutputTokenProgress::Cumulative { tokens: 4, delta: 1 })
+            r#"{"choices":[{"index":0,"delta":{"content":"alpha beta gamma"}}]}"# => Some(RequestOutputTokenProgress::Cumulative { tokens: 3 }),
+            r#"{"choices":[{"index":1,"delta":{"content":"loop loop loop loop"}}]}"# => Some(RequestOutputTokenProgress::Cumulative { tokens: 4 })
         );
 
         assert!(result.evaluated);
@@ -439,7 +440,7 @@ mod tests {
         let (_metrics, result) = evaluate!(
             config!(output_tokens_threshold_min: Some(2));
             r#"{"choices":[{"index":0,"delta":{"content":"alpha beta gamma"}}]}"# => delta(3),
-            r#"{"object":"chat.completion.chunk","choices":[],"usage":{"completion_tokens":3}}"# => Some(RequestOutputTokenProgress::Cumulative { tokens: 3, delta: 0 })
+            r#"{"object":"chat.completion.chunk","choices":[],"usage":{"completion_tokens":3}}"# => Some(RequestOutputTokenProgress::Cumulative { tokens: 3 })
         );
 
         assert!(result.evaluated);

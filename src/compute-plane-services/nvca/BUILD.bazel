@@ -21,7 +21,6 @@ load("@gazelle//:def.bzl", "gazelle")
 
 # Non-Go top-level dirs.
 # gazelle:exclude docker
-# gazelle:exclude deployments
 # gazelle:exclude examples
 # gazelle:exclude scripts
 # gazelle:exclude test

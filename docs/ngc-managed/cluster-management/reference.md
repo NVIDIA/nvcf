@@ -14,29 +14,29 @@ version for the authoritative list of parameters and defaults:
 
 The chart values are organized into three layers:
 
-1. **Shared parameters** (top-level) — Apply to **all deployment modes**. These control the
+1. Shared parameters (top-level): Apply to all deployment modes. These control the
    operator image, NGC authentication, node placement, network policies, observability, agent
    resources, and agent runtime config. Examples: `image`, `ngcConfig`, `nodeSelector`,
    `networkPolicy`, `agent`, `agentConfig`.
 
-2. **`helmManaged.*`** — Only used when `ngcConfig.clusterSource` is `"helm-managed"`.
+2. `helmManaged.*`: Only used when `ngcConfig.clusterSource` is `"helm-managed"`.
    These define the cluster identity and backend configuration that would otherwise come from
    the NGC UI. Includes cloud provider, region, cluster group, NVCA version, feature gates,
    cluster attributes, and manual GPU config.
 
+The key field is `ngcConfig.clusterSource`:
 
-**The key field is `ngcConfig.clusterSource`:**
-
-- `"ngc-managed"` (default) — The operator fetches cluster configuration from the NGC
+- `"ngc-managed"` (default): The operator fetches cluster configuration from the NGC
   control plane. The `helmManaged` and `selfManaged` sections are ignored.
-- `"helm-managed"` — The operator reads backend configuration from `helmManaged.*` values.
+- `"helm-managed"`: The operator reads backend configuration from `helmManaged.*` values.
+
 ```yaml
 
  # --- Shared parameters (all modes) ---
  image:
    repository: "nvcr.io/nvidia/nvcf-byoc/nvca-operator"
  ngcConfig:
-   clusterSource: "helm-managed"    # ← This determines which section below is used
+   clusterSource: "helm-managed"    # This determines which section below is used
    serviceKey: "<your-key>"
  nodeSelector:
    key: "node.kubernetes.io/instance-type"
@@ -85,7 +85,7 @@ These parameters apply to all deployment modes.
  priorityClassName: ""           # K8s PriorityClassName for eviction preference
  k8sVersionOverride: ""          # Override K8s version NVCA registers with
  enableGXCache: true             # Enable GXCache support
- ddcsIPAllowList: ""             # Comma-separated CIDRs for DDCS access control
+ ddcsIPAllowList: ""             # Comma-separated CIDRs for OVDC access control (legacy key name)
  nvcaHelmRepositoryPrefix: ""    # Restrict Helm repos to specific org/team
 ```
 
@@ -123,9 +123,13 @@ These parameters apply to all deployment modes.
 
 ### OpenTelemetry
 
+Set the endpoint for your collector when enabling tracing. See
+[Tracing](./monitoring.md#tracing) for endpoint selection and verification.
+
 ```yaml
  otel:
    enabled: false
+   endpoint: ""          # Required when enabled; OTLP gRPC host:port
    lightstep:
      serviceName: ""        # Lightstep service name
      accessToken: ""        # Lightstep API token

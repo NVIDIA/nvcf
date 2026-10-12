@@ -66,7 +66,7 @@ data:
       enabled: false
       imageConfig:
         repository: "nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector"
-        tag: "0.157.9"
+        tag: "0.157.0-nv-0.2.1"
     placeholder:
       imageRepository: ""
       imageTag: "ignored"
@@ -89,7 +89,7 @@ expected_images=(
   "nvcr.io/nvidia/nvcf-byoc/nvca-operator:2.52.0-rc.5"
   "nvcr.io/nvidia/nvcf-byoc/nvca:2.52.0-rc.5"
   "nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper:0.5.0"
-  "nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector:0.157.9"
+  "nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector:0.157.0-nv-0.2.1"
   "nvcr.io/nvidia/nvcf-byoc/samba:1.0.5"
   "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.0-nv-0.2.1"
 )

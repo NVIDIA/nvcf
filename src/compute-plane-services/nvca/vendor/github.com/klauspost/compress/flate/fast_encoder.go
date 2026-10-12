@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2011 The Snappy-Go Authors. All rights reserved.
 // Modified for deflate by Klaus Post (c) 2015.
 // Use of this source code is governed by a BSD-style

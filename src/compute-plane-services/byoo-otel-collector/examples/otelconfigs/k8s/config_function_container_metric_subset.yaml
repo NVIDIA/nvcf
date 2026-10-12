@@ -204,10 +204,22 @@ processors:
     attributes:
       - action: delete
         key: service.instance.id
+      - action: insert
+        key: instance_id
+        value: ${env:NVCF_INSTANCE_ID:-unknown}
   resource/workload_metrics_drop_labels:
     attributes:
       - action: delete
         key: metric_subset_enabled
+  transform/drop_empty_labels:
+    error_mode: ignore
+    metric_statements:
+      - context: resource
+        statements:
+          - set(resource.attributes, Filter(resource.attributes, (_, v) => v != ""))
+      - context: scope
+        statements:
+          - set(scope.attributes, Filter(scope.attributes, (_, v) => v != ""))
 extensions:
   cgroup_runtime:
     gomaxprocs:
@@ -273,6 +285,7 @@ service:
         - memory_limiter
         - filter/metrics
         - resource
+        - transform/drop_empty_labels
         - resource/workload_metrics_drop_labels
         - metrics_transform
         - batch
@@ -285,6 +298,7 @@ service:
         - memory_limiter
         - filter/metric_subset
         - resource
+        - transform/drop_empty_labels
         - resource/workload_metrics_drop_labels
         - metrics_transform
         - batch/metric_subset

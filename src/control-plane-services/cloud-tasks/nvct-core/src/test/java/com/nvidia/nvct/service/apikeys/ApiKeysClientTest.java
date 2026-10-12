@@ -16,9 +16,14 @@
  */
 package com.nvidia.nvct.service.apikeys;
 
+import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static com.nvidia.nvct.util.MockApiKeysServer.EVALUATION_URI_PATH;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.http.HttpHeaders.CONTENT_TYPE;
+import static org.springframework.http.MediaType.APPLICATION_JSON_VALUE;
 
 import tools.jackson.databind.json.JsonMapper;
 import com.nvidia.nvct.IntegrationTestConfiguration;
@@ -66,10 +71,42 @@ class ApiKeysClientTest {
 
     @Test
     void fetchApiKeyValidationResultPostsToConfiguredEvaluationUri() {
+        var client = apiKeysClient();
+
+        client.fetchApiKeyValidationResult("my-api-key");
+
+        MockApiKeysServer.getMockApiKeysServer()
+                .verify(1, postRequestedFor(urlPathEqualTo(EVALUATION_URI_PATH)));
+    }
+
+    // Key services that predate ownerNcaId omit it; validation must still succeed.
+    @Test
+    void fetchApiKeyValidationResultWithoutOwnerNcaId() {
+        MockApiKeysServer.getMockApiKeysServer().stubFor(
+                post(urlPathEqualTo(EVALUATION_URI_PATH))
+                        .willReturn(aResponse().withStatus(200)
+                                            .withHeader(CONTENT_TYPE, APPLICATION_JSON_VALUE)
+                                            .withBody("""
+                                                    {"namespace": "nvct", "rule_name": "apikey.allow",
+                                                     "result": {"allowed": true, "ncaId": "nca-1",
+                                                                "ownerId": "owner-1",
+                                                                "policy": {"resources": [],
+                                                                           "scopes": ["list_tasks"],
+                                                                           "product": "nvct"}}}
+                                                    """)));
+
+        var result = apiKeysClient().fetchApiKeyValidationResult("my-api-key");
+
+        assertThat(result.valid()).isTrue();
+        assertThat(result.ncaId()).isEqualTo("nca-1");
+        assertThat(result.ownerNcaId()).isNull();
+    }
+
+    private static ApiKeysClient apiKeysClient() {
         var baseUrl = MockApiKeysServer.getMockApiKeysServer().baseUrl();
         var staticProps = new StaticClientApiKeysProperties();
         staticProps.setToken("static-token");
-        var client = new ApiKeysClient(
+        return new ApiKeysClient(
                 baseUrl,
                 EVALUATION_URI_PATH,
                 "apiKey",
@@ -80,10 +117,5 @@ class ApiKeysClientTest {
                 Optional.of(staticProps),
                 WebClient.builder(),
                 JsonMapper.builder().build());
-
-        client.fetchApiKeyValidationResult("my-api-key");
-
-        MockApiKeysServer.getMockApiKeysServer()
-                .verify(1, postRequestedFor(urlPathEqualTo(EVALUATION_URI_PATH)));
     }
 }

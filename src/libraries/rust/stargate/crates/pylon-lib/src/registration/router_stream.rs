@@ -21,6 +21,7 @@ use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
+use crate::runtime_state::PylonRuntimeState;
 use crate::stats::PylonMetrics;
 use stargate_auth::AuthTokenProvider;
 use stargate_proto::REGISTRATION_HEARTBEAT_MS_METADATA;
@@ -28,7 +29,10 @@ use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClien
 use stargate_proto::pb::{InferenceServerAck, InferenceServerRegistration, InferenceServerStatus};
 use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
 
-use super::grpc_endpoint::{StargateGrpcEndpoint, connect_stargate_grpc_channel};
+use super::grpc_endpoint::{
+    StargateGrpcEndpoint, classify_stargate_grpc_certificate_failure,
+    connect_stargate_grpc_channel, grpc_error_chain, log_stargate_grpc_certificate_failure,
+};
 use super::reverse_tunnel::{
     ReverseTunnelState, reverse_tunnel_endpoint_from_ack, run_reverse_tunnel_loop,
 };
@@ -42,26 +46,47 @@ pub(super) async fn run_router_registration_stream(
     config: Arc<RegistrationSessionConfig>,
     stop: CancellationToken,
 ) {
-    let router_addr = router_endpoint.authority_addr().to_string();
+    let router_addr = router_endpoint.metric_addr();
+    let mut last_certificate_failure = None;
 
     loop {
         let connection = tokio::select! {
             _ = stop.cancelled() => return,
             connection = open_registration_stream(
                 &router_endpoint,
+                config.grpc_tls_ca_cert_pem.as_deref(),
                 config.auth_token_provider.as_deref(),
                 config.min_update_interval,
             ) => connection,
         };
-        let Ok((mut ack_stream, update_tx)) = connection else {
-            if stop
-                .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
-                .await
-                .is_none()
-            {
-                return;
+        let (mut ack_stream, update_tx) = match connection {
+            Ok(connection) => connection,
+            Err(error) => {
+                last_certificate_failure = log_stargate_grpc_certificate_failure(
+                    &router_endpoint,
+                    "register_inference_server",
+                    error.as_ref(),
+                    last_certificate_failure,
+                );
+                if classify_stargate_grpc_certificate_failure(error.as_ref()).is_none() {
+                    tracing::warn!(
+                        transport = "grpc",
+                        operation = "register_inference_server",
+                        endpoint = %router_endpoint,
+                        cluster_id = %config.cluster_id,
+                        error = %grpc_error_chain(error.as_ref()),
+                        "Stargate gRPC operation failed"
+                    );
+                }
+                if stop
+                    .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
+                    .await
+                    .is_none()
+                {
+                    return;
+                }
+                continue;
             }
-            continue;
         };
 
         let (reverse_state_tx, mut reverse_state_rx) =
@@ -96,7 +121,13 @@ pub(super) async fn run_router_registration_stream(
                 reverse_connected,
             )
         };
-        let initial_registration = current_registration(reverse_state_rx.borrow().is_connected());
+        // Routers act on these stats, so publish request state changes as
+        // they happen. Coalescing bounds the update rate under load; the
+        // heartbeat interval below remains the liveness signal.
+        let (mut registration_changes, initial_registration) =
+            subscribe_then_snapshot(&config.forwarding.runtime_state, || {
+                current_registration(reverse_state_rx.borrow().is_connected())
+            });
         let mut advertised_status =
             RouterAdvertisedStatusTracker::new(config.forwarding.metrics.as_deref(), &router_addr);
         advertised_status.record_reverse_tunnel_connected(false);
@@ -120,6 +151,8 @@ pub(super) async fn run_router_registration_stream(
 
         let mut tick_interval = tokio::time::interval(config.min_update_interval);
         tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut changes_open = true;
+        let mut coalesced_send_at: Option<Instant> = None;
 
         let stopped = loop {
             let reverse_connected = tokio::select! {
@@ -143,9 +176,52 @@ pub(super) async fn run_router_registration_stream(
                     }
                     connected
                 }
+                changed = registration_changes.changed(),
+                    if changes_open && coalesced_send_at.is_none() =>
+                {
+                    if changed.is_err() {
+                        changes_open = false;
+                        continue;
+                    }
+                    let send_at = last_send + config.stats_update_coalesce;
+                    if Instant::now() < send_at {
+                        coalesced_send_at = Some(send_at);
+                        continue;
+                    }
+                    reverse_state_rx.borrow().is_connected()
+                }
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+                    coalesced_send_at.unwrap_or_else(Instant::now),
+                )), if coalesced_send_at.is_some() => {
+                    reverse_state_rx.borrow().is_connected()
+                }
                 maybe_ack = ack_stream.message() => {
-                    let Ok(Some(ack)) = maybe_ack else {
-                        break false;
+                    let ack = match maybe_ack {
+                        Ok(Some(ack)) => {
+                            last_certificate_failure = None;
+                            ack
+                        }
+                        Ok(None) => {
+                            tracing::warn!(
+                                transport = "grpc",
+                                operation = "register_inference_server_stream",
+                                endpoint = %router_endpoint,
+                                cluster_id = %config.cluster_id,
+                                "Stargate registration response stream ended"
+                            );
+                            break false;
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                transport = "grpc",
+                                operation = "register_inference_server_stream",
+                                endpoint = %router_endpoint,
+                                cluster_id = %config.cluster_id,
+                                error = %grpc_error_chain(&error),
+                                "Stargate gRPC operation failed"
+                            );
+                            break false;
+                        }
                     };
                     if config.reverse_tunnel {
                         let endpoint = reverse_tunnel_endpoint_from_ack(&ack);
@@ -156,6 +232,9 @@ pub(super) async fn run_router_registration_stream(
                     continue;
                 }
             };
+            // Everything changed so far is included in this snapshot.
+            registration_changes.borrow_and_update();
+            coalesced_send_at = None;
             let registration_update = current_registration(reverse_connected);
             let advertised = advertised_model_statuses(&registration_update);
             if !send_registration_update(&update_tx, registration_update, &stop).await {
@@ -166,13 +245,29 @@ pub(super) async fn run_router_registration_stream(
             last_send = Instant::now();
         };
 
+        drop(advertised_status);
         if let Some(task) = reverse_task {
             task.shutdown(TASK_SHUTDOWN_TIMEOUT).await;
         }
-        if stopped {
+        if stopped
+            || stop
+                .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
+                .await
+                .is_none()
+        {
             return;
         }
     }
+}
+
+/// Subscribes before taking the snapshot, so a change that lands after the
+/// snapshot read is still pending on the returned receiver.
+pub(super) fn subscribe_then_snapshot<T>(
+    runtime_state: &PylonRuntimeState,
+    snapshot: impl FnOnce() -> T,
+) -> (watch::Receiver<u64>, T) {
+    let changes = runtime_state.subscribe_registration_changes();
+    (changes, snapshot())
 }
 
 pub(super) async fn send_registration_update(
@@ -262,14 +357,19 @@ pub(super) fn observe_advertised_statuses(
 
 pub(super) async fn open_registration_stream(
     router_endpoint: &StargateGrpcEndpoint,
+    grpc_tls_ca_cert_pem: Option<&[u8]>,
     auth_token_provider: Option<&AuthTokenProvider>,
     min_update_interval: Duration,
 ) -> anyhow::Result<(
     tonic::Streaming<InferenceServerAck>,
     mpsc::Sender<InferenceServerRegistration>,
 )> {
-    let channel =
-        connect_stargate_grpc_channel(router_endpoint, "register_inference_server").await?;
+    let channel = connect_stargate_grpc_channel(
+        router_endpoint,
+        grpc_tls_ca_cert_pem,
+        "register_inference_server",
+    )
+    .await?;
     let (update_tx, update_rx) = mpsc::channel(32);
     let mut request = tonic::Request::new(ReceiverStream::new(update_rx));
     request.metadata_mut().insert(
@@ -277,7 +377,10 @@ pub(super) async fn open_registration_stream(
         min_update_interval.as_millis().to_string().parse()?,
     );
     if let Some(provider) = auth_token_provider {
-        let token = provider.resolve_token().await?;
+        let token = provider
+            .resolve_token()
+            .await
+            .context("failed to resolve registration token")?;
         request.metadata_mut().insert(
             "authorization",
             format!("Bearer {token}")

@@ -359,6 +359,7 @@ flowchart TB
 ```
 
 The router picks based on cluster capability probed at startup:
+
 - s3-rdma service reachable AND host has CX-7+ → RDMA path
 - Otherwise → HTTPS multi-part
 
@@ -380,6 +381,7 @@ flowchart TB
 ```
 
 **The active workload migration scenario is the more demanding driver.** Customer pattern:
+
 - Workload running in `us-west` cluster, serving at capacity
 - GPU availability opens in `us-east` (or scarce in `us-west`)
 - Operator (or autoscaler) decides to shift some/all serving to `us-east`

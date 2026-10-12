@@ -166,9 +166,11 @@ async fn watch_stargates_returns_remote_watch_urls_without_remote_registration_t
             "test-sg-watch-remote",
             peers,
             vec![
-                " remote-b:50071 ".to_string(),
-                "remote-a:50071".to_string(),
-                "remote-b:50071".to_string(),
+                " https://remote-b:50071 ".to_string(),
+                "http://remote-a:50071".to_string(),
+                "https://remote-b:50071".to_string(),
+                "remote-c:50071".to_string(),
+                "ftp://remote-d:50071".to_string(),
                 String::new(),
             ],
         );
@@ -180,7 +182,7 @@ async fn watch_stargates_returns_remote_watch_urls_without_remote_registration_t
     assert_eq!(msg.stargates[0].stargate_id, "test-sg-watch-remote");
     assert_eq!(
         msg.watch_stargate_urls,
-        vec!["remote-a:50071", "remote-b:50071"]
+        vec!["http://remote-a:50071", "https://remote-b:50071"]
     );
 
     shutdown([handle]).await;

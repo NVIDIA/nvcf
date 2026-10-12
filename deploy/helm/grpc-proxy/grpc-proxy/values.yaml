@@ -36,7 +36,7 @@ grpcproxy:
 
     pullPolicy: IfNotPresent
 
-    tag: "1.29.1"
+    tag: "1.33.5"
 
   # Image pull secrets for private registries
   imagePullSecrets: []
@@ -59,6 +59,8 @@ grpcproxy:
     tolerations: []
     # Affinity rules for the Deployment pods
     affinity: {}
+    # Zone spread; set by the HA value layer, empty by default.
+    topologySpreadConstraints: []
 
   # DaemonSet-specific configuration (only used when deploymentType: "daemonset")
   daemonset:

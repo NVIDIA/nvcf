@@ -14,13 +14,15 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 -->
-Joining Structures with Consul Template
+# Joining Structures with Consul Template
+
 ---------------------------------------
+
 Consul Template has built-in support for joining existing arrays and lists on a given separator, but there is no built-in support for complex map-reduce functions. This section details some common join techniques.
 
 ## Joining Service Addresses
-Sometimes you require all service addresses to be listed in a comma-separated list. Memcached and other tools usually accept this as an environment variable.
 
+Sometimes you require all service addresses to be listed in a comma-separated list. Memcached and other tools usually accept this as an environment variable.
 
 ```liquid
 export MEMCACHED_SERVERS="{{range $index, $service := service "memcached" }}{{if ne $index 0}},{{end}}{{$service.Address}}:{{$service.Port}}{{end}}"

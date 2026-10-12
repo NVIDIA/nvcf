@@ -66,14 +66,19 @@ func writeControlPlaneProfile(req controlPlaneProfileWriteRequest) (string, erro
 	doc := buildControlPlaneProfile(req)
 	rootCAPEM := strings.TrimSpace(req.RootCAPEM)
 	if rootCAPEM == "" && req.SourceRootCA {
-		ctx := req.Ctx
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		var err error
-		rootCAPEM, err = fetchControlPlaneRootCAPEM(ctx, req.ControlPlaneContext)
+		sourceRootCA, err := shouldSourceControlPlaneRootCA(req.StackPath, req.Env)
 		if err != nil {
 			return "", err
+		}
+		if sourceRootCA {
+			ctx := req.Ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			rootCAPEM, err = fetchControlPlaneRootCAPEM(ctx, req.ControlPlaneContext)
+			if err != nil {
+				return "", err
+			}
 		}
 	}
 	if rootCAPEM != "" {
@@ -86,6 +91,66 @@ func writeControlPlaneProfile(req controlPlaneProfileWriteRequest) (string, erro
 		return "", err
 	}
 	return path, nil
+}
+
+func shouldSourceControlPlaneRootCA(stackPath, env string) (bool, error) {
+	if stackPath == "" {
+		return true, nil
+	}
+	llmEnabled := true
+	pkiEnabled := true
+	for _, name := range []string{"base.yaml", env + ".yaml"} {
+		path := filepath.Join(stackPath, "environments", name)
+		body, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, fmt.Errorf("reading control-plane stack values %q: %w", path, err)
+		}
+		var values struct {
+			Addons struct {
+				LLM struct {
+					Enabled yaml.Node `yaml:"enabled"`
+					PKI     struct {
+						Enabled yaml.Node `yaml:"enabled"`
+					} `yaml:"pki"`
+				} `yaml:"llm"`
+			} `yaml:"addons"`
+		}
+		if err := yaml.Unmarshal(body, &values); err != nil {
+			return false, fmt.Errorf("parsing control-plane stack values %q: %w", path, err)
+		}
+		value, set, err := parseOptionalYAMLBool(values.Addons.LLM.Enabled)
+		if err != nil {
+			return false, fmt.Errorf("parsing addons.llm.enabled in %q: %w", path, err)
+		}
+		if set {
+			llmEnabled = value
+		}
+		value, set, err = parseOptionalYAMLBool(values.Addons.LLM.PKI.Enabled)
+		if err != nil {
+			return false, fmt.Errorf("parsing addons.llm.pki.enabled in %q: %w", path, err)
+		}
+		if set {
+			pkiEnabled = value
+		}
+	}
+	return llmEnabled && pkiEnabled, nil
+}
+
+func parseOptionalYAMLBool(node yaml.Node) (bool, bool, error) {
+	if node.Kind == 0 {
+		return false, false, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(node.Value)) {
+	case "true":
+		return true, true, nil
+	case "false":
+		return false, true, nil
+	default:
+		return false, false, fmt.Errorf("expected true or false, got %q", node.Value)
+	}
 }
 
 func controlPlaneProfilePath(stackPath string) string {
@@ -148,6 +213,11 @@ func buildControlPlaneProfile(req controlPlaneProfileWriteRequest) controlplanep
 	sisHost := firstNonEmpty(os.Getenv("NVCF_ICMS_HOST"), viper.GetString("icms_host"), "sis."+domain)
 	revalHost := firstNonEmpty(os.Getenv("NVCF_REVAL_HOST"), viper.GetString("reval_host"), "reval."+domain)
 	natsHost := firstNonEmpty(os.Getenv("NVCF_NATS_HOST"), viper.GetString("nats_host"), "nats."+domain)
+	if strings.EqualFold(req.Env, "local") {
+		computeEndpoints.ICMSServiceURL = rewriteURLHost(computeEndpoints.ICMSServiceURL, sisHost)
+		computeEndpoints.ReValServiceURL = rewriteURLHost(computeEndpoints.ReValServiceURL, revalHost)
+		computeEndpoints.NATSURL = rewriteURLHost(computeEndpoints.NATSURL, natsHost)
+	}
 
 	return controlplaneprofile.ControlPlaneProfile{
 		APIVersion: controlplaneprofile.APIVersion,
@@ -163,9 +233,9 @@ func buildControlPlaneProfile(req controlPlaneProfileWriteRequest) controlplanep
 					NATSURL:  "nats://nats.nats-system.svc.cluster.local:4222",
 				},
 				ComputeReachable: controlplaneprofile.EndpointScope{
-					ICMSURL:  rewriteURLHost(computeEndpoints.ICMSServiceURL, sisHost),
-					ReValURL: rewriteURLHost(computeEndpoints.ReValServiceURL, revalHost),
-					NATSURL:  rewriteURLHost(computeEndpoints.NATSURL, natsHost),
+					ICMSURL:  computeEndpoints.ICMSServiceURL,
+					ReValURL: computeEndpoints.ReValServiceURL,
+					NATSURL:  computeEndpoints.NATSURL,
 				},
 			},
 			Gateway: controlplaneprofile.Gateway{
@@ -247,10 +317,8 @@ func resolveProfileICMSURL(flagValue, env, stackDomain string) string {
 // query) of rawURL with newHost. Returns rawURL unchanged when it cannot be
 // parsed, has no host, or when newHost is empty.
 //
-// This lets buildControlPlaneProfile project bare-ELB URLs back through the
-// canonical sis./reval./nats. service prefix that the gateway HTTPRoutes
-// match. For local k3d (rawURL already has sis./reval./nats. prefixes equal
-// to newHost) this is effectively a no-op.
+// Local split-cluster resolution can produce cross-cluster service names that
+// must be normalized to the local gateway routing hosts before export.
 func rewriteURLHost(rawURL, newHost string) string {
 	if rawURL == "" || newHost == "" {
 		return rawURL

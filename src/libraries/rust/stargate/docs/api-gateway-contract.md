@@ -134,7 +134,7 @@ Optional trusted headers:
 | Header | Meaning |
 | --- | --- |
 | `x-routing-key` | Authenticated routing scope. Omit for unscoped. |
-| `x-routing-method` | Request-scoped load-balancer override, only for methods allowed by Stargate config. |
+| `x-routing-method` | Request-scoped load-balancer override, only for methods allowed by Stargate config, optionally with expression parameters. See [routing expressions](load-balancer-configuration.md#routing-expressions). |
 | `x-cache-affinity-key` | Opaque cache/prefix identity. Required by some LB configs. |
 | `x-priority` | Unsigned priority rank; lower is more urgent. Omit when no priority is resolved. |
 | `x-request-slo-ms` | Per-request LB latency hint. |
@@ -203,13 +203,29 @@ Stargate strips pylon retry metadata before returning downstream:
 Stargate may retry when the request body is replayable and retry budget remains.
 Pylon may return retryable `429` with
 `x-stargate-retry-reason: queue_estimate_mismatch` before upstream execution.
+By default it does so only when its local queue estimate exceeds Stargate's by
+at least 10 s and at least 4 times (`--pylon-queue-mismatch-min-delta-ms`,
+`--pylon-queue-mismatch-tolerance-factor`). Stargate's estimate lags behind
+Pylon's under load, so smaller differences are expected.
 The local upstream may mark `429` or `503` retryable for pylon with
 `x-stargate-upstream-retryable: true`; pylon converts that to Stargate retry
 metadata and does not forward the upstream header downstream.
 
+Queued requests can wait a long time before their first output. Stargate waits
+up to `--quic-request-timeout-ms` (default 300000) for response headers from
+Pylon. After the engine returns headers, Pylon waits up to
+`--pylon-first-output-timeout-ms` (default 300000) for the first streamed output
+and `--pylon-output-chunk-timeout-ms` (default 30000) between outputs. The two
+waits run one after the other, so a single attempt can wait for their sum before
+its first output, and each retry can wait that long again.
+
 Gateway rules:
 
 - Set `x-stargate-max-wait-ms` from the remaining request deadline.
+- Size any gateway request deadline for the whole path: the header wait plus the
+  first-output wait, for every attempt and retry delay allowed. A shorter
+  deadline fails requests that are still queued. The LLM API gateway sets no
+  deadline toward Stargate by default.
 - Avoid blind external retries after a streaming request may have reached an
   upstream.
 - Keep the same `x-request-id` only for convergence retries that did not reach

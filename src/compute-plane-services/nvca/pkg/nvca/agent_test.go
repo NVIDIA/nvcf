@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -45,7 +46,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	nvcaauth "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
@@ -65,6 +69,7 @@ import (
 	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue"
+	mockqueue "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue/mock"
 	natsqueue "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue/nats"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
@@ -109,8 +114,8 @@ func TestAgentApis(t *testing.T) {
 		NamespaceLabels:                labels.Set{"foo": "bar"},
 		K8sVersion:                     "1.27.8",
 		CredRenewInterval:              DefaultCredRenewInterval,
-		HeartbeatInterval:              DefaultHeartBeatInterval,
-		SyncQueueInterval:              defaultSyncQueueInterval,
+		HeartbeatInterval:              365 * 24 * time.Hour,
+		SyncQueueInterval:              365 * 24 * time.Hour,
 		SyncRequestStatusInterval:      DefaultSyncRequestStatusInterval,
 		PeriodicInstanceStatusInterval: DefaultPeriodicInstanceStatusInterval,
 		SyncAcknowledgeRequestInterval: ackReqInterval,
@@ -128,6 +133,16 @@ func TestAgentApis(t *testing.T) {
 	body, err := io.ReadAll(versionResp.Body)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, versionResp.StatusCode, string(body))
+
+	// /info is wired next to /version in Agent.Start; assert through the real
+	// server rather than only the shared HTTPAddInfoRoute helper test, so a
+	// regression that drops the AddInfoRoute() call here is caught.
+	infoResp, err := http.Get("http://" + ag.NVCASvcAddress + "/info")
+	require.NoError(t, err)
+	defer infoResp.Body.Close()
+	infoBody, err := io.ReadAll(infoResp.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, infoResp.StatusCode, string(infoBody))
 	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
 		resp, err := http.Get("http://" + ag.NVCASvcAddress + health.HTTPLivenessRoutePath)
 		require.NoError(ct, err)
@@ -190,6 +205,593 @@ func TestAgentApis(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, is.Status, string(types.ICMSInstanceTerminated))
 	assert.Equal(t, is.LastReportedStatus, string(types.ICMSInstanceTerminated))
+}
+
+type blockingRecordingICMSClient struct {
+	*mockICMSClient
+
+	mu                    sync.Mutex
+	registrationRequests  []types.ICMSRegistrationRequest
+	results               []blockingRegistrationResult
+	registrationStarted   chan int
+	credentialResponse    *types.ICMSCredentialResponse
+	credentialErr         error
+	credentialStarted     chan struct{}
+	credentialRelease     chan struct{}
+	credentialReleaseOnce sync.Once
+}
+
+type registrationResult struct {
+	response *types.ICMSRegistrationResponse
+	err      error
+}
+
+type blockingRegistrationResult struct {
+	registrationResult
+	release     chan struct{}
+	releaseOnce sync.Once
+}
+
+func newBlockingRecordingICMSClient(results ...registrationResult) *blockingRecordingICMSClient {
+	blockingResults := make([]blockingRegistrationResult, len(results))
+	for i, result := range results {
+		blockingResults[i] = blockingRegistrationResult{
+			registrationResult: result,
+			release:            make(chan struct{}),
+		}
+	}
+	return &blockingRecordingICMSClient{
+		mockICMSClient:      &mockICMSClient{},
+		results:             blockingResults,
+		registrationStarted: make(chan int, len(results)),
+	}
+}
+
+func (m *blockingRecordingICMSClient) Register(
+	ctx context.Context,
+	req *types.ICMSRegistrationRequest,
+) (*types.ICMSRegistrationResponse, error) {
+	requestCopy := *req
+	requestCopy.BackendGPUs = append([]types.RegistrationGPU(nil), req.BackendGPUs...)
+	for i := range requestCopy.BackendGPUs {
+		requestCopy.BackendGPUs[i].InstanceTypes = append(
+			[]types.RegistrationInstanceType(nil),
+			req.BackendGPUs[i].InstanceTypes...,
+		)
+	}
+
+	m.mu.Lock()
+	attempt := len(m.registrationRequests)
+	m.registrationRequests = append(m.registrationRequests, requestCopy)
+	if attempt >= len(m.results) {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("unexpected ICMS registration attempt %d", attempt)
+	}
+	result := &m.results[attempt]
+	m.mu.Unlock()
+	m.registrationStarted <- attempt
+
+	select {
+	case <-result.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	return result.response, result.err
+}
+
+func (m *blockingRecordingICMSClient) GetCreds(ctx context.Context) (*types.ICMSCredentialResponse, error) {
+	m.mu.Lock()
+	credentialStarted := m.credentialStarted
+	credentialRelease := m.credentialRelease
+	credentialResponse := m.credentialResponse
+	credentialErr := m.credentialErr
+	m.mu.Unlock()
+	if credentialStarted == nil {
+		return m.mockICMSClient.GetCreds(ctx)
+	}
+
+	select {
+	case credentialStarted <- struct{}{}:
+	default:
+	}
+	select {
+	case <-credentialRelease:
+		return credentialResponse, credentialErr
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (m *blockingRecordingICMSClient) blockCredentialFetch(
+	response *types.ICMSCredentialResponse,
+	err error,
+) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.credentialResponse = response
+	m.credentialErr = err
+	m.credentialStarted = make(chan struct{}, 1)
+	m.credentialRelease = make(chan struct{})
+}
+
+func (m *blockingRecordingICMSClient) releaseCredentialFetch() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.credentialReleaseOnce.Do(func() { close(m.credentialRelease) })
+}
+
+func (m *blockingRecordingICMSClient) release(attempt int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := &m.results[attempt]
+	result.releaseOnce.Do(func() { close(result.release) })
+}
+
+func (m *blockingRecordingICMSClient) requests() []types.ICMSRegistrationRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]types.ICMSRegistrationRequest(nil), m.registrationRequests...)
+}
+
+func requireRegistrationAttempt(t *testing.T, client *blockingRecordingICMSClient, expected int) {
+	t.Helper()
+	select {
+	case attempt := <-client.registrationStarted:
+		require.Equal(t, expected, attempt)
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for ICMS registration attempt %d", expected)
+	}
+}
+
+func requireNoRegistrationAttempt(t *testing.T, client *blockingRecordingICMSClient, wait time.Duration) {
+	t.Helper()
+	select {
+	case attempt := <-client.registrationStarted:
+		t.Fatalf("unexpected ICMS registration attempt %d while another registration is in flight", attempt)
+	case <-time.After(wait):
+	}
+}
+
+func newGracefulNoGPUTestAgent(
+	t *testing.T,
+	ctx context.Context,
+	icmsClient ICMSClientInterface,
+) (*Agent, *kubeclients.KubeClients) {
+	t.Helper()
+	oldSyncInterval := syncICMSRegistrationInterval
+	// Callers use a fixed random seed, keeping periodic registration outside the test window.
+	syncICMSRegistrationInterval = 365 * 24 * time.Hour
+	t.Cleanup(func() { syncICMSRegistrationInterval = oldSyncInterval })
+
+	featureFlags := &featureflagmock.Fetcher{}
+	featureFlags.SetFeatureFlags(featureflag.GracefulNoGPU)
+	agentOpts := AgentOptions{
+		TokenFetcherOptions: nvcaauth.TokenFetcherOptions{
+			OAuthTokenScope:      "byoc_registration",
+			OAuthClientID:        "foo",
+			OAuthClientSecretKey: "bar",
+		},
+		NCAId:                          "randomNCAId123",
+		ClusterName:                    "bartnvbackend",
+		ClusterID:                      "clusterid-1",
+		ClusterDescription:             "this is a test cluster",
+		ClusterGroupName:               "group of all A30",
+		ComputeBackend:                 "k8s",
+		CloudProvider:                  "on-prem",
+		NamespaceLabels:                labels.Set{"foo": "bar"},
+		K8sVersion:                     "1.27.8",
+		CredRenewInterval:              365 * 24 * time.Hour,
+		HeartbeatInterval:              DefaultHeartBeatInterval,
+		SyncQueueInterval:              defaultSyncQueueInterval,
+		SyncRequestStatusInterval:      DefaultSyncRequestStatusInterval,
+		PeriodicInstanceStatusInterval: DefaultPeriodicInstanceStatusInterval,
+		SyncAcknowledgeRequestInterval: ackReqInterval,
+		DynamicGPUDiscoveryEnabled:     true,
+		MultipleGPUTypesAllowed:        true,
+		UniformInstanceLabelsEnabled:   true,
+		GPUPollInterval:                10 * time.Millisecond,
+		GPUDebounceTime:                time.Millisecond,
+		FeatureFlagFetcher:             featureFlags,
+		MetricsRegisterer:              prometheus.NewRegistry(),
+	}
+
+	agent := newMockAgent(t, ctx, agentOpts)
+	// Isolate startup readiness from the immediate heartbeat and queue-sync events.
+	delete(agent.resourceEventWorkerQueues, EventTickUpdateHeartbeat)
+	delete(agent.resourceEventWorkerQueues, EventTickSyncSQSQueue)
+	oldNewQueueClient := newQueueClient
+	newQueueClient = func(string) queue.Client {
+		return &mockqueue.Client{Use10MillisForWaits: true}
+	}
+	t.Cleanup(func() { newQueueClient = oldNewQueueClient })
+	k8sClients := mockKubeClientsDynamicGPUs()
+	agent.newKubeClients = func(context.Context, string) (*kubeclients.KubeClients, error) {
+		return k8sClients, nil
+	}
+	agent.newBackendK8sCacheBuilder = func() *BackendK8sCacheBuilder {
+		builder := NewBackendk8sCacheBuilder()
+		builder.addSharedClusterNodePublisher = mockAddSharedClusterNodePublisherFunc
+		return builder
+	}
+	agent.icmsClient = icmsClient
+	return agent, k8sClients
+}
+
+func requireHTTPStatusEventually(t *testing.T, address, path string, expected int) {
+	t.Helper()
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		resp, err := http.Get("http://" + address + path)
+		if !assert.NoError(ct, err) {
+			return
+		}
+		assert.NoError(ct, resp.Body.Close())
+		assert.Equal(ct, expected, resp.StatusCode)
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
+func requireHTTPStatus(t *testing.T, address, path string, expected int) {
+	t.Helper()
+	resp, err := http.Get("http://" + address + path)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, expected, resp.StatusCode)
+}
+
+func requireRefreshedReadinessStatus(
+	t *testing.T,
+	ctx context.Context,
+	agent *Agent,
+	expected int,
+) {
+	t.Helper()
+	_, err := agent.backendHealthCache.RefreshStatus(ctx)
+	require.NoError(t, err)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPReadinessRoutePath, expected)
+}
+
+func TestAgentStartGracefulNoGPURecoversWhenGPUAppears(t *testing.T) {
+	ctx, cancel := context.WithCancel(core.WithRandomSeed(newTestContext(), 42))
+	t.Cleanup(cancel)
+
+	recoveredCredentials := getTestQueueCreds(true)
+	icmsClient := newBlockingRecordingICMSClient(registrationResult{
+		response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    recoveredCredentials,
+		},
+	})
+	agent, k8sClients := newGracefulNoGPUTestAgent(t, ctx, icmsClient)
+
+	require.NoError(t, agent.Start(ctx))
+	requireHTTPStatus(t, agent.NVCASvcAddress, health.HTTPReadinessRoutePath, http.StatusServiceUnavailable)
+	requireHTTPStatus(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+	require.NotNil(t, agent.gpuRegistration.monitor)
+	require.NotNil(t, agent.queueManager)
+	assert.False(t, agent.gpuRegistration.hasGPUs())
+	assert.True(t, agent.queueManager.IsPaused())
+	assert.Empty(t, icmsClient.requests())
+	assert.Empty(t, agent.queueManager.getCreateQueue(testGPUNameDefault).QueueURL)
+
+	_, err := k8sClients.K8s.CoreV1().Nodes().Create(ctx, functionNode.DeepCopy(), metav1.CreateOptions{})
+	require.NoError(t, err)
+	requireRegistrationAttempt(t, icmsClient, 0)
+
+	assert.True(t, agent.queueManager.IsPaused(), "queue must remain paused while registration is in flight")
+	assert.Empty(t, agent.queueManager.getCreateQueue(testGPUNameDefault).QueueURL)
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusServiceUnavailable)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+	requests := icmsClient.requests()
+	require.Len(t, requests, 1)
+	assert.Equal(t, []types.RegistrationGPU{{
+		Name: "A100",
+		InstanceTypes: []types.RegistrationInstanceType{{
+			Name:          "ON-PREM.GPU.A100_1x",
+			Value:         "ON-PREM.GPU.A100",
+			Description:   "A100-SXM4-40GB (ampere family) on a Google-Compute-Engine machine",
+			Default:       true,
+			CPUCores:      6,
+			CPU:           "6",
+			SystemMemory:  "32Gi",
+			GPUCount:      1,
+			GPUMemory:     "40Gi",
+			Storage:       "512Gi",
+			CPUArch:       "unknown",
+			OS:            "unknown",
+			DriverVersion: "unknown",
+			NodeType:      types.RegistrationInstanceTypeNodeTypeSingle,
+			MaxInstances:  1,
+		}},
+	}}, requests[0].BackendGPUs)
+
+	icmsClient.release(0)
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.True(ct, agent.gpuRegistration.hasGPUs())
+		assert.False(ct, agent.queueManager.IsPaused())
+		assert.Equal(ct, recoveredCredentials.CreationQueues[testGPUNameDefault],
+			agent.queueManager.getCreateQueue(testGPUNameDefault))
+		assert.Equal(ct, recoveredCredentials.TerminationQueue, agent.queueManager.getTermQueue())
+	}, 5*time.Second, 10*time.Millisecond)
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusOK)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+
+	require.NoError(t, k8sClients.K8s.CoreV1().Nodes().Delete(ctx, functionNode.Name, metav1.DeleteOptions{}))
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.False(ct, agent.gpuRegistration.hasGPUs())
+		assert.True(ct, agent.queueManager.IsPaused())
+	}, 5*time.Second, 10*time.Millisecond)
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusServiceUnavailable)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+	require.Len(t, icmsClient.requests(), 1)
+}
+
+func TestAgentStartGracefulNoGPURegistrationFailureRetriesBeforeResuming(t *testing.T) {
+	logCtx, logHook := core.WithTestingLogger(newTestContext())
+	ctx, cancel := context.WithCancel(core.WithRandomSeed(logCtx, 42))
+	t.Cleanup(cancel)
+
+	recoveredCredentials := getTestQueueCreds(true)
+	icmsClient := newBlockingRecordingICMSClient(
+		registrationResult{err: fmt.Errorf("registration unavailable")},
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    recoveredCredentials,
+		}},
+	)
+	agent, k8sClients := newGracefulNoGPUTestAgent(t, ctx, icmsClient)
+	require.NoError(t, agent.Start(ctx))
+	requireHTTPStatus(t, agent.NVCASvcAddress, health.HTTPReadinessRoutePath, http.StatusServiceUnavailable)
+	requireHTTPStatus(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+
+	_, err := k8sClients.K8s.CoreV1().Nodes().Create(ctx, functionNode.DeepCopy(), metav1.CreateOptions{})
+	require.NoError(t, err)
+	requireRegistrationAttempt(t, icmsClient, 0)
+	assert.True(t, agent.queueManager.IsPaused(), "queue must remain paused while registration is in flight")
+
+	icmsClient.release(0)
+	requireRegistrationAttempt(t, icmsClient, 1)
+	retryLogs := make([]*logrus.Entry, 0, 1)
+	for _, entry := range logHook.AllEntries() {
+		if entry.Message == "Failed to register with ICMS after GPUs became available; will retry" {
+			retryLogs = append(retryLogs, entry)
+		}
+	}
+	require.Len(t, retryLogs, 1)
+	assert.Equal(t, logrus.WarnLevel, retryLogs[0].Level)
+	assert.True(t, agent.queueManager.IsPaused(), "queue must remain paused while registration retry is in flight")
+	assert.Empty(t, agent.queueManager.getCreateQueue(testGPUNameDefault).QueueURL)
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusServiceUnavailable)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+
+	icmsClient.release(1)
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.False(ct, agent.queueManager.IsPaused())
+		assert.Equal(ct, recoveredCredentials.CreationQueues[testGPUNameDefault],
+			agent.queueManager.getCreateQueue(testGPUNameDefault))
+		assert.Equal(ct, recoveredCredentials.TerminationQueue, agent.queueManager.getTermQueue())
+	}, 5*time.Second, 10*time.Millisecond)
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusOK)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+	require.Len(t, icmsClient.requests(), 2)
+}
+
+func TestAgentStartGracefulNoGPUStaysPausedWhenGPUDisappearsDuringRegistration(t *testing.T) {
+	ctx, cancel := context.WithCancel(core.WithRandomSeed(newTestContext(), 42))
+	t.Cleanup(cancel)
+
+	recoveredCredentials := getTestQueueCreds(true)
+	icmsClient := newBlockingRecordingICMSClient(
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    recoveredCredentials,
+		}},
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    recoveredCredentials,
+		}},
+	)
+	agent, k8sClients := newGracefulNoGPUTestAgent(t, ctx, icmsClient)
+	require.NoError(t, agent.Start(ctx))
+
+	_, err := k8sClients.K8s.CoreV1().Nodes().Create(ctx, functionNode.DeepCopy(), metav1.CreateOptions{})
+	require.NoError(t, err)
+	requireRegistrationAttempt(t, icmsClient, 0)
+	require.NoError(t, k8sClients.K8s.CoreV1().Nodes().Delete(ctx, functionNode.Name, metav1.DeleteOptions{}))
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.False(ct, agent.gpuRegistration.hasGPUs())
+		assert.True(ct, agent.queueManager.IsPaused())
+	}, 5*time.Second, 10*time.Millisecond)
+
+	icmsClient.release(0)
+	requireNoRegistrationAttempt(t, icmsClient, 100*time.Millisecond)
+	assert.True(t, agent.queueManager.IsPaused())
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusServiceUnavailable)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+
+	_, err = k8sClients.K8s.CoreV1().Nodes().Create(ctx, functionNode.DeepCopy(), metav1.CreateOptions{})
+	require.NoError(t, err)
+	requireRegistrationAttempt(t, icmsClient, 1)
+	assert.True(t, agent.queueManager.IsPaused())
+	icmsClient.release(1)
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.False(ct, agent.queueManager.IsPaused())
+		assert.Equal(ct, recoveredCredentials.CreationQueues[testGPUNameDefault],
+			agent.queueManager.getCreateQueue(testGPUNameDefault))
+	}, 5*time.Second, 10*time.Millisecond)
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusOK)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+}
+
+func TestAgentStartGracefulNoGPUSerializesCredentialRenewalBeforeRecovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(core.WithRandomSeed(newTestContext(), 42))
+	t.Cleanup(cancel)
+
+	initialCredentials := getTestQueueCreds(false)
+	staleCredentials := getTestQueueCreds(false)
+	recoveredCredentials := getTestQueueCreds(true)
+	icmsClient := newBlockingRecordingICMSClient(
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    initialCredentials,
+		}},
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    recoveredCredentials,
+		}},
+	)
+	agent, k8sClients := newGracefulNoGPUTestAgent(t, ctx, icmsClient)
+	_, err := k8sClients.K8s.CoreV1().Nodes().Create(ctx, functionNode.DeepCopy(), metav1.CreateOptions{})
+	require.NoError(t, err)
+	icmsClient.release(0)
+	require.NoError(t, agent.Start(ctx))
+	requireRegistrationAttempt(t, icmsClient, 0)
+	assert.False(t, agent.queueManager.IsPaused())
+
+	require.NoError(t, k8sClients.K8s.CoreV1().Nodes().Delete(ctx, functionNode.Name, metav1.DeleteOptions{}))
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.False(ct, agent.gpuRegistration.hasGPUs())
+		assert.True(ct, agent.queueManager.IsPaused())
+	}, 5*time.Second, 10*time.Millisecond)
+
+	icmsClient.blockCredentialFetch(&types.ICMSCredentialResponse{QueueCredentials: staleCredentials}, nil)
+	credentialDone := make(chan error, 1)
+	go func() {
+		credentialDone <- agent.RenewICMSQueueCreds(ctx)
+	}()
+	select {
+	case <-icmsClient.credentialStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for credential renewal to start")
+	}
+
+	_, err = k8sClients.K8s.CoreV1().Nodes().Create(ctx, functionNode.DeepCopy(), metav1.CreateOptions{})
+	require.NoError(t, err)
+	requireNoRegistrationAttempt(t, icmsClient, 250*time.Millisecond)
+	assert.True(t, agent.queueManager.IsPaused())
+
+	icmsClient.releaseCredentialFetch()
+	select {
+	case credentialErr := <-credentialDone:
+		require.NoError(t, credentialErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for credential renewal to finish")
+	}
+	requireRegistrationAttempt(t, icmsClient, 1)
+	assert.True(t, agent.queueManager.IsPaused())
+	icmsClient.release(1)
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.False(ct, agent.queueManager.IsPaused())
+		assert.Equal(ct, recoveredCredentials.CreationQueues[testGPUNameDefault],
+			agent.queueManager.getCreateQueue(testGPUNameDefault))
+		assert.Equal(ct, recoveredCredentials.TerminationQueue, agent.queueManager.getTermQueue())
+	}, 5*time.Second, 10*time.Millisecond)
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusOK)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+}
+
+func TestAgentStartGracefulNoGPUSerializesPeriodicRegistrationBeforeRecovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(core.WithRandomSeed(newTestContext(), 42))
+	t.Cleanup(cancel)
+
+	initialCredentials := getTestQueueCreds(false)
+	stalePeriodicCredentials := getTestQueueCreds(false)
+	recoveredGPU := types.GPUName("AD102GL")
+	recoveredQueue := getTestCreationMessageQueueInfo(true)
+	recoveredQueue.GPU = string(recoveredGPU)
+	recoveredCredentials := getTestQueueCreds(true)
+	recoveredCredentials.CreationQueues = types.CreationQueueInfoSet{
+		recoveredGPU: recoveredQueue,
+	}
+	icmsClient := newBlockingRecordingICMSClient(
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    initialCredentials,
+		}},
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    stalePeriodicCredentials,
+		}},
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    recoveredCredentials,
+		}},
+	)
+	agent, k8sClients := newGracefulNoGPUTestAgent(t, ctx, icmsClient)
+	_, err := k8sClients.K8s.CoreV1().Nodes().Create(ctx, functionNode.DeepCopy(), metav1.CreateOptions{})
+	require.NoError(t, err)
+	icmsClient.release(0)
+	require.NoError(t, agent.Start(ctx))
+	requireRegistrationAttempt(t, icmsClient, 0)
+	assert.False(t, agent.queueManager.IsPaused())
+
+	periodicDone := make(chan error, 1)
+	go func() {
+		periodicDone <- agent.syncICMSRegistration(ctx)
+	}()
+	requireRegistrationAttempt(t, icmsClient, 1)
+	requests := icmsClient.requests()
+	require.Len(t, requests, 2)
+	require.Len(t, requests[1].BackendGPUs, 1)
+	assert.Equal(t, "A100", requests[1].BackendGPUs[0].Name)
+
+	require.NoError(t, k8sClients.K8s.CoreV1().Nodes().Delete(ctx, functionNode.Name, metav1.DeleteOptions{}))
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.False(ct, agent.gpuRegistration.hasGPUs())
+		assert.True(ct, agent.queueManager.IsPaused())
+	}, 5*time.Second, 10*time.Millisecond)
+
+	recoveryNode := functionNode.DeepCopy()
+	recoveryNode.Name = "node-2"
+	recoveryNode.Labels[nodefeatures.UniformInstanceTypeLabelKey] = "ON-PREM.GPU.AD102GL"
+	recoveryNode.Labels["nvidia.com/gpu.family"] = "volta"
+	recoveryNode.Labels["nvidia.com/gpu.memory"] = "32768"
+	recoveryNode.Labels["nvidia.com/gpu.product"] = "V100-SXM2-32GB"
+	recoveryNode.Labels["nvca.nvcf.nvidia.io/gpu.product"] = string(recoveredGPU)
+	lossGeneration := agent.gpuRegistration.generation.Load()
+	_, err = k8sClients.K8s.CoreV1().Nodes().Create(ctx, recoveryNode, metav1.CreateOptions{})
+	require.NoError(t, err)
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.True(ct, agent.gpuRegistration.hasGPUs())
+		assert.Greater(ct, agent.gpuRegistration.generation.Load(), lossGeneration)
+	}, 5*time.Second, 10*time.Millisecond)
+	requireNoRegistrationAttempt(t, icmsClient, 250*time.Millisecond)
+	assert.True(t, agent.queueManager.IsPaused())
+	assert.Empty(t, agent.queueManager.getCreateQueue(recoveredGPU).QueueURL)
+
+	icmsClient.release(1)
+	select {
+	case periodicErr := <-periodicDone:
+		require.NoError(t, periodicErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for periodic registration to complete")
+	}
+	requireRegistrationAttempt(t, icmsClient, 2)
+	requests = icmsClient.requests()
+	require.Len(t, requests, 3)
+	require.Len(t, requests[2].BackendGPUs, 1)
+	assert.Equal(t, recoveredGPU, types.GPUName(requests[2].BackendGPUs[0].Name))
+	assert.True(t, agent.queueManager.IsPaused())
+	assert.Empty(t, agent.queueManager.getCreateQueue(recoveredGPU).QueueURL)
+
+	icmsClient.release(2)
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.False(ct, agent.queueManager.IsPaused())
+		assert.Equal(ct, recoveredQueue, agent.queueManager.getCreateQueue(recoveredGPU))
+		assert.Equal(ct, recoveredCredentials.TerminationQueue, agent.queueManager.getTermQueue())
+	}, 5*time.Second, 10*time.Millisecond)
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusOK)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
 }
 
 func TestAgentRegisterWithICMSUpdatesQueueManagerCredentials(t *testing.T) {
@@ -895,11 +1497,18 @@ func TestAgentMaintenanceModeInitialization(t *testing.T) {
 }
 
 // Mock implementation for testing
+type postedInstanceStatusUpdate struct {
+	requestID  string
+	instanceID string
+	payload    types.ICMSInstanceStatusUpdateRequest
+}
+
 type mockICMSClient struct {
 	healthStatusRequests []types.HealthStatusRequest
 	registrationRequests []types.ICMSRegistrationRequest
 	registrationResponse *types.ICMSRegistrationResponse
 	registerErr          error
+	postedStatusUpdates  []postedInstanceStatusUpdate
 }
 
 func (m *mockICMSClient) PutHealthStatus(ctx context.Context, req *types.HealthStatusRequest) (*types.HealthStatusResponse, error) {
@@ -923,6 +1532,11 @@ func (m *mockICMSClient) Register(ctx context.Context, req *types.ICMSRegistrati
 }
 
 func (m *mockICMSClient) PostInstanceStatusUpdate(ctx context.Context, requestID, instanceID string, payload *types.ICMSInstanceStatusUpdateRequest) error {
+	m.postedStatusUpdates = append(m.postedStatusUpdates, postedInstanceStatusUpdate{
+		requestID:  requestID,
+		instanceID: instanceID,
+		payload:    *payload,
+	})
 	return nil
 }
 
@@ -1112,6 +1726,264 @@ func TestEvictAllWorkloads(t *testing.T) {
 	// Verify that miniservice was deleted
 	err = ag.backendk8scache.clients.HelmV2.Get(ctx, client.ObjectKey{Name: "instance-3-miniservice"}, ms)
 	assert.True(t, errors.IsNotFound(err), "Miniservice should be deleted")
+}
+
+// TestEvictAllWorkloads_SkipsTerminationUpdateForStillPresentInstance verifies that
+// evictAllWorkloads only reports instances to ICMS as terminated when PurgeInstanceID
+// actually confirmed the backing Pod/MiniService is gone. It simulates a MiniService whose
+// delete is accepted but that remains present (e.g. blocked by its own finalizer), and
+// checks that instance is excluded from the termination updates sent to ICMS while an
+// unrelated, successfully purged Pod instance is still reported.
+func TestEvictAllWorkloads_SkipsTerminationUpdateForStillPresentInstance(t *testing.T) {
+	ctx := newTestContext()
+
+	agentOpts := AgentOptions{
+		TokenFetcherOptions: nvcaauth.TokenFetcherOptions{
+			OAuthTokenScope:      "byoc_registration",
+			OAuthClientID:        "foo",
+			OAuthClientSecretKey: "bar",
+		},
+		NCAId:                          "randomNCAId123",
+		ClusterName:                    "bartnvbackend",
+		ClusterID:                      "clusterid-1",
+		ClusterDescription:             "this is a test cluster",
+		ClusterGroupName:               "group of all A30",
+		ComputeBackend:                 "k8s",
+		CloudProvider:                  "on-prem",
+		NamespaceLabels:                labels.Set{"foo": "bar"},
+		K8sVersion:                     "1.27.8",
+		CredRenewInterval:              DefaultCredRenewInterval,
+		HeartbeatInterval:              DefaultHeartBeatInterval,
+		SyncQueueInterval:              defaultSyncQueueInterval,
+		SyncRequestStatusInterval:      DefaultSyncRequestStatusInterval,
+		PeriodicInstanceStatusInterval: DefaultPeriodicInstanceStatusInterval,
+		SyncAcknowledgeRequestInterval: ackReqInterval,
+		GPUCapacity:                    2,
+		FeatureFlagFetcher:             featureflag.DefaultFetcher,
+		MaintenanceMode:                types.MaintenanceModeCordonAndDrain,
+		MetricsRegisterer:              prometheus.NewRegistry(),
+	}
+
+	testReq := &nvcav2beta1.ICMSRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-request-1",
+			Namespace: "default",
+		},
+		Spec: nvcav2beta1.ICMSRequestSpec{
+			RequestID: "req-1",
+		},
+		Status: nvcav2beta1.ICMSRequestStatus{
+			RequestStatus: nvcav2beta1.ICMSRequestStatusInProgress,
+			Instances: map[string]nvcav2beta1.InstanceStatus{
+				"instance-ok": {
+					ID:     "instance-ok",
+					Type:   nvcav2beta1.InstanceTypePod,
+					Status: string(types.ICMSInstanceRunning),
+				},
+				"instance-blocked-miniservice": {
+					ID:     "instance-blocked-miniservice",
+					Type:   nvcav2beta1.InstanceTypeMiniService,
+					Status: string(types.ICMSInstanceRunning),
+				},
+			},
+		},
+	}
+
+	mockICMS := &mockICMSClient{}
+	ag := newMockAgentSingleGPU(t, ctx, agentOpts)
+	ag.icmsClient = mockICMS
+
+	require.NoError(t, ag.Start(ctx))
+
+	_, err := ag.backendk8scache.clients.BART.NvcaV2beta1().ICMSRequests(testReq.Namespace).Create(ctx, testReq, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		items, _ := ag.backendk8scache.icmsRequestLister.List(labels.Everything())
+		return len(items) >= 1
+	}, time.Second, time.Millisecond*50)
+
+	podNamespace := ag.backendk8scache.podInstanceNamespace
+	pod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "instance-ok",
+			Namespace: podNamespace,
+		},
+	}
+	_, err = ag.backendk8scache.clients.K8s.CoreV1().Pods(podNamespace).Create(ctx, pod, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	// Wait for the informer backing podSpecLister to observe the newly created pod before
+	// evicting, so the subsequent delete's existence check converges quickly instead of
+	// racing an informer that hasn't synced the pod's existence yet.
+	require.Eventually(t, func() bool {
+		_, err := ag.backendk8scache.podSpecLister.Get("instance-ok")
+		return err == nil
+	}, 5*time.Second, 50*time.Millisecond, "informer should observe the created pod")
+
+	// Replace HelmV2 with a client whose Delete is accepted but does not remove the
+	// object, simulating a MiniService still blocked by its own finalizer/cleanup.
+	sch := newMiniServiceScheme()
+	fakeHelmClient := ctrlfake.NewClientBuilder().
+		WithScheme(sch).
+		WithStatusSubresource(&v1alpha1.MiniService{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				return nil
+			},
+		}).
+		Build()
+	ag.backendk8scache.clients.HelmV2 = fakeHelmClient
+
+	ms := &v1alpha1.MiniService{
+		ObjectMeta: metav1.ObjectMeta{Name: "instance-blocked-miniservice"},
+	}
+	require.NoError(t, ag.backendk8scache.clients.HelmV2.Create(ctx, ms))
+
+	// evictAllWorkloads issues Delete() and checks the informer-backed lister for actual
+	// absence in the same pass; the lister may not have converged yet by the time the
+	// check runs, so retry a few times (mirroring the retry-on-next-reconcile behavior
+	// this PR's fix relies on) until the successfully purged pod is reported.
+	//
+	// Eventually's condition runs in its own goroutine, so errors are captured here and
+	// asserted after Eventually returns rather than via require inside the closure, which
+	// is unsafe to call outside the test goroutine.
+	var evictErr error
+	require.Eventually(t, func() bool {
+		evictErr = ag.evictAllWorkloads(ctx)
+		if evictErr != nil {
+			return false
+		}
+		for _, u := range mockICMS.postedStatusUpdates {
+			if u.instanceID == "instance-ok" {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 100*time.Millisecond, "instance-ok should eventually be reported terminated")
+	require.NoError(t, evictErr)
+
+	// The Pod instance was successfully purged; the MiniService instance was not.
+	_, err = ag.backendk8scache.clients.K8s.CoreV1().Pods(podNamespace).Get(ctx, "instance-ok", metav1.GetOptions{})
+	assert.True(t, errors.IsNotFound(err), "Pod instance-ok should be deleted")
+
+	err = ag.backendk8scache.clients.HelmV2.Get(ctx, client.ObjectKey{Name: "instance-blocked-miniservice"}, &v1alpha1.MiniService{})
+	assert.NoError(t, err, "MiniService instance should still exist since its delete was blocked")
+
+	var reportedIDs []string
+	for _, u := range mockICMS.postedStatusUpdates {
+		reportedIDs = append(reportedIDs, u.instanceID)
+		assert.Equal(t, types.ICMSInstanceTerminated, u.payload.InstanceState)
+	}
+	assert.Contains(t, reportedIDs, "instance-ok", "successfully purged instance should be reported terminated")
+	assert.NotContains(t, reportedIDs, "instance-blocked-miniservice", "still-present instance must not be reported terminated")
+}
+
+// TestHandleSelfDestruct_RetriesUntilInstancesConfirmedTerminated verifies that
+// handleSelfDestruct retries eviction when an instance's backing MiniService is not yet
+// confirmed gone on the first pass, and only enters self-destruct mode (which disables
+// further ICMS status-sync communication) once it is reported terminated.
+func TestHandleSelfDestruct_RetriesUntilInstancesConfirmedTerminated(t *testing.T) {
+	ctx := newTestContext()
+
+	agentOpts := AgentOptions{
+		TokenFetcherOptions: nvcaauth.TokenFetcherOptions{
+			OAuthTokenScope:      "byoc_registration",
+			OAuthClientID:        "foo",
+			OAuthClientSecretKey: "bar",
+		},
+		NCAId:                          "randomNCAId123",
+		ClusterName:                    "bartnvbackend",
+		ClusterID:                      "clusterid-1",
+		ClusterDescription:             "this is a test cluster",
+		ClusterGroupName:               "group of all A30",
+		ComputeBackend:                 "k8s",
+		CloudProvider:                  "on-prem",
+		NamespaceLabels:                labels.Set{"foo": "bar"},
+		K8sVersion:                     "1.27.8",
+		CredRenewInterval:              DefaultCredRenewInterval,
+		HeartbeatInterval:              DefaultHeartBeatInterval,
+		SyncQueueInterval:              defaultSyncQueueInterval,
+		SyncRequestStatusInterval:      DefaultSyncRequestStatusInterval,
+		PeriodicInstanceStatusInterval: DefaultPeriodicInstanceStatusInterval,
+		SyncAcknowledgeRequestInterval: ackReqInterval,
+		GPUCapacity:                    2,
+		FeatureFlagFetcher:             featureflag.DefaultFetcher,
+		MaintenanceMode:                types.MaintenanceModeCordonAndDrain,
+		MetricsRegisterer:              prometheus.NewRegistry(),
+	}
+
+	testReq := &nvcav2beta1.ICMSRequest{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-request-1",
+			Namespace: "default",
+		},
+		Spec: nvcav2beta1.ICMSRequestSpec{
+			RequestID: "req-1",
+		},
+		Status: nvcav2beta1.ICMSRequestStatus{
+			RequestStatus: nvcav2beta1.ICMSRequestStatusInProgress,
+			Instances: map[string]nvcav2beta1.InstanceStatus{
+				"instance-blocked-then-ok-miniservice": {
+					ID:     "instance-blocked-then-ok-miniservice",
+					Type:   nvcav2beta1.InstanceTypeMiniService,
+					Status: string(types.ICMSInstanceRunning),
+				},
+			},
+		},
+	}
+
+	mockICMS := &mockICMSClient{}
+	ag := newMockAgentSingleGPU(t, ctx, agentOpts)
+	ag.icmsClient = mockICMS
+
+	require.NoError(t, ag.Start(ctx))
+
+	_, err := ag.backendk8scache.clients.BART.NvcaV2beta1().ICMSRequests(testReq.Namespace).Create(ctx, testReq, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		items, _ := ag.backendk8scache.icmsRequestLister.List(labels.Everything())
+		return len(items) >= 1
+	}, time.Second, time.Millisecond*50)
+
+	// Block the MiniService's delete on the first attempt only, then let subsequent
+	// attempts through, simulating a finalizer that releases shortly after eviction starts.
+	var deleteAttempts atomic.Int32
+	sch := newMiniServiceScheme()
+	fakeHelmClient := ctrlfake.NewClientBuilder().
+		WithScheme(sch).
+		WithStatusSubresource(&v1alpha1.MiniService{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if deleteAttempts.Add(1) == 1 {
+					return nil
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	ag.backendk8scache.clients.HelmV2 = fakeHelmClient
+
+	ms := &v1alpha1.MiniService{
+		ObjectMeta: metav1.ObjectMeta{Name: "instance-blocked-then-ok-miniservice"},
+	}
+	require.NoError(t, ag.backendk8scache.clients.HelmV2.Create(ctx, ms))
+
+	require.NoError(t, ag.handleSelfDestruct(ctx))
+
+	assert.True(t, ag.selfDestruct.Load(), "agent should enter self-destruct mode once eviction completes")
+	assert.GreaterOrEqual(t, deleteAttempts.Load(), int32(2), "eviction should have retried the delete at least once")
+
+	err = ag.backendk8scache.clients.HelmV2.Get(ctx, client.ObjectKey{Name: "instance-blocked-then-ok-miniservice"}, &v1alpha1.MiniService{})
+	assert.True(t, errors.IsNotFound(err), "MiniService should be deleted once its finalizer released")
+
+	var reportedIDs []string
+	for _, u := range mockICMS.postedStatusUpdates {
+		reportedIDs = append(reportedIDs, u.instanceID)
+	}
+	assert.Contains(t, reportedIDs, "instance-blocked-then-ok-miniservice",
+		"instance should be reported terminated once confirmed gone, before self-destruct disables status sync")
 }
 
 func TestEvictAllWorkloads_EmptyList(t *testing.T) {
@@ -2096,4 +2968,49 @@ func TestStartReadinessNotSetOnICMSRegistrationFailure(t *testing.T) {
 		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
 			"readiness endpoint should return 503 when Start() fails before arming readiness")
 	}
+}
+
+// TestEventDispatcherSurvivesClosedChannel covers a shutdown crash. The
+// dispatcher used a single-value receive, so once the event channel closed it
+// received a nil event immediately and forever: it dereferenced that nil and
+// panicked the agent, and spun on the closed channel until it did. The panic
+// was observed after "Self-destruct sequence completed", where the dispatcher
+// outlives the shutdown that closed its channel.
+func TestEventDispatcherSurvivesClosedChannel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	events := make(chan *core.Event)
+	a := &Agent{
+		metrics: nvcametrics.NewDefaultMetrics("cluster", "backend", "backend", "test"),
+		resourceEventWorkerQueues: map[string]workqueue.Interface{
+			"Pod": workqueue.New(),
+		},
+	}
+	defer a.resourceEventWorkerQueues["Pod"].ShutDown()
+	ctx = nvcametrics.WithMetrics(ctx, a.metrics)
+
+	a.startEventProcessDispatchers(ctx, events)
+
+	// A nil event on an open channel must be skipped rather than dereferenced.
+	// The channel is unbuffered, so the send below only completes once the
+	// dispatcher has received this one: if it panicked or returned here, the
+	// next send would block and this test would fail rather than pass silently.
+	events <- nil
+
+	// A live event still reaches its queue.
+	events <- &core.Event{Kind: "Pod", ObjectMetaKey: "ns/name"}
+	assert.Eventually(t, func() bool {
+		return a.resourceEventWorkerQueues["Pod"].Len() == 1
+	}, 2*time.Second, 10*time.Millisecond, "a dispatched event should be queued")
+
+	// Closing the channel must stop the dispatcher, not panic it. Before the
+	// fix this panicked the test binary rather than failing it. A dispatcher
+	// spinning on the closed channel would enqueue continuously, so assert the
+	// queue never grows instead of sampling it once after a sleep.
+	close(events)
+	assert.Never(t, func() bool {
+		return a.resourceEventWorkerQueues["Pod"].Len() != 1
+	}, 250*time.Millisecond, 10*time.Millisecond,
+		"a closed channel must not enqueue anything further")
 }

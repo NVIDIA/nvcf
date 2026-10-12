@@ -21,6 +21,7 @@ limitations under the License.
 **Chart Name:** nvcf-container-cache
 
 ## Table of Contents
+
 - [Overview](#overview)
 - [Architecture](#architecture)
   - [Container Cache](#container-cache)
@@ -46,6 +47,7 @@ NVCF Container Cache is a high-performance caching system with two complementary
 Both run in the same StatefulSet pod and share the OpenResty/Nginx engine with dynamic TLS certificate generation.
 
 ### Key Features
+
 - **Multi-runtime**: Supports both containerd and CRI-O for container image caching
 - **Multi-endpoint**: S3, NGC Files, HuggingFace CDN, Nucleus/LFT for proxy caching
 - **Multi-registry**: NGC, Docker Hub, GCR, ECR, and any OCI-compliant registry
@@ -68,7 +70,7 @@ Caches container image layers and manifests pulled by containerd or CRI-O. Routi
 
 ![Container Cache Architecture](docs/container-cache-architecture.png)
 
-```
+```text
                      +---------------------------+
                      |  Upstream Registries       |
                      |  (nvcr.io, docker.io, etc) |
@@ -120,7 +122,7 @@ Caches S3 objects, NGC assets, and HuggingFace models. Uses DNS-based MITM via n
 
 ![Proxy Cache Architecture](docs/proxy-cache-architecture.png)
 
-```
+```text
                      +---------------------------------------+
                      |         Upstream Endpoints             |
                      |  AWS S3 | NGC Files | HuggingFace CDN |
@@ -169,6 +171,7 @@ The cache validates credentials on **every request** by sending a HEAD to the up
 ![Container Registry Auth Flow](docs/container-registry-auth-flow.png)
 
 Key behaviors:
+
 - **Key rotation**: Old keys are rejected immediately. The cache never serves content with stale credentials.
 - **Public registries**: HEAD with no auth header returns 200, so caching works for all users with no configuration needed.
 - **Private registries**: Each request is validated against the upstream. Different users sharing the same cluster get the same cached blobs (blobs are content-addressed by SHA256, so identical content is safe to share).
@@ -181,7 +184,7 @@ The S3 proxy cache validates access on every request using `lua-access.lua`. The
 
 ![S3 Proxy Cache Auth Flow](docs/s3-proxy-auth-flow.png)
 
-```
+```text
                    +-- Cache disabled? (no-cache header) --YES--> Bypass, proxy direct to S3
                    |
   S3 request ----->+
@@ -231,6 +234,7 @@ The S3 proxy cache validates access on every request using `lua-access.lua`. The
 ```
 
 Key behaviors:
+
 - **Cache key**: `bucket_region | bucket_name | method | URI | versionId | If-Match | filtered_args | range`. This ensures different buckets, versions, and byte ranges are cached independently.
 - **Presigned URLs**: Cached until their `X-Amz-Expires` time minus a 10-second safety margin. This avoids serving content after the presigned URL has expired.
 - **HEAD auth caching**: HEAD results are cached in shared memory with a configurable TTL. This dramatically reduces upstream calls during burst traffic (e.g., hundreds of pods starting simultaneously and checking the same S3 object).
@@ -413,6 +417,7 @@ kubectl -n container-caching exec ds/nvcf-container-cache-cc -- \
 ```
 
 Expected `hosts.toml`:
+
 ```toml
 server = "https://nvcr.io"
 [host."https://10.0.0.27:30345"]
@@ -469,6 +474,7 @@ The DaemonSet modifies containerd/CRI-O configuration on every node. After unins
 ```
 
 Or manually:
+
 ```bash
 kubectl create -f ./client/remove/remove-containerd-configuration.yaml
 kubectl wait --for=condition=ready pod -l name=remove-containerd-configuration \
@@ -477,6 +483,7 @@ kubectl delete -f ./client/remove/remove-containerd-configuration.yaml
 ```
 
 The cleanup tool:
+
 - Removes `hosts.toml` files from `/etc/containerd/certs.d/` for each target registry
 - Restores `config.toml` from the backup created during installation
 - Removes CRI-O registry mirror config (`nvcf-container-cache.conf`)

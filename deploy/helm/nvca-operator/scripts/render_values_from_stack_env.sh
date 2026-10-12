@@ -76,6 +76,17 @@ if helm status "${release}" --namespace "${namespace}" >/dev/null 2>&1; then
   yq eval-all -i '. as $item ireduce ({}; . *+ $item )' "${output_file}" "${tmp_existing}"
 fi
 
+# The probe image an earlier render wrote on a mirror, busybox:1.36 under the
+# release's own image prefix, read before that prefix is rendered again below.
+earlier_probe_default=""
+if [ -f "${tmp_existing}" ] &&
+  [ -z "$(yq -r '.clusterValidator.nodeToNodeProbeImage // ""' "${root_dir}/values.local.yml")" ]; then
+  earlier_operator_repository="$(yq -r '.image.repository // ""' "${tmp_existing}")"
+  case "${earlier_operator_repository}" in
+    */nvca-operator) earlier_probe_default="${earlier_operator_repository%/nvca-operator}/busybox:1.36" ;;
+  esac
+fi
+
 export REPO_PREFIX="${repo_prefix}"
 yq eval -i '
   .image.repository = strenv(REPO_PREFIX) + "/nvca-operator" |
@@ -89,6 +100,101 @@ yq eval -i '
   .nameOverride = "nvca-operator" |
   .fullnameOverride = "nvca-operator"
 ' "${output_file}"
+
+# The clusterValidator keys below, but for the probe image, describe the
+# stack, so they are written on every render, empty included. Values reused
+# from the release would otherwise keep a Gateway, a StorageClass or an
+# external component the stack no longer has, and the validator would judge
+# the cluster against it.
+
+# The control-plane validator judges only the NVCF Gateways, so name them as
+# the stack wires its routes (base.yaml defaults: gatewayApi enabled, optional
+# routes off): shared and grpc always, nats and the LLM worker Gateways only
+# with their routes on. With none named, route-label discovery stands in.
+stack_value() {
+  yq -r "$1" "${stack_env_file}"
+}
+gateway_names=()
+add_gateway() {
+  local ns name
+  ns="$(stack_value ".ingress.gatewayApi.gateways.$1.namespace // \"\"")"
+  name="$(stack_value ".ingress.gatewayApi.gateways.$1.name // \"\"")"
+  if [ -n "${ns}" ] && [ -n "${name}" ]; then
+    gateway_names+=("${ns}/${name}")
+  fi
+}
+if [ "$(stack_value '.ingress.gatewayApi.enabled')" != "false" ]; then
+  add_gateway shared
+  add_gateway grpc
+  if [ "$(stack_value '.ingress.gatewayApi.routes.nats.enabled // false')" = "true" ]; then
+    add_gateway nats
+  fi
+  if [ "$(stack_value '.ingress.gatewayApi.routes.llmWorker.enabled // false')" = "true" ]; then
+    add_gateway llmGrpc
+    add_gateway llmQuic
+  fi
+fi
+GATEWAY_NAMES=""
+if [ "${#gateway_names[@]}" -gt 0 ]; then
+  GATEWAY_NAMES="$(printf '%s\n' "${gateway_names[@]}" | sort -u | paste -sd, -)"
+fi
+export GATEWAY_NAMES
+yq eval -i '.clusterValidator.gatewayNames = (strenv(GATEWAY_NAMES) | split(",") | map(select(. != "")))' \
+  "${output_file}"
+
+# global.storageClass binds every control-plane PVC to that class, so the
+# validator checks it instead of requiring a default class.
+STORAGE_CLASS="$(stack_value '.global.storageClass // ""')"
+export STORAGE_CLASS
+yq eval -i '.clusterValidator.storageClass = strenv(STORAGE_CLASS)' "${output_file}"
+
+# A quorum dependency the stack does not install runs outside the cluster,
+# so after install the validator must not expect its StatefulSet.
+external_components=()
+for component in nats openbao cassandra; do
+  if [ "$(stack_value ".${component}.enabled")" = "false" ]; then
+    external_components+=("${component}")
+  fi
+done
+EXTERNAL_COMPONENTS=""
+if [ "${#external_components[@]}" -gt 0 ]; then
+  EXTERNAL_COMPONENTS="$(IFS=,; echo "${external_components[*]}")"
+fi
+export EXTERNAL_COMPONENTS
+yq eval -i '.clusterValidator.externalComponents = (strenv(EXTERNAL_COMPONENTS) | split(",") | map(select(. != "")))' \
+  "${output_file}"
+
+# The node-to-node probe pods carry no imagePullSecrets, and an air-gapped
+# cluster cannot reach Docker Hub. On a mirror registry they pull
+# busybox:1.36 from the stack's repository, where it must be mirrored and
+# pullable without a secret. No NGC registry (nvcr.io or a subdomain) has
+# busybox, so there the chart's default stays. A probe image the release or
+# values.local.yml already sets is the user's, and is kept, as is an
+# enforcement test image, which the probe falls back to and a mirror default
+# would shadow. The default an earlier render wrote is not the user's: it
+# follows the registry, as the other images do. NODE_TO_NODE_PROBE_IMAGE
+# overrides all of these.
+registry_host="${stack_image_registry#*://}"
+registry_host="${registry_host%%/*}"
+registry_host="$(printf '%s' "${registry_host%%:*}" | tr '[:upper:]' '[:lower:]')"
+case "${registry_host}" in
+  nvcr.io | *.nvcr.io) ngc_registry=true ;;
+  *) ngc_registry=false ;;
+esac
+existing_probe_image="$(yq -r '.clusterValidator.nodeToNodeProbeImage // ""' "${output_file}")"
+if [ -n "${earlier_probe_default}" ] && [ "${existing_probe_image}" = "${earlier_probe_default}" ]; then
+  existing_probe_image=""
+  yq eval -i '.clusterValidator.nodeToNodeProbeImage = ""' "${output_file}"
+fi
+PROBE_IMAGE="${NODE_TO_NODE_PROBE_IMAGE:-}"
+if [ -z "${PROBE_IMAGE}" ] && [ "${ngc_registry}" = "false" ] && [ -z "${existing_probe_image}" ] &&
+  [ -z "$(yq -r '.clusterValidator.networkChecks.enforcement.testImage // ""' "${output_file}")" ]; then
+  PROBE_IMAGE="${repo_prefix}/busybox:1.36"
+fi
+if [ -n "${PROBE_IMAGE}" ]; then
+  export PROBE_IMAGE
+  yq eval -i '.clusterValidator.nodeToNodeProbeImage = strenv(PROBE_IMAGE)' "${output_file}"
+fi
 
 if [ -n "${NVCA_OPERATOR_VERSION:-}" ]; then
   export NVCA_OPERATOR_VERSION

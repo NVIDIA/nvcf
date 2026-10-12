@@ -38,8 +38,9 @@ import (
 
 // Samba-on-NVMesh model cache backend (HelmCacheBackendSamba).
 //
-// Selected when CachingSupport is on, neither nvcf-sc-30 (NVMesh 3.x) nor an
-// operator-provided nvcf-miniservice-sc exists, and HelmSharedStorage is enabled.
+// Selected when CachingSupport is on, the model cache class is not provisioned
+// by NVMesh, no operator-provided nvcf-miniservice-sc exists, and
+// HelmSharedStorage is enabled.
 //
 // Each cacheHandle gets its OWN Samba server (Deployment + Service) backed by
 // its OWN block-storage data PVC on the model cache storage class

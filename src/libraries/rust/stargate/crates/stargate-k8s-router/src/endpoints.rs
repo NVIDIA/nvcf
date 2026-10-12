@@ -72,7 +72,7 @@ impl TargetSnapshot {
         self.ready_targets().map_or(0, <[PodTarget]>::len)
     }
 
-    fn ready_targets(&self) -> Option<&[PodTarget]> {
+    pub fn ready_targets(&self) -> Option<&[PodTarget]> {
         self.ready.as_deref()
     }
 }
@@ -176,9 +176,8 @@ fn target_from_endpoint(endpoint: &Endpoint, grpc_port: u16, quic_port: u16) -> 
 
 fn endpoint_is_ready(conditions: Option<&EndpointConditions>) -> bool {
     let ready = conditions.and_then(|c| c.ready).unwrap_or(true);
-    let serving = conditions.and_then(|c| c.serving).unwrap_or(true);
     let terminating = conditions.and_then(|c| c.terminating).unwrap_or(false);
-    ready && serving && !terminating
+    ready && !terminating
 }
 
 fn endpoint_pod_name(endpoint: &Endpoint) -> Option<&str> {
@@ -187,7 +186,6 @@ fn endpoint_pod_name(endpoint: &Endpoint) -> Option<&str> {
         .as_ref()
         .filter(|target| target.kind.as_deref().is_none_or(|kind| kind == "Pod"))
         .and_then(|target| target.name.as_deref())
-        .or(endpoint.hostname.as_deref())
 }
 
 fn socket_addr(address: &str, port: u16) -> String {
@@ -340,6 +338,28 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_normalizes_duplicate_pod_targets_across_slices() {
+        let first = slice(
+            "slice-a",
+            vec![endpoint("request-router-abc", "10.0.0.10", None)],
+        );
+        let replacement = slice(
+            "slice-b",
+            vec![endpoint("request-router-abc", "10.0.0.11", None)],
+        );
+
+        let snapshot = snapshot_from_slices([&first, &replacement], &config());
+
+        assert_eq!(snapshot.ready_count(), 1);
+        assert_eq!(
+            snapshot
+                .target_for_pod("request-router-abc")
+                .map(|target| target.grpc_addr),
+            Some("10.0.0.11:50071".to_string())
+        );
+    }
+
+    #[test]
     fn snapshot_includes_ready_pod_targets() {
         let slice = slice(
             "slice-a",
@@ -360,6 +380,40 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_uses_target_ref_name_instead_of_endpoint_hostname_alias() {
+        let mut pod = endpoint("request-router-7d9c6f64f5-mz2qk", "10.0.0.10", None);
+        pod.hostname = Some("10-0-0-10".to_string());
+        let slice = slice("slice-a", vec![pod]);
+
+        let snapshot = snapshot_from_slices([&slice], &config());
+
+        assert_eq!(snapshot.ready_count(), 1);
+        assert!(
+            snapshot
+                .target_for_pod("request-router-7d9c6f64f5-mz2qk")
+                .is_some()
+        );
+        assert!(snapshot.target_for_pod("10-0-0-10").is_none());
+    }
+
+    #[test]
+    fn snapshot_ignores_hostname_alias_without_pod_target_ref() {
+        let slice = slice(
+            "slice-a",
+            vec![Endpoint {
+                addresses: vec!["10.0.0.10".to_string()],
+                hostname: Some("10-0-0-10".to_string()),
+                ..Endpoint::default()
+            }],
+        );
+
+        let snapshot = snapshot_from_slices([&slice], &config());
+
+        assert_eq!(snapshot.ready_count(), 0);
+        assert!(snapshot.target_for_pod("10-0-0-10").is_none());
+    }
+
+    #[test]
     fn snapshot_treats_missing_conditions_with_kubernetes_defaults() {
         let slice = slice("slice-a", vec![endpoint("stargate-0", "10.0.0.10", None)]);
 
@@ -369,20 +423,38 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_excludes_unready_serving_false_and_terminating_endpoints() {
+    fn snapshot_includes_published_warming_endpoint() {
+        let slice = slice(
+            "slice-a",
+            vec![endpoint(
+                "warming",
+                "10.0.0.10",
+                conditions(Some(true), Some(false), Some(false)),
+            )],
+        );
+
+        let snapshot = snapshot_from_slices([&slice], &config());
+
+        assert_eq!(
+            snapshot.target_for_pod("warming"),
+            Some(target("warming", "10.0.0.10"))
+        );
+    }
+
+    #[test]
+    fn snapshot_excludes_unready_and_terminating_endpoints() {
         let slice = slice(
             "slice-a",
             vec![
-                endpoint("unready", "10.0.0.10", conditions(Some(false), None, None)),
                 endpoint(
-                    "not-serving",
-                    "10.0.0.11",
-                    conditions(None, Some(false), None),
+                    "unready",
+                    "10.0.0.10",
+                    conditions(Some(false), Some(false), Some(false)),
                 ),
                 endpoint(
                     "terminating",
-                    "10.0.0.12",
-                    conditions(None, None, Some(true)),
+                    "10.0.0.11",
+                    conditions(Some(true), Some(true), Some(true)),
                 ),
             ],
         );

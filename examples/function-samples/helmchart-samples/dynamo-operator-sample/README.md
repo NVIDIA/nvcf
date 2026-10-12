@@ -4,9 +4,9 @@ This demo adapts an
 [upstream disaggregated router example](https://github.com/ai-dynamo/dynamo/blob/v1.0.2/examples/backends/vllm/deploy/disagg_router.yaml)
 for an NVCF Helm function. Dynamo uses Grove and KAI Scheduler to orchestrate
 and place the workload. See
-[Gang Scheduling](../../../../docs/user/cluster-management/gang-scheduling.md)
+[Gang Scheduling](../../../../docs/compute-plane/cluster-management/gang-scheduling.md)
 and
-[Topology-Aware Scheduling](../../../../docs/user/cluster-management/topology-aware-scheduling.md)
+[Topology-Aware Scheduling](../../../../docs/compute-plane/cluster-management/topology-aware-scheduling.md)
 for the production compute plane configuration.
 
 ## Prerequisites

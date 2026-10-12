@@ -27,6 +27,8 @@ import (
 type Interface interface {
 	// ICMSRequests returns a ICMSRequestInformer.
 	ICMSRequests() ICMSRequestInformer
+	// ModelCacheBindings returns a ModelCacheBindingInformer.
+	ModelCacheBindings() ModelCacheBindingInformer
 	// StorageRequests returns a StorageRequestInformer.
 	StorageRequests() StorageRequestInformer
 }
@@ -45,6 +47,11 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 // ICMSRequests returns a ICMSRequestInformer.
 func (v *version) ICMSRequests() ICMSRequestInformer {
 	return &iCMSRequestInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// ModelCacheBindings returns a ModelCacheBindingInformer.
+func (v *version) ModelCacheBindings() ModelCacheBindingInformer {
+	return &modelCacheBindingInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
 // StorageRequests returns a StorageRequestInformer.

@@ -20,10 +20,11 @@ use std::time::{Duration, Instant};
 use futures::{Stream, stream};
 use tokio::sync::watch;
 use tonic::Status;
-use tracing::debug;
+use tracing::{debug, warn};
 use url::Url;
 
 use stargate_proto::pb::{StargateInfo, WatchStargatesResponse};
+use stargate_protocol::parse_explicit_http_uri;
 
 use crate::discovery::Discovery;
 use stargate_runtime::CriticalTaskGroup;
@@ -153,11 +154,18 @@ fn normalize_remote_watch_urls(
     excluded_endpoint_keys: &BTreeSet<String>,
 ) -> Vec<String> {
     let mut deduped: BTreeMap<String, String> = BTreeMap::new();
-    for raw_url in urls {
-        let url = raw_url.trim().to_string();
-        if url.is_empty() {
-            continue;
-        }
+    for (rejected_watch_url_index, raw_url) in urls.into_iter().enumerate() {
+        let url = match parse_explicit_http_uri(&raw_url) {
+            Ok(url) => url,
+            Err(error) => {
+                warn!(
+                    rejected_watch_url_index,
+                    %error,
+                    "ignoring invalid remote Stargate Watch URI"
+                );
+                continue;
+            }
+        };
         let key = watch_endpoint_key(&url).unwrap_or_else(|| url.clone());
         if excluded_endpoint_keys.contains(&key) {
             continue;
@@ -240,9 +248,9 @@ mod tests {
     fn watch_stargates_response_sorts_and_dedupes_local_and_remote_entries() {
         let remote_watch_urls = normalize_remote_watch_urls(
             vec![
-                "remote-b.stargate:50071".to_string(),
-                "remote-a.stargate:50071".to_string(),
-                "remote-b.stargate:50071".to_string(),
+                "https://remote-b.stargate:50071".to_string(),
+                "https://remote-a.stargate:50071".to_string(),
+                "https://remote-b.stargate:50071".to_string(),
             ],
             &BTreeSet::new(),
         );
@@ -264,7 +272,10 @@ mod tests {
         assert_eq!(ids, vec!["stargate-0", "stargate-1"]);
         assert_eq!(
             response.watch_stargate_urls,
-            vec!["remote-a.stargate:50071", "remote-b.stargate:50071"]
+            vec![
+                "https://remote-a.stargate:50071",
+                "https://remote-b.stargate:50071"
+            ]
         );
     }
 
@@ -289,12 +300,12 @@ mod tests {
         let response = build_watch_stargates_response(
             vec![stargate("stargate-0", "stargate-0.region-a:50071", "")],
             &[],
-            Some(" stargate-grpc-lb.region-a:443 "),
+            Some(" https://stargate-grpc-lb.region-a:443 "),
         );
 
         assert_eq!(
             response.stargates[0].grpc_pylon_dial_addr,
-            "stargate-grpc-lb.region-a:443"
+            "https://stargate-grpc-lb.region-a:443"
         );
     }
 
@@ -306,19 +317,21 @@ mod tests {
         );
         let urls = normalize_remote_watch_urls(
             vec![
-                " remote-b:50071 ".to_string(),
-                "remote-a:50071".to_string(),
-                "remote-b:50071".to_string(),
+                " https://remote-b:50071 ".to_string(),
+                "http://remote-a:50071".to_string(),
+                "https://remote-b:50071".to_string(),
                 String::new(),
-                "10.0.0.1:50071".to_string(),
                 "http://10.0.0.1:50071".to_string(),
-                "stargate-headless.ns.svc.cluster.local:50071".to_string(),
-                "stargate.ns.svc.cluster.local:50071".to_string(),
+                "https://stargate-headless.ns.svc.cluster.local:50071".to_string(),
+                "http://stargate.ns.svc.cluster.local:50071".to_string(),
             ],
             &excluded,
         );
 
-        assert_eq!(urls, vec!["remote-a:50071", "remote-b:50071"]);
+        assert_eq!(
+            urls,
+            vec!["http://remote-a:50071", "https://remote-b:50071"]
+        );
     }
 
     #[test]

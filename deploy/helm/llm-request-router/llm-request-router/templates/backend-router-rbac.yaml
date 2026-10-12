@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-{{- if and .Values.llmRequestRouter.backendRouter.enabled .Values.llmRequestRouter.rbac.create }}
+{{- if and (eq (include "llm-request-router.backendRouterEnabled" .) "true") .Values.llmRequestRouter.rbac.create }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

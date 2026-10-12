@@ -16,19 +16,24 @@
 mod mocks;
 
 use crate::mocks::nvcf_worker_mock::PublishMode;
+use async_nats::jetstream::{context::GetStreamErrorKind, ErrorCode};
 use axum::{
     body::Body,
     http::{self, header, HeaderValue, Method, StatusCode},
 };
 use futures::future;
+use http_body_util::BodyExt;
 use mocks::{
     fixtures,
     nvcf_worker_mock::{
         DefaultWorkHandler, DroppableBackgroundWorker, FailedWorkHandler, Worker, WorkerProperties,
     },
-    API_KEY, FUNCTION_ID, INSTANCE_ID, VERSION_ID_1,
+    API_KEY, FUNCTION_ID, INSTANCE_ID, LLM_FUNCTION_ID, LLM_VERSION_ID, VERSION_ID_1,
 };
 use nvcf_invocation_service::app::app;
+use nvcf_invocation_service::nats::NatsService;
+use nvcf_invocation_service::settings::GrpcClientConfig;
+use problem_details::ProblemDetails;
 use std::time::{Duration, Instant};
 use tokio::{task::JoinHandle, time::timeout};
 use tower::{Service, ServiceExt};
@@ -340,5 +345,99 @@ async fn test_delayed_worker_start() -> anyhow::Result<()> {
             break;
         }
     }
+    Ok(())
+}
+
+/// LLM functions are rejected by the auth call, so classic invocation must fail fast with a 404
+/// on every entry point and must not publish a request that no worker will consume.
+#[tokio::test]
+async fn test_llm_function_rejected_without_publishing() -> anyhow::Result<()> {
+    let (_localstack, _nats, _mock_nvcf_api, config) = fixtures().await;
+    let mut app = app(config.clone(), None).await?;
+    let app = ServiceExt::<http::Request<Body>>::ready(&mut app).await?;
+
+    let requests = [
+        http::Request::builder()
+            .method(Method::POST)
+            .uri(format!(
+                "/v2/nvcf/pexec/functions/{LLM_FUNCTION_ID}/versions/{LLM_VERSION_ID}"
+            ))
+            .header(header::AUTHORIZATION, format!("Bearer {API_KEY}"))
+            .body(Body::from("a body"))?,
+        http::Request::builder()
+            .method(Method::POST)
+            .uri(format!("/v2/nvcf/pexec/functions/{LLM_FUNCTION_ID}"))
+            .header(header::AUTHORIZATION, format!("Bearer {API_KEY}"))
+            .body(Body::from("a body"))?,
+        http::Request::builder()
+            .method(Method::POST)
+            .uri(format!("/v2/nvcf/exec/functions/{LLM_FUNCTION_ID}"))
+            .header(header::AUTHORIZATION, format!("Bearer {API_KEY}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"requestBody":{"input":"hi"}}"#))?,
+        // host form, as used by <function-id>.<invocation host>/v1/responses
+        http::Request::builder()
+            .method(Method::POST)
+            .uri("/v1/responses")
+            .header(
+                header::HOST,
+                format!("{LLM_FUNCTION_ID}.example.nvidia.com"),
+            )
+            .header(header::AUTHORIZATION, format!("Bearer {API_KEY}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"input":"hi"}"#))?,
+    ];
+
+    for request in requests {
+        let uri = request.uri().clone();
+        let start = Instant::now();
+        let response = timeout(Duration::from_secs(10), app.call(request))
+            .await
+            .unwrap_or_else(|_| panic!("{uri}: request should not wait for a worker"))?;
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "{uri}: took {:?}",
+            start.elapsed()
+        );
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("application/problem+json")),
+            "{uri}"
+        );
+        let body = response.into_body().collect().await?.to_bytes();
+        let problem: ProblemDetails = serde_json::from_slice(&body)?;
+        assert_eq!(
+            problem.status,
+            Some(StatusCode::NOT_FOUND),
+            "{uri}: {problem:?}"
+        );
+        assert!(
+            problem
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("LLM functions cannot be invoked")),
+            "{uri}: {problem:?}"
+        );
+    }
+
+    // publishing creates the request stream on demand, so its absence proves nothing was queued
+    let nats_service = NatsService::new(
+        &config.nats_properties,
+        "http://dummy.localhost",
+        None,
+        &GrpcClientConfig::default(),
+    )
+    .await?;
+    let stream_name = nats_service.request_stream_name(LLM_VERSION_ID);
+    match nats_service.jetstream().get_stream(&stream_name).await {
+        Ok(_) => panic!("no request stream should exist for the rejected LLM function"),
+        Err(err) => match err.kind() {
+            GetStreamErrorKind::JetStream(js_err)
+                if js_err.error_code() == ErrorCode::STREAM_NOT_FOUND => {}
+            _ => return Err(err.into()),
+        },
+    }
+
     Ok(())
 }

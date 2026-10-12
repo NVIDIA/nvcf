@@ -43,10 +43,14 @@ type fakeRunner struct {
 	result     harness.Result
 	runResults []harness.Result
 	err        error
+	runHook    func(context.Context, int) (harness.Result, error)
 }
 
-func (f *fakeRunner) Run(_ context.Context, command string) (harness.Result, error) {
+func (f *fakeRunner) Run(ctx context.Context, command string) (harness.Result, error) {
 	f.runs = append(f.runs, recordedRun{command: command})
+	if f.runHook != nil {
+		return f.runHook(ctx, len(f.runs))
+	}
 	if index := len(f.runs) - 1; index < len(f.runResults) {
 		return f.runResults[index], f.err
 	}
@@ -358,6 +362,161 @@ func TestIUpdateYAMLFileWritesKeys(t *testing.T) {
 	got, _ := os.ReadFile(abs)
 	if !strings.Contains(string(got), "registry: nvcr.io") {
 		t.Fatalf("missing key:\n%s", got)
+	}
+}
+
+// TestIWriteYAMLFileCreatesAndRestores verifies that the write-yaml
+// step creates the file and that Suite.Teardown removes it.
+func TestIWriteYAMLFileCreatesAndRestores(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	rel := "out/region-b-values.yaml"
+	abs := filepath.Join(sc.Suite.Config.RepoRoot, rel)
+
+	table := docTable(t, [][]string{
+		{"llmRequestRouter.fullnameOverride", "llm-request-router-region-b"},
+		{"llmRequestRouter.replicaCount", "2"},
+	})
+	if err := sc.iWriteYAMLFile(rel, table); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got, err := os.ReadFile(abs)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(got), "fullnameOverride: llm-request-router-region-b") {
+		t.Fatalf("missing key:\n%s", got)
+	}
+
+	if err := sc.Suite.Teardown(); err != nil {
+		t.Fatalf("teardown: %v", err)
+	}
+	if _, err := os.Stat(abs); err == nil {
+		t.Fatal("file should be removed after restore")
+	}
+}
+
+// TestIWriteYAMLFileRejectsExistingFile confirms that the write-yaml
+// step refuses to overwrite an existing file.
+func TestIWriteYAMLFileRejectsExistingFile(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	rel := "existing.yaml"
+	abs := filepath.Join(sc.Suite.Config.RepoRoot, rel)
+	if err := os.WriteFile(abs, []byte("key: value\n"), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	table := docTable(t, [][]string{{"key", "new"}})
+	err := sc.iWriteYAMLFile(rel, table)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("err = %v, want already-exists error", err)
+	}
+}
+
+// TestKubernetesManifestAppliesInterpolatedBodyPerContext verifies that the
+// Given stores the raw docstring, that ${VAR} expands at apply time rather
+// than declaration time, and that one explicit-context apply runs per row
+// against the same rendered file under OutDir.
+func TestKubernetesManifestAppliesInterpolatedBodyPerContext(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	sc.Suite.Config.OutDir = filepath.Join(sc.Suite.Config.RepoRoot, "out", "run")
+	fake.result = harness.Result{ExitCode: 0}
+	doc := &godog.DocString{Content: "apiVersion: v1\nkind: Endpoints\nsubsets:\n  - addresses:\n      - ip: ${BDD_ALIAS_IP}\n"}
+	if err := sc.kubernetesManifestIs("region-b-watch", doc); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	// Exported after the declaration, as the feature does with CONTROL_PLANE_IP.
+	t.Setenv("BDD_ALIAS_IP", "192.0.2.10")
+
+	table := docTable(t, [][]string{{"context"}, {"k3d-ncp-local-cp"}, {"k3d-ncp-local-compute-1"}})
+	if err := sc.iSuccessfullyApplyKubernetesManifest(context.Background(), "region-b-watch", table); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if len(fake.runs) != 2 {
+		t.Fatalf("runs = %d, want 2", len(fake.runs))
+	}
+	var path string
+	for index, wantContext := range []string{"k3d-ncp-local-cp", "k3d-ncp-local-compute-1"} {
+		prefix := "kubectl --context " + wantContext + " apply -f "
+		if !strings.HasPrefix(fake.runs[index].command, prefix) {
+			t.Fatalf("command %d = %q, want prefix %q", index+1, fake.runs[index].command, prefix)
+		}
+		got := strings.TrimPrefix(fake.runs[index].command, prefix)
+		if path == "" {
+			path = got
+		} else if got != path {
+			t.Fatalf("second apply used %q, want the same file %q", got, path)
+		}
+	}
+	if !strings.HasPrefix(path, sc.Suite.Config.OutDir) {
+		t.Fatalf("manifest %q was not written under OutDir %q", path, sc.Suite.Config.OutDir)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if !strings.Contains(string(body), "ip: 192.0.2.10") {
+		t.Fatalf("manifest body was not interpolated at apply time:\n%s", body)
+	}
+	if sc.LastResult.ExitCode != 0 || sc.LastCommand != fake.runs[1].command {
+		t.Fatalf("last result not recorded: %+v %q", sc.LastResult, sc.LastCommand)
+	}
+}
+
+// TestKubernetesManifestIsRejectsEmptyAndDuplicateDeclarations confirms
+// that the manifest Given rejects an empty name, a blank body, and a
+// second declaration of the same name within one scenario.
+func TestKubernetesManifestIsRejectsEmptyAndDuplicateDeclarations(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	if err := sc.kubernetesManifestIs("", &godog.DocString{Content: "kind: Service\n"}); err == nil {
+		t.Fatal("expected empty name error")
+	}
+	if err := sc.kubernetesManifestIs("alias", &godog.DocString{Content: "  \n"}); err == nil {
+		t.Fatal("expected empty body error")
+	}
+	if err := sc.kubernetesManifestIs("alias", &godog.DocString{Content: "kind: Service\n"}); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	err := sc.kubernetesManifestIs("alias", &godog.DocString{Content: "kind: Endpoints\n"})
+	if err == nil || !strings.Contains(err.Error(), "already declared") {
+		t.Fatalf("err = %v, want already-declared error", err)
+	}
+}
+
+// TestISuccessfullyApplyKubernetesManifestRejectsUndeclaredNameAndBadTable
+// confirms that applying an undeclared manifest or passing a table without
+// the context header fails before any kubectl command runs.
+func TestISuccessfullyApplyKubernetesManifestRejectsUndeclaredNameAndBadTable(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	table := docTable(t, [][]string{{"context"}, {"k3d-ncp-local-cp"}})
+	err := sc.iSuccessfullyApplyKubernetesManifest(context.Background(), "missing", table)
+	if err == nil || !strings.Contains(err.Error(), "not declared") {
+		t.Fatalf("err = %v, want not-declared error", err)
+	}
+	if err := sc.kubernetesManifestIs("alias", &godog.DocString{Content: "kind: Service\n"}); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	badHeader := docTable(t, [][]string{{"cluster"}, {"k3d-ncp-local-cp"}})
+	if err := sc.iSuccessfullyApplyKubernetesManifest(context.Background(), "alias", badHeader); err == nil {
+		t.Fatal("expected header error")
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0 before validation passes", len(fake.runs))
+	}
+}
+
+// TestISuccessfullyApplyKubernetesManifestNamesFailingContext verifies
+// that when a later context row fails, the error names that row number
+// and kube context so the operator knows which cluster rejected the apply.
+func TestISuccessfullyApplyKubernetesManifestNamesFailingContext(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.runResults = []harness.Result{{ExitCode: 0}, {ExitCode: 1}}
+	if err := sc.kubernetesManifestIs("alias", &godog.DocString{Content: "kind: Service\n"}); err != nil {
+		t.Fatalf("declare: %v", err)
+	}
+	table := docTable(t, [][]string{{"context"}, {"k3d-ncp-local-cp"}, {"k3d-ncp-local-compute-1"}})
+	err := sc.iSuccessfullyApplyKubernetesManifest(context.Background(), "alias", table)
+	if err == nil || !strings.Contains(err.Error(), "row 2") || !strings.Contains(err.Error(), "k3d-ncp-local-compute-1") {
+		t.Fatalf("err = %v, want row 2 compute context failure", err)
 	}
 }
 
@@ -997,6 +1156,139 @@ func TestDeploymentShouldCompleteRolloutRunsExplicitWait(t *testing.T) {
 	}
 }
 
+func TestDNSNameShouldResolveRunsExplicitWait(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+	t.Setenv("BDD_DNS_NAME", "api.192-0-2-10.nip.io")
+	t.Setenv("BDD_DNS_TIMEOUT", "180")
+
+	if err := sc.dnsNameShouldResolve(context.Background(), "${BDD_DNS_NAME}", "${BDD_DNS_TIMEOUT}"); err != nil {
+		t.Fatalf("wait for DNS resolution: %v", err)
+	}
+	want := "tests/bdd/scripts/wait-for-dns.sh api.192-0-2-10.nip.io 180"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestDNSNameShouldResolveRejectsInvalidInputsBeforeRunning(t *testing.T) {
+	tests := []struct {
+		name     string
+		hostname string
+		timeout  string
+		want     string
+	}{
+		{
+			name:     "empty hostname",
+			hostname: " ",
+			timeout:  "180",
+			want:     "DNS name is empty",
+		},
+		{
+			name:     "invalid timeout",
+			hostname: "gateway.example.com",
+			timeout:  "-1",
+			want:     "not a non-negative integer",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sc, fake := newScenarioContext(t)
+			err := sc.dnsNameShouldResolve(context.Background(), tc.hostname, tc.timeout)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want error containing %q", err, tc.want)
+			}
+			if len(fake.runs) != 0 {
+				t.Fatalf("runs = %d, want 0", len(fake.runs))
+			}
+		})
+	}
+}
+
+func TestDNSNameShouldResolveFailureNamesTargetWithoutResolverOutput(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	secretOutput := "unrelated-resolver-output"
+	fake.result = harness.Result{ExitCode: 2, Stdout: secretOutput, Stderr: secretOutput}
+
+	err := sc.dnsNameShouldResolve(context.Background(), "gateway.example.com", "180")
+	if err == nil {
+		t.Fatal("expected DNS resolution failure")
+	}
+	for _, want := range []string{`DNS name "gateway.example.com"`, "within 180 seconds"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), secretOutput) {
+		t.Fatalf("error leaked resolver output: %v", err)
+	}
+}
+
+// TestKubernetesWorkloadsShouldCompleteRolloutRunsExplicitWaits verifies
+// that each table row produces exactly one explicit-context rollout status
+// command, in row order, with the kind lowercased for kubectl.
+func TestKubernetesWorkloadsShouldCompleteRolloutRunsExplicitWaits(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+	table := docTable(t, [][]string{
+		{"kind", "name", "namespace"},
+		{"StatefulSet", "llm-request-router-region-b", "nvcf"},
+		{"Deployment", "llm-request-router-region-b-backend-router", "nvcf"},
+	})
+
+	if err := sc.kubernetesWorkloadsShouldCompleteRollout(context.Background(), "k3d-ncp-local-cp", "10m", table); err != nil {
+		t.Fatalf("wait for workload rollouts: %v", err)
+	}
+	want := []string{
+		"kubectl rollout status statefulset/llm-request-router-region-b -n nvcf --context k3d-ncp-local-cp --timeout=10m",
+		"kubectl rollout status deployment/llm-request-router-region-b-backend-router -n nvcf --context k3d-ncp-local-cp --timeout=10m",
+	}
+	if len(fake.runs) != len(want) {
+		t.Fatalf("runs = %d, want %d", len(fake.runs), len(want))
+	}
+	for index, run := range fake.runs {
+		if run.command != want[index] {
+			t.Fatalf("command %d = %q, want %q", index+1, run.command, want[index])
+		}
+	}
+}
+
+// TestKubernetesWorkloadsShouldCompleteRolloutNamesFailingRow confirms
+// that a non-zero rollout exit names the row, kind, and workload name in
+// the error without echoing kubectl output.
+func TestKubernetesWorkloadsShouldCompleteRolloutNamesFailingRow(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 1}
+	table := docTable(t, [][]string{
+		{"kind", "name", "namespace"},
+		{"StatefulSet", "llm-request-router-region-b", "nvcf"},
+	})
+
+	err := sc.kubernetesWorkloadsShouldCompleteRollout(context.Background(), "k3d-ncp-local-cp", "10m", table)
+	if err == nil || !strings.Contains(err.Error(), "row 1") || !strings.Contains(err.Error(), `StatefulSet "llm-request-router-region-b"`) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+// TestKubernetesWorkloadsShouldCompleteRolloutRejectsWrongHeaders confirms
+// that a table whose headers are not kind, name, namespace in that order is
+// rejected before any rollout command runs.
+func TestKubernetesWorkloadsShouldCompleteRolloutRejectsWrongHeaders(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	table := docTable(t, [][]string{
+		{"kind", "namespace", "name"},
+		{"StatefulSet", "nvcf", "llm-request-router-region-b"},
+	})
+
+	if err := sc.kubernetesWorkloadsShouldCompleteRollout(context.Background(), "k3d-ncp-local-cp", "10m", table); err == nil {
+		t.Fatal("expected header order error")
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0", len(fake.runs))
+	}
+}
+
 func TestKubernetesResourceShouldContainFailureDoesNotExposeResourceValues(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	fake.result = harness.Result{ExitCode: 0, Stdout: `data:
@@ -1411,6 +1703,171 @@ func TestCommandOutputContainsAssertion(t *testing.T) {
 	}
 	if err := sc.commandOutputShouldNotContain("deployed"); err == nil {
 		t.Fatal("expected mismatch for not-contain")
+	}
+}
+
+func TestCommandShouldFailAcceptsNonZeroWithoutCaching(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	sc.LastCommand = "grpcurl rejected-call"
+	sc.LastResult = harness.Result{ExitCode: 1, Stderr: "certificate is not trusted"}
+
+	if err := sc.commandShouldFail(); err != nil {
+		t.Fatalf("assert command failure: %v", err)
+	}
+	if sc.Suite.Cache.Has(sc.LastCommand) {
+		t.Fatal("failed command should not enter the successful-command cache")
+	}
+
+	sc.LastResult = harness.Result{ExitCode: 0}
+	if err := sc.commandShouldFail(); err == nil {
+		t.Fatal("expected successful command to fail the negative assertion")
+	}
+}
+
+func TestCommandOutputTableAssertionsInterpolateExpectedText(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("BDD_EXPECTED_DIAGNOSTIC", "certificate is not trusted")
+	sc.LastResult = harness.Result{
+		Stdout: "request rejected\n",
+		Stderr: "certificate is not trusted\ncontext deadline exceeded\n",
+	}
+
+	all := docTable(t, [][]string{
+		{"text"},
+		{"${BDD_EXPECTED_DIAGNOSTIC}"},
+		{"context deadline exceeded"},
+	})
+	if err := sc.commandOutputShouldContainAll(all); err != nil {
+		t.Fatalf("contain all: %v", err)
+	}
+
+	oneOf := docTable(t, [][]string{
+		{"text"},
+		{"certificate signed by unknown authority"},
+		{"${BDD_EXPECTED_DIAGNOSTIC}"},
+	})
+	if err := sc.commandOutputShouldContainOneOf(oneOf); err != nil {
+		t.Fatalf("contain one of: %v", err)
+	}
+}
+
+func TestCommandOutputAssertionsRejectValuesThatInterpolateToEmpty(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("BDD_EMPTY_EXPECTATION", "")
+	sc.LastResult = harness.Result{Stdout: "any output contains the empty string"}
+
+	if err := sc.commandOutputShouldContain("${BDD_EMPTY_EXPECTATION}"); err == nil {
+		t.Fatal("expected empty single-value expectation to fail")
+	}
+	if err := sc.commandOutputShouldNotContain("${BDD_EMPTY_EXPECTATION}"); err == nil {
+		t.Fatal("expected empty negative expectation to fail validation")
+	}
+
+	containAll := docTable(t, [][]string{
+		{"text"},
+		{"${BDD_EMPTY_EXPECTATION}"},
+	})
+	if err := sc.commandOutputShouldContainAll(containAll); err == nil {
+		t.Fatal("expected contain-all table with an empty resolved value to fail")
+	}
+	containOneOf := docTable(t, [][]string{
+		{"text"},
+		{"any output"},
+		{"${BDD_EMPTY_EXPECTATION}"},
+	})
+	if err := sc.commandOutputShouldContainOneOf(containOneOf); err == nil {
+		t.Fatal("expected contain-one-of table with an empty resolved value to fail")
+	}
+}
+
+func TestCommandOutputShouldNotMatchRejectsDashedPodIPAlias(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	const pattern = `([0-9]{1,3}-){3}[0-9]{1,3}\.`
+
+	sc.LastResult = harness.Result{Stdout: "llm-request-router-region-b-0.nvcf.svc.cluster.local"}
+	if err := sc.commandOutputShouldNotMatch(pattern); err != nil {
+		t.Fatalf("stable identity should pass: %v", err)
+	}
+
+	sc.LastResult = harness.Result{Stdout: "10-42-0-7.llm-request-router-region-b-headless.nvcf.svc.cluster.local"}
+	if err := sc.commandOutputShouldNotMatch(pattern); err == nil {
+		t.Fatal("expected dashed pod-IP alias failure")
+	}
+}
+
+func TestCommandOutputShouldHaveDistinctMatchesCountsUniqueIdentities(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	sc.LastResult = harness.Result{
+		Stdout: "llm-request-router-region-b-0 llm-request-router-region-b-1 llm-request-router-region-b-0",
+	}
+
+	if err := sc.commandOutputShouldHaveDistinctMatches(2, "llm-request-router-region-b-[0-9]+"); err != nil {
+		t.Fatalf("two distinct identities should pass: %v", err)
+	}
+	err := sc.commandOutputShouldHaveDistinctMatches(3, "llm-request-router-region-b-[0-9]+")
+	if err == nil {
+		t.Fatal("expected distinct match count failure")
+	}
+	if !strings.Contains(err.Error(), "want 3") {
+		t.Fatalf("error = %q, want expected-count detail", err)
+	}
+}
+
+func TestISuccessfullyObserveWatchStargatesRunsExplicitCommand(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: "{\n  \"stargates\": []\n}\n"}
+
+	err := sc.iSuccessfullyObserveWatchStargates(
+		context.Background(),
+		"127.0.0.1:50071",
+		"llm-request-router.nvcf.svc.cluster.local",
+		"stargate-quic-tls",
+		"nvcf",
+		"k3d-ncp-local-cp",
+		"3",
+	)
+	if err != nil {
+		t.Fatalf("observe WatchStargates: %v", err)
+	}
+	want := "bash tests/bdd/scripts/observe-watch-stargates.sh 127.0.0.1:50071 llm-request-router.nvcf.svc.cluster.local stargate-quic-tls nvcf k3d-ncp-local-cp 3"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+	if !strings.Contains(sc.LastResult.Stdout, "stargates") {
+		t.Fatalf("last result = %#v, want preserved WatchStargates output", sc.LastResult)
+	}
+}
+
+func TestEveryPylonForFunctionShouldReportMetricsRunsVisibleExpectations(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+	table := docTable(t, [][]string{
+		{"metric", "comparison", "count"},
+		{"pylon_registration_stream_connected", "exactly", "5"},
+		{"pylon_reverse_tunnel_connected", "at least", "3"},
+	})
+
+	if err := sc.everyPylonForFunctionShouldReportMetrics(context.Background(), "bdd-registration-tls", "llm-worker", "k3d-ncp-local-compute-1", "10m", table); err != nil {
+		t.Fatalf("observe Pylon metrics: %v", err)
+	}
+	want := "bash tests/bdd/scripts/wait-pylon-metrics.sh bdd-registration-tls llm-worker k3d-ncp-local-compute-1 10m pylon_registration_stream_connected exactly 5 pylon_reverse_tunnel_connected 'at least' 3"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestPylonMetricTableRejectsInvalidStructureBeforeRunning(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	table := docTable(t, [][]string{
+		{"metric", "comparison", "count"},
+		{"pylon_registration_stream_connected", "exactly", "not-a-count"},
+	})
+
+	if err := sc.everyPylonForFunctionShouldReportMetrics(context.Background(), "function", "llm-worker", "context", "10m", table); err == nil {
+		t.Fatal("expected invalid count error")
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0 before table validation", len(fake.runs))
 	}
 }
 

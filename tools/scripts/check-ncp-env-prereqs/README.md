@@ -6,10 +6,11 @@ installing or validating a self-managed NVCF/NCP environment.
 
 ---
 
-#### Testing Environment
+## Testing Environment
+
 - BCM + K8S cluster provision by NCP
   
-----
+---
 
 Run it from the repository root:
 

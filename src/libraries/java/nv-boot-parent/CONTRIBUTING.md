@@ -16,7 +16,7 @@ git commit -s -m "feat: your commit message"
 
 This adds a line like:
 
-```
+```text
 Signed-off-by: Your Name <your.email@example.com>
 ```
 

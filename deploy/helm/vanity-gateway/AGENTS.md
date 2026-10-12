@@ -54,6 +54,15 @@ override is used for validation.
 on most of its sub-objects. Adding a value key requires a matching schema
 change or the render fails.
 
+The CI values only cover renders that are expected to succeed. Chart-specific
+render checks run by hand:
+
+```bash
+bash tests/chart-render/verify-llm-gateway-routing.sh
+bash tests/chart-render/verify-shadow-schema.sh
+bash tests/chart-render/verify-servicemonitor-label.sh
+```
+
 This chart pairs with the service image source at
 `src/invocation-plane-services/vanity-gateway`, whose service name is
 `nvcf-ai-api-gateway-service`. Route configuration for the gateway in front of

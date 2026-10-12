@@ -30,6 +30,14 @@ nats:
       registry: ""
       pullPolicy: IfNotPresent
   container:
+    merge:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
     image:
       registry: ""
       repository: ""
@@ -77,10 +85,18 @@ nats:
         value: "/healthz?js-server-only=true"
   reloader:
     enabled: true
+    merge:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
     image:
-      registry: ""
-      repository: ""
-      tag: 0.23.0
+      registry: docker.io
+      repository: natsio/nats-server-config-reloader
+      tag: 0.24.0
       pullPolicy: IfNotPresent
   natsBox:
     enabled: true
@@ -96,6 +112,15 @@ nats:
         nkey:
           secretName: nats-nkeys
           key: user.key
+  podTemplate:
+    merge:
+      spec:
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+          fsGroupChangePolicy: OnRootMismatch
   # Auth callout NKey bootstrap.
   # The default secret name is shared with openbao-migrations; override it only
   # when every downstream consumer is configured to read the same Secret.
@@ -120,6 +145,7 @@ nats:
     merge:
       server_tags:
         - "dc:ncp"
+        - "aws-region:ncp"
       # Auth callout delegates authentication to an external service (nvcf-nats-auth-callout-service).
       # The AUTH account holds the auth callout service's NKey identity.
       # The APP account is the default for authenticated clients (NVCA, workers).

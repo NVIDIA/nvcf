@@ -43,7 +43,7 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH \
 # Final runtime image – one per requested TARGETPLATFORM
 # BuildKit will create a final image per platform and copy the pre-built
 # binary that matches the platform's architecture.
-FROM nvcr.io/nvidia/distroless/go:v4.0.6
+FROM nvcr.io/nvidia/distroless/go:v4.1.2
 
 # The following build arg is automatically populated by BuildKit.
 ARG TARGETARCH

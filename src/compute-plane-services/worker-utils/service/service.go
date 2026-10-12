@@ -58,7 +58,7 @@ func Run() {
 		}
 	}
 	err := NewRootCommand(context.Background(), logger).Execute()
-	if err != nil && err.Error() != "received signal interrupt" {
+	if isFatalRunError(err) {
 		utils.ExitReason(err)
 		zap.S().Panic(err)
 	}

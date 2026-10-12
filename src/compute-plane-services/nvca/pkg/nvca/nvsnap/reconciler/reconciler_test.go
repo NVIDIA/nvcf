@@ -709,7 +709,7 @@ func TestRecordFailurePreservesCapturedAt(t *testing.T) {
 		AttemptCount:    1,
 	}
 	_ = r.recordFailure(context.Background(), "fv-failtest", "completed_failed", prev,
-		fmtErrorf("simulated"), logrus.NewEntry(logrus.New()))
+		fmtErrorf("simulated"), claimToken{}, logrus.NewEntry(logrus.New()))
 
 	got, err := dyn.Resource(CFSResource).Get(context.Background(), "fv-failtest", metav1.GetOptions{})
 	if err != nil {
@@ -757,7 +757,7 @@ func TestWriteStatusPreservesUnmanagedKeys(t *testing.T) {
 	if err := writeStatus(context.Background(), dyn, "fv-conditions", statusUpdate{
 		CheckpointHash:  "deadbeef",
 		LocalCacheState: nvsnapv1alpha1.LocalCacheStateWarm,
-	}); err != nil {
+	}, claimToken{}); err != nil {
 		t.Fatalf("writeStatus: %v", err)
 	}
 
@@ -811,7 +811,7 @@ func TestRecordFailureReturnsNil_NoRequeue(t *testing.T) {
 	r := &Reconciler{DynClient: dyn}
 
 	got := r.recordFailure(context.Background(), "fv-noretry", "completed_failed",
-		cfsStatus{}, fmtErrorf("simulated capture failure"), logrus.NewEntry(logrus.New()))
+		cfsStatus{}, fmtErrorf("simulated capture failure"), claimToken{}, logrus.NewEntry(logrus.New()))
 	if got != nil {
 		t.Errorf("recordFailure returned %v; want nil so controller-runtime DOES NOT requeue (nvsnap-h100-a 2026-06-03 retry storm)", got)
 	}
@@ -834,7 +834,7 @@ func TestRecordFailureBumpsCounterByReason(t *testing.T) {
 			before := testutil.ToFloat64(checkpointAttemptFailures.WithLabelValues(reason))
 
 			err := r.recordFailure(context.Background(), "fv-"+reason, reason,
-				cfsStatus{}, fmtErrorf("simulated"), logrus.NewEntry(logrus.New()))
+				cfsStatus{}, fmtErrorf("simulated"), claimToken{}, logrus.NewEntry(logrus.New()))
 			if err != nil {
 				t.Fatalf("recordFailure returned %v; must be nil", err)
 			}

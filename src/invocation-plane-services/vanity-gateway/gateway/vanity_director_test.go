@@ -252,6 +252,27 @@ func TestModifyTooManyRequestsResponse(t *testing.T) {
 			message:        "Check out this model at a partner!",
 			expectedDetail: "Rate limit exceeded. Check out this model at a partner!",
 		},
+		{
+			name:         "429 with a bare message appends to it",
+			statusCode:   http.StatusTooManyRequests,
+			responseBody: `{"message":"rate limit exceeded"}`,
+			message:      "Check out this model at a partner!",
+			expectedBody: `{"message":"rate limit exceeded Check out this model at a partner!"}`,
+		},
+		{
+			name:         "429 with a non-string message passes through unchanged",
+			statusCode:   http.StatusTooManyRequests,
+			responseBody: `{"message":42}`,
+			message:      "Check out this model at a partner!",
+			expectedBody: `{"message":42}`,
+		},
+		{
+			name:           "429 prefers problem details over a bare message",
+			statusCode:     http.StatusTooManyRequests,
+			responseBody:   `{"title":"Too Many Requests","detail":"Rate limit exceeded.","message":"ignored"}`,
+			message:        "Check out this model at a partner!",
+			expectedDetail: "Rate limit exceeded. Check out this model at a partner!",
+		},
 	}
 
 	for _, tc := range tests {
@@ -496,10 +517,12 @@ func TestServeExecPassesThroughUpstreamBadGateway(t *testing.T) {
 	require.Equal(t, upstreamBody, string(body))
 
 	metrics := collectGatewayMetrics(t, reader)
-	require.True(t, gatewayMetricHasAttributeAbsent(metrics, map[attribute.Key]attribute.Value{
-		"http.request.method":       attribute.StringValue(http.MethodPost),
-		"http.response.status_code": attribute.Int64Value(http.StatusBadGateway),
-	}, middleware.GatewayProxyOutcomeMetricAttribute))
+	require.True(t, gatewayMetricHasAttributes(metrics, map[attribute.Key]attribute.Value{
+		"http.request.method":                         attribute.StringValue(http.MethodPost),
+		"http.response.status_code":                   attribute.Int64Value(http.StatusBadGateway),
+		middleware.GatewayProxyOutcomeMetricAttribute: attribute.StringValue(string(middleware.GatewayProxyOutcomeUpstreamStatus)),
+	}))
+	require.Equal(t, string(middleware.GatewayProxyOutcomeUpstreamStatus), result.Header.Get(middleware.ErrorSourceHeader))
 }
 
 func TestServeExecRecordsGatewayProxyOutcomeOnParentSpan(t *testing.T) {

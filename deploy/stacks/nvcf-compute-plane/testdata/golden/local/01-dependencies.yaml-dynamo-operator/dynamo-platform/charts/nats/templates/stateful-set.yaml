@@ -45,7 +45,7 @@ spec:
               fieldPath: metadata.name
         - name: SERVER_NAME
           value: $(POD_NAME)
-        image: nats:2.10.21-alpine
+        image: docker.io/library/nats:2.10.21-alpine
         lifecycle:
           preStop:
             exec:
@@ -97,7 +97,7 @@ spec:
         - /var/run/nats/nats.pid
         - -config
         - /etc/nats-config/nats.conf
-        image: natsio/nats-server-config-reloader:0.16.0
+        image: docker.io/natsio/nats-server-config-reloader:0.24.0
         name: reloader
         volumeMounts:
         - mountPath: /var/run/nats

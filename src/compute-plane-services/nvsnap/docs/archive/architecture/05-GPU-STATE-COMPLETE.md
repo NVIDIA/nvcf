@@ -9,6 +9,7 @@ To checkpoint a GPU application, we must capture **ALL** state that affects prog
 ### 1. CUDA Driver API State
 
 #### 1.1 Contexts
+
 ```c
 // What we intercept
 CUresult cuCtxCreate(CUcontext *pctx, unsigned int flags, CUdevice dev);
@@ -32,6 +33,7 @@ struct ContextState {
 ```
 
 #### 1.2 Device Memory Allocations
+
 ```c
 // What we intercept
 CUresult cuMemAlloc(CUdeviceptr *dptr, size_t bytesize);
@@ -59,6 +61,7 @@ struct MemoryAllocation {
 ```
 
 #### 1.3 Host Pinned Memory
+
 ```c
 // What we intercept
 CUresult cuMemHostAlloc(void **pp, size_t bytesize, unsigned int Flags);
@@ -78,6 +81,7 @@ struct PinnedHostAllocation {
 ```
 
 #### 1.4 Streams
+
 ```c
 // What we intercept
 CUresult cuStreamCreate(CUstream *phStream, unsigned int Flags);
@@ -99,6 +103,7 @@ struct StreamState {
 ```
 
 #### 1.5 Events
+
 ```c
 // What we intercept
 CUresult cuEventCreate(CUevent *phEvent, unsigned int Flags);
@@ -118,6 +123,7 @@ struct EventState {
 ```
 
 #### 1.6 Modules and Functions (Kernels)
+
 ```c
 // What we intercept
 CUresult cuModuleLoad(CUmodule *module, const char *fname);
@@ -143,6 +149,7 @@ struct ModuleState {
 ```
 
 #### 1.7 Textures and Surfaces
+
 ```c
 // What we intercept  
 CUresult cuTexObjectCreate(CUtexObject *pTexObject, const CUDA_RESOURCE_DESC *pResDesc, const CUDA_TEXTURE_DESC *pTexDesc, const CUDA_RESOURCE_VIEW_DESC *pResViewDesc);
@@ -165,6 +172,7 @@ struct TextureState {
 ```
 
 #### 1.8 Arrays (for textures/surfaces)
+
 ```c
 // What we intercept
 CUresult cuArrayCreate(CUarray *pHandle, const CUDA_ARRAY_DESCRIPTOR *pAllocateArray);
@@ -186,6 +194,7 @@ struct ArrayState {
 ```
 
 #### 1.9 CUDA Graphs
+
 ```c
 // What we intercept
 CUresult cuGraphCreate(CUgraph *phGraph, unsigned int flags);
@@ -483,7 +492,7 @@ CUresult cuWaitExternalSemaphoresAsync(const CUexternalSemaphore *extSemArray, c
 
 On restore, all handles will be different:
 
-```
+```text
 CHECKPOINT                          RESTORE
 ───────────────────────────────────────────────────────────
 cudaMalloc → 0x7f1234560000        cudaMalloc → 0x7f9876540000
@@ -613,7 +622,7 @@ CUresult restore_memory_allocation(MemoryAllocation* alloc) {
 
 ## Checkpoint Procedure
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        CHECKPOINT PROCEDURE                                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -652,7 +661,7 @@ CUresult restore_memory_allocation(MemoryAllocation* alloc) {
 
 ## Restore Procedure
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                         RESTORE PROCEDURE                                    │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -695,7 +704,7 @@ CUresult restore_memory_allocation(MemoryAllocation* alloc) {
 
 ### 1. Library Version Compatibility
 
-```
+```text
 Problem: Application checkpointed with cuBLAS 11.0, restore on cuBLAS 12.0
          Internal handle layouts may differ
 
@@ -707,7 +716,7 @@ Solution:
 
 ### 2. Driver Version Compatibility
 
-```
+```text
 Problem: NVIDIA driver 525 → 535 may change internal structures
 
 Solution:
@@ -718,7 +727,7 @@ Solution:
 
 ### 3. GPU Generation Differences
 
-```
+```text
 Problem: Checkpoint on A100, restore on H100
          Memory layout, compute capabilities differ
 
@@ -730,7 +739,7 @@ Solution:
 
 ### 4. Multi-Process Atomicity
 
-```
+```text
 Problem: 4 processes with NCCL, must checkpoint atomically
 
 Solution:
@@ -742,7 +751,7 @@ Solution:
 
 ### 5. In-Flight Operations
 
-```
+```text
 Problem: Operations queued on stream not yet executed
 
 Solution:
@@ -754,6 +763,7 @@ Solution:
 ## Testing Strategy
 
 ### Unit Tests (per function)
+
 ```bash
 # Test each intercepted function
 test_cuMemAlloc_tracked
@@ -763,6 +773,7 @@ test_handle_remap_after_restore
 ```
 
 ### Integration Tests
+
 ```bash
 # Test checkpoint/restore cycle
 test_single_allocation_restore
@@ -772,6 +783,7 @@ test_nccl_allreduce_restore
 ```
 
 ### Stress Tests
+
 ```bash
 # Edge cases
 test_1000_allocations

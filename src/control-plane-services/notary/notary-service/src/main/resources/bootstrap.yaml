@@ -17,11 +17,6 @@ spring:
   application:
     name: nvcf-notary-service
     env: default
-    # Satisfies nv-boot-starter-core's ValidateEnvironmentPostProcessor during the bootstrap
-    # phase (where application-{profile}.yaml has not yet been loaded). BootCoreEnvironmentPostProcessor
-    # overrides this with git.closest.tag.name / git.build.version / git.commit.id.abbrev from
-    # classpath:git.properties when present; profile YAMLs may also override.
-    version: 0.0.0-unknown
     host:
       id: ${HOSTNAME:${spring.application.name}-${random.int}-host}
       dc: ${AWS_REGION:${spring.application.name}-${random.uuid}-dc}

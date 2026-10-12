@@ -97,6 +97,7 @@ class CreateInstanceApiModelConverterTest {
         launchSpec.setResultHandlingStrategy(ResultHandlingStrategy.UPLOAD);
         launchSpec.setDeploymentId(UUID.randomUUID());
         launchSpec.setGpuSpecificationId(UUID.randomUUID());
+        launchSpec.setMaxRequestConcurrency(37);
         launchSpec.setCacheArtifacts(true);
         launchSpec.setCacheSize(100L);
         launchSpec.setCacheHandle("test-cache-handle");
@@ -127,6 +128,7 @@ class CreateInstanceApiModelConverterTest {
         assertEquals(ResultHandlingStrategy.UPLOAD, result.getResultHandlingStrategy());
         assertEquals(launchSpec.getDeploymentId(), result.getDeploymentId());
         assertEquals(launchSpec.getGpuSpecificationId(), result.getGpuSpecificationId());
+        assertEquals(37, result.getMaxRequestConcurrency());
         assertTrue(result.isCacheArtifacts());
         assertEquals(100L, result.getCacheSize());
         assertEquals("test-cache-handle", result.getCacheHandle());

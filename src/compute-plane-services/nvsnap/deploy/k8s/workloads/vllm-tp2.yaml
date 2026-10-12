@@ -33,7 +33,7 @@ metadata:
     # anything requesting >= 2 GPUs here. Declaring "criu" made the manifest
     # generator emit a criu-v2 restore placeholder that nothing ever drives,
     # so the restore pod idled until the readiness timeout.
-    nvsnap.io/path: "rootfs"
+    nvsnap.io/path: "cachedir"
 spec:
   automountServiceAccountToken: false
   tolerations:

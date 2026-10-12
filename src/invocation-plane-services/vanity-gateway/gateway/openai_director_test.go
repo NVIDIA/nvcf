@@ -28,6 +28,7 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,6 +44,28 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func testShadowConfigs(modelNames []string, percentage int) []shadowConfig {
+	return testShadowConfigsWithPolicy(modelNames, percentage, config.ShadowSamplingMethodRandom, false)
+}
+
+func testShadowConfigsWithPolicy(
+	modelNames []string,
+	percentage int,
+	samplingMethod config.ShadowSamplingMethod,
+	cancelOnClientDisconnect bool,
+) []shadowConfig {
+	shadows := make([]shadowConfig, 0, len(modelNames))
+	for _, modelName := range modelNames {
+		shadows = append(shadows, shadowConfig{
+			modelName:                modelName,
+			percentage:               percentage,
+			samplingMethod:           samplingMethod,
+			cancelOnClientDisconnect: cancelOnClientDisconnect,
+		})
+	}
+	return shadows
 }
 
 type failingResponseWriter struct {
@@ -302,8 +325,7 @@ func TestBuildModelMapping(t *testing.T) {
 			OutgoingPathOverride:   "/custom/path",
 			UsePexec:               true,
 			TooManyRequestsMessage: "Try a partner API!",
-			ShadowModelNames:       []string{"private/facebook/opt-125m-shadow"},
-			ShadowPercentage:       &shadowPct,
+			Shadows:                testShadowConfigs([]string{"private/facebook/opt-125m-shadow"}, shadowPct),
 		},
 		"private/facebook/opt-125m-shadow": {
 			FunctionId:        "shadow-func",
@@ -319,8 +341,7 @@ func TestBuildModelMapping(t *testing.T) {
 	assert.Equal(t, "/custom/path", *functionInfo.pathOverride)
 	assert.True(t, functionInfo.usePexec)
 	assert.Equal(t, "Try a partner API!", functionInfo.tooManyRequestsMessage)
-	assert.Equal(t, []string{"private/facebook/opt-125m-shadow"}, functionInfo.shadowModelNames)
-	assert.Equal(t, shadowPct, functionInfo.shadowPercentage)
+	assert.Equal(t, testShadowConfigs([]string{"private/facebook/opt-125m-shadow"}, shadowPct), functionInfo.shadows)
 
 	_, shadowIsPublic := mapping.modelNameToModelInfo["private/facebook/opt-125m-shadow"]
 	assert.False(t, shadowIsPublic)
@@ -331,13 +352,17 @@ func TestBuildModelMappingPreservesAndDefaultsShadowSamplingMethod(t *testing.T)
 
 	mapping, err := buildModelMapping(map[string]ModelNameToFunctionIdVersionId{
 		"facebook/opt-125m": {
-			FunctionId:           "func-123",
-			ShadowModelNames:     []string{"private/facebook/opt-125m-shadow"},
-			ShadowSamplingMethod: config.ShadowSamplingMethodPerBearerKey,
+			FunctionId: "func-123",
+			Shadows: testShadowConfigsWithPolicy(
+				[]string{"private/facebook/opt-125m-shadow"},
+				100,
+				config.ShadowSamplingMethodPerBearerKey,
+				false,
+			),
 		},
 		"meta/llama-3.1-8b": {
-			FunctionId:       "func-456",
-			ShadowModelNames: []string{"private/meta/llama-3.1-8b-shadow"},
+			FunctionId: "func-456",
+			Shadows:    testShadowConfigs([]string{"private/meta/llama-3.1-8b-shadow"}, 100),
 		},
 		"private/facebook/opt-125m-shadow": {
 			FunctionId: "shadow-func",
@@ -348,8 +373,10 @@ func TestBuildModelMappingPreservesAndDefaultsShadowSamplingMethod(t *testing.T)
 	}, privateModelMatcher)
 	require.NoError(t, err)
 
-	assert.Equal(t, config.ShadowSamplingMethodPerBearerKey, mapping.modelNameToNVCFUrl["facebook/opt-125m"].shadowSamplingMethod)
-	assert.Equal(t, config.ShadowSamplingMethodRandom, mapping.modelNameToNVCFUrl["meta/llama-3.1-8b"].shadowSamplingMethod)
+	optShadows := mapping.modelNameToNVCFUrl["facebook/opt-125m"].shadows
+	llamaShadows := mapping.modelNameToNVCFUrl["meta/llama-3.1-8b"].shadows
+	assert.Equal(t, config.ShadowSamplingMethodPerBearerKey, optShadows[0].samplingMethod)
+	assert.Equal(t, config.ShadowSamplingMethodRandom, llamaShadows[0].samplingMethod)
 }
 
 func TestResolveModelMappedRequestAddsMetricAttributes(t *testing.T) {
@@ -395,11 +422,11 @@ func TestBuildModelMappingPreservesMultipleShadowTargets(t *testing.T) {
 	mapping, err := buildModelMapping(map[string]ModelNameToFunctionIdVersionId{
 		"facebook/opt-125m": {
 			FunctionId: "func-123",
-			ShadowModelNames: []string{
+			Shadows: testShadowConfigs([]string{
 				"private/facebook/opt-125m-shadow-a",
 				"private/facebook/opt-125m-shadow-b",
 				"private/facebook/opt-125m-shadow-c",
-			},
+			}, 100),
 		},
 		"private/facebook/opt-125m-shadow-a": {FunctionId: "shadow-a-func"},
 		"private/facebook/opt-125m-shadow-b": {FunctionId: "shadow-b-func"},
@@ -409,11 +436,11 @@ func TestBuildModelMappingPreservesMultipleShadowTargets(t *testing.T) {
 
 	functionInfo, ok := mapping.modelNameToNVCFUrl["facebook/opt-125m"]
 	require.True(t, ok)
-	assert.Equal(t, []string{
+	assert.Equal(t, testShadowConfigs([]string{
 		"private/facebook/opt-125m-shadow-a",
 		"private/facebook/opt-125m-shadow-b",
 		"private/facebook/opt-125m-shadow-c",
-	}, functionInfo.shadowModelNames)
+	}, 100), functionInfo.shadows)
 }
 
 func TestConvertIntoModelNameToFunctionIdAndVersionIdMappingV2(t *testing.T) {
@@ -447,13 +474,50 @@ func TestConvertIntoModelNameToFunctionIdAndVersionIdMappingV2(t *testing.T) {
 	assert.Equal(t, config.SessionTimeoutSeconds(900), expected.SessionTimeout)
 	assert.Equal(t, eolDate, expected.EOL)
 	assert.Equal(t, "Try a partner API!", expected.TooManyRequestsMessage)
-	assert.Equal(t, []string{
-		"private/facebook/opt-125m-shadow",
-		"private/facebook/opt-125m-shadow-b",
-	}, expected.ShadowModelNames)
-	assert.Equal(t, &shadowPct, expected.ShadowPercentage)
-	assert.Equal(t, config.ShadowSamplingMethodPerBearerKey, expected.ShadowSamplingMethod)
-	assert.True(t, expected.ShadowCancelOnClientDisconnect)
+	assert.Equal(t, testShadowConfigsWithPolicy(
+		[]string{
+			"private/facebook/opt-125m-shadow",
+			"private/facebook/opt-125m-shadow-b",
+		},
+		shadowPct,
+		config.ShadowSamplingMethodPerBearerKey,
+		true,
+	), expected.Shadows)
+}
+
+func TestConvertIntoModelNameToFunctionIdAndVersionIdMappingV2PreservesPerShadowPolicies(t *testing.T) {
+	percentage := 25
+	result := convertIntoModelNameToFunctionIdAndVersionIdMappingV2(map[string]config.ModelFunctionDetails{
+		"model-key": {
+			ModelName:  "facebook/opt-125m",
+			FunctionID: "func-123",
+			Shadows: []config.ShadowConfig{
+				{
+					ModelName:                "private/facebook/opt-125m-shadow-a",
+					Percentage:               &percentage,
+					SamplingMethod:           config.ShadowSamplingMethodPerBearerKey,
+					CancelOnClientDisconnect: true,
+				},
+				{ModelName: "private/facebook/opt-125m-shadow-b"},
+			},
+		},
+	})
+
+	expected, ok := result["facebook/opt-125m"]
+	require.True(t, ok)
+	assert.Equal(t, []shadowConfig{
+		{
+			modelName:                "private/facebook/opt-125m-shadow-a",
+			percentage:               percentage,
+			samplingMethod:           config.ShadowSamplingMethodPerBearerKey,
+			cancelOnClientDisconnect: true,
+		},
+		{
+			modelName:      "private/facebook/opt-125m-shadow-b",
+			percentage:     100,
+			samplingMethod: config.ShadowSamplingMethodRandom,
+		},
+	}, expected.Shadows)
 }
 
 func TestDefaultShadowPercentage(t *testing.T) {
@@ -470,9 +534,8 @@ func TestResolveModelMappedRequestPreservesShadowConfig(t *testing.T) {
 
 	modelMapping := map[string]FunctionInfo{
 		"facebook/opt-125m": {
-			functionId:       "primary-func",
-			shadowModelNames: []string{"private/facebook/opt-125m-shadow"},
-			shadowPercentage: 100,
+			functionId: "primary-func",
+			shadows:    testShadowConfigs([]string{"private/facebook/opt-125m-shadow"}, 100),
 		},
 		"private/facebook/opt-125m-shadow": {
 			functionId: "shadow-func",
@@ -481,8 +544,7 @@ func TestResolveModelMappedRequestPreservesShadowConfig(t *testing.T) {
 
 	resolved, handled := director.resolveModelMappedRequest(writer, req, modelMapping)
 	require.False(t, handled)
-	assert.Equal(t, []string{"private/facebook/opt-125m-shadow"}, resolved.functionInfo.shadowModelNames)
-	assert.Equal(t, 100, resolved.functionInfo.shadowPercentage)
+	assert.Equal(t, testShadowConfigs([]string{"private/facebook/opt-125m-shadow"}, 100), resolved.functionInfo.shadows)
 
 	body, err := io.ReadAll(resolved.request.Body)
 	require.NoError(t, err)
@@ -506,9 +568,8 @@ func TestDispatchShadowIfNeededReplaysHandlerAndRewritesBody(t *testing.T) {
 
 	modelMapping := map[string]FunctionInfo{
 		"facebook/opt-125m": {
-			functionId:       "primary-func",
-			shadowModelNames: []string{"private/facebook/opt-125m-shadow"},
-			shadowPercentage: 100,
+			functionId: "primary-func",
+			shadows:    testShadowConfigs([]string{"private/facebook/opt-125m-shadow"}, 100),
 		},
 		"private/facebook/opt-125m-shadow": {
 			functionId: "shadow-func",
@@ -526,8 +587,7 @@ func TestDispatchShadowIfNeededReplaysHandlerAndRewritesBody(t *testing.T) {
 	resolved := resolvedOpenAIRequest{
 		request: req,
 		functionInfo: FunctionInfo{
-			shadowModelNames: []string{"private/facebook/opt-125m-shadow"},
-			shadowPercentage: 100,
+			shadows: testShadowConfigs([]string{"private/facebook/opt-125m-shadow"}, 100),
 		},
 	}
 	director.dispatchShadowIfNeeded(resolved, modelMapping)
@@ -538,6 +598,67 @@ func TestDispatchShadowIfNeededReplaysHandlerAndRewritesBody(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(receivedBody), &shadowBody))
 	assert.Equal(t, "private/facebook/opt-125m-shadow", shadowBody["model"])
 	assert.Equal(t, true, shadowBody["stream"])
+}
+
+func TestDispatchShadowIfNeededIsolatesRewriteFailure(t *testing.T) {
+	var receivedModels sync.Map
+	var receivedCount atomic.Int32
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err == nil {
+			receivedModels.Store(payload["model"], true)
+		}
+		receivedCount.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer backend.Close()
+
+	vanity, err := NewVanityDirector(backend.URL, backend.Client().Transport)
+	require.NoError(t, err)
+
+	failingTarget := "private/facebook/opt-125m-broken"
+	healthyTarget := "private/facebook/opt-125m-shadow"
+	shadows := testShadowConfigs([]string{failingTarget, healthyTarget}, 100)
+	modelMapping := map[string]FunctionInfo{
+		"facebook/opt-125m": {functionId: "primary-func", shadows: shadows},
+		failingTarget:       {functionId: "broken-func"},
+		healthyTarget:       {functionId: "shadow-func"},
+	}
+
+	director := &OpenAIDirector{
+		shadower:       NewTrafficShadower(10, 30*time.Second),
+		vanityDirector: vanity,
+		shadowBodyRewriter: func(body []byte, modelName string) ([]byte, error) {
+			if modelName == failingTarget {
+				return nil, errors.New("injected rewrite failure")
+			}
+			return rewriteShadowRequestModel(body, modelName)
+		},
+	}
+	primaryBody := `{"model":"facebook/opt-125m","stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(primaryBody))
+	req.Header.Set("Authorization", "Bearer test-key")
+	req.Header.Set("Content-Type", "application/json")
+
+	resolved := resolvedOpenAIRequest{
+		request:      req,
+		functionInfo: FunctionInfo{functionId: "primary-func", shadows: shadows},
+	}
+	finish := director.dispatchShadowIfNeeded(resolved, modelMapping)
+
+	assert.Eventually(t, func() bool { return receivedCount.Load() == 1 }, 5*time.Second, 10*time.Millisecond)
+	_, healthyReceived := receivedModels.Load(healthyTarget)
+	_, failingReceived := receivedModels.Load(failingTarget)
+	assert.True(t, healthyReceived, "healthy target must still be dispatched")
+	assert.False(t, failingReceived, "failing target must be dropped")
+
+	// The primary request body is untouched by the failed rewrite.
+	body, err := io.ReadAll(resolved.request.Body)
+	require.NoError(t, err)
+	assert.JSONEq(t, primaryBody, string(body))
+	finish(nil)
 }
 
 func TestDispatchShadowIfNeededPerBearerKeyUsesBearerBucket(t *testing.T) {
@@ -557,10 +678,13 @@ func TestDispatchShadowIfNeededPerBearerKeyUsesBearerBucket(t *testing.T) {
 
 	modelMapping := map[string]FunctionInfo{
 		"facebook/opt-125m": {
-			functionId:           "primary-func",
-			shadowModelNames:     []string{"private/facebook/opt-125m-shadow"},
-			shadowPercentage:     47,
-			shadowSamplingMethod: config.ShadowSamplingMethodPerBearerKey,
+			functionId: "primary-func",
+			shadows: testShadowConfigsWithPolicy(
+				[]string{"private/facebook/opt-125m-shadow"},
+				47,
+				config.ShadowSamplingMethodPerBearerKey,
+				false,
+			),
 		},
 		"private/facebook/opt-125m-shadow": {
 			functionId: "shadow-func",
@@ -587,6 +711,117 @@ func TestDispatchShadowIfNeededPerBearerKeyUsesBearerBucket(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(receivedBody), &shadowBody))
 	assert.Equal(t, "private/facebook/opt-125m-shadow", shadowBody["model"])
 	assert.Equal(t, true, shadowBody["stream"])
+}
+
+func TestDispatchShadowIfNeededAppliesCancellationPerShadow(t *testing.T) {
+	attachedStarted := make(chan struct{})
+	attachedCanceled := make(chan struct{})
+	detachedStarted := make(chan struct{})
+	detachedCanceled := make(chan struct{})
+	detachedDone := make(chan struct{})
+	releaseDetached := make(chan struct{}, 1)
+	release := func() {
+		select {
+		case releaseDetached <- struct{}{}:
+		default:
+		}
+	}
+	t.Cleanup(release)
+
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.Header.Get("function-id") {
+		case "attached-func":
+			close(attachedStarted)
+			<-req.Context().Done()
+			close(attachedCanceled)
+			return nil, req.Context().Err()
+		case "detached-func":
+			close(detachedStarted)
+			select {
+			case <-req.Context().Done():
+				close(detachedCanceled)
+				return nil, req.Context().Err()
+			case <-releaseDetached:
+				close(detachedDone)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     "200 OK",
+					Header:     make(http.Header),
+					Body:       io.NopCloser(bytes.NewReader(nil)),
+					Request:    req,
+				}, nil
+			}
+		default:
+			t.Fatalf("unexpected function-id %q", req.Header.Get("function-id"))
+			return nil, nil
+		}
+	})
+
+	vanity, err := NewVanityDirector("https://nvcf.example.test", transport)
+	require.NoError(t, err)
+	director := &OpenAIDirector{
+		shadower:       NewTrafficShadower(2, 30*time.Second),
+		vanityDirector: vanity,
+	}
+	modelMapping := map[string]FunctionInfo{
+		"attached-shadow": {functionId: "attached-func"},
+		"detached-shadow": {functionId: "detached-func"},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		bytes.NewBufferString(`{"model":"primary"}`),
+	).WithContext(ctx)
+	request.Header.Set("Content-Type", "application/json")
+
+	finishPrimary := director.dispatchShadowIfNeeded(resolvedOpenAIRequest{
+		request: request,
+		functionInfo: FunctionInfo{shadows: []shadowConfig{
+			{
+				modelName:                "attached-shadow",
+				percentage:               100,
+				samplingMethod:           config.ShadowSamplingMethodRandom,
+				cancelOnClientDisconnect: true,
+			},
+			{
+				modelName:      "detached-shadow",
+				percentage:     100,
+				samplingMethod: config.ShadowSamplingMethodRandom,
+			},
+		}},
+	}, modelMapping)
+
+	for name, started := range map[string]<-chan struct{}{
+		"attached": attachedStarted,
+		"detached": detachedStarted,
+	} {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatalf("%s shadow did not start", name)
+		}
+	}
+
+	cancel()
+	finishPrimary(context.Canceled)
+	select {
+	case <-attachedCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("attached shadow was not canceled")
+	}
+	select {
+	case <-detachedCanceled:
+		t.Fatal("detached shadow was canceled")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	release()
+	select {
+	case <-detachedDone:
+	case <-time.After(time.Second):
+		t.Fatal("detached shadow did not finish")
+	}
 }
 
 func TestShadowCancelledWhenPrimaryProxyErrorsBeforeRequestContextCancels(t *testing.T) {
@@ -618,10 +853,13 @@ func TestShadowCancelledWhenPrimaryProxyErrorsBeforeRequestContextCancels(t *tes
 	}
 	modelMapping := map[string]FunctionInfo{
 		"facebook/opt-125m": {
-			functionId:                     "primary-func",
-			shadowModelNames:               []string{"private/facebook/opt-125m-shadow"},
-			shadowPercentage:               100,
-			shadowCancelOnClientDisconnect: true,
+			functionId: "primary-func",
+			shadows: testShadowConfigsWithPolicy(
+				[]string{"private/facebook/opt-125m-shadow"},
+				100,
+				config.ShadowSamplingMethodRandom,
+				true,
+			),
 		},
 		"private/facebook/opt-125m-shadow": {
 			functionId: "shadow-func",
@@ -703,10 +941,13 @@ func TestShadowCancelledWhenPrimaryResponseWriteFails(t *testing.T) {
 			}
 			modelMapping := map[string]FunctionInfo{
 				"facebook/opt-125m": {
-					functionId:                     "primary-func",
-					shadowModelNames:               []string{"private/facebook/opt-125m-shadow"},
-					shadowPercentage:               100,
-					shadowCancelOnClientDisconnect: true,
+					functionId: "primary-func",
+					shadows: testShadowConfigsWithPolicy(
+						[]string{"private/facebook/opt-125m-shadow"},
+						100,
+						config.ShadowSamplingMethodRandom,
+						true,
+					),
 				},
 				"private/facebook/opt-125m-shadow": {
 					functionId: "shadow-func",
@@ -761,10 +1002,13 @@ func TestShadowCancelledWhenPrimaryProxyPanics(t *testing.T) {
 	}
 	modelMapping := map[string]FunctionInfo{
 		"facebook/opt-125m": {
-			functionId:                     "primary-func",
-			shadowModelNames:               []string{"private/facebook/opt-125m-shadow"},
-			shadowPercentage:               100,
-			shadowCancelOnClientDisconnect: true,
+			functionId: "primary-func",
+			shadows: testShadowConfigsWithPolicy(
+				[]string{"private/facebook/opt-125m-shadow"},
+				100,
+				config.ShadowSamplingMethodRandom,
+				true,
+			),
 		},
 		"private/facebook/opt-125m-shadow": {
 			functionId: "shadow-func",
@@ -806,8 +1050,7 @@ func TestDispatchShadowIfNeededSkipsShadowRequests(t *testing.T) {
 	director.dispatchShadowIfNeeded(resolvedOpenAIRequest{
 		request: req,
 		functionInfo: FunctionInfo{
-			shadowModelNames: []string{"private/facebook/opt-125m-shadow"},
-			shadowPercentage: 100,
+			shadows: testShadowConfigs([]string{"private/facebook/opt-125m-shadow"}, 100),
 		},
 	}, map[string]FunctionInfo{
 		"private/facebook/opt-125m-shadow": {
@@ -906,7 +1149,7 @@ func TestNewOpenAIDirectorV2DeduplicatesModels(t *testing.T) {
 			cfg.OpenAI.Embeddings = tc.embeddings
 			cfg.OpenAI.Responses = tc.responses
 
-			director, err := NewOpenAIDirectorV2(cfg, privateModelMatcher, nil, nil)
+			director, err := NewOpenAIDirectorV2(cfg, privateModelMatcher, nil, nil, nil)
 			require.NoError(t, err)
 
 			var modelIDs []string

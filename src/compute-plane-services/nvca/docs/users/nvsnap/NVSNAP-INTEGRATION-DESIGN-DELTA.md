@@ -51,7 +51,7 @@ same algorithm nvsnap's `internal/rootfsonly/composer.go` uses (or a
 thin Go wrapper that produces an identical hash). Inputs that
 affect checkpoint validity:
 
-```
+```text
 canonicalHash = sha256(
   imageDigest                  // immutable digest, not :tag
   + literalEnvVars             // only env[].value entries; skip valueFrom (per-pod metadata)
@@ -112,6 +112,7 @@ it, restores will misbehave at runtime. Mitigations:
 | `Failed` | last capture failed | inject `nvsnap-wait` init container that bypasses to cold after backoff | retry from any pod after backoff window |
 
 Transitions:
+
 - `NoCheckpoint → Capturing` — first pod calls `POST /identities/<hash>/lease`, gets `acquired`
 - `Capturing → Warm` — nvsnap-server records hash via existing flow, NVCA reconciler updates status
 - `Capturing → Failed` — lease TTL expired without success, or checkpointer reported failure
@@ -146,6 +147,7 @@ exit 0
 ```
 
 Notes:
+
 - Always `exit 0` — never block the pod permanently. Worst case, fall
   back to cold-boot and emit metrics.
 - Image: bundled with NVCA's existing utils image (curl + bash) so no
@@ -172,6 +174,7 @@ Notes:
 ### Numbers — QA scenario after this delta
 
 100 pods, same canonical hash:
+
 - 1 pod cold-boots (~2-3 min warmup), captures (~1-2 min)
 - 99 pods init-container-wait (~3-5 min idle), restore (~30-60s each, parallel)
 - **Total wall time ~5 min** vs. ~30 min today
@@ -207,6 +210,7 @@ Every line carries: `identity` (16-char hash prefix), `fvID`, `pod`,
 `namespace`, `clusterID`, `reason`.
 
 Levels:
+
 - `ERROR` — any checkpoint/restore failure, with nvsnap-server response body
 - `WARN` — lease-timeout fallbacks, silent fallbacks, reconciler retries
 - `INFO` — state transitions (`NoCheckpoint → Capturing → Warm`), lease acquire/release

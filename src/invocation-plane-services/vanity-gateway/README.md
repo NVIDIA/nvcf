@@ -27,9 +27,11 @@ Bazel scaffold matches the Phase B pattern other NVCF services use (ess-agent, g
 ## About
 
 The Vanity Gateway fronts invocation APIs with route mappings from a YAML config
-file. It supports two request shapes:
+file. It supports three request shapes:
 
 - OpenAI-compatible `/v1/*` endpoints that map public model names to functions.
+- The native Anthropic Messages endpoint, `POST /v1/messages`, configured under
+  `v2config.anthropicMessages`.
 - Vanity URL routes that forward caller-defined paths to function executions and polling.
 
 The gateway is meant to run against an upstream invocation service with pexec
@@ -45,6 +47,7 @@ Configuration is passed through environment variables.
 | `MAPPING_PATH` | Yes | None | Path to the rendered mapping config file. |
 | `MAPPING_LOAD_TIMEOUT` | No | `15s` | Maximum time to wait at startup for `MAPPING_PATH` to appear. Increase this when a ConfigMap projection or remote-config sidecar materializes the file after the main container starts. Duration strings require a unit, such as `2m` or `90s`. A value without a unit is rejected when configuration is loaded, and a negative value is rejected at startup. |
 | `NVCF_API_ENDPOINT` | No | Service default | Upstream invocation service endpoint. In cluster deployments, this usually points to the in-cluster invocation service. |
+| `LLM_GATEWAY_ENDPOINT` | No | Empty | Upstream LLM Gateway endpoint. Required only when a model sets `functionType: LLM`. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | Empty | OTLP endpoint for tracing. Empty disables OTLP export. |
 | `TRACING_ACCESS_TOKEN` | No | Empty | Access token for OTLP tracing. Also configurable in the secrets file under `$.tracingAccessToken`. |
 | `SECRETS_PATH` | No | `vault/secrets.json` | File used to read `tracingAccessToken` when `TRACING_ACCESS_TOKEN` is not set. |
@@ -142,10 +145,11 @@ v2config:
           X-Provider-Feature: enabled
           X-Request-Source: vanity-gateway
         tooManyRequestsMessage: "Try again later or use a partner endpoint."
-        shadowModelNames:
-          - private/meta/llama-3.1-8b-shadow
-        shadowPercentage: 10
-        shadowSamplingMethod: perBearerKey
+        shadows:
+          - modelName: private/meta/llama-3.1-8b-shadow
+            percentage: 10
+            samplingMethod: perBearerKey
+            cancelOnClientDisconnect: false
       private_meta_llama-3_1-8b-shadow:
         modelName: private/meta/llama-3.1-8b-shadow
         functionID: 00000000-0000-0000-0000-000000000002
@@ -187,12 +191,17 @@ v2config:
 | `customHeaders` | No | Map of static request headers to set on the upstream request. Configured values overwrite caller-provided values for the same header. Reserved routing, protocol, auth, proxy, and `NVCF-*` headers are rejected. |
 | `eol` | No | RFC3339 timestamp. Future dates add a `Deprecation` header; past dates return `410 Gone` and hide the model from `/v1/models`. |
 | `offlineMessage` | No | Non-empty value returns `503 Service Unavailable` with this message. |
-| `tooManyRequestsMessage` | No | Message appended to upstream `429 Too Many Requests` responses for this model. |
-| `shadowModelName` | No | Legacy single shadow target. Prefer `shadowModelNames` for new config. |
-| `shadowModelNames` | No | Additional model names in the same OpenAI section that receive shadow traffic. Not supported for multipart image edit or variation endpoints. |
-| `shadowPercentage` | No | Percentage of primary requests to shadow, from `1` to `100`. Defaults to `100` when shadow targets exist. |
-| `shadowSamplingMethod` | No | Shadow admission method. Allowed values are `random` and `perBearerKey`. Missing or empty defaults to `random`. Requires at least one shadow target. Not supported for multipart image edit or variation endpoints. |
-| `shadowCancelOnClientDisconnect` | No | When `true`, cancels shadow work if the primary request context is canceled. Requires at least one shadow target. |
+| `tooManyRequestsMessage` | No | Message appended to upstream `429 Too Many Requests` responses for this model. Recognizes an OpenAI error object, an RFC 7807 problem document, and a bare `{"message": "..."}`. Any other body is returned unchanged. |
+| `shadows` | No | List of per-target shadow configs. It must be a list; `null` is rejected, and so is `null` for any field inside an entry. It cannot be combined with any legacy top-level shadow field. Not supported for multipart image edit or variation endpoints. |
+| `shadows[].modelName` | Yes | Target model name in the same OpenAI section. It cannot match the primary model or another shadow target. |
+| `shadows[].percentage` | No | Percentage of primary requests sent to this target, from `1` to `100`. Defaults to `100`. |
+| `shadows[].samplingMethod` | No | Admission method for this target. Allowed values are `random` and `perBearerKey`. Defaults to `random`. |
+| `shadows[].cancelOnClientDisconnect` | No | When `true`, cancels this target if the primary request context is canceled. Defaults to `false`. |
+| `shadowModelName` | No | Legacy single shadow target. Prefer `shadows` for new config. |
+| `shadowModelNames` | No | Legacy list of additional shadow targets. Targets must be in the same OpenAI section. |
+| `shadowPercentage` | No | Legacy percentage applied to every legacy target, from `1` to `100`. Defaults to `100`. |
+| `shadowSamplingMethod` | No | Legacy admission method applied to every legacy target. Allowed values are `random` and `perBearerKey`. Missing, empty, or `null` defaults to `random`. |
+| `shadowCancelOnClientDisconnect` | No | Legacy cancellation policy applied to every legacy target. When `true`, cancels shadow work if the primary request context is canceled. Defaults to `false`. |
 
 ### Shadow Traffic Support
 
@@ -203,9 +212,21 @@ section as the primary model. The gateway rewrites the request `model` field to
 the shadow target and marks the replay with `NVCF-Shadow: true` so shadow
 requests do not recursively shadow.
 
-`shadowSamplingMethod` controls how `shadowPercentage` admits requests. The
-default method, `random`, draws a request-local bucket from `0` to `99` and
-admits the request when `bucket < shadowPercentage`.
+Each `shadows` entry has its own `percentage`, `samplingMethod`, and
+`cancelOnClientDisconnect` policy. The gateway evaluates each target against
+its policy. This allows one primary model to shadow different request
+percentages to different targets.
+
+Legacy top-level shadow fields remain supported. The gateway combines
+`shadowModelName` and `shadowModelNames` into one target list and applies the
+top-level `shadowPercentage`, `shadowSamplingMethod`, and
+`shadowCancelOnClientDisconnect` policy to every target. A model entry cannot
+combine `shadows` with any legacy top-level shadow field. Config validation
+rejects the mixed form.
+
+The default sampling method, `random`, draws one request-local bucket from `0`
+to `99` for each primary request. Every `random` shadow on that request uses the
+same bucket and admits the request when `bucket < percentage`.
 
 The `perBearerKey` method makes admission sticky by bearer credential. It
 requires exactly one `Authorization` header whose value starts with the
@@ -214,22 +235,26 @@ only the `Bearer` scheme and following separator whitespace, then hashes the
 complete remaining credential as opaque UTF-8 bytes. It computes SHA-256, reads
 the first 8 digest bytes as a big-endian `uint64`, sets
 `bucket = value % 100`, and admits the request when
-`bucket < shadowPercentage`. Bearer credential prefixes such as `nvapi`,
+`bucket < percentage`. Every `perBearerKey` shadow on the request uses the same
+credential bucket. Bearer credential prefixes such as `nvapi`,
 `nvapi-stg`, and `nvapi-nvcf` remain part of the credential and are not
 stripped. Missing, malformed, duplicate, or non-Bearer authorization skips
-shadow dispatch when `shadowPercentage` is below `100`.
+each `perBearerKey` target whose `percentage` is below `100`. It does not affect
+targets that use `random`.
 
 `perBearerKey` is key-level sampling. It is not true user or session sampling
 and can skew shadow volume when a few bearer keys dominate traffic.
 
 Shadow traffic is not supported for multipart image endpoints: `imageEdits` and
-`imageVariations`. Config validation rejects shadow fields in those sections.
+`imageVariations`. Config validation rejects effective shadow settings in those
+sections. Legacy zero-value settings and an empty `shadows` list remain accepted
+as no-ops.
 
 Admitted shadow requests are bounded by `SHADOW_MAX_CONCURRENT` and the gateway
 shadow timeout. Normal primary response completion does not cancel shadow work.
-When `shadowCancelOnClientDisconnect` is `true`, the gateway cancels shadow work
-only if the client disconnects or cancels the primary request before the primary
-response completes.
+When a target's `cancelOnClientDisconnect` is `true`, the gateway cancels only
+that target if the client disconnects or cancels the primary request before the
+primary response completes. Other targets continue under their own policies.
 
 ### Vanity Mapping Fields
 
@@ -249,6 +274,58 @@ response completes.
 | shadow fields | No | Unsupported for Vanity URL routes. `shadowFunctionID`, `shadowFunctionVersionID`, `shadowPercentage`, and `shadowSamplingMethod` are rejected during config validation. |
 
 `customHeaders` only affects outbound proxied requests; it does not add response headers. Header names must be valid HTTP field names and cannot include reserved routing, auth, protocol, proxy, or NVCF-managed names such as `Authorization`, `Host`, `function-id`, `function-version-id`, `Content-Length`, `Connection`, or any `NVCF-*` header.
+
+### LLM Function Models
+
+Set `functionType: LLM` on a model entry to serve it from the LLM Gateway
+instead of the invocation service. Supported in `openai.chatCompletions`,
+`openai.responses`, `openai.embeddings`, and `anthropicMessages`, the four
+routes the LLM Gateway serves.
+
+```yaml
+v2config:
+  openai:
+    host: api.example.com
+    chatCompletions:
+      meta_llama-3_3-70b:
+        modelName: meta/llama-3.3-70b
+        functionID: 00000000-0000-0000-0000-000000000001
+        functionType: LLM
+```
+
+Callers send the public `modelName`, exactly as they do for any other model on
+this host. The gateway looks the model up, rewrites the request `model` to
+`functionID/modelName`, and forwards it to `LLM_GATEWAY_ENDPOINT`, which routes
+on that prefix, so a caller never has to supply a function ID.
+
+Only the request is rewritten. On `/v1/chat/completions` the LLM Gateway echoes
+the model it was given, so the `model` field of the response, and of every
+streamed chunk, carries `functionID/modelName` back to the caller.
+`/v1/responses` and `/v1/embeddings` return the public model name instead.
+
+`function-id`, `function-version-id`, and `nvcf-function-id` are stripped from
+these requests. The LLM Gateway resolves the function from the model, so the
+gateway sets none of them, and a caller-supplied value is removed rather than
+forwarded: the mapping is what decides which function a caller reaches.
+Vanity Gateway passes `Authorization`, `NVCF-POLL-SECONDS`, and the caller's
+other headers to the LLM Gateway.
+
+Config validation rejects `functionType: LLM` outside the four supported
+sections, and rejects `usePexec`, `outgoingPathOverride`, and `sessionTimeout`
+on those entries because the LLM Gateway ignores them. An `X-Priority` entry in
+`customHeaders` is rejected too: the LLM Gateway answers `400 Bad Request` for
+any request carrying that header. `eol`, `offlineMessage`, and the remaining
+`customHeaders` behave as they do for other models, and the model still appears
+in `/v1/models`.
+
+Shadow traffic works on these entries. Each shadow target is resolved from the
+same model table as the primary, so it is rewritten and routed by its own
+`functionType`. A shadow of an LLM model reaches the LLM Gateway, and an LLM
+model may shadow a model served by the invocation service, or the reverse.
+
+`LLM_GATEWAY_ENDPOINT` is required whenever a model sets `functionType: LLM`. It
+is the outbound address of the LLM Gateway, so it is a full URL with a scheme
+and must not carry a path.
 
 ## Invoking OpenAI-compatible Endpoints
 
@@ -327,6 +404,59 @@ curl -si -H "Host: api.example.com" http://localhost:10081/v1/models
 curl -si -H "Host: api.example.com" http://localhost:10081/v1/models/facebook/opt-125m
 ```
 
+## Invoking the Anthropic Messages Endpoint
+
+`v2config.anthropicMessages` maps public model names to functions for native
+Anthropic Messages requests. Entries use the same fields and validation as
+`openai.chatCompletions`, and the endpoint is served on the shared API host set
+by `openai.host`.
+
+```yaml
+v2config:
+  openai:
+    host: api.example.com
+  anthropicMessages:
+    example_native-model:
+      modelName: example/native-model
+      functionID: 00000000-0000-0000-0000-000000000002
+      functionType: LLM
+```
+
+Request and response bodies, including content blocks, tool use, and SSE
+events, pass through in native Messages format. They are not translated through
+Chat Completions.
+
+```shell
+source .env
+curl http://localhost:10081/v1/messages \
+-H "Host: api.example.com" \
+-H "Content-Type: application/json" \
+-H "anthropic-version: 2023-06-01" \
+-H "Authorization: Bearer ${API_TOKEN}" \
+-d '{
+"model": "example/native-model",
+"max_tokens": 256,
+"messages": [{"role": "user", "content": "Hello"}]
+}'
+```
+
+Set `"stream": true` to receive Messages SSE events.
+
+Errors generated by the Vanity Gateway use the Anthropic error envelope,
+`{"type":"error","error":{"type":"...","message":"..."}}`. Malformed JSON and a
+missing `model` return `400`, an unknown model returns `404`, an offline model
+returns `503` with `Retry-After`, an end-of-life model returns `410`, and a
+failed upstream request returns `502`. Upstream status codes and bodies are
+passed through unchanged.
+
+`/v1/models` on the shared host lists Messages models and adds
+`supported_endpoints` to them, so OpenAI clients can tell which models accept
+only Messages.
+
+The Messages path requires compatible LLM Gateway, Stargate router, and Pylon
+worker builds. See `docs/overview/llm-gateway.md` for upgrade order, token
+accounting, session affinity, and Claude Code configuration.
+
 ## Invoking Vanity URL Routes
 
 ```shell
@@ -376,16 +506,103 @@ curl -v -H 'Host: api.example.com' localhost:10081/health
 curl -v localhost:10083/metrics
 ```
 
+`/health` reports one check per configured upstream. The `nvcf api` check probes
+`/health` on `NVCF_API_ENDPOINT`. When a model sets `functionType: LLM`, an
+`llm api gateway` check probes `/healthz` on `LLM_GATEWAY_ENDPOINT`, since the
+LLM Gateway does not serve `/health`.
+
+The two checks differ in what a failure does. A failing `nvcf api` check returns
+`503`, because that upstream serves every route. A failing `llm api gateway`
+check is reported in the response body but still returns `200`: deployments wire
+`/health` to both the readiness and liveness probes, so failing it would restart
+every pod and drop invocation-service routing when only the LLM Gateway is down.
+Requests for an LLM-routed model return `502` for as long as that upstream is
+unreachable, and everything else keeps serving.
+
 `nvcf_ai_api_gateway_shadow_requests_dropped_total` counts shadow dispatches
 dropped before replay. The `openai_model_name` label identifies the shadow
 target. The `reason` label is one of `body_read_error`, `body_rewrite_error`,
 or `concurrency_limit`.
 
-`gateway_proxy_outcome` is present only on Gateway server metrics emitted when
-the ReverseProxy ErrorHandler writes an error response. Its value is
-`client_canceled` when the inbound request is canceled before upstream response
-headers are written, or `gateway_proxy_error` for another ErrorHandler failure.
-Successful requests and upstream HTTP responses omit this label.
+`gateway_proxy_outcome` labels the origin of covered non-2xx responses on the
+Gateway server metric (`http_server_request_duration_seconds`) and as the
+`gateway.proxy.outcome` span attribute. Successful requests omit it. Values:
+
+- `gateway_rejected`: the gateway answered itself with no dependency involved
+  (offline `503`, end-of-life `410`, reserved-header `400`, request validation
+  `400`/`404`/`500`).
+- `client_canceled`: the inbound request was canceled before upstream response
+  headers were written (`499`).
+- `gateway_proxy_error`: another ReverseProxy ErrorHandler failure (`502`).
+- `upstream_status`: a non-2xx status passed through from the upstream,
+  including `429` responses whose body the gateway rewrites.
+
+Responses with a labeled outcome also carry an `NVCF-Error-Source` header with
+the same value. Some non-2xx responses are not labeled and have no header (router
+404/405, panic recovery, request timeout), so a missing label or header does not
+mean the response was successful or came from the upstream. Any
+`NVCF-Error-Source` header sent by the upstream is removed first. Shadow replays
+never set this error-origin label. Their telemetry context and metric labeler
+are isolated from the primary request. Status codes and bodies are unchanged.
+Because the metric label set depends on the response status, the label values
+cannot be pre-initialized on the first scrape.
+
+### Request duration boundaries
+
+`http_server_request_duration_seconds` measures the full handler lifetime,
+including upstream waits and response-body forwarding. Existing route, model,
+function, status, and error-origin attributes retain their meaning.
+
+`nvcf_vanity_gateway_pre_upstream_processing_seconds` measures each primary
+request from server telemetry entry to entry into the outbound transport,
+before client instrumentation, connection setup, upstream headers, or body
+streaming. It covers routing, validation, request-body parsing and rewriting,
+and shadow scheduling before primary dispatch. It is elapsed pre-upstream
+processing time, including scheduling and request-body reads, not gateway CPU
+time or total gateway work. Post-dispatch processing is excluded.
+
+The histogram uses buckets from 1 ms through 60 seconds. Labels:
+
+- `http_route`: the registered route pattern, or `unknown` before routing.
+- `openai_model_name`: the configured public model name when resolved. Unknown
+  user-supplied names, private models, and path-only routes omit this label.
+- `outcome`: `dispatched` at primary transport entry, or `client_canceled` if
+  its context is already canceled. A later proxy error, upstream error status,
+  cancellation, or streaming failure does not change that observation.
+  Requests that finish locally record at handler exit with `gateway_rejected`,
+  `gateway_proxy_error`, or `client_canceled` when known. Other local responses,
+  including model listings, health checks, and unmatched routes, use `local`.
+  Cancellation or deadline expiry before dispatch takes precedence over other
+  local outcomes. Each request observed by server telemetry records once.
+
+Primary pre-upstream p99 in seconds, grouped by route and public model:
+
+```promql
+histogram_quantile(
+  0.99,
+  sum by (le, http_route, openai_model_name) (
+    rate(nvcf_vanity_gateway_pre_upstream_processing_seconds_bucket{outcome="dispatched"}[5m])
+  )
+)
+```
+
+Remove the outcome filter to include local failures and pre-dispatch
+cancellation. Multiply by 1000 to display milliseconds. Histograms create
+series on the first observation; this adds no counters requiring zero samples.
+
+Outbound HTTP metrics add `nvcf_shadow="false"` for primary and other non-shadow
+calls, including health probes, and `nvcf_shadow="true"` for shadow replays.
+Filter client metrics by this label when comparing populations. Shadow replay
+server metrics also carry `nvcf_shadow="true"`; primary server series keep
+existing labels. Shadows never record the pre-upstream histogram or mutate
+primary timing, model, or error-origin labels. Select server series with
+`nvcf_shadow!="true"` to exclude replay handlers.
+
+With the pinned HTTP instrumentation, client duration ends at response headers,
+while its trace span continues until body EOF or Close. Server duration minus
+client duration therefore includes streaming time. Neither aggregate duration
+nor histogram quantiles can be subtracted to recover gateway processing time.
+`model.stream` remains a trace-only attribute; no stream metric label is added.
 
 ## Running a Local OpenAI-compatible Model
 
@@ -427,5 +644,9 @@ docker run --gpus all -p 8080:80 -v $PWD:/data --pull always ghcr.io/huggingface
 
 ## Known Limitations
 
+- For `functionType: LLM` models, the LLM Gateway does not forward inbound
+  headers on `/v1/chat/completions` to the function container. This includes
+  mapping `customHeaders` and the `NVCF-Shadow` marker. Do not rely on these
+  headers in the function container for this endpoint.
 - HTTP polling invocations that last longer than 20 minutes return a `504 Timeout` error when using OpenAI-compatible endpoints. This does not apply to Vanity URL routes.
 - Streaming invocations that last longer than 5 minutes return a `502 Timeout` error when using OpenAI-compatible endpoints. This does not apply to Vanity URL routes.

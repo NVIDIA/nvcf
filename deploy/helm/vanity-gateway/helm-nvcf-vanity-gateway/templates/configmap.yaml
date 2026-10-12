@@ -22,6 +22,7 @@ metadata:
 data:
   MAPPING_PATH: {{ .Values.vanityGateway.config.mappingPath | quote }}
   NVCF_API_ENDPOINT: {{ .Values.vanityGateway.config.nvcfApiEndpoint | quote }}
+  LLM_GATEWAY_ENDPOINT: {{ .Values.vanityGateway.config.llmGatewayEndpoint | quote }}
   OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.vanityGateway.config.otelExporterOtlpEndpoint | quote }}
   SECRETS_PATH: {{ .Values.vanityGateway.config.secretsPath | quote }}
   PRIVATE_MODEL_NAME_REGEX_PATTERN: {{ .Values.vanityGateway.config.privateModelNameRegexPattern | quote }}

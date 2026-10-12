@@ -190,7 +190,13 @@ if ! grep -R -q 'name: worker-tcp' "$ROOT_DIR/apps/envoy-gateway/gateway-grpc.ya
   fail "control-plane Gateway must define the grpc-proxy worker TCP listener"
 fi
 if ! grep -R -q 'name: llm-grpc' "$ROOT_DIR/apps/envoy-gateway/gateway-grpc.yaml"; then
-  fail "control-plane Gateway must define the LLM worker TCP listener"
+  fail "control-plane Gateway must define the LLM worker HTTPS listener"
+fi
+if ! awk '/name: llm-grpc/{found=1; next} found && /protocol: HTTPS/{https=1} found && /mode: Terminate/{terminate=1} found && /name: llm-request-router-grpc-tls/{secret=1; exit} END{exit !(https && terminate && secret)}' "$ROOT_DIR/apps/envoy-gateway/gateway-grpc.yaml"; then
+  fail "LLM registration Gateway listener must terminate HTTPS with the dedicated gRPC Secret"
+fi
+if awk '/name: llm-grpc/{inside=1; next} inside && /name: llm-quic/{inside=0} inside && /^[[:space:]]+hostname:/{found=1} END{exit !found}' "$ROOT_DIR/apps/envoy-gateway/gateway-grpc.yaml"; then
+  fail "LLM registration listener must not constrain the Stargate HTTP/2 authority with a hostname"
 fi
 if ! grep -R -q 'name: llm-quic' "$ROOT_DIR/apps/envoy-gateway/gateway-grpc.yaml"; then
   fail "control-plane Gateway must define the LLM worker UDP listener"

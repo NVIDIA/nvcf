@@ -33,9 +33,9 @@ Add to your application's `pom.xml`:
 ## Configuration
 
 Set `spring.cassandra.ssl.bundle` to the **same name** as the PEM bundle under
-`spring.ssl.bundle.pem` (examples below use `cassandra-ssl`). 
+`spring.ssl.bundle.pem` (examples below use `cassandra-ssl`).
 
-For a **local plaintext** cluster, either do not set `spring.cassandra.ssl.enabled` or 
+For a **local plaintext** cluster, either do not set `spring.cassandra.ssl.enabled` or
 set it to `spring.cassandra.ssl.enabled=false`. In such a scenario, the starter still registers the
 refreshable `cassandraSession` without requiring `spring.cassandra.ssl.bundle` to be configured.
 
@@ -157,7 +157,7 @@ spans:
 
 ### Opt-out: expose a `RefreshingCqlSessionObservabilityProperties` bean
 
-The library follows the "app-owned properties bean" convention - 
+The library follows the "app-owned properties bean" convention -
 `com.nvidia.boot.cassandra.configuration.RefreshingCqlSessionObservabilityProperties`:
 
 - **Bean absent** (default): treated as if `enabled=true`. `cqlSession` is wrapped with observability.
@@ -206,6 +206,7 @@ This opt-out is a **short-term** fix.
 The longer-term goal is to make the reactive and sync observation layers coexist on the same `CqlSession` without producing duplicate observations.
 
 This requires:
+
 1. Remove `ObservationRegistry` from `RefreshingCqlSession` -> internal `delegate` is always the raw driver session
 2. Make `RefreshingCqlSession` a non-primary bean under a qualified name (e.g. `refreshingCassandraSession`)
 3. Keep `cassandraSession` as the `@Primary @Bean` name (preserving today's by-type and by-name injection behavior), but explicitly wrap `@Qualifier("refreshingCassandraSession")` `ObservableCqlSessionFactory.wrap(refreshingCassandraSession, registry)`

@@ -363,6 +363,26 @@ class NvcaAccountControllerTest extends IntegrationTest {
     }
 
     @Test
+    void getClusters_readClusterManagementScope_success()
+            throws Exception {
+        // Prepare
+        when(clusterManagementService.getClusters(DUMMY_BYOC_NCA_ID, null,
+                null)).thenReturn(
+                List.of(getDummyGetClusterResponse(DUMMY_BYOC_NCA_ID, DUMMY_CLUSTER_ID)));
+
+        // Act
+        mockMvc.perform(MockMvcRequestBuilders.get(GET_CLUSTERS_URL, DUMMY_BYOC_NCA_ID)
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .header(HttpHeaders.AUTHORIZATION,
+                                        JwtKeyUtils.getAuthHeader(DUMMY_CUSTOMER_1,
+                                                                  TestUtil.NGC_CLUSTER_MANAGEMENT_READ_SCOPE)))
+                .andExpect(MockMvcResultMatchers.status().isOk());
+
+        // Assert
+        verify(clusterManagementService).getClusters(DUMMY_BYOC_NCA_ID, null, null);
+    }
+
+    @Test
     void getClusters_legacyIncludeGfnParam_mapsToIncludeNonByoc()
             throws Exception {
         // Prepare

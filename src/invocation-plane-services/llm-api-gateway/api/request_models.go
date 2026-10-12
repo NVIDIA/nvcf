@@ -28,6 +28,8 @@ import (
 	"net/textproto"
 
 	echo "github.com/labstack/echo/v4"
+
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 )
 
 func requestRoutingKey(req *http.Request) string {
@@ -111,6 +113,19 @@ func requestModelIDFromMultipart(body []byte, boundary string) string {
 			return requestModelIDFromJSON(value)
 		}
 	}
+}
+
+// rejectAmbiguousMembers refuses bodies that spell a field the gateway binds
+// with more than one letter case. The gateway would validate and meter one
+// value while the backend reads the other from the forwarded body.
+func rejectAmbiguousMembers(body []byte, model any) error {
+	if path := models.AmbiguousMemberPath(body, model); path != "" {
+		return echo.NewHTTPError(
+			http.StatusBadRequest,
+			fmt.Sprintf("field %q is sent more than once with different letter case", path),
+		)
+	}
+	return nil
 }
 
 func rewriteJSONModel(body []byte, model string) ([]byte, bool, error) {
