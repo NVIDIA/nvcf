@@ -116,3 +116,7 @@ func TestPrewarm(t *testing.T) {
 	t.Setenv("NVSNAP_PREWARM", "0")
 	prewarmCmd([]string{"--root", root})
 }
+
+func TestSkip(t *testing.T) {
+	skipCmd([]string{"--reason", "nothing to do"}) // must return, not exit
+}

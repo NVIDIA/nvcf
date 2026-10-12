@@ -104,6 +104,7 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 	if c.Args != nil {
 		patches = append(patches, PatchOp{Op: "remove", Path: base + "/args"})
 	}
+	patches = append(patches, placeholderInitPatches(pod, c)...)
 	if c.LivenessProbe != nil {
 		patches = append(patches, PatchOp{Op: "remove", Path: base + "/livenessProbe"})
 	}
@@ -201,4 +202,67 @@ func criuNodePreference(pod *corev1.Pod, nodes []string) []PatchOp {
 // jsonPointerEscape escapes a key for a JSON Patch path (RFC 6901).
 func jsonPointerEscape(s string) string {
 	return strings.NewReplacer("~", "~0", "/", "~1").Replace(s)
+}
+
+// placeholderInitPatches skips, in a restore placeholder, the init
+// containers whose output the restored process cannot see: the process
+// already went through its startup when it was captured, so what an init
+// container leaves matters only on a volume the main container mounts,
+// and one that writes none only waits or checks. Waiting is harmful here:
+// a rank that waits for its leader to serve (a Dynamo worker's
+// wait-for-leader) never starts, and the leader is a placeholder until the
+// whole group is restored. A skipped init runs the helper's skip instead,
+// keeping its place so the other patches' indices hold.
+func placeholderInitPatches(pod *corev1.Pod, main *corev1.Container) []PatchOp {
+	volumes := map[string]corev1.Volume{}
+	for _, v := range pod.Spec.Volumes {
+		volumes[v.Name] = v
+	}
+	seen := map[string]bool{}
+	for _, vm := range main.VolumeMounts {
+		seen[vm.Name] = true
+	}
+	var patches []PatchOp
+	for i := range pod.Spec.InitContainers {
+		init := &pod.Spec.InitContainers[i]
+		if writesSharedVolume(init, volumes, seen) {
+			continue
+		}
+		base := fmt.Sprintf("/spec/initContainers/%d", i)
+		op := "add"
+		if init.Command != nil {
+			op = "replace"
+		}
+		patches = append(patches, PatchOp{Op: op, Path: base + "/command",
+			Value: []string{HelperBin, "skip", "--reason", "restore placeholder: " + init.Name + " writes nothing the restored process reads"}})
+		if init.Args != nil {
+			patches = append(patches, PatchOp{Op: "remove", Path: base + "/args"})
+		}
+		if init.VolumeMounts == nil {
+			patches = append(patches, PatchOp{Op: "add", Path: base + "/volumeMounts", Value: []corev1.VolumeMount{helperMount()}})
+		} else {
+			patches = append(patches, PatchOp{Op: "add", Path: base + "/volumeMounts/-", Value: helperMount()})
+		}
+	}
+	return patches
+}
+
+// writesSharedVolume reports whether init mounts, writable, a volume that
+// holds data (not a ConfigMap, Secret or projection) the main container
+// also mounts.
+func writesSharedVolume(init *corev1.Container, volumes map[string]corev1.Volume, mainMounts map[string]bool) bool {
+	for _, vm := range init.VolumeMounts {
+		if vm.ReadOnly || !mainMounts[vm.Name] {
+			continue
+		}
+		v, ok := volumes[vm.Name]
+		if !ok {
+			return true // not knowable here: keep the init
+		}
+		s := v.VolumeSource
+		if s.EmptyDir != nil || s.PersistentVolumeClaim != nil || s.HostPath != nil || s.Ephemeral != nil || s.CSI != nil || s.NFS != nil {
+			return true
+		}
+	}
+	return false
 }

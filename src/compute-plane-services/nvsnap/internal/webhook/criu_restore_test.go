@@ -286,3 +286,50 @@ func TestCRIURestore_PlaceholderIsTheGPUContainer(t *testing.T) {
 		t.Error("a pod with no GPU limit keeps the configured main container")
 	}
 }
+
+// A placeholder runs only the init containers whose output the restored
+// process can see: those writing a volume the engine mounts. The others
+// only wait or check, and a wait on a peer that is itself a placeholder
+// (a Dynamo worker waiting for its leader) would never end.
+func TestCRIURestore_PlaceholderSkipsInitsWithNoSharedOutput(t *testing.T) {
+	m := criuMutator(t, criuCaptureRecord())
+	pod := podWithAnnotation("abc123")
+	pod.Spec = criuFunctionPod().Spec
+	pod.Spec.Volumes = []corev1.Volume{
+		{Name: "models", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: "scripts", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{}}},
+		{Name: "scratch", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+	}
+	pod.Spec.Containers[1].VolumeMounts = []corev1.VolumeMount{{Name: "models", MountPath: "/config/models"}, {Name: "scripts", MountPath: "/scripts"}}
+	pod.Spec.InitContainers = []corev1.Container{
+		{Name: "download-model", Image: "img", Command: []string{"download"}, VolumeMounts: []corev1.VolumeMount{{Name: "models", MountPath: "/config/models"}}},
+		{Name: "wait-for-leader", Image: "img", Command: []string{"sh", "-c"}, Args: []string{"wait"}, VolumeMounts: []corev1.VolumeMount{{Name: "scripts", MountPath: "/scripts"}}},
+		{Name: "wait-for-nats", Image: "curl", Command: []string{"sh", "-c", "until curl nats; do sleep 5; done"}},
+		{Name: "own-scratch", Image: "img", Command: []string{"prep"}, VolumeMounts: []corev1.VolumeMount{{Name: "scratch", MountPath: "/s"}}},
+	}
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := applyPatches(t, pod, patches)
+	run := map[string]bool{}
+	for _, c := range got.Spec.InitContainers {
+		skipped := len(c.Command) > 1 && c.Command[0] == HelperBin && c.Command[1] == "skip"
+		run[c.Name] = !skipped
+		if skipped {
+			hasHelper := false
+			for _, vm := range c.VolumeMounts {
+				hasHelper = hasHelper || vm == helperMount()
+			}
+			if len(c.Args) != 0 || !hasHelper {
+				t.Errorf("%s: a skipped init runs the helper with no args: %v %v", c.Name, c.Args, c.VolumeMounts)
+			}
+		}
+	}
+	want := map[string]bool{"download-model": true, "wait-for-leader": false, "wait-for-nats": false, "own-scratch": false}
+	for n, w := range want {
+		if run[n] != w {
+			t.Errorf("%s runs = %v, want %v", n, run[n], w)
+		}
+	}
+}

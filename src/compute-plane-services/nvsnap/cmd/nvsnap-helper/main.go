@@ -39,6 +39,9 @@ func main() {
 	var err error
 	code := 0
 	switch cmd {
+	case "skip":
+		skipCmd(args)
+		return
 	case "wait":
 		code, err = waitCmd(args)
 	case "write":
@@ -60,7 +63,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: nvsnap-helper wait | write | seed | prewarm [flags] [-- command...]")
+	fmt.Fprintln(os.Stderr, "usage: nvsnap-helper skip | wait | write | seed | prewarm [flags] [-- command...]")
 	os.Exit(2)
 }
 
@@ -107,6 +110,14 @@ func run(argv []string) (int, error) {
 // it reaps whatever is reparented to it, and every two seconds runs a
 // short child, so a pid the agent reserves in the namespace shows up in
 // it. SIGTERM ends it cleanly.
+// skipCmd stands in for a step that does not run: it says why and exits 0.
+func skipCmd(args []string) {
+	fs := flag.NewFlagSet("skip", flag.ExitOnError)
+	reason := fs.String("reason", "", "why the step does not run")
+	_ = fs.Parse(args)
+	fmt.Println("nvsnap: skipped:", *reason)
+}
+
 // waitCmd waits for a shared model's completion marker. On a recorded
 // failure, or past the deadline, it falls back: with --in-place it runs
 // the given download (none: it lets the engine download), else the
