@@ -7,7 +7,7 @@ on:
   push:
     branches: [main, 'release-**']
   pull_request:
-    branches: [main, 'release-**']
+    branches: [main, 'release-**', 'docs/**']
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -23,6 +23,7 @@ jobs:
   docs:
     name: docs
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,6 +40,27 @@ jobs:
 
       - name: Run docs validation
         run: ./tools/ci/check-docs
+
+      - name: Validate Development links
+        run: ./tools/ci/preview-docs --check
+
+      - name: Test changed-doc link selection
+        run: bash tools/scripts/test/test-check-doc-links
+
+      - name: Check links in changed Markdown
+        env:
+          DOCS_LINK_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || 'HEAD^' }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./tools/ci/check-doc-links "$DOCS_LINK_BASE" "$RUNNER_TEMP/docs-link-report.md"
+
+      - name: Retain link report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docs-link-report
+          path: ${{ runner.temp }}/docs-link-report.md
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Check latest stack release
         continue-on-error: true
@@ -111,6 +133,7 @@ jobs:
         run: |
           make -C deploy/helm/nvca-operator test-default-ownership
           make -C deploy/helm/nvca-operator test-resource-quantity-schema
+          make -C deploy/helm/nvca-operator test-cluster-validator
           make -C deploy/stacks/nvcf-compute-plane test-nvca-default-ownership
 
       - name: Run self-managed Helmfile render tests

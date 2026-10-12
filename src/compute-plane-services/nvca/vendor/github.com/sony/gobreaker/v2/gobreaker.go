@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Package gobreaker implements the Circuit Breaker pattern.
 // See https://msdn.microsoft.com/en-us/library/dn589784.aspx.
 package gobreaker

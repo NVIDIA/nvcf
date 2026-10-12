@@ -99,9 +99,13 @@ func stripNVCFRoutingHeaders(request *http.Request) {
 
 func (d *LLMGatewayDirector) ServeProxy(target LLMGatewayRequest, writer http.ResponseWriter, request *http.Request) error {
 	span := trace.SpanFromContext(request.Context())
-	span.SetAttributes(traceAttrEndpointType.String(traceAttrValueEndpointLLMGateway))
+	endpointType := traceAttrValueEndpointLLMGateway
+	if request.URL.Path == "/v1/messages" {
+		endpointType = traceAttrValueEndpointAnthropic
+	}
+	span.SetAttributes(traceAttrEndpointType.String(endpointType))
 
-	if writeFunctionStatusError(writer, target.OfflineMessage, target.EOL, "") {
+	if writeFunctionStatusError(writer, request, target.OfflineMessage, target.EOL, "") {
 		return nil
 	}
 
@@ -116,11 +120,6 @@ func (d *LLMGatewayDirector) ServeProxy(target LLMGatewayRequest, writer http.Re
 	}
 
 	var proxyErr error
-	rp := *d.rp
-	rp.ErrorHandler = func(writer http.ResponseWriter, request *http.Request, err error) {
-		proxyErr = err
-		writeProxyError(writer, request, err)
-	}
-	rp.ServeHTTP(writer, request)
+	requestProxy(d.rp, request, &proxyErr).ServeHTTP(writer, request)
 	return proxyErr
 }

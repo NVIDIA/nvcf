@@ -13,36 +13,85 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Duration;
+
 use super::pulsar::PulsarLoadBalancer;
 use super::wait_and_widen::{WaitAndWidenConfig, WaitAndWidenLoadBalancer};
 use super::{
-    LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice, LoadBalancerRequest,
+    LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice, LoadBalancerDecision,
+    LoadBalancerRequest,
 };
 use crate::routing_state::RoutedClusterSnapshot;
 
+/// WaitAndWiden with Pulsar ranking as the source of affinity.
+///
+/// The affinity group is the top of the capacity-weighted rendezvous ranking
+/// instead of a consistent-hash ring. Selection, the affinity wait, and bucket
+/// unlocks follow WaitAndWiden. After the affinity wait, the eligible set grows
+/// one exponentially wider ranking band per widen interval until it covers
+/// every candidate, so overflow spreads outward from a key's stable ranking
+/// instead of jumping to the whole pool at once.
 pub(super) struct PulsarWaitAndWidenLoadBalancer {
     ranking: PulsarLoadBalancer,
     wait_and_widen: WaitAndWidenLoadBalancer,
+    /// Same selection with `fallback_max_queued` as the capacity limit, used
+    /// for the open set after the affinity wait.
+    fallback_wait_and_widen: WaitAndWidenLoadBalancer,
+    affinity_group_size: usize,
+    affinity_wait: Duration,
+    band_widen_interval: Duration,
+    affinity_input_tokens_scale: f64,
+}
+
+/// Affinity selection discounts prefill and uses `max_queued`; fallback uses
+/// full prefill cost and `fallback_max_queued`.
+#[derive(Clone, Copy)]
+enum SelectionPhase {
+    Affinity,
+    Fallback,
 }
 
 impl PulsarWaitAndWidenLoadBalancer {
     pub(super) fn new(config: LoadBalancerAlgorithmConfig) -> anyhow::Result<Self> {
+        let settings = config
+            .wait_and_widen_settings()
+            .expect("pulsar-wait-and-widen config has wait_and_widen settings");
+        let wait_and_widen_config = WaitAndWidenConfig::from_algorithm_config(&config)?;
+        let band_widen_interval = settings.band_widen_interval_ms.map_or(
+            wait_and_widen_config.cache_affinity_wait,
+            Duration::from_millis,
+        );
+        let mut fallback_config = wait_and_widen_config.clone();
+        fallback_config.max_queued = settings.fallback_max_queued.unwrap_or(0);
         Ok(Self {
-            wait_and_widen: WaitAndWidenLoadBalancer::new(
-                WaitAndWidenConfig::from_algorithm_config(&config)?,
-            ),
+            // The Pulsar primary is the affinity group unless configured wider.
+            affinity_group_size: wait_and_widen_config
+                .cache_affinity_backend_selection_count
+                .unwrap_or(1),
+            affinity_wait: wait_and_widen_config.cache_affinity_wait,
+            band_widen_interval,
+            affinity_input_tokens_scale: wait_and_widen_config.cache_affinity_input_tokens_scale,
+            fallback_wait_and_widen: WaitAndWidenLoadBalancer::new(fallback_config),
+            wait_and_widen: WaitAndWidenLoadBalancer::new(wait_and_widen_config),
             ranking: PulsarLoadBalancer::new(config),
         })
     }
 
-    fn choose_band(
+    /// Runs WaitAndWiden selection over the first `open_end` ranked candidates.
+    fn decide_from_ranking_prefix(
         &self,
+        phase: SelectionPhase,
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
         ranked_indices: &[usize],
-        band: &[usize],
-    ) -> Option<LoadBalancerCandidateChoice> {
-        let eligible = band
+        open_end: usize,
+        elapsed: Duration,
+    ) -> LoadBalancerDecision {
+        let (selector, input_tokens_scale) = match phase {
+            SelectionPhase::Affinity => (&self.wait_and_widen, self.affinity_input_tokens_scale),
+            SelectionPhase::Fallback => (&self.fallback_wait_and_widen, 1.0),
+        };
+        let eligible = ranked_indices[..open_end]
             .iter()
             .copied()
             .filter(|index| {
@@ -51,33 +100,143 @@ impl PulsarWaitAndWidenLoadBalancer {
                     .is_eligible()
             })
             .collect::<Vec<_>>();
-        self.wait_and_widen
-            .decide_from_candidate_indices(
-                request,
-                candidates,
-                &eligible,
-                1.0,
-                request.received_at.elapsed(),
+        match selector.decide_from_candidate_indices(
+            request,
+            candidates,
+            &eligible,
+            input_tokens_scale,
+            elapsed,
+        ) {
+            LoadBalancerDecision::Selected(choice) => LoadBalancerDecision::Selected(
+                self.ranked_choice(request, candidates, ranked_indices, choice.candidate_index),
+            ),
+            decision => decision,
+        }
+    }
+
+    fn ranked_choice(
+        &self,
+        request: &LoadBalancerRequest<'_>,
+        candidates: &[RoutedClusterSnapshot],
+        ranked_indices: &[usize],
+        candidate_index: usize,
+    ) -> LoadBalancerCandidateChoice {
+        let rank_depth = ranked_indices
+            .iter()
+            .position(|index| *index == candidate_index)
+            .expect("wait_and_widen choice must come from the PULSAR ranking")
+            + 1;
+        LoadBalancerCandidateChoice {
+            candidate_index,
+            rank_depth,
+            selected_after_kv_free_tokens_skip: ranked_indices[..rank_depth - 1].iter().any(
+                |index| {
+                    self.ranking
+                        .feasibility(request, &candidates[*index])
+                        .skipped_for_kv_free_tokens()
+                },
+            ),
+        }
+    }
+
+    fn decide_at(
+        &self,
+        request: &LoadBalancerRequest<'_>,
+        candidates: &[RoutedClusterSnapshot],
+        elapsed: Duration,
+    ) -> LoadBalancerDecision {
+        let ranked_indices = self.ranking.compute_ranking(request, candidates);
+        let Some(&primary_index) = ranked_indices.first() else {
+            return LoadBalancerDecision::Unavailable;
+        };
+        if !self.wait_and_widen.has_queue_slo(request)
+            && self
+                .ranking
+                .feasibility(request, &candidates[primary_index])
+                .is_eligible()
+        {
+            return LoadBalancerDecision::Selected(LoadBalancerCandidateChoice {
+                candidate_index: primary_index,
+                rank_depth: 1,
+                selected_after_kv_free_tokens_skip: false,
+            });
+        }
+
+        // Every attempt checks the affinity group first, even after the wait.
+        let group_end = self.affinity_group_size.min(ranked_indices.len());
+        let affinity_bucket_wait = match self.decide_from_ranking_prefix(
+            SelectionPhase::Affinity,
+            request,
+            candidates,
+            &ranked_indices,
+            group_end,
+            elapsed,
+        ) {
+            LoadBalancerDecision::Selected(choice) => {
+                return LoadBalancerDecision::Selected(choice);
+            }
+            LoadBalancerDecision::Wait(delay) => Some(delay),
+            LoadBalancerDecision::Unavailable => None,
+        };
+        if elapsed < self.affinity_wait {
+            let remaining = self.affinity_wait - elapsed;
+            return LoadBalancerDecision::Wait(
+                affinity_bucket_wait.map_or(remaining, |delay| delay.min(remaining)),
+            );
+        }
+
+        // After the affinity wait, the open set grows by one ranking band per
+        // widen interval: ranks 1..=k+2, then 1..=k+6, and so on until it
+        // covers the whole ranking. Open candidates compete at full prefill
+        // cost, as WaitAndWiden global buckets do, and bucket unlocks count
+        // from the end of the affinity wait.
+        let widened_for = elapsed - self.affinity_wait;
+        let bands_open = if self.band_widen_interval.is_zero() {
+            usize::MAX
+        } else {
+            usize::try_from(widened_for.as_nanos() / self.band_widen_interval.as_nanos() + 1)
+                .unwrap_or(usize::MAX)
+        };
+        let mut open_end = group_end;
+        let mut band_width = 2usize;
+        for _ in 0..bands_open {
+            if open_end >= ranked_indices.len() {
+                break;
+            }
+            open_end = open_end
+                .saturating_add(band_width)
+                .min(ranked_indices.len());
+            band_width = band_width.saturating_mul(2);
+        }
+        let next_band_wait = (open_end < ranked_indices.len()).then(|| {
+            let next_opening = self
+                .band_widen_interval
+                .saturating_mul(u32::try_from(bands_open).unwrap_or(u32::MAX));
+            next_opening.saturating_sub(widened_for)
+        });
+        let open_decision = self.decide_from_ranking_prefix(
+            SelectionPhase::Fallback,
+            request,
+            candidates,
+            &ranked_indices,
+            open_end,
+            widened_for,
+        );
+        let open_wait = match open_decision {
+            LoadBalancerDecision::Selected(choice) => {
+                return LoadBalancerDecision::Selected(choice);
+            }
+            LoadBalancerDecision::Wait(delay) => Some(delay),
+            LoadBalancerDecision::Unavailable => None,
+        };
+        [affinity_bucket_wait, open_wait, next_band_wait]
+            .into_iter()
+            .flatten()
+            .min()
+            .map_or(
+                LoadBalancerDecision::Unavailable,
+                LoadBalancerDecision::Wait,
             )
-            .selected()
-            .map(|choice| {
-                let rank_depth = ranked_indices
-                    .iter()
-                    .position(|index| *index == choice.candidate_index)
-                    .expect("wait_and_widen choice must come from the PULSAR ranking")
-                    + 1;
-                LoadBalancerCandidateChoice {
-                    candidate_index: choice.candidate_index,
-                    rank_depth,
-                    selected_after_kv_free_tokens_skip: ranked_indices[..rank_depth - 1]
-                        .iter()
-                        .any(|index| {
-                            self.ranking
-                                .feasibility(request, &candidates[*index])
-                                .skipped_for_kv_free_tokens()
-                        }),
-                }
-            })
     }
 }
 
@@ -89,46 +248,15 @@ impl LoadBalancer for PulsarWaitAndWidenLoadBalancer {
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
     ) -> Option<LoadBalancerCandidateChoice> {
-        if candidates.is_empty() {
-            return None;
-        }
+        self.decide(request, candidates).selected()
+    }
 
-        let ranked_indices = self.ranking.compute_ranking(request, candidates);
-        let primary_index = *ranked_indices.first()?;
-        let primary = &candidates[primary_index];
-        if !self.wait_and_widen.has_queue_slo(request)
-            && self.ranking.feasibility(request, primary).is_eligible()
-        {
-            return Some(LoadBalancerCandidateChoice {
-                candidate_index: primary_index,
-                rank_depth: 1,
-                selected_after_kv_free_tokens_skip: false,
-            });
-        }
-
-        if let Some(choice) =
-            self.choose_band(request, candidates, &ranked_indices, &ranked_indices[..1])
-        {
-            return Some(choice);
-        }
-
-        let mut band_start = 1usize;
-        let mut band_width = 2usize;
-        while band_start < ranked_indices.len() {
-            let band_end = (band_start + band_width).min(ranked_indices.len());
-            if let Some(choice) = self.choose_band(
-                request,
-                candidates,
-                &ranked_indices,
-                &ranked_indices[band_start..band_end],
-            ) {
-                return Some(choice);
-            }
-            band_start = band_end;
-            band_width = band_width.saturating_mul(2);
-        }
-
-        None
+    fn decide(
+        &self,
+        request: &LoadBalancerRequest<'_>,
+        candidates: &[RoutedClusterSnapshot],
+    ) -> LoadBalancerDecision {
+        self.decide_at(request, candidates, request.received_at.elapsed())
     }
 }
 
@@ -203,6 +331,7 @@ mod tests {
             stats: ModelStats {
                 output_tps: 0.0,
                 last_mean_input_tps: 100.0,
+                max_input_tps: Some(100.0),
                 max_output_tps: 100.0,
                 queue_size: 0,
                 queued_input_size: 0,
@@ -316,6 +445,7 @@ mod tests {
             true,
             |settings| {
                 settings.n = Some(2);
+                settings.band_widen_interval_ms = Some(10_000);
             },
         ))
         .expect("valid hybrid config");
@@ -350,6 +480,7 @@ mod tests {
                 settings.max_queue_time_ceil_ms = Some(100);
                 settings.ttft_bucket_size_ms = Some(100);
                 settings.n = Some(2);
+                settings.band_widen_interval_ms = Some(10_000);
             }),
         )
         .expect("valid hybrid config");
@@ -405,6 +536,7 @@ mod tests {
                 settings.max_queue_time_ceil_ms = Some(100);
                 settings.ttft_bucket_size_ms = Some(100);
                 settings.n = Some(2);
+                settings.band_widen_interval_ms = Some(1_000);
             },
         ))
         .expect("valid hybrid config");
@@ -440,13 +572,250 @@ mod tests {
             }
         }
 
-        let expanded_choice = hybrid
-            .choose_for_test(&hybrid_request, &candidates)
-            .expect("second fallback band should contain usable candidates");
+        // Ranks 2 and 3 now miss the queue SLO. The next band opens only after
+        // one widen interval.
         assert_eq!(
-            expanded_choice.candidate.cluster_id,
-            globally_fast_lower_rank
+            hybrid.decide_at(&hybrid_request, &candidates, Duration::ZERO),
+            LoadBalancerDecision::Wait(Duration::from_secs(1))
         );
-        assert_eq!(expanded_choice.rank_depth, 4);
+        let expanded_choice =
+            hybrid.decide_at(&hybrid_request, &candidates, Duration::from_millis(1_000));
+        match expanded_choice {
+            LoadBalancerDecision::Selected(choice) => {
+                assert_eq!(
+                    candidates[choice.candidate_index].cluster_id,
+                    globally_fast_lower_rank
+                );
+                assert_eq!(choice.rank_depth, 4);
+            }
+            other => panic!("second band should contain usable candidates, got {other:?}"),
+        }
+    }
+
+    fn single_slot_candidates(count: usize) -> Vec<RoutedClusterSnapshot> {
+        let mut candidates = candidates(count, 0);
+        for candidate in &mut candidates {
+            candidate.stats.max_engine_concurrency = 1;
+        }
+        candidates
+    }
+
+    fn affinity_wait_config(
+        seed: &str,
+        configure: impl FnOnce(&mut WaitAndWidenAlgorithmConfig),
+    ) -> PulsarWaitAndWidenLoadBalancer {
+        PulsarWaitAndWidenLoadBalancer::new(pulsar_wait_and_widen_algorithm_config(
+            seed,
+            false,
+            |settings| {
+                settings.max_queue_time_floor_ms = Some(10_000);
+                settings.max_queue_time_ceil_ms = Some(10_000);
+                settings.n = Some(2);
+                configure(settings);
+            },
+        ))
+        .expect("valid hybrid config")
+    }
+
+    fn selected_rank(decision: LoadBalancerDecision) -> usize {
+        match decision {
+            LoadBalancerDecision::Selected(choice) => choice.rank_depth,
+            other => panic!("expected a selection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn affinity_wait_holds_full_primary_before_widening() {
+        let target = target();
+        let affinity_key = "hybrid-affinity-wait";
+        let mut candidates = single_slot_candidates(5);
+        let ranked = pulsar_ranked_indices("wait-seed", &target, affinity_key, 0, &candidates);
+        candidates[ranked[0]].stats.num_running_queries = 1;
+        // Faster lower ranks would win any open-set selection that includes them.
+        for rank in [1, 2] {
+            candidates[ranked[rank]].rtt = Duration::from_millis(1);
+        }
+        let hybrid = affinity_wait_config("wait-seed", |settings| {
+            settings.cache_affinity_wait_ms = Some(300);
+        });
+        let request = request(&target, Some(affinity_key), Some(0));
+
+        assert_eq!(
+            hybrid.decide_at(&request, &candidates, Duration::from_millis(100)),
+            LoadBalancerDecision::Wait(Duration::from_millis(200))
+        );
+        let rank =
+            selected_rank(hybrid.decide_at(&request, &candidates, Duration::from_millis(300)));
+        assert!(
+            (2..=3).contains(&rank),
+            "first fallback band, got rank {rank}"
+        );
+
+        candidates[ranked[0]].stats.num_running_queries = 0;
+        assert_eq!(
+            selected_rank(hybrid.decide_at(&request, &candidates, Duration::from_millis(100))),
+            1
+        );
+        // After the wait, the affinity group is still checked before the open
+        // set, so a free primary wins over faster free lower ranks.
+        assert_eq!(
+            selected_rank(hybrid.decide_at(&request, &candidates, Duration::from_millis(500))),
+            1
+        );
+    }
+
+    #[test]
+    fn widen_interval_defaults_to_the_affinity_wait() {
+        let target = target();
+        let affinity_key = "hybrid-default-interval";
+        let mut candidates = single_slot_candidates(5);
+        let ranked = pulsar_ranked_indices("interval-seed", &target, affinity_key, 0, &candidates);
+        // Only rank 4 is free. It opens with the second band, one interval
+        // after the affinity wait.
+        for rank in [0, 1, 2, 4] {
+            candidates[ranked[rank]].stats.num_running_queries = 1;
+        }
+        let hybrid = affinity_wait_config("interval-seed", |settings| {
+            settings.cache_affinity_wait_ms = Some(300);
+        });
+        let request = request(&target, Some(affinity_key), Some(0));
+
+        assert_eq!(
+            hybrid.decide_at(&request, &candidates, Duration::from_millis(300)),
+            LoadBalancerDecision::Wait(Duration::from_millis(300))
+        );
+        assert_eq!(
+            selected_rank(hybrid.decide_at(&request, &candidates, Duration::from_millis(600))),
+            4
+        );
+    }
+
+    #[test]
+    fn affinity_group_size_widens_the_group_before_fallback() {
+        let target = target();
+        let affinity_key = "hybrid-affinity-group";
+        let mut candidates = single_slot_candidates(5);
+        let ranked = pulsar_ranked_indices("group-seed", &target, affinity_key, 0, &candidates);
+        candidates[ranked[0]].stats.num_running_queries = 1;
+        let hybrid = affinity_wait_config("group-seed", |settings| {
+            settings.cache_affinity_wait_ms = Some(300);
+            settings.cache_affinity_backend_selection_count = Some(2);
+        });
+        let request = request(&target, Some(affinity_key), Some(0));
+
+        assert_eq!(
+            selected_rank(hybrid.decide_at(&request, &candidates, Duration::ZERO)),
+            2
+        );
+    }
+
+    #[test]
+    fn locked_fallback_bucket_returns_timed_wait() {
+        let target = target();
+        let affinity_key = "hybrid-locked-bucket";
+        let mut candidates = single_slot_candidates(5);
+        let ranked = pulsar_ranked_indices("bucket-seed", &target, affinity_key, 0, &candidates);
+        for rank in [0, 1, 3, 4] {
+            candidates[ranked[rank]].stats.num_running_queries = 1;
+        }
+        // Only rank 3 has capacity, and it sits 495 ms behind the full
+        // clusters that form the first TTFT bucket.
+        candidates[ranked[2]].rtt = Duration::from_millis(500);
+        let hybrid = affinity_wait_config("bucket-seed", |settings| {
+            settings.band_widen_interval_ms = Some(0);
+            settings.ttft_bucket_size_ms = Some(20);
+            settings.next_bucket_unlock_factor = Some(0.25);
+        });
+        let request = request(&target, Some(affinity_key), Some(0));
+
+        match hybrid.decide_at(&request, &candidates, Duration::ZERO) {
+            LoadBalancerDecision::Wait(delay) => {
+                assert!(
+                    delay > Duration::from_millis(100) && delay < Duration::from_millis(150),
+                    "unexpected bucket wait {delay:?}"
+                );
+            }
+            other => panic!("expected a timed wait, got {other:?}"),
+        }
+        assert_eq!(
+            selected_rank(hybrid.decide_at(&request, &candidates, Duration::from_millis(200))),
+            3
+        );
+    }
+
+    #[test]
+    fn widen_interval_opens_bands_progressively() {
+        let target = target();
+        let affinity_key = "hybrid-progressive";
+        let mut candidates = single_slot_candidates(8);
+        let ranked = pulsar_ranked_indices("widen-seed", &target, affinity_key, 0, &candidates);
+        // Only rank 8 has capacity: it opens with the third band (ranks 1-15).
+        for rank in 0..7 {
+            candidates[ranked[rank]].stats.num_running_queries = 1;
+        }
+        let request = request(&target, Some(affinity_key), Some(0));
+        let gated = affinity_wait_config("widen-seed", |settings| {
+            settings.cache_affinity_wait_ms = Some(100);
+            settings.band_widen_interval_ms = Some(200);
+        });
+
+        assert_eq!(
+            gated.decide_at(&request, &candidates, Duration::from_millis(100)),
+            LoadBalancerDecision::Wait(Duration::from_millis(200))
+        );
+        assert_eq!(
+            gated.decide_at(&request, &candidates, Duration::from_millis(350)),
+            LoadBalancerDecision::Wait(Duration::from_millis(150))
+        );
+        assert_eq!(
+            selected_rank(gated.decide_at(&request, &candidates, Duration::from_millis(500))),
+            8
+        );
+
+        let immediate = affinity_wait_config("widen-seed", |settings| {
+            settings.cache_affinity_wait_ms = Some(100);
+            settings.band_widen_interval_ms = Some(0);
+        });
+        assert_eq!(
+            selected_rank(immediate.decide_at(&request, &candidates, Duration::from_millis(100))),
+            8
+        );
+    }
+
+    #[test]
+    fn fallback_max_queued_defaults_to_free_slot_overflow() {
+        let target = target();
+        let affinity_key = "hybrid-fallback-queue";
+        let mut candidates = single_slot_candidates(5);
+        let ranked = pulsar_ranked_indices("guard-seed", &target, affinity_key, 0, &candidates);
+        // The primary is full including its queue. Ranks 2 and 3 have no free
+        // slot but still have one queued place each.
+        candidates[ranked[0]].stats.num_running_queries = 2;
+        candidates[ranked[1]].stats.num_running_queries = 1;
+        candidates[ranked[2]].stats.num_running_queries = 1;
+        let request = request(&target, Some(affinity_key), Some(0));
+        let configure = |fallback_max_queued| {
+            affinity_wait_config("guard-seed", move |settings| {
+                settings.max_queued = Some(1);
+                settings.fallback_max_queued = fallback_max_queued;
+                settings.band_widen_interval_ms = Some(1_000);
+            })
+        };
+
+        let queued =
+            selected_rank(configure(Some(1)).decide_at(&request, &candidates, Duration::ZERO));
+        assert!((2..=3).contains(&queued), "queued overflow rank {queued}");
+        // The default guards overflow.
+        let guarded = configure(None);
+        assert_eq!(
+            guarded.decide_at(&request, &candidates, Duration::ZERO),
+            LoadBalancerDecision::Wait(Duration::from_secs(1))
+        );
+        let widened =
+            selected_rank(guarded.decide_at(&request, &candidates, Duration::from_secs(1)));
+        assert!(
+            (4..=5).contains(&widened),
+            "free-slot overflow rank {widened}"
+        );
     }
 }

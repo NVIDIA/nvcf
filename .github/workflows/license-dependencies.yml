@@ -81,7 +81,7 @@ jobs:
           # Do not let a failed diff look like an empty change set: feeding no
           # paths to the scope script makes it answer "true".
           changed="$(git diff --name-only "${base}...HEAD" || true)"
-          decision="$(printf '%s\n' "${changed}" | ./tools/ci/dependency-docs-scope)"
+          decision="$(printf '%s\n' "${changed}" | ./tools/ci/dependency-docs-scope || true)"
           echo "run=${decision}" >> "${GITHUB_OUTPUT}"
           if [ "${decision}" = "true" ]; then
             echo "[scope] dependency inputs changed; running the full check"

@@ -81,7 +81,7 @@ Important settings to review before deployment:
 - `imagePullSecretName` and `generateImagePullSecret` for private registry access
 - `replicaCount`, resource requests, and limits for your environment
 - `otelCollector.enabled` and `otelCollector.config.*` for the optional event-collection sidecar
-- `clusterValidator.*` for the cluster validation hook image and behavior
+- `clusterValidator.*` for the cluster-validator: the operator's init container, the CronJob, and under role `control-plane` the runs the operator starts when the validator spec changes
 
 The default values include development-oriented placeholders. Override them before using the chart in any shared or production environment.
 

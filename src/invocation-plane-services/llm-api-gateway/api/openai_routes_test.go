@@ -51,6 +51,7 @@ func TestRegisterRoutesRegistersOpenAIRoutes(t *testing.T) {
 		http.MethodPost + " /v1/chat/completions",
 		http.MethodPost + " /v1/responses",
 		http.MethodPost + " /v1/embeddings",
+		http.MethodPost + " /v1/messages",
 	}
 
 	for _, route := range expected {

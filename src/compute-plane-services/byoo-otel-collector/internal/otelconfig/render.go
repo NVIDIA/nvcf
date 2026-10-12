@@ -21,6 +21,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -179,6 +180,60 @@ func getCredentialsPath() string {
 		return credentialPath
 	}
 	return "/etc/byoo-otel-collector/secrets"
+}
+
+// remoteWriteTLSCredentials builds the remote-write exporter's tls block from
+// the extracted secret files. The clientCert/clientKey pair and caFile are each
+// optional, but at least one must be usable. The secrets extractor writes a key
+// submitted as "" as an empty file, so an empty or whitespace-only file counts
+// as not provided instead of being passed to the collector.
+func remoteWriteTLSCredentials(credentialPath, telemetryName string) (map[string]string, error) {
+	secretsPathPrefix := filepath.Join(credentialPath, telemetryName)
+	certFile := secretsPathPrefix + "-clientCert"
+	keyFile := secretsPathPrefix + "-clientKey"
+	caFile := secretsPathPrefix + "-caFile"
+
+	hasCert, err := secretFileHasContent(certFile)
+	if err != nil {
+		return nil, err
+	}
+	hasKey, err := secretFileHasContent(keyFile)
+	if err != nil {
+		return nil, err
+	}
+	hasCA, err := secretFileHasContent(caFile)
+	if err != nil {
+		return nil, err
+	}
+
+	creds := map[string]string{}
+	switch {
+	case hasCert && hasKey:
+		creds["cert_file"] = certFile
+		creds["key_file"] = keyFile
+	case hasCert:
+		return nil, fmt.Errorf("metrics telemetry %q: clientCert is set but clientKey is empty or missing", telemetryName)
+	case hasKey:
+		return nil, fmt.Errorf("metrics telemetry %q: clientKey is set but clientCert is empty or missing", telemetryName)
+	}
+	if hasCA {
+		creds["ca_file"] = caFile
+	}
+	if len(creds) == 0 {
+		return nil, fmt.Errorf("metrics telemetry %q: TLS secret needs clientCert and clientKey, caFile, or both", telemetryName)
+	}
+	return creds, nil
+}
+
+func secretFileHasContent(path string) (bool, error) {
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to read secret file %s: %w", path, err)
+	}
+	return len(bytes.TrimSpace(content)) > 0, nil
 }
 
 func resolvedLogChunkingConfig(config LogChunkingConfig) (LogChunkingConfig, error) {
@@ -468,22 +523,14 @@ func exporterMetrics(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (e
 		exporterName = fmt.Sprintf("%s-%s-metrics", config.Telemetries.Metrics.Provider, config.Telemetries.Metrics.Name)
 		exporterId = fmt.Sprintf("%s/%s", exporterType, exporterName)
 
-		secretsPathPrefix := filepath.Join(credentialPath, config.Telemetries.Metrics.Name)
-
-		exporterCredential = make(map[string]string)
-		if creds, ok := exporterCredential.(map[string]string); ok {
-			creds["cert_file"] = fmt.Sprintf("%s-clientCert", secretsPathPrefix)
-			creds["key_file"] = fmt.Sprintf("%s-clientKey", secretsPathPrefix)
-
-			ca_file := fmt.Sprintf("%s-caFile", secretsPathPrefix)
-			if _, err := os.Stat(ca_file); err == nil {
-				creds["ca_file"] = ca_file
-			}
+		tlsCredentials, err := remoteWriteTLSCredentials(credentialPath, config.Telemetries.Metrics.Name)
+		if err != nil {
+			return "", err
 		}
 
 		otelConfig.Exporters[exporterId] = map[string]interface{}{
 			"endpoint": config.Telemetries.Metrics.Endpoint,
-			"tls":      exporterCredential,
+			"tls":      tlsCredentials,
 		}
 
 	case ProviderDatadog:

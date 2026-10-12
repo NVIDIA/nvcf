@@ -7,8 +7,8 @@ types and storage classes are AWS examples. For another cloud service provider
 storage classes that provide at least the listed vCPU, memory, storage, zone
 spread, and GPU compatibility characteristics. Actual requirements depend on
 workload characteristics, function count, and request concurrency. Use the
-[self-managed-grpc-load-test](/nvcf/overview/g-rpc-load-testing) and
-[self-managed-http-load-test](/nvcf/overview/http-load-testing) guides to validate
+[self-managed-grpc-load-test](../dev/grpc-load-testing.md) and
+[self-managed-http-load-test](../dev/http-load-testing.md) guides to validate
 throughput and tune your control plane accordingly.
 
 </Info>
@@ -153,7 +153,7 @@ GPU requirements:
 - Physical GPU hardware on worker nodes
 
 For development and testing environments without GPUs, install the fake GPU
-operator to simulate GPU resources. See [fake-gpu-operator](/nvcf/compute-plane/fake-gpu-operator) for
+operator to simulate GPU resources. See [fake-gpu-operator](../dev/fake-gpu-operator.md) for
 instructions.
 
 ## Storage Recommendations
@@ -166,7 +166,7 @@ instructions.
 | Control Plane Services | 1 to 10 Gi each | Defaults are typically sufficient |
 
 Storage sizes are configurable via the `storageSize` value in your environment
-file. See [helmfile-installation](/nvcf/self-managed/helmfile-installation) for details.
+file. See [helmfile-installation](../self-managed/helmfile-installation.md) for details.
 
 <Note>
 Some cloud providers have minimum PVC size requirements. For example, AWS EBS
@@ -180,18 +180,18 @@ The default control-plane resource sizing shipped with the helmfile stack is
 designed to handle approximately 100 concurrent users. If you need higher
 throughput:
 
-1. Benchmark your deployment using the [self-managed-grpc-load-test](/nvcf/overview/g-rpc-load-testing)
-   or [self-managed-http-load-test](/nvcf/overview/http-load-testing) guide. Start with
+1. Benchmark your deployment using the [self-managed-grpc-load-test](../dev/grpc-load-testing.md)
+   or [self-managed-http-load-test](../dev/http-load-testing.md) guide. Start with
    `--vus 100` and increase gradually.
 2. Scale node pools independently. Cassandra, OpenBao, and control-plane
    pools can each be scaled without affecting the others.
 3. Increase pod resources for specific services by adding `values:` blocks
-   in the helmfile release definitions. See [helmfile-installation](/nvcf/self-managed/helmfile-installation)
+   in the helmfile release definitions. See [helmfile-installation](../self-managed/helmfile-installation.md)
    for override examples.
 
 <Note>
 - [Quickstart](./quickstart.md): One-click fresh installation walkthrough
-- [self-managed-grpc-load-test](/nvcf/overview/g-rpc-load-testing): Validate control-plane throughput
-- [self-managed-http-load-test](/nvcf/overview/http-load-testing): Validate HTTP invocation throughput
+- [self-managed-grpc-load-test](../dev/grpc-load-testing.md): Validate control-plane throughput
+- [self-managed-http-load-test](../dev/http-load-testing.md): Validate HTTP invocation throughput
 
 </Note>

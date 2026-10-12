@@ -1394,6 +1394,7 @@ fn test_registration_config(
             ..Default::default()
         },
         min_update_interval: Duration::from_millis(100),
+        stats_update_coalesce: Duration::from_millis(10),
         reverse_tunnel,
         tls_cert_pem: None,
         grpc_tls_ca_cert_pem: None,

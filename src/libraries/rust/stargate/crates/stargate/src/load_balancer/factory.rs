@@ -27,19 +27,21 @@ pub fn create_load_balancer_with_config(
     config: &LoadBalancerAlgorithmConfig,
 ) -> anyhow::Result<Arc<dyn LoadBalancer>> {
     if config.algorithm() == LoadBalancerAlgorithm::PulsarWaitAndWiden
-        && let Some(settings) = config.wait_and_widen_settings()
+        && config
+            .wait_and_widen_settings()
+            .is_some_and(|settings| settings.comparator.is_some())
     {
-        if settings.comparator.is_some() {
-            anyhow::bail!("comparator is not supported for pulsar-wait-and-widen");
-        }
-        if settings.cache_affinity_input_tokens_scale.unwrap_or(1.0) != 1.0 {
-            anyhow::bail!(
-                "cache_affinity_input_tokens_scale is not supported for pulsar-wait-and-widen"
-            );
-        }
-        if settings.cache_affinity_wait_ms.unwrap_or(0) != 0 {
-            anyhow::bail!("cache_affinity_wait_ms is not supported for pulsar-wait-and-widen");
-        }
+        anyhow::bail!("comparator is not supported for pulsar-wait-and-widen");
+    }
+
+    if config.algorithm() == LoadBalancerAlgorithm::WaitAndWiden
+        && config.wait_and_widen_settings().is_some_and(|settings| {
+            settings.band_widen_interval_ms.is_some() || settings.fallback_max_queued.is_some()
+        })
+    {
+        anyhow::bail!(
+            "band_widen_interval_ms and fallback_max_queued are supported only for pulsar-wait-and-widen"
+        );
     }
 
     if config.considers_kv_free_tokens()

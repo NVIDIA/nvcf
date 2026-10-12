@@ -307,6 +307,7 @@ fn shared_backend_a_stats() -> ModelStats {
     ModelStats {
         output_tps: 2.0,
         last_mean_input_tps: 100.0,
+        max_input_tps: Some(110.0),
         max_output_tps: 50.0,
         queue_size: 1,
         queued_input_size: 100,
@@ -329,6 +330,7 @@ fn shared_backend_b_stats() -> ModelStats {
     ModelStats {
         output_tps: 5.0,
         last_mean_input_tps: 120.0,
+        max_input_tps: Some(130.0),
         max_output_tps: 60.0,
         queue_size: 2,
         queued_input_size: 200,
@@ -1718,6 +1720,7 @@ fn cluster_backend_aggregate_dedupes_sources_and_averages_rtt() {
     backend_a.stats = ModelStats {
         output_tps: 1.5,
         last_mean_input_tps: 10.0,
+        max_input_tps: Some(15.0),
         queue_size: 2,
         queued_input_size: 20,
         input_processing_queries: 1,
@@ -1737,6 +1740,7 @@ fn cluster_backend_aggregate_dedupes_sources_and_averages_rtt() {
     backend_b.stats = ModelStats {
         output_tps: 2.5,
         last_mean_input_tps: 30.0,
+        max_input_tps: Some(35.0),
         queue_size: 4,
         queued_input_size: 40,
         input_processing_queries: 5,
@@ -1758,6 +1762,7 @@ fn cluster_backend_aggregate_dedupes_sources_and_averages_rtt() {
     assert_stats!(stats,
         output_tps: 4.0,
         last_mean_input_tps: 40.0,
+        max_input_tps: Some(35.0),
         queue_size: 6,
         queued_input_size: 60,
         input_processing_queries: 6,
@@ -1773,6 +1778,66 @@ fn cluster_backend_aggregate_dedupes_sources_and_averages_rtt() {
     sources.sort();
     assert_eq!(sources, vec!["shared", "source-a", "source-b"]);
     assert_eq!(stats.stats_sources.len(), 3);
+}
+
+#[test]
+fn cluster_backend_aggregate_requires_every_backend_max() {
+    let mut backend_a = backend!("cluster-max", "backend-a", 1.0, 10.0, 5);
+    backend_a.stats.max_input_tps = Some(15.0);
+    let cluster_state = RoutedClusterState::new(backend_a.registration.cluster_generation.clone());
+    cluster_state.upsert_backend(Arc::new(backend_a.clone()));
+    assert_eq!(
+        cluster_state
+            .backend_aggregate()
+            .expect("one backend max should aggregate")
+            .0
+            .max_input_tps,
+        Some(15.0)
+    );
+
+    let mut backend_b = backend!(
+        backend_a.registration.cluster_generation.clone() =>
+        "cluster-max", "backend-b", 1.0, 10.0, 5
+    );
+    backend_b.stats.max_input_tps = Some(25.0);
+    cluster_state.upsert_backend(Arc::new(backend_b.clone()));
+    assert_eq!(
+        cluster_state
+            .backend_aggregate()
+            .expect("complete backend max should aggregate")
+            .0
+            .max_input_tps,
+        Some(25.0)
+    );
+
+    backend_b.stats.max_input_tps = None;
+    cluster_state.upsert_backend(Arc::new(backend_b.clone()));
+    assert_eq!(
+        cluster_state
+            .backend_aggregate()
+            .expect("missing max should not remove the cluster")
+            .0
+            .max_input_tps,
+        None
+    );
+
+    for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        backend_b.stats.max_input_tps = Some(invalid);
+        cluster_state.upsert_backend(Arc::new(backend_b.clone()));
+        assert_eq!(
+            cluster_state
+                .backend_aggregate()
+                .expect("invalid max should not remove the cluster")
+                .0
+                .max_input_tps,
+            None
+        );
+    }
+    cluster_state.remove_backend(&backend_b.registration);
+    assert_eq!(
+        cluster_state.backend_aggregate().unwrap().0.max_input_tps,
+        Some(15.0)
+    );
 }
 
 #[tokio::test]
@@ -2151,6 +2216,7 @@ async fn shared_cluster_registration_exposes_one_aggregated_cluster_candidate() 
     assert_eq!(cluster.active_backend_count, 2);
     assert_stats!(cluster.stats,
         last_mean_input_tps: 220.0,
+        max_input_tps: Some(130.0),
         output_tps: 7.0,
         queue_size: 3,
         queued_input_size: 300,

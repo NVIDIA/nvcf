@@ -119,6 +119,6 @@ COPY --chmod=775 entrypoint.sh /app/
 # The hook scripts do not use Helm. Check the final runtime on both platforms.
 RUN ! command -v helm && ! apk info --exists helm
 
-USER openbao
+USER 100:1000
 
 CMD ["/app/entrypoint.sh"]

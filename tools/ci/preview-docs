@@ -32,8 +32,8 @@ require_cmd() {
 require_cmd curl
 require_cmd jq
 
-# Candidate configuration is applied only inside a disposable clone. Git history
-# and the real origin remain available for Fern's branch-ref resolver.
+# Preview configuration and link normalization happen in a disposable clone.
+# Git history and the real origin remain available for Fern's branch-ref resolver.
 preview_workspace=""
 preview_log="$(mktemp)"
 cleanup() {
@@ -48,16 +48,18 @@ if [ -n "${DOCS_PREVIEW_CONFIG:-}" ]; then
     echo "DOCS_PREVIEW_CONFIG must name an existing YAML file directly under fern/." >&2
     exit 1
   fi
-  preview_workspace="$(mktemp -d)"
-  git clone --quiet --shared --no-checkout "$repo_root" "$preview_workspace/source"
-  git -C "$preview_workspace/source" remote set-url origin "$(git remote get-url origin)"
-  cp -R docs fern "$preview_workspace/source/"
-  cp "$DOCS_PREVIEW_CONFIG" "$preview_workspace/source/fern/docs.yml"
-  if [ "$DOCS_PREVIEW_CONFIG" = fern/edition-preview.yml ]; then
-    go run -C "$repo_root/tools/docs-version-sync" . edition links --repo "$preview_workspace/source"
-  fi
-  cd "$preview_workspace/source"
 fi
+preview_workspace="$(mktemp -d)"
+git clone --quiet --shared --no-checkout "$repo_root" "$preview_workspace/source"
+git -C "$preview_workspace/source" remote set-url origin "$(git remote get-url origin)"
+cp -R docs fern "$preview_workspace/source/"
+if [ -n "${DOCS_PREVIEW_CONFIG:-}" ]; then
+  cp "$DOCS_PREVIEW_CONFIG" "$preview_workspace/source/fern/docs.yml"
+else
+  require_cmd go
+  go run -C "$repo_root/tools/docs-version-sync" . edition preview --repo "$preview_workspace/source"
+fi
+cd "$preview_workspace/source"
 
 if [ "$check_only" -eq 1 ]; then
   "$repo_root/tools/ci/run-fern" check

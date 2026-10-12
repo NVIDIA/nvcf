@@ -152,7 +152,7 @@ impl StatsAggregator {
             )
             && model_state.last_mean_input_tps != input_tps
         {
-            model_state.last_mean_input_tps = input_tps;
+            model_state.publish_mean_input_tps(input_tps);
             input_tps_changed = true;
         }
         let mut completed_sample_recorded = false;

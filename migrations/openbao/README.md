@@ -60,7 +60,11 @@ nor its Alpine package is installed on either supported architecture.
 Use an OpenBao chart whose initialization script checks for Helm only in
 standalone `script` mode. Older charts check for Helm even in the in-cluster
 `helm` hook mode and cannot initialize with this image. Publish and consume
-the chart prerequisite fix together with the migration image update.
+the chart prerequisite fix together with the migration image update, including
+for maintenance backports. Validate the packaged chart and exact image together
+on a fresh installation before release. An upgrade alone does not exercise the
+`post-install` initialization hook. Scan the published image and validate each
+enabled addon before updating downstream chart and stack pins.
 
 ```bash
 docker build -t <your-registry>/<your-org>/openbao-migrations:<version> .

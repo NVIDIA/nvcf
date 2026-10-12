@@ -30,6 +30,11 @@ set. Every Pylon must also select exactly one local stats initialization source:
 [Pylon onboarding](docs/operations/pylon-onboarding.md) for the complete
 lifecycle and calibration contract.
 
+Pulsar weights clusters by generation maximum input TPS by default. Upgrade
+Pylons and registration relays before Stargates; see
+[load-balancer configuration](docs/load-balancer-configuration.md#pulsar) for
+the rollout order and the mean-weighting option.
+
 Pylon gates startup on an upstream health probe. It tries `/health` and then
 `/v1/health/ready`, reuses whichever path answers first, and forwards Stargate's
 `/health` RTT probe to that same path, so engines that serve only the

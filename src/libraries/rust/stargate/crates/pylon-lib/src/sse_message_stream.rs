@@ -67,6 +67,8 @@ pub(crate) struct SseEventFacts {
     pub(crate) reasoning_output_observed: bool,
     pub(crate) calibration_ineligible: bool,
     pub(crate) terminal: Option<RelayOutcome>,
+    /// The event's data is the Chat Completions `[DONE]` sentinel.
+    pub(crate) done_sentinel: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -346,6 +348,7 @@ fn classify_sse_event(
                 calibration_ineligible: output_token_calibration_enabled
                     && event_name.is_some_and(|event_name| event_name.starts_with("response.")),
                 terminal: Some(terminal),
+                done_sentinel: true,
                 ..SseEventFacts::default()
             },
         );
@@ -394,6 +397,7 @@ fn classify_sse_event(
             terminal_outcome(json_event_type),
             terminal_outcome(event_name),
         ),
+        done_sentinel: false,
     };
     (parsed, facts)
 }

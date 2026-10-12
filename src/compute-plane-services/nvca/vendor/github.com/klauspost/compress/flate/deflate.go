@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2009 The Go Authors. All rights reserved.
 // Copyright (c) 2015 Klaus Post
 // Use of this source code is governed by a BSD-style

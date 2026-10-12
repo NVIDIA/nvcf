@@ -59,13 +59,21 @@ KUBECONFIG=cp.yaml:gpu1.yaml nvcf-cli self-hosted up \
   --compute-plane-context=admin@gpu1 \
   --icms-url=https://icms.nvcf.example.com
 
-# Add a new compute plane to an existing control plane (no kubectl access to CP needed;
+# Add a new compute plane to an existing control plane, from the profile
+# `self-hosted control-plane profile export` wrote to the path it printed,
+# copied here as control-plane-profile.yaml (no kubectl access to CP needed;
 # reaches the control plane via the public ICMS HTTPRoute):
-nvcf-cli self-hosted add-compute-plane \
+nvcf-cli self-hosted compute-plane register \
+  --control-plane-profile=control-plane-profile.yaml \
   --cluster-name=ncp-local-2 \
-  --compute-plane-context=admin@gpu2 \
+  --kube-context=admin@gpu2 \
   --icms-url=https://icms.nvcf.example.com \
-  --token=$ADMIN_JWT
+  --token=$ADMIN_JWT \
+  --output=ncp-local-2-register-values.yaml
+nvcf-cli self-hosted compute-plane install \
+  --values=ncp-local-2-register-values.yaml \
+  --kube-context=admin@gpu2 \
+  --cluster-name=ncp-local-2
 
 # Tear down (always plan-only first):
 nvcf-cli self-hosted down --plan-only --cluster-name=ncp-local --json | jq
@@ -75,7 +83,7 @@ nvcf-cli self-hosted down --cluster-name=ncp-local
 nvcf-cli self-hosted uninstall --no-apply --compute-plane --cluster-name=ncp-local | kubectl delete -f -
 ```
 
-> **`up` vs `add-compute-plane`.** `up` always installs both planes — use it for the *first* install. `add-compute-plane` is the right subcommand any time the control plane is already running and you want to attach an Nth compute cluster.
+> `up` vs `compute-plane register` and `install`. `up` always installs both planes; use it for the first install. To attach an Nth compute cluster to a running control plane, register it with `compute-plane register` and install it with `compute-plane install`.
 >
 > **`down` always with `--plan-only` first.** Show the user the `willUninstall.commands[]` array before running for real.
 
@@ -135,12 +143,12 @@ After `init`, the credentials live in `~/.nvcf-cli.state`, so later commands wor
 
 | Subcommand | What it does | When to use |
 |---|---|---|
-| `nvcf-cli self-hosted check --pre [--local-only \| --control-plane-context=X \| --compute-plane-context=Y]` | Pre-flight: local-host tools + cluster-side prerequisites | Always run first on a new environment |
+| `nvcf-cli self-hosted check --pre [--local-only \| --control-plane-context=X --compute-plane-context=Y]` | Pre-flight: local-host tools, registry credentials, and cluster-side prerequisites for both planes. Pass both context flags or neither | Always run first on a new environment |
 | `nvcf-cli self-hosted install --control-plane \| kubectl apply -f -` | Render + apply the control plane | When you want manual control over apply (GitOps-friendly) |
 | `nvcf-cli self-hosted install --compute-plane --cluster-name=X \| kubectl apply -f -` | Register cluster + render compute plane | Same — manual apply path |
 | `nvcf-cli self-hosted up --cluster-name=X` | One-shot first install: pre-flight → control plane → register → compute plane | Standard install path (both planes from scratch) |
 | `nvcf-cli self-hosted up --plan-only --cluster-name=X` | Dry-run: emit phase-by-phase plan + ETA without changing state | Agent / CI preview before commit |
-| `nvcf-cli self-hosted add-compute-plane --cluster-name=X --compute-plane-context=Y --icms-url=… --token=$JWT` | Add a new compute plane to an *existing* control plane (no CP install) | Adding the 2nd, 3rd, … GPU cluster after the initial `up` |
+| `nvcf-cli self-hosted compute-plane register --control-plane-profile=P --cluster-name=X --kube-context=Y --output=V`, then `nvcf-cli self-hosted compute-plane install --values=V --kube-context=Y` | Add a new compute plane to an existing control plane (no CP install) | Adding the 2nd, 3rd, ... GPU cluster after the initial `up` |
 | `nvcf-cli self-hosted uninstall --control-plane` | Per-plane primitive: `helmfile destroy` on the control plane (refuses if compute planes still registered) | Final teardown after all compute planes are gone, or scripted pipelines |
 | `nvcf-cli self-hosted uninstall --compute-plane --cluster-name=X` | Per-plane primitive: `helmfile destroy` on a compute plane (no ICMS unregister, no drain) | Just remove the helm releases without the ICMS-side cleanup |
 | `nvcf-cli self-hosted uninstall --no-apply <plane>` | Render delete YAML via `helm get manifest` | GitOps; `\| kubectl delete -f -` or commit + Argo applies |
@@ -184,7 +192,7 @@ LLM function type is independent of workload packaging. For a Helm-chart backed 
 
 Invocation uses the LLM route, for example `https://llm.invocation.<domain>/v1/chat/completions`. The OpenAI `model` value must be `<function-id>/<model-name>`; the function ID is the routing key and the model name is forwarded upstream.
 
-Update mutable per-model routing settings with `nvcf-cli function update --llm-model-update='name=<model>,routingMethod=<method>,tokenRateLimit=<limit>'`, or put the same fields under `modelUpdates[].llmConfig` in an update JSON file. See [reference/flags.md](reference/flags.md) for accepted routing methods. `tokenRateLimit` supports positive integer limits for `S`, `M`, `H`, `D`, and `W`; use JSON input for combined limits such as `1000-S,5000-M,100000-H,500000-D,1000000-W`. Do not include `uris` in model updates.
+Update mutable per-model routing settings with `nvcf-cli function update --llm-model-update='name=<model>,routingMethod=<method>,tokenRateLimit=<limit>'`, or put the same fields under `modelUpdates[].llmConfig` in an update JSON file. See [reference/flags.md](reference/flags.md) for the routing method format. `tokenRateLimit` supports positive integer limits for `S`, `M`, `H`, `D`, and `W`; use JSON input for combined limits such as `1000-S,5000-M,100000-H,500000-D,1000000-W`. Do not include `uris` in model updates.
 
 For `/v1/responses`, the gateway proxies the native Responses path upstream, relays SSE to streaming clients, and aggregates the terminal JSON response for non-streaming clients. For `/v1/embeddings`, input may be a string or string array, must be non-empty, and may contain at most 2048 entries.
 
@@ -195,7 +203,7 @@ Session stickiness uses `x-multi-turn-session-id` for chat completions and Respo
 For step-by-step playbooks, load the prompt that matches the user's intent:
 
 - **Install from scratch.** [prompts/install-from-scratch.md](prompts/install-from-scratch.md) — k3d cluster → preflight → up → deploy a smoke function.
-- **Add a new compute plane.** [prompts/add-compute-plane.md](prompts/add-compute-plane.md) — split-cluster `up` against an existing control plane.
+- **Add a new compute plane.** [prompts/add-compute-plane.md](prompts/add-compute-plane.md): register and install a compute plane against an existing control plane.
 - **Deploy and invoke a function.** [prompts/deploy-and-invoke.md](prompts/deploy-and-invoke.md) — create → deploy → API key → invoke, including the LLM create/invoke variant.
 - **Diagnose a failed install.** [prompts/diagnose-failed-install.md](prompts/diagnose-failed-install.md) — `status --json` → identify failed component → kubectl describe → remediation.
 - **Rotate JWKS.** [prompts/rotate-cluster-jwks.md](prompts/rotate-cluster-jwks.md) — when PSAT auth starts failing.
@@ -250,16 +258,21 @@ For step-by-step playbooks, load the prompt that matches the user's intent:
 
 `nvcf-cli` subcommands that long-run (`up`, `status`, `check`) accept four output modes:
 
-- **`--json`** — JSONL events on stderr; one event per line; stable schema (`schemaVersion: 2`). **Use this when running under an agent.** Parse line-by-line with `jq -c .` or `json.loads()`.
-- **`--plain`** — Plain timestamped lines, RFC3339 UTC, `[NN/8]` phase prefix; grep-friendly. Default in non-TTY.
-- **`--accessible`** — Plain output without spinners, with verbose state markers (`[completed]`, `[running]`, `[pending]`, `[failed]`). For screen readers and constrained terminals.
-- **(no flag)** — Bubbletea TTY dashboard. Default in TTY ≥100×30. Don't use under an agent (cursor-up sequences are noisy).
+- `--json`: JSONL events on stderr, one event per line, stable schema (`schemaVersion: 1`). Use this when running under an agent. Redirect stderr to the parser (`2>&1 >/dev/null`), keep only lines that start with `{`, and parse line-by-line with `jq -c .` or `json.loads()`.
+- `--plain`: plain timestamped lines, RFC3339 UTC, `[NN/8]` phase prefix; grep-friendly. Default in non-TTY.
+- `--accessible`: plain output without spinners, with verbose state markers (`[completed]`, `[running]`, `[pending]`, `[failed]`). For screen readers and constrained terminals.
+- (no flag): Bubbletea TTY dashboard. Default in a TTY of at least 100x30. Don't use under an agent (cursor-up sequences are noisy).
 
 Auto-detect picks the right mode for whatever stdout/stderr is. The CLI also honors `NO_COLOR` (any value → forces plain), `TERM=dumb` (forces plain), and `CI=truthy` (forces plain even on a fake TTY). When the terminal is smaller than 100×30, the bubbletea renderer falls back to a compact layout. Explicit `--json` is the right call for agent piping.
 
 ## On failure
 
-`nvcf-cli` failures emit structured `phase_failed` events in JSON:
+`check` never emits `phase_failed`. It ends with one `final` event: gate on
+`success`, and treat a missing `final` event as a failure. See
+[examples/ci-pipelines.md](examples/ci-pipelines.md) and
+[reference/exit-codes.md](reference/exit-codes.md).
+
+Other `nvcf-cli` failures emit structured `phase_failed` events in JSON:
 
 ```json
 {"event":"phase_failed","phaseNum":4,"phase":"apply-cp",

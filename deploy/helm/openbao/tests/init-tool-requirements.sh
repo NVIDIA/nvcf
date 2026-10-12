@@ -7,6 +7,22 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 test_root="$(mktemp -d)"
 trap 'rm -rf "$test_root"' EXIT
+
+# Exercise the scripts and invocation shipped in the chart package.
+chart_dir="$test_root/chart"
+cp -R "$project_dir/helm" "$chart_dir"
+helm dependency build "$chart_dir" >/dev/null
+helm package "$chart_dir" --destination "$test_root" >/dev/null
+rendered="$test_root/rendered.yaml"
+helm template openbao "$test_root"/*.tgz --namespace test \
+    -f "$project_dir/../../../tools/ci/helm-validate-values/openbao.yaml" > "$rendered"
+init_job='select(.kind == "Job" and .metadata.name == "openbao-server-initialize-cluster")'
+test "$(yq -r "$init_job | .metadata.annotations.\"helm.sh/hook\"" "$rendered")" = post-install
+test "$(yq -r "$init_job | .spec.template.spec.containers[0].command[0]" "$rendered")" = /bin/bash
+test "$(yq -r "$init_job | .spec.template.spec.containers[0].args[0]" "$rendered")" = -c
+read -r -a chart_command <<< "$(yq -r "$init_job | .spec.template.spec.containers[0].args[1]" "$rendered")"
+test "${chart_command[0]}" = /scripts/deploy.sh
+
 bin_dir="$test_root/bin"
 mkdir -p "$bin_dir"
 for tool in dirname jq tr sort head; do
@@ -31,11 +47,16 @@ for source_dir in "$project_dir" "$project_dir/helm/scripts"; do
     # Reproduce the chart's ConfigMap mounts without requiring a cluster.
     stage="$test_root/stage"
     mkdir -p "$stage/utils"
-    cp "$source_dir/deploy.sh" "$stage/deploy.sh"
+    hook_args=(test openbao helm)
     if [ -d "$source_dir/utils" ]; then
+        cp "$source_dir/deploy.sh" "$stage/deploy.sh"
         cp "$source_dir/utils/utils.sh" "$source_dir/utils/log.sh" "$stage/utils/"
     else
-        cp "$source_dir/utils.sh" "$source_dir/log.sh" "$stage/utils/"
+        yq -r 'select(.kind == "ConfigMap" and .metadata.name == "openbao-server-init-script") | .data."deploy.sh"' "$rendered" > "$stage/deploy.sh"
+        for script in utils log; do
+            yq -r "select(.kind == \"ConfigMap\" and .metadata.name == \"openbao-server-utils-script\") | .data.\"$script.sh\"" "$rendered" > "$stage/utils/$script.sh"
+        done
+        hook_args=("${chart_command[@]:1}")
     fi
     ln -sf "$(type -P true)" "$bin_dir/jwker"
     : > "$KUBECTL_CALLS"
@@ -46,9 +67,9 @@ for source_dir in "$project_dir" "$project_dir/helm/scripts"; do
     grep -q 'helm check failed' "$test_root/script.log"
     test ! -s "$KUBECTL_CALLS"
 
-    # Hook mode must reach Kubernetes initialization without checking Helm.
-    # The fake API rejects initialization, so no cluster is contacted.
-    if PATH="$bin_dir" "$BASH" "$stage/deploy.sh" test openbao helm > "$test_root/hook.log" 2>&1; then
+    # This checks prerequisites, not successful initialization. The fake API
+    # rejects later operations, so no cluster is contacted.
+    if PATH="$bin_dir" "$BASH" "$stage/deploy.sh" "${hook_args[@]}" > "$test_root/hook.log" 2>&1; then
         echo 'Hook unexpectedly succeeded against the rejecting fake API' >&2
         exit 1
     fi
@@ -61,7 +82,7 @@ for source_dir in "$project_dir" "$project_dir/helm/scripts"; do
 
     rm "$bin_dir/jwker"
     : > "$KUBECTL_CALLS"
-    if PATH="$bin_dir" "$BASH" "$stage/deploy.sh" test openbao helm > "$test_root/missing-jwker.log" 2>&1; then
+    if PATH="$bin_dir" "$BASH" "$stage/deploy.sh" "${hook_args[@]}" > "$test_root/missing-jwker.log" 2>&1; then
         echo 'Hook unexpectedly succeeded without jwker' >&2
         exit 1
     fi

@@ -1393,6 +1393,7 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		key  string
 		want string
 	}{
+		{key: "global.workerEndpoints.invocationServiceURL", want: "http://invocation.nvcf.svc.cluster.local:8080"},
 		{key: "global.workerEndpoints.llmRequestRouterAddress", want: "https://llm-request-router.nvcf.svc.cluster.local:50071"},
 		{key: "addons.llm.requestRouter.chartPath", want: "../../../helm/llm-request-router/llm-request-router"},
 		{key: "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress", want: "https://llm-request-router.nvcf.svc.cluster.local:50071"},

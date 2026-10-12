@@ -37,6 +37,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile/clustermgmt"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
+	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 )
 
 func TestGetSystemNamespace(t *testing.T) {
@@ -145,6 +146,108 @@ func TestGetRequestsNamespace(t *testing.T) {
 			if result != tt.expected {
 				t.Errorf("getRequestsNamespace() = %v, want %v", result, tt.expected)
 			}
+		})
+	}
+}
+
+func TestEffectiveRequestsNamespace(t *testing.T) {
+	withBackendNamespace := func(ns string) *nvidiaiov1.NVCFBackend {
+		return &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
+			ClusterConfig: nvidiaiov1.ClusterConfig{RequestsNamespace: ns},
+		}}}
+	}
+	withOverride := func(ns string) nvcaconfig.Config {
+		var cfg nvcaconfig.Config
+		cfg.Agent.RequestsNamespace = ns
+		return cfg
+	}
+
+	tests := []struct {
+		name     string
+		nb       *nvidiaiov1.NVCFBackend
+		mergeCfg nvcaconfig.Config
+		expected string
+	}{
+		{
+			name:     "default when neither source sets it",
+			nb:       withBackendNamespace(""),
+			expected: DefaultNVCARequestsNamespace,
+		},
+		{
+			name:     "backend value when there is no override",
+			nb:       withBackendNamespace("backend-ns"),
+			expected: "backend-ns",
+		},
+		{
+			name:     "override wins over the default",
+			nb:       withBackendNamespace(""),
+			mergeCfg: withOverride("team-x"),
+			expected: "team-x",
+		},
+		{
+			name:     "override wins over the backend value",
+			nb:       withBackendNamespace("backend-ns"),
+			mergeCfg: withOverride("team-x"),
+			expected: "team-x",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, effectiveRequestsNamespace(tt.nb, tt.mergeCfg))
+		})
+	}
+}
+
+func TestGetEffectiveRequestsNamespaceReadsMergeConfig(t *testing.T) {
+	ctx := context.Background()
+	nb := &nvidiaiov1.NVCFBackend{}
+	bc, clientset := newNamespaceCache(t)
+	bc.operatorNamespace = NVCAOperatorNamespace
+
+	got, err := bc.getEffectiveRequestsNamespace(ctx, nb)
+	require.NoError(t, err)
+	assert.Equal(t, DefaultNVCARequestsNamespace, got)
+
+	_, err = clientset.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: agentConfigMergeConfigMapName, Namespace: NVCAOperatorNamespace},
+		Data:       map[string]string{agentConfigFile: "agent:\n  requestsNamespace: team-x\n"},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	got, err = bc.getEffectiveRequestsNamespace(ctx, nb)
+	require.NoError(t, err)
+	assert.Equal(t, "team-x", got)
+}
+
+func TestValidateRequestsNamespaceConfig(t *testing.T) {
+	tests := []struct {
+		name      string
+		namespace string
+		wantErr   string
+	}{
+		{name: "unset", namespace: ""},
+		{name: "valid name", namespace: "team-x"},
+		{name: "uppercase and underscore", namespace: "Team_X", wantErr: "is not a valid namespace name"},
+		{name: "leading dash", namespace: "-team", wantErr: "is not a valid namespace name"},
+		{name: "longer than 63 characters", namespace: fmt.Sprintf("%064d", 0), wantErr: "is not a valid namespace name"},
+		{name: "default", namespace: "default", wantErr: "is a reserved Kubernetes namespace"},
+		{name: "kube-system", namespace: "kube-system", wantErr: "is a reserved Kubernetes namespace"},
+		{name: "kube-public", namespace: "kube-public", wantErr: "is a reserved Kubernetes namespace"},
+		{name: "kube-node-lease", namespace: "kube-node-lease", wantErr: "is a reserved Kubernetes namespace"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cfg nvcaconfig.Config
+			cfg.Agent.RequestsNamespace = tt.namespace
+			err := validateRequestsNamespaceConfig(cfg)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.True(t, isInvalidAgentConfigError(err), "rejection must keep the running agent")
+			assert.ErrorContains(t, err, "worker.requestsNamespace")
+			assert.ErrorContains(t, err, tt.wantErr)
 		})
 	}
 }
@@ -587,7 +690,7 @@ func TestSetupNamespacesPreserveExternalMetadata(t *testing.T) {
 		bc, clientset := newNamespaceCache(t, externalMetadata(getRequestsNamespace(nb)))
 		bc.enableGXCache = true
 
-		require.NoError(t, bc.setupRequestsNamespace(ctx, nb))
+		require.NoError(t, bc.setupRequestsNamespace(ctx, getRequestsNamespace(nb)))
 
 		got, err := clientset.CoreV1().Namespaces().Get(ctx, getRequestsNamespace(nb), metav1.GetOptions{})
 		require.NoError(t, err)
@@ -598,12 +701,66 @@ func TestSetupNamespacesPreserveExternalMetadata(t *testing.T) {
 		assert.Equal(t, "true", got.Labels[clustermgmt.ShaderCacheLabelKey])
 	})
 
+	t.Run("missing requests namespace is created and marked operator-created", func(t *testing.T) {
+		bc, clientset := newNamespaceCache(t)
+
+		require.NoError(t, bc.setupRequestsNamespace(ctx, "team-x"))
+
+		got, err := clientset.CoreV1().Namespaces().Get(ctx, "team-x", metav1.GetOptions{})
+		require.NoError(t, err)
+		assert.Equal(t, "true", got.Annotations[nvcaoptypes.CreatedByOperatorAnnotation])
+		assert.Equal(t, nvcaoptypes.NVCAModuleName, got.Labels[ManagedbyLabelKey])
+		assert.Equal(t, WorkloadInstanceTypeValuePodSpec, got.Labels[nvcatypes.WorkloadInstanceTypeLabel])
+		sa, err := clientset.CoreV1().ServiceAccounts("team-x").Get(ctx, "default", metav1.GetOptions{})
+		require.NoError(t, err)
+		require.NotNil(t, sa.AutomountServiceAccountToken)
+		assert.False(t, *sa.AutomountServiceAccountToken)
+	})
+
+	t.Run("pre-existing requests namespace is labeled but not marked operator-created", func(t *testing.T) {
+		bc, clientset := newNamespaceCache(t, externalMetadata("team-x"))
+
+		require.NoError(t, bc.setupRequestsNamespace(ctx, "team-x"))
+		// A second sync must not mark it either.
+		require.NoError(t, bc.setupRequestsNamespace(ctx, "team-x"))
+
+		got, err := clientset.CoreV1().Namespaces().Get(ctx, "team-x", metav1.GetOptions{})
+		require.NoError(t, err)
+		assert.NotContains(t, got.Annotations, nvcaoptypes.CreatedByOperatorAnnotation)
+		assert.Equal(t, "enabled", got.Annotations[externalAnnotationKey])
+		assert.Equal(t, nvcaoptypes.NVCAModuleName, got.Labels[ManagedbyLabelKey])
+	})
+
+	t.Run("requests namespace get failure is returned", func(t *testing.T) {
+		bc, clientset := newNamespaceCache(t)
+		clientset.PrependReactor("get", "namespaces", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, k8serrors.NewForbidden(corev1.Resource("namespaces"), "team-x", fmt.Errorf("denied"))
+		})
+
+		err := bc.setupRequestsNamespace(ctx, "team-x")
+		require.Error(t, err)
+		assert.True(t, k8serrors.IsForbidden(err))
+	})
+
+	t.Run("forbidden ServiceAccount setup is reported as configuration not applied", func(t *testing.T) {
+		bc, clientset := newNamespaceCache(t)
+		clientset.PrependReactor("create", "serviceaccounts", func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, k8serrors.NewForbidden(corev1.Resource("serviceaccounts"), "default",
+				fmt.Errorf("namespace team-x is being terminated"))
+		})
+
+		err := bc.setupRequestsNamespace(ctx, "team-x")
+		require.Error(t, err)
+		assert.True(t, k8serrors.IsForbidden(err), "the API error type must survive wrapping")
+		assert.True(t, isAgentConfigNotAppliedError(requestsNamespaceSetupError("team-x", err)))
+	})
+
 	t.Run("requests namespace drops the gxcache label when disabled", func(t *testing.T) {
 		existing := externalMetadata(getRequestsNamespace(nb))
 		existing.Labels[clustermgmt.ShaderCacheLabelKey] = "true"
 		bc, clientset := newNamespaceCache(t, existing)
 
-		require.NoError(t, bc.setupRequestsNamespace(ctx, nb))
+		require.NoError(t, bc.setupRequestsNamespace(ctx, getRequestsNamespace(nb)))
 
 		got, err := clientset.CoreV1().Namespaces().Get(ctx, getRequestsNamespace(nb), metav1.GetOptions{})
 		require.NoError(t, err)

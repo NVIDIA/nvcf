@@ -140,11 +140,14 @@ func (c K8sComputeBackend) setupRWXReadOnlyModelCachingForRequest(
 			job.Spec.Template.Annotations = map[string]string{}
 		}
 		job.Spec.Template.Annotations[nvcastorage.ModelCacheWriterPVCUIDAnnotationKey] = string(current.UID)
+		if selection.WriterIdentity == nvcastorage.ModelCacheWriterIdentityRoot {
+			runSharedClaimWriterAsRoot(job)
+		}
 		if _, err := jobs.Create(ctx, job, metav1.CreateOptions{}); err != nil && !errors.IsAlreadyExists(err) {
 			return fail(modelcachetypes.ReasonPVCSetupFailed, fmt.Errorf("create writer job %s: %w", job.Name, err))
 		}
-		log.Infof("shared cache claim %s created on %s, writer job %s started", current.Name,
-			selection.StorageClassName, initJob.Name)
+		log.Infof("shared cache claim %s created on %s, writer job %s started with writer identity %q", current.Name,
+			selection.StorageClassName, initJob.Name, selection.WriterIdentity)
 		// The claim exists from here on, so every in-progress result names it:
 		// the request records it as its cache reference and the reference
 		// sweep can see the claim is in use while the writer runs.
@@ -312,4 +315,56 @@ func regularModelCacheKeepsSharedClaim(req *nvcav2beta1.ICMSRequest) bool {
 	return err == nil && present &&
 		selection.Mode == nvcastorage.ModelCacheSelectionDurable &&
 		selection.Transition == nvcastorage.ModelCacheTransitionRWXReadOnly
+}
+
+// runSharedClaimWriterAsRoot makes the containers that write the shared
+// (ReadWriteMany) claim run as root. It is applied only when the persisted
+// selection recorded the root writer identity, which the storage resolver
+// sets from the live CSIDriver or an explicit catalog entry: the translator
+// relies on the pod fsGroup to make the volume writable by the non-root
+// writer, but Kubernetes applies fsGroup only under the File fsGroupPolicy.
+// Drivers that declare ReadWriteOnceWithFSType, as OCI FSS and a default
+// NetApp Trident install do, skip ReadWriteMany volumes, so a fresh claim's
+// root stays owned by root and the writer fails on its first mkdir with
+// "permission denied". Drivers that apply fsGroup, as Weka does by default,
+// and selections persisted before the identity existed keep the non-root
+// writer. There is exactly one writer per handle, it only populates the cache,
+// and it writes world-readable files, so running it as root where required
+// keeps the read-only readers unprivileged.
+//
+// Only containers with a read-write mount of the claim are changed, init
+// containers included since validateSharedClaimWriterJob accepts one as the
+// writer; sidecars and other containers keep their identity. RunAsNonRoot is
+// set to false explicitly: the container value is what overrides a pod-level
+// runAsNonRoot of true, which would otherwise make the kubelet refuse to
+// start a uid 0 container.
+func runSharedClaimWriterAsRoot(job *batchv1.Job) {
+	root := int64(0)
+	notRequired := false
+	spec := &job.Spec.Template.Spec
+	for _, list := range [][]corev1.Container{spec.InitContainers, spec.Containers} {
+		for i := range list {
+			c := &list[i]
+			if !mountsSharedClaimReadWrite(c) {
+				continue
+			}
+			if c.SecurityContext == nil {
+				c.SecurityContext = &corev1.SecurityContext{}
+			}
+			c.SecurityContext.RunAsUser = &root
+			c.SecurityContext.RunAsGroup = &root
+			c.SecurityContext.RunAsNonRoot = &notRequired
+		}
+	}
+}
+
+// mountsSharedClaimReadWrite reports whether a container mounts the model
+// volume read-write, the same test validateSharedClaimWriterJob applies.
+func mountsSharedClaimReadWrite(c *corev1.Container) bool {
+	for _, m := range c.VolumeMounts {
+		if m.Name == ModelVolumeName && !m.ReadOnly {
+			return true
+		}
+	}
+	return false
 }
