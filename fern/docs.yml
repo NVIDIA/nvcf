@@ -18,9 +18,9 @@ navbar-links:
   - type: github
     value: https://github.com/NVIDIA/nvcf
 versions:
-  - display-name: 1.0.3
+  - display-name: 1.0.4
     path: navigation.yml
-    slug: 1.0.3
+    slug: 1.0.4
   - display-name: Self-Managed Stack 1.0.1 archive
     hidden: true
     path: products/self-managed/1.0.1.yml
