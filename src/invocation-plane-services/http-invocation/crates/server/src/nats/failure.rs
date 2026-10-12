@@ -166,7 +166,10 @@ fn classify_rustls(err: &RustlsError) -> NatsFailureReason {
 // Runtime events only carry the error as a string.
 fn classify_message(msg: &str) -> NatsFailureReason {
     let msg = msg.to_ascii_lowercase();
-    if msg.contains("authorization") || msg.contains("authentication") {
+    if msg.contains("authorization")
+        || msg.contains("authentication")
+        || msg.contains("permissions violation")
+    {
         NatsFailureReason::Authentication
     } else if msg.contains("certificate") && msg.contains("expired") {
         NatsFailureReason::TlsCertExpired
@@ -258,6 +261,12 @@ mod tests {
         );
         assert_eq!(
             classify_server_error(&ServerError::Other("authentication token expired".into())),
+            NatsFailureReason::Authentication
+        );
+        assert_eq!(
+            classify_server_error(&ServerError::Other(
+                "Permissions Violation for Publish to \"foo.bar\"".into()
+            )),
             NatsFailureReason::Authentication
         );
         assert_eq!(
