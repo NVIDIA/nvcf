@@ -470,10 +470,14 @@ type fabricDriveOpts struct {
 // does not resume) takes no part.
 func driveFabric(ctx context.Context, members []fabricMember, done func(i int) bool, opts fabricDriveOpts, log *logrus.Entry) fabricOutcome {
 	var out fabricOutcome
-	decided := -1 // highest attempt answered
+	vote := &fabricVoter{decided: -1, abortSent: map[int]int{}}
 	aborted := false
-	unlockSent := false
-	exchanged := false
+	// Each phase is sent to every running member and retried, each poll, to
+	// the ones it did not reach; it is complete only once all have it. A
+	// member waits for its message, and the receivers' writes are atomic
+	// and idempotent, so a repeat is harmless and a loss is not.
+	var unlock, exchange *fabricDelivery
+	unlockDone, exchanged := false, false
 	tick := time.NewTicker(fabricPollInterval)
 	defer tick.Stop()
 	for {
@@ -505,60 +509,60 @@ func driveFabric(ctx context.Context, members []fabricMember, done func(i int) b
 				aborted = true
 				log.Warn("gpushare fabric: a member ended before the quiesce vote passed; aborting the vote")
 			}
-			driveVote(ctx, members, running, states, aborted, &decided, &out, log)
+			vote.drive(ctx, members, running, states, aborted, &out, log)
 		}
 
-		if opts.Unlock && !unlockSent {
-			verdict := ""
-			if lostOne {
-				verdict = fabricVerdictAbort
-			} else {
-				all := true
-				for _, i := range running {
-					if st, ok := states[i]; !ok || !st.Restored {
-						all = false
-						break
+		if opts.Unlock && !unlockDone {
+			if unlock == nil {
+				verdict := ""
+				if lostOne {
+					verdict = fabricVerdictAbort
+				} else {
+					all := true
+					for _, i := range running {
+						if st, ok := states[i]; !ok || !st.Restored {
+							all = false
+							break
+						}
+					}
+					if all {
+						verdict = "unlock"
 					}
 				}
-				if all {
-					verdict = "unlock"
+				if verdict != "" {
+					unlock = &fabricDelivery{what: "unlock verdict", value: verdict, sent: map[int]bool{}}
 				}
 			}
-			if verdict != "" {
-				for _, i := range running {
-					if err := members[i].Unlock(ctx, verdict); err != nil {
-						log.WithError(err).WithField("member", members[i].Name()).Warn("gpushare fabric: unlock verdict")
-					}
-				}
-				unlockSent = true
-				out.Unlocked = verdict == "unlock"
-				log.WithFields(logrus.Fields{"verdict": verdict, "members": len(running)}).Info("gpushare fabric: group restore network lock")
+			if unlock != nil && unlock.deliver(running, func(i int) error { return members[i].Unlock(ctx, unlock.value) }, members, log) {
+				unlockDone = true
+				out.Unlocked = unlock.value == "unlock"
+				log.WithFields(logrus.Fields{"verdict": unlock.value, "members": len(running)}).Info("gpushare fabric: group restore network lock")
 			}
 		}
 
 		if !exchanged && (!opts.Unlock || out.Unlocked) {
-			var merged bytes.Buffer
-			ready := true
-			for _, i := range running {
-				st, ok := states[i]
-				if !ok || st.Out == nil {
-					ready = false
-					break
-				}
-				merged.WriteString(*st.Out)
-				if n := merged.Len(); n > 0 && merged.Bytes()[n-1] != '\n' {
-					merged.WriteByte('\n')
-				}
-			}
-			if ready {
+			if exchange == nil {
+				var merged bytes.Buffer
+				ready := true
 				for _, i := range running {
-					if err := members[i].PutIn(ctx, merged.Bytes()); err != nil {
-						log.WithError(err).WithField("member", members[i].Name()).Warn("gpushare fabric: deliver handle list")
+					st, ok := states[i]
+					if !ok || st.Out == nil {
+						ready = false
+						break
+					}
+					merged.WriteString(*st.Out)
+					if n := merged.Len(); n > 0 && merged.Bytes()[n-1] != '\n' {
+						merged.WriteByte('\n')
 					}
 				}
+				if ready {
+					exchange = &fabricDelivery{what: "handle list", value: merged.String(), sent: map[int]bool{}}
+				}
+			}
+			if exchange != nil && exchange.deliver(running, func(i int) error { return members[i].PutIn(ctx, []byte(exchange.value)) }, members, log) {
 				exchanged = true
 				out.Exchanged = true
-				out.Handles = strings.Count(merged.String(), "\n")
+				out.Handles = strings.Count(exchange.value, "\n")
 				log.WithFields(logrus.Fields{"members": len(running), "handles": out.Handles}).Info("gpushare fabric: handle lists exchanged")
 			}
 		}
@@ -571,49 +575,90 @@ func driveFabric(ctx context.Context, members []fabricMember, done func(i int) b
 	}
 }
 
-// driveVote answers one round of the quiesce vote, if it is complete.
-func driveVote(ctx context.Context, members []fabricMember, running []int, states map[int]fabricState, aborted bool, decided *int, out *fabricOutcome, log *logrus.Entry) {
+// fabricDelivery is one message to every member, tracked per member.
+type fabricDelivery struct {
+	what, value string
+	sent        map[int]bool
+}
+
+// deliver sends to the running members not yet reached and reports whether
+// every running member now has the message.
+func (d *fabricDelivery) deliver(running []int, send func(i int) error, members []fabricMember, log *logrus.Entry) bool {
+	all := true
+	for _, i := range running {
+		if d.sent[i] {
+			continue
+		}
+		if err := send(i); err != nil {
+			log.WithError(err).WithField("member", members[i].Name()).Warn("gpushare fabric: deliver " + d.what + "; retrying")
+			all = false
+			continue
+		}
+		d.sent[i] = true
+	}
+	return all
+}
+
+// fabricVoter answers the quiesce vote round by round. A verdict is
+// decided only once every running member has received it.
+type fabricVoter struct {
+	decided   int // highest attempt every member has the verdict for
+	pending   *fabricDelivery
+	attempt   int
+	abortSent map[int]int // member -> highest attempt it has the abort for
+}
+
+func (v *fabricVoter) drive(ctx context.Context, members []fabricMember, running []int, states map[int]fabricState, aborted bool, out *fabricOutcome, log *logrus.Entry) {
 	if aborted {
 		// An abort answers each member's own attempt as it votes.
 		for _, i := range running {
-			if st, ok := states[i]; ok && st.Vote != nil && st.Vote.Attempt > *decided {
-				if err := members[i].Verdict(ctx, st.Vote.Attempt, fabricVerdictAbort); err != nil {
-					log.WithError(err).WithField("member", members[i].Name()).Warn("gpushare fabric: abort verdict")
-				}
+			st, ok := states[i]
+			if !ok || st.Vote == nil || st.Vote.Attempt <= v.decided {
+				continue
 			}
+			if got, ok := v.abortSent[i]; ok && got >= st.Vote.Attempt {
+				continue
+			}
+			if err := members[i].Verdict(ctx, st.Vote.Attempt, fabricVerdictAbort); err != nil {
+				log.WithError(err).WithField("member", members[i].Name()).Warn("gpushare fabric: abort verdict; retrying")
+				continue
+			}
+			v.abortSent[i] = st.Vote.Attempt
 		}
 		return
 	}
-	attempt, allOK := -1, true
-	for _, i := range running {
-		st, ok := states[i]
-		if !ok || st.Vote == nil {
+	if v.pending == nil {
+		attempt, allOK := -1, true
+		for _, i := range running {
+			st, ok := states[i]
+			if !ok || st.Vote == nil {
+				return
+			}
+			if attempt == -1 {
+				attempt = st.Vote.Attempt
+			}
+			if st.Vote.Attempt != attempt {
+				return
+			}
+			allOK = allOK && st.Vote.OK
+		}
+		if attempt <= v.decided {
 			return
 		}
-		if attempt == -1 {
-			attempt = st.Vote.Attempt
+		verdict := "retry"
+		if allOK {
+			verdict = "go"
 		}
-		if st.Vote.Attempt != attempt {
-			return
-		}
-		allOK = allOK && st.Vote.OK
+		v.pending, v.attempt = &fabricDelivery{what: "verdict", value: verdict, sent: map[int]bool{}}, attempt
 	}
-	if attempt <= *decided {
+	p := v.pending
+	if !p.deliver(running, func(i int) error { return members[i].Verdict(ctx, v.attempt, p.value) }, members, log) {
 		return
 	}
-	verdict := "retry"
-	if allOK {
-		verdict = "go"
-	}
-	for _, i := range running {
-		if err := members[i].Verdict(ctx, attempt, verdict); err != nil {
-			log.WithError(err).WithField("member", members[i].Name()).Warn("gpushare fabric: verdict")
-		}
-	}
-	*decided = attempt
-	out.Attempts = attempt + 1
-	out.Went = verdict == "go"
-	log.WithFields(logrus.Fields{"attempt": attempt, "verdict": verdict}).Info("gpushare fabric: quiesce vote")
+	v.decided, v.pending = v.attempt, nil
+	out.Attempts = v.attempt + 1
+	out.Went = p.value == "go"
+	log.WithFields(logrus.Fields{"attempt": v.attempt, "verdict": p.value}).Info("gpushare fabric: quiesce vote")
 }
 
 // httpFabricMember reaches a member's session on its node's agent.

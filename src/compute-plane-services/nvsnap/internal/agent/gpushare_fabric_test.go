@@ -613,3 +613,83 @@ func TestRestoreSession_UnlockOverHTTP(t *testing.T) {
 		t.Errorf("session dir survives close: %v", err)
 	}
 }
+
+// flakyFabricMember loses the first delivery of each message kind.
+type flakyFabricMember struct {
+	*fakeFabricMember
+	failed map[string]bool
+}
+
+func (f *flakyFabricMember) once(kind string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.failed[kind] {
+		return nil
+	}
+	f.failed[kind] = true
+	return fmt.Errorf("%s: connection reset", kind)
+}
+
+func (f *flakyFabricMember) Verdict(ctx context.Context, attempt int, verdict string) error {
+	if err := f.once("verdict"); err != nil {
+		return err
+	}
+	return f.fakeFabricMember.Verdict(ctx, attempt, verdict)
+}
+
+func (f *flakyFabricMember) PutIn(ctx context.Context, data []byte) error {
+	if err := f.once("in"); err != nil {
+		return err
+	}
+	return f.fakeFabricMember.PutIn(ctx, data)
+}
+
+func (f *flakyFabricMember) Unlock(ctx context.Context, verdict string) error {
+	if err := f.once("unlock"); err != nil {
+		return err
+	}
+	return f.fakeFabricMember.Unlock(ctx, verdict)
+}
+
+// A message lost on the way to one member is sent again until it arrives,
+// and its phase completes only then: the member would otherwise wait for
+// it until its timeout.
+func TestDriveFabric_RetriesLostDeliveries(t *testing.T) {
+	t.Run("vote and exchange", func(t *testing.T) {
+		a := &fakeFabricMember{name: "a"}
+		b := &flakyFabricMember{fakeFabricMember: &fakeFabricMember{name: "b"}, failed: map[string]bool{}}
+		ds, res, cancel := startDrive([]fabricMember{a, b})
+		defer cancel()
+		a.vote(0, true)
+		b.vote(0, true)
+		eventually(t, "go reaches b", func() bool { v, _ := b.sent(); return len(v) == 1 })
+		if v, _ := a.sent(); len(v) != 1 {
+			t.Errorf("a must get the go once, got %v", v)
+		}
+		a.out("ha\n")
+		b.out("hb\n")
+		eventually(t, "handle list reaches b", func() bool { _, in := b.sent(); return len(in) == 1 })
+		ds.set(0)
+		ds.set(1)
+		if out := <-res; !out.Went || !out.Exchanged || out.Attempts != 1 {
+			t.Errorf("outcome = %+v, want went and exchanged after the retries", out)
+		}
+	})
+	t.Run("unlock", func(t *testing.T) {
+		a := &fakeFabricMember{name: "a"}
+		b := &flakyFabricMember{fakeFabricMember: &fakeFabricMember{name: "b"}, failed: map[string]bool{}}
+		ds, res, cancel := startDriveOpts([]fabricMember{a, b}, fabricDriveOpts{Unlock: true})
+		defer cancel()
+		a.restored()
+		b.restored()
+		eventually(t, "unlock reaches b", func() bool { return len(b.unlocked()) == 1 })
+		if u := a.unlocked(); len(u) != 1 {
+			t.Errorf("a must get the unlock once, got %v", u)
+		}
+		ds.set(0)
+		ds.set(1)
+		if out := <-res; !out.Unlocked {
+			t.Errorf("outcome = %+v, want unlocked after the retry", out)
+		}
+	})
+}
