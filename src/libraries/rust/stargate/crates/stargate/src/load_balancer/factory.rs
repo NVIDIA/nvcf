@@ -73,8 +73,8 @@ pub fn create_load_balancer_with_config(
     }
 }
 
-/// Every value the algorithm routes with, written in the routing-expression
-/// grammar. Defaults come from the constructors' own default-filling functions.
+/// Every routing-expression parameter the algorithm uses, with the value it routes with,
+/// in the expression grammar. Defaults come from the constructors' default-filling functions.
 pub(super) fn effective_routing_expression(
     config: &LoadBalancerAlgorithmConfig,
 ) -> anyhow::Result<String> {
