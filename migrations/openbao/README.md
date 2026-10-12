@@ -92,7 +92,8 @@ Environment variables consumed by the entrypoint:
 | `BAO_SERVICE` | `openbao-server.vault-system.svc.cluster.local` | DNS name of the OpenBao Service |
 | `CORE_MIGRATIONS_ENABLED` | `true` | Run the numbered scripts under `migrations/` |
 | `ADDONS_LLS_ENABLED` | `false` | Run the LLS addon under `addons/lls/setup_lls.sh` (fail-hard when enabled, see [addons/lls/README.md](addons/lls/README.md)) |
-| `ADDONS_LLM_ENABLED` | `false` | Run the LLM addon under `addons/llm/setup_llm.sh` (fail-hard when enabled, see [addons/llm/README.md](addons/llm/README.md)) |
+| `NVCF_SERVICE_PKI_ENABLED` | `false` | Run the service PKI addon under `addons/service-pki/setup_service_pki.sh` (fail-hard when enabled, see [addons/service-pki/README.md](addons/service-pki/README.md)) |
+| `ADDONS_LLM_ENABLED` | `false` | Same as `NVCF_SERVICE_PKI_ENABLED`; kept for the llm-request-router chart and existing installs |
 | `ADDONS_NVCF_UI_ENABLED` | `false` | Run the nvcf-ui addon under `addons/nvcf-ui/setup_nvcf-ui.sh` (fail-hard when enabled, see [addons/nvcf-ui/README.md](addons/nvcf-ui/README.md)) |
 | `DEFAULT_CASSANDRA_PASSWORD` | `ch@ng3m3` (override required) | See above |
 | `NVCF_API_SIDECARS_IMAGE_PULL_SECRET` | `""` | Image pull secret name passed to the NVCF API sidecar mount |

@@ -36,10 +36,11 @@ trap 'rm -f /tmp/nvcf-service-intermediate.csr /tmp/nvcf-service-intermediate.pe
 # not set it directly.
 #
 # Hard requirement when this addon is enabled. The entrypoint owns the
-# opt-in gate via ADDONS_LLM_ENABLED — if it invoked us, the operator
-# opted in, so a missing required value is a hard failure (script aborts,
-# entrypoint accumulates the failure, Job exits non-zero).
-: "${NVCF_SERVICE_PKI_ALLOWED_DOMAINS:?NVCF_SERVICE_PKI_ALLOWED_DOMAINS is required when ADDONS_LLM_ENABLED=true (comma-separated DNS suffixes; the stack chart should derive this from global.domain)}"
+# opt-in gate via NVCF_SERVICE_PKI_ENABLED or ADDONS_LLM_ENABLED — if it
+# invoked us, the operator opted in, so a missing required value is a hard
+# failure (script aborts, entrypoint accumulates the failure, Job exits
+# non-zero).
+: "${NVCF_SERVICE_PKI_ALLOWED_DOMAINS:?NVCF_SERVICE_PKI_ALLOWED_DOMAINS is required when NVCF_SERVICE_PKI_ENABLED or ADDONS_LLM_ENABLED is true (comma-separated DNS suffixes; the stack chart should derive this from global.domain)}"
 
 VAULT_SECRET_BASE_PATH="${VAULT_SECRET_BASE_PATH:-services/all}"
 VAULT_POLICY_BASE_PATH="${VAULT_POLICY_BASE_PATH:-services-all}"
