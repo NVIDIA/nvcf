@@ -265,22 +265,22 @@ Complete uninstall combines [removing the model release](README.md#uninstall-kee
 
 ### Helm GLM recipe
 
-The committed [GLM values](recipes/values/glm-5.3.yaml) select the automatic two-node GB10 profile. Replace `gpu-node-1` and `gpu-node-2` below with distinct available nodes. Override `runtimeClassName` and `storageClassName` if your cluster uses different names.
+GLM has two automatic GB10 profiles. The committed [three-node values](recipes/values/glm-5.3-x3.yaml) select `gb10-x3`, which splits the weights evenly over one leader and two RPC workers and is the profile that passed gateway checks. The committed [two-node values](recipes/values/glm-5.3.yaml) select `gb10-x2`, which stops at the host-memory guard during loading. The commands below use the three-node profile. Replace `gpu-node-1`, `gpu-node-2` and `gpu-node-3` with distinct available nodes. Override `runtimeClassName` and `storageClassName` if your cluster uses different names.
 
 Install it with the shared stack already running:
 
 ```bash
 helm upgrade --install glm dev-artifacts/charts/pylon-gguf-backend-0.2.0.tgz \
   --namespace llm-stack \
-  --values recipes/values/glm-5.3.yaml \
-  --set 'nodes[0]=gpu-node-1' --set 'nodes[1]=gpu-node-2' \
+  --values recipes/values/glm-5.3-x3.yaml \
+  --set 'nodes[0]=gpu-node-1' --set 'nodes[1]=gpu-node-2' --set 'nodes[2]=gpu-node-3' \
   --wait --timeout 120m &&
 kubectl --namespace llm-stack wait \
   --for=condition=Registered inferenceendpoint/glm --timeout=5m &&
 echo 'Model installed and registered.'
 ```
 
-Kubernetes checks placement, builds the pinned llama.cpp runtime, starts the worker RPC server and qualifies both GPUs. It then verifies or downloads the pinned GGUF cache and starts the model server. The served model ID is `GLM-5.3-UD-IQ2_M`. Use that ID for [gateway verification](#verification). The common catalog lists its per-node resource and storage requirements. The current cached two-node Helm trial stopped at the host-memory guard during loading. Automatic serving validation remains open.
+Kubernetes checks placement, builds the pinned llama.cpp runtime, starts each worker RPC server and qualifies every GPU, including each pair. It then verifies or downloads the pinned GGUF cache and starts the model server. The served model ID is `GLM-5.3-UD-IQ2_M`. Use that ID for [gateway verification](#verification). The common catalog lists its per-node resource and storage requirements. The three-node profile passed gateway discovery, chat, streaming and authentication at context 2,048 and concurrency 1. Loading about 148 GiB to the workers took roughly 30 minutes on the pod network. Stop/resume, longer context, throughput and output quality are untested. The two-node profile's Helm trials stopped at the host-memory guard during loading, so use three nodes. Each RPC worker has its own Service and cache claim, named `<release>-rpc-n1`, `<release>-rpc-n2` and so on. Set `rpc.cache.existingClaims` to one retained claim per worker. `rpc.cache.existingClaim` still serves a single worker.
 
 By default (`reuseCaches: false`), a changed image, llama.cpp revision or CUDA architecture rebuilds compiled runtime state while preserving model files and cached source archives. Unchanged runtimes are verified and reused.
 
@@ -470,7 +470,7 @@ The verifier opens a temporary connection through the installed shared stack. `-
 
 Recipe qualification has separate stages: hardware compatibility and placement, preparation, runtime readiness, registration, and gateway inference. Offline tests establish rendering and local behavior. Accept a hardware trial only after its exact model pins and profile pass discovery, chat, streaming, authentication, retained-cache restart and isolation from another running model. Record the tested context and concurrency separately from the profile's candidate limits.
 
-The current Qwen FP8 and NVFP4 evidence covers short prompts at configured context 8,192 and concurrency 1. The one-node Flash-Next NVMe profile also passed startup and short-prompt gateway checks at context 8,192 and concurrency 1. Flash-Next tensor-parallel serving remains unverified. GLM's latest automatic Helm trial stopped at its host-memory guard. These records do not establish maximum context, throughput or output quality. Gateway checks passed against the existing shared Helm release. Fresh-cluster installation remains unverified.
+The current Qwen FP8 and NVFP4 evidence covers short prompts at configured context 8,192 and concurrency 1. The one-node Flash-Next NVMe profile also passed startup and short-prompt gateway checks at context 8,192 and concurrency 1. Flash-Next tensor-parallel serving remains unverified. GLM's two-node automatic Helm trials stopped at the host-memory guard, while its three-node profile passed short-prompt gateway checks at context 2,048 and concurrency 1. These records do not establish maximum context, throughput or output quality. Gateway checks passed against the existing shared Helm release. Fresh-cluster installation remains unverified.
 
 ## Monitoring
 

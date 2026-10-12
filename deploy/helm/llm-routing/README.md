@@ -113,7 +113,7 @@ Both models use the same gateway and caller credential. Each keeps its own Helm 
 | --- | --- | --- |
 | [Qwen3.8-27B](#2-install-a-model) | FP8 | [1 GB10 (Spark)](recipes/values/qwen3.8-27b.yaml) or [1 GB300 (Station)](recipes/values/qwen3.8-27b-station.yaml) |
 | [Qwen3.8-27B](#add-a-second-model) | NVIDIA NVFP4 | [1 GB10 (Spark)](recipes/values/qwen3.8-27b-nvfp4.yaml) |
-| [GLM-5.3](ADVANCED.md#helm-glm-recipe) | UD-IQ2_M | [2 GB10s (Spark)](recipes/values/glm-5.3.yaml) |
+| [GLM-5.3](ADVANCED.md#helm-glm-recipe) | UD-IQ2_M | [3 GB10s (Spark)](recipes/values/glm-5.3-x3.yaml), or [2 GB10s (Spark)](recipes/values/glm-5.3.yaml). The two-node profile stops at the host-memory guard |
 | [Qwen3.5-4B](recipes/values/qwen3.5-4b.yaml) | BF16 | [1 GB10 (Spark)](recipes/values/qwen3.5-4b.yaml). Thinks by default, so verify with `recipes/verify.py --max-tokens 2048` |
 | [Nemotron Nano 12B v2](recipes/values/nemotron-nano-12b-v2.yaml) | BF16 | [1 GB10 (Spark)](recipes/values/nemotron-nano-12b-v2.yaml). No tool-call parser configured |
 | [Nemotron 3.5 Lightning](recipes/values/nemotron-3.5-lightning.yaml) | NVFP4 | [1 GB10 (Spark)](recipes/values/nemotron-3.5-lightning.yaml). Pinned SGLang development image |

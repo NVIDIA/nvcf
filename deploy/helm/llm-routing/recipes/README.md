@@ -15,7 +15,8 @@ Automatic recipes select pinned model and runtime settings from the chart. Suppl
 | Qwen3.5-4B BF16 | [qwen3.5-4b.yaml](values/qwen3.5-4b.yaml) | [Automatic, one node](../README.md#2-install-a-model). Gateway checks passed at context 8,192 and concurrency 1 with a 2,048-token completion budget. |
 | Nemotron Nano 12B v2 BF16 | [nemotron-nano-12b-v2.yaml](values/nemotron-nano-12b-v2.yaml) | [Automatic, one node](../README.md#2-install-a-model). Short-prompt gateway checks passed at context 8,192 and concurrency 1. |
 | Nemotron 3.5 Lightning NVFP4 | [nemotron-3.5-lightning.yaml](values/nemotron-3.5-lightning.yaml) | [Automatic, one node](../README.md#2-install-a-model). Short-prompt gateway checks passed at context 8,192 and concurrency 1. |
-| GLM-5.3 UD-IQ2_M | [glm-5.3.yaml](values/glm-5.3.yaml) | [Automatic, two nodes](../ADVANCED.md#helm-glm-recipe). Latest trial stopped at the host-memory guard. |
+| GLM-5.3 UD-IQ2_M, three nodes | [glm-5.3-x3.yaml](values/glm-5.3-x3.yaml) | [Automatic, three nodes](../ADVANCED.md#helm-glm-recipe). Short-prompt gateway checks passed at context 2,048 and concurrency 1. |
+| GLM-5.3 UD-IQ2_M, two nodes | [glm-5.3.yaml](values/glm-5.3.yaml) | [Automatic, two nodes](../ADVANCED.md#helm-glm-recipe). Latest trials stopped at the host-memory guard. |
 | Qwen3.8-Flash-Next NVFP4, NVMe offload | [qwen3.8-flash-next-nvme.yaml](values/qwen3.8-flash-next-nvme.yaml) | [Automatic, one node](../ADVANCED.md#helm-flash-next-recipes). Startup and short-prompt gateway checks passed at context 8,192 and concurrency 1. |
 | Qwen3.8-Flash-Next NVFP4, tensor parallel | [qwen3.8-flash-next-tp2.yaml](values/qwen3.8-flash-next-tp2.yaml) | [Automatic, two nodes](../ADVANCED.md#helm-flash-next-recipes). Live validation pending. |
 

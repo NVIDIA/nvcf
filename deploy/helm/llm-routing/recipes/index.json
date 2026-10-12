@@ -320,6 +320,194 @@
             ],
             "guide": "../ADVANCED.md#helm-glm-recipe"
           }
+        },
+        {
+          "id": "gb10-x3",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuCount": 1,
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA_GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "computeCapability": "12.1",
+            "memoryMode": "unified",
+            "minHostMemoryGiB": 120
+          },
+          "modelNodeCount": 3,
+          "gpusPerNode": 1,
+          "minimumAvailableMemoryBytesPerNode": 81604378624,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 8000,
+                "cpuLimitMillicores": 12000,
+                "memoryRequestBytes": 78383153152,
+                "memoryLimitBytes": 82678120448,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "servingResources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": 12000,
+                "memoryRequestBytes": 78383153152,
+                "memoryLimitBytes": 82678120448,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 429496729600
+              },
+              "preparationResources": {
+                "cpuRequestMillicores": 8000,
+                "cpuLimitMillicores": 12000,
+                "memoryRequestBytes": 25769803776,
+                "memoryLimitBytes": 42949672960,
+                "gpuRequest": 0,
+                "gpuLimit": 0
+              },
+              "additionalWorkloads": [
+                {
+                  "role": "artifacts",
+                  "sharesModelClaim": true,
+                  "resources": {
+                    "cpuRequestMillicores": 100,
+                    "cpuLimitMillicores": 1000,
+                    "memoryRequestBytes": 134217728,
+                    "memoryLimitBytes": 536870912,
+                    "gpuRequest": 0,
+                    "gpuLimit": 0
+                  }
+                }
+              ]
+            },
+            {
+              "rank": 1,
+              "role": "rpc",
+              "resources": {
+                "cpuRequestMillicores": 2000,
+                "cpuLimitMillicores": 8000,
+                "memoryRequestBytes": 78383153152,
+                "memoryLimitBytes": 82678120448,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "servingResources": {
+                "cpuRequestMillicores": 2000,
+                "cpuLimitMillicores": 8000,
+                "memoryRequestBytes": 78383153152,
+                "memoryLimitBytes": 82678120448,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 171798691840
+              }
+            },
+            {
+              "rank": 2,
+              "role": "rpc",
+              "resources": {
+                "cpuRequestMillicores": 2000,
+                "cpuLimitMillicores": 8000,
+                "memoryRequestBytes": 78383153152,
+                "memoryLimitBytes": 82678120448,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "servingResources": {
+                "cpuRequestMillicores": 2000,
+                "cpuLimitMillicores": 8000,
+                "memoryRequestBytes": 78383153152,
+                "memoryLimitBytes": 82678120448,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 171798691840
+              }
+            }
+          ],
+          "workload": {
+            "defaultContextTokens": 2048,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 2048,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "pending",
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "status": "smoke-tested",
+              "date": "2026-10-12",
+              "profile": "gb10-x3",
+              "modelRevision": "346b3591c7f28d1a23716f97a065ecf12ec14771",
+              "runtimeImage": "nvcr.io/nvidia/vllm@sha256:67c617846180989a71e0f353c8b101e9808dc7c2638b60f890064e3d7b660282",
+              "contextLength": 2048,
+              "concurrency": 1,
+              "tensorSplit": [
+                1,
+                1,
+                1
+              ],
+              "requestType": "short-prompt-smoke",
+              "cacheMode": "leader-cache-reused",
+              "lowestObservedAvailableGiB": 33.2,
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "distributed-runtime-qualification",
+                "runtime-integrity",
+                "model-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication"
+              ],
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "scope": "Three-GB10 layer split of the pinned checkpoint, with one leader and two RPC workers. On 2026-10-12 the automatic Helm install passed placement, three-GPU distributed qualification, runtime and model integrity, readiness, gateway discovery, chat, streaming and authentication at context 2,048 and concurrency 1. Each node held about 74 GiB of weights and kept at least 33 GiB of host memory available, so the 1 GiB host-memory guard did not trigger. Stop/resume, longer context, throughput and output quality are untested. The two-node profile stopped at the host-memory guard.",
+            "workload": {
+              "contextLength": 2048,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-gguf-backend",
+              "version": "0.2.0",
+              "localPath": "charts/gguf-backend",
+              "archive": "pylon-gguf-backend-0.2.0.tgz",
+              "repository": null,
+              "publication": "local"
+            },
+            "releaseName": "glm",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "glm-5.3",
+              "profileName": "gb10-x3"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../ADVANCED.md#helm-glm-recipe"
+          }
         }
       ]
     },
