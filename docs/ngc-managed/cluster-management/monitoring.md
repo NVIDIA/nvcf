@@ -7,7 +7,7 @@ structured logging, and OpenTelemetry tracing.
 
 ### Metrics
 
-**Prerequisites**
+#### Prerequisites
 
 To use the PodMonitor and ServiceMonitor examples below, you must first install the Prometheus Operator. Follow the [Prometheus Operator installation guide](https://prometheus-operator.dev/docs/getting-started/installation/) to set this up in your cluster.
 
@@ -25,7 +25,7 @@ Cluster maintainers can scrape the available metrics. See a full example of how 
 
 Use the following examples of a PodMonitor for NVCA Operator and ServiceMonitor for NVCA for reference:
 
-**Sample NVCA Operator PodMonitor**
+#### Sample NVCA Operator PodMonitor
 
 ```yaml
 
@@ -55,7 +55,7 @@ Use the following examples of a PodMonitor for NVCA Operator and ServiceMonitor 
           - nvca-operator
 ```
 
-**Sample NVCA ServiceMonitor**
+#### Sample NVCA ServiceMonitor
 
 ```yaml
 
@@ -103,26 +103,76 @@ Similarly, NVIDIA Cluster Agent logs can be obtained with the following command 
 
 <Warning>
 
-Current function-level inference container logs are **not supported** for functions deployed on non-NVIDIA-managed clusters. Customers are encouraged to emit logs directly from their inference containers running on their own clusters to any third-party tool, there are no public egress limitations for containers.
+Current function-level inference container logs are not supported for functions deployed on non-NVIDIA-managed clusters. Customers are encouraged to emit logs directly from their inference containers running on their own clusters to any third-party tool, there are no public egress limitations for containers.
 </Warning>
 
 ### Tracing
 
-The NVIDIA Cluster Agent provides OpenTelemetry integration for exporting traces and events to compatible collectors. As of agent version 2.0, the only supported collector receiver is Lightstep.
+The NVIDIA Cluster Agent exports OpenTelemetry traces to Lightstep. The
+`lightstep` exporter requires an access token and an OTLP gRPC endpoint.
+`otelConfig.endpoint` is required when `otelConfig.accessToken` is set, including
+on NVCA and Operator 3.7.2. A successful Kubernetes patch only confirms that the
+API accepted the configuration; the Operator must reconcile it before tracing
+is enabled.
 
-**Enable Tracing with Lightstep**
+#### Enable tracing with Lightstep
 
-1. Get your [Lightstep access token](https://docs.lightstep.com/docs/create-and-manage-access-tokens) from the [Lightstep UI](https://app.lightstep.com) and set to `LS_ACCESS_TOKEN` environment variable.
-2. Get the NVCF cluster name:
+1. Get a [Lightstep access token](https://docs.lightstep.com/docs/create-and-manage-access-tokens)
+   and export it as `LS_ACCESS_TOKEN` in your shell.
+2. Select the endpoint for your Lightstep project. For direct ingestion, use
+   `ingest.lightstep.com:443` for the US region or
+   `ingest.eu.lightstep.com:443` for the EU region. For a managed collector,
+   obtain its endpoint from your administrator. Use `host:port` without an
+   `https://` prefix. See the [Lightstep tracing quickstart](https://docs.lightstep.com/docs/quick-start-instrumentation).
 
-```bash
+   ```bash
+   export LS_OTEL_ENDPOINT="ingest.lightstep.com:443"
+   ```
 
-  nvcf_cluster_name="$(kubectl get nvcfbackends -n nvca-operator -o name | cut -d'/' -f2)"
-```
+3. List the backends and select the one to configure:
 
-1. Apply the tracing configuration:
+   ```bash
+   kubectl get nvcfbackends -n nvca-operator
+   nvcf_cluster_name="<backend-name>"
+   ```
 
-```bash
+4. Apply the configuration. This command requires Python 3 and sends the token
+   through standard input instead of including it in the `kubectl` arguments.
 
-  kubectl patch nvcfbackends.nvcf.nvidia.io -n nvca-operator "$nvcf_cluster_name"  --type=merge --patch="{\"spec\":{\"overrides\":{\"featureGate\":{\"otelConfig\":{\"exporter\":\"lightstep\",\"serviceName\":\"nvcf-nvca\",\"accessToken\":\"${LS_ACCESS_TOKEN}\"}}}}}"
-```
+   ```bash
+   python3 - <<'PYCODE' | kubectl patch nvcfbackends.nvcf.nvidia.io \
+     -n nvca-operator "$nvcf_cluster_name" --type=merge --patch-file=/dev/stdin
+   import json
+   import os
+
+   print(json.dumps({"spec": {"overrides": {"featureGate": {"otelConfig": {
+       "exporter": "lightstep",
+       "endpoint": os.environ["LS_OTEL_ENDPOINT"],
+       "serviceName": "nvcf-nvca",
+       "accessToken": os.environ["LS_ACCESS_TOKEN"],
+   }}}}}))
+   PYCODE
+   ```
+
+5. Check the Operator logs and the agent rollout:
+
+   ```bash
+   kubectl logs -l app.kubernetes.io/instance=nvca-operator \
+     -n nvca-operator --tail=100
+   kubectl rollout status deployment/nvca -n nvca-system --timeout=5m
+   ```
+
+   Wait for the Operator to reconcile the change and replace the agent Pod.
+   Then deploy or invoke a function and confirm that new spans appear in your
+   Lightstep project. An existing ready agent or a successful patch alone does
+   not confirm trace delivery.
+
+If the Operator logs `otelConfig.endpoint is required when
+otelConfig.accessToken is set`, reapply the configuration with the endpoint.
+A merge patch preserves existing fields, so an old endpoint can mask an
+incomplete configuration example. Always specify the endpoint and token
+together when enabling tracing.
+
+For a Helm-managed backend, persist the same endpoint in `otel.endpoint` along
+with `otel.enabled`, `otel.lightstep.serviceName`, and
+`otel.lightstep.accessToken` in your [Helm values](./reference.md#opentelemetry).
