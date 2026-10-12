@@ -245,7 +245,17 @@ Values without parameters use the same response for `unknown_method` and
   received on every request.
 - When the router builds or replaces a configuration, it writes the info log
   `routing expression configuration built` with the algorithm, outcome, and
-  value.
+  value. The `expression` field is the value as received.
+- The `effective` field on the same line lists every value the algorithm
+  routes with, in the expression format. It includes values inherited from the
+  static configuration and the router defaults. Unset optional values, such as
+  `seed` or the queue-time pair, are omitted. A decimal with more than three
+  fractional digits is written as a quoted string. For example, the value
+  `wait-and-widen;n=3` logs:
+
+  ```text
+  effective="wait-and-widen;n=3;max_queued=0;comparator=ttft;ttft_bucket_size_ms=20;next_bucket_unlock_factor=0.25;cache_affinity_virtual_nodes=150;cache_affinity_input_tokens_scale=1.0;cache_affinity_wait_ms=0;ignore_queue_time=false;ignore_input_processing_time=false;require_cache_affinity_key=false;require_input_tokens=false"
+  ```
 - Each rejected request writes the warn log `invalid routing algorithm header`
   with the code and message.
 

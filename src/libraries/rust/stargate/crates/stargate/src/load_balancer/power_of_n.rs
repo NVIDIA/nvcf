@@ -26,8 +26,8 @@ use super::{
 use crate::routing_state::RoutedClusterSnapshot;
 
 pub(super) struct PowerOfNLoadBalancer {
-    sample_count: usize,
-    comparator: ClusterComparator,
+    pub(super) sample_count: usize,
+    pub(super) comparator: ClusterComparator,
 }
 
 impl PowerOfNLoadBalancer {

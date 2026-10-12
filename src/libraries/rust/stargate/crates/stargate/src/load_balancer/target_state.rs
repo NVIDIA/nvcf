@@ -20,6 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use scc::HashMap as SccHashMap;
 
+use super::factory::effective_routing_expression;
 use super::{LoadBalancer, LoadBalancerAlgorithmConfig, create_load_balancer_with_config};
 
 #[derive(Clone, Debug)]
@@ -56,6 +57,11 @@ impl LoadBalancerDefinition {
 
     pub(crate) fn config(&self) -> &LoadBalancerAlgorithmConfig {
         &self.0.config
+    }
+
+    pub(crate) fn effective_expression(&self) -> String {
+        effective_routing_expression(&self.0.config)
+            .expect("load balancer config validated by LoadBalancerDefinition::new")
     }
 
     pub(super) fn retire(&self) {

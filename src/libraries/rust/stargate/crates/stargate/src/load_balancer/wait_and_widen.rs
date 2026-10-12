@@ -52,13 +52,13 @@ pub(super) struct WaitAndWidenLoadBalancer {
 
 #[derive(Clone, Debug)]
 pub(super) struct WaitAndWidenConfig {
-    comparator: Option<ClusterComparator>,
+    pub(super) comparator: Option<ClusterComparator>,
     pub(super) seed: Option<String>,
     pub(super) cache_affinity_virtual_nodes: usize,
     pub(super) cache_affinity_backend_selection_count: Option<usize>,
     pub(super) cache_affinity_input_tokens_scale: f64,
     pub(super) cache_affinity_wait: Duration,
-    queue_slo: Option<RangeInclusive<Duration>>,
+    pub(super) queue_slo: Option<RangeInclusive<Duration>>,
     pub(super) ttft_bucket_size: Duration,
     pub(super) next_bucket_unlock_factor: f64,
     pub(super) sample_count: usize,
