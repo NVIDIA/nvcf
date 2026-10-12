@@ -215,8 +215,8 @@ require unavailable hardware, access or changes outside the authorized scope.
 
 Follow the [model lifecycle](../../../../deploy/helm/llm-routing/ADVANCED.md#independent-model-lifecycle)
 to test stop/resume and uninstall/reinstall using the original cache nodes.
-Verify endpoint withdrawal and restoration, unchanged cache identities and
-weight reuse, and another model's availability when one is already running.
+Verify that the endpoint stays registered and unhealthy while stopped and
+returns to healthy on resume, unchanged cache identities and weight reuse, and another model's availability when one is already running.
 Restore the agreed final state and keep logs and private values outside Git.
 
 ### 6. Propagate the verified result

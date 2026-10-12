@@ -163,19 +163,19 @@ class HelmSGLangTests(unittest.TestCase):
         self.assertEqual(env['TRANSFORMERS_OFFLINE'], '1')
         self.assertEqual(self.configuration(docs)['claimName'], 'previous-model-cache')
 
-    def test_automatic_suspend_withdraws_endpoint_and_keeps_cache_service_and_pins(self):
+    def test_automatic_suspend_keeps_endpoint_cache_service_and_pins(self):
         original = self.render(self.values())
         suspended = self.render(dict(self.values(), suspended=True))
         resumed = self.render(dict(self.values(), suspended=False))
         self.assertEqual(original, resumed)
         self.assertEqual(sum(doc['kind'] == 'InferenceEndpoint' for doc in original), 1)
-        self.assertFalse(any(doc['kind'] == 'InferenceEndpoint' for doc in suspended))
+        self.assertEqual(sum(doc['kind'] == 'InferenceEndpoint' for doc in suspended), 1)
         for docs in (original, suspended):
             deployment = next(doc for doc in docs if doc['kind'] == 'Deployment')
             self.assertEqual(deployment['spec'].pop('replicas'), 0 if docs is suspended else 1)
             pvc = next(doc for doc in docs if doc['kind'] == 'PersistentVolumeClaim')
             self.assertEqual(pvc['metadata']['annotations']['helm.sh/resource-policy'], 'keep')
-        self.assertEqual([doc for doc in original if doc['kind'] != 'InferenceEndpoint'], suspended)
+        self.assertEqual(original, suspended)
 
 
     def test_profile_rollback_restores_pinned_config_and_retains_cache_identity(self):

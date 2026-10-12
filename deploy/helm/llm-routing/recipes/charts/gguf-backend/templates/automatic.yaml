@@ -291,7 +291,6 @@ spec:
         - podSelector:
             matchLabels: {app.kubernetes.io/instance: {{ $name }}}
       ports: [{protocol: TCP, port: 8080}, {protocol: TCP, port: 50052}]
-{{- if not .Values.suspended }}
 ---
 apiVersion: pylon.nvidia.com/v1alpha1
 kind: InferenceEndpoint
@@ -305,4 +304,3 @@ spec:
   canary: {{ $config.recipe.canary | toJson }}
   maxEngineConcurrency: {{ $tuning.slots }}
   gpu: {product: {{ index $config.profile.hardware.gpuProducts 0 | quote }}}
-{{- end }}

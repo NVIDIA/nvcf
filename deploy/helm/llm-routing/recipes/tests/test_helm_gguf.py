@@ -196,7 +196,7 @@ class AutomaticChartTests(unittest.TestCase):
     def test_suspend_retains_claims_and_stops_all_owned_deployments(self):
         objects = render(values(suspended=True))
         self.assertEqual([item['spec']['replicas'] for item in objects if item['kind'] == 'Deployment'], [0, 0, 0])
-        self.assertFalse(any(item['kind'] == 'InferenceEndpoint' for item in objects))
+        self.assertEqual(sum(item['kind'] == 'InferenceEndpoint' for item in objects), 1)
         for item in objects:
             if item['kind'] == 'PersistentVolumeClaim':
                 self.assertEqual(item['metadata']['annotations']['helm.sh/resource-policy'], 'keep')
@@ -312,7 +312,7 @@ class ThreeNodeChartTests(unittest.TestCase):
     def test_suspend_stops_the_leader_every_worker_and_the_artifact_server(self):
         objects = render(three_node_values(suspended=True))
         self.assertEqual([item['spec']['replicas'] for item in objects if item['kind'] == 'Deployment'], [0, 0, 0, 0])
-        self.assertFalse(any(item['kind'] == 'InferenceEndpoint' for item in objects))
+        self.assertEqual(sum(item['kind'] == 'InferenceEndpoint' for item in objects), 1)
 
     def test_the_catalog_records_the_three_node_result_and_keeps_the_two_node_failure(self):
         exported = next(recipe for recipe in json.loads((ROOT / 'index.json').read_text())['recipes'] if recipe['id'] == 'glm-5.3')

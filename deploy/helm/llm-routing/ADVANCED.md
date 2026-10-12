@@ -233,7 +233,7 @@ kubectl -n llm-stack logs deployment/qwen-fp8-serve-0 -c placement-check
 kubectl -n llm-stack logs deployment/qwen-fp8-serve-0 -c sglang
 ```
 
-Correct the values and rerun the original Helm command. Set `suspended: true` in the model values to release its GPUs while retaining cache claims. Set it back to `false` and rerun Helm to resume. Automatic recipes withdraw their endpoint while suspended and restore it on resume. The shared release and other models continue serving. `helm uninstall` removes model-owned workloads and endpoint resources while retaining model PVCs.
+Correct the values and rerun the original Helm command. Set `suspended: true` in the model values to release its GPUs while retaining cache claims. Set it back to `false` and rerun Helm to resume. A suspended model keeps its endpoint registered, so the gateway registry and the demo UI list it as unhealthy ("Deployed, unhealthy"). It stays out of the model list that clients see, because that list includes only healthy models. Resuming brings it back to healthy. The shared release and other models continue serving. `helm uninstall` removes model-owned workloads and endpoint resources while retaining model PVCs.
 
 ### Remove downloaded model files
 
