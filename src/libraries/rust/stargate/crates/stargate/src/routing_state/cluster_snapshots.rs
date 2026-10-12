@@ -166,9 +166,14 @@ impl ClusterRoutingGeneration {
         true
     }
 
-    fn contains_registration(&self, registration: &Arc<RegistrationGeneration>) -> bool {
+    fn registered_backend(
+        &self,
+        registration: &Arc<RegistrationGeneration>,
+    ) -> Option<&Arc<RoutedInferenceServerSnapshot>> {
         backend_index(&self.backends, registration.inference_server_id())
-            .is_ok_and(|index| Arc::ptr_eq(&self.backends[index].registration, registration))
+            .ok()
+            .map(|index| &self.backends[index])
+            .filter(|backend| Arc::ptr_eq(&backend.registration, registration))
     }
 
     fn backend_aggregate(&self) -> Option<(ModelStats, Duration, usize)> {
@@ -339,13 +344,13 @@ impl ClusterRoutingGeneration {
         registration: &Arc<RegistrationGeneration>,
         input_tokens: u64,
         priority: u32,
-        ttl: Duration,
+        ttl_for_rtt: impl FnOnce(Duration) -> Duration,
         metrics: Option<Arc<StargateMetrics>>,
         target: &RoutingTargetKey,
     ) -> Option<RoutingReservation> {
-        if !self.contains_registration(registration) {
-            return None;
-        }
+        // Read the RTT from the stored backend so a caller holding an older
+        // backend snapshot, such as a same-backend retry, gets the current RTT.
+        let ttl = ttl_for_rtt(self.registered_backend(registration)?.rtt);
         let snapshot_state = self.snapshot_state.as_mut()?;
         let pending = PendingClusterReservation::new(
             registration.clone(),
@@ -482,18 +487,20 @@ impl RoutedClusterState {
             registration,
             input_tokens,
             priority,
-            super::reservations::UNEXPIRING_TEST_RESERVATION_TTL,
+            |_rtt| super::reservations::UNEXPIRING_TEST_RESERVATION_TTL,
             None,
             &RoutingTargetKey::new(None, ""),
         )
     }
 
-    pub(super) fn reserve_backend_with_ttl(
+    /// Reserves the exact stored registration with a TTL derived from that
+    /// backend's current RTT.
+    pub(super) fn reserve_backend_with_rtt_ttl(
         &self,
         registration: &Arc<RegistrationGeneration>,
         input_tokens: u64,
         priority: u32,
-        ttl: Duration,
+        ttl_for_rtt: impl FnOnce(Duration) -> Duration,
         metrics: Arc<StargateMetrics>,
         target: &RoutingTargetKey,
     ) -> Option<RoutingReservation> {
@@ -501,7 +508,7 @@ impl RoutedClusterState {
             registration,
             input_tokens,
             priority,
-            ttl,
+            ttl_for_rtt,
             Some(metrics),
             target,
         )

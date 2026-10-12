@@ -122,21 +122,24 @@ impl ProxyRequestRun<'_> {
             }
         }
 
-        let reservation: Option<RoutingReservation> = selected.cluster.reserve_backend_with_ttl(
-            &chosen.registration,
-            self.request.request_inputs.input_tokens,
-            self.request.request_inputs.priority,
-            clamp_routing_reservation_ttl(
-                chosen.rtt,
-                self.app.routing_reservation_ttl_min,
-                self.app.routing_reservation_ttl_max,
-            ),
-            self.app.metrics.clone(),
-            &crate::routing_state::RoutingTargetKey::new(
-                self.routing_key().map(str::to_owned),
-                self.model_id(),
-            ),
-        );
+        let reservation: Option<RoutingReservation> =
+            selected.cluster.reserve_backend_with_rtt_ttl(
+                &chosen.registration,
+                self.request.request_inputs.input_tokens,
+                self.request.request_inputs.priority,
+                |rtt| {
+                    clamp_routing_reservation_ttl(
+                        rtt,
+                        self.app.routing_reservation_ttl_min,
+                        self.app.routing_reservation_ttl_max,
+                    )
+                },
+                self.app.metrics.clone(),
+                &crate::routing_state::RoutingTargetKey::new(
+                    self.routing_key().map(str::to_owned),
+                    self.model_id(),
+                ),
+            );
         record_proxy_attempt_start(self, selected, chosen);
 
         let upstream_span = proxy_upstream_attempt_span(self, selected, chosen);
@@ -695,6 +698,102 @@ mod tests {
         assert!(metrics.contains(
             "stargate_routing_reservations_active{model=\"model-a\",routing_key=\"tenant-a\"} 1"
         ));
+    }
+
+    #[tokio::test]
+    async fn same_backend_retry_reserves_with_the_current_backend_rtt() {
+        let mut app = test_proxy_app_state();
+        app.state = Arc::new(StargateState::new_with_metrics(app.metrics.clone()));
+        let target = RoutingTargetKey::new(Some("tenant-a".to_string()), "model-a");
+        let identity = RegistrationIdentity {
+            inference_server_id: "backend-a".to_string(),
+            cluster_id: "cluster-a".to_string(),
+            inference_server_url: "quic://127.0.0.1:5001".to_string(),
+            routing_key: target.routing_key.clone(),
+            reverse_tunnel: true,
+        };
+        let registration = app.state.begin_registration(&identity).unwrap();
+        let update = stargate_proto::pb::InferenceServerRegistration {
+            inference_server_id: identity.inference_server_id.clone(),
+            cluster_id: identity.cluster_id.clone(),
+            inference_server_url: identity.inference_server_url.clone(),
+            models: std::collections::HashMap::from([(
+                target.model_id.clone(),
+                stargate_proto::pb::InferenceServerModelRegistration {
+                    stats: Some(ModelStats::default()),
+                    status: InferenceServerStatus::Active.into(),
+                },
+            )]),
+            reverse_tunnel: true,
+        };
+        app.state
+            .apply_registration_update(
+                &registration,
+                &update,
+                true,
+                Some(Duration::from_millis(60)),
+            )
+            .await;
+        let resolution = app
+            .lb_router
+            .resolve_algorithm_override(&target.model_id, None)
+            .unwrap();
+        let selected = super::super::run::SelectedClusterRun::new(
+            app.state
+                .routing_target_snapshot(&target)
+                .await
+                .expect("registered backend should produce a target snapshot"),
+            resolution.selection(LoadBalancerCandidateChoice::with_rank_depth_1(0)),
+            0,
+        );
+        // A same-backend retry reuses the snapshot chosen for the first attempt.
+        let retained = selected
+            .cluster
+            .select_backend(&std::collections::HashSet::new())
+            .expect("registered backend should be selectable");
+        assert_eq!(retained.rtt, Duration::from_millis(60));
+
+        app.state
+            .apply_registration_update(
+                &registration,
+                &update,
+                true,
+                Some(Duration::from_millis(200)),
+            )
+            .await;
+        let request = PreparedProxyRequest {
+            lb_resolution: resolution,
+            request_inputs: ProxyRequestInputs {
+                target,
+                input_tokens: 10,
+                priority: 0,
+                max_wait_ms: None,
+                request_slo_ms: None,
+                cache_affinity_key: None,
+                routing_algorithm_override: None,
+            },
+            endpoint_name: "chat_completions",
+            method: Method::POST,
+            path_and_query: "/v1/chat/completions".to_string(),
+            forwarded_headers: HeaderMap::new(),
+            retry_deadline: None,
+            request_start: Instant::now(),
+            replay_body: ReplayableRequestBody::new(&HeaderMap::new(), Body::empty(), 1024)
+                .unwrap(),
+        };
+        let mut run = ProxyRequestRun::new(&app, request);
+        let _ = run.run_proxy_attempt(&selected, &retained).await;
+
+        let ttl = app
+            .metrics
+            .routing_reservation_ttl_seconds(Some("tenant-a"), "model-a");
+        assert_eq!(ttl.get_sample_count(), 1);
+        assert_eq!(
+            Duration::from_secs_f64(ttl.get_sample_sum()),
+            Duration::from_millis(200),
+            "a new dispatch must use the backend's current RTT, not the retained snapshot"
+        );
+        app.state.end_registration(registration).await;
     }
 
     fn finish_response(

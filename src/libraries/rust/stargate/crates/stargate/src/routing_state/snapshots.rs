@@ -140,6 +140,7 @@ impl SelectedRoutedCluster {
             .reserve_backend(registration, input_tokens, priority)
     }
 
+    #[cfg(test)]
     pub(crate) fn reserve_backend_with_ttl(
         &self,
         registration: &Arc<RegistrationGeneration>,
@@ -149,11 +150,32 @@ impl SelectedRoutedCluster {
         metrics: Arc<StargateMetrics>,
         target: &RoutingTargetKey,
     ) -> Option<RoutingReservation> {
-        self.owner.reserve_backend_with_ttl(
+        self.reserve_backend_with_rtt_ttl(
             registration,
             input_tokens,
             priority,
-            ttl,
+            |_rtt| ttl,
+            metrics,
+            target,
+        )
+    }
+
+    /// Reserves `registration` if it is still the stored backend, deriving
+    /// the TTL from that backend's current RTT rather than a caller snapshot.
+    pub(crate) fn reserve_backend_with_rtt_ttl(
+        &self,
+        registration: &Arc<RegistrationGeneration>,
+        input_tokens: u64,
+        priority: u32,
+        ttl_for_rtt: impl FnOnce(Duration) -> Duration,
+        metrics: Arc<StargateMetrics>,
+        target: &RoutingTargetKey,
+    ) -> Option<RoutingReservation> {
+        self.owner.reserve_backend_with_rtt_ttl(
+            registration,
+            input_tokens,
+            priority,
+            ttl_for_rtt,
             metrics,
             target,
         )
