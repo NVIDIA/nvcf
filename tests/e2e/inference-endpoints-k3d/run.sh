@@ -541,6 +541,35 @@ chat_without_key_is_401() {
   [ "${code}" = "401" ]
 }
 
+# Responses API tool cases. The gateway always asks the backend for a stream,
+# so the sample's streamed tool-call events are what the gateway relays or
+# aggregates for both stream settings.
+RESPONSES_NS_TOOLS='[{"type":"namespace","name":"diagnostics","description":"Compatibility test tools.","tools":[{"type":"function","name":"echo","description":"Return the value.","parameters":{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}},{"type":"custom","name":"apply_patch","format":{"type":"text"}}]}]'
+RESPONSES_CUSTOM_TOOL='[{"type":"custom","name":"apply_patch","description":"Apply a patch.","format":{"type":"grammar","syntax":"lark","definition":"start: /.+/"}}]'
+RESPONSES_USER='{"role":"user","content":[{"type":"input_text","text":"call echo"}]}'
+RESPONSES_ECHO_CALL='{"type":"function_call","namespace":"diagnostics","call_id":"call_e2e_1","name":"echo","arguments":"{\"value\":\"NAMESPACE_OK\"}"}'
+RESPONSES_PATCH_CALL='{"type":"custom_tool_call","call_id":"call_e2e_2","name":"apply_patch","input":"*** Begin Patch"}'
+
+# responses_case STATUS BODY_MEMBERS [PATTERN...]: POSTs /v1/responses with the
+# model added to BODY_MEMBERS and requires the HTTP STATUS and every PATTERN
+# (a fixed string) in the response body.
+responses_case() {
+  local want="$1" members="$2" out="${E2E_WORK_DIR}/responses.out" code pattern
+  shift 2
+  code="$(gw POST /v1/responses "${out}" \
+    -H @"${AUTH_HEADER_FILE}" \
+    -H 'Content-Type: application/json' \
+    --data "{\"model\":\"${MODEL}\",${members}}")"
+  LAST_OBSERVED="HTTP ${code}; body: $(head -c 300 "${out}" 2>/dev/null | tr '\n' ' ')"
+  [ "${code}" = "${want}" ] || return 1
+  for pattern in "$@"; do
+    if ! grep -qF -- "${pattern}" "${out}"; then
+      LAST_OBSERVED="missing ${pattern}; ${LAST_OBSERVED}"
+      return 1
+    fi
+  done
+}
+
 # ---------------------------------------------------------------------------
 # Diagnostics and summary
 
@@ -1061,6 +1090,32 @@ main() {
   expect "POST /v1/chat/completions with key streams SSE (200)" "${T}" chat_stream_ok || true
   log "chat stream: ${LAST_OBSERVED}"
   expect "POST /v1/chat/completions without key is 401" 30 chat_without_key_is_401 || true
+  expect "responses: namespace function call, stream=false" 30 responses_case 200 \
+    '"stream":false,"tools":'"${RESPONSES_NS_TOOLS}"',"input":"please call echo value=NAMESPACE_OK"' \
+    '"type":"function_call"' '"namespace":"diagnostics"' '"name":"echo"' 'NAMESPACE_OK' || true
+  expect "responses: namespace function call, stream=true" 30 responses_case 200 \
+    '"stream":true,"tools":'"${RESPONSES_NS_TOOLS}"',"input":"please call echo value=NAMESPACE_OK"' \
+    'event: response.function_call_arguments.delta' 'event: response.function_call_arguments.done' \
+    'event: response.completed' '"namespace":"diagnostics"' 'NAMESPACE_OK' || true
+  expect "responses: array function_call_output, stream=false" 30 responses_case 200 \
+    '"stream":false,"tools":'"${RESPONSES_NS_TOOLS}"',"input":['"${RESPONSES_USER},${RESPONSES_ECHO_CALL}"',{"type":"function_call_output","call_id":"call_e2e_1","output":[{"type":"input_text","text":"NAMESPACE_OK"}]}]' \
+    'The diagnostics.echo tool returned: NAMESPACE_OK' || true
+  expect "responses: array function_call_output, stream=true" 30 responses_case 200 \
+    '"stream":true,"tools":'"${RESPONSES_NS_TOOLS}"',"input":['"${RESPONSES_USER},${RESPONSES_ECHO_CALL}"',{"type":"function_call_output","call_id":"call_e2e_1","output":[{"type":"input_text","text":"NAMESPACE_OK"}]}]' \
+    'event: response.completed' 'The diagnostics.echo tool returned: NAMESPACE_OK' || true
+  expect "responses: top-level custom tool call, stream=false" 30 responses_case 200 \
+    '"stream":false,"tools":'"${RESPONSES_CUSTOM_TOOL}"',"tool_choice":{"type":"custom","name":"apply_patch"},"input":"patch it"' \
+    '"type":"custom_tool_call"' '"name":"apply_patch"' '"call_id":"call_' || true
+  expect "responses: namespaced custom tool call, stream=true" 30 responses_case 200 \
+    '"stream":true,"tools":'"${RESPONSES_NS_TOOLS}"',"input":"call diagnostics.apply_patch input=hello"' \
+    'event: response.custom_tool_call_input.delta' 'event: response.custom_tool_call_input.done' \
+    '"namespace":"diagnostics"' || true
+  expect "responses: array custom_tool_call_output, stream=false" 30 responses_case 200 \
+    '"stream":false,"tools":'"${RESPONSES_CUSTOM_TOOL}"',"input":['"${RESPONSES_USER},${RESPONSES_PATCH_CALL}"',{"type":"custom_tool_call_output","call_id":"call_e2e_2","output":[{"type":"input_text","text":"applied"}]}]' \
+    'The apply_patch tool returned: applied' || true
+  expect "responses: malformed function_call_output names the output field (400)" 30 responses_case 400 \
+    '"stream":false,"input":['"${RESPONSES_ECHO_CALL}"',{"type":"function_call_output","call_id":"call_e2e_1","output":42}]' \
+    'output' || true
   step_done
 
   section "Failure path: backend scaled to zero"

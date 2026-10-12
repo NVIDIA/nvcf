@@ -31,7 +31,7 @@ walks through the same setup step by step.
   | `docker.io/src/invocation-plane-services/llm-api-gateway:latest` | `bazel run //src/invocation-plane-services/llm-api-gateway:image_load` |
   | `docker.io/src/compute-plane-services/pylon-operator:latest` | `bazel run //src/compute-plane-services/pylon-operator:image_load` |
   | `docker.io/src/libraries/rust/stargate/crates/pylon:latest` | `bazel run //src/libraries/rust/stargate/crates/pylon:image_load` |
-  | `docker.io/library/openai-compatible-sample:e2e` | the OpenAI-compatible sample server from `examples/function-samples/openai-compatible-sample`; it serves `GET /health`, `GET /v1/models` with model `test-model`, and `POST /v1/chat/completions` on port 8000. Build and import it with `make sample-image` |
+  | `docker.io/library/openai-compatible-sample:e2e` | the OpenAI-compatible sample server from `examples/function-samples/openai-compatible-sample`; it serves `GET /health`, `GET /v1/models` with model `test-model`, `POST /v1/chat/completions`, and `POST /v1/responses` with mock tool calls on port 8000. Build and import it with `make sample-image` |
 
   For example:
 
@@ -232,6 +232,12 @@ Assertions, each polled for up to `E2E_TIMEOUT` seconds:
   - A streaming `POST /v1/chat/completions` with the API key returns 200 and
     Server-Sent Events `data:` lines ending in `data: [DONE]`.
   - The same request without a key returns 401.
+  - `POST /v1/responses` tool cases, which the sample backend answers with
+    mock tool calls: a namespace function call with and without streaming, an
+    array `function_call_output` answered with text, a top-level custom tool
+    call, a namespaced custom tool call streamed, an array
+    `custom_tool_call_output`, and a malformed `function_call_output` returned
+    as 400 by the gateway with the `output` field named.
 - Backend scaled to zero: `Ready=False/NoReadyEndpoints` while `Registered`
   stays `True`. Under `backend at 0`, `GET /v1/registry` shows the model
   `Unhealthy` with one registered and no healthy server, `GET /v1/models`
