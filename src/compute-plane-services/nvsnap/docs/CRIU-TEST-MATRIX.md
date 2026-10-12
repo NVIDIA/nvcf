@@ -24,17 +24,25 @@ flowchart LR
 
 ## How to run a case
 
-Each case is a values file for one chart, `tests/criu-matrix/chart`, deployable
-as an NVCF Helm function.
+Each case is a values file for one chart, `tests/criu-matrix/chart`.
+`create-functions.sh` turns every case into an NVCF Helm function, and every
+single-pod Deployment case into a container function as well, since NVCF
+builds the two kinds of pod differently:
 
 ```sh
 cd tests/criu-matrix
-helm package chart
-helm push nvsnap-criu-matrix-0.1.0.tgz oci://<registry>/<namespace>
-# Create a Helm function from the chart with cases/<case>.yaml as its values
-# override, deploy it on a CRIU cluster (agent.captureMethod=criu), wait for
-# Ready, wait for the capture, undeploy, deploy again.
+# Every case for arm64 nodes, as nvsnap-reg-<case> (Helm) and
+# nvsnap-reg-ctr-<case> (container). PREFIX=tst for ad hoc tests,
+# MODE=helm|container for one kind, CASES="..." for some cases,
+# DRY_RUN=1 to print the commands.
+ORG=<org> NGC_CLI_API_KEY=... HF_TOKEN=... NGC_API_KEY=... ./create-functions.sh
 ```
+
+Each case is pushed as its own chart version, with the case's values as the
+defaults, so a deployment needs no configuration. Deploy a function on a CRIU
+cluster (`agent.captureMethod=criu`), wait for Ready and the capture,
+undeploy, deploy again. A case declares its inference URL, health path,
+secrets, node architectures and required cluster features under `function:`.
 
 A multi-pod case is captured only on request: its pods carry
 `nvsnap.io/criu-capture: "true"` (`criuCapture: true`), or the cluster's chart
@@ -65,7 +73,8 @@ with the cold deploy of the same case.
 | `pod-bare` | Pod | 1 | `exec` | no controller, no instance | never captured | Verified |
 | `sts-tp2` | StatefulSet | 2 | `exec`, TP=2 over the network | group capture, address remap of the ranks' connections | restored | Verified: cold 150 s, restored 39 s |
 | `lws-tp2` | LeaderWorkerSet | 2 | `exec`, TP=2 | LWS grouping and rank | restored | New (needs the LWS CRD) |
-| `deploy-sglang` | Deployment | 1 | SGLang, pid 1 | a second engine | restored | New (needs an image for the node architecture) |
+| `deploy-sglang` | Deployment | 1 | SGLang, pid 1 | a second engine | restored | New |
+| `dynamo-grove-tp2` | DynamoGraphDeployment | 2 + frontend | Dynamo vLLM worker over two nodes | Grove PodCliques, the shape production Dynamo functions run | restored | New (needs the Dynamo operator) |
 | `deploy-noshell` | Deployment | 1 | `exec`, image with no shell | every injected step (model wait, cache seed, prewarm, placeholder) runs without `/bin/sh` | restored | New (needs a GPU image without a shell) |
 
 Real models, deployed as their own functions:
@@ -74,6 +83,7 @@ Real models, deployed as their own functions:
 | --- | --- | --- | --- |
 | 2-pod TP=8 vLLM (about 1.2 TB GPU memory per pod), NVCF Helm StatefulSet | multi-node NVLink, gpushare fabric | group capture, cross-node restore from L2 | Verified: cold 14m33s, same node 3m24s, other nodes 6m26s |
 | Dynamo, aggregated and disaggregated (`examples/function-samples/helmchart-samples/dynamo-operator-sample`) | frontend, workers, etcd, NATS | non-root engine, connections to etcd and NATS after restore, prefill/decode KV transfer | In progress |
+| vLLM Llama 3.1 8B and 70B, gpt-oss 120B, DeepSeek V4 Pro, GLM 5.1, Qwen3.6 35B, Nemotron 3 Nano; SGLang Gemma 4 31B, DeepSeek V4 Flash, Qwen3.5 397B, MiniMax M2.7 and M3, Kimi K2.6; NIM Llama 3.1 8B; e5-mistral embeddings | one case each under `cases/`, TP=8 as two pods of four GPUs | each engine's own capture and restore | New |
 
 ## Restore paths
 
@@ -117,7 +127,7 @@ Without it rank 0 fails at startup and the other ranks wait for it forever.
 
 - Ray-based multi-node engines (`ray start --address`): not recognized as
   multi-node, so a Ray worker pod could be captured alone.
-- Grove instances (Dynamo operator): grouping is implemented and unit-tested,
-  not yet run on a cluster.
+- Grove instances (Dynamo operator): grouping is implemented and unit-tested;
+  `dynamo-grove-tp2` is the case that runs it, not yet run on a cluster.
 - Pods with an IMEX channel restore only when the channel is the same on the
   new pods.
