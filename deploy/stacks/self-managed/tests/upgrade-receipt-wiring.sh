@@ -53,4 +53,22 @@ last_stage="$(ls "$stack_dir"/helmfile.d/*.gotmpl | sort | tail -1)"
 [[ "$(basename "$last_stage")" == "04-upgrade-receipt.yaml.gotmpl" ]] \
   || fail "receipt is not the last stage; it would record a version before the stack finished applying"
 
+custom="$(cd "$stack_dir" && HELMFILE_ENV=base helmfile \
+  --file helmfile.d/04-upgrade-receipt.yaml.gotmpl \
+  --state-values-set upgradeReceipt.image.registry=mirror.example.com \
+  --state-values-set upgradeReceipt.image.repository=maintenance/helper \
+  --state-values-set upgradeReceipt.image.tag=9.8.7-sm.1 template)"
+test "$(yq -r 'select(.kind == "Job") | .spec.template.spec.containers[0].image' <<<"$custom")" = \
+  mirror.example.com/maintenance/helper:9.8.7-sm.1 ||
+  fail "receipt image overrides did not reach the rendered Job"
+
+empty="$(cd "$stack_dir" && HELMFILE_ENV=base helmfile \
+  --file helmfile.d/04-upgrade-receipt.yaml.gotmpl \
+  --state-values-set upgradeReceipt.image.registry= \
+  --state-values-set upgradeReceipt.image.repository= \
+  --state-values-set upgradeReceipt.image.tag= template)"
+test "$(yq -r 'select(.kind == "Job") | .spec.template.spec.containers[0].image' <<<"$empty")" = \
+  "$(yq -r 'select(.kind == "Job") | .spec.template.spec.containers[0].image' <<<"$rendered")" ||
+  fail "empty receipt image overrides must preserve the existing default"
+
 echo "PASS: upgrade-receipt-wiring"

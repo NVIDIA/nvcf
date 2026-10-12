@@ -22,8 +22,11 @@ releases:
     values:
       - stackVersion: {{ readFile "../VERSION" | trim | quote }}
         image:
-          registry: {{ .Values.global.image.registry | quote }}
-          repository: {{ .Values.global.image.repository }}/alpine-k8s
+          registry: {{ dig "upgradeReceipt" "image" "registry" "" .Values | default .Values.global.image.registry | quote }}
+          repository: {{ dig "upgradeReceipt" "image" "repository" "" .Values | default (printf "%s/alpine-k8s" .Values.global.image.repository) | quote }}
+          {{- with dig "upgradeReceipt" "image" "tag" "" .Values }}
+          tag: {{ . | quote }}
+          {{- end }}
         {{- with .Values.global.imagePullSecrets }}
         imagePullSecrets:
           {{- toYaml . | nindent 10 }}

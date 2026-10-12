@@ -506,22 +506,11 @@ openbao:
       tag: 9.8.7-maintenance
     agentImage:
       tag: 9.8.7-maintenance
-cassandra:
-  initialization:
-    image:
-      registry: mirror.example.com
-      repository: maintenance/cassandra-helper
-      tag: 9.8.7-maintenance
 nats:
   container:
     image:
       registry: mirror.example.com
       repository: maintenance/nats
-      tag: 9.8.7-maintenance
-  nkeyJob:
-    image:
-      registry: mirror.example.com
-      repository: maintenance/nats-helper
       tag: 9.8.7-maintenance
 nvctApi:
   remoteConfig:
@@ -541,7 +530,7 @@ for path in .openbao.server.image .openbao.injector.image .openbao.injector.agen
   test "$(yq -r "$path.tag" "$work_dir/maintenance-values.yaml")" = 9.8.7-maintenance ||
     fail "$path image tag override was not forwarded"
 done
-for path in .cassandra.initialization.image .nats.container.image .nats.nkeyJob.image; do
+for path in .nats.container.image; do
   for field in registry repository tag; do
     expected="$(yq -r "$path.$field" "$environment_file")"
     actual="$(yq -r "$path.$field" "$work_dir/maintenance-values.yaml")"
@@ -585,19 +574,8 @@ openbao:
       tag: ""
     agentImage:
       tag: ""
-cassandra:
-  initialization:
-    image:
-      registry: ""
-      repository: ""
-      tag: ""
 nats:
   container:
-    image:
-      registry: ""
-      repository: ""
-      tag: ""
-  nkeyJob:
     image:
       registry: ""
       repository: ""
@@ -610,10 +588,10 @@ render_values "$work_dir/empty-maintenance-values.yaml"
 for component in apikeys invocation grpcproxy rateLimiter reval; do
   assert_yaml_path_absent "$work_dir/empty-maintenance-values.yaml" ".$component.image.tag" "$component empty override"
 done
-for path in .openbao.server.image .openbao.injector.image .openbao.injector.agentImage .cassandra.initialization.image .nats.nkeyJob.image; do
+for path in .openbao.server.image .openbao.injector.image .openbao.injector.agentImage; do
   assert_yaml_path_absent "$work_dir/empty-maintenance-values.yaml" "$path.tag" "$path empty tag override"
 done
-for path in .cassandra.initialization.image .nats.container.image .nats.nkeyJob.image; do
+for path in .nats.container.image; do
   for field in registry repository; do
     expected="$(yq -r "$path.$field" "$work_dir/default-values.yaml")"
     actual="$(yq -r "$path.$field" "$work_dir/empty-maintenance-values.yaml")"

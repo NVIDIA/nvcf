@@ -65,11 +65,8 @@ cassandra:
       {{- end }}
   initialization:
     image:
-      registry: {{ dig "cassandra" "initialization" "image" "registry" "" .Values | default .Values.global.image.registry }}
-      repository: {{ dig "cassandra" "initialization" "image" "repository" "" .Values | default (printf "%s/alpine-k8s" .Values.global.image.repository) }}
-      {{- with dig "cassandra" "initialization" "image" "tag" "" .Values }}
-      tag: {{ . | quote }}
-      {{- end }}
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/alpine-k8s
   image:
     registry: {{ dig "cassandra" "image" "registry" "" .Values | default .Values.global.image.registry }}
     repository: {{ dig "cassandra" "image" "repository" "" .Values | default (printf "%s/cassandra" .Values.global.image.repository) }}
@@ -278,11 +275,8 @@ nats:
         tag: 0.19.7-nonroot
   nkeyJob:
     image:
-      registry: {{ dig "nats" "nkeyJob" "image" "registry" "" .Values | default .Values.global.image.registry }}
-      repository: {{ dig "nats" "nkeyJob" "image" "repository" "" .Values | default (printf "%s/alpine-k8s" .Values.global.image.repository) }}
-      {{- with dig "nats" "nkeyJob" "image" "tag" "" .Values }}
-      tag: {{ . | quote }}
-      {{- end }}
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/alpine-k8s
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
   {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   podTemplate:
