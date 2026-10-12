@@ -65,8 +65,11 @@ cassandra:
       {{- end }}
   initialization:
     image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/alpine-k8s
+      registry: {{ dig "cassandra" "initialization" "image" "registry" "" .Values | default .Values.global.image.registry }}
+      repository: {{ dig "cassandra" "initialization" "image" "repository" "" .Values | default (printf "%s/alpine-k8s" .Values.global.image.repository) }}
+      {{- with dig "cassandra" "initialization" "image" "tag" "" .Values }}
+      tag: {{ . | quote }}
+      {{- end }}
   image:
     registry: {{ dig "cassandra" "image" "registry" "" .Values | default .Values.global.image.registry }}
     repository: {{ dig "cassandra" "image" "repository" "" .Values | default (printf "%s/cassandra" .Values.global.image.repository) }}
@@ -162,9 +165,15 @@ openbao:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/oss-vault-k8s
+      {{- with dig "openbao" "injector" "image" "tag" "" .Values }}
+      tag: {{ . | quote }}
+      {{- end }}
     agentImage:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nvcf-openbao
+      {{- with dig "openbao" "injector" "agentImage" "tag" "" .Values }}
+      tag: {{ . | quote }}
+      {{- end }}
     {{- with include "nvcf.nodeSelector" (dict "type" "vault" "selectors" .Values.global.nodeSelectors) }}
     {{- . | nindent 4 }}
     {{- end }}
@@ -195,6 +204,9 @@ openbao:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nvcf-openbao
+      {{- with dig "openbao" "server" "image" "tag" "" .Values }}
+      tag: {{ . | quote }}
+      {{- end }}
     {{- with include "nvcf.nodeSelector" (dict "type" "vault" "selectors" .Values.global.nodeSelectors) }}
     {{- . | nindent 4 }}
     {{- end }}
@@ -231,9 +243,9 @@ nats:
         {{- toYaml . | nindent 8 }}
     {{- end }}
     image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/nats-server
-      tag: 2.14.6-alpine3.22
+      registry: {{ dig "nats" "container" "image" "registry" "" .Values | default .Values.global.image.registry }}
+      repository: {{ dig "nats" "container" "image" "repository" "" .Values | default (printf "%s/nats-server" .Values.global.image.repository) }}
+      tag: {{ dig "nats" "container" "image" "tag" "" .Values | default "2.14.6-alpine3.22" | quote }}
   {{- $natsReloaderRegistry := dig "nats" "reloader" "image" "registry" "" .Values }}
   {{- $natsReloaderRepository := dig "nats" "reloader" "image" "repository" "" .Values }}
   {{- $natsReloaderTag := dig "nats" "reloader" "image" "tag" "" .Values }}
@@ -266,8 +278,11 @@ nats:
         tag: 0.19.7-nonroot
   nkeyJob:
     image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/alpine-k8s
+      registry: {{ dig "nats" "nkeyJob" "image" "registry" "" .Values | default .Values.global.image.registry }}
+      repository: {{ dig "nats" "nkeyJob" "image" "repository" "" .Values | default (printf "%s/alpine-k8s" .Values.global.image.repository) }}
+      {{- with dig "nats" "nkeyJob" "image" "tag" "" .Values }}
+      tag: {{ . | quote }}
+      {{- end }}
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
   {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   podTemplate:

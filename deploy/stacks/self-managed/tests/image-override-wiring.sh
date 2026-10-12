@@ -497,6 +497,32 @@ rateLimiter:
 reval:
   image:
     tag: 9.8.7-maintenance
+openbao:
+  server:
+    image:
+      tag: 9.8.7-maintenance
+  injector:
+    image:
+      tag: 9.8.7-maintenance
+    agentImage:
+      tag: 9.8.7-maintenance
+cassandra:
+  initialization:
+    image:
+      registry: mirror.example.com
+      repository: maintenance/cassandra-helper
+      tag: 9.8.7-maintenance
+nats:
+  container:
+    image:
+      registry: mirror.example.com
+      repository: maintenance/nats
+      tag: 9.8.7-maintenance
+  nkeyJob:
+    image:
+      registry: mirror.example.com
+      repository: maintenance/nats-helper
+      tag: 9.8.7-maintenance
 nvctApi:
   remoteConfig:
     configData:
@@ -511,6 +537,17 @@ for component in apikeys invocation grpcproxy rateLimiter reval; do
   test "$(yq -r ".$component.image.tag" "$work_dir/maintenance-values.yaml")" = 9.8.7-maintenance ||
     fail "$component image tag override was not forwarded"
 done
+for path in .openbao.server.image .openbao.injector.image .openbao.injector.agentImage; do
+  test "$(yq -r "$path.tag" "$work_dir/maintenance-values.yaml")" = 9.8.7-maintenance ||
+    fail "$path image tag override was not forwarded"
+done
+for path in .cassandra.initialization.image .nats.container.image .nats.nkeyJob.image; do
+  for field in registry repository tag; do
+    expected="$(yq -r "$path.$field" "$environment_file")"
+    actual="$(yq -r "$path.$field" "$work_dir/maintenance-values.yaml")"
+    test "$actual" = "$expected" || fail "$path.$field override was not forwarded"
+  done
+done
 for sidecar in init-container ess-agent-container; do
   expected="$(yq -r ".nvctApi.remoteConfig.configData.nvct.sidecars.\"$sidecar\"" "$environment_file")"
   actual="$(yq -r ".nvctApi.remoteConfig.configData.nvct.sidecars.\"$sidecar\"" "$work_dir/maintenance-values.yaml")"
@@ -520,6 +557,10 @@ test "$(yq -r '.nvctApi.remoteConfig.configData.nvct.retained-option' "$work_dir
   fail "task configuration fields must be preserved"
 
 write_env <<'EOF'
+global:
+  image:
+    registry: nvcr.io
+    repository: test/nvcf
 apikeys:
   image:
     tag: ""
@@ -535,6 +576,32 @@ rateLimiter:
 reval:
   image:
     tag: ""
+openbao:
+  server:
+    image:
+      tag: ""
+  injector:
+    image:
+      tag: ""
+    agentImage:
+      tag: ""
+cassandra:
+  initialization:
+    image:
+      registry: ""
+      repository: ""
+      tag: ""
+nats:
+  container:
+    image:
+      registry: ""
+      repository: ""
+      tag: ""
+  nkeyJob:
+    image:
+      registry: ""
+      repository: ""
+      tag: ""
 nvctApi:
   remoteConfig:
     configData: {}
@@ -543,6 +610,19 @@ render_values "$work_dir/empty-maintenance-values.yaml"
 for component in apikeys invocation grpcproxy rateLimiter reval; do
   assert_yaml_path_absent "$work_dir/empty-maintenance-values.yaml" ".$component.image.tag" "$component empty override"
 done
+for path in .openbao.server.image .openbao.injector.image .openbao.injector.agentImage .cassandra.initialization.image .nats.nkeyJob.image; do
+  assert_yaml_path_absent "$work_dir/empty-maintenance-values.yaml" "$path.tag" "$path empty tag override"
+done
+for path in .cassandra.initialization.image .nats.container.image .nats.nkeyJob.image; do
+  for field in registry repository; do
+    expected="$(yq -r "$path.$field" "$work_dir/default-values.yaml")"
+    actual="$(yq -r "$path.$field" "$work_dir/empty-maintenance-values.yaml")"
+    test "$actual" = "$expected" || fail "$path.$field empty override must preserve its default"
+  done
+done
+test "$(yq -r '.nats.container.image.tag' "$work_dir/empty-maintenance-values.yaml")" = \
+  "$(yq -r '.nats.container.image.tag' "$work_dir/default-values.yaml")" ||
+  fail "nats container empty tag must preserve the stack default"
 assert_yaml_path_absent "$work_dir/empty-maintenance-values.yaml" .nvctApi.remoteConfig "task empty configuration"
 
 write_env <<'EOF'
