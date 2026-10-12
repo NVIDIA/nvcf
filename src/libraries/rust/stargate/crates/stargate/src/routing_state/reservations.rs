@@ -30,7 +30,9 @@ pub(super) struct PendingClusterReservation {
     pub(super) registration: Option<Arc<RegistrationGeneration>>,
     pub(super) input_tokens: u64,
     pub(super) priority: u32,
-    expires_at: Instant,
+    // `None` when the TTL is too large to represent as an `Instant`; such a
+    // reservation only ends by release or backend removal.
+    expires_at: Option<Instant>,
     active: AtomicBool,
     metrics: Option<Arc<StargateMetrics>>,
     routing_key: Option<String>,
@@ -71,6 +73,9 @@ impl PendingClusterReservation {
             .map_or_else(String::new, |registration| {
                 registration.inference_server_id().to_string()
             });
+        // Compute expiry before touching metrics so an unrepresentable TTL
+        // cannot panic after the active gauge was incremented.
+        let expires_at = now.checked_add(ttl);
         if let Some(metrics) = &metrics {
             metrics
                 .inc_routing_reservations_active(target.routing_key.as_deref(), &target.model_id);
@@ -83,7 +88,7 @@ impl PendingClusterReservation {
             registration,
             input_tokens,
             priority,
-            expires_at: now + ttl,
+            expires_at,
             active: AtomicBool::new(true),
             metrics,
             routing_key: target.routing_key.clone(),
@@ -98,10 +103,11 @@ impl PendingClusterReservation {
     #[cfg(test)]
     pub(super) fn expires_at(&self) -> Instant {
         self.expires_at
+            .expect("test reservation should have a representable expiry")
     }
 
     pub(super) fn is_active_at(&self, now: Instant) -> bool {
-        if now >= self.expires_at {
+        if self.expires_at.is_some_and(|expires_at| now >= expires_at) {
             self.deactivate();
         }
         self.is_active()
@@ -278,5 +284,70 @@ mod tests {
         assert!(active_gauge().contains(
             "stargate_routing_reservations_active{model=\"model\",routing_key=\"routing\"} 0"
         ));
+    }
+
+    fn active_reservation_gauge(metrics: &StargateMetrics) -> String {
+        let mut encoded = Vec::new();
+        prometheus::TextEncoder::new()
+            .encode(&metrics.registry().gather(), &mut encoded)
+            .expect("metrics should encode");
+        String::from_utf8(encoded)
+            .expect("metrics should be UTF-8")
+            .lines()
+            .find(|line| line.starts_with("stargate_routing_reservations_active{"))
+            .expect("reservation gauge series should exist")
+            .to_string()
+    }
+
+    #[test]
+    fn dropping_last_reservation_owner_decrements_active_gauge() {
+        let target = RoutingTargetKey::new(Some("routing".to_string()), "model");
+        let metrics = StargateMetrics::new().expect("metrics should initialize");
+        let pending = PendingClusterReservation::new_at(
+            None,
+            1,
+            0,
+            Instant::now(),
+            Duration::from_millis(60),
+            Some(metrics.clone()),
+            &target,
+        );
+        let token = RoutingReservation(Arc::clone(&pending));
+        assert!(active_reservation_gauge(&metrics).ends_with(" 1"));
+
+        drop(pending);
+        assert!(
+            active_reservation_gauge(&metrics).ends_with(" 1"),
+            "a remaining owner keeps the reservation active"
+        );
+        drop(token);
+        assert!(
+            active_reservation_gauge(&metrics).ends_with(" 0"),
+            "dropping the last owner must settle the gauge"
+        );
+    }
+
+    #[test]
+    fn unrepresentable_ttl_does_not_panic_or_leak_the_active_gauge() {
+        let target = RoutingTargetKey::new(Some("routing".to_string()), "model");
+        let metrics = StargateMetrics::new().expect("metrics should initialize");
+        let dispatched_at = Instant::now();
+        let pending = PendingClusterReservation::new_at(
+            None,
+            1,
+            0,
+            dispatched_at,
+            Duration::MAX,
+            Some(metrics.clone()),
+            &target,
+        );
+
+        assert!(active_reservation_gauge(&metrics).ends_with(" 1"));
+        assert!(
+            pending.is_active_at(dispatched_at + Duration::from_secs(365 * 24 * 60 * 60)),
+            "an unrepresentable expiry must not expire early"
+        );
+        RoutingReservation(pending).release();
+        assert!(active_reservation_gauge(&metrics).ends_with(" 0"));
     }
 }
