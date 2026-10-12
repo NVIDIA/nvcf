@@ -125,4 +125,17 @@ class UserStatusDtosJsonTest {
         assertThat(json.has("limit")).isFalse();
         assertThat(json.get("accounts").get(0).has("issuerServices")).isFalse();
     }
+
+    @Test
+    void accountUserStatus_omitsIssuerServicesWhenListIsEmpty() throws Exception {
+        AccountUserStatus status = AccountUserStatus.builder()
+                .ncaId("account-a")
+                .status(KeyOwnerStatus.ACTIVE)
+                .issuerServices(List.of())
+                .build();
+
+        JsonNode json = mapper.readTree(mapper.writeValueAsString(status));
+
+        assertThat(json.has("issuerServices")).isFalse();
+    }
 }

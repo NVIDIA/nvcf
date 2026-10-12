@@ -41,5 +41,6 @@ public class AccountUserStatus {
 
     private KeyOwnerStatus status;
 
+    @JsonInclude(Include.NON_EMPTY)
     private List<IssuerUserStatus> issuerServices;
 }
