@@ -151,12 +151,12 @@ impl PulsarWaitAndWidenLoadBalancer {
         elapsed: Duration,
     ) -> LoadBalancerDecision {
         let ranking = self.ranking.compute_ranking(request, candidates);
-        if ranking.is_empty() {
-            return LoadBalancerDecision::Unavailable;
-        }
         // Session rules reorder a per-request copy of the ranking. Rank 1 has
         // no shortcut: it goes through queue admission, the affinity wait, and
-        // the affinity discount like every other affinity member.
+        // the affinity discount like every other affinity member. The plan is
+        // built before the empty-ranking check so the first decision always
+        // pins the session classification, even when no candidate has a
+        // usable Pulsar weight yet.
         let plan = session::plan_affinity(
             self.last_cluster_affinity,
             request,
@@ -167,6 +167,9 @@ impl PulsarWaitAndWidenLoadBalancer {
             self.affinity_input_tokens_scale,
         );
         let ranked_indices = &*plan.order;
+        if ranked_indices.is_empty() {
+            return LoadBalancerDecision::Unavailable;
+        }
         let affinity_wait = plan.affinity_wait;
         let band_widen_interval = self.band_widen_interval.unwrap_or(affinity_wait);
 
@@ -1395,6 +1398,43 @@ mod tests {
             assert_eq!(with_header, without);
             assert_eq!(hint.classification(), None);
         }
+    }
+
+    #[test]
+    fn empty_ranking_still_pins_first_classification() {
+        let target = target();
+        let mut unweighted = single_slot_candidates(1);
+        unweighted[0].stats.max_input_tps = None;
+        let hint = LastClusterHint::new(Some("cluster-1".to_string()));
+        let hybrid = session_hybrid("empty-ranking-seed", true, |_| {});
+        let request = session_request(&target, 0, &hint);
+
+        assert_eq!(
+            hybrid.decide_at(&request, &unweighted, Duration::ZERO),
+            LoadBalancerDecision::Unavailable
+        );
+        assert_eq!(
+            hint.classification(),
+            Some(SessionClassification {
+                state: SessionState::Stale,
+                promoted: false,
+            })
+        );
+
+        // The hinted cluster joins before the retry. The request stays stale:
+        // no promotion and no affinity wait, so a free cluster wins at once.
+        let mut candidates = single_slot_candidates(3);
+        candidates[1].stats.num_running_queries = 1;
+        let choice = hybrid
+            .decide_at(&request, &candidates, Duration::ZERO)
+            .selected()
+            .expect("stale session must not wait for the hinted cluster");
+        assert_ne!(choice.candidate_index, 1);
+        assert_eq!(
+            hint.classification()
+                .map(|classification| classification.state),
+            Some(SessionState::Stale)
+        );
     }
 
     #[test]
