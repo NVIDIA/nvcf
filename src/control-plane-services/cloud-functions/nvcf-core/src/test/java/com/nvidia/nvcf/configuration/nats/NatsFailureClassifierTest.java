@@ -118,6 +118,10 @@ class NatsFailureClassifierTest {
             "invalid peer certificate: Expired|TLS_CERT_EXPIRED",
             "certificate verify failed|TLS_VERIFICATION",
             "tls: handshake failure|TLS",
+            "SSL handshake failed|TLS",
+            "TLSv1.3 alert received|TLS",
+            "classloader failed|OTHER",
+            "outlets unavailable|OTHER",
             "operation timed out|TIMEOUT",
             "something odd|OTHER"
     })

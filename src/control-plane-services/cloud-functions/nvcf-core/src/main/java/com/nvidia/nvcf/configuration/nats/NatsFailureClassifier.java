@@ -26,12 +26,17 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeoutException;
+import java.util.regex.Pattern;
 import javax.net.ssl.SSLException;
 
 /** Maps NATS client errors onto a small, fixed set of {@link NatsFailureReason}s. */
 public final class NatsFailureClassifier {
 
     private static final int MAX_CAUSE_DEPTH = 10;
+    // short terms must stand alone (optionally versioned, e.g. TLSv1.3) so "classloader" does
+    // not match "ssl"
+    private static final Pattern TLS_TERM =
+            Pattern.compile("(?<![a-z])(?:tls|ssl)(?:v?\\d[\\d.]*)?(?![a-z])|(?<![a-z])handshake");
 
     private NatsFailureClassifier() {
     }
@@ -87,7 +92,7 @@ public final class NatsFailureClassifier {
         if (msg.contains("certificate")) {
             return NatsFailureReason.TLS_VERIFICATION;
         }
-        if (msg.contains("tls") || msg.contains("ssl") || msg.contains("handshake")) {
+        if (TLS_TERM.matcher(msg).find()) {
             return NatsFailureReason.TLS;
         }
         if (msg.contains("timed out") || msg.contains("timeout")) {

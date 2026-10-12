@@ -18,8 +18,10 @@ package com.nvidia.nvcf.configuration.nats;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import io.nats.client.Connection;
+import io.nats.client.Connection.Status;
 import io.nats.client.ConnectionListener.Events;
 import io.nats.client.ErrorListener;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
@@ -57,7 +59,7 @@ public class NatsFailureTelemetry {
             @Override
             public void errorOccurred(Connection conn, String error) {
                 NatsFailureReason reason = NatsFailureClassifier.classifyMessage(error);
-                recordEventFailure(conn, reason);
+                recordEventFailure(conn, reason, endsConnection(reason, error));
                 log.error("nats error occurred {} reason={} {}", conn.getServerInfo(),
                           reason.tag(), error);
             }
@@ -65,7 +67,7 @@ public class NatsFailureTelemetry {
             @Override
             public void exceptionOccurred(Connection conn, Exception exp) {
                 NatsFailureReason reason = NatsFailureClassifier.classify(exp);
-                recordEventFailure(conn, reason);
+                recordEventFailure(conn, reason, false);
                 log.error("nats exception occurred {} reason={}", conn.getServerInfo(),
                           reason.tag(), exp);
             }
@@ -82,9 +84,20 @@ public class NatsFailureTelemetry {
         return Optional.ofNullable(lastFailures.get(conn));
     }
 
-    private void recordEventFailure(Connection conn, NatsFailureReason reason) {
-        lastFailures.put(conn, reason);
+    // Listener errors also fire for failures that leave the connection up (a rejected publish,
+    // an exception in an application callback). Only retain a reason as the cause of a down
+    // connection when the connection is not connected or the error ends it.
+    private void recordEventFailure(Connection conn, NatsFailureReason reason,
+                                    boolean endsConnection) {
         count(reason, SOURCE_EVENT);
+        if (endsConnection || conn.getStatus() != Status.CONNECTED) {
+            lastFailures.put(conn, reason);
+        }
+    }
+
+    private static boolean endsConnection(NatsFailureReason reason, String error) {
+        return reason == NatsFailureReason.AUTHENTICATION
+                && !error.toLowerCase(Locale.ROOT).contains("permissions violation");
     }
 
     private void count(NatsFailureReason reason, String source) {

@@ -24,6 +24,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.nats.client.AuthenticationException;
 import io.nats.client.Connection;
+import io.nats.client.Connection.Status;
 import io.nats.client.ConnectionListener.Events;
 import io.nats.client.ErrorListener;
 import java.io.IOException;
@@ -76,6 +77,7 @@ class NatsFailureTelemetryTest {
 
     @Test
     void runtimeErrorStringIsCountedAndRemembered() {
+        when(connA.getStatus()).thenReturn(Status.CONNECTED);
         listener.errorOccurred(connA, "Authorization Violation");
 
         assertThat(count("authentication", "event")).isEqualTo(1);
@@ -83,7 +85,29 @@ class NatsFailureTelemetryTest {
     }
 
     @Test
+    void failuresThatLeaveTheConnectionUpAreCountedButNotRetained() {
+        when(connA.getStatus()).thenReturn(Status.CONNECTED);
+
+        listener.errorOccurred(connA, "Permissions Violation for Publish to \"foo.bar\"");
+        listener.exceptionOccurred(connA, new IllegalStateException("callback failed"));
+
+        assertThat(count("authentication", "event")).isEqualTo(1);
+        assertThat(count("other", "event")).isEqualTo(1);
+        assertThat(telemetry.lastFailure(connA)).isEmpty();
+    }
+
+    @Test
+    void failureWhileNotConnectedIsRetained() {
+        when(connA.getStatus()).thenReturn(Status.RECONNECTING);
+
+        listener.errorOccurred(connA, "Permissions Violation for Publish to \"foo.bar\"");
+
+        assertThat(telemetry.lastFailure(connA)).contains(NatsFailureReason.AUTHENTICATION);
+    }
+
+    @Test
     void runtimeExpiredCertificateIsCountedAndRemembered() {
+        when(connA.getStatus()).thenReturn(Status.RECONNECTING);
         var handshake = new SSLHandshakeException("handshake failed");
         handshake.initCause(new CertificateExpiredException());
 
