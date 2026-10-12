@@ -258,6 +258,33 @@ class CommonCatalogTests(unittest.TestCase):
                 self.assertRegex(evidence["checkedAt"], r"^\d{4}-\d{2}-\d{2}$")
                 self.assertTrue(evidence["reason"])
 
+    def test_optional_description_is_exported_only_when_the_catalog_has_one(self):
+        source = catalog.read(ROOT / "catalog.json")
+        described = {model["id"]: model["description"] for model in source["models"] if "description" in model}
+        self.assertIn("deepseek-v4-flash", described)
+        for recipe in self.index["recipes"]:
+            if recipe["id"] in described:
+                self.assertEqual(recipe["description"], described[recipe["id"]])
+            elif recipe["id"] in {model["id"] for model in source["models"]}:
+                self.assertNotIn("description", recipe)
+        real_read = catalog.read
+
+        def with_description(value):
+            def read(path):
+                data = real_read(path)
+                if Path(path).name == "catalog.json":
+                    data = copy.deepcopy(data)
+                    data["models"][0]["description"] = value
+                return data
+            return read
+        with patch.object(catalog, "read", side_effect=with_description("A short plain description.")):
+            exported = next(item for item in catalog.build(ROOT)["recipes"] if item["id"] == real_read(ROOT / "catalog.json")["models"][0]["id"])
+        self.assertEqual(exported["description"], "A short plain description.")
+        for bad in ("", "   ", 7, ["list"], "x" * 601, "two\nlines", "caf\u00e9"):
+            with self.subTest(description=bad), patch.object(catalog, "read", side_effect=with_description(bad)), \
+                    self.assertRaisesRegex(ValueError, "short single-line ASCII"):
+                catalog.build(ROOT)
+
     def test_chart_references_resolve_to_local_packages(self):
         for recipe in self.recipes.values():
             for profile in recipe["profiles"]:

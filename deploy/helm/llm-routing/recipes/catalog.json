@@ -731,6 +731,7 @@
     {
       "id": "deepseek-v4-flash",
       "name": "DeepSeek V4 Flash",
+      "description": "DeepSeek V4 Flash is a mixture-of-experts language model with 284 billion parameters, 13 billion active per token, and support for up to 1 million tokens of context. This recipe serves it with FP4 expert weights across two DGX Spark nodes joined by a 200 Gbps link, with an 8,192-token context.",
       "releaseName": "deepseek-v4",
       "precision": "FP4 experts, FP8 attention",
       "repository": "deepseek-ai/DeepSeek-V4-Flash",

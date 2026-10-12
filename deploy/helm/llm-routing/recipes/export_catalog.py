@@ -132,7 +132,12 @@ def sglang_recipes(root):
                     "guide": ("../ADVANCED.md#helm-flash-next-recipes" if model["id"] == "qwen3.8-flash-next"
                         else "../README.md")},
             })
+        description = model.get("description")
+        if description is not None and (not isinstance(description, str) or not description.strip() or len(description) > 600
+                or any(not 32 <= ord(character) <= 126 for character in description)):
+            raise ValueError("Recipe description must be a short single-line ASCII string: " + model["id"])
         recipes.append({"id": model["id"], "name": model["name"], "servedModelId": model["id"],
+            **({"description": description} if description else {}),
             "availability": {"status": "available", "deployable": True},
             "precision": model["precision"], "license": model["license"],
             "licenseNotice": "notices/" + model["id"] + "/NOTICE",
