@@ -120,7 +120,6 @@ go_test(
         "gpushare_store_owner_test.go",
         "gpushare_store_reaper_test.go",
         "gpushare_test.go",
-        "l2_copy_test.go",
         "l2_fetch_test.go",
         "l2_integration_test.go",
         "l2_integration_unqualified_test.go",

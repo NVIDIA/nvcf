@@ -75,6 +75,7 @@ type Copier struct {
 	bytesCopied atomic.Int64
 	filesCopied atomic.Int64
 	workers     int
+	faithful    bool // see faithful.go
 	log         logrus.FieldLogger
 }
 
@@ -197,6 +198,10 @@ func (c *Copier) Copy(ctx context.Context, src, dst string) (bytesCopied, entrie
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			var buf []byte
+			if c.faithful {
+				buf = alignedBuffer(directBufferLen)
+			}
 			for job := range jobs {
 				select {
 				case <-poolCtx.Done():
@@ -207,7 +212,7 @@ func (c *Copier) Copy(ctx context.Context, src, dst string) (bytesCopied, entrie
 					continue
 				default:
 				}
-				if err := c.copyRegular(job.srcPath, job.dstPath, job.info); err != nil {
+				if err := c.copyRegular(job.srcPath, job.dstPath, job.info, buf); err != nil {
 					// Record first fatal error and trigger pool
 					// cancellation. Transient (mid-walk ENOENT)
 					// errors don't get here — copyRegular swallows
@@ -296,7 +301,13 @@ func (c *Copier) dispatch(ctx context.Context, jobs chan<- fileJob, srcPath, dst
 		if err := os.MkdirAll(dstPath, mode.Perm()); err != nil {
 			return err
 		}
-		return c.copyXattrs(srcPath, dstPath)
+		if err := c.copyXattrs(srcPath, dstPath); err != nil {
+			return err
+		}
+		if c.faithful {
+			return keepOwnerAndMode(dstPath, info)
+		}
+		return nil
 	case mode&os.ModeSymlink != 0:
 		return c.copySymlink(srcPath, dstPath, info)
 	case mode.IsRegular():
@@ -324,7 +335,11 @@ func (c *Copier) dispatch(ctx context.Context, jobs chan<- fileJob, srcPath, dst
 		if isFirstLink {
 			// Inline copy guarantees the file exists before any
 			// downstream hardlink dispatch attempts os.Link.
-			return c.copyRegular(srcPath, dstPath, info)
+			var buf []byte
+			if c.faithful {
+				buf = alignedBuffer(directBufferLen)
+			}
+			return c.copyRegular(srcPath, dstPath, info, buf)
 		}
 		select {
 		case jobs <- fileJob{srcPath: srcPath, dstPath: dstPath, info: info}:
@@ -332,6 +347,15 @@ func (c *Copier) dispatch(ctx context.Context, jobs chan<- fileJob, srcPath, dst
 		case <-ctx.Done():
 			return ctx.Err()
 		}
+	case c.faithful && (mode&os.ModeDevice != 0 || mode&os.ModeNamedPipe != 0):
+		if err := makeSpecial(dstPath, info); err != nil {
+			return err
+		}
+		c.filesCopied.Add(1)
+		if err := keepOwnerAndMode(dstPath, info); err != nil {
+			return err
+		}
+		return preserveTimes(dstPath, info, false)
 	case mode&os.ModeDevice != 0:
 		// Char/block device. Whiteouts (overlayfs deletion markers) are
 		// char-dev 0:0; everything else (real /dev/* mounts) is excluded
@@ -377,7 +401,7 @@ func (c *Copier) isExcluded(rel string) bool {
 // Fallback: if sendfile fails with EINVAL or ENOSYS (kernel too old,
 // or one of the FDs is a special file type that sendfile can't
 // handle), we drop to io.CopyBuffer with a 1 MiB pooled buffer.
-func (c *Copier) copyRegular(srcPath, dstPath string, info os.FileInfo) error {
+func (c *Copier) copyRegular(srcPath, dstPath string, info os.FileInfo, directBuf []byte) error {
 	in, err := os.Open(srcPath)
 	if err != nil {
 		if IsTransientErr(err) {
@@ -392,7 +416,12 @@ func (c *Copier) copyRegular(srcPath, dstPath string, info os.FileInfo) error {
 		return fmt.Errorf("create dst: %w", err)
 	}
 
-	written, err := streamCopy(out, in, info.Size())
+	var written int64
+	if directBuf != nil {
+		written, err = copyDirect(out, srcPath, directBuf)
+	} else {
+		written, err = streamCopy(out, in, info.Size())
+	}
 	closeErr := out.Close()
 	if err != nil {
 		return err
@@ -405,6 +434,11 @@ func (c *Copier) copyRegular(srcPath, dstPath string, info os.FileInfo) error {
 	c.filesCopied.Add(1)
 	if err := c.copyXattrs(srcPath, dstPath); err != nil {
 		return err
+	}
+	if c.faithful {
+		if err := keepOwnerAndMode(dstPath, info); err != nil {
+			return err
+		}
 	}
 	return preserveTimes(dstPath, info, false)
 }
@@ -538,6 +572,11 @@ func (c *Copier) copySymlink(srcPath, dstPath string, info os.FileInfo) error {
 		return err
 	}
 	c.filesCopied.Add(1)
+	if c.faithful {
+		if err := keepOwnerAndMode(dstPath, info); err != nil {
+			return err
+		}
+	}
 	return preserveTimes(dstPath, info, true)
 }
 

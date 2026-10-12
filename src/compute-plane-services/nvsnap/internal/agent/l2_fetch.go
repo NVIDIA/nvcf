@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/treecopy"
 	"io"
 	"net/http"
 	"net/url"
@@ -302,14 +303,20 @@ func releaseQuietly(ctx context.Context, release func(context.Context) error, lo
 // copyL2Tree copies the mounted L2 tree src into localDir. Existing
 // directories are filled in place (treecopy creates with MkdirAll and
 // writes files with O_TRUNC), so bind mounts under localDir stay put.
-// treecopy streams whole files with sendfile on a worker pool
-// (NVSNAP_TREECOPY_WORKERS), which suits a tree of large chunk files.
+// treecopy reads with direct I/O on NVSNAP_L2_FETCH_WORKERS workers
+// (32 by default): a TB and more per rank of a large model, in chunk
+// files of up to 64 MiB, read from a network volume.
 func copyL2Tree(ctx context.Context, src, localDir string, log *logrus.Entry) (int64, error) {
 	start := time.Now()
 	log.WithFields(logrus.Fields{"src": src, "dst": localDir}).Info("L2 fetch: copy starting")
 	// lost+found is the volume's filesystem, not the checkpoint.
 	workers := l2CopyWorkers()
-	bytes, files, err := copyTreeDirect(ctx, src, localDir, []string{"/lost+found"}, workers)
+	tc := treecopy.NewCopier([]string{"/lost+found"}, log)
+	tc.SetWorkers(workers)
+	// The checkpoint as captured: its rootfs-diff is an overlay upper
+	// directory, whose whiteouts, owners and modes the restore needs.
+	tc.SetFaithful(true)
+	bytes, files, err := tc.Copy(ctx, src, localDir)
 	elapsed := time.Since(start)
 	if err != nil {
 		return bytes, fmt.Errorf("copy %s -> %s (%d bytes in %.1fs): %w", src, localDir, bytes, elapsed.Seconds(), err)
