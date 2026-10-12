@@ -203,12 +203,20 @@ mod tests {
         let settings = static_base.wait_and_widen_settings_mut().unwrap();
         settings.n = Some(4);
         settings.ttft_bucket_size_ms = Some(50);
+        let mut pulsar_base = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::Pulsar);
+        pulsar_base.rendezvous_weight = PulsarRendezvousWeight::LastMeanInputTps;
         let configured = LoadBalancerRouter::from_config(&LoadBalancerConfig {
             default: LoadBalancerAlgorithm::Random,
-            request_algorithms: HashMap::from([(
-                LoadBalancerAlgorithm::WaitAndWiden,
-                LoadBalancerModelConfig::Detailed(Box::new(static_base)),
-            )]),
+            request_algorithms: HashMap::from([
+                (
+                    LoadBalancerAlgorithm::WaitAndWiden,
+                    LoadBalancerModelConfig::Detailed(Box::new(static_base)),
+                ),
+                (
+                    LoadBalancerAlgorithm::Pulsar,
+                    LoadBalancerModelConfig::Detailed(Box::new(pulsar_base)),
+                ),
+            ]),
             models: HashMap::new(),
         })
         .unwrap();
@@ -265,6 +273,14 @@ mod tests {
                 json!({"algorithm": "pulsar", "consider_kv_free_tokens": true,
                     "rendezvous_weight": "max-input-tps",
                     "require_cache_affinity_key": false, "require_input_tokens": true}),
+            ),
+            (
+                "pulsar inherits the static rendezvous weight",
+                &configured,
+                "pulsar;seed=x",
+                json!({"algorithm": "pulsar", "seed": "x", "consider_kv_free_tokens": false,
+                    "rendezvous_weight": "last-mean-input-tps",
+                    "require_cache_affinity_key": false, "require_input_tokens": false}),
             ),
             (
                 "wait-and-widen defaults",
