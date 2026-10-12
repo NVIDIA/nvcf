@@ -4,4 +4,4 @@ apiVersion: v2
 name: llm-demo-monitoring
 description: Local metrics collection and dashboards for the LLM routing demo
 type: application
-version: 0.1.0
+version: 0.1.0-iiab

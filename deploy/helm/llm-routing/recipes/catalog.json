@@ -3,6 +3,7 @@
   "models": [
     {
       "id": "qwen3.8-27b",
+      "chartRepository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
       "name": "Qwen3.8-27B",
       "description": "Qwen3.8-27B is a 27 billion parameter language model from Qwen that mixes linear and full attention layers and supports up to 262,144 tokens of context. This card lists an FP8 build for one DGX Spark or one DGX Station and an NVIDIA NVFP4 build for one DGX Spark, served by SGLang with a short context of up to 9,216 tokens.",
       "releaseName": "qwen-fp8",
@@ -209,6 +210,7 @@
     },
     {
       "id": "qwen3.8-27b-nvfp4",
+      "chartRepository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
       "name": "Qwen3.8-27B",
       "description": "Qwen3.8-27B is a 27 billion parameter language model from Qwen that mixes linear and full attention layers and supports up to 262,144 tokens of context. This card lists an FP8 build for one DGX Spark or one DGX Station and an NVIDIA NVFP4 build for one DGX Spark, served by SGLang with a short context of up to 9,216 tokens.",
       "releaseName": "qwen-nvfp4",
@@ -1386,6 +1388,7 @@
     },
     {
       "id": "qwen3.8-flash-next",
+      "chartRepository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
       "name": "Qwen3.8-Flash-Next",
       "description": "Qwen3.8-Flash-Next is a large mixture-of-experts language model with 512 routed experts, 10 of them active per token, a mix of linear and full attention layers, and a 262,144-token context window. This card lists an NVFP4 build from RadixArk, served by SGLang on one DGX Spark with local NVMe storage, on two DGX Sparks joined by a 200 Gbps link, or on one DGX Station.",
       "releaseName": "qwen-flash",

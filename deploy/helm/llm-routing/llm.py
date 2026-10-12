@@ -156,10 +156,14 @@ def deployment_command(report, catalog, context, namespace, args, capabilities):
     release = args.release or deployment['releaseName']
     if deployment['lifecycle'] != 'automatic':
         raise ValueError('The selected profile does not support automatic Helm installation.')
-    chart = args.chart_source or str((HERE / 'recipes' / deployment['chart']['localPath']).resolve())
-    command = ['helm', 'install', release,
-               chart,
-               '--kube-context', context, '--namespace', namespace]
+    chart = deployment['chart']
+    if args.chart_source:
+        command = ['helm', 'install', release, args.chart_source]
+    elif chart.get('repository'):
+        command = ['helm', 'install', release, chart['repository'], '--version', chart['version']]
+    else:
+        command = ['helm', 'install', release, str((HERE / 'recipes' / chart['localPath']).resolve())]
+    command += ['--kube-context', context, '--namespace', namespace]
     settings = {'recipe': model['id'], 'profileName': profile['id'], 'runtimeClassName': args.runtime_class,
                 'storageClassName': args.storage_class, 'sharedCAConfigMap': args.shared_ca_configmap}
     for index, node in enumerate(report['chosenNodes']):
@@ -823,7 +827,7 @@ def main(argv=None):
     plan.add_argument('--storage-class', default='local-path')
     plan.add_argument('--shared-ca-configmap', default='llm-gateway-stack-ca')
     plan.add_argument('--release', help='Name for a new Helm release. Existing model releases are reported separately.')
-    plan.add_argument('--chart-source', help='Exact Helm chart reference for the install command. Defaults to the recipe source chart.')
+    plan.add_argument('--chart-source', help='Exact Helm chart reference for the install command. Defaults to the published chart, or the recipe source chart when none is published.')
     plan.add_argument('--verbose', action='store_true', help='Show deployment checks, per-pod allocations and an install command when eligible.')
     plan.add_argument('--json', action='store_true', help='Print the complete capacity report as JSON.')
     for name, text in (('start', 'Start an installed model by scaling its deployments up, after checking that its GPUs and memory are free.'),

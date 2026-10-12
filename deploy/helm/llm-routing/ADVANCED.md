@@ -2,9 +2,9 @@
 
 ## Helm configuration
 
-The [main guide](README.md) uses local chart archives and an explicit values file. Build these archives with [package-charts.sh](dev-artifacts/package-charts.sh). A chart source directory can also be installed after its local dependencies are built. Helm and kubectl use your current kubeconfig context. Use their `--kube-context` and `--context` flags for an explicit override.
+The [main guide](README.md) installs the published charts with an explicit values file. A chart source directory can also be installed after its local dependencies are built. Helm and kubectl use your current kubeconfig context. Use their `--kube-context` and `--context` flags for an explicit override.
 
-The supported installation is the `llm-stack` release in namespace `llm-stack`. It contains the gateway, router, Pylon operator and InferenceEndpoint CRD. Independent model releases use that stack in the same namespace. Use [shared-stack/values.local.example.yaml](charts/shared-stack/values.local.example.yaml) for image references and placement, with the operator watching `llm-stack`. Images may come from a registry or a node cache. [Local image preparation](dev-artifacts/README.md) is a temporary development convenience.
+The supported installation is the `llm-stack` release in namespace `llm-stack`. It contains the gateway, router, Pylon operator and InferenceEndpoint CRD. Independent model releases use that stack in the same namespace. Use [shared-stack/values.local.example.yaml](charts/shared-stack/values.local.example.yaml) for image references and placement, with the operator watching `llm-stack`. Images may come from a registry or a node cache. [values.registry.yaml](values.registry.yaml) selects the published images.
 
 `operator.installCRDs` inherits the operator chart's boolean default, `true`. The CRD stays in the chart templates so upgrades of the owning release update its schema. Its `helm.sh/resource-policy: keep` annotation retains it and existing InferenceEndpoints on uninstall. Set `operator.installCRDs=false` only when a compatible CRD is managed externally. The chart checks compatibility but does not change that CRD's schema or ownership. Do not delete the CRD to resolve a Helm ownership conflict.
 
@@ -27,14 +27,24 @@ Caller IDs and trimmed keys must be distinct, including the primary caller. Upgr
 Use the context selected in the [installation guide](README.md#1-install-shared-infrastructure). The shared chart runs a verification Job after installation and upgrade. It uses the installed CA to check gateway TLS and the `/v1/models` response, then checks that an unknown model returns HTTP 401 with an invalid key and HTTP 404 with the valid key. An empty registry is valid on first installation. Existing models remain valid on upgrades. A failed check makes the Helm command fail:
 
 ```bash
-helm upgrade --install llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
+helm upgrade --install llm-stack oci://nvcr.io/0651155215864979/ncp-dev/llm-shared-stack --version 0.1.0-iiab \
   --namespace llm-stack --create-namespace \
-  --values dev-artifacts/values.yaml --wait --timeout 10m
+  --values values.registry.yaml --wait --timeout 10m
 ```
 
 The Job retries temporary connection failures, gateway unavailability and HTTP 401 for the configured caller key for up to 180 seconds. This allows time for Secret projection and authentication reload after key rotation. TLS failures and other unexpected authentication responses fail immediately. Successful verification Jobs are removed. Failed Jobs and their logs remain available until the next install or upgrade.
 
-The verification image must be pullable or preloaded on eligible nodes. See [verification image distribution](dev-artifacts/README.md#verification-image) for its default and offline settings.
+The verification Job uses `python:3.12-alpine` with `IfNotPresent` pull policy, so the image must be pullable or preloaded on eligible nodes. For offline installation, preload it for every eligible architecture and set `verification.image.pullPolicy: Never`. For a registry mirror, use:
+
+```yaml
+verification:
+  image:
+    repository: registry.example.com/mirrors/python
+    tag: 3.12-alpine
+    pullPolicy: IfNotPresent
+```
+
+Set `verification.imagePullSecrets` to Kubernetes Secret references when the mirror requires credentials.
 
 ### Shared CLI connection options
 
@@ -46,7 +56,7 @@ python3 llm.py --context my-cluster chat \
   --model qwen3.8-27b 'Say hello in one short sentence.'
 ```
 
-The `recipes` command reads the local catalog and works without cluster access. The `models` and `chat` commands retrieve the installed CA and caller credential for each call. Their local connection and temporary files last only for that command. Chat uses the model's normal generation defaults; pass `chat --max-tokens N` to limit output. Reaching that limit returns the partial answer. The separate verifier retains deterministic prompts and strict completion checks. The `plan` command reads Kubernetes and Helm inventory and never opens a gateway connection. Its install command defaults to the recipe source chart. Pass `plan --chart-source PATH_OR_REFERENCE` to select a local archive or published Helm chart. Use `--ca-configmap NAME` and `--api-key-file FILE` to select an existing CA and caller key. Image preparation remains in the [image build guide](dev-artifacts/README.md).
+The `recipes` command reads the local catalog and works without cluster access. The `models` and `chat` commands retrieve the installed CA and caller credential for each call. Their local connection and temporary files last only for that command. Chat uses the model's normal generation defaults; pass `chat --max-tokens N` to limit output. Reaching that limit returns the partial answer. The separate verifier retains deterministic prompts and strict completion checks. The `plan` command reads Kubernetes and Helm inventory and never opens a gateway connection. Its install command uses the recipe's published chart at the catalog version, or the recipe source chart when none is published. Pass `plan --chart-source PATH_OR_REFERENCE` to select another chart, such as a source directory with local changes. Use `--ca-configmap NAME` and `--api-key-file FILE` to select an existing CA and caller key.
 
 ### Model capacity check
 
@@ -274,7 +284,7 @@ Use the command for your hardware with the shared stack already running. Replace
 Three Spark nodes:
 
 ```bash
-helm upgrade --install glm dev-artifacts/charts/pylon-gguf-backend-0.2.0.tgz \
+helm upgrade --install glm oci://nvcr.io/0651155215864979/ncp-dev/pylon-gguf-backend --version 0.2.0-iiab \
   --kube-context my-cluster --namespace llm-stack \
   --values recipes/values/glm-5.3-x3.yaml \
   --set 'nodes[0]=gpu-node-1' --set 'nodes[1]=gpu-node-2' --set 'nodes[2]=gpu-node-3' \
@@ -342,7 +352,7 @@ Run the printed Helm command when all placement checks pass. It contains the rec
 For a direct one-node install, replace `NODE_FROM_PLANNER` in both places below. The entire block installs the model and waits for gateway registration:
 
 ```bash
-helm upgrade --install qwen-flash dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
+helm upgrade --install qwen-flash oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.2.0-iiab \
   --namespace llm-stack \
   --set recipe=qwen3.8-flash-next --set profileName=spark-nvfp4-nvme \
   --set 'nodes[0]=NODE_FROM_PLANNER' \
@@ -361,33 +371,34 @@ For direct Helm configuration, the [one-node values](recipes/values/qwen3.8-flas
 
 All supported recipes use the same Helm lifecycle. Preparation, startup and endpoint registration belong to the model chart. Keep the shared `llm-stack` release installed while managing models. That release name is reserved and rejected by model charts. The examples above use these independent releases:
 
-| Model | Release | Chart archive | Served model ID |
+| Model | Release | Chart | Served model ID |
 | --- | --- | --- | --- |
-| Qwen FP8 | `qwen-fp8` | `pylon-sglang-recipe-0.2.0.tgz` | `qwen3.8-27b` |
-| Qwen NVFP4 | `qwen-nvfp4` | `pylon-sglang-recipe-0.2.0.tgz` | `qwen3.8-27b-nvfp4` |
-| Qwen3.5-4B | `qwen35-4b` | `pylon-sglang-recipe-0.2.0.tgz` | `qwen3.5-4b` |
-| Nemotron Nano 12B v2 | `nemotron-nano` | `pylon-sglang-recipe-0.2.0.tgz` | `nemotron-nano-12b-v2` |
-| Nemotron 3.5 Lightning | `nemotron-lightning` | `pylon-sglang-recipe-0.2.0.tgz` | `nemotron-3.5-lightning` |
-| DeepSeek V4 Flash | `deepseek-v4` | `pylon-sglang-recipe-0.2.0.tgz` | `deepseek-v4-flash` |
-| Flash-Next, either profile | `qwen-flash` | `pylon-sglang-recipe-0.2.0.tgz` | `qwen3.8-flash-next` |
-| GLM | `glm` | `pylon-gguf-backend-0.2.0.tgz` | `GLM-5.3-UD-IQ2_M` |
+| Qwen FP8 | `qwen-fp8` | `pylon-sglang-recipe` 0.2.0-iiab | `qwen3.8-27b` |
+| Qwen NVFP4 | `qwen-nvfp4` | `pylon-sglang-recipe` 0.2.0-iiab | `qwen3.8-27b-nvfp4` |
+| Qwen3.5-4B | `qwen35-4b` | `pylon-sglang-recipe` 0.2.0-iiab | `qwen3.5-4b` |
+| Nemotron Nano 12B v2 | `nemotron-nano` | `pylon-sglang-recipe` 0.2.0-iiab | `nemotron-nano-12b-v2` |
+| Nemotron 3.5 Lightning | `nemotron-lightning` | `pylon-sglang-recipe` 0.2.0-iiab | `nemotron-3.5-lightning` |
+| DeepSeek V4 Flash | `deepseek-v4` | `pylon-sglang-recipe` 0.2.0-iiab | `deepseek-v4-flash` |
+| Flash-Next, either profile | `qwen-flash` | `pylon-sglang-recipe` 0.2.0-iiab | `qwen3.8-flash-next` |
+| GLM | `glm` | `pylon-gguf-backend` 0.2.0-iiab | `GLM-5.3-UD-IQ2_M` |
 
 For the commands below, select the Kubernetes context, existing release and its chart. Use the chart version that installed it for stop and resume. For example:
 
 ```bash
 CONTEXT=your-kubernetes-context
 MODEL_RELEASE=glm
-MODEL_CHART=dev-artifacts/charts/pylon-gguf-backend-0.2.0.tgz
+MODEL_CHART=oci://nvcr.io/0651155215864979/ncp-dev/pylon-gguf-backend
+MODEL_VERSION=0.2.0-iiab
 MODEL_ID=GLM-5.3-UD-IQ2_M
 ```
 
 ### Upgrade a model
 
-Save its values privately and review changes to the same recipe, profile and node placement before upgrading a serving release. Use the target chart version in `MODEL_CHART`. GPU placement and retained claim names must stay consistent. Changing model pins or hardware needs fresh qualification.
+Save its values privately and review changes to the same recipe, profile and node placement before upgrading a serving release. Use the target chart version in `MODEL_VERSION`. GPU placement and retained claim names must stay consistent. Changing model pins or hardware needs fresh qualification.
 
 ```bash
 helm --kube-context "$CONTEXT" get values "$MODEL_RELEASE" --namespace llm-stack -o yaml > /path/to/private/model-values.yaml
-helm --kube-context "$CONTEXT" upgrade "$MODEL_RELEASE" "$MODEL_CHART" --namespace llm-stack \
+helm --kube-context "$CONTEXT" upgrade "$MODEL_RELEASE" "$MODEL_CHART" --version "$MODEL_VERSION" --namespace llm-stack \
   --values /path/to/private/model-values.yaml --wait --timeout 120m &&
 kubectl --context "$CONTEXT" --namespace llm-stack wait \
   --for=condition=Registered "inferenceendpoint/$MODEL_RELEASE" --timeout=5m
@@ -406,7 +417,7 @@ python3 recipes/verify.py --context "$CONTEXT" --model "$MODEL_ID" \
 Stop the model and wait for all its pods to terminate before reusing its GPUs:
 
 ```bash
-helm --kube-context "$CONTEXT" upgrade "$MODEL_RELEASE" "$MODEL_CHART" --namespace llm-stack \
+helm --kube-context "$CONTEXT" upgrade "$MODEL_RELEASE" "$MODEL_CHART" --version "$MODEL_VERSION" --namespace llm-stack \
   --reuse-values --set suspended=true --timeout 10m &&
 kubectl --context "$CONTEXT" --namespace llm-stack wait --for=delete pod \
   -l "app.kubernetes.io/instance=$MODEL_RELEASE" --timeout=10m
@@ -415,7 +426,7 @@ kubectl --context "$CONTEXT" --namespace llm-stack wait --for=delete pod \
 The stop command omits readiness waiting because the model is intentionally unavailable. The release and cache claims remain. When its original GPUs are free, resume and wait for registration:
 
 ```bash
-helm --kube-context "$CONTEXT" upgrade "$MODEL_RELEASE" "$MODEL_CHART" --namespace llm-stack \
+helm --kube-context "$CONTEXT" upgrade "$MODEL_RELEASE" "$MODEL_CHART" --version "$MODEL_VERSION" --namespace llm-stack \
   --reuse-values --set suspended=false --wait --timeout 120m &&
 kubectl --context "$CONTEXT" --namespace llm-stack wait \
   --for=condition=Registered "inferenceendpoint/$MODEL_RELEASE" --timeout=5m
@@ -468,7 +479,7 @@ Save the installed values and release revision privately before upgrading. Revie
 umask 077
 helm get values llm-stack --namespace llm-stack -o yaml > /path/to/private/previous-values.yaml
 helm history llm-stack --namespace llm-stack
-helm upgrade --install llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
+helm upgrade --install llm-stack oci://nvcr.io/0651155215864979/ncp-dev/llm-shared-stack --version 0.1.0-iiab \
   --namespace llm-stack --values /path/to/private/site-values.yaml \
   --wait --timeout 10m
 ```
@@ -633,32 +644,10 @@ For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the
 
    Run additional startup/cache tests when those implementations change.
 
-4. Package into a fresh directory, verify checksums, and select the archive listed for your recipe and profile:
+4. Select the source chart for live testing. Recipe metadata is part of the chart, so the published chart contains the recipe only after a chart release:
 
    ```bash
-   PACKAGE_DIR="$(mktemp -d)"
-   bash dev-artifacts/package-charts.sh --output-dir "$PACKAGE_DIR" &&
-   python3 - "$PACKAGE_DIR" <<'PY' &&
-   import hashlib
-   import sys
-   from pathlib import Path
-   root = Path(sys.argv[1])
-   for line in (root / 'SHA256SUMS').read_text().splitlines():
-       expected, name = line.split(None, 1)
-       assert hashlib.sha256((root / name).read_bytes()).hexdigest() == expected, name
-   print('Package checksums passed')
-   PY
-   MODEL_CHART="$PACKAGE_DIR/$(python3 - "$RECIPE_ID" "$PROFILE_ID" <<'PY'
-   import json
-   import sys
-   from pathlib import Path
-   recipes = json.loads(Path('recipes/index.json').read_text())['recipes']
-   recipe = next(item for item in recipes if item['id'] == sys.argv[1])
-   profile = next(item for item in recipe['profiles'] if item['id'] == sys.argv[2])
-   print(profile['deployment']['chart']['archive'])
-   PY
-   )" &&
-   test -f "$MODEL_CHART"
+   MODEL_CHART="$CHART_SOURCE"
    ```
 
 5. Reuse the shared stack, or [install it once](README.md#1-install-shared-infrastructure). Inspect the plan before deploying. Exit code 2 means an existing release, blocked placement or an unsupported recipe. For an expected existing release, retain its cache nodes and saved values. Resolve other blockers before deploying:
@@ -698,15 +687,15 @@ For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the
 
    Confirm the deployed revision and pod configuration match the intended chart and pins. Check logs, memory and restarts. Exercise the intended context/concurrency and [cache-preserving lifecycle](#independent-model-lifecycle). If a check fails, adjust maintained metadata, repeat steps 2-4, then upgrade and retest. Preserve caches and other models.
 
-6. Record the tested profile, artifact pins, date, workload and passed checks in recipe metadata. Keep hardware and installation links in the README. Repeat synchronization, export, checks and packaging above, using a fresh `PACKAGE_DIR`. Compare the final rendered pod templates with the tested deployment. Metadata can change the configuration checksum and trigger a rollout, so repeat affected live checks with the final archive when that happens. Then refresh the distribution from that verified package:
+6. Record the tested profile, artifact pins, date, workload and passed checks in recipe metadata. Keep hardware and installation links in the README. Repeat synchronization, export and checks above. Compare the final rendered pod templates with the tested deployment. Metadata can change the configuration checksum and trigger a rollout, so repeat affected live checks with the final chart when that happens. Then bump the chart's `Chart.yaml` version and regenerate the index, which points installs at that version:
 
    ```bash
-   cp -R "$PACKAGE_DIR/." dev-artifacts/charts/ &&
+   python3 recipes/export_catalog.py &&
    python3 recipes/export_catalog.py --check &&
    git diff --check
    ```
 
-   Review the generated diff before committing. Keep private values and evidence outside Git. Leave untested profiles pending.
+   Review the generated diff before committing. Keep private values and evidence outside Git. Leave untested profiles pending. After the change merges, [publish the chart](#publishing-charts-and-images) at the new version.
 
 ## Local validation
 
@@ -718,8 +707,9 @@ python3 -m unittest discover -s tests -v
 python3 -m unittest discover -s recipes/tests -v
 python3 -m unittest discover -s recipes/charts/gguf-backend/tests -v
 python3 recipes/export_catalog.py --check
-helm lint --strict dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
-  --namespace llm-stack --values dev-artifacts/values.yaml
+helm dependency build ../llm-gateway-stack/llm-gateway-stack
+helm dependency build charts/shared-stack
+helm lint --strict charts/shared-stack --namespace llm-stack --values values.registry.yaml
 helm lint --strict recipes/charts/sglang --values recipes/charts/sglang/values.example.yaml
 helm lint --strict recipes/charts/gguf-backend --values recipes/charts/gguf-backend/values.example.yaml
 git diff --check
@@ -730,11 +720,35 @@ Use private temporary output for offline rendered manifests because they can con
 ```bash
 umask 077
 RENDER_DIR="$(mktemp -d)"
-helm template llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
-  --namespace llm-stack --values dev-artifacts/values.yaml > "$RENDER_DIR/shared.yaml"
+helm template llm-stack charts/shared-stack \
+  --namespace llm-stack --values values.registry.yaml > "$RENDER_DIR/shared.yaml"
 helm template qwen-fp8 recipes/charts/sglang --namespace llm-stack \
   --set recipe=qwen3.8-27b --set profileName=spark-fp8 \
   --set 'nodes[0]=offline-gpu-node' > "$RENDER_DIR/model.yaml"
 ```
 
-Offline rendering cannot inspect live ownership or prove credential reuse. Use [package-charts.sh](dev-artifacts/package-charts.sh) to build archives in a fresh output directory, then check catalog paths, bundled source equality and `SHA256SUMS`. Package generation and developer image builds do not install or upgrade a release.
+Offline rendering cannot inspect live ownership or prove credential reuse.
+
+## Publishing charts and images
+
+The charts and shared images are published to `nvcr.io/0651155215864979/ncp-dev` from release tags on this repository. Each artifact has its own tag prefix, and versions carry an `-iiab` suffix:
+
+| Artifact | Tag prefix |
+| --- | --- |
+| `llm-shared-stack` chart | `deploy/helm/llm-routing/charts/shared-stack/v` |
+| `pylon-sglang-recipe` chart | `deploy/helm/llm-routing/recipes/charts/sglang/v` |
+| `pylon-gguf-backend` chart | `deploy/helm/llm-routing/recipes/charts/gguf-backend/v` |
+| `llm-demo-monitoring` chart | `deploy/helm/llm-routing/recipes/charts/monitoring/v` |
+| `llm-api-gateway` image | `src/invocation-plane-services/llm-api-gateway/v` |
+| `stargate` and `pylon` images | `src/libraries/rust/stargate/v` |
+| `nvcf-pylon-operator` image | `src/compute-plane-services/pylon-operator/v` |
+
+Publish by creating a prerelease GitHub Release for each tag; a tag without a Release is not published:
+
+```bash
+gh release create deploy/helm/llm-routing/recipes/charts/sglang/v0.2.0-iiab \
+  --repo NVIDIA/nvcf --target COMMIT_SHA --prerelease \
+  --title deploy/helm/llm-routing/recipes/charts/sglang/v0.2.0-iiab --notes ''
+```
+
+A chart's tag version must equal its `Chart.yaml` version, because the catalog and the commands in these guides install that version. Recipe metadata is part of the model charts, so a recipe change needs a chart version bump and a new chart release. After publishing new images, update their tags in [values.registry.yaml](values.registry.yaml).

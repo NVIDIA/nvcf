@@ -12,6 +12,12 @@ import unittest
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parents[1]
+
+
+def catalog_chart(recipe_id):
+    catalog = json.loads((HERE / 'recipes/index.json').read_text())
+    recipe = next(item for item in catalog['recipes'] if item['id'] == recipe_id)
+    return recipe['profiles'][0]['deployment']['chart']
 spec = importlib.util.spec_from_file_location('llm_plan_tested', HERE / 'llm.py')
 llm = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(llm)
@@ -63,7 +69,8 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(report['status'], 'fits')
         command = shlex.split(report['deployment']['command'])
         self.assertEqual(command[:3], ['helm', 'install', 'qwen-fp8'])
-        self.assertEqual(command[3], str(HERE / 'recipes/charts/sglang'))
+        chart = catalog_chart('qwen3.8-27b')
+        self.assertEqual(command[3:6], [chart['repository'], '--version', chart['version']])
         self.assertNotIn('--values', command)
         self.assertIn('recipe=qwen3.8-27b', command)
         self.assertIn('nodes[0]=available-0', command)
@@ -208,12 +215,26 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(report['deployment']['release'], 'catalog-name')
         self.assertEqual(override['deployment']['release'], 'requested-release')
 
-    def test_default_chart_is_resolved_from_catalog_when_run_outside_checkout(self):
-        with tempfile.TemporaryDirectory() as directory, contextlib.chdir(directory):
-            report = self.plan()
-        chart = Path(shlex.split(report['deployment']['command'])[3])
+    def test_published_chart_is_pinned_to_the_catalog_version(self):
+        chart = catalog_chart('qwen3.8-27b')
+        self.assertEqual(chart['publication'], 'oci')
+        command = shlex.split(self.plan()['deployment']['command'])
+        self.assertEqual(command[3:6], [chart['repository'], '--version', chart['version']])
+
+    def test_unpublished_chart_is_resolved_from_catalog_when_run_outside_checkout(self):
+        catalog = json.loads((HERE/'recipes/index.json').read_text())
+        for recipe in catalog['recipes']:
+            for profile in recipe['profiles']:
+                profile['deployment']['chart'].update(repository=None, publication='local')
+        original = Path.read_text
+        with patch.object(Path, 'read_text', lambda path, *a, **kw: json.dumps(catalog) if path == HERE/'recipes/index.json' else original(path, *a, **kw)):
+            with tempfile.TemporaryDirectory() as directory, contextlib.chdir(directory):
+                report = self.plan()
+        command = shlex.split(report['deployment']['command'])
+        chart = Path(command[3])
         self.assertEqual(chart, HERE / 'recipes/charts/sglang')
         self.assertTrue((chart / 'Chart.yaml').is_file())
+        self.assertNotIn('--version', command)
 
     def test_chart_source_preserves_exact_helm_reference_as_one_argument(self):
         for chart in ('./packages/model chart.tgz', 'repository/model-chart',
@@ -222,6 +243,7 @@ class PlanTests(unittest.TestCase):
                 report = self.plan(None, '--chart-source', chart)
                 command = shlex.split(report['deployment']['command'])
                 self.assertEqual(command[3], chart)
+                self.assertNotIn('--version', command)
                 self.assertIn('profileName=spark-fp8', command)
                 self.assertIn('nodes[0]=available-0', command)
 
@@ -374,7 +396,8 @@ class PlanTests(unittest.TestCase):
         command = shlex.split(report['deployment']['command'])
         self.assertNotIn('--values', command)
         self.assertIn('recipe=glm-5.3', command)
-        self.assertEqual(command[3], str(HERE / 'recipes/charts/gguf-backend'))
+        chart = catalog_chart('glm-5.3')
+        self.assertEqual(command[3:6], [chart['repository'], '--version', chart['version']])
         self.assertIn('nodes[1]=available-1', command)
 
     def test_json_is_machine_readable_and_unknown_gpu_is_printable(self):

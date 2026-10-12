@@ -351,14 +351,16 @@ class CommonCatalogTests(unittest.TestCase):
         self.assertRegex(evidence["checkedAt"], r"^\d{4}-\d{2}-\d{2}$")
         self.assertGreater(evidence["weightBytes"], 0)
 
-    def test_chart_references_resolve_to_local_packages(self):
+    def test_chart_references_resolve_to_source_and_published_charts(self):
+        # Every executable recipe names its published chart; without one, the
+        # planner would install the source chart instead.
         for recipe in self.recipes.values():
             for profile in recipe["profiles"]:
                 chart = profile["deployment"]["chart"]
                 self.assertTrue((ROOT / chart["localPath"] / "Chart.yaml").is_file())
                 self.assertEqual(chart["archive"], f"{chart['name']}-{chart['version']}.tgz")
-                self.assertEqual(chart["publication"], "local")
-                self.assertIsNone(chart["repository"])
+                self.assertEqual(chart["publication"], "oci")
+                self.assertTrue(chart["repository"].endswith("/" + chart["name"]))
 
     def test_optional_oci_repositories_are_independent_per_recipe_and_backend(self):
         original_read = catalog.read
@@ -385,8 +387,10 @@ class CommonCatalogTests(unittest.TestCase):
                 self.assertEqual(chart['publication'], 'oci' if recipe['id'] in expected else 'local')
                 self.assertEqual(chart['localPath'], baseline['localPath'])
                 self.assertEqual(chart['archive'], baseline['archive'])
-        self.assertTrue(all(p['deployment']['chart']['repository'] is None
-                            for recipe in catalog.build()['recipes'] for p in recipe['profiles']))
+        def repositories(recipes):
+            return {recipe['id']: {p['id']: p['deployment']['chart']['repository'] for p in recipe['profiles']}
+                    for recipe in recipes}
+        self.assertEqual(repositories(catalog.build()['recipes']), repositories(self.recipes.values()))
 
     def test_chart_repositories_reject_malformed_or_incomplete_references(self):
         good = 'oci://registry.example.com/charts/pylon-sglang-recipe'

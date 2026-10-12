@@ -134,9 +134,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "archive": "pylon-sglang-recipe-0.2.0-iiab.tgz",
               "repository": null,
               "publication": "local"
             },
@@ -231,9 +231,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "archive": "pylon-sglang-recipe-0.2.0-iiab.tgz",
               "repository": null,
               "publication": "local"
             },
@@ -449,11 +449,11 @@
           "deployment": {
             "chart": {
               "name": "pylon-gguf-backend",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/gguf-backend",
-              "archive": "pylon-gguf-backend-0.2.0.tgz",
-              "repository": null,
-              "publication": "local"
+              "archive": "pylon-gguf-backend-0.2.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-gguf-backend",
+              "publication": "oci"
             },
             "releaseName": "glm",
             "lifecycle": "automatic",
@@ -637,11 +637,11 @@
           "deployment": {
             "chart": {
               "name": "pylon-gguf-backend",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/gguf-backend",
-              "archive": "pylon-gguf-backend-0.2.0.tgz",
-              "repository": null,
-              "publication": "local"
+              "archive": "pylon-gguf-backend-0.2.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-gguf-backend",
+              "publication": "oci"
             },
             "releaseName": "glm",
             "lifecycle": "automatic",
@@ -883,11 +883,11 @@
           "deployment": {
             "chart": {
               "name": "pylon-gguf-backend",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/gguf-backend",
-              "archive": "pylon-gguf-backend-0.2.0.tgz",
-              "repository": null,
-              "publication": "local"
+              "archive": "pylon-gguf-backend-0.2.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-gguf-backend",
+              "publication": "oci"
             },
             "releaseName": "glm",
             "lifecycle": "automatic",
@@ -1012,9 +1012,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "archive": "pylon-sglang-recipe-0.2.0-iiab.tgz",
               "repository": null,
               "publication": "local"
             },
@@ -1208,9 +1208,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "archive": "pylon-sglang-recipe-0.2.0-iiab.tgz",
               "repository": null,
               "publication": "local"
             },
@@ -1337,9 +1337,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "archive": "pylon-sglang-recipe-0.2.0-iiab.tgz",
               "repository": null,
               "publication": "local"
             },
@@ -1532,9 +1532,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "archive": "pylon-sglang-recipe-0.2.0-iiab.tgz",
               "repository": null,
               "publication": "local"
             },
@@ -1662,9 +1662,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "archive": "pylon-sglang-recipe-0.2.0-iiab.tgz",
               "repository": null,
               "publication": "local"
             },
@@ -1846,9 +1846,9 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.2.0.tgz",
+              "archive": "pylon-sglang-recipe-0.2.0-iiab.tgz",
               "repository": null,
               "publication": "local"
             },
@@ -1975,11 +1975,11 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.2.0.tgz",
-              "repository": null,
-              "publication": "local"
+              "archive": "pylon-sglang-recipe-0.2.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
             },
             "releaseName": "qwen-fp8",
             "lifecycle": "automatic",
@@ -2107,11 +2107,11 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.2.0.tgz",
-              "repository": null,
-              "publication": "local"
+              "archive": "pylon-sglang-recipe-0.2.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
             },
             "releaseName": "qwen-fp8",
             "lifecycle": "automatic",
@@ -2238,11 +2238,11 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.2.0.tgz",
-              "repository": null,
-              "publication": "local"
+              "archive": "pylon-sglang-recipe-0.2.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
             },
             "releaseName": "qwen-nvfp4",
             "lifecycle": "automatic",
@@ -2373,11 +2373,11 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.2.0.tgz",
-              "repository": null,
-              "publication": "local"
+              "archive": "pylon-sglang-recipe-0.2.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
             },
             "releaseName": "qwen-flash",
             "lifecycle": "automatic",
@@ -2464,11 +2464,11 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.2.0.tgz",
-              "repository": null,
-              "publication": "local"
+              "archive": "pylon-sglang-recipe-0.2.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
             },
             "releaseName": "qwen-flash",
             "lifecycle": "automatic",
@@ -2575,11 +2575,11 @@
           "deployment": {
             "chart": {
               "name": "pylon-sglang-recipe",
-              "version": "0.2.0",
+              "version": "0.2.0-iiab",
               "localPath": "charts/sglang",
-              "archive": "pylon-sglang-recipe-0.2.0.tgz",
-              "repository": null,
-              "publication": "local"
+              "archive": "pylon-sglang-recipe-0.2.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
             },
             "releaseName": "qwen-flash",
             "lifecycle": "automatic",

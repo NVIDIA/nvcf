@@ -1,0 +1,34 @@
+# Published shared-stack images. The registry requires credentials: create the
+# ngc-ncp-dev pull Secret in namespace llm-stack before installing. Images are
+# multi-architecture (arm64 and amd64).
+gatewayStack:
+  llm-api-gateway:
+    llmApiGateway:
+      image:
+        repository: nvcr.io/0651155215864979/ncp-dev/llm-api-gateway
+        tag: 0.1.0-iiab
+        pullPolicy: IfNotPresent
+      imagePullSecrets:
+        - name: ngc-ncp-dev
+  llm-request-router:
+    llmRequestRouter:
+      image:
+        repository: nvcr.io/0651155215864979/ncp-dev/stargate
+        tag: 0.1.0-iiab
+        pullPolicy: IfNotPresent
+      imagePullSecrets:
+        - name: ngc-ncp-dev
+operator:
+  image:
+    repository: nvcr.io/0651155215864979/ncp-dev/nvcf-pylon-operator
+    tag: 0.1.0-iiab
+    pullPolicy: IfNotPresent
+  imagePullSecrets:
+    - name: ngc-ncp-dev
+  pylon:
+    image:
+      repository: nvcr.io/0651155215864979/ncp-dev/pylon
+      tag: 0.1.0-iiab
+      pullPolicy: IfNotPresent
+    imagePullSecrets:
+      - name: ngc-ncp-dev
