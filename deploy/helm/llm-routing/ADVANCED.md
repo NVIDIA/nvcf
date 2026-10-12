@@ -512,7 +512,7 @@ python3 -m pip install -r recipes/tests/requirements.txt
 
 For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the setup block. Take `MODEL_RELEASE` and `SERVED_MODEL_ID` from the recipe metadata. For an existing recipe, set `VALUES_EXAMPLE` to its existing file under `recipes/values/`.
 
-1. Add the maintained metadata. For SGLang, edit [recipes/catalog.json](recipes/catalog.json). For GGUF, create `recipes/<recipe-id>/recipe.json`, `model.lock.json`, `profiles.json` and `NOTICE`. Verify checkpoint/runtime pins, hardware fit, license, workload limits and chart support. Keep validation pending until tested. Remove a promoted model's entry from `recipes/planned.json`. For a new GGUF family, update the exporter's license and guide mappings, which currently target GLM.
+1. Add the maintained metadata, including a short `description` for the demo UI card. For SGLang, edit [recipes/catalog.json](recipes/catalog.json). For GGUF, create `recipes/<recipe-id>/recipe.json`, `model.lock.json`, `profiles.json` and `NOTICE`. Verify checkpoint/runtime pins, hardware fit, license, workload limits and chart support. Keep validation pending until tested. Remove a promoted model's entry from `recipes/planned.json`. For a new GGUF family, update the exporter's license and guide mappings, which currently target GLM.
 
 2. Synchronize the chart copy. For SGLang, copy only the selected catalog entry into the chart's model map:
 

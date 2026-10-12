@@ -162,6 +162,7 @@
       "id": "glm-5.3",
       "name": "GLM-5.3",
       "servedModelId": "GLM-5.3-UD-IQ2_M",
+      "description": "GLM-5.3 is a 754 billion parameter mixture-of-experts language model from Z.ai. This card serves Unsloth's UD-IQ2_M 2-bit GGUF quantization, about 239 GB of weights, with llama.cpp. The profile that works spans three DGX Sparks, one leader and two RPC workers, at a 2,048-token context.",
       "availability": {
         "status": "available",
         "deployable": true
@@ -566,6 +567,7 @@
       "id": "nemotron-3.5-lightning",
       "name": "Nemotron 3.5 Lightning 30B-A3B",
       "servedModelId": "nemotron-3.5-lightning",
+      "description": "NVIDIA Nemotron 3.5 Lightning is a 30 billion parameter mixture-of-experts model that activates 3 billion parameters per token. It combines Mamba-2, mixture-of-experts and attention layers and supports up to 1 million tokens of context. This recipe serves the NVFP4 build on one DGX Spark, with up to 16,384 tokens of context and reasoning and tool-call parsing enabled.",
       "availability": {
         "status": "available",
         "deployable": true
@@ -694,6 +696,7 @@
       "id": "nemotron-nano-12b-v2",
       "name": "Nemotron Nano 12B v2",
       "servedModelId": "nemotron-nano-12b-v2",
+      "description": "NVIDIA Nemotron Nano 12B v2 is a 12.3 billion parameter hybrid language model built mostly from Mamba-2 and MLP layers with only six attention layers, and it supports up to 131,072 tokens of context. This recipe serves the BF16 build on one DGX Spark, with up to 16,384 tokens of context.",
       "availability": {
         "status": "available",
         "deployable": true
@@ -822,6 +825,7 @@
       "id": "qwen3.5-4b",
       "name": "Qwen3.5-4B",
       "servedModelId": "qwen3.5-4b",
+      "description": "Qwen3.5-4B is a 4.7 billion parameter language model from Qwen that mixes linear and full attention layers and supports up to 262,144 tokens of context. This recipe serves the BF16 build on one DGX Spark, with up to 32,768 tokens of context and 4 concurrent requests. It reasons before it answers, so give it a generous token budget.",
       "availability": {
         "status": "available",
         "deployable": true
@@ -951,6 +955,7 @@
       "id": "qwen3.8-27b",
       "name": "Qwen3.8-27B",
       "servedModelId": "qwen3.8-27b",
+      "description": "Qwen3.8-27B is a 27 billion parameter language model from Qwen that mixes linear and full attention layers and supports up to 262,144 tokens of context. This card lists an FP8 build for one DGX Spark or one DGX Station and an NVIDIA NVFP4 build for one DGX Spark, served by SGLang with a short context of up to 9,216 tokens.",
       "availability": {
         "status": "available",
         "deployable": true
@@ -1211,6 +1216,7 @@
       "id": "qwen3.8-27b-nvfp4",
       "name": "Qwen3.8-27B",
       "servedModelId": "qwen3.8-27b-nvfp4",
+      "description": "Qwen3.8-27B is a 27 billion parameter language model from Qwen that mixes linear and full attention layers and supports up to 262,144 tokens of context. This card lists an FP8 build for one DGX Spark or one DGX Station and an NVIDIA NVFP4 build for one DGX Spark, served by SGLang with a short context of up to 9,216 tokens.",
       "availability": {
         "status": "available",
         "deployable": true
@@ -1341,6 +1347,7 @@
       "id": "qwen3.8-flash-next",
       "name": "Qwen3.8-Flash-Next",
       "servedModelId": "qwen3.8-flash-next",
+      "description": "Qwen3.8-Flash-Next is a large mixture-of-experts language model with 512 routed experts, 10 of them active per token, a mix of linear and full attention layers, and a 262,144-token context window. This card lists an NVFP4 build from RadixArk, served by SGLang on one DGX Spark with local NVMe storage or on two DGX Sparks joined by a 200 Gbps link.",
       "availability": {
         "status": "available",
         "deployable": true

@@ -92,6 +92,14 @@ def profile_validation(model, profile, key):
     return copy.deepcopy(record)
 
 
+def checked_description(value, identifier):
+    """An optional card description is a short single-line ASCII string, so a bad value fails the export."""
+    if value is not None and (not isinstance(value, str) or not value.strip() or len(value) > 600
+            or any(not 32 <= ord(character) <= 126 for character in value)):
+        raise ValueError("Recipe description must be a short single-line ASCII string: " + identifier)
+    return value
+
+
 def sglang_recipes(root):
     automatic_ids = set(read(root / "charts/sglang/files/profiles.json"))
     recipes = []
@@ -132,10 +140,7 @@ def sglang_recipes(root):
                     "guide": ("../ADVANCED.md#helm-flash-next-recipes" if model["id"] == "qwen3.8-flash-next"
                         else "../README.md")},
             })
-        description = model.get("description")
-        if description is not None and (not isinstance(description, str) or not description.strip() or len(description) > 600
-                or any(not 32 <= ord(character) <= 126 for character in description)):
-            raise ValueError("Recipe description must be a short single-line ASCII string: " + model["id"])
+        description = checked_description(model.get("description"), model["id"])
         recipes.append({"id": model["id"], "name": model["name"], "servedModelId": model["id"],
             **({"description": description} if description else {}),
             "availability": {"status": "available", "deployable": True},
@@ -191,7 +196,9 @@ def gguf_recipes(root):
                     "values": {"recipe": metadata["recipe"], "profileName": profile["id"]},
                     "requiredSiteValues": ["nodes", "runtimeClassName", "storageClassName", "sharedCAConfigMap"],
                     "guide": "../ADVANCED.md#helm-glm-recipe"}})
+        description = checked_description(recipe.get("description"), metadata["recipe"])
         recipes.append({"id": metadata["recipe"], "name": recipe["name"], "servedModelId": recipe["servedName"],
+            **({"description": description} if description else {}),
             "availability": {"status": "available", "deployable": True},
             "precision": lock["quantization"], "license": "glm-5.3",
             "licenseNotice": "notices/" + metadata["recipe"] + "/NOTICE",

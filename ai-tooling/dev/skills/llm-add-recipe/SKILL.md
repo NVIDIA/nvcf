@@ -98,6 +98,7 @@ For SGLang, add a model to `recipes/catalog.json` using an existing entry as the
 field reference:
 
 - Identity: `id`, `name`, `releaseName` and `precision`.
+- Card text: a `description` of one or two plain sentences for the demo UI card. State the parameter count, architecture, context limit and what the recipe serves, using values from the model card and config. Use short single-line ASCII under 600 characters. Recipes that share a card name share one description. For GGUF, set it in `recipe.json`.
 - Artifacts: `repository`, `revision`, `image`, `runtime`, `license` and `source`.
 - Each profile: `id`, `nodes`, `hardware`, `cpu`, `memoryGiB`, `memoryLimitGiB`,
   `cacheGiB`, `minFreeDiskGiB`, `maxContext`, `maxConcurrency`, `flags` and

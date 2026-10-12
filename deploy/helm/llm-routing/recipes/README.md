@@ -29,7 +29,7 @@ The charts own model workloads, persistent caches and InferenceEndpoints. Shared
 
 ## Catalog maintenance
 
-An SGLang catalog entry can set an optional `description`, a short single-line ASCII summary that the demo UI shows under the model name. It is exported to the index unchanged and omitted when absent. Recipe metadata remains in [catalog.json](catalog.json) for SGLang and [glm-5.3](glm-5.3/profiles.json) for GGUF. [planned.json](planned.json) owns requested models without an executable recipe. Regenerate the common index after changing recipe metadata:
+Every recipe needs a `description`, a short single-line ASCII summary that the demo UI shows under the model name. SGLang entries set it in `catalog.json` and GGUF recipes set it in `recipe.json`. The exporter rejects an invalid value and a test requires one on every recipe. Recipes that share a card name share one description. Recipe metadata remains in [catalog.json](catalog.json) for SGLang and [glm-5.3](glm-5.3/profiles.json) for GGUF. [planned.json](planned.json) owns requested models without an executable recipe. Regenerate the common index after changing recipe metadata:
 
 ```bash
 python3 export_catalog.py

@@ -258,32 +258,55 @@ class CommonCatalogTests(unittest.TestCase):
                 self.assertRegex(evidence["checkedAt"], r"^\d{4}-\d{2}-\d{2}$")
                 self.assertTrue(evidence["reason"])
 
-    def test_optional_description_is_exported_only_when_the_catalog_has_one(self):
-        source = catalog.read(ROOT / "catalog.json")
-        described = {model["id"]: model["description"] for model in source["models"] if "description" in model}
-        self.assertIn("deepseek-v4-flash", described)
+    def committed_descriptions(self):
+        sources = {model["id"]: model.get("description") for model in catalog.read(ROOT / "catalog.json")["models"]}
+        for path in sorted(ROOT.glob("*/profiles.json")):
+            metadata = catalog.read(path)
+            sources[metadata["recipe"]] = catalog.read(path.parent / metadata["recipeFile"]).get("description")
+        return sources
+
+    def test_every_recipe_has_a_valid_description_that_the_index_exports_unchanged(self):
+        sources = self.committed_descriptions()
+        self.assertEqual(set(sources), {recipe["id"] for recipe in self.index["recipes"]})
+        for identifier, description in sources.items():
+            with self.subTest(recipe=identifier):
+                self.assertTrue(description, "Every catalog recipe needs a description for the demo UI card")
+                self.assertEqual(self.recipes[identifier]["description"], description)
+                self.assertEqual(catalog.checked_description(description, identifier), description)
+
+    def test_recipes_that_share_a_card_share_one_description(self):
+        # The UI groups recipes by name and shows the first description it finds.
+        by_name = {}
         for recipe in self.index["recipes"]:
-            if recipe["id"] in described:
-                self.assertEqual(recipe["description"], described[recipe["id"]])
-            elif recipe["id"] in {model["id"] for model in source["models"]}:
-                self.assertNotIn("description", recipe)
+            by_name.setdefault(recipe["name"], set()).add(recipe["description"])
+        for name, descriptions in by_name.items():
+            with self.subTest(card=name):
+                self.assertEqual(len(descriptions), 1)
+
+    def test_description_validation_applies_to_both_backends(self):
         real_read = catalog.read
 
-        def with_description(value):
+        def with_description(value, backend):
             def read(path):
                 data = real_read(path)
-                if Path(path).name == "catalog.json":
+                path = Path(path)
+                if backend == "sglang" and path.name == "catalog.json":
                     data = copy.deepcopy(data)
                     data["models"][0]["description"] = value
+                if backend == "gguf" and path.name == "recipe.json" and path.parent.name == "glm-5.3":
+                    data = copy.deepcopy(data)
+                    data["description"] = value
                 return data
             return read
-        with patch.object(catalog, "read", side_effect=with_description("A short plain description.")):
-            exported = next(item for item in catalog.build(ROOT)["recipes"] if item["id"] == real_read(ROOT / "catalog.json")["models"][0]["id"])
-        self.assertEqual(exported["description"], "A short plain description.")
-        for bad in ("", "   ", 7, ["list"], "x" * 601, "two\nlines", "caf\u00e9"):
-            with self.subTest(description=bad), patch.object(catalog, "read", side_effect=with_description(bad)), \
-                    self.assertRaisesRegex(ValueError, "short single-line ASCII"):
-                catalog.build(ROOT)
+        for backend in ("sglang", "gguf"):
+            with patch.object(catalog, "read", side_effect=with_description("A short plain description.", backend)):
+                built = {item["id"]: item for item in catalog.build(ROOT)["recipes"]}
+            changed = real_read(ROOT / "catalog.json")["models"][0]["id"] if backend == "sglang" else "glm-5.3"
+            self.assertEqual(built[changed]["description"], "A short plain description.")
+            for bad in ("", "   ", 7, ["list"], "x" * 601, "two\nlines", "caf\u00e9"):
+                with self.subTest(backend=backend, description=bad), patch.object(catalog, "read", side_effect=with_description(bad, backend)), \
+                        self.assertRaisesRegex(ValueError, "short single-line ASCII"):
+                    catalog.build(ROOT)
 
     def test_chart_references_resolve_to_local_packages(self):
         for recipe in self.recipes.values():
