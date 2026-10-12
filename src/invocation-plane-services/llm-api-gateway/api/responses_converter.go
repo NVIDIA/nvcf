@@ -19,6 +19,7 @@ package api
 
 import (
 	"maps"
+	"strings"
 
 	openairesponses "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api/adapters/openairesponses"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
@@ -104,8 +105,34 @@ func processInputItems(items []openairesponses.InputItem) []models.ChatMessage {
 			if toolCallOutput, ok := item.ToolCallData.(openairesponses.FunctionCallOutput); ok {
 				messages = append(messages, models.ChatMessage{
 					Role:       models.ChatCompletionRoleTool,
-					Content:    models.SingleTextContent(toolCallOutput.Output),
+					Content:    toolOutputToChatContent(toolCallOutput.Output),
 					ToolCallID: &toolCallOutput.CallID,
+				})
+			}
+
+		case openairesponses.ItemTypeCustomToolCall:
+			if call, ok := item.ToolCallData.(openairesponses.CustomToolCall); ok {
+				messages = append(messages, models.ChatMessage{
+					Role: models.ChatCompletionRoleAssistant,
+					ToolCalls: &[]models.ChatToolCall{
+						{
+							ID:   call.CallID,
+							Type: models.ToolTypeFunction,
+							Function: models.ChatToolCallFunction{
+								Name:      call.Name,
+								Arguments: call.Input,
+							},
+						},
+					},
+				})
+			}
+
+		case openairesponses.ItemTypeCustomToolCallOutput:
+			if output, ok := item.ToolCallData.(openairesponses.CustomToolCallOutput); ok {
+				messages = append(messages, models.ChatMessage{
+					Role:       models.ChatCompletionRoleTool,
+					Content:    toolOutputToChatContent(output.Output),
+					ToolCallID: &output.CallID,
 				})
 			}
 
@@ -138,6 +165,13 @@ func processInputItems(items []openairesponses.InputItem) []models.ChatMessage {
 	}
 
 	return messages
+}
+
+func toolOutputToChatContent(output openairesponses.ToolOutput) models.ChatMessageContent {
+	if output.IsContent {
+		return convertMessageContentToChatContent(output.Content)
+	}
+	return models.SingleTextContent(output.Text)
 }
 
 func convertMessageContentToChatContent(inputContent []openairesponses.InputContent) models.ChatMessageContent {
@@ -262,20 +296,61 @@ func setTools(
 	}
 }
 
+func chatFunctionTool(t *openairesponses.FunctionTool) models.ChatTool {
+	return models.ChatTool{
+		Type: models.ToolTypeFunction,
+		Function: models.ChatFunctionSpec{
+			Name:        t.Name,
+			Description: t.Description,
+			Parameters:  &t.Parameters,
+			Strict:      t.Strict,
+		},
+	}
+}
+
+func chatCustomTool(t *openairesponses.CustomTool) models.ChatTool {
+	return models.ChatTool{
+		Type: models.ToolTypeFunction,
+		Function: models.ChatFunctionSpec{
+			Name:        t.Name,
+			Description: t.Description,
+		},
+	}
+}
+
+// customToolFormatText returns the format definitions of custom tools, including
+// those nested in namespaces. chatCustomTool omits them from the chat tool, but
+// they are forwarded upstream and can be large grammars.
+func customToolFormatText(reqTools []openairesponses.Tool) string {
+	var text strings.Builder
+	for _, tool := range reqTools {
+		switch t := tool.(type) {
+		case *openairesponses.CustomTool:
+			text.Write(t.Format)
+		case *openairesponses.NamespaceTool:
+			text.WriteString(customToolFormatText(t.Tools))
+		}
+	}
+	return text.String()
+}
+
 func convertTools(reqTools openairesponses.ToolSlice) []models.ChatTool {
 	tools := make([]models.ChatTool, 0, len(reqTools))
 	for _, tool := range reqTools {
 		switch t := tool.(type) {
 		case *openairesponses.FunctionTool:
-			tools = append(tools, models.ChatTool{
-				Type: models.ToolTypeFunction,
-				Function: models.ChatFunctionSpec{
-					Name:        t.Name,
-					Description: t.Description,
-					Parameters:  &t.Parameters,
-					Strict:      t.Strict,
-				},
-			})
+			tools = append(tools, chatFunctionTool(t))
+		case *openairesponses.NamespaceTool:
+			for _, nested := range t.Tools {
+				switch n := nested.(type) {
+				case *openairesponses.FunctionTool:
+					tools = append(tools, chatFunctionTool(n))
+				case *openairesponses.CustomTool:
+					tools = append(tools, chatCustomTool(n))
+				}
+			}
+		case *openairesponses.CustomTool:
+			tools = append(tools, chatCustomTool(t))
 		case *openairesponses.BrowserSearchTool:
 			tools = append(tools, models.ChatTool{
 				Type: models.ToolTypeBrowserSearch,
