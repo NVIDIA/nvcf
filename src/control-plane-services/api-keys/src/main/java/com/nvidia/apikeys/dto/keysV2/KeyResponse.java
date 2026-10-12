@@ -25,6 +25,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -40,6 +41,8 @@ public class KeyResponse {
 
     private String id;
 
+    // @Data's generated toString honors this exclusion, so the full key is never printed.
+    @ToString.Exclude
     private String value;
 
     private KeyStatusV2 status;
@@ -61,4 +64,13 @@ public class KeyResponse {
     private Instant lastUsedAt;
 
     private JsonNode authorizations;
+
+    // Lombok ignores @ToString.Exclude on the builder, so its toString would print the full key.
+    public static class KeyResponseBuilder {
+
+        @Override
+        public String toString() {
+            return "KeyResponse.KeyResponseBuilder()";
+        }
+    }
 }

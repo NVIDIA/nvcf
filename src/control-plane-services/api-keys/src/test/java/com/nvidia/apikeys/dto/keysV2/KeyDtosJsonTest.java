@@ -140,4 +140,19 @@ class KeyDtosJsonTest {
 
         assertThat(json.get("cursor").asString()).isEqualTo("opaque-cursor");
     }
+
+    @Test
+    void keyResponse_toStringNeverExposesTheCompleteKey() {
+        String secret = "nvcfapi-complete-key-value";
+        KeyResponse.KeyResponseBuilder builder = KeyResponse.builder()
+                .id("k1")
+                .value(secret);
+        KeyResponse response = builder.build();
+
+        assertThat(response.toString()).contains("k1").doesNotContain(secret);
+        assertThat(builder.toString()).doesNotContain(secret);
+        assertThat(response.toBuilder().toString()).doesNotContain(secret);
+        assertThat(ListKeysResponse.builder().keys(List.of(response)).build().toString())
+                .doesNotContain(secret);
+    }
 }
