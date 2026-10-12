@@ -1,5 +1,5 @@
 {
-  "source": "f5117e2da903661b2835d39c41aabb9343bfdbe8",
+  "source": "e13ce2c31b9c550370cb7cf535b750adc7a06b21",
   "version": "1.0.4",
   "previous_version": "1.0.3",
   "change": "patch",
@@ -8,5 +8,5 @@
   "observability": "1.0.0",
   "navigation": "navigation.yml",
   "qualification": "",
-  "digest": "356f610543b1a8a47f1bed69933b7f93cdba44c4fc2cf9c952b4f5063f801816"
+  "digest": "1ce907add78dc6e24e810b0ba8f4cf7be86be2e1fbc15781fbf7a7af0071afbc"
 }
