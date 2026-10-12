@@ -13,7 +13,7 @@ from pathlib import Path
 
 
 STABLE_SEMVER_PATTERN = r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
-SEMVER_PATTERN = rf"{STABLE_SEMVER_PATTERN}(?:-(?:rc|dev)\.(?:0|[1-9]\d*))?"
+SEMVER_PATTERN = rf"{STABLE_SEMVER_PATTERN}(?:-(?:rc|dev|sm)\.(?:0|[1-9]\d*))?"
 RELEASE_RULES = [
     {"type": "feat", "release": "minor"},
     {"type": "fix", "release": "patch"},
@@ -579,6 +579,8 @@ def create_release(tag, title, notes, draft, dry_run):
         print(f"[github-release] GitHub release {tag} already exists; leaving it unchanged")
         return False
     cmd = ["gh", "release", "create", tag, "--verify-tag", "--title", title, "--notes", notes]
+    if re.search(r"-sm\.(?:0|[1-9]\d*)$", tag):
+        cmd.extend(["--prerelease", "--latest=false"])
     if draft:
         cmd.append("--draft")
     run(cmd)
