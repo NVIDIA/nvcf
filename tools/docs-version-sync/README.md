@@ -543,6 +543,11 @@ draft and `--promote` to expose a qualified release. Writes require
 this workflow does not introduce an OCI package or change existing OCI stack
 publication.
 
+Dispatch with `target` set to the full reviewed commit SHA containing the
+manifest and notes. The workflow verifies that it belongs to `main` and checks
+out that exact commit. Reuse this target for validation, draft retries, and
+promotion even after `main` advances.
+
 An interrupted upload leaves a draft. Retry with the same commit and bytes.
 Existing assets are downloaded and compared, never overwritten. If an asset is
 incomplete or differs, stop and inspect the draft; this tool deliberately does

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -220,5 +221,102 @@ func TestUmbrellaPublisherTriggerIsolation(t *testing.T) {
 	}
 	if strings.Contains(string(data), "fern generate") || strings.Contains(string(data), "git push") {
 		t.Fatal("artifact publisher must not publish docs or push branches")
+	}
+}
+
+func TestUmbrellaPublisherRetainsReviewedTarget(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github/workflows/publish-umbrella-release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow map[string]any
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	inputs := workflow["on"].(map[string]any)["workflow_dispatch"].(map[string]any)["inputs"].(map[string]any)
+	if inputs["target"].(map[string]any)["required"] != true {
+		t.Fatal("release target must be required")
+	}
+	job := workflow["jobs"].(map[string]any)["publish"].(map[string]any)
+	if job["env"].(map[string]any)["RELEASE_TARGET"] != "${{ inputs.target }}" {
+		t.Fatal("publisher must use the explicit target")
+	}
+	var selection string
+	publishCalls := 0
+	for _, raw := range job["steps"].([]any) {
+		step := raw.(map[string]any)
+		script, _ := step["run"].(string)
+		if step["name"] == "Select reviewed release target" {
+			selection = script
+		}
+		if strings.Contains(script, "umbrella publish") {
+			publishCalls++
+			if !strings.Contains(script, `--target "$RELEASE_TARGET"`) || strings.Contains(script, "$GITHUB_SHA") {
+				t.Fatal("publication does not retain the reviewed target")
+			}
+		}
+	}
+	if selection == "" || publishCalls != 2 {
+		t.Fatal("missing target selection or publish invocation")
+	}
+	repo := initTestGitRepo(t)
+	git := func(args ...string) string {
+		t.Helper()
+		output, err := gitOutput(repo, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	git("commit", "--allow-empty", "-m", "reviewed release")
+	target := git("rev-parse", "HEAD")
+	git("commit", "--allow-empty", "-m", "advance main")
+	main := git("rev-parse", "HEAD")
+	git("update-ref", "refs/remotes/origin/main", main)
+	selectTarget := func(target string, wantSuccess bool) {
+		t.Helper()
+		command := exec.Command("bash", "-c", selection)
+		command.Dir = repo
+		command.Env = append(os.Environ(), "RELEASE_TARGET="+target)
+		output, err := command.CombinedOutput()
+		if (err == nil) != wantSuccess {
+			t.Fatalf("target %q: %v\n%s", target, err, output)
+		}
+		if wantSuccess && git("rev-parse", "HEAD") != target {
+			t.Fatal("selected moving main instead of reviewed target")
+		}
+	}
+	selectTarget(target, true)
+	git("checkout", "--detach", main)
+	git("commit", "--allow-empty", "-m", "advance main again before promotion")
+	git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"))
+	selectTarget(target, true)
+	git("commit", "--allow-empty", "-m", "unreviewed side commit")
+	side := git("rev-parse", "HEAD")
+	for _, rejected := range []string{"main", target[:12], strings.Repeat("f", 40), side} {
+		selectTarget(rejected, false)
+	}
+}
+
+func TestUmbrellaValidationCoversPublisherWorkflows(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github/workflows/umbrella-release-validation.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var workflow map[string]any
+	if err := yaml.Unmarshal(data, &workflow); err != nil {
+		t.Fatal(err)
+	}
+	paths := workflow["on"].(map[string]any)["pull_request"].(map[string]any)["paths"].([]any)
+	for _, required := range []string{".github/workflows/publish-umbrella-release.yml", ".github/workflows/release-tags.yml"} {
+		found := false
+		for _, path := range paths {
+			if path == required {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("umbrella validation does not run for %s", required)
+		}
 	}
 }

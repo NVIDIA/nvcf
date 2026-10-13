@@ -8,6 +8,10 @@ on:
         description: Reviewed umbrella version with manifest and notes committed on main
         required: true
         type: string
+      target:
+        description: Full reviewed commit SHA on main; reuse for draft retries and promotion
+        required: true
+        type: string
       mode:
         description: Validate locally, upload a draft, or promote a qualified release
         type: choice
@@ -23,12 +27,22 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      RELEASE_TARGET: ${{ inputs.target }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
+      - name: Select reviewed release target
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TARGET" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "$RELEASE_TARGET^{commit}"
+          git merge-base --is-ancestor "$RELEASE_TARGET" origin/main
+          git checkout --detach "$RELEASE_TARGET"
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: tools/docs-version-sync/go.mod
@@ -59,7 +73,7 @@ jobs:
             --manifest "$manifest" --inventories "$inventories" \
             "${previous[@]}" --out "$RUNNER_TEMP/umbrella-assets"
           "$RUNNER_TEMP/docs-version-sync" umbrella publish --repo . \
-            --target "$GITHUB_SHA" --assets "$RUNNER_TEMP/umbrella-assets"
+            --target "$RELEASE_TARGET" --assets "$RUNNER_TEMP/umbrella-assets"
       - name: Upload draft or promote after asset readback
         if: inputs.mode != 'validate'
         env:
@@ -71,7 +85,7 @@ jobs:
           promotion=()
           if [[ "$RELEASE_MODE" == promote ]]; then promotion=(--promote); fi
           "$RUNNER_TEMP/docs-version-sync" umbrella publish --repo . \
-            --target "$GITHUB_SHA" --assets "$RUNNER_TEMP/umbrella-assets" \
+            --target "$RELEASE_TARGET" --assets "$RUNNER_TEMP/umbrella-assets" \
             --write "${promotion[@]}"
       - name: Record verified candidate identity
         shell: bash
