@@ -90,6 +90,8 @@ func TestHandlePing(t *testing.T) {
 	}
 }
 
+// TestHandleReadyz checks that /readyz reports 200 when no readiness check is configured
+// or the check passes, and 503 with the check's error otherwise.
 func TestHandleReadyz(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	tests := []struct {
@@ -129,6 +131,8 @@ func TestHandleReadyz(t *testing.T) {
 	}
 }
 
+// TestHealthzIgnoresReadinessCheck checks that /healthz stays 200 while the readiness
+// check fails, so it remains safe to use as the liveness probe.
 func TestHealthzIgnoresReadinessCheck(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	notReady := func() error { return errors.New("NATS connection is CLOSED") }

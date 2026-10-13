@@ -109,7 +109,7 @@ func (r *Router) prometheusMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// skip metrics collection for healthz and metrics endpoints
 		path := c.Request.URL.Path
-		if path == "/healthz" || path == "/readyz" || path == "/metrics" {
+		if path == "/healthz" || path == "/metrics" {
 			c.Next()
 			return
 		}

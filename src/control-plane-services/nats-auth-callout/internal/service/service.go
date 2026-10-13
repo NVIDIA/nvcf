@@ -42,6 +42,9 @@ type Service struct {
 	closed         chan struct{}
 }
 
+// NewFromConfig connects to NATS with the service's nkey and starts the authorization
+// callout service on that connection. The connection reconnects without limit; see
+// Closed and CheckReady for how its state is reported.
 func NewFromConfig(ctx context.Context, config *config.ServiceConfig, logger *zap.Logger) (*Service, error) {
 	// Create NKey keypair from embedded seed
 	nkeyPair, err := nkeys.FromSeed([]byte(config.NkeySeed))
@@ -155,6 +158,8 @@ func NewFromConfig(ctx context.Context, config *config.ServiceConfig, logger *za
 	}, nil
 }
 
+// Stop stops the callout service and closes the NATS connection. Call it once: the
+// underlying callout.AuthorizationService.Stop closes a channel unconditionally.
 func (s *Service) Stop() {
 	_ = s.calloutService.Stop()
 	s.nc.Close()
