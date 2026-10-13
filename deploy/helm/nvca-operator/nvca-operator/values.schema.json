@@ -12,7 +12,7 @@
         },
         "optionalDuration": {
             "type": "string",
-            "pattern": "^$|^([0-9]+(\\.[0-9]+)?(ns|us|\u00b5s|ms|s|m|h))+$"
+            "pattern": "^$|^[+-]?0$|^\\+?(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|\u00b5s|\u03bcs|ms|s|m|h))+$"
         }
     },
     "properties": {

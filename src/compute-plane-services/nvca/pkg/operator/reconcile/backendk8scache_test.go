@@ -2236,8 +2236,8 @@ func TestSyncNVCFBackendHealthKeepsInvalidAgentConfigUnhealthy(t *testing.T) {
 }
 
 // TestSyncNVCFBackendHealthIgnoresRejectedHeartbeatInterval is a regression
-// test for NVBug 6914489. A rejected worker.timeouts value is never applied,
-// so the running agent is unaffected by it: unlike the invalidAgentConfigError
+// test for rejected negative worker.timeouts values. A rejected value is never
+// applied, so the running agent is unaffected by it: unlike the invalidAgentConfigError
 // cases in TestSyncNVCFBackendHealthKeepsInvalidAgentConfigUnhealthy above,
 // AgentStatus must follow the agent's own /healthz response, not flip to
 // Unhealthy because of the rejected merge config.

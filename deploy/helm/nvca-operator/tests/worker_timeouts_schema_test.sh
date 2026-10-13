@@ -2,9 +2,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# NVBug 6914489: a negative worker.timeouts interval (e.g. heartbeatInterval:
-# -1s) used to be accepted by this chart's schema, then reach the operator and
-# crash-loop it. Asserts the schema now rejects a negative duration string for
+# Regression test for rejected negative worker.timeouts intervals: a negative
+# interval (e.g. heartbeatInterval: -1s) used to be accepted by this chart's
+# schema, then reach the operator and crash-loop it. Asserts the schema now rejects a negative duration string for
 # every worker.timeouts field at `helm template` time, before the value ever
 # reaches the operator.
 
@@ -87,7 +87,7 @@ assert_rejects() {
     "${work_dir}/rejected.yaml" "${work_dir}/rejected.err"; then
     fail "${chart} accepted invalid duration '${value}' for ${path}"
   fi
-  grep -Fq "does not match pattern" "${work_dir}/rejected.err" || {
+  grep -Fqi "does not match pattern" "${work_dir}/rejected.err" || {
     cat "${work_dir}/rejected.err" >&2
     fail "${chart} did not report schema validation for ${path}=${value}"
   }
@@ -95,10 +95,12 @@ assert_rejects() {
 
 valid_durations=(
   "" "0s" "30s" "500ms" "1m30s" "1h" "2.5s" "100ns" "1us" "5m0s"
+  # Nonnegative forms accepted by Go's time.ParseDuration.
+  "0" "+0" "-0" "+1s" "+1h" ".5s" "1.s" "1µs" "1μs"
 )
 
 invalid_durations=(
-  # NVBug 6914489's exact repro value.
+  # The exact value that originally crash-looped the operator.
   "-1s" "-30s" "-1" "1" "30seconds" "1x" "notaduration" "1.2.3s" "- 1s" "1 s"
 )
 

@@ -1445,7 +1445,7 @@ func requestsNamespaceSetupError(requestsNamespace string, err error) error {
 // kept alive only because its replacement configuration was rejected.
 //
 // Checks that DecodeConfig's own cfg.Validate() already covers (such as a
-// negative worker.timeouts interval, NVBug 6914489) do not need a second
+// negative worker.timeouts interval) do not need a second
 // check here: both callers reach mergeCfg through getRawAgentConfigToMerge,
 // which classifies that failure before a value this invalid can reach here.
 // This function covers validation that depends on data outside Config, such
@@ -1650,8 +1650,8 @@ func isResourceQuantityDecodeError(err error) bool {
 }
 
 // isAgentTimeConfigError reports whether DecodeConfig's cfg.Validate() stage
-// failed specifically on AgentTimeConfig.Validate()'s negative-duration check
-// (NVBug 6914489), identified by its exact, otherwise-unused message suffix.
+// failed specifically on AgentTimeConfig.Validate()'s negative-duration check,
+// identified by its typed error.
 // A negative worker.timeouts interval is a recoverable agent-config-merge
 // content problem, like a malformed resource.Quantity, not evidence of a
 // corrupt ConfigMap or an operator bug. This intentionally does not match
@@ -1660,7 +1660,8 @@ func isResourceQuantityDecodeError(err error) bool {
 // structural misconfigurations that TestGetAgentConfigToMerge_Rejects*AsFatal
 // requires stay fatal.
 func isAgentTimeConfigError(err error) bool {
-	return strings.Contains(err.Error(), "must not be negative, got ")
+	var target *nvcaconfig.NegativeDurationError
+	return errors.As(err, &target)
 }
 
 func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
@@ -1687,8 +1688,9 @@ func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaco
 		if isAgentTimeConfigError(err) {
 			// Not fatal and not invalidAgentConfigError: the running agent is
 			// unaffected by a rejected value (the new config was never
-			// applied), so AgentStatus is left alone. The field name and
-			// value are in this error, logged by the caller.
+			// applied), so agent health stays independent of config issues
+			// and AgentStatus is left alone. The field name and value are in
+			// this error, logged by the caller.
 			return nvcaconfig.Config{}, false, wrappedErr
 		}
 		return nvcaconfig.Config{}, false, nvcaoperatorerrors.FatalError(wrappedErr)

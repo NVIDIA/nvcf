@@ -5762,11 +5762,11 @@ func TestNewAgentConfigConfigMapRequestsNamespaceOverride(t *testing.T) {
 }
 
 // TestNewAgentConfigConfigMapRejectsNegativeHeartbeatInterval is a regression
-// test for NVBug 6914489: a negative worker.timeouts interval used to reach
-// getAgentConfigToMerge as a FatalError, which crash-looped the operator. The
-// rejected value was never applied, so this is also not invalidAgentConfigError:
-// AgentStatus is left alone, same as any other error SyncNVCFBackendHealth
-// does not specifically recognize.
+// test for rejected negative worker.timeouts intervals: such a value used to
+// reach getAgentConfigToMerge as a FatalError, which crash-looped the operator.
+// The rejected value was never applied, so this is also not
+// invalidAgentConfigError: AgentStatus is left alone, same as any other error
+// SyncNVCFBackendHealth does not specifically recognize.
 func TestNewAgentConfigConfigMapRejectsNegativeHeartbeatInterval(t *testing.T) {
 	ctx := newTestContext()
 	clients := mockKubeClientsForIntegrationTests()
