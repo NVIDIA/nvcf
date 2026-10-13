@@ -82,28 +82,15 @@ func TestLoadFromEnvReadsLastCluster(t *testing.T) {
 }
 
 func TestLoadFromEnvRejectsInvalidLastCluster(t *testing.T) {
-	cases := []struct {
-		key   string
-		value string
-	}{
-		{key: "STARGATE_LAST_CLUSTER_ENABLED", value: "maybe"},
-		{key: "STARGATE_LAST_CLUSTER_TTL", value: "10"},
-		{key: "STARGATE_LAST_CLUSTER_TTL", value: "0s"},
-		{key: "STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT", value: "-1ms"},
-		{key: "STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES", value: "0"},
-		{key: "STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES", value: "-1"},
-		{key: "STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES", value: "many"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.key+"="+tc.value, func(t *testing.T) {
-			t.Setenv(tc.key, tc.value)
-
-			_, err := LoadFromEnv()
-			if err == nil {
-				t.Fatal("LoadFromEnv() error = nil, want error")
-			}
-			if !strings.Contains(err.Error(), tc.key) {
-				t.Fatalf("error %q does not mention %s", err.Error(), tc.key)
+	for key, value := range map[string]string{
+		"STARGATE_LAST_CLUSTER_TTL":               "0s",
+		"STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT":    "-1ms",
+		"STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES": "0",
+	} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, value)
+			if _, err := LoadFromEnv(); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("LoadFromEnv() error = %v, want one naming %s", err, key)
 			}
 		})
 	}

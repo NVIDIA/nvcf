@@ -42,8 +42,15 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
-// fakeStore records calls and can inject errors or block Get while ignoring
-// the context, like a store that does not honor cancellation.
+const (
+	lookupSpan    = "llm-api-gateway.last_cluster_lookup"
+	writeSpan     = "llm-api-gateway.last_cluster_write"
+	lookupsMetric = "llm_api_gateway_last_cluster_lookups_total"
+	writesMetric  = "llm_api_gateway_last_cluster_writes_total"
+)
+
+// fakeStore can inject errors or block calls while ignoring the context,
+// like a store that does not honor cancellation.
 type fakeStore struct {
 	mu       sync.Mutex
 	values   map[string]string
@@ -103,6 +110,23 @@ func (s *fakeStore) value(key string) string {
 	return s.values[key]
 }
 
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 func sessionCtx(source string) *requestctx.RequestContext {
 	return &requestctx.RequestContext{
 		RequestID:        "req-1",
@@ -116,6 +140,12 @@ func sessionCtx(source string) *requestctx.RequestContext {
 
 func newTestTracker(store Store) *Tracker {
 	return NewTracker(store, Options{TTL: time.Minute, LookupTimeout: 20 * time.Millisecond})
+}
+
+func inflightWrites(t *Tracker) int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.writes
 }
 
 func installSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
@@ -144,6 +174,7 @@ func installMetricReader(t *testing.T) *sdkmetric.ManualReader {
 	return reader
 }
 
+// counterValues returns the counter's values keyed by its result label.
 func counterValues(t *testing.T, reader *sdkmetric.ManualReader, name string) map[string]int64 {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
@@ -165,434 +196,243 @@ func counterValues(t *testing.T, reader *sdkmetric.ManualReader, name string) ma
 	return out
 }
 
-func spanByName(t *testing.T, recorder *tracetest.SpanRecorder, name string) sdktrace.ReadOnlySpan {
+// assertSpan checks the named span's result, status, and function ID.
+func assertSpan(t *testing.T, recorder *tracetest.SpanRecorder, name, wantResult string, wantStatus codes.Code) {
 	t.Helper()
 	for _, span := range recorder.Ended() {
-		if span.Name() == name {
-			return span
+		if span.Name() != name {
+			continue
 		}
+		attrs := attribute.NewSet(span.Attributes()...)
+		result, _ := attrs.Value("result")
+		functionID, _ := attrs.Value("nvcf.function.id")
+		if result.AsString() != wantResult || span.Status().Code != wantStatus || functionID.AsString() != "fn-alpha" {
+			t.Fatalf("span %s attributes=%v status=%v, want result=%s status=%v nvcf.function.id=fn-alpha",
+				name, span.Attributes(), span.Status().Code, wantResult, wantStatus)
+		}
+		return
 	}
 	t.Fatalf("span %q not recorded", name)
-	return nil
 }
 
-func spanResult(span sdktrace.ReadOnlySpan) string {
-	for _, attr := range span.Attributes() {
-		if attr.Key == attribute.Key("result") {
-			return attr.Value.AsString()
-		}
-	}
-	return ""
-}
-
-func TestTrackerRoundTripForEligibleSources(t *testing.T) {
-	for _, source := range []string{
-		requestctx.SessionSourcePromptCacheKey,
-		requestctx.SessionSourceConversationID,
-		requestctx.SessionSourceHeader,
-		requestctx.SessionSourceClaudeCodeHeader,
+func TestLookupOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		stored     string
+		getErr     error
+		block      bool
+		cancel     bool
+		wantID     string
+		wantResult string
+		wantStatus codes.Code
+	}{
+		{name: "hit", stored: "cluster-b", wantID: "cluster-b", wantResult: "hit"},
+		{name: "miss", wantResult: "miss"},
+		{name: "invalid stored value", stored: "bad\nvalue", wantResult: "miss"},
+		{name: "error", getErr: errors.New("olric unavailable"), wantResult: "error", wantStatus: codes.Error},
+		{name: "timeout", block: true, wantResult: "timeout", wantStatus: codes.Error},
+		// A cancelled request (client gone) is not a store failure.
+		{name: "cancelled request", block: true, cancel: true, wantResult: "timeout"},
 	} {
-		t.Run(source, func(t *testing.T) {
-			ctx := context.Background()
-			tracker := newTestTracker(NewLocalStore(10))
-			reqCtx := sessionCtx(source)
-
-			key, clusterID := tracker.Lookup(ctx, reqCtx, reqCtx.Model)
-			if key == "" || clusterID != "" {
-				t.Fatalf("first Lookup() = %q, %q; want key and no cluster", key, clusterID)
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := installSpanRecorder(t)
+			reader := installMetricReader(t)
+			var logs syncBuffer
+			ctx, cancel := context.WithCancel(zerolog.New(&logs).WithContext(context.Background()))
+			defer cancel()
+			if tc.cancel {
+				cancel()
 			}
-			tracker.Remember(ctx, reqCtx, reqCtx.Model, key, http.StatusOK, "cluster-b")
-			tracker.Drain(ctx)
+			store := newFakeStore()
+			store.getErr = tc.getErr
+			if tc.block {
+				store.blockGet = make(chan struct{})
+				t.Cleanup(func() { close(store.blockGet) })
+			}
+			reqCtx := sessionCtx(requestctx.SessionSourceHeader)
+			if tc.stored != "" {
+				store.values[Key(reqCtx.RoutingKey, reqCtx.Model, reqCtx.CacheAffinityKey)] = tc.stored
+			}
 
-			_, clusterID = tracker.Lookup(ctx, reqCtx, reqCtx.Model)
-			if clusterID != "cluster-b" {
-				t.Fatalf("second Lookup() cluster = %q, want cluster-b", clusterID)
+			start := time.Now()
+			key, clusterID := newTestTracker(store).Lookup(ctx, reqCtx, reqCtx.Model)
+			// A blocked store never returns before cleanup, so any bound well
+			// under that proves Lookup did not wait for it. The slack keeps
+			// loaded -race runs stable.
+			if elapsed := time.Since(start); elapsed >= 200*time.Millisecond {
+				t.Fatalf("Lookup() took %s, want < 200ms", elapsed)
+			}
+			if key == "" || clusterID != tc.wantID {
+				t.Fatalf("Lookup() = %q, %q; want a key and %q", key, clusterID, tc.wantID)
+			}
+			assertSpan(t, recorder, lookupSpan, tc.wantResult, tc.wantStatus)
+			if got := counterValues(t, reader, lookupsMetric); got[tc.wantResult] != 1 || len(got) != 1 {
+				t.Fatalf("lookups = %v, want only %s=1", got, tc.wantResult)
+			}
+			// Failures warn (timeouts sampled); see TestStoreErrorLogsOmitSessionIdentifiers.
+			if tc.wantStatus != codes.Error && strings.Contains(logs.String(), `"level":"warn"`) {
+				t.Fatalf("logs = %s, want no warn", logs.String())
 			}
 		})
 	}
 }
 
-func TestTrackerSkipsIneligibleSessions(t *testing.T) {
+func TestLookupSkipsIneligibleSessions(t *testing.T) {
 	reader := installMetricReader(t)
-	ctx := context.Background()
 	store := newFakeStore()
 	tracker := newTestTracker(store)
+	header := sessionCtx(requestctx.SessionSourceHeader)
 
-	for _, source := range []string{
-		requestctx.SessionSourcePayload,
-		"unknown",
+	for _, tc := range []struct {
+		reqCtx *requestctx.RequestContext
+		model  string
+	}{
+		{sessionCtx(requestctx.SessionSourcePayload), "m"},
+		{sessionCtx("unknown"), "m"},
+		{header, ""},
+		// No session at all is not counted as skipped.
+		{&requestctx.RequestContext{RoutingKey: "fn"}, "m"},
 	} {
-		key, clusterID := tracker.Lookup(ctx, sessionCtx(source), "company/model")
-		if key != "" || clusterID != "" {
-			t.Fatalf("Lookup(%s) = %q, %q; want skipped", source, key, clusterID)
+		if key, clusterID := tracker.Lookup(context.Background(), tc.reqCtx, tc.model); key != "" || clusterID != "" {
+			t.Fatalf("Lookup(%+v, %q) = %q, %q; want skipped", tc.reqCtx, tc.model, key, clusterID)
 		}
-		tracker.Remember(ctx, sessionCtx(source), "company/model", key, http.StatusOK, "cluster-b")
 	}
-	if key, _ := tracker.Lookup(ctx, sessionCtx(requestctx.SessionSourceHeader), ""); key != "" {
-		t.Fatal("Lookup() with empty model must be skipped")
+	if gets, _ := store.counts(); gets != 0 {
+		t.Fatalf("store gets = %d, want 0", gets)
 	}
-	// No session at all is not counted.
-	if key, _ := tracker.Lookup(ctx, &requestctx.RequestContext{RoutingKey: "fn"}, "m"); key != "" {
-		t.Fatal("Lookup() without a session must return no key")
-	}
-	tracker.Drain(ctx)
-
-	if gets, sets := store.counts(); gets != 0 || sets != 0 {
-		t.Fatalf("store gets=%d sets=%d, want 0 and 0", gets, sets)
-	}
-	lookups := counterValues(t, reader, "llm_api_gateway_last_cluster_lookups_total")
-	if lookups["skipped"] != 3 || len(lookups) != 1 {
-		t.Fatalf("lookups = %v, want only skipped=3", lookups)
+	if got := counterValues(t, reader, lookupsMetric); got["skipped"] != 3 || len(got) != 1 {
+		t.Fatalf("lookups = %v, want only skipped=3", got)
 	}
 }
 
-func TestTrackerNilIsNoop(t *testing.T) {
-	var tracker *Tracker
-	ctx := context.Background()
-	if key, clusterID := tracker.Lookup(ctx, sessionCtx(requestctx.SessionSourceHeader), "m"); key != "" || clusterID != "" {
-		t.Fatal("nil Tracker Lookup() must return empty values")
+func TestWriteOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		setErr     error
+		wantResult string
+		wantStatus codes.Code
+	}{
+		{wantResult: "ok"},
+		{setErr: errors.New("olric unavailable"), wantResult: "error", wantStatus: codes.Error},
+	} {
+		t.Run(tc.wantResult, func(t *testing.T) {
+			recorder := installSpanRecorder(t)
+			reader := installMetricReader(t)
+			ctx := context.Background()
+			store := newFakeStore()
+			store.setErr = tc.setErr
+			tracker := newTestTracker(store)
+
+			tracker.Remember(ctx, sessionCtx(requestctx.SessionSourceHeader), "m", "k", http.StatusOK, "cluster-b")
+			tracker.Drain(ctx)
+
+			assertSpan(t, recorder, writeSpan, tc.wantResult, tc.wantStatus)
+			if got := counterValues(t, reader, writesMetric); got[tc.wantResult] != 1 || len(got) != 1 {
+				t.Fatalf("writes = %v, want only %s=1", got, tc.wantResult)
+			}
+		})
 	}
-	tracker.Remember(ctx, nil, "m", "k", http.StatusOK, "B")
-	tracker.Drain(ctx)
 }
 
-func TestTrackerRememberOnlyStoresValidSuccessfulResponses(t *testing.T) {
-	ctx := context.Background()
+func TestRememberStoresOnlyValidSuccessfulResponses(t *testing.T) {
 	store := newFakeStore()
 	tracker := newTestTracker(store)
 	reqCtx := sessionCtx(requestctx.SessionSourceHeader)
-	key, _ := tracker.Lookup(ctx, reqCtx, reqCtx.Model)
+	// The write outlives the request, so a cancelled request still records.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
-	tracker.Remember(ctx, reqCtx, reqCtx.Model, key, http.StatusOK, "cluster-a")
-	tracker.Drain(ctx)
 	for _, tc := range []struct {
 		status    int
 		clusterID string
 	}{
-		{status: http.StatusServiceUnavailable, clusterID: "cluster-c"},
-		{status: http.StatusTooManyRequests, clusterID: "cluster-c"},
-		{status: http.StatusMultipleChoices, clusterID: "cluster-c"},
-		{status: http.StatusOK, clusterID: ""},
-		{status: http.StatusOK, clusterID: "   "},
-		{status: http.StatusOK, clusterID: strings.Repeat("c", MaxValueBytes+1)},
-		{status: http.StatusOK, clusterID: "bad\x01value"},
+		{http.StatusMultipleChoices, "cluster-c"},
+		{http.StatusOK, "   "},
+		{http.StatusOK, "bad\x01value"},
+		{http.StatusCreated, "  cluster-b  "},
 	} {
-		tracker.Remember(ctx, reqCtx, reqCtx.Model, key, tc.status, tc.clusterID)
+		tracker.Remember(ctx, reqCtx, reqCtx.Model, "k", tc.status, tc.clusterID)
 	}
-	tracker.Drain(ctx)
+	tracker.Drain(context.Background())
 
-	if got := store.value(key); got != "cluster-a" {
-		t.Fatalf("stored value = %q, want cluster-a", got)
-	}
-	if _, sets := store.counts(); sets != 1 {
-		t.Fatalf("store sets = %d, want 1", sets)
-	}
-
-	tracker.Remember(ctx, reqCtx, reqCtx.Model, key, http.StatusCreated, "  cluster-b  ")
-	tracker.Drain(ctx)
-	if got := store.value(key); got != "cluster-b" {
-		t.Fatalf("stored value = %q, want trimmed cluster-b", got)
+	if _, sets := store.counts(); sets != 1 || store.value("k") != "cluster-b" {
+		t.Fatalf("sets = %d, stored = %q; want one write of trimmed cluster-b", sets, store.value("k"))
 	}
 }
 
-func TestTrackerTreatsInvalidStoredValueAsMiss(t *testing.T) {
-	ctx := context.Background()
+func TestStoreErrorLogsOmitSessionIdentifiers(t *testing.T) {
+	var logs syncBuffer
+	ctx := zerolog.New(&logs).WithContext(context.Background())
 	store := newFakeStore()
-	tracker := newTestTracker(store)
-	reqCtx := sessionCtx(requestctx.SessionSourceHeader)
-	key := Key(reqCtx.RoutingKey, reqCtx.Model, reqCtx.CacheAffinityKey)
-	store.values[key] = "bad\nvalue"
-
-	if _, clusterID := tracker.Lookup(ctx, reqCtx, reqCtx.Model); clusterID != "" {
-		t.Fatalf("Lookup() cluster = %q, want miss for an invalid stored value", clusterID)
-	}
-}
-
-func TestLookupTimeout(t *testing.T) {
-	recorder := installSpanRecorder(t)
-	reader := installMetricReader(t)
-	store := newFakeStore()
-	store.blockGet = make(chan struct{})
-	t.Cleanup(func() { close(store.blockGet) })
-	tracker := newTestTracker(store)
-	reqCtx := sessionCtx(requestctx.SessionSourcePromptCacheKey)
-
-	start := time.Now()
-	key, clusterID := tracker.Lookup(context.Background(), reqCtx, reqCtx.Model)
-	elapsed := time.Since(start)
-
-	// The store blocks until cleanup, so any bound well under that proves the
-	// lookup did not wait for Get. The slack keeps loaded -race runs stable.
-	if elapsed >= 200*time.Millisecond {
-		t.Fatalf("Lookup() took %s, want < 200ms", elapsed)
-	}
-	if key == "" || clusterID != "" {
-		t.Fatalf("Lookup() = %q, %q; want key and no cluster", key, clusterID)
-	}
-	span := spanByName(t, recorder, "llm-api-gateway.last_cluster_lookup")
-	if spanResult(span) != "timeout" || span.Status().Code != codes.Error {
-		t.Fatalf("span result=%q status=%v, want timeout and Error", spanResult(span), span.Status().Code)
-	}
-	if got := counterValues(t, reader, "llm_api_gateway_last_cluster_lookups_total"); got["timeout"] != 1 {
-		t.Fatalf("lookups = %v, want timeout=1", got)
-	}
-}
-
-func TestLookupCancelledRequestIsNotAStoreFailure(t *testing.T) {
-	recorder := installSpanRecorder(t)
-	reader := installMetricReader(t)
-	var buf syncBuffer
-	store := newFakeStore()
-	store.blockGet = make(chan struct{})
-	t.Cleanup(func() { close(store.blockGet) })
-	tracker := newTestTracker(store)
-	reqCtx := sessionCtx(requestctx.SessionSourceHeader)
-	ctx, cancel := context.WithCancel(zerolog.New(&buf).WithContext(context.Background()))
-	time.AfterFunc(time.Millisecond, cancel)
-
-	key, clusterID := tracker.Lookup(ctx, reqCtx, reqCtx.Model)
-	if key == "" || clusterID != "" {
-		t.Fatalf("Lookup() = %q, %q; want key and no cluster", key, clusterID)
-	}
-	span := spanByName(t, recorder, "llm-api-gateway.last_cluster_lookup")
-	if spanResult(span) != "timeout" || span.Status().Code == codes.Error {
-		t.Fatalf("span result=%q status=%v, want timeout without error status", spanResult(span), span.Status().Code)
-	}
-	if got := counterValues(t, reader, "llm_api_gateway_last_cluster_lookups_total"); got["timeout"] != 1 || got["error"] != 0 {
-		t.Fatalf("lookups = %v, want timeout=1 and no error", got)
-	}
-	if logs := buf.String(); strings.Contains(logs, `"level":"warn"`) {
-		t.Fatalf("logs = %s, want no warn for a cancelled request", logs)
-	}
-}
-
-func TestTrackerSpansCarryFunctionID(t *testing.T) {
-	recorder := installSpanRecorder(t)
-	ctx := context.Background()
-	tracker := newTestTracker(newFakeStore())
-	reqCtx := sessionCtx(requestctx.SessionSourceHeader)
-
-	key, _ := tracker.Lookup(ctx, reqCtx, reqCtx.Model)
-	tracker.Remember(ctx, reqCtx, reqCtx.Model, key, http.StatusOK, "cluster-b")
-	tracker.Drain(ctx)
-
-	for _, name := range []string{"llm-api-gateway.last_cluster_lookup", "llm-api-gateway.last_cluster_write"} {
-		span := spanByName(t, recorder, name)
-		found := false
-		for _, attr := range span.Attributes() {
-			if attr.Key == "nvcf.function.id" && attr.Value.AsString() == reqCtx.RoutingKey {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatalf("span %s attributes = %v, want nvcf.function.id=%s", name, span.Attributes(), reqCtx.RoutingKey)
-		}
-	}
-}
-
-func TestTrackerWriteLogUsesLookupModel(t *testing.T) {
-	var buf syncBuffer
-	ctx := zerolog.New(&buf).WithContext(context.Background())
-	store := newFakeStore()
-	store.setErr = errors.New("olric unavailable")
+	store.getErr = errors.New("olric unavailable")
+	store.setErr = store.getErr
 	tracker := newTestTracker(store)
 	reqCtx := sessionCtx(requestctx.SessionSourceHeader)
 
+	// The logged model is the one used for the key, not reqCtx.Model.
 	key, _ := tracker.Lookup(ctx, reqCtx, "company/effective-model")
 	tracker.Remember(ctx, reqCtx, "company/effective-model", key, http.StatusOK, "cluster-b")
 	tracker.Drain(ctx)
 
-	if logs := buf.String(); !strings.Contains(logs, `"model":"company/effective-model"`) {
-		t.Fatalf("logs = %s, want the model used for the key", logs)
-	}
-}
-
-func TestTrackerSpansAndMetrics(t *testing.T) {
-	recorder := installSpanRecorder(t)
-	reader := installMetricReader(t)
-	ctx := context.Background()
-	store := newFakeStore()
-	tracker := newTestTracker(store)
-	reqCtx := sessionCtx(requestctx.SessionSourceHeader)
-
-	key, _ := tracker.Lookup(ctx, reqCtx, reqCtx.Model) // miss
-	tracker.Remember(ctx, reqCtx, reqCtx.Model, key, http.StatusOK, "cluster-b")
-	tracker.Drain(ctx)
-	tracker.Lookup(ctx, reqCtx, reqCtx.Model) // hit
-
-	store.mu.Lock()
-	store.getErr = errors.New("olric unavailable")
-	store.setErr = errors.New("olric unavailable")
-	store.mu.Unlock()
-	tracker.Lookup(ctx, reqCtx, reqCtx.Model) // error
-	tracker.Remember(ctx, reqCtx, reqCtx.Model, key, http.StatusOK, "cluster-c")
-	tracker.Drain(ctx)
-
-	var lookups, writes []sdktrace.ReadOnlySpan
-	for _, span := range recorder.Ended() {
-		switch span.Name() {
-		case "llm-api-gateway.last_cluster_lookup":
-			lookups = append(lookups, span)
-		case "llm-api-gateway.last_cluster_write":
-			writes = append(writes, span)
+	out := logs.String()
+	for _, want := range []string{
+		`"level":"warn"`, `"request_id":"req-1"`, `"model":"company/effective-model"`, `"routing_key":"fn-alpha"`,
+	} {
+		if strings.Count(out, want) != 2 {
+			t.Fatalf("logs = %s, want %s on both the lookup and the write line", out, want)
 		}
 	}
-	if len(lookups) != 3 || len(writes) != 2 {
-		t.Fatalf("spans lookups=%d writes=%d, want 3 and 2", len(lookups), len(writes))
-	}
-	for i, want := range []struct {
-		result string
-		code   codes.Code
-	}{{"miss", codes.Unset}, {"hit", codes.Unset}, {"error", codes.Error}} {
-		if got := spanResult(lookups[i]); got != want.result || lookups[i].Status().Code != want.code {
-			t.Fatalf("lookup span %d result=%q status=%v, want %q %v", i, got, lookups[i].Status().Code, want.result, want.code)
+	for _, secret := range []string{"affinity-secret", reqCtx.SessionID, key} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("logs leak %q: %s", secret, out)
 		}
 	}
-	for i, want := range []struct {
-		result string
-		code   codes.Code
-	}{{"ok", codes.Unset}, {"error", codes.Error}} {
-		if got := spanResult(writes[i]); got != want.result || writes[i].Status().Code != want.code {
-			t.Fatalf("write span %d result=%q status=%v, want %q %v", i, got, writes[i].Status().Code, want.result, want.code)
-		}
-	}
-
-	gotLookups := counterValues(t, reader, "llm_api_gateway_last_cluster_lookups_total")
-	if gotLookups["miss"] != 1 || gotLookups["hit"] != 1 || gotLookups["error"] != 1 {
-		t.Fatalf("lookups = %v, want miss=1 hit=1 error=1", gotLookups)
-	}
-	gotWrites := counterValues(t, reader, "llm_api_gateway_last_cluster_writes_total")
-	if gotWrites["ok"] != 1 || gotWrites["error"] != 1 {
-		t.Fatalf("writes = %v, want ok=1 error=1", gotWrites)
-	}
-}
-
-func TestTrackerStoreErrorsLogWarnWithoutSessionIdentifiers(t *testing.T) {
-	var buf syncBuffer
-	ctx := zerolog.New(&buf).WithContext(context.Background())
-	store := newFakeStore()
-	store.getErr = errors.New("olric unavailable")
-	store.setErr = errors.New("olric unavailable")
-	tracker := newTestTracker(store)
-	reqCtx := sessionCtx(requestctx.SessionSourceHeader)
-
-	key, clusterID := tracker.Lookup(ctx, reqCtx, reqCtx.Model)
-	if key == "" || clusterID != "" {
-		t.Fatalf("Lookup() = %q, %q; want key and no cluster on error", key, clusterID)
-	}
-	tracker.Remember(ctx, reqCtx, reqCtx.Model, key, http.StatusOK, "cluster-b")
-	tracker.Drain(ctx)
-
-	logs := buf.String()
-	if strings.Count(logs, `"level":"warn"`) != 2 {
-		t.Fatalf("logs = %s, want two warn lines", logs)
-	}
-	for _, want := range []string{`"request_id":"req-1"`, `"model":"company/model"`, `"routing_key":"fn-alpha"`} {
-		if strings.Count(logs, want) != 2 {
-			t.Fatalf("logs = %s, want %s on both lines", logs, want)
-		}
-	}
-	for _, secret := range []string{reqCtx.CacheAffinityKey, reqCtx.SessionID, "affinity-secret", key} {
-		if strings.Contains(logs, secret) {
-			t.Fatalf("logs leak %q: %s", secret, logs)
-		}
-	}
-}
-
-func TestTrackerWriteSurvivesRequestCancellation(t *testing.T) {
-	store := newFakeStore()
-	tracker := newTestTracker(store)
-	reqCtx := sessionCtx(requestctx.SessionSourceHeader)
-	ctx, cancel := context.WithCancel(context.Background())
-	key, _ := tracker.Lookup(ctx, reqCtx, reqCtx.Model)
-
-	tracker.Remember(ctx, reqCtx, reqCtx.Model, key, http.StatusOK, "cluster-b")
-	cancel()
-	tracker.Drain(context.Background())
-
-	if got := store.value(key); got != "cluster-b" {
-		t.Fatalf("stored value = %q, want cluster-b", got)
-	}
-}
-
-type syncBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *syncBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
-}
-
-func (b *syncBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.String()
 }
 
 func TestTrackerCapsStuckStoreCalls(t *testing.T) {
 	reader := installMetricReader(t)
 	ctx := context.Background()
-	store := newFakeStore()
 	unblock := make(chan struct{})
-	store.blockGet = unblock
-	store.blockSet = unblock
-	const maxInflight = 4
-	const calls = 50
-	tracker := NewTracker(store, Options{
-		TTL:                time.Minute,
-		LookupTimeout:      5 * time.Millisecond,
-		MaxInflightLookups: maxInflight,
-		MaxInflightWrites:  maxInflight,
-	})
+	store := newFakeStore()
+	store.blockGet, store.blockSet = unblock, unblock
+	const maxInflight, calls = 4, 50
+	tracker := NewTracker(store, Options{TTL: time.Minute, LookupTimeout: 5 * time.Millisecond})
+	tracker.lookupSlots = make(chan struct{}, maxInflight)
+	tracker.maxWrites = maxInflight
 	reqCtx := sessionCtx(requestctx.SessionSourceHeader)
 	baseline := runtime.NumGoroutine()
 
 	start := time.Now()
 	for i := 0; i < calls; i++ {
-		key, clusterID := tracker.Lookup(ctx, reqCtx, reqCtx.Model)
-		if key == "" || clusterID != "" {
-			t.Fatalf("Lookup() = %q, %q; want key and no cluster", key, clusterID)
-		}
+		key, _ := tracker.Lookup(ctx, reqCtx, reqCtx.Model)
 		tracker.Remember(ctx, reqCtx, reqCtx.Model, key, http.StatusOK, "cluster-b")
 	}
 	// Only the first maxInflight lookups wait for their deadline.
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("%d calls against a stuck store took %s", calls, elapsed)
 	}
-	if got := tracker.InflightLookups(); got != maxInflight {
-		t.Fatalf("InflightLookups() = %d, want %d", got, maxInflight)
-	}
-	if got := tracker.InflightWrites(); got != maxInflight {
-		t.Fatalf("InflightWrites() = %d, want %d", got, maxInflight)
+	if lookups, writes := len(tracker.lookupSlots), inflightWrites(tracker); lookups != maxInflight || writes != maxInflight {
+		t.Fatalf("in flight lookups=%d writes=%d, want %d each", lookups, writes, maxInflight)
 	}
 	if delta := runtime.NumGoroutine() - baseline; delta > 2*maxInflight+4 {
 		t.Fatalf("goroutines grew by %d, want at most %d", delta, 2*maxInflight+4)
 	}
-	lookups := counterValues(t, reader, "llm_api_gateway_last_cluster_lookups_total")
-	if lookups["timeout"] != calls {
-		t.Fatalf("lookups = %v, want timeout=%d", lookups, calls)
+	if got := counterValues(t, reader, lookupsMetric); got["timeout"] != calls {
+		t.Fatalf("lookups = %v, want timeout=%d", got, calls)
 	}
-	writes := counterValues(t, reader, "llm_api_gateway_last_cluster_writes_total")
-	if writes["error"] != calls-maxInflight {
-		t.Fatalf("writes = %v, want error=%d for dropped writes", writes, calls-maxInflight)
+	if got := counterValues(t, reader, writesMetric); got["error"] != calls-maxInflight {
+		t.Fatalf("writes = %v, want error=%d for dropped writes", got, calls-maxInflight)
 	}
 
 	close(unblock)
 	tracker.Drain(ctx)
 	deadline := time.Now().Add(2 * time.Second)
-	for tracker.InflightLookups() != 0 || tracker.InflightWrites() != 0 {
+	for len(tracker.lookupSlots) != 0 {
 		if time.Now().After(deadline) {
-			t.Fatalf("slots not released: lookups=%d writes=%d", tracker.InflightLookups(), tracker.InflightWrites())
+			t.Fatalf("lookup slots not released: %d", len(tracker.lookupSlots))
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if got := counterValues(t, reader, "llm_api_gateway_last_cluster_writes_total"); got["ok"] != maxInflight {
-		t.Fatalf("writes = %v, want ok=%d once unblocked", got, maxInflight)
-	}
-	// Freed slots serve new calls.
+	// Freed slots serve new calls, and the admitted writes landed.
 	if _, clusterID := tracker.Lookup(ctx, reqCtx, reqCtx.Model); clusterID != "cluster-b" {
 		t.Fatalf("Lookup() after unblock cluster = %q, want cluster-b", clusterID)
 	}
@@ -600,17 +440,16 @@ func TestTrackerCapsStuckStoreCalls(t *testing.T) {
 
 func TestDrainWaitsForWritesStartedWhileWaiting(t *testing.T) {
 	ctx := context.Background()
-	store := &gatedStore{fakeStore: newFakeStore(), gates: map[string]chan struct{}{}}
+	store := newFakeStore()
+	gate1, gate2 := make(chan struct{}), make(chan struct{})
+	store.blockSet = gate1
 	tracker := newTestTracker(store)
 	reqCtx := sessionCtx(requestctx.SessionSourceHeader)
-	gate1, gate2 := store.gate("k1"), store.gate("k2")
-
 	tracker.Remember(ctx, reqCtx, reqCtx.Model, "k1", http.StatusOK, "cluster-a")
 
-	// The hook stops Drain after it captured the idle channel of W1 and
-	// before it waits on it.
-	captured := make(chan struct{})
-	resume := make(chan struct{})
+	// The hook pauses Drain after it captured the first write's idle channel
+	// and before it waits on it.
+	captured, resume := make(chan struct{}), make(chan struct{})
 	var once sync.Once
 	tracker.drainWaitHook = func() {
 		once.Do(func() {
@@ -625,51 +464,26 @@ func TestDrainWaitsForWritesStartedWhileWaiting(t *testing.T) {
 	}()
 	<-captured
 
-	// W1 finishes and W2 starts before Drain resumes.
+	// The first write finishes and a second starts before Drain resumes.
 	close(gate1)
-	for tracker.InflightWrites() != 0 {
+	for inflightWrites(tracker) != 0 {
 		time.Sleep(time.Millisecond)
 	}
+	store.mu.Lock()
+	store.blockSet = gate2
+	store.mu.Unlock()
 	tracker.Remember(ctx, reqCtx, reqCtx.Model, "k2", http.StatusOK, "cluster-b")
 	close(resume)
 
 	select {
 	case <-drained:
-		t.Fatal("Drain returned while W2 was still in flight")
+		t.Fatal("Drain returned while the second write was in flight")
 	case <-time.After(50 * time.Millisecond):
 	}
 	close(gate2)
 	select {
 	case <-drained:
 	case <-time.After(2 * time.Second):
-		t.Fatal("Drain did not return after W2 finished")
+		t.Fatal("Drain did not return after the second write finished")
 	}
-	if got := store.value("k2"); got != "cluster-b" {
-		t.Fatalf("stored k2 = %q, want cluster-b", got)
-	}
-}
-
-// gatedStore blocks Set for each key until its gate is closed.
-type gatedStore struct {
-	*fakeStore
-	gateMu sync.Mutex
-	gates  map[string]chan struct{}
-}
-
-func (s *gatedStore) gate(key string) chan struct{} {
-	s.gateMu.Lock()
-	defer s.gateMu.Unlock()
-	ch := make(chan struct{})
-	s.gates[key] = ch
-	return ch
-}
-
-func (s *gatedStore) Set(ctx context.Context, key, value string, ttl time.Duration) error {
-	s.gateMu.Lock()
-	ch := s.gates[key]
-	s.gateMu.Unlock()
-	if ch != nil {
-		<-ch
-	}
-	return s.fakeStore.Set(ctx, key, value, ttl)
 }

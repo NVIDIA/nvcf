@@ -66,21 +66,15 @@ type stateShutdown struct {
 // Olric, so neither the limiter nor the drain writes to a node that already
 // left the cluster.
 func (s stateShutdown) run() {
-	if s.stopLimiter != nil {
-		s.stopLimiter()
+	s.stopLimiter()
+	timeout := s.timeout
+	if timeout <= 0 {
+		timeout = util.DefaultOlricShutdownTimeout
 	}
-	if s.drain != nil {
-		timeout := s.timeout
-		if timeout <= 0 {
-			timeout = util.DefaultOlricShutdownTimeout
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		s.drain(ctx)
-		cancel()
-	}
-	if s.stopOlric != nil {
-		s.stopOlric(context.Background())
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	s.drain(ctx)
+	cancel()
+	s.stopOlric(context.Background())
 }
 
 func New(
@@ -134,17 +128,16 @@ func New(
 		olric.stop(ctx)
 		return nil, err
 	}
-	if stargate, ok := inferenceProvider.(*provider.StargateProvider); ok && tracker != nil {
+	if stargate, ok := inferenceProvider.(*provider.StargateProvider); ok {
 		stargate.SetLastClusterTracker(tracker)
 	}
 
+	// A nil tracker drains immediately.
 	state := stateShutdown{
 		stopLimiter: stopLimiter,
+		drain:       tracker.Drain,
 		stopOlric:   olric.stop,
 		timeout:     cfg.Olric.ShutdownTimeout,
-	}
-	if tracker != nil {
-		state.drain = tracker.Drain
 	}
 
 	handlers := api.NewHandlers(
@@ -195,7 +188,7 @@ func startOlric(ctx context.Context, cfg *config.Config) (*olricRuntime, error) 
 }
 
 func (r *olricRuntime) stop(ctx context.Context) {
-	if r == nil || r.node == nil {
+	if r.node == nil {
 		return
 	}
 	r.collector.Stop()

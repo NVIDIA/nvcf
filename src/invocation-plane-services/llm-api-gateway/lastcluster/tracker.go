@@ -33,18 +33,16 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
-// DefaultWriteTimeout bounds one background store write.
-const DefaultWriteTimeout = time.Second
+// writeTimeout bounds one background store write.
+const writeTimeout = time.Second
 
-// Default caps on store calls still running in the background. The Olric
-// client does not always honor context cancellation, so a lookup can outlive
-// its deadline and a write can outlive its timeout. The caps bound the
-// goroutines, and the request contexts they hold, when the store is slow or
-// stuck. At the cap, lookups and writes are skipped instead of queued.
-const (
-	DefaultMaxInflightLookups = 1024
-	DefaultMaxInflightWrites  = 1024
-)
+// maxInflight caps lookups and, separately, writes whose store call has not
+// returned. The Olric client does not always honor context cancellation, so a
+// lookup can outlive its deadline and a write can outlive its timeout. The
+// caps bound the goroutines, and the request contexts they hold, when the
+// store is slow or stuck. At the cap, lookups and writes are skipped instead
+// of queued.
+const maxInflight = 1024
 
 var errCapacity = errors.New("last-cluster store has too many calls in flight")
 
@@ -52,12 +50,6 @@ var errCapacity = errors.New("last-cluster store has too many calls in flight")
 type Options struct {
 	TTL           time.Duration
 	LookupTimeout time.Duration
-	// WriteTimeout bounds one background write. Zero uses DefaultWriteTimeout.
-	WriteTimeout time.Duration
-	// MaxInflightLookups and MaxInflightWrites cap store calls still running.
-	// Zero uses the defaults.
-	MaxInflightLookups int
-	MaxInflightWrites  int
 }
 
 // Tracker looks up and records the last cluster per session. A nil Tracker is
@@ -69,6 +61,7 @@ type Tracker struct {
 	// lookupSlots holds one token per lookup whose store call has not
 	// returned yet.
 	lookupSlots chan struct{}
+	maxWrites   int
 
 	// writes counts background writes. idle is closed when it drops to zero.
 	// A WaitGroup is not used because writes may start while Drain waits.
@@ -81,19 +74,11 @@ type Tracker struct {
 }
 
 func NewTracker(store Store, opts Options) *Tracker {
-	if opts.WriteTimeout <= 0 {
-		opts.WriteTimeout = DefaultWriteTimeout
-	}
-	if opts.MaxInflightLookups <= 0 {
-		opts.MaxInflightLookups = DefaultMaxInflightLookups
-	}
-	if opts.MaxInflightWrites <= 0 {
-		opts.MaxInflightWrites = DefaultMaxInflightWrites
-	}
 	return &Tracker{
 		store:       store,
 		opts:        opts,
-		lookupSlots: make(chan struct{}, opts.MaxInflightLookups),
+		lookupSlots: make(chan struct{}, maxInflight),
+		maxWrites:   maxInflight,
 	}
 }
 
@@ -217,14 +202,6 @@ func (t *Tracker) runLookup(ctx context.Context, key string) lookupResult {
 	}
 }
 
-// InflightLookups returns the number of store lookups that have not returned.
-func (t *Tracker) InflightLookups() int {
-	if t == nil {
-		return 0
-	}
-	return len(t.lookupSlots)
-}
-
 func sampled(logger *zerolog.Logger) *zerolog.Logger {
 	l := logger.Sample(zerolog.Often)
 	return &l
@@ -239,7 +216,8 @@ func setFunctionID(span trace.Span, routingKey string) {
 }
 
 // Remember records clusterID for the session in the background when status is
-// 2xx. key and model are the values Lookup used. It never blocks the caller.
+// 2xx. reqCtx, key, and model are the values Lookup used. It never blocks the
+// caller.
 // Empty, oversized, or non-printable cluster IDs are ignored. When the write
 // cap is reached, the write is dropped and counted as an error.
 func (t *Tracker) Remember(
@@ -257,10 +235,7 @@ func (t *Tracker) Remember(
 	if !validClusterID(clusterID) {
 		return
 	}
-	var requestID, routingKey string
-	if reqCtx != nil {
-		requestID, routingKey = reqCtx.RequestID, reqCtx.RoutingKey
-	}
+	requestID, routingKey := reqCtx.RequestID, reqCtx.RoutingKey
 	logFailure := func(logger *zerolog.Logger, err error) {
 		logger.Warn().
 			Err(err).
@@ -282,7 +257,7 @@ func (t *Tracker) Remember(
 	writeCtx := context.WithoutCancel(ctx)
 	go func() {
 		defer t.endWrite()
-		writeCtx, cancel := context.WithTimeout(writeCtx, t.opts.WriteTimeout)
+		writeCtx, cancel := context.WithTimeout(writeCtx, writeTimeout)
 		defer cancel()
 		writeCtx, span := telemetry.Tracer().Start(writeCtx, "llm-api-gateway.last_cluster_write")
 		defer span.End()
@@ -305,7 +280,7 @@ func (t *Tracker) Remember(
 func (t *Tracker) beginWrite() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.writes >= t.opts.MaxInflightWrites {
+	if t.writes >= t.maxWrites {
 		return false
 	}
 	if t.writes == 0 {
@@ -322,16 +297,6 @@ func (t *Tracker) endWrite() {
 	if t.writes == 0 {
 		close(t.idle)
 	}
-}
-
-// InflightWrites returns the number of store writes that have not returned.
-func (t *Tracker) InflightWrites() int {
-	if t == nil {
-		return 0
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.writes
 }
 
 // Drain waits until no background write is in flight or ctx is done. Writes

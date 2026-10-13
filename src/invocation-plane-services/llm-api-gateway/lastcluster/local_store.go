@@ -46,13 +46,12 @@ func NewLocalStore(maxEntries int) *LocalStore {
 	if maxEntries < 1 {
 		maxEntries = 1
 	}
-	s := &LocalStore{
+	return &LocalStore{
 		maxEntries: maxEntries,
 		now:        time.Now,
 		order:      list.New(),
 		entries:    make(map[string]*list.Element),
 	}
-	return s
 }
 
 func (s *LocalStore) Get(_ context.Context, key string) (string, bool, error) {

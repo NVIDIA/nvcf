@@ -155,9 +155,6 @@ func (p *StargateProvider) rememberLastCluster(
 	key string,
 	resp *http.Response,
 ) {
-	if key == "" || resp == nil {
-		return
-	}
 	p.lastCluster.Remember(ctx, reqCtx, model, key, resp.StatusCode, resp.Header.Get(headerStargateClusterID))
 }
 

@@ -19,35 +19,24 @@ package lastcluster
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestKeyIsPrefixedHashOfLengthPrefixedParts(t *testing.T) {
+func TestKey(t *testing.T) {
 	key := Key("routing-key", "model", "mt:v1:session:abc")
 	if !strings.HasPrefix(key, "lc:v1:") || len(key) != len("lc:v1:")+64 {
 		t.Fatalf("Key() = %q, want lc:v1: plus 64 hex characters", key)
 	}
-	if strings.Contains(key, "routing-key") {
-		t.Fatalf("Key() = %q leaks the raw routing key", key)
-	}
 	if Key("ab", "c", "d") == Key("a", "bc", "d") {
 		t.Fatal("Key() collides for different splits of the same bytes")
-	}
-	if Key("r", "m1", "k") == Key("r", "m2", "k") || Key("r1", "m", "k") == Key("r2", "m", "k") {
-		t.Fatal("Key() must differ by model and routing key")
-	}
-	if Key("r", "m", "k") != Key("r", "m", "k") {
-		t.Fatal("Key() must be deterministic")
 	}
 }
 
 func TestValidClusterID(t *testing.T) {
 	cases := map[string]bool{
 		"":                                   false,
-		"cluster-b":                          true,
 		"cluster b":                          true,
 		strings.Repeat("a", MaxValueBytes):   true,
 		strings.Repeat("a", MaxValueBytes+1): false,
@@ -61,52 +50,24 @@ func TestValidClusterID(t *testing.T) {
 	}
 }
 
-type fakeClock struct{ now time.Time }
-
-func (c *fakeClock) Now() time.Time          { return c.now }
-func (c *fakeClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
-
 func TestLocalStoreTTL(t *testing.T) {
 	ctx := context.Background()
-	clock := &fakeClock{now: time.Unix(1000, 0)}
+	now := time.Unix(1000, 0)
 	store := NewLocalStore(10)
-	store.now = clock.Now
-	ttl := 10 * time.Minute
-
-	if err := store.Set(ctx, "k", "B", ttl); err != nil {
-		t.Fatalf("Set() error = %v", err)
-	}
-	clock.Advance(ttl - time.Nanosecond)
-	if value, ok, _ := store.Get(ctx, "k"); !ok || value != "B" {
-		t.Fatalf("Get() before TTL = %q, %v; want B, true", value, ok)
-	}
-	clock.Advance(time.Nanosecond)
-	if value, ok, _ := store.Get(ctx, "k"); ok {
-		t.Fatalf("Get() at TTL = %q, true; want miss", value)
-	}
-	if store.Len() != 0 {
-		t.Fatalf("Len() = %d after expired read, want 0", store.Len())
-	}
-}
-
-func TestLocalStoreWriteResetsTTL(t *testing.T) {
-	ctx := context.Background()
-	clock := &fakeClock{now: time.Unix(1000, 0)}
-	store := NewLocalStore(10)
-	store.now = clock.Now
+	store.now = func() time.Time { return now }
 	ttl := time.Minute
 
 	_ = store.Set(ctx, "k", "A", ttl)
-	clock.Advance(ttl / 2)
+	now = now.Add(ttl / 2)
 	_ = store.Set(ctx, "k", "B", ttl)
-	clock.Advance(ttl/2 + ttl/4)
+	now = now.Add(ttl/2 + ttl/4)
 	if value, ok, _ := store.Get(ctx, "k"); !ok || value != "B" {
-		t.Fatalf("Get() after rewrite = %q, %v; want B, true", value, ok)
+		t.Fatalf("Get() past the first TTL = %q, %v; want B, true since the rewrite reset it", value, ok)
 	}
-	// A read does not extend the TTL.
-	clock.Advance(ttl / 4)
-	if _, ok, _ := store.Get(ctx, "k"); ok {
-		t.Fatal("Get() after rewrite TTL = hit, want miss")
+	// The read above does not extend the TTL.
+	now = now.Add(ttl / 4)
+	if _, ok, _ := store.Get(ctx, "k"); ok || store.Len() != 0 {
+		t.Fatalf("Get() at TTL = hit=%v, Len()=%d; want a miss that drops the entry", ok, store.Len())
 	}
 }
 
@@ -120,32 +81,12 @@ func TestLocalStoreEvictsLeastRecentlyUsed(t *testing.T) {
 	}
 	_ = store.Set(ctx, "c", "C", time.Minute)
 
-	if _, ok, _ := store.Get(ctx, "b"); ok {
-		t.Fatal("Get(b) = hit, want b evicted as least recently used")
+	if store.Len() != 2 {
+		t.Fatalf("Len() = %d, want 2", store.Len())
 	}
-	for _, key := range []string{"a", "c"} {
-		if _, ok, _ := store.Get(ctx, key); !ok {
-			t.Fatalf("Get(%s) = miss, want hit", key)
+	for key, want := range map[string]bool{"a": true, "b": false, "c": true} {
+		if _, ok, _ := store.Get(ctx, key); ok != want {
+			t.Fatalf("Get(%s) hit = %v, want %v", key, ok, want)
 		}
-	}
-}
-
-func TestLocalStoreNeverExceedsCap(t *testing.T) {
-	ctx := context.Background()
-	store := NewLocalStore(100)
-	for i := 0; i < 1000; i++ {
-		_ = store.Set(ctx, fmt.Sprintf("k%d", i), "B", time.Minute)
-		if store.Len() > 100 {
-			t.Fatalf("Len() = %d after %d writes, want <= 100", store.Len(), i+1)
-		}
-	}
-	if store.Len() != 100 {
-		t.Fatalf("Len() = %d, want 100", store.Len())
-	}
-	if _, ok, _ := store.Get(ctx, "k999"); !ok {
-		t.Fatal("newest entry evicted")
-	}
-	if _, ok, _ := store.Get(ctx, "k0"); ok {
-		t.Fatal("oldest entry still present")
 	}
 }

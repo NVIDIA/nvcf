@@ -89,12 +89,10 @@ uses the hint only for models whose routing algorithm sets
   when the response headers arrive, before a stream ends. Non-2xx responses and
   transport errors never change the stored value. Writes run in the background
   and never delay or fail the client response.
-- The lookup is bounded by `STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT`. On a miss,
-  error, or timeout the request proceeds without the hint.
+- On a lookup miss, error, or timeout, the request proceeds without the hint.
 - At most 1024 lookups and 1024 writes may wait on the store at once, counting
-  calls that outlived their timeout. When a cap is reached, a lookup returns at
-  once without the hint and counts as `timeout`, and a write is dropped and
-  counts as `error`. Requests never wait for a slot.
+  calls that outlived their timeout. Past the cap, a lookup returns without the
+  hint (`timeout`) and a write is dropped (`error`).
 - On shutdown the gateway stops serving, waits for in-flight requests, drains
   pending writes, and then stops the Olric node. The drain and the Olric
   shutdown are each bounded by `OLRIC_SHUTDOWN_TIMEOUT`.
@@ -105,7 +103,7 @@ uses the hint only for models whose routing algorithm sets
 - With `OLRIC_ENABLED=true`, entries live in the `stargate-last-cluster` DMap
   of the embedded Olric cluster, so every replica sees them. With Olric off,
   each replica keeps its own LRU capped at
-  `STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES`. Every write resets the entry TTL.
+  `STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES`.
 - The gateway always strips a client-supplied `x-stargate-last-cluster-id`,
   whether or not the feature is enabled, and keeps stripping `x-stargate-*`
   response headers from client responses.
@@ -226,15 +224,10 @@ time, first-token time, and stream duration metrics. Infrastructure metrics for
 authentication, pub/sub, rate-limit synchronization, and Olric remain
 function-independent.
 
-Last-cluster store metrics use only a `result` label:
-
-- `llm_api_gateway_last_cluster_lookups_total`: `hit`, `miss`, `error`,
-  `timeout`, or `skipped` (enabled, but the session is not eligible)
-- `llm_api_gateway_last_cluster_writes_total`: `ok` or `error`
-- `llm_api_gateway_last_cluster_lookup_duration_seconds`: lookup latency, with
-  buckets from 1 ms to 50 ms
-
-Lookups and writes also create the `llm-api-gateway.last_cluster_lookup` and
+Last-cluster store lookups and writes record `llm_api_gateway_last_cluster_*`
+metrics, listed in the
+[metrics reference](../../../docs/observability/metrics/llm-api-gateway/metrics.md),
+and create the `llm-api-gateway.last_cluster_lookup` and
 `llm-api-gateway.last_cluster_write` spans.
 
 Example request-rate query:

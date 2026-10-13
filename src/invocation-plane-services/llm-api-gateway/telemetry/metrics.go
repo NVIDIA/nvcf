@@ -491,10 +491,6 @@ var (
 	lastClusterWriteResults = []string{LastClusterWriteOK, LastClusterWriteError}
 )
 
-// LastClusterLookupBuckets cover the store lookup latency. The lookup runs on
-// the request path with a 20ms default deadline, so buckets stop at 50ms.
-var LastClusterLookupBuckets = []float64{0.001, 0.002, 0.005, 0.01, 0.02, 0.05}
-
 func lastClusterLookupsTotal() otelmetric.Int64Counter {
 	return must.Get(Meter().Int64Counter(
 		metricPrefix+"last_cluster_lookups_total",
@@ -514,7 +510,8 @@ func lastClusterLookupDuration() otelmetric.Float64Histogram {
 		metricPrefix+"last_cluster_lookup_duration_seconds",
 		otelmetric.WithUnit("s"),
 		otelmetric.WithDescription("Duration of Stargate last-cluster store lookups on the request path."),
-		otelmetric.WithExplicitBucketBoundaries(LastClusterLookupBuckets...),
+		// The lookup runs on the request path with a 20ms default deadline.
+		otelmetric.WithExplicitBucketBoundaries(0.001, 0.002, 0.005, 0.01, 0.02, 0.05),
 	))
 }
 
