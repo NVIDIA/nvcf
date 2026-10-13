@@ -112,6 +112,7 @@ for relative, source in guides.items():
         content = content.replace(
             'Use the [llm-add-recipe skill](../../../ai-tooling/dev/skills/llm-add-recipe/SKILL.md), or run',
             'Run')
+    content = re.sub(r'\]\(((?:\.\.|charts|recipes|dev-artifacts)/)', r'](../../../\1', content)
     target.write_text(content)
 (staging / 'index.json').write_text(json.dumps(index, indent=2) + '\n')
 files = sorted(path for path in staging.rglob('*') if path.is_file())

@@ -2,15 +2,15 @@
 
 ## Helm configuration
 
-The [main guide](README.md) uses local chart archives and an explicit values file. Build these archives with [package-charts.sh](dev-artifacts/package-charts.sh). A chart source directory can also be installed after its local dependencies are built. Helm and kubectl use your current kubeconfig context. Use their `--kube-context` and `--context` flags for an explicit override.
+The [main guide](README.md) uses local chart archives and an explicit values file. Build these archives with [package-charts.sh](../../../dev-artifacts/package-charts.sh). A chart source directory can also be installed after its local dependencies are built. Helm and kubectl use your current kubeconfig context. Use their `--kube-context` and `--context` flags for an explicit override.
 
-The supported installation is the `llm-stack` release in namespace `llm-stack`. It contains the gateway, router, Pylon operator and InferenceEndpoint CRD. Independent model releases use that stack in the same namespace. Use [shared-stack/values.local.example.yaml](charts/shared-stack/values.local.example.yaml) for image references and placement, with the operator watching `llm-stack`. Images may come from a registry or a node cache. [Local image preparation](dev-artifacts/README.md) is a temporary development convenience.
+The supported installation is the `llm-stack` release in namespace `llm-stack`. It contains the gateway, router, Pylon operator and InferenceEndpoint CRD. Independent model releases use that stack in the same namespace. Use [shared-stack/values.local.example.yaml](../../../charts/shared-stack/values.local.example.yaml) for image references and placement, with the operator watching `llm-stack`. Images may come from a registry or a node cache. [Local image preparation](../../../dev-artifacts/README.md) is a temporary development convenience.
 
 `operator.installCRDs` inherits the operator chart's boolean default, `true`. The CRD stays in the chart templates so upgrades of the owning release update its schema. Its `helm.sh/resource-policy: keep` annotation retains it and existing InferenceEndpoints on uninstall. Set `operator.installCRDs=false` only when a compatible CRD is managed externally. The chart checks compatibility but does not change that CRD's schema or ownership. Do not delete the CRD to resolve a Helm ownership conflict.
 
 The shared chart generates the caller key in `llm-shared-caller-key` and the transport credential in `llm-shared-cluster-token`. Existing installations retain these Secrets and their CA during upgrades and reinstalls. For an existing caller credential, set `callerKey.existingSecret` to a Secret containing `api-key`. For an existing transport credential, set `clusterCredential.create: false` and `operator.credential.existingSecret` to a Secret containing `cluster-token`. Both Secrets must be in the release namespace. Keep generated credentials and site values in private storage.
 
-TLS customization uses `gatewayStack.tls` and the child chart listener TLS values. See [shared-stack/values.yaml](charts/shared-stack/values.yaml) and the [gateway chart](../llm-gateway-stack/llm-gateway-stack/values.yaml). Model values reference the same CA ConfigMap through `sharedCAConfigMap`.
+TLS customization uses `gatewayStack.tls` and the child chart listener TLS values. See [shared-stack/values.yaml](../../../charts/shared-stack/values.yaml) and the [gateway chart](../../../../llm-gateway-stack/llm-gateway-stack/values.yaml). Model values reference the same CA ConfigMap through `sharedCAConfigMap`.
 
 To configure additional callers, create a Secret containing `api-key` for each caller in the release namespace, then list them in shared values:
 
@@ -34,7 +34,7 @@ helm upgrade --install llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz
 
 The Job retries temporary connection failures, gateway unavailability and HTTP 401 for the configured caller key for up to 180 seconds. This allows time for Secret projection and authentication reload after key rotation. TLS failures and other unexpected authentication responses fail immediately. Successful verification Jobs are removed. Failed Jobs and their logs remain available until the next install or upgrade.
 
-The verification image must be pullable or preloaded on eligible nodes. See [verification image distribution](dev-artifacts/README.md#verification-image) for its default and offline settings.
+The verification image must be pullable or preloaded on eligible nodes. See [verification image distribution](../../../dev-artifacts/README.md#verification-image) for its default and offline settings.
 
 ### Shared CLI connection options
 
@@ -46,7 +46,7 @@ python3 llm.py --context my-cluster chat \
   --model qwen3.8-27b 'Say hello in one short sentence.'
 ```
 
-The `recipes` command reads the local catalog and works without cluster access. The `models` and `chat` commands retrieve the installed CA and caller credential for each call. Their local connection and temporary files last only for that command. Chat uses the model's normal generation defaults; pass `chat --max-tokens N` to limit output. Reaching that limit returns the partial answer. The separate verifier retains deterministic prompts and strict completion checks. The `plan` command reads Kubernetes and Helm inventory and never opens a gateway connection. Its install command defaults to the recipe source chart. Pass `plan --chart-source PATH_OR_REFERENCE` to select a local archive or published Helm chart. Use `--ca-configmap NAME` and `--api-key-file FILE` to select an existing CA and caller key. Image preparation remains in the [image build guide](dev-artifacts/README.md).
+The `recipes` command reads the local catalog and works without cluster access. The `models` and `chat` commands retrieve the installed CA and caller credential for each call. Their local connection and temporary files last only for that command. Chat uses the model's normal generation defaults; pass `chat --max-tokens N` to limit output. Reaching that limit returns the partial answer. The separate verifier retains deterministic prompts and strict completion checks. The `plan` command reads Kubernetes and Helm inventory and never opens a gateway connection. Its install command defaults to the recipe source chart. Pass `plan --chart-source PATH_OR_REFERENCE` to select a local archive or published Helm chart. Use `--ca-configmap NAME` and `--api-key-file FILE` to select an existing CA and caller key. Image preparation remains in the [image build guide](../../../dev-artifacts/README.md).
 
 ### Model capacity check
 
@@ -67,7 +67,7 @@ Options:
 
 - `--profile NAME` restricts the check to one catalog hardware profile.
 - `--context-length TOKENS --concurrency COUNT` checks a requested workload against the recipe's supported envelope. SGLang commands include these overrides. GGUF profiles use fixed recipe tuning and reject workload overrides.
-- `--capabilities FILE` supplies verified per-node NVMe, device-memory or fabric facts. Start from [capabilities.example.json](recipes/capabilities.example.json), replace example node names and values, and save it outside the checkout.
+- `--capabilities FILE` supplies verified per-node NVMe, device-memory or fabric facts. Start from [capabilities.example.json](../../../recipes/capabilities.example.json), replace example node names and values, and save it outside the checkout.
 - `--runtime-class NAME --storage-class NAME --shared-ca-configmap NAME` sets the installation's site values. The check requires the RuntimeClass and a StorageClass with `WaitForFirstConsumer` and unrestricted topology. It does not verify the CA or gateway connection.
 - `--release NAME` changes the name of a new release. It does not adopt or replace an existing deployment.
 - `--verbose` shows detailed diagnostics and an install command when all deployment checks pass.
@@ -113,9 +113,9 @@ Change `model` to `qwen3.8-27b-nvfp4` to call the other precision. Add `"stream"
 
 ### Connect a coding agent
 
-Coding agents such as [Pi](https://github.com/badlogic/pi-mono) and [Codex](https://github.com/openai/codex) can use the model through the gateway. They need a large context: their first request is 1,500 to 6,500 tokens before any file contents. For GLM, the GB300 profile uses `tuning.discrete` in [recipe.json](recipes/glm-5.3/recipe.json), including 65,536 tokens per slot. The GB10 default of 2048 tokens is too small. See [Recipe resources and tuning](#recipe-resources-and-tuning) before changing these settings.
+Coding agents such as [Pi](https://github.com/badlogic/pi-mono) and [Codex](https://github.com/openai/codex) can use the model through the gateway. They need a large context: their first request is 1,500 to 6,500 tokens before any file contents. For GLM, the GB300 profile uses `tuning.discrete` in [recipe.json](../../../recipes/glm-5.3/recipe.json), including 65,536 tokens per slot. The GB10 default of 2048 tokens is too small. See [Recipe resources and tuning](#recipe-resources-and-tuning) before changing these settings.
 
-Tested in October 2026 with Pi 1.0.4 and Codex 0.161.0 against `glm-5.3` on one GB300 with two 65,536-token slots. Each agent found and fixed a one-line bug by running a test, editing the file and running the test again, using tool calls through the gateway. Pi took 7 seconds and Codex 33 seconds. Automatic Helm profile validation is recorded separately in the [catalog](recipes/index.json).
+Tested in October 2026 with Pi 1.0.4 and Codex 0.161.0 against `glm-5.3` on one GB300 with two 65,536-token slots. Each agent found and fixed a one-line bug by running a test, editing the file and running the test again, using tool calls through the gateway. Pi took 7 seconds and Codex 33 seconds. Automatic Helm profile validation is recorded separately in the [catalog](../../../recipes/index.json).
 
 #### Open the gateway
 
@@ -267,7 +267,7 @@ Complete uninstall combines [removing the model release](README.md#uninstall-kee
 
 ### Helm GLM recipe
 
-GLM has two automatic GB10 profiles. The committed [three-node values](recipes/values/glm-5.3-x3.yaml) select `gb10-x3`, which splits the weights evenly over one leader and two RPC workers and is the Spark profile that passed gateway checks. The committed [two-node values](recipes/values/glm-5.3.yaml) select `gb10-x2`, which stops at the host-memory guard during loading. For two GB300 nodes, the [Station values](recipes/values/glm-5.3-station.yaml) select `gb300-x2` with one leader and one RPC worker.
+GLM has two automatic GB10 profiles. The committed [three-node values](../../../recipes/values/glm-5.3-x3.yaml) select `gb10-x3`, which splits the weights evenly over one leader and two RPC workers and is the Spark profile that passed gateway checks. The committed [two-node values](../../../recipes/values/glm-5.3.yaml) select `gb10-x2`, which stops at the host-memory guard during loading. For two GB300 nodes, the [Station values](../../../recipes/values/glm-5.3-station.yaml) select `gb300-x2` with one leader and one RPC worker.
 
 Use the command for your hardware with the shared stack already running. Replace `my-cluster` with your Kubernetes context and the node placeholders with distinct available nodes. Override `runtimeClassName` and `storageClassName` if your cluster uses different names.
 
@@ -319,7 +319,7 @@ List recipe and profile names before selecting a placement:
 python3 llm.py recipes
 ```
 
-Copy [capabilities.example.json](recipes/capabilities.example.json) to a private path and record verified facts for your nodes. Set `localNvme` only after checking the storage backing `/var/lib/kubelet`. For two-node serving, verify both interfaces, addresses, link speeds and mutual reachability. The planner does not measure these facts. Select available GPUs with enough host memory and disk space.
+Copy [capabilities.example.json](../../../recipes/capabilities.example.json) to a private path and record verified facts for your nodes. Set `localNvme` only after checking the storage backing `/var/lib/kubelet`. For two-node serving, verify both interfaces, addresses, link speeds and mutual reachability. The planner does not measure these facts. Select available GPUs with enough host memory and disk space.
 
 Print an install command for the one-node profile:
 
@@ -355,7 +355,7 @@ echo 'Model installed and registered.'
 
 For two-node serving, replace the Helm command in this block with the command printed by the two-node plan. Keep the registration wait, using your chosen release name if you set `--release`. Then [discover and call the model](README.md#3-discover-and-call-models) with model ID `qwen3.8-flash-next`.
 
-For direct Helm configuration, the [one-node values](recipes/values/qwen3.8-flash-next-nvme.yaml) and [two-node values](recipes/values/qwen3.8-flash-next-tp2.yaml) are examples. Replace their nodes and capability facts with your verified settings. Model pins and runtime flags come from the chart. Retain the release name and node placement when reusing its caches.
+For direct Helm configuration, the [one-node values](../../../recipes/values/qwen3.8-flash-next-nvme.yaml) and [two-node values](../../../recipes/values/qwen3.8-flash-next-tp2.yaml) are examples. Replace their nodes and capability facts with your verified settings. Model pins and runtime flags come from the chart. Retain the release name and node placement when reusing its caches.
 
 ## Independent model lifecycle
 
@@ -446,7 +446,7 @@ Options:
 - `--wait` on `start` waits until the endpoint reports Ready. `--timeout` sets the limit, for example `30m`; the default is `60m`.
 - `--json` prints the report for other tools.
 
-A running model is reported as already running and a stopped model as already stopped. The check is a point-in-time snapshot and does not reserve capacity, so Kubernetes can still leave a pod Pending if another workload claims the GPU first. A later `helm upgrade` without `--reuse-values` restores the chart's replica count. The [UI start and stop specification](recipes/UI-MODEL-CONTROLS.md) describes how a UI backend reuses this check.
+A running model is reported as already running and a stopped model as already stopped. The check is a point-in-time snapshot and does not reserve capacity, so Kubernetes can still leave a pod Pending if another workload claims the GPU first. A later `helm upgrade` without `--reuse-values` restores the chart's replica count. The [UI start and stop specification](../../../recipes/UI-MODEL-CONTROLS.md) describes how a UI backend reuses this check.
 
 ### Remove and reinstall a recipe
 
@@ -529,11 +529,11 @@ The current Qwen FP8 and NVFP4 evidence covers short prompts at configured conte
 
 ## Monitoring
 
-Monitoring is an optional Helm release with its own retained metrics volume. It reads the installed stack and model metrics. It does not install routing infrastructure. See [monitoring configuration](recipes/MONITORING.md) for values, dashboard access and teardown.
+Monitoring is an optional Helm release with its own retained metrics volume. It reads the installed stack and model metrics. It does not install routing infrastructure. See [monitoring configuration](../../../recipes/MONITORING.md) for values, dashboard access and teardown.
 
 ## Recipe resources and tuning
 
-The [catalog](recipes/index.json) records each profile's hardware, pinned image and checkpoint, placement, cache sizes, memory reservations and candidate workload limits. `python3 llm.py recipes` lists these profiles, and `plan --verbose` checks the requested model against current reservations.
+The [catalog](../../../recipes/index.json) records each profile's hardware, pinned image and checkpoint, placement, cache sizes, memory reservations and candidate workload limits. `python3 llm.py recipes` lists these profiles, and `plan --verbose` checks the requested model against current reservations.
 
 SGLang accepts `contextLength` and `concurrency` in Helm values within the selected profile's limits. The GGUF automatic chart derives tuning from the recipe's `tuning.unified` or `tuning.discrete` settings and exposes its effective arguments in the rendered workload. Changing tuning or model pins requires new qualification. Inspect host memory as well as GPU memory on unified-memory hardware.
 
@@ -566,7 +566,7 @@ python3 -m pip install -r recipes/tests/requirements.txt
 
 For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the setup block. Take `MODEL_RELEASE` and `SERVED_MODEL_ID` from the recipe metadata. For an existing recipe, set `VALUES_EXAMPLE` to its existing file under `recipes/values/`.
 
-1. Add the maintained metadata, including a short `description` for the demo UI card. For SGLang, edit [recipes/catalog.json](recipes/catalog.json). For GGUF, create `recipes/<recipe-id>/recipe.json`, `model.lock.json`, `profiles.json` and `NOTICE`. Verify checkpoint/runtime pins, hardware fit, license, workload limits and chart support. Keep validation pending until tested. Remove a promoted model's entry from `recipes/planned.json`. For a new GGUF family, update the exporter's license and guide mappings, which currently target GLM.
+1. Add the maintained metadata, including a short `description` for the demo UI card. For SGLang, edit [recipes/catalog.json](../../../recipes/catalog.json). For GGUF, create `recipes/<recipe-id>/recipe.json`, `model.lock.json`, `profiles.json` and `NOTICE`. Verify checkpoint/runtime pins, hardware fit, license, workload limits and chart support. Keep validation pending until tested. Remove a promoted model's entry from `recipes/planned.json`. For a new GGUF family, update the exporter's license and guide mappings, which currently target GLM.
 
 2. Synchronize the chart copy. For SGLang, copy only the selected catalog entry into the chart's model map:
 
@@ -737,4 +737,4 @@ helm template qwen-fp8 recipes/charts/sglang --namespace llm-stack \
   --set 'nodes[0]=offline-gpu-node' > "$RENDER_DIR/model.yaml"
 ```
 
-Offline rendering cannot inspect live ownership or prove credential reuse. Use [package-charts.sh](dev-artifacts/package-charts.sh) to build archives in a fresh output directory, then check catalog paths, bundled source equality and `SHA256SUMS`. Package generation and developer image builds do not install or upgrade a release.
+Offline rendering cannot inspect live ownership or prove credential reuse. Use [package-charts.sh](../../../dev-artifacts/package-charts.sh) to build archives in a fresh output directory, then check catalog paths, bundled source equality and `SHA256SUMS`. Package generation and developer image builds do not install or upgrade a release.

@@ -5,6 +5,7 @@ import importlib.util
 import json
 import pathlib
 import py_compile
+import re
 import shutil
 import subprocess
 import tarfile
@@ -91,7 +92,13 @@ class ChartPackageTests(unittest.TestCase):
                     self.assertIn('](../../../ai-tooling/', introduction)
                     expected = expected.replace(introduction, 'Run the steps below manually. ')
                     self.assertNotIn('../../../ai-tooling/', actual)
+                for directory in ('..', 'charts', 'recipes', 'dev-artifacts'):
+                    expected = expected.replace(f']({directory}/', f'](../../../{directory}/')
                 self.assertEqual(actual, expected)
+                for link in re.findall(r'\]\(([^)]+)\)', actual):
+                    if not link.startswith(('https://', 'http://', '#', 'mailto:')):
+                        target = HERE/'dev-artifacts/charts/guides'/link.partition('#')[0]
+                        self.assertTrue(target.is_file(), link)
         sums = (self.output/'SHA256SUMS').read_text().splitlines()
         self.assertEqual(len(sums), 7)
         source_index = json.loads((self.source/'recipes/index.json').read_text())
