@@ -130,10 +130,10 @@ vLLM Responses usage and Dynamo vLLM workers report them by default. Engines
 that report cached tokens may omit Chat details on a cache miss, so once a model
 generation's streamed Chat usage reports cached-token details, later Chat usage
 without them counts as a miss. A request that expects usage holds newer
-requests out of the rate until its usage arrives, for at most 120 seconds.
-The idle sweep drops pending entries past this bound. Cache hits that leave fewer
-than 256 uncached prompt tokens are left out, because their time to first output
-is mostly fixed overhead.
+requests out of the rate until its usage arrives, for at most 120 seconds after
+newer requests reach first output. Cache hits that leave fewer than 256 uncached
+prompt tokens are left out, because their time to first output is mostly fixed
+overhead.
 
 ## Optional KV Stats
 
@@ -209,12 +209,6 @@ used at runtime. Each calibration request starts with a unique prompt prefix, so
 it cannot hit the prefix cache. Duplicate engine events for calibration IDs are
 ignored. Pylon logs the current stats at timeout without reinjecting them.
 Later valid runtime samples continue updating either unpinned distribution.
-
-Upgrade note: calibrated input throughput is now measured in tokens per second,
-not characters per second. Reported calibration values will therefore be lower;
-the conversion depends on the model's tokenizer and prompt text. Compare new
-measurements in token units rather than treating the change as a throughput
-regression.
 
 Labels:
 
