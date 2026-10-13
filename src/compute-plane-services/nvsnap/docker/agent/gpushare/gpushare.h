@@ -63,6 +63,11 @@ SPDX-License-Identifier: Apache-2.0
  * Multicast (NVLS) needs a driver that lets a restored process create and
  * join multicast objects: 610.57.04 on GB300 does, 580.173.02 does not.
  *
+ * "release" frees allocations whose handles the app keeps, and the driver
+ * may give a freed handle value to a new allocation. So after the first
+ * "release" the app gets each new handle (cuMemCreate, import, multicast
+ * create, retain) as a value of ours, which the wrappers translate.
+ *
  * A process may drive several GPUs: peer access the app enables
  * (cuCtxEnablePeerAccess) is granted on the cuMem memory behind cuMemAlloc,
  * and each allocation is saved and re-created on its own device.

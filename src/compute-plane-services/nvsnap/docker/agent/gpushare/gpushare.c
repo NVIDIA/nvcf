@@ -346,8 +346,10 @@ struct lmap {
     int fresh;    /* created after the checkpoint: exports as is (see replace_alloc) */
 };
 /* A local allocation the shim replaced (see replace_alloc): the app's
- * handle stands for the new one. */
-struct swap { CUmemGenericAllocationHandle app_h, cur_h; };
+ * handle stands for the new one. Also a handle value of ours that the app
+ * holds for a driver handle (see "Handle values"); ret: one from
+ * cuMemRetainAllocationHandle, so the app may hold the driver's value too. */
+struct swap { CUmemGenericAllocationHandle app_h, cur_h; int ret; };
 
 /* An fd this process exported (dup kept until "release", to identify it).
  * id 0: the handle h was not mapped yet; w_map assigns the id (NCCL exports
@@ -480,10 +482,12 @@ static int lock_ctl(void)
 
 static int fabric_hidden(void);
 
+/* Entries are found by the value the app holds, never by cur_h: after a
+ * remap, cur_h may equal a stale value the app holds for another entry. */
 static int find_imp(CUmemGenericAllocationHandle h)
 {
     for (int i = 0; i < n_imps; i++)
-        if (!imps[i].app_released && (imps[i].cur_h == h || imps[i].app_h == h)) return i;
+        if (!imps[i].app_released && imps[i].app_h == h) return i;
     return -1;
 }
 
@@ -498,8 +502,61 @@ static CUmemGenericAllocationHandle own_h(CUmemGenericAllocationHandle h)
 static int find_mc(CUmemGenericAllocationHandle h)
 {
     for (int i = 0; i < n_mcs; i++)
-        if (!mcs[i].dead && !mcs[i].app_released && (mcs[i].cur_h == h || mcs[i].app_h == h)) return i;
+        if (!mcs[i].dead && !mcs[i].app_released && mcs[i].app_h == h) return i;
     return -1;
+}
+
+/* The live handle for any handle of the app (mu held). */
+static CUmemGenericAllocationHandle real_h(CUmemGenericAllocationHandle h)
+{
+    int i = find_imp(h), m = i < 0 ? find_mc(h) : -1;
+    return i >= 0 ? imps[i].cur_h : m >= 0 ? mcs[m].cur_h : own_h(h);
+}
+
+/* ── Handle values ───────────────────────────────────────────────────── */
+
+/* "release" frees allocations whose handles the app keeps (imports,
+ * multicast objects, shared allocations), and the tables above map those
+ * values to the live handles. Driver handles are heap addresses, so the
+ * driver may give a freed value to a new allocation: a table entry would
+ * then take it (w_map would map the entry's allocation at the app's VA,
+ * w_release would free it). So from the first "release" on, the app gets
+ * each new handle as a value of ours, from address space reserved for
+ * that, which no driver handle can have; swaps, imps and mcs translate it. */
+#define PH_SPAN (1UL << 30)
+static uintptr_t ph_base, ph_next;
+static int virt;  /* set by the first "release" */
+
+/* Does h equal a freed handle the app holds (debug log)? mu held. */
+static int stale(CUmemGenericAllocationHandle h)
+{
+    for (int i = 0; i < n_imps; i++) if (imps[i].app_h == h && imps[i].cur_h != h) return 1;
+    for (int i = 0; i < n_mcs; i++) if (mcs[i].app_h == h && mcs[i].cur_h != h) return 1;
+    for (int i = 0; i < n_swaps; i++) if (swaps[i].app_h == h) return 1;
+    return 0;
+}
+
+/* The value to give the app for its new driver handle h (mu held): h
+ * itself before the first "release", else one of ours, which the caller
+ * records. */
+static CUmemGenericAllocationHandle app_value(CUmemGenericAllocationHandle h)
+{
+    if (!virt) return h;
+    if (!ph_base) {
+        void *p = mmap(NULL, PH_SPAN, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+        if (p == MAP_FAILED) {
+            logf_("reserving handle values: %s; new handles go to the app as is", strerror(errno));
+            virt = 0;
+            return h;
+        }
+        ph_base = ph_next = (uintptr_t)p;
+    }
+    if (ph_next == ph_base + PH_SPAN) ph_next = ph_base;  /* after 2^30 handles */
+    CUmemGenericAllocationHandle v = ph_next++;
+    if (getenv("NVSNAP_GPUSHARE_DEBUG") && stale(h))
+        logf_("new handle %#llx has a freed handle's value; the app gets %#llx",
+              (unsigned long long)h, (unsigned long long)v);
+    return v;
 }
 
 static const char *errstr(CUresult r);
@@ -975,6 +1032,7 @@ static void do_release(char *reply, size_t n, const char *args)
         pthread_mutex_unlock(&mu);
         return;
     }
+    virt = 1;  /* handles the app holds are freed from now on */
     store[0] = cache[0] = 0;
     st_written = st_dedup = st_zero = 0;
     if (args) {
@@ -1459,10 +1517,12 @@ static CUresult replace_alloc(int k)
     l->h = nh;
     for (int j = 0; j < n_mcbinds; j++)
         if (mcbinds[j].memh == old) mcbinds[j].memh = nh;
-    int j = 0;
-    while (j < n_swaps && swaps[j].cur_h != old) j++;
-    if (j < n_swaps) swaps[j].cur_h = nh;
-    else PUSH(swaps, ((struct swap){ old, nh }));
+    /* The app's values for old now stand for nh; unless only retained
+     * ones did, it also holds old itself. */
+    int held = 0;
+    for (int j = 0; j < n_swaps; j++)
+        if (swaps[j].cur_h == old) { swaps[j].cur_h = nh; held |= !swaps[j].ret; }
+    if (!held) PUSH(swaps, ((struct swap){ old, nh, 0 }));
 out:
     pop_ctx(dev);
     return r;
@@ -1721,7 +1781,7 @@ static CUresult w_export(void *sh, CUmemGenericAllocationHandle h, CUmemAllocati
 {
     pthread_mutex_lock(&mu);
     int mc = find_mc(h);
-    h = mc >= 0 ? mcs[mc].cur_h : own_h(h);
+    h = real_h(h);
     pthread_mutex_unlock(&mu);
     CUresult r = REAL(r_export, "cuMemExportToShareableHandle")(sh, h, type, flags);
     if (r == CUDA_SUCCESS && type == CU_MEM_HANDLE_TYPE_POSIX_FILE_DESCRIPTOR) {
@@ -1811,7 +1871,8 @@ static CUresult w_import(CUmemGenericAllocationHandle *h, void *os, CUmemAllocat
     if (!peer && !fab) im.ufd = fcntl((int)(uintptr_t)os, F_DUPFD_CLOEXEC, 3);
     if (im.ufd < 0) im.ufd = 0;
     pthread_mutex_lock(&mu);
-    if (mc) PUSH(mcs, ((struct mcobj){ .app_h = *h, .cur_h = *h, .peer = peer, .key = key, .fab = fab }));
+    im.app_h = *h = app_value(*h);
+    if (mc) PUSH(mcs, ((struct mcobj){ .app_h = *h, .cur_h = im.cur_h, .peer = peer, .key = key, .fab = fab }));
     else PUSH(imps, im);
     pthread_mutex_unlock(&mu);
     return r;
@@ -1939,8 +2000,21 @@ static CUresult w_retain(CUmemGenericAllocationHandle *h, void *addr)
     while (i < n_rets && rets[i].h != *h) i++;
     if (i == n_rets) PUSH(rets, ((struct lmap){ .va = base, .h = *h }));
     else rets[i].va = base;
+    CUmemGenericAllocationHandle v = app_value(*h);
+    if (v != *h) PUSH(swaps, ((struct swap){ v, *h, 1 }));
+    *h = v;
     pthread_mutex_unlock(&mu);
     return r;
+}
+
+static __typeof__(&cuMemGetAllocationPropertiesFromHandle) r_props;
+
+static CUresult w_props(CUmemAllocationProp *p, CUmemGenericAllocationHandle h)
+{
+    pthread_mutex_lock(&mu);
+    h = real_h(h);
+    pthread_mutex_unlock(&mu);
+    return REAL(r_props, "cuMemGetAllocationPropertiesFromHandle")(p, h);
 }
 
 /* ── CUDA IPC on cuMem ───────────────────────────────────────────────── */
@@ -2430,13 +2504,13 @@ static CUresult xdrop_load_all(int *nx, size_t *nb, char *reply, size_t n)
             if (mcbinds[j].memh == xdrops[k].old) { mcbinds[j].memh = xdrops[k].nh; break; }
     for (int j = 0; j < n_swaps; j++)
         for (int k = 0; k < done; k++)
-            if (!xdrops[k].app_rel && swaps[j].cur_h == xdrops[k].old) {
+            if (swaps[j].cur_h == xdrops[k].old) {
                 swaps[j].cur_h = xdrops[k].nh;
-                xdrops[k].app_rel = -1;  /* swap done */
+                if (!swaps[j].ret && !xdrops[k].app_rel) xdrops[k].app_rel = -1;  /* the app's handle */
                 break;
             }
-    for (int k = 0; k < done; k++)  /* no swap yet: the app's handle is the old one */
-        if (!xdrops[k].app_rel) PUSH(swaps, ((struct swap){ xdrops[k].old, xdrops[k].nh }));
+    for (int k = 0; k < done; k++)  /* none yet: the app's handle is the old one */
+        if (!xdrops[k].app_rel) PUSH(swaps, ((struct swap){ xdrops[k].old, xdrops[k].nh, 0 }));
     /* Keep what is not loaded yet, for a retry. */
     if (done > 0) {
         memmove(xdrops, xdrops + done, (n_xdrops - done) * sizeof(*xdrops));
@@ -2628,6 +2702,12 @@ static CUresult w_mem_create(CUmemGenericAllocationHandle *h, size_t size, const
               p->allocFlags.compressionType, errstr(r));
         r = REAL(r_mem_create, "cuMemCreate")(h, size, p, flags);
     }
+    if (r != CUDA_SUCCESS) return r;
+    pthread_mutex_lock(&mu);
+    CUmemGenericAllocationHandle v = app_value(*h);
+    if (v != *h) PUSH(swaps, ((struct swap){ v, *h, 0 }));
+    *h = v;
+    pthread_mutex_unlock(&mu);
     return r;
 }
 
@@ -2642,7 +2722,9 @@ static CUresult w_mc_create(CUmemGenericAllocationHandle *h, const CUmulticastOb
     if (r != CUDA_SUCCESS && q.handleTypes != p->handleTypes) r = REAL(r_mc_create, "cuMulticastCreate")(h, (q = *p, &q));
     if (r != CUDA_SUCCESS) return r;
     pthread_mutex_lock(&mu);
-    PUSH(mcs, ((struct mcobj){ .app_h = *h, .cur_h = *h, .prop = q, .creator = 1, .key = next_id++ }));
+    CUmemGenericAllocationHandle v = app_value(*h);
+    PUSH(mcs, ((struct mcobj){ .app_h = v, .cur_h = *h, .prop = q, .creator = 1, .key = next_id++ }));
+    *h = v;
     pthread_mutex_unlock(&mu);
     return r;
 }
@@ -2941,6 +3023,7 @@ static const struct { const char *name; void *wrapper; void **real; } hooks[] = 
     { "cuGetProcAddress_v2", w_gpa2, (void **)&r_gpa2 },
     { "cuGetProcAddress", w_gpa1, (void **)&r_gpa1 },
     { "cuMemRetainAllocationHandle", w_retain, (void **)&r_retain },
+    { "cuMemGetAllocationPropertiesFromHandle", w_props, (void **)&r_props },
     { "cuMemAlloc_v2", w_alloc, (void **)&r_alloc },
     { "cuMemFree_v2", w_free, (void **)&r_free },
     { "cuIpcGetMemHandle", w_ipc_get, (void **)&r_ipc_get },
@@ -3015,6 +3098,7 @@ EXPORT(CUresult, cuMemSetAccess, w_set_access, (CUdeviceptr va, size_t s, const 
 EXPORT(CUresult, cuMemImportFromShareableHandle, w_import, (CUmemGenericAllocationHandle *h, void *os, CUmemAllocationHandleType t), (h, os, t))
 EXPORT(CUresult, cuMemExportToShareableHandle, w_export, (void *sh, CUmemGenericAllocationHandle h, CUmemAllocationHandleType t, unsigned long long f), (sh, h, t, f))
 EXPORT(CUresult, cuMemRetainAllocationHandle, w_retain, (CUmemGenericAllocationHandle *h, void *a), (h, a))
+EXPORT(CUresult, cuMemGetAllocationPropertiesFromHandle, w_props, (CUmemAllocationProp *p, CUmemGenericAllocationHandle h), (p, h))
 EXPORT(CUresult, cuMemAlloc_v2, w_alloc, (CUdeviceptr *p, size_t s), (p, s))
 EXPORT(CUresult, cuMemFree_v2, w_free, (CUdeviceptr p), (p))
 EXPORT(CUresult, cuIpcGetMemHandle, w_ipc_get, (CUipcMemHandle *h, CUdeviceptr p), (h, p))
