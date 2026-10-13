@@ -19,7 +19,12 @@ run_sync() {
 }
 workspace=""
 trap 'if [[ -n "$workspace" ]]; then rm -rf "$workspace"; fi' EXIT
-if [[ "$(run_sync umbrella docs-mode --repo "$repo_root")" == umbrella ]]; then
+docs_mode="$(run_sync umbrella docs-mode --repo "$repo_root")"
+case "$docs_mode" in
+  umbrella|legacy) ;;
+  *) echo "Unknown docs mode: $docs_mode" >&2; exit 1 ;;
+esac
+if [[ "$docs_mode" == umbrella ]]; then
   canonical_status="$(git status --porcelain --untracked-files=all --ignored -- docs fern)"
   if [[ -n "$canonical_status" ]]; then
     echo 'Canonical docs publishing requires a clean docs/ and fern/ tree, including untracked and ignored files. Commit reviewed inputs or use preview-docs for working-tree edits.' >&2

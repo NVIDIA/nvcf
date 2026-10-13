@@ -62,7 +62,12 @@ fi
 # Maintained refs are always materialized from the approved registry commits.
 if [ -f "$preview_workspace/source/fern/editions.yml" ]; then
   require_cmd go
-  if [ "$(go run -C "$repo_root/tools/docs-version-sync" . umbrella docs-mode --repo "$preview_workspace/source")" = umbrella ]; then
+  docs_mode="$(go run -C "$repo_root/tools/docs-version-sync" . umbrella docs-mode --repo "$preview_workspace/source")"
+  case "$docs_mode" in
+    umbrella|legacy) ;;
+    *) echo "Unknown docs mode: $docs_mode" >&2; exit 1 ;;
+  esac
+  if [[ "$docs_mode" == umbrella ]]; then
     mkdir -p "$preview_workspace/source/tools/ci"
     cp "$repo_root/tools/ci/run-fern" "$preview_workspace/source/tools/ci/run-fern"
     go run -C "$repo_root/tools/docs-version-sync" . umbrella docs-stage \
