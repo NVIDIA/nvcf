@@ -45,6 +45,13 @@ if [[ "$1" == check ]]; then exit "${FAIL_CHECK:-0}"; fi
 [[ "$*" == 'generate --docs --strict-broken-links' ]]
 SH
 chmod +x "$workdir/source/tools/ci/"* "$DOCS_VERSION_SYNC_BIN"
+mkdir -p "$FIXTURE_ROOT/docs" "$FIXTURE_ROOT/fern"
+printf 'reviewed docs\n' > "$FIXTURE_ROOT/docs/page.md"
+printf 'reviewed config\n' > "$FIXTURE_ROOT/fern/docs.yml"
+printf 'ignored.md\n' > "$FIXTURE_ROOT/.gitignore"
+git -C "$FIXTURE_ROOT" init --quiet
+git -C "$FIXTURE_ROOT" add .
+git -C "$FIXTURE_ROOT" -c user.name=Test -c user.email=test@example.com commit --quiet -m fixture
 : > "$FIXTURE_LOG"
 "$workdir/source/tools/ci/publish-docs" --publish
 [[ "$(cat "$FIXTURE_LOG")" == $'legacy-check\ngenerate' ]]
@@ -61,4 +68,32 @@ done
 : > "$FIXTURE_LOG"
 FIXTURE_MODE=umbrella "$workdir/source/tools/ci/publish-docs" --check
 ! grep -q generate "$FIXTURE_LOG"
+for tree in docs fern; do
+  for dirty in tracked staged untracked ignored; do
+    case "$dirty" in
+      tracked|staged)
+        if [[ "$tree" == docs ]]; then path=docs/page.md; else path=fern/docs.yml; fi
+        printf 'unreviewed edit\n' >> "$FIXTURE_ROOT/$path"
+        if [[ "$dirty" == staged ]]; then git -C "$FIXTURE_ROOT" add "$path"; fi
+        ;;
+      untracked) printf 'untracked content\n' > "$FIXTURE_ROOT/$tree/new.md" ;;
+      ignored) printf 'ignored content\n' > "$FIXTURE_ROOT/$tree/ignored.md" ;;
+    esac
+    for mode in --check --publish; do
+      : > "$FIXTURE_LOG"
+      if FIXTURE_MODE=umbrella "$FIXTURE_ROOT/tools/ci/publish-docs" "$mode" > "$workdir/dirty.log" 2>&1; then
+        echo "accepted $dirty $tree input in $mode"; exit 1
+      fi
+      grep -q 'requires a clean docs/ and fern/ tree' "$workdir/dirty.log"
+      [[ ! -s "$FIXTURE_LOG" ]]
+    done
+    git -C "$FIXTURE_ROOT" restore --source=HEAD --staged --worktree -- docs fern
+    rm -f "$FIXTURE_ROOT/$tree/new.md" "$FIXTURE_ROOT/$tree/ignored.md"
+  done
+done
+# The opt-in guard does not alter the legacy publisher's working-tree behavior.
+printf 'legacy edit\n' >> "$FIXTURE_ROOT/docs/page.md"
+: > "$FIXTURE_LOG"
+"$FIXTURE_ROOT/tools/ci/publish-docs" --publish
+[[ "$(cat "$FIXTURE_LOG")" == $'legacy-check\ngenerate' ]]
 echo 'test-publish-docs: PASS'

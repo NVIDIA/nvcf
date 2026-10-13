@@ -20,6 +20,11 @@ run_sync() {
 workspace=""
 trap 'if [[ -n "$workspace" ]]; then rm -rf "$workspace"; fi' EXIT
 if [[ "$(run_sync umbrella docs-mode --repo "$repo_root")" == umbrella ]]; then
+  canonical_status="$(git status --porcelain --untracked-files=all --ignored -- docs fern)"
+  if [[ -n "$canonical_status" ]]; then
+    echo 'Canonical docs publishing requires a clean docs/ and fern/ tree, including untracked and ignored files. Commit reviewed inputs or use preview-docs for working-tree edits.' >&2
+    exit 1
+  fi
   ./tools/ci/check-doc-version-sync
   workspace="$(mktemp -d)"
   run_sync umbrella docs-stage --repo "$repo_root" --out "$workspace/source"

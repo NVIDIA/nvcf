@@ -80,9 +80,14 @@ redirects:
 
 func TestUmbrellaCanonicalDocsStageE2E(t *testing.T) {
 	root, source, release := umbrellaDocsStageFixture(t)
+	writeFile(t, filepath.Join(root, "docs/page.md"), "# Working-tree preview edit\n")
 	out := filepath.Join(t.TempDir(), "build")
 	if err := stageCanonicalDocs(root, out, false); err != nil {
 		t.Fatal(err)
+	}
+	preview, err := os.ReadFile(filepath.Join(out, "docs/page.md"))
+	if err != nil || string(preview) != "# Working-tree preview edit\n" {
+		t.Fatalf("preview staging lost working-tree edits: %v %s", err, preview)
 	}
 	// Advance after staging, then verify validation/generation inputs remain frozen.
 	writeFile(t, filepath.Join(source, "docs/page.md"), "# Unapproved branch content\n")
