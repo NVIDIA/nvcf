@@ -27,6 +27,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use axum::response::IntoResponse;
 use parking_lot::Mutex;
 use stargate_proto::pb::{
     InferenceServerModelRegistration, InferenceServerRegistration, InferenceServerStatus,
@@ -286,9 +287,15 @@ async fn send_request(app: &ProxyAppState, request_id: &str) -> Result<HeaderMap
         .header(HEADER_INPUT_TOKENS, INPUT_TOKENS.to_string())
         .body(Body::from("{}"))
         .expect("request should build");
-    proxy_openai_request(app.clone(), request, OpenAiProxyEndpoint::CHAT_COMPLETIONS)
-        .await
-        .map(|response| response.headers().clone())
+    let response =
+        proxy_openai_request(app.clone(), request, OpenAiProxyEndpoint::CHAT_COMPLETIONS)
+            .await
+            .into_response();
+    if response.status().is_success() {
+        Ok(response.headers().clone())
+    } else {
+        Err(response.status())
+    }
 }
 
 /// Reservations currently counted in the routed cluster snapshot. Base stats

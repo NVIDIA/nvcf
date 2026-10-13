@@ -564,11 +564,13 @@ mod tests {
     use axum::http::{HeaderMap, Method};
     use prometheus::Encoder;
     use stargate_proto::pb::{InferenceServerStatus, ModelStats};
-    use stargate_protocol::tunnel_contract::HEADER_STARGATE_RETRY_AFTER_MS;
+    use stargate_protocol::tunnel_contract::{
+        HEADER_INPUT_TOKENS, HEADER_MODEL, HEADER_REQUEST_ID, HEADER_STARGATE_RETRY_AFTER_MS,
+    };
     use std::time::Duration;
 
     use super::super::HEADER_STARGATE_ERROR_CODE;
-    use super::super::request::ProxyRequestInputs;
+    use super::super::request::{ProxyRequestInputs, parse_proxy_request_inputs};
     use super::super::retry::ReplayableRequestBody;
     use super::super::run::PreparedProxyRequest;
     use super::super::test_support::test_proxy_app_state;
@@ -576,6 +578,16 @@ mod tests {
     use crate::routing_state::{
         RegistrationIdentity, RoutingTargetKey, StargateState, test_registration_generation,
     };
+
+    fn chat_request_inputs(target: RoutingTargetKey) -> ProxyRequestInputs {
+        let mut headers = HeaderMap::new();
+        headers.insert(HEADER_REQUEST_ID, "req-1".parse().unwrap());
+        headers.insert(HEADER_MODEL, target.model_id.parse().unwrap());
+        headers.insert(HEADER_INPUT_TOKENS, "10".parse().unwrap());
+        let mut inputs = parse_proxy_request_inputs(&headers).unwrap();
+        inputs.target = target;
+        inputs
+    }
 
     #[test]
     fn reservation_ttl_is_clamped_to_the_configured_bounds() {
@@ -673,15 +685,7 @@ mod tests {
         );
         let request = PreparedProxyRequest {
             lb_resolution: resolution,
-            request_inputs: ProxyRequestInputs {
-                target,
-                input_tokens: 10,
-                priority: 0,
-                max_wait_ms: None,
-                request_slo_ms: None,
-                cache_affinity_key: None,
-                routing_algorithm_override: None,
-            },
+            request_inputs: chat_request_inputs(target),
             endpoint_name: "chat_completions",
             method: Method::POST,
             path_and_query: "/v1/chat/completions".to_string(),
@@ -770,15 +774,7 @@ mod tests {
             .await;
         let request = PreparedProxyRequest {
             lb_resolution: resolution,
-            request_inputs: ProxyRequestInputs {
-                target,
-                input_tokens: 10,
-                priority: 0,
-                max_wait_ms: None,
-                request_slo_ms: None,
-                cache_affinity_key: None,
-                routing_algorithm_override: None,
-            },
+            request_inputs: chat_request_inputs(target),
             endpoint_name: "chat_completions",
             method: Method::POST,
             path_and_query: "/v1/chat/completions".to_string(),
