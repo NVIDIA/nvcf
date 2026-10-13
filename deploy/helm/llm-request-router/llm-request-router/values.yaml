@@ -43,7 +43,7 @@ llmRequestRouter:
   image:
     registry: ""
     repository: ""
-    tag: "0.25.0"
+    tag: "0.26.1"
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
@@ -112,12 +112,13 @@ llmRequestRouter:
       minAvailable: ""
       maxUnavailable: 1
     # Registry, repository, and tag fall back to the main Stargate image
-    # settings, then the chart appVersion. Override only when validating a
-    # different Stargate build; it must contain stargate-k8s-router.
+    # settings, then the chart appVersion. The tag is pinned separately so
+    # stargate-k8s-router can move on its own release schedule; set it to ""
+    # to follow the main image. The image must contain stargate-k8s-router.
     image:
       registry: ""
       repository: ""
-      tag: ""
+      tag: "0.25.0"
       pullPolicy: ""
     # Addresses workers dial to reach the router. The gRPC address is an
     # explicit HTTP(S) URI; the reverse-tunnel address remains host:port. Both

@@ -332,9 +332,9 @@ fi
 assert_backend_router_role_binding_subject "$external_service_account" "external-backend-router"
 
 assert_zero_config_contains "image: registry.example.invalid/nvcf/stargate:0.25.0" \
-  "backend router must inherit the released Stargate image with no router image configuration"
+  "backend router must use the chart's pinned Stargate image with no router image configuration"
 assert_zero_config_contains 'app.kubernetes.io/version: "0.25.0"' \
-  "backend router labels must identify the inherited Stargate image version"
+  "backend router labels must identify the pinned Stargate image version"
 
 helm template llm-request-router "$chart_dir" \
   --namespace nvcf \
