@@ -163,10 +163,10 @@ struct Args {
     registration_update_max_idle_timeout_ms: u64,
     /// Minimum soft TTL for a routing reservation. The soft TTL is the
     /// selected backend's RTT clamped to the min and max; after it, the
-    /// backend's next registration update ends the reservation. The default
-    /// matches Pylon's default stats update coalescing interval, so a request
-    /// stays counted until the first change-driven update that can include it.
-    #[arg(long, default_value_t = 10, value_name = "MS")]
+    /// backend's next registration update ends the reservation. Settlement
+    /// already waits for that update, so a larger floor only adds time in
+    /// which the request is counted twice.
+    #[arg(long, default_value_t = 1, value_name = "MS")]
     routing_reservation_ttl_min_ms: u64,
     /// Maximum soft TTL for a routing reservation. It bounds the effect of a
     /// bad RTT sample and never ends a reservation on its own; a backend that
@@ -695,8 +695,13 @@ mod tests {
     #[test]
     fn routing_reservation_ttl_defaults_and_bounds_are_validated() {
         let args = parse_args("");
-        assert_eq!(args.routing_reservation_ttl_min_ms, 10);
+        assert_eq!(args.routing_reservation_ttl_min_ms, 1);
         assert_eq!(args.routing_reservation_ttl_max_ms, 1000);
+        let args = parse_args("--routing-reservation-ttl-max-ms 5");
+        let config = runtime_config_from_args(&args, proxy_transport(&args))
+            .expect("a maximum above the default minimum should reach runtime config");
+        assert_eq!(config.routing_reservation_ttl_min, Duration::from_millis(1));
+        assert_eq!(config.routing_reservation_ttl_max, Duration::from_millis(5));
         let args =
             parse_args("--routing-reservation-ttl-min-ms 20 --routing-reservation-ttl-max-ms 200");
         let config = runtime_config_from_args(&args, proxy_transport(&args))

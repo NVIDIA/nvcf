@@ -43,7 +43,7 @@ delay of the backend's actual load, instead of up to one heartbeat behind.
 Each dispatched request adds a local reservation for the selected backend.
 At dispatch, Stargate fixes the reservation's soft expiry: one health-check RTT
 of the selected backend (not the cluster mean) after dispatch, bounded by
-`--routing-reservation-ttl-min-ms` (default `10`) and
+`--routing-reservation-ttl-min-ms` (default `1`) and
 `--routing-reservation-ttl-max-ms` (default `1000`). The maximum only limits
 the effect of a bad RTT sample; it does not end the reservation.
 
@@ -62,11 +62,13 @@ Waiting for the backend's own update covers two cases:
   reservations would all end together and those idle stats would attract a new
   burst of requests each time. Held reservations keep steering traffic away
   until the backend reports again or deregisters.
-- On links with an RTT below Pylon's update coalescing interval, a request can
-  reach the backend after the first coalesced update was already sent. The
-  minimum default matches Pylon's default `--stats-update-coalesce-ms`, so the
-  soft expiry leaves room for the change-driven update that includes the
-  request. Keep the minimum at or above the Pylon coalescing interval.
+- Pylon coalesces change-driven updates (`--stats-update-coalesce-ms`, default
+  `10`), so on low-RTT links the update that includes a request can arrive
+  well after one RTT. The reservation holds until that update arrives, and an
+  update received one RTT or more after dispatch was sent after the request
+  reached the backend. Coalescing therefore needs no TTL floor. A larger
+  minimum only lengthens the time in which a request counts in both reported
+  stats and its reservation, which overstates the queue.
 
 The trade-off is that a reservation on a backend that stops reporting stays
 counted, in routing and in `stargate_routing_reservations_active`, until that
