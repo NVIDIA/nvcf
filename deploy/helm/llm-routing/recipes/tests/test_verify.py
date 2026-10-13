@@ -28,7 +28,7 @@ class VerifyTests(unittest.TestCase):
         self.assertEqual([c.args[0] for c in client.auth.call_args_list], ['model-a', 'model-b'])
         self.assertEqual([c.kwargs.get('stream', False) for c in client.completion.call_args_list], [False, True, False, True])
 
-    def test_default_budget_is_unchanged_and_custom_budget_is_recorded(self):
+    def test_server_default_budget_is_used_and_custom_budget_is_recorded(self):
         client = self.client()
         result = verify.verify(client, ['model-a'])
         self.assertNotIn('maxTokens', result)

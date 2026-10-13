@@ -35,7 +35,7 @@ def main(argv=None):
     parser.add_argument('--ca-configmap')
     parser.add_argument('--api-key-file', type=pathlib.Path)
     parser.add_argument('--model', action='append', required=True)
-    parser.add_argument('--max-tokens', type=int, help='Completion budget for models that reason before answering. Default 512.')
+    parser.add_argument('--max-tokens', type=int, help='Maximum generated tokens. Defaults to the model server setting.')
     parser.add_argument('--output', type=pathlib.Path, required=True)
     args = parser.parse_args(argv)
     if args.output.exists():

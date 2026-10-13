@@ -524,7 +524,7 @@ python3 recipes/verify.py --namespace llm-stack \
   --output /path/to/private/gateway-results.json
 ```
 
-The verifier opens a temporary connection through the installed shared stack. `--context`, `--ca-configmap` and `--api-key-file` override connection settings. It writes results to the requested path and cleans up its connection files when finished.
+The verifier opens a temporary connection through the installed shared stack. `--context`, `--ca-configmap` and `--api-key-file` override connection settings. Generation uses the model server defaults unless `--max-tokens` is supplied to limit output. The verifier requires a complete answer and reports token-limited generation as incomplete. It writes results to the requested path and cleans up its connection files when finished.
 
 Recipe qualification has separate stages: hardware compatibility and placement, preparation, runtime readiness, registration, and gateway inference. Offline tests establish rendering and local behavior. Accept a hardware trial only after its exact model pins and profile pass discovery, chat, streaming, authentication, retained-cache restart and isolation from another running model. Record the tested context and concurrency separately from the profile's candidate limits.
 

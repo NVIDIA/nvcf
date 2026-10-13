@@ -140,8 +140,8 @@ class MonitoringTests(unittest.TestCase):
                     record = monitoring.sample_completion(client, model, stream)
                 payload = request.call_args.args[2]
                 self.assertEqual(payload['model'], model)
-                self.assertEqual(payload['max_tokens'], 512)
-                self.assertEqual(set(payload), {'model', 'messages', 'max_tokens', 'stream'} | ({'stream_options'} if stream else set()))
+                self.assertNotIn('max_tokens', payload)
+                self.assertEqual(set(payload), {'model', 'messages', 'stream'} | ({'stream_options'} if stream else set()))
                 self.assertEqual(record, {'model': model, 'stream': stream, 'status': 200, 'promptTokens': 7, 'completionTokens': 12})
                 self.assertNotIn('Thinking', json.dumps(record))
         for invalid in [dict(reply, usage={}), dict(reply, choices=[]),

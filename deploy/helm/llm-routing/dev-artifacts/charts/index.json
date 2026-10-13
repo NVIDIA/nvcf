@@ -223,115 +223,10 @@
             "maximumConcurrency": 1
           },
           "validation": {
-            "runtimeStatus": "smoke-tested",
-            "workload": {
-              "date": "2026-10-11",
-              "profile": "station-fp4-tp2",
-              "modelRevision": "60d8d70770c6776ff598c94bb586a859a38244f1",
-              "runtimeImage": "lmsysorg/sglang@sha256:1f176b3a1dd1205d2a462ab80ea9fc17769a32e53cb6f3c690efa2dc2c384977",
-              "contextLength": 8192,
-              "concurrency": 1,
-              "requestType": "short-chat-stream-and-context-boundary",
-              "fullContextExercised": false,
-              "contextBoundaryExercised": true,
-              "performanceBenchmarked": false,
-              "qualityEvaluated": false
-            },
-            "automaticHelmStatus": "smoke-tested",
-            "automaticHelmWorkload": {
-              "date": "2026-10-11",
-              "status": "smoke-tested",
-              "profile": "station-fp4-tp2",
-              "modelRevision": "60d8d70770c6776ff598c94bb586a859a38244f1",
-              "runtimeImage": "lmsysorg/sglang@sha256:1f176b3a1dd1205d2a462ab80ea9fc17769a32e53cb6f3c690efa2dc2c384977",
-              "contextLength": 8192,
-              "concurrency": 1,
-              "tokenCapacity": 16384,
-              "tensorParallelRanks": 2,
-              "qualificationNcclVersion": "2.29.7",
-              "servingNcclVersion": "2.30.7",
-              "cacheMode": "retained-verified",
-              "requestType": "short-chat-stream-and-context-boundary",
-              "fullContextExercised": false,
-              "contextBoundaryExercised": true,
-              "performanceBenchmarked": false,
-              "qualityEvaluated": false,
-              "reason": "The original Flash checkpoint passed packaged Helm TP2 serving and retained-cache lifecycle checks on two GB300s. NCCL used TCP sockets on the verified 400 Gbps interfaces. Link speed is not a measured throughput result.",
-              "checks": [
-                "placement",
-                "fabric-tcp-integrity",
-                "gpu-collective",
-                "runtime-patch-integrity",
-                "cache-integrity",
-                "readiness",
-                "registration",
-                "discovery",
-                "chat",
-                "streaming",
-                "authentication",
-                "context-boundary",
-                "stop-resume",
-                "uninstall-reinstall",
-                "cache-identities-preserved",
-                "shared-availability",
-                "final-package-equivalence"
-              ],
-              "pendingChecks": [],
-              "observedWorkload": {
-                "shortPromptTokens": 11,
-                "shortCompletionTokens": 3,
-                "maximumOutputTokensRequested": 512,
-                "streamReasoningCharacters": 0,
-                "boundaryPromptTokens": 8160,
-                "boundaryCompletionTokens": 2,
-                "boundaryMaxOutputTokens": 32,
-                "boundaryHttpStatus": 200,
-                "boundarySeconds": 5.3282,
-                "tokenCounter": "Pinned SGLang DeepSeek V4 encoder and checkpoint tokenizer, checked against server usage"
-              },
-              "measuredMemoryByRank": {
-                "0": {
-                  "hostCgroupPeakGiB": 153.25,
-                  "gpu": "NVIDIA GB300",
-                  "gpuTotalMiB": 256703,
-                  "gpuUsedMiB": 79731,
-                  "hostCgroupEvents": {
-                    "low": "0",
-                    "high": "0",
-                    "max": "0",
-                    "oom": "0",
-                    "oom_kill": "0",
-                    "oom_group_kill": "0",
-                    "sock_throttled": "0"
-                  }
-                },
-                "1": {
-                  "hostCgroupPeakGiB": 152.23,
-                  "gpu": "NVIDIA GB300",
-                  "gpuTotalMiB": 256703,
-                  "gpuUsedMiB": 79892,
-                  "hostCgroupEvents": {
-                    "low": "0",
-                    "high": "0",
-                    "max": "0",
-                    "oom": "0",
-                    "oom_kill": "0",
-                    "oom_group_kill": "0",
-                    "sock_throttled": "0"
-                  }
-                }
-              },
-              "maximumObservedTotalTokens": 8162,
-              "modelPodRestarts": 0,
-              "otherModelIsolation": {
-                "status": "not-exercised",
-                "reason": "TP2 uses both available GPUs. Shared CPU services were verified while the model was stopped."
-              },
-              "sharedTransport": {
-                "disableQuicGso": true,
-                "imageTag": "dev-20261011050719-7b10c0"
-              }
-            }
+            "runtimeStatus": "pending",
+            "workload": null,
+            "automaticHelmStatus": "pending",
+            "automaticHelmWorkload": null
           },
           "deployment": {
             "chart": {
@@ -1189,119 +1084,125 @@
           "validation": {
             "runtimeStatus": "smoke-tested",
             "workload": {
-              "date": "2026-10-11",
+              "date": "2026-10-13",
               "profile": "station-nvfp4",
               "modelRevision": "bee7596271d1495f6992ae224aefde4410e816b8",
               "runtimeImage": "lmsysorg/sglang@sha256:ee63304703432429d55cf2e4579b70c5a334ed4cc49194fb5290c077fcbbd4a0",
               "contextLength": 8192,
               "concurrency": 1,
               "tokenCapacity": 9216,
-              "requestType": "short-chat-stream-and-context-boundary",
+              "requestType": "short-chat-stream-and-auth-with-runtime-defaults",
               "promptTokens": [
-                23,
-                8160
+                22,
+                23
               ],
-              "maximumObservedTotalTokens": 8162,
-              "maximumOutputTokensRequested": 512,
+              "maximumObservedTotalTokens": 1025,
+              "generationSettings": {
+                "outputTokenBudget": "server-default",
+                "sampling": "server-default",
+                "thinking": "model-default",
+                "omittedRequestFields": [
+                  "max_tokens",
+                  "temperature",
+                  "seed",
+                  "reasoning_effort",
+                  "chat_template_kwargs"
+                ]
+              },
               "fullContextExercised": false,
+              "contextBoundaryExercised": false,
               "performanceBenchmarked": false,
-              "qualityEvaluated": false,
-              "contextBoundaryExercised": true
+              "qualityEvaluated": false
             },
             "automaticHelmStatus": "smoke-tested",
             "automaticHelmWorkload": {
-              "date": "2026-10-11",
+              "date": "2026-10-13",
               "profile": "station-nvfp4",
               "modelRevision": "bee7596271d1495f6992ae224aefde4410e816b8",
               "runtimeImage": "lmsysorg/sglang@sha256:ee63304703432429d55cf2e4579b70c5a334ed4cc49194fb5290c077fcbbd4a0",
               "contextLength": 8192,
               "concurrency": 1,
               "tokenCapacity": 9216,
-              "requestType": "short-chat-stream-and-context-boundary",
+              "requestType": "short-chat-stream-and-auth-with-runtime-defaults",
               "promptTokens": [
-                23,
-                8160
+                22,
+                23
               ],
-              "maximumObservedTotalTokens": 8162,
-              "maximumOutputTokensRequested": 512,
+              "maximumObservedTotalTokens": 1025,
+              "generationSettings": {
+                "outputTokenBudget": "server-default",
+                "sampling": "server-default",
+                "thinking": "model-default",
+                "omittedRequestFields": [
+                  "max_tokens",
+                  "temperature",
+                  "seed",
+                  "reasoning_effort",
+                  "chat_template_kwargs"
+                ]
+              },
               "fullContextExercised": false,
+              "contextBoundaryExercised": false,
               "performanceBenchmarked": false,
               "qualityEvaluated": false,
               "status": "smoke-tested",
-              "reason": "Packaged Helm install passed readiness, registration, gateway discovery, chat, streaming, authentication and context-boundary inference. Stop/resume and uninstall/reinstall reused the original verified cache and restored inference.",
+              "reason": "Packaged Helm upgrade passed readiness, registration, discovery, chat, streaming and authentication with model-default thinking and server-default output and sampling settings. All three generated responses finished with stop and included final answers. Retained verified weights were reused and cache identities were preserved. Context-boundary and lifecycle checks have not been repeated with these generation defaults.",
               "cacheMode": "retained-verified",
               "checks": [
-                "placement",
-                "gpu-qualification",
-                "cache-integrity",
-                "packaged-helm-install",
+                "packaged-helm-upgrade",
                 "readiness",
                 "registration",
                 "discovery",
                 "chat",
                 "streaming",
                 "authentication",
+                "cache-integrity",
+                "retained-cache-reuse",
+                "cache-identity-preserved"
+              ],
+              "pendingChecks": [
                 "context-boundary",
                 "stop-resume",
                 "uninstall-reinstall",
-                "cache-identity-preserved",
                 "other-model-isolation",
-                "final-package-equivalence"
+                "long-thinking-requests",
+                "long-context-streaming",
+                "tool-calling",
+                "quality-evaluation",
+                "throughput-benchmark"
               ],
-              "pendingChecks": [],
               "observedWorkload": {
-                "shortPromptTokens": 23,
-                "shortCompletionTokens": 3,
-                "maximumOutputTokensRequested": 512,
-                "streamReasoningCharacters": 0,
-                "boundaryPromptTokens": 8160,
-                "boundaryCompletionTokens": 2,
-                "boundaryMaxOutputTokens": 32,
-                "boundaryHttpStatus": 200,
-                "boundarySeconds": 1.1855
+                "chat": {
+                  "promptTokens": 23,
+                  "completionTokens": 1002,
+                  "reasoningTokens": 999,
+                  "totalTokens": 1025,
+                  "finishReason": "stop"
+                },
+                "stream": {
+                  "promptTokens": 23,
+                  "completionTokens": 852,
+                  "reasoningTokens": 849,
+                  "totalTokens": 875,
+                  "finishReason": "stop",
+                  "completionMarkerReceived": true
+                },
+                "authenticatedChat": {
+                  "promptTokens": 22,
+                  "completionTokens": 92,
+                  "reasoningTokens": 90,
+                  "totalTokens": 114,
+                  "finishReason": "stop"
+                }
               },
               "modelPodRestarts": 0,
-              "sharedTransport": {
-                "disableQuicGso": true,
-                "imageTag": "dev-20261011050719-7b10c0"
-              },
-              "measuredMemoryGiB": {
-                "weights": 20.51,
-                "recurrentState": 0.21,
-                "kvCache": 0.02,
-                "retainedCacheHostCgroupPeak": 10.3
-              },
               "resolvedFailures": [
                 {
-                  "check": "compiled-kernel-cache-retention",
-                  "fix": "Set TVM_FFI_CACHE_DIR on the retained cache volume. Stop/resume and reinstall reused the compiled kernels."
-                },
-                {
-                  "check": "strict-streaming",
-                  "observed": "One post-resume verifier run reported incomplete SSE content, finish reason, usage or completion marker. A/B probes showed that reasoning_effort=low overrode the recipe thinking default.",
-                  "fix": "The generic verifier keeps its output budget and complete-SSE assertions while inheriting recipe reasoning and chat-template defaults."
+                  "check": "retained-cache-recipe-identity",
+                  "observed": "Initial startup rejected a retained cache marker containing the previous nemotron3.5-lightning recipe ID.",
+                  "fix": "All retained checkpoint blobs passed verification before the marker recipe ID was migrated to nemotron-3.5-lightning. Repository and model revision were unchanged. A fresh serving pod then passed readiness and inference with zero restarts."
                 }
-              ],
-              "reinstallLoadSeconds": 19.04,
-              "contextBoundaryExercised": true,
-              "finalChartRetest": {
-                "retainedTvmKernelCache": true,
-                "sharedBlobCacheValidation": true,
-                "recipeReasoningDefaults": true,
-                "checks": [
-                  "readiness",
-                  "registration",
-                  "discovery",
-                  "chat",
-                  "streaming",
-                  "authentication",
-                  "context-boundary",
-                  "cache-identities-preserved",
-                  "other-model-availability"
-                ]
-              },
-              "hostCgroupPeakGiB": 14.28,
-              "hostCgroupEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              ]
             }
           },
           "deployment": {
@@ -1828,52 +1729,71 @@
           "validation": {
             "runtimeStatus": "smoke-tested",
             "workload": {
-              "date": "2026-10-11",
+              "date": "2026-10-13",
               "profile": "station-bf16",
               "modelRevision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
               "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
               "contextLength": 8192,
               "concurrency": 1,
               "tokenCapacity": 9216,
-              "requestType": "short-prompt-and-context-boundary-smoke",
+              "requestType": "short-chat-stream-and-auth-with-runtime-defaults",
               "promptTokens": [
-                19,
-                8160
+                16,
+                17
               ],
-              "maximumObservedTotalTokens": 8162,
-              "maximumOutputTokensRequested": 512,
+              "maximumObservedTotalTokens": 1570,
+              "generationSettings": {
+                "outputTokenBudget": "server-default",
+                "sampling": "server-default",
+                "thinking": "model-default",
+                "omittedRequestFields": [
+                  "max_tokens",
+                  "temperature",
+                  "seed",
+                  "reasoning_effort",
+                  "chat_template_kwargs"
+                ]
+              },
               "fullContextExercised": false,
+              "contextBoundaryExercised": false,
               "performanceBenchmarked": false,
-              "qualityEvaluated": false,
-              "contextBoundaryExercised": true
+              "qualityEvaluated": false
             },
             "automaticHelmStatus": "smoke-tested",
             "automaticHelmWorkload": {
-              "date": "2026-10-11",
+              "date": "2026-10-13",
               "profile": "station-bf16",
               "modelRevision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
               "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
               "contextLength": 8192,
               "concurrency": 1,
               "tokenCapacity": 9216,
-              "requestType": "short-prompt-and-context-boundary-smoke",
+              "requestType": "short-chat-stream-and-auth-with-runtime-defaults",
               "promptTokens": [
-                19,
-                8160
+                16,
+                17
               ],
-              "maximumObservedTotalTokens": 8162,
-              "maximumOutputTokensRequested": 512,
+              "maximumObservedTotalTokens": 1570,
+              "generationSettings": {
+                "outputTokenBudget": "server-default",
+                "sampling": "server-default",
+                "thinking": "model-default",
+                "omittedRequestFields": [
+                  "max_tokens",
+                  "temperature",
+                  "seed",
+                  "reasoning_effort",
+                  "chat_template_kwargs"
+                ]
+              },
               "fullContextExercised": false,
+              "contextBoundaryExercised": false,
               "performanceBenchmarked": false,
               "qualityEvaluated": false,
               "status": "smoke-tested",
-              "reason": "Packaged Helm deployment passed readiness, registration, discovery, chat, streaming and authentication. The 8160-token prompt with 32 output tokens allowed returned HTTP 200. Stop/resume and uninstall/reinstall preserved cache identity, reused verified weights and left the original model available. Token capacity 9216 supplies SGLang admission headroom while request context remains 8192 and concurrency 1.",
+              "reason": "Packaged Helm upgrade passed readiness, registration, discovery, chat, streaming and authentication with model-default thinking and server-default output and sampling settings. All three generated responses finished with stop and included final answers. Retained verified weights were reused and cache identities were preserved. Context-boundary and lifecycle checks have not been repeated with these generation defaults.",
               "cacheMode": "retained-verified",
               "checks": [
-                "placement",
-                "gpu-qualification",
-                "cache-integrity",
-                "packaged-helm-install",
                 "packaged-helm-upgrade",
                 "readiness",
                 "registration",
@@ -1881,56 +1801,46 @@
                 "chat",
                 "streaming",
                 "authentication",
+                "cache-integrity",
+                "retained-cache-reuse",
+                "cache-identity-preserved"
+              ],
+              "pendingChecks": [
                 "context-boundary",
                 "stop-resume",
-                "cache-identity-preserved",
-                "other-model-isolation",
                 "uninstall-reinstall",
-                "final-package-live-verification",
-                "final-package-equivalence"
+                "other-model-isolation",
+                "long-thinking-requests",
+                "long-context-streaming",
+                "tool-calling",
+                "quality-evaluation",
+                "throughput-benchmark"
               ],
-              "resolvedFailures": [
-                {
-                  "check": "thinking-token-budget",
-                  "fix": "The recipe defaults enable_thinking=false through the runtime chat-template kwargs."
-                },
-                {
-                  "check": "context-boundary-admission",
-                  "fix": "Additional token cache capacity for SGLang admission/page headroom. Request limits remain 8192 tokens and concurrency 1."
-                }
-              ],
-              "pendingChecks": [],
               "observedWorkload": {
-                "shortPromptTokens": 19,
-                "shortCompletionTokens": 3,
-                "maximumOutputTokensRequested": 512,
-                "streamReasoningCharacters": 0,
-                "boundaryPromptTokens": 8160,
-                "boundaryCompletionTokens": 2,
-                "boundaryMaxOutputTokens": 32,
-                "boundaryHttpStatus": 200,
-                "boundarySeconds": 0.8452
+                "chat": {
+                  "promptTokens": 17,
+                  "completionTokens": 1553,
+                  "reasoningTokens": 1549,
+                  "totalTokens": 1570,
+                  "finishReason": "stop"
+                },
+                "stream": {
+                  "promptTokens": 17,
+                  "completionTokens": 651,
+                  "reasoningTokens": 646,
+                  "totalTokens": 668,
+                  "finishReason": "stop",
+                  "completionMarkerReceived": true
+                },
+                "authenticatedChat": {
+                  "promptTokens": 16,
+                  "completionTokens": 138,
+                  "reasoningTokens": 135,
+                  "totalTokens": 154,
+                  "finishReason": "stop"
+                }
               },
-              "contextBoundaryExercised": true,
-              "finalChartRetest": {
-                "retainedTvmKernelCache": true,
-                "sharedBlobCacheValidation": true,
-                "recipeReasoningDefaults": true,
-                "checks": [
-                  "readiness",
-                  "registration",
-                  "discovery",
-                  "chat",
-                  "streaming",
-                  "authentication",
-                  "context-boundary",
-                  "cache-identities-preserved",
-                  "other-model-availability"
-                ]
-              },
-              "modelPodRestarts": 0,
-              "hostCgroupPeakGiB": 13.58,
-              "hostCgroupEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+              "modelPodRestarts": 0
             }
           },
           "deployment": {

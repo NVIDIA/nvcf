@@ -47,7 +47,9 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(payload['model'], MODEL)
         self.assertNotIn('reasoning_effort', payload)
         self.assertNotIn('chat_template_kwargs', payload)
-        self.assertEqual(payload['max_tokens'], 512)
+        self.assertNotIn('max_tokens', payload)
+        self.assertNotIn('temperature', payload)
+        self.assertNotIn('seed', payload)
         self.assertEqual(payload['stream_options'], {'include_usage': True})
         self.assertEqual(result['content'], '323')
         self.assertEqual(result['reasoningCharacters'], 5)
@@ -205,7 +207,10 @@ class ClientTests(unittest.TestCase):
                         else:
                             with self.assertRaisesRegex(RuntimeError, 'incomplete generation'):
                                 c.auth(MODEL, **kwargs)
-                    self.assertEqual(request.call_args.args[1]['max_tokens'], budget or 512)
+                    if budget is None:
+                        self.assertNotIn('max_tokens', request.call_args.args[1])
+                    else:
+                        self.assertEqual(request.call_args.args[1]['max_tokens'], budget)
                     for connection, _ in responses:
                         connection.close.assert_called_once()
 

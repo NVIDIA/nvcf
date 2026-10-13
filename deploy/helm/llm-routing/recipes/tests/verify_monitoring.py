@@ -69,7 +69,7 @@ def select_model(client, requested=None):
 
 def sample_completion(client, model, stream):
     payload = {'model': model, 'messages': [{'role': 'user', 'content': 'What is 2 plus 2? Answer briefly.'}],
-               'max_tokens': 512, 'stream': stream}
+               'stream': stream}
     if stream:
         payload['stream_options'] = {'include_usage': True}
     body = gateway_response(client, '/v1/chat/completions', payload)
