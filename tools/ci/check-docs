@@ -14,7 +14,12 @@ if [ -n "$bad" ]; then
 fi
 
 ./tools/ci/check-doc-version-sync
-if [ "$(go run -C tools/docs-version-sync . umbrella docs-mode --repo "$repo_root")" = umbrella ]; then
+docs_mode="$(go run -C tools/docs-version-sync . umbrella docs-mode --repo "$repo_root")"
+case "$docs_mode" in
+  umbrella|legacy) ;;
+  *) echo "Unknown docs mode: $docs_mode" >&2; exit 1 ;;
+esac
+if [[ "$docs_mode" == umbrella ]]; then
   staged="$(mktemp -d)"
   trap 'rm -rf "$staged"' EXIT
   go run -C tools/docs-version-sync . umbrella docs-stage --repo "$repo_root" --out "$staged/source"

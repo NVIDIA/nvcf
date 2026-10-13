@@ -13,6 +13,7 @@ printf 'source content\n' > "$workdir/source/docs/page.md"
 cat > "$workdir/source/tools/ci/run-fern" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "${FERN_CALL_LOG:-}" ]]; then echo invoked >> "$FERN_CALL_LOG"; fi
 [ "$(pwd)" != "$SOURCE_REPO" ]
 [ "$(git remote get-url origin)" = 'https://github.com/example/docs.git' ]
 [ "$(git rev-parse HEAD)" = "$EXPECT_SHA" ]
@@ -41,6 +42,10 @@ cat > "$workdir/bin/go" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 [ "$#" -eq 8 ]
+if [[ "$5" == umbrella && "$6" == docs-mode ]]; then
+  echo "${FIXTURE_DOCS_MODE:-legacy}"
+  exit "${FAIL_MODE:-0}"
+fi
 [ "$1" = run ] && [ "$2" = -C ]
 [ "$3" = "$SOURCE_REPO/tools/docs-version-sync" ]
 [ "$4" = . ] && [ "$5" = edition ] && [ "$6" = preview ] && [ "$7" = --repo ]
@@ -95,4 +100,18 @@ DOCS_PREVIEW_SKIP_COMMENT=1 tools/ci/preview-docs > "$workdir/default.txt" 2>&1
 [ "$(cat fern/docs.yml)" = legacy ]
 [ "$(cat docs/page.md)" = 'uncommitted candidate content' ]
 EXPECT_CHECK=1 DOCS_PREVIEW_ID='' tools/ci/preview-docs --check > "$workdir/default-check.txt" 2>&1
+printf 'fixture registry\n' > fern/editions.yml
+for failure in failed unknown; do
+  if [[ "$failure" == failed ]]; then
+    mode=legacy; mode_exit=23; expected=23
+  else
+    mode=unexpected; mode_exit=0; expected=1
+  fi
+  status=0
+  FIXTURE_DOCS_MODE="$mode" FAIL_MODE="$mode_exit" FERN_CALL_LOG="$workdir/fern-calls" \
+    tools/ci/preview-docs --check > "$workdir/mode.log" 2>&1 || status=$?
+  [[ "$status" == "$expected" ]] || { echo "preview accepted $failure docs mode: $status"; exit 1; }
+  [[ ! -e "$workdir/fern-calls" ]]
+  if [[ "$failure" == unknown ]]; then grep -q 'Unknown docs mode' "$workdir/mode.log"; fi
+done
 echo 'test-preview-docs: PASS'

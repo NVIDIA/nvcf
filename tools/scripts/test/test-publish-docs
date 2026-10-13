@@ -11,7 +11,7 @@ export FIXTURE_ROOT="$workdir/source" FIXTURE_LOG="$workdir/log" DOCS_VERSION_SY
 cat > "$DOCS_VERSION_SYNC_BIN" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "$2" == docs-mode ]]; then echo "${FIXTURE_MODE:-legacy}"; exit; fi
+if [[ "$2" == docs-mode ]]; then echo "${FIXTURE_MODE:-legacy}"; exit "${FAIL_MODE:-0}"; fi
 [[ "$2" == docs-stage ]]
 if [[ "${FAIL_STAGE:-0}" != 0 ]]; then exit 17; fi
 mkdir -p "$6"
@@ -96,4 +96,33 @@ printf 'legacy edit\n' >> "$FIXTURE_ROOT/docs/page.md"
 : > "$FIXTURE_LOG"
 "$FIXTURE_ROOT/tools/ci/publish-docs" --publish
 [[ "$(cat "$FIXTURE_LOG")" == $'legacy-check\ngenerate' ]]
+# Exercise the real checker too: no mode lookup failure may select legacy fallback.
+cp "$repo_root/tools/ci/check-docs" "$FIXTURE_ROOT/tools/ci/check-docs-real"
+cat > "$workdir/bin/go" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+shift 4
+exec "$DOCS_VERSION_SYNC_BIN" "$@"
+SH
+chmod +x "$workdir/bin/go"
+for failure in failed unknown; do
+  for entrypoint in publish-check publish-generate check-docs; do
+    : > "$FIXTURE_LOG"
+    case "$entrypoint" in
+      publish-check) args=("$FIXTURE_ROOT/tools/ci/publish-docs" --check) ;;
+      publish-generate) args=("$FIXTURE_ROOT/tools/ci/publish-docs" --publish) ;;
+      check-docs) args=(bash "$FIXTURE_ROOT/tools/ci/check-docs-real") ;;
+    esac
+    if [[ "$failure" == failed ]]; then
+      mode=legacy; mode_exit=23; expected=23
+    else
+      mode=unexpected; mode_exit=0; expected=1
+    fi
+    status=0
+    PATH="$workdir/bin:$PATH" FIXTURE_MODE="$mode" FAIL_MODE="$mode_exit" "${args[@]}" > "$workdir/mode.log" 2>&1 || status=$?
+    [[ "$status" == "$expected" ]] || { echo "$entrypoint accepted $failure docs mode: $status"; exit 1; }
+    ! grep -Eq 'legacy-check|generate|^check$' "$FIXTURE_LOG"
+    if [[ "$failure" == unknown ]]; then grep -q 'Unknown docs mode' "$workdir/mode.log"; fi
+  done
+done
 echo 'test-publish-docs: PASS'
