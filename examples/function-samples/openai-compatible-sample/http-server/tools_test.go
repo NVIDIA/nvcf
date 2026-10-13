@@ -314,3 +314,126 @@ func TestResponsesToolOutputReplyStream(t *testing.T) {
 		t.Fatalf("text = %#v", text)
 	}
 }
+
+func TestResponsesTextReplyEchoesToolSettings(t *testing.T) {
+	const tools = `[{"type":"function","name":"get_weather","parameters":{"type":"object"}}]`
+
+	t.Run("tool_choice none", func(t *testing.T) {
+		recorder := postJSON(t, "/v1/responses", responsesBody(
+			`"tools":`+tools+`,"tool_choice":"none","parallel_tool_calls":false,"input":"hello"`))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+		}
+		body := responseMap(t, recorder)
+		if item := outputItem(t, body); item["type"] != "message" {
+			t.Fatalf("item = %#v, want message", item)
+		}
+		assertToolSettings(t, body, "none", false, 1)
+	})
+
+	t.Run("streamed", func(t *testing.T) {
+		recorder := postJSON(t, "/v1/responses", responsesBody(
+			`"stream":true,"tools":`+tools+`,"tool_choice":"none","parallel_tool_calls":false,"input":"hello"`))
+		events := parseResponsesSSEEvents(t, recorder.Body.String())
+		for _, event := range events {
+			if event.name == "response.created" || event.name == "response.completed" {
+				assertToolSettings(t, event.data["response"].(map[string]any), "none", false, 1)
+			}
+		}
+	})
+
+	t.Run("reply to a tool output", func(t *testing.T) {
+		recorder := postJSON(t, "/v1/responses", responsesBody(
+			`"tools":`+tools+`,"input":[{"type":"function_call","call_id":"c1","name":"get_weather","arguments":"{}"},`+
+				`{"type":"function_call_output","call_id":"c1","output":"sunny"}]`))
+		assertToolSettings(t, responseMap(t, recorder), "auto", true, 1)
+	})
+
+	t.Run("object tool_choice is echoed", func(t *testing.T) {
+		recorder := postJSON(t, "/v1/responses", responsesBody(
+			`"tools":`+tools+`,"tool_choice":{"type":"function","name":"get_weather"},"input":"hi"`))
+		choice := responseMap(t, recorder)["tool_choice"].(map[string]any)
+		if choice["type"] != "function" || choice["name"] != "get_weather" {
+			t.Fatalf("tool_choice = %#v", choice)
+		}
+	})
+
+	t.Run("defaults without tools", func(t *testing.T) {
+		recorder := postJSON(t, "/v1/responses", responsesBody(`"input":"hello"`))
+		assertToolSettings(t, responseMap(t, recorder), "auto", true, 0)
+	})
+}
+
+func TestResponsesToolCallEchoesParallelToolCalls(t *testing.T) {
+	recorder := postJSON(t, "/v1/responses", responsesBody(
+		`"parallel_tool_calls":false,"tool_choice":"required","tools":[{"type":"function","name":"f","parameters":{"type":"object"}}],"input":"go"`))
+	assertToolSettings(t, responseMap(t, recorder), "required", false, 1)
+}
+
+func assertToolSettings(t *testing.T, response map[string]any, choice string, parallel bool, toolCount int) {
+	t.Helper()
+	if response["tool_choice"] != choice {
+		t.Fatalf("tool_choice = %#v, want %q", response["tool_choice"], choice)
+	}
+	if response["parallel_tool_calls"] != parallel {
+		t.Fatalf("parallel_tool_calls = %#v, want %v", response["parallel_tool_calls"], parallel)
+	}
+	if tools, _ := response["tools"].([]any); len(tools) != toolCount {
+		t.Fatalf("tools = %#v, want %d", response["tools"], toolCount)
+	}
+}
+
+func TestResponsesToolOutputWithPriorContext(t *testing.T) {
+	const orphan = `{"type":"function_call_output","call_id":"call_from_earlier_turn","output":"sunny"}`
+
+	for name, extra := range map[string]string{
+		"previous_response_id":        `"previous_response_id":"resp_prev",`,
+		"conversation id":             `"conversation":"conv_1",`,
+		"conversation object":         `"conversation":{"id":"conv_1"},`,
+		"item_reference in the input": ``,
+	} {
+		t.Run(name, func(t *testing.T) {
+			input := orphan
+			if name == "item_reference in the input" {
+				input = `{"type":"item_reference","id":"fc_stored"},` + orphan
+			}
+			recorder := postJSON(t, "/v1/responses", responsesBody(extra+`"input":[`+input+`]`))
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", recorder.Code, recorder.Body.String())
+			}
+			item := outputItem(t, responseMap(t, recorder))
+			text := item["content"].([]any)[0].(map[string]any)["text"]
+			if text != "The tool returned: sunny" {
+				t.Fatalf("text = %#v", text)
+			}
+		})
+	}
+
+	t.Run("null conversation does not count", func(t *testing.T) {
+		recorder := postJSON(t, "/v1/responses", responsesBody(`"conversation":null,"input":[`+orphan+`]`))
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400: %s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("output shape is still validated", func(t *testing.T) {
+		recorder := postJSON(t, "/v1/responses", responsesBody(
+			`"previous_response_id":"resp_prev","input":[{"type":"function_call_output","call_id":"c","output":42}]`))
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400: %s", recorder.Code, recorder.Body.String())
+		}
+		errBody := responseMap(t, recorder)["error"].(map[string]any)
+		if errBody["param"] != "input[0].output" {
+			t.Fatalf("error = %#v", errBody)
+		}
+	})
+
+	t.Run("a call of the other kind is still rejected", func(t *testing.T) {
+		recorder := postJSON(t, "/v1/responses", responsesBody(
+			`"previous_response_id":"resp_prev","input":[{"type":"custom_tool_call","call_id":"c","name":"n","input":"x"},`+
+				`{"type":"function_call_output","call_id":"c","output":"x"}]`))
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400: %s", recorder.Code, recorder.Body.String())
+		}
+	})
+}

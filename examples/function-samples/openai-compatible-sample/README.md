@@ -34,6 +34,11 @@ kind, and its `output` is a string or an array of `input_text`, `input_image`,
 and `input_file` parts. Errors are 400 `invalid_request_error` responses with
 the offending `param`.
 
+The sample stores no responses, so it cannot see calls from earlier turns. When
+the request sets `previous_response_id` or `conversation`, or has an
+`item_reference` input item, a tool output does not need an earlier call in
+`input`, and the reply reads `The tool returned: <output text>`.
+
 The sample has no model, so it decides tool calls with fixed rules:
 
 | Request | Reply |
@@ -56,9 +61,14 @@ several `response.function_call_arguments.delta` events,
 `response.function_call_arguments.done`, `response.output_item.done`, and
 `response.completed`. A custom call uses `response.custom_tool_call_input.delta`
 and `response.custom_tool_call_input.done`. TTFT and ITL controls apply. Output
-chunk controls do not apply to tool calls or to replies to a tool output. The
-response echoes `tools` and `tool_choice`, and `usage.input_tokens` counts the
-words of `input` and `tools` for tool-call replies.
+chunk controls do not apply to tool calls or to replies to a tool output.
+
+Every `/v1/responses` reply, text or tool call, echoes `tools`, `tool_choice`,
+and `parallel_tool_calls` from the request, with the defaults `[]`, `"auto"`,
+and `true`. `usage.input_tokens` counts the words of `input` and `tools` for
+tool-call replies only; other replies report `0`. Other request fields, such as
+`max_tool_calls`, `store`, `reasoning`, and `include`, are accepted and
+ignored.
 
 ## Benchmark controls
 

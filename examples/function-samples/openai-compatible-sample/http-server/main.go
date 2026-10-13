@@ -124,6 +124,11 @@ type responsesRequest struct {
 	Input      json.RawMessage   `json:"input"`
 	Tools      []json.RawMessage `json:"tools"`
 	ToolChoice json.RawMessage   `json:"tool_choice"`
+	// ParallelToolCalls is echoed. PreviousResponseID and Conversation only
+	// relax the tool-call history check, because the sample stores no responses.
+	ParallelToolCalls  *bool           `json:"parallel_tool_calls"`
+	PreviousResponseID string          `json:"previous_response_id"`
+	Conversation       json.RawMessage `json:"conversation"`
 	benchmarkBodyControls
 }
 
@@ -162,8 +167,8 @@ type responsesResponse struct {
 	Model             string               `json:"model"`
 	Output            []responseOutputItem `json:"output"`
 	ParallelToolCalls bool                 `json:"parallel_tool_calls"`
-	ToolChoice        string               `json:"tool_choice"`
-	Tools             []any                `json:"tools"`
+	ToolChoice        any                  `json:"tool_choice"`
+	Tools             json.RawMessage      `json:"tools"`
 	Usage             *responsesUsage      `json:"usage"`
 }
 
@@ -430,11 +435,14 @@ func handleResponses(w http.ResponseWriter, r *http.Request, config serverConfig
 	}
 
 	if request.Stream {
-		streamResponses(r.Context(), w, newResponsesResponse(request.Model, ""), tuning)
+		response := newResponsesResponse(request.Model, "")
+		request.echoInto(&response)
+		streamResponses(r.Context(), w, response, tuning)
 		return
 	}
 	chunks := outputChunks(tuning)
 	response := newResponsesResponse(request.Model, strings.Join(chunks, ""))
+	request.echoInto(&response)
 	if !waitFor(r.Context(), tuning.TTFT, tuning.TTFTJitter) {
 		return
 	}
@@ -1005,7 +1013,7 @@ func newResponsesResponse(model, text string) responsesResponse {
 		Model:             model,
 		ParallelToolCalls: true,
 		ToolChoice:        "auto",
-		Tools:             []any{},
+		Tools:             json.RawMessage("[]"),
 		Output: []responseOutputItem{{
 			ID:     fmt.Sprintf("msg_%d", sequence),
 			Type:   "message",

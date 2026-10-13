@@ -167,7 +167,10 @@ type parsedResponsesInput struct {
 	}
 }
 
-func parseResponsesInput(raw json.RawMessage) (parsedResponsesInput, error) {
+// parseResponsesInput reads the input items. priorContext says the request has
+// history the sample cannot see (previous_response_id or conversation), so a
+// tool output may answer a call that is not in the input.
+func parseResponsesInput(raw json.RawMessage, priorContext bool) (parsedResponsesInput, error) {
 	var parsed parsedResponsesInput
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
@@ -183,6 +186,17 @@ func parseResponsesInput(raw json.RawMessage) (parsedResponsesInput, error) {
 	var rawItems []json.RawMessage
 	if err := json.Unmarshal(trimmed, &rawItems); err != nil {
 		return parsed, &toolRequestError{"invalid input: " + err.Error(), "input"}
+	}
+
+	// An item_reference can point at a call stored outside the input.
+	for _, rawItem := range rawItems {
+		var probe struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(rawItem, &probe) == nil && probe.Type == "item_reference" {
+			priorContext = true
+			break
+		}
 	}
 
 	calls := map[string]toolCallRef{}
@@ -215,7 +229,7 @@ func parseResponsesInput(raw json.RawMessage) (parsedResponsesInput, error) {
 				return parsed, &toolRequestError{"Missing required parameter: '" + param + ".call_id'.", param + ".call_id"}
 			}
 			call, found := calls[item.CallID]
-			if !found || call.kind != kind {
+			if (found && call.kind != kind) || (!found && !priorContext) {
 				return parsed, &toolRequestError{
 					fmt.Sprintf("No tool call found for %s output with call_id %s.", noun, item.CallID),
 					"input",
@@ -352,7 +366,7 @@ func planResponsesTools(request *responsesRequest) (toolPlan, error) {
 	if err != nil {
 		return toolPlan{}, err
 	}
-	input, err := parseResponsesInput(request.Input)
+	input, err := parseResponsesInput(request.Input, request.hasPriorContext())
 	if err != nil {
 		return toolPlan{}, err
 	}
@@ -364,7 +378,10 @@ func planResponsesTools(request *responsesRequest) (toolPlan, error) {
 
 	if input.toolOutput != nil {
 		plan.hasReply = true
-		plan.replyText = fmt.Sprintf("The %s tool returned: %s", input.toolOutput.label, input.toolOutput.text)
+		plan.replyText = "The tool returned: " + input.toolOutput.text
+		if input.toolOutput.label != "" {
+			plan.replyText = fmt.Sprintf("The %s tool returned: %s", input.toolOutput.label, input.toolOutput.text)
+		}
 		return plan, nil
 	}
 	if len(tools) == 0 || choice.mode == "none" {
@@ -596,7 +613,7 @@ func newToolCallOutput(request *responsesRequest, tool responsesToolDef, payload
 		Status:            "completed",
 		Model:             request.Model,
 		Output:            []any{output.finished},
-		ParallelToolCalls: true,
+		ParallelToolCalls: request.parallelToolCalls(),
 		ToolChoice:        request.toolChoiceValue(),
 		Tools:             tools,
 		Usage: &responsesUsage{
@@ -608,6 +625,24 @@ func newToolCallOutput(request *responsesRequest, tool responsesToolDef, payload
 		},
 	}
 	return output
+}
+
+func (request *responsesRequest) hasPriorContext() bool {
+	conversation := bytes.TrimSpace(request.Conversation)
+	return request.PreviousResponseID != "" ||
+		(len(conversation) > 0 && !bytes.Equal(conversation, []byte("null")))
+}
+
+func (request *responsesRequest) parallelToolCalls() bool {
+	return request.ParallelToolCalls == nil || *request.ParallelToolCalls
+}
+
+// echoInto copies the request's tool settings into a text reply, as the API
+// returns them on every response.
+func (request *responsesRequest) echoInto(response *responsesResponse) {
+	response.Tools = request.toolsJSON()
+	response.ToolChoice = request.toolChoiceValue()
+	response.ParallelToolCalls = request.parallelToolCalls()
 }
 
 func (request *responsesRequest) toolsJSON() json.RawMessage {
