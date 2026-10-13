@@ -139,6 +139,13 @@ the `read` scope for `GET` requests.
 JWT authentication is supported on the tenant-aware v3 API. Set
 `deprecate-endpoints: true` when using the JWT provider.
 
+In self-managed deployments using the policy provider with
+`auth.introspection.enabled`, NVCA can use a projected service account token
+(PSAT) for the v3 `k8s-events` and `cloudevents` write endpoints. A PSAT does
+not authorize read or admin operations.
+**Each event's cluster ID must match the cluster returned by introspection**; if
+the event omits it, the introspected cluster ID is used.
+
 For local development, authentication can be disabled with
 `--disable-authentication`. Do not disable it in production.
 

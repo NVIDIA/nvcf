@@ -22,6 +22,11 @@ helm dependency build "${chart_dir}" >/dev/null
 rendered="${test_root}/rendered.yaml"
 helm template openbao "${chart_dir}" -f "${values_file}" >"${rendered}"
 
+for hook in openbao-server-initialize-cluster openbao-server-refresh-jwt-plugin-catalog openbao-server-migrations; do
+  test "$(yq -r "select(.kind == \"Job\" and .metadata.name == \"$hook\") | .spec.template.spec.securityContext.runAsNonRoot" "${rendered}")" = true
+  test "$(yq -r "select(.kind == \"Job\" and .metadata.name == \"$hook\") | .spec.template.spec.securityContext.runAsUser" "${rendered}")" = 100
+done
+
 # Helm upgrades using --reuse-values do not add newly introduced default
 # subtrees. Rendering must remain compatible with persisted pre-change values.
 legacy_values="${test_root}/legacy-values.yaml"

@@ -69,6 +69,31 @@ bring-up floor (scheduling, framework import, CUDA init, tensor-parallel
 worker spawn) that both cold and warm starts pay; cachedir compresses the
 disk work, not live process initialization.
 
+### Page-cache prewarm A/B, September 2026
+
+The cachedir restore adds an `nvsnap-prewarm` init container that reads the
+whole rox tree (`find | xargs -P 6 cat`) before the engine starts, so the
+engine's weight load hits page cache instead of storage. Opt out per pod with
+`NVSNAP_PREWARM=0`. Measured on Llama-3.1-70B-Instruct, vLLM v0.20.0 TP=4,
+131.6 GB rox on a network block volume (NVMesh, ~1 GB/s per volume), same node,
+page cache dropped before every run:
+
+| Restore | Ready | Prewarm init |
+|---|---:|---:|
+| prewarm | 245 s, 249 s | 138 s, 137 s |
+| no prewarm | 263 s, 251 s | -- |
+
+Cold start on the same node: 632 s. The prewarm is neutral here: a single
+reader already saturates the volume, so the prewarm only moves the same
+storage-bound read ahead of the engine instead of overlapping it with process
+bring-up. The prewarm pays off on volumes whose single-stream reads are
+latency-bound but whose aggregate throughput is high (Hyperdisk ML), where the
+engine's per-fault mmap reads leave the volume idle and the parallel sweep does
+not. Treat the prewarm value as a property of the storage class, not the model:
+the default and the reader count live in the storage profile (`prewarm`,
+`prewarmParallelism` in the `nvsnap-storage-profiles` ConfigMap), see
+`docs/design/STORAGE-AGNOSTIC-L2-PROMOTION.md`.
+
 ## Environment
 
 - **Cluster**: example-gpu-cluster (GKE)

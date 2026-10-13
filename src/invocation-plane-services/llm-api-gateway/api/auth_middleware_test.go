@@ -159,6 +159,10 @@ var priorityMiddlewarePaths = []struct {
 		body: `{"model":"fn-chat/company-name/model-name","input":"hello"}`,
 	},
 	{
+		path: "/v1/messages",
+		body: `{"model":"fn-chat/company-name/model-name","messages":[{"role":"user","content":"hello"}],"max_tokens":16}`,
+	},
+	{
 		path: "/v1/embeddings",
 		body: `{"model":"fn-chat/company-name/model-name","input":"hello"}`,
 	},

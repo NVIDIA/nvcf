@@ -38,7 +38,10 @@ pub struct InferenceServerRegistrationConfig {
     pub cluster_id: String,
     pub inference_server_url: String,
     pub forwarding: TunnelForwardingConfig,
+    /// Heartbeat interval: the longest gap between registration updates.
     pub min_update_interval: Duration,
+    /// Minimum gap between updates triggered by stats or status changes.
+    pub stats_update_coalesce: Duration,
     pub reverse_tunnel: bool,
     pub tls_cert_pem: Option<Vec<u8>>,
     pub grpc_tls_ca_cert_pem: Option<Vec<u8>>,
@@ -55,6 +58,7 @@ pub(super) struct RegistrationSessionConfig {
     pub(super) inference_server_url: String,
     pub(super) forwarding: TunnelForwardingConfig,
     pub(super) min_update_interval: Duration,
+    pub(super) stats_update_coalesce: Duration,
     pub(super) reverse_tunnel: bool,
     pub(super) tls_cert_pem: Option<Vec<u8>>,
     pub(super) grpc_tls_ca_cert_pem: Option<Vec<u8>>,
@@ -97,6 +101,7 @@ impl TryFrom<InferenceServerRegistrationConfig> for RegistrationSessionConfig {
             inference_server_url,
             forwarding: config.forwarding,
             min_update_interval: config.min_update_interval,
+            stats_update_coalesce: config.stats_update_coalesce,
             reverse_tunnel: config.reverse_tunnel,
             tls_cert_pem: config.tls_cert_pem,
             grpc_tls_ca_cert_pem: config.grpc_tls_ca_cert_pem,

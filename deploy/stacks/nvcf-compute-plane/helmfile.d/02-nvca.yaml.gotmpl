@@ -248,6 +248,9 @@ releases:
           {{- with dig "natsHostOverride" "" $selfManaged }}
           natsHostOverride: {{ . | quote }}
           {{- end }}
+          {{- with dig "eventLedgerServiceURL" "" $selfManaged }}
+          eventLedgerServiceURL: {{ . | quote }}
+          {{- end }}
           featureGateValues:
           {{- include "nvca-operator.featureGateValues" (dict
                 "values" $featureGateValues

@@ -37,6 +37,7 @@ fn crate_root_exports_registration_public_api() {
         cluster_id: "cluster-a".to_string(),
         inference_server_url: "quic://127.0.0.1:8443".to_string(),
         min_update_interval: Duration::from_secs(1),
+        stats_update_coalesce: Duration::from_millis(10),
         reverse_tunnel: false,
         tls_cert_pem: None,
         grpc_tls_ca_cert_pem: None,

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /*
 Package xml holds the XMl encoder utility. This utility is written in accordance to our design to delegate to
 shape serializer function in which a xml.Value will be passed around.

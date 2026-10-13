@@ -144,8 +144,10 @@ const (
 )
 
 // applyPSATIdentity adds the projected ServiceAccount token volume for PSAT identity.
-// The agent container reads the token from /var/run/secrets/tokens/token; audience
-// is "nvcf-icms:{clusterID}" so ICMS can resolve the cluster by audience at verify time.
+// The agent and OTel collector containers read the token from
+// /var/run/secrets/tokens/token; audience is "nvcf-icms:{clusterID}" so ICMS can
+// resolve the cluster by audience at verify time, and Event Ledger can verify the
+// collector's token through SIS introspection.
 func applyPSATIdentity(ctx context.Context, nvcaDeployment *appsv1.Deployment, clusterID string) {
 	core.GetLogger(ctx).Debugf("Adding projected SA token volume for PSAT identity")
 
@@ -168,16 +170,22 @@ func applyPSATIdentity(ctx context.Context, nvcaDeployment *appsv1.Deployment, c
 		},
 	)
 
+	tokenMount := corev1.VolumeMount{
+		Name:      "nvca-token",
+		MountPath: clusterIssuedTokenDir,
+		ReadOnly:  true,
+	}
 	containers := nvcaDeployment.Spec.Template.Spec.Containers
 	for i := range containers {
 		if containers[i].Name == "agent" {
-			containers[i].VolumeMounts = append(containers[i].VolumeMounts,
-				corev1.VolumeMount{
-					Name:      "nvca-token",
-					MountPath: clusterIssuedTokenDir,
-					ReadOnly:  true,
-				},
-			)
+			containers[i].VolumeMounts = append(containers[i].VolumeMounts, tokenMount)
+		}
+	}
+	// The collector runs as a restartable init container when enabled.
+	initContainers := nvcaDeployment.Spec.Template.Spec.InitContainers
+	for i := range initContainers {
+		if initContainers[i].Name == NVCAOTelCollectorContainerName {
+			initContainers[i].VolumeMounts = append(initContainers[i].VolumeMounts, tokenMount)
 		}
 	}
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -34,6 +35,7 @@ const (
 	openAIModelNameAttribute           attribute.Key = "openai_model_name"
 	functionIDAttribute                attribute.Key = "function_id"
 	GatewayProxyOutcomeMetricAttribute attribute.Key = "gateway_proxy_outcome"
+	GatewayProxyOutcomeSpanAttribute   attribute.Key = "gateway.proxy.outcome"
 )
 
 type GatewayProxyOutcome string
@@ -41,7 +43,17 @@ type GatewayProxyOutcome string
 const (
 	GatewayProxyOutcomeClientCanceled GatewayProxyOutcome = "client_canceled"
 	GatewayProxyOutcomeProxyError     GatewayProxyOutcome = "gateway_proxy_error"
+	// GatewayProxyOutcomeRejected marks a response the gateway wrote itself with
+	// no dependency involved (offline, end of life, validation, not found).
+	GatewayProxyOutcomeRejected GatewayProxyOutcome = "gateway_rejected"
+	// GatewayProxyOutcomeUpstreamStatus marks a non-2xx response passed through
+	// from the upstream service.
+	GatewayProxyOutcomeUpstreamStatus GatewayProxyOutcome = "upstream_status"
 )
+
+// ErrorSourceHeader is added to non-2xx responses so clients and support can
+// tell where the status came from. Its value is a GatewayProxyOutcome.
+const ErrorSourceHeader = "NVCF-Error-Source"
 
 var spanNameFormatter = otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
 	return r.URL.Path
@@ -49,11 +61,28 @@ var spanNameFormatter = otelhttp.WithSpanNameFormatter(func(operation string, r 
 
 func ServerTelemetryMiddleware(opts ...otelhttp.Option) func(http.Handler) http.Handler {
 	options := append(defaultHTTPServerOptions(), opts...)
-	return otelhttp.NewMiddleware(serverOperationName, options...)
+	telemetry := otelhttp.NewMiddleware(serverOperationName, options...)
+	return func(next http.Handler) http.Handler {
+		return processingMiddleware(telemetry(next))
+	}
 }
 
 func TracedRoundTripper(rt http.RoundTripper) http.RoundTripper {
-	return otelhttp.NewTransport(rt, spanNameFormatter)
+	traced := otelhttp.NewTransport(rt, spanNameFormatter, otelhttp.WithMetricAttributesFn(shadowMetricAttributes))
+	return dispatchRoundTripper{traced}
+}
+
+type dispatchRoundTripper struct{ http.RoundTripper }
+
+func (rt dispatchRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	if state := processingFromContext(r.Context()); state != nil {
+		outcome := "dispatched"
+		if r.Context().Err() != nil {
+			outcome = string(GatewayProxyOutcomeClientCanceled)
+		}
+		state.record(r.Context(), outcome)
+	}
+	return rt.RoundTripper.RoundTrip(r)
 }
 
 func defaultHTTPServerOptions() []otelhttp.Option {
@@ -90,9 +119,20 @@ func AddFunctionIDMetricAttribute(ctx context.Context, functionID string) {
 
 func AddGatewayProxyOutcomeMetricAttribute(ctx context.Context, outcome GatewayProxyOutcome) {
 	switch outcome {
-	case GatewayProxyOutcomeClientCanceled, GatewayProxyOutcomeProxyError:
+	case GatewayProxyOutcomeClientCanceled, GatewayProxyOutcomeProxyError,
+		GatewayProxyOutcomeRejected, GatewayProxyOutcomeUpstreamStatus:
+		if state := processingFromContext(ctx); state != nil {
+			state.outcome = string(outcome)
+		}
 		addRequestMetricAttributes(ctx, GatewayProxyOutcomeMetricAttribute.String(string(outcome)))
 	}
+}
+
+// RecordGatewayProxyOutcome sets the outcome on the inbound server request
+// metric and on the active server span so traces match metrics.
+func RecordGatewayProxyOutcome(ctx context.Context, outcome GatewayProxyOutcome) {
+	AddGatewayProxyOutcomeMetricAttribute(ctx, outcome)
+	trace.SpanFromContext(ctx).SetAttributes(GatewayProxyOutcomeSpanAttribute.String(string(outcome)))
 }
 
 func addRequestMetricAttributes(ctx context.Context, attrs ...attribute.KeyValue) {

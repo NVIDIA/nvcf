@@ -93,7 +93,7 @@ func setShadowSpanAttribute(span trace.Span, req *http.Request) {
 }
 
 func newShadowRequest(req *http.Request, body []byte, ctx context.Context) *http.Request {
-	shadowReq := req.Clone(ctx)
+	shadowReq := req.Clone(middleware.ShadowTelemetryContext(ctx))
 	shadowReq.Header.Set(shadowHeader, shadowHeaderValue)
 	shadowReq.Body = io.NopCloser(bytes.NewReader(body))
 	shadowReq.ContentLength = int64(len(body))
@@ -173,6 +173,9 @@ func newShadowReplayHandler(targetModel string, handler http.Handler) http.Handl
 		replay,
 		shadowReplaySpanName,
 		otelhttp.WithPropagators(propagation.NewCompositeTextMapPropagator()),
+		otelhttp.WithMetricAttributesFn(func(*http.Request) []attribute.KeyValue {
+			return []attribute.KeyValue{attribute.Bool("nvcf.shadow", true)}
+		}),
 		otelhttp.WithSpanOptions(trace.WithAttributes(traceAttrShadowTargetModel.String(targetModel))),
 	)
 }

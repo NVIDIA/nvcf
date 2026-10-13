@@ -30,5 +30,6 @@ func providerHTTPError(err error) error {
 		return httpErr
 	}
 
-	return echo.NewHTTPError(http.StatusBadGateway, err.Error())
+	// Transport errors carry internal addresses; keep them for the request log only.
+	return echo.NewHTTPError(http.StatusBadGateway, "upstream request failed").SetInternal(err)
 }

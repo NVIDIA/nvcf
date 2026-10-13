@@ -91,6 +91,7 @@ type ManifestEntry struct {
 }
 
 type Catalog struct {
+	DocsEdition           *DocsEdition         `yaml:"docs_edition,omitempty"`
 	Version               int                  `yaml:"version"`
 	Target                string               `yaml:"target"`
 	Registries            map[string]Registry  `yaml:"registries"`
@@ -415,11 +416,14 @@ func ValidateCatalog(catalog *Catalog) error {
 		seenPending[name] = struct{}{}
 	}
 	if catalog.ReleaseSet != (ReleaseSetMetadata{}) {
-		if err := validateReleaseSet(catalog.ReleaseSet); err != nil {
+		if err := validateReleaseSetMetadata(catalog.ReleaseSet, catalog.DocsEdition == nil); err != nil {
 			return err
 		}
 	}
 	if err := validateCompatibility(catalog.Compatibility); err != nil {
+		return err
+	}
+	if err := validateDocsEdition(catalog); err != nil {
 		return err
 	}
 	if strings.TrimSpace(catalog.Stack.Name) == "" {
@@ -527,6 +531,10 @@ func ValidateCatalog(catalog *Catalog) error {
 }
 
 func validateReleaseSet(releaseSet ReleaseSetMetadata) error {
+	return validateReleaseSetMetadata(releaseSet, true)
+}
+
+func validateReleaseSetMetadata(releaseSet ReleaseSetMetadata, checkDocumentation bool) error {
 	for _, stack := range []struct {
 		name     string
 		metadata StackReleaseMetadata
@@ -552,8 +560,10 @@ func validateReleaseSet(releaseSet ReleaseSetMetadata) error {
 		if stack.metadata.InventoryAsset != spec.AssetName {
 			return fmt.Errorf("release_set %s inventory_asset must be %s", stack.name, spec.AssetName)
 		}
-		if err := validateStackDocumentationVersion(stack.name, stack.metadata); err != nil {
-			return err
+		if checkDocumentation {
+			if err := validateStackDocumentationVersion(stack.name, stack.metadata); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

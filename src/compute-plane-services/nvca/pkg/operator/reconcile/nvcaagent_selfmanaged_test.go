@@ -75,6 +75,41 @@ func agentDeployment() *appsv1.Deployment {
 	}
 }
 
+func TestApplyPSATIdentity_MountsTokenIntoAgentAndOTelCollector(t *testing.T) {
+	tokenMount := corev1.VolumeMount{Name: "nvca-token", MountPath: "/var/run/secrets/tokens", ReadOnly: true}
+
+	t.Run("collector enabled", func(t *testing.T) {
+		dep := agentDeployment()
+		dep.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: NVCAOTelCollectorContainerName}}
+
+		applyPSATIdentity(context.Background(), dep, "abc")
+
+		podSpec := dep.Spec.Template.Spec
+		assert.Equal(t, []corev1.VolumeMount{tokenMount}, podSpec.Containers[0].VolumeMounts)
+		assert.Equal(t, []corev1.VolumeMount{tokenMount}, podSpec.InitContainers[0].VolumeMounts)
+		require.Len(t, podSpec.Volumes, 1)
+		assert.Equal(t, "nvcf-icms:abc", podSpec.Volumes[0].Projected.Sources[0].ServiceAccountToken.Audience)
+	})
+
+	t.Run("collector disabled", func(t *testing.T) {
+		dep := agentDeployment()
+
+		applyPSATIdentity(context.Background(), dep, "abc")
+
+		assert.Equal(t, []corev1.VolumeMount{tokenMount}, dep.Spec.Template.Spec.Containers[0].VolumeMounts)
+		assert.Empty(t, dep.Spec.Template.Spec.InitContainers)
+	})
+
+	t.Run("other init containers are untouched", func(t *testing.T) {
+		dep := agentDeployment()
+		dep.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "other"}}
+
+		applyPSATIdentity(context.Background(), dep, "abc")
+
+		assert.Empty(t, dep.Spec.Template.Spec.InitContainers[0].VolumeMounts)
+	})
+}
+
 func TestApplySelfManagedNVCADeployment_RejectsInvalidSource(t *testing.T) {
 	nb := &nvidiaiov1.NVCFBackend{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "test"},

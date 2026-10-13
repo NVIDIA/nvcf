@@ -27,4 +27,5 @@ ENV ULIMIT_FLAG=1
 ENV JDK_JAVA_OPTIONS=""
 
 WORKDIR /home/app
+USER 1000:1000
 CMD ["java", "-jar", "/usr/share/app.jar"]

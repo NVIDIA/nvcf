@@ -18,6 +18,7 @@ limitations under the License.
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1549,6 +1550,8 @@ func llmModelConfig(section string, entry ModelFunctionDetails) *GatewayConfig {
 		cfg.OpenAI.ChatCompletions = entries
 	case "responses":
 		cfg.OpenAI.Responses = entries
+	case "anthropicMessages":
+		cfg.AnthropicMessages = entries
 	case "embeddings":
 		cfg.OpenAI.Embeddings = entries
 	case "completions":
@@ -1660,4 +1663,59 @@ v2config:
 	assert.True(t, cfg.HasLLMGatewayRoute())
 	assert.True(t, cfg.OpenAI.ChatCompletions["llama"].TargetsLLMGateway())
 	assert.False(t, cfg.OpenAI.ChatCompletions["phi"].TargetsLLMGateway())
+}
+
+func TestMessagesConfigValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		headers   CustomHeaders
+		shadow    string
+		wantError string
+	}{
+		{name: "protocol headers", headers: CustomHeaders{"anthropic-version": "2023-06-01", "anthropic-beta": "tools-test"}},
+		{name: "invalid header", headers: CustomHeaders{"Host": "override.test"}, wantError: "customHeaders"},
+		{name: "missing shadow", shadow: "missing", wantError: "shadow"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := llmModel()
+			entry.CustomHeaders = tc.headers
+			entry.ShadowModelName = tc.shadow
+			cfg := llmModelConfig("anthropicMessages", entry)
+			err := cfg.Validate()
+			if tc.wantError == "" {
+				require.NoError(t, err)
+				require.True(t, cfg.HasLLMGatewayRoute())
+			} else {
+				require.ErrorContains(t, err, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestAnthropicMessagesConfigNamespace(t *testing.T) {
+	var cfg GatewayConfig
+	require.NoError(t, json.Unmarshal([]byte(`{
+  "v2config": {
+   "openai": {"host": "api.example.com", "chatCompletions": {
+    "chat": {"modelName": "chat-model", "functionID": "chat-function"}
+   }},
+   "anthropicMessages": {
+    "native": {"modelName": "native-model", "functionID": "native-function", "functionType": "LLM"}
+   }
+  }
+ }`), &cfg))
+	require.NoError(t, cfg.Validate())
+	require.True(t, cfg.HasLLMGatewayRoute())
+	require.Equal(t, "api.example.com", cfg.OpenAI.Host)
+	require.Equal(t, "chat-model", cfg.OpenAI.ChatCompletions["chat"].ModelName)
+	entry := cfg.AnthropicMessages["native"]
+	require.Equal(t, "native-model", entry.ModelName)
+	// A model on another protocol cannot satisfy a Messages shadow target.
+	entry.ShadowModelName = "chat-model"
+	cfg.AnthropicMessages["native"] = entry
+	require.ErrorContains(t, cfg.Validate(), "anthropicMessages.native: shadow target must reference another model in anthropicMessages")
+	entry.ShadowModelName = ""
+	entry.ModelName = ""
+	cfg.AnthropicMessages["native"] = entry
+	require.ErrorContains(t, cfg.Validate(), "anthropicMessages.native: modelName is required")
 }

@@ -62,6 +62,14 @@ test "$(yq -r '.agentConfig // "omitted"' "${default_values}")" = "omitted" ||
   fail "stack shadowed the chart agentConfig defaults without an explicit merge"
 test "$(yq -r '.nodeSelector // "omitted"' "${default_values}")" = "omitted" ||
   fail "stack emitted a node selector while the singular global default is disabled"
+test "$(yq -r '.selfManaged.eventLedgerServiceURL // "omitted"' "${default_values}")" = "omitted" ||
+  fail "stack emitted an empty Event Ledger URL that would shadow the operator default"
+
+event_ledger_values="${work_dir}/event-ledger-values.yaml"
+render_values "${event_ledger_values}" \
+  --state-values-set-string global.nvcaOperator.selfManaged.eventLedgerServiceURL=https://events.example.invalid
+test "$(yq -r '.selfManaged.eventLedgerServiceURL' "${event_ledger_values}")" = "https://events.example.invalid" ||
+  fail "global.nvcaOperator.selfManaged.eventLedgerServiceURL was not forwarded to the chart"
 
 write_registration '    workload:
       defaultOwnershipProbe: true'
