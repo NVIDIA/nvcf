@@ -58,8 +58,12 @@ rg -n "<term>" docs/overview docs/self-managed docs/compute-plane docs/observabi
 ## Editing
 
 Edit the owning current source tree for customer changes and `docs/dev/` for
-contributor guides. Changes on `main` update Development. Released docs branches
-are immutable; corrections require a new patch edition.
+contributor guides. Changes on `main` update Development. Legacy
+`docs/releases/` branches are immutable; corrections require a new patch edition. Opt-in umbrella entries use maintained `docs/versions/X.Y.Z`
+sources. Their approved docs commit can advance under the same product
+version, while the bound product manifest and artifact pins stay immutable.
+Use `umbrella docs-revise` to prepare a reviewed canonical registry update.
+Do not change the production default before the mixed-version preview gate.
 
 ### Artifact manifest
 

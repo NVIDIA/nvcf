@@ -25,6 +25,9 @@ func runUmbrella(args []string) error {
 		return fmt.Errorf("usage: docs-version-sync umbrella <prepare|check|bundle|verify-bundle> [flags]")
 	}
 	command := args[0]
+	if strings.HasPrefix(command, "docs-") {
+		return runUmbrellaDocs(command, args[1:])
+	}
 	if command == "publish" {
 		return runUmbrellaPublish(args[1:])
 	}
