@@ -219,7 +219,15 @@ fn promote(
     order
 }
 
-/// Records the session metric, span field, and debug log for a selection.
+/// Records the pinned session state on the current span. A no-op until the
+/// first load-balancer decision classifies the request.
+pub(crate) fn record_session_state(hint: &LastClusterHint) {
+    if let Some(classification) = hint.classification() {
+        Span::current().record("routing.session_state", classification.state.as_str());
+    }
+}
+
+/// Records the session metric and debug log for a selection.
 ///
 /// For a returning session, `primary` means the request went to its last
 /// cluster. For new and stale sessions, `primary` means the cluster came from
@@ -286,7 +294,6 @@ pub(crate) fn record_session_selection(
         )
         .inc();
 
-    Span::current().record("routing.session_state", classification.state.as_str());
     tracing::debug!(
         request_id = %request_id,
         model_id = %target.model_id,

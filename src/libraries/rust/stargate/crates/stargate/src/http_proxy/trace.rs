@@ -207,10 +207,10 @@ mod tests {
     }
 
     #[test]
-    fn session_selection_records_span_state_and_debug_event() {
+    fn session_state_and_selection_record_span_field_and_debug_event() {
         use crate::load_balancer::{
             LastClusterHint, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig,
-            SessionClassification, SessionState, record_session_selection,
+            SessionClassification, SessionState, record_session_selection, record_session_state,
         };
         use crate::metrics::StargateMetrics;
         use crate::routing_state::RoutingTargetKey;
@@ -239,6 +239,7 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             let span = proxy_openai_request_span(&HeaderMap::new());
             let _entered = span.enter();
+            record_session_state(&hint);
             record_session_selection(
                 &metrics,
                 &config,
