@@ -150,14 +150,16 @@ impl SelectedRoutedCluster {
         metrics: Arc<StargateMetrics>,
         target: &RoutingTargetKey,
     ) -> Option<RoutingReservation> {
-        self.reserve_backend_with_rtt_ttl(
+        let reservation = self.reserve_backend_with_rtt_ttl(
             registration,
             input_tokens,
             priority,
             |_rtt| ttl,
             metrics,
             target,
-        )
+        );
+        // Tests reserve as if the request were sent at once.
+        reservation.inspect(RoutingReservation::arm)
     }
 
     /// Reserves `registration` if it is still the stored backend, deriving

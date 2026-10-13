@@ -165,6 +165,13 @@ impl ProxyRequestRun<'_> {
             &self.request.path_and_query,
             attempt_headers,
             || {
+                // The tunnel calls this after opening the stream and sending
+                // the request head, so the soft expiry starts only once the
+                // request has left Stargate. Attempts that end earlier arm
+                // when the reservation is dropped.
+                if let Some(reservation) = &reservation {
+                    reservation.arm();
+                }
                 let body = self.request.replay_body.body_for_attempt()?;
                 // After handing the body to the tunnel, a transport failure
                 // cannot establish whether the backend applied this POST.

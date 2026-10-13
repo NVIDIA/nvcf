@@ -16,6 +16,7 @@
 use super::*;
 use crate::metrics::StargateMetrics;
 use stargate_protocol::common::queue_time_delta_ms;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
@@ -30,12 +31,15 @@ pub(super) struct PendingClusterReservation {
     pub(super) registration: Option<Arc<RegistrationGeneration>>,
     pub(super) input_tokens: u64,
     pub(super) priority: u32,
+    ttl: Duration,
     // Soft expiry: a registration update from the reserved backend received
     // at or after this instant ends the reservation. Time alone never does,
     // so a backend that stops reporting keeps its reservations until it is
-    // removed. `None` when the TTL is too large to represent as an `Instant`;
-    // such a reservation only ends by release or backend removal.
-    expires_at: Option<Instant>,
+    // removed. Unset until the request is handed to the tunnel, so no update
+    // can settle a request that has not left Stargate. `Some(None)` when the
+    // TTL is too large to represent as an `Instant`; such a reservation only
+    // ends by release or backend removal.
+    expires_at: OnceLock<Option<Instant>>,
     active: AtomicBool,
     metrics: Option<Arc<StargateMetrics>>,
     routing_key: Option<String>,
@@ -43,30 +47,12 @@ pub(super) struct PendingClusterReservation {
 }
 
 impl PendingClusterReservation {
-    pub(super) fn new(
-        registration: Arc<RegistrationGeneration>,
-        input_tokens: u64,
-        priority: u32,
-        ttl: Duration,
-        metrics: Option<Arc<StargateMetrics>>,
-        target: &RoutingTargetKey,
-    ) -> Arc<Self> {
-        Self::new_at(
-            Some(registration),
-            input_tokens,
-            priority,
-            Instant::now(),
-            ttl,
-            metrics,
-            target,
-        )
-    }
-
-    pub(super) fn new_at(
+    /// Creates a counted reservation whose soft expiry starts when it is
+    /// armed.
+    pub(super) fn new_unarmed(
         registration: Option<Arc<RegistrationGeneration>>,
         input_tokens: u64,
         priority: u32,
-        now: Instant,
         ttl: Duration,
         metrics: Option<Arc<StargateMetrics>>,
         target: &RoutingTargetKey,
@@ -76,9 +62,6 @@ impl PendingClusterReservation {
             .map_or_else(String::new, |registration| {
                 registration.inference_server_id().to_string()
             });
-        // Compute expiry before touching metrics so an unrepresentable TTL
-        // cannot panic after the active gauge was incremented.
-        let expires_at = now.checked_add(ttl);
         if let Some(metrics) = &metrics {
             metrics
                 .inc_routing_reservations_active(target.routing_key.as_deref(), &target.model_id);
@@ -91,7 +74,8 @@ impl PendingClusterReservation {
             registration,
             input_tokens,
             priority,
-            expires_at,
+            ttl,
+            expires_at: OnceLock::new(),
             active: AtomicBool::new(true),
             metrics,
             routing_key: target.routing_key.clone(),
@@ -99,17 +83,38 @@ impl PendingClusterReservation {
         })
     }
 
+    /// Creates a reservation already armed at `now`.
+    #[cfg(test)]
+    pub(super) fn new_at(
+        registration: Option<Arc<RegistrationGeneration>>,
+        input_tokens: u64,
+        priority: u32,
+        now: Instant,
+        ttl: Duration,
+        metrics: Option<Arc<StargateMetrics>>,
+        target: &RoutingTargetKey,
+    ) -> Arc<Self> {
+        let pending = Self::new_unarmed(registration, input_tokens, priority, ttl, metrics, target);
+        pending.arm_at(now);
+        pending
+    }
+
     pub(super) fn is_active(&self) -> bool {
         self.active.load(Ordering::Acquire)
     }
 
+    /// Starts the soft expiry at `now`. Only the first call takes effect.
+    pub(super) fn arm_at(&self, now: Instant) {
+        let _ = self.expires_at.set(now.checked_add(self.ttl));
+    }
+
     /// Ends the reservation when a registration update from its own backend,
     /// received at `updated_at`, arrived at or after the soft expiry and so
-    /// can already include the request. Earlier updates leave it counting.
+    /// can already include the request. Earlier updates, and any update
+    /// before the reservation is armed, leave it counting.
     pub(super) fn settle_on_backend_update(&self, updated_at: Instant) {
-        if self
-            .expires_at
-            .is_some_and(|expires_at| updated_at >= expires_at)
+        if let Some(Some(expires_at)) = self.expires_at.get()
+            && updated_at >= *expires_at
         {
             self.deactivate();
         }
@@ -139,8 +144,23 @@ impl Drop for PendingClusterReservation {
 pub(crate) struct RoutingReservation(pub(super) Arc<PendingClusterReservation>);
 
 impl RoutingReservation {
+    /// Starts the soft expiry once the request has been handed to the tunnel.
+    /// Later calls keep the first arm time.
+    pub(crate) fn arm(&self) {
+        self.0.arm_at(Instant::now());
+    }
+
     pub(crate) fn release(self) {
         self.0.deactivate();
+    }
+}
+
+impl Drop for RoutingReservation {
+    // An attempt that ends before sending its request, including by
+    // cancellation, arms the reservation here so it still ends on the
+    // backend's next update after the TTL.
+    fn drop(&mut self) {
+        self.arm();
     }
 }
 
@@ -261,6 +281,71 @@ mod tests {
         );
         pending.settle_on_backend_update(at(60));
         assert!(!pending.is_active());
+    }
+
+    #[test]
+    fn unarmed_reservation_is_not_settled_by_any_update() {
+        let target = RoutingTargetKey::new(Some("routing".to_string()), "model");
+        let pending = PendingClusterReservation::new_unarmed(
+            None,
+            10,
+            0,
+            Duration::from_millis(1),
+            None,
+            &target,
+        );
+
+        pending.settle_on_backend_update(Instant::now() + Duration::from_secs(3600));
+        assert!(
+            pending.is_active(),
+            "a request that has not left Stargate cannot appear in any update"
+        );
+    }
+
+    #[test]
+    fn soft_expiry_starts_when_the_reservation_is_armed() {
+        let target = RoutingTargetKey::new(Some("routing".to_string()), "model");
+        let reserved_at = Instant::now();
+        let pending = PendingClusterReservation::new_unarmed(
+            None,
+            10,
+            0,
+            Duration::from_millis(60),
+            None,
+            &target,
+        );
+        let armed_at = reserved_at + Duration::from_millis(100);
+        let after_arm = |millis| armed_at + Duration::from_millis(millis);
+
+        pending.settle_on_backend_update(armed_at);
+        assert!(pending.is_active());
+        pending.arm_at(armed_at);
+        pending.arm_at(after_arm(1000));
+        pending.settle_on_backend_update(after_arm(59));
+        assert!(
+            pending.is_active(),
+            "an update before arm time plus TTL cannot include the request"
+        );
+        pending.settle_on_backend_update(after_arm(60));
+        assert!(!pending.is_active(), "the first arm time must win");
+    }
+
+    #[test]
+    fn dropping_an_unarmed_token_arms_its_reservation() {
+        let target = RoutingTargetKey::new(Some("routing".to_string()), "model");
+        let metrics = StargateMetrics::new().expect("metrics should initialize");
+        let ttl = Duration::from_millis(60);
+        let pending =
+            PendingClusterReservation::new_unarmed(None, 1, 0, ttl, Some(metrics.clone()), &target);
+        let before_drop = Instant::now();
+
+        drop(RoutingReservation(Arc::clone(&pending)));
+        assert!(active_reservation_gauge(&metrics).ends_with(" 1"));
+        pending.settle_on_backend_update(before_drop);
+        assert!(pending.is_active());
+        pending.settle_on_backend_update(Instant::now() + ttl);
+        assert!(!pending.is_active());
+        assert!(active_reservation_gauge(&metrics).ends_with(" 0"));
     }
 
     #[test]

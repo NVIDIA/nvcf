@@ -77,12 +77,27 @@ struct MockTunnel {
 
 impl MockTunnel {
     fn start(reply: MockReply) -> Self {
+        Self::start_with_stream_limit(reply, None)
+    }
+
+    /// Accepts connections but grants no request streams, so Stargate's
+    /// stream open blocks until it times out or is cancelled.
+    fn start_without_stream_capacity() -> Self {
+        Self::start_with_stream_limit(OK_REPLY, Some(0))
+    }
+
+    fn start_with_stream_limit(reply: MockReply, max_bidi_streams: Option<u32>) -> Self {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        let server_config = stargate_tls::build_quic_server_config(
+        let mut server_config = stargate_tls::build_quic_server_config(
             &stargate_tls::ServerTlsIdentity::SelfSigned,
             TunnelTransportProtocol::RawQuic.alpn_protocols(),
         )
         .expect("mock tunnel server config should build");
+        if let Some(max_bidi_streams) = max_bidi_streams {
+            let mut transport = quinn::TransportConfig::default();
+            transport.max_concurrent_bidi_streams(max_bidi_streams.into());
+            server_config.transport_config(Arc::new(transport));
+        }
         let endpoint = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap())
             .expect("mock tunnel endpoint should bind");
         let received = Arc::new(Mutex::new(Vec::new()));
@@ -183,6 +198,14 @@ async fn serve_stream(
 }
 
 fn proxy_app(ttl_min: Duration, ttl_max: Duration) -> ProxyAppState {
+    proxy_app_with_request_timeout(ttl_min, ttl_max, Duration::from_secs(5))
+}
+
+fn proxy_app_with_request_timeout(
+    ttl_min: Duration,
+    ttl_max: Duration,
+    request_timeout: Duration,
+) -> ProxyAppState {
     let mut app = test_proxy_app_state();
     // The shared fixture uses 10 ms tunnel timeouts because it never dials a
     // backend; these tests complete real QUIC requests.
@@ -190,7 +213,7 @@ fn proxy_app(ttl_min: Duration, ttl_max: Duration) -> ProxyAppState {
         QuicHttpProxy::new(
             QuicTunnelConfig {
                 connect_timeout: Duration::from_secs(5),
-                request_timeout: Duration::from_secs(5),
+                request_timeout,
                 direct_quic_connections: 1,
                 tls_cert_pem: None,
                 server_tls_identity: stargate_tls::ServerTlsIdentity::SelfSigned,
@@ -279,6 +302,18 @@ async fn counted_reservations(app: &ProxyAppState) -> u64 {
     let clusters = snapshot.clusters();
     assert_eq!(clusters.len(), 1);
     clusters[0].stats.queue_size
+}
+
+/// Polls until the routed cluster counts `expected` reservations.
+async fn wait_for_counted_reservations(app: &ProxyAppState, expected: u64) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while counted_reservations(app).await != expected {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "routed cluster never counted {expected} reservations"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 }
 
 fn observed_ttl_sum_ms(app: &ProxyAppState) -> u64 {
@@ -436,6 +471,68 @@ async fn soft_expired_reservation_counts_until_the_backend_reports() {
         0,
         "an update after the soft expiry replaces reservations with reported stats"
     );
+
+    app.state.end_registration(running).await;
+}
+
+#[tokio::test]
+async fn blocked_stream_open_keeps_reservation_unarmed_until_cancelled() {
+    // A zero TTL armed at dispatch would end on the first update below.
+    let app = proxy_app(Duration::ZERO, Duration::ZERO);
+    let tunnel = MockTunnel::start_without_stream_capacity();
+    let running = register_backend(&app, "inst-a", &tunnel, Duration::from_millis(10)).await;
+
+    let request = tokio::spawn({
+        let app = app.clone();
+        async move { send_request(&app, "req-blocked").await }
+    });
+    wait_for_counted_reservations(&app, 1).await;
+    report_idle(&app, &running, Duration::from_millis(10)).await;
+    assert_eq!(
+        counted_reservations(&app).await,
+        1,
+        "an update cannot settle a request still waiting for a stream"
+    );
+
+    request.abort();
+    assert!(
+        request
+            .await
+            .expect_err("aborted request should not finish")
+            .is_cancelled()
+    );
+    report_idle(&app, &running, Duration::from_millis(10)).await;
+    assert_eq!(
+        counted_reservations(&app).await,
+        0,
+        "cancellation must arm the reservation so the next update settles it"
+    );
+    assert_eq!(tunnel.request_count(), 0);
+
+    app.state.end_registration(running).await;
+}
+
+#[tokio::test]
+async fn failed_stream_open_arms_reservation_when_the_attempt_ends() {
+    let app =
+        proxy_app_with_request_timeout(Duration::ZERO, Duration::ZERO, Duration::from_millis(100));
+    let tunnel = MockTunnel::start_without_stream_capacity();
+    let running = register_backend(&app, "inst-a", &tunnel, Duration::from_millis(10)).await;
+
+    send_request(&app, "req-open-timeout")
+        .await
+        .expect_err("a request without stream capacity should fail");
+    assert!(
+        counted_reservations(&app).await >= 1,
+        "failed attempts stay reserved until their backend reports"
+    );
+    report_idle(&app, &running, Duration::from_millis(10)).await;
+    assert_eq!(
+        counted_reservations(&app).await,
+        0,
+        "a failed attempt must arm its reservation so the next update settles it"
+    );
+    assert_eq!(tunnel.request_count(), 0);
 
     app.state.end_registration(running).await;
 }

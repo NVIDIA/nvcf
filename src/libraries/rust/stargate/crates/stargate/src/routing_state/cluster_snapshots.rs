@@ -361,8 +361,8 @@ impl ClusterRoutingGeneration {
         // backend snapshot, such as a same-backend retry, gets the current RTT.
         let ttl = ttl_for_rtt(self.registered_backend(registration)?.rtt);
         let snapshot_state = self.snapshot_state.as_mut()?;
-        let pending = PendingClusterReservation::new(
-            registration.clone(),
+        let pending = PendingClusterReservation::new_unarmed(
+            Some(registration.clone()),
             input_tokens,
             priority,
             ttl,
@@ -513,14 +513,15 @@ impl RoutedClusterState {
         input_tokens: u64,
         priority: u32,
     ) -> Option<RoutingReservation> {
-        self.generation.lock().reserve_backend(
+        let reservation = self.generation.lock().reserve_backend(
             registration,
             input_tokens,
             priority,
             |_rtt| super::reservations::UNEXPIRING_TEST_RESERVATION_TTL,
             None,
             &RoutingTargetKey::new(None, ""),
-        )
+        );
+        reservation.inspect(RoutingReservation::arm)
     }
 
     /// Reserves one request on `registration` dispatched at `dispatched_at`,
@@ -540,7 +541,8 @@ impl RoutedClusterState {
     }
 
     /// Reserves the exact stored registration with a TTL derived from that
-    /// backend's current RTT.
+    /// backend's current RTT. The caller arms the returned reservation when
+    /// it hands the request to the tunnel.
     pub(super) fn reserve_backend_with_rtt_ttl(
         &self,
         registration: &Arc<RegistrationGeneration>,
