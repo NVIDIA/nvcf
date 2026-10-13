@@ -3,7 +3,8 @@
 A controllable HTTP target for testing NVCF LLM functions with OpenAI client
 libraries and load generators. It returns synthetic text and deterministic
 embedding vectors. It is not a model server and does not implement the full
-OpenAI API.
+OpenAI API. It also serves a synthetic Anthropic Messages route for Anthropic
+clients.
 
 ## Supported routes
 
@@ -13,6 +14,7 @@ OpenAI API.
 | `POST /v1/completions` | Legacy text completions with JSON or SSE output |
 | `POST /v1/responses` | Responses API JSON or SSE output |
 | `POST /v1/embeddings` | Embeddings for one string or an array of strings |
+| `POST /v1/messages` | Anthropic Messages JSON or SSE output |
 | `GET /v1/models` | Lists the sample model |
 | `GET /v1/models/{id}` | Returns metadata for a model ID |
 | `GET /health` | Health check returning 200 |
@@ -32,8 +34,8 @@ decoded normally.
 
 If any request header starts with `X-Load-Tester-`, all body controls are
 ignored. Header controls and defaults apply instead. The default output chunk
-is `xxxx`. Text controls apply to Chat Completions, Responses, and legacy
-Completions. Queue delay, TTFT, status injection, and concurrency limits apply
+is `xxxx`. Text controls apply to Chat Completions, Responses, Messages, and
+legacy Completions. Queue delay, TTFT, status injection, and concurrency limits apply
 to all POST routes.
 
 | Control | Header | JSON body field | Default | Behavior |
@@ -59,6 +61,43 @@ accepts values from 1 through 60000. It is read once when the server starts.
 are mutually exclusive.
 For a deterministic concurrency test, send the same concurrency limit header
 on every request in the load test.
+
+## Anthropic Messages
+
+`POST /v1/messages` returns synthetic text in the
+[Anthropic Messages](https://platform.claude.com/docs/en/api/messages) format.
+A request needs `model`, a non-negative integer `max_tokens`, and a non-empty
+`messages` array. Other fields, such as `system`, `tools`, `thinking`, and
+`stop_sequences`, are accepted and ignored. The `anthropic-version` and
+`x-api-key` headers are not checked.
+
+- Without `stream`, the response is a `message` object with one `text` content
+  block, `stop_reason`, `stop_sequence: null`, and `usage`.
+- With `stream: true`, the
+  [event stream](https://platform.claude.com/docs/en/build-with-claude/streaming)
+  sends `message_start`, `content_block_start`, `ping`, one
+  `content_block_delta` (`text_delta`) per output chunk, `content_block_stop`,
+  `message_delta`, and `message_stop`.
+- Each output chunk counts as one output token. `usage.input_tokens` and the
+  cache token fields are always 0.
+- If `max_tokens` is lower than the output chunk count, output stops after
+  `max_tokens` chunks and `stop_reason` is `max_tokens`. Otherwise it is
+  `end_turn`. With `max_tokens: 0` the message has no content blocks. Stream
+  error and truncate controls past the capped output have no effect.
+- Every response has a `request-id` header. Errors use the Messages error shape,
+  `{"type":"error","error":{"type":"...","message":"..."},"request_id":"..."}`.
+- The error type follows the HTTP status: 400 `invalid_request_error`, 401
+  `authentication_error`, 402 `billing_error`, 403 `permission_error`, 404
+  `not_found_error`, 409 `conflict_error`, 413 `request_too_large`, 429
+  `rate_limit_error`, 500 `api_error`, 504 `timeout_error`, and 529
+  `overloaded_error`. Other 4xx codes use `invalid_request_error` and other 5xx
+  codes use `api_error`.
+- The stream error control sends an `error` event with type `api_error`. Stream
+  error and truncate controls end the stream without `message_stop`.
+
+Tool use, thinking blocks, images, documents, citations, stop sequences,
+prompt caching, token counting, and Message Batches are not implemented.
+`GET /v1/models` keeps the OpenAI shape.
 
 ## Build and run
 
@@ -111,6 +150,21 @@ curl --request POST \
   --url http://localhost:18000/v1/embeddings \
   --header 'Content-Type: application/json' \
   --data '{"model": "test-model", "input": ["one", "two"], "encoding_format": "float"}'
+
+curl --request POST \
+  --url http://localhost:18000/v1/messages \
+  --header 'Content-Type: application/json' \
+  --header 'anthropic-version: 2023-06-01' \
+  --header 'X-Load-Tester-TTFT-Ms: 200' \
+  --header 'X-Load-Tester-ITL-Ms: 50' \
+  --header 'X-Load-Tester-Chunk: token' \
+  --header 'X-Load-Tester-Output-Chunks: 3' \
+  --data '{
+    "model": "test-model",
+    "max_tokens": 1024,
+    "stream": true,
+    "messages": [{"role": "user", "content": "hello"}]
+  }'
 ```
 
 ## OpenAI Python client
@@ -160,6 +214,52 @@ go run .
 python3 openai_client_check.py
 ```
 
+## Anthropic Python client
+
+Use the sample root URL, without `/v1`, as the Anthropic client `base_url`:
+
+```python
+import anthropic
+
+client = anthropic.Anthropic(
+    api_key="not-needed",
+    base_url="http://localhost:18000",
+    _strict_response_validation=True,
+)
+
+message = client.messages.create(
+    model="test-model",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "hello"}],
+    extra_headers={
+        "X-Load-Tester-Chunk": "token",
+        "X-Load-Tester-Output-Chunks": "3",
+    },
+)
+assert message.content[0].text == "tokentokentoken"
+assert message.stop_reason == "end_turn"
+
+with client.messages.stream(
+    model="test-model",
+    max_tokens=2,
+    messages=[{"role": "user", "content": "hello"}],
+    extra_headers={"X-Load-Tester-Output-Chunks": "3"},
+) as stream:
+    text = "".join(stream.text_stream)
+assert text == "xxxxxxxx"
+assert stream.get_final_message().stop_reason == "max_tokens"
+```
+
+Run the included Messages compatibility check after starting the Go server:
+
+```bash
+cd examples/function-samples/openai-compatible-sample/http-server
+go run .
+
+# In another terminal, with the anthropic package installed:
+python3 anthropic_client_check.py
+```
+
 ## 60-second SSE capacity run
 
 Use the matching pinned xk6 binary from `examples/load-tests`. The command
@@ -198,6 +298,7 @@ routes required by the workload, such as:
 /v1/completions
 /v1/responses
 /v1/embeddings
+/v1/messages
 ```
 
 See the [LLM Gateway guide](../../../docs/user/llm-gateway.md) for function
