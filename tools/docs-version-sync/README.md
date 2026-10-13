@@ -627,6 +627,9 @@ Mixed builds verify the public stable product release and its assets, fetch
 approved docs commits, and replace remote version refs with local navigation
 paths in a temporary build tree. Validation and generation use that same tree.
 A source branch advancing between those steps cannot change the output.
+The canonical publisher requires clean `docs/` and `fern/` trees, including
+untracked and ignored files, so the receipt identifies the published inputs.
+Commit reviewed inputs first. Use `preview-docs` for working-tree edits.
 Missing artifacts, moved product tags, unavailable approved commits, and
 invalid navigation stop the build before generation.
 

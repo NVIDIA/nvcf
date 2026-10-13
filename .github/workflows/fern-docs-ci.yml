@@ -37,6 +37,7 @@ on:
       - 'tools/docs-version-sync/**'
       - 'tools/scripts/test/test-run-fern'
       - 'tools/scripts/test/test-preview-docs'
+      - 'tools/scripts/test/test-publish-docs'
       - '.github/workflows/fern-docs-ci.yml'
   workflow_dispatch:
     inputs:
