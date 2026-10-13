@@ -286,15 +286,25 @@ Coverage, matching the role flags:
 {{- end -}}
 {{- end }}
 
-{{- define "llm-request-router.image" -}}
-{{- $registry := .Values.llmRequestRouter.image.registry -}}
-{{- $repository := .Values.llmRequestRouter.image.repository -}}
-{{- $tag := default .Chart.AppVersion .Values.llmRequestRouter.image.tag -}}
-{{- if $registry -}}
-{{- printf "%s/%s:%s" $registry $repository $tag -}}
-{{- else -}}
-{{- printf "%s:%s" $repository $tag -}}
+{{/*
+Image reference from a dict with registry, repository, tag, and digest. A
+digest pins the image and replaces the tag.
+*/}}
+{{- define "llm-request-router.imageRef" -}}
+{{- $name := .repository -}}
+{{- if .registry -}}
+{{- $name = printf "%s/%s" .registry .repository -}}
 {{- end -}}
+{{- if .digest -}}
+{{- printf "%s@%s" $name .digest -}}
+{{- else -}}
+{{- printf "%s:%s" $name .tag -}}
+{{- end -}}
+{{- end }}
+
+{{- define "llm-request-router.image" -}}
+{{- $image := .Values.llmRequestRouter.image -}}
+{{- include "llm-request-router.imageRef" (dict "registry" $image.registry "repository" $image.repository "tag" (default .Chart.AppVersion $image.tag) "digest" $image.digest) -}}
 {{- end }}
 
 {{- define "llm-request-router.advertisedHostnameTemplate" -}}
@@ -346,11 +356,12 @@ externally reachable address.
 {{- $registry := default .Values.llmRequestRouter.image.registry $image.registry -}}
 {{- $repository := required "llmRequestRouter.backendRouter.image.repository or llmRequestRouter.image.repository is required when backend routing is enabled" (default .Values.llmRequestRouter.image.repository $image.repository) -}}
 {{- $tag := include "llm-request-router.backendRouterImageTag" . -}}
-{{- if $registry -}}
-{{- printf "%s/%s:%s" $registry $repository $tag -}}
-{{- else -}}
-{{- printf "%s:%s" $repository $tag -}}
+{{- /* The main image digest applies only when the backend router image is not overridden. */ -}}
+{{- $digest := "" -}}
+{{- if not (or $image.registry $image.repository $image.tag) -}}
+{{- $digest = .Values.llmRequestRouter.image.digest -}}
 {{- end -}}
+{{- include "llm-request-router.imageRef" (dict "registry" $registry "repository" $repository "tag" $tag "digest" $digest) -}}
 {{- end }}
 
 {{- define "llm-request-router.pkiMigrationsImage" -}}
@@ -438,7 +449,7 @@ the mount and the Stargate arguments are all conditional on them.
 {{- $hasSecret := not (empty $secretName) -}}
 {{- $hasCert := not (empty $tls.certPath) -}}
 {{- $hasKey := not (empty $tls.keyPath) -}}
-{{- $hasAny := or $hasSecret $hasCert $hasKey -}}
+{{- $hasAny := or $hasSecret $hasCert $hasKey (not (empty $tls.upstreamCaPath)) -}}
 {{- $hasAll := and $hasSecret $hasCert $hasKey -}}
 {{- if and $hasAny (not $hasAll) -}}
 {{- fail "llmRequestRouter backend routing requires tls.secretName (or certificate secret), tls.certPath, and tls.keyPath together" -}}
@@ -449,8 +460,12 @@ the mount and the Stargate arguments are all conditional on them.
 {{- if $hasAll -}}
 {{- include "llm-request-router.validateTlsCertKeyDir" . -}}
 {{- end -}}
-{{- if and $hasAll (ne (clean (include "llm-request-router.tlsMountPath" .)) (clean (dir $tls.certPath))) -}}
+{{- $tlsMountPath := clean (include "llm-request-router.tlsMountPath" .) -}}
+{{- if and $hasAll (ne $tlsMountPath (clean (dir $tls.certPath))) -}}
 {{- fail "llmRequestRouter.tls.mountPath must match the directory containing tls.certPath and tls.keyPath" -}}
+{{- end -}}
+{{- if and $tls.upstreamCaPath (ne $tlsMountPath (clean (dir $tls.upstreamCaPath))) -}}
+{{- fail "llmRequestRouter.tls.upstreamCaPath must be in the directory containing tls.certPath and tls.keyPath" -}}
 {{- end -}}
 {{- end }}
 
@@ -491,6 +506,10 @@ Generate all pod annotations
 
 {{- if .Values.llmRequestRouter.podAnnotations -}}
 {{- $annotations = merge $annotations .Values.llmRequestRouter.podAnnotations -}}
+{{- end -}}
+
+{{- if .Values.llmRequestRouter.loadBalancer.config -}}
+{{- $_ := set $annotations "checksum/load-balancer-config" (.Values.llmRequestRouter.loadBalancer.config | sha256sum) -}}
 {{- end -}}
 
 {{- if not (and .Values.llmRequestRouter.vault .Values.llmRequestRouter.vault.noVaultAnnotations) -}}

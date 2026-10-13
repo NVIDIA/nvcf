@@ -437,4 +437,150 @@ if ! grep -Fq -- "--advertised-hostname-template={pod_name}.llm-request-router-h
   exit 1
 fi
 
+backend_service_ports() {
+  yq ea -r \
+    'select(.kind == "Service" and .metadata.name == "llm-request-router-backend-router") | .spec.ports[] | .name + "/" + (.port | tostring) + "/" + .protocol' \
+    "$1" | sort | paste -sd ' ' -
+}
+
+# The default ClusterIP Service keeps the health port, and the ServiceMonitor
+# keeps selecting that Service, so existing scrape jobs do not change.
+actual_ports="$(backend_service_ports "$rendered")"
+if [[ "$actual_ports" != "grpc/50071/TCP health/8080/TCP quic/50072/UDP" ]]; then
+  echo "FAIL: ClusterIP backend router Service must expose grpc, quic, and health; rendered ${actual_ports}" >&2
+  exit 1
+fi
+monitored_services="$(yq ea -r '[.]
+  | ([.[] | select(.kind == "ServiceMonitor" and .metadata.name == "llm-request-router-backend-router-metrics") | .spec.selector.matchLabels][0]) as $selector
+  | .[] | select(.kind == "Service" and (.metadata.labels | contains($selector))) | .metadata.name' "$rendered")"
+if [[ "$monitored_services" != "llm-request-router-backend-router" ]]; then
+  echo "FAIL: backend router ServiceMonitor must select only the backend router Service; selected ${monitored_services:-none}" >&2
+  exit 1
+fi
+
+# A LoadBalancer Service exposes only registration and QUIC and passes the
+# class, source ranges, and annotations through.
+load_balancer_service="$(helm template llm-request-router "$chart_dir" \
+  --namespace nvcf \
+  --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.backendRouter.enabled=true \
+  --set llmRequestRouter.backendRouter.service.type=LoadBalancer \
+  --set llmRequestRouter.backendRouter.service.loadBalancerClass=service.k8s.aws/nlb \
+  --set 'llmRequestRouter.backendRouter.service.loadBalancerSourceRanges[0]=192.0.2.1/32' \
+  --set 'llmRequestRouter.backendRouter.service.annotations.example\.invalid/scheme=internet-facing' \
+  | yq ea -o=json -I=0 'select(.kind == "Service" and .metadata.name == "llm-request-router-backend-router")')"
+jq -e '
+  .spec.type == "LoadBalancer"
+  and .spec.loadBalancerClass == "service.k8s.aws/nlb"
+  and .spec.loadBalancerSourceRanges == ["192.0.2.1/32"]
+  and .metadata.annotations["example.invalid/scheme"] == "internet-facing"
+  and ([.spec.ports[] | .name + "/" + (.port | tostring) + "/" + .protocol] | sort == ["grpc/50071/TCP", "quic/50072/UDP"])
+' <<<"$load_balancer_service" >/dev/null || {
+  echo "FAIL: LoadBalancer backend router Service must drop the health port and pass class, source ranges, and annotations through" >&2
+  exit 1
+}
+
+# A main image digest pins both workloads unless the backend router image is
+# overridden.
+digest="sha256:$(printf '%064d' 0)"
+digest_images="$(helm template llm-request-router "$chart_dir" \
+  --namespace nvcf \
+  --set llmRequestRouter.image.registry=registry.example.invalid \
+  --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.image.digest="$digest" \
+  --set llmRequestRouter.backendRouter.enabled=true \
+  | yq ea -r '[select(.kind == "Deployment") | .spec.template.spec.containers[].image] | .[]' | sort -u)"
+if [[ "$digest_images" != "registry.example.invalid/nvcf/stargate@${digest}" ]]; then
+  echo "FAIL: image digest must pin Stargate and the backend router; rendered ${digest_images}" >&2
+  exit 1
+fi
+override_images="$(helm template llm-request-router "$chart_dir" \
+  --namespace nvcf \
+  --set llmRequestRouter.image.registry=registry.example.invalid \
+  --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.image.digest="$digest" \
+  --set llmRequestRouter.backendRouter.enabled=true \
+  --set llmRequestRouter.backendRouter.image.tag=next \
+  | yq ea -r '[select(.kind == "Deployment") | .spec.template.spec.containers[].image] | .[]' | sort -u | paste -sd ' ' -)"
+if [[ "$override_images" != "registry.example.invalid/nvcf/stargate:next registry.example.invalid/nvcf/stargate@${digest}" ]]; then
+  echo "FAIL: a backend router image override must not inherit the main digest; rendered ${override_images}" >&2
+  exit 1
+fi
+
+# Local mode without Vault, as used by test-readiness-warmup-k8s.py, must not
+# reference a ConfigMap the chart does not render.
+no_vault="$(helm template llm-request-router "$chart_dir" \
+  --namespace nvcf \
+  --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.backendRouter.enabled=true \
+  --set llmRequestRouter.vault.noVaultAnnotations=true \
+  --set-string llmRequestRouter.auth.workerAuthEndpoint=)"
+missing_config_maps="$(yq ea -r '[.]
+  | ([.[] | select(.kind == "ConfigMap") | .metadata.name]) as $rendered
+  | [.[] | .spec.template.spec.volumes[]? | .configMap.name | select(.)] - $rendered | .[]' <<<"$no_vault")"
+if [[ -n "$missing_config_maps" ]]; then
+  echo "FAIL: no-Vault render references ConfigMaps it does not render: ${missing_config_maps}" >&2
+  exit 1
+fi
+if grep -Fq -- "vault.hashicorp.com" <<<"$no_vault"; then
+  echo "FAIL: no-Vault render must not add Vault Agent annotations" >&2
+  exit 1
+fi
+
+# A pre-created auth Secret replaces the Vault token and template volumes.
+existing_secret="$(helm template llm-request-router "$chart_dir" \
+  --namespace nvcf \
+  --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.backendRouter.enabled=true \
+  --set llmRequestRouter.vault.noVaultAnnotations=true \
+  --set llmRequestRouter.auth.existingSecret.name=router-auth)"
+existing_secret_pod="$(yq ea -o=json -I=0 \
+  'select(.kind == "Deployment" and .metadata.name == "llm-request-router") | .spec.template.spec' <<<"$existing_secret")"
+jq -e '
+  (.containers[0].args | index("--secrets-path=/var/run/secrets/stargate-auth/service-token.json") != null)
+  and (.containers[0].args | index("--secrets-json-path=nvcfApiToken") != null)
+  and ([.volumes[].name] | sort == ["worker-auth"])
+  and (.volumes[0].secret == {"secretName": "router-auth", "items": [{"key": "service-token.json", "path": "service-token.json"}]})
+  and (.containers[0].volumeMounts == [{"name": "worker-auth", "mountPath": "/var/run/secrets/stargate-auth", "readOnly": true}])
+' <<<"$existing_secret_pod" >/dev/null || {
+  echo "FAIL: auth.existingSecret must mount only the service token and point Stargate at it" >&2
+  exit 1
+}
+
+assert_render_fails "llmRequestRouter.vault.noVaultAnnotations must be true when auth.existingSecret.name is set" \
+  --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.auth.existingSecret.name=router-auth
+
+# The upstream CA flag must point at a file the TLS Secret volume projects.
+upstream_ca_pod="$(helm template llm-request-router "$chart_dir" \
+  --namespace nvcf \
+  --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.backendRouter.enabled=true \
+  --set llmRequestRouter.tls.secretName=stargate-quic-tls \
+  --set llmRequestRouter.tls.certPath=/etc/stargate/tls/tls.crt \
+  --set llmRequestRouter.tls.keyPath=/etc/stargate/tls/tls.key \
+  --set llmRequestRouter.tls.upstreamCaPath=/etc/stargate/tls/ca.crt \
+  | yq ea -o=json -I=0 'select(.kind == "Deployment" and .metadata.name == "llm-request-router-backend-router") | .spec.template.spec')"
+jq -e '
+  (.containers[0].args | index("--upstream-tls-cert-path=/etc/stargate/tls/ca.crt") != null)
+  and (.containers[0].volumeMounts[0].mountPath == "/etc/stargate/tls")
+  and (.volumes[0].secret.items | index({"key": "ca.crt", "path": "ca.crt"}) != null)
+' <<<"$upstream_ca_pod" >/dev/null || {
+  echo "FAIL: tls.upstreamCaPath must render the flag and project ca.crt into the TLS mount" >&2
+  exit 1
+}
+
+assert_render_fails "llmRequestRouter backend routing requires tls.secretName (or certificate secret), tls.certPath, and tls.keyPath together" \
+  --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.backendRouter.enabled=true \
+  --set llmRequestRouter.tls.upstreamCaPath=/etc/stargate/tls/ca.crt
+
+assert_render_fails "llmRequestRouter.tls.upstreamCaPath must be in the directory containing tls.certPath and tls.keyPath" \
+  --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.backendRouter.enabled=true \
+  --set llmRequestRouter.tls.secretName=stargate-quic-tls \
+  --set llmRequestRouter.tls.certPath=/etc/stargate/tls/tls.crt \
+  --set llmRequestRouter.tls.keyPath=/etc/stargate/tls/tls.key \
+  --set llmRequestRouter.tls.upstreamCaPath=/etc/stargate/ca/ca.crt
+
 echo "PASS: LLM request-router backend routing renders correctly"

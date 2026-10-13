@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "SPDX-License-Identifier: Apache-2.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["clusterId", "modelName", "workerToken", "stargate", "images", "mockDynamo"],
+  "properties": {
+    "clusterId": {"type": "string", "minLength": 1},
+    "modelName": {"type": "string", "minLength": 1},
+    "workerToken": {"type": "string", "minLength": 1},
+    "stargate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address"],
+      "properties": {
+        "address": {"type": "string", "pattern": "^https://[^/]+(:[0-9]+)?$"}
+      }
+    },
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mockDynamo", "pylon"],
+      "properties": {
+        "mockDynamo": {"$ref": "#/$defs/image"},
+        "pylon": {"$ref": "#/$defs/image"}
+      }
+    },
+    "mockDynamo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend0", "backend1"],
+      "properties": {
+        "backend0": {"$ref": "#/$defs/mockDynamo"},
+        "backend1": {"$ref": "#/$defs/mockDynamo"}
+      }
+    },
+    "resources": {"type": "object"}
+  },
+  "$defs": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "digest"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "digest": {"type": "string", "pattern": "^sha256:[a-f0-9]{64}$"}
+      }
+    },
+    "mockDynamo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numGpuWorkers"],
+      "properties": {
+        "numGpuWorkers": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}
