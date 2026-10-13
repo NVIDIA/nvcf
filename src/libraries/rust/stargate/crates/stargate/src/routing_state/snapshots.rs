@@ -129,6 +129,7 @@ impl SelectedRoutedCluster {
         self.owner.select_backend(failed_backend_ids)
     }
 
+    #[cfg(test)]
     pub(crate) fn reserve_backend(
         &self,
         registration: &Arc<RegistrationGeneration>,
@@ -137,6 +138,59 @@ impl SelectedRoutedCluster {
     ) -> Option<RoutingReservation> {
         self.owner
             .reserve_backend(registration, input_tokens, priority)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reserve_backend_with_ttl(
+        &self,
+        registration: &Arc<RegistrationGeneration>,
+        input_tokens: u64,
+        priority: u32,
+        ttl: Duration,
+        metrics: Arc<StargateMetrics>,
+        target: &RoutingTargetKey,
+    ) -> Option<RoutingReservation> {
+        let reservation = self.reserve_backend_with_rtt_ttl(
+            registration,
+            input_tokens,
+            priority,
+            |_rtt| ttl,
+            metrics,
+            target,
+        );
+        // Tests reserve as if the request were sent at once.
+        reservation.inspect(RoutingReservation::arm)
+    }
+
+    /// Reserves `registration` if it is still the stored backend, deriving
+    /// the TTL from that backend's current RTT rather than a caller snapshot.
+    pub(crate) fn reserve_backend_with_rtt_ttl(
+        &self,
+        registration: &Arc<RegistrationGeneration>,
+        input_tokens: u64,
+        priority: u32,
+        ttl_for_rtt: impl FnOnce(Duration) -> Duration,
+        metrics: Arc<StargateMetrics>,
+        target: &RoutingTargetKey,
+    ) -> Option<RoutingReservation> {
+        self.owner.reserve_backend_with_rtt_ttl(
+            registration,
+            input_tokens,
+            priority,
+            ttl_for_rtt,
+            metrics,
+            target,
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn routing_snapshot(&self) -> Option<RoutedClusterSnapshot> {
+        self.owner.routing_snapshot()
+    }
+
+    #[cfg(test)]
+    pub(super) fn pending_reservation_count(&self) -> usize {
+        self.owner.pending_reservation_count()
     }
 }
 
@@ -178,6 +232,9 @@ pub struct RoutedInferenceServerSnapshot {
     pub stats: ModelStats,
     pub rtt: Duration,
     pub snapshot_updated_at: Instant,
+    // When Stargate received the registration update carrying these stats.
+    // It can precede `snapshot_updated_at` by connection and RTT awaits.
+    pub(crate) update_received_at: Instant,
     pub status: InferenceServerStatus,
     pub reverse_tunnel: bool,
 }
@@ -197,10 +254,16 @@ impl RoutedInferenceServerSnapshot {
             stats,
             rtt,
             snapshot_updated_at,
+            update_received_at: snapshot_updated_at,
             status,
             reverse_tunnel: registration.identity.reverse_tunnel,
             registration,
         }
+    }
+
+    pub(super) fn with_update_received_at(mut self, update_received_at: Instant) -> Self {
+        self.update_received_at = update_received_at;
+        self
     }
 
     pub(super) fn assert_registration_identity(&self) {

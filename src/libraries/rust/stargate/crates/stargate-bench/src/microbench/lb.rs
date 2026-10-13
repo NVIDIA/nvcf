@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use clap::ValueEnum;
 use stargate::load_balancer::{
-    LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerConfig,
+    LastClusterHint, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerConfig,
     LoadBalancerModelConfig, LoadBalancerRequest, LoadBalancerRouter, LoadBalancerTargetState,
     MAX_POWER_OF_N_SAMPLE_COUNT,
 };
@@ -36,6 +36,7 @@ enum WaitAndWidenTuning {
     IgnoreQueue,
     RttOnly,
     Affinity,
+    LastCluster,
 }
 
 struct LbMicrobenchScenarioMetadata {
@@ -45,7 +46,7 @@ struct LbMicrobenchScenarioMetadata {
     excluded_clusters: usize,
 }
 
-use WaitAndWidenTuning::{Affinity, IgnoreQueue, RttOnly};
+use WaitAndWidenTuning::{Affinity, IgnoreQueue, LastCluster, RttOnly};
 
 macro_rules! scenarios {
     ($($scenario:ident, $model_id:literal, $algorithm:ident, $tuning:expr, $excluded:literal;)+) => {
@@ -54,7 +55,7 @@ macro_rules! scenarios {
         #[value(rename_all = "kebab-case")]
         pub enum LbMicrobenchScenario { $($scenario,)+ }
 
-        const LB_MICROBENCH_SCENARIOS: [LbMicrobenchScenarioMetadata; 23] = [$(
+        const LB_MICROBENCH_SCENARIOS: [LbMicrobenchScenarioMetadata; 25] = [$(
             LbMicrobenchScenarioMetadata {
                 model_id: $model_id,
                 algorithm: LoadBalancerAlgorithm::$algorithm,
@@ -87,6 +88,8 @@ scenarios! {
     WaitAndWidenAffinityMultiExcluded, "lb-bench-wait-and-widen-affinity-multi-excluded", WaitAndWiden, Some(Affinity), 2;
     Pulsar, "lb-bench-pulsar", Pulsar, None, 0;
     PulsarOneExcluded, "lb-bench-pulsar-one-excluded", Pulsar, None, 1;
+    PulsarWaitAndWiden, "lb-bench-pulsar-wait-and-widen", PulsarWaitAndWiden, None, 0;
+    PulsarWaitAndWidenLastCluster, "lb-bench-pulsar-wait-and-widen-last-cluster", PulsarWaitAndWiden, Some(LastCluster), 0;
     Random, "lb-bench-random", Random, None, 0;
     RandomOneExcluded, "lb-bench-random-one-excluded", Random, None, 1;
     RoundRobinOneExcluded, "lb-bench-round-robin-one-excluded", RoundRobin, None, 1;
@@ -247,6 +250,17 @@ fn run_scenario(
         model_id: scenario.metadata().model_id.to_string(),
     };
     let received_at = Instant::now();
+    let run = LbMicrobenchRun {
+        target: &target,
+        target_state: &target_state,
+        candidates,
+        cache_keys,
+        config,
+        received_at,
+        excluded_cluster_ids: excluded_cluster_ids.as_ref(),
+        last_cluster_hints: scenario.metadata().tuning == Some(LastCluster),
+    };
+    let warmup_hints = last_cluster_hints(&router, run, 0..config.warmup_iterations);
     for iteration in 0..config.warmup_iterations {
         let request = request_for_iteration(
             &target,
@@ -254,23 +268,13 @@ fn run_scenario(
             iteration,
             received_at,
             excluded_cluster_ids.as_ref(),
+            warmup_hints.get(iteration),
         );
         let _ = black_box(router.choose_candidate(&target_state, &request, candidates));
     }
 
     let worker_count = config.concurrency.min(config.iterations);
-    let (stats, total_ns) = run_concurrent_measured_iterations(
-        &router,
-        LbMicrobenchRun {
-            target: &target,
-            target_state: &target_state,
-            candidates,
-            cache_keys,
-            config,
-            received_at,
-            excluded_cluster_ids: excluded_cluster_ids.as_ref(),
-        },
-    );
+    let (stats, total_ns) = run_concurrent_measured_iterations(&router, run);
     let choices = stats.candidate_counts.iter().sum::<usize>();
     let avg_rank_depth = if choices == 0 {
         0.0
@@ -341,6 +345,38 @@ struct LbMicrobenchRun<'a> {
     config: &'a LbMicrobenchConfig,
     received_at: Instant,
     excluded_cluster_ids: Option<&'a HashSet<String>>,
+    /// Send a returning-session hint that names a cluster other than the
+    /// request's no-hint choice, so the decision promotes it.
+    last_cluster_hints: bool,
+}
+
+/// One fresh hint per iteration, built outside the timed region. A hint pins
+/// its classification on first use, so hints are never reused.
+fn last_cluster_hints(
+    router: &LoadBalancerRouter,
+    run: LbMicrobenchRun<'_>,
+    iterations: std::ops::Range<usize>,
+) -> Vec<LastClusterHint> {
+    if !run.last_cluster_hints {
+        return Vec::new();
+    }
+    iterations
+        .map(|iteration| {
+            let request = request_for_iteration(
+                run.target,
+                run.cache_keys,
+                iteration,
+                run.received_at,
+                run.excluded_cluster_ids,
+                None,
+            );
+            let first_choice = router
+                .choose_candidate(run.target_state, &request, run.candidates)
+                .map_or(0, |choice| choice.candidate_index);
+            let last_index = (first_choice + 1) % run.candidates.len();
+            LastClusterHint::new(Some(run.candidates[last_index].cluster_id.clone()))
+        })
+        .collect()
 }
 
 fn run_concurrent_measured_iterations(
@@ -360,16 +396,23 @@ fn run_concurrent_measured_iterations(
             handles.push(scope.spawn(move || {
                 let measurements =
                     LbMicrobenchMeasurements::new(run.candidates.len(), iterations.len());
+                let first_iteration = run.config.warmup_iterations + iterations.start;
+                let hints = last_cluster_hints(
+                    router,
+                    run,
+                    first_iteration..first_iteration + iterations.len(),
+                );
                 ready_barrier.wait();
                 release_barrier.wait();
                 let mut measurements = measurements;
-                for measured_iteration in iterations {
+                for (offset, measured_iteration) in iterations.enumerate() {
                     let request = request_for_iteration(
                         run.target,
                         run.cache_keys,
                         run.config.warmup_iterations + measured_iteration,
                         run.received_at,
                         run.excluded_cluster_ids,
+                        hints.get(offset),
                     );
                     if let Some(choice) = black_box(router.choose_candidate(
                         run.target_state,
@@ -449,6 +492,7 @@ fn request_for_iteration<'a>(
     iteration: usize,
     received_at: Instant,
     excluded_cluster_ids: Option<&'a HashSet<String>>,
+    last_cluster: Option<&'a LastClusterHint>,
 ) -> LoadBalancerRequest<'a> {
     LoadBalancerRequest {
         routing_target: target,
@@ -458,6 +502,7 @@ fn request_for_iteration<'a>(
         received_at,
         request_slo: Some(Duration::from_millis(250)),
         excluded_cluster_ids,
+        last_cluster,
     }
 }
 
@@ -520,6 +565,9 @@ fn config_for_scenario(
         }
         if metadata.tuning == Some(RttOnly) {
             wait_and_widen.ignore_input_processing_time = Some(true);
+        }
+        if metadata.tuning == Some(LastCluster) {
+            wait_and_widen.last_cluster_affinity = Some(true);
         }
     }
     config
@@ -608,7 +656,7 @@ mod tests {
         config.scenarios.clear();
         let rows = run_lb_microbench(&config).expect("microbench should run");
 
-        assert_eq!(rows.len(), 23);
+        assert_eq!(rows.len(), 25);
         assert_eq!(rows[0].scenario, LbMicrobenchScenario::PowerOfN);
         for row in rows {
             assert_eq!(row.choices, row.iterations);
@@ -766,7 +814,7 @@ mod tests {
         for measured_iteration in 0..2 {
             let iteration = 2 + measured_iteration;
             assert_eq!(
-                request_for_iteration(&target, &cache_keys, iteration, received_at, None)
+                request_for_iteration(&target, &cache_keys, iteration, received_at, None, None)
                     .cache_affinity_key,
                 Some(cache_keys[2 + measured_iteration].as_str())
             );

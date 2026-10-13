@@ -178,7 +178,7 @@ functionAutoscaler:
 # API environment entries are merged over the stack defaults. Remote config is
 # passed to the API chart and overrides its packaged application profile. When
 # the LLM addon is enabled, the stack defaults the Pylon image from
-# global.sidecars (or global.image) at version 0.18.0.
+# global.sidecars (or global.image) at version 0.25.0.
 api:
   env: {}
   # In-cluster ESS base URL for the API's own ESS calls. Empty defaults to
