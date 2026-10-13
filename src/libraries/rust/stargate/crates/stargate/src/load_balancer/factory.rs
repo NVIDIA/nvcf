@@ -180,6 +180,22 @@ mod tests {
             models: HashMap::new(),
         })
         .unwrap();
+        // Static config can set values the constructor corrects; expressions reject them.
+        let mut corrected_base =
+            LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::WaitAndWiden);
+        let settings = corrected_base.wait_and_widen_settings_mut().unwrap();
+        settings.n = Some(0);
+        settings.cache_affinity_virtual_nodes = Some(0);
+        settings.cache_affinity_backend_selection_count = Some(0);
+        let corrected = LoadBalancerRouter::from_config(&LoadBalancerConfig {
+            default: LoadBalancerAlgorithm::Random,
+            request_algorithms: HashMap::from([(
+                LoadBalancerAlgorithm::WaitAndWiden,
+                LoadBalancerModelConfig::Detailed(Box::new(corrected_base)),
+            )]),
+            models: HashMap::new(),
+        })
+        .unwrap();
         let wait_and_widen_defaults = json!({
             "algorithm": "wait-and-widen", "n": 2, "max_queued": 0, "comparator": "ttft",
             "ttft_bucket_size_ms": 20, "next_bucket_unlock_factor": 0.25,
@@ -262,6 +278,13 @@ mod tests {
                 "wait-and-widen;max_queued=1",
                 with(json!({"n": 4, "max_queued": 1, "ttft_bucket_size_ms": 50,
                     "max_input_work_seconds": 9.0})),
+            ),
+            (
+                "wait-and-widen logs the corrected static values, not the written ones",
+                &corrected,
+                "wait-and-widen;seed=s",
+                // n and virtual nodes are raised to 1; a backend count of 0 turns affinity off.
+                with(json!({"seed": "s", "n": 1, "cache_affinity_virtual_nodes": 1})),
             ),
             (
                 "pulsar-wait-and-widen widen interval follows the affinity wait",
