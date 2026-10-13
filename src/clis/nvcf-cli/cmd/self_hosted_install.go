@@ -22,6 +22,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -259,6 +260,7 @@ func runSelfHostedInstall(c *cobra.Command, _ []string) error {
 		Stderr:          c.ErrOrStderr(),
 		Ctx:             c.Context(),
 		ExtraEnv: []string{
+			"OUTPUT_DIR=" + filepath.Join(resolved.Path, "out"),
 			"CLUSTER_NAME=" + installClusterName,
 			"CLUSTER_ID=" + resp.ClusterID,
 			"CLUSTER_GROUP_ID=" + resp.ClusterGroupID,

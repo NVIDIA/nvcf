@@ -262,12 +262,13 @@ func TestSelfHostedInstall_ComputePlane_RegistersAndRenders(t *testing.T) {
 		return "https://k8s.example/.well-known/oidc", `{"keys":[]}`, "psat", nil
 	}
 
-	// Provide a fake helmfile that echoes CLUSTER_NAME as a ConfigMap name.
+	// Match the released compute stack: read the generated registration handoff.
+	t.Setenv("OUTPUT_DIR", filepath.Join(t.TempDir(), "stale-output"))
 	stackDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
 	fakeBin := filepath.Join(t.TempDir(), "helmfile")
 	require.NoError(t, os.WriteFile(fakeBin,
-		[]byte("#!/bin/sh\nprintf 'apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n  name: %s\\n' \"$CLUSTER_NAME\"\n"),
+		[]byte("#!/bin/sh\nset -eu\ntest -s \"$OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml\"\nprintf 'apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n  name: %s\\n' \"$CLUSTER_NAME\"\n"),
 		0o755))
 	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))
 
