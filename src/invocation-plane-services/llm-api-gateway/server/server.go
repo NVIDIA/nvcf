@@ -46,9 +46,8 @@ type Gateway struct {
 }
 
 // Shutdown stops the HTTP server and waits for in-flight handlers, then
-// releases the shared state: pending last-cluster writes are drained and the
-// Olric node leaves the cluster. Both steps are bounded by
-// OLRIC_SHUTDOWN_TIMEOUT.
+// releases the shared state once: the rate-limit sync runtime stops, pending
+// last-cluster writes are drained, and the Olric node leaves the cluster.
 func (g *Gateway) Shutdown(ctx context.Context) error {
 	err := g.Echo.Shutdown(ctx)
 	g.stateOnce.Do(g.state.run)
@@ -57,20 +56,18 @@ func (g *Gateway) Shutdown(ctx context.Context) error {
 
 // stateShutdown releases shared state after the HTTP server has stopped.
 type stateShutdown struct {
-	// limiterStopped is closed by the server's shutdown hook once the
-	// rate-limit sync runtime has stopped. Nil when there is no hook.
-	limiterStopped <-chan struct{}
-	drain          func(context.Context)
-	stopOlric      func(context.Context)
-	timeout        time.Duration
+	stopLimiter func()
+	drain       func(context.Context)
+	stopOlric   func(context.Context)
+	timeout     time.Duration
 }
 
-// run drains last-cluster writes and then stops Olric. Olric stops only
-// after the rate limiter has stopped and the drain has finished, so neither
-// writes to a node that already left the cluster.
+// run stops the rate limiter, drains last-cluster writes, and then stops
+// Olric, so neither the limiter nor the drain writes to a node that already
+// left the cluster.
 func (s stateShutdown) run() {
-	if s.limiterStopped != nil {
-		<-s.limiterStopped
+	if s.stopLimiter != nil {
+		s.stopLimiter()
 	}
 	if s.drain != nil {
 		timeout := s.timeout
@@ -137,27 +134,17 @@ func New(
 		olric.stop(ctx)
 		return nil, err
 	}
-	if aware, ok := inferenceProvider.(provider.LastClusterAware); ok && tracker != nil {
-		aware.SetLastClusterTracker(tracker)
+	if stargate, ok := inferenceProvider.(*provider.StargateProvider); ok && tracker != nil {
+		stargate.SetLastClusterTracker(tracker)
 	}
 
 	state := stateShutdown{
-		stopOlric: olric.stop,
-		timeout:   cfg.Olric.ShutdownTimeout,
+		stopLimiter: stopLimiter,
+		stopOlric:   olric.stop,
+		timeout:     cfg.Olric.ShutdownTimeout,
 	}
 	if tracker != nil {
 		state.drain = tracker.Drain
-	}
-	if olric.node != nil {
-		// The rate-limit sync runtime still stops when shutdown begins, as
-		// before. The Olric node and pending last-cluster writes outlive the
-		// in-flight handlers and are released by Gateway.Shutdown.
-		limiterStopped := make(chan struct{})
-		state.limiterStopped = limiterStopped
-		e.Server.RegisterOnShutdown(func() {
-			defer close(limiterStopped)
-			stopLimiter()
-		})
 	}
 
 	handlers := api.NewHandlers(

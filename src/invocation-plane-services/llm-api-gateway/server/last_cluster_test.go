@@ -188,14 +188,8 @@ func TestStateShutdownOrder(t *testing.T) {
 		defer mu.Unlock()
 		order = append(order, step)
 	}
-	limiterStopped := make(chan struct{})
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		record("limiter")
-		close(limiterStopped)
-	}()
 	state := stateShutdown{
-		limiterStopped: limiterStopped,
+		stopLimiter: func() { record("limiter") },
 		drain: func(ctx context.Context) {
 			if _, ok := ctx.Deadline(); !ok {
 				t.Error("drain context has no deadline")
@@ -234,5 +228,30 @@ func TestGatewayShutdownReleasesStateOnceAfterHTTPShutdown(t *testing.T) {
 	}
 	if runs != 1 {
 		t.Fatalf("state released %d times, want 1", runs)
+	}
+}
+
+func TestGatewayRepeatedShutdownWithOlric(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping embedded Olric test in -short mode")
+	}
+	t.Setenv("POD_NAMESPACE", "")
+	upstream := newHintingStargate(t, "cluster-b")
+	cfg := testConfig(upstream.URL)
+	cfg.Olric = olrictest.NodeConfig(t, nil)
+	cfg.Stargate.LastCluster.Enabled = true
+	inferenceProvider, err := provider.NewStargateProvider(cfg.Stargate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := New(cfg, inferenceProvider, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if err := g.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown() #%d error = %v", i+1, err)
+		}
 	}
 }
