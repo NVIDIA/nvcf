@@ -729,6 +729,8 @@ type AgentTimeConfig struct {
 // NegativeDurationError reports a negative agent timeout interval. Callers
 // detect it with errors.As to tell a recoverable bad timeout value apart from
 // other config validation failures.
+//
+// +k8s:deepcopy-gen=false
 type NegativeDurationError struct {
 	Field string
 	Value time.Duration
