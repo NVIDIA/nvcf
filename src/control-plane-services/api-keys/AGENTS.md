@@ -51,9 +51,10 @@ multi-tenant behavior to them. Keys issued to an account use `KeysV2Dao`,
 
 `keys_v2.nca_id` is a regular column. `KeysV2Dao` and `KeyV2Model` require it.
 
-`KeysV2Service` serves the v2 API. New keys always go to `keys_v2`. For the
-configured `apikeys.nca-id`, reads check `keys_v2` first and fall back to the
-legacy DAOs, and updates and deletes go to the table that holds the key.
+`KeysV2Service` serves the v2 API. New keys always go to `keys_v2`. Create
+rejects a hash that already exists in `keys_v2` or the legacy `keys` table.
+For the configured `apikeys.nca-id`, reads check `keys_v2` first and fall back
+to the legacy DAOs, and updates and deletes go to the table that holds the key.
 `LegacyAccountTranslator` maps v2 service IDs (the keys of
 `apikeys.service-id-map`) to the legacy IDs stored in the legacy tables. Keep
 legacy routing in these two classes instead of the DAOs or controllers.

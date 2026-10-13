@@ -72,11 +72,12 @@ import org.springframework.stereotype.Service;
 public class KeysV2Service {
 
     static final String MESG_KEY_NOT_FOUND = "Key not found";
+    static final String MESG_KEY_ALREADY_EXISTS = "Key already exists";
     static final String MESG_KEY_NOT_ACTIVE = "Key is not active";
     static final String MESG_KEY_STATUS_FINAL = "Key status cannot change from %s";
     static final String MESG_OWNER_SUSPENDED = "Key owner suspended.";
-    static final String MESG_SERVICE_STATUS_UNSUPPORTED =
-            "Issuer service status is not supported for account '%s'";
+    static final String MESG_OWNER_STATUS_FOR_ACCOUNT_AND_SERVICE_UNSUPPORTED =
+            "Owner status for account and service is not supported for account '%s'";
 
     private static final Set<KeyStatus> FINAL_KEY_STATUSES =
             Set.of(KeyStatus.EXPIRED, KeyStatus.REVOKED);
@@ -91,11 +92,15 @@ public class KeysV2Service {
     private final ActionRecorder actionRecorder;
 
     /**
-     * Every new key goes to keys_v2, including keys for the legacy account.
+     * Every new key goes to keys_v2, including keys for the legacy account. The hash is unique
+     * across keys_v2 and the legacy keys table, so a leftover v1 key cannot be shadowed.
      */
     public KeyV2Vo create(KeyV2Vo key) {
         assertOwnerActive(getEffectiveOwnerStatus(
                 key.getNcaId(), key.getOwnerType(), key.getOwnerId(), key.getIssuerServiceId()));
+        if (getByHash(key.getKeyHash()).isPresent()) {
+            throw new ConflictException(MESG_KEY_ALREADY_EXISTS);
+        }
         keysV2Dao.save(key);
         recordKeyAction(key, CREATE);
         return key;
@@ -212,49 +217,52 @@ public class KeysV2Service {
     }
 
     /**
-     * Account-scoped owner status. For the legacy account this is the owner status stored with
+     * Owner status for the account. For the legacy account this is the owner status stored with
      * the owner's legacy keys.
      */
-    public Optional<OwnerStatusByAccountModel> getAccountStatus(
+    public Optional<OwnerStatusByAccountModel> getOwnerStatusForAccount(
             String ncaId, KeyOwnerType ownerType, String ownerId) {
         if (legacyAccount.isLegacy(ncaId)) {
             return keysDao.getKeyOwner(ownerType, ownerId)
                     .filter(owner -> owner.getOwnerStatus() != null)
-                    .map(owner -> toAccountStatus(ncaId, owner));
+                    .map(owner -> toOwnerStatusForAccount(ncaId, owner));
         }
-        return ownerStatusDao.getAccountStatus(ncaId, ownerType, ownerId);
+        return ownerStatusDao.getOwnerStatusForAccount(ncaId, ownerType, ownerId);
     }
 
     /**
-     * Issuer-scoped owner status. The legacy account has no issuer-scoped records.
+     * Owner status for the account and issuer service. The legacy account has no
+     * account-and-service records.
      */
-    public Optional<OwnerStatusByAccountAndServiceModel> getServiceStatus(
+    public Optional<OwnerStatusByAccountAndServiceModel> getOwnerStatusForAccountAndService(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId) {
         if (legacyAccount.isLegacy(ncaId)) {
             return Optional.empty();
         }
-        return ownerStatusDao.getServiceStatus(ncaId, ownerType, ownerId, issuerServiceId);
+        return ownerStatusDao.getOwnerStatusForAccountAndService(
+                ncaId, ownerType, ownerId, issuerServiceId);
     }
 
-    public OwnerStatusByAccountModel updateAccountStatus(
+    public OwnerStatusByAccountModel updateOwnerStatusForAccount(
             String ncaId, KeyOwnerType ownerType, String ownerId, KeyOwnerStatus status) {
         if (legacyAccount.isLegacy(ncaId)) {
             var owner = keyOwnerService.loadKeyOwnerByTypeAndIdOrCreateNew(ownerType, ownerId);
             var saved = keyOwnerService.updateKeyOwner(owner, status, clock.instant());
-            return toAccountStatus(ncaId, saved);
+            return toOwnerStatusForAccount(ncaId, saved);
         }
-        var saved = ownerStatusDao.saveAccountStatus(ncaId, ownerType, ownerId, status);
+        var saved = ownerStatusDao.saveOwnerStatusForAccount(ncaId, ownerType, ownerId, status);
         recordOwnerAction(ownerType, ownerId, status, VALUE_NOT_APPLICABLE);
         return saved;
     }
 
-    public OwnerStatusByAccountAndServiceModel updateServiceStatus(
+    public OwnerStatusByAccountAndServiceModel updateOwnerStatusForAccountAndService(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             KeyOwnerStatus status) {
         if (legacyAccount.isLegacy(ncaId)) {
-            throw new BadRequestException(MESG_SERVICE_STATUS_UNSUPPORTED.formatted(ncaId));
+            throw new BadRequestException(
+                    MESG_OWNER_STATUS_FOR_ACCOUNT_AND_SERVICE_UNSUPPORTED.formatted(ncaId));
         }
-        var saved = ownerStatusDao.saveServiceStatus(
+        var saved = ownerStatusDao.saveOwnerStatusForAccountAndService(
                 ncaId, ownerType, ownerId, issuerServiceId, status);
         recordOwnerAction(ownerType, ownerId, status, issuerServiceId);
         return saved;
@@ -320,7 +328,8 @@ public class KeysV2Service {
         }
     }
 
-    private static OwnerStatusByAccountModel toAccountStatus(String ncaId, KeyOwnerVo owner) {
+    private static OwnerStatusByAccountModel toOwnerStatusForAccount(
+            String ncaId, KeyOwnerVo owner) {
         return OwnerStatusByAccountModel.builder()
                 .ncaId(ncaId)
                 .ownerType(owner.getOwnerType())
