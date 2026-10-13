@@ -611,29 +611,33 @@ impl CassandraServiceManager {
         .await
     }
 
+    /// LWT delete: only applies if this node still owns the lock.
+    /// Returns Ok(true) if the lock was deleted, Ok(false) if it expired or another node now owns it.
     #[tracing::instrument(skip(self))]
-    pub async fn delete_lock(&self, lock_name: &str) -> Result<()> {
+    pub async fn delete_lock_if_owner(&self, lock_name: &str, node_id: &str) -> Result<bool> {
         let session = self.get_session().await?;
-        let mut prepared_statement = session
-            .prepare(get_delete_locks_stmt(&self.config.keyspace))
-            .await?;
-        prepared_statement.set_is_idempotent(true);
-        let result = with_cassandra_timing("delete_lock", || async {
-            session
-                .execute_unpaged(&prepared_statement, (lock_name,))
-                .await
+        with_cassandra_timing("delete_lock_if_owner", || async {
+            let mut prepared = session
+                .prepare(get_stmt_delete_lock_if_owner(&self.config.keyspace))
+                .await?;
+            prepared.set_consistency(Consistency::LocalQuorum);
+            prepared.set_serial_consistency(Some(SerialConsistency::Serial));
+            prepared.set_is_idempotent(false);
+            let result = session
+                .execute_unpaged(&prepared, (lock_name, node_id))
+                .await?;
+            let rows = result.into_rows_result()?;
+            // On a CAS miss, Scylla returns [applied]=false + the IF-clause columns (node_id).
+            // Check for that shape first; if node_id is present we know applied=false.
+            if rows.column_specs().get_by_name("node_id").is_some() {
+                return Ok(false);
+            }
+            if let Some(row) = rows.rows::<(bool,)>()?.next() {
+                return Ok(row?.0);
+            }
+            Ok(false)
         })
-        .await;
-        match result {
-            Ok(_) => {
-                tracing::debug!("Successfully deleted lock {} from Cassandra", lock_name);
-            }
-            Err(e) => {
-                tracing::error!("Failed to delete lock {} from Cassandra: {}", lock_name, e);
-                return Err(e.into());
-            }
-        }
-        Ok(())
+        .await
     }
 
     #[tracing::instrument(skip(self))]
@@ -814,6 +818,7 @@ mod tests {
     use crate::cassandra::cassandra_settings::{
         ExecutionProfileSettings, PoolSettings, SslSettings,
     };
+    use crate::cassandra::distributed_lock::DistributedLockManager;
     use crate::secrets::secrets_file_watcher::SecretFileWatcher;
     use chrono::Utc;
     use std::path::Path;
@@ -945,7 +950,9 @@ mod tests {
         assert!(put_result.unwrap());
 
         // Test delete operation
-        let delete_result = manager.delete_lock(&lock.lock_name).await;
+        let delete_result = manager
+            .delete_lock_if_owner(&lock.lock_name, &lock.node_id)
+            .await;
         assert!(delete_result.is_ok());
 
         // Test get operation again- it should be None
@@ -954,7 +961,9 @@ mod tests {
         assert!(get_result.unwrap().is_none());
 
         // Test delete operation again- it should fail
-        let delete_result = manager.delete_lock(&lock.lock_name).await;
+        let delete_result = manager
+            .delete_lock_if_owner(&lock.lock_name, &lock.node_id)
+            .await;
         assert!(delete_result.is_ok());
     }
 
@@ -994,7 +1003,178 @@ mod tests {
         };
         assert!(!manager.put_lock(&contender, ttl_seconds).await.unwrap());
 
-        manager.delete_lock(&lock.lock_name).await.unwrap();
+        manager
+            .delete_lock_if_owner(&lock.lock_name, &lock.node_id)
+            .await
+            .unwrap();
+    }
+
+    async fn create_test_manager() -> Arc<CassandraServiceManager> {
+        let settings = create_test_settings().await;
+        let secrets_path = get_test_secrets_path();
+        let secrets_watcher = Arc::new(
+            SecretFileWatcher::new(Path::new(&secrets_path))
+                .await
+                .unwrap(),
+        );
+        Arc::new(
+            CassandraServiceManager::new(&settings, secrets_watcher)
+                .await
+                .unwrap(),
+        )
+    }
+
+    // Unique per test so ignored tests running in parallel do not share a lock row.
+    fn create_unique_test_lock() -> DistributedLock {
+        DistributedLock {
+            lock_name: format!("test_lock_{}", Uuid::new_v4()),
+            node_id: Uuid::new_v4().to_string(),
+            acquired_at: Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires running Cassandra"]
+    async fn test_delete_lock_if_owner_deletes_owned_lock() {
+        let manager = create_test_manager().await;
+        let lock = create_unique_test_lock();
+        assert!(manager.put_lock(&lock, 30).await.unwrap());
+
+        assert!(manager
+            .delete_lock_if_owner(&lock.lock_name, &lock.node_id)
+            .await
+            .unwrap());
+        assert!(manager.get_lock(&lock.lock_name).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires running Cassandra"]
+    async fn test_delete_lock_if_owner_on_missing_lock_is_not_applied() {
+        let manager = create_test_manager().await;
+        let lock = create_unique_test_lock();
+
+        assert!(!manager
+            .delete_lock_if_owner(&lock.lock_name, &lock.node_id)
+            .await
+            .unwrap());
+        assert!(manager.get_lock(&lock.lock_name).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires running Cassandra"]
+    async fn test_delete_lock_if_owner_keeps_lock_acquired_by_another_node_after_expiry() {
+        let manager = create_test_manager().await;
+        let node_a = create_unique_test_lock();
+        assert!(manager.put_lock(&node_a, 2).await.unwrap());
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let node_b = DistributedLock {
+            node_id: Uuid::new_v4().to_string(),
+            acquired_at: Utc::now(),
+            ..node_a.clone()
+        };
+        assert!(manager.put_lock(&node_b, 30).await.unwrap());
+
+        assert!(!manager
+            .delete_lock_if_owner(&node_a.lock_name, &node_a.node_id)
+            .await
+            .unwrap());
+        let current = manager.get_lock(&node_a.lock_name).await.unwrap().unwrap();
+        assert_eq!(current.node_id, node_b.node_id);
+
+        manager
+            .delete_lock_if_owner(&node_b.lock_name, &node_b.node_id)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires running Cassandra"]
+    async fn test_refresh_lock_ttl_by_stale_owner_does_not_take_over_new_owners_lock() {
+        let manager = create_test_manager().await;
+        let node_a = create_unique_test_lock();
+        assert!(manager.put_lock(&node_a, 2).await.unwrap());
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let node_b = DistributedLock {
+            node_id: Uuid::new_v4().to_string(),
+            acquired_at: Utc::now(),
+            ..node_a.clone()
+        };
+        assert!(manager.put_lock(&node_b, 30).await.unwrap());
+
+        assert!(!manager
+            .refresh_lock_ttl(&node_a.lock_name, &node_a.node_id, 30)
+            .await
+            .unwrap());
+        let current = manager.get_lock(&node_a.lock_name).await.unwrap().unwrap();
+        assert_eq!(current.node_id, node_b.node_id);
+
+        manager
+            .delete_lock_if_owner(&node_b.lock_name, &node_b.node_id)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires running Cassandra"]
+    async fn test_lock_guard_drop_releases_owned_lock() {
+        let manager = create_test_manager().await;
+        let lock_manager = DistributedLockManager::new(manager.clone(), "node-a".to_string());
+        let lock_name = create_unique_test_lock().lock_name;
+
+        let guard = lock_manager
+            .try_acquire(lock_name.clone(), 30)
+            .await
+            .unwrap()
+            .expect("node-a should acquire the free lock");
+        drop(guard);
+
+        // Drop releases from a spawned task, so poll until it has run.
+        let mut released = false;
+        for _ in 0..50 {
+            if manager.get_lock(&lock_name).await.unwrap().is_none() {
+                released = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(released, "owner's guard drop should delete the lock");
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires running Cassandra"]
+    async fn test_stale_lock_guard_drop_keeps_new_owners_lock() {
+        let manager = create_test_manager().await;
+        let node_a = DistributedLockManager::new(manager.clone(), "node-a".to_string());
+        let node_b = DistributedLockManager::new(manager.clone(), "node-b".to_string());
+        let lock_name = create_unique_test_lock().lock_name;
+
+        let stale_guard = node_a
+            .try_acquire(lock_name.clone(), 2)
+            .await
+            .unwrap()
+            .expect("node-a should acquire the free lock");
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let new_guard = node_b
+            .try_acquire(lock_name.clone(), 30)
+            .await
+            .unwrap()
+            .expect("node-b should acquire the expired lock");
+
+        drop(stale_guard);
+        // Give the spawned release task time to run before checking the row.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        let current = manager
+            .get_lock(&lock_name)
+            .await
+            .unwrap()
+            .expect("node-b's lock must survive node-a's stale guard drop");
+        assert_eq!(current.node_id, "node-b");
+
+        drop(new_guard);
     }
 
     #[tokio::test]

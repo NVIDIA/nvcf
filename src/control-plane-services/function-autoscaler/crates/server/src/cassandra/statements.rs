@@ -23,8 +23,15 @@ pub(crate) fn get_select_locks_stmt(keyspace: &str) -> String {
     )
 }
 
-pub(crate) fn get_delete_locks_stmt(keyspace: &str) -> String {
-    format!("DELETE FROM {}.locks WHERE lock_name = ?;", keyspace)
+// LWT conditional delete: only removes the lock if node_id still matches this node,
+// so a stale holder cannot delete a lock another node acquired after expiry.
+// Returns [applied]=true if the row was deleted, false if it expired or another node owns it.
+// Bind order: (lock_name, node_id)
+pub(crate) fn get_stmt_delete_lock_if_owner(keyspace: &str) -> String {
+    format!(
+        "DELETE FROM {}.locks WHERE lock_name = ? IF node_id = ?",
+        keyspace,
+    )
 }
 
 // healthy_nodes table
@@ -99,9 +106,17 @@ pub(crate) fn get_stmt_insert_to_recently_invoked_functions(
 #[cfg(test)]
 mod tests {
     use super::{
-        get_select_recently_invoked_functions_in_token_range_stmt,
+        get_select_recently_invoked_functions_in_token_range_stmt, get_stmt_delete_lock_if_owner,
         get_stmt_insert_to_recently_invoked_functions, get_stmt_refresh_lock,
     };
+
+    #[test]
+    fn delete_lock_is_conditional_on_owner() {
+        let statement = get_stmt_delete_lock_if_owner("test_keyspace");
+
+        assert!(statement.contains("WHERE lock_name = ?"));
+        assert!(statement.contains("IF node_id = ?"));
+    }
 
     #[test]
     fn refresh_lock_renews_every_non_key_column() {
