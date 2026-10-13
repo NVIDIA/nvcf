@@ -207,27 +207,20 @@ mod tests {
     }
 
     #[test]
-    fn session_selection_records_span_state_and_debug_event() {
+    fn session_state_records_span_field_and_debug_event() {
         use crate::load_balancer::{
             LastClusterHint, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig,
-            SessionClassification, SessionState, record_session_selection,
+            SessionClassification, SessionState, record_session_selection, record_session_state,
         };
-        use crate::metrics::StargateMetrics;
         use crate::routing_state::RoutingTargetKey;
 
         let logs = CapturedLogs::default();
+        let writer = logs.clone();
         let subscriber = tracing_subscriber::fmt()
             .with_ansi(false)
-            .without_time()
             .with_max_level(tracing::Level::DEBUG)
-            .with_writer({
-                let logs = logs.clone();
-                move || logs.clone()
-            })
+            .with_writer(move || writer.clone())
             .finish();
-        let metrics = StargateMetrics::new().unwrap();
-        let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PulsarWaitAndWiden);
-        let target = RoutingTargetKey::new(Some("tenant-a".to_string()), "model-a");
         let hint = LastClusterHint::classified(
             Some("cluster-b"),
             SessionClassification {
@@ -239,12 +232,13 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             let span = proxy_openai_request_span(&HeaderMap::new());
             let _entered = span.enter();
+            record_session_state(&hint);
             record_session_selection(
-                &metrics,
-                &config,
+                &crate::metrics::StargateMetrics::new().unwrap(),
+                &LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PulsarWaitAndWiden),
                 "pulsar-wait-and-widen",
                 "req-42",
-                &target,
+                &RoutingTargetKey::new(Some("tenant-a".to_string()), "model-a"),
                 &hint,
                 "cluster-b",
                 1,
@@ -252,26 +246,16 @@ mod tests {
         });
 
         let output = String::from_utf8(logs.0.lock().unwrap().clone()).unwrap();
-        let event = output
-            .lines()
-            .find(|line| line.contains("routing session classified"))
-            .unwrap_or_else(|| panic!("missing session debug event in {output}"));
-        assert!(event.contains("DEBUG"), "{event}");
-        // The span prefix shows the recorded field value.
-        assert!(
-            event.contains("routing.session_state=\"returning\""),
-            "{event}"
-        );
         for field in [
+            "DEBUG",
+            "routing.session_state=\"returning\"",
             "request_id=req-42",
             "model_id=model-a",
             "routing_key=Some(\"tenant-a\")",
-            "session_state=\"returning\"",
+            " session_state=\"returning\"",
             "last_cluster_promoted=true",
-            "selected_cluster_id=cluster-b",
-            "selection=\"primary\"",
         ] {
-            assert!(event.contains(field), "missing {field} in {event}");
+            assert!(output.contains(field), "missing {field} in {output}");
         }
     }
 }

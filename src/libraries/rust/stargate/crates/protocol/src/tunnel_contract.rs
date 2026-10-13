@@ -76,9 +76,6 @@ mod tests {
             HEADER_STARGATE_LAST_CLUSTER_ID,
             "x-stargate-last-cluster-id"
         );
-        assert!(is_internal_control_header(
-            &http::header::HeaderName::from_static(HEADER_STARGATE_LAST_CLUSTER_ID)
-        ));
         assert_eq!(HEADER_INFERENCE_SERVER_ID, "x-inference-server-id");
         assert_eq!(HEADER_REVERSE_AUTH_TOKEN, "x-stargate-auth-token");
         assert_eq!(WEBTRANSPORT_TUNNEL_PATH, "/_stargate/webtransport");

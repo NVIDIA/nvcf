@@ -55,15 +55,15 @@ impl SessionState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SessionSelection {
+enum SessionSelection {
     Primary,
     Fallback,
 }
 
 impl SessionSelection {
-    pub const ALL: [Self; 2] = [Self::Primary, Self::Fallback];
+    const ALL: [Self; 2] = [Self::Primary, Self::Fallback];
 
-    pub fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::Primary => "primary",
             Self::Fallback => "fallback",
@@ -219,7 +219,15 @@ fn promote(
     order
 }
 
-/// Records the session metric, span field, and debug log for a selection.
+/// Records the pinned session state on the current span. A no-op until the
+/// first load-balancer decision classifies the request.
+pub(crate) fn record_session_state(hint: &LastClusterHint) {
+    if let Some(classification) = hint.classification() {
+        Span::current().record("routing.session_state", classification.state.as_str());
+    }
+}
+
+/// Records the session metric and debug log for a selection.
 ///
 /// For a returning session, `primary` means the request went to its last
 /// cluster. For new and stale sessions, `primary` means the cluster came from
@@ -286,7 +294,6 @@ pub(crate) fn record_session_selection(
         )
         .inc();
 
-    Span::current().record("routing.session_state", classification.state.as_str());
     tracing::debug!(
         request_id = %request_id,
         model_id = %target.model_id,
@@ -302,30 +309,59 @@ pub(crate) fn record_session_selection(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::time::Instant;
 
     use super::*;
+    use crate::load_balancer::pulsar::pulsar_ranked_indices;
+    use crate::load_balancer::pulsar_wait_and_widen::PulsarWaitAndWidenLoadBalancer;
     use crate::load_balancer::tests::candidates;
-    use crate::load_balancer::{
-        LoadBalancerAlgorithm, LoadBalancerAlgorithmSettings, WaitAndWidenAlgorithmConfig,
+    use crate::load_balancer::wait_and_widen::{
+        WaitAndWidenConfig, WaitAndWidenLoadBalancer, cache_affinity_candidate_indices,
     };
+    use crate::load_balancer::{
+        LoadBalancerAlgorithm, LoadBalancerCandidateChoice, LoadBalancerDecision,
+        PulsarRendezvousWeight, WaitAndWidenAlgorithmConfig,
+    };
+    use LoadBalancerAlgorithm::{PulsarWaitAndWiden, WaitAndWiden};
+    use LoadBalancerDecision::{Selected, Unavailable, Wait};
+    use MissingLastCluster::{InsertAndTruncate, Keep};
 
     const WAIT: Duration = Duration::from_millis(300);
     const SCALE: f64 = 0.1;
+    const KEY: &str = "session-key";
+    const BOTH: [LoadBalancerAlgorithm; 2] = [WaitAndWiden, PulsarWaitAndWiden];
+
+    type Decide = Box<
+        dyn Fn(
+            &LoadBalancerRequest<'_>,
+            &[RoutedClusterSnapshot],
+            Duration,
+        ) -> LoadBalancerDecision,
+    >;
+
+    fn ms(millis: u64) -> Duration {
+        Duration::from_millis(millis)
+    }
 
     fn target() -> RoutingTargetKey {
         RoutingTargetKey::new(Some("rk-1".to_string()), "model-a")
     }
 
+    fn hint(id: &str) -> LastClusterHint {
+        LastClusterHint::new(Some(id.to_string()))
+    }
+
     fn request<'a>(
         target: &'a RoutingTargetKey,
         cache_affinity_key: Option<&'a str>,
+        input_tokens: u64,
         hint: Option<&'a LastClusterHint>,
     ) -> LoadBalancerRequest<'a> {
         LoadBalancerRequest {
             routing_target: target,
             cache_affinity_key,
-            input_tokens: Some(100),
+            input_tokens: Some(input_tokens),
             priority: 0,
             received_at: Instant::now(),
             request_slo: None,
@@ -334,290 +370,563 @@ mod tests {
         }
     }
 
-    fn plan<'a>(
-        enabled: bool,
-        request: &LoadBalancerRequest<'_>,
+    /// X = 300 ms, s = 0.1, k = 1, and sampling that covers every candidate.
+    fn config(
+        algorithm: LoadBalancerAlgorithm,
+        last_cluster_affinity: bool,
+        configure: impl FnOnce(&mut WaitAndWidenAlgorithmConfig),
+    ) -> LoadBalancerAlgorithmConfig {
+        let mut config = LoadBalancerAlgorithmConfig::from(algorithm);
+        config.set_seed(Some("seed-1".to_string())).unwrap();
+        let settings = config.wait_and_widen_settings_mut().unwrap();
+        settings.n = Some(5);
+        settings.cache_affinity_backend_selection_count = Some(1);
+        settings.cache_affinity_wait_ms = Some(300);
+        settings.cache_affinity_input_tokens_scale = Some(SCALE);
+        settings.last_cluster_affinity = Some(last_cluster_affinity);
+        configure(settings);
+        config
+    }
+
+    fn balancer(config: LoadBalancerAlgorithmConfig) -> Decide {
+        if config.algorithm() == WaitAndWiden {
+            let lb = WaitAndWidenLoadBalancer::new(
+                WaitAndWidenConfig::from_algorithm_config(&config).unwrap(),
+            );
+            Box::new(move |request, candidates, elapsed| lb.decide_at(request, candidates, elapsed))
+        } else {
+            let lb = PulsarWaitAndWidenLoadBalancer::new(config).unwrap();
+            Box::new(move |request, candidates, elapsed| lb.decide_at(request, candidates, elapsed))
+        }
+    }
+
+    /// The original affinity order for `KEY`: the ring group followed by the
+    /// other candidates, or the full Pulsar ranking.
+    fn affinity_order(
+        config: &LoadBalancerAlgorithmConfig,
         candidates: &[RoutedClusterSnapshot],
-        order: &'a [usize],
-        missing: MissingLastCluster,
-    ) -> AffinityPlan<'a> {
-        plan_affinity(
-            enabled,
-            request,
-            candidates,
-            Cow::Borrowed(order),
-            missing,
-            WAIT,
-            SCALE,
-        )
+    ) -> Vec<usize> {
+        let target = target();
+        let request = request(&target, Some(KEY), 0, None);
+        if config.algorithm() == WaitAndWiden {
+            let config = WaitAndWidenConfig::from_algorithm_config(config).unwrap();
+            let mut order =
+                cache_affinity_candidate_indices(&config, &request, candidates).unwrap();
+            let rest: Vec<_> = (0..candidates.len())
+                .filter(|index| !order.contains(index))
+                .collect();
+            order.extend(rest);
+            order
+        } else {
+            pulsar_ranked_indices(
+                config.seed(),
+                PulsarRendezvousWeight::default(),
+                &request,
+                candidates,
+            )
+        }
     }
 
-    fn five_candidates() -> Vec<RoutedClusterSnapshot> {
-        candidates(&["A", "B", "C", "D", "E"])
+    fn single_slot(count: usize) -> Vec<RoutedClusterSnapshot> {
+        let mut candidates = candidates(&["a", "b", "c", "d", "e"][..count]);
+        for candidate in &mut candidates {
+            candidate.stats.max_engine_concurrency = 1;
+        }
+        candidates
     }
 
-    fn hint(id: &str) -> LastClusterHint {
-        LastClusterHint::new(Some(id.to_string()))
+    fn fill(candidates: &mut [RoutedClusterSnapshot], indices: &[usize]) {
+        for index in indices {
+            candidates[*index].stats.num_running_queries = 1;
+        }
+    }
+
+    fn selected(index: usize, rank_depth: usize) -> LoadBalancerDecision {
+        Selected(LoadBalancerCandidateChoice {
+            candidate_index: index,
+            rank_depth,
+            selected_after_kv_free_tokens_skip: false,
+        })
+    }
+
+    fn selected_index(decision: LoadBalancerDecision) -> usize {
+        decision
+            .selected()
+            .unwrap_or_else(|| panic!("expected a selection, got {decision:?}"))
+            .candidate_index
     }
 
     #[test]
-    fn missing_hint_classifies_new_and_drops_wait_and_discount() {
+    fn plan_affinity_applies_session_rules() {
+        use SessionState::{New, Returning, Stale};
         let target = target();
-        let candidates = five_candidates();
-        let hint = LastClusterHint::new(None);
-        let request = request(&target, Some("key"), Some(&hint));
-        let plan = plan(
-            true,
-            &request,
-            &candidates,
-            &[0],
-            MissingLastCluster::InsertAndTruncate,
-        );
+        let candidates = candidates(&["A", "B", "C", "D", "E"]);
+        let plan = |enabled, key, hint: Option<&LastClusterHint>, order: &[usize], missing| {
+            let request = request(&target, key, 0, hint);
+            let plan = plan_affinity(
+                enabled,
+                &request,
+                &candidates,
+                Cow::Borrowed(order),
+                missing,
+                WAIT,
+                SCALE,
+            );
+            let configured = (plan.affinity_wait, plan.input_tokens_scale) == (WAIT, SCALE);
+            assert!(
+                configured
+                    || (plan.affinity_wait, plan.input_tokens_scale) == (Duration::ZERO, 1.0)
+            );
+            (plan.order.into_owned(), configured)
+        };
 
-        assert_eq!(&*plan.order, &[0]);
-        assert_eq!(plan.affinity_wait, Duration::ZERO);
-        assert_eq!(plan.input_tokens_scale, 1.0);
+        for (last_id, order, missing, expected_order, expected) in [
+            (None, vec![0], InsertAndTruncate, vec![0], (New, false)),
+            (
+                Some("gone"),
+                vec![0, 1],
+                InsertAndTruncate,
+                vec![0, 1],
+                (Stale, false),
+            ),
+            (
+                Some("B"),
+                vec![0],
+                InsertAndTruncate,
+                vec![1],
+                (Returning, true),
+            ),
+            (
+                Some("C"),
+                vec![0, 1],
+                InsertAndTruncate,
+                vec![2, 0],
+                (Returning, true),
+            ),
+            (
+                Some("B"),
+                vec![0, 1],
+                InsertAndTruncate,
+                vec![1, 0],
+                (Returning, true),
+            ),
+            (
+                Some("D"),
+                vec![0, 1, 2, 3, 4],
+                Keep,
+                vec![3, 0, 1, 2, 4],
+                (Returning, true),
+            ),
+            (Some("A"), vec![0, 1], Keep, vec![0, 1], (Returning, false)),
+            (
+                Some("E"),
+                vec![0, 1, 2, 3],
+                Keep,
+                vec![0, 1, 2, 3],
+                (Returning, false),
+            ),
+        ] {
+            let hint = LastClusterHint::new(last_id.map(str::to_owned));
+            let case = format!("{last_id:?} {order:?}");
+            let configured = expected.0 == Returning;
+            assert_eq!(
+                plan(true, Some(KEY), Some(&hint), &order, missing),
+                (expected_order, configured),
+                "{case}"
+            );
+            let classification = hint.classification().map(|c| (c.state, c.promoted));
+            assert_eq!(classification, Some(expected), "{case}");
+        }
+
+        // Flag off or no affinity key: unchanged and unclassified.
+        let last = hint("B");
+        for (enabled, key) in [(false, Some(KEY)), (true, None)] {
+            let planned = plan(enabled, key, Some(&last), &[0], InsertAndTruncate);
+            assert_eq!(planned, (vec![0], true));
+        }
+        assert_eq!(last.classification(), None);
+        // A request without a hint, as outside the proxy, routes as new.
         assert_eq!(
-            hint.classification(),
-            Some(SessionClassification {
-                state: SessionState::New,
-                promoted: false
-            })
-        );
-    }
-
-    #[test]
-    fn unknown_cluster_classifies_stale_and_routes_as_new() {
-        let target = target();
-        let candidates = five_candidates();
-        let hint = hint("gone");
-        let request = request(&target, Some("key"), Some(&hint));
-        let plan = plan(
-            true,
-            &request,
-            &candidates,
-            &[0, 1],
-            MissingLastCluster::InsertAndTruncate,
-        );
-
-        assert_eq!(&*plan.order, &[0, 1]);
-        assert_eq!(plan.affinity_wait, Duration::ZERO);
-        assert_eq!(plan.input_tokens_scale, 1.0);
-        assert_eq!(
-            hint.classification().map(|c| c.state),
-            Some(SessionState::Stale)
-        );
-    }
-
-    #[test]
-    fn returning_session_promotes_into_single_member_group() {
-        let target = target();
-        let candidates = five_candidates();
-        let hint = hint("B");
-        let request = request(&target, Some("key"), Some(&hint));
-        let plan = plan(
-            true,
-            &request,
-            &candidates,
-            &[0],
-            MissingLastCluster::InsertAndTruncate,
-        );
-
-        assert_eq!(&*plan.order, &[1]);
-        assert_eq!(plan.affinity_wait, WAIT);
-        assert_eq!(plan.input_tokens_scale, SCALE);
-        assert_eq!(
-            hint.classification(),
-            Some(SessionClassification {
-                state: SessionState::Returning,
-                promoted: true
-            })
-        );
-    }
-
-    #[test]
-    fn returning_session_outside_group_replaces_last_member() {
-        let target = target();
-        let candidates = five_candidates();
-        let hint = hint("C");
-        let request = request(&target, Some("key"), Some(&hint));
-        let plan = plan(
-            true,
-            &request,
-            &candidates,
-            &[0, 1],
-            MissingLastCluster::InsertAndTruncate,
-        );
-
-        assert_eq!(&*plan.order, &[2, 0]);
-    }
-
-    #[test]
-    fn returning_session_inside_group_keeps_members() {
-        let target = target();
-        let candidates = five_candidates();
-        let hint = hint("B");
-        let request = request(&target, Some("key"), Some(&hint));
-        let plan = plan(
-            true,
-            &request,
-            &candidates,
-            &[0, 1],
-            MissingLastCluster::InsertAndTruncate,
-        );
-
-        assert_eq!(&*plan.order, &[1, 0]);
-    }
-
-    #[test]
-    fn returning_session_reorders_full_ranking_and_keeps_relative_order() {
-        let target = target();
-        let candidates = five_candidates();
-        let hint = hint("D");
-        let request = request(&target, Some("key"), Some(&hint));
-        let plan = plan(
-            true,
-            &request,
-            &candidates,
-            &[0, 1, 2, 3, 4],
-            MissingLastCluster::Keep,
-        );
-
-        assert_eq!(&*plan.order, &[3, 0, 1, 2, 4]);
-    }
-
-    #[test]
-    fn returning_session_already_first_is_not_promoted() {
-        let target = target();
-        let candidates = five_candidates();
-        let hint = hint("A");
-        let request = request(&target, Some("key"), Some(&hint));
-        let plan = plan(
-            true,
-            &request,
-            &candidates,
-            &[0, 1],
-            MissingLastCluster::Keep,
-        );
-
-        assert!(matches!(plan.order, Cow::Borrowed(_)));
-        assert_eq!(&*plan.order, &[0, 1]);
-        assert_eq!(
-            hint.classification(),
-            Some(SessionClassification {
-                state: SessionState::Returning,
-                promoted: false
-            })
-        );
-    }
-
-    #[test]
-    fn ranking_without_last_cluster_is_kept() {
-        let target = target();
-        let candidates = five_candidates();
-        let hint = hint("E");
-        let request = request(&target, Some("key"), Some(&hint));
-        let plan = plan(
-            true,
-            &request,
-            &candidates,
-            &[0, 1, 2, 3],
-            MissingLastCluster::Keep,
-        );
-
-        assert_eq!(&*plan.order, &[0, 1, 2, 3]);
-        assert_eq!(plan.affinity_wait, WAIT);
-        assert_eq!(
-            hint.classification(),
-            Some(SessionClassification {
-                state: SessionState::Returning,
-                promoted: false
-            })
+            plan(true, Some(KEY), None, &[0], InsertAndTruncate),
+            (vec![0], false)
         );
     }
 
     #[test]
     fn classification_is_pinned_across_attempts() {
         let target = target();
-        let candidates = five_candidates();
         let hint = hint("B");
-        let request = request(&target, Some("key"), Some(&hint));
-        let _ = plan(
-            true,
-            &request,
-            &candidates,
-            &[0],
-            MissingLastCluster::InsertAndTruncate,
-        );
-
-        // B left the candidate set before a retry: still returning, no promotion.
-        let later = crate::load_balancer::tests::candidates(&["A", "C"]);
-        let plan = plan(
-            true,
-            &request,
-            &later,
-            &[0],
-            MissingLastCluster::InsertAndTruncate,
-        );
-        assert_eq!(&*plan.order, &[0]);
-        assert_eq!(plan.affinity_wait, WAIT);
-        assert_eq!(plan.input_tokens_scale, SCALE);
+        let request = request(&target, Some(KEY), 0, Some(&hint));
+        let plan = |candidates: &[RoutedClusterSnapshot]| {
+            let plan = plan_affinity(
+                true,
+                &request,
+                candidates,
+                Cow::Borrowed(&[0]),
+                InsertAndTruncate,
+                WAIT,
+                SCALE,
+            );
+            (
+                plan.order.into_owned(),
+                plan.affinity_wait,
+                plan.input_tokens_scale,
+            )
+        };
+        assert_eq!(plan(&candidates(&["A", "B"])), (vec![1], WAIT, SCALE));
+        // B left the candidate set before a retry: still returning, original order.
+        assert_eq!(plan(&candidates(&["A", "C"])), (vec![0], WAIT, SCALE));
         assert_eq!(
             hint.classification().map(|c| c.state),
             Some(SessionState::Returning)
         );
     }
 
-    #[test]
-    fn flag_off_or_missing_affinity_key_is_not_classified() {
-        let target = target();
-        let candidates = five_candidates();
-        for (enabled, affinity_key) in [(false, Some("key")), (true, None)] {
-            let hint = hint("B");
-            let request = request(&target, affinity_key, Some(&hint));
-            let plan = plan(
-                enabled,
-                &request,
-                &candidates,
-                &[0],
-                MissingLastCluster::InsertAndTruncate,
-            );
+    /// k = 2. Slower TTFT buckets stay locked past every tested elapsed
+    /// time, so no tie breaks at random.
+    fn locked_group_of_two(settings: &mut WaitAndWidenAlgorithmConfig) {
+        settings.cache_affinity_backend_selection_count = Some(2);
+        settings.next_bucket_unlock_factor = Some(100.0);
+    }
 
-            assert_eq!(&*plan.order, &[0]);
-            assert_eq!(plan.affinity_wait, WAIT);
-            assert_eq!(plan.input_tokens_scale, SCALE);
-            assert_eq!(hint.classification(), None);
+    #[test]
+    fn new_and_stale_sessions_route_like_flag_off_with_no_wait_or_discount() {
+        let target = target();
+        for algorithm in BOTH {
+            let session_config = config(algorithm, true, locked_group_of_two);
+            let mut all_free = single_slot(4);
+            let order = affinity_order(&session_config, &all_free);
+            for (position, rtt_ms) in [120, 80, 40, 160].into_iter().enumerate() {
+                all_free[order[position]].rtt = ms(rtt_ms);
+            }
+            let mut all_full = all_free.clone();
+            fill(&mut all_full, &order);
+            let mut group_full = all_free.clone();
+            fill(&mut group_full, &order[..2]);
+            // Full prefill favors order[0] (1500 vs 2001 ms); the 0.1
+            // discount favors order[1] (600 vs 201 ms).
+            let mut prefill = all_free.clone();
+            prefill[order[0]].rtt = ms(500);
+            prefill[order[0]].stats.last_mean_input_tps = 1_000.0;
+            prefill[order[1]].rtt = ms(1);
+            prefill[order[1]].stats.last_mean_input_tps = 500.0;
+
+            let session = balancer(session_config);
+            let baseline = balancer(config(algorithm, false, |settings| {
+                locked_group_of_two(settings);
+                settings.cache_affinity_wait_ms = Some(0);
+                settings.cache_affinity_input_tokens_scale = Some(1.0);
+            }));
+            for snapshot in [&all_free, &all_full, &group_full, &prefill] {
+                for elapsed in [0, 50, 300, 1_000].map(ms) {
+                    for hint in [LastClusterHint::default(), hint("gone")] {
+                        let request = request(&target, Some(KEY), 1_000, Some(&hint));
+                        assert_eq!(
+                            session(&request, snapshot, elapsed),
+                            baseline(&request, snapshot, elapsed),
+                            "{algorithm} at {elapsed:?}"
+                        );
+                    }
+                }
+            }
+
+            let new = LastClusterHint::default();
+            let request = request(&target, Some(KEY), 1_000, Some(&new));
+            assert_eq!(
+                selected_index(session(&request, &group_full, Duration::ZERO)),
+                order[2],
+                "{algorithm}"
+            );
+            assert_eq!(
+                selected_index(session(&request, &prefill, Duration::ZERO)),
+                order[0],
+                "{algorithm}"
+            );
         }
     }
 
     #[test]
-    fn request_without_hint_is_new_when_enabled() {
+    fn returning_session_waits_for_its_last_cluster_and_promotion_is_not_cached() {
         let target = target();
-        let candidates = five_candidates();
-        let request = request(&target, Some("key"), None);
-        let plan = plan(
-            true,
-            &request,
-            &candidates,
-            &[0],
-            MissingLastCluster::InsertAndTruncate,
+        for algorithm in BOTH {
+            let config = config(algorithm, true, |_| {});
+            let mut candidates = single_slot(3);
+            let order = affinity_order(&config, &candidates);
+            let (a, b) = (order[0], order[1]);
+            fill(&mut candidates, &[b]);
+            let lb = balancer(config);
+            let returning = hint(&candidates[b].cluster_id);
+            let held = request(&target, Some(KEY), 0, Some(&returning));
+
+            // A is free, but the request holds for B for the whole wait.
+            for elapsed_ms in [0, 150, 299] {
+                assert_eq!(
+                    lb(&held, &candidates, ms(elapsed_ms)),
+                    Wait(ms(300 - elapsed_ms)),
+                    "{algorithm}"
+                );
+            }
+            assert_eq!(
+                returning.classification(),
+                Some(SessionClassification {
+                    state: SessionState::Returning,
+                    promoted: true
+                })
+            );
+            candidates[b].stats.num_running_queries = 0;
+            assert_eq!(
+                lb(&held, &candidates, Duration::ZERO),
+                selected(b, 1),
+                "{algorithm}"
+            );
+
+            let new = LastClusterHint::default();
+            let new_request = request(&target, Some(KEY), 0, Some(&new));
+            assert_eq!(
+                lb(&new_request, &candidates, Duration::ZERO),
+                selected(a, 1),
+                "{algorithm}"
+            );
+        }
+    }
+
+    #[test]
+    fn returning_session_does_not_discount_the_original_rank_one() {
+        let target = target();
+        for algorithm in BOTH {
+            let config = config(algorithm, true, |_| {});
+            let mut candidates = single_slot(3);
+            let order = affinity_order(&config, &candidates);
+            let (a, b, c) = (order[0], order[1], order[2]);
+            fill(&mut candidates, &[b]);
+            // Discounted, A beats C (201 vs 1500 ms); at full prefill C wins.
+            candidates[a].rtt = ms(1);
+            candidates[a].stats.last_mean_input_tps = 500.0;
+            candidates[c].rtt = ms(500);
+            candidates[c].stats.last_mean_input_tps = 1_000.0;
+            let returning = hint(&candidates[b].cluster_id);
+            let request = request(&target, Some(KEY), 1_000, Some(&returning));
+
+            assert_eq!(
+                selected_index(balancer(config)(&request, &candidates, WAIT)),
+                c,
+                "{algorithm}"
+            );
+        }
+    }
+
+    #[test]
+    fn returning_session_group_keeps_its_size() {
+        let target = target();
+        for algorithm in BOTH {
+            let config = config(algorithm, true, |settings| {
+                settings.cache_affinity_backend_selection_count = Some(2);
+            });
+            let base = single_slot(4);
+            let order = affinity_order(&config, &base);
+            let (a, b, c, d) = (order[0], order[1], order[2], order[3]);
+            let lb = balancer(config);
+
+            // Last cluster C outside the group (A, B): the group is (C, A).
+            let last = hint(&base[c].cluster_id);
+            let outside = request(&target, Some(KEY), 0, Some(&last));
+            let mut candidates = base.clone();
+            fill(&mut candidates, &[a, c, d]);
+            assert_eq!(
+                lb(&outside, &candidates, ms(100)),
+                Wait(ms(200)),
+                "{algorithm}"
+            );
+            assert_eq!(
+                selected_index(lb(&outside, &candidates, WAIT)),
+                b,
+                "{algorithm}"
+            );
+            candidates[a].stats.num_running_queries = 0;
+            assert_eq!(
+                selected_index(lb(&outside, &candidates, Duration::ZERO)),
+                a,
+                "{algorithm}"
+            );
+
+            // Last cluster B inside the group: the members stay A and B.
+            let last = hint(&base[b].cluster_id);
+            let inside = request(&target, Some(KEY), 0, Some(&last));
+            let mut candidates = base.clone();
+            fill(&mut candidates, &[b]);
+            assert_eq!(
+                selected_index(lb(&inside, &candidates, Duration::ZERO)),
+                a,
+                "{algorithm}"
+            );
+            fill(&mut candidates, &[a]);
+            assert_eq!(
+                lb(&inside, &candidates, Duration::ZERO),
+                Wait(WAIT),
+                "{algorithm}"
+            );
+        }
+    }
+
+    #[test]
+    fn pulsar_returning_session_widens_bands_from_the_promoted_ranking() {
+        let target = target();
+        let config = config(PulsarWaitAndWiden, true, |settings| {
+            settings.band_widen_interval_ms = Some(100);
+        });
+        let base = single_slot(5);
+        let order = affinity_order(&config, &base);
+        let lb = balancer(config);
+        let last = hint(&base[order[3]].cluster_id);
+        let request = request(&target, Some(KEY), 0, Some(&last));
+        let only_free = |position: usize| {
+            let mut candidates = base.clone();
+            for (other, index) in order.iter().enumerate() {
+                if other != position {
+                    candidates[*index].stats.num_running_queries = 1;
+                }
+            }
+            candidates
+        };
+
+        // After the wait the open set is D, A, B. C opens with the next band.
+        assert_eq!(lb(&request, &only_free(1), WAIT), selected(order[1], 3));
+        assert_eq!(lb(&request, &only_free(2), WAIT), Wait(ms(100)));
+        assert_eq!(
+            lb(&request, &only_free(2), WAIT + ms(100)),
+            selected(order[2], 4)
         );
-
-        assert_eq!(plan.affinity_wait, Duration::ZERO);
-        assert_eq!(plan.input_tokens_scale, 1.0);
     }
 
-    fn classified_hint(id: Option<&str>, state: SessionState) -> LastClusterHint {
-        LastClusterHint::classified(
-            id,
-            SessionClassification {
-                state,
-                promoted: false,
-            },
-        )
+    #[test]
+    fn ineligible_last_cluster_acts_as_an_ineligible_rank_one() {
+        let target = target();
+        for (algorithm, kv_check) in [
+            (WaitAndWiden, false),
+            (PulsarWaitAndWiden, false),
+            (PulsarWaitAndWiden, true),
+        ] {
+            let mut config = config(algorithm, true, |_| {});
+            config.request_policy_mut().consider_kv_free_tokens = kv_check;
+            let mut candidates = single_slot(3);
+            let b = affinity_order(&config, &candidates)[1];
+            let b_id = candidates[b].cluster_id.clone();
+            let excluded = HashSet::from([b_id.clone()]);
+            if kv_check {
+                candidates[b].stats.kv_cache_free_tokens = 50;
+                candidates[b].stats.kv_cache_used_tokens = 974;
+            }
+            let last = hint(&b_id);
+            let request = LoadBalancerRequest {
+                excluded_cluster_ids: (!kv_check).then_some(&excluded),
+                ..request(&target, Some(KEY), 100, Some(&last))
+            };
+            let lb = balancer(config);
+
+            assert_eq!(
+                lb(&request, &candidates, Duration::ZERO),
+                Wait(WAIT),
+                "{algorithm}"
+            );
+            assert_ne!(
+                selected_index(lb(&request, &candidates, WAIT)),
+                b,
+                "{algorithm}"
+            );
+        }
     }
 
-    fn session_series(metrics: &StargateMetrics) -> Vec<(String, String, u64)> {
+    #[test]
+    fn instances_with_the_same_config_make_the_same_choice() {
+        let target = target();
+        for algorithm in BOTH {
+            let config = config(algorithm, true, locked_group_of_two);
+            let mut candidates = single_slot(5);
+            let order = affinity_order(&config, &candidates);
+            for (position, rtt_ms) in [150, 100, 50, 250, 0].into_iter().enumerate() {
+                candidates[order[position]].rtt = ms(rtt_ms);
+            }
+            let mut group_full = candidates.clone();
+            fill(&mut group_full, &[order[0], order[3]]);
+            let instances = [balancer(config.clone()), balancer(config)];
+
+            for (snapshot, elapsed_ms) in [
+                (&candidates, 0),
+                (&group_full, 150),
+                (&group_full, 300),
+                (&group_full, 301),
+            ] {
+                let [first, second] = instances.each_ref().map(|lb| {
+                    let last = hint(&candidates[order[3]].cluster_id);
+                    lb(
+                        &request(&target, Some(KEY), 0, Some(&last)),
+                        snapshot,
+                        ms(elapsed_ms),
+                    )
+                });
+                assert_eq!(first, second, "{algorithm} at {elapsed_ms} ms");
+            }
+        }
+    }
+
+    #[test]
+    fn last_cluster_is_ignored_without_flag_affinity_key_or_group() {
+        let target = target();
+        for (algorithm, enabled, key, group) in [
+            (WaitAndWiden, false, Some(KEY), Some(1)),
+            (PulsarWaitAndWiden, false, Some(KEY), Some(1)),
+            (WaitAndWiden, true, None, Some(1)),
+            (PulsarWaitAndWiden, true, None, Some(1)),
+            (WaitAndWiden, true, Some(KEY), None),
+        ] {
+            let lb = balancer(config(algorithm, enabled, |settings| {
+                locked_group_of_two(settings);
+                settings.cache_affinity_backend_selection_count = group;
+            }));
+            let mut candidates = single_slot(3);
+            for (index, rtt_ms) in [40, 80, 120].into_iter().enumerate() {
+                candidates[index].rtt = ms(rtt_ms);
+            }
+            fill(&mut candidates, &[1]);
+            let last = hint(&candidates[1].cluster_id);
+            for elapsed in [Duration::ZERO, WAIT] {
+                assert_eq!(
+                    lb(&request(&target, key, 0, Some(&last)), &candidates, elapsed),
+                    lb(&request(&target, key, 0, None), &candidates, elapsed),
+                    "{algorithm} enabled={enabled} key={key:?} group={group:?}"
+                );
+            }
+            assert_eq!(last.classification(), None);
+        }
+    }
+
+    #[test]
+    fn pulsar_pins_the_classification_even_with_an_empty_ranking() {
+        let target = target();
+        let lb = balancer(config(PulsarWaitAndWiden, true, |_| {}));
+        let last = hint("b");
+        let request = request(&target, Some(KEY), 0, Some(&last));
+        let mut unweighted = single_slot(1);
+        unweighted[0].stats.max_input_tps = None;
+
+        assert_eq!(lb(&request, &unweighted, Duration::ZERO), Unavailable);
+        // B joins before the retry. The request stays stale, so it does not
+        // wait for B.
+        let mut candidates = single_slot(3);
+        fill(&mut candidates, &[1]);
+        assert!(
+            lb(&request, &candidates, Duration::ZERO)
+                .selected()
+                .is_some()
+        );
+        assert_eq!(
+            last.classification().map(|c| c.state),
+            Some(SessionState::Stale)
+        );
+    }
+
+    /// Label values in declaration order, with the counter value.
+    fn session_series(metrics: &StargateMetrics) -> Vec<(Vec<String>, u64)> {
         metrics
             .registry()
             .gather()
@@ -625,99 +934,49 @@ mod tests {
             .filter(|family| family.name() == "stargate_routing_session_selections_total")
             .flat_map(|family| family.get_metric().to_vec())
             .map(|metric| {
-                let label = |name: &str| {
+                let labels = [
+                    "routing_key",
+                    "model",
+                    "algorithm",
+                    "session_state",
+                    "selection",
+                ]
+                .map(|name| {
                     metric
                         .get_label()
                         .iter()
                         .find(|label| label.name() == name)
                         .map(|label| label.value().to_string())
                         .unwrap_or_default()
-                };
-                (
-                    label("session_state"),
-                    label("selection"),
-                    metric.get_counter().value() as u64,
-                )
+                });
+                (labels.to_vec(), metric.get_counter().value() as u64)
             })
             .collect()
     }
 
-    fn pulsar_wait_and_widen_config(group_size: Option<usize>) -> LoadBalancerAlgorithmConfig {
-        LoadBalancerAlgorithmConfig {
-            settings: LoadBalancerAlgorithmSettings::PulsarWaitAndWiden(
-                WaitAndWidenAlgorithmConfig {
-                    cache_affinity_backend_selection_count: group_size,
-                    last_cluster_affinity: Some(true),
-                    ..WaitAndWidenAlgorithmConfig::default()
-                },
-            ),
-            ..LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PulsarWaitAndWiden)
-        }
-    }
-
     #[test]
-    fn session_metric_starts_every_pair_at_zero_and_counts_selection() {
-        let metrics = StargateMetrics::new().unwrap();
-        let config = pulsar_wait_and_widen_config(None);
-        let hint = classified_hint(Some("B"), SessionState::Returning);
-        record_session_selection(
-            &metrics,
-            &config,
-            "pulsar-wait-and-widen",
-            "req-1",
-            &target(),
-            &hint,
-            "B",
-            2,
-        );
-
-        let mut series = session_series(&metrics);
-        series.sort();
-        assert_eq!(series.len(), 6);
-        assert_eq!(
-            series
-                .iter()
-                .filter(|(_, _, value)| *value == 1)
-                .collect::<Vec<_>>(),
-            vec![&("returning".to_string(), "primary".to_string(), 1)]
-        );
-        assert_eq!(series.iter().map(|(_, _, value)| value).sum::<u64>(), 1);
-    }
-
-    #[test]
-    fn returning_session_on_other_cluster_counts_fallback() {
-        let metrics = StargateMetrics::new().unwrap();
-        let config = pulsar_wait_and_widen_config(None);
-        let hint = classified_hint(Some("B"), SessionState::Returning);
-        record_session_selection(
-            &metrics,
-            &config,
-            "pulsar-wait-and-widen",
-            "req-1",
-            &target(),
-            &hint,
-            "A",
-            1,
-        );
-
-        assert!(session_series(&metrics).contains(&(
-            "returning".to_string(),
-            "fallback".to_string(),
-            1
-        )));
-    }
-
-    #[test]
-    fn new_session_primary_means_affinity_group() {
-        let config = pulsar_wait_and_widen_config(Some(2));
-        for (state, rank_depth, expected) in [
-            (SessionState::New, 1, "primary"),
-            (SessionState::New, 2, "primary"),
-            (SessionState::New, 3, "fallback"),
-            (SessionState::Stale, 3, "fallback"),
+    fn session_metric_starts_every_pair_at_zero_and_counts_the_selection() {
+        let config = config(PulsarWaitAndWiden, true, |settings| {
+            settings.cache_affinity_backend_selection_count = Some(2);
+        });
+        // Returning: primary means the last cluster. New and stale: primary
+        // means a rank within the affinity group (k = 2).
+        use SessionSelection::{Fallback, Primary};
+        use SessionState::{New, Returning, Stale};
+        for (state, last_id, selected_id, rank_depth, selection) in [
+            (Returning, Some("B"), "B", 3, Primary),
+            (Returning, Some("B"), "A", 1, Fallback),
+            (New, None, "A", 2, Primary),
+            (New, None, "A", 3, Fallback),
+            (Stale, Some("gone"), "A", 1, Primary),
+            (Stale, Some("gone"), "A", 3, Fallback),
         ] {
             let metrics = StargateMetrics::new().unwrap();
-            let hint = classified_hint(None, state);
+            let classification = SessionClassification {
+                state,
+                promoted: false,
+            };
+            let hint = LastClusterHint::classified(last_id, classification);
             record_session_selection(
                 &metrics,
                 &config,
@@ -725,24 +984,41 @@ mod tests {
                 "req-1",
                 &target(),
                 &hint,
-                "A",
+                selected_id,
                 rank_depth,
             );
-            assert!(
-                session_series(&metrics).contains(&(
-                    state.as_str().to_string(),
-                    expected.to_string(),
-                    1
-                )),
-                "{state:?} at rank {rank_depth}"
+
+            let series = session_series(&metrics);
+            let labels = |state: SessionState, selection: SessionSelection| {
+                ["rk-1", "model-a", "pulsar-wait-and-widen"]
+                    .into_iter()
+                    .chain([state.as_str(), selection.as_str()])
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            };
+            for state in SessionState::ALL {
+                for selection in SessionSelection::ALL {
+                    let labels = labels(state, selection);
+                    assert!(
+                        series
+                            .iter()
+                            .any(|(series_labels, _)| *series_labels == labels)
+                    );
+                }
+            }
+            let counted: Vec<_> = series.into_iter().filter(|(_, value)| *value > 0).collect();
+            assert_eq!(
+                counted,
+                vec![(labels(state, selection), 1)],
+                "{state:?} {selection:?}"
             );
         }
     }
 
     #[test]
-    fn unclassified_requests_record_nothing() {
+    fn unclassified_requests_record_no_session_metric() {
         let metrics = StargateMetrics::new().unwrap();
-        let config = pulsar_wait_and_widen_config(None);
+        let config = config(PulsarWaitAndWiden, true, |_| {});
         record_session_selection(
             &metrics,
             &config,

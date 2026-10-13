@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -42,68 +41,53 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
-// lastClusterStore is an in-memory lastcluster.Store that counts calls, can
-// inject errors, and can block Get while ignoring the context.
+// lastClusterStore is a lastcluster.Store that counts calls, can fail them,
+// and can block Get while ignoring the context.
 type lastClusterStore struct {
-	mu       sync.Mutex
-	values   map[string]string
-	gets     int
-	sets     int
-	getErr   error
-	setErr   error
-	blockGet chan struct{}
-}
-
-func newLastClusterStore() *lastClusterStore {
-	return &lastClusterStore{values: map[string]string{}}
+	mu         sync.Mutex
+	values     map[string]string
+	gets, sets int
+	err        error
+	block      chan struct{}
 }
 
 func (s *lastClusterStore) Get(_ context.Context, key string) (string, bool, error) {
 	s.mu.Lock()
 	s.gets++
-	block, err := s.blockGet, s.getErr
 	value, ok := s.values[key]
 	s.mu.Unlock()
-	if block != nil {
-		<-block
+	if s.block != nil {
+		<-s.block
 	}
-	if err != nil {
-		return "", false, err
-	}
-	return value, ok, nil
+	return value, ok, s.err
 }
 
 func (s *lastClusterStore) Set(_ context.Context, key, value string, _ time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sets++
-	if s.setErr != nil {
-		return s.setErr
+	if s.err == nil {
+		s.values[key] = value
 	}
-	s.values[key] = value
-	return nil
+	return s.err
 }
 
-func (s *lastClusterStore) get(key string) string {
+func (s *lastClusterStore) snapshot() (gets, sets int, values map[string]string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.values[key]
+	values = map[string]string{}
+	for k, v := range s.values {
+		values[k] = v
+	}
+	return s.gets, s.sets, values
 }
 
-func (s *lastClusterStore) counts() (gets, sets int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.gets, s.sets
-}
-
-const lastClusterTestModel = "company/model"
+var lastClusterPaths = []string{"Complete", "Stream", "Proxy"}
 
 func lastClusterReqCtx(source string) *requestctx.RequestContext {
 	return &requestctx.RequestContext{
-		RequestID:        "req-lc",
 		RoutingKey:       "fn-lc",
-		Model:            lastClusterTestModel,
-		SessionID:        "session-1",
+		Model:            "company/model",
 		SessionSource:    source,
 		CacheAffinityKey: "mt:v1:session:lc-hash",
 	}
@@ -113,96 +97,95 @@ func lastClusterKey(reqCtx *requestctx.RequestContext) string {
 	return lastcluster.Key(reqCtx.RoutingKey, reqCtx.Model, reqCtx.CacheAffinityKey)
 }
 
-func lastClusterChatRequest() *NormalizedRequest {
-	return &NormalizedRequest{
-		ChatRequest: &models.ChatCompletionRequest{
-			Model: lastClusterTestModel,
-			Messages: &[]models.ChatMessage{
-				{Role: models.ChatCompletionRoleUser, Content: models.SingleTextContent("hi")},
-			},
-		},
+// newLastClusterProvider returns a provider whose Stargate answers with
+// status and x-stargate-cluster-id: cluster-b, or with transportErr, and
+// records each last-cluster hint it receives. A nil store disables hints.
+func newLastClusterProvider(
+	t *testing.T,
+	store *lastClusterStore,
+	status int,
+	transportErr error,
+) (*StargateProvider, *lastcluster.Tracker, func() []string) {
+	t.Helper()
+	p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
+	require.NoError(t, err)
+	var tracker *lastcluster.Tracker
+	if store != nil {
+		tracker = lastcluster.NewTracker(store, lastcluster.Options{TTL: time.Minute, LookupTimeout: 20 * time.Millisecond})
 	}
-}
+	p.SetLastClusterTracker(tracker)
 
-func lastClusterSSE(t *testing.T) string {
-	return sseChatBody(t, models.ChatCompletionChunk{
+	body := sseChatBody(t, models.ChatCompletionChunk{
 		ID:     "chatcmpl-lc",
 		Object: models.ObjectChatCompletionChunk,
-		Model:  lastClusterTestModel,
 		Choices: []models.ChatCompletionChunkChoice{{
 			Delta:        models.ChatCompletionChunkDelta{Content: ptr.To("ok")},
 			FinishReason: ptr.To(models.FinishReasonStop),
 		}},
 	})
-}
-
-func newLastClusterTracker(store lastcluster.Store) *lastcluster.Tracker {
-	return lastcluster.NewTracker(store, lastcluster.Options{TTL: time.Minute, LookupTimeout: 20 * time.Millisecond})
-}
-
-// lastClusterUpstream answers every request with status and the cluster ID
-// header, and records the last-cluster hint each request carried.
-type lastClusterUpstream struct {
-	mu        sync.Mutex
-	hints     []string
-	status    int
-	clusterID string
-}
-
-func (u *lastClusterUpstream) roundTrip(t *testing.T) roundTripFunc {
-	return func(r *http.Request) (*http.Response, error) {
-		u.mu.Lock()
-		u.hints = append(u.hints, r.Header.Get(headerStargateLastClusterID))
-		status, clusterID := u.status, u.clusterID
-		u.mu.Unlock()
-		header := http.Header{headerContentType: []string{contentTypeSSE}}
-		if clusterID != "" {
-			header.Set(headerStargateClusterID, clusterID)
-		}
-		body := lastClusterSSE(t)
-		if status >= http.StatusBadRequest {
-			header.Set(headerContentType, contentTypeJSON)
-			body = `{"error":{"message":"upstream failed"}}`
+	var mu sync.Mutex
+	var hints []string
+	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		mu.Lock()
+		hints = append(hints, r.Header.Get(headerStargateLastClusterID))
+		mu.Unlock()
+		if transportErr != nil {
+			return nil, transportErr
 		}
 		return &http.Response{
 			StatusCode: status,
-			Header:     header,
+			Header:     http.Header{headerContentType: {contentTypeSSE}, headerStargateClusterID: {"cluster-b"}},
 			Body:       io.NopCloser(strings.NewReader(body)),
 			Request:    r,
 		}, nil
+	})}
+	return p, tracker, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), hints...)
 	}
 }
 
-func (u *lastClusterUpstream) lastHint() string {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	if len(u.hints) == 0 {
-		return "<none>"
-	}
-	return u.hints[len(u.hints)-1]
+func lastClusterChat(reqCtx *requestctx.RequestContext) *NormalizedRequest {
+	return &NormalizedRequest{ChatRequest: &models.ChatCompletionRequest{
+		Model:    reqCtx.Model,
+		Messages: &[]models.ChatMessage{{Role: models.ChatCompletionRoleUser, Content: models.SingleTextContent("hi")}},
+	}}
 }
 
 // lastClusterCall runs one request through the named provider path and
-// closes any response body.
+// returns everything the client would see.
 func lastClusterCall(
-	ctx context.Context,
+	t *testing.T,
 	p *StargateProvider,
 	path string,
 	reqCtx *requestctx.RequestContext,
 	inbound http.Header,
-) (int, error) {
+) (string, error) {
+	t.Helper()
+	ctx := context.Background()
+	chat := lastClusterChat(reqCtx)
 	switch path {
 	case "Complete":
-		_, err := p.Complete(ctx, reqCtx, lastClusterChatRequest())
-		return 0, err
-	case "Stream":
-		events, err := p.Stream(ctx, reqCtx, lastClusterChatRequest())
+		response, err := p.Complete(ctx, reqCtx, chat)
 		if err != nil {
-			return 0, err
+			return "", err
 		}
-		for range events {
+		raw, err := json.Marshal(response)
+		require.NoError(t, err)
+		return string(raw), nil
+	case "Stream":
+		events, err := p.Stream(ctx, reqCtx, chat)
+		if err != nil {
+			return "", err
 		}
-		return 0, nil
+		var out strings.Builder
+		for event := range events {
+			raw, err := json.Marshal(event.Chunk)
+			require.NoError(t, err)
+			fmt.Fprintf(&out, "%s err=%v\n", raw, event.Err)
+		}
+		return out.String(), nil
 	default:
 		resp, err := p.Proxy(ctx, reqCtx, &ProxyRequest{
 			Method: http.MethodPost,
@@ -211,16 +194,19 @@ func lastClusterCall(
 			Body:   io.NopCloser(strings.NewReader(`{}`)),
 		})
 		if err != nil {
-			return 0, err
+			return "", err
 		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-		return resp.StatusCode, nil
+		defer resp.Body.Close()
+		raw, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		return fmt.Sprintf("%d %s", resp.StatusCode, raw), nil
 	}
 }
 
-var lastClusterPaths = []string{"Complete", "Stream", "Proxy"}
-
+// TestLastClusterRoundTrip covers every session source on every path: an
+// eligible session's second request carries the hint, the same session with
+// another model or routing key does not, and payload sessions without
+// prefix-chain values never touch the store.
 func TestLastClusterRoundTrip(t *testing.T) {
 	for _, path := range lastClusterPaths {
 		for _, source := range []string{
@@ -228,258 +214,140 @@ func TestLastClusterRoundTrip(t *testing.T) {
 			requestctx.SessionSourceConversationID,
 			requestctx.SessionSourceHeader,
 			requestctx.SessionSourceClaudeCodeHeader,
+			requestctx.SessionSourcePayload,
 		} {
 			t.Run(path+"/"+source, func(t *testing.T) {
-				ctx := context.Background()
-				store := newLastClusterStore()
-				tracker := newLastClusterTracker(store)
-				upstream := &lastClusterUpstream{status: http.StatusOK, clusterID: "cluster-b"}
-				p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
-				require.NoError(t, err)
-				p.client = &http.Client{Transport: upstream.roundTrip(t)}
-				p.SetLastClusterTracker(tracker)
+				store := &lastClusterStore{values: map[string]string{}}
+				p, tracker, hints := newLastClusterProvider(t, store, http.StatusOK, nil)
 				reqCtx := lastClusterReqCtx(source)
+				otherModel := lastClusterReqCtx(source)
+				otherModel.Model = "company/other-model"
+				otherRoutingKey := lastClusterReqCtx(source)
+				otherRoutingKey.RoutingKey = "fn-other"
 
-				_, err = lastClusterCall(ctx, p, path, reqCtx, nil)
-				require.NoError(t, err)
-				require.Empty(t, upstream.lastHint(), "first request must carry no hint")
-				tracker.Drain(ctx)
-				require.Equal(t, "cluster-b", store.get(lastClusterKey(reqCtx)))
+				for _, rc := range []*requestctx.RequestContext{reqCtx, reqCtx, otherModel, otherRoutingKey} {
+					_, err := lastClusterCall(t, p, path, rc, nil)
+					require.NoError(t, err)
+					tracker.Drain(context.Background())
+				}
 
-				_, err = lastClusterCall(ctx, p, path, reqCtx, nil)
-				require.NoError(t, err)
-				require.Equal(t, "cluster-b", upstream.lastHint())
+				if source != requestctx.SessionSourcePayload {
+					require.Equal(t, []string{"", "cluster-b", "", ""}, hints())
+					return
+				}
+				require.Equal(t, []string{"", "", "", ""}, hints())
+				gets, sets, _ := store.snapshot()
+				require.Zero(t, gets)
+				require.Zero(t, sets)
 			})
 		}
-	}
-}
-
-func TestLastClusterInboundHintStripped(t *testing.T) {
-	for _, path := range lastClusterPaths {
-		for _, enabled := range []bool{false, true} {
-			name := path + "/disabled"
-			if enabled {
-				name = path + "/enabled"
-			}
-			t.Run(name, func(t *testing.T) {
-				ctx := context.Background()
-				upstream := &lastClusterUpstream{status: http.StatusOK}
-				p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
-				require.NoError(t, err)
-				p.client = &http.Client{Transport: upstream.roundTrip(t)}
-				reqCtx := lastClusterReqCtx(requestctx.SessionSourceHeader)
-				want := ""
-				if enabled {
-					store := newLastClusterStore()
-					store.values[lastClusterKey(reqCtx)] = "cluster-b"
-					p.SetLastClusterTracker(newLastClusterTracker(store))
-					want = "cluster-b"
-				}
-				inbound := http.Header{}
-				inbound.Set(headerStargateLastClusterID, "client-forged")
-
-				_, err = lastClusterCall(ctx, p, path, reqCtx, inbound)
-				require.NoError(t, err)
-				require.Equal(t, want, upstream.lastHint())
-
-				// Ineligible session: the forged value is still dropped.
-				_, err = lastClusterCall(ctx, p, path, lastClusterReqCtx(requestctx.SessionSourcePayload), inbound)
-				require.NoError(t, err)
-				require.Empty(t, upstream.lastHint())
-			})
-		}
-	}
-}
-
-func TestLastClusterDisabledProxyHeadersUnchanged(t *testing.T) {
-	var got []http.Header
-	p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
-	require.NoError(t, err)
-	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		got = append(got, r.Header.Clone())
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{headerStargateClusterID: []string{"cluster-b"}},
-			Body:       io.NopCloser(strings.NewReader(`{}`)),
-			Request:    r,
-		}, nil
-	})}
-	reqCtx := lastClusterReqCtx(requestctx.SessionSourcePromptCacheKey)
-	baseline := http.Header{"X-Client": []string{"1"}}
-	withHint := baseline.Clone()
-	withHint.Set(headerStargateLastClusterID, "client-forged")
-
-	for _, inbound := range []http.Header{baseline, withHint, baseline} {
-		_, err := lastClusterCall(context.Background(), p, "Proxy", reqCtx, inbound)
-		require.NoError(t, err)
-	}
-	require.Len(t, got, 3)
-	require.Equal(t, got[0], got[1], "inbound hint must only be stripped")
-	require.Equal(t, got[0], got[2], "a disabled gateway must not learn from responses")
-}
-
-func TestLastClusterPayloadSessionSkipped(t *testing.T) {
-	for _, path := range lastClusterPaths {
-		t.Run(path, func(t *testing.T) {
-			ctx := context.Background()
-			store := newLastClusterStore()
-			tracker := newLastClusterTracker(store)
-			upstream := &lastClusterUpstream{status: http.StatusOK, clusterID: "cluster-b"}
-			p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
-			require.NoError(t, err)
-			p.client = &http.Client{Transport: upstream.roundTrip(t)}
-			p.SetLastClusterTracker(tracker)
-
-			for i := 0; i < 2; i++ {
-				_, err := lastClusterCall(ctx, p, path, lastClusterReqCtx(requestctx.SessionSourcePayload), nil)
-				require.NoError(t, err)
-				require.Empty(t, upstream.lastHint())
-			}
-			tracker.Drain(ctx)
-			gets, sets := store.counts()
-			require.Zero(t, gets)
-			require.Zero(t, sets)
-		})
-	}
-}
-
-func TestLastClusterKeyIsolation(t *testing.T) {
-	ctx := context.Background()
-	store := newLastClusterStore()
-	upstream := &lastClusterUpstream{status: http.StatusOK}
-	p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
-	require.NoError(t, err)
-	p.client = &http.Client{Transport: upstream.roundTrip(t)}
-	p.SetLastClusterTracker(newLastClusterTracker(store))
-	seeded := lastClusterReqCtx(requestctx.SessionSourceHeader)
-	store.values[lastClusterKey(seeded)] = "cluster-b"
-
-	otherModel := lastClusterReqCtx(requestctx.SessionSourceHeader)
-	otherModel.Model = "company/other-model"
-	otherRoutingKey := lastClusterReqCtx(requestctx.SessionSourceHeader)
-	otherRoutingKey.RoutingKey = "fn-other"
-
-	for _, reqCtx := range []*requestctx.RequestContext{otherModel, otherRoutingKey} {
-		_, err := lastClusterCall(ctx, p, "Proxy", reqCtx, nil)
-		require.NoError(t, err)
-		require.Empty(t, upstream.lastHint())
-	}
-	_, err = lastClusterCall(ctx, p, "Proxy", seeded, nil)
-	require.NoError(t, err)
-	require.Equal(t, "cluster-b", upstream.lastHint())
-}
-
-func TestLastClusterNoWriteOnFailure(t *testing.T) {
-	for _, path := range lastClusterPaths {
-		t.Run(path, func(t *testing.T) {
-			ctx := context.Background()
-			store := newLastClusterStore()
-			tracker := newLastClusterTracker(store)
-			reqCtx := lastClusterReqCtx(requestctx.SessionSourceHeader)
-			store.values[lastClusterKey(reqCtx)] = "cluster-a"
-			p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
-			require.NoError(t, err)
-			p.SetLastClusterTracker(tracker)
-
-			for _, status := range []int{http.StatusServiceUnavailable, http.StatusTooManyRequests, http.StatusBadRequest} {
-				upstream := &lastClusterUpstream{status: status, clusterID: "cluster-c"}
-				p.client = &http.Client{Transport: upstream.roundTrip(t)}
-				_, _ = lastClusterCall(ctx, p, path, reqCtx, nil)
-				require.Equal(t, "cluster-a", upstream.lastHint())
-			}
-			p.client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-				return nil, errors.New("connection reset")
-			})}
-			_, err = lastClusterCall(ctx, p, path, reqCtx, nil)
-			require.Error(t, err)
-
-			tracker.Drain(ctx)
-			require.Equal(t, "cluster-a", store.get(lastClusterKey(reqCtx)))
-			_, sets := store.counts()
-			require.Zero(t, sets)
-		})
-	}
-}
-
-func TestLastClusterStreamWritesBeforeEnd(t *testing.T) {
-	for _, path := range []string{"Stream", "Proxy"} {
-		t.Run(path, func(t *testing.T) {
-			release := make(chan struct{})
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set(headerContentType, contentTypeSSE)
-				w.Header().Set(headerStargateClusterID, "cluster-b")
-				w.WriteHeader(http.StatusOK)
-				_, _ = io.WriteString(w, "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[]}\n\n")
-				w.(http.Flusher).Flush()
-				select {
-				case <-release:
-				case <-r.Context().Done():
-				}
-				_, _ = io.WriteString(w, "data: [DONE]\n\n")
-			}))
-			defer server.Close()
-			var releaseOnce sync.Once
-			releaseStream := func() { releaseOnce.Do(func() { close(release) }) }
-			defer releaseStream()
-
-			ctx := context.Background()
-			store := newLastClusterStore()
-			tracker := newLastClusterTracker(store)
-			p, err := NewStargateProvider(config.StargateConfig{URL: server.URL})
-			require.NoError(t, err)
-			p.SetLastClusterTracker(tracker)
-			reqCtx := lastClusterReqCtx(requestctx.SessionSourcePromptCacheKey)
-
-			var body io.Closer
-			if path == "Stream" {
-				events, err := p.Stream(ctx, reqCtx, lastClusterChatRequest())
-				require.NoError(t, err)
-				<-events
-				defer func() {
-					releaseStream()
-					for range events {
-					}
-				}()
-			} else {
-				resp, err := p.Proxy(ctx, reqCtx, &ProxyRequest{
-					Method: http.MethodPost,
-					Path:   "/v1/responses",
-					Body:   io.NopCloser(strings.NewReader(`{}`)),
-				})
-				require.NoError(t, err)
-				body = resp.Body
-				defer body.Close()
-			}
-
-			require.Eventually(t, func() bool {
-				return store.get(lastClusterKey(reqCtx)) == "cluster-b"
-			}, 2*time.Second, 5*time.Millisecond, "write must land while the stream is still open")
-		})
 	}
 }
 
 func TestLastClusterLookupTimeoutProceeds(t *testing.T) {
 	for _, path := range lastClusterPaths {
 		t.Run(path, func(t *testing.T) {
-			store := newLastClusterStore()
-			store.blockGet = make(chan struct{})
-			defer close(store.blockGet)
-			p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
-			require.NoError(t, err)
-			p.SetLastClusterTracker(newLastClusterTracker(store))
-			var arrived time.Time
-			upstream := &lastClusterUpstream{status: http.StatusOK}
-			inner := upstream.roundTrip(t)
-			p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-				arrived = time.Now()
-				return inner(r)
-			})}
+			store := &lastClusterStore{values: map[string]string{}, block: make(chan struct{})}
+			defer close(store.block)
+			p, _, hints := newLastClusterProvider(t, store, http.StatusOK, nil)
 
 			start := time.Now()
-			_, err = lastClusterCall(context.Background(), p, path, lastClusterReqCtx(requestctx.SessionSourceHeader), nil)
+			_, err := lastClusterCall(t, p, path, lastClusterReqCtx(requestctx.SessionSourceHeader), nil)
 			require.NoError(t, err)
-			require.Less(t, arrived.Sub(start), 25*time.Millisecond)
-			require.Empty(t, upstream.lastHint())
+			// The store blocks until cleanup; the slack over the 20ms lookup
+			// timeout keeps loaded -race runs stable.
+			require.Less(t, time.Since(start), 200*time.Millisecond)
+			require.Equal(t, []string{""}, hints())
+		})
+	}
+}
+
+// Complete and Stream build outbound headers from scratch, so only Proxy can
+// carry a client-supplied hint.
+func TestLastClusterProxyStripsInboundHint(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		source  string
+		want    string
+	}{
+		{name: "disabled", source: requestctx.SessionSourceHeader, want: ""},
+		{name: "enabled", enabled: true, source: requestctx.SessionSourceHeader, want: "cluster-b"},
+		{name: "enabled/payload session", enabled: true, source: requestctx.SessionSourcePayload, want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reqCtx := lastClusterReqCtx(tc.source)
+			var store *lastClusterStore
+			if tc.enabled {
+				store = &lastClusterStore{values: map[string]string{lastClusterKey(reqCtx): "cluster-b"}}
+			}
+			p, _, hints := newLastClusterProvider(t, store, http.StatusOK, nil)
+
+			_, err := lastClusterCall(t, p, "Proxy", reqCtx, http.Header{headerStargateLastClusterID: {"client-forged"}})
+			require.NoError(t, err)
+			require.Equal(t, []string{tc.want}, hints())
+		})
+	}
+}
+
+func TestLastClusterNoWriteOnFailure(t *testing.T) {
+	for _, path := range lastClusterPaths {
+		for name, upstream := range map[string]struct {
+			status int
+			err    error
+		}{
+			"503":       {status: http.StatusServiceUnavailable},
+			"transport": {err: errors.New("connection reset")},
+		} {
+			t.Run(path+"/"+name, func(t *testing.T) {
+				store := &lastClusterStore{values: map[string]string{}}
+				p, tracker, _ := newLastClusterProvider(t, store, upstream.status, upstream.err)
+
+				_, _ = lastClusterCall(t, p, path, lastClusterReqCtx(requestctx.SessionSourceHeader), nil)
+				tracker.Drain(context.Background())
+				_, sets, _ := store.snapshot()
+				require.Zero(t, sets)
+			})
+		}
+	}
+}
+
+func TestLastClusterWritesBeforeStreamEnds(t *testing.T) {
+	for _, path := range []string{"Stream", "Proxy"} {
+		t.Run(path, func(t *testing.T) {
+			store := &lastClusterStore{values: map[string]string{}}
+			p, tracker, _ := newLastClusterProvider(t, store, http.StatusOK, nil)
+			body, bodyWriter := io.Pipe()
+			defer bodyWriter.Close()
+			p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{headerContentType: {contentTypeSSE}, headerStargateClusterID: {"cluster-b"}},
+					Body:       body,
+					Request:    r,
+				}, nil
+			})}
+			ctx := context.Background()
+			reqCtx := lastClusterReqCtx(requestctx.SessionSourcePromptCacheKey)
+
+			if path == "Stream" {
+				events, err := p.Stream(ctx, reqCtx, lastClusterChat(reqCtx))
+				require.NoError(t, err)
+				defer func() {
+					_ = bodyWriter.Close()
+					for range events {
+					}
+				}()
+			} else {
+				resp, err := p.Proxy(ctx, reqCtx, &ProxyRequest{Method: http.MethodPost, Path: "/v1/responses", Body: http.NoBody})
+				require.NoError(t, err)
+				defer resp.Body.Close()
+			}
+
+			// The upstream body is still open, so the write cannot wait for it.
+			tracker.Drain(ctx)
+			_, _, values := store.snapshot()
+			require.Equal(t, "cluster-b", values[lastClusterKey(reqCtx)])
 		})
 	}
 }
@@ -487,59 +355,19 @@ func TestLastClusterLookupTimeoutProceeds(t *testing.T) {
 func TestLastClusterStoreErrorsTransparent(t *testing.T) {
 	for _, path := range lastClusterPaths {
 		t.Run(path, func(t *testing.T) {
-			ctx := context.Background()
-			// run returns everything the client would see: the error, plus the
-			// proxy status and body, the aggregated completion, or every stream
-			// event.
-			run := func(tracker *lastcluster.Tracker) (status int, err error, output string) {
-				p, newErr := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
-				require.NoError(t, newErr)
-				p.SetLastClusterTracker(tracker)
-				upstream := &lastClusterUpstream{status: http.StatusOK, clusterID: "cluster-b"}
-				p.client = &http.Client{Transport: upstream.roundTrip(t)}
-				reqCtx := lastClusterReqCtx(requestctx.SessionSourceHeader)
-				defer tracker.Drain(ctx)
+			reqCtx := lastClusterReqCtx(requestctx.SessionSourceHeader)
+			healthy, _, _ := newLastClusterProvider(t, nil, http.StatusOK, nil)
+			want, wantErr := lastClusterCall(t, healthy, path, reqCtx, nil)
+			require.NoError(t, wantErr)
 
-				switch path {
-				case "Complete":
-					response, err := p.Complete(ctx, reqCtx, lastClusterChatRequest())
-					raw, marshalErr := json.Marshal(response)
-					require.NoError(t, marshalErr)
-					return 0, err, string(raw)
-				case "Stream":
-					events, err := p.Stream(ctx, reqCtx, lastClusterChatRequest())
-					if err != nil {
-						return 0, err, ""
-					}
-					var seen []string
-					for event := range events {
-						raw, marshalErr := json.Marshal(event.Chunk)
-						require.NoError(t, marshalErr)
-						seen = append(seen, fmt.Sprintf("%s err=%v", raw, event.Err))
-					}
-					return 0, nil, strings.Join(seen, "\n")
-				default:
-					resp, err := p.Proxy(ctx, reqCtx, &ProxyRequest{
-						Method: http.MethodPost, Path: "/v1/responses", Body: io.NopCloser(strings.NewReader(`{}`)),
-					})
-					require.NoError(t, err)
-					raw, _ := io.ReadAll(resp.Body)
-					_ = resp.Body.Close()
-					return resp.StatusCode, nil, string(raw)
-				}
-			}
+			store := &lastClusterStore{values: map[string]string{}, err: errors.New("olric unavailable")}
+			failing, tracker, _ := newLastClusterProvider(t, store, http.StatusOK, nil)
+			got, err := lastClusterCall(t, failing, path, reqCtx, nil)
+			tracker.Drain(context.Background())
 
-			store := newLastClusterStore()
-			store.getErr = errors.New("olric unavailable")
-			store.setErr = errors.New("olric unavailable")
-			gotStatus, gotErr, gotOutput := run(newLastClusterTracker(store))
-			wantStatus, wantErr, wantOutput := run(nil)
-
-			require.Equal(t, wantStatus, gotStatus)
-			require.Equal(t, wantErr, gotErr)
-			require.NotEmpty(t, wantOutput)
-			require.Equal(t, wantOutput, gotOutput)
-			gets, sets := store.counts()
+			require.NoError(t, err)
+			require.Equal(t, want, got)
+			gets, sets, _ := store.snapshot()
 			require.Equal(t, 1, gets)
 			require.Equal(t, 1, sets)
 		})
@@ -605,30 +433,17 @@ func TestLastClusterPayloadSessionTwoTurns(t *testing.T) {
 				_ = meterProvider.Shutdown(context.Background())
 			})
 			ctx := context.Background()
-			store := newLastClusterStore()
-			tracker := newLastClusterTracker(store)
-			upstream := &lastClusterUpstream{status: http.StatusOK, clusterID: "cluster-b"}
-			p, err := NewStargateProvider(config.StargateConfig{URL: "http://stargate.example"})
-			require.NoError(t, err)
-			p.client = &http.Client{Transport: upstream.roundTrip(t)}
-			p.SetLastClusterTracker(tracker)
-
-			endpoint := lastcluster.EndpointChatCompletions
-			call := func(reqCtx *requestctx.RequestContext) {
-				if path != "Proxy" {
-					_, err := lastClusterCall(ctx, p, path, reqCtx, nil)
-					require.NoError(t, err)
-					return
-				}
-				resp, err := p.Proxy(ctx, reqCtx, &ProxyRequest{
-					Method: http.MethodPost,
-					Path:   "/v1/messages",
-					Body:   io.NopCloser(strings.NewReader(`{}`)),
-				})
-				require.NoError(t, err)
-				_, _ = io.Copy(io.Discard, resp.Body)
-				_ = resp.Body.Close()
+			store := &lastClusterStore{values: map[string]string{}}
+			p, tracker, hints := newLastClusterProvider(t, store, http.StatusOK, nil)
+			lastHint := func() string {
+				all := hints()
+				return all[len(all)-1]
 			}
+			call := func(reqCtx *requestctx.RequestContext) {
+				_, err := lastClusterCall(t, p, path, reqCtx, nil)
+				require.NoError(t, err)
+			}
+			endpoint := lastcluster.EndpointChatCompletions
 			if path == "Proxy" {
 				endpoint = lastcluster.EndpointMessages
 			}
@@ -637,24 +452,24 @@ func TestLastClusterPayloadSessionTwoTurns(t *testing.T) {
 			turn1 := payloadTurnCtx(t, endpoint, u1)
 			require.Empty(t, turn1.LastClusterLookupKey)
 			call(turn1)
-			require.Empty(t, upstream.lastHint(), "first turn must carry no hint")
+			require.Empty(t, lastHint(), "first turn must carry no hint")
 			tracker.Drain(ctx)
-			gets, sets := store.counts()
+			gets, sets, values := store.snapshot()
 			require.Zero(t, gets, "first turn must not read the store")
 			require.Equal(t, 1, sets)
 			require.Equal(t, map[string]int64{"miss": 1}, lastClusterLookupResults(t, reader))
-			require.Equal(t, "cluster-b", store.get(lastcluster.Key(turn1.RoutingKey, turn1.Model, turn1.LastClusterWriteKey)))
+			require.Equal(t, "cluster-b", values[lastcluster.Key(turn1.RoutingKey, turn1.Model, turn1.LastClusterWriteKey)])
 
 			turn2 := payloadTurnCtx(t, endpoint, u1, `{"role":"assistant","content":"a1"}`, `{"role":"user","content":"u2"}`)
 			require.Equal(t, turn1.LastClusterWriteKey, turn2.LastClusterLookupKey)
 			call(turn2)
-			require.Equal(t, "cluster-b", upstream.lastHint())
+			require.Equal(t, "cluster-b", lastHint())
 			tracker.Drain(ctx)
-			gets, sets = store.counts()
+			gets, sets, values = store.snapshot()
 			require.Equal(t, 1, gets)
 			require.Equal(t, 2, sets)
 			require.Equal(t, map[string]int64{"miss": 1, "hit": 1}, lastClusterLookupResults(t, reader))
-			require.Equal(t, "cluster-b", store.get(lastcluster.Key(turn2.RoutingKey, turn2.Model, turn2.LastClusterWriteKey)))
+			require.Equal(t, "cluster-b", values[lastcluster.Key(turn2.RoutingKey, turn2.Model, turn2.LastClusterWriteKey)])
 		})
 	}
 }

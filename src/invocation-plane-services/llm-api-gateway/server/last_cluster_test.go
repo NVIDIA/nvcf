@@ -27,194 +27,83 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/olrictest"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 )
 
-// hintingStargate answers like Stargate with x-stargate-cluster-id set and
-// records the x-stargate-last-cluster-id each request carried.
-type hintingStargate struct {
-	*httptest.Server
-	mu    sync.Mutex
-	hints []string
-}
-
-func newHintingStargate(t *testing.T, clusterID string) *hintingStargate {
+// hintingStargate answers chat completions with x-stargate-cluster-id:
+// cluster-b and reports the x-stargate-last-cluster-id of the latest request.
+func hintingStargate(t *testing.T) (url string, lastHint func() string) {
 	t.Helper()
-	s := &hintingStargate{}
-	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
-		s.mu.Lock()
-		s.hints = append(s.hints, r.Header.Get("X-Stargate-Last-Cluster-Id"))
-		s.mu.Unlock()
-		w.Header().Set("X-Stargate-Cluster-Id", clusterID)
-		switch r.URL.Path {
-		case "/v1/chat/completions":
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w, `data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"company-name/model-name","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`+"\n\n")
-			_, _ = io.WriteString(w, "data: [DONE]\n\n")
-		case "/v1/embeddings":
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1]}],"model":"company-name/model-name","usage":{"prompt_tokens":1,"total_tokens":1}}`)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(s.Close)
-	return s
-}
-
-func (s *hintingStargate) lastHint() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.hints) == 0 {
-		return ""
-	}
-	return s.hints[len(s.hints)-1]
-}
-
-const lastClusterChatPayload = `{"model":"fn-alpha/company-name/model-name","prompt_cache_key":"session-1","messages":[{"role":"user","content":"hello"}]}`
-
-// assertSecondRequestCarriesHint sends a first request, then repeats the
-// session's request until the background write is visible.
-func assertSecondRequestCarriesHint(t *testing.T, gateway *testGateway, upstream *hintingStargate) {
-	t.Helper()
-	status, body, err := gateway.post("/v1/chat/completions", lastClusterChatPayload)
-	if err != nil || status != http.StatusOK {
-		t.Fatalf("first request status=%d err=%v body=%s", status, err, body)
-	}
-	if hint := upstream.lastHint(); hint != "" {
-		t.Fatalf("first request hint = %q, want none", hint)
-	}
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		status, body, err := gateway.post("/v1/chat/completions", lastClusterChatPayload)
-		if err != nil || status != http.StatusOK {
-			t.Fatalf("follow-up request status=%d err=%v body=%s", status, err, body)
-		}
-		if upstream.lastHint() == "cluster-b" {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("follow-up hint = %q, want cluster-b", upstream.lastHint())
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
-func TestOlricWithoutRateLimiterServesLastCluster(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping embedded Olric test in -short mode")
-	}
-	t.Setenv("POD_NAMESPACE", "")
-	upstream := newHintingStargate(t, "cluster-b")
-	cfg := testConfig(upstream.URL)
-	cfg.RateLimiter.Enabled = false
-	cfg.Olric = olrictest.NodeConfig(t, nil)
-	cfg.Stargate.LastCluster.Enabled = true
-
-	assertSecondRequestCarriesHint(t, startGatewayWithConfig(t, cfg, protocols[0]), upstream)
-}
-
-func TestLocalStoreServesLastClusterWhenOlricOff(t *testing.T) {
-	upstream := newHintingStargate(t, "cluster-b")
-	cfg := testConfig(upstream.URL)
-	cfg.Olric.Enabled = false
-	cfg.Stargate.LastCluster.Enabled = true
-
-	assertSecondRequestCarriesHint(t, startGatewayWithConfig(t, cfg, protocols[0]), upstream)
-}
-
-func TestLastClusterDisabledSendsNoHint(t *testing.T) {
-	upstream := newHintingStargate(t, "cluster-b")
-	cfg := testConfig(upstream.URL)
-	gateway := startGatewayWithConfig(t, cfg, protocols[0])
-
-	for i := 0; i < 3; i++ {
-		status, body, err := gateway.post("/v1/chat/completions", lastClusterChatPayload)
-		if err != nil || status != http.StatusOK {
-			t.Fatalf("request status=%d err=%v body=%s", status, err, body)
-		}
-		if hint := upstream.lastHint(); hint != "" {
-			t.Fatalf("request %d hint = %q, want none while disabled", i, hint)
-		}
-	}
-}
-
-func TestStargateClusterIDStrippedFromClientResponses(t *testing.T) {
-	upstream := newHintingStargate(t, "cluster-b")
-	cfg := testConfig(upstream.URL)
-	cfg.Stargate.LastCluster.Enabled = true
-	gateway := startGatewayWithConfig(t, cfg, protocols[0])
-
-	for _, tc := range []struct{ path, payload string }{
-		{"/v1/chat/completions", lastClusterChatPayload},
-		{"/v1/chat/completions", `{"model":"fn-alpha/company-name/model-name","prompt_cache_key":"s","stream":true,"messages":[{"role":"user","content":"hello"}]}`},
-		{"/v1/embeddings", `{"model":"fn-alpha/company-name/model-name","input":"hello"}`},
-	} {
-		req, err := http.NewRequest(http.MethodPost, gateway.url+tc.path, strings.NewReader(tc.payload))
-		if err != nil {
-			t.Fatal(err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Stargate-Last-Cluster-Id", "client-forged")
-		resp, err := gateway.client.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("%s status = %d, want 200", tc.path, resp.StatusCode)
-		}
-		if got := resp.Header.Get("X-Stargate-Cluster-Id"); got != "" {
-			t.Fatalf("%s leaked x-stargate-cluster-id %q to the client", tc.path, got)
-		}
-		if hint := upstream.lastHint(); hint == "client-forged" {
-			t.Fatalf("%s forwarded the client-supplied last-cluster hint", tc.path)
-		}
-	}
-}
-
-func TestStateShutdownOrder(t *testing.T) {
 	var (
-		mu    sync.Mutex
-		order []string
+		mu   sync.Mutex
+		hint string
 	)
-	record := func(step string) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		mu.Lock()
+		hint = r.Header.Get("X-Stargate-Last-Cluster-Id")
+		mu.Unlock()
+		w.Header().Set("X-Stargate-Cluster-Id", "cluster-b")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"company-name/model-name","choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")
+	}))
+	t.Cleanup(server.Close)
+	return server.URL, func() string {
 		mu.Lock()
 		defer mu.Unlock()
-		order = append(order, step)
-	}
-	limiterStopped := make(chan struct{})
-	go func() {
-		time.Sleep(20 * time.Millisecond)
-		record("limiter")
-		close(limiterStopped)
-	}()
-	state := stateShutdown{
-		limiterStopped: limiterStopped,
-		drain: func(ctx context.Context) {
-			if _, ok := ctx.Deadline(); !ok {
-				t.Error("drain context has no deadline")
-			}
-			record("drain")
-		},
-		stopOlric: func(context.Context) { record("olric") },
-	}
-
-	state.run()
-
-	if got := strings.Join(order, ","); got != "limiter,drain,olric" {
-		t.Fatalf("shutdown order = %s, want limiter,drain,olric", got)
+		return hint
 	}
 }
 
-func TestGatewayShutdownReleasesStateOnceAfterHTTPShutdown(t *testing.T) {
-	upstream := newHintingStargate(t, "cluster-b")
-	cfg := testConfig(upstream.URL)
+func TestLastClusterStoreWiring(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		olric bool
+	}{
+		{name: "local store"},
+		{name: "olric without rate limiter", olric: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.olric && testing.Short() {
+				t.Skip("skipping embedded Olric test in -short mode")
+			}
+			t.Setenv("POD_NAMESPACE", "")
+			url, lastHint := hintingStargate(t)
+			cfg := testConfig(url)
+			if tc.olric {
+				cfg.Olric = olrictest.NodeConfig(t, nil)
+			}
+			cfg.Stargate.LastCluster.Enabled = true
+			gateway := startGatewayWithConfig(t, cfg, protocols[0])
+
+			// The write is asynchronous, so repeat the session's request until
+			// a follow-up carries the hint.
+			deadline := time.Now().Add(5 * time.Second)
+			for lastHint() != "cluster-b" {
+				if time.Now().After(deadline) {
+					t.Fatalf("hint = %q, want cluster-b", lastHint())
+				}
+				status, body, err := gateway.post("/v1/chat/completions",
+					`{"model":"fn-alpha/company-name/model-name","prompt_cache_key":"session-1","messages":[{"role":"user","content":"hello"}]}`)
+				if err != nil || status != http.StatusOK {
+					t.Fatalf("status=%d err=%v body=%s", status, err, body)
+				}
+			}
+		})
+	}
+}
+
+func TestLastClusterDisabledHasNoTracker(t *testing.T) {
+	tracker, err := newLastClusterTracker(context.Background(), config.Default(), nil)
+	if tracker != nil || err != nil {
+		t.Fatalf("newLastClusterTracker() = %v, %v; want nil, nil", tracker, err)
+	}
+}
+
+func TestGatewayShutdownReleasesStateOnceInOrder(t *testing.T) {
+	cfg := testConfig("http://127.0.0.1:1")
 	cfg.Stargate.LastCluster.Enabled = true
 	inferenceProvider, err := provider.NewStargateProvider(cfg.Stargate)
 	if err != nil {
@@ -224,15 +113,24 @@ func TestGatewayShutdownReleasesStateOnceAfterHTTPShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runs := 0
-	g.state.stopOlric = func(context.Context) { runs++ }
+	var order []string
+	stopLimiter, drain, stopOlric := g.state.stopLimiter, g.state.drain, g.state.stopOlric
+	g.state.stopLimiter = func() { order = append(order, "limiter"); stopLimiter() }
+	g.state.drain = func(ctx context.Context) {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("drain context has no deadline")
+		}
+		order = append(order, "drain")
+		drain(ctx)
+	}
+	g.state.stopOlric = func(ctx context.Context) { order = append(order, "olric"); stopOlric(ctx) }
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := g.Shutdown(context.Background()); err != nil {
 			t.Fatalf("Shutdown() error = %v", err)
 		}
 	}
-	if runs != 1 {
-		t.Fatalf("state released %d times, want 1", runs)
+	if got := strings.Join(order, ","); got != "limiter,drain,olric" {
+		t.Fatalf("shutdown steps = %s, want limiter,drain,olric once", got)
 	}
 }

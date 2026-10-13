@@ -162,9 +162,8 @@ Last-cluster rules for the gateway:
 - Store the `x-stargate-cluster-id` of a 2xx response when the response
   headers arrive, not at stream end. Do not store on non-2xx responses or
   transport errors.
-- Keep the lookup bounded and off the critical path: on a miss, store error,
-  or timeout, send the request without the header.
-- Writes must never delay or fail the client response.
+- Bound the lookup. On a miss, store error, or timeout, send the request
+  without the header. Writes must never delay or fail the client response.
 
 Internal headers:
 

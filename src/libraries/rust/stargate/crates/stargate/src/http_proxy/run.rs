@@ -162,6 +162,9 @@ impl<'a> ProxyRequestRun<'a> {
                     )
                 })
         };
+        // Before any wait or rejection, so a request that times out or is
+        // rejected still carries its session state.
+        crate::load_balancer::record_session_state(&self.request.request_inputs.last_cluster);
 
         if let LoadBalancerDecision::Wait(remaining) = decision
             && let Some(delay) =

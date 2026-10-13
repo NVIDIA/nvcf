@@ -79,11 +79,10 @@ llmApiGateway:
     defaultModel: ""
     defaultRpm: 120
     defaultTpm: 240000
-    # Session last-cluster hint sent to the LLM Request Router as
-    # x-stargate-last-cluster-id. Entries live in the embedded Olric cluster
-    # when olric.enabled is true, otherwise in a per-pod LRU capped at
-    # localMaxEntries. Enable it after the router is upgraded and before any
-    # model turns on last_cluster_affinity.
+    # Session last-cluster hint (x-stargate-last-cluster-id) for the LLM
+    # Request Router. Stored in Olric when olric.enabled is true, otherwise in
+    # a per-pod LRU capped at localMaxEntries. Enable it after the router is
+    # upgraded and before any model turns on last_cluster_affinity.
     lastCluster:
       enabled: false
       ttl: 10m

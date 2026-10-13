@@ -27,17 +27,25 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 )
 
-func TestOlricStoreTTL(t *testing.T) {
+func newOlricStores(t *testing.T, nodes int) []*OlricStore {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping embedded Olric test in -short mode")
 	}
-	ctx := context.Background()
-	node := olrictest.StartCluster(t, 1)[0]
-	dm, err := node.Client.NewDMap(DMapName)
-	if err != nil {
-		t.Fatalf("NewDMap() error = %v", err)
+	var stores []*OlricStore
+	for i, node := range olrictest.StartCluster(t, nodes) {
+		dm, err := node.Client.NewDMap(DMapName)
+		if err != nil {
+			t.Fatalf("NewDMap() on node %d error = %v", i, err)
+		}
+		stores = append(stores, NewOlricStore(dm))
 	}
-	store := NewOlricStore(dm)
+	return stores
+}
+
+func TestOlricStoreTTL(t *testing.T) {
+	ctx := context.Background()
+	store := newOlricStores(t, 1)[0]
 
 	if _, ok, err := store.Get(ctx, "missing"); ok || err != nil {
 		t.Fatalf("Get(missing) = %v, %v; want miss without error", ok, err)
@@ -65,29 +73,17 @@ func TestOlricStoreTTL(t *testing.T) {
 }
 
 func TestTwoReplicasShareLastCluster(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping multi-node Olric test in -short mode")
-	}
 	ctx := context.Background()
-	nodes := olrictest.StartCluster(t, 2)
-	trackers := make([]*Tracker, len(nodes))
-	for i, node := range nodes {
-		dm, err := node.Client.NewDMap(DMapName)
-		if err != nil {
-			t.Fatalf("NewDMap() on node %d error = %v", i, err)
-		}
-		trackers[i] = NewTracker(NewOlricStore(dm), Options{TTL: time.Minute, LookupTimeout: time.Second})
-	}
+	stores := newOlricStores(t, 2)
+	opts := Options{TTL: time.Minute, LookupTimeout: time.Second}
+	replica1, replica2 := NewTracker(stores[0], opts), NewTracker(stores[1], opts)
 	reqCtx := sessionCtx(requestctx.SessionSourcePromptCacheKey)
 
-	key, clusterID := trackers[0].Lookup(ctx, reqCtx, reqCtx.Model)
-	if clusterID != "" {
-		t.Fatalf("first lookup cluster = %q, want miss", clusterID)
-	}
-	trackers[0].Remember(ctx, reqCtx, reqCtx.Model, key, http.StatusOK, "cluster-b")
-	trackers[0].Drain(ctx)
+	key, _ := replica1.Lookup(ctx, reqCtx, reqCtx.Model)
+	replica1.Remember(ctx, reqCtx, reqCtx.Model, key, http.StatusOK, "cluster-b")
+	replica1.Drain(ctx)
 
-	if _, clusterID := trackers[1].Lookup(ctx, reqCtx, reqCtx.Model); clusterID != "cluster-b" {
+	if _, clusterID := replica2.Lookup(ctx, reqCtx, reqCtx.Model); clusterID != "cluster-b" {
 		t.Fatalf("replica 2 lookup cluster = %q, want cluster-b", clusterID)
 	}
 }

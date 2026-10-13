@@ -165,6 +165,13 @@ mod tests {
         settings.ttft_bucket_size_ms = Some(50);
         let mut pulsar_base = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::Pulsar);
         pulsar_base.rendezvous_weight = PulsarRendezvousWeight::LastMeanInputTps;
+        // last_cluster_affinity is static config only; expressions cannot set it.
+        let mut last_cluster_base =
+            LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PulsarWaitAndWiden);
+        last_cluster_base
+            .wait_and_widen_settings_mut()
+            .unwrap()
+            .last_cluster_affinity = Some(true);
         let configured = LoadBalancerRouter::from_config(&LoadBalancerConfig {
             default: LoadBalancerAlgorithm::Random,
             request_algorithms: HashMap::from([
@@ -175,6 +182,10 @@ mod tests {
                 (
                     LoadBalancerAlgorithm::Pulsar,
                     LoadBalancerModelConfig::Detailed(Box::new(pulsar_base)),
+                ),
+                (
+                    LoadBalancerAlgorithm::PulsarWaitAndWiden,
+                    LoadBalancerModelConfig::Detailed(Box::new(last_cluster_base)),
                 ),
             ]),
             models: HashMap::new(),
@@ -192,22 +203,6 @@ mod tests {
             request_algorithms: HashMap::from([(
                 LoadBalancerAlgorithm::WaitAndWiden,
                 LoadBalancerModelConfig::Detailed(Box::new(corrected_base)),
-            )]),
-            models: HashMap::new(),
-        })
-        .unwrap();
-        // last_cluster_affinity is static config only; expressions cannot set it.
-        let mut last_cluster_base =
-            LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PulsarWaitAndWiden);
-        last_cluster_base
-            .wait_and_widen_settings_mut()
-            .unwrap()
-            .last_cluster_affinity = Some(true);
-        let last_cluster = LoadBalancerRouter::from_config(&LoadBalancerConfig {
-            default: LoadBalancerAlgorithm::Random,
-            request_algorithms: HashMap::from([(
-                LoadBalancerAlgorithm::PulsarWaitAndWiden,
-                LoadBalancerModelConfig::Detailed(Box::new(last_cluster_base)),
             )]),
             models: HashMap::new(),
         })
@@ -318,7 +313,7 @@ mod tests {
             ),
             (
                 "pulsar-wait-and-widen with last-cluster affinity omits an unset widen interval",
-                &last_cluster,
+                &configured,
                 "pulsar-wait-and-widen;cache_affinity_wait_ms=40",
                 json!({"algorithm": "pulsar-wait-and-widen", "n": 2, "max_queued": 0,
                     "ttft_bucket_size_ms": 20, "next_bucket_unlock_factor": 0.25,

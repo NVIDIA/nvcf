@@ -31,8 +31,8 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/util"
 )
 
-// FreeTCPPort returns a port that was free on 127.0.0.1 when checked.
-func FreeTCPPort() (int, error) {
+// freeTCPPort returns a port that was free on 127.0.0.1 when checked.
+func freeTCPPort() (int, error) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return 0, err
@@ -48,11 +48,11 @@ func FreeTCPPort() (int, error) {
 // NodeConfig returns a loopback Olric config on fresh ports that joins peers.
 func NodeConfig(t testing.TB, peers []string) config.OlricConfig {
 	t.Helper()
-	clientPort, err := FreeTCPPort()
+	clientPort, err := freeTCPPort()
 	if err != nil {
 		t.Fatalf("free client port: %v", err)
 	}
-	memberlistPort, err := FreeTCPPort()
+	memberlistPort, err := freeTCPPort()
 	if err != nil {
 		t.Fatalf("free memberlist port: %v", err)
 	}

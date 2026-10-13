@@ -59,7 +59,7 @@ pub use request::{LoadBalancerCandidateChoice, LoadBalancerDecision, LoadBalance
 pub use router::{
     LoadBalancerAlgorithmResolution, LoadBalancerCandidateSelection, LoadBalancerRouter,
 };
-pub(crate) use session::record_session_selection;
-pub use session::{LastClusterHint, SessionClassification, SessionSelection, SessionState};
+pub use session::{LastClusterHint, SessionClassification, SessionState};
+pub(crate) use session::{record_session_selection, record_session_state};
 pub(crate) use target_state::LoadBalancerDefinition;
 pub use target_state::LoadBalancerTargetState;

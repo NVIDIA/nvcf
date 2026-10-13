@@ -421,18 +421,16 @@ configured with a cache-affinity-aware routing method for the target model.
 
 ### Last-Cluster Hints
 
-The gateway can remember which LLM request router cluster served each
-session's last successful request and send it back on the next request in the
-trusted `x-stargate-last-cluster-id` header. The router uses the hint when the
-target model's `wait-and-widen` or `pulsar-wait-and-widen` configuration sets
-`last_cluster_affinity: true`. A returning session then waits for the cluster
-that holds its KV cache, and a new session goes straight to the best cluster
-that is free now.
+The gateway can send the LLM request router the cluster that served a
+session's last successful request, in the trusted `x-stargate-last-cluster-id`
+header. When the model's `wait-and-widen` or `pulsar-wait-and-widen`
+configuration sets `last_cluster_affinity: true`, a returning session stays on
+its last cluster and a new session skips the affinity wait.
 
-A session is the routing key, model, and cache affinity key. Sessions from
-`prompt_cache_key`, `conversation.id`, `x-multi-turn-session-id`, or
-`x-claude-code-session-id` are eligible. Sessions that fall back to a messages
-or input hash are also eligible, with no extra setting.
+Sessions from `prompt_cache_key`, `conversation.id`,
+`x-multi-turn-session-id`, or `x-claude-code-session-id` are eligible. Sessions
+that fall back to a messages or input hash are also eligible, with no extra
+setting.
 
 A messages or input hash changes every turn, so for those sessions the gateway
 keys the store by a prefix chain:
@@ -460,10 +458,6 @@ are asynchronous, entries expire after the TTL, and with Olric off each replica
 has its own store. The `x-cache-affinity-key` header and router placement do
 not change.
 
-The gateway records the `x-stargate-cluster-id` of each 2xx router response
-when the response headers arrive. Errors never change the stored value. A
-client-supplied `x-stargate-last-cluster-id` is always stripped.
-
 | Env var | Helm value | Default | Effect |
 | --- | --- | --- | --- |
 | `STARGATE_LAST_CLUSTER_ENABLED` | `llmApiGateway.config.lastCluster.enabled` | `false` | Turns lookup, the header, and store writes on. |
@@ -471,9 +465,8 @@ client-supplied `x-stargate-last-cluster-id` is always stripped.
 | `STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT` | `llmApiGateway.config.lastCluster.lookupTimeout` | `20ms` | Lookup deadline on the request path. The request proceeds without the hint after it. |
 | `STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES` | `llmApiGateway.config.lastCluster.localMaxEntries` | `100000` | Per-replica LRU cap when Olric is off. |
 
-With `OLRIC_ENABLED=true`, entries live in the `stargate-last-cluster` DMap of
-the gateway's embedded Olric cluster and are shared by all replicas. The Olric
-node starts whenever Olric is enabled, even with rate limiting off.
+With `OLRIC_ENABLED=true`, all replicas share entries through the embedded
+Olric cluster, which then starts even with rate limiting off.
 
 Roll out in this order:
 
@@ -503,13 +496,10 @@ key, such as health checks, use `function_id="none"`.
 | `llm_api_gateway_provider_time_seconds` | Histogram | `endpoint`, `phase`, `stream`, `function_id` | Provider-reported timing phases. |
 | `llm_api_gateway_stream_first_token_seconds` | Histogram | `endpoint`, `function_id` | Time from stream request start to the first token. |
 | `llm_api_gateway_stream_duration_seconds` | Histogram | `endpoint`, `status`, `function_id` | Total stream duration. |
-| `llm_api_gateway_last_cluster_lookups_total` | Counter | `result` | Last-cluster store lookups: `hit`, `miss`, `error`, `timeout`, or `skipped`. |
-| `llm_api_gateway_last_cluster_writes_total` | Counter | `result` | Last-cluster store writes: `ok` or `error`. |
-| `llm_api_gateway_last_cluster_lookup_duration_seconds` | Histogram | `result` | Last-cluster store lookup latency, 1 ms to 50 ms buckets. |
 
 Infrastructure metrics for authentication, rate limit synchronization, pub/sub,
-the last-cluster store, and the distributed cache do not include `function_id` because they are not
-associated with a single routed function.
+the last-cluster store, and the distributed cache do not include `function_id`
+because they are not associated with a single routed function.
 
 Use the label to calculate request rate by function:
 
