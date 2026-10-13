@@ -425,9 +425,10 @@ The gateway can remember which LLM request router cluster served each
 session's last successful request and send it back on the next request in the
 trusted `x-stargate-last-cluster-id` header. The router uses the hint when the
 target model's `wait-and-widen` or `pulsar-wait-and-widen` configuration sets
-`last_cluster_affinity: true`. A returning session then waits for the cluster
-that holds its KV cache, and a new session goes straight to the best cluster
-that is free now.
+`last_cluster_affinity: true`. A returning session puts its last cluster first
+in the affinity order and follows the configured wait and selection rules. New
+and stale sessions skip the affinity wait and go to the best-ranked cluster
+that is selectable now.
 
 A session is the routing key, model, and cache affinity key. Only sessions
 from `prompt_cache_key`, `conversation.id`, `x-multi-turn-session-id`, or
