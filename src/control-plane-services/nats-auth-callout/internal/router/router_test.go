@@ -19,6 +19,7 @@ package router
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -86,6 +87,60 @@ func TestHandlePing(t *testing.T) {
 	// Check timestamp exists
 	if _, exists := response["timestamp"]; !exists {
 		t.Error("Expected timestamp field to exist in response")
+	}
+}
+
+func TestHandleReadyz(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	tests := []struct {
+		name       string
+		check      func() error
+		wantStatus int
+		wantError  string
+	}{
+		{name: "no check configured", check: nil, wantStatus: http.StatusOK},
+		{name: "ready", check: func() error { return nil }, wantStatus: http.StatusOK},
+		{
+			name:       "not ready",
+			check:      func() error { return errors.New("NATS connection is RECONNECTING") },
+			wantStatus: http.StatusServiceUnavailable,
+			wantError:  "NATS connection is RECONNECTING",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := New(logger, &Config{ServiceName: "test-service", ReadinessCheck: tt.check})
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/readyz", nil)
+
+			router.engine.ServeHTTP(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Errorf("Expected status code %d, but got %d", tt.wantStatus, w.Code)
+			}
+			var response map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+				t.Fatalf("Failed to parse response body: %v", err)
+			}
+			if tt.wantError != "" && response["error"] != tt.wantError {
+				t.Errorf("Expected error '%s', but got '%v'", tt.wantError, response["error"])
+			}
+		})
+	}
+}
+
+func TestHealthzIgnoresReadinessCheck(t *testing.T) {
+	logger, _ := zap.NewDevelopment()
+	notReady := func() error { return errors.New("NATS connection is CLOSED") }
+	router := New(logger, &Config{ServiceName: "test-service", ReadinessCheck: notReady})
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/healthz", nil)
+
+	router.engine.ServeHTTP(w, req)
+
+	// /healthz is the liveness check: a NATS outage must not make Kubernetes restart the pod.
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status code %d, but got %d", http.StatusOK, w.Code)
 	}
 }
 

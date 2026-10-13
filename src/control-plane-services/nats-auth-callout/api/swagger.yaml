@@ -98,6 +98,26 @@ paths:
       summary: Health check interface
       tags:
       - Health
+  /readyz:
+    get:
+      consumes:
+      - application/json
+      description: return 503 while the service cannot serve auth requests (NATS connection
+        down)
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Ready
+          schema:
+            $ref: '#/definitions/models.HealthResponse'
+        "503":
+          description: Not ready
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Readiness check interface
+      tags:
+      - Health
   /v1/ping:
     get:
       consumes:
