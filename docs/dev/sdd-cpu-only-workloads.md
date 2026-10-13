@@ -22,6 +22,7 @@ defaults stay the same. Some internal upkeep, such as classification records, ru
 ## 2. Goals and non-goals
 
 Goals:
+
 - A user can run a function or task with no GPU, and it runs only on eligible non-GPU nodes.
 - No change to how any existing GPU workload is placed or behaves.
 - Works with what is in this repository and the self-managed stack. No hosted service is needed.
@@ -29,6 +30,7 @@ Goals:
   until the feature is switched on.
 
 Not in this release:
+
 - No new fields in the public function or task API.
 - One CPU shape per cluster. Every instance in a cluster has that size, a workload that needs more
   than the shape cannot run there, and a workload that needs less still takes a whole instance
@@ -47,7 +49,7 @@ Not in this release:
 
 How a CPU request travels:
 
-```
+```text
      User / CLI                 ICMS                  Queue                 NVCA                CPU node
                            (control plane)        (NATS or SQS)    (agent in the cluster)    (pod runs here)
           |                       |                     |                     |                     |
@@ -96,7 +98,7 @@ How a CPU request travels:
 
 How a cluster comes to offer its CPU pool:
 
-```
+```text
       Operator                      CPU nodes                       NVCA                          ICMS
                              (labeled by the admin)        (agent in the cluster)            (control plane)
           |                             |                             |                             |
@@ -223,6 +225,7 @@ Not chosen: protecting the in-namespace ConfigMap with an admission rule. A rule
 would also block the namespace controller and could leave namespaces stuck in Terminating.
 
 Details that matter:
+
 - A record exists for every namespace, GPU ones too (cpuOnly false). A record only for CPU
   namespaces could not tell "GPU namespace" from "missing record".
 - Records are create-only, deterministic and deleted with UID and version preconditions, so two
@@ -288,6 +291,7 @@ Component: NVCA webhooks and translation.
 ### Decision 8: how a CPU pod is built and kept apart from GPU nodes
 
 What we chose, in the translation library (CPUOnly mode) and in NVCA:
+
 - No GPU toleration is added. The seven places that added it go through one helper that skips it for
   CPU-only work and is otherwise identical.
 - Every CPU-only pod requires a node that has the shape label and no GPU label. So a GPU node that
@@ -440,6 +444,7 @@ consumer fixes it properly and is a planned follow-up (section 6).
 
 What happens to CPU requests already queued when the hold starts: they must not block GPU work, and
 they must not be lost. The path is:
+
 1. The request is recorded in the cluster as an ICMSRequest in a new RequestRejected status, with no
    instances and a reason. This is the durable record.
 2. The queue message is acknowledged once that record exists.
@@ -449,6 +454,7 @@ they must not be lost. The path is:
 4. Nothing creates instances for a rejected request, and it counts as holding no capacity.
 
 Alternatives that were not used:
+
 - Hand the message straight back: JetStream redelivers it ahead of the GPU messages, so it blocks them.
 - Keep it unacknowledged for a while ("parking"): every parked message holds a slot on the shared
   consumer, and NATS stops delivering at 1000 pending, so a big backlog still blocks GPU work.
@@ -475,6 +481,7 @@ Adding CPU as one more name is the same problem, which is why GPU and CPU in one
 supported in this release.
 
 Four NATS words:
+
 - Pending: a message that was delivered and not yet acknowledged.
 - Acknowledge: tell NATS the message is done. It leaves the consumer for good.
 - Nak: give the message back now. NATS redelivers it at once, and ahead of newer messages.
@@ -493,6 +500,7 @@ first. This is existing behavior and it is unchanged for GPU-only clusters.
 
 Held CPU requests need something better, because a refused message that keeps coming back first would
 block the GPU messages behind it. What each approach does:
+
 - Nak it at once: it comes back first, every time, and blocks the GPU messages behind it.
 - Keep it pending for a while: it holds a slot. Enough of them reach the limit, and then no message of
   any kind is delivered.
@@ -503,7 +511,7 @@ block the GPU messages behind it. What each approach does:
 
 What we do instead is shown here:
 
-```
+```text
      NATS stream                Queue manager                  Cluster                      ICMS
 (one shared consumer)             (in NVCA)             (ICMSRequest records)          (control plane)
           |                           |                           |                           |
@@ -550,6 +558,7 @@ What we do instead is shown here:
 ```
 
 Why it works:
+
 - The message is acknowledged as soon as a durable record exists in the cluster, so it never holds a
   slot and never comes back first.
 - ICMS is not on the queue's path at all. The agent's ICMS loop reports the record later and keeps
@@ -591,6 +600,7 @@ Component: the NVCA operator.
 ### Decision 18: the control plane (ICMS) rules
 
 What we chose, when the switch is on:
+
 - A registration with a CPU shape is validated on every path. The name and value must be the same
   shape name and a valid label, cores positive, memory and storage positive Kubernetes quantities.
   A cluster registers exactly one CPU shape, and only under the name CPU.
@@ -671,6 +681,7 @@ Component: NVCA.
 ### Decision 24: how we tested
 
 What we chose:
+
 - Unit tests for every rule, and golden tests for every translation mode.
 - envtest suites against a real API server for the records, the sentinel, preconditions, the
   replacement race, immutability, quarantine, namespace reuse, Terminating namespaces, restart and
@@ -697,6 +708,7 @@ Component: the docs and the CLI agent skill.
 ## 6. Known limits and next features
 
 Limits in this release:
+
 - One CPU shape per cluster. Every instance has that size. A workload that needs more than the shape
   cannot run in that cluster, and one that needs less still takes a whole instance (decision 12).
 - GPU and CPU workloads in one cluster are not supported. The CPU pool is held when GPU nodes are
@@ -707,6 +719,7 @@ Limits in this release:
 - The live CPU BDD scenarios are opt-in. They need charts and images that carry the feature.
 
 Next features:
+
 - Finer CPU scheduling. Schedule by each workload's own CPU and memory request, or offer more than
   one shape in a cluster, so that small workloads do not each take a full instance and large ones can
   run. This needs changes to capacity accounting, registration and placement, and its own design.
