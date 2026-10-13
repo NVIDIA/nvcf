@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::ClusterComparator;
 
@@ -47,7 +47,7 @@ impl<'de> Deserialize<'de> for LoadBalancerModelConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LoadBalancerAlgorithm {
     #[default]
@@ -68,7 +68,7 @@ pub enum LoadBalancerAlgorithm {
     PulsarWaitAndWiden,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum PulsarRendezvousWeight {
     LastMeanInputTps,
@@ -196,35 +196,55 @@ pub struct LoadBalancerRequestPolicy {
     pub consider_kv_free_tokens: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct WaitAndWidenAlgorithmConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_present_comparator")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_comparator",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub comparator: Option<ClusterComparator>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_affinity_virtual_nodes: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_affinity_backend_selection_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_affinity_input_tokens_scale: Option<f64>,
     /// Keep public buckets closed for this many milliseconds after request arrival.
     /// Defaults to zero. Queue and TTFT selection still apply within the affinity group.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_affinity_wait_ms: Option<u64>,
     /// Pulsar wait-and-widen only: time between ranking-band openings after
     /// the affinity wait. Defaults to `cache_affinity_wait_ms`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub band_widen_interval_ms: Option<u64>,
     /// Pulsar wait-and-widen only: `max_queued` for open-set selection after
     /// the affinity wait. Defaults to `0`, so overflow needs a free engine slot.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fallback_max_queued: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_queue_time_floor_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_queue_time_ceil_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ttft_bucket_size_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub next_bucket_unlock_factor: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub n: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_queued: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ignore_queue_time: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ignore_input_processing_time: Option<bool>,
     /// Use `x-stargate-last-cluster-id` to tell new sessions from returning
     /// ones. New sessions skip the affinity wait and prefill discount;
     /// returning sessions put their last cluster first in the affinity order.
     /// Defaults to `false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_cluster_affinity: Option<bool>,
 }
 
@@ -252,7 +272,7 @@ where
 const DEFAULT_POWER_OF_N_SAMPLE_COUNT: usize = 2;
 pub const MAX_POWER_OF_N_SAMPLE_COUNT: usize = 64;
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct PowerOfNAlgorithmConfig {
     pub sample_count: usize,

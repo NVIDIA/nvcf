@@ -18,10 +18,10 @@ use std::time::Duration;
 
 use super::pulsar::PulsarLoadBalancer;
 use super::session::{self, MissingLastCluster};
-use super::wait_and_widen::{WaitAndWidenConfig, WaitAndWidenLoadBalancer};
+use super::wait_and_widen::{WaitAndWidenConfig, WaitAndWidenLoadBalancer, millis};
 use super::{
     LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice, LoadBalancerDecision,
-    LoadBalancerRequest,
+    LoadBalancerRequest, WaitAndWidenAlgorithmConfig,
 };
 use crate::routing_state::RoutedClusterSnapshot;
 
@@ -56,20 +56,65 @@ enum SelectionPhase {
     Fallback,
 }
 
-impl PulsarWaitAndWidenLoadBalancer {
-    pub(super) fn new(config: LoadBalancerAlgorithmConfig) -> anyhow::Result<Self> {
+pub(super) struct PulsarWaitAndWidenConfig {
+    pub(super) wait_and_widen: WaitAndWidenConfig,
+    pub(super) affinity_group_size: usize,
+    /// Explicit `band_widen_interval_ms`. Unset follows the request's
+    /// effective affinity wait.
+    pub(super) band_widen_interval: Option<Duration>,
+    pub(super) fallback_max_queued: u64,
+}
+
+impl PulsarWaitAndWidenConfig {
+    pub(super) fn from_algorithm_config(
+        config: &LoadBalancerAlgorithmConfig,
+    ) -> anyhow::Result<Self> {
         let settings = config
             .wait_and_widen_settings()
             .expect("pulsar-wait-and-widen config has wait_and_widen settings");
-        let wait_and_widen_config = WaitAndWidenConfig::from_algorithm_config(&config)?;
-        let band_widen_interval = settings.band_widen_interval_ms.map(Duration::from_millis);
-        let mut fallback_config = wait_and_widen_config.clone();
-        fallback_config.max_queued = settings.fallback_max_queued.unwrap_or(0);
+        let wait_and_widen = WaitAndWidenConfig::from_algorithm_config(config)?;
         Ok(Self {
             // The Pulsar primary is the affinity group unless configured wider.
-            affinity_group_size: wait_and_widen_config
+            affinity_group_size: wait_and_widen
                 .cache_affinity_backend_selection_count
                 .unwrap_or(1),
+            band_widen_interval: settings.band_widen_interval_ms.map(Duration::from_millis),
+            fallback_max_queued: settings.fallback_max_queued.unwrap_or(0),
+            wait_and_widen,
+        })
+    }
+
+    /// The inverse of `from_algorithm_config`: the values this algorithm routes with, as config.
+    pub(super) fn to_algorithm_config(&self) -> WaitAndWidenAlgorithmConfig {
+        WaitAndWidenAlgorithmConfig {
+            // The Pulsar ranking replaces the affinity ring, so virtual nodes do not route.
+            cache_affinity_virtual_nodes: None,
+            cache_affinity_backend_selection_count: Some(self.affinity_group_size),
+            // With last-cluster affinity, an unset interval follows a wait that
+            // differs per request, so it has no single value to log.
+            band_widen_interval_ms: match self.band_widen_interval {
+                Some(interval) => Some(millis(interval)),
+                None if self.wait_and_widen.last_cluster_affinity => None,
+                None => Some(millis(self.wait_and_widen.cache_affinity_wait)),
+            },
+            fallback_max_queued: Some(self.fallback_max_queued),
+            ..self.wait_and_widen.to_algorithm_config()
+        }
+    }
+}
+
+impl PulsarWaitAndWidenLoadBalancer {
+    pub(super) fn new(config: LoadBalancerAlgorithmConfig) -> anyhow::Result<Self> {
+        let PulsarWaitAndWidenConfig {
+            wait_and_widen: wait_and_widen_config,
+            affinity_group_size,
+            band_widen_interval,
+            fallback_max_queued,
+        } = PulsarWaitAndWidenConfig::from_algorithm_config(&config)?;
+        let mut fallback_config = wait_and_widen_config.clone();
+        fallback_config.max_queued = fallback_max_queued;
+        Ok(Self {
+            affinity_group_size,
             affinity_wait: wait_and_widen_config.cache_affinity_wait,
             band_widen_interval,
             affinity_input_tokens_scale: wait_and_widen_config.cache_affinity_input_tokens_scale,

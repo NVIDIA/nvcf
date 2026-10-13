@@ -2235,6 +2235,56 @@ func TestSyncNVCFBackendHealthKeepsInvalidAgentConfigUnhealthy(t *testing.T) {
 	}
 }
 
+// TestSyncNVCFBackendHealthIgnoresRejectedHeartbeatInterval is a regression
+// test for rejected negative worker.timeouts values. A rejected value is never
+// applied, so the running agent is unaffected by it: unlike the invalidAgentConfigError
+// cases in TestSyncNVCFBackendHealthKeepsInvalidAgentConfigUnhealthy above,
+// AgentStatus must follow the agent's own /healthz response, not flip to
+// Unhealthy because of the rejected merge config.
+func TestSyncNVCFBackendHealthIgnoresRejectedHeartbeatInterval(t *testing.T) {
+	ctx := newTestContext()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		require.NoError(t, json.NewEncoder(w).Encode(nvcfBackendHealthResponse{
+			Status: nvidiaiov1.AgentStatusHealthy,
+		}))
+	}))
+	t.Cleanup(server.Close)
+	previousHealthzURL := makeNVCAHealthzURL
+	makeNVCAHealthzURL = func(*nvidiaiov1.NVCFBackend) (string, error) {
+		return server.URL, nil
+	}
+	t.Cleanup(func() { makeNVCAHealthzURL = previousHealthzURL })
+
+	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
+	nb.Name = "backend"
+	nb.Namespace = NVCAOperatorNamespace
+	nb.Status.AgentStatus = nvidiaiov1.AgentStatusHealthy
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Name: nvcaoptypes.NVCAModuleName, Namespace: getSystemNamespace(nb),
+	}}
+	dep.Status.ReadyReplicas = 1
+	mergeCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: agentConfigMergeConfigMapName, Namespace: NVCAOperatorNamespace},
+		Data:       map[string]string{agentConfigFile: "agent:\n  heartbeatInterval: -1s\n"},
+	}
+	recorder := record.NewFakeRecorder(0)
+	recorder.Events = nil
+	bc := &BackendK8sCache{
+		clients: &kubeclients.KubeClients{
+			NVCAOP: fakenvcaopclient.NewSimpleClientset(nb),
+			K8s:    fakek8sclient.NewSimpleClientset(dep, mergeCM),
+		},
+		httpClient:        server.Client(),
+		operatorNamespace: NVCAOperatorNamespace,
+		eventRecorder:     recorder,
+	}
+
+	require.NoError(t, bc.SyncNVCFBackendHealth(ctx, nb))
+	got, err := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).Get(ctx, nb.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, nvidiaiov1.AgentStatusHealthy, got.Status.AgentStatus)
+}
+
 type PatchedOSExit struct {
 	Called     bool
 	CalledWith int

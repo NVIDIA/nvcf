@@ -204,6 +204,85 @@ is intentionally excluded from public documentation, and give it a public-safe
 reason. Do not use a private registry as a placeholder for an unpublished
 artifact.
 
+## Prepare an umbrella product manifest
+
+The opt-in `umbrella` commands prepare a product manifest independently of docs
+editions. Existing `edition` commands, catalogs, registries, and publication
+defaults keep their current behavior.
+
+Review the exact three-stack catalog at a full source commit. Download the
+inventory asset from each selected stack release into one directory, and fetch
+the corresponding immutable source tags. The command validates those local tags
+and inventory bytes; it does not discover latest versions or publish anything.
+
+```bash
+git fetch origin --tags
+go run -C tools/docs-version-sync . umbrella prepare \
+  --source <full-reviewed-catalog-commit> \
+  --version <umbrella-version> --change initial \
+  --helm-version <exact-3.x-version> --helmfile-version <exact-1.1.x-version> \
+  --inventories /tmp/selected-stack-inventories \
+  --out /tmp/umbrella-manifest.json
+
+go run -C tools/docs-version-sync . umbrella check \
+  --manifest /tmp/umbrella-manifest.json \
+  --inventories /tmp/selected-stack-inventories
+```
+
+The default status is `development`. Supply `--qualification` with the public
+review URL only after the complete combination is qualified. This records the
+reviewer's declaration; an approval URL is not proof that runtime tests passed.
+
+For a subsequent product version, supply `--previous` with its qualified
+predecessor manifest and use `--change patch`, `minor`, or `major`. Pass the same
+predecessor to `umbrella check`. Component downgrades and changes to an existing
+component version's source or inventory are rejected. A component major requires
+an umbrella major; a component minor requires at least an umbrella minor.
+
+Manifest schema version 1 uses these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `version`, `previous_version`, `change` | Product version and deployment-contract transition |
+| `status`, `qualification` | Development candidate or qualified combination with public review |
+| `source_commit` | Reviewed catalog commit used to select the combination |
+| `toolchain.helm`, `toolchain.helmfile` | Exact supported render tool versions |
+| `stacks` | Exactly `control-plane`, `compute-plane`, and `observability` |
+| `stacks.<name>.version` | Independent component stack version |
+| `source_tag`, `source_commit` within each stack | Immutable component source identity |
+| `inventory_asset`, `inventory_sha256` within each stack | Canonical released inventory filename and digest of its exact bytes |
+| `compatible_with` within each stack | Reviewed requirements for the other two component stacks |
+
+`control-plane` identifies the Self-Managed stack and retains the catalog's
+existing key. The three component versions do not have to match.
+
+Product manifests use `deploy/releases/X.Y.Z/manifest.json` and the reserved tag
+format `nvcf/X.Y.Z`. That tag format avoids the existing component publisher's
+`*-v*` and `**/v*` triggers. Preparation creates neither the tag nor a GitHub
+release. If the product tag is present locally, validation requires the exact
+manifest bytes recorded at that tag. Fetch release tags before validation.
+
+Repeated preparation with identical inputs verifies the existing output. A
+different output is rejected. Bundle and manifest checksums belong in a separate
+release asset index, so the manifest never needs to contain its own hash or the
+hash of an archive that embeds it.
+
+Documentation corrections do not change this product manifest or its version.
+This preparation command does not change the current immutable-docs-edition
+policy; maintained umbrella documentation requires the separate docs workflow.
+
+Run the command-level integration test and existing regressions with:
+
+```bash
+go test -C tools/docs-version-sync ./...
+./tools/ci/check-doc-version-sync
+tools/ci/preview-docs --check
+```
+
+The integration test builds the real command, prepares and checks independent
+fixture releases, rejects changed source identities and released manifests, and
+exercises the legacy edition commands through the same binary.
+
 ## Compare release sets
 
 Store each release set's inventory JSON files in a directory, then run:
