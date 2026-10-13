@@ -3,6 +3,7 @@
 {{- $name := include "matrix.name" . }}
 {{- $ann := dict }}
 {{- if .Values.criuCapture }}{{ $_ := set $ann "nvsnap.io/criu-capture" "true" }}{{ end }}
+{{- with .Values.cacheSalt }}{{ $_ := set $ann "nvsnap.io/cache-salt" . }}{{ end }}
 {{- if eq .Values.kind "StatefulSet" }}
 apiVersion: apps/v1
 kind: StatefulSet
