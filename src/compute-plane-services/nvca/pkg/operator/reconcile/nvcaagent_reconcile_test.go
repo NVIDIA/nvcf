@@ -5805,6 +5805,33 @@ func TestNewAgentConfigConfigMapRejectsBadHeartbeatInterval(t *testing.T) {
 	}
 }
 
+// TestNewAgentConfigConfigMapKeepsTimeoutDecodeMixedWithValidationFailureFatal
+// guards that an overflowing timeout does not mask an unrelated cfg.Validate()
+// failure: the mixed config is structurally invalid, so it stays fatal.
+func TestNewAgentConfigConfigMapKeepsTimeoutDecodeMixedWithValidationFailureFatal(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{
+		clients:           clients,
+		envType:           nvidiaiov1.EnvTypeStage,
+		operatorNamespace: NVCAOperatorNamespace,
+	}
+	_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      agentConfigMergeConfigMapName,
+			Namespace: NVCAOperatorNamespace,
+		},
+		Data: map[string]string{agentConfigFile: "agent:\n  heartbeatInterval: 999999999999999999h\n  byooOtelCollector:\n    logSampling:\n      samplingPercentage: -1\n"},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
+	_, err = bc.newAgentConfigConfigMap(ctx, nb)
+	require.Error(t, err)
+	assert.True(t, nvcaoperatorerrors.IsFatal(err))
+	assert.ErrorContains(t, err, "log sampling")
+}
+
 func TestOTelCollectorEnvUsesEffectiveRequestsNamespace(t *testing.T) {
 	bc := &BackendK8sCache{envType: nvidiaiov1.EnvTypeProd}
 	nb := &nvidiaiov1.NVCFBackend{}

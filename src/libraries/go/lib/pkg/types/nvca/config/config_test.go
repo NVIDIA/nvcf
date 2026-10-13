@@ -762,6 +762,10 @@ func TestDecodeConfig_AgentTimeoutDecodeFailure(t *testing.T) {
 			name: "timeout failure mixed with an unrelated failure stays unrecoverable",
 			yaml: "agent:\n  heartbeatInterval: 999999999999999999h\n  logLevel: [1]\n",
 		},
+		{
+			name: "timeout decode failure mixed with an unrelated validation failure stays unrecoverable",
+			yaml: "agent:\n  heartbeatInterval: 999999999999999999h\n  byooOtelCollector:\n    logSampling:\n      samplingPercentage: -1\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
