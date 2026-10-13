@@ -126,6 +126,9 @@ Examples:
 	return cmd
 }
 
+// runServer loads the configuration, starts the auth service and its HTTP server, and
+// blocks until SIGINT/SIGTERM or until the NATS connection is closed for good. The
+// latter returns an error so the process exits and the orchestrator restarts it.
 func runServer(cmd *cobra.Command) error {
 	// Get custom config path from flag
 	customConfigPath, _ := cmd.Flags().GetString("config")
@@ -310,7 +313,6 @@ func runServer(cmd *cobra.Command) error {
 	select {
 	case <-ctx.Done():
 	case <-service.Closed():
-		appLogger.Error("NATS connection closed permanently, shutting down")
 		runErr = fmt.Errorf("NATS connection closed permanently")
 	}
 

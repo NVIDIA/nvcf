@@ -16,11 +16,16 @@
 package test_e2e
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/nkey"
+	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats-server/v2/test"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nkeys"
 )
@@ -81,6 +86,7 @@ func restartNATS(t *testing.T, setup *TestSetup, outage time.Duration) {
 	t.Cleanup(setup.NATSServer.Shutdown)
 }
 
+// publicKeyFromSeed returns the public key for an nkey seed held by the test setup.
 func publicKeyFromSeed(t *testing.T, seed string) string {
 	t.Helper()
 	kp, err := nkeys.FromSeed([]byte(seed))
@@ -170,8 +176,62 @@ func TestReadinessFollowsNATSConnection(t *testing.T) {
 	}
 }
 
+// TestServiceClosesOnRepeatedAuthRejection covers NATS rejecting the service's own
+// credentials outright, for example after they were rotated. The NATS client gives up
+// after the same authorization error twice, even with unlimited reconnects. Closed must
+// then fire so the server exits and the orchestrator restarts it, which reloads the
+// credentials; before the fix the process kept running and never reconnected.
+func TestServiceClosesOnRepeatedAuthRejection(t *testing.T) {
+	setup, _ := reconnectSetup(t)
+
+	setup.NATSServer.Shutdown()
+	setup.NATSServer.WaitForShutdown()
+	setup.NATSServer = runNATSServerRejectingAuthService(t)
+	t.Cleanup(setup.NATSServer.Shutdown)
+
+	select {
+	case <-setup.AuthService.Closed():
+	case <-time.After(30 * time.Second):
+		t.Fatal("Expected Closed to fire after NATS repeatedly rejected the service's credentials")
+	}
+	if err := setup.AuthService.CheckReady(); err == nil {
+		t.Error("Expected the service to report not ready once its connection is closed")
+	}
+}
+
+// runNATSServerRejectingAuthService starts NATS on the default port with a configuration
+// that does not know the auth service's user, so each of its logins is rejected at once.
+func runNATSServerRejectingAuthService(t *testing.T) *server.Server {
+	t.Helper()
+	otherUser, err := nkeys.CreateUser()
+	if err != nil {
+		t.Fatalf("Failed to create nkey pair: %v", err)
+	}
+	otherUserPublicKey, err := otherUser.PublicKey()
+	if err != nil {
+		t.Fatalf("Failed to get public key: %v", err)
+	}
+
+	configPath := filepath.Join(t.TempDir(), "nats_rejecting.conf")
+	configContent := fmt.Sprintf(`
+accounts {
+  AUTH: {
+    users: [ { nkey: %s } ]
+  }
+}
+`, otherUserPublicKey)
+	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+		t.Fatalf("Failed to create NATS config: %v", err)
+	}
+
+	srv, _ := test.RunServerWithConfig(configPath)
+	return srv
+}
+
+// notYetError is returned by eventually conditions that are not met yet.
 type notYetError struct{}
 
+// Error implements error.
 func (notYetError) Error() string { return "not yet" }
 
 var errNotYet error = notYetError{}
