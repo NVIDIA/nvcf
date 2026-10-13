@@ -69,7 +69,8 @@ func (c *fakeClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
 func TestLocalStoreTTL(t *testing.T) {
 	ctx := context.Background()
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	store := NewLocalStore(10, WithClock(clock.Now))
+	store := NewLocalStore(10)
+	store.now = clock.Now
 	ttl := 10 * time.Minute
 
 	if err := store.Set(ctx, "k", "B", ttl); err != nil {
@@ -91,7 +92,8 @@ func TestLocalStoreTTL(t *testing.T) {
 func TestLocalStoreWriteResetsTTL(t *testing.T) {
 	ctx := context.Background()
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	store := NewLocalStore(10, WithClock(clock.Now))
+	store := NewLocalStore(10)
+	store.now = clock.Now
 	ttl := time.Minute
 
 	_ = store.Set(ctx, "k", "A", ttl)

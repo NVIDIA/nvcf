@@ -41,16 +41,8 @@ type localEntry struct {
 	expiresAt time.Time
 }
 
-// LocalOption configures a LocalStore.
-type LocalOption func(*LocalStore)
-
-// WithClock overrides the clock used for TTL checks. Tests only.
-func WithClock(now func() time.Time) LocalOption {
-	return func(s *LocalStore) { s.now = now }
-}
-
 // NewLocalStore returns an empty LocalStore. maxEntries below 1 is treated as 1.
-func NewLocalStore(maxEntries int, opts ...LocalOption) *LocalStore {
+func NewLocalStore(maxEntries int) *LocalStore {
 	if maxEntries < 1 {
 		maxEntries = 1
 	}
@@ -59,9 +51,6 @@ func NewLocalStore(maxEntries int, opts ...LocalOption) *LocalStore {
 		now:        time.Now,
 		order:      list.New(),
 		entries:    make(map[string]*list.Element),
-	}
-	for _, opt := range opts {
-		opt(s)
 	}
 	return s
 }
