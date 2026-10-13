@@ -78,6 +78,6 @@ and operator settings during upgrades.
 ## Safety
 
 Before creating, deleting, or reusing local k3d clusters, read the local-dev
-safety guidance in `.cursor/skills/nvcf-self-hosted-local-dev/SKILL.md` from
+safety guidance in `docs/dev/local-development.md` from
 the repo root. Do not delete clusters or Helm releases without explicit user
 approval.

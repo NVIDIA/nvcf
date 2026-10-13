@@ -7,6 +7,15 @@ the sole tag and release authority, publishing is live, and a merge to
 except the three under `deploy/stacks/`, which release from a
 maintenance branch instead.
 
+## Umbrella product releases
+
+An umbrella product release packages exact independently released stacks. It
+uses the explicit `Publish Umbrella Release` workflow and `nvcf/X.Y.Z` tag
+namespace. Component release triggers remain unchanged. Documentation
+corrections can advance an approved docs revision under the same umbrella
+version without creating another release. Follow the
+[qualification, activation, and rollback procedure](umbrella-releases.md).
+
 ## Publish gate
 
 The workflow reads these repository variables:

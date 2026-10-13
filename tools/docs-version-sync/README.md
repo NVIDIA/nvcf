@@ -509,6 +509,9 @@ for cards and frontmatter tags for filters. Keep links relative and record the
 edition and exact artifact versions in release entries. Qualification remains a
 reviewed declaration; a development entry is not release approval.
 
+See [the end-to-end umbrella release and docs procedure](../../docs/dev/umbrella-releases.md)
+for qualification, same-version corrections, backports, and rollback.
+
 ### Opt-in umbrella publication
 
 The `Publish Umbrella Release` workflow runs only on explicit dispatch from
