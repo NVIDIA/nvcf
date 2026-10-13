@@ -52,6 +52,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	nvcaoperatorerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/errors"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 )
 
@@ -5758,6 +5759,37 @@ func TestNewAgentConfigConfigMapRequestsNamespaceOverride(t *testing.T) {
 	cfg, err := nvcaconfig.DecodeConfig([]byte(cm.Data[agentConfigFile]))
 	require.NoError(t, err)
 	assert.Equal(t, "team-x", cfg.Agent.RequestsNamespace)
+}
+
+// TestNewAgentConfigConfigMapRejectsNegativeHeartbeatInterval is a regression
+// test for rejected negative worker.timeouts intervals: such a value used to
+// reach getAgentConfigToMerge as a FatalError, which crash-looped the operator.
+// The rejected value was never applied, so this is also not
+// invalidAgentConfigError: AgentStatus is left alone, same as any other error
+// SyncNVCFBackendHealth does not specifically recognize.
+func TestNewAgentConfigConfigMapRejectsNegativeHeartbeatInterval(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{
+		clients:           clients,
+		envType:           nvidiaiov1.EnvTypeStage,
+		operatorNamespace: NVCAOperatorNamespace,
+	}
+	_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      agentConfigMergeConfigMapName,
+			Namespace: NVCAOperatorNamespace,
+		},
+		Data: map[string]string{agentConfigFile: "agent:\n  heartbeatInterval: -1s\n"},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
+	_, err = bc.newAgentConfigConfigMap(ctx, nb)
+	require.Error(t, err)
+	assert.False(t, nvcaoperatorerrors.IsFatal(err), "must not be fatal, or the operator crash-loops")
+	assert.False(t, isInvalidAgentConfigError(err), "must not touch AgentStatus; the running agent is unaffected")
+	assert.ErrorContains(t, err, "agent.heartbeatInterval: must not be negative")
 }
 
 func TestOTelCollectorEnvUsesEffectiveRequestsNamespace(t *testing.T) {

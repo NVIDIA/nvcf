@@ -22,6 +22,7 @@ limitations under the License.
 package openairesponses
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -231,9 +232,14 @@ func (i *Input) UnmarshalJSON(data []byte) error {
 
 	// Try array of InputItems
 	var items []InputItem
-	if err := json.Unmarshal(data, &items); err == nil {
+	itemsErr := json.Unmarshal(data, &items)
+	if itemsErr == nil {
 		i.Items = items
 		return nil
+	}
+	// A real array with a bad item keeps the item error so the client sees the cause.
+	if bytes.HasPrefix(bytes.TrimSpace(data), []byte("[")) {
+		return itemsErr
 	}
 
 	return &UnmarshalError{

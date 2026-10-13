@@ -32,6 +32,9 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) > 0 && args[0] == "umbrella" {
+		return runUmbrella(args[1:])
+	}
 	if len(args) > 0 && args[0] == "edition" {
 		return runEdition(args[1:])
 	}

@@ -1440,7 +1440,16 @@ func requestsNamespaceSetupError(requestsNamespace string, err error) error {
 
 // validateMergedAgentConfig rejects agent-config-merge values that would make a
 // new agent fail at startup, so the operator keeps the running agent instead
-// of rolling out a configuration it knows is broken.
+// of rolling out a configuration it knows is broken. SyncNVCFBackendHealth
+// also calls this directly to keep reporting Unhealthy for a running agent
+// kept alive only because its replacement configuration was rejected.
+//
+// Checks that DecodeConfig's own cfg.Validate() already covers (such as a
+// negative worker.timeouts interval) do not need a second
+// check here: both callers reach mergeCfg through getRawAgentConfigToMerge,
+// which classifies that failure before a value this invalid can reach here.
+// This function covers validation that depends on data outside Config, such
+// as the NVCFBackend's GPU discovery mode.
 func validateMergedAgentConfig(nb *nvidiaiov1.NVCFBackend, mergeCfg nvcaconfig.Config) error {
 	if err := validateGPUDiscoveryConfig(nb, mergeCfg); err != nil {
 		return err
@@ -1579,6 +1588,11 @@ func (bc *BackendK8sCache) getAgentConfigToMerge(ctx context.Context) (nvcaconfi
 		mergeCfg.Workload.TransportTLS = operatorCfg.Workload.TransportTLS
 	}
 	if err := validateAgentConfigToMerge(mergeCfg); err != nil {
+		// mergeCfg already passed cfg.Validate() once inside
+		// getRawAgentConfigToMerge's DecodeConfig call above, so the only way
+		// this second validateAgentConfigToMerge call can still fail is the
+		// operator-config TransportTLS overlay a few lines up introducing a
+		// new TLS misconfiguration. That stays fatal.
 		return nvcaconfig.Config{}, false,
 			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid combined NVCA agent configuration: %w", err))
 	}
@@ -1635,6 +1649,21 @@ func isResourceQuantityDecodeError(err error) bool {
 	return strings.Contains(err.Error(), "decode resource ")
 }
 
+// isAgentTimeConfigError reports whether DecodeConfig's cfg.Validate() stage
+// failed specifically on AgentTimeConfig.Validate()'s negative-duration check,
+// identified by its typed error.
+// A negative worker.timeouts interval is a recoverable agent-config-merge
+// content problem, like a malformed resource.Quantity, not evidence of a
+// corrupt ConfigMap or an operator bug. This intentionally does not match
+// every cfg.Validate() failure: some, such as
+// workload.stargateQUICInsecure=true with transportTLS.trustMode=bundle, are
+// structural misconfigurations that TestGetAgentConfigToMerge_Rejects*AsFatal
+// requires stay fatal.
+func isAgentTimeConfigError(err error) bool {
+	var target *nvcaconfig.NegativeDurationError
+	return errors.As(err, &target)
+}
+
 func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
 	log := core.GetLogger(ctx)
 	cm, err := bc.clients.K8s.CoreV1().ConfigMaps(bc.operatorNamespace).Get(ctx, agentConfigMergeConfigMapName, metav1.GetOptions{})
@@ -1655,6 +1684,14 @@ func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaco
 		wrappedErr := fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err)
 		if isResourceQuantityDecodeError(err) {
 			return nvcaconfig.Config{}, false, &invalidAgentConfigError{err: wrappedErr}
+		}
+		if isAgentTimeConfigError(err) {
+			// Not fatal and not invalidAgentConfigError: the running agent is
+			// unaffected by a rejected value (the new config was never
+			// applied), so agent health stays independent of config issues
+			// and AgentStatus is left alone. The field name and value are in
+			// this error, logged by the caller.
+			return nvcaconfig.Config{}, false, wrappedErr
 		}
 		return nvcaconfig.Config{}, false, nvcaoperatorerrors.FatalError(wrappedErr)
 	}

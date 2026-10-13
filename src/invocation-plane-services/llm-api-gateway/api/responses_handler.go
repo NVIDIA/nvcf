@@ -136,6 +136,7 @@ func (h *ResponsesHandlers) prepareNativeResponsesRequest(
 		countRequest.Model,
 		countRequest,
 	)
+	estimatedInputTokens += estimatedTokenCountForText(customToolFormatText(request.Tools))
 	inputTokens := estimatedInputTokens
 	maxOutputTokens := maxOutputTokensForRequest(countRequest)
 	checkRequest := ratelimit.ResourceRequest{

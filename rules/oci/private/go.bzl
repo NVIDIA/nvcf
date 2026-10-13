@@ -19,7 +19,7 @@ load("@rules_pkg//pkg:mappings.bzl", "pkg_attributes", "pkg_files", "strip_prefi
 load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
 load("//rules/oci/private:common.bzl", "DEFAULT_BASE", "create_oci_image")
 
-def _go_oci_image_impl(name, visibility, binary, base, entrypoint, binary_path, env, extra_layers, registry, extra_registries, tags):
+def _go_oci_image_impl(name, visibility, binary, base, entrypoint, binary_path, env, extra_layers, registry, extra_registries, tags, user):
     layer_name = name + "_layer"
 
     # Where the binary lands inside the layer tarball. Left to rules_pkg, it
@@ -93,6 +93,7 @@ def _go_oci_image_impl(name, visibility, binary, base, entrypoint, binary_path, 
         base = base,
         entrypoint = entry,
         env = env,
+        user = user,
         visibility = visibility,
         registry = registry,
         extra_registries = extra_registries,
@@ -142,6 +143,10 @@ go_oci_image = macro(
         ),
         "tags": attr.string_list(
             doc = "Tags for generated targets. 'manual' is always added.",
+            configurable = False,
+        ),
+        "user": attr.string(
+            doc = "Numeric UID:GID recorded in the OCI image configuration.",
             configurable = False,
         ),
     },
