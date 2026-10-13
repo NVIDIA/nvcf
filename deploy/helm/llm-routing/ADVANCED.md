@@ -27,7 +27,7 @@ Caller IDs and trimmed keys must be distinct, including the primary caller. Upgr
 Use the context selected in the [installation guide](README.md#1-install-shared-infrastructure). The shared chart runs a verification Job after installation and upgrade. It uses the installed CA to check gateway TLS and the `/v1/models` response, then checks that an unknown model returns HTTP 401 with an invalid key and HTTP 404 with the valid key. An empty registry is valid on first installation. Existing models remain valid on upgrades. A failed check makes the Helm command fail:
 
 ```bash
-helm upgrade --install llm-stack oci://nvcr.io/0651155215864979/ncp-dev/llm-shared-stack --version 0.1.0-iiab \
+helm upgrade --install llm-stack oci://nvcr.io/0651155215864979/ncp-dev/llm-shared-stack --version 0.2.0-iiab \
   --namespace llm-stack --create-namespace \
   --values values.registry.yaml --wait --timeout 10m
 ```
@@ -479,7 +479,7 @@ Save the installed values and release revision privately before upgrading. Revie
 umask 077
 helm get values llm-stack --namespace llm-stack -o yaml > /path/to/private/previous-values.yaml
 helm history llm-stack --namespace llm-stack
-helm upgrade --install llm-stack oci://nvcr.io/0651155215864979/ncp-dev/llm-shared-stack --version 0.1.0-iiab \
+helm upgrade --install llm-stack oci://nvcr.io/0651155215864979/ncp-dev/llm-shared-stack --version 0.2.0-iiab \
   --namespace llm-stack --values /path/to/private/site-values.yaml \
   --wait --timeout 10m
 ```
@@ -494,7 +494,8 @@ Before rolling back, inspect the saved values and the manifests for the target r
 
 If a pod network drops UDP segmentation offload (GSO) batches, large requests
 can time out in the QUIC tunnel while short requests and direct backend HTTP
-succeed. With images built from the matching sources, set
+succeed. With the router, operator and Pylon images in
+[values.registry.yaml](values.registry.yaml), or images built from matching sources, set
 `gatewayStack.llm-request-router.llmRequestRouter.transport.disableQuicGso: true`
 and `operator.pylon.disableQuicGso: true` in private site values, then upgrade
 the shared release. Both peers use ordinary UDP packets with the same TLS and

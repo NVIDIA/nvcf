@@ -47,7 +47,7 @@ python3 llm.py preflight
 ## 1. Install shared infrastructure
 
 ```bash
-helm upgrade --install llm-stack oci://nvcr.io/0651155215864979/ncp-dev/llm-shared-stack --version 0.1.0-iiab \
+helm upgrade --install llm-stack oci://nvcr.io/0651155215864979/ncp-dev/llm-shared-stack --version 0.2.0-iiab \
   --namespace llm-stack --create-namespace \
   --values values.registry.yaml --wait --timeout 10m
 ```

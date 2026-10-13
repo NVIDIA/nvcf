@@ -14,21 +14,21 @@ gatewayStack:
     llmRequestRouter:
       image:
         repository: nvcr.io/0651155215864979/ncp-dev/stargate
-        tag: 0.1.0-iiab
+        tag: 0.2.0-iiab
         pullPolicy: IfNotPresent
       imagePullSecrets:
         - name: ngc-ncp-dev
 operator:
   image:
     repository: nvcr.io/0651155215864979/ncp-dev/nvcf-pylon-operator
-    tag: 0.1.0-iiab
+    tag: 0.2.0-iiab
     pullPolicy: IfNotPresent
   imagePullSecrets:
     - name: ngc-ncp-dev
   pylon:
     image:
       repository: nvcr.io/0651155215864979/ncp-dev/pylon
-      tag: 0.1.0-iiab
+      tag: 0.2.0-iiab
       pullPolicy: IfNotPresent
     imagePullSecrets:
       - name: ngc-ncp-dev
