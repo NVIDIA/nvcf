@@ -638,11 +638,14 @@ Ledger at `event_ledger_url`. When that is not set, it replaces the leading
 | Command | Description |
 | --- | --- |
 | `stats get` | Show the latest event for every instance of a function version (supports `--function-version-id` and `--event-filter`) |
-| `stages events list` | List the event history of one instance, most recent first (supports `--function-version-id`, `--instance-id`, `--deployment-id`, `--gpu-specification-id`, and `--cluster-id`) |
+| `stages events list` | List the event history of one instance, most recent first (supports `--function-version-id`, `--instance-id`, `--deployment-id`, `--gpu-specification-id`, `--cluster-id`, and `--resource-id`, plus `--attribute-key` with `--attribute-value`) |
 
 `--function-version-id` defaults to the saved version ID. `stages events list`
-needs at least one context filter that matches how the events were ingested. Run
-`stats get` first to see the contexts that exist.
+needs at least one context filter (`--instance-id`, `--deployment-id`,
+`--gpu-specification-id`, `--cluster-id`, or `--resource-id`) that matches how the
+events were ingested. Run `stats get` first to see the contexts that exist.
+`--attribute-key` and `--attribute-value` must be given together and keep only
+events whose attribute with that key has that value.
 
 ```bash
 nvcf-cli stats get --function-version-id <uuid>

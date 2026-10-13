@@ -121,6 +121,14 @@ type EventsContext struct {
 	DeploymentID     string
 	GPUSpecification string
 	ClusterID        string
+	ResourceID       string
+}
+
+// EventsAttribute narrows a context's events to those whose details attribute
+// Key equals Value. Key and Value must be set together.
+type EventsAttribute struct {
+	Key   string
+	Value string
 }
 
 // GetStats returns the latest event per context for a function version.
@@ -137,7 +145,10 @@ func (c *Client) GetStats(ctx context.Context, namespace string, opts StatsOptio
 }
 
 // ListEvents returns the event history of one context in a function version.
-func (c *Client) ListEvents(ctx context.Context, namespace string, ec EventsContext) (*EventsResponse, error) {
+func (c *Client) ListEvents(ctx context.Context, namespace string, ec EventsContext, attr EventsAttribute) (*EventsResponse, error) {
+	if (attr.Key == "") != (attr.Value == "") {
+		return nil, fmt.Errorf("an attribute key and value must be provided together")
+	}
 	query := url.Values{}
 	set := func(key, value string) {
 		if value != "" {
@@ -148,6 +159,9 @@ func (c *Client) ListEvents(ctx context.Context, namespace string, ec EventsCont
 	set("deployment_id", ec.DeploymentID)
 	set("gpu_specification_id", ec.GPUSpecification)
 	set("cluster_id", ec.ClusterID)
+	set("resource_id", ec.ResourceID)
+	set("attribute_key", attr.Key)
+	set("attribute_value", attr.Value)
 	var out EventsResponse
 	if err := c.get(ctx, namespacePath(namespace, "events"), query, &out); err != nil {
 		return nil, err

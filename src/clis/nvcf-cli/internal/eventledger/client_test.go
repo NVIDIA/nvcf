@@ -71,10 +71,34 @@ func TestListEventsSendsContextAndHost(t *testing.T) {
 			`"details":{"severity":"INFO","body":"pulled","attributes":{"k8s.pod.name":"p"}}}]}`))
 	}, "events.example.com")
 
-	got, err := c.ListEvents(context.Background(), "fv-1", EventsContext{DeploymentID: "dep-1", GPUSpecification: "gpu-a100"})
+	got, err := c.ListEvents(context.Background(), "fv-1", EventsContext{DeploymentID: "dep-1", GPUSpecification: "gpu-a100"}, EventsAttribute{})
 	require.NoError(t, err)
 	require.Len(t, got.Events, 1)
 	assert.Equal(t, "p", got.Events[0].Details.Attributes["k8s.pod.name"])
+}
+
+func TestListEventsSendsResourceAndAttributeFilter(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		assert.Equal(t, "res-1", q.Get("resource_id"))
+		assert.Equal(t, "request-id", q.Get("attribute_key"))
+		assert.Equal(t, "abc", q.Get("attribute_value"))
+		_, _ = w.Write([]byte(`{"namespace":"fv-1","context":"resource_id=res-1","events":[]}`))
+	}, "")
+
+	_, err := c.ListEvents(context.Background(), "fv-1", EventsContext{ResourceID: "res-1"}, EventsAttribute{Key: "request-id", Value: "abc"})
+	require.NoError(t, err)
+}
+
+func TestListEventsRequiresAttributeKeyAndValueTogether(t *testing.T) {
+	c := newTestClient(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("no request expected")
+	}, "")
+
+	_, err := c.ListEvents(context.Background(), "fv-1", EventsContext{ResourceID: "res-1"}, EventsAttribute{Key: "request-id"})
+	require.ErrorContains(t, err, "together")
+	_, err = c.ListEvents(context.Background(), "fv-1", EventsContext{ResourceID: "res-1"}, EventsAttribute{Value: "abc"})
+	require.ErrorContains(t, err, "together")
 }
 
 func TestGetReportsHTTPErrors(t *testing.T) {

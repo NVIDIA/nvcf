@@ -47,6 +47,9 @@ var (
 	eventsDeploymentID             string
 	eventsGPUSpecificationID       string
 	eventsClusterID                string
+	eventsResourceID               string
+	eventsAttributeKey             string
+	eventsAttributeValue           string
 )
 
 var statsCmd = &cobra.Command{
@@ -93,7 +96,8 @@ first to see the contexts that exist. Requires an API key with the
 fnds:getEvents read scope.
 
 Examples:
-  nvcf-cli stages events list --function-version-id <uuid> --deployment-id <uuid> --gpu-specification-id gpu-a100`,
+  nvcf-cli stages events list --function-version-id <uuid> --deployment-id <uuid> --gpu-specification-id gpu-a100
+  nvcf-cli stages events list --function-version-id <uuid> --resource-id <id> --attribute-key <key> --attribute-value <value>`,
 	Args:         cobra.NoArgs,
 	SilenceUsage: true,
 	RunE:         runStagesEventsList,
@@ -115,6 +119,9 @@ func init() {
 	stagesEventsListCmd.Flags().StringVar(&eventsDeploymentID, "deployment-id", "", "deployment ID")
 	stagesEventsListCmd.Flags().StringVar(&eventsGPUSpecificationID, "gpu-specification-id", "", "GPU specification ID")
 	stagesEventsListCmd.Flags().StringVar(&eventsClusterID, "cluster-id", "", "cluster ID")
+	stagesEventsListCmd.Flags().StringVar(&eventsResourceID, "resource-id", "", "resource ID (for example an ICMS request)")
+	stagesEventsListCmd.Flags().StringVar(&eventsAttributeKey, "attribute-key", "", "only events whose attribute with this key equals --attribute-value")
+	stagesEventsListCmd.Flags().StringVar(&eventsAttributeValue, "attribute-value", "", "attribute value to match; requires --attribute-key")
 }
 
 func runStatsGet(cmd *cobra.Command, _ []string) error {
@@ -142,9 +149,13 @@ func runStagesEventsList(cmd *cobra.Command, _ []string) error {
 		DeploymentID:     eventsDeploymentID,
 		GPUSpecification: eventsGPUSpecificationID,
 		ClusterID:        eventsClusterID,
+		ResourceID:       eventsResourceID,
 	}
 	if ec == (eventledger.EventsContext{}) {
-		return fmt.Errorf("at least one of --instance-id, --deployment-id, --gpu-specification-id, or --cluster-id is required; run 'nvcf-cli stats get' to list contexts")
+		return fmt.Errorf("at least one of --instance-id, --deployment-id, --gpu-specification-id, --cluster-id, or --resource-id is required; run 'nvcf-cli stats get' to list contexts")
+	}
+	if (eventsAttributeKey == "") != (eventsAttributeValue == "") {
+		return fmt.Errorf("--attribute-key and --attribute-value must be used together")
 	}
 	c, namespace, timeout, err := newEventLedgerClient()
 	if err != nil {
@@ -153,7 +164,7 @@ func runStagesEventsList(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	events, err := c.ListEvents(ctx, namespace, ec)
+	events, err := c.ListEvents(ctx, namespace, ec, eventledger.EventsAttribute{Key: eventsAttributeKey, Value: eventsAttributeValue})
 	if err != nil {
 		return fmt.Errorf("failed to list events: %w", err)
 	}

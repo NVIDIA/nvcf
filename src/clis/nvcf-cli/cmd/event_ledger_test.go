@@ -46,11 +46,13 @@ func setupEventLedgerCommandTest(t *testing.T, handler http.HandlerFunc) {
 	eventLedgerFunctionVersionFlag = "fv-1"
 	statsEventFilter = nil
 	eventsInstanceID, eventsDeploymentID, eventsGPUSpecificationID, eventsClusterID = "", "", "", ""
+	eventsResourceID, eventsAttributeKey, eventsAttributeValue = "", "", ""
 	t.Cleanup(func() {
 		jsonOutput = false
 		eventLedgerFunctionVersionFlag = ""
 		statsEventFilter = nil
 		eventsInstanceID, eventsDeploymentID, eventsGPUSpecificationID, eventsClusterID = "", "", "", ""
+		eventsResourceID, eventsAttributeKey, eventsAttributeValue = "", "", ""
 	})
 }
 
@@ -114,4 +116,30 @@ func TestResolveEventLedgerURL(t *testing.T) {
 func TestEventLedgerAPIKeyPrefersDedicatedKey(t *testing.T) {
 	assert.Equal(t, "nvapi-el", eventLedgerAPIKey(&client.Config{APIKey: "nvapi-fn", EventLedgerAPIKey: "nvapi-el"}))
 	assert.Equal(t, "nvapi-fn", eventLedgerAPIKey(&client.Config{APIKey: "nvapi-fn"}))
+}
+
+func TestStagesEventsListResourceIDCountsAsContextAndSendsAttributeFilter(t *testing.T) {
+	setupEventLedgerCommandTest(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		assert.Equal(t, "res-1", q.Get("resource_id"))
+		assert.Equal(t, "request-id", q.Get("attribute_key"))
+		assert.Equal(t, "abc", q.Get("attribute_value"))
+		_, _ = w.Write([]byte(`{"namespace":"fv-1","context":"resource_id=res-1","events":[]}`))
+	})
+	eventsResourceID = "res-1"
+	eventsAttributeKey = "request-id"
+	eventsAttributeValue = "abc"
+
+	require.NoError(t, stagesEventsListCmd.RunE(stagesEventsListCmd, nil))
+}
+
+func TestStagesEventsListAttributeFilterNeedsKeyAndValue(t *testing.T) {
+	setupEventLedgerCommandTest(t, func(http.ResponseWriter, *http.Request) {
+		t.Error("no request expected with a half-specified attribute filter")
+	})
+	eventsDeploymentID = "dep-1"
+	eventsAttributeKey = "request-id"
+
+	err := stagesEventsListCmd.RunE(stagesEventsListCmd, nil)
+	require.ErrorContains(t, err, "must be used together")
 }
