@@ -4,7 +4,7 @@ apiVersion: v2
 name: llm-shared-stack
 description: Empty LLM gateway, router and namespace-scoped Pylon operator
 type: application
-version: 0.1.0
+version: 0.2.0-iiab
 dependencies:
   - name: llm-gateway-stack
     alias: gatewayStack

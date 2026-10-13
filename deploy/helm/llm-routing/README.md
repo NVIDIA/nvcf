@@ -15,7 +15,7 @@ No cluster yet? [Prepare a k3s GPU cluster](cluster/README.md) from your own GPU
 - The [NVIDIA device plugin](https://github.com/NVIDIA/k8s-device-plugin) advertising `nvidia.com/gpu`. Use v0.17.4 or later on GB10.
 - The node label `nvidia.com/gpu.product` on each GPU node. [GPU Feature Discovery](https://github.com/NVIDIA/k8s-device-plugin/tree/main/docs/gpu-feature-discovery) sets it, or apply it on Spark with `kubectl label node NODE nvidia.com/gpu.product=NVIDIA-GB10`. Use `NVIDIA-GB300` for Station. Capacity planning and the in-chart placement check match it against the recipe profile.
 - A StorageClass named `local-path`, or another class passed to `llm.py plan --storage-class`, with `WaitForFirstConsumer` binding and unrestricted topology. Each model cache is node-local disk on its model node.
-- The shared stack images on every eligible node. No published images exist yet. The committed [image values](dev-artifacts/values.yaml) reference development images with `Never` pull policy, so [prepare and preload them](dev-artifacts/README.md) on your nodes first. The verification Job also needs `python:3.12-alpine`, pulled or preloaded.
+- Pull access from the nodes to the published shared stack images. [values.registry.yaml](values.registry.yaml) selects them and the `ngc-ncp-dev` pull Secret created below. The verification Job also needs `python:3.12-alpine`, pulled or preloaded.
 - Outbound access from the nodes to Hugging Face for model weights, Docker Hub for `lmsysorg/sglang`, nvcr.io, and GitHub for the llama.cpp source used by GGUF recipes.
 
 k3s provides the `nvidia` RuntimeClass when the container toolkit is installed before k3s starts. It also installs Traefik ingress and the `local-path` StorageClass by default.
@@ -23,29 +23,33 @@ k3s provides the `nvidia` RuntimeClass when the container toolkit is installed b
 ### Workstation
 
 - kubectl, Helm 3.10 or newer, and Python 3.11 or newer.
+- An NGC API key with access to the `0651155215864979/ncp-dev` registry, which hosts the charts and shared images.
 - A checkout of this repository. Run all commands from `deploy/helm/llm-routing` in one terminal. The supported release and namespace are both `llm-stack`.
 
 ### Check the cluster
 
-Replace `YOUR_CONTEXT` with your kubeconfig context, then check and load any missing shared images:
+Replace `YOUR_CONTEXT` with your kubeconfig context and set `NGC_API_KEY`. Log Helm in to the registry and create the image pull Secret:
 
 ```bash
 kubectl config use-context YOUR_CONTEXT
-python3 dev-artifacts/build.py --load-only --allow-containerd-import
+echo "$NGC_API_KEY" | helm registry login nvcr.io --username '$oauthtoken' --password-stdin
+kubectl create namespace llm-stack
+kubectl --namespace llm-stack create secret docker-registry ngc-ncp-dev \
+  --docker-server=nvcr.io --docker-username='$oauthtoken' --docker-password="$NGC_API_KEY"
 ```
 
-Then run preflight to check tools, cluster access, GPU compatibility, runtime, storage configuration and image availability:
+Then run preflight to check tools, cluster access, GPU compatibility, runtime and storage configuration:
 
 ```bash
-python3 llm.py preflight --values dev-artifacts/values.yaml
+python3 llm.py preflight
 ```
 
 ## 1. Install shared infrastructure
 
 ```bash
-helm upgrade --install llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
+helm upgrade --install llm-stack oci://nvcr.io/0651155215864979/ncp-dev/llm-shared-stack --version 0.2.0-iiab \
   --namespace llm-stack --create-namespace \
-  --values dev-artifacts/values.yaml --wait --timeout 10m
+  --values values.registry.yaml --wait --timeout 10m
 ```
 
 Helm installs the gateway, router and namespace-scoped operator with an empty model registry. A chart verification Job checks gateway TLS, model discovery, acceptance of the caller key and rejection of an invalid key before Helm reports success. The same checks run on upgrades with registered models. The chart generates the caller credential and TLS material on first installation and preserves them on upgrades. The operator watches `llm-stack`. The operator chart defaults `installCRDs` to `true`, so the shared release owns the templated InferenceEndpoint CRD and updates its schema on upgrades. For an externally managed CRD, set `operator.installCRDs=false`. The CRD is retained on uninstall.
@@ -73,7 +77,7 @@ python3 llm.py plan --model qwen3.8-27b
 Install and register Qwen FP8 below, replacing `PROFILE_FROM_PLANNER` and `NODE_FROM_PLANNER` with your chosen profile and node. To reuse retained downloads, keep the original release name, namespace and cache node. Completed model files are verified and reused automatically; missing files are downloaded. No cache flag or values file is required. [Model values examples](recipes/README.md#committed-values) are available for optional overrides and other recipes.
 
 ```bash
-helm upgrade --install qwen-fp8 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
+helm upgrade --install qwen-fp8 oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.3.0-iiab \
   --namespace llm-stack \
   --set recipe=qwen3.8-27b --set profileName=PROFILE_FROM_PLANNER \
   --set 'nodes[0]=NODE_FROM_PLANNER' \
@@ -96,7 +100,7 @@ python3 llm.py plan --model qwen3.8-27b-nvfp4
 Each recipe reserves its own GPU. Running both precisions on one-GPU nodes requires two distinct available nodes before installation. For the second model, replace `PROFILE_FROM_PLANNER` with its profile and `SECOND_NODE_FROM_PLANNER` with an available node different from the first model's node. If no GPU is free, [stop another model](#stop-and-resume) before installing.
 
 ```bash
-helm upgrade --install qwen-nvfp4 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
+helm upgrade --install qwen-nvfp4 oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.3.0-iiab \
   --namespace llm-stack \
   --set recipe=qwen3.8-27b-nvfp4 --set profileName=PROFILE_FROM_PLANNER \
   --set 'nodes[0]=SECOND_NODE_FROM_PLANNER' \
@@ -164,7 +168,7 @@ These actions affect one model release. Keep the shared gateway and operator ins
 Stop the FP8 release installed above. Use the same chart version that installed the release:
 
 ```bash
-helm upgrade qwen-fp8 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
+helm upgrade qwen-fp8 oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.3.0-iiab \
   --namespace llm-stack \
   --reuse-values --set suspended=true --timeout 10m &&
 kubectl -n llm-stack wait --for=delete pod \
@@ -176,7 +180,7 @@ Wait for the pods to terminate before assigning their GPUs to another model. The
 Resume when those GPUs are available again:
 
 ```bash
-helm upgrade qwen-fp8 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
+helm upgrade qwen-fp8 oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.3.0-iiab \
   --namespace llm-stack \
   --reuse-values --set suspended=false --wait --timeout 120m
 ```

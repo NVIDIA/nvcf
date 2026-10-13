@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -55,6 +56,25 @@ class CommonCatalogTests(unittest.TestCase):
             self.assertRegex(release, r'^[a-z0-9][a-z0-9-]*$')
             for profile in self.recipes[identifier]['profiles']:
                 self.assertEqual(profile['deployment']['releaseName'], release)
+
+    def test_committed_chart_notices_are_current(self):
+        notices = catalog.chart_notices()
+        self.assertEqual({path.relative_to(ROOT) for path in notices},
+                         {Path("charts/sglang/NOTICE"), Path("charts/gguf-backend/NOTICE")})
+        for path, notice in notices.items():
+            self.assertEqual(path.read_text(), notice, path)
+
+    def test_recipe_without_maintained_notice_fails_export(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gguf = {"id": "example-gguf", "runtime": {"backend": "llama.cpp"}}
+            with self.assertRaisesRegex(ValueError, "Missing model notice for example-gguf"):
+                catalog.recipe_notice(root, gguf)
+            (root / "NOTICE").write_text("shared SGLang terms\n")
+            with self.assertRaisesRegex(ValueError, "Missing model notice for example-gguf"):
+                catalog.recipe_notice(root, gguf)
+            self.assertEqual(catalog.recipe_notice(root, {"id": "example", "runtime": {"backend": "sglang"}}),
+                             root / "NOTICE")
 
     def test_available_and_planned_notice_paths_share_one_bundle_file(self):
         for identifier, recipe in self.recipes.items():
@@ -351,14 +371,16 @@ class CommonCatalogTests(unittest.TestCase):
         self.assertRegex(evidence["checkedAt"], r"^\d{4}-\d{2}-\d{2}$")
         self.assertGreater(evidence["weightBytes"], 0)
 
-    def test_chart_references_resolve_to_local_packages(self):
+    def test_chart_references_resolve_to_source_and_published_charts(self):
+        # Every executable recipe names its published chart; without one, the
+        # planner would install the source chart instead.
         for recipe in self.recipes.values():
             for profile in recipe["profiles"]:
                 chart = profile["deployment"]["chart"]
                 self.assertTrue((ROOT / chart["localPath"] / "Chart.yaml").is_file())
                 self.assertEqual(chart["archive"], f"{chart['name']}-{chart['version']}.tgz")
-                self.assertEqual(chart["publication"], "local")
-                self.assertIsNone(chart["repository"])
+                self.assertEqual(chart["publication"], "oci")
+                self.assertTrue(chart["repository"].endswith("/" + chart["name"]))
 
     def test_optional_oci_repositories_are_independent_per_recipe_and_backend(self):
         original_read = catalog.read
@@ -385,8 +407,10 @@ class CommonCatalogTests(unittest.TestCase):
                 self.assertEqual(chart['publication'], 'oci' if recipe['id'] in expected else 'local')
                 self.assertEqual(chart['localPath'], baseline['localPath'])
                 self.assertEqual(chart['archive'], baseline['archive'])
-        self.assertTrue(all(p['deployment']['chart']['repository'] is None
-                            for recipe in catalog.build()['recipes'] for p in recipe['profiles']))
+        def repositories(recipes):
+            return {recipe['id']: {p['id']: p['deployment']['chart']['repository'] for p in recipe['profiles']}
+                    for recipe in recipes}
+        self.assertEqual(repositories(catalog.build()['recipes']), repositories(self.recipes.values()))
 
     def test_chart_repositories_reject_malformed_or_incomplete_references(self):
         good = 'oci://registry.example.com/charts/pylon-sglang-recipe'

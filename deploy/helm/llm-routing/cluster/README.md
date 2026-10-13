@@ -113,7 +113,7 @@ It runs `nvidia-smi` in a pod on each node and checks that every node reports a 
 
 ## Continue
 
-k3s provides the `nvidia` RuntimeClass, the `local-path` StorageClass and Traefik ingress. The shared stack images are not on the nodes yet. Continue with [Check the cluster](../README.md#check-the-cluster), using `my-cluster` as the context, to load the images and run the preflight.
+k3s provides the `nvidia` RuntimeClass, the `local-path` StorageClass and Traefik ingress. The nodes pull the shared stack images from the registry during installation. Continue with [Check the cluster](../README.md#check-the-cluster), using `my-cluster` as the context, to create the image pull Secret and run the preflight.
 
 ## Two-node models
 

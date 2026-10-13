@@ -115,9 +115,10 @@ For GGUF, create `recipes/<recipe-id>/recipe.json`, `model.lock.json`,
 revision, tuning and startup settings. The lock records checkpoint files and
 integrity data. Profiles own the runtime image, hardware, role resources and
 workload limits. Match context and concurrency to the selected memory-mode
-tuning. Copy these files into
+tuning. Copy `recipe.json`, `model.lock.json` and `profiles.json` into
 `recipes/charts/gguf-backend/files/recipes/<recipe-id>/` and extend the bundled
-metadata equality and rendering tests for that recipe.
+metadata equality and rendering tests for that recipe. Do not copy `NOTICE`:
+`export_catalog.py` writes each model chart's `NOTICE` from the recipe notices.
 
 For either backend:
 
@@ -150,17 +151,9 @@ Use its values example for `helm lint --strict` and `helm template`, then
 inspect placement, resource requests, cache retention, readiness and endpoint
 configuration. Keep rendered manifests in a private temporary directory.
 
-After the chart copies and index agree:
-
-```bash
-PACKAGE_DIR="$(mktemp -d)"
-bash dev-artifacts/package-charts.sh --output-dir "$PACKAGE_DIR"
-```
-
-Compare archive contents with maintained chart sources, verify `SHA256SUMS`,
-and refresh the changed distribution files in `dev-artifacts/charts/`, including
-the packaged index, guides and combined notice. Update the model inventory and
-installation links when the supported profiles change. Offline checks establish
+After the chart copies and index agree, test the source chart directly. The
+published chart contains the new recipe only after a chart release. Update the
+model inventory and installation links when the supported profiles change. Offline checks establish
 metadata and packaging consistency. They do not establish GPU memory fit or
 successful inference.
 
@@ -229,16 +222,16 @@ profiles pending and retain failed results accurately.
 
 Repeat the chart-copy synchronization in step 3, regenerate `recipes/index.json`
 with `python3 recipes/export_catalog.py`, then run the affected tests and
-`--check`. Repackage through `dev-artifacts/package-charts.sh` and refresh the
-packaged catalog, changed archives, guides, combined notice and checksums from
-that output. Keep hardware and installation links in the README and validation
-records in recipe metadata.
-Verify the final archives match source and compare the rendered pod templates
+`--check`. Bump the chart's `Chart.yaml` version and regenerate the index so it
+points at that version, then publish the chart at it after the change merges
+(see [Publishing charts and images](../../../../deploy/helm/llm-routing/ADVANCED.md#publishing-charts-and-images)).
+Update the README validation summary to match the recorded result. Compare the
+rendered pod templates
 with the tested deployment. Both model charts exclude profile qualification records from serving
-configuration and rollout checksums. If executable content or pod templates changed after the live
-pass, upgrade with the final package and rerun the affected readiness and
-inference checks. Metadata changes that leave pod templates and runtime
-behavior unchanged need only local checks.
+configuration and rollout checksums. If executable
+content or pod templates changed after the live pass, upgrade with the final
+chart and rerun the affected readiness and inference checks. Metadata changes
+that leave pod templates and runtime behavior unchanged need only local checks.
 
 Finish with the tested model/profile, artifact pins, workload, check results,
 remaining gaps and final release/cache state. Commit and publish only within

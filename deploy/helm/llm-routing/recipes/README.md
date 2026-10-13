@@ -30,7 +30,7 @@ Automatic recipes select pinned model and runtime settings from the chart. Suppl
 
 Planned and unavailable catalog entries have no installable values file. Their missing artifacts or chart support must be resolved first.
 
-See [build and package](../dev-artifacts/README.md) for development image preparation and local chart archives.
+The charts and shared images are published to a registry. See [Publishing charts and images](../ADVANCED.md#publishing-charts-and-images).
 
 The charts own model workloads, persistent caches and InferenceEndpoints. Shared routing and credentials belong to the shared infrastructure release. Kubernetes manages preparation, startup and readiness. Choose distinct available GPU nodes from a supported hardware profile.
 
@@ -43,10 +43,10 @@ python3 export_catalog.py
 python3 export_catalog.py --check
 ```
 
-Resolve each deployment's `chart.localPath` and `guide` relative to its containing `index.json`. The source index points to chart directories and repository guides. `dev-artifacts/package-charts.sh` rewrites these fields to the packaged chart archives and included guide snapshots. `chart.archive` and `licenseNotice` identify files relative to the package directory. `licenseNotice` is `NOTICE` when terms are recorded and `null` otherwise. The packager includes each distinct maintained notice once in that file, including terms for planned upstream candidates. Guide snapshots describe the repository workflow, so their commands and links to other source files still require the checkout.
+Resolve each deployment's `chart.localPath` and `guide` relative to its containing `index.json`. The index points to chart source directories and repository guides. `chart.archive` names the archive `helm package` produces. `licenseNotice` is `NOTICE` when terms are recorded and `null` otherwise; the maintained terms are in the recipe's `NOTICE`, `NOTICE.<recipe-id>`, or the shared SGLang `NOTICE` in this directory. Each model chart ships a root `NOTICE` that lists its bundled recipes and carries their terms. `export_catalog.py` generates it from those files, so edit the recipe notices instead.
 
-Chart packages include the same pinned metadata. Tests check synchronization. The common index records runtime smoke tests separately from automatic Helm lifecycle validation and points to local archives until publication is configured.
+Chart packages include the same pinned metadata. Tests check synchronization. The common index records runtime smoke tests separately from automatic Helm lifecycle validation.
 
-Each exported `deployment.chart` includes `repository: null` and `publication: "local"` by default. To describe a published chart, set optional `chartRepository` on its SGLang model in `catalog.json` or its GGUF `recipe.json`, then regenerate the index. Supply the full OCI repository ending in the chart name, without a tag or digest; the exported chart version selects the tag. The exporter emits that address as `repository` with `publication: "oci"` and retains the local paths. This setting neither publishes a chart nor checks registry availability. Consumers must handle a null repository as local-only. The planner continues using local charts unless `--chart-source` is supplied.
+Each exported `deployment.chart` includes `repository: null` and `publication: "local"` unless its recipe sets `chartRepository`: on its SGLang model in `catalog.json` or its GGUF `recipe.json`. Supply the full OCI repository ending in the chart name, without a tag or digest; the exported chart version selects the tag. The exporter emits that address as `repository` with `publication: "oci"` and retains the local paths. This setting neither publishes a chart nor checks registry availability. Every current recipe sets it to its published chart. Consumers must handle a null repository as local-only. The planner installs a published chart at the exported version, and the local chart otherwise; `--chart-source` overrides both.
 
 Use `../llm.py` for recipe discovery, placement planning, model discovery and chat. Use the [independent model lifecycle](../ADVANCED.md#independent-model-lifecycle) to upgrade, verify, stop, resume, remove and reinstall each recipe through its Helm release. See [Advanced deployment and configuration](../ADVANCED.md) for verification and recovery.
