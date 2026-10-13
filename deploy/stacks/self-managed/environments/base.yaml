@@ -579,7 +579,6 @@ icms:
 # repository.
 cpuWorkloads:
   enabled: false
-  sisChartVersion: ""
 
 # PDB knobs for control-plane services. Disabled by default.
 # Set enabled: true for any service running more than one replica.

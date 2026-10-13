@@ -238,4 +238,21 @@ if render_values "$work_dir/both-values.yaml" api; then
   fail "both a sis chart version and a chart path were accepted"
 fi
 
+write_environment <<'EOF'
+global:
+  image:
+    registry: nvcr.io
+    repository: test/nvcf
+cpuWorkloads:
+  enabled: true
+  sisChartVersion: ""
+sis:
+  chartPath: /charts/helm-nvcf-sis
+EOF
+if render_values "$work_dir/empty-version-values.yaml" api; then
+  fail "an empty cpuWorkloads.sisChartVersion was accepted"
+fi
+grep -Fq 'must not be empty' "$work_dir/write-values.log" ||
+  fail "the empty sis chart version did not say it must not be empty"
+
 echo "cpu-workloads-wiring: OK"

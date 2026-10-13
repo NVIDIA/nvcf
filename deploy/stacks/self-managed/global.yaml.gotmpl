@@ -1329,6 +1329,10 @@ notary:
        named, by version or through the existing sis.chartPath override. */}}
 {{- $cpuSisChartVersion := dig "cpuWorkloads" "sisChartVersion" "" .Values }}
 {{- $cpuSisChartPath := dig "sis" "chartPath" "" .Values }}
+{{- /* An empty value would reach the release as an empty chart version, which helm reads as the latest chart. */}}
+{{- if and (hasKey (dig "cpuWorkloads" (dict) .Values) "sisChartVersion") (not $cpuSisChartVersion) }}
+{{- fail "cpuWorkloads.sisChartVersion must not be empty. Remove it, or name a released sis chart version" }}
+{{- end }}
 {{- if and $cpuWorkloadsEnabled (not $cpuSisChartVersion) (not $cpuSisChartPath) }}
 {{- fail "cpuWorkloads.enabled=true needs an sis chart that supports CPU-only workloads, and the chart this stack pins (2.6.0) does not. Set cpuWorkloads.sisChartVersion to a released chart that does, or sis.chartPath to a chart built from this repository" }}
 {{- end }}
