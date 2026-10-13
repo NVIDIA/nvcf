@@ -307,6 +307,8 @@ impl ClusterRoutingGeneration {
             };
             // Only the reserved backend's own update can include the request.
             // Updates from other backends in the cluster leave it counting.
+            // The update's receipt time, not when it was applied here, bounds
+            // what the backend could have reported.
             if updated_backend_index == Some(index) {
                 pending.settle_on_backend_update(self.backends[index].snapshot_updated_at);
             }

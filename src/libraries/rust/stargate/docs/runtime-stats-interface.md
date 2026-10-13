@@ -71,8 +71,9 @@ Waiting for the backend's own update covers two cases:
 Pylons that send only heartbeats keep each reservation until the first
 heartbeat received at or after its soft expiry, which includes the request, or
 until the hard deadline. With the default heartbeat interval and maximum TTL
-both at 1000 ms, the remaining gap is at most about one RTT: a heartbeat lands
-just before the soft expiry and the next one just after the hard deadline. A
+both at 1000 ms, the remaining gap is at most about the soft TTL (the bounded
+RTT, at least the minimum TTL): a heartbeat lands just before the soft expiry
+and the next one just after the hard deadline. A
 heartbeat interval longer than the maximum TTL widens that gap. Deploying
 Pylons with change-driven stats updates before this Stargate version is
 recommended for the most current view but is no longer required.

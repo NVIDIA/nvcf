@@ -151,9 +151,11 @@ forwarded health RTT + queue delay + request prefill time
 
 Queue delay is zero when the reported engine concurrency limit is positive and
 the active request count is below that limit. Active requests include prefill,
-decode, and pending routing reservations. A reservation ends when the selected
-backend sends a registration update at least one health-check RTT after
-dispatch, or at `--routing-reservation-ttl-max-ms`, whichever comes first. See
+decode, and pending routing reservations. A reservation ends when Stargate
+receives a registration update from the selected backend at or after the
+reservation's soft expiry (the backend's health-check RTT, bounded by the
+minimum and maximum TTL flags), or at `--routing-reservation-ttl-max-ms`,
+whichever comes first. See
 [Runtime stats interface](runtime-stats-interface.md#registration-updates). The
 new request's own prefill time still contributes to TTFT.
 
