@@ -106,7 +106,12 @@ func TestCRIUGroupCaptureLeader(t *testing.T) {
 	restored.Annotations[webhook.CRIURestoreAnnotation] = "a"
 	bare := stsRank("src", "0", "1", "", true)
 	bare.OwnerReferences = nil
-	for name, p := range map[string]corev1.Pod{"rank 1": r1, "not ready": notReady, "restored": restored, "a bare pod": bare} {
+	ownInstance := stsRank("kimi-0", "0", "2", "sts-a", true)
+	ownInstance.Namespace = "sr-instance-a"
+	for i := range ownInstance.Spec.Containers {
+		ownInstance.Spec.Containers[i].Env = append(ownInstance.Spec.Containers[i].Env, corev1.EnvVar{Name: "DISCOVERY_NAMESPACE", Value: "sr-instance-a-graph"})
+	}
+	for name, p := range map[string]corev1.Pod{"rank 1": r1, "not ready": notReady, "restored": restored, "a bare pod": bare, "a pod naming its instance": ownInstance} {
 		if _, _, ok := criuGroupCaptureLeader(&p); ok {
 			t.Errorf("%s drives a capture", name)
 		}

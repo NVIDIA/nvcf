@@ -59,6 +59,10 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 	}
 	key := g.Key
 	log := m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "criuGroup": key})
+	if name := NamesOwnInstance(pod); name != "" {
+		log.WithField("env", name).Info("CRIU group restore: the pod names its own instance in its configuration; it starts from the caches")
+		return nil
+	}
 	ordinal, size := podOrdinal(pod), m.groupSize(ctx, pod)
 	if size != len(g.Checkpoints) || ordinal >= size {
 		log.WithFields(logrus.Fields{"ordinal": ordinal, "size": size, "captured": len(g.Checkpoints)}).

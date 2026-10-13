@@ -211,6 +211,11 @@ func criuGroupCaptureLeader(pod *corev1.Pod) (uri string, size int, ok bool) {
 	if !isRank || o != 0 || !rootfsonly.IsPodReady(pod) || gpuContainer(pod) == "" || !hasInstance(pod) {
 		return "", 0, false
 	}
+	// A pod that names its own instance would restore as the wrong one
+	// (webhook.NamesOwnInstance): not captured.
+	if webhook.NamesOwnInstance(pod) != "" {
+		return "", 0, false
+	}
 	return uri, s, true
 }
 
@@ -244,6 +249,13 @@ func (a *Agent) captureOptedIn(pod *corev1.Pod) bool {
 }
 
 func (c *criuAutoRestorer) considerGroupCapture(ctx context.Context, pod *corev1.Pod) {
+	if name := webhook.NamesOwnInstance(pod); name != "" && rootfsonly.IsPodReady(pod) && pod.Annotations[cacheURIAnnotation] != "" {
+		if _, seen := c.attempted.LoadOrStore("identity/"+string(pod.UID), struct{}{}); !seen {
+			c.a.log.WithFields(logrus.Fields{"pod": pod.Namespace + "/" + pod.Name, "env": name}).
+				Info("CRIU group capture: skipped; the pod names its own instance in its configuration, so a restore would run as the wrong instance (it starts from the caches)")
+		}
+		return
+	}
 	uri, size, ok := criuGroupCaptureLeader(pod)
 	if !ok || (size > 1 && !c.a.captureOptedIn(pod)) {
 		return

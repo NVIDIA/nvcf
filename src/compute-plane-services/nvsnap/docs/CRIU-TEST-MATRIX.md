@@ -74,8 +74,8 @@ with the cold deploy of the same case.
 | `sts-tp2` | StatefulSet | 2 | `exec`, TP=2 over the network | group capture, address remap of the ranks' connections | restored | Verified: cold 150 s, restored 39 s |
 | `lws-tp2` | LeaderWorkerSet | 2 | `exec`, TP=2 | LWS grouping and rank | restored | New (needs the LWS CRD) |
 | `deploy-sglang` | Deployment | 1 | SGLang, pid 1 | a second engine | restored | New |
-| `dynamo-1gpu` | DynamoGraphDeployment | 1 + frontend | Dynamo vLLM worker on one GPU | single-pod Dynamo shape | restored, not serving (see below) | New (needs the Dynamo operator) |
-| `dynamo-grove-tp2` | DynamoGraphDeployment | 2 + frontend | Dynamo vLLM worker over two nodes | Grove PodCliques, the shape production Dynamo functions run | restored, not serving (see below) | Capture and restore run |
+| `dynamo-1gpu` | DynamoGraphDeployment | 1 + frontend | Dynamo vLLM worker on one GPU | single-pod Dynamo shape | starts from the caches, not restored (see below) | New (needs the Dynamo operator) |
+| `dynamo-grove-tp2` | DynamoGraphDeployment | 2 + frontend | Dynamo vLLM worker over two nodes | Grove PodCliques, the shape production Dynamo functions run | starts from the caches, not restored (see below) | Group capture and restore verified before the rule below |
 | `deploy-noshell` | Deployment | 1 | `exec`, image with no shell | every injected step (model wait, cache seed, prewarm, placeholder) runs without `/bin/sh` | restored | New (needs a GPU image without a shell) |
 
 Real models, deployed as their own functions:
@@ -128,10 +128,13 @@ Without it rank 0 fails at startup and the other ranks wait for it forever.
 
 - Ray-based multi-node engines (`ray start --address`): not recognized as
   multi-node, so a Ray worker pod could be captured alone.
-- Engines that register with a discovery service outside the process, such
-  as Dynamo workers: the registration names the instance the process was
-  captured in, so a restored worker is not found by the new instance's
-  frontend. nvsnap restores the process; serving after a restore needs the
-  engine to register again.
+- Pods that name their own instance in their configuration: a GPU container
+  with a literal env value containing the pod's namespace (Dynamo's
+  `DYN_NAMESPACE`, a Grove headless service name). A restored process keeps
+  the environment it was started with, so it would run as the instance it
+  was captured from; a Dynamo worker restored that way is Ready but never
+  registers with the new instance, and every request fails. These pods are
+  not CRIU-captured or restored; they start from the model volume and the
+  compile caches (NVIDIA/nvcf#2517).
 - Pods with an IMEX channel restore only when the channel is the same on the
   new pods.
