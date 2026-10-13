@@ -571,15 +571,20 @@ func prepareComputePlaneRegisterHandoff(c *cobra.Command, clusterName string) (*
 	if err != nil {
 		return nil, err
 	}
+	return computePlaneHandoffForStack(resolved, clusterName)
+}
+
+func computePlaneHandoffForStack(resolved *selfhosted.ResolvedStack, clusterName string) (*computePlaneRegisterHandoff, error) {
 	valuesPath := computePlaneRegisterOutput
 	if valuesPath == "" {
 		// TODO: resolve to using one path in both CLI and helmfiles.
 		valuesPath = filepath.Join(resolved.Path, "out", clusterName+"-register-values.yaml")
 	} else {
-		valuesPath, err = filepath.Abs(valuesPath)
+		absolute, err := filepath.Abs(valuesPath)
 		if err != nil {
 			return nil, fmt.Errorf("resolving output path: %w", err)
 		}
+		valuesPath = absolute
 	}
 	chart, version, err := computePlaneChartFromStack(resolved.Path)
 	if err != nil {
@@ -597,6 +602,13 @@ func prepareComputePlaneRegisterHandoff(c *cobra.Command, clusterName string) (*
 			umbrellaArgs = []string{"--umbrella-bundle", absolute}
 		}
 		umbrellaArgs = append(umbrellaArgs, "--umbrella-sha256", resolved.Umbrella.SHA256)
+		if selfHostedUmbrellaCacheDir != "" {
+			absolute, err := filepath.Abs(selfHostedUmbrellaCacheDir)
+			if err != nil {
+				return nil, fmt.Errorf("resolving umbrella cache path: %w", err)
+			}
+			umbrellaArgs = append(umbrellaArgs, "--umbrella-cache-dir", absolute)
+		}
 	}
 	return &computePlaneRegisterHandoff{
 		UmbrellaArgs: umbrellaArgs,

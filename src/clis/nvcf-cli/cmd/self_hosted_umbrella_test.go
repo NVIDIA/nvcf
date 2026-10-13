@@ -1,13 +1,31 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
+/*
+SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"nvcf-cli/internal/selfhosted"
 	"nvcf-cli/internal/selfhosted/progress"
@@ -85,5 +103,53 @@ func TestUmbrellaSelectionDoesNotReplaceObservedStatus(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("observed snapshot missing")
+	}
+}
+
+func TestComputePlaneUmbrellaHandoffRetainsCache(t *testing.T) {
+	oldRelease, oldBundle, oldCache := selfHostedUmbrellaRelease, selfHostedUmbrellaBundle, selfHostedUmbrellaCacheDir
+	oldOutput := computePlaneRegisterOutput
+	t.Cleanup(func() {
+		selfHostedUmbrellaRelease, selfHostedUmbrellaBundle, selfHostedUmbrellaCacheDir = oldRelease, oldBundle, oldCache
+		computePlaneRegisterOutput = oldOutput
+	})
+	computePlaneRegisterOutput = ""
+	stack := &selfhosted.ResolvedStack{Path: writeComputePlaneStack(t), Umbrella: &selfhosted.UmbrellaIdentity{Version: "2.0.3", SHA256: "sha256:" + strings.Repeat("a", 64)}}
+	for _, selector := range []string{"release", "bundle"} {
+		for _, cache := range []string{"", "relative cache with spaces"} {
+			t.Run(selector+"/"+cache, func(t *testing.T) {
+				selfHostedUmbrellaRelease, selfHostedUmbrellaBundle = "", ""
+				selfHostedUmbrellaCacheDir = cache
+				if selector == "release" {
+					selfHostedUmbrellaRelease = stack.Umbrella.Version
+				} else {
+					selfHostedUmbrellaBundle = "bundle with spaces.tar.gz"
+				}
+				handoff, err := computePlaneHandoffForStack(stack, "gpu-a")
+				if err != nil {
+					t.Fatal(err)
+				}
+				var output bytes.Buffer
+				command := &cobra.Command{}
+				command.SetOut(&output)
+				writeComputePlaneRegisterSummary(command, computePlaneRegisterSummary{Registration: &selfhosted.RegisterResponse{}, Handoff: handoff})
+				if cache == "" {
+					if strings.Contains(output.String(), "--umbrella-cache-dir") {
+						t.Fatal("implicit cache unexpectedly forwarded")
+					}
+				} else {
+					absolute, err := filepath.Abs(cache)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !strings.Contains(output.String(), "--umbrella-cache-dir "+shellQuote(absolute)) {
+						t.Fatalf("handoff lost explicit cache: %s", &output)
+					}
+				}
+				if !strings.Contains(output.String(), "--umbrella-"+selector+" ") || !strings.Contains(output.String(), stack.Umbrella.SHA256) {
+					t.Fatalf("handoff lost pinned selection: %s", &output)
+				}
+			})
+		}
 	}
 }

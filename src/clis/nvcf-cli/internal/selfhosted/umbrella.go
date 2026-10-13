@@ -1,5 +1,19 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
+/*
+SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 
 package selfhosted
 
@@ -203,7 +217,11 @@ func resolveUmbrellaStack(ctx context.Context, opts StackOptions) (*ResolvedStac
 			return nil, err
 		}
 		if err := os.WriteFile(target, file.data, os.FileMode(file.mode)); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("write umbrella cache file %s: %w", name, err)
+		}
+		// Restore the verified archive mode after the process umask is applied.
+		if err := os.Chmod(target, os.FileMode(file.mode)); err != nil {
+			return nil, fmt.Errorf("set umbrella cache file mode %s: %w", name, err)
 		}
 	}
 	if err := os.WriteFile(filepath.Join(temporary, "bundle.tar.gz"), archive, 0o644); err != nil {
