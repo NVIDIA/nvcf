@@ -87,7 +87,7 @@ Event Ledger commands need the Event Ledger addon on the control plane and an AP
 
 | Command | Purpose | Notes |
 |---|---|---|
-| `stats get [--function-version-id=VID] [--event-filter=NAME[,NAME]]` | Latest event for every instance of a function version | Uses the saved version ID when the flag is omitted; `--json` for machine-readable output |
+| `stats get [--function-version-id=VID] [--event-filter=NAME[,NAME]]` | Latest event for every instance of a function version | The version ID must be a UUID; uses the saved version ID when the flag is omitted; `--json` for machine-readable output |
 | `stages events list [--function-version-id=VID] --deployment-id=ID --gpu-specification-id=ID [--attribute-key=K --attribute-value=V]` | Event history of one instance, most recent first | Needs at least one of `--instance-id`, `--deployment-id`, `--gpu-specification-id`, `--cluster-id`, `--resource-id`, matching how the events were ingested. `--attribute-key` and `--attribute-value` go together and keep only events with that attribute value. Run `stats get` first to see the contexts |
 
 ## Agent skill

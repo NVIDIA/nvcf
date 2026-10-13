@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -38,6 +39,8 @@ const (
 	eventLedgerFlagURL             = "event-ledger-url"
 	eventLedgerFlagFunctionVersion = "function-version-id"
 )
+
+var functionVersionIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 var (
 	eventLedgerURLFlag             string
@@ -192,6 +195,9 @@ func newEventLedgerClient() (*eventledger.Client, string, time.Duration, error) 
 	}
 	if namespace == "" {
 		return nil, "", 0, fmt.Errorf("--%s is required", eventLedgerFlagFunctionVersion)
+	}
+	if !functionVersionIDPattern.MatchString(namespace) {
+		return nil, "", 0, fmt.Errorf("invalid function version ID %q: must be a UUID", namespace)
 	}
 	c, err := eventledger.NewClient(eventledger.Config{
 		ServiceURL: resolveEventLedgerURL(eventLedgerURLFlag, config.BaseHTTPURL),

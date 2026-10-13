@@ -30,6 +30,8 @@ import (
 	"nvcf-cli/internal/client"
 )
 
+const testFunctionVersionID = "11111111-2222-3333-4444-555555555555"
+
 func setupEventLedgerCommandTest(t *testing.T, handler http.HandlerFunc) {
 	t.Helper()
 	server := httptest.NewServer(handler)
@@ -43,7 +45,7 @@ func setupEventLedgerCommandTest(t *testing.T, handler http.HandlerFunc) {
 
 	jsonOutput = false
 	eventLedgerURLFlag = ""
-	eventLedgerFunctionVersionFlag = "fv-1"
+	eventLedgerFunctionVersionFlag = testFunctionVersionID
 	statsEventFilter = nil
 	eventsInstanceID, eventsDeploymentID, eventsGPUSpecificationID, eventsClusterID = "", "", "", ""
 	eventsResourceID, eventsAttributeKey, eventsAttributeValue = "", "", ""
@@ -58,10 +60,10 @@ func setupEventLedgerCommandTest(t *testing.T, handler http.HandlerFunc) {
 
 func TestStatsGetRendersContexts(t *testing.T) {
 	setupEventLedgerCommandTest(t, func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/v3/ledger/namespace/fv-1/stats", r.URL.Path)
+		assert.Equal(t, "/v3/ledger/namespace/"+testFunctionVersionID+"/stats", r.URL.Path)
 		assert.Equal(t, "Bearer nvapi-test", r.Header.Get("Authorization"))
 		assert.Equal(t, "Started", r.URL.Query().Get("eventFilter"))
-		_, _ = w.Write([]byte(`{"namespace":"fv-1","summary":{"total_contexts":1,"by_event":{"Started":1}},` +
+		_, _ = w.Write([]byte(`{"namespace":"ns","summary":{"total_contexts":1,"by_event":{"Started":1}},` +
 			`"contexts":[{"context":"cluster_id=c1,instance_id=i1","event_name":"Started","timestamp":"2026-01-01T00:00:00Z","first_seen":"2026-01-01T00:00:00Z"}]}`))
 	})
 	statsEventFilter = []string{"Started"}
@@ -84,10 +86,10 @@ func TestStagesEventsListRequiresContextFilter(t *testing.T) {
 
 func TestStagesEventsListRendersEvents(t *testing.T) {
 	setupEventLedgerCommandTest(t, func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/v3/ledger/namespace/fv-1/events", r.URL.Path)
+		assert.Equal(t, "/v3/ledger/namespace/"+testFunctionVersionID+"/events", r.URL.Path)
 		assert.Equal(t, "dep-1", r.URL.Query().Get("deployment_id"))
 		assert.Equal(t, "gpu-a100", r.URL.Query().Get("gpu_specification_id"))
-		_, _ = w.Write([]byte(`{"namespace":"fv-1","context":"deployment_id=dep-1","events":[` +
+		_, _ = w.Write([]byte(`{"namespace":"ns","context":"deployment_id=dep-1","events":[` +
 			`{"event_name":"Pulled","timestamp":"2026-01-01T00:00:01Z","details":{"severity":"INFO","body":"Successfully pulled image"}}]}`))
 	})
 	eventsDeploymentID = "dep-1"
@@ -124,7 +126,7 @@ func TestStagesEventsListResourceIDCountsAsContextAndSendsAttributeFilter(t *tes
 		assert.Equal(t, "res-1", q.Get("resource_id"))
 		assert.Equal(t, "request-id", q.Get("attribute_key"))
 		assert.Equal(t, "abc", q.Get("attribute_value"))
-		_, _ = w.Write([]byte(`{"namespace":"fv-1","context":"resource_id=res-1","events":[]}`))
+		_, _ = w.Write([]byte(`{"namespace":"ns","context":"resource_id=res-1","events":[]}`))
 	})
 	eventsResourceID = "res-1"
 	eventsAttributeKey = "request-id"
@@ -142,4 +144,17 @@ func TestStagesEventsListAttributeFilterNeedsKeyAndValue(t *testing.T) {
 
 	err := stagesEventsListCmd.RunE(stagesEventsListCmd, nil)
 	require.ErrorContains(t, err, "must be used together")
+}
+
+func TestEventLedgerCommandsRejectNonUUIDFunctionVersionID(t *testing.T) {
+	setupEventLedgerCommandTest(t, func(http.ResponseWriter, *http.Request) {
+		t.Error("no request expected for a malformed function version ID")
+	})
+	eventLedgerFunctionVersionFlag = "not-a-uuid"
+	eventsDeploymentID = "dep-1"
+
+	err := statsGetCmd.RunE(statsGetCmd, nil)
+	require.ErrorContains(t, err, "must be a UUID")
+	err = stagesEventsListCmd.RunE(stagesEventsListCmd, nil)
+	require.ErrorContains(t, err, "must be a UUID")
 }

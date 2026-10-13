@@ -640,7 +640,7 @@ Ledger at `event_ledger_url`. When that is not set, it replaces the leading
 | `stats get` | Show the latest event for every instance of a function version (supports `--function-version-id` and `--event-filter`) |
 | `stages events list` | List the event history of one instance, most recent first (supports `--function-version-id`, `--instance-id`, `--deployment-id`, `--gpu-specification-id`, `--cluster-id`, and `--resource-id`, plus `--attribute-key` with `--attribute-value`) |
 
-`--function-version-id` defaults to the saved version ID. `stages events list`
+`--function-version-id` must be a UUID and defaults to the saved version ID. `stages events list`
 needs at least one context filter (`--instance-id`, `--deployment-id`,
 `--gpu-specification-id`, `--cluster-id`, or `--resource-id`) that matches how the
 events were ingested. Run `stats get` first to see the contexts that exist.
