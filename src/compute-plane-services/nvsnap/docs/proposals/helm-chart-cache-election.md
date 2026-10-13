@@ -111,7 +111,7 @@ capture; the reconciler treats an expired Lease like a failed leader.
   hash (`CaptureRequest.Hash`).
 - `internal/server`: ungate on `ready`, leader liveness in the reconciler.
 - Helm: `agent.election.enabled` (default false until qualified),
-  `agent.election.leaseTimeout`; server RBAC gains `leases` get/list/watch.
+  `agent.election.deadline`; server RBAC gains `leases` get/list/watch.
 
 ## Disaggregated workers share one cache
 

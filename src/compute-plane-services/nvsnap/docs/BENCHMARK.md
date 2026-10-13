@@ -54,10 +54,12 @@ recompiling.
 | e5-mistral-7b-instruct | vLLM | 73 s | 90 s | -- |
 | whisper-large-v3 | NIM (Riva) | 72 s | 74 s | -- |
 
-The two rows above the June table are from dev1 (EKS, NVMesh, 2026-09-25);
-the Qwen row is a two-replica Helm chart through the admission election
-(`docs/proposals/helm-chart-cache-election.md`): first deploy pays one cold
-leader plus capture, every later start of the chart is the restore number.
+The first three rows are from an EKS cluster with NVMesh storage
+(2026-09-25), not the June GKE run. The two Qwen rows are two-replica Helm
+chart deployments through the admission election
+(`docs/proposals/helm-chart-cache-election.md`): their first deploy pays one
+cold leader plus capture, and every later start of the chart is the restore
+number.
 Phase split for Qwen3-235B, cold to warm: model download and load 641 s to
 17 s, torch.compile 94 s to 15 s, init engine 292 s to 48 s; the warm 367 s is
 mostly the 230 s prewarm read of 237 GB. Qwen2.5-32B: model download and load 247 s to 6 s,
