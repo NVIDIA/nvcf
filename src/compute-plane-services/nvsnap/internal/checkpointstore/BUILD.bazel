@@ -42,6 +42,7 @@ go_library(
 go_test(
     name = "checkpointstore_test",
     srcs = [
+        "chain_rollback_test.go",
         "hash_test.go",
         "local_test.go",
         "mount_holder_test.go",

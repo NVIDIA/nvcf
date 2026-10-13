@@ -59,8 +59,9 @@ not.
    chart downloads in an init container, that init is the download step.
    If the engine downloads itself, the webhook injects an init
    (`huggingface-cli download <repo>` into the landing path) and starts the
-   engine offline. The Lease `nvsnap-model-<id>` elects the writer among
-   concurrent admissions; the writer's init runs the download, its main
+   engine offline. The Lease `nvsnap-model-<id>`, always in the nvsnap
+   namespace whatever the workload's namespace, elects the writer among
+   concurrent admissions across the cluster; the writer's init runs the download, its main
    container mounts the model read-only. Every other pod is a reader and
    its download init is replaced by a wait.
 
