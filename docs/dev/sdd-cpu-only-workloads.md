@@ -2,6 +2,10 @@
 
 Tracking issue: NVIDIA/nvcf#74.
 
+Status: this document describes the whole series. This pull request adds the control plane (ICMS) part. The
+cluster agent, pod translation, CLI and documentation parts arrive in later pull requests of the series, so
+until they land only ICMS can be enabled.
+
 This document explains the design in plain words. Each decision says what was built, why, and which
 alternatives were not used. Section 6 lists the known limits and the planned next features.
 

@@ -80,7 +80,7 @@ clusters register CPU instance types. The self-managed stack pins an SIS chart t
 so it refuses the switch until `cpuWorkloads.sisChartVersion` or `sis.chartPath` names a chart that has it.
 
 - A CPU shape is registered under the reserved GPU name `CPU`, with an instance type named
-  `<provider>.CPU.<shape>` (for example `NCP.CPU.4c16g`) and `gpuCount` 0.
+  `<provider>.CPU.<shape>` (for example `NCP.CPU.8c32g`) and `gpuCount` 0.
 - A shape NVCA could not build is refused with a 400: the name and value must be the same shape name and a valid
   Kubernetes label value, `cpuCores` must be positive, and `systemMemory` and `storage` must be positive
   Kubernetes quantities such as `16Gi`. Registration forms that carry no storage field are not checked for it.
