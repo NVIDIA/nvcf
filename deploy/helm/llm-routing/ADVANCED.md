@@ -286,6 +286,12 @@ By default (`reuseCaches: false`), a changed image, llama.cpp revision or CUDA a
 
 To require offline reuse without rebuilding, set `reuseCaches: true`, `artifacts.existingClaim` and `rpc.cache.existingClaim` to the retained claims. Supply their original nodes in leader/worker order. The artifact claim must contain the pinned build and source files used for GPU qualification, as well as the runtime bundle and complete model files. Missing qualification state stops startup without rebuilding or deleting the retained files. Use a complete retained artifact cache or a new runtime cache; do not bypass the qualification check. Runtime identity and complete model checksums are validated before serving.
 
+GGUF downloads retain valid partial files after network failures. Invalid resume
+responses, HTTP 416 responses and oversized partial files restart the affected
+file from zero within the existing 12-attempt budget. Chunks that exceed the
+pinned size or advertised range are rejected before writing. Completed files
+still require the pinned size and SHA-256 digest before publication.
+
 ### Helm Flash-Next recipes
 
 Flash-Next uses recipe `qwen3.8-flash-next` with two NVFP4 profiles. Both use automatic startup: one Helm install qualifies the hardware, verifies or downloads the pinned checkpoint, and starts serving. Each profile's live validation is recorded separately in the catalog.

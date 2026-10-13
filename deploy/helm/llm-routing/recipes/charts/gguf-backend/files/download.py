@@ -6,9 +6,11 @@ import datetime
 import hashlib
 import json
 import pathlib
+import re
 import shutil
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -16,6 +18,10 @@ lock = {}
 root = pathlib.Path('/artifacts/model')
 progress = {}
 mutex = threading.Lock()
+
+
+class RestartDownload(Exception):
+    """The retained prefix or response cannot be used for a pinned download."""
 
 
 def emit(record):
@@ -47,29 +53,49 @@ def download(expected):
         return
     for attempt in range(12):
         offset = partial.stat().st_size if partial.exists() else 0
+        if offset > expected['size']:
+            partial.unlink()
+            emit({'restart': relative, 'reason': 'oversized_partial', 'bytes': offset})
+            offset = 0
         with mutex:
             progress[relative] = offset
         if offset == expected['size']:
             break
-        assert offset < expected['size'], 'Partial file exceeds pinned size'
         url = 'https://huggingface.co/' + lock['model'] + '/resolve/' + lock['revision'] + '/' + urllib.parse.quote(relative)
         url += '?download=true&attempt=' + str(time.time_ns())
         request = urllib.request.Request(url, headers={'Range': 'bytes=' + str(offset) + '-', 'User-Agent': 'pylon-gguf-validation'})
         try:
             with urllib.request.urlopen(request, timeout=120) as response, partial.open('ab') as output:
+                response_limit = expected['size']
                 if offset:
-                    assert response.status == 206, 'Server refused resume'
-                    assert response.headers['Content-Range'].startswith('bytes ' + str(offset) + '-'), 'Incorrect resume range'
+                    if response.status != 206:
+                        raise RestartDownload('Server refused resume')
+                    content_range = re.fullmatch(r'bytes ([0-9]+)-([0-9]+)/([0-9]+)', response.headers.get('Content-Range') or '')
+                    if content_range is None:
+                        raise RestartDownload('Missing or malformed resume range')
+                    try:
+                        start, end, total = map(int, content_range.groups())
+                    except ValueError:
+                        raise RestartDownload('Invalid resume range numbers') from None
+                    if start != offset or not start <= end < expected['size'] or total != expected['size']:
+                        raise RestartDownload('Incorrect resume range')
+                    response_limit = end + 1
                 while chunk := response.read(8 * 1024 * 1024):
+                    if offset + len(chunk) > response_limit:
+                        raise RestartDownload('Download exceeded pinned range or size')
                     output.write(chunk)
                     offset += len(chunk)
-                    assert offset <= expected['size'], 'Download exceeded pinned size'
                     with mutex:
                         progress[relative] = offset
             if offset != expected['size']:
                 raise OSError('Incomplete response')
             break
-        except OSError as error:
+        except (OSError, RestartDownload) as error:
+            if isinstance(error, RestartDownload) or (offset and isinstance(error, urllib.error.HTTPError) and error.code == 416):
+                partial.unlink(missing_ok=True)
+                offset = 0
+                with mutex:
+                    progress[relative] = 0
             emit({'retry': relative, 'attempt': attempt + 1, 'bytes': offset, 'errorType': type(error).__name__})
             if attempt == 11:
                 raise RuntimeError('Download retries exhausted for ' + relative) from None
