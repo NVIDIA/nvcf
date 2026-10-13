@@ -16,7 +16,9 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 
 use parking_lot::Mutex;
 use stargate_proto::pb::ModelStats;
@@ -27,8 +29,7 @@ use crate::metrics::StargateMetrics;
 use super::keys::RoutingTargetKey;
 use super::registration::{RegistrationClusterGeneration, RegistrationGeneration};
 use super::reservations::{
-    PendingClusterReservation, ReservationTtl, RoutingReservation,
-    apply_pending_cluster_reservations,
+    PendingClusterReservation, RoutingReservation, apply_pending_cluster_reservations,
 };
 use super::snapshots::{
     ClusterBackendRemoval, ClusterBackendUpsert, ClusterRoutingGeneration, ClusterSnapshotState,
@@ -312,8 +313,6 @@ impl ClusterRoutingGeneration {
             if updated_backend_index == Some(index) {
                 pending.settle_on_backend_update(self.backends[index].snapshot_updated_at);
             }
-            // Hard deadlines are pruned on snapshot reads, which precede
-            // every new reservation.
             pending.is_active()
         });
         let mut stats = backend_stats;
@@ -335,14 +334,12 @@ impl ClusterRoutingGeneration {
     }
 
     fn routing_snapshot(&mut self) -> Option<RoutedClusterSnapshot> {
-        self.routing_snapshot_at(Instant::now())
-    }
-
-    pub(super) fn routing_snapshot_at(&mut self, now: Instant) -> Option<RoutedClusterSnapshot> {
         let snapshot_state = self.snapshot_state.as_mut()?;
+        // Reservations end only by backend update, release, or removal, so a
+        // read just drops ones that were released since the last refresh.
         snapshot_state
             .pending_cluster_reservations
-            .retain(|pending| pending.is_active_at(now));
+            .retain(|pending| pending.is_active());
         let mut snapshot = snapshot_state.base_snapshot.clone();
         apply_pending_cluster_reservations(
             &mut snapshot.stats,
@@ -356,7 +353,7 @@ impl ClusterRoutingGeneration {
         registration: &Arc<RegistrationGeneration>,
         input_tokens: u64,
         priority: u32,
-        ttl_for_rtt: impl FnOnce(Duration) -> ReservationTtl,
+        ttl_for_rtt: impl FnOnce(Duration) -> Duration,
         metrics: Option<Arc<StargateMetrics>>,
         target: &RoutingTargetKey,
     ) -> Option<RoutingReservation> {
@@ -383,7 +380,7 @@ impl ClusterRoutingGeneration {
         &mut self,
         registration: &Arc<RegistrationGeneration>,
         dispatched_at: Instant,
-        ttl: ReservationTtl,
+        ttl: Duration,
         metrics: Arc<StargateMetrics>,
         target: &RoutingTargetKey,
     ) -> Option<RoutingReservation> {
@@ -467,11 +464,6 @@ impl RoutedClusterState {
     }
 
     #[cfg(test)]
-    pub(super) fn routing_snapshot_at(&self, now: Instant) -> Option<RoutedClusterSnapshot> {
-        self.generation.lock().routing_snapshot_at(now)
-    }
-
-    #[cfg(test)]
     pub(super) fn pending_reservation_count(&self) -> usize {
         self.generation
             .lock()
@@ -525,20 +517,20 @@ impl RoutedClusterState {
             registration,
             input_tokens,
             priority,
-            |_rtt| ReservationTtl::fixed(super::reservations::UNEXPIRING_TEST_RESERVATION_TTL),
+            |_rtt| super::reservations::UNEXPIRING_TEST_RESERVATION_TTL,
             None,
             &RoutingTargetKey::new(None, ""),
         )
     }
 
     /// Reserves one request on `registration` dispatched at `dispatched_at`,
-    /// so tests can place soft and hard expiry on an explicit timeline.
+    /// so tests can place the soft expiry on an explicit timeline.
     #[cfg(test)]
     pub(super) fn reserve_backend_at(
         &self,
         registration: &Arc<RegistrationGeneration>,
         dispatched_at: Instant,
-        ttl: ReservationTtl,
+        ttl: Duration,
         metrics: Arc<StargateMetrics>,
         target: &RoutingTargetKey,
     ) -> Option<RoutingReservation> {
@@ -554,7 +546,7 @@ impl RoutedClusterState {
         registration: &Arc<RegistrationGeneration>,
         input_tokens: u64,
         priority: u32,
-        ttl_for_rtt: impl FnOnce(Duration) -> ReservationTtl,
+        ttl_for_rtt: impl FnOnce(Duration) -> Duration,
         metrics: Arc<StargateMetrics>,
         target: &RoutingTargetKey,
     ) -> Option<RoutingReservation> {

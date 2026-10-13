@@ -41,42 +41,44 @@ Change-driven updates keep that view within the coalescing window and network
 delay of the backend's actual load, instead of up to one heartbeat behind.
 
 Each dispatched request adds a local reservation for the selected backend.
-At dispatch, Stargate fixes two times for it:
+At dispatch, Stargate fixes the reservation's soft expiry: one health-check RTT
+of the selected backend (not the cluster mean) after dispatch, bounded by
+`--routing-reservation-ttl-min-ms` (default `10`) and
+`--routing-reservation-ttl-max-ms` (default `1000`). The maximum only limits
+the effect of a bad RTT sample; it does not end the reservation.
 
-- A soft expiry, one health-check RTT of the selected backend (not the
-  cluster mean) after dispatch, bounded by `--routing-reservation-ttl-min-ms`
-  (default `10`) and `--routing-reservation-ttl-max-ms` (default `1000`).
-- A hard deadline, `--routing-reservation-ttl-max-ms` after dispatch.
-
-The reservation counts until the selected backend sends a registration update
-that Stargate receives at or after the soft expiry, or until the hard deadline,
-whichever comes first. An update received before the soft expiry cannot yet
-include the request, so it leaves the reservation in place, and routing briefly
-counts the request in both reported stats and the reservation. Updates from
-other backends in the same cluster never end it. A queue estimate mismatch
-rejection releases the reservation early, and removing the backend drops it.
+The reservation counts until Stargate receives a registration update from the
+selected backend at or after the soft expiry. Time alone never ends it. An
+update received before the soft expiry cannot yet include the request, so it
+leaves the reservation in place, and routing briefly counts the request in both
+reported stats and the reservation. Updates from other backends in the same
+cluster never end it. A queue estimate mismatch rejection releases the
+reservation early, and removing or deregistering the backend drops it.
 
 Waiting for the backend's own update covers two cases:
 
 - A backend that hangs but keeps its connection stops sending updates. Its last
-  reported stats still look idle. With a purely time-based expiry, those stats
-  would attract most new requests until the backend deregistered. Held
-  reservations keep steering traffic away until the hard deadline.
+  reported stats still look idle. With a time-based expiry or cap, its
+  reservations would all end together and those idle stats would attract a new
+  burst of requests each time. Held reservations keep steering traffic away
+  until the backend reports again or deregisters.
 - On links with an RTT below Pylon's update coalescing interval, a request can
   reach the backend after the first coalesced update was already sent. The
   minimum default matches Pylon's default `--stats-update-coalesce-ms`, so the
   soft expiry leaves room for the change-driven update that includes the
   request. Keep the minimum at or above the Pylon coalescing interval.
 
+The trade-off is that a reservation on a backend that stops reporting stays
+counted, in routing and in `stargate_routing_reservations_active`, until that
+backend reports or its registration ends.
+
 Pylons that send only heartbeats keep each reservation until the first
-heartbeat received at or after its soft expiry, which includes the request, or
-until the hard deadline. With the default heartbeat interval and maximum TTL
-both at 1000 ms, the remaining gap is at most about the soft TTL (the bounded
-RTT, at least the minimum TTL): a heartbeat lands just before the soft expiry
-and the next one just after the hard deadline. A
-heartbeat interval longer than the maximum TTL widens that gap. Deploying
-Pylons with change-driven stats updates before this Stargate version is
-recommended for the most current view but is no longer required.
+heartbeat received at or after its soft expiry, which includes the request.
+No cap ends the reservation before that heartbeat, so a request no longer
+drops out of routing between its reservation ending and the next heartbeat.
+Deploying Pylons with
+change-driven stats updates before this Stargate version is recommended for the
+most current view but is not required.
 
 ## Stream Events
 

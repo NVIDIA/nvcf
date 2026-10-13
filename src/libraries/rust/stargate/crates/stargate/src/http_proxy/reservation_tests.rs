@@ -51,7 +51,7 @@ const BASE_QUEUE_MS: u64 = 5;
 const LAST_MEAN_INPUT_TPS: f64 = 100.0;
 /// Queue time one reservation adds: 37 tokens at 100 tokens/s.
 const RESERVATION_QUEUE_MS: u64 = 370;
-/// Long enough that no reservation can expire while a test runs.
+/// Long enough that no reservation reaches its soft expiry while a test runs.
 const UNEXPIRING_TTL: Duration = Duration::from_secs(600);
 
 #[derive(Clone, Copy)]
@@ -366,7 +366,7 @@ async fn unexpired_reservation_raises_expected_queue_header_for_later_requests()
             Some(BASE_QUEUE_MS + RESERVATION_QUEUE_MS),
             Some(BASE_QUEUE_MS + 2 * RESERVATION_QUEUE_MS),
         ],
-        "each completed dispatch stays reserved until its TTL"
+        "each completed dispatch stays reserved until its backend reports"
     );
     assert_eq!(counted_reservations(&app).await, 3);
 
@@ -374,11 +374,10 @@ async fn unexpired_reservation_raises_expected_queue_header_for_later_requests()
 }
 
 #[tokio::test]
-async fn expired_reservation_is_excluded_from_expected_queue_header() {
-    // A zero maximum TTL sets the hard deadline to the dispatch instant.
-    // `Instant` is monotonic, so every later snapshot read is at or past the
-    // deadline without a registration update, sleeping, or controlling the
-    // clock.
+async fn reported_reservation_is_excluded_from_expected_queue_header() {
+    // A zero TTL puts the soft expiry at the dispatch instant. `Instant` is
+    // monotonic, so the backend update applied after each request is received
+    // at or past the soft expiry without sleeping or controlling the clock.
     let app = proxy_app(Duration::ZERO, Duration::ZERO);
     let tunnel = MockTunnel::start(OK_REPLY);
     let running = register_backend(&app, "inst-a", &tunnel, Duration::from_millis(10)).await;
@@ -387,12 +386,13 @@ async fn expired_reservation_is_excluded_from_expected_queue_header() {
         send_request(&app, request_id)
             .await
             .expect("request should be proxied");
+        report_idle(&app, &running, Duration::from_millis(10)).await;
     }
 
     assert_eq!(
         tunnel.expected_queue_ms_headers(),
         [Some(BASE_QUEUE_MS), Some(BASE_QUEUE_MS)],
-        "an expired reservation must not inflate the next estimate"
+        "a reservation settled by its backend's update must not inflate the next estimate"
     );
     assert_eq!(counted_reservations(&app).await, 0);
     assert_eq!(
@@ -400,7 +400,7 @@ async fn expired_reservation_is_excluded_from_expected_queue_header() {
             .routing_reservation_ttl_seconds(None, MODEL)
             .get_sample_count(),
         2,
-        "both dispatches must have reserved before expiring"
+        "both dispatches must have reserved before settling"
     );
 
     app.state.end_registration(running).await;
@@ -408,9 +408,9 @@ async fn expired_reservation_is_excluded_from_expected_queue_header() {
 
 #[tokio::test]
 async fn soft_expired_reservation_counts_until_the_backend_reports() {
-    // A zero RTT and minimum put the soft expiry at the dispatch instant, so
-    // only the missing registration update keeps the reservation counted.
-    let app = proxy_app(Duration::ZERO, UNEXPIRING_TTL);
+    // A zero RTT and TTL put the soft expiry at the dispatch instant, so only
+    // the missing registration update keeps the reservation counted.
+    let app = proxy_app(Duration::ZERO, Duration::ZERO);
     let tunnel = MockTunnel::start(OK_REPLY);
     let running = register_backend(&app, "inst-a", &tunnel, Duration::ZERO).await;
 
@@ -455,7 +455,7 @@ async fn assert_reply_keeps_reservations(reply: MockReply, case: &str) {
     assert_eq!(
         counted_reservations(&app).await,
         attempts as u64,
-        "{case}: every failed attempt must stay reserved until its TTL"
+        "{case}: every failed attempt must stay reserved until its backend reports"
     );
     let _ = send_request(&app, "req-follow-up").await;
     assert_eq!(

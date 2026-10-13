@@ -115,7 +115,7 @@ define_stargate_metrics! {
     }
     gauges {
         active_inference_servers("active_inference_servers", "Active inference servers available for a routing target", ["routing_key", "model"]);
-        routing_reservations_active("routing_reservations_active", "Routing reservations not yet released or pruned; a reservation counts until its backend reports after the soft TTL, or until a snapshot read after its hard deadline prunes it", ["routing_key", "model"]);
+        routing_reservations_active("routing_reservations_active", "Routing reservations not yet released or pruned; a reservation counts until its backend reports at or after the soft TTL, or until the backend is removed", ["routing_key", "model"]);
         tls_certificate_expiry_seconds("tls_certificate_expiry_seconds", "Unix timestamp when the active TLS certificate expires", ["material_type"]);
     }
 }

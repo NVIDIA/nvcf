@@ -154,8 +154,7 @@ the active request count is below that limit. Active requests include prefill,
 decode, and pending routing reservations. A reservation ends when Stargate
 receives a registration update from the selected backend at or after the
 reservation's soft expiry (the backend's health-check RTT, bounded by the
-minimum and maximum TTL flags), or at `--routing-reservation-ttl-max-ms`,
-whichever comes first. See
+minimum and maximum TTL flags), or when the backend is removed. See
 [Runtime stats interface](runtime-stats-interface.md#registration-updates). The
 new request's own prefill time still contributes to TTFT.
 

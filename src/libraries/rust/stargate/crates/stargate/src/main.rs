@@ -168,9 +168,9 @@ struct Args {
     /// stays counted until the first change-driven update that can include it.
     #[arg(long, default_value_t = 10, value_name = "MS")]
     routing_reservation_ttl_min_ms: u64,
-    /// Maximum soft TTL and hard lifetime for a routing reservation. A
-    /// reservation ends this long after dispatch even if its backend has sent
-    /// no registration update, which bounds the load held for a silent backend.
+    /// Maximum soft TTL for a routing reservation. It bounds the effect of a
+    /// bad RTT sample and never ends a reservation on its own; a backend that
+    /// stops reporting keeps its reservations until it reports or is removed.
     #[arg(long, default_value_t = 1000, value_name = "MS")]
     routing_reservation_ttl_max_ms: u64,
     /// Grace period for shutdown tasks after Stargate starts draining.
