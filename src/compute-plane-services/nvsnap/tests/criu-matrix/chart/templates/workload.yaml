@@ -69,14 +69,27 @@ spec:
        stores it as v1beta1. */}}
 apiVersion: nvidia.com/v1alpha1
 kind: DynamoGraphDeployment
-metadata: {name: {{ $name }}}
+metadata:
+  name: {{ $name }}
+  {{- with $v.dynamo.discoveryBackend }}
+  annotations: {nvidia.com/dynamo-discovery-backend: {{ . | quote }}}
+  {{- end }}
 spec:
   backendFramework: vllm
-  {{- if $v.dynamo.etcdNats }}
+  {{- with $v.dynamo.discoveryBackend }}
+  annotations: {nvidia.com/dynamo-discovery-backend: {{ . | quote }}}
+  {{- end }}
+  {{- if or $v.dynamo.etcdNats $v.dynamo.namespace }}
   envs:
+    {{- if $v.dynamo.etcdNats }}
     - {name: NATS_SERVER, value: "nats://mini-service-nats:4222"}
     - {name: ETCD_ENDPOINTS, value: "mini-service-etcd:2379"}
     - {name: DYN_REQUEST_PLANE, value: nats}
+    {{- end }}
+    {{- with $v.dynamo.namespace }}
+    - {name: DYN_NAMESPACE, value: {{ . | quote }}}
+    - {name: DYN_NAMESPACE_PREFIX, value: {{ . | quote }}}
+    {{- end }}
   {{- end }}
   services:
     Frontend:

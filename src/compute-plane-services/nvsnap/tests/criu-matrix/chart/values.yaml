@@ -52,6 +52,15 @@ dynamo:
   # them (NATS request plane), as production Dynamo functions do. Discovery
   # stays Kubernetes either way: the operator sets it.
   etcdNats: false
+  # Discovery backend the operator wires the components to
+  # (nvidia.com/dynamo-discovery-backend), for example etcd as production
+  # Dynamo functions run; empty keeps the operator's default (kubernetes).
+  discoveryBackend: ""
+  # A fixed Dynamo namespace (DYN_NAMESPACE) for every component instead of
+  # the one the operator derives from the Kubernetes namespace (and the
+  # frontend's DYN_NAMESPACE_PREFIX to match); empty keeps
+  # the operator's.
+  namespace: ""
   etcdImage: quay.io/coreos/etcd:v3.5.17
   natsImage: docker.io/library/nats:2.10-alpine
 
