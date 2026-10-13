@@ -19,7 +19,7 @@ name: Fern Docs CI
 
 on:
   push:
-    branches: ['docs/releases/**', 'docs/candidates/**']
+    branches: ['docs/releases/**', 'docs/candidates/**', 'docs/versions/**']
   pull_request:
     paths:
       - 'docs/**'
@@ -29,6 +29,7 @@ on:
       - 'tools/ci/check-doc-version-sync'
       - 'tools/ci/check-doc-editions'
       - 'tools/ci/preview-docs'
+      - 'tools/ci/publish-docs'
       - 'tools/ci/check-doc-links'
       - 'tools/ci/run-lychee'
       - 'tools/ci/docs-links.toml'
@@ -74,6 +75,7 @@ jobs:
         run: |
           bash tools/scripts/test/test-run-fern
           bash tools/scripts/test/test-preview-docs
+          bash tools/scripts/test/test-publish-docs
           bash tools/scripts/test/test-check-doc-links
 
       - name: Test docs version and edition tooling

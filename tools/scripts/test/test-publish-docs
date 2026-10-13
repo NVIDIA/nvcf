@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+workdir="$(mktemp -d)"
+trap 'rm -rf "$workdir"' EXIT
+mkdir -p "$workdir/source/tools/ci" "$workdir/bin"
+cp "$repo_root/tools/ci/publish-docs" "$workdir/source/tools/ci/"
+export FIXTURE_ROOT="$workdir/source" FIXTURE_LOG="$workdir/log" DOCS_VERSION_SYNC_BIN="$workdir/bin/sync"
+cat > "$DOCS_VERSION_SYNC_BIN" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$2" == docs-mode ]]; then echo "${FIXTURE_MODE:-legacy}"; exit; fi
+[[ "$2" == docs-stage ]]
+if [[ "${FAIL_STAGE:-0}" != 0 ]]; then exit 17; fi
+mkdir -p "$6"
+printf 'approved\n' > "$6/content"
+printf '{}\n' > "$6/docs-build-receipt.json"
+SH
+cat > "$workdir/source/tools/ci/check-docs" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$PWD" == "$FIXTURE_ROOT" ]]
+echo legacy-check >> "$FIXTURE_LOG"
+exit "${FAIL_CHECK:-0}"
+SH
+cat > "$workdir/source/tools/ci/check-doc-version-sync" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$PWD" == "$FIXTURE_ROOT" ]]
+echo catalog-check >> "$FIXTURE_LOG"
+SH
+cat > "$workdir/source/tools/ci/run-fern" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${FIXTURE_MODE:-legacy}" == umbrella ]]; then
+  [[ "$PWD" != "$FIXTURE_ROOT" ]]
+  [[ "$(cat content)" == approved ]]
+  # Simulate an advancing source branch after validation. Generation must use its staged copy.
+  printf 'unapproved\n' > "$FIXTURE_ROOT/content"
+fi
+echo "$1" >> "$FIXTURE_LOG"
+if [[ "$1" == check ]]; then exit "${FAIL_CHECK:-0}"; fi
+[[ "$*" == 'generate --docs --strict-broken-links' ]]
+SH
+chmod +x "$workdir/source/tools/ci/"* "$DOCS_VERSION_SYNC_BIN"
+: > "$FIXTURE_LOG"
+"$workdir/source/tools/ci/publish-docs" --publish
+[[ "$(cat "$FIXTURE_LOG")" == $'legacy-check\ngenerate' ]]
+: > "$FIXTURE_LOG"
+FIXTURE_MODE=umbrella "$workdir/source/tools/ci/publish-docs" --publish
+[[ "$(cat "$FIXTURE_LOG")" == $'catalog-check\ncheck\ngenerate' ]]
+for failure in FAIL_CHECK FAIL_STAGE; do
+  : > "$FIXTURE_LOG"
+  if env FIXTURE_MODE=umbrella "$failure"=17 "$workdir/source/tools/ci/publish-docs" --publish; then
+    echo "expected publisher failure"; exit 1
+  fi
+  ! grep -q generate "$FIXTURE_LOG"
+done
+: > "$FIXTURE_LOG"
+FIXTURE_MODE=umbrella "$workdir/source/tools/ci/publish-docs" --check
+! grep -q generate "$FIXTURE_LOG"
+echo 'test-publish-docs: PASS'
