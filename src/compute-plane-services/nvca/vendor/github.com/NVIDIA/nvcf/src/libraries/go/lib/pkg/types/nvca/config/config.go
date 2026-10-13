@@ -78,6 +78,11 @@ func DecodeConfig(data []byte, extraConfigDatas ...[]byte) (cfg Config, err erro
 	if err := v.Unmarshal(&cfg, NewViperDecoderConfig()); err != nil {
 		err = fmt.Errorf("decode merged config: %w", err)
 		if onlyAgentTimeFieldsFailed(err) {
+			// Decoding stopped before cfg.Validate() ran, so check the fields that did
+			// decode: an unrelated validation failure must stay unrecoverable.
+			if verr := cfg.Validate(); verr != nil {
+				return cfg, fmt.Errorf("validate merged config: %w", verr)
+			}
 			return cfg, &AgentTimeDecodeError{err: err}
 		}
 		return cfg, err
