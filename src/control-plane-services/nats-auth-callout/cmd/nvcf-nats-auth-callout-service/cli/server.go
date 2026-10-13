@@ -303,8 +303,16 @@ func runServer(cmd *cobra.Command) error {
 		}
 	}()
 
-	// Wait for interrupt signal to gracefully shutdown the server
-	<-ctx.Done()
+	// Wait for an interrupt signal, or for the NATS connection to close for good: a
+	// callout without NATS cannot authorize anyone, so exit and let the orchestrator
+	// restart it instead of running on while every login times out.
+	var runErr error
+	select {
+	case <-ctx.Done():
+	case <-service.Closed():
+		appLogger.Error("NATS connection closed permanently, shutting down")
+		runErr = fmt.Errorf("NATS connection closed permanently")
+	}
 
 	// Restore default behavior on the interrupt signal and notify user of shutdown
 	stop()
@@ -318,5 +326,5 @@ func runServer(cmd *cobra.Command) error {
 	defer cancel()
 
 	appLogger.Info("Server shutdown complete")
-	return nil
+	return runErr
 }
