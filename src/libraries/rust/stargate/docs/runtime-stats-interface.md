@@ -172,16 +172,15 @@ stays until a later valid sample replaces it.
 The maximum is the greatest max-eligible `last_mean_input_tps` published for the
 current model generation. A configured `--initial-input-tps`, engine stats
 stream counters, embeddings samples, and calibration can raise it. An OpenAI
-fallback mean raises it only when every request in its window reported
-cached-token details, or omitted Chat details after that generation's first
-Chat details report. Other fallback means update `last_mean_input_tps` but not
-the maximum, because cached input may be counted as prefill. The maximum
-follows the smoothed mean rather than individual samples, so the mean dilutes
-one outlier sample. Lower means do not reduce it, and generation replacement
-clears it. It is absent until the first max-eligible mean. A backend whose
-fallback usage never reports cached-token details, such as Chat traffic without
-`include_usage`, or whose traffic is only near-full cache hits, never gets a
-maximum this way. Use `--do-calibration` or `--initial-input-tps` for such
+fallback mean raises it only when every request in its window counted uncached
+prompt tokens under the Fallback rules above. Other fallback means update
+`last_mean_input_tps` but not the maximum, because cached input may be counted
+as prefill. The maximum follows the smoothed mean rather than individual
+samples, so the mean dilutes one outlier sample. Lower means do not reduce it,
+and generation replacement clears it. It is absent until the first max-eligible
+mean. A backend whose fallback usage never reports cached-token details, such
+as Chat traffic without `include_usage`, or whose traffic is only near-full
+cache hits, never gets a maximum this way. Use `--do-calibration` or `--initial-input-tps` for such
 backends, because default Pulsar ranking requires a maximum (see below).
 
 Pylon publishes `pylon_model_max_input_tps` when the maximum is known and removes
@@ -207,8 +206,7 @@ installs nothing: it runs an increasing request ramp until a load-step timeout,
 and those requests' exact-generation observer events build the same distribution
 used at runtime. Each calibration request starts with a unique prompt prefix, so
 it cannot hit the prefix cache. Duplicate engine events for calibration IDs are
-ignored. Pylon
-logs the current stats at timeout without reinjecting them.
+ignored. Pylon logs the current stats at timeout without reinjecting them.
 Later valid runtime samples continue updating either unpinned distribution.
 
 Labels:

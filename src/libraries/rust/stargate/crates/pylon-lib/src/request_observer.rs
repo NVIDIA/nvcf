@@ -227,10 +227,7 @@ impl RequestObserver {
     }
 
     pub(crate) fn set_input_usage_expected(&mut self, expected: bool) {
-        if self.input_usage_expected != expected {
-            self.input_usage_expected = expected;
-            self.emit();
-        }
+        self.input_usage_expected = expected;
     }
 
     pub(super) fn update_embedding_items(&mut self, embedding_items: Option<u64>) {

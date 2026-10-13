@@ -2349,15 +2349,15 @@ async fn quic_tunnel_preserves_cached_prompt_usage_for_fallback_stats() {
         "req-cached-usage",
         "13",
     );
-    tunnel
-        .send(headers, br#"{"messages":[],"stream":true}"#)
-        .await;
+    let body = br#"{"messages":[],"stream":true,"stream_options":{"include_usage":true}}"#;
+    tunnel.send(headers, body).await;
     tunnel.response_head(StatusCode::OK).await;
     tunnel.drain().await;
 
     let event = recv_terminal_event(&rx).await;
     assert_eq!(event.observation().input_tokens, 13);
     assert_eq!(event.cached_input_tokens(), Some(8));
+    assert!(event.input_usage_expected());
 
     tunnel.shutdown().await;
 }

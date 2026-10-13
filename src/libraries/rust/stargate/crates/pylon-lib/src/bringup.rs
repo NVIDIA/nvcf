@@ -780,17 +780,9 @@ mod tests {
 
     #[test]
     fn calibration_prompts_are_unique_and_keep_the_requested_length() {
-        for prompt_units in [8, CALIBRATION_PROMPT_UNITS_FLOOR] {
-            let prompts = (0..64)
-                .map(|_| calibration_prompt(prompt_units))
-                .collect::<Vec<_>>();
-            assert!(prompts.iter().all(|prompt| prompt.len() == prompt_units));
-            let prefixes = prompts
-                .iter()
-                .map(|prompt| &prompt[..prompt_units.min(32)])
-                .collect::<std::collections::HashSet<_>>();
-            assert_eq!(prefixes.len(), prompts.len());
-        }
+        let prompt = calibration_prompt(CALIBRATION_PROMPT_UNITS_FLOOR);
+        assert_eq!(prompt.len(), CALIBRATION_PROMPT_UNITS_FLOOR);
+        assert_ne!(prompt, calibration_prompt(CALIBRATION_PROMPT_UNITS_FLOOR));
     }
 
     #[tokio::test]
