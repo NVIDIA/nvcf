@@ -207,6 +207,15 @@ nvctApi:
 #       repository: <your-repository>/alpine-k8s
 #       tag: "1.37.0"
 
+# The bundled upgrade receipt uses its chart's public upstream helper image.
+# Global NVCF image settings do not select this third-party image. To use a
+# mirror, set upgradeReceipt.image.registry and repository together. A tag
+# override is optional and must be qualified for the cluster's Kubernetes version.
+#   upgradeReceipt:
+#     image:
+#       registry: <your-registry>
+#       repository: <your-repository>/alpine-k8s
+
 accounts:
   limits:
     maxFunctions: 10

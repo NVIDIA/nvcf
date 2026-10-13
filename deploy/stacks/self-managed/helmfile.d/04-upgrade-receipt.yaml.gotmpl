@@ -21,12 +21,16 @@ releases:
     namespace: nvcf
     values:
       - stackVersion: {{ readFile "../VERSION" | trim | quote }}
+        {{- $image := dict }}
+        {{- range $key := list "registry" "repository" "tag" }}
+        {{- with (dig "upgradeReceipt" "image" $key "" $.Values) }}
+        {{- $_ := set $image $key . }}
+        {{- end }}
+        {{- end }}
+        {{- with $image }}
         image:
-          registry: {{ dig "upgradeReceipt" "image" "registry" "" .Values | default .Values.global.image.registry | quote }}
-          repository: {{ dig "upgradeReceipt" "image" "repository" "" .Values | default (printf "%s/alpine-k8s" .Values.global.image.repository) | quote }}
-          {{- with dig "upgradeReceipt" "image" "tag" "" .Values }}
-          tag: {{ . | quote }}
-          {{- end }}
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
         {{- with .Values.global.imagePullSecrets }}
         imagePullSecrets:
           {{- toYaml . | nindent 10 }}
