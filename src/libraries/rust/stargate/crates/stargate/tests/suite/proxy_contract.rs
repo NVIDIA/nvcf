@@ -3713,3 +3713,81 @@ async fn exercise_native_messages_contract(protocol: TunnelTransportProtocol, re
     fixture.shutdown().await;
     backend_task.abort();
 }
+
+#[tokio::test]
+async fn last_cluster_hint_classifies_only_flagged_affinity_requests() {
+    let flagged_model = "last-cluster-on-model";
+    let unflagged_model = "last-cluster-off-model";
+    let cluster_id = "last-cluster-cluster";
+
+    init_crypto();
+    let mut config_file = tempfile::NamedTempFile::new().expect("failed to create temp file");
+    std::io::Write::write_all(
+        &mut config_file,
+        br#"{
+            "default": "power-of-n",
+            "request_algorithms": {"power-of-n": "power-of-n"},
+            "models": {
+                "last-cluster-on-model": {
+                    "algorithm": "wait-and-widen",
+                    "seed": "test-seed",
+                    "cache_affinity_backend_selection_count": 1,
+                    "last_cluster_affinity": true
+                },
+                "last-cluster-off-model": {
+                    "algorithm": "wait-and-widen",
+                    "seed": "test-seed",
+                    "cache_affinity_backend_selection_count": 1
+                }
+            }
+        }"#,
+    )
+    .expect("failed to write config");
+    let config_path = config_file.path().to_str().unwrap().to_string();
+    let (grpc_addr, http_addr, runtime) =
+        make_stargate_runtime_with_lb("last-cluster-header", Some(config_path));
+    let handle = runtime.start().await.expect("stargate failed to start");
+    let mut fixture = ProxyFixture::new(grpc_addr, http_addr, handle);
+    for model in [flagged_model, unflagged_model] {
+        fixture
+            .add_dummy_backend(
+                &format!("{model}-backend"),
+                cluster_id,
+                model,
+                active_runtime(model),
+            )
+            .await;
+        wait_for_routing(http_addr, model, Duration::from_secs(5)).await;
+    }
+
+    // (model, x-routing-method, x-cache-affinity-key, classified requests)
+    for (model, routing_method, affinity_key, expected) in [
+        (flagged_model, None, Some("session-a"), 1.0),
+        (flagged_model, None, None, 0.0),
+        (flagged_model, Some("power-of-n"), Some("session-a"), 0.0),
+        (unflagged_model, None, Some("session-a"), 0.0),
+    ] {
+        let before = fixture.metrics();
+        let mut request = fixture
+            .chat_request(model, "last-cluster-request")
+            .header("x-stargate-last-cluster-id", cluster_id);
+        if let Some(routing_method) = routing_method {
+            request = request.header("x-routing-method", routing_method);
+        }
+        if let Some(affinity_key) = affinity_key {
+            request = request.header("x-cache-affinity-key", affinity_key);
+        }
+        let response = request.send().await.expect("request failed");
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = response.bytes().await;
+        assert_metric_delta(
+            &before,
+            &fixture.metrics(),
+            "stargate_routing_session_selections_total",
+            &[&format!(r#"model="{model}""#)],
+            expected,
+        );
+    }
+
+    fixture.shutdown().await;
+}

@@ -419,6 +419,38 @@ sequenceDiagram
 Sticky routing only affects backend selection when the LLM request router is
 configured with a cache-affinity-aware routing method for the target model.
 
+### Last-Cluster Hints
+
+The gateway can send the LLM request router the cluster that served a
+session's last successful request, in the trusted `x-stargate-last-cluster-id`
+header. When the model's `wait-and-widen` or `pulsar-wait-and-widen`
+configuration sets `last_cluster_affinity: true`, a returning session stays on
+its last cluster and a new session skips the affinity wait.
+
+Only sessions from `prompt_cache_key`, `conversation.id`,
+`x-multi-turn-session-id`, or `x-claude-code-session-id` are eligible. Sessions
+keyed by a messages or input hash change key every turn and are skipped.
+
+| Env var | Helm value | Default | Effect |
+| --- | --- | --- | --- |
+| `STARGATE_LAST_CLUSTER_ENABLED` | `llmApiGateway.config.lastCluster.enabled` | `false` | Turns lookup, the header, and store writes on. |
+| `STARGATE_LAST_CLUSTER_TTL` | `llmApiGateway.config.lastCluster.ttl` | `10m` | Entry lifetime, reset on every write. |
+| `STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT` | `llmApiGateway.config.lastCluster.lookupTimeout` | `20ms` | Lookup deadline on the request path. The request proceeds without the hint after it. |
+| `STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES` | `llmApiGateway.config.lastCluster.localMaxEntries` | `100000` | Per-replica LRU cap when Olric is off. |
+
+With `OLRIC_ENABLED=true`, all replicas share entries through the embedded
+Olric cluster, which then starts even with rate limiting off.
+
+Roll out in this order:
+
+1. Upgrade the LLM request router with `last_cluster_affinity` off. It accepts
+   the header and ignores it.
+2. Set `STARGATE_LAST_CLUSTER_ENABLED=true` on the gateway.
+3. Turn on `last_cluster_affinity` per model in the router configuration.
+
+Do not turn on `last_cluster_affinity` before step 2. Without the hint, every
+request is treated as a new session and skips the affinity wait.
+
 ## Metrics
 
 LLM API Gateway request metrics include a `function_id` label. The value is the
@@ -439,8 +471,8 @@ key, such as health checks, use `function_id="none"`.
 | `llm_api_gateway_stream_duration_seconds` | Histogram | `endpoint`, `status`, `function_id` | Total stream duration. |
 
 Infrastructure metrics for authentication, rate limit synchronization, pub/sub,
-and the distributed cache do not include `function_id` because they are not
-associated with a single routed function.
+the last-cluster store, and the distributed cache do not include `function_id`
+because they are not associated with a single routed function.
 
 Use the label to calculate request rate by function:
 

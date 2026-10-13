@@ -165,6 +165,13 @@ mod tests {
         settings.ttft_bucket_size_ms = Some(50);
         let mut pulsar_base = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::Pulsar);
         pulsar_base.rendezvous_weight = PulsarRendezvousWeight::LastMeanInputTps;
+        // last_cluster_affinity is static config only; expressions cannot set it.
+        let mut last_cluster_base =
+            LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PulsarWaitAndWiden);
+        last_cluster_base
+            .wait_and_widen_settings_mut()
+            .unwrap()
+            .last_cluster_affinity = Some(true);
         let configured = LoadBalancerRouter::from_config(&LoadBalancerConfig {
             default: LoadBalancerAlgorithm::Random,
             request_algorithms: HashMap::from([
@@ -175,6 +182,10 @@ mod tests {
                 (
                     LoadBalancerAlgorithm::Pulsar,
                     LoadBalancerModelConfig::Detailed(Box::new(pulsar_base)),
+                ),
+                (
+                    LoadBalancerAlgorithm::PulsarWaitAndWiden,
+                    LoadBalancerModelConfig::Detailed(Box::new(last_cluster_base)),
                 ),
             ]),
             models: HashMap::new(),
@@ -201,8 +212,8 @@ mod tests {
             "ttft_bucket_size_ms": 20, "next_bucket_unlock_factor": 0.25,
             "cache_affinity_virtual_nodes": 150, "cache_affinity_input_tokens_scale": 1.0,
             "cache_affinity_wait_ms": 0, "ignore_queue_time": false,
-            "ignore_input_processing_time": false, "require_cache_affinity_key": false,
-            "require_input_tokens": false,
+            "ignore_input_processing_time": false, "last_cluster_affinity": false,
+            "require_cache_affinity_key": false, "require_input_tokens": false,
         });
         let with = |changes: Value| {
             let mut value = wait_and_widen_defaults.clone();
@@ -296,6 +307,21 @@ mod tests {
                     "cache_affinity_input_tokens_scale": 1.0, "cache_affinity_wait_ms": 40,
                     "band_widen_interval_ms": 40, "fallback_max_queued": 0,
                     "ignore_queue_time": false, "ignore_input_processing_time": false,
+                    "last_cluster_affinity": false,
+                    "consider_kv_free_tokens": false, "rendezvous_weight": "max-input-tps",
+                    "require_cache_affinity_key": false, "require_input_tokens": false}),
+            ),
+            (
+                "pulsar-wait-and-widen with last-cluster affinity omits an unset widen interval",
+                &configured,
+                "pulsar-wait-and-widen;cache_affinity_wait_ms=40",
+                json!({"algorithm": "pulsar-wait-and-widen", "n": 2, "max_queued": 0,
+                    "ttft_bucket_size_ms": 20, "next_bucket_unlock_factor": 0.25,
+                    "cache_affinity_backend_selection_count": 1,
+                    "cache_affinity_input_tokens_scale": 1.0, "cache_affinity_wait_ms": 40,
+                    "fallback_max_queued": 0,
+                    "ignore_queue_time": false, "ignore_input_processing_time": false,
+                    "last_cluster_affinity": true,
                     "consider_kv_free_tokens": false, "rendezvous_weight": "max-input-tps",
                     "require_cache_affinity_key": false, "require_input_tokens": false}),
             ),

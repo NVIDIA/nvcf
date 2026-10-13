@@ -140,9 +140,24 @@ Optional trusted headers:
 | `x-request-slo-ms` | Per-request LB latency hint. |
 | `x-max-wait-ms` | Wait budget for temporarily infeasible candidates. |
 | `x-stargate-max-wait-ms` | Stargate internal retry budget. |
+| `x-stargate-last-cluster-id` | The `x-stargate-cluster-id` from the session's last 2xx response. Used only by algorithms with `last_cluster_affinity`. Stargate consumes it and never forwards it to pylon. |
 
 The gateway must synthesize or validate these headers. Do not pass public
 caller-supplied routing headers through blindly.
+
+Last-cluster rules for the gateway:
+
+- A session is one `x-routing-key`, `x-model`, and `x-cache-affinity-key`
+  tuple.
+- Always delete an inbound `x-stargate-last-cluster-id` before building the
+  Stargate request, including on paths that clone inbound headers.
+- Set the header only from the gateway's own store, and only for sessions with
+  a stable key. Skip payload-derived affinity keys, which change every turn.
+- Store the `x-stargate-cluster-id` of a 2xx response when the response
+  headers arrive, not at stream end. Do not store on non-2xx responses or
+  transport errors.
+- Bound the lookup. On a miss, store error, or timeout, send the request
+  without the header. Writes must never delay or fail the client response.
 
 Internal headers:
 
@@ -241,3 +256,5 @@ Gateway rules:
 6. Enforce streaming body rules for chat and Responses.
 7. Treat `ListModels` as a short-lived hint.
 8. Keep backend response headers internal unless intentionally exposed.
+9. Strip inbound `x-stargate-last-cluster-id`; set it only from the gateway
+   store.
