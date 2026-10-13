@@ -81,6 +81,7 @@ import java.util.Optional;
 import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 import org.junit.jupiter.api.Assertions;
+import com.nvidia.icms.service.workers.WorkerIdentifierService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -127,6 +128,11 @@ public class ClusterRegistrationServiceTest {
 
     ObjectMapper objectMapper;
 
+    @Mock
+
+    private WorkerIdentifierService workerIdentifierService;
+
+
     private ClusterRegistrationService clusterRegistrationService;
 
     @BeforeEach
@@ -147,7 +153,8 @@ public class ClusterRegistrationServiceTest {
                         auditService,
                         instanceServiceHelper,
                         byocServiceHelper,
-                        ComputePlatformTestFixtures.nonByocComputePlatformService());
+                        ComputePlatformTestFixtures.nonByocComputePlatformService(),
+                        workerIdentifierService);
     }
 
     // Tests for adding new cluster
