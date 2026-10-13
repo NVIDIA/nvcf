@@ -3,7 +3,9 @@
 This directory is an example of a multi-region Stargate development
 environment on AWS. It runs Stargate against mock inference backends
 (MockDynamo with a Pylon sidecar) so routing policies can be benchmarked
-across regions without GPUs.
+across regions without GPUs. To run a smaller mock topology on one Linux
+workstation without AWS, see
+[Run locally on a workstation](#run-locally-on-a-workstation).
 
 It is not a supported production deployment. Every AWS account ID, ARN,
 hostname, image reference, and network range checked in here is a
@@ -12,15 +14,17 @@ the repository.
 
 ## What it deploys
 
-For each region in `environments/`:
+For each AWS region in `environments/`:
 
 - One hub EKS cluster with Stargate, the backend router, the dev-only auth
   fixture, and a Grafana Alloy metrics collector.
 - Two MockDC EKS clusters. Each runs two backends, and each backend is one
   MockDynamo container with a Pylon sidecar.
 
-The example environments define five regions (`us-west-2`, `us-east-1`,
+The AWS example environments define five regions (`us-west-2`, `us-east-1`,
 `eu-west-1`, `ap-northeast-1`, `ap-southeast-2`) with 20 backends in total.
+`environments/` also holds two local k3d regions, `local-a` and `local-b`,
+described in [Run locally on a workstation](#run-locally-on-a-workstation).
 Each Pylon registers with its own region's Stargate. A hub republishes the
 peer hub URLs in `router.remoteWatchUrls` to its Pylons, and each Pylon also
 registers with those peer hubs. In a connected topology every hub sees all
@@ -32,6 +36,9 @@ auth fixture, and each Pylon trusts only the CA in its local
 `stargate-router-ca` Secret.
 
 ## Prerequisites
+
+The prerequisites, placeholders, and deploy steps below are for AWS. For the
+local workflow, see [Run locally on a workstation](#run-locally-on-a-workstation).
 
 Tools on `PATH`: the AWS CLI, `kubectl`, `helm` with the `helm-diff` plugin,
 `helmfile`, and `python3` with PyYAML.
@@ -260,14 +267,173 @@ drain. Latency quantiles describe successful requests and use Spark's histogram
 bucket lower bounds. Observed ranges are not confidence intervals. Production
 recommendations remain pending real-engine QA.
 
+## Run locally on a workstation
+
+The `local-a` and `local-b` environments run the stack as a mock multi-cluster
+topology on one Linux workstation. Every cluster is a k3d cluster in Docker.
+No AWS account and no GPUs are needed. Use it to check deployment,
+registration, cross-region membership, and the benchmark controller before
+using AWS.
+
+### Local topology
+
+- Each region has a hub cluster `stargate-dev-<region>-hub` and two MockDC
+  clusters, `stargate-dev-<region>-mockdc-1` and
+  `stargate-dev-<region>-mockdc-2`. Kube contexts are `k3d-<cluster name>`,
+  for example `k3d-stargate-dev-local-a-hub`.
+- A hub cluster is one server node. Each MockDC cluster has two agent nodes,
+  so the backend anti-affinity rule can schedule both backends. Backends use
+  small `numGpuWorkers` values.
+- All clusters join the Docker network `stargate-dev-local`. Pylons reach the
+  hub registration Services directly on that network. The two hubs are
+  connected, so each hub sees all 8 backends.
+- The k3d registry `k3d-stargate-dev-registry` serves images to every
+  cluster. Charts keep `repository@digest` image references.
+- The environment files set `platform: local`. Without it, the platform is
+  AWS. `deploy.py` rejects a values file that sets `platform`. In local mode
+  the registration Service uses k3s ServiceLB instead of an AWS network load
+  balancer, so it answers on the hub node's address on the shared network.
+  That address is `router.address`. There is no ACM certificate, DNS record,
+  or source range list, and `STARGATE_DEV_AWS_ACCOUNT_ID` is not required.
+- On AWS the load balancer terminates TLS for registration gRPC on port
+  50071. The router serves that port only as plaintext gRPC, so locally Pylons
+  and peer hubs dial `http://<router.address>:50071`. Reverse QUIC on port
+  50072 still uses TLS from the `stargate-router-tls` Secret. Its certificate
+  names `router.hostname` (`router.<region>.stargate-dev.test`) and
+  `*.router.hostname`. That name is only a TLS identity, so no DNS is
+  needed.
+
+### Local prerequisites
+
+- Linux with Docker. The benchmark CLI needs Linux process APIs.
+- Tools on `PATH`: `docker`, `k3d`, `kubectl`, `helm` with the `helm-diff`
+  plugin, `helmfile`, `bazel` or `bazelisk`, `openssl`, `python3` with PyYAML,
+  and Rust 1.97.0 for the benchmark CLI.
+- The Cap'n Proto compiler `capnp` 0.5.2 or newer, for example from the
+  Ubuntu `capnproto` package. A Bazel build script runs it with Bazel's fixed
+  action `PATH`, so install it in `/usr/bin` or `/usr/local/bin`, or pass
+  `--action_env=PATH=...` in a `user.bazelrc`.
+- Resources for six clusters, the registry, and Bazel outputs. Plan for 8 CPU
+  cores, 16 GiB of memory, and 20 GiB of free disk. The idle stack uses about
+  5 GiB of memory, and the Bazel output tree about 5 GiB of disk.
+- If Pods fail with `too many open files`, raise the host's
+  `fs.inotify.max_user_instances` and `fs.inotify.max_user_watches`.
+
+### Local deploy
+
+Run from this directory:
+
+```sh
+python3 scripts/local.py up
+python3 scripts/local.py images
+```
+
+`up` creates the Docker network, the registry, and the six clusters, and adds
+their contexts to your kubeconfig without switching the current context. For
+a cluster that already exists, `up` adds its context again. The
+registry and each API server listen only on `127.0.0.1`. `up` also creates a
+local CA and one router certificate per region with `openssl`, the
+`stargate-router-tls` Secret in each hub, and the `stargate-router-ca` Secret
+in each MockDC cluster, all in the `stargate-dev` namespace. It also creates
+the shared credential bundle. `images` builds the Stargate, dev auth,
+MockDynamo, and Pylon images with Bazel for the host's Linux platform, pushes
+them to the registry, and writes one values file per region. Each file holds
+the image digests, `deploymentReady: true`, the hub's `router.address`, and
+the peer hub's URL in `router.remoteWatchUrls`.
+
+Local state lives in `.local/` in this directory, which Git ignores. It holds
+the CA, the router certificates, the credential bundle
+(`.local/credentials.json`), and the values files
+(`.local/values-local-a.yaml` and `.local/values-local-b.yaml`).
+
+Apply both hubs first, then both MockDC phases, so every Pylon can reach its
+peer hub:
+
+```sh
+python3 scripts/deploy.py apply --region local-a --phase stargate --credentials .local/credentials.json --values .local/values-local-a.yaml
+python3 scripts/deploy.py apply --region local-b --phase stargate --credentials .local/credentials.json --values .local/values-local-b.yaml
+python3 scripts/deploy.py apply --region local-a --phase mockdc --credentials .local/credentials.json --values .local/values-local-a.yaml
+python3 scripts/deploy.py apply --region local-b --phase mockdc --credentials .local/credentials.json --values .local/values-local-b.yaml
+```
+
+In local mode, `deploy.py` skips the AWS CLI, EKS, and account checks. It
+still checks that each kube context exists, that the router Secrets are
+present, and, before the MockDC phase, that the registration Service is
+exposed on `router.address`. The `observability` phase is not supported
+locally, and `deploy.py` exits with an error if you request it.
+
+Hub addresses come from Docker. If a hub cluster is recreated, run `images`
+again to refresh `router.address` and `router.remoteWatchUrls`, then apply
+every phase again.
+
+Each Pylon calibrates its backend for about a minute after the MockDC phase
+before it registers. Until then `verify` fails with `membership is not ready`;
+run it again.
+
+### Local verify and traffic checks
+
+Run from the repository root:
+
+```sh
+cargo +1.97.0 build --locked --release --manifest-path deploy/stacks/stargate-dev/benchmark/Cargo.toml
+export STARGATE_BENCH=deploy/stacks/stargate-dev/benchmark/target/release/stargate-dev-bench
+"$STARGATE_BENCH" verify --region local-a --peer-region local-b
+```
+
+`verify` checks the `local-a` hub's Stargate Deployments, registration
+Service, and MockDC Pods, and expects that hub's routers to report all 8
+backends across both regions. Run it with `--region local-b --peer-region
+local-a` to check the other hub.
+
+To send single requests without Spark, start a curl Pod in the `local-a` hub
+and send streaming chat completions. The router requires the request ID,
+model, input token, and routing key headers, and the default policy also
+requires a cache affinity key. Pylon's tunnel accepts only streaming chat
+requests (`"stream": true`). The `x-stargate-cluster-id` response header names
+the backend, so repeated requests with different affinity keys show both
+regions' backends.
+
+```sh
+kubectl --context k3d-stargate-dev-local-a-hub -n stargate-dev run curl --image=curlimages/curl:8.11.1 --restart=Never --command -- sleep 3600
+kubectl --context k3d-stargate-dev-local-a-hub -n stargate-dev wait --for=condition=Ready pod/curl --timeout=120s
+kubectl --context k3d-stargate-dev-local-a-hub -n stargate-dev exec curl -- curl -sS -D - http://llm-request-router:8000/v1/chat/completions -H 'content-type: application/json' -H 'x-request-id: smoke-1' -H 'x-model: stargate-dev-model' -H 'x-input-tokens: 8' -H 'x-routing-key: stargate-dev' -H 'x-cache-affinity-key: smoke-1' -d '{"model":"stargate-dev-model","stream":true,"max_tokens":16,"messages":[{"role":"user","content":"hello"}]}'
+kubectl --context k3d-stargate-dev-local-a-hub -n stargate-dev delete pod curl
+```
+
+Benchmark campaigns need a Spark image, which this repository does not
+provide, so campaigns are not validated on the local topology.
+
+### Local teardown
+
+```sh
+python3 scripts/local.py down
+```
+
+`down` deletes the six clusters, the registry, and the Docker network by
+their exact names, including any that `up` found and reused instead of
+creating. `up` prints a line for each one it reuses. `down` keeps `.local/`;
+delete that directory yourself to start again with a new CA and credentials.
+The image tags that `images` adds to the local Docker image store also
+remain.
+
+### Local limitations
+
+- No observability phase, AMP workspace, or Grafana.
+- Mock backends only. MockDynamo and Pylon stand in for inference engines.
+- All clusters share one host's CPU, memory, and network. Latency and
+  throughput numbers are not comparable with AWS results. Use local runs to
+  check behavior, not performance.
+
 ## Layout
 
 - `environments/`: one file per region with cluster names and per-backend
-  MockDynamo settings.
+  MockDynamo settings. `local-a.yaml` and `local-b.yaml` are the local k3d
+  regions.
 - `values/versions.yaml`: image and chart version pins.
 - `helmfile.yaml.gotmpl`: releases and install order.
 - `charts/`: the dev auth fixture and MockDC charts.
-- `scripts/`: deployment and observability wrappers.
+- `scripts/`: deployment and observability wrappers, and `local.py` for the
+  local k3d topology.
 - `benchmark/`: the `stargate-dev-bench` controller for verification and
   benchmark campaigns.
 - `dashboards/`, `loadtest/`: Grafana dashboards and load profiles.

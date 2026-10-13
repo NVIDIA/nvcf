@@ -7,6 +7,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -127,6 +128,19 @@ class ObservabilityProvisioningTests(unittest.TestCase):
             )
         ensure_amp.assert_not_called()
         ensure_role.assert_not_called()
+
+    def test_local_regions_are_refused_before_any_aws_call(self) -> None:
+        deploy = OBSERVABILITY.deploy
+        aws = mock.Mock(side_effect=AssertionError("must not call AWS"))
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(deploy, "require_tools", aws),
+            mock.patch.object(deploy, "aws_account", aws),
+        ):
+            values = Path(directory) / "values.yaml"
+            values.write_text("{}\n", encoding="utf-8")
+            with self.assertRaisesRegex(deploy.DeploymentError, "local"):
+                OBSERVABILITY.provision("local-a", values)
 
     def test_provision_returns_values_without_writing_files(self) -> None:
         ensure_role = mock.Mock()

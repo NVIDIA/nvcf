@@ -29,6 +29,9 @@ pub struct Region {
     pub model_name: String,
     pub routing_key: String,
     pub clusters: Clusters,
+    // Not serialized, so campaign manifests keep their recorded topology.
+    #[serde(default, skip_serializing)]
+    platform: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -90,6 +93,8 @@ impl Topology {
                 "eu-west-1" => include_str!("../../environments/eu-west-1.yaml"),
                 "ap-northeast-1" => include_str!("../../environments/ap-northeast-1.yaml"),
                 "ap-southeast-2" => include_str!("../../environments/ap-southeast-2.yaml"),
+                "local-a" => include_str!("../../environments/local-a.yaml"),
+                "local-b" => include_str!("../../environments/local-b.yaml"),
                 _ => bail!("unsupported region {name:?}"),
             };
             let region: Region = serde_yaml_ng::from_str(source)
@@ -119,6 +124,12 @@ impl Topology {
         };
         for peer in &topology.regions[1..] {
             let primary = topology.primary();
+            ensure!(
+                peer.platform == primary.platform,
+                "region {} and peer region {} run on different platforms; connect local regions only to local regions",
+                primary.region,
+                peer.region
+            );
             ensure!(
                 peer.namespace == primary.namespace
                     && peer.model_name == primary.model_name
@@ -1036,6 +1047,16 @@ mod tests {
         }
         assert!(Topology::load("us-west-2", &["us-west-2".into()]).is_err());
         assert!(Topology::load("../us-west-2", &[]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn local_regions_connect_only_to_local_regions() -> Result<()> {
+        Topology::load("local-a", &["local-b".into()])?;
+        for (primary, peer) in [("local-a", "us-west-2"), ("us-west-2", "local-b")] {
+            let error = Topology::load(primary, &[peer.into()]).unwrap_err();
+            assert!(error.to_string().contains("different platforms"), "{error}");
+        }
         Ok(())
     }
 

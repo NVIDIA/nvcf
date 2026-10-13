@@ -13,7 +13,7 @@
       "additionalProperties": false,
       "required": ["address"],
       "properties": {
-        "address": {"type": "string", "pattern": "^https://[^/]+(:[0-9]+)?$"}
+        "address": {"type": "string", "pattern": "^https?://[^/]+(:[0-9]+)?$"}
       }
     },
     "images": {

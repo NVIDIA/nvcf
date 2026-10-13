@@ -23,6 +23,21 @@ toolchain. Tests do not require cluster access. CLI fixtures retain their own
 executable copy for resume.
 The repository's `.github/workflows/build-test.yml` runs these Rust checks.
 
+## Local end-to-end check
+
+To run the CLI against real clusters without AWS, bring up the `local-a` and
+`local-b` k3d regions from
+[README.md](../README.md#run-locally-on-a-workstation), then run from this
+directory:
+
+```sh
+cargo run --locked --release -- verify --region local-a --peer-region local-b
+```
+
+`cluster.rs` embeds each environment file with `include_str!`. When you add a
+region file under `../environments/`, add it there and to the `range` list of
+environments in `../helmfile.yaml.gotmpl`.
+
 ## Contracts
 
 - Keep suite parsing and workload recipes deterministic. Preserve checked numeric

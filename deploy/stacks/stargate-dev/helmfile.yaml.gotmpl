@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 environments:
-{{- range $region := list "eu-west-1" "ap-northeast-1" "ap-southeast-2" "us-east-1" "us-west-2" }}
+{{- range $region := list "eu-west-1" "ap-northeast-1" "ap-southeast-2" "us-east-1" "us-west-2" "local-a" "local-b" }}
   {{ $region }}:
     values:
       - environments/{{ $region }}.yaml
@@ -18,6 +18,19 @@ environments:
 {{- $credentials = readFile $credentialsPath | fromJson -}}
 {{- end -}}
 {{- $workerToken := sprigGet $credentials "workerToken" | default "" -}}
+
+{{- /* Local environments run on k3d without an AWS NLB to terminate TLS on
+50071. The backend router serves registration gRPC as plaintext h2c, so local
+Pylons and peer hubs dial it over http:// at router.address, the hub's address
+on the shared Docker network. QUIC on 50072 keeps the router certificate, and
+router.hostname stays the TLS and routing identity in both modes. */}}
+{{- $local := eq (.Values | get "platform" "aws") "local" -}}
+{{- $grpcScheme := "https" -}}
+{{- $routerAddress := .Values.router.hostname -}}
+{{- if $local -}}
+{{- $grpcScheme = "http" -}}
+{{- $routerAddress = .Values.router.address -}}
+{{- end -}}
 
 helmDefaults:
   atomic: true
@@ -65,6 +78,9 @@ releases:
             digest: {{ .Values.images.stargate.digest }}
           discovery:
             remoteWatchUrls: {{ .Values.router.remoteWatchUrls | toJson }}
+{{- if $local }}
+            allowInsecureRemoteWatchHttp: true
+{{- end }}
           loadBalancer:
 {{- if .Values.router.loadBalancerConfig }}
             config: {{ .Values.router.loadBalancerConfig | toJson | quote }}
@@ -130,8 +146,8 @@ releases:
           backendRouter:
             enabled: true
             replicaCount: 3
-            pylonGrpcDialAddress: https://{{ .Values.router.hostname }}:50071
-            pylonReverseTunnelDialAddress: {{ .Values.router.hostname }}:50072
+            pylonGrpcDialAddress: {{ $grpcScheme }}://{{ $routerAddress }}:50071
+            pylonReverseTunnelDialAddress: {{ $routerAddress }}:50072
             podAnnotations:
               prometheus.io/scrape: "true"
               prometheus.io/path: /metrics
@@ -156,6 +172,7 @@ releases:
                           app.kubernetes.io/instance: llm-request-router
             service:
               type: LoadBalancer
+{{- if not $local }}
               loadBalancerClass: service.k8s.aws/nlb
               loadBalancerSourceRanges:
                 {{- toYaml .Values.router.loadBalancerSourceRanges | nindent 16 }}
@@ -169,6 +186,7 @@ releases:
                 service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: TCP
                 service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "8080"
                 service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true
+{{- end }}
           auth:
             workerAuthEndpoint: http://stargate-dev-auth.{{ .Values.namespace }}.svc.cluster.local:50051
             existingSecret:
@@ -200,7 +218,7 @@ releases:
         modelName: {{ $.Values.modelName }}
         workerToken: {{ $workerToken | quote }}
         stargate:
-          address: https://{{ $.Values.router.hostname }}:50071
+          address: {{ $grpcScheme }}://{{ $routerAddress }}:50071
         images:
           mockDynamo:
             repository: {{ $.Values.images.mockDynamo.repository }}
@@ -213,7 +231,9 @@ releases:
 {{- end }}
 
 {{- /* Apply the observability phase after the stargate and mockdc phases:
-each collector creates a Role in the stack namespace those phases create. */}}
+each collector creates a Role in the stack namespace those phases create.
+Local environments have no AMP workspace or IAM roles and skip this phase. */}}
+{{- if not $local }}
 {{- $observability := required "observability is required" .Values.observability }}
 {{- $amp := required "observability.amp is required" $observability.amp }}
 {{- $alloy := required "observability.alloy is required" $observability.alloy }}
@@ -486,4 +506,5 @@ each collector creates a Role in the stack namespace those phases create. */}}
                   }
                 }
               }
+{{- end }}
 {{- end }}

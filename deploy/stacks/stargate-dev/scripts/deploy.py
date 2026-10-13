@@ -23,10 +23,15 @@ SHA256_DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
 ACCOUNT_ENV = "STARGATE_DEV_AWS_ACCOUNT_ID"
 ROUTER_TLS_SECRET = "stargate-router-tls"
 ROUTER_CA_SECRET = "stargate-router-ca"
+PLACEHOLDER_NETWORK = ipaddress.ip_network("192.0.2.0/24")
 
 
 class DeploymentError(RuntimeError):
     pass
+
+
+def is_local(config: dict) -> bool:
+    return config.get("platform", "aws") == "local"
 
 
 def load_yaml(path: Path) -> dict:
@@ -44,6 +49,8 @@ def load_region(region: str) -> dict:
     config = load_yaml(path)
     if config.get("region") != region:
         raise DeploymentError(f"{path} region does not match {region}")
+    if config.get("platform", "aws") not in ("aws", "local"):
+        raise DeploymentError(f"{path} platform must be aws or local")
     mockdcs = config.get("clusters", {}).get("mockdcs", [])
     names = [mockdc.get("name") for mockdc in mockdcs]
     if len(names) != 2 or any(not name for name in names) or len(set(names)) != 2:
@@ -58,18 +65,26 @@ def run(
     *,
     env: dict[str, str] | None = None,
     check: bool = True,
+    cwd: Path = STACK_DIR,
+    input_text: str | None = None,
+    capture: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         command,
-        cwd=STACK_DIR,
+        cwd=cwd,
         env=env,
+        input=input_text,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.PIPE if capture else None,
         check=False,
     )
     if check and result.returncode:
-        message = result.stderr.strip() or result.stdout.strip() or "command failed"
+        message = (
+            (result.stderr or "").strip()
+            or (result.stdout or "").strip()
+            or "command failed"
+        )
         raise DeploymentError(f"{command[0]} failed: {message}")
     return result
 
@@ -134,7 +149,12 @@ def merge_values(base: dict, override: dict) -> None:
 def load_deployment_values(region: str, values_path: Path) -> dict:
     config = load_region(region)
     merge_values(config, load_yaml(STACK_DIR / "values" / "versions.yaml"))
-    merge_values(config, load_yaml(values_path.expanduser().resolve()))
+    values = load_yaml(values_path.expanduser().resolve())
+    if "platform" in values:
+        raise DeploymentError(
+            f"{values_path} must not set platform; it comes from the environment file"
+        )
+    merge_values(config, values)
     return config
 
 
@@ -160,6 +180,16 @@ def validate_deployment_inputs(config: dict, phase: str) -> None:
     router = config.get("router", {})
     if router.get("hostname", "").endswith(".invalid"):
         raise DeploymentError("router.hostname is a placeholder")
+    if is_local(config):
+        try:
+            address = ipaddress.ip_address(str(router.get("address", "")))
+        except ValueError as error:
+            raise DeploymentError(
+                "router.address must be the hub IP address on the local Docker network"
+            ) from error
+        if address in PLACEHOLDER_NETWORK:
+            raise DeploymentError("router.address is a placeholder")
+        return
     if not router.get("loadBalancerSourceRanges"):
         raise DeploymentError("router.loadBalancerSourceRanges must be restricted")
     prefix = f"arn:aws:acm:{config['region']}:{account}:certificate/"
@@ -218,10 +248,6 @@ def verify_cluster(
 ) -> None:
     name = cluster["name"]
     context = cluster["kubeContext"]
-    if context not in contexts:
-        raise DeploymentError(
-            f"missing kube context {context}; create it with aws eks update-kubeconfig --alias {context}"
-        )
     describe = json.loads(
         run(
             [
@@ -312,6 +338,12 @@ def verify_stargate_endpoint(config: dict) -> None:
         ).stdout
     )
     ingress = service.get("status", {}).get("loadBalancer", {}).get("ingress", [])
+    if is_local(config):
+        if str(config["router"]["address"]) not in {item.get("ip") for item in ingress}:
+            raise DeploymentError(
+                "backend-router Service is not exposed on router.address"
+            )
+        return
     if not any(item.get("hostname") for item in ingress):
         raise DeploymentError("backend-router NLB does not have a hostname")
 
@@ -336,22 +368,38 @@ def apply(
     credentials_path: Path | None,
     values_path: Path,
 ) -> None:
-    require_tools("aws", "helm", "helmfile", "kubectl")
+    config = load_deployment_values(region, values_path)
+    local = is_local(config)
+    if local and phase == "observability":
+        raise DeploymentError(
+            "the observability phase is not supported for local environments"
+        )
+    require_tools(*(() if local else ("aws",)), "helm", "helmfile", "kubectl")
     if run(["helm", "diff", "version"], check=False).returncode:
         raise DeploymentError("the helm-diff plugin is required by helmfile apply")
-    config = load_deployment_values(region, values_path)
     if phase != "observability":
         if credentials_path is None:
             raise DeploymentError(f"--credentials is required for the {phase} phase")
         load_credentials(credentials_path)
     validate_deployment_inputs(config, phase)
-    account = aws_account()
+    account = "" if local else aws_account()
     contexts = configured_contexts()
     clusters = [config["clusters"]["stargate"]]
     if phase in ("mockdc", "observability"):
         clusters.extend(config["clusters"]["mockdcs"])
     for cluster in clusters:
-        verify_cluster(cluster, config, account, contexts)
+        context = cluster["kubeContext"]
+        if context not in contexts:
+            hint = (
+                "scripts/local.py up"
+                if local
+                else f"aws eks update-kubeconfig --alias {context}"
+            )
+            raise DeploymentError(
+                f"missing kube context {context}; create it with {hint}"
+            )
+        if not local:
+            verify_cluster(cluster, config, account, contexts)
     verify_prerequisite_resources(config, phase)
     if phase == "mockdc":
         verify_stargate_endpoint(config)

@@ -21,6 +21,57 @@ ACCOUNT_ID = "123456789012"
 DIGEST_IMAGE = re.compile(r"^[^@]+@sha256:[a-f0-9]{64}$")
 
 
+def helmfile(
+    region: str,
+    values: dict,
+    credential_path: Path,
+    *arguments: str,
+    account: str | None = ACCOUNT_ID,
+) -> str:
+    """Run helmfile for a region with values written beside the credentials."""
+    values_path = credential_path.parent / f"{region}-values.yaml"
+    values_path.write_text(yaml.safe_dump(values), encoding="utf-8")
+    environment = dict(
+        os.environ,
+        STARGATE_DEV_VALUES_FILE=str(values_path),
+        STARGATE_DEV_CREDENTIALS_FILE=str(credential_path),
+    )
+    environment.pop("STARGATE_DEV_AWS_ACCOUNT_ID", None)
+    if account:
+        environment["STARGATE_DEV_AWS_ACCOUNT_ID"] = account
+    return subprocess.run(
+        ["helmfile", "-e", region, *arguments],
+        cwd=STACK_DIR,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+
+def render(
+    region: str,
+    values: dict,
+    credential_path: Path,
+    *selector: str,
+    account: str | None = ACCOUNT_ID,
+) -> list[dict]:
+    rendered = helmfile(
+        region,
+        values,
+        credential_path,
+        *selector,
+        "template",
+        "--skip-deps",
+        account=account,
+    )
+    return [
+        resource
+        for resource in yaml.safe_load_all(rendered)
+        if isinstance(resource, dict) and resource.get("kind")
+    ]
+
+
 class DeploymentInitTests(unittest.TestCase):
     def test_init_creates_one_reusable_mode_0600_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -128,28 +179,8 @@ class RenderedStackTests(unittest.TestCase):
     def render(
         self, region_name: str, values: dict, *selector: str
     ) -> list[dict]:
-        root = Path(self.temporary.name)
-        values_path = root / f"{region_name}-values.yaml"
-        values_path.write_text(yaml.safe_dump(values))
         # setUpClass already added the chart repositories.
-        rendered = subprocess.run(
-            ["helmfile", "-e", region_name, *selector, "template", "--skip-deps"],
-            cwd=STACK_DIR,
-            env=dict(
-                os.environ,
-                STARGATE_DEV_VALUES_FILE=str(values_path),
-                STARGATE_DEV_CREDENTIALS_FILE=str(self.credential_path),
-                STARGATE_DEV_AWS_ACCOUNT_ID=ACCOUNT_ID,
-            ),
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return [
-            resource
-            for resource in yaml.safe_load_all(rendered.stdout)
-            if isinstance(resource, dict)
-        ]
+        return render(region_name, values, self.credential_path, *selector)
 
     def test_routing_policy_override_preserves_omitted_queue_bounds(self) -> None:
         policy = {

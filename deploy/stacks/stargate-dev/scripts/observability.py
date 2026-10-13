@@ -171,8 +171,12 @@ def role_names(region: str) -> tuple[str, str]:
 
 
 def provision(region: str, values_path: Path) -> dict:
-    deploy.require_tools("aws")
     config = deploy.load_deployment_values(region, values_path)
+    if deploy.is_local(config):
+        raise deploy.DeploymentError(
+            "observability is not supported for local environments"
+        )
+    deploy.require_tools("aws")
     account = deploy.aws_account()
     stargate = config["clusters"]["stargate"]
     writer_trust = trust_policy(
