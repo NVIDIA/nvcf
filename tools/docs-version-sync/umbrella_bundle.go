@@ -302,6 +302,9 @@ func safeUmbrellaArchivePath(name string) bool {
 
 func writeUmbrellaAssets(out string, assets map[string][]byte) error {
 	if entries, err := os.ReadDir(out); err == nil {
+		if len(entries) == 0 {
+			return fmt.Errorf("bundle output directory must not already exist; choose a new path instead of empty directory %s", out)
+		}
 		if len(entries) != len(assets) {
 			return fmt.Errorf("existing umbrella output has a different asset set: %s", out)
 		}

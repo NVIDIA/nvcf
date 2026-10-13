@@ -294,6 +294,11 @@ go run -C tools/docs-version-sync . umbrella bundle \
   --out /tmp/umbrella-release-assets
 ```
 
+For the first assembly, `--out` must not already exist. Do not pre-create an
+empty output directory.
+An existing directory is accepted only when it contains the exact complete
+asset set from an earlier identical assembly.
+
 Supply `--previous` for a non-initial release, as with manifest validation.
 Assembly reads each stack from its selected Git commit, never the working tree
 or another stack's incidental checkout. It retains the sibling layout:

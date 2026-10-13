@@ -97,6 +97,7 @@ func TestUmbrellaBundleCommandE2E(t *testing.T) {
 		invoke("", "umbrella", "bundle", "--repo", fixture.root, "--manifest", fixture.manifestPath, "--inventories", fixture.inventories, "--out", out)
 	}
 	first, second := filepath.Join(t.TempDir(), "first"), filepath.Join(t.TempDir(), "second")
+	invoke("output directory must not already exist", "umbrella", "bundle", "--repo", fixture.root, "--manifest", fixture.manifestPath, "--inventories", fixture.inventories, "--out", t.TempDir())
 	assemble(first)
 	// Reassembly must ignore the working tree, including modified tracked runtime files.
 	writeFile(t, filepath.Join(fixture.root, umbrellaStackDirectory(releaseSetStackObservability), "charts/fixture/templates/config.yaml"), "unreviewed worktree content\n")

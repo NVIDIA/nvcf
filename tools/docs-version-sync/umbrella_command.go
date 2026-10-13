@@ -40,7 +40,7 @@ func runUmbrella(args []string) error {
 	manifestPath := flags.String("manifest", "", "umbrella manifest to validate")
 	previousPath := flags.String("previous", "", "preceding qualified umbrella manifest")
 	inventories := flags.String("inventories", "", "directory containing the three released inventory JSON files")
-	out := flags.String("out", "", "candidate manifest output; existing different content is never overwritten")
+	out := flags.String("out", "", "manifest file or new bundle directory; existing output must match exactly")
 	bundle := flags.String("bundle", "", "umbrella archive to verify")
 	digest := flags.String("sha256", "", "expected archive digest from the trusted release asset index")
 	plan := umbrellaPreparation{}
