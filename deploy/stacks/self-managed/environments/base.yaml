@@ -595,10 +595,22 @@ invocation:
 
 adminIssuerProxy:
   # Mints admin JWTs for `nvcf-cli init` without authenticating the caller.
-  # Defaults to true so existing installs are unchanged. The condition only
-  # skips the release; one already installed stays until it is uninstalled.
+  # Defaults to true so existing installs are unchanged.
+  #
+  # false drops the release, its Gateway route, its NVCF UI health entry, and
+  # the OpenBao role that lets it sign admin-scoped tokens. `nvcf-cli init`
+  # calls POST /v1/admin/keys, so it stops working against this stack; obtain
+  # the first admin token from your own identity provider instead.
+  #
+  # On a stack where it is already installed this uninstalls nothing: the
+  # release and the OpenBao role both already exist and stay. Until the role is
+  # removed, any pod running as the admin-issuer-proxy service account in the
+  # api-keys namespace can still sign those tokens. For the removal steps see
+  # "Disabling Admin Issuer Proxy" in docs/self-managed/control-plane-operations.md.
   enabled: true
   # The api-keys.<domain>/v1/admin/keys route; false keeps it in-cluster only.
+  # Only meaningful with enabled: true -- disabling the release removes the
+  # route with it.
   gateway:
     enabled: true
   podDisruptionBudget:

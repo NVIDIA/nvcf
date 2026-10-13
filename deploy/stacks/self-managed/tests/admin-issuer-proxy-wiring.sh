@@ -13,6 +13,7 @@ environment_name="admin-issuer-proxy-wiring-test"
 environment_file="$test_stack_dir/environments/$environment_name.yaml"
 secrets_file="$test_stack_dir/secrets/$environment_name-secrets.yaml"
 ui_entries='[.nvcfUi.controlPlane.components[] | select(.name == "admin-issuer-proxy")] | length'
+bao_flag='[.openbao.migrations.env[] | select(.name == "ADMIN_ISSUER_PROXY_ENABLED")] | .[0].value'
 trap 'rm -rf "$work_dir"' EXIT
 
 fail() {
@@ -94,6 +95,8 @@ assert_yaml_value "$work_dir/values-default.yaml" '.adminIssuerProxy.gateway.ena
   "default: the route must stay enabled"
 assert_yaml_value "$work_dir/values-default.yaml" "$ui_entries" 1 \
   "default: the UI must health-check admin-issuer-proxy"
+assert_yaml_value "$work_dir/values-default.yaml" "$bao_flag" true \
+  "default: the OpenBao role must still be created"
 
 # 2. adminIssuerProxy.enabled: false disables the release and drops its UI health
 #    entry, while the other releases stay enabled.
@@ -115,6 +118,10 @@ assert_enabled "$work_dir/list-off.json" api true
 render_values "$work_dir/values-off.yaml"
 assert_yaml_value "$work_dir/values-off.yaml" "$ui_entries" 0 \
   "off: the UI must not health-check a release that is not installed"
+# OpenBao state outlives the release, so a gate on the release alone would
+# leave the sign capability behind for anything running as its service account.
+assert_yaml_value "$work_dir/values-off.yaml" "$bao_flag" false \
+  "off: the OpenBao role must not be created either"
 
 # 3. adminIssuerProxy.gateway.enabled: false drops only the route; the release
 #    stays enabled for in-cluster callers.
@@ -133,5 +140,8 @@ assert_enabled "$work_dir/list-route-off.json" admin-issuer-proxy true
 render_values "$work_dir/values-route-off.yaml"
 assert_yaml_value "$work_dir/values-route-off.yaml" '.adminIssuerProxy.gateway.enabled' false \
   "route off: adminIssuerProxy.gateway.enabled must reach the release values"
+# Dropping the route is not a reason to withdraw the proxy's own credentials.
+assert_yaml_value "$work_dir/values-route-off.yaml" "$bao_flag" true \
+  "route off: the OpenBao role must be unaffected"
 
 echo "admin-issuer-proxy-wiring: all checks passed"
