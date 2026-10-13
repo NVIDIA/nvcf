@@ -19,7 +19,7 @@ use crate::cassandra::cassandra_service::CassandraServiceManager;
 use crate::metrics;
 use crate::models::DistributedLock;
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use tracing;
 
@@ -98,6 +98,7 @@ impl DistributedLockManager {
 pub struct DistributedLockGuard {
     lock_name: String,
     node_id: String,
+    acquired_at: DateTime<Utc>,
     cassandra_service: Arc<CassandraServiceManager>,
     released: bool,
 }
@@ -109,12 +110,13 @@ impl DistributedLockGuard {
         cassandra_service: Arc<CassandraServiceManager>,
         lock_duration_seconds: i32,
     ) -> Result<Option<Self>> {
+        let acquired_at = Utc::now();
         let lock_acquired = cassandra_service
             .put_lock(
                 &DistributedLock {
                     lock_name: lock_name.clone(),
                     node_id: node_id.clone(),
-                    acquired_at: Utc::now(),
+                    acquired_at,
                 },
                 lock_duration_seconds,
             )
@@ -124,6 +126,7 @@ impl DistributedLockGuard {
             Ok(Some(Self {
                 lock_name,
                 node_id,
+                acquired_at,
                 cassandra_service,
                 released: false,
             }))
@@ -139,18 +142,19 @@ impl Drop for DistributedLockGuard {
         if !self.released {
             let lock_name = self.lock_name.clone();
             let node_id = self.node_id.clone();
+            let acquired_at = self.acquired_at;
             let cassandra_service = self.cassandra_service.clone();
 
             tokio::spawn(async move {
                 match cassandra_service
-                    .delete_lock_if_owner(&lock_name, &node_id)
+                    .delete_lock_if_owner(&lock_name, &node_id, acquired_at)
                     .await
                 {
                     Ok(true) => {
                         tracing::info!("Released lock {} during drop", lock_name);
                     }
-                    // The lock already expired or another node acquired it after expiry;
-                    // there is nothing left for this node to release.
+                    // The lock already expired or was re-acquired after expiry, by another
+                    // node or by this one; there is nothing left for this guard to release.
                     Ok(false) => {
                         tracing::warn!(
                             "Lock {} no longer owned by node {} at drop, skipping release",
@@ -168,7 +172,7 @@ impl Drop for DistributedLockGuard {
                         tokio::spawn(async move {
                             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                             match retry_cassandra_service
-                                .delete_lock_if_owner(&retry_lock_name, &retry_node_id)
+                                .delete_lock_if_owner(&retry_lock_name, &retry_node_id, acquired_at)
                                 .await
                             {
                                 Ok(true) => {

@@ -23,7 +23,7 @@ use crate::secrets::secrets_config::CassandraSslCertificates;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use base64::Engine;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures::TryStreamExt as _;
 use openssl::ssl::{SslContextBuilder, SslMethod, SslVerifyMode};
 use scylla::client::session::Session;
@@ -611,10 +611,15 @@ impl CassandraServiceManager {
         .await
     }
 
-    /// LWT delete: only applies if this node still owns the lock.
-    /// Returns Ok(true) if the lock was deleted, Ok(false) if it expired or another node now owns it.
+    /// LWT delete: only applies if the lock still holds this acquisition's node_id and acquired_at.
+    /// Returns Ok(true) if the lock was deleted, Ok(false) if it expired or was re-acquired.
     #[tracing::instrument(skip(self))]
-    pub async fn delete_lock_if_owner(&self, lock_name: &str, node_id: &str) -> Result<bool> {
+    pub async fn delete_lock_if_owner(
+        &self,
+        lock_name: &str,
+        node_id: &str,
+        acquired_at: DateTime<Utc>,
+    ) -> Result<bool> {
         let session = self.get_session().await?;
         with_cassandra_timing("delete_lock_if_owner", || async {
             let mut prepared = session
@@ -624,7 +629,7 @@ impl CassandraServiceManager {
             prepared.set_serial_consistency(Some(SerialConsistency::Serial));
             prepared.set_is_idempotent(false);
             let result = session
-                .execute_unpaged(&prepared, (lock_name, node_id))
+                .execute_unpaged(&prepared, (lock_name, node_id, acquired_at))
                 .await?;
             let rows = result.into_rows_result()?;
             // On a CAS miss, Scylla returns [applied]=false + the IF-clause columns (node_id).
@@ -951,7 +956,7 @@ mod tests {
 
         // Test delete operation
         let delete_result = manager
-            .delete_lock_if_owner(&lock.lock_name, &lock.node_id)
+            .delete_lock_if_owner(&lock.lock_name, &lock.node_id, lock.acquired_at)
             .await;
         assert!(delete_result.is_ok());
 
@@ -962,7 +967,7 @@ mod tests {
 
         // Test delete operation again- it should fail
         let delete_result = manager
-            .delete_lock_if_owner(&lock.lock_name, &lock.node_id)
+            .delete_lock_if_owner(&lock.lock_name, &lock.node_id, lock.acquired_at)
             .await;
         assert!(delete_result.is_ok());
     }
@@ -1003,10 +1008,13 @@ mod tests {
         };
         assert!(!manager.put_lock(&contender, ttl_seconds).await.unwrap());
 
-        manager
-            .delete_lock_if_owner(&lock.lock_name, &lock.node_id)
-            .await
-            .unwrap();
+        // Refresh rewrites acquired_at, so release with the current value if the row is still live.
+        if let Some(current) = manager.get_lock(&lock.lock_name).await.unwrap() {
+            manager
+                .delete_lock_if_owner(&lock.lock_name, &lock.node_id, current.acquired_at)
+                .await
+                .unwrap();
+        }
     }
 
     async fn create_test_manager() -> Arc<CassandraServiceManager> {
@@ -1041,7 +1049,7 @@ mod tests {
         assert!(manager.put_lock(&lock, 30).await.unwrap());
 
         assert!(manager
-            .delete_lock_if_owner(&lock.lock_name, &lock.node_id)
+            .delete_lock_if_owner(&lock.lock_name, &lock.node_id, lock.acquired_at)
             .await
             .unwrap());
         assert!(manager.get_lock(&lock.lock_name).await.unwrap().is_none());
@@ -1054,7 +1062,7 @@ mod tests {
         let lock = create_unique_test_lock();
 
         assert!(!manager
-            .delete_lock_if_owner(&lock.lock_name, &lock.node_id)
+            .delete_lock_if_owner(&lock.lock_name, &lock.node_id, lock.acquired_at)
             .await
             .unwrap());
         assert!(manager.get_lock(&lock.lock_name).await.unwrap().is_none());
@@ -1076,14 +1084,14 @@ mod tests {
         assert!(manager.put_lock(&node_b, 30).await.unwrap());
 
         assert!(!manager
-            .delete_lock_if_owner(&node_a.lock_name, &node_a.node_id)
+            .delete_lock_if_owner(&node_a.lock_name, &node_a.node_id, node_a.acquired_at)
             .await
             .unwrap());
         let current = manager.get_lock(&node_a.lock_name).await.unwrap().unwrap();
         assert_eq!(current.node_id, node_b.node_id);
 
         manager
-            .delete_lock_if_owner(&node_b.lock_name, &node_b.node_id)
+            .delete_lock_if_owner(&node_b.lock_name, &node_b.node_id, node_b.acquired_at)
             .await
             .unwrap();
     }
@@ -1111,7 +1119,7 @@ mod tests {
         assert_eq!(current.node_id, node_b.node_id);
 
         manager
-            .delete_lock_if_owner(&node_b.lock_name, &node_b.node_id)
+            .delete_lock_if_owner(&node_b.lock_name, &node_b.node_id, node_b.acquired_at)
             .await
             .unwrap();
     }
@@ -1173,6 +1181,38 @@ mod tests {
             .unwrap()
             .expect("node-b's lock must survive node-a's stale guard drop");
         assert_eq!(current.node_id, "node-b");
+
+        drop(new_guard);
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires running Cassandra"]
+    async fn test_stale_lock_guard_drop_keeps_same_nodes_reacquired_lock() {
+        let manager = create_test_manager().await;
+        let node_a = DistributedLockManager::new(manager.clone(), "node-a".to_string());
+        let lock_name = create_unique_test_lock().lock_name;
+
+        let stale_guard = node_a
+            .try_acquire(lock_name.clone(), 2)
+            .await
+            .unwrap()
+            .expect("node-a should acquire the free lock");
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let new_guard = node_a
+            .try_acquire(lock_name.clone(), 30)
+            .await
+            .unwrap()
+            .expect("node-a should re-acquire the expired lock");
+
+        drop(stale_guard);
+        // Give the spawned release task time to run before checking the row.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        assert!(
+            manager.get_lock(&lock_name).await.unwrap().is_some(),
+            "node-a's re-acquired lock must survive its stale guard drop"
+        );
 
         drop(new_guard);
     }

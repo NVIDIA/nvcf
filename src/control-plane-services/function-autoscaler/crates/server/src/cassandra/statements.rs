@@ -23,13 +23,14 @@ pub(crate) fn get_select_locks_stmt(keyspace: &str) -> String {
     )
 }
 
-// LWT conditional delete: only removes the lock if node_id still matches this node,
-// so a stale holder cannot delete a lock another node acquired after expiry.
-// Returns [applied]=true if the row was deleted, false if it expired or another node owns it.
-// Bind order: (lock_name, node_id)
+// LWT conditional delete: only removes the lock if node_id and acquired_at still match
+// this acquisition, so a stale holder cannot delete a lock acquired after expiry,
+// whether by another node or by the same node again.
+// Returns [applied]=true if the row was deleted, false if it expired or was re-acquired.
+// Bind order: (lock_name, node_id, acquired_at)
 pub(crate) fn get_stmt_delete_lock_if_owner(keyspace: &str) -> String {
     format!(
-        "DELETE FROM {}.locks WHERE lock_name = ? IF node_id = ?",
+        "DELETE FROM {}.locks WHERE lock_name = ? IF node_id = ? AND acquired_at = ?",
         keyspace,
     )
 }
@@ -115,7 +116,7 @@ mod tests {
         let statement = get_stmt_delete_lock_if_owner("test_keyspace");
 
         assert!(statement.contains("WHERE lock_name = ?"));
-        assert!(statement.contains("IF node_id = ?"));
+        assert!(statement.contains("IF node_id = ? AND acquired_at = ?"));
     }
 
     #[test]
