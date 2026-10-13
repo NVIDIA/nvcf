@@ -92,7 +92,7 @@ class ChartPackageTests(unittest.TestCase):
                     self.assertIn('](../../../ai-tooling/', introduction)
                     expected = expected.replace(introduction, 'Run the steps below manually. ')
                     self.assertNotIn('../../../ai-tooling/', actual)
-                for directory in ('..', 'charts', 'recipes', 'dev-artifacts'):
+                for directory in ('..', 'charts', 'cluster', 'recipes', 'dev-artifacts'):
                     expected = expected.replace(f']({directory}/', f'](../../../{directory}/')
                 self.assertEqual(actual, expected)
                 for link in re.findall(r'\]\(([^)]+)\)', actual):
