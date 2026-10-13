@@ -248,7 +248,7 @@ Verified on NVCA 3.13.3:
 |---|---|
 | Regular workflow, `ReadWriteMany` provisioner (OCI FSS qualified) | One shared claim per handle in the request namespace, writer Job runs as root where the CSIDriver skips fsGroup, claim labeled populated, worker pods report every artifact cached |
 | Regular workflow, NVMesh | Writer claim and derived reader PVs; the primary is kept while a function serves from it |
-| Helm workflow with a persisted selection | `rwxReadOnly` selects the SharedFS backend, `roxReadOnly` selects NVMesh, `ephemeral` injects an `emptyDir` and the `model-cache-init` container whose environment travels in the miniservice metadata ConfigMap |
+| Helm workflow with a persisted selection | `rwxReadOnly` selects the SharedFS backend and applies the recorded writer identity to the writer Job exactly as the regular workflow does, `roxReadOnly` selects NVMesh, `ephemeral` injects an `emptyDir` and the `model-cache-init` container whose environment travels in the miniservice metadata ConfigMap |
 | Helm workflow without a selection | StorageClass-presence order: `nvcf-sc-30`, `nvcf-miniservice-sc`, `HelmSharedStorage` Samba, ephemeral |
 | Readers | The mutating webhook injects the reader claim as the `model-data` volume, mounted read-only, at `/config/models` and `/config/resources` |
 
@@ -321,8 +321,8 @@ No code change should be needed. If one is, the catalog is missing a fact.
 
 ## Source references
 
-- [Catalog](https://github.com/NVIDIA/nvcf/blob/main/deploy/helm/nvca-operator/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.yaml)
-- [Catalog schema](https://github.com/NVIDIA/nvcf/blob/main/deploy/helm/nvca-operator/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.schema.json)
-- [Catalog loader and validator](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/pkg/storage/storage_capabilities.go)
-- [Backend selection on main](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/pkg/storage/cachebackend.go)
+- [Catalog](../../deploy/helm/nvca-operator/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.yaml)
+- [Catalog schema](../../deploy/helm/nvca-operator/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.schema.json)
+- [Catalog loader and validator](../../src/compute-plane-services/nvca/pkg/storage/storage_capabilities.go)
+- [Backend selection on main](../../src/compute-plane-services/nvca/pkg/storage/cachebackend.go)
 - [Runtime work](https://github.com/NVIDIA/nvcf/issues/1326)

@@ -16,13 +16,13 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use stargate_protocol::common::valid_last_mean_input_tps;
 
 use super::{LoadBalancerRequest, input_work_units};
 use crate::routing_state::RoutedClusterSnapshot;
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ClusterComparator {
     #[default]

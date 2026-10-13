@@ -127,6 +127,7 @@ alias(
 go_test(
     name = "reconcile_test",
     srcs = [
+        "agent_config_key_conflict_test.go",
         "agent_test.go",
         "authconfig_helpers_test.go",
         "authconfig_validation_test.go",
