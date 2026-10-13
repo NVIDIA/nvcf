@@ -49,7 +49,7 @@ Environment:
   E2E_GATEWAY_BIN   Prebuilt llm-api-gateway binary to use with --no-build.
                     Without it, --no-build still builds the gateway.
 
-Requires curl and jq. Building also needs cargo and go.
+Requires curl, jq, and sha256sum or shasum. Building also needs cargo and go.
 EOF
 }
 
@@ -169,14 +169,21 @@ wait_for() {
     done
 }
 
-build_gateway() {
+check_gateway_build() {
     [[ -d "${gateway_root}" ]] || fail "missing gateway source at ${gateway_root}; set E2E_GATEWAY_BIN"
+    command -v go >/dev/null || fail "go is required to build the gateway; set E2E_GATEWAY_BIN"
+}
+
+build_gateway() {
+    check_gateway_build
     echo "building llm-api-gateway"
     (cd "${gateway_root}" && go build -o "${gateway_bin}" ./cmd/llm-api-gateway)
 }
 
 build_binaries() {
-    echo "building stargate, pylon, mock-dynamo, and the worker-auth fixture (release)"
+    # Fail before the long cargo build when the gateway cannot be built.
+    check_gateway_build
+    echo "building stargate, pylon, and mock-dynamo (release)"
     (cd "${stargate_root}" && cargo build --locked --release -q -p stargate -p pylon -p mock-dynamo)
     build_gateway
 }
@@ -243,7 +250,9 @@ served_by() {
 }
 
 affinity_key() {
-    printf 'mt:v1:session:%s' "$(printf '%s' "${session_id}" | shasum -a 256 | cut -d' ' -f1)"
+    local hasher=(sha256sum)
+    command -v sha256sum >/dev/null || hasher=(shasum -a 256)
+    printf 'mt:v1:session:%s' "$(printf '%s' "${session_id}" | "${hasher[@]}" | cut -d' ' -f1)"
 }
 
 # Sends a direct Stargate request with the session's affinity key and no
