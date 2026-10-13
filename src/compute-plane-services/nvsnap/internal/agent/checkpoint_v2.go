@@ -470,7 +470,8 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 var gpuDevPatterns = []string{"nvidia*", "gdrdrv"}
 
 // nvidiaDevExternals builds CRIU --external dev[maj/min]:name entries for
-// every GPU character device visible in the container.
+// every GPU character device visible in the container, none for a
+// container without GPUs.
 func nvidiaDevExternals(devDir string) ([]string, error) {
 	var matches []string
 	for _, pat := range gpuDevPatterns {
@@ -493,9 +494,8 @@ func nvidiaDevExternals(devDir string) ([]string, error) {
 		min := uint32(st.Rdev & 0xff)       //nolint:gosec // masked device-number bits
 		exts = append(exts, fmt.Sprintf("dev[%d/%d]:%s", maj, min, filepath.Base(m)))
 	}
-	if len(exts) == 0 {
-		return nil, fmt.Errorf("no GPU devices under %s", devDir)
-	}
+	// A container without GPUs (an instance's companion) has none to
+	// declare.
 	return exts, nil
 }
 

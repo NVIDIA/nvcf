@@ -158,3 +158,12 @@ func TestDuplicateURI(t *testing.T) {
 		t.Error("duplicateURI")
 	}
 }
+
+// A companion's container has no GPU devices: nothing to declare, not an
+// error.
+func TestNvidiaDevExternalsWithoutGPUs(t *testing.T) {
+	exts, err := nvidiaDevExternals(t.TempDir())
+	if err != nil || len(exts) != 0 {
+		t.Fatalf("got %v %v, want no externals and no error", exts, err)
+	}
+}
