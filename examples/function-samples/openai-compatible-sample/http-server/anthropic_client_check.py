@@ -30,6 +30,7 @@ if API_KEY != "not-needed" and urlparse(BASE_URL).scheme != "https":
 CLIENT = anthropic.Anthropic(
     api_key=API_KEY,
     base_url=BASE_URL,
+    http_client=anthropic.DefaultHttpxClient(follow_redirects=False),
     max_retries=0,
     _strict_response_validation=True,
 )
