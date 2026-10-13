@@ -204,6 +204,158 @@ is intentionally excluded from public documentation, and give it a public-safe
 reason. Do not use a private registry as a placeholder for an unpublished
 artifact.
 
+## Prepare an umbrella product manifest
+
+The opt-in `umbrella` commands prepare a product manifest independently of docs
+editions. Existing `edition` commands, catalogs, registries, and publication
+defaults keep their current behavior.
+
+Review the exact three-stack catalog at a full source commit. Download the
+inventory asset from each selected stack release into one directory, and fetch
+the corresponding immutable source tags. The command validates those local tags
+and inventory bytes; it does not discover latest versions or publish anything.
+
+```bash
+git fetch origin --tags
+go run -C tools/docs-version-sync . umbrella prepare \
+  --source <full-reviewed-catalog-commit> \
+  --version <umbrella-version> --change initial \
+  --helm-version <exact-3.x-version> --helmfile-version <exact-1.1.x-version> \
+  --inventories /tmp/selected-stack-inventories \
+  --out /tmp/umbrella-manifest.json
+
+go run -C tools/docs-version-sync . umbrella check \
+  --manifest /tmp/umbrella-manifest.json \
+  --inventories /tmp/selected-stack-inventories
+```
+
+The default status is `development`. Supply `--qualification` with the public
+review URL only after the complete combination is qualified. This records the
+reviewer's declaration; an approval URL is not proof that runtime tests passed.
+
+For a subsequent product version, supply `--previous` with its qualified
+predecessor manifest and use `--change patch`, `minor`, or `major`. Pass the same
+predecessor to `umbrella check`. Component downgrades and changes to an existing
+component version's source or inventory are rejected. A component major requires
+an umbrella major; a component minor requires at least an umbrella minor.
+
+Manifest schema version 1 uses these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `version`, `previous_version`, `change` | Product version and deployment-contract transition |
+| `status`, `qualification` | Development candidate or qualified combination with public review |
+| `source_commit` | Reviewed catalog commit used to select the combination |
+| `toolchain.helm`, `toolchain.helmfile` | Exact supported render tool versions |
+| `stacks` | Exactly `control-plane`, `compute-plane`, and `observability` |
+| `stacks.<name>.version` | Independent component stack version |
+| `source_tag`, `source_commit` within each stack | Immutable component source identity |
+| `inventory_asset`, `inventory_sha256` within each stack | Canonical released inventory filename and digest of its exact bytes |
+| `compatible_with` within each stack | Reviewed requirements for the other two component stacks |
+
+`control-plane` identifies the Self-Managed stack and retains the catalog's
+existing key. The three component versions do not have to match.
+
+Product manifests use `deploy/releases/X.Y.Z/manifest.json` and the reserved tag
+format `nvcf/X.Y.Z`. That tag format avoids the existing component publisher's
+`*-v*` and `**/v*` triggers. Preparation creates neither the tag nor a GitHub
+release. If the product tag is present locally, validation requires the exact
+manifest bytes recorded at that tag. Fetch release tags before validation.
+
+Repeated preparation with identical inputs verifies the existing output. A
+different output is rejected. Bundle and manifest checksums belong in a separate
+release asset index, so the manifest never needs to contain its own hash or the
+hash of an archive that embeds it.
+
+Documentation corrections do not change this product manifest or its version.
+This preparation command does not change the current immutable-docs-edition
+policy; maintained umbrella documentation requires the separate docs workflow.
+
+Run the command-level integration test and existing regressions with:
+
+```bash
+go test -C tools/docs-version-sync ./...
+./tools/ci/check-doc-version-sync
+tools/ci/preview-docs --check
+```
+
+The integration test builds the real command, prepares and checks independent
+fixture releases, rejects changed source identities and released manifests, and
+exercises the legacy edition commands through the same binary.
+
+## Assemble an umbrella bundle
+
+Build a distribution from the prepared manifest and the same inventory inputs:
+
+```bash
+go run -C tools/docs-version-sync . umbrella bundle \
+  --manifest /tmp/umbrella-manifest.json \
+  --inventories /tmp/selected-stack-inventories \
+  --out /tmp/umbrella-release-assets
+```
+
+For the first assembly, `--out` must not already exist. Do not pre-create an
+empty output directory.
+An existing directory is accepted only when it contains the exact complete
+asset set from an earlier identical assembly.
+
+Supply `--previous` for a non-initial release, as with manifest validation.
+Assembly reads each stack from its selected Git commit, never the working tree
+or another stack's incidental checkout. It retains the sibling layout:
+
+```text
+manifest.json
+inventory.json
+bundle-files.json
+inventories/
+deploy/stacks/self-managed/
+deploy/stacks/nvcf-compute-plane/
+deploy/stacks/observability/
+```
+
+The archive also includes the reviewed root LICENSE and NOTICE, operator
+instructions, and VERSION files. Each stack's VERSION is stamped with its own
+artifact version. Where available, `Makefile.dist` becomes the distribution
+Makefile. Base environments, local charts, Helmfile states, values, scripts, and
+secret templates are included. Tests, local environment overrides, dotfiles,
+and customer secret files are excluded. Source symlinks are rejected.
+
+`release-assets.json` sits outside the archive. It records SHA-256 digests for
+the archive, manifest, combined inventory, and three constituent inventories.
+The archive's `bundle-files.json` records each payload file's digest and mode.
+Identical inputs produce identical archives. Repeating assembly verifies
+existing output; it does not overwrite different assets.
+
+Verify a downloaded archive against the manifest and the archive digest from a
+trusted release asset index:
+
+```bash
+go run -C tools/docs-version-sync . umbrella verify-bundle \
+  --manifest /tmp/umbrella-release-assets/manifest.json \
+  --bundle /tmp/umbrella-release-assets/nvcf-<version>.tar.gz \
+  --sha256 sha256:<archive-digest>
+```
+
+Verification checks the archive digest, embedded manifest, file index, stack
+versions, and inventories. It rejects links, path traversal, duplicate paths,
+and oversized archives. It does not install or extract into an existing cluster.
+Use the bundle's README for extraction-layout and per-plane render commands.
+Chart/image payloads and the CLI binary remain separate downloads.
+
+The command E2E builds twice from different working-tree states, verifies
+downloaded assets, extracts the archive, and renders control-plane, compute-plane,
+and enabled/disabled observability fixtures with real Helm and Helmfile:
+
+```bash
+NVCF_UMBRELLA_RENDER_E2E=1 go test -C tools/docs-version-sync \
+  -run TestUmbrella -count=1 -v
+```
+
+The dedicated umbrella validation workflow installs checksum-pinned render tools
+and requires this test. The ordinary Go suite skips rendering only when the
+tools are absent; setting the variable makes missing tools a failure. These
+isolated fixture renders do not qualify a production stack combination.
+
 ## Compare release sets
 
 Store each release set's inventory JSON files in a directory, then run:

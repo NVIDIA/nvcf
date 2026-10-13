@@ -778,6 +778,13 @@ mod tests {
         assert_eq!(max_in_flight.load(Ordering::SeqCst), 3);
     }
 
+    #[test]
+    fn calibration_prompts_are_unique_and_keep_the_requested_length() {
+        let prompt = calibration_prompt(CALIBRATION_PROMPT_UNITS_FLOOR);
+        assert_eq!(prompt.len(), CALIBRATION_PROMPT_UNITS_FLOOR);
+        assert_ne!(prompt, calibration_prompt(CALIBRATION_PROMPT_UNITS_FLOOR));
+    }
+
     #[tokio::test]
     async fn calibration_top_level_usage_does_not_claim_chunk_usage_stats() {
         let base_url = spawn_test_server(TestServerState::default()).await;

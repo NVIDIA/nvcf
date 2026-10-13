@@ -67,10 +67,18 @@ func DecodeConfig(data []byte, extraConfigDatas ...[]byte) (cfg Config, err erro
 	if err := AutobindAll(v); err != nil {
 		return cfg, err
 	}
+	// Each input is checked on its own: keys in separate inputs that differ
+	// only by case are a supported override, resolved in input order.
+	if err := validateYAMLKeys(data); err != nil {
+		return cfg, fmt.Errorf("read config: %w", err)
+	}
 	if err := v.ReadConfig(bytes.NewReader(data)); err != nil {
 		return cfg, fmt.Errorf("read config: %w", err)
 	}
 	for _, extraCfgData := range extraConfigDatas {
+		if err := validateYAMLKeys(extraCfgData); err != nil {
+			return cfg, fmt.Errorf("merge extra config: %w", err)
+		}
 		if err := v.MergeConfig(bytes.NewReader(extraCfgData)); err != nil {
 			return cfg, fmt.Errorf("merge extra config: %w", err)
 		}

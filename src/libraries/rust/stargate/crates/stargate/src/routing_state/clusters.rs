@@ -72,7 +72,8 @@ impl RoutingTargetState {
         replacement.upsert_backend(backend);
         clusters
             .insert(cluster_id, replacement)
-            .expect("existing routed cluster generation should be replaced");
+            .expect("existing routed cluster generation should be replaced")
+            .detach();
         update_active_backend_count(active_backend_count, stale_backend_count, 1);
         Ok(())
     }
@@ -103,9 +104,12 @@ impl RoutingTargetState {
                 return;
             }
             let backend_count = cluster_state.generation.lock().backends.len();
-            clusters.remove(cluster_id).expect(
-                "retired routed cluster generation should remain target-owned until removal",
-            );
+            clusters
+                .remove(cluster_id)
+                .expect(
+                    "retired routed cluster generation should remain target-owned until removal",
+                )
+                .detach();
             backend_count
         } else {
             match cluster_state.remove_backend(registration) {

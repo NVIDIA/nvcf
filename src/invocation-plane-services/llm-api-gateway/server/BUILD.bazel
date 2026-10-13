@@ -23,6 +23,7 @@ go_library(
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/api",
         "//src/invocation-plane-services/llm-api-gateway/config",
+        "//src/invocation-plane-services/llm-api-gateway/lastcluster",
         "//src/invocation-plane-services/llm-api-gateway/provider",
         "//src/invocation-plane-services/llm-api-gateway/ratelimit",
         "//src/invocation-plane-services/llm-api-gateway/ratelimitsync",
@@ -41,10 +42,14 @@ alias(
 
 go_test(
     name = "server_test",
-    srcs = ["server_test.go"],
+    srcs = [
+        "last_cluster_test.go",
+        "server_test.go",
+    ],
     embed = [":server"],
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/config",
+        "//src/invocation-plane-services/llm-api-gateway/internal/olrictest",
         "//src/invocation-plane-services/llm-api-gateway/provider",
     ],
 )

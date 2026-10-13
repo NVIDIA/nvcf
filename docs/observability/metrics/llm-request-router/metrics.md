@@ -14,9 +14,9 @@ The self-managed stack maps
 ## Label Boundaries
 
 Use bounded labels only. Keep `routing_key`, `model`, `inference_server_id`,
-`algorithm`, `selection`, `status`, `result`, `reason`, and `cache` to bounded
-service dimensions. Routing expression content never becomes a
-label value. Do not add request IDs, session IDs, function IDs, organization
+`algorithm`, `selection`, `session_state`, `status`, `result`, `reason`, and
+`cache` to bounded service dimensions. Routing expression content never becomes
+a label value. Do not add request IDs, session IDs, function IDs, organization
 IDs, project IDs, raw URLs, raw prompts, authorization values, or other
 unbounded request fields as metric labels.
 
@@ -29,6 +29,7 @@ unbounded request fields as metric labels.
 | `stargate_proxy_retries_total` | Counter | `llm-request-router:9090/metrics` | `routing_key`, `model`, `reason` | Total proxy retries by retry reason. |
 | `stargate_routing_selections_total` | Counter | `llm-request-router:9090/metrics` | `routing_key`, `model`, `algorithm`, `selection` | Primary and ranked fallback cluster choices used for upstream attempts. |
 | `stargate_routing_kv_free_token_fallback_selections_total` | Counter | `llm-request-router:9090/metrics` | `routing_key`, `model`, `algorithm` | Routes selected after a higher-ranked candidate failed the KV free-token check. |
+| `stargate_routing_session_selections_total` | Counter | `llm-request-router:9090/metrics` | `routing_key`, `model`, `algorithm`, `session_state`, `selection` | Cluster choices for requests classified by `last_cluster_affinity`. `session_state` is `new`, `returning`, or `stale`. For `returning`, `primary` means the request went to its last cluster; for `new` and `stale`, it means the cluster came from the affinity group. Every state and selection pair starts at zero once a routing key, model, and algorithm records its first classified request. |
 | `stargate_routing_expressions_total` | Counter | `llm-request-router:9090/metrics` | `algorithm`, `cache` | Accepted `x-routing-method` values with parameters. `cache` is `hit`, `build`, or `rebuild`. Values without parameters and rejected values are not counted. Rejected `x-routing-method` values write the warn log `invalid routing algorithm header` with their `rejection_reason`. |
 | `stargate_routing_expression_cache_entries` | Gauge | `llm-request-router:9090/metrics` | none | Approximate number of routing targets that hold a routing expression configuration, with a capacity of 16384 per process. The router runs cache maintenance once a minute to remove entries idle for 15 minutes. Scrapes read the count without maintenance, so it can lag behind pending insertions or removals until the next maintenance run. |
 | `stargate_proxy_retry_exhausted_total` | Counter | `llm-request-router:9090/metrics` | `routing_key`, `model`, `reason` | Total requests that exhausted retry options. |
@@ -41,3 +42,5 @@ unbounded request fields as metric labels.
 | `stargate_proxy_duration_seconds` | Histogram | `llm-request-router:9090/metrics` | `routing_key`, `model`, `inference_server_id` | Time to first byte from upstream in seconds. |
 | `stargate_routing_duration_seconds` | Histogram | `llm-request-router:9090/metrics` | `routing_key`, `model` | Load-balancer decision time in seconds. |
 | `stargate_active_inference_servers` | Gauge | `llm-request-router:9090/metrics` | `routing_key`, `model` | Currently routable inference servers for a routing target. |
+| `stargate_routing_reservations_active` | Gauge | `llm-request-router:9090/metrics` | `routing_key`, `model` | Local routing reservations not yet released or pruned. A reservation counts until its backend sends a registration update received at or after the soft TTL; time alone never ends it. Release after a queue estimate mismatch and removing or deregistering the backend also end it, so a backend that stops reporting keeps this gauge raised until it reports or deregisters. |
+| `stargate_routing_reservation_ttl_seconds` | Histogram | `llm-request-router:9090/metrics` | `routing_key`, `model` | RTT-based soft reservation TTL in seconds after applying the configured bounds. After it, the next registration update from the backend ends the reservation. |

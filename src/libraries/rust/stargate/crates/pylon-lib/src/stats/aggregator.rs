@@ -50,6 +50,11 @@ pub(super) struct ModelMetricsState {
     aggregate_state_counted: bool,
     pub(super) counter_output_tps_authoritative: bool,
     pub(super) chunk_usage_stats_observed: bool,
+    // Set once streamed Chat Completions usage for this generation reports valid
+    // cached-token details. Engines that report them omit Chat details on a
+    // cache miss, so later Chat usage without details then means no cached
+    // tokens. Responses usage never sets or uses it.
+    pub(super) chat_cache_details_observed: bool,
     pub(super) kv_cache_stats_observed: bool,
     pub(super) engine_stream_stats_observed: bool,
     pub(super) last_stats_event_at: Option<TokioInstant>,
@@ -139,18 +144,57 @@ fn calibration_factor(ratios: &VecDeque<f64>) -> Option<f64> {
     }
 }
 
-#[derive(Debug)]
+// Entries newer than a pending request wait for its usage. Past either bound
+// the oldest pending request is dropped rather than resolved with total tokens
+// that may include cached prompt tokens.
+const MAX_RETAINED_INPUT_INTERVALS: usize = 1024;
+// Measured against the newest observed first output. Decodes longer than this
+// after first output stop holding back newer requests.
+const MAX_PENDING_INPUT_INTERVAL_LAG: Duration = Duration::from_secs(120);
+// Cache hits with fewer uncached prompt tokens are left out: a short
+// remainder's submit-to-first-output time is mostly fixed overhead.
+const MIN_CACHE_HIT_UNCACHED_INPUT_TOKENS: u64 = 256;
+
+#[derive(Debug, PartialEq)]
 struct RetainedInputInterval {
     request_id: String,
     interval: RequestInputInterval,
     input_tokens: u64,
     input_tokens_explicit: bool,
+    max_input_tps_eligible: bool,
+    pending: bool,
 }
 
+pub(super) struct InputIntervalSample<'a> {
+    pub(super) request_id: &'a str,
+    pub(super) interval: RequestInputInterval,
+    // Total prompt tokens; the minimum-size filter applies to this count.
+    pub(super) prompt_tokens: u64,
+    // Rate numerator: uncached prompt tokens when known, else the total.
+    pub(super) input_tokens: u64,
+    pub(super) input_tokens_explicit: bool,
+    // True when `input_tokens` is known to count prefill work: usage split out
+    // cached prompt tokens, or the request is a Pylon calibration probe.
+    pub(super) max_input_tps_eligible: bool,
+    // True while the request still expects usage that has not arrived. The entry
+    // keeps its first-output position but is excluded from the rate until resolved.
+    pub(super) pending: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct InputIntervalRate {
+    pub(super) input_tps: f64,
+    pub(super) max_input_tps_eligible: bool,
+}
+
+// Entries are ordered by first output. The rate covers the resolved entries
+// before the oldest pending entry, so it always describes a contiguous run of
+// requests; newer resolved entries are held back until that request resolves.
 #[derive(Debug, Default)]
 pub(super) struct RequestInputIntervalWindow {
     intervals: VecDeque<RetainedInputInterval>,
     evicted_through: Option<Instant>,
+    newest_first_output: Option<Instant>,
     has_observed_rate: bool,
 }
 
@@ -166,47 +210,61 @@ impl RequestInputIntervalWindow {
 
     pub(super) fn observe(
         &mut self,
-        request_id: &str,
-        interval: RequestInputInterval,
-        input_tokens: u64,
-        input_tokens_explicit: bool,
+        sample: InputIntervalSample<'_>,
         config: &StatsCollectorConfig,
-    ) -> Option<f64> {
+    ) -> Option<InputIntervalRate> {
+        let InputIntervalSample {
+            request_id,
+            interval,
+            prompt_tokens,
+            input_tokens,
+            input_tokens_explicit,
+            max_input_tps_eligible,
+            pending,
+        } = sample;
         if config.smoothing_window_size == 0
             || interval.first_generated_output_at <= interval.submitted_at
         {
             return None;
         }
+        self.newest_first_output = self
+            .newest_first_output
+            .max(Some(interval.first_generated_output_at));
         let existing = self.intervals.iter().position(|entry| {
             entry.request_id == request_id && entry.interval.submitted_at == interval.submitted_at
         });
-        let min_input_tokens = config.min_input_tokens.max(1);
-        if input_tokens_explicit && input_tokens < min_input_tokens {
-            if let Some(index) = existing {
+        // A cache hit with a short uncached remainder measures request overhead,
+        // not prefill, so it leaves the window like a prompt below the minimum.
+        let short_cache_hit =
+            input_tokens < prompt_tokens && input_tokens < MIN_CACHE_HIT_UNCACHED_INPUT_TOKENS;
+        if short_cache_hit || prompt_tokens < config.min_input_tokens.max(1) {
+            if let Some(index) = existing
+                && input_tokens_explicit
+            {
                 self.intervals.remove(index);
-                return self.record_current_rate(config.duration_floor);
             }
-            return None;
-        }
-        if input_tokens < min_input_tokens {
-            return None;
+            // The newest first output still advanced, so a lagging slot can expire.
+            return self.refresh(config);
         }
 
+        let retained = RetainedInputInterval {
+            request_id: request_id.to_string(),
+            interval,
+            input_tokens,
+            input_tokens_explicit,
+            max_input_tps_eligible,
+            pending,
+        };
         if let Some(index) = existing {
-            let entry = self
-                .intervals
-                .get_mut(index)
-                .expect("located input interval should remain retained");
-            if entry.input_tokens_explicit && !input_tokens_explicit {
+            let entry = &mut self.intervals[index];
+            // Engine-reported usage is authoritative over later events without it.
+            if (pending && !entry.pending)
+                || (entry.input_tokens_explicit && !input_tokens_explicit)
+                || *entry == retained
+            {
                 return None;
             }
-            let rate_changed = entry.interval != interval || entry.input_tokens != input_tokens;
-            entry.interval = interval;
-            entry.input_tokens = input_tokens;
-            entry.input_tokens_explicit |= input_tokens_explicit;
-            if !rate_changed {
-                return None;
-            }
+            *entry = retained;
         } else {
             if self
                 .evicted_through
@@ -221,47 +279,62 @@ impl RequestInputIntervalWindow {
                     entry.interval.first_generated_output_at > interval.first_generated_output_at
                 })
                 .unwrap_or(self.intervals.len());
-            self.intervals.insert(
-                insertion_index,
-                RetainedInputInterval {
-                    request_id: request_id.to_string(),
-                    interval,
-                    input_tokens,
-                    input_tokens_explicit,
-                },
-            );
-            while self.intervals.len() > config.smoothing_window_size {
-                let evicted = self
-                    .intervals
-                    .pop_front()
-                    .expect("oversized input interval window should not be empty");
-                self.evicted_through = Some(
-                    self.evicted_through
-                        .map_or(evicted.interval.first_generated_output_at, |prior| {
-                            prior.max(evicted.interval.first_generated_output_at)
-                        }),
-                );
-            }
+            self.intervals.insert(insertion_index, retained);
         }
-        self.record_current_rate(config.duration_floor)
+        self.refresh(config)
     }
 
-    fn record_current_rate(&mut self, duration_floor: Duration) -> Option<f64> {
-        let rate = self.rate(duration_floor);
+    fn refresh(&mut self, config: &StatsCollectorConfig) -> Option<InputIntervalRate> {
+        self.enforce_bounds(config.smoothing_window_size);
+        let rate = self.rate(config.duration_floor);
         self.has_observed_rate |= rate.is_some();
         rate
     }
 
-    fn rate(&self, duration_floor: Duration) -> Option<f64> {
-        let input_tokens = self.intervals.iter().fold(0_u64, |total, entry| {
+    fn enforce_bounds(&mut self, window_size: usize) {
+        // Pending entries are ordered by first output, so lagging ones are the
+        // oldest. A later event for a dropped request re-enters through the
+        // normal insert path; while still pending it is dropped again.
+        if let Some(newest) = self.newest_first_output {
+            self.intervals.retain(|entry| {
+                !entry.pending
+                    || newest.saturating_duration_since(entry.interval.first_generated_output_at)
+                        <= MAX_PENDING_INPUT_INTERVAL_LAG
+            });
+        }
+        let retained_limit = MAX_RETAINED_INPUT_INTERVALS.max(window_size.saturating_mul(8));
+        loop {
+            let resolved_prefix = self
+                .intervals
+                .iter()
+                .position(|entry| entry.pending)
+                .unwrap_or(self.intervals.len());
+            let evicted = self
+                .intervals
+                .drain(..resolved_prefix.saturating_sub(window_size))
+                .next_back();
+            if let Some(evicted) = evicted {
+                self.evicted_through = self
+                    .evicted_through
+                    .max(Some(evicted.interval.first_generated_output_at));
+            }
+            if self.intervals.len() <= retained_limit {
+                return;
+            }
+            self.intervals.remove(resolved_prefix.min(window_size));
+        }
+    }
+
+    fn rate(&self, duration_floor: Duration) -> Option<InputIntervalRate> {
+        let rate_window = || self.intervals.iter().take_while(|entry| !entry.pending);
+        let input_tokens = rate_window().fold(0_u64, |total, entry| {
             total.saturating_add(entry.input_tokens)
         });
         if input_tokens == 0 {
             return None;
         }
-        let mut intervals = self
-            .intervals
-            .iter()
+        let max_input_tps_eligible = rate_window().all(|entry| entry.max_input_tps_eligible);
+        let mut intervals = rate_window()
             .map(|entry| entry.interval)
             .collect::<Vec<_>>();
         intervals.sort_unstable_by_key(|interval| interval.submitted_at);
@@ -283,7 +356,10 @@ impl RequestInputIntervalWindow {
         union_duration = union_duration.saturating_add(end.saturating_duration_since(start));
         let duration = union_duration.max(duration_floor);
         let input_tps = input_tokens as f64 / duration.as_secs_f64();
-        valid_last_mean_input_tps(input_tps).then_some(input_tps)
+        valid_last_mean_input_tps(input_tps).then_some(InputIntervalRate {
+            input_tps,
+            max_input_tps_eligible,
+        })
     }
 }
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
@@ -1059,11 +1135,7 @@ pub(super) fn apply_input_throughput_sample(
     {
         return false;
     }
-    if model_state.last_mean_input_tps == mean_input_tps {
-        return false;
-    }
-    model_state.publish_mean_input_tps(mean_input_tps);
-    true
+    model_state.publish_mean_input_tps(mean_input_tps, true)
 }
 
 fn is_duplicate_calibration_update(update: &RequestCounterUpdate) -> bool {
@@ -1091,12 +1163,18 @@ pub(super) struct ModelStatsSnapshotInputs {
 impl ModelMetricsState {
     // The maximum follows the published smoothed mean rather than raw samples,
     // so the mean dilutes a single outlier sample before it can raise the weight.
-    pub(super) fn publish_mean_input_tps(&mut self, input_tps: f64) {
+    // Callers pass update_max = false for a fallback window that may count cached
+    // prompt tokens as prefill; the mean still moves, the maximum does not.
+    pub(super) fn publish_mean_input_tps(&mut self, input_tps: f64, update_max: bool) -> bool {
+        let before = (self.last_mean_input_tps, self.max_input_tps);
         self.last_mean_input_tps = input_tps;
-        self.max_input_tps = Some(
-            self.max_input_tps
-                .map_or(input_tps, |max| max.max(input_tps)),
-        );
+        if update_max {
+            self.max_input_tps = Some(
+                self.max_input_tps
+                    .map_or(input_tps, |max| max.max(input_tps)),
+            );
+        }
+        before != (self.last_mean_input_tps, self.max_input_tps)
     }
 
     pub(super) fn clear_live_output_tps(&mut self) -> bool {
@@ -1290,5 +1368,352 @@ mod output_token_calibration_tests {
 
         assert_eq!(calibration.scale(0), 0);
         assert_eq!(calibration.scale(1), 1);
+    }
+}
+
+#[cfg(test)]
+mod request_input_interval_window_tests {
+    use super::*;
+
+    const UNCACHED: u64 = 100;
+    const TOTAL: u64 = 150;
+
+    fn config(smoothing_window_size: usize) -> StatsCollectorConfig {
+        StatsCollectorConfig {
+            smoothing_window_size,
+            ..Default::default()
+        }
+    }
+
+    fn interval(start: Instant, submitted_ms: u64) -> RequestInputInterval {
+        let submitted_at = start + Duration::from_millis(submitted_ms);
+        RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + Duration::from_millis(500),
+        }
+    }
+
+    // A deferred request before usage: header token estimate, held as pending.
+    fn placeholder(request_id: &str, interval: RequestInputInterval) -> InputIntervalSample<'_> {
+        InputIntervalSample {
+            request_id,
+            interval,
+            prompt_tokens: TOTAL,
+            input_tokens: TOTAL,
+            input_tokens_explicit: false,
+            max_input_tps_eligible: false,
+            pending: true,
+        }
+    }
+
+    // A terminal observation whose usage reported UNCACHED uncached prompt tokens.
+    fn usage(request_id: &str, interval: RequestInputInterval) -> InputIntervalSample<'_> {
+        InputIntervalSample {
+            request_id,
+            interval,
+            prompt_tokens: UNCACHED,
+            input_tokens: UNCACHED,
+            input_tokens_explicit: true,
+            max_input_tps_eligible: true,
+            pending: false,
+        }
+    }
+
+    // A request without expected usage: resolved immediately with total tokens.
+    fn live(request_id: &str, interval: RequestInputInterval) -> InputIntervalSample<'_> {
+        InputIntervalSample {
+            pending: false,
+            ..placeholder(request_id, interval)
+        }
+    }
+
+    fn retained(window: &RequestInputIntervalWindow) -> Vec<(&str, bool)> {
+        window
+            .intervals
+            .iter()
+            .map(|entry| (entry.request_id.as_str(), entry.pending))
+            .collect()
+    }
+
+    fn current(window: &RequestInputIntervalWindow) -> Option<InputIntervalRate> {
+        window.rate(config(1).duration_floor)
+    }
+
+    fn assert_tps(rate: Option<InputIntervalRate>, expected: f64, eligible: bool) {
+        let rate = rate.expect("input rate should be available");
+        assert!(
+            (rate.input_tps - expected).abs() < 1e-6,
+            "expected {expected} TPS, got {}",
+            rate.input_tps
+        );
+        assert_eq!(rate.max_input_tps_eligible, eligible);
+    }
+
+    #[test]
+    fn pending_entry_holds_back_newer_entries_until_resolved() {
+        let config = config(2);
+        let start = Instant::now();
+        let mut window = RequestInputIntervalWindow::default();
+
+        assert_tps(
+            window.observe(usage("z", interval(start, 0)), &config),
+            200.0,
+            true,
+        );
+        window.observe(placeholder("a", interval(start, 100)), &config);
+        assert_tps(
+            window.observe(usage("b", interval(start, 200)), &config),
+            200.0,
+            true,
+        );
+        assert!(
+            window
+                .observe(placeholder("a", interval(start, 100)), &config)
+                .is_none()
+        );
+        assert_eq!(retained(&window), [("z", false), ("a", true), ("b", false)]);
+
+        assert_tps(
+            window.observe(usage("a", interval(start, 100)), &config),
+            200.0 / 0.6,
+            true,
+        );
+        assert_eq!(retained(&window), [("a", false), ("b", false)]);
+    }
+
+    #[test]
+    fn filtered_requests_still_expire_a_lagging_pending_entry() {
+        let config = config(2);
+        let start = Instant::now();
+        let mut window = RequestInputIntervalWindow::default();
+        window.observe(usage("z", interval(start, 0)), &config);
+        window.observe(placeholder("a", interval(start, 100)), &config);
+        window.observe(usage("b", interval(start, 200)), &config);
+        // A's usage and terminal are lost; only below-minimum requests follow.
+        let filtered = InputIntervalSample {
+            prompt_tokens: 0,
+            input_tokens: 0,
+            ..live("small", interval(start, 200_000))
+        };
+        assert_tps(window.observe(filtered, &config), 200.0 / 0.7, true);
+        assert_eq!(retained(&window), [("z", false), ("b", false)]);
+    }
+
+    #[test]
+    fn retained_limit_drops_the_oldest_pending_entry() {
+        let config = config(1);
+        let start = Instant::now();
+        let mut window = RequestInputIntervalWindow::default();
+        let earlier = InputIntervalSample {
+            input_tokens: 400,
+            ..usage("z", interval(start, 0))
+        };
+        assert_tps(window.observe(earlier, &config), 800.0, true);
+        window.observe(placeholder("a", interval(start, 100)), &config);
+        let ids = (0..MAX_RETAINED_INPUT_INTERVALS - 2)
+            .map(|index| format!("n-{index}"))
+            .collect::<Vec<_>>();
+        for (index, request_id) in ids.iter().enumerate() {
+            let request_interval = interval(start, 200 + index as u64 * 100);
+            assert_tps(
+                window.observe(usage(request_id, request_interval), &config),
+                800.0,
+                true,
+            );
+        }
+        assert_eq!(window.len(), MAX_RETAINED_INPUT_INTERVALS);
+
+        let last = format!("n-{}", ids.len());
+        let last_interval = interval(start, 200 + ids.len() as u64 * 100);
+        assert_tps(
+            window.observe(usage(&last, last_interval), &config),
+            200.0,
+            true,
+        );
+        assert_eq!(retained(&window), [(last.as_str(), false)]);
+    }
+
+    #[test]
+    fn lagging_pending_entry_is_dropped_by_newer_first_outputs() {
+        let config = config(8);
+        let start = Instant::now();
+        let mut window = RequestInputIntervalWindow::default();
+        let ids = (0..8).map(|index| format!("r-{index}")).collect::<Vec<_>>();
+        for (index, request_id) in ids.iter().enumerate() {
+            window.observe(
+                usage(request_id, interval(start, index as u64 * 1_000)),
+                &config,
+            );
+        }
+        assert_tps(current(&window), 200.0, true);
+        window.observe(placeholder("stuck", interval(start, 8_000)), &config);
+
+        // Faster requests arrive every second after the stuck one.
+        let lag_ms = MAX_PENDING_INPUT_INTERVAL_LAG.as_millis() as u64;
+        let ids = (0..=lag_ms / 1_000)
+            .map(|index| format!("fast-{index}"))
+            .collect::<Vec<_>>();
+        let mut released = None;
+        for (index, request_id) in ids.iter().enumerate() {
+            let submitted_ms = 9_000 + index as u64 * 1_000;
+            let sample = InputIntervalSample {
+                input_tokens: 400,
+                ..usage(request_id, interval(start, submitted_ms))
+            };
+            let rate = window.observe(sample, &config);
+            if submitted_ms - 8_000 <= lag_ms {
+                assert_tps(rate, 200.0, true);
+            } else {
+                released = rate;
+            }
+        }
+        assert_tps(released, 800.0, true);
+        assert!(retained(&window).iter().all(|(id, _)| *id != "stuck"));
+
+        assert!(
+            window
+                .observe(usage("stuck", interval(start, 8_000)), &config)
+                .is_none(),
+            "usage for a dropped request behind evicted entries must be ignored"
+        );
+    }
+
+    // Requests arrive every `spacing_ms` with 500 ms prefill and report 100
+    // uncached prompt tokens `decode_ms(index)` after first output. The window
+    // must publish only eligible rates, start publishing while requests are
+    // still arriving, and end on `expected`.
+    fn assert_steady_schedule(
+        requests: u64,
+        spacing_ms: u64,
+        decode_ms: impl Fn(u64) -> u64,
+        expected: f64,
+    ) {
+        let config = config(8);
+        let start = Instant::now();
+        let ids = (0..requests)
+            .map(|index| format!("req-{index}"))
+            .collect::<Vec<_>>();
+        let mut events = Vec::new();
+        for index in 0..requests {
+            let first_output_ms = index * spacing_ms + 500;
+            events.push((first_output_ms, 1, index));
+            events.push((first_output_ms + decode_ms(index), 0, index));
+        }
+        events.sort_unstable();
+        let arrivals_end_ms = (requests - 1) * spacing_ms + 500;
+
+        let mut window = RequestInputIntervalWindow::default();
+        let mut first_published_ms = None;
+        for (at_ms, kind, index) in events {
+            let request_id = &ids[index as usize];
+            let request_interval = interval(start, index * spacing_ms);
+            let sample = if kind == 1 {
+                placeholder(request_id, request_interval)
+            } else {
+                usage(request_id, request_interval)
+            };
+            if let Some(rate) = window.observe(sample, &config) {
+                assert!(
+                    rate.max_input_tps_eligible,
+                    "published a rate that counts cached tokens at {at_ms} ms"
+                );
+                first_published_ms.get_or_insert(at_ms);
+            }
+        }
+        assert!(
+            first_published_ms.is_some_and(|at_ms| at_ms < arrivals_end_ms),
+            "first publication at {first_published_ms:?} ms, arrivals end at {arrivals_end_ms} ms"
+        );
+        assert_tps(current(&window), expected, true);
+    }
+
+    #[test]
+    fn long_decodes_keep_the_rate_window_contiguous() {
+        // Even requests finish 50 ms after first output; odd requests decode for 2 s.
+        assert_steady_schedule(
+            40,
+            100,
+            |index| if index % 2 == 0 { 50 } else { 2_050 },
+            800.0 / 1.2,
+        );
+    }
+
+    #[test]
+    fn decodes_past_the_lag_bound_still_publish_while_requests_arrive() {
+        // 1 request per second with 150 s decodes: every slot hits the lag bound.
+        assert_steady_schedule(600, 1_000, |_| 150_000, 800.0 / 4.0);
+    }
+
+    #[test]
+    fn cache_hits_with_a_short_remainder_leave_the_window() {
+        let config = config(2);
+        let min = MIN_CACHE_HIT_UNCACHED_INPUT_TOKENS;
+        let start = Instant::now();
+        let mut window = RequestInputIntervalWindow::default();
+        let prompt = |request_id, submitted_ms, uncached| InputIntervalSample {
+            prompt_tokens: 8_000,
+            input_tokens: uncached,
+            ..usage(request_id, interval(start, submitted_ms))
+        };
+        assert!(
+            window
+                .observe(prompt("short", 0, min - 1), &config)
+                .is_none()
+        );
+        assert!(!window.has_observed_rate());
+        let a_rate = min as f64 / 0.5;
+        assert_tps(window.observe(prompt("a", 100, min), &config), a_rate, true);
+        // B's submit-to-first-output time was not prefill work, so the window is
+        // A and C even though B is between them.
+        assert_tps(window.observe(prompt("b", 200, 0), &config), a_rate, true);
+        assert_tps(
+            window.observe(prompt("c", 300, 8_000), &config),
+            (min + 8_000) as f64 / 0.7,
+            true,
+        );
+        assert_eq!(retained(&window), [("a", false), ("c", false)]);
+    }
+
+    #[test]
+    fn pending_slot_resolved_as_a_cache_hit_releases_newer_entries() {
+        let config = config(2);
+        let start = Instant::now();
+        let mut window = RequestInputIntervalWindow::default();
+        window.observe(usage("z", interval(start, 0)), &config);
+        let a_interval = interval(start, 2_000);
+        window.observe(placeholder("a", a_interval), &config);
+        let b = InputIntervalSample {
+            input_tokens: 400,
+            ..usage("b", interval(start, 4_000))
+        };
+        assert_tps(window.observe(b, &config), 200.0, true);
+
+        let hit = || InputIntervalSample {
+            prompt_tokens: 8_000,
+            input_tokens: 10,
+            ..usage("a", a_interval)
+        };
+        assert_tps(window.observe(hit(), &config), 500.0, true);
+        assert_eq!(retained(&window), [("z", false), ("b", false)]);
+        assert!(window.evicted_through.is_none());
+
+        assert_tps(window.observe(hit(), &config), 500.0, true);
+        assert_eq!(window.len(), 2);
+    }
+
+    #[test]
+    fn equal_input_sample_mean_still_raises_a_missing_max() {
+        let config = StatsCollectorConfig::default();
+        let mut state = ModelMetricsState::default();
+        state.publish_mean_input_tps(1_000.0, false);
+        while !state.input_tps_distribution.has_sufficient_data() {
+            let sample = InputThroughputSample {
+                units: 1_000,
+                duration: Duration::from_secs(1),
+                clamp_duration_to_floor: false,
+            };
+            apply_input_throughput_sample(&config, &mut state, sample);
+        }
+        assert_eq!(state.max_input_tps, Some(1_000.0));
     }
 }

@@ -204,6 +204,8 @@ func (item *InputItem) unmarshalTypedItem(data []byte) error {
 		return item.unmarshalMCPApprovalRequest(data)
 	case ItemTypeMCPApprovalResponse:
 		return item.unmarshalMCPApprovalResponse(data)
+	case ItemTypeCustomToolCall:
+		return item.unmarshalCustomToolCallInput(data)
 	case ItemTypeCustomToolCallOutput:
 		return item.unmarshalCustomToolCallOutput(data)
 	default:
@@ -326,6 +328,15 @@ func (item *InputItem) unmarshalMCPListTools(data []byte) error {
 		Tools:       tools,
 		Error:       lt.Error,
 	}
+	return nil
+}
+
+func (item *InputItem) unmarshalCustomToolCallInput(data []byte) error {
+	var call CustomToolCall
+	if err := json.Unmarshal(data, &call); err != nil {
+		return err
+	}
+	item.ToolCallData = call
 	return nil
 }
 
@@ -888,9 +899,10 @@ type outputItemMessage struct {
 type outputItemFunctionCall struct {
 	outputItemBase
 
-	CallID    string `json:"call_id"`
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
+	CallID    string  `json:"call_id"`
+	Namespace *string `json:"namespace,omitempty"`
+	Name      string  `json:"name"`
+	Arguments string  `json:"arguments"`
 }
 
 // outputItemWebSearchCall represents a web search call output item for JSON marshaling
@@ -950,8 +962,10 @@ type outputItemMCPApprovalRequest struct {
 type outputItemCustomToolCall struct {
 	outputItemBase
 
-	Name  string `json:"name"`
-	Input string `json:"input"`
+	CallID    string  `json:"call_id,omitempty"`
+	Namespace *string `json:"namespace,omitempty"`
+	Name      string  `json:"name"`
+	Input     string  `json:"input"`
 }
 
 func (item *OutputItem) MarshalJSON() ([]byte, error) {
@@ -978,6 +992,7 @@ func (item *OutputItem) MarshalJSON() ([]byte, error) {
 			return json.Marshal(outputItemFunctionCall{
 				outputItemBase: base,
 				CallID:         call.CallID,
+				Namespace:      call.Namespace,
 				Name:           call.Name,
 				Arguments:      call.Arguments,
 			})
@@ -1061,6 +1076,8 @@ func (item *OutputItem) MarshalJSON() ([]byte, error) {
 		if customCall, ok := item.ToolCallData.(CustomToolCall); ok {
 			return json.Marshal(outputItemCustomToolCall{
 				outputItemBase: base,
+				CallID:         customCall.CallID,
+				Namespace:      customCall.Namespace,
 				Name:           customCall.Name,
 				Input:          customCall.Input,
 			})
@@ -1121,18 +1138,20 @@ type MCPApprovalResponse struct {
 
 // CustomToolCall represents a custom tool call
 type CustomToolCall struct {
-	Type   string  `json:"type"` // Always "custom_tool_call"
-	ID     string  `json:"id"`
-	Name   string  `json:"name"`
-	Input  string  `json:"input"`
-	Status *string `json:"status,omitempty"`
+	Type      string  `json:"type"` // Always "custom_tool_call"
+	ID        string  `json:"id"`
+	CallID    string  `json:"call_id,omitempty"`
+	Namespace *string `json:"namespace,omitempty"`
+	Name      string  `json:"name"`
+	Input     string  `json:"input"`
+	Status    *string `json:"status,omitempty"`
 }
 
 // CustomToolCallOutput represents output from a custom tool call
 type CustomToolCallOutput struct {
-	Type   string  `json:"type"` // Always "custom_tool_call_output"
-	ID     string  `json:"id"`
-	CallID string  `json:"call_id"`
-	Output string  `json:"output"`
-	Status *string `json:"status,omitempty"`
+	Type   string     `json:"type"` // Always "custom_tool_call_output"
+	ID     string     `json:"id"`
+	CallID string     `json:"call_id"`
+	Output ToolOutput `json:"output"`
+	Status *string    `json:"status,omitempty"`
 }
