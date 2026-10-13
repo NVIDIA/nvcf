@@ -283,6 +283,74 @@ The integration test builds the real command, prepares and checks independent
 fixture releases, rejects changed source identities and released manifests, and
 exercises the legacy edition commands through the same binary.
 
+## Assemble an umbrella bundle
+
+Build a distribution from the prepared manifest and the same inventory inputs:
+
+```bash
+go run -C tools/docs-version-sync . umbrella bundle \
+  --manifest /tmp/umbrella-manifest.json \
+  --inventories /tmp/selected-stack-inventories \
+  --out /tmp/umbrella-release-assets
+```
+
+Supply `--previous` for a non-initial release, as with manifest validation.
+Assembly reads each stack from its selected Git commit, never the working tree
+or another stack's incidental checkout. It retains the sibling layout:
+
+```text
+manifest.json
+inventory.json
+bundle-files.json
+inventories/
+deploy/stacks/self-managed/
+deploy/stacks/nvcf-compute-plane/
+deploy/stacks/observability/
+```
+
+The archive also includes the reviewed root LICENSE and NOTICE, operator
+instructions, and VERSION files. Each stack's VERSION is stamped with its own
+artifact version. Where available, `Makefile.dist` becomes the distribution
+Makefile. Base environments, local charts, Helmfile states, values, scripts, and
+secret templates are included. Tests, local environment overrides, dotfiles,
+and customer secret files are excluded. Source symlinks are rejected.
+
+`release-assets.json` sits outside the archive. It records SHA-256 digests for
+the archive, manifest, combined inventory, and three constituent inventories.
+The archive's `bundle-files.json` records each payload file's digest and mode.
+Identical inputs produce identical archives. Repeating assembly verifies
+existing output; it does not overwrite different assets.
+
+Verify a downloaded archive against the manifest and the archive digest from a
+trusted release asset index:
+
+```bash
+go run -C tools/docs-version-sync . umbrella verify-bundle \
+  --manifest /tmp/umbrella-release-assets/manifest.json \
+  --bundle /tmp/umbrella-release-assets/nvcf-<version>.tar.gz \
+  --sha256 sha256:<archive-digest>
+```
+
+Verification checks the archive digest, embedded manifest, file index, stack
+versions, and inventories. It rejects links, path traversal, duplicate paths,
+and oversized archives. It does not install or extract into an existing cluster.
+Use the bundle's README for extraction-layout and per-plane render commands.
+Chart/image payloads and the CLI binary remain separate downloads.
+
+The command E2E builds twice from different working-tree states, verifies
+downloaded assets, extracts the archive, and renders control-plane, compute-plane,
+and enabled/disabled observability fixtures with real Helm and Helmfile:
+
+```bash
+NVCF_UMBRELLA_RENDER_E2E=1 go test -C tools/docs-version-sync \
+  -run TestUmbrella -count=1 -v
+```
+
+The dedicated umbrella validation workflow installs checksum-pinned render tools
+and requires this test. The ordinary Go suite skips rendering only when the
+tools are absent; setting the variable makes missing tools a failure. These
+isolated fixture renders do not qualify a production stack combination.
+
 ## Compare release sets
 
 Store each release set's inventory JSON files in a directory, then run:
