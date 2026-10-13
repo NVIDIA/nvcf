@@ -128,7 +128,11 @@ func validateUmbrellaDocsCatalog(root string, manifest *umbrellaManifest, data [
 			c.Manifest.Entries[i].UpstreamURL = ""
 		}
 	}
-	if !reflect.DeepEqual(expected, &actual) {
+	equal, err := catalogsEqual(expected, &actual)
+	if err != nil {
+		return err
+	}
+	if !equal {
 		return fmt.Errorf("docs revision changed immutable product catalog inputs")
 	}
 	return nil

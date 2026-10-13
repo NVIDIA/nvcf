@@ -18,7 +18,15 @@ func TestUmbrellaDocsRevisionE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := umbrellaTestManifest()
-	manifest.SourceCommit = legacyCommit
+	// Optional empty YAML lists can become omitted on serialization.
+	raw, err := os.ReadFile(filepath.Join(root, "docs/version-catalog/main.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, "docs/version-catalog/main.yaml"), string(raw)+"\npublication_pending: []\n")
+	editionGit(t, root, "add", ".")
+	editionGit(t, root, "commit", "-m", "review explicit empty optional metadata")
+	manifest.SourceCommit = editionGit(t, root, "rev-parse", "HEAD")
 	manifest.Status = ReleaseSetQualified
 	manifest.Qualification = catalog.DocsEdition.Qualification
 	for _, name := range releaseSetStackNames {
