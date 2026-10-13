@@ -109,9 +109,10 @@ impl PendingClusterReservation {
     }
 
     /// Ends the reservation when a registration update from its own backend,
-    /// received at `updated_at`, arrived at or after the soft expiry and so
-    /// can already include the request. Earlier updates, and any update
-    /// before the reservation is armed, leave it counting.
+    /// received at `updated_at`, arrives at or after the soft expiry. Receipt
+    /// time is a settlement threshold, not proof that the update includes the
+    /// request. Earlier updates, and any update before the reservation is
+    /// armed, leave it counting.
     pub(super) fn settle_on_backend_update(&self, updated_at: Instant) {
         if let Some(Some(expires_at)) = self.expires_at.get()
             && updated_at >= *expires_at

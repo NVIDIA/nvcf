@@ -52,12 +52,16 @@ no update can end the reservation. An attempt that ends before sending starts
 the soft expiry when it ends.
 
 The reservation counts until Stargate receives a registration update from the
-selected backend at or after the soft expiry. Time alone never ends it. An
-update received before the soft expiry cannot yet include the request, so it
-leaves the reservation in place, and routing briefly counts the request in both
-reported stats and the reservation. Updates from other backends in the same
-cluster never end it. A queue estimate mismatch rejection releases the
-reservation early, and removing or deregistering the backend drops it.
+selected backend at or after the soft expiry. Receipt time is the settlement
+threshold; it does not show when the update was generated or whether it includes
+the request. The request tunnel and registration stream are independent, so an
+update generated before the backend receives a request can arrive after the
+threshold, while an update that includes the request can arrive before it. This
+can briefly leave the request counted in both reported stats and the
+reservation, or settle the reservation before the request appears in reported
+stats. Updates from other backends in the same cluster never settle it. A queue
+estimate mismatch rejection releases the reservation early, and removing or
+deregistering the backend drops it.
 
 Waiting for the backend's own update covers two cases:
 
@@ -67,12 +71,11 @@ Waiting for the backend's own update covers two cases:
   burst of requests each time. Held reservations keep steering traffic away
   until the backend reports again or deregisters.
 - Pylon coalesces change-driven updates (`--stats-update-coalesce-ms`, default
-  `10`), so on low-RTT links the update that includes a request can arrive
-  well after one RTT. The reservation holds until that update arrives, and an
-  update that Stargate receives at least one RTT after sending the request left
-  the backend after the request arrived there. Coalescing therefore needs no
-  TTL floor. A larger minimum only lengthens the time in which a request counts
-  in both reported stats and its reservation, which overstates the queue.
+  `10`). The reservation uses the selected backend's soft-expiry threshold to
+  decide when its own updates can settle it. Because the streams are
+  independent, receipt time is a heuristic and does not prove that an update
+  includes the request. A larger minimum can lengthen the period in which a
+  request is counted in both reported stats and its reservation.
 
 The trade-off is that a reservation on a backend that stops reporting stays
 counted, in routing and in `stargate_routing_reservations_active`, until that
@@ -82,9 +85,10 @@ leaves them unbounded for a backend that keeps serving requests without sending
 updates.
 
 Pylons that send only heartbeats keep each reservation until the first
-heartbeat received at or after its soft expiry, which includes the request.
-No cap ends the reservation before that heartbeat, so a request no longer
-drops out of routing between its reservation ending and the next heartbeat.
+heartbeat received at or after its soft expiry. Receipt time does not prove
+that the heartbeat includes the request. The reservation cannot expire while
+waiting for that heartbeat, although the reported stats may still lag the
+request.
 Deploying Pylons with
 change-driven stats updates before this Stargate version is recommended for the
 most current view but is not required.
