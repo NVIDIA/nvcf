@@ -20,6 +20,7 @@ go_library(
     srcs = [
         "local_store.go",
         "olric_store.go",
+        "prefix.go",
         "store.go",
         "tracker.go",
     ],
@@ -47,6 +48,7 @@ go_test(
     srcs = [
         "local_store_test.go",
         "olric_store_test.go",
+        "prefix_test.go",
         "tracker_test.go",
     ],
     embed = [":lastcluster"],

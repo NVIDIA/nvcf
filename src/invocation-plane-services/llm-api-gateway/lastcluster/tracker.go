@@ -97,16 +97,19 @@ func NewTracker(store Store, opts Options) *Tracker {
 	}
 }
 
-// eligibleSource reports whether a session source yields a key that stays
-// stable across turns. Payload-derived keys hash the full message list, which
-// changes every turn, so they never return.
-func eligibleSource(source string) bool {
-	switch source {
+// eligible reports whether the request yields session values that recur
+// across turns. Header and body session IDs stay stable. Payload sessions
+// qualify only when the handler derived prefix-chain values, because their
+// CacheAffinityKey hashes the full message list and changes every turn.
+func eligible(reqCtx *requestctx.RequestContext) bool {
+	switch reqCtx.SessionSource {
 	case requestctx.SessionSourcePromptCacheKey,
 		requestctx.SessionSourceConversationID,
 		requestctx.SessionSourceHeader,
 		requestctx.SessionSourceClaudeCodeHeader:
 		return true
+	case requestctx.SessionSourcePayload:
+		return reqCtx.LastClusterWriteKey != ""
 	default:
 		return false
 	}
@@ -118,10 +121,12 @@ type lookupResult struct {
 	err   error
 }
 
-// Lookup returns the store key for the session and the remembered cluster ID.
-// key is empty when the request has no eligible session, in which case no
-// write should follow. clusterID is empty on a miss, error, or timeout. The
-// lookup never takes longer than the configured lookup timeout.
+// Lookup returns the store key Remember writes under and the remembered
+// cluster ID. key is empty when the request has no eligible session, in which
+// case no write should follow. clusterID is empty on a miss, error, or
+// timeout. Payload sessions read under their lookup value and write under
+// their write value; a first turn has no lookup value and skips the store.
+// The lookup never takes longer than the configured lookup timeout.
 func (t *Tracker) Lookup(
 	ctx context.Context,
 	reqCtx *requestctx.RequestContext,
@@ -130,16 +135,25 @@ func (t *Tracker) Lookup(
 	if t == nil || reqCtx == nil || reqCtx.CacheAffinityKey == "" {
 		return "", ""
 	}
-	if !eligibleSource(reqCtx.SessionSource) || model == "" {
+	if !eligible(reqCtx) || model == "" {
 		telemetry.RecordLastClusterLookup(ctx, telemetry.LastClusterLookupSkipped, 0)
 		return "", ""
 	}
 	// The deadline starts before any span or key work so the whole lookup,
 	// not only the store call, fits in the lookup timeout.
 	start := time.Now()
+	lookupValue, writeValue := reqCtx.CacheAffinityKey, reqCtx.CacheAffinityKey
+	if reqCtx.SessionSource == requestctx.SessionSourcePayload {
+		lookupValue, writeValue = reqCtx.LastClusterLookupKey, reqCtx.LastClusterWriteKey
+	}
+	key = Key(reqCtx.RoutingKey, model, writeValue)
+	if lookupValue == "" {
+		telemetry.RecordLastClusterLookup(ctx, telemetry.LastClusterLookupMiss, time.Since(start))
+		return key, ""
+	}
 	lookupCtx, cancel := context.WithDeadline(ctx, start.Add(t.opts.LookupTimeout))
 	defer cancel()
-	key = Key(reqCtx.RoutingKey, model, reqCtx.CacheAffinityKey)
+	lookupKey := Key(reqCtx.RoutingKey, model, lookupValue)
 
 	ctx, span := telemetry.Tracer().Start(ctx, "llm-api-gateway.last_cluster_lookup")
 	defer span.End()
@@ -149,7 +163,7 @@ func (t *Tracker) Lookup(
 	var res lookupResult
 	select {
 	case t.lookupSlots <- struct{}{}:
-		res = t.runLookup(lookupCtx, key)
+		res = t.runLookup(lookupCtx, lookupKey)
 	default:
 		res.err = errCapacity
 	}

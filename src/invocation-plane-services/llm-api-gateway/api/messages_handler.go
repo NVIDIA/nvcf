@@ -94,6 +94,7 @@ func (h *MessagesHandlers) ServeMessages(ec echo.Context) error {
 			}
 		} else {
 			setPayloadSessionAffinity(reqCtx, request.Messages)
+			h.handlers.setMessagesLastClusterKeys(reqCtx, messages, request.System)
 		}
 	}
 	outboundBody, err := rewriteMessagesBody(body, routedModel)

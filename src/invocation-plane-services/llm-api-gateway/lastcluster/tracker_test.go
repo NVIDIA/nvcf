@@ -671,3 +671,108 @@ func (s *gatedStore) Set(ctx context.Context, key, value string, ttl time.Durati
 	}
 	return s.fakeStore.Set(ctx, key, value, ttl)
 }
+
+func payloadCtx(lookup, write string) *requestctx.RequestContext {
+	reqCtx := sessionCtx(requestctx.SessionSourcePayload)
+	reqCtx.LastClusterLookupKey = lookup
+	reqCtx.LastClusterWriteKey = write
+	return reqCtx
+}
+
+func TestTrackerPayloadFirstTurnSkipsGet(t *testing.T) {
+	recorder := installSpanRecorder(t)
+	reader := installMetricReader(t)
+	ctx := context.Background()
+	store := newFakeStore()
+	tracker := newTestTracker(store)
+	reqCtx := payloadCtx("", "pc:v1:turn1")
+
+	key, clusterID := tracker.Lookup(ctx, reqCtx, reqCtx.Model)
+	if want := Key(reqCtx.RoutingKey, reqCtx.Model, "pc:v1:turn1"); key != want || clusterID != "" {
+		t.Fatalf("Lookup() = %q, %q; want write store key and no cluster", key, clusterID)
+	}
+	if got := tracker.InflightLookups(); got != 0 {
+		t.Fatalf("InflightLookups() = %d, want 0", got)
+	}
+	tracker.Remember(ctx, reqCtx, reqCtx.Model, key, http.StatusOK, "cluster-b")
+	tracker.Drain(ctx)
+
+	if gets, sets := store.counts(); gets != 0 || sets != 1 {
+		t.Fatalf("store gets=%d sets=%d, want 0 and 1", gets, sets)
+	}
+	if got := store.value(key); got != "cluster-b" {
+		t.Fatalf("stored value = %q, want cluster-b", got)
+	}
+	if got := counterValues(t, reader, "llm_api_gateway_last_cluster_lookups_total"); got["miss"] != 1 || len(got) != 1 {
+		t.Fatalf("lookups = %v, want only miss=1", got)
+	}
+	for _, span := range recorder.Ended() {
+		if span.Name() == "llm-api-gateway.last_cluster_lookup" {
+			t.Fatal("first turn must not record a lookup span")
+		}
+	}
+}
+
+func TestTrackerPayloadReadsLookupAndWritesWriteKey(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	tracker := newTestTracker(store)
+	reqCtx := payloadCtx("pc:v1:turn1", "pc:v1:turn2")
+	lookupKey := Key(reqCtx.RoutingKey, reqCtx.Model, "pc:v1:turn1")
+	writeKey := Key(reqCtx.RoutingKey, reqCtx.Model, "pc:v1:turn2")
+	store.values[lookupKey] = "cluster-a"
+
+	key, clusterID := tracker.Lookup(ctx, reqCtx, reqCtx.Model)
+	if key != writeKey || clusterID != "cluster-a" {
+		t.Fatalf("Lookup() = %q, %q; want write store key and cluster-a", key, clusterID)
+	}
+	tracker.Remember(ctx, reqCtx, reqCtx.Model, key, http.StatusOK, "cluster-b")
+	tracker.Drain(ctx)
+
+	if got := store.value(writeKey); got != "cluster-b" {
+		t.Fatalf("write key value = %q, want cluster-b", got)
+	}
+	if got := store.value(lookupKey); got != "cluster-a" {
+		t.Fatalf("lookup key value = %q, want cluster-a unchanged", got)
+	}
+	if got := store.value(Key(reqCtx.RoutingKey, reqCtx.Model, reqCtx.CacheAffinityKey)); got != "" {
+		t.Fatalf("CacheAffinityKey entry = %q, want none for payload sessions", got)
+	}
+	if gets, sets := store.counts(); gets != 1 || sets != 1 {
+		t.Fatalf("store gets=%d sets=%d, want 1 and 1", gets, sets)
+	}
+}
+
+func TestTrackerPayloadWithoutWriteKeySkipped(t *testing.T) {
+	reader := installMetricReader(t)
+	ctx := context.Background()
+	store := newFakeStore()
+	tracker := newTestTracker(store)
+
+	key, clusterID := tracker.Lookup(ctx, payloadCtx("pc:v1:turn1", ""), "company/model")
+	if key != "" || clusterID != "" {
+		t.Fatalf("Lookup() = %q, %q; want skipped", key, clusterID)
+	}
+	if gets, _ := store.counts(); gets != 0 {
+		t.Fatalf("store gets = %d, want 0", gets)
+	}
+	if got := counterValues(t, reader, "llm_api_gateway_last_cluster_lookups_total"); got["skipped"] != 1 || len(got) != 1 {
+		t.Fatalf("lookups = %v, want only skipped=1", got)
+	}
+}
+
+func TestTrackerNonPayloadIgnoresPrefixChainValues(t *testing.T) {
+	ctx := context.Background()
+	store := newFakeStore()
+	tracker := newTestTracker(store)
+	reqCtx := sessionCtx(requestctx.SessionSourceHeader)
+	reqCtx.LastClusterLookupKey = "pc:v1:turn1"
+	reqCtx.LastClusterWriteKey = "pc:v1:turn2"
+	sessionKey := Key(reqCtx.RoutingKey, reqCtx.Model, reqCtx.CacheAffinityKey)
+	store.values[sessionKey] = "cluster-a"
+
+	key, clusterID := tracker.Lookup(ctx, reqCtx, reqCtx.Model)
+	if key != sessionKey || clusterID != "cluster-a" {
+		t.Fatalf("Lookup() = %q, %q; want CacheAffinityKey store key and cluster-a", key, clusterID)
+	}
+}
