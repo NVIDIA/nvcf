@@ -214,6 +214,8 @@ func TestMessagesErrorsUseAnthropicShape(t *testing.T) {
 		"injected 500":        {body: messagesBody + `}`, headers: map[string]string{headerStatusCode: "500"}, status: http.StatusInternalServerError, errType: "api_error"},
 		"injected 529":        {body: messagesBody + `,"x_load_tester_status_code":529}`, status: 529, errType: "overloaded_error"},
 		"oversized body":      {body: `{"model":"` + strings.Repeat("x", maxRequestBytes) + `"}`, status: http.StatusRequestEntityTooLarge, errType: "request_too_large"},
+		"oversized trailer":   {body: paddedMessagesBody(maxRequestBytes) + "\n", status: http.StatusRequestEntityTooLarge, errType: "request_too_large"},
+		"body at limit":       {body: paddedMessagesBody(maxRequestBytes), headers: map[string]string{headerStatusCode: "400"}, status: http.StatusBadRequest, errType: "invalid_request_error"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			method := test.method
@@ -319,6 +321,12 @@ func TestMessagesStreamCancellationDoesNotComplete(t *testing.T) {
 	if strings.Contains(recorder.Body.String(), "event: message_stop") {
 		t.Fatalf("cancelled stream completed: %s", recorder.Body.String())
 	}
+}
+
+// paddedMessagesBody returns a valid Messages request of exactly size bytes.
+func paddedMessagesBody(size int) string {
+	prefix := messagesBody + `,"padding":"`
+	return prefix + strings.Repeat("x", size-len(prefix)-2) + `"}`
 }
 
 func assertEventNames(t *testing.T, events []sseEvent, want []string, stream string) {

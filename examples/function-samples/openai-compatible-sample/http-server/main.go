@@ -902,6 +902,10 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) error {
 		return err
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return err
+		}
 		return errors.New("request body must contain one JSON object")
 	}
 	return nil
