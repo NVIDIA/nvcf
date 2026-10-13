@@ -354,6 +354,7 @@ func newRouterWithConfig(config serverConfig) http.Handler {
 	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) { handleChatCompletions(w, r, config) })
 	mux.HandleFunc("/v1/completions", func(w http.ResponseWriter, r *http.Request) { handleCompletions(w, r, config) })
 	mux.HandleFunc("/v1/embeddings", func(w http.ResponseWriter, r *http.Request) { handleEmbeddings(w, r, config) })
+	mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) { handleMessages(w, r, config) })
 	return mux
 }
 
@@ -561,9 +562,17 @@ func requireGet(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func startBenchmark(w http.ResponseWriter, r *http.Request, config serverConfig, body benchmarkBodyControls) (benchmarkTuning, func(), bool) {
+	return startBenchmarkWithErrors(w, r, config, body, func(w http.ResponseWriter, status int, message, code string) {
+		writeAPIErrorWithCode(w, status, message, "", code)
+	})
+}
+
+// startBenchmarkWithErrors applies the shared benchmark controls and writes
+// control failures in the route's protocol error shape.
+func startBenchmarkWithErrors(w http.ResponseWriter, r *http.Request, config serverConfig, body benchmarkBodyControls, writeError func(http.ResponseWriter, int, string, string)) (benchmarkTuning, func(), bool) {
 	tuning, err := resolveBenchmarkTuning(r, body, config.maxOutputChunks)
 	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error(), "")
+		writeError(w, http.StatusBadRequest, err.Error(), "")
 		return benchmarkTuning{}, nil, false
 	}
 
@@ -573,7 +582,7 @@ func startBenchmark(w http.ResponseWriter, r *http.Request, config serverConfig,
 	}
 	if tuning.MaxConcurrency > 0 && active > int64(tuning.MaxConcurrency) {
 		release()
-		writeAPIError(w, http.StatusTooManyRequests, "injected concurrency limit reached", "")
+		writeError(w, http.StatusTooManyRequests, "injected concurrency limit reached", "")
 		return benchmarkTuning{}, nil, false
 	}
 	if !waitFor(r.Context(), tuning.QueueDelay, 0) {
@@ -581,7 +590,7 @@ func startBenchmark(w http.ResponseWriter, r *http.Request, config serverConfig,
 		return benchmarkTuning{}, nil, false
 	}
 	if tuning.StatusCode != 0 {
-		writeAPIErrorWithCode(w, tuning.StatusCode, "injected status response", "", "injected_status")
+		writeError(w, tuning.StatusCode, "injected status response", "injected_status")
 		release()
 		return benchmarkTuning{}, nil, false
 	}
