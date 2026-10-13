@@ -113,11 +113,9 @@ Change `model` to `qwen3.8-27b-nvfp4` to call the other precision. Add `"stream"
 
 ### Connect a coding agent
 
-Coding agents such as [Pi](https://github.com/badlogic/pi-mono) and [Codex](https://github.com/openai/codex) can use the model through the gateway. They need a large context: their first request is 1,500 to 6,500 tokens before any file contents. The automatic GLM Station profile uses `tuning.discrete` in [recipe.json](recipes/glm-5.3/recipe.json), configured for one 8,192-token slot. Larger contexts require separate qualification. See [Recipe resources and tuning](#recipe-resources-and-tuning) before changing these settings.
+Coding agents such as [Pi](https://github.com/badlogic/pi-mono) and [Codex](https://github.com/openai/codex) can use the model through the gateway. They need a large context: their first request is 1,500 to 6,500 tokens before any file contents. For GLM, the GB300 profile uses `tuning.discrete` in [recipe.json](recipes/glm-5.3/recipe.json), including 65,536 tokens per slot. The GB10 default of 2048 tokens is too small. See [Recipe resources and tuning](#recipe-resources-and-tuning) before changing these settings.
 
-The examples below use the automatic Station profile's one 8,192-token slot and 512-token output budget. Coding-agent workloads with this profile remain pending in the [catalog](recipes/index.json).
-
-A separate manual deployment was tested in October 2026 with Pi 1.0.4 and Codex 0.161.0 against `glm-5.3` on one GB300 with two 65,536-token slots. Each agent found and fixed a one-line bug by running a test, editing the file and running the test again, using tool calls through the gateway. Pi took 7 seconds and Codex 33 seconds.
+Tested in October 2026 with Pi 1.0.4 and Codex 0.161.0 against `glm-5.3` on one GB300 with two 65,536-token slots. Each agent found and fixed a one-line bug by running a test, editing the file and running the test again, using tool calls through the gateway. Pi took 7 seconds and Codex 33 seconds. Automatic Helm profile validation is recorded separately in the [catalog](recipes/index.json).
 
 #### Open the gateway
 
@@ -144,7 +142,7 @@ cat > ~/.pi/agent/models.json <<'EOF'
   "compat": {"supportsStore": false, "supportsDeveloperRole": false, "supportsReasoningEffort": false,
              "supportsUsageInStreaming": true, "supportsStrictMode": false, "maxTokensField": "max_tokens"},
   "models": [{"id": "GLM-5.3-UD-IQ2_M", "name": "GLM-5.3", "reasoning": false,
-              "input": ["text"], "contextWindow": 8192, "maxTokens": 512}]}}}
+              "input": ["text"], "contextWindow": 65536, "maxTokens": 8192}]}}}
 EOF
 echo '{"defaultProvider": "llm-routing", "defaultModel": "GLM-5.3-UD-IQ2_M"}' > ~/.pi/agent/settings.json
 NODE_EXTRA_CA_CERTS="$LLM_GATEWAY_CA" pi
@@ -163,8 +161,8 @@ mkdir -p ~/.codex
 cat > ~/.codex/glm.config.toml <<'EOF'
 model = "GLM-5.3-UD-IQ2_M"
 model_provider = "llm-routing"
-model_context_window = 8192
-model_auto_compact_token_limit = 6144
+model_context_window = 65536
+model_auto_compact_token_limit = 56000
 web_search = "disabled"
 include_apps_instructions = false
 show_raw_agent_reasoning = true
@@ -192,14 +190,13 @@ CODEX_CA_CERTIFICATE="$LLM_GATEWAY_CA" codex --profile glm
 ```
 
 - Set `model_context_window` to the selected recipe tuning's `contextPerSlot`. Without it, Codex assumes a much larger context and requests fail when the conversation grows.
-- The 6,144-token compaction threshold leaves room for output and request overhead within the 8,192-token context.
 - The `[features]`, `[tools]` and `[skills]` settings remove tools the model cannot use and keep the first request near 4,500 tokens instead of 6,600.
 - The recipe's `defaultMaxTokens` supplies the server's output cap for requests that omit a limit, including reasoning.
 
 #### Tips
 
-- The first request processes the whole prompt. The manual deployment above measured about 250 tokens per second. Later requests reuse the cached prefix, so start each agent once before a demo.
-- The automatic Station profile serves one request at a time. Run one agent at a time. The Pylon canary waits for the slot to become free.
+- The first request processes the whole prompt, at about 250 tokens per second on GB300. Later requests reuse the cached prefix, so start each agent once before a demo.
+- Each slot serves one request at a time. Two agents working at once use both GB300 slots; the Pylon canary waits for the next free slot.
 - For scripted runs, close stdin: `pi -p "<task>" < /dev/null` or `codex exec --profile glm "<task>" < /dev/null`. `pi -p` reads piped stdin as part of the prompt and waits until it closes.
 
 ### Helm cache reuse and recovery
