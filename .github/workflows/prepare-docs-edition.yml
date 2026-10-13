@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+name: Prepare Docs Edition
+on:
+  workflow_dispatch:
+    inputs:
+      edition:
+        description: Exact docs edition X.Y.Z
+        required: true
+        type: string
+      source:
+        description: Reviewed source commit (full SHA, containing navigation.yml)
+        required: true
+        type: string
+      self_managed:
+        description: Exact self-managed stack version in the reviewed catalog
+        required: true
+        type: string
+      compute_plane:
+        description: Exact compute-plane stack version in the reviewed catalog
+        required: true
+        type: string
+      observability:
+        description: Exact observability stack version in the reviewed catalog
+        required: true
+        type: string
+      change:
+        description: Highest change since the preceding docs edition
+        required: true
+        type: choice
+        options: [initial, patch, minor, major]
+      previous:
+        description: Preceding registered default edition (empty for the first)
+        required: false
+        type: string
+      qualification:
+        description: Public approval URL for the complete combination (omit for development)
+        required: false
+        type: string
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: fern/.node-version
+      - name: Prepare the reviewable edition sources
+        env:
+          EDITION: ${{ inputs.edition }}
+          SOURCE: ${{ inputs.source }}
+          SELF_MANAGED: ${{ inputs.self_managed }}
+          COMPUTE_PLANE: ${{ inputs.compute_plane }}
+          OBSERVABILITY: ${{ inputs.observability }}
+          CHANGE: ${{ inputs.change }}
+          PREVIOUS: ${{ inputs.previous }}
+          QUALIFICATION: ${{ inputs.qualification }}
+        run: |
+          set -euo pipefail
+          go run -C tools/docs-version-sync . edition prepare \
+            --source "$SOURCE" --version "$EDITION" --change "$CHANGE" \
+            --previous-version "$PREVIOUS" --self-managed "$SELF_MANAGED" \
+            --compute-plane "$COMPUTE_PLANE" --observability "$OBSERVABILITY" \
+            --qualification "$QUALIFICATION" --out "$RUNNER_TEMP/edition"
+          git -C "$RUNNER_TEMP/edition" add --intent-to-add -- docs fern
+          git -C "$RUNNER_TEMP/edition" diff -- docs fern > "$RUNNER_TEMP/edition.patch"
+          echo 'Prepared sources are attached for review. Branch creation, protection, and registry activation follow qualification review.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Validate prepared documentation
+        working-directory: ${{ runner.temp }}/edition
+        run: |
+          "$GITHUB_WORKSPACE/tools/ci/run-fern" check
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: docs-edition-candidate
+          include-hidden-files: true
+          path: |
+            ${{ runner.temp }}/edition/docs/
+            ${{ runner.temp }}/edition/fern/
+            ${{ runner.temp }}/edition/.docs-edition-preparation.json
+            ${{ runner.temp }}/edition.patch
+          retention-days: 7

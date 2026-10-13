@@ -239,7 +239,7 @@ class CapacityPrimitiveTests(unittest.TestCase):
         for model, profile, count in (
                 ('qwen3.5-4b', 'station-bf16', 1),
                 ('nemotron-nano-12b-v2', 'station-bf16', 1),
-                ('nemotron3.5-lightning', 'station-nvfp4', 1),
+                ('nemotron-3.5-lightning', 'station-nvfp4', 1),
                 ('glm-5.3', 'gb300-x2', 2)):
             with self.subTest(model=model):
                 report = check(snapshot, model)

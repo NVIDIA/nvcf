@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 package gobreaker
 
 // TwoStepCircuitBreaker is like CircuitBreaker but instead of surrounding a function

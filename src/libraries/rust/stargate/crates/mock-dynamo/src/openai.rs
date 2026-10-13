@@ -24,6 +24,7 @@ use tokio::sync::OwnedSemaphorePermit;
 use tracing::info;
 
 use crate::AppState;
+use crate::engine_driver::EngineRequest;
 use crate::kv_cache::{KvCacheAccess, KvCacheStats, insert_kv_cache_headers};
 use crate::stats_stream::StatsStreamEvent;
 use crate::test_control::{TestEndpoint, TestRequestClass, is_canary_request, request_class};
@@ -72,10 +73,17 @@ const CANARY_ANSWER: &str = "2";
 #[derive(Deserialize)]
 pub(crate) struct ChatRequest {
     pub(crate) stream: Option<bool>,
+    stream_options: Option<ChatStreamOptions>,
     pub(crate) model: Option<String>,
     pub(crate) max_tokens: Option<usize>,
     #[serde(default)]
     pub(crate) messages: Vec<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct ChatStreamOptions {
+    #[serde(default)]
+    include_usage: bool,
 }
 
 #[derive(Deserialize)]
@@ -105,7 +113,10 @@ struct ChatCompletionChunk<'a> {
     id: &'a str,
     object: &'static str,
     model: &'a str,
-    choices: [ChunkChoice<'a>; 1],
+    choices: &'a [ChunkChoice<'a>],
+    // Omitted unless requested, then null until the final usage chunk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usage: Option<Option<ChatUsage>>,
 }
 
 #[derive(Serialize)]
@@ -165,16 +176,65 @@ struct StreamResponseConfig {
     id: String,
     request_id: String,
     input_tokens: usize,
-    first_token_delay: Duration,
     output_tokens: usize,
     kv_cache_access: KvCacheAccess,
-    request_slot: Option<OwnedSemaphorePermit>,
+    pacing: TokenPacing,
     kind: StreamKind,
+}
+
+/// Output timing for a request whose input has been processed.
+enum TokenPacing {
+    /// Legacy fixed per-request delays. The concurrency permit is held until
+    /// the response ends.
+    Fixed {
+        first_token_delay: Duration,
+        _request_slot: Option<OwnedSemaphorePermit>,
+    },
+    /// Token events from the shared batched engine, which has already
+    /// produced the first token.
+    Engine(EngineRequest),
+}
+
+impl TokenPacing {
+    async fn first_token(&self) {
+        if let Self::Fixed {
+            first_token_delay, ..
+        } = self
+        {
+            tokio::time::sleep(*first_token_delay).await;
+        }
+    }
+
+    async fn next_token(&mut self, state: &AppState, request_id: &str, token_index: usize) {
+        match self {
+            Self::Fixed { .. } => {
+                tokio::time::sleep(token_delay(state, request_id, token_index)).await;
+            }
+            Self::Engine(request) => request.next_token().await,
+        }
+    }
+
+    async fn whole_response(&mut self, state: &AppState, request_id: &str, output_tokens: usize) {
+        match self {
+            Self::Fixed {
+                first_token_delay, ..
+            } => {
+                tokio::time::sleep(non_streaming_delay(
+                    state,
+                    request_id,
+                    *first_token_delay,
+                    output_tokens,
+                ))
+                .await;
+            }
+            Self::Engine(request) => request.completion().await,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum StreamKind {
-    Chat { canary: bool },
+    Chat { canary: bool, include_usage: bool },
     Responses { created_at: u64 },
 }
 
@@ -217,18 +277,18 @@ pub(crate) async fn chat_completions(
             ),
         );
     };
-    let request_slot = state.acquire_request_slot().await;
     let stream = req.stream == Some(true);
     info!(id = %id, model = %model, stream = stream, "received chat/completions request");
     let cache_affinity_key = optional_header(&headers, "x-cache-affinity-key");
-    if stream {
-        state.emit_counters(&request_id, &model, 0, 0, false);
-    }
-    let kv_cache_access = state
-        .process_input_with_cache(cache_affinity_key.as_deref(), input_tokens)
+    let (kv_cache_access, mut pacing) = state
+        .prepare_request(
+            &model,
+            &request_id,
+            cache_affinity_key.as_deref(),
+            input_tokens,
+            output_tokens,
+        )
         .await;
-    let first_token_delay =
-        state.ttft + Duration::from_millis(jitter_ms(&request_id, "ttft", state.ttft_jitter_ms));
     info!(
         id = %id,
         cache_affinity_key = ?cache_affinity_key,
@@ -247,21 +307,22 @@ pub(crate) async fn chat_completions(
             id,
             request_id,
             input_tokens,
-            first_token_delay,
             output_tokens,
             kv_cache_access,
-            request_slot,
-            kind: StreamKind::Chat { canary },
+            pacing,
+            kind: StreamKind::Chat {
+                canary,
+                include_usage: req
+                    .stream_options
+                    .as_ref()
+                    .is_some_and(|options| options.include_usage),
+            },
         });
     }
 
-    tokio::time::sleep(non_streaming_delay(
-        &state,
-        &request_id,
-        first_token_delay,
-        output_tokens,
-    ))
-    .await;
+    pacing
+        .whole_response(&state, &request_id, output_tokens)
+        .await;
 
     let content = if canary {
         CANARY_ANSWER.to_string()
@@ -337,15 +398,17 @@ pub(crate) async fn responses(
             ),
         );
     };
-    let request_slot = state.acquire_request_slot().await;
     info!(id = %id, model = %model, "received responses request");
     let cache_affinity_key = optional_header(&headers, "x-cache-affinity-key");
-    state.emit_counters(&request_id, &model, 0, 0, false);
-    let kv_cache_access = state
-        .process_input_with_cache(cache_affinity_key.as_deref(), input_tokens)
+    let (kv_cache_access, pacing) = state
+        .prepare_request(
+            &model,
+            &request_id,
+            cache_affinity_key.as_deref(),
+            input_tokens,
+            output_tokens,
+        )
         .await;
-    let first_token_delay =
-        state.ttft + Duration::from_millis(jitter_ms(&request_id, "ttft", state.ttft_jitter_ms));
 
     stream_response(StreamResponseConfig {
         state,
@@ -353,10 +416,9 @@ pub(crate) async fn responses(
         id,
         request_id,
         input_tokens,
-        first_token_delay,
         output_tokens,
         kv_cache_access,
-        request_slot,
+        pacing,
         kind: StreamKind::Responses {
             created_at: current_unix_timestamp(),
         },
@@ -427,10 +489,59 @@ pub(crate) async fn health(State(state): State<AppState>) -> &'static str {
 }
 
 pub(crate) async fn kv_cache_stats(State(state): State<AppState>) -> Json<KvCacheStats> {
+    if let Some(engine) = &state.engine {
+        let workers = engine.worker_stats().await;
+        return Json(KvCacheStats::from_engine_workers(
+            &state.model_name,
+            &workers,
+        ));
+    }
     Json(state.kv_cache.lock().await.stats(&state.model_name))
 }
 
 impl AppState {
+    /// Processes the input and returns its cache access and output timing.
+    /// Stats counters report zero progress before input processing and the
+    /// processed input afterwards.
+    async fn prepare_request(
+        &self,
+        model: &str,
+        request_id: &str,
+        cache_affinity_key: Option<&str>,
+        input_tokens: usize,
+        output_tokens: usize,
+    ) -> (KvCacheAccess, TokenPacing) {
+        if let Some(engine) = &self.engine {
+            let mut request = engine.submit(cache_affinity_key, input_tokens, output_tokens);
+            self.emit_counters(request_id, model, 0, 0, false);
+            // The engine never reports more reuse than the prompt length.
+            let reused = request.first_token().await;
+            self.emit_counters(request_id, model, input_tokens, 0, false);
+            let access = KvCacheAccess {
+                hit: reused > 0,
+                reused_input_tokens: reused,
+                uncached_input_tokens: input_tokens as u64 - reused,
+                ..KvCacheAccess::default()
+            };
+            return (access, TokenPacing::Engine(request));
+        }
+        let request_slot = self.acquire_request_slot().await;
+        self.emit_counters(request_id, model, 0, 0, false);
+        let kv_cache_access = self
+            .process_input_with_cache(cache_affinity_key, input_tokens)
+            .await;
+        self.emit_counters(request_id, model, input_tokens, 0, false);
+        let first_token_delay =
+            self.ttft + Duration::from_millis(jitter_ms(request_id, "ttft", self.ttft_jitter_ms));
+        (
+            kv_cache_access,
+            TokenPacing::Fixed {
+                first_token_delay,
+                _request_slot: request_slot,
+            },
+        )
+    }
+
     async fn process_input_with_cache(
         &self,
         cache_affinity_key: Option<&str>,
@@ -495,29 +606,52 @@ pub(crate) enum ChatStreamChunk<'a> {
     Role,
     Content(&'a str),
     Stop,
+    Usage {
+        input_tokens: usize,
+        output_tokens: usize,
+    },
 }
 
-pub(crate) fn chat_chunk_json(id: &str, model: &str, chunk: ChatStreamChunk<'_>) -> String {
-    let (role, content, finish_reason) = match chunk {
-        ChatStreamChunk::Role => (Some("assistant"), None, None),
-        ChatStreamChunk::Content(content) => (None, Some(content), None),
-        ChatStreamChunk::Stop => (None, None, Some("stop")),
-    };
+pub(crate) fn chat_chunk_json(
+    id: &str,
+    model: &str,
+    chunk: ChatStreamChunk<'_>,
+    include_usage: bool,
+) -> String {
+    let mut usage = include_usage.then_some(None);
+    let choice = match chunk {
+        ChatStreamChunk::Role => Some((Some("assistant"), None, None)),
+        ChatStreamChunk::Content(content) => Some((None, Some(content), None)),
+        ChatStreamChunk::Stop => Some((None, None, Some("stop"))),
+        ChatStreamChunk::Usage {
+            input_tokens,
+            output_tokens,
+        } => {
+            usage = Some(Some(ChatUsage {
+                prompt_tokens: input_tokens,
+                completion_tokens: output_tokens,
+                total_tokens: input_tokens.saturating_add(output_tokens),
+            }));
+            None
+        }
+    }
+    .map(|(role, content, finish_reason)| ChunkChoice {
+        index: 0,
+        delta: Delta { role, content },
+        finish_reason,
+    });
     serde_json::to_string(&ChatCompletionChunk {
         id,
         object: "chat.completion.chunk",
         model,
-        choices: [ChunkChoice {
-            index: 0,
-            delta: Delta { role, content },
-            finish_reason,
-        }],
+        choices: choice.as_slice(),
+        usage,
     })
     .expect("chat stream event should serialize")
 }
 
-fn chat_sse_event(id: &str, model: &str, chunk: ChatStreamChunk<'_>) -> Event {
-    Event::default().data(chat_chunk_json(id, model, chunk))
+fn chat_sse_event(id: &str, model: &str, chunk: ChatStreamChunk<'_>, include_usage: bool) -> Event {
+    Event::default().data(chat_chunk_json(id, model, chunk, include_usage))
 }
 
 fn stream_response(config: StreamResponseConfig) -> Response {
@@ -527,14 +661,12 @@ fn stream_response(config: StreamResponseConfig) -> Response {
         id,
         request_id,
         input_tokens,
-        first_token_delay,
         output_tokens,
         kv_cache_access,
-        request_slot,
+        mut pacing,
         kind,
     } = config;
     let stream = async_stream::stream! {
-        let _request_slot = request_slot;
         let mut output_text = String::new();
         if let StreamKind::Responses { created_at } = kind {
             yield Ok::<_, std::convert::Infallible>(responses_sse_event(
@@ -553,26 +685,24 @@ fn stream_response(config: StreamResponseConfig) -> Response {
                 }),
             ));
         }
-        tokio::time::sleep(first_token_delay).await;
+        pacing.first_token().await;
 
-        state.emit_counters(&request_id, &model, input_tokens, 0, false);
-
-        if matches!(kind, StreamKind::Chat { .. }) {
-            yield Ok(chat_sse_event(&id, &model, ChatStreamChunk::Role));
+        if let StreamKind::Chat { include_usage, .. } = kind {
+            yield Ok(chat_sse_event(&id, &model, ChatStreamChunk::Role, include_usage));
         }
 
         for i in 0..output_tokens {
             if i > 0 {
-                tokio::time::sleep(token_delay(&state, &request_id, i)).await;
+                pacing.next_token(&state, &request_id, i).await;
             }
-            let token = if matches!(kind, StreamKind::Chat { canary: true }) {
+            let token = if matches!(kind, StreamKind::Chat { canary: true, .. }) {
                 CANARY_ANSWER
             } else {
                 DUMMY_TOKENS[i % DUMMY_TOKENS.len()]
             };
             let event = match kind {
-                StreamKind::Chat { .. } => {
-                    chat_sse_event(&id, &model, ChatStreamChunk::Content(token))
+                StreamKind::Chat { include_usage, .. } => {
+                    chat_sse_event(&id, &model, ChatStreamChunk::Content(token), include_usage)
                 }
                 StreamKind::Responses { .. } => {
                     output_text.push_str(token);
@@ -593,7 +723,7 @@ fn stream_response(config: StreamResponseConfig) -> Response {
         }
 
         let completed = match kind {
-            StreamKind::Chat { .. } => chat_sse_event(&id, &model, ChatStreamChunk::Stop),
+            StreamKind::Chat { include_usage, .. } => chat_sse_event(&id, &model, ChatStreamChunk::Stop, include_usage),
             StreamKind::Responses { created_at } => responses_sse_event(
                 "response.completed",
                 &serde_json::json!({
@@ -628,7 +758,10 @@ fn stream_response(config: StreamResponseConfig) -> Response {
 
         state.emit_counters(&request_id, &model, input_tokens, output_tokens, true);
 
-        if matches!(kind, StreamKind::Chat { .. }) {
+        if let StreamKind::Chat { include_usage, .. } = kind {
+            if include_usage {
+                yield Ok(chat_sse_event(&id, &model, ChatStreamChunk::Usage { input_tokens, output_tokens }, true));
+            }
             yield Ok(Event::default().data("[DONE]"));
         }
     };

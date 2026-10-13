@@ -40,7 +40,6 @@ class ChartPackageTests(unittest.TestCase):
             shutil.copy2(HERE/guide, self.source/guide)
         shutil.copy2(HERE/'recipes/index.json', self.source/'recipes/index.json')
         shutil.copy2(HERE/'recipes/NOTICE', self.source/'recipes/NOTICE')
-        shutil.copy2(HERE/'recipes/NOTICE.deepseek-v4-flash', self.source/'recipes/NOTICE.deepseek-v4-flash')
         (self.source/'recipes/glm-5.3').mkdir()
         shutil.copy2(HERE/'recipes/glm-5.3/NOTICE', self.source/'recipes/glm-5.3/NOTICE')
 
@@ -100,7 +99,7 @@ class ChartPackageTests(unittest.TestCase):
                          {recipe['licenseNotice'] for recipe in source_index['recipes']})
         self.assertFalse((self.output/'notices').exists())
         notice = (self.output/'NOTICE').read_bytes()
-        for relative in ('NOTICE', 'glm-5.3/NOTICE', 'NOTICE.deepseek-v4-flash'):
+        for relative in ('NOTICE', 'glm-5.3/NOTICE'):
             source_notice = (self.source/'recipes'/relative).read_bytes()
             self.assertEqual(notice.count(source_notice), 1, relative)
         self.assertIn('    deploy/helm/llm-routing/dev-artifacts/charts/NOTICE',
@@ -204,12 +203,10 @@ class ChartPackageTests(unittest.TestCase):
     def test_missing_candidate_notice_does_not_fall_back_to_qwen_terms(self):
         path = self.source/'recipes/index.json'
         index = json.loads(path.read_text())
-        candidate = next(recipe for recipe in index['recipes'] if recipe['id'] == 'deepseek-v4-flash')
-        candidate.update(runtime=None, profiles=[], availability={'status': 'planned', 'deployable': False})
+        index['recipes'].append({'id': 'planned-candidate', 'licenseNotice': 'NOTICE', 'profiles': [], 'runtime': {'backend': 'planned'}})
         path.write_text(json.dumps(index))
-        (self.source/'recipes/NOTICE.deepseek-v4-flash').unlink()
         result = self.package(success=False)
-        self.assertIn('Missing model notice for deepseek-v4-flash', result.stderr)
+        self.assertIn('Missing model notice for planned-candidate', result.stderr)
         self.assertEqual(list(self.output.iterdir()), [])
 
     def test_invalid_notice_path_fails_without_publishing(self):

@@ -45,7 +45,8 @@
 {{/* Qualification records stay in the catalog, outside serving config and its rollout checksum. */}}
 {{- $_ := set $v "model" (omit $model "profiles" "validation" "validatedWorkload" "automaticHelmValidation" "qualification" "artifactEvidence") -}}
 {{- $_ := set $v "profile" (omit $profile "validation" "validatedWorkload" "automaticHelmValidation" "qualification" "artifactEvidence") -}}
-{{- $_ := set $v "image" $model.image -}}
+{{/* A profile tested on different hardware can pin its own runtime image. */}}
+{{- $_ := set $v "image" (default $model.image $profile.image) -}}
 {{- $_ := set $v "gpu" (dict "product" (index $profile.hardware.gpuProducts 0)) -}}
 {{- $_ := set $v "targets" $targets -}}
 {{- if and $v.cache.existingClaim (gt (len $v.nodes) 1) }}{{ fail "TP2 retained caches require cache.existingClaims in rank order" }}{{ end -}}

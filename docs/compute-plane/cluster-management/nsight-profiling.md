@@ -233,7 +233,7 @@ cluster policy. Recreate existing function pods after the label is present.
 ## Run a Capture
 
 Use this flow with an existing Gemma-based LLM function, or create one using the
-[LLM Gateway](/nvcf/overview/llm-gateway#function-configuration) function configuration
+[LLM Gateway](../../overview/llm-gateway.md#function-configuration) function configuration
 pattern. Keep the model name aligned with the function's configured
 `models[].name` value.
 
@@ -390,8 +390,8 @@ or profile in a maintenance window.
 ## See Also
 
 - [Self-Managed Clusters](./self-managed.md)
-- [LLM Gateway](/nvcf/overview/llm-gateway)
-- [Generic HTTP Function Invocation](/nvcf/overview/generic-http-function-invocation)
+- [LLM Gateway](../../overview/llm-gateway.md)
+- [Generic HTTP Function Invocation](../../overview/generic-http-function-invocation.md)
 - [NVIDIA Nsight Operator Installation Guide](https://docs.nvidia.com/nsight-operator/InstallationGuide/index.html)
 - [NVIDIA Nsight Operator User Guide](https://docs.nvidia.com/nsight-operator/UserGuide/index.html)
 - [NVIDIA Nsight Operator CRD Reference](https://docs.nvidia.com/nsight-operator/CRDReference/index.html)

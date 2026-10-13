@@ -136,6 +136,7 @@ func (h *ResponsesHandlers) prepareNativeResponsesRequest(
 		countRequest.Model,
 		countRequest,
 	)
+	estimatedInputTokens += estimatedTokenCountForText(customToolFormatText(request.Tools))
 	inputTokens := estimatedInputTokens
 	maxOutputTokens := maxOutputTokensForRequest(countRequest)
 	checkRequest := ratelimit.ResourceRequest{
@@ -230,6 +231,7 @@ func (h *ResponsesHandlers) dispatchNativeResponsesRequest(
 			RawQuery:      c.Request().URL.RawQuery,
 			Header:        headers,
 			Body:          io.NopCloser(bytes.NewReader(body)),
+			ContentLength: int64(len(body)),
 			InputTokens:   request.InputTokens,
 			TokenEstimate: request.InputTokens + request.MaxOutputTokens,
 		},

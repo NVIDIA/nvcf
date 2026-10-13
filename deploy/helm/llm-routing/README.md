@@ -111,14 +111,14 @@ Both models use the same gateway and caller credential. Each keeps its own Helm 
 
 | Recipe | Precision | Hardware |
 | --- | --- | --- |
-| [Qwen3.5-4B](#2-install-a-model) | BF16 | [1 GB300 (Station)](recipes/values/qwen3.5-4b-station.yaml) |
-| [Nemotron Nano 12B v2](#2-install-a-model) | BF16 | [1 GB300 (Station)](recipes/values/nemotron-nano-12b-v2-station.yaml) |
-| [Nemotron 3.5 Lightning](#2-install-a-model) | NVIDIA NVFP4 | [1 GB300 (Station)](recipes/values/nemotron3.5-lightning-station.yaml) |
 | [Qwen3.8-27B](#2-install-a-model) | FP8 | [1 GB10 (Spark)](recipes/values/qwen3.8-27b.yaml) or [1 GB300 (Station)](recipes/values/qwen3.8-27b-station.yaml) |
 | [Qwen3.8-27B](#add-a-second-model) | NVIDIA NVFP4 | [1 GB10 (Spark)](recipes/values/qwen3.8-27b-nvfp4.yaml) |
-| [GLM-5.3](ADVANCED.md#helm-glm-recipe) | UD-IQ2_M | [2 GB10s (Spark)](recipes/values/glm-5.3.yaml) or [2 GB300s (Station)](recipes/values/glm-5.3-station.yaml) |
+| [GLM-5.3](ADVANCED.md#helm-glm-recipe) | UD-IQ2_M | [3 GB10s (Spark)](recipes/values/glm-5.3-x3.yaml), or [2 GB10s (Spark)](recipes/values/glm-5.3.yaml). The two-node Spark profile stops at the host-memory guard. Or [2 GB300s (Station)](recipes/values/glm-5.3-station.yaml) |
+| [Qwen3.5-4B](recipes/values/qwen3.5-4b.yaml) | BF16 | [1 GB10 (Spark)](recipes/values/qwen3.5-4b.yaml) or [1 GB300 (Station)](recipes/values/qwen3.5-4b-station.yaml). Thinks by default, so verify with `recipes/verify.py --max-tokens 2048` |
+| [Nemotron Nano 12B v2](recipes/values/nemotron-nano-12b-v2.yaml) | BF16 | [1 GB10 (Spark)](recipes/values/nemotron-nano-12b-v2.yaml) or [1 GB300 (Station)](recipes/values/nemotron-nano-12b-v2-station.yaml). No tool-call parser configured |
+| [Nemotron 3.5 Lightning](recipes/values/nemotron-3.5-lightning.yaml) | NVFP4 | [1 GB10 (Spark)](recipes/values/nemotron-3.5-lightning.yaml) or [1 GB300 (Station)](recipes/values/nemotron-3.5-lightning-station.yaml). Pinned SGLang development image |
 | [Qwen3.8-Flash-Next](ADVANCED.md#helm-flash-next-recipes) | NVFP4 | [1 GB10 (Spark) with local NVMe](recipes/values/qwen3.8-flash-next-nvme.yaml) or [2 GB10s (Spark) with a 200 Gbps link](recipes/values/qwen3.8-flash-next-tp2.yaml) |
-| [DeepSeek V4 Flash](#2-install-a-model) | Mixed FP4/FP8 | [2 GB300s (Station), link >=200 Gbps](recipes/values/deepseek-v4-flash-station.yaml) |
+| [DeepSeek V4 Flash](recipes/values/deepseek-v4-flash.yaml) | FP4 experts, FP8 attention | [2 GB10s (Spark) with a 200 Gbps link](recipes/values/deepseek-v4-flash.yaml) or [2 GB300s (Station) with a link of at least 200 Gbps](recipes/values/deepseek-v4-flash-station.yaml). A three-way split is not valid for this model. Needs 200 GiB of cache per node |
 
 See the [catalog](recipes/index.json) for profile details and validation scope. Two-node SGLang profiles require verified fabric addresses and interfaces in their values files.
 
@@ -179,6 +179,8 @@ helm upgrade qwen-fp8 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
   --namespace llm-stack \
   --reuse-values --set suspended=false --wait --timeout 120m
 ```
+
+To stop or start a model without Helm, scale its deployments with `python3 llm.py stop --model MODEL` and `python3 llm.py start --model MODEL`. A start checks that the GPUs and memory are free first and names the model holding them when they are not. See [Start and stop an installed model](ADVANCED.md#start-and-stop-an-installed-model-by-replica-count).
 
 ### Uninstall, keep downloads
 

@@ -220,6 +220,46 @@ class CacheReuseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'invalid link'):
             runtime.reuse_snapshot(self.model, self.cache)
 
+    def pool_the_weight_blob(self, pool_name='ab' + 'c' * 62):
+        # Newer Hugging Face clients store content in a pool shared under the hub root. The repository blob named
+        # by the file's SHA256 becomes a link into that pool, and the snapshot entry links to the repository blob.
+        pool = self.cache / 'huggingface/hub/blobs' / pool_name[:2] / pool_name
+        pool.parent.mkdir(parents=True, exist_ok=True)
+        pool.write_bytes(self.blob.read_bytes())
+        self.blob.unlink()
+        self.blob.symlink_to(pathlib.Path('../../blobs') / pool_name[:2] / pool_name)
+        return pool
+
+    def test_shared_blob_pool_layout_is_accepted(self):
+        pool = self.pool_the_weight_blob()
+        self.assertTrue((self.snapshot / 'model-00001.safetensors').is_symlink() and self.blob.is_symlink())
+        self.assertEqual(runtime.reuse_snapshot(self.model, self.cache), self.snapshot)
+        self.assertEqual(pool.read_bytes()[-4:], b'1234')
+
+    def test_shared_blob_pool_content_is_still_checksummed_against_the_repository_blob_name(self):
+        pool = self.pool_the_weight_blob()
+        original = pool.read_bytes()
+        pool.write_bytes(original[:-1] + b'X')
+        with self.assertRaisesRegex(RuntimeError, 'checksum differs'):
+            runtime.reuse_snapshot(self.model, self.cache)
+        pool.write_bytes(original)
+        runtime.reuse_snapshot(self.model, self.cache)
+
+    def test_links_outside_the_hub_or_into_nothing_are_rejected_even_with_a_pool(self):
+        self.pool_the_weight_blob()
+        outside = self.cache / 'outside'
+        outside.write_bytes(b'x')
+        link = self.snapshot / 'model-00001.safetensors'
+        link.unlink()
+        link.symlink_to(outside)
+        with self.assertRaisesRegex(RuntimeError, 'invalid link'):
+            runtime.reuse_snapshot(self.model, self.cache)
+        link.unlink()
+        link.symlink_to(self.blob)
+        (self.cache / 'huggingface/hub/blobs/ab' / ('ab' + 'c' * 62)).unlink()
+        with self.assertRaisesRegex(RuntimeError, 'invalid link'):
+            runtime.reuse_snapshot(self.model, self.cache)
+
     def test_truncated_plain_weight_shard_is_rejected(self):
         path = self.snapshot / 'model-00001.safetensors'
         path.unlink()

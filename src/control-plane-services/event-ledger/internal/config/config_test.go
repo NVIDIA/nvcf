@@ -38,6 +38,84 @@ func TestStatsConfigLegacyFilteredEventNamesKey(t *testing.T) {
 	assert.Equal(t, []string{"ready", "destroyed"}, cfg.Stats.FilteredStatsEnabledEventNames)
 }
 
+func TestGetDefaultCacheConfig(t *testing.T) {
+	assert.Equal(t, CacheConfig{Enabled: false, MaxSize: 100_000, FlushIntervalSeconds: 60}, GetDefaultCacheConfig())
+}
+
+func TestCacheConfigWithDefaults(t *testing.T) {
+	defaults := GetDefaultCacheConfig()
+	tests := []struct {
+		name string
+		in   CacheConfig
+		want CacheConfig
+	}{
+		{name: "zero value gets defaults", in: CacheConfig{}, want: defaults},
+		{name: "only max size set", in: CacheConfig{MaxSize: 5}, want: CacheConfig{MaxSize: 5, FlushIntervalSeconds: defaults.FlushIntervalSeconds}},
+		{name: "only interval set", in: CacheConfig{FlushIntervalSeconds: 9}, want: CacheConfig{MaxSize: defaults.MaxSize, FlushIntervalSeconds: 9}},
+		{name: "explicit values kept", in: CacheConfig{Enabled: true, MaxSize: 5, FlushIntervalSeconds: 9}, want: CacheConfig{Enabled: true, MaxSize: 5, FlushIntervalSeconds: 9}},
+		{name: "negative values get defaults", in: CacheConfig{Enabled: true, MaxSize: -1, FlushIntervalSeconds: -1}, want: CacheConfig{Enabled: true, MaxSize: defaults.MaxSize, FlushIntervalSeconds: defaults.FlushIntervalSeconds}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, tt.in.WithDefaults())
+		})
+	}
+}
+
+func TestCacheConfiguration(t *testing.T) {
+	defaults := GetDefaultCacheConfig()
+	tests := []struct {
+		name string
+		args []string
+		want CacheConfig
+	}{
+		{
+			name: "defaults come from GetDefaultCacheConfig",
+			args: nil,
+			want: defaults,
+		},
+		{
+			name: "enabled via CLI flag",
+			args: []string{"--cache.enabled=true"},
+			want: CacheConfig{Enabled: true, MaxSize: defaults.MaxSize, FlushIntervalSeconds: defaults.FlushIntervalSeconds},
+		},
+		{
+			name: "size and interval overridden",
+			args: []string{"--cache.enabled=true", "--cache.max-size=500", "--cache.flush-interval-seconds=15"},
+			want: CacheConfig{Enabled: true, MaxSize: 500, FlushIntervalSeconds: 15},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := viper.New()
+			rootCmd := &cobra.Command{
+				Use:  "test",
+				RunE: func(cmd *cobra.Command, args []string) error { return nil },
+			}
+			NewCliArgs(rootCmd, v, &otelzap.SugaredLogger{}).SetupCache()
+			rootCmd.SetArgs(tt.args)
+			require.NoError(t, rootCmd.Execute())
+
+			var cfg Config
+			require.NoError(t, v.Unmarshal(&cfg))
+
+			assert.Equal(t, tt.want, cfg.Cache)
+		})
+	}
+}
+
+func TestCacheConfigurationFromConfigFileKeys(t *testing.T) {
+	v := viper.New()
+	v.Set("cache.enabled", true)
+	v.Set("cache.max-size", 42)
+	v.Set("cache.flush-interval-seconds", 7)
+
+	var cfg Config
+	require.NoError(t, v.Unmarshal(&cfg))
+
+	assert.Equal(t, CacheConfig{Enabled: true, MaxSize: 42, FlushIntervalSeconds: 7}, cfg.Cache)
+}
+
 func TestIndexerConfiguration(t *testing.T) {
 	tests := []struct {
 		name            string

@@ -1395,7 +1395,7 @@ fn test_registration_config(
             ..Default::default()
         },
         min_update_interval: Duration::from_millis(100),
-        reconnect_max_backoff: pylon_lib::DEFAULT_REGISTRATION_RECONNECT_MAX_BACKOFF,
+        stats_update_coalesce: Duration::from_millis(10),
         reverse_tunnel,
         tls_cert_pem: None,
         grpc_tls_ca_cert_pem: None,

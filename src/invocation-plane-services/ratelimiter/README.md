@@ -40,6 +40,7 @@ The NVCF Rate Limiter provides:
 - NCA ID (NVIDIA Cloud Account ID) based exclusions for the global rate
 - Per NCA ID rate limiting for a function (introduced 2025/10). Each NCA ID can have its own limit; when a specific NCA ID rate in `perNcaIdRate` is configured, it replaces the global `rateLimit` for that NCA. Function owners can use either the global `rateLimit` or `perNcaIdRate` (or both)
 - Per user (caller) rate limiting (introduced 2026/04). A single `perUserRate` is configured on the function version and applied **independently** against every unique caller — counters are keyed by `clientAuthSubject`, the per-caller identity the upstream service resolves from the request's credentials. Enforced **in addition to** the NCA-tier limit. A request with an empty `clientAuthSubject` skips the user tier; callers that share one `clientAuthSubject` share one counter
+- Rate limiting by key owner (introduced 2026/09). A request may carry `ownerNcaId`, the account the invoking key's owner belongs to, alongside `ncaId`, the account the request is authorized against. They differ when a key's owner was granted access to another account. When `ownerNcaId` is set, the limiter uses it in place of `ncaId` everywhere below: `perNcaIdRate` matching, `excludedNcaIds`, and every counter key. Each key owner is therefore limited and exempted by its own account, not by the account it is authorized against. An empty `ownerNcaId` falls back to `ncaId`, which is also its value for every other key, so their behavior is unchanged
 - Multiple rates per entry (e.g. `"5-S,300-H"`). Every rate within an entry must allow; rates with the same time window are deduplicated to the stricter limit
 - GRPC interface for integration with Invocation Service and gRPC Proxy Service
 - Configurable rate limits with Olric-backed shared counters across pods
@@ -91,7 +92,7 @@ end group
 ```plantuml
 participant "NVCF Ratelimiter" as service
 
-service -> service: validate incoming gRPC request (NCA ID, Function ID, Function Version ID required; clientAuthSubject optional)
+service -> service: validate incoming gRPC request (NCA ID, Function ID, Function Version ID required; clientAuthSubject and ownerNcaId optional)
 service -> service: load the applicable rate-limit policy for the function version
 group Build the set of tiers that apply to this request
     alt clientAuthSubject is non-empty AND perUserRate is configured
@@ -110,6 +111,7 @@ note right
         NCA tier:  NCA ID + ":" + Function Version ID + ":" + Rate
         User tier: "user:" + clientAuthSubject + ":" + NCA ID +
                    ":" + Function Version ID + ":" + Rate
+        NCA ID is ownerNcaId when set, otherwise ncaId.
 
         Shared Olric counters make the configured limit
         consistent across all rate-limiter pods.
@@ -233,6 +235,8 @@ own `5-S` / `500-H` user budget.
 |---|---|
 | Per-user | `"user:" + clientAuthSubject + ":" + ncaId + ":" + functionVersionId + ":" + rate` |
 | Per-NCA-ID / global | `ncaId + ":" + functionVersionId + ":" + rate` |
+
+In both keys, `ncaId` is replaced by `ownerNcaId` when the request sets it.
 
 The `"user:"` prefix keeps user-tier counters in a separate namespace so they
 never collide with NCA-tier counters that share the same NCA / function /

@@ -12,16 +12,20 @@ SPEC = importlib.util.spec_from_file_location("export_catalog", ROOT / "export_c
 catalog = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(catalog)
 
-
-def planned_fixture():
-    return {"schemaVersion": 1, "recipes": [{
-        "id": "future-model", "name": "Future model", "servedModelId": None,
-        "availability": {"status": "planned", "deployable": False, "reason": "Research only",
-                         "checkedAt": "2026-10-11", "sources": ["https://example.com/model"]},
-        "profiles": [], "model": None, "runtime": None, "precision": None, "license": None,
-        "licenseNotice": None, "upstreamCandidates": [{"id": "candidate",
-            "model": {"revision": "a" * 40},
-            "runtime": {"image": "example/runtime@sha256:" + "b" * 64}}]}]}
+# A synthetic planned entry keeps the planned-recipe validation covered while the catalog has no real one.
+PLANNED = {"schemaVersion": 1, "recipes": [{
+    "id": "example-planned", "name": "Example Planned", "servedModelId": None,
+    "availability": {"status": "planned", "deployable": False, "reason": "Needs chart support.",
+                     "checkedAt": "2026-10-12", "sources": ["https://example.invalid/model"]},
+    "precision": None, "license": None, "licenseNotice": "notices/example-planned/NOTICE",
+    "model": None, "runtime": None, "profiles": [],
+    "upstreamCandidates": [{
+        "id": "example-tp4", "model": {"repository": "example/model", "revision": "a" * 40},
+        "license": "MIT", "precision": "FP8",
+        "runtime": {"backend": "sglang", "image": "example/runtime@sha256:" + "b" * 64},
+        "hardware": {"os": "linux", "architecture": "arm64", "gpuProduct": "EXAMPLE", "modelNodeCount": 1,
+                     "gpusPerNode": 4, "tensorParallelSize": 4},
+        "validation": {"status": "unqualified", "scope": "Documentation only."}}]}]}
 
 
 class CommonCatalogTests(unittest.TestCase):
@@ -167,60 +171,176 @@ class CommonCatalogTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "pins changed"):
             self.export_flash(stale)
 
-    def test_inventory_keeps_all_executable_demo_recipes(self):
-        self.assertEqual(set(self.recipes), {"qwen3.8-27b", "qwen3.8-27b-nvfp4", "qwen3.8-flash-next",
-            "glm-5.3", "deepseek-v4-flash", "qwen3.5-4b", "nemotron-nano-12b-v2", "nemotron3.5-lightning"})
-        available = {recipe["id"] for recipe in self.recipes.values() if recipe["availability"]["deployable"]}
-        self.assertEqual(available, set(self.recipes))
+    def test_inventory_keeps_every_executable_recipe_deployable(self):
+        available = {"qwen3.8-27b", "qwen3.8-27b-nvfp4", "qwen3.8-flash-next", "glm-5.3", "nemotron-nano-12b-v2",
+                     "nemotron-3.5-lightning", "qwen3.5-4b", "deepseek-v4-flash"}
+        planned = {recipe["id"] for recipe in catalog.read(ROOT / "planned.json")["recipes"]}
+        self.assertEqual(set(self.recipes), available | planned)
+        deployable = {recipe["id"] for recipe in self.recipes.values() if recipe["availability"]["deployable"]}
+        self.assertEqual(deployable, available)
         for identifier in available:
             self.assertEqual(self.recipes[identifier]["availability"]["status"], "available")
             self.assertTrue(self.recipes[identifier]["profiles"])
 
     def test_planned_entries_have_no_deployment_or_unverified_artifact_pins(self):
-        self.assertEqual(catalog.read(ROOT / "planned.json")["recipes"], [])
-        source = planned_fixture()
-        with patch.object(catalog, "read", return_value=source):
-            exported = catalog.planned_recipes(ROOT)
-        self.assertEqual(exported, source["recipes"])
-        self.assertEqual(exported[0]["profiles"], [])
-        self.assertIs(exported[0]["availability"]["deployable"], False)
+        for source in (catalog.read(ROOT / "planned.json"), PLANNED):
+            with patch.object(catalog, "read", return_value=source):
+                exported = {recipe["id"]: recipe for recipe in catalog.planned_recipes(ROOT)}
+            self.assertEqual(set(exported), {recipe["id"] for recipe in source["recipes"]})
+            for recipe in source["recipes"]:
+                entry = exported[recipe["id"]]
+                self.assertEqual(entry, recipe)
+                self.assertIs(entry["availability"]["deployable"], False)
+                self.assertEqual(entry["profiles"], [])
+                self.assertIsNone(entry["servedModelId"])
+                for key in ("model", "runtime", "license", "precision"):
+                    self.assertIsNone(entry[key])
+                self.assertNotIn("deployment", entry)
+        for recipe in catalog.read(ROOT / "planned.json")["recipes"]:
+            self.assertEqual(self.recipes[recipe["id"]]["profiles"], [])
+            self.assertIsNone(self.recipes[recipe["id"]]["servedModelId"])
 
     def test_planned_export_rejects_accidentally_executable_metadata(self):
-        original = planned_fixture()
         mutations = [("profiles", [{"deployment": {"chart": "example"}}]), ("servedModelId", "invented"),
                      ("model", {"repository": "invented/model"}), ("deployment", {"chart": "example"}), ("chart", "example")]
         for key, value in mutations:
             with self.subTest(key=key):
-                modified = copy.deepcopy(original)
+                modified = copy.deepcopy(PLANNED)
                 modified["recipes"][0][key] = value
                 with patch.object(catalog, "read", return_value=modified), self.assertRaisesRegex(ValueError, "must not expose"):
                     catalog.planned_recipes(ROOT)
-        modified = copy.deepcopy(original)
+        modified = copy.deepcopy(PLANNED)
         modified["recipes"][0]["availability"]["deployable"] = True
         with patch.object(catalog, "read", return_value=modified), self.assertRaisesRegex(ValueError, "must not expose"):
             catalog.planned_recipes(ROOT)
 
-    def test_deepseek_station_profile_uses_two_exclusive_gpus_and_pinned_artifacts(self):
+    def test_planned_upstream_candidates_are_pinned_research_not_installer_inputs(self):
+        sources = [catalog.read(ROOT / "planned.json"), PLANNED]
+        candidates = [candidate for source in sources for recipe in source["recipes"] for candidate in recipe["upstreamCandidates"]]
+        self.assertTrue(candidates)
+        for candidate in candidates:
+            self.assertRegex(candidate["model"]["revision"], r"^[0-9a-f]{40}$")
+            self.assertRegex(candidate["runtime"]["image"], r"@sha256:[0-9a-f]{64}$")
+            self.assertEqual(candidate["validation"]["status"], "unqualified")
+            self.assertNotIn("deployment", candidate)
+        import model_capacity
+        real_read = catalog.read
+        for source in sources:
+            with patch.object(catalog, "read", side_effect=lambda path, source=source: source if Path(path).name == "planned.json" else real_read(path)):
+                built = catalog.build(ROOT)
+            for entry in source["recipes"]:
+                with self.subTest(recipe=entry["id"]):
+                    report = model_capacity.analyze({'nodes': [], 'pods': []}, built, entry['id'])
+                    self.assertEqual(report['status'], 'unsupported')
+                    self.assertEqual(report['chosenNodes'], [])
+        for chart in ("sglang", "gguf-backend"):
+            for path in (ROOT / "charts" / chart / "files").rglob("profiles.json"):
+                content = path.read_text()
+                for candidate in candidates:
+                    self.assertNotIn(candidate["model"]["revision"], content)
+                    self.assertNotIn(candidate["runtime"]["image"], content)
+
+    def override_runtime(self, **fields):
+        real_read = catalog.read
+
+        def read(path):
+            data = real_read(path)
+            if Path(path).name == "catalog.json":
+                data = copy.deepcopy(data)
+                data["models"][0]["profiles"][0].update(fields)
+            return data
+        return patch.object(catalog, "read", side_effect=read)
+
+    def test_a_profile_runtime_override_needs_both_fields_a_digest_and_matching_validation(self):
+        digest = "example/runtime@sha256:" + "c" * 64
+        for fields, message in (({"image": digest}, "both image and runtime"), ({"runtime": "SGLang"}, "both image and runtime"),
+                                ({"image": "example/runtime:latest", "runtime": "SGLang"}, "digest-pinned"),
+                                ({"image": digest, "runtime": "SGLang"}, "pins changed")):
+            with self.subTest(fields=fields), self.override_runtime(**fields), self.assertRaisesRegex(ValueError, message):
+                catalog.build(ROOT)
+
+    def test_deepseek_station_profile_uses_two_exclusive_gpus_and_its_own_pinned_runtime(self):
         recipe = self.recipes["deepseek-v4-flash"]
         self.assertRegex(recipe["model"]["revision"], r"^[0-9a-f]{40}$")
         self.assertRegex(recipe["runtime"]["image"], r"@sha256:[0-9a-f]{64}$")
-        profile, = recipe["profiles"]
-        self.assertEqual(profile["id"], "station-fp4-tp2")
-        self.assertEqual(profile["modelNodeCount"], 2)
-        self.assertEqual(len(profile["perNode"]), 2)
-        self.assertEqual(profile["hardware"]["memoryMode"], "discrete")
+        profiles = {profile["id"]: profile for profile in recipe["profiles"]}
+        self.assertEqual(set(profiles), {"spark-tp2", "station-fp4-tp2"})
+        station = profiles["station-fp4-tp2"]
+        self.assertEqual(station["modelNodeCount"], 2)
+        self.assertEqual(len(station["perNode"]), 2)
+        self.assertEqual(station["hardware"]["memoryMode"], "discrete")
+        self.assertRegex(station["runtime"]["image"], r"@sha256:[0-9a-f]{64}$")
+        self.assertNotEqual(station["runtime"]["image"], recipe["runtime"]["image"])
+        self.assertNotIn("runtime", profiles["spark-tp2"])
         self.assertEqual(recipe["model"]["repository"], "deepseek-ai/DeepSeek-V4-Flash")
 
     def test_upstream_candidates_reject_deployment_and_mutable_references(self):
         for field, value, message in (("chart", "example", "installable deployment"),
                                       ("model", {"revision": "main"}, "immutable"),
                                       ("runtime", {"image": "image:latest"}, "immutable")):
-            modified = planned_fixture()
-            candidate = next(recipe for recipe in modified["recipes"] if recipe["upstreamCandidates"])["upstreamCandidates"][0]
-            candidate[field] = value
+            modified = copy.deepcopy(PLANNED)
+            modified["recipes"][0]["upstreamCandidates"][0][field] = value
             with self.subTest(field=field), patch.object(catalog, "read", return_value=modified), \
                     self.assertRaisesRegex(ValueError, message):
                 catalog.planned_recipes(ROOT)
+
+    def test_availability_evidence_is_dated_and_cites_sources(self):
+        for source in (catalog.read(ROOT / "planned.json"), PLANNED):
+            for recipe in source["recipes"]:
+                evidence = recipe["availability"]
+                self.assertTrue(evidence["sources"])
+                self.assertRegex(evidence["checkedAt"], r"^\d{4}-\d{2}-\d{2}$")
+                self.assertTrue(evidence["reason"])
+
+    def committed_descriptions(self):
+        sources = {model["id"]: model.get("description") for model in catalog.read(ROOT / "catalog.json")["models"]}
+        for path in sorted(ROOT.glob("*/profiles.json")):
+            metadata = catalog.read(path)
+            sources[metadata["recipe"]] = catalog.read(path.parent / metadata["recipeFile"]).get("description")
+        return sources
+
+    def test_every_recipe_has_a_valid_description_that_the_index_exports_unchanged(self):
+        sources = self.committed_descriptions()
+        self.assertEqual(set(sources), {recipe["id"] for recipe in self.index["recipes"]})
+        for identifier, description in sources.items():
+            with self.subTest(recipe=identifier):
+                self.assertTrue(description, "Every catalog recipe needs a description for the demo UI card")
+                self.assertEqual(self.recipes[identifier]["description"], description)
+                self.assertEqual(catalog.checked_description(description, identifier), description)
+
+    def test_recipes_that_share_a_card_share_one_description(self):
+        # The UI groups recipes by name and shows the first description it finds.
+        by_name = {}
+        for recipe in self.index["recipes"]:
+            by_name.setdefault(recipe["name"], set()).add(recipe["description"])
+        for name, descriptions in by_name.items():
+            with self.subTest(card=name):
+                self.assertEqual(len(descriptions), 1)
+
+    def test_description_validation_applies_to_both_backends(self):
+        real_read = catalog.read
+
+        def with_description(value, backend):
+            def read(path):
+                data = real_read(path)
+                path = Path(path)
+                if backend == "sglang" and path.name == "catalog.json":
+                    data = copy.deepcopy(data)
+                    data["models"][0]["description"] = value
+                if backend == "gguf" and path.name == "recipe.json" and path.parent.name == "glm-5.3":
+                    data = copy.deepcopy(data)
+                    data["description"] = value
+                return data
+            return read
+        for backend in ("sglang", "gguf"):
+            with patch.object(catalog, "read", side_effect=with_description("A short plain description.", backend)):
+                built = {item["id"]: item for item in catalog.build(ROOT)["recipes"]}
+            changed = real_read(ROOT / "catalog.json")["models"][0]["id"] if backend == "sglang" else "glm-5.3"
+            self.assertEqual(built[changed]["description"], "A short plain description.")
+            for bad in ("", "   ", 7, ["list"], "x" * 601, "two\nlines", "caf\u00e9"):
+                with self.subTest(backend=backend, description=bad), patch.object(catalog, "read", side_effect=with_description(bad, backend)), \
+                        self.assertRaisesRegex(ValueError, "short single-line ASCII"):
+                    catalog.build(ROOT)
 
     def test_deepseek_evidence_uses_publisher_checkpoint_and_primary_tp2_example(self):
         source = next(m for m in catalog.read(ROOT / "catalog.json")["models"] if m["id"] == "deepseek-v4-flash")
@@ -305,7 +425,7 @@ class CommonCatalogTests(unittest.TestCase):
                 if validation["automaticHelmStatus"] == "smoke-tested":
                     record = validation["automaticHelmWorkload"]
                     self.assertEqual(record["modelRevision"], recipe["model"]["revision"])
-                    self.assertEqual(record["runtimeImage"], recipe["runtime"]["image"])
+                    self.assertEqual(record["runtimeImage"], profile.get("runtime", recipe["runtime"])["image"])
                     self.assertEqual(record["profile"], profile["id"])
                 if validation["workload"]:
                     if validation["workload"].get("contextBoundaryExercised"):

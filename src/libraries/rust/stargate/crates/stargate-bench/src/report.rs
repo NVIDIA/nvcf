@@ -187,6 +187,7 @@ fn render_report_header(out: &mut String, context: &ReportContext) {
 }
 
 fn render_overview_table(out: &mut String, entries: &[ReportEntry]) {
+    out.push_str("Output goodput and output shares use reported token usage. They are unavailable when successful usage is missing or token totals exceed the supported range.\n\n");
     out.push_str("| Algorithm | Admission Mode | Success | Successful RPS | Output Goodput | Avg TTFT | P95 TTFT | Avg TTLT | P95 TTLT | Max TTLT | Total Length | Cluster Equal Balance | Cluster Input-Capacity Balance | Pylon Equal Balance | Pylon Capacity Balance | Cache Hits | Cache Hit Rate | Input Reuse Rate | Reused Input | Prefilled Input | Cache Movement | Cache Evictions | Evicted Tokens | Failure Groups | Fallback Route Choices | KV-Free Fallback Choices | Pylon Rejected | Pylon Disabled | Queue Mismatch Retries | Retry Exhausted |\n");
     out.push_str("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n");
     for entry in entries {
@@ -497,8 +498,8 @@ fn render_warnings(out: &mut String, context: &ReportContext, entries: &[ReportE
 mod tests {
     use super::*;
     use crate::config::{
-        ArrivalPatternConfig, BackendConfig, BackendProfile, RegistrationConfig, ServiceTimeConfig,
-        StargateConfig, TokenDistributionConfig, TrafficPatternConfig, UniformTrafficConfig,
+        ArrivalPatternConfig, BackendConfig, BackendProfile, ServiceTimeConfig, StargateConfig,
+        TokenDistributionConfig, TrafficPatternConfig, UniformTrafficConfig,
     };
     use crate::score::{
         BackendSummary, CacheSummary, FailureSummary, QueueAdmissionSummary,
@@ -531,10 +532,7 @@ mod tests {
                         ttft_jitter_ms: 0,
                         decode_tokens_per_s: 1,
                         decode_jitter_ms: 0,
-                        prefill_tokens_per_s: None,
-                    },
-                    registration: RegistrationConfig {
-                        last_mean_input_tps: 1.0,
+                        prefill_tokens_per_s: 1.0,
                     },
                 },
             },
@@ -661,6 +659,7 @@ mod tests {
                 success_count: 1,
                 input_tokens: 1,
                 output_tokens: 10,
+                observed_output_tokens: Some(10),
                 avg_ttlt_ms: Some(20.0),
                 p95_ttlt_ms: Some(20),
                 cache_hit_rate: Some(1.0),

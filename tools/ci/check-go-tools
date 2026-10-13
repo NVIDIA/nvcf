@@ -79,8 +79,7 @@ for m in "${modules[@]}"; do
   #
   # With a main package, plain `go build ./...` writes the executable into the
   # working directory, which under -C is the module itself. That leaves binaries
-  # behind and, for tools/changelog-site, rewrites one that is committed, so the
-  # output goes to a scratch directory.
+  # behind in the source tree, so the output goes to a scratch directory.
   #
   # With no main package, `go build -o <dir> ./...` is itself an error: "no main
   # packages to build". A library-only module under tools/ is perfectly valid,

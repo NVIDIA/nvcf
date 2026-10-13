@@ -12,20 +12,25 @@ deploy_nvcf:
   variables:
     KUBECONFIG: $KUBECONFIG_FILE
   script:
-    - nvcf-cli self-hosted check --pre --json | jq -e '.event != "phase_failed"' || exit 2
+    - nvcf-cli self-hosted check --pre --json 2>&1 >/dev/null | grep '^{' | jq -se 'any(.[]; .event == "final" and .success)' || exit 2
     - nvcf-cli self-hosted up --cluster-name=$CLUSTER_NAME --token=$NVCF_ADMIN_JWT --non-interactive --json
-    - nvcf-cli self-hosted status --json | jq -e '.verdict == "healthy"'
+    - nvcf-cli self-hosted status --json 2>&1 >/dev/null | grep '^{' | jq -se 'any(.[]; .verdict == "healthy")'
 ```
 
 Notes:
 
 - `--non-interactive --token=$JWT` is required in CI; never use interactive `init`.
 - Always `--json` for machine-parsing.
+- `--json` writes JSONL to stderr, not stdout, so redirect with `2>&1 >/dev/null` before a parser.
+- `check` reports its verdict in one `final` event, with `success: false` when any check failed at error severity or the run timed out (exit `5`, `verdict: "timeout"`). Gate on that event: `check` never emits `phase_failed`, so a condition on it always passes. Requiring the `final` event also fails the step when the command dies before emitting it.
+- Slurp with `jq -s` before testing a condition. Without it `jq -e` takes its exit status from the last event alone.
+- stderr also carries plain-text notices, so filter to JSON lines. Do not add `--show-logs` here: it appends a non-JSON transcript to the same stream.
+- The plain-text notice that says how to remove objects a validator run left in the cluster is filtered out with the rest. Read the same commands from the `final` event instead, for example `jq -r '.[] | select(.event == "final") | .cleanup[]?'` on the slurped stream.
 - Final status check gates downstream stages on `verdict == "healthy"`.
 
 ## GitOps (Argo / Flux) pattern
 
-CI doesn't `kubectl apply` — instead, render manifests, commit them, let the controller apply.
+CI doesn't `kubectl apply`. Instead, render manifests, commit them, let the controller apply.
 
 ```yaml
 render:
@@ -62,16 +67,20 @@ deploy_compute_planes:
       - CLUSTER: ncp-eu-1
         CONTEXT: admin@gpu-eu-1
   script:
-    - nvcf-cli self-hosted up
+    - nvcf-cli self-hosted compute-plane register
+        --control-plane-profile=control-plane-profile.yaml
         --cluster-name=$CLUSTER
-        --compute-plane-context=$CONTEXT
+        --kube-context=$CONTEXT
         --icms-url=$ICMS_PUBLIC_URL
         --token=$NVCF_ADMIN_JWT
-        --non-interactive
-        --json
+        --output=$CLUSTER-register-values.yaml
+    - nvcf-cli self-hosted compute-plane install
+        --values=$CLUSTER-register-values.yaml
+        --kube-context=$CONTEXT
+        --cluster-name=$CLUSTER
 ```
 
-Each parallel job registers + installs one compute plane against the shared control plane. Failures are isolated.
+Each parallel job registers + installs one compute plane against the shared control plane. Failures are isolated. The control-plane profile comes from `nvcf-cli self-hosted control-plane profile export`, run once against the control plane. It writes the profile to the stack's `out/` directory and prints that path; hand the file to each job as `control-plane-profile.yaml`, for example as an artifact.
 
 ## Plan-only preview in PRs
 

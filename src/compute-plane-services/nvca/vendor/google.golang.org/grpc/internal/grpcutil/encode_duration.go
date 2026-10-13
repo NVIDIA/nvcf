@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /*
  *
  * Copyright 2020 gRPC authors.
@@ -42,7 +39,6 @@ func div(d, r time.Duration) int64 {
 //
 // https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md#requests
 func EncodeDuration(t time.Duration) string {
-	// TODO: This is simplistic and not bandwidth efficient. Improve it.
 	if t <= 0 {
 		return "0n"
 	}

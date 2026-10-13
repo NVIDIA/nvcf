@@ -19,6 +19,9 @@ package clustervalidator
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -26,9 +29,15 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
+	ktesting "k8s.io/client-go/testing"
 )
 
 // ---------------------------------------------------------------------------
@@ -192,8 +201,10 @@ func TestWaitForPodReady_AlreadyReady(t *testing.T) {
 		},
 	}
 	client := fake.NewSimpleClientset(pod)
-	err := waitForPodReady(context.Background(), client, "ns", "srv", 5*time.Second)
+	got, err := waitForPodReady(context.Background(), client, "ns", "srv", 5*time.Second)
 	assert.NoError(t, err)
+	require.NotNil(t, got, "the Ready pod is returned")
+	assert.Equal(t, "srv", got.Name)
 }
 
 func TestWaitForPodReady_Failed(t *testing.T) {
@@ -202,7 +213,7 @@ func TestWaitForPodReady_Failed(t *testing.T) {
 		Status:     corev1.PodStatus{Phase: corev1.PodFailed},
 	}
 	client := fake.NewSimpleClientset(pod)
-	err := waitForPodReady(context.Background(), client, "ns", "srv", 5*time.Second)
+	_, err := waitForPodReady(context.Background(), client, "ns", "srv", 5*time.Second)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "Failed phase")
 }
@@ -211,7 +222,7 @@ func TestWaitForPodReady_NotFound(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	err := waitForPodReady(ctx, client, "ns", "missing", 200*time.Millisecond)
+	_, err := waitForPodReady(ctx, client, "ns", "missing", 200*time.Millisecond)
 	assert.Error(t, err)
 }
 
@@ -225,7 +236,7 @@ func TestWaitForPodDone_Succeeded(t *testing.T) {
 		Status:     corev1.PodStatus{Phase: corev1.PodSucceeded},
 	}
 	client := fake.NewSimpleClientset(pod)
-	ok, err := waitForPodDone(context.Background(), client, "ns", "p", 5*time.Second)
+	ok, _, err := waitForPodDone(context.Background(), client, "ns", "p", 5*time.Second)
 	assert.NoError(t, err)
 	assert.True(t, ok)
 }
@@ -236,7 +247,7 @@ func TestWaitForPodDone_Failed(t *testing.T) {
 		Status:     corev1.PodStatus{Phase: corev1.PodFailed},
 	}
 	client := fake.NewSimpleClientset(pod)
-	ok, err := waitForPodDone(context.Background(), client, "ns", "p", 5*time.Second)
+	ok, _, err := waitForPodDone(context.Background(), client, "ns", "p", 5*time.Second)
 	assert.NoError(t, err)
 	assert.False(t, ok)
 }
@@ -247,43 +258,139 @@ func TestWaitForPodDone_Timeout(t *testing.T) {
 		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
 	}
 	client := fake.NewSimpleClientset(pod)
-	_, err := waitForPodDone(context.Background(), client, "ns", "p", 100*time.Millisecond)
+	_, _, err := waitForPodDone(context.Background(), client, "ns", "p", 100*time.Millisecond)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "did not complete")
 }
 
-// ---------------------------------------------------------------------------
-// getPodIP
-// ---------------------------------------------------------------------------
-
-func TestGetPodIP(t *testing.T) {
-	t.Run("has IP", func(t *testing.T) {
-		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: "srv", Namespace: "ns"},
-			Status:     corev1.PodStatus{PodIP: "10.0.0.5"},
+// A single 429 must not decide the result: the Get is retried in the deadline.
+func TestWaitForPodDone_RetriesTransientErrors(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "ns"},
+		Status:     corev1.PodStatus{Phase: corev1.PodSucceeded},
+	}
+	client := fake.NewSimpleClientset(pod)
+	calls := 0
+	client.PrependReactor("get", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		calls++
+		if calls == 1 {
+			return true, nil, apierrors.NewTooManyRequestsError("slow down")
 		}
-		client := fake.NewSimpleClientset(pod)
-		ip, err := getPodIP(context.Background(), client, "ns", "srv")
-		assert.NoError(t, err)
-		assert.Equal(t, "10.0.0.5", ip)
+		return false, nil, nil
 	})
+	ok, _, err := waitForPodDone(context.Background(), client, "ns", "p", 10*time.Second)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Greater(t, calls, 1)
+}
 
-	t.Run("no IP", func(t *testing.T) {
-		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: "srv", Namespace: "ns"},
-			Status:     corev1.PodStatus{},
+// A missing pod cannot reappear, so it returns at once instead of waiting out
+// the deadline.
+func TestWaitForPodDone_NotFoundIsTerminal(t *testing.T) {
+	start := time.Now()
+	_, _, err := waitForPodDone(context.Background(), fake.NewSimpleClientset(), "ns", "p", 30*time.Second)
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), 5*time.Second)
+}
+
+// hangingClient is a real clientset against an apiserver that never answers,
+// holding each request until the client gives up on it.
+func hangingClient(t *testing.T) kubernetes.Interface {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	// Close waits for in-flight handlers, and a hung Get that outlived
+	// finishesWithin would hold this one forever. Dropping the connections
+	// first cancels the request context the handler is blocked on.
+	t.Cleanup(func() {
+		srv.CloseClientConnections()
+		srv.Close()
+	})
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: srv.URL})
+	require.NoError(t, err)
+	return client
+}
+
+// finishesWithin fails the test if fn has not returned after limit, instead of
+// letting a hung wait run into the package timeout.
+func finishesWithin(t *testing.T, limit time.Duration, fn func()) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	select {
+	case <-done:
+	case <-time.After(limit):
+		t.Fatalf("did not return within %v", limit)
+	}
+}
+
+// The client sets no request timeout, so a hung Get must be bounded by the
+// wait's own deadline, not left to block the check forever.
+func TestWaitForPodReady_HungGetEndsAtTheDeadline(t *testing.T) {
+	client := hangingClient(t)
+	finishesWithin(t, 5*time.Second, func() {
+		_, err := waitForPodReady(context.Background(), client, "ns", "srv", time.Second)
+		assert.Error(t, err)
+	})
+}
+
+func TestWaitForPodDone_HungGetEndsAtTheDeadline(t *testing.T) {
+	client := hangingClient(t)
+	finishesWithin(t, 6*time.Second, func() {
+		_, _, err := waitForPodDone(context.Background(), client, "ns", "p", time.Second)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "did not complete",
+			"a timed-out Get is transient, so the deadline ends the wait")
+	})
+}
+
+// A spent budget returns at once without another API call.
+func TestWaitForPod_ExpiredBudgetMakesNoCall(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	calls := 0
+	client.PrependReactor("get", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		calls++
+		return false, nil, nil
+	})
+	_, err := waitForPodReady(context.Background(), client, "ns", "srv", 0)
+	require.Error(t, err)
+	_, _, err = waitForPodDone(context.Background(), client, "ns", "p", 0)
+	require.Error(t, err)
+	assert.Zero(t, calls)
+}
+
+// ---------------------------------------------------------------------------
+// server pod IP
+// ---------------------------------------------------------------------------
+
+// The server's IP comes from the read that saw it Ready. A separate read for
+// the IP was unretried, so one transient error after Ready dropped a critical
+// enforcement check from the verdict.
+func TestSetupEnforcementEnv_IPComesFromTheReadyRead(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	ready := false
+	client.PrependReactor("create", "pods", func(a ktesting.Action) (bool, runtime.Object, error) {
+		return true, a.(ktesting.CreateAction).GetObject(), nil
+	})
+	client.PrependReactor("get", "pods", func(a ktesting.Action) (bool, runtime.Object, error) {
+		if ready {
+			return true, nil, apierrors.NewInternalError(fmt.Errorf("etcd timeout"))
 		}
-		client := fake.NewSimpleClientset(pod)
-		_, err := getPodIP(context.Background(), client, "ns", "srv")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "no IP")
+		ready = true
+		return true, &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: enforcementServerPod, Namespace: "ns"},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.9",
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
+		}, nil
 	})
-
-	t.Run("pod not found", func(t *testing.T) {
-		client := fake.NewSimpleClientset()
-		_, err := getPodIP(context.Background(), client, "ns", "missing")
-		assert.Error(t, err)
-	})
+	state := &ValidationState{Log: testLog()}
+	env, ok := setupEnforcementEnv(context.Background(), client, state, "ns", "img", 5*time.Second)
+	require.True(t, ok, "warnings: %v", state.Warnings)
+	assert.Equal(t, "10.0.0.9", env.serverIP)
 }
 
 // ---------------------------------------------------------------------------
@@ -354,13 +461,14 @@ func TestNextProbe(t *testing.T) {
 
 func TestCreateTestNamespace(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	err := createTestNamespace(context.Background(), client, "test-enforcement-ns")
+	err := createTestNamespace(context.Background(), client, "test-enforcement-ns", "abc123")
 	assert.NoError(t, err)
 
 	ns, err := client.CoreV1().Namespaces().Get(context.Background(), "test-enforcement-ns", metav1.GetOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "netpol-validation", ns.Labels["app"])
 	assert.Equal(t, "enforcement-test", ns.Labels["purpose"])
+	assert.Equal(t, "abc123", ns.Labels[instanceLabel], "a retried create adopts only its own run's namespace")
 }
 
 func TestCreateServerPod(t *testing.T) {
@@ -503,4 +611,100 @@ func TestSweepOrphanTestNamespaces_MixedAges(t *testing.T) {
 	assert.Error(t, err2, "old-2 should be deleted")
 	assert.NoError(t, err3, "new-1 should remain")
 	assert.NoError(t, err4, "new-2 should remain")
+}
+
+// One poll attempt is bounded by the per-attempt cap and by the time left, but
+// never below the floor, so the final attempt still gets sent.
+func TestAttemptContext_BoundsEachCall(t *testing.T) {
+	remaining := func(deadline time.Time) time.Duration {
+		ctx, cancel := attemptContext(context.Background(), deadline)
+		defer cancel()
+		d, ok := ctx.Deadline()
+		require.True(t, ok)
+		return time.Until(d)
+	}
+	assert.LessOrEqual(t, remaining(time.Now().Add(time.Hour)), pollAttemptTimeout)
+	assert.Less(t, remaining(time.Now().Add(3*time.Second)), 4*time.Second)
+	assert.Greater(t, remaining(time.Now().Add(-time.Minute)), 500*time.Millisecond)
+}
+
+// A slow or throttled Get is not the pod's answer, so it is retried inside the
+// deadline. Failing on it aborted the whole enforcement check.
+func TestWaitForPodReady_RetriesTransientErrors(t *testing.T) {
+	client := fake.NewSimpleClientset(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "srv", Namespace: "ns"},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}},
+	})
+	calls := 0
+	client.PrependReactor("get", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		calls++
+		if calls == 1 {
+			return true, nil, apierrors.NewTooManyRequestsError("slow down")
+		}
+		return false, nil, nil
+	})
+	_, err := waitForPodReady(context.Background(), client, "ns", "srv", 10*time.Second)
+	require.NoError(t, err)
+	assert.Greater(t, calls, 1)
+
+	denied := fake.NewSimpleClientset()
+	denied.PrependReactor("get", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "srv", fmt.Errorf("denied"))
+	})
+	start := time.Now()
+	_, err = waitForPodReady(context.Background(), denied, "ns", "srv", 30*time.Second)
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), 5*time.Second, "a denial cannot change inside the deadline")
+}
+
+// A transient error followed by NotFound until the deadline times out on the
+// missing pod, not on the error the API has since recovered from.
+func TestWaitForPodReady_NotFoundClearsAnEarlierTransientError(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	calls := 0
+	client.PrependReactor("get", "pods", func(ktesting.Action) (bool, runtime.Object, error) {
+		calls++
+		if calls == 1 {
+			return true, nil, apierrors.NewTooManyRequestsError("slow down")
+		}
+		return false, nil, nil
+	})
+	_, err := waitForPodReady(context.Background(), client, "ns", "missing", 3*time.Second)
+	require.Error(t, err)
+	assert.Greater(t, calls, 1)
+	assert.NotContains(t, err.Error(), "slow down")
+}
+
+// The sweep matches the labels the run's own create stamps, and nothing less:
+// the prefix with one of the labels, or with none, is someone else's namespace.
+func TestSweepOrphanTestNamespaces_RequiresBothLabels(t *testing.T) {
+	ctx := context.Background()
+	client := fake.NewSimpleClientset()
+	require.NoError(t, createTestNamespace(ctx, client, "netpol-validation-abc123", "abc123"))
+	created, err := client.CoreV1().Namespaces().Get(ctx, "netpol-validation-abc123", metav1.GetOptions{})
+	require.NoError(t, err)
+	created.CreationTimestamp = metav1.NewTime(time.Now().Add(-48 * time.Hour))
+	_, err = client.CoreV1().Namespaces().Update(ctx, created, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	foreign := map[string]map[string]string{
+		"netpol-validation-prod":    {"app": "netpol-validation"},
+		"netpol-validation-staging": {"purpose": "enforcement-test"},
+		"netpol-validation-team":    nil,
+	}
+	for name, labels := range foreign {
+		_, err := client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Labels: labels, CreationTimestamp: metav1.NewTime(time.Now().Add(-48 * time.Hour)),
+		}}, metav1.CreateOptions{})
+		require.NoError(t, err)
+	}
+
+	sweepOrphanTestNamespaces(ctx, testLog(), client, orphanNamespaceTTL)
+
+	_, err = client.CoreV1().Namespaces().Get(ctx, "netpol-validation-abc123", metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "the run's own namespace is swept, got %v", err)
+	for name := range foreign {
+		_, err := client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+		assert.NoError(t, err, "%s was deleted", name)
+	}
 }

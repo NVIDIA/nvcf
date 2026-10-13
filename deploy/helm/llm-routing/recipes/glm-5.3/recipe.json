@@ -1,6 +1,6 @@
 {
   "name": "GLM-5.3",
-  "description": "GLM-5.3 UD-IQ2_M GGUF served by llama.cpp",
+  "description": "GLM-5.3 is a 754 billion parameter mixture-of-experts language model from Z.ai. This card serves Unsloth's UD-IQ2_M 2-bit GGUF quantization, about 239 GB of weights, with llama.cpp. The profile that works spans three DGX Sparks, one leader and two RPC workers, at a 2,048-token context.",
   "releaseName": "glm",
   "llamaCppRevision": "f872b591121761ac7b2af18283bd99bdc092a63a",
   "servedName": "GLM-5.3-UD-IQ2_M",

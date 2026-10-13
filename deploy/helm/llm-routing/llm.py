@@ -582,6 +582,108 @@ def print_capacity_details(report):
         print('  ' + limitation)
 
 
+def scaling_modules():
+    planning_modules()
+    import scale
+    return scale
+
+
+def cluster_deployments(context, namespace):
+    return json.loads(run(kube(context, namespace, 'get', 'deployments', '-o', 'json'), timeout=120))['items']
+
+
+def scale_target(context, args, scale, snapshot):
+    """The Helm release to scale. A served model ID is matched through its endpoint, then through Helm."""
+    try:
+        return scale.resolve_release(snapshot['endpoints'], args.namespace, model=args.model, release=args.release)
+    except ValueError as error:
+        catalog = json.loads((HERE / 'recipes/index.json').read_text())
+        entry = next((item for item in catalog['recipes'] if args.model in (item['id'], item.get('servedModelId'))), None) if args.model else None
+        if entry is None or not entry['availability']['deployable']:
+            raise error
+        releases, _ = model_releases(context, args.namespace, entry)
+        if len(releases) != 1:
+            raise error
+        return releases[0]['release']
+
+
+def wait_for_pods_to_end(context, namespace, release):
+    try:
+        run(kube(context, namespace, 'wait', '--for=delete', 'pod', '-l', 'app.kubernetes.io/instance=' + release, '--timeout=5m'), timeout=330)
+    except RuntimeError as error:
+        if 'no matching resources' not in str(error):
+            raise
+
+
+def stop_release(context, namespace, release, dry_run=False):
+    scale = scaling_modules()
+    report = scale.plan_stop(cluster_deployments(context, namespace), release, namespace)
+    report.update(context=context, action='stop', dryRun=dry_run, stoppedNow=[])
+    if report['status'] == 'running' and not dry_run:
+        for command in scale.stop_commands(report):
+            run(kube(context, namespace, *command), timeout=120)
+        report['stoppedNow'] = [item['deployment'] for item in report['toStop']]
+        wait_for_pods_to_end(context, namespace, release)
+    return report
+
+
+def start_release(context, args):
+    scale, analyzer = scaling_modules(), planning_modules()
+    snapshot = analyzer.inventory(context)
+    deployments = cluster_deployments(context, args.namespace)
+    release = scale_target(context, args, scale, snapshot)
+    report = scale.plan_start(snapshot, deployments, release, args.namespace)
+    report.update(context=context, action='start', dryRun=args.dry_run, stoppedBlockers=[], started=[])
+    if report['status'] == 'blocked' and args.stop_blockers and not args.dry_run:
+        freeing = sorted({entry['release'] for entry in report['holders']
+                          if entry['release'] and entry['namespace'] == args.namespace and (entry['gpu'] or entry['memoryBytes'])})
+        if freeing:
+            for other in freeing:
+                stop_release(context, args.namespace, other)
+            blockers = freeing
+            snapshot = analyzer.inventory(context)
+            report = scale.plan_start(snapshot, cluster_deployments(context, args.namespace), release, args.namespace)
+            report.update(context=context, action='start', dryRun=False, stoppedBlockers=blockers, started=[])
+    if report['status'] == 'ready' and not args.dry_run:
+        for command in scale.start_commands(report):
+            run(kube(context, args.namespace, *command), timeout=120)
+        report['started'] = [item['deployment'] for item in report['toStart']]
+        if args.wait:
+            run(kube(context, args.namespace, 'wait', '--for=condition=Ready', 'inferenceendpoint/' + release, '--timeout=' + args.timeout),
+                timeout=3 * 3600 + 60)
+    return report
+
+
+def print_scale_report(report):
+    release, scale = report['release'], scaling_modules()
+    if report['action'] == 'stop':
+        if report['status'] == 'stopped':
+            print(release + ' is already stopped.')
+        elif report['dryRun']:
+            print('Would stop ' + str(len(report['toStop'])) + ' deployment(s) of ' + release + ': ' + ', '.join(item['deployment'] for item in report['toStop']) + '.')
+        else:
+            print('Stopped ' + release + ' (' + ', '.join(report['stoppedNow']) + '). Its release, endpoint and caches remain, so the UI shows it as Deployed, unhealthy.')
+        return
+    for other in report.get('stoppedBlockers', []):
+        print('Stopped ' + other + ' to free its GPU.')
+    if report['status'] == 'running':
+        print(release + ' is already running (' + ', '.join(report['running']) + ').')
+    elif report['status'] == 'blocked':
+        print('Cannot start ' + release + ': the cluster does not have room for it.')
+        for blocker in report['blockers']:
+            print('  - ' + blocker)
+        hints = scale.blocker_stop_hint(report)
+        if hints:
+            print('Free the node by stopping the model that holds it, or add --stop-blockers to do that for you:')
+            for hint in hints:
+                print('  ' + hint)
+    elif report['dryRun']:
+        print('Would start ' + str(len(report['toStart'])) + ' deployment(s) of ' + release + ': ' + ', '.join(item['deployment'] for item in report['toStart']) + '. Every node has room.')
+    else:
+        print('Started ' + release + ' (' + ', '.join(report['started']) + '). Loading takes several minutes. Follow it with: kubectl --namespace '
+              + report['namespace'] + ' get inferenceendpoint ' + release + ' --watch')
+
+
 def print_table(headers, rows):
     def cell(value):
         return ' '.join(str(value).split())
@@ -724,6 +826,18 @@ def main(argv=None):
     plan.add_argument('--chart-source', help='Exact Helm chart reference for the install command. Defaults to the recipe source chart.')
     plan.add_argument('--verbose', action='store_true', help='Show deployment checks, per-pod allocations and an install command when eligible.')
     plan.add_argument('--json', action='store_true', help='Print the complete capacity report as JSON.')
+    for name, text in (('start', 'Start an installed model by scaling its deployments up, after checking that its GPUs and memory are free.'),
+                       ('stop', 'Stop an installed model by scaling its deployments to zero. Its release, endpoint and caches stay.')):
+        scaling = commands.add_parser(name, help=text)
+        target = scaling.add_mutually_exclusive_group(required=True)
+        target.add_argument('--model', help='Served model ID or recipe ID of an installed model.')
+        target.add_argument('--release', help='Helm release name of the installed model.')
+        scaling.add_argument('--dry-run', action='store_true', help='Check and show what would change, without scaling anything.')
+        scaling.add_argument('--json', action='store_true', help='Print the complete report as JSON.')
+        if name == 'start':
+            scaling.add_argument('--stop-blockers', action='store_true', help='Stop the models that hold the needed GPUs, then start this one.')
+            scaling.add_argument('--wait', action='store_true', help='Wait until the endpoint reports Ready.')
+            scaling.add_argument('--timeout', default='60m', help='Longest wait with --wait, such as 90m (default: 60m).')
     args = parser.parse_args(argv)
     if args.command == 'recipes':
         catalog = json.loads((HERE / 'recipes/index.json').read_text())
@@ -744,6 +858,15 @@ def main(argv=None):
         for field in ('runtime_class', 'storage_class'):
             if not re.fullmatch(r'[a-z0-9](?:[-a-z0-9.]{0,251}[a-z0-9])?', getattr(args, field)):
                 parser.error('--' + field.replace('_', '-') + ' must be a Kubernetes resource name.')
+    if args.command in ('start', 'stop'):
+        for field in ('model', 'release'):
+            value = getattr(args, field)
+            if value is not None and not re.fullmatch(r'[A-Za-z0-9](?:[-A-Za-z0-9._]{0,251}[A-Za-z0-9])?', value):
+                parser.error('--' + field + ' must be a model ID or Helm release name.')
+        if args.release == 'llm-stack':
+            parser.error('--release llm-stack is reserved for shared infrastructure.')
+        if args.command == 'start' and not re.fullmatch(r'[1-9][0-9]{0,3}[smh]', args.timeout):
+            parser.error('--timeout must look like 90m, 2h or 300s.')
     if args.command == 'preflight':
         report = preflight(args)
         if args.json:
@@ -771,6 +894,18 @@ def main(argv=None):
             print(json.dumps(report, indent=2))
         else:
             print_capacity_plan(report, verbose=args.verbose)
+        return report
+    if args.command in ('start', 'stop'):
+        if args.command == 'start':
+            report = start_release(context, args)
+        else:
+            scale = scaling_modules()
+            snapshot = planning_modules().inventory(context)
+            report = stop_release(context, args.namespace, scale_target(context, args, scale, snapshot), args.dry_run)
+        if args.json:
+            print(json.dumps(report, indent=2, default=str))
+        else:
+            print_scale_report(report)
         return report
     if args.command == 'connect':
         return hold_gateway(context, args.namespace, args.port, args.ca_configmap, args.api_key_file)

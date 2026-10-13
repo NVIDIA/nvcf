@@ -235,7 +235,7 @@ kubectl -n llm-stack logs deployment/qwen-fp8-serve-0 -c placement-check
 kubectl -n llm-stack logs deployment/qwen-fp8-serve-0 -c sglang
 ```
 
-Correct the values and rerun the original Helm command. Set `suspended: true` in the model values to release its GPUs while retaining cache claims. Set it back to `false` and rerun Helm to resume. Automatic recipes withdraw their endpoint while suspended and restore it on resume. The shared release and other models continue serving. `helm uninstall` removes model-owned workloads and endpoint resources while retaining model PVCs.
+Correct the values and rerun the original Helm command. Set `suspended: true` in the model values to release its GPUs while retaining cache claims. Set it back to `false` and rerun Helm to resume. A suspended model keeps its endpoint registered, so the gateway registry and the demo UI list it as unhealthy ("Deployed, unhealthy"). It stays out of the model list that clients see, because that list includes only healthy models. Resuming brings it back to healthy. The shared release and other models continue serving. `helm uninstall` removes model-owned workloads and endpoint resources while retaining model PVCs.
 
 ### Remove downloaded model files
 
@@ -267,22 +267,22 @@ Complete uninstall combines [removing the model release](README.md#uninstall-kee
 
 ### Helm GLM recipe
 
-The committed [Spark values](recipes/values/glm-5.3.yaml) select the automatic two-node GB10 profile. For two GB300 nodes, use the [Station values](recipes/values/glm-5.3-station.yaml) instead. Replace `gpu-node-1` and `gpu-node-2` below with distinct available nodes. Override `runtimeClassName` and `storageClassName` if your cluster uses different names.
+GLM has two automatic GB10 profiles. The committed [three-node values](recipes/values/glm-5.3-x3.yaml) select `gb10-x3`, which splits the weights evenly over one leader and two RPC workers and is the profile that passed gateway checks. The committed [two-node values](recipes/values/glm-5.3.yaml) select `gb10-x2`, which stops at the host-memory guard during loading. The commands below use the three-node profile. For two GB300 nodes (Station), use the [Station values](recipes/values/glm-5.3-station.yaml) instead and keep only `gpu-node-1` and `gpu-node-2`. Replace `gpu-node-1`, `gpu-node-2` and `gpu-node-3` with distinct available nodes. Override `runtimeClassName` and `storageClassName` if your cluster uses different names.
 
 Install it with the shared stack already running:
 
 ```bash
 helm upgrade --install glm dev-artifacts/charts/pylon-gguf-backend-0.2.0.tgz \
   --namespace llm-stack \
-  --values recipes/values/glm-5.3.yaml \
-  --set 'nodes[0]=gpu-node-1' --set 'nodes[1]=gpu-node-2' \
+  --values recipes/values/glm-5.3-x3.yaml \
+  --set 'nodes[0]=gpu-node-1' --set 'nodes[1]=gpu-node-2' --set 'nodes[2]=gpu-node-3' \
   --wait --timeout 120m &&
 kubectl --namespace llm-stack wait \
   --for=condition=Registered inferenceendpoint/glm --timeout=5m &&
 echo 'Model installed and registered.'
 ```
 
-Kubernetes checks placement, builds the pinned llama.cpp runtime, starts the worker RPC server and qualifies both GPUs. It then verifies or downloads the pinned GGUF cache and starts the model server. The served model ID is `GLM-5.3-UD-IQ2_M`. Use that ID for [gateway verification](#verification). The common catalog lists per-node resource and storage requirements and each profile's validation status.
+Kubernetes checks placement, builds the pinned llama.cpp runtime, starts each worker RPC server and qualifies every GPU, including each pair. It then verifies or downloads the pinned GGUF cache and starts the model server. The served model ID is `GLM-5.3-UD-IQ2_M`. Use that ID for [gateway verification](#verification). The common catalog lists its per-node resource and storage requirements. The three-node profile passed gateway discovery, chat, streaming and authentication at context 2,048 and concurrency 1. Loading about 148 GiB to the workers took roughly 30 minutes on the pod network. Stop/resume, longer context, throughput and output quality are untested. The two-node profile's Helm trials stopped at the host-memory guard during loading, so use three nodes. Each RPC worker has its own Service and cache claim, named `<release>-rpc-n1`, `<release>-rpc-n2` and so on. Set `rpc.cache.existingClaims` to one retained claim per worker. `rpc.cache.existingClaim` still serves a single worker.
 
 By default (`reuseCaches: false`), a changed image, llama.cpp revision or CUDA architecture rebuilds compiled runtime state while preserving model files and cached source archives. Unchanged runtimes are verified and reused.
 
@@ -349,6 +349,10 @@ All supported recipes use the same Helm lifecycle. Preparation, startup and endp
 | --- | --- | --- | --- |
 | Qwen FP8 | `qwen-fp8` | `pylon-sglang-recipe-0.2.0.tgz` | `qwen3.8-27b` |
 | Qwen NVFP4 | `qwen-nvfp4` | `pylon-sglang-recipe-0.2.0.tgz` | `qwen3.8-27b-nvfp4` |
+| Qwen3.5-4B | `qwen35-4b` | `pylon-sglang-recipe-0.2.0.tgz` | `qwen3.5-4b` |
+| Nemotron Nano 12B v2 | `nemotron-nano` | `pylon-sglang-recipe-0.2.0.tgz` | `nemotron-nano-12b-v2` |
+| Nemotron 3.5 Lightning | `nemotron-lightning` | `pylon-sglang-recipe-0.2.0.tgz` | `nemotron-3.5-lightning` |
+| DeepSeek V4 Flash | `deepseek-v4` | `pylon-sglang-recipe-0.2.0.tgz` | `deepseek-v4-flash` |
 | Flash-Next, either profile | `qwen-flash` | `pylon-sglang-recipe-0.2.0.tgz` | `qwen3.8-flash-next` |
 | GLM | `glm` | `pylon-gguf-backend-0.2.0.tgz` | `GLM-5.3-UD-IQ2_M` |
 
@@ -400,6 +404,33 @@ helm --kube-context "$CONTEXT" upgrade "$MODEL_RELEASE" "$MODEL_CHART" --namespa
 kubectl --context "$CONTEXT" --namespace llm-stack wait \
   --for=condition=Registered "inferenceendpoint/$MODEL_RELEASE" --timeout=5m
 ```
+
+### Start and stop an installed model by replica count
+
+`llm.py stop` and `llm.py start` scale a model's deployments to zero and back to one. The Helm release, deployments, endpoint and caches stay in place, so the gateway registry lists a stopped model as unhealthy. Clients that list `/v1/models` do not see it. Run from `deploy/helm/llm-routing` with an explicit context:
+
+```bash
+python3 llm.py --context "$CONTEXT" start --model qwen3.5-4b --dry-run
+python3 llm.py --context "$CONTEXT" start --model qwen3.5-4b --wait
+python3 llm.py --context "$CONTEXT" stop --release qwen35-4b
+```
+
+Pass `--model` with the served model ID or recipe ID, or `--release` with the Helm release name. Release `llm-stack` is reserved for the shared stack.
+
+Before a start, the command reads the live cluster and checks that every stopped deployment fits on its node. It compares the GPUs, memory and CPU the deployment requests with what is free after other pods. Nothing scales when a check fails. A blocked start exits with status `2` and names each shortage, the models holding the node and the command that frees it:
+
+```text
+Node n2 cannot fit deepseek-v4-serve-1 (GPU: needs 1, 0 free; memory: needs 80.0 GiB, 12.0 GiB free). In use by qwen3.5-4b.
+```
+
+Options:
+
+- `--dry-run` prints the check and the scale commands without changing anything.
+- `--stop-blockers` on `start` stops the models that hold the needed GPUs, waits for their pods to end, then starts the requested model. Without it, no other model is touched.
+- `--wait` on `start` waits until the endpoint reports Ready. `--timeout` sets the limit, for example `30m`; the default is `60m`.
+- `--json` prints the report for other tools.
+
+A running model is reported as already running and a stopped model as already stopped. The check is a point-in-time snapshot and does not reserve capacity, so Kubernetes can still leave a pod Pending if another workload claims the GPU first. A later `helm upgrade` without `--reuse-values` restores the chart's replica count. The [UI start and stop specification](recipes/UI-MODEL-CONTROLS.md) describes how a UI backend reuses this check.
 
 ### Remove and reinstall a recipe
 
@@ -478,7 +509,7 @@ The verifier opens a temporary connection through the installed shared stack. `-
 
 Recipe qualification has separate stages: hardware compatibility and placement, preparation, runtime readiness, registration, and gateway inference. Offline tests establish rendering and local behavior. Accept a hardware trial only after its exact model pins and profile pass discovery, chat, streaming, authentication, retained-cache restart and isolation from another running model. Record the tested context and concurrency separately from the profile's candidate limits.
 
-The current Qwen FP8 and NVFP4 evidence covers short prompts at configured context 8,192 and concurrency 1. The one-node Flash-Next NVMe profile also passed startup and short-prompt gateway checks at context 8,192 and concurrency 1. Flash-Next tensor-parallel serving remains unverified. GLM's latest automatic Helm trial stopped at its host-memory guard. These records do not establish maximum context, throughput or output quality. Gateway checks passed against the existing shared Helm release. Fresh-cluster installation remains unverified.
+The current Qwen FP8 and NVFP4 evidence covers short prompts at configured context 8,192 and concurrency 1. The one-node Flash-Next NVMe profile also passed startup and short-prompt gateway checks at context 8,192 and concurrency 1. Flash-Next tensor-parallel serving remains unverified. GLM's two-node automatic Helm trials stopped at the host-memory guard, while its three-node profile passed short-prompt gateway checks at context 2,048 and concurrency 1. These records do not establish maximum context, throughput or output quality. Gateway checks passed against the existing shared Helm release. Fresh-cluster installation remains unverified.
 
 ## Monitoring
 
@@ -519,7 +550,7 @@ python3 -m pip install -r recipes/tests/requirements.txt
 
 For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the setup block. Take `MODEL_RELEASE` and `SERVED_MODEL_ID` from the recipe metadata. For an existing recipe, set `VALUES_EXAMPLE` to its existing file under `recipes/values/`.
 
-1. Add the maintained metadata. For SGLang, edit [recipes/catalog.json](recipes/catalog.json). For GGUF, create `recipes/<recipe-id>/recipe.json`, `model.lock.json`, `profiles.json` and `NOTICE`. Verify checkpoint/runtime pins, hardware fit, license, workload limits and chart support. Keep validation pending until tested. Remove a promoted model's entry from `recipes/planned.json`. For a new GGUF family, update the exporter's license and guide mappings, which currently target GLM.
+1. Add the maintained metadata, including a short `description` for the demo UI card. For SGLang, edit [recipes/catalog.json](recipes/catalog.json). For GGUF, create `recipes/<recipe-id>/recipe.json`, `model.lock.json`, `profiles.json` and `NOTICE`. Verify checkpoint/runtime pins, hardware fit, license, workload limits and chart support. Keep validation pending until tested. Remove a promoted model's entry from `recipes/planned.json`. For a new GGUF family, update the exporter's license and guide mappings, which currently target GLM.
 
 2. Synchronize the chart copy. For SGLang, copy only the selected catalog entry into the chart's model map:
 

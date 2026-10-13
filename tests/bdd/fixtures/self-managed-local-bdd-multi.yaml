@@ -30,6 +30,11 @@ global:
     repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
 
   workerEndpoints:
+    # Route HTTP worker responses through the compute cluster's alias Service.
+    # The default pod address is not resolvable across clusters. This shared
+    # callback requires one invocation-service replica because pending requests
+    # are held in that replica's memory.
+    invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
     # This DNS name is local to each cluster. On the compute cluster, the
     # ncp-local alias Service forwards it to the control-plane load balancer.
     # NVCF API advertises this value as LLM_REQUEST_ROUTER_ADDRESS.

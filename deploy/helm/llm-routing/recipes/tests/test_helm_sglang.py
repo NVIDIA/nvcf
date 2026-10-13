@@ -71,25 +71,45 @@ class HelmSGLangTests(unittest.TestCase):
             shutil.copytree(CHART, chart)
             path = chart / 'files/profiles.json'
             data = json.loads(path.read_text())
+            values = {**self.values('qwen3.5-4b'), 'profileName': 'station-bf16'}
+            station = next(profile for profile in data['qwen3.5-4b']['profiles'] if profile['id'] == 'station-bf16')
             with patch(__name__ + '.CHART', chart):
-                before = self.render(self.values('qwen3.5-4b'))
-                for owner in (data['qwen3.5-4b'], data['qwen3.5-4b']['profiles'][0]):
+                before = self.render(values)
+                for owner in (data['qwen3.5-4b'], station):
                     for key in ('validation', 'validatedWorkload', 'automaticHelmValidation', 'qualification', 'artifactEvidence'):
                         owner[key] = {'new': 'qualification evidence'}
                 path.write_text(json.dumps(data))
-                recorded = self.render(self.values('qwen3.5-4b'))
+                recorded = self.render(values)
                 self.assertEqual(before, recorded)
-                data['qwen3.5-4b']['profiles'][0]['maxTotalTokens'] += 1024
+                station['maxTotalTokens'] += 1024
                 path.write_text(json.dumps(data))
-                changed = self.render(self.values('qwen3.5-4b'))
+                changed = self.render(values)
                 def checksum(objects):
                     return next(o for o in objects if o['kind'] == 'Deployment')['spec']['template']['metadata']['annotations']['checksum/config']
                 self.assertNotEqual(checksum(before), checksum(changed))
 
+    def test_a_profile_can_pin_its_own_runtime_image_and_the_others_keep_the_model_image(self):
+        override = 'example/runtime@sha256:' + 'c' * 64
+        with tempfile.TemporaryDirectory() as directory:
+            chart = pathlib.Path(directory) / 'sglang'
+            shutil.copytree(CHART, chart)
+            path = chart / 'files/profiles.json'
+            data = json.loads(path.read_text())
+            station = next(profile for profile in data['qwen3.5-4b']['profiles'] if profile['id'] == 'station-bf16')
+            station.update(image=override, runtime='SGLang example')
+            path.write_text(json.dumps(data))
+            def images(profile):
+                with patch(__name__ + '.CHART', chart):
+                    docs = self.render({**self.values('qwen3.5-4b'), 'profileName': profile})
+                deployment = next(doc for doc in docs if doc['kind'] == 'Deployment')
+                return {container['image'] for container in deployment['spec']['template']['spec']['containers']}
+            self.assertEqual(images('station-bf16'), {override})
+            self.assertEqual(images('spark-bf16'), {data['qwen3.5-4b']['image']})
+
     def test_bundled_profiles_match_catalog_pins_and_workload_envelopes(self):
         bundled = json.loads((CHART/'files/profiles.json').read_text())
         catalog = {model['id']: model for model in json.loads((ROOT/'catalog.json').read_text())['models']}
-        self.assertEqual(set(bundled), {'qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'qwen3.8-flash-next', 'qwen3.5-4b', 'nemotron-nano-12b-v2', 'nemotron3.5-lightning', 'deepseek-v4-flash'})
+        self.assertEqual(set(bundled), {'qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'nemotron-nano-12b-v2', 'nemotron-3.5-lightning', 'qwen3.5-4b', 'qwen3.8-flash-next', 'deepseek-v4-flash'})
         for name, model in bundled.items():
             for field in ('id', 'repository', 'revision', 'image', 'profiles'):
                 self.assertEqual(model[field], catalog[name][field])
@@ -116,7 +136,7 @@ class HelmSGLangTests(unittest.TestCase):
 
     def test_small_values_install_both_pinned_profiles_with_automatic_startup(self):
         pins = json.loads((CHART/'files/profiles.json').read_text())
-        for name in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'qwen3.5-4b', 'nemotron-nano-12b-v2', 'nemotron3.5-lightning'):
+        for name in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'nemotron-nano-12b-v2', 'nemotron-3.5-lightning', 'qwen3.5-4b'):
             with self.subTest(recipe=name):
                 docs = self.render(self.values(name))
                 config = self.configuration(docs)
@@ -142,7 +162,7 @@ class HelmSGLangTests(unittest.TestCase):
                 self.assertEqual(endpoint['spec']['modelName'], name)
 
     def test_each_automatic_recipe_installs_without_a_values_file_or_cache_flag(self):
-        for recipe in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'qwen3.5-4b', 'nemotron-nano-12b-v2', 'nemotron3.5-lightning'):
+        for recipe in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'nemotron-nano-12b-v2', 'nemotron-3.5-lightning', 'qwen3.5-4b'):
             with self.subTest(recipe=recipe):
                 result = subprocess.run(['helm', 'template', 'test-model', str(CHART),
                                          '--namespace', 'test-stack', '--set', 'recipe=' + recipe,
@@ -206,19 +226,19 @@ class HelmSGLangTests(unittest.TestCase):
         self.assertEqual(env['TVM_FFI_CACHE_DIR'], '/cache/tvm-ffi')
         self.assertEqual(self.configuration(docs)['claimName'], 'previous-model-cache')
 
-    def test_automatic_suspend_withdraws_endpoint_and_keeps_cache_service_and_pins(self):
+    def test_automatic_suspend_keeps_endpoint_cache_service_and_pins(self):
         original = self.render(self.values())
         suspended = self.render(dict(self.values(), suspended=True))
         resumed = self.render(dict(self.values(), suspended=False))
         self.assertEqual(original, resumed)
         self.assertEqual(sum(doc['kind'] == 'InferenceEndpoint' for doc in original), 1)
-        self.assertFalse(any(doc['kind'] == 'InferenceEndpoint' for doc in suspended))
+        self.assertEqual(sum(doc['kind'] == 'InferenceEndpoint' for doc in suspended), 1)
         for docs in (original, suspended):
             deployment = next(doc for doc in docs if doc['kind'] == 'Deployment')
             self.assertEqual(deployment['spec'].pop('replicas'), 0 if docs is suspended else 1)
             pvc = next(doc for doc in docs if doc['kind'] == 'PersistentVolumeClaim')
             self.assertEqual(pvc['metadata']['annotations']['helm.sh/resource-policy'], 'keep')
-        self.assertEqual([doc for doc in original if doc['kind'] != 'InferenceEndpoint'], suspended)
+        self.assertEqual(original, suspended)
 
 
     def test_profile_rollback_restores_pinned_config_and_retains_cache_identity(self):

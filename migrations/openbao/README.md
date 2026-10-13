@@ -48,15 +48,35 @@ The shipped `job.yaml` sets a default placeholder value for this variable so the
 
 ## Building the container
 
-The `Dockerfile` uses the public upstream OpenBao 2.6.2 image as its runtime base. It replaces the upstream `bao` binary with a reproducible build from the matching checksum-pinned source commit. The build pins x/crypto v0.56.0, gRPC v1.83.2, and go-archive v0.3.0, then verifies those dependency floors and the target architecture from the embedded Go build metadata.
+The `Dockerfile` uses the public upstream OpenBao 2.6.3 image as its runtime base. It replaces the upstream `bao` binary with a reproducible build from the matching checksum-pinned source commit. The build pins x/crypto v0.56.0, gRPC v1.83.2, and go-archive v0.3.0, then verifies those dependency floors and the target architecture from the embedded Go build metadata.
 
 The image also builds `jwker` v0.2.2 from checksum-pinned source with Go 1.27.0. It rebuilds Kubernetes v1.36.4 `kubectl` from the checksum-pinned official source archive with a digest-pinned Go 1.26.6 toolchain and vendored dependencies. Keeping the 1.36 client preserves `kubectl`'s supported one-minor skew across this repository's Kubernetes latest-and-N-2 support window (1.35 through 1.37). The build verifies the source identity, embedded Go and target metadata, and the executable client's version, commit, build date, and platform.
+
+The image does not include the Helm CLI. The core migrations and LLS, LLM, and
+UI addons use `bao`, `kubectl`, and shell utilities. Helm runs outside this image
+to create the hook Jobs. The image build checks that neither a Helm executable
+nor its Alpine package is installed on either supported architecture.
+
+Use an OpenBao chart whose initialization script checks for Helm only in
+standalone `script` mode. Older charts check for Helm even in the in-cluster
+`helm` hook mode and cannot initialize with this image. Publish and consume
+the chart prerequisite fix together with the migration image update, including
+for maintenance backports. Validate the packaged chart and exact image together
+on a fresh installation before release. An upgrade alone does not exercise the
+`post-install` initialization hook. Scan the published image and validate each
+enabled addon before updating downstream chart and stack pins.
 
 ```bash
 docker build -t <your-registry>/<your-org>/openbao-migrations:<version> .
 ```
 
 ## Running the migrations
+
+The OpenBao 2.6.3 update changes the bundled CLI and runtime base, not the
+migration scripts or secret schema. Updating this image alone does not upgrade
+the running OpenBao servers or injected agents. Use the matching chart and
+stack release, then follow the
+[OpenBao patch upgrade runbook](../../docs/self-managed/runbooks/openbao-patch-upgrade.md).
 
 The container expects the following at runtime:
 

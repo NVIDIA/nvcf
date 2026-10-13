@@ -83,6 +83,16 @@ def helm_validation(record, profile, revision, image):
     return {"automaticHelmStatus": status, "automaticHelmWorkload": copy.deepcopy(record)}
 
 
+def profile_runtime(model, profile):
+    """The runtime image and version of a profile. A profile can override both when its hardware was tested on another build."""
+    if ("image" in profile) != ("runtime" in profile):
+        raise ValueError("A profile that overrides the runtime must set both image and runtime: " + profile["id"])
+    image, version = profile.get("image", model["image"]), profile.get("runtime", model["runtime"])
+    if not re.fullmatch(r".+@sha256:[0-9a-f]{64}", image):
+        raise ValueError("Profile runtime image must be digest-pinned: " + profile["id"])
+    return image, version
+
+
 def profile_validation(model, profile, key):
     record = profile.get(key, model.get(key))
     if record and record.get("profile") != profile["id"]:
@@ -90,6 +100,14 @@ def profile_validation(model, profile, key):
             raise ValueError("Validation record belongs to another profile: " + profile["id"])
         return None
     return copy.deepcopy(record)
+
+
+def checked_description(value, identifier):
+    """An optional card description is a short single-line ASCII string, so a bad value fails the export."""
+    if value is not None and (not isinstance(value, str) or not value.strip() or len(value) > 600
+            or any(not 32 <= ord(character) <= 126 for character in value)):
+        raise ValueError("Recipe description must be a short single-line ASCII string: " + identifier)
+    return value
 
 
 def sglang_recipes(root):
@@ -102,6 +120,7 @@ def sglang_recipes(root):
         profiles = []
         for profile in model["profiles"]:
             hardware = copy.deepcopy(profile["hardware"])
+            image, version = profile_runtime(model, profile)
             validated = profile_validation(model, profile, "validatedWorkload")
             if validated:
                 validated.setdefault("requestType", "short-prompt-smoke")
@@ -118,12 +137,13 @@ def sglang_recipes(root):
                     "resources": resource_requirements(profile["cpu"], profile["memoryGiB"],
                         profile["memoryLimitGiB"], hardware["gpuCount"]), "storage": copy.deepcopy(storage)}
                     for rank in range(profile["nodes"])],
+                **({"runtime": {"backend": "sglang", "version": version, "image": image}} if "image" in profile else {}),
                 "fabric": {"minimumGbps": profile["minFabricGbps"]} if profile.get("fabric") else None,
                 "workload": {"defaultContextTokens": 8192, "defaultConcurrency": 1,
                     "maximumContextTokens": profile["maxContext"], "maximumConcurrency": profile["maxConcurrency"]},
                 "validation": {"runtimeStatus": "smoke-tested" if validated else "pending",
                     "workload": validated, **helm_validation(profile_validation(model, profile, "automaticHelmValidation"), profile["id"],
-                        model["revision"], model["image"])},
+                        model["revision"], image)},
                 "deployment": {"chart": copy.deepcopy(chart), "releaseName": model["releaseName"],
                     "lifecycle": "automatic",
                     "values": {"recipe": model["id"], "profileName": profile["id"]},
@@ -132,7 +152,9 @@ def sglang_recipes(root):
                     "guide": ("../ADVANCED.md#helm-flash-next-recipes" if model["id"] == "qwen3.8-flash-next"
                         else "../README.md")},
             })
+        description = checked_description(model.get("description"), model["id"])
         recipes.append({"id": model["id"], "name": model["name"], "servedModelId": model["id"],
+            **({"description": description} if description else {}),
             "availability": {"status": "available", "deployable": True},
             "precision": model["precision"], "license": model["license"],
             "licenseNotice": "notices/" + model["id"] + "/NOTICE",
@@ -186,7 +208,9 @@ def gguf_recipes(root):
                     "values": {"recipe": metadata["recipe"], "profileName": profile["id"]},
                     "requiredSiteValues": ["nodes", "runtimeClassName", "storageClassName", "sharedCAConfigMap"],
                     "guide": "../ADVANCED.md#helm-glm-recipe"}})
+        description = checked_description(recipe.get("description"), metadata["recipe"])
         recipes.append({"id": metadata["recipe"], "name": recipe["name"], "servedModelId": recipe["servedName"],
+            **({"description": description} if description else {}),
             "availability": {"status": "available", "deployable": True},
             "precision": lock["quantization"], "license": "glm-5.3",
             "licenseNotice": "notices/" + metadata["recipe"] + "/NOTICE",

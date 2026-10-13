@@ -55,6 +55,8 @@ pub const RESULTS_BUCKET: &str = "results-bucket";
 pub const API_KEY: &str = "test-token";
 pub const NCA_ID: &str = "test-nca-id";
 #[allow(unused)]
+pub const OWNER_NCA_ID: &str = "test-owner-nca-id";
+#[allow(unused)]
 pub const INSTANCE_ID: &str = "local-worker-instance-id";
 
 pub async fn fixtures() -> (
@@ -185,6 +187,7 @@ async fn mock_nvcf_api() -> ApiMockServer {
             ApiClient {
                 subject: "test-subject".into(),
                 nca_id: NCA_ID.into(),
+                owner_nca_id: OWNER_NCA_ID.into(),
             },
         )]
         .into_iter()

@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 header:
   schema-version: "1.0.0"
   expiration-date: "2026-08-04T00:00:00.000Z"

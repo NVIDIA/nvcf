@@ -228,7 +228,7 @@ metadata:
 spec:
   selector: {app.kubernetes.io/instance: {{ .Release.Name }}, recipe-rank: '0'}
   ports: [{name: http, port: 8000, targetPort: http}]
-{{- if and $v.register (not $v.suspended) }}
+{{- if $v.register }}
 ---
 apiVersion: pylon.nvidia.com/v1alpha1
 kind: InferenceEndpoint
