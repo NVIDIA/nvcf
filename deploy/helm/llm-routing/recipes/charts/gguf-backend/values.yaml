@@ -14,3 +14,4 @@ artifacts:
 rpc:
   cache:
     existingClaim: ""
+    existingClaims: []

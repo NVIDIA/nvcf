@@ -305,22 +305,26 @@ def reuse_snapshot(model, cache=pathlib.Path('/cache'), require_complete=True, w
     snapshot = repository / 'snapshots' / model['revision']
     if not repository.resolve().is_relative_to(cache.resolve()) or not snapshot.is_dir() or not snapshot.resolve().is_relative_to(repository.resolve()):
         raise RuntimeError('Pinned model snapshot is missing from the retained cache')
+    # Newer Hugging Face clients keep file contents in a pool shared by every repository under the hub root.
+    hub = (cache / 'huggingface' / 'hub').resolve()
     checked = set()
     for path in snapshot.rglob('*'):
         if path.is_dir():
             continue
         resolved = path.resolve()
-        if not path.is_file() or not resolved.is_relative_to(repository.resolve()):
+        if not path.is_file() or not resolved.is_relative_to(hub):
             raise RuntimeError('Cached snapshot has a missing file or invalid link: ' + path.name)
-        # Hub blobs use SHA256 for LFS files and Git blob SHA1 for other files.
-        if resolved not in checked and len(resolved.name) in (40, 64) and all(c in '0123456789abcdef' for c in resolved.name):
-            digest = hashlib.sha256() if len(resolved.name) == 64 else hashlib.sha1(usedforsecurity=False)
-            if len(resolved.name) == 40:
+        # Hub blobs are named by SHA256 for LFS files and Git blob SHA1 for other files. A shared pool names the stored
+        # content differently, so the checksum is the name of the repository blob that the snapshot entry links to.
+        name = pathlib.Path(os.readlink(path)).name if path.is_symlink() else resolved.name
+        if resolved not in checked and len(name) in (40, 64) and all(c in '0123456789abcdef' for c in name):
+            digest = hashlib.sha256() if len(name) == 64 else hashlib.sha1(usedforsecurity=False)
+            if len(name) == 40:
                 digest.update(('blob ' + str(path.stat().st_size) + '\0').encode())
             with path.open('rb') as stream:
                 for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
                     digest.update(chunk)
-            if digest.hexdigest() != resolved.name:
+            if digest.hexdigest() != name:
                 raise RuntimeError('Cached model blob checksum differs: ' + path.name)
             checked.add(resolved)
     def read_json(name):

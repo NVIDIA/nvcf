@@ -4,6 +4,7 @@
 import concurrent.futures
 import hashlib
 import importlib.util
+import itertools
 import json
 import os
 import pathlib
@@ -220,7 +221,9 @@ def qualify(config, root=ROOT):
                               '--port', '50052', '--device', 'CUDA0'])
     try:
         wait_endpoints(endpoints)
-        subprocess.run([str(root / 'runtime/test-rpc-multi-server'), *endpoints], check=True, timeout=120)
+        # The upstream multi-server test accepts exactly two endpoints, so check every pair of GPUs.
+        for pair in itertools.combinations(endpoints, 2):
+            subprocess.run([str(root / 'runtime/test-rpc-multi-server'), *pair], check=True, timeout=120)
         subprocess.run([str(root / 'runtime/rpc-gpu-check'), *endpoints], check=True, timeout=180)
         # The dependent-graph check uses the pinned build objects and stops on remote fallback.
         env = dict(os.environ, RPC_ENDPOINTS=','.join(endpoints), LLAMA_REVISION=config['recipe']['llamaCppRevision'])

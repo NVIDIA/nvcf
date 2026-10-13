@@ -58,7 +58,7 @@ class CommittedValuesTests(unittest.TestCase):
         return ROOT / chart['localPath']
 
     def check_automatic_install(self):
-        for recipe_id in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'glm-5.3'):
+        for recipe_id in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'nemotron-nano-12b-v2', 'nemotron-3.5-lightning', 'qwen3.5-4b', 'glm-5.3'):
             recipe = self.recipes[recipe_id]
             profile = recipe['profiles'][0]
             chart = profile['deployment']['chart']

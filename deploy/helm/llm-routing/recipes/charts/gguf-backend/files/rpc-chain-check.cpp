@@ -20,17 +20,26 @@ static ggml_status reject_cpu_compute(ggml_backend_t, ggml_cgraph *) {
 }
 
 int main(int argc, char ** argv) {
-    if (argc != 3) throw std::runtime_error("Two distinct CUDA-only RPC endpoints are required");
-    ggml_backend_t gpu[] = {std::strcmp(argv[1], "local") == 0 ? ggml_backend_cuda_init(0) : ggml_backend_rpc_init(argv[1], 0),
-                           ggml_backend_rpc_init(argv[2], 0)};
-    if (!gpu[0] || !gpu[1]) throw std::runtime_error("RPC initialization failed");
+    if (argc < 3) throw std::runtime_error("At least two distinct CUDA-only RPC endpoints are required");
+    std::vector<ggml_backend_t> gpu;
+    for (int endpoint = 1; endpoint < argc; ++endpoint) {
+        gpu.push_back(std::strcmp(argv[endpoint], "local") == 0 ? ggml_backend_cuda_init(0) : ggml_backend_rpc_init(argv[endpoint], 0));
+        if (!gpu.back()) throw std::runtime_error("RPC initialization failed");
+    }
     auto cpu = ggml_backend_cpu_init();
     // The scheduler requires a CPU backend. Make any CPU graph execution fail.
     cpu->iface.graph_compute = reject_cpu_compute;
     constexpr int k = 256, m = 128, n = 64, p = 48;
     std::vector<float> a(k*m), b(k*n), c(m*p), middle(m*n), expected(p*n), actual(p*n);
-    for (int direction = 0; direction < 2; ++direction) {
-        auto first = gpu[direction], second = gpu[1-direction];
+    const int count = argc - 1;
+    for (int pair = 0; pair < count * (count - 1); ++pair) {
+        // Visit each ordered pair once. Two GPUs give the original two directions.
+        const int direction = pair % 2;
+        int low = 0, high = 1, index = pair / 2;
+        for (; index >= count - 1 - low; ++low) index -= count - 1 - low;
+        high = low + 1 + index;
+        const int first_index = direction ? high : low, second_index = direction ? low : high;
+        auto first = gpu[first_index], second = gpu[second_index];
         ggml_backend_t backends[] = {first, second, cpu};
         auto scheduler = ggml_backend_sched_new(backends, nullptr, 3, 128, false, true);
         ggml_init_params params = {32*ggml_tensor_overhead() + ggml_graph_overhead_custom(128, false), nullptr, true};
@@ -87,7 +96,7 @@ int main(int argc, char ** argv) {
             }
             if (error > 0.001f || cpu_graph_calls != 0) throw std::runtime_error("Incorrect result or CPU execution");
             std::printf("{\"result\":\"PASS\",\"firstGPU\":\"%s\",\"secondGPU\":\"%s\",\"repeat\":%d,\"maximumAbsoluteError\":%.9g,\"outputChecksum\":%.9g,\"intermediateBytes\":%zu,\"gpuPartitions\":2,\"cpuGraphCalls\":0}\n",
-                        argv[direction+1], argv[2-direction], repeat, error, checksum, middle.size()*sizeof(float));
+                        argv[first_index + 1], argv[second_index + 1], repeat, error, checksum, middle.size()*sizeof(float));
         }
         ggml_backend_sched_free(scheduler);
         ggml_free(ctx);
