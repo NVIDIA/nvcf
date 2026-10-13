@@ -1542,9 +1542,13 @@ async fn wait_and_widen_capacity_rejection_returns_overloaded_error() {
         routing_key: None,
         model_id: model.to_string(),
     };
+    // Wait on the backend's own report, not the cluster snapshot. The cluster
+    // snapshot still counts the reservation from the wait_for_routing probe,
+    // and a registration update built before set_stats can settle that
+    // reservation after this loop, leaving a free slot for the next request.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let candidates = state.cluster_candidates_for_target(&target).await;
+        let candidates = state.candidates_for_target(&target).await;
         if candidates.len() == 1
             && candidates[0].stats.max_engine_concurrency == 1
             && candidates[0].stats.num_running_queries >= 1
