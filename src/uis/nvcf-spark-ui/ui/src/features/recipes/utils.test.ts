@@ -57,7 +57,7 @@ function profile(
 			chart: {
 				name: "pylon-sglang-recipe",
 				version: "0.2.0",
-				repository: "oci://nvcr.io/org",
+				repository: "oci://nvcr.io/org/pylon-sglang-recipe",
 			},
 			lifecycle: "automatic",
 			values: { recipe: "x", profileName: id },
@@ -255,12 +255,12 @@ describe("formatting", () => {
 		expect(lastValidation(profile("p"))).toBeUndefined();
 	});
 
-	it("builds the chart reference from the catalog's repository", () => {
+	it("uses the chart's published reference, or a placeholder", () => {
 		expect(
 			chartReference({
 				name: "pylon-sglang-recipe",
 				version: "0.2.0",
-				repository: "oci://nvcr.io/org/",
+				repository: "oci://nvcr.io/org/pylon-sglang-recipe/",
 			}),
 		).toBe("oci://nvcr.io/org/pylon-sglang-recipe");
 		expect(chartReference({ name: "c", version: "1" })).toBe(
@@ -268,8 +268,16 @@ describe("formatting", () => {
 		);
 	});
 
-	it("names the release after the build, as the planner does", () => {
-		expect(releaseName(qwenFp8)).toBe("qwen3-8-27b");
+	it("names the release as the planner does: the catalog's name, else the build's id", () => {
+		const [fp8] = qwenFp8.profiles;
+		if (!fp8) throw new Error("no profile");
+		expect(releaseName(qwenFp8, fp8)).toBe("qwen3-8-27b");
+		expect(
+			releaseName(qwenFp8, {
+				...fp8,
+				deployment: { ...fp8.deployment, releaseName: "qwen-fp8" },
+			}),
+		).toBe("qwen-fp8");
 	});
 });
 

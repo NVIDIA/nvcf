@@ -27,7 +27,7 @@ export interface RecipeChart {
 	name: string;
 	version: string;
 	/**
-	 * OCI repository the chart is published to, without the chart name, e.g. `oci://nvcr.io/org`. Not in the upstream export, which packages charts locally; the operator's ConfigMap adds it per recipe.
+	 * The published chart's full OCI reference, ending in the chart name, e.g. `oci://nvcr.io/org/pylon-sglang-recipe`, as the recipe export defines it. The export leaves it null while charts are packaged locally; the operator's ConfigMap then fills a placeholder.
 	 * @pattern ^oci://
 	 */
 	repository?: string;

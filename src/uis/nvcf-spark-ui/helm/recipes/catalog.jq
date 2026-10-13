@@ -16,9 +16,11 @@
 # Turns the recipe charts' published catalog (index.json, from
 # deploy/helm/llm-routing/recipes in NVIDIA/nvcf) into the UI's ConfigMap
 # content, adding what the export doesn't carry yet:
-# - each chart's OCI repository, which the deploy snippets install from
-#   (default oci://nvcr.io/org, a placeholder until the charts are published);
-# - a one-line description per model, for its card (the UI mocks' copy);
+# - each chart's full OCI reference, which the deploy snippets install from:
+#   the repository argument plus the chart's name (default
+#   oci://nvcr.io/org/<chart>, a placeholder until the charts are published);
+# - a one-line description for a model the export describes none for, for its
+#   card (the UI mocks' copy);
 # and standardizes the runtime's version: the export gives runtimes built from
 # source a git `revision` instead, which becomes `version` ("llama.cpp f872b59").
 # Values the export already has are kept.
@@ -45,6 +47,6 @@
         else . end
       )
     | .profiles |= map(
-        .deployment.chart.repository = (.deployment.chart.repository // $repository)
+        .deployment.chart.repository = (.deployment.chart.repository // "\($repository)/\(.deployment.chart.name)")
       )
   )

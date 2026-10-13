@@ -95,7 +95,7 @@ make ui-dev
 
 | Target | What it does |
 | --- | --- |
-| `make recipes-configmap` | Prints the recipe catalog ConfigMap as YAML, for `kubectl apply`. It runs the catalog (below) through `helm/recipes/catalog.jq`, which adds what the UI needs. Variables:<br>- `RECIPES_REF`: the NVIDIA/nvcf branch or commit to fetch `deploy/helm/llm-routing/recipes/index.json` from (needs `gh`).<br>- `RECIPES_INDEX`: a local `index.json` to use instead.<br>- `RECIPES_REPOSITORY`: the OCI repository for charts the catalog names none for; default `oci://nvcr.io/org`.<br>- `RECIPES_CONFIGMAP`, `RECIPES_NAMESPACE`: the ConfigMap's name and namespace; default `demo-ui-recipes` in `demo-ui`. |
+| `make recipes-configmap` | Prints the recipe catalog ConfigMap as YAML, for `kubectl apply`. It runs the catalog (below) through `helm/recipes/catalog.jq`, which adds what the UI needs. Variables:<br>- `RECIPES_REF`: the NVIDIA/nvcf branch, commit or pull request (`refs/pull/<number>/head`) to fetch `deploy/helm/llm-routing/recipes/index.json` from (needs `gh`); default `feat/inference-in-a-box`.<br>- `RECIPES_INDEX`: a local `index.json` to use instead.<br>- `RECIPES_REPOSITORY`: the OCI repository for charts the catalog names none for, without the chart's name, which is appended; default `oci://nvcr.io/org`.<br>- `RECIPES_CONFIGMAP`, `RECIPES_NAMESPACE`: the ConfigMap's name and namespace; default `demo-ui-recipes` in `demo-ui`. |
 
 ```bash
 make -s recipes-configmap | kubectl apply --server-side -f -

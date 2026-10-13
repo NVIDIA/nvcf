@@ -45,9 +45,9 @@ TAG ?= $(DEFAULT_TAG)
 
 # The recipe catalog ConfigMap (recipes-configmap): NVIDIA/nvcf's index.json at
 # RECIPES_REF, or a local copy at RECIPES_INDEX, through helm/recipes/catalog.jq.
-RECIPES_REF ?= feat/multi-model-spark-recipes
+RECIPES_REF ?= feat/inference-in-a-box
 RECIPES_INDEX ?=
-# The OCI repository given to charts the export has none for.
+# The OCI repository, without the chart's name, for charts the export has none for.
 RECIPES_REPOSITORY ?= oci://nvcr.io/org
 RECIPES_CONFIGMAP ?= demo-ui-recipes
 RECIPES_NAMESPACE ?= demo-ui

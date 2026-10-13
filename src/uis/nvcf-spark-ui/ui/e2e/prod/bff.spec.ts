@@ -139,11 +139,11 @@ test("serves the recipe catalog, and its pages, through the BFF", async ({
 	const catalog = await request.get("/api/v1/recipes");
 	expect(catalog.status()).toBe(200);
 	expect(catalog.headers()["cache-control"]).toBe("no-cache");
-	expect((await catalog.json()).recipes).toHaveLength(8);
+	expect((await catalog.json()).recipes).toHaveLength(5);
 
 	await page.goto("/recipes");
-	// One card per model: the 8 builds are 7 models.
-	await expect(page.getByRole("heading", { level: 2 })).toHaveCount(7);
+	// One card per model: the 5 builds are 4 models.
+	await expect(page.getByRole("heading", { level: 2 })).toHaveCount(4);
 	await expectNoSeriousA11yViolations(page);
 
 	await page.goto("/recipes/qwen3.8-27b");

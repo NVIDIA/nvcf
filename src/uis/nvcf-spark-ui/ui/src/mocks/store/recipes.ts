@@ -47,6 +47,7 @@ function profile(
 	id: string,
 	options: {
 		chart?: string;
+		release?: string;
 		nodes?: number;
 		product?: string;
 		memoryGiB: number;
@@ -57,6 +58,7 @@ function profile(
 	},
 ): RecipeProfile {
 	const nodes = options.nodes ?? 1;
+	const chart = options.chart ?? "pylon-sglang-recipe";
 	const capabilities = options.nvme || options.fabricGbps !== undefined;
 	return {
 		id,
@@ -90,10 +92,11 @@ function profile(
 		validation: options.validation,
 		deployment: {
 			chart: {
-				name: options.chart ?? "pylon-sglang-recipe",
+				name: chart,
 				version: "0.2.0",
-				repository: "oci://nvcr.io/org",
+				repository: `oci://nvcr.io/org/${chart}`,
 			},
+			...(options.release ? { releaseName: options.release } : {}),
 			lifecycle: "automatic",
 			values: { recipe, profileName: id },
 			requiredSiteValues: capabilities
@@ -162,6 +165,7 @@ export const recipeCatalog: RecipeCatalog = {
 			runtime: { backend: "llama.cpp", version: "llama.cpp f872b59" },
 			profiles: [
 				profile("glm-5.3", "gb10-x2", {
+					release: "glm",
 					chart: "pylon-gguf-backend",
 					nodes: 2,
 					memoryGiB: 110,
@@ -217,6 +221,7 @@ export const recipeCatalog: RecipeCatalog = {
 			runtime: SGLANG,
 			profiles: [
 				profile("qwen3.8-27b", "spark-fp8", {
+					release: "qwen-fp8",
 					memoryGiB: 104,
 					validation: smokeTested,
 				}),
@@ -234,6 +239,7 @@ export const recipeCatalog: RecipeCatalog = {
 			runtime: SGLANG,
 			profiles: [
 				profile("qwen3.8-27b-nvfp4", "spark-nvfp4", {
+					release: "qwen-nvfp4",
 					memoryGiB: 104,
 					validation: smokeTested,
 				}),
@@ -260,12 +266,14 @@ export const recipeCatalog: RecipeCatalog = {
 			},
 			profiles: [
 				profile("qwen3.8-flash-next", "spark-nvfp4-nvme", {
+					release: "qwen-flash",
 					memoryGiB: 110,
 					nvme: true,
 					maxContext: 262_144,
 					validation: smokeTested,
 				}),
 				profile("qwen3.8-flash-next", "spark-nvfp4-tp2", {
+					release: "qwen-flash",
 					nodes: 2,
 					memoryGiB: 110,
 					fabricGbps: 200,

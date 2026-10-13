@@ -26,6 +26,8 @@ import type { RecipeDeploymentValues } from "./recipeDeploymentValues.ts";
 
 export interface RecipeDeployment {
 	chart: RecipeChart;
+	/** Helm release the recipe planner (`llm.py`) installs the build as, e.g. `qwen-fp8`. Older exports lack it. */
+	releaseName?: string;
 	/** `automatic` when one `helm install` qualifies, downloads and serves. */
 	lifecycle: string;
 	values: RecipeDeploymentValues;

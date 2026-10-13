@@ -88,7 +88,7 @@ describe("RecipeDetail", () => {
 		);
 		const helm = helmCommand();
 		expect(helm).toContain(
-			"helm install qwen3-8-27b oci://nvcr.io/org/pylon-sglang-recipe",
+			"helm install qwen-fp8 oci://nvcr.io/org/pylon-sglang-recipe",
 		);
 		expect(helm).toContain("--set-string recipe=qwen3.8-27b");
 		expect(helm).toContain("--set-string profileName=spark-fp8");
@@ -113,7 +113,7 @@ describe("RecipeDetail", () => {
 		);
 		expect(nvfp4).toBeChecked();
 		const helm = helmCommand();
-		expect(helm).toContain("helm install qwen3-8-27b-nvfp4");
+		expect(helm).toContain("helm install qwen-nvfp4");
 		expect(helm).toContain("--set-string recipe=qwen3.8-27b-nvfp4");
 		expect(helm).toContain("--set-string profileName=spark-nvfp4");
 		expect(
@@ -167,7 +167,7 @@ describe("RecipeDetail", () => {
 		);
 		expect(glm?.closest("label")).not.toHaveTextContent("2026-10-07");
 		expect(helmCommand()).toContain(
-			"helm install glm-5-3 oci://nvcr.io/org/pylon-gguf-backend",
+			"helm install glm oci://nvcr.io/org/pylon-gguf-backend",
 		);
 	});
 

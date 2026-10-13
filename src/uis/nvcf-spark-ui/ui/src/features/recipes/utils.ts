@@ -181,16 +181,24 @@ export function lastValidation(
 	);
 }
 
-/** Where `helm` and Flux pull the chart from; a placeholder until it's published. */
+/**
+ * Where `helm` pulls the chart from: its full published reference, which ends
+ * in the chart's name, or a placeholder until it's published.
+ */
 export function chartReference(chart: RecipeChart): string {
-	const repository =
-		chart.repository?.replace(/\/+$/, "") ?? "oci://<chart-registry>";
-	return `${repository}/${chart.name}`;
+	return (
+		chart.repository?.replace(/\/+$/, "") ??
+		`oci://<chart-registry>/${chart.name}`
+	);
 }
 
-/** The release name the recipe charts' planner gives a build by default. */
-export function releaseName(build: Recipe): string {
-	return build.id.replaceAll(".", "-");
+/**
+ * The release a build installs as: the recipe planner's (`llm.py`) name from
+ * the catalog, or, for an export without one, the build's id with dots
+ * replaced.
+ */
+export function releaseName(build: Recipe, profile: RecipeProfile): string {
+	return profile.deployment.releaseName ?? build.id.replaceAll(".", "-");
 }
 
 function nodePlaceholders(config: RecipeConfiguration): string[] {
@@ -258,7 +266,7 @@ export function helmInstallCommand(config: RecipeConfiguration): string {
 	];
 	const capabilities = nodeCapabilities(config);
 	const lines = [
-		`helm install ${releaseName(build)} ${chartReference(chart)}`,
+		`helm install ${releaseName(build, profile)} ${chartReference(chart)}`,
 		`--version ${shellArgument(chart.version)}`,
 		`--namespace ${RECIPE_NAMESPACE}`,
 		...settings.map(

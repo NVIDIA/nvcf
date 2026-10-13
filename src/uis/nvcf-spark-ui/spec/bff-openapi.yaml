@@ -348,6 +348,11 @@ components:
       properties:
         chart:
           $ref: "#/components/schemas/RecipeChart"
+        releaseName:
+          type: string
+          description: >-
+            Helm release the recipe planner (`llm.py`) installs the build as, e.g.
+            `qwen-fp8`. Older exports lack it.
         lifecycle:
           type: string
           description: "`automatic` when one `helm install` qualifies, downloads and serves."
@@ -380,9 +385,10 @@ components:
           type: string
           pattern: "^oci://"
           description: >-
-            OCI repository the chart is published to, without the chart name, e.g.
-            `oci://nvcr.io/org`. Not in the upstream export, which packages charts
-            locally; the operator's ConfigMap adds it per recipe.
+            The published chart's full OCI reference, ending in the chart name, e.g.
+            `oci://nvcr.io/org/pylon-sglang-recipe`, as the recipe export defines it.
+            The export leaves it null while charts are packaged locally; the
+            operator's ConfigMap then fills a placeholder.
 
     BffError:
       type: object

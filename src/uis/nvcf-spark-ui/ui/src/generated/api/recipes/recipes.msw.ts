@@ -223,6 +223,10 @@ export const getGetRecipesResponseMock = (
 						undefined,
 					]),
 				},
+				releaseName: faker.helpers.arrayElement([
+					faker.string.alpha({ length: { min: 10, max: 20 } }),
+					undefined,
+				]),
 				lifecycle: faker.string.alpha({ length: { min: 10, max: 20 } }),
 				values: {
 					recipe: faker.string.alpha({ length: { min: 10, max: 20 } }),
