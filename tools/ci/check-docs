@@ -14,5 +14,13 @@ if [ -n "$bad" ]; then
 fi
 
 ./tools/ci/check-doc-version-sync
-./tools/ci/check-doc-editions
-./tools/ci/run-fern check
+if [ "$(go run -C tools/docs-version-sync . umbrella docs-mode --repo "$repo_root")" = umbrella ]; then
+  staged="$(mktemp -d)"
+  trap 'rm -rf "$staged"' EXIT
+  go run -C tools/docs-version-sync . umbrella docs-stage --repo "$repo_root" --out "$staged/source"
+  cd "$staged/source"
+  "$repo_root/tools/ci/run-fern" check
+else
+  ./tools/ci/check-doc-editions
+  ./tools/ci/run-fern check
+fi

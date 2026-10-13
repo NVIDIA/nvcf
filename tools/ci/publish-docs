@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+
+if [[ $# != 1 || ! "$1" =~ ^--(check|publish)$ ]]; then
+  echo 'Usage: publish-docs --check|--publish' >&2
+  exit 2
+fi
+mode="$1"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$repo_root"
+run_sync() {
+  if [[ -n "${DOCS_VERSION_SYNC_BIN:-}" ]]; then
+    "$DOCS_VERSION_SYNC_BIN" "$@"
+  else
+    go run -C "$repo_root/tools/docs-version-sync" . "$@"
+  fi
+}
+workspace=""
+trap 'if [[ -n "$workspace" ]]; then rm -rf "$workspace"; fi' EXIT
+if [[ "$(run_sync umbrella docs-mode --repo "$repo_root")" == umbrella ]]; then
+  ./tools/ci/check-doc-version-sync
+  workspace="$(mktemp -d)"
+  run_sync umbrella docs-stage --repo "$repo_root" --out "$workspace/source"
+  cd "$workspace/source"
+  "$repo_root/tools/ci/run-fern" check
+  if [[ -n "${DOCS_BUILD_RECEIPT:-}" ]]; then
+    cp docs-build-receipt.json "$DOCS_BUILD_RECEIPT"
+  fi
+else
+  ./tools/ci/check-docs
+fi
+if [[ "$mode" == --publish ]]; then
+  "$repo_root/tools/ci/run-fern" generate --docs --strict-broken-links
+fi

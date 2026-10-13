@@ -59,7 +59,21 @@ else
   require_cmd go
   go run -C "$repo_root/tools/docs-version-sync" . edition preview --repo "$preview_workspace/source"
 fi
-cd "$preview_workspace/source"
+# Maintained refs are always materialized from the approved registry commits.
+if [ -f "$preview_workspace/source/fern/editions.yml" ]; then
+  require_cmd go
+  if [ "$(go run -C "$repo_root/tools/docs-version-sync" . umbrella docs-mode --repo "$preview_workspace/source")" = umbrella ]; then
+    mkdir -p "$preview_workspace/source/tools/ci"
+    cp "$repo_root/tools/ci/run-fern" "$preview_workspace/source/tools/ci/run-fern"
+    go run -C "$repo_root/tools/docs-version-sync" . umbrella docs-stage \
+      --repo "$preview_workspace/source" --out "$preview_workspace/approved"
+    cd "$preview_workspace/approved"
+  else
+    cd "$preview_workspace/source"
+  fi
+else
+  cd "$preview_workspace/source"
+fi
 
 if [ "$check_only" -eq 1 ]; then
   "$repo_root/tools/ci/run-fern" check
