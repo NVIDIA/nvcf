@@ -33,10 +33,12 @@ class VerifyTests(unittest.TestCase):
         result = verify.verify(client, ['model-a'])
         self.assertNotIn('maxTokens', result)
         self.assertTrue(all('max_tokens' not in c.kwargs for c in client.completion.call_args_list))
+        client.auth.assert_called_once_with('model-a')
         client = self.client()
         result = verify.verify(client, ['model-a'], max_tokens=2048)
         self.assertEqual(result['maxTokens'], 2048)
         self.assertEqual([c.kwargs['max_tokens'] for c in client.completion.call_args_list], [2048, 2048])
+        client.auth.assert_called_once_with('model-a', max_tokens=2048)
         for bad in (0, -1, '5', True):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 verify.verify(self.client(), ['model-a'], max_tokens=bad)

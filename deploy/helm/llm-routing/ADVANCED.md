@@ -115,7 +115,9 @@ Change `model` to `qwen3.8-27b-nvfp4` to call the other precision. Add `"stream"
 
 Coding agents such as [Pi](https://github.com/badlogic/pi-mono) and [Codex](https://github.com/openai/codex) can use the model through the gateway. They need a large context: their first request is 1,500 to 6,500 tokens before any file contents. The automatic GLM Station profile uses `tuning.discrete` in [recipe.json](recipes/glm-5.3/recipe.json), configured for one 8,192-token slot. Larger contexts require separate qualification. See [Recipe resources and tuning](#recipe-resources-and-tuning) before changing these settings.
 
-Tested in October 2026 with Pi 1.0.4 and Codex 0.161.0 against `glm-5.3` on one GB300 with two 65,536-token slots. Each agent found and fixed a one-line bug by running a test, editing the file and running the test again, using tool calls through the gateway. Pi took 7 seconds and Codex 33 seconds. Automatic Helm profile validation is recorded separately in the [catalog](recipes/index.json).
+The examples below use the automatic Station profile's one 8,192-token slot and 512-token output budget. Coding-agent workloads with this profile remain pending in the [catalog](recipes/index.json).
+
+A separate manual deployment was tested in October 2026 with Pi 1.0.4 and Codex 0.161.0 against `glm-5.3` on one GB300 with two 65,536-token slots. Each agent found and fixed a one-line bug by running a test, editing the file and running the test again, using tool calls through the gateway. Pi took 7 seconds and Codex 33 seconds.
 
 #### Open the gateway
 
@@ -142,7 +144,7 @@ cat > ~/.pi/agent/models.json <<'EOF'
   "compat": {"supportsStore": false, "supportsDeveloperRole": false, "supportsReasoningEffort": false,
              "supportsUsageInStreaming": true, "supportsStrictMode": false, "maxTokensField": "max_tokens"},
   "models": [{"id": "GLM-5.3-UD-IQ2_M", "name": "GLM-5.3", "reasoning": false,
-              "input": ["text"], "contextWindow": 65536, "maxTokens": 8192}]}}}
+              "input": ["text"], "contextWindow": 8192, "maxTokens": 512}]}}}
 EOF
 echo '{"defaultProvider": "llm-routing", "defaultModel": "GLM-5.3-UD-IQ2_M"}' > ~/.pi/agent/settings.json
 NODE_EXTRA_CA_CERTS="$LLM_GATEWAY_CA" pi
@@ -161,8 +163,8 @@ mkdir -p ~/.codex
 cat > ~/.codex/glm.config.toml <<'EOF'
 model = "GLM-5.3-UD-IQ2_M"
 model_provider = "llm-routing"
-model_context_window = 65536
-model_auto_compact_token_limit = 56000
+model_context_window = 8192
+model_auto_compact_token_limit = 6144
 web_search = "disabled"
 include_apps_instructions = false
 show_raw_agent_reasoning = true
@@ -190,13 +192,14 @@ CODEX_CA_CERTIFICATE="$LLM_GATEWAY_CA" codex --profile glm
 ```
 
 - Set `model_context_window` to the selected recipe tuning's `contextPerSlot`. Without it, Codex assumes a much larger context and requests fail when the conversation grows.
+- The 6,144-token compaction threshold leaves room for output and request overhead within the 8,192-token context.
 - The `[features]`, `[tools]` and `[skills]` settings remove tools the model cannot use and keep the first request near 4,500 tokens instead of 6,600.
 - The recipe's `defaultMaxTokens` supplies the server's output cap for requests that omit a limit, including reasoning.
 
 #### Tips
 
-- The first request processes the whole prompt, at about 250 tokens per second on GB300. Later requests reuse the cached prefix, so start each agent once before a demo.
-- Each slot serves one request at a time. Two agents working at once use both GB300 slots; the Pylon canary waits for the next free slot.
+- The first request processes the whole prompt. The manual deployment above measured about 250 tokens per second. Later requests reuse the cached prefix, so start each agent once before a demo.
+- The automatic Station profile serves one request at a time. Run one agent at a time. The Pylon canary waits for the slot to become free.
 - For scripted runs, close stdin: `pi -p "<task>" < /dev/null` or `codex exec --profile glm "<task>" < /dev/null`. `pi -p` reads piped stdin as part of the prompt and waits until it closes.
 
 ### Helm cache reuse and recovery
@@ -267,22 +270,37 @@ Complete uninstall combines [removing the model release](README.md#uninstall-kee
 
 ### Helm GLM recipe
 
-GLM has two automatic GB10 profiles. The committed [three-node values](recipes/values/glm-5.3-x3.yaml) select `gb10-x3`, which splits the weights evenly over one leader and two RPC workers and is the profile that passed gateway checks. The committed [two-node values](recipes/values/glm-5.3.yaml) select `gb10-x2`, which stops at the host-memory guard during loading. The commands below use the three-node profile. For two GB300 nodes (Station), use the [Station values](recipes/values/glm-5.3-station.yaml) instead and keep only `gpu-node-1` and `gpu-node-2`. Replace `gpu-node-1`, `gpu-node-2` and `gpu-node-3` with distinct available nodes. Override `runtimeClassName` and `storageClassName` if your cluster uses different names.
+GLM has two automatic GB10 profiles. The committed [three-node values](recipes/values/glm-5.3-x3.yaml) select `gb10-x3`, which splits the weights evenly over one leader and two RPC workers and is the Spark profile that passed gateway checks. The committed [two-node values](recipes/values/glm-5.3.yaml) select `gb10-x2`, which stops at the host-memory guard during loading. For two GB300 nodes, the [Station values](recipes/values/glm-5.3-station.yaml) select `gb300-x2` with one leader and one RPC worker.
 
-Install it with the shared stack already running:
+Use the command for your hardware with the shared stack already running. Replace `my-cluster` with your Kubernetes context and the node placeholders with distinct available nodes. Override `runtimeClassName` and `storageClassName` if your cluster uses different names.
+
+Three Spark nodes:
 
 ```bash
 helm upgrade --install glm dev-artifacts/charts/pylon-gguf-backend-0.2.0.tgz \
-  --namespace llm-stack \
+  --kube-context my-cluster --namespace llm-stack \
   --values recipes/values/glm-5.3-x3.yaml \
   --set 'nodes[0]=gpu-node-1' --set 'nodes[1]=gpu-node-2' --set 'nodes[2]=gpu-node-3' \
   --wait --timeout 120m &&
-kubectl --namespace llm-stack wait \
+kubectl --context my-cluster --namespace llm-stack wait \
   --for=condition=Registered inferenceendpoint/glm --timeout=5m &&
 echo 'Model installed and registered.'
 ```
 
-Kubernetes checks placement, builds the pinned llama.cpp runtime, starts each worker RPC server and qualifies every GPU, including each pair. It then verifies or downloads the pinned GGUF cache and starts the model server. The served model ID is `GLM-5.3-UD-IQ2_M`. Use that ID for [gateway verification](#verification). The common catalog lists its per-node resource and storage requirements. The three-node profile passed gateway discovery, chat, streaming and authentication at context 2,048 and concurrency 1. Loading about 148 GiB to the workers took roughly 30 minutes on the pod network. Stop/resume, longer context, throughput and output quality are untested. The two-node profile's Helm trials stopped at the host-memory guard during loading, so use three nodes. Each RPC worker has its own Service and cache claim, named `<release>-rpc-n1`, `<release>-rpc-n2` and so on. Set `rpc.cache.existingClaims` to one retained claim per worker. `rpc.cache.existingClaim` still serves a single worker.
+Two Station nodes:
+
+```bash
+helm upgrade --install glm dev-artifacts/charts/pylon-gguf-backend-0.2.0.tgz \
+  --kube-context my-cluster --namespace llm-stack \
+  --values recipes/values/glm-5.3-station.yaml \
+  --set 'nodes[0]=station-node-1' --set 'nodes[1]=station-node-2' \
+  --wait --timeout 120m &&
+kubectl --context my-cluster --namespace llm-stack wait \
+  --for=condition=Registered inferenceendpoint/glm --timeout=5m &&
+echo 'Model installed and registered.'
+```
+
+Kubernetes checks placement, builds the pinned llama.cpp runtime, starts each worker RPC server and qualifies every GPU, including each pair. It then verifies or downloads the pinned GGUF cache and starts the model server. The served model ID is `GLM-5.3-UD-IQ2_M`. Use that ID for [gateway verification](#verification). The common catalog lists its per-node resource and storage requirements. The three-node Spark profile passed gateway discovery, chat, streaming and authentication at context 2,048 and concurrency 1. Loading about 148 GiB to the workers took roughly 30 minutes on the pod network. Stop/resume, longer context, throughput and output quality are untested for that Spark profile. The two-node Spark profile's Helm trials stopped at the host-memory guard during loading, so use three Spark nodes. Each RPC worker has its own Service and cache claim, named `<release>-rpc-n1`, `<release>-rpc-n2` and so on. Set `rpc.cache.existingClaims` to one retained claim per worker. `rpc.cache.existingClaim` still serves a single worker.
 
 By default (`reuseCaches: false`), a changed image, llama.cpp revision or CUDA architecture rebuilds compiled runtime state while preserving model files and cached source archives. Unchanged runtimes are verified and reused.
 

@@ -21,7 +21,7 @@ def verify(client, models, max_tokens=None):
         results.append({'model': model, 'discovery': client.discovery(model),
                         'chat': client.completion(model, 'Say hello in one short sentence.', **budget),
                         'stream': client.completion(model, 'Say hello in one short sentence.', stream=True, **budget),
-                        'auth': client.auth(model)})
+                        'auth': client.auth(model, **budget)})
     result = {'passed': True, 'models': results}
     if max_tokens is not None:
         result['maxTokens'] = max_tokens
