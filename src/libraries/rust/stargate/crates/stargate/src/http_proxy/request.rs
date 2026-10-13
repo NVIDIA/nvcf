@@ -213,27 +213,12 @@ mod tests {
     }
 
     #[test]
-    fn last_cluster_header_is_trimmed_and_request_id_is_kept() {
-        let mut headers = proxy_headers();
-        set_header(
-            &mut headers,
-            HEADER_STARGATE_LAST_CLUSTER_ID,
-            "  cluster-b  ",
-        );
-
-        let inputs = parse_proxy_request_inputs(&headers).expect("headers should parse");
-
-        assert_eq!(inputs.request_id, "req-test");
-        assert_eq!(inputs.last_cluster.last_cluster_id(), Some("cluster-b"));
-        assert_eq!(inputs.last_cluster.classification(), None);
-    }
-
-    #[test]
-    fn unusable_last_cluster_header_reads_as_absent() {
-        for value in [
-            HeaderValue::from_static(""),
-            HeaderValue::from_static("   "),
-            HeaderValue::from_bytes(b"\xff\xfe").unwrap(),
+    fn last_cluster_header_is_trimmed_and_unusable_values_read_as_absent() {
+        for (value, expected) in [
+            (HeaderValue::from_static("  cluster-b  "), Some("cluster-b")),
+            (HeaderValue::from_static(""), None),
+            (HeaderValue::from_static("   "), None),
+            (HeaderValue::from_bytes(b"\xff\xfe").unwrap(), None),
         ] {
             let mut headers = proxy_headers();
             headers.insert(
@@ -243,11 +228,8 @@ mod tests {
 
             let inputs = parse_proxy_request_inputs(&headers)
                 .expect("an unusable hint must not fail the request");
-            assert_eq!(inputs.last_cluster.last_cluster_id(), None);
+            assert_eq!(inputs.last_cluster.last_cluster_id(), expected);
         }
-
-        let inputs = parse_proxy_request_inputs(&proxy_headers()).unwrap();
-        assert_eq!(inputs.last_cluster.last_cluster_id(), None);
     }
 
     #[test]

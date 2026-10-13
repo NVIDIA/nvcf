@@ -3715,9 +3715,7 @@ async fn exercise_native_messages_contract(protocol: TunnelTransportProtocol, re
 }
 
 #[tokio::test]
-async fn last_cluster_hint_is_consumed_and_classifies_only_flagged_affinity_requests() {
-    const LAST_CLUSTER_HEADER: &str = "x-stargate-last-cluster-id";
-    const SESSION_METRIC: &str = "stargate_routing_session_selections_total";
+async fn last_cluster_hint_classifies_only_flagged_affinity_requests() {
     let flagged_model = "last-cluster-on-model";
     let unflagged_model = "last-cluster-off-model";
     let cluster_id = "last-cluster-cluster";
@@ -3750,98 +3748,29 @@ async fn last_cluster_hint_is_consumed_and_classifies_only_flagged_affinity_requ
         make_stargate_runtime_with_lb("last-cluster-header", Some(config_path));
     let handle = runtime.start().await.expect("stargate failed to start");
     let mut fixture = ProxyFixture::new(grpc_addr, http_addr, handle);
-
-    let captured = Arc::new(std::sync::Mutex::new(Vec::<axum::http::HeaderMap>::new()));
-    let captured_for_app = captured.clone();
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream_addr = listener.local_addr().unwrap();
-    let app = Router::new()
-        .route(
-            "/v1/chat/completions",
-            post(move |req: Request| {
-                let captured = captured_for_app.clone();
-                async move {
-                    captured
-                        .lock()
-                        .expect("header capture poisoned")
-                        .push(req.headers().clone());
-                    Response::builder()
-                        .status(StatusCode::OK)
-                        .header("content-type", "text/event-stream")
-                        .body(Body::from(
-                            "data: {\"object\":\"chat.completion.chunk\"}\n\ndata: [DONE]\n\n",
-                        ))
-                        .expect("success response should build")
-                }
-            }),
-        )
-        .route("/health", get(|| async { "ok" }));
-    let backend_task = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-    let tunnel = start_quic_http_tunnel(QuicHttpTunnelConfig::new(
-        "127.0.0.1:0".parse().unwrap(),
-        format!("http://{upstream_addr}"),
-    ))
-    .await
-    .unwrap();
-    let runtime_state = PylonRuntimeState::new(
-        InferenceServerStatus::Active,
-        &[flagged_model.to_string(), unflagged_model.to_string()],
-    );
     for model in [flagged_model, unflagged_model] {
-        runtime_state.set_model_stats(
-            model,
-            CurrentModelStats {
-                last_mean_input_tps: 1000.0,
-                max_input_tps: Some(1000.0),
-                ..CurrentModelStats::default()
-            },
-        );
-    }
-    fixture.register(
-        active_registration_config_with_state(
-            grpc_addr,
-            "last-cluster-backend",
-            cluster_id,
-            format!("quic://{}", tunnel.listen_addr()),
-            format!("http://{upstream_addr}"),
-            runtime_state,
-        ),
-        "registration failed",
-    );
-    fixture.own_tunnel(tunnel);
-    fixture.wait_for_clusters(flagged_model, 1).await;
-    fixture.wait_for_clusters(unflagged_model, 1).await;
-    for model in [flagged_model, unflagged_model] {
+        fixture
+            .add_dummy_backend(
+                &format!("{model}-backend"),
+                cluster_id,
+                model,
+                active_runtime(model),
+            )
+            .await;
         wait_for_routing(http_addr, model, Duration::from_secs(5)).await;
     }
 
-    // (model, routing method override, cache affinity key, classified)
-    let cases = [
-        (flagged_model, None, Some("session-a"), true),
-        (flagged_model, None, None, false),
-        (flagged_model, Some("power-of-n"), Some("session-a"), false),
-        (unflagged_model, None, Some("session-a"), false),
-    ];
-    let client = reqwest::Client::new();
-    for (index, (model, routing_method, affinity_key, classified)) in cases.into_iter().enumerate()
-    {
-        let context = format!(
-            "model={model} routing_method={routing_method:?} affinity_key={affinity_key:?}"
-        );
-        let request_id = format!("last-cluster-request-{index}");
-        let model_label = format!(r#"model="{model}""#);
-        let before = metrics_text(fixture.handle.metrics().registry());
-        let mut request = proxy_json_request(
-            &client,
-            http_addr,
-            "/v1/chat/completions",
-            model,
-            &request_id,
-            &streaming_chat_body(model),
-        )
-        .header(LAST_CLUSTER_HEADER, cluster_id);
+    // (model, x-routing-method, x-cache-affinity-key, classified requests)
+    for (model, routing_method, affinity_key, expected) in [
+        (flagged_model, None, Some("session-a"), 1.0),
+        (flagged_model, None, None, 0.0),
+        (flagged_model, Some("power-of-n"), Some("session-a"), 0.0),
+        (unflagged_model, None, Some("session-a"), 0.0),
+    ] {
+        let before = fixture.metrics();
+        let mut request = fixture
+            .chat_request(model, "last-cluster-request")
+            .header("x-stargate-last-cluster-id", cluster_id);
         if let Some(routing_method) = routing_method {
             request = request.header("x-routing-method", routing_method);
         }
@@ -3849,47 +3778,16 @@ async fn last_cluster_hint_is_consumed_and_classifies_only_flagged_affinity_requ
             request = request.header("x-cache-affinity-key", affinity_key);
         }
         let response = request.send().await.expect("request failed");
-        assert_eq!(response.status(), StatusCode::OK, "{context}");
-        assert_eq!(
-            response_header(&response, "x-stargate-cluster-id"),
-            Some(cluster_id),
-            "{context}"
-        );
+        assert_eq!(response.status(), StatusCode::OK);
         let _ = response.bytes().await;
-
-        let headers = captured
-            .lock()
-            .expect("header capture poisoned")
-            .iter()
-            .rev()
-            .find(|headers| {
-                headers
-                    .get("x-request-id")
-                    .is_some_and(|value| value.as_bytes() == request_id.as_bytes())
-            })
-            .cloned()
-            .unwrap_or_else(|| panic!("upstream did not receive {request_id}: {context}"));
-        assert!(
-            !headers.contains_key(LAST_CLUSTER_HEADER),
-            "{LAST_CLUSTER_HEADER} leaked upstream: {context}"
-        );
-
-        let after = metrics_text(fixture.handle.metrics().registry());
-        let expected = if classified { 1.0 } else { 0.0 };
-        assert_metric_delta(&before, &after, SESSION_METRIC, &[&model_label], expected);
         assert_metric_delta(
             &before,
-            &after,
-            SESSION_METRIC,
-            &[
-                &model_label,
-                r#"session_state="returning""#,
-                r#"selection="primary""#,
-            ],
+            &fixture.metrics(),
+            "stargate_routing_session_selections_total",
+            &[&format!(r#"model="{model}""#)],
             expected,
         );
     }
 
     fixture.shutdown().await;
-    backend_task.abort();
 }

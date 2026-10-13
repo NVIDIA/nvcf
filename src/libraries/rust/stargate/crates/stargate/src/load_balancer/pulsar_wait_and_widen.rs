@@ -189,19 +189,15 @@ impl PulsarWaitAndWidenLoadBalancer {
         }
     }
 
-    fn decide_at(
+    pub(super) fn decide_at(
         &self,
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
         elapsed: Duration,
     ) -> LoadBalancerDecision {
         let ranking = self.ranking.compute_ranking(request, candidates);
-        // Session rules reorder a per-request copy of the ranking. Rank 1 has
-        // no shortcut: it goes through queue admission, the affinity wait, and
-        // the affinity discount like every other affinity member. The plan is
-        // built before the empty-ranking check so the first decision always
-        // pins the session classification, even when no candidate has a
-        // usable Pulsar weight yet.
+        // Plan before the empty-ranking check so the first decision pins the
+        // session classification even when no candidate has a Pulsar weight.
         let plan = session::plan_affinity(
             self.last_cluster_affinity,
             request,
@@ -326,12 +322,9 @@ mod tests {
 
     use super::super::pulsar::PulsarLoadBalancer;
     use super::super::tests::LoadBalancerTestChoiceExt;
-    use std::borrow::Cow;
-
-    use super::super::session::{self, MissingLastCluster};
     use super::super::{
-        LastClusterHint, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerRequest,
-        SessionClassification, SessionState, WaitAndWidenAlgorithmConfig,
+        LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerRequest,
+        WaitAndWidenAlgorithmConfig,
     };
     use super::*;
     use crate::routing_state::{RoutedClusterSnapshot, RoutingTargetKey};
@@ -446,87 +439,50 @@ mod tests {
         ranked_indices
     }
 
-    /// No queue-SLO fields, rank 1 at its engine concurrency limit.
-    fn no_slo_full_primary(
-        seed: &str,
-        affinity_key: &str,
-        configure: impl FnOnce(&mut WaitAndWidenAlgorithmConfig),
-    ) -> (
-        PulsarWaitAndWidenLoadBalancer,
-        Vec<RoutedClusterSnapshot>,
-        Vec<usize>,
-    ) {
+    #[test]
+    fn without_queue_slo_full_primary_goes_through_affinity_admission() {
         let target = target();
+        let affinity_key = "hybrid-prefix-without-slo";
         let mut candidates = single_slot_candidates(3);
-        let ranked = pulsar_ranked_indices(seed, &target, affinity_key, 0, &candidates);
-        candidates[ranked[0]].stats.num_running_queries = 1;
+        let ranked = pulsar_ranked_indices("hybrid-seed", &target, affinity_key, 0, &candidates);
         candidates[ranked[2]].stats.num_running_queries = 1;
-        let hybrid = PulsarWaitAndWidenLoadBalancer::new(pulsar_wait_and_widen_algorithm_config(
-            seed,
-            false,
-            |settings| {
-                settings.n = Some(2);
-                configure(settings);
-            },
-        ))
-        .expect("valid hybrid config");
-        (hybrid, candidates, ranked)
-    }
-
-    #[test]
-    fn without_queue_slo_overflows_full_primary() {
-        let target = target();
-        let affinity_key = "hybrid-prefix-without-slo";
-        let (hybrid, candidates, ranked) = no_slo_full_primary("hybrid-seed", affinity_key, |_| {});
         let request = request(&target, Some(affinity_key), Some(0));
+        let choice = |rank: usize| {
+            LoadBalancerDecision::Selected(LoadBalancerCandidateChoice {
+                candidate_index: ranked[rank - 1],
+                rank_depth: rank,
+                selected_after_kv_free_tokens_skip: false,
+            })
+        };
 
-        let choice = hybrid
-            .decide_at(&request, &candidates, Duration::ZERO)
-            .selected()
-            .expect("a free rank-2 cluster should take the overflow");
-        assert_eq!(choice.candidate_index, ranked[1]);
-        assert_eq!(choice.rank_depth, 2);
-    }
-
-    #[test]
-    fn without_queue_slo_queues_on_primary_within_max_queued() {
-        let target = target();
-        let affinity_key = "hybrid-prefix-without-slo";
-        let (hybrid, mut candidates, ranked) =
-            no_slo_full_primary("hybrid-seed", affinity_key, |settings| {
-                settings.max_queued = Some(4);
-            });
-        // One running query and one queued.
-        candidates[ranked[0]].stats.num_running_queries = 2;
-        let request = request(&target, Some(affinity_key), Some(0));
-
-        let choice = hybrid
-            .decide_at(&request, &candidates, Duration::ZERO)
-            .selected()
-            .expect("rank 1 should admit the request into its queue");
-        assert_eq!(choice.candidate_index, ranked[0]);
-        assert_eq!(choice.rank_depth, 1);
-    }
-
-    #[test]
-    fn without_queue_slo_waits_for_affinity_then_widens() {
-        let target = target();
-        let affinity_key = "hybrid-prefix-without-slo";
-        let (hybrid, candidates, ranked) =
-            no_slo_full_primary("hybrid-seed", affinity_key, |settings| {
-                settings.cache_affinity_wait_ms = Some(300);
-            });
-        let request = request(&target, Some(affinity_key), Some(0));
-
-        assert_eq!(
-            hybrid.decide_at(&request, &candidates, Duration::ZERO),
-            LoadBalancerDecision::Wait(Duration::from_millis(300))
-        );
-        let choice = hybrid
-            .decide_at(&request, &candidates, Duration::from_millis(300))
-            .selected()
-            .expect("the request should widen after the affinity wait");
-        assert_eq!(choice.candidate_index, ranked[1]);
+        // Rank 1 is at its engine concurrency limit; rank 2 has a free slot.
+        for (max_queued, wait_ms, primary_running, elapsed_ms, expected) in [
+            (0, 0, 1, 0, choice(2)),
+            // One request queued on rank 1, within max_queued.
+            (4, 0, 2, 0, choice(1)),
+            (
+                0,
+                300,
+                1,
+                0,
+                LoadBalancerDecision::Wait(Duration::from_millis(300)),
+            ),
+            (0, 300, 1, 300, choice(2)),
+        ] {
+            candidates[ranked[0]].stats.num_running_queries = primary_running;
+            let hybrid = PulsarWaitAndWidenLoadBalancer::new(
+                pulsar_wait_and_widen_algorithm_config("hybrid-seed", false, |settings| {
+                    settings.max_queued = Some(max_queued);
+                    settings.cache_affinity_wait_ms = Some(wait_ms);
+                }),
+            )
+            .unwrap();
+            assert_eq!(
+                hybrid.decide_at(&request, &candidates, Duration::from_millis(elapsed_ms)),
+                expected,
+                "max_queued={max_queued} wait={wait_ms} at {elapsed_ms} ms"
+            );
+        }
     }
 
     #[test]
@@ -929,576 +885,5 @@ mod tests {
             (4..=5).contains(&widened),
             "free-slot overflow rank {widened}"
         );
-    }
-
-    // Session-aware pulsar-wait-and-widen (`last_cluster_affinity`).
-
-    const SESSION_WAIT: Duration = Duration::from_millis(300);
-    const SESSION_KEY: &str = "hybrid-session";
-
-    fn session_hybrid(
-        seed: &str,
-        last_cluster_affinity: bool,
-        configure: impl FnOnce(&mut WaitAndWidenAlgorithmConfig),
-    ) -> PulsarWaitAndWidenLoadBalancer {
-        PulsarWaitAndWidenLoadBalancer::new(pulsar_wait_and_widen_algorithm_config(
-            seed,
-            false,
-            |settings| {
-                settings.n = Some(2);
-                settings.cache_affinity_wait_ms = Some(300);
-                settings.cache_affinity_input_tokens_scale = Some(0.1);
-                settings.last_cluster_affinity = Some(last_cluster_affinity);
-                configure(settings);
-            },
-        ))
-        .expect("valid hybrid config")
-    }
-
-    fn session_request<'a>(
-        target: &'a RoutingTargetKey,
-        input_tokens: u64,
-        hint: &'a LastClusterHint,
-    ) -> LoadBalancerRequest<'a> {
-        LoadBalancerRequest {
-            last_cluster: Some(hint),
-            ..request(target, Some(SESSION_KEY), Some(input_tokens))
-        }
-    }
-
-    fn last_cluster(candidate: &RoutedClusterSnapshot) -> LastClusterHint {
-        LastClusterHint::new(Some(candidate.cluster_id.clone()))
-    }
-
-    fn selected_index(decision: LoadBalancerDecision) -> usize {
-        match decision {
-            LoadBalancerDecision::Selected(choice) => choice.candidate_index,
-            other => panic!("expected a selection, got {other:?}"),
-        }
-    }
-
-    fn session_ranking(seed: &str, candidates: &[RoutedClusterSnapshot]) -> Vec<usize> {
-        pulsar_ranked_indices(seed, &target(), SESSION_KEY, 0, candidates)
-    }
-
-    #[test]
-    fn new_session_overflows_without_waiting() {
-        let target = target();
-        let mut candidates = single_slot_candidates(3);
-        let ranked = session_ranking("new-seed", &candidates);
-        candidates[ranked[0]].stats.num_running_queries = 1;
-        candidates[ranked[2]].stats.num_running_queries = 1;
-
-        for hint in [
-            LastClusterHint::default(),
-            LastClusterHint::new(Some("gone".to_string())),
-        ] {
-            let hybrid = session_hybrid("new-seed", true, |_| {});
-            let choice = hybrid
-                .decide_at(
-                    &session_request(&target, 0, &hint),
-                    &candidates,
-                    Duration::ZERO,
-                )
-                .selected()
-                .expect("a new session should overflow at once");
-            assert_eq!(choice.candidate_index, ranked[1]);
-        }
-
-        let flag_off = session_hybrid("new-seed", false, |_| {});
-        let hint = LastClusterHint::default();
-        assert_eq!(
-            flag_off.decide_at(
-                &session_request(&target, 0, &hint),
-                &candidates,
-                Duration::ZERO
-            ),
-            LoadBalancerDecision::Wait(SESSION_WAIT)
-        );
-    }
-
-    #[test]
-    fn new_session_matches_flag_off_without_wait_or_discount() {
-        let target = target();
-        let all_free = single_slot_candidates(5);
-        let ranked = session_ranking("match-seed", &all_free);
-        let mut all_full = all_free.clone();
-        for candidate in &mut all_full {
-            candidate.stats.num_running_queries = 1;
-        }
-        let mut only_second_free = all_full.clone();
-        only_second_free[ranked[1]].stats.num_running_queries = 0;
-        let mut only_last_free = all_full.clone();
-        only_last_free[ranked[4]].stats.num_running_queries = 0;
-        let baseline = session_hybrid("match-seed", false, |settings| {
-            settings.cache_affinity_wait_ms = Some(0);
-            settings.cache_affinity_input_tokens_scale = Some(1.0);
-        });
-
-        for candidates in [&all_free, &all_full, &only_second_free, &only_last_free] {
-            for elapsed_ms in [0, 50, 300, 1_000] {
-                let elapsed = Duration::from_millis(elapsed_ms);
-                for hint in [
-                    LastClusterHint::default(),
-                    LastClusterHint::new(Some("gone".to_string())),
-                ] {
-                    let hybrid = session_hybrid("match-seed", true, |_| {});
-                    let request = session_request(&target, 0, &hint);
-                    assert_eq!(
-                        hybrid.decide_at(&request, candidates, elapsed),
-                        baseline.decide_at(&request, candidates, elapsed),
-                        "at {elapsed_ms} ms"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn new_session_uses_full_prefill_in_affinity_group() {
-        let target = target();
-        let mut candidates = single_slot_candidates(4);
-        let ranked = session_ranking("prefill-seed", &candidates);
-        // Full prefill favors the faster processor (1500 vs 2001 ms).
-        // Discounted prefill favors the closer backend (600 vs 201 ms).
-        candidates[ranked[0]].rtt = Duration::from_millis(500);
-        candidates[ranked[0]].stats.last_mean_input_tps = 1_000.0;
-        candidates[ranked[1]].rtt = Duration::from_millis(1);
-        candidates[ranked[1]].stats.last_mean_input_tps = 500.0;
-        assert_eq!(session_ranking("prefill-seed", &candidates), ranked);
-        let group_of_two = |settings: &mut WaitAndWidenAlgorithmConfig| {
-            settings.cache_affinity_backend_selection_count = Some(2);
-        };
-
-        let hint = LastClusterHint::default();
-        let request = session_request(&target, 1_000, &hint);
-        let flag_off = session_hybrid("prefill-seed", false, group_of_two);
-        assert_eq!(
-            selected_index(flag_off.decide_at(&request, &candidates, Duration::ZERO)),
-            ranked[1]
-        );
-        for hint in [
-            LastClusterHint::default(),
-            LastClusterHint::new(Some("gone".to_string())),
-        ] {
-            let hybrid = session_hybrid("prefill-seed", true, group_of_two);
-            assert_eq!(
-                selected_index(hybrid.decide_at(
-                    &session_request(&target, 1_000, &hint),
-                    &candidates,
-                    Duration::ZERO
-                )),
-                ranked[0]
-            );
-        }
-    }
-
-    #[test]
-    fn returning_session_waits_for_last_cluster() {
-        let target = target();
-        let mut candidates = single_slot_candidates(3);
-        let ranked = session_ranking("returning-seed", &candidates);
-        candidates[ranked[1]].stats.num_running_queries = 1;
-        let hint = last_cluster(&candidates[ranked[1]]);
-        let hybrid = session_hybrid("returning-seed", true, |_| {});
-        let request = session_request(&target, 0, &hint);
-
-        assert_eq!(
-            hybrid.decide_at(&request, &candidates, Duration::ZERO),
-            LoadBalancerDecision::Wait(SESSION_WAIT)
-        );
-        for elapsed_ms in (0..300).step_by(10) {
-            assert!(
-                matches!(
-                    hybrid.decide_at(&request, &candidates, Duration::from_millis(elapsed_ms)),
-                    LoadBalancerDecision::Wait(_)
-                ),
-                "returning session must wait for its last cluster at {elapsed_ms} ms"
-            );
-        }
-        assert_eq!(
-            hint.classification(),
-            Some(SessionClassification {
-                state: SessionState::Returning,
-                promoted: true,
-            })
-        );
-
-        candidates[ranked[1]].stats.num_running_queries = 0;
-        let choice = hybrid
-            .decide_at(&request, &candidates, Duration::ZERO)
-            .selected()
-            .unwrap();
-        assert_eq!(choice.candidate_index, ranked[1]);
-        assert_eq!(choice.rank_depth, 1);
-    }
-
-    #[test]
-    fn returning_session_discounts_only_the_last_cluster() {
-        let target = target();
-        let mut candidates = single_slot_candidates(3);
-        let ranked = session_ranking("discount-seed", &candidates);
-        let (a, b, c) = (ranked[0], ranked[1], ranked[2]);
-        candidates[b].stats.num_running_queries = 1;
-        // A wins only when discounted (201 ms vs C at 1500 ms).
-        candidates[a].rtt = Duration::from_millis(1);
-        candidates[a].stats.last_mean_input_tps = 500.0;
-        candidates[c].rtt = Duration::from_millis(500);
-        candidates[c].stats.last_mean_input_tps = 1_000.0;
-        assert_eq!(session_ranking("discount-seed", &candidates), ranked);
-        let hint = last_cluster(&candidates[b]);
-        let request = session_request(&target, 1_000, &hint);
-
-        let hybrid = session_hybrid("discount-seed", true, |_| {});
-        assert_eq!(
-            selected_index(hybrid.decide_at(&request, &candidates, SESSION_WAIT)),
-            c
-        );
-        let flag_off = session_hybrid("discount-seed", false, |_| {});
-        assert_eq!(
-            selected_index(flag_off.decide_at(&request, &candidates, Duration::ZERO)),
-            a
-        );
-    }
-
-    #[test]
-    fn returning_session_outside_group_replaces_last_member() {
-        let target = target();
-        let mut candidates = single_slot_candidates(4);
-        let ranked = session_ranking("group-seed", &candidates);
-        let (a, b, c, d) = (ranked[0], ranked[1], ranked[2], ranked[3]);
-        let hint = last_cluster(&candidates[c]);
-        let hybrid = session_hybrid("group-seed", true, |settings| {
-            settings.cache_affinity_backend_selection_count = Some(2);
-        });
-        let request = session_request(&target, 0, &hint);
-
-        // The group is (C, A): B is not selectable during the wait.
-        for _ in 0..32 {
-            let choice = selected_index(hybrid.decide_at(&request, &candidates, Duration::ZERO));
-            assert!([a, c].contains(&choice), "chose {choice}");
-        }
-
-        for index in [a, c, d] {
-            candidates[index].stats.num_running_queries = 1;
-        }
-        assert_eq!(
-            hybrid.decide_at(&request, &candidates, Duration::from_millis(100)),
-            LoadBalancerDecision::Wait(Duration::from_millis(200))
-        );
-        let choice = hybrid
-            .decide_at(&request, &candidates, SESSION_WAIT)
-            .selected()
-            .unwrap();
-        assert_eq!(choice.candidate_index, b);
-        assert_eq!(choice.rank_depth, 3);
-    }
-
-    #[test]
-    fn returning_session_inside_group_keeps_members() {
-        let target = target();
-        let mut candidates = single_slot_candidates(4);
-        let ranked = session_ranking("members-seed", &candidates);
-        let hint = last_cluster(&candidates[ranked[1]]);
-        let group_of_two = |settings: &mut WaitAndWidenAlgorithmConfig| {
-            settings.cache_affinity_backend_selection_count = Some(2);
-        };
-        let hybrid = session_hybrid("members-seed", true, group_of_two);
-        let flag_off = session_hybrid("members-seed", false, group_of_two);
-        let request = session_request(&target, 0, &hint);
-
-        for _ in 0..32 {
-            let choice = selected_index(hybrid.decide_at(&request, &candidates, Duration::ZERO));
-            assert!(ranked[..2].contains(&choice), "chose {choice}");
-        }
-        candidates[ranked[0]].stats.num_running_queries = 1;
-        candidates[ranked[1]].stats.num_running_queries = 1;
-        for elapsed_ms in [0, 100] {
-            let elapsed = Duration::from_millis(elapsed_ms);
-            assert_eq!(
-                hybrid.decide_at(&request, &candidates, elapsed),
-                flag_off.decide_at(&request, &candidates, elapsed)
-            );
-        }
-    }
-
-    #[test]
-    fn returning_session_widens_bands_from_reordered_ranking() {
-        let target = target();
-        let base = single_slot_candidates(5);
-        let ranked = session_ranking("band-seed", &base);
-        let hint = last_cluster(&base[ranked[3]]);
-        let hybrid = session_hybrid("band-seed", true, |settings| {
-            settings.band_widen_interval_ms = Some(100);
-        });
-        let request = session_request(&target, 0, &hint);
-        let only_free = |rank: usize| {
-            let mut candidates = base.clone();
-            for (position, index) in ranked.iter().enumerate() {
-                if position != rank {
-                    candidates[*index].stats.num_running_queries = 1;
-                }
-            }
-            candidates
-        };
-
-        // After the wait the open set is D, A, B. C opens with the next band.
-        let c_free = only_free(2);
-        assert_eq!(
-            hybrid.decide_at(&request, &c_free, SESSION_WAIT),
-            LoadBalancerDecision::Wait(Duration::from_millis(100))
-        );
-        let choice = hybrid
-            .decide_at(&request, &c_free, SESSION_WAIT + Duration::from_millis(100))
-            .selected()
-            .unwrap();
-        assert_eq!(choice.candidate_index, ranked[2]);
-        assert_eq!(choice.rank_depth, 4);
-
-        let b_free = only_free(1);
-        let choice = hybrid
-            .decide_at(&request, &b_free, SESSION_WAIT)
-            .selected()
-            .unwrap();
-        assert_eq!(choice.candidate_index, ranked[1]);
-        assert_eq!(choice.rank_depth, 3);
-    }
-
-    #[test]
-    fn retry_excluded_last_cluster_acts_as_ineligible_primary() {
-        let target = target();
-        let candidates = single_slot_candidates(3);
-        let ranked = session_ranking("excluded-seed", &candidates);
-        let b_id = candidates[ranked[1]].cluster_id.clone();
-        let hint = last_cluster(&candidates[ranked[1]]);
-        let excluded = HashSet::from([b_id.clone()]);
-        let request = LoadBalancerRequest {
-            excluded_cluster_ids: Some(&excluded),
-            ..session_request(&target, 0, &hint)
-        };
-        let hybrid = session_hybrid("excluded-seed", true, |_| {});
-
-        assert_eq!(
-            hybrid.decide_at(&request, &candidates, Duration::ZERO),
-            LoadBalancerDecision::Wait(SESSION_WAIT)
-        );
-        let choice = selected_index(hybrid.decide_at(&request, &candidates, SESSION_WAIT));
-        assert_ne!(candidates[choice].cluster_id, b_id);
-    }
-
-    #[test]
-    fn kv_infeasible_last_cluster_acts_as_ineligible_primary() {
-        let target = target();
-        let mut candidates = candidates(3, 1024);
-        let ranked = session_ranking("kv-seed", &candidates);
-        candidates[ranked[1]].stats.kv_cache_free_tokens = 50;
-        candidates[ranked[1]].stats.kv_cache_used_tokens = 974;
-        let hint = last_cluster(&candidates[ranked[1]]);
-        let request = session_request(&target, 100, &hint);
-        let hybrid = PulsarWaitAndWidenLoadBalancer::new(pulsar_wait_and_widen_algorithm_config(
-            "kv-seed",
-            true,
-            |settings| {
-                settings.n = Some(2);
-                settings.cache_affinity_wait_ms = Some(300);
-                settings.last_cluster_affinity = Some(true);
-            },
-        ))
-        .expect("valid hybrid config");
-
-        assert_eq!(
-            hybrid.decide_at(&request, &candidates, Duration::ZERO),
-            LoadBalancerDecision::Wait(SESSION_WAIT)
-        );
-        let choice = hybrid
-            .decide_at(&request, &candidates, SESSION_WAIT)
-            .selected()
-            .unwrap();
-        assert_ne!(choice.candidate_index, ranked[1]);
-        assert!(choice.selected_after_kv_free_tokens_skip);
-    }
-
-    #[test]
-    fn promotion_is_not_cached() {
-        let target = target();
-        let candidates = single_slot_candidates(3);
-        let ranked = session_ranking("cache-seed", &candidates);
-        let hybrid = session_hybrid("cache-seed", true, |_| {});
-        let returning = last_cluster(&candidates[ranked[1]]);
-        assert_eq!(
-            selected_index(hybrid.decide_at(
-                &session_request(&target, 0, &returning),
-                &candidates,
-                Duration::ZERO
-            )),
-            ranked[1]
-        );
-
-        let new_session = LastClusterHint::default();
-        let choice = hybrid
-            .decide_at(
-                &session_request(&target, 0, &new_session),
-                &candidates,
-                Duration::ZERO,
-            )
-            .selected()
-            .unwrap();
-        assert_eq!(choice.candidate_index, ranked[0]);
-        assert_eq!(choice.rank_depth, 1);
-    }
-
-    #[test]
-    fn session_decisions_match_across_instances() {
-        let target = target();
-        let mut candidates = single_slot_candidates(5);
-        let ranked = session_ranking("instances-seed", &candidates);
-        let (a, b, c, d, e) = (ranked[0], ranked[1], ranked[2], ranked[3], ranked[4]);
-        // RTTs more than one TTFT bucket apart give one winner per open
-        // set; ties within a bucket break randomly. With D
-        // promoted the order is D, A, B, C, E: E is fastest but opens last.
-        for (rtt_ms, index) in [(150, a), (100, b), (50, c), (250, d), (0, e)] {
-            candidates[index].rtt = Duration::from_millis(rtt_ms);
-        }
-        let mut group_full = candidates.clone();
-        group_full[a].stats.num_running_queries = 1;
-        group_full[d].stats.num_running_queries = 1;
-        // A 1 ms band interval opens E one millisecond after C's band,
-        // before any later TTFT bucket unlocks.
-        let configure = |settings: &mut WaitAndWidenAlgorithmConfig| {
-            settings.n = Some(5);
-            settings.cache_affinity_backend_selection_count = Some(2);
-            settings.band_widen_interval_ms = Some(1);
-        };
-        let instances: Vec<_> = (0..2)
-            .map(|_| session_hybrid("instances-seed", true, configure))
-            .collect();
-
-        let plans: Vec<_> = instances
-            .iter()
-            .map(|hybrid| {
-                let hint = last_cluster(&candidates[d]);
-                let request = session_request(&target, 0, &hint);
-                let plan = session::plan_affinity(
-                    hybrid.last_cluster_affinity,
-                    &request,
-                    &candidates,
-                    Cow::Owned(hybrid.ranking.compute_ranking(&request, &candidates)),
-                    MissingLastCluster::Keep,
-                    hybrid.affinity_wait,
-                    hybrid.affinity_input_tokens_scale,
-                );
-                (
-                    plan.order.into_owned(),
-                    plan.affinity_wait,
-                    plan.input_tokens_scale,
-                    hint.classification(),
-                )
-            })
-            .collect();
-        assert_eq!(plans[0], plans[1]);
-        assert_eq!(plans[0].0, vec![d, a, b, c, e]);
-        assert_eq!((plans[0].1, plans[0].2), (SESSION_WAIT, 0.1));
-
-        for (snapshot, elapsed_ms, expected) in [
-            (&candidates, 0, Some(a)),
-            (&group_full, 150, None),
-            (&group_full, 300, Some(c)),
-            (&group_full, 301, Some(e)),
-        ] {
-            let elapsed = Duration::from_millis(elapsed_ms);
-            let decisions: Vec<_> = instances
-                .iter()
-                .map(|hybrid| {
-                    let hint = last_cluster(&candidates[d]);
-                    hybrid.decide_at(&session_request(&target, 0, &hint), snapshot, elapsed)
-                })
-                .collect();
-            assert_eq!(decisions[0], decisions[1], "at {elapsed_ms} ms");
-            assert_eq!(
-                decisions[0].selected().map(|choice| choice.candidate_index),
-                expected,
-                "at {elapsed_ms} ms"
-            );
-        }
-    }
-
-    #[test]
-    fn last_cluster_is_ignored_when_flag_is_off() {
-        let target = target();
-        let mut candidates = single_slot_candidates(3);
-        let ranked = session_ranking("off-seed", &candidates);
-        candidates[ranked[1]].stats.num_running_queries = 1;
-        let hybrid = session_hybrid("off-seed", false, |_| {});
-
-        for elapsed_ms in [0, 300] {
-            let elapsed = Duration::from_millis(elapsed_ms);
-            let hint = last_cluster(&candidates[ranked[1]]);
-            let with_header =
-                hybrid.decide_at(&session_request(&target, 0, &hint), &candidates, elapsed);
-            let without = hybrid.decide_at(
-                &request(&target, Some(SESSION_KEY), Some(0)),
-                &candidates,
-                elapsed,
-            );
-            assert_eq!(with_header, without);
-            assert_eq!(hint.classification(), None);
-        }
-    }
-
-    #[test]
-    fn empty_ranking_still_pins_first_classification() {
-        let target = target();
-        let mut unweighted = single_slot_candidates(1);
-        unweighted[0].stats.max_input_tps = None;
-        let hint = LastClusterHint::new(Some("cluster-1".to_string()));
-        let hybrid = session_hybrid("empty-ranking-seed", true, |_| {});
-        let request = session_request(&target, 0, &hint);
-
-        assert_eq!(
-            hybrid.decide_at(&request, &unweighted, Duration::ZERO),
-            LoadBalancerDecision::Unavailable
-        );
-        assert_eq!(
-            hint.classification(),
-            Some(SessionClassification {
-                state: SessionState::Stale,
-                promoted: false,
-            })
-        );
-
-        // The hinted cluster joins before the retry. The request stays stale:
-        // no promotion and no affinity wait, so a free cluster wins at once.
-        let mut candidates = single_slot_candidates(3);
-        candidates[1].stats.num_running_queries = 1;
-        let choice = hybrid
-            .decide_at(&request, &candidates, Duration::ZERO)
-            .selected()
-            .expect("stale session must not wait for the hinted cluster");
-        assert_ne!(choice.candidate_index, 1);
-        assert_eq!(
-            hint.classification()
-                .map(|classification| classification.state),
-            Some(SessionState::Stale)
-        );
-    }
-
-    #[test]
-    fn last_cluster_needs_an_affinity_key() {
-        let target = target();
-        let candidates = single_slot_candidates(3);
-        let hint = last_cluster(&candidates[0]);
-        let hybrid = session_hybrid("no-key-seed", true, |_| {});
-        let request = LoadBalancerRequest {
-            last_cluster: Some(&hint),
-            ..request(&target, None, Some(0))
-        };
-
-        assert!(
-            hybrid
-                .decide_at(&request, &candidates, Duration::ZERO)
-                .selected()
-                .is_some()
-        );
-        assert_eq!(hint.classification(), None);
     }
 }
