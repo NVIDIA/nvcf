@@ -429,10 +429,35 @@ target model's `wait-and-widen` or `pulsar-wait-and-widen` configuration sets
 that holds its KV cache, and a new session goes straight to the best cluster
 that is free now.
 
-A session is the routing key, model, and cache affinity key. Only sessions
-from `prompt_cache_key`, `conversation.id`, `x-multi-turn-session-id`, or
-`x-claude-code-session-id` are eligible. Sessions that fall back to a messages or input hash change key every
-turn, so the gateway never looks them up or stores them.
+A session is the routing key, model, and cache affinity key. Sessions from
+`prompt_cache_key`, `conversation.id`, `x-multi-turn-session-id`, or
+`x-claude-code-session-id` are eligible. Sessions that fall back to a messages
+or input hash are also eligible, with no extra setting.
+
+A messages or input hash changes every turn, so for those sessions the gateway
+keys the store by a prefix chain:
+
+- It writes the cluster under a hash of the full conversation.
+- It looks up under a hash of the conversation before the last contiguous run
+  of model-output items. For chat and Messages these are assistant messages.
+  For Responses they are assistant `message`, `reasoning`, `function_call`,
+  `custom_tool_call`, `web_search_call`, `code_interpreter_call`, `mcp_call`,
+  `mcp_list_tools`, and `mcp_approval_request` items.
+- Messages hashes `system` first. Responses hashes `instructions` and `prompt`
+  first.
+- Values come from the raw request JSON. Object key order and whitespace
+  outside strings do not change them. They are scoped by endpoint, org and
+  project, routing key, and model.
+
+Clients that append to their history and resend it verbatim, including tool
+loops, find the cluster that served the previous turn. Edited, truncated, or
+summarized history and assistant prefill continuation miss and route as new
+sessions. Responses requests with `previous_response_id` or an
+`item_reference` item are skipped. A first turn skips the store read, counts
+as a `miss`, and is written on a 2xx response. Delivery is best-effort: writes
+are asynchronous, entries expire after the TTL, and with Olric off each replica
+has its own store. The `x-cache-affinity-key` header and router placement do
+not change.
 
 The gateway records the `x-stargate-cluster-id` of each 2xx router response
 when the response headers arrive. Errors never change the stored value. A
