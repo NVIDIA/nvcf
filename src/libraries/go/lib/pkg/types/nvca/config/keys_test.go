@@ -201,6 +201,48 @@ agent:
 			}},
 		},
 		{
+			name: "case variants in an inline merge source are reported once",
+			data: `agent:
+  <<: {maxPayloadBytes: 1, MaxPayloadBytes: 2}
+`,
+			want: []*KeyConflictError{{
+				Path:  "agent",
+				Keys:  []string{"maxPayloadBytes", "MaxPayloadBytes"},
+				Lines: []int{2, 2},
+			}},
+		},
+		{
+			name: "case variants nested in an inline merge source",
+			data: `agent:
+  <<:
+    byooLogChunking:
+      maxPayloadBytes: 1
+      MaxPayloadBytes: 2
+`,
+			want: []*KeyConflictError{{
+				Path:  "agent.byooLogChunking",
+				Keys:  []string{"maxPayloadBytes", "MaxPayloadBytes"},
+				Lines: []int{4, 5},
+			}},
+		},
+		{
+			name: "case variants nested in a merge source sequence",
+			data: `base: &base
+  dryRun: true
+agent:
+  <<:
+    - *base
+    - byooLogChunking:
+        maxPayloadBytes: 1
+        MaxPayloadBytes: 2
+`,
+			want: []*KeyConflictError{{
+				Path:  "agent.byooLogChunking",
+				Keys:  []string{"maxPayloadBytes", "MaxPayloadBytes"},
+				Lines: []int{7, 8},
+			}},
+		},
+		{
 			name: "invalid YAML is left to the decoder",
 			data: "agent: [",
 		},

@@ -104,13 +104,35 @@ func (v *keyValidator) walk(node *yaml.Node, path string) {
 		}
 	case yaml.MappingNode:
 		v.checkMapping(node, path)
-		for i := 0; i+1 < len(node.Content); i += 2 {
-			key, value := node.Content[i], node.Content[i+1]
-			if isMergeKey(key) || key.Kind != yaml.ScalarNode {
-				continue
-			}
+		v.walkValues(node, path)
+	}
+}
+
+// walkValues walks the value of every key in a mapping. Values of "<<" merge
+// keys are merged into the mapping at path, so their values are walked at path
+// too.
+func (v *keyValidator) walkValues(node *yaml.Node, path string) {
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key, value := node.Content[i], node.Content[i+1]
+		switch {
+		case isMergeKey(key):
+			v.walkMergeSource(value, path)
+		case key.Kind == yaml.ScalarNode:
 			v.walk(value, joinKeyPath(path, key.Value))
 		}
+	}
+}
+
+// walkMergeSource walks an inline merge source. Its own keys are checked as
+// part of the mapping that merges it, so only its values are walked here.
+func (v *keyValidator) walkMergeSource(node *yaml.Node, path string) {
+	switch node.Kind {
+	case yaml.SequenceNode:
+		for _, child := range node.Content {
+			v.walkMergeSource(child, path)
+		}
+	case yaml.MappingNode:
+		v.walkValues(node, path)
 	}
 }
 
