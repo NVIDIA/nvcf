@@ -77,7 +77,7 @@ python3 llm.py plan --model qwen3.8-27b
 Install and register Qwen FP8 below, replacing `PROFILE_FROM_PLANNER` and `NODE_FROM_PLANNER` with your chosen profile and node. To reuse retained downloads, keep the original release name, namespace and cache node. Completed model files are verified and reused automatically; missing files are downloaded. No cache flag or values file is required. [Model values examples](recipes/README.md#committed-values) are available for optional overrides and other recipes.
 
 ```bash
-helm upgrade --install qwen-fp8 oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.2.0-iiab \
+helm upgrade --install qwen-fp8 oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.3.0-iiab \
   --namespace llm-stack \
   --set recipe=qwen3.8-27b --set profileName=PROFILE_FROM_PLANNER \
   --set 'nodes[0]=NODE_FROM_PLANNER' \
@@ -100,7 +100,7 @@ python3 llm.py plan --model qwen3.8-27b-nvfp4
 Each recipe reserves its own GPU. Running both precisions on one-GPU nodes requires two distinct available nodes before installation. For the second model, replace `PROFILE_FROM_PLANNER` with its profile and `SECOND_NODE_FROM_PLANNER` with an available node different from the first model's node. If no GPU is free, [stop another model](#stop-and-resume) before installing.
 
 ```bash
-helm upgrade --install qwen-nvfp4 oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.2.0-iiab \
+helm upgrade --install qwen-nvfp4 oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.3.0-iiab \
   --namespace llm-stack \
   --set recipe=qwen3.8-27b-nvfp4 --set profileName=PROFILE_FROM_PLANNER \
   --set 'nodes[0]=SECOND_NODE_FROM_PLANNER' \
@@ -168,7 +168,7 @@ These actions affect one model release. Keep the shared gateway and operator ins
 Stop the FP8 release installed above. Use the same chart version that installed the release:
 
 ```bash
-helm upgrade qwen-fp8 oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.2.0-iiab \
+helm upgrade qwen-fp8 oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.3.0-iiab \
   --namespace llm-stack \
   --reuse-values --set suspended=true --timeout 10m &&
 kubectl -n llm-stack wait --for=delete pod \
@@ -180,7 +180,7 @@ Wait for the pods to terminate before assigning their GPUs to another model. The
 Resume when those GPUs are available again:
 
 ```bash
-helm upgrade qwen-fp8 oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.2.0-iiab \
+helm upgrade qwen-fp8 oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.3.0-iiab \
   --namespace llm-stack \
   --reuse-values --set suspended=false --wait --timeout 120m
 ```

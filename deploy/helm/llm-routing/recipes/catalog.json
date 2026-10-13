@@ -311,6 +311,7 @@
     },
     {
       "id": "qwen3.5-4b",
+      "chartRepository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
       "name": "Qwen3.5-4B",
       "description": "Qwen3.5-4B is a 4.7 billion parameter language model from Qwen that mixes linear and full attention layers and supports up to 262,144 tokens of context. This recipe serves the BF16 build on one DGX Spark, with up to 32,768 tokens of context and 4 concurrent requests, or on one DGX Station, with up to 8,192 tokens and 1 request at a time.",
       "releaseName": "qwen35-4b",
@@ -696,6 +697,7 @@
     },
     {
       "id": "nemotron-nano-12b-v2",
+      "chartRepository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
       "name": "Nemotron Nano 12B v2",
       "description": "NVIDIA Nemotron Nano 12B v2 is a 12.3 billion parameter hybrid language model built mostly from Mamba-2 and MLP layers with only six attention layers, and it supports up to 131,072 tokens of context. This recipe serves the BF16 build on one DGX Spark, with up to 16,384 tokens of context, or on one DGX Station, with up to 8,192 tokens.",
       "releaseName": "nemotron-nano",
@@ -977,6 +979,7 @@
     },
     {
       "id": "nemotron-3.5-lightning",
+      "chartRepository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
       "name": "Nemotron 3.5 Lightning 30B-A3B",
       "description": "NVIDIA Nemotron 3.5 Lightning is a 30 billion parameter mixture-of-experts model that activates 3 billion parameters per token. It combines Mamba-2, mixture-of-experts and attention layers and supports up to 1 million tokens of context. This recipe serves the NVFP4 build on one DGX Spark, with up to 16,384 tokens of context, or on one DGX Station, with up to 8,192 tokens, with reasoning and tool-call parsing enabled.",
       "releaseName": "nemotron-lightning",
@@ -1648,6 +1651,7 @@
     },
     {
       "id": "deepseek-v4-flash",
+      "chartRepository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
       "name": "DeepSeek V4 Flash",
       "description": "DeepSeek V4 Flash is a mixture-of-experts language model with 284 billion parameters, 13 billion active per token, and support for up to 1 million tokens of context. This recipe serves it with FP4 expert weights across two DGX Spark nodes joined by a 200 Gbps link, or across two DGX Station nodes, with an 8,192-token context.",
       "releaseName": "deepseek-v4",
