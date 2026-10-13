@@ -1423,7 +1423,7 @@ adminIssuerProxy:
   {{- . | nindent 2 }}
   {{- end }}
   gateway:
-    enabled: true
+    enabled: {{ dig "adminIssuerProxy" "gateway" "enabled" true .Values }}
     namespace: {{ .Values.ingress.gatewayApi.gateways.shared.namespace }}
     gatewayRef:
       name: {{ required "ingress.gatewayApi.gateways.shared.name is required" .Values.ingress.gatewayApi.gateways.shared.name }}
@@ -2101,10 +2101,12 @@ nvcfUi:
         namespace: {{ $apiKeysBackend.namespace }}
         endpoints:
           - {{ printf "%s.%s.svc.cluster.local:%v/health" $apiKeysBackend.name $apiKeysBackend.namespace $apiKeysBackend.port }}
+      {{- if dig "adminIssuerProxy" "enabled" true .Values }}
       - name: admin-issuer-proxy
         namespace: api-keys
         endpoints:
           - admin-token-issuer-proxy.api-keys.svc.cluster.local:8080/healthz
+      {{- end }}
       - name: nats-auth-callout-service
         namespace: nats-system
         endpoints:

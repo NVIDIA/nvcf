@@ -594,6 +594,13 @@ invocation:
     maxUnavailable: 1
 
 adminIssuerProxy:
+  # Mints admin JWTs for `nvcf-cli init` without authenticating the caller.
+  # Defaults to true so existing installs are unchanged. The condition only
+  # skips the release; one already installed stays until it is uninstalled.
+  enabled: true
+  # The api-keys.<domain>/v1/admin/keys route; false keeps it in-cluster only.
+  gateway:
+    enabled: true
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
