@@ -224,6 +224,7 @@ func TestLastClusterRoundTrip(t *testing.T) {
 			requestctx.SessionSourcePromptCacheKey,
 			requestctx.SessionSourceConversationID,
 			requestctx.SessionSourceHeader,
+			requestctx.SessionSourceClaudeCodeHeader,
 		} {
 			t.Run(path+"/"+source, func(t *testing.T) {
 				ctx := context.Background()

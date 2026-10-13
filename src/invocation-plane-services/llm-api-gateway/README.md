@@ -82,9 +82,9 @@ uses the hint only for models whose routing algorithm sets
 
 - A session is the tuple of routing key, model, and cache affinity key.
 - Only sessions from `prompt_cache_key`, `conversation_id`, or the
-  `x-multi-turn-session-id` header are eligible. Payload-derived sessions hash
-  the full message list, which changes every turn, so they are never looked up
-  or stored. Sessions from `x-claude-code-session-id` are also skipped.
+  `x-multi-turn-session-id` or `x-claude-code-session-id` header are eligible.
+  Payload-derived sessions hash the full message list, which changes every
+  turn, so they are never looked up or stored.
 - The gateway writes the `x-stargate-cluster-id` of a 2xx Stargate response
   when the response headers arrive, before a stream ends. Non-2xx responses and
   transport errors never change the stored value. Writes run in the background

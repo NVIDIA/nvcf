@@ -190,6 +190,7 @@ func TestTrackerRoundTripForEligibleSources(t *testing.T) {
 		requestctx.SessionSourcePromptCacheKey,
 		requestctx.SessionSourceConversationID,
 		requestctx.SessionSourceHeader,
+		requestctx.SessionSourceClaudeCodeHeader,
 	} {
 		t.Run(source, func(t *testing.T) {
 			ctx := context.Background()
@@ -219,7 +220,6 @@ func TestTrackerSkipsIneligibleSessions(t *testing.T) {
 
 	for _, source := range []string{
 		requestctx.SessionSourcePayload,
-		requestctx.SessionSourceClaudeCodeHeader,
 		"unknown",
 	} {
 		key, clusterID := tracker.Lookup(ctx, sessionCtx(source), "company/model")
@@ -241,8 +241,8 @@ func TestTrackerSkipsIneligibleSessions(t *testing.T) {
 		t.Fatalf("store gets=%d sets=%d, want 0 and 0", gets, sets)
 	}
 	lookups := counterValues(t, reader, "llm_api_gateway_last_cluster_lookups_total")
-	if lookups["skipped"] != 4 || len(lookups) != 1 {
-		t.Fatalf("lookups = %v, want only skipped=4", lookups)
+	if lookups["skipped"] != 3 || len(lookups) != 1 {
+		t.Fatalf("lookups = %v, want only skipped=3", lookups)
 	}
 }
 

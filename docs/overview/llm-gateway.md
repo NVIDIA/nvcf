@@ -430,8 +430,8 @@ that holds its KV cache, and a new session goes straight to the best cluster
 that is free now.
 
 A session is the routing key, model, and cache affinity key. Only sessions
-from `prompt_cache_key`, `conversation.id`, or `x-multi-turn-session-id` are
-eligible. Sessions that fall back to a messages or input hash change key every
+from `prompt_cache_key`, `conversation.id`, `x-multi-turn-session-id`, or
+`x-claude-code-session-id` are eligible. Sessions that fall back to a messages or input hash change key every
 turn, so the gateway never looks them up or stores them.
 
 The gateway records the `x-stargate-cluster-id` of each 2xx router response

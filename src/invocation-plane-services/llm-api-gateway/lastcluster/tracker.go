@@ -104,7 +104,8 @@ func eligibleSource(source string) bool {
 	switch source {
 	case requestctx.SessionSourcePromptCacheKey,
 		requestctx.SessionSourceConversationID,
-		requestctx.SessionSourceHeader:
+		requestctx.SessionSourceHeader,
+		requestctx.SessionSourceClaudeCodeHeader:
 		return true
 	default:
 		return false
