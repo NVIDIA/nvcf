@@ -354,10 +354,14 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       Given environment variable "SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES" is set
       And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
 
-      When I successfully run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-multi-helm-function-missing-resources --helm-chart ${SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES} --helm-chart-service entrypoint --inference-url /echo --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S
-        """
+      When I successfully create function "bdd-multi-helm-function-missing-resources" from Helm chart "${SAMPLE_HELM_FUNCTION_CHART_WITHOUT_RESOURCES}" with CLI options:
+        | option               | value      |
+        | --helm-chart-service | entrypoint |
+        | --inference-url      | /echo      |
+        | --inference-port     | 8000       |
+        | --health-uri         | /health    |
+        | --health-port        | 8000       |
+        | --health-timeout     | PT30S      |
 
       When I run command:
         """
@@ -376,12 +380,14 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       # ReVal renders the chart on the control plane before NVCA deploys the
       # workload in the separate compute cluster. Successful invocation proves
       # that the complete chart-backed path works across the cluster boundary.
-      # TODO(#1871): Replace this raw command with a table-backed Helm function
-      # create step so the options remain readable.
-      When I successfully run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-multi-helm-function --helm-chart ${SAMPLE_HELM_FUNCTION_CHART} --helm-chart-service entrypoint --inference-url /echo --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S
-        """
+      When I successfully create function "bdd-multi-helm-function" from Helm chart "${SAMPLE_HELM_FUNCTION_CHART}" with CLI options:
+        | option               | value      |
+        | --helm-chart-service | entrypoint |
+        | --inference-url      | /echo      |
+        | --inference-port     | 8000       |
+        | --health-uri         | /health    |
+        | --health-port        | 8000       |
+        | --health-timeout     | PT30S      |
 
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |

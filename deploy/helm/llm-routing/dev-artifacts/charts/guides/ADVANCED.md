@@ -403,6 +403,33 @@ kubectl --context "$CONTEXT" --namespace llm-stack wait \
   --for=condition=Registered "inferenceendpoint/$MODEL_RELEASE" --timeout=5m
 ```
 
+### Start and stop an installed model by replica count
+
+`llm.py stop` and `llm.py start` scale a model's deployments to zero and back to one. The Helm release, deployments, endpoint and caches stay in place, so the gateway registry lists a stopped model as unhealthy. Clients that list `/v1/models` do not see it. Run from `deploy/helm/llm-routing` with an explicit context:
+
+```bash
+python3 llm.py --context "$CONTEXT" start --model qwen3.5-4b --dry-run
+python3 llm.py --context "$CONTEXT" start --model qwen3.5-4b --wait
+python3 llm.py --context "$CONTEXT" stop --release qwen35-4b
+```
+
+Pass `--model` with the served model ID or recipe ID, or `--release` with the Helm release name. Release `llm-stack` is reserved for the shared stack.
+
+Before a start, the command reads the live cluster and checks that every stopped deployment fits on its node. It compares the GPUs, memory and CPU the deployment requests with what is free after other pods. Nothing scales when a check fails. A blocked start exits with status `2` and names each shortage, the models holding the node and the command that frees it:
+
+```text
+Node n2 cannot fit deepseek-v4-serve-1 (GPU: needs 1, 0 free; memory: needs 80.0 GiB, 12.0 GiB free). In use by qwen3.5-4b.
+```
+
+Options:
+
+- `--dry-run` prints the check and the scale commands without changing anything.
+- `--stop-blockers` on `start` stops the models that hold the needed GPUs, waits for their pods to end, then starts the requested model. Without it, no other model is touched.
+- `--wait` on `start` waits until the endpoint reports Ready. `--timeout` sets the limit, for example `30m`; the default is `60m`.
+- `--json` prints the report for other tools.
+
+A running model is reported as already running and a stopped model as already stopped. The check is a point-in-time snapshot and does not reserve capacity, so Kubernetes can still leave a pod Pending if another workload claims the GPU first. A later `helm upgrade` without `--reuse-values` restores the chart's replica count. The [UI start and stop specification](recipes/UI-MODEL-CONTROLS.md) describes how a UI backend reuses this check.
+
 ### Remove and reinstall a recipe
 
 ```bash

@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -164,4 +165,40 @@ func TestNewESSAccountsSecretEnvs(t *testing.T) {
 			assert.NoError(t, err)
 		})
 	}
+}
+
+func TestNewESSContainerSecurityContext(t *testing.T) {
+	ctx := NewESSContainerSecurityContext()
+	assert.Equal(t, EssAgentUID, *ctx.RunAsUser)
+	assert.Equal(t, EssAgentUID, *ctx.RunAsGroup)
+	assert.True(t, *ctx.RunAsNonRoot)
+	assert.False(t, *ctx.AllowPrivilegeEscalation)
+	assert.Equal(t, []corev1.Capability{"ALL"}, ctx.Capabilities.Drop)
+	assert.Equal(t, []corev1.Capability{"CHOWN"}, ctx.Capabilities.Add)
+}
+
+func TestNewESSInitContainerUsesESSSecurityContext(t *testing.T) {
+	container := NewESSInitContainer("ess-agent:latest", nil)
+	require.NotNil(t, container.SecurityContext)
+	assert.Equal(t, EssAgentUID, *container.SecurityContext.RunAsUser)
+	assert.True(t, *container.SecurityContext.RunAsNonRoot)
+}
+
+func TestNewESSContainerUsesESSSecurityContext(t *testing.T) {
+	container := NewESSContainer("ess-agent:latest", nil)
+	require.NotNil(t, container.SecurityContext)
+	assert.Equal(t, EssAgentUID, *container.SecurityContext.RunAsUser)
+	assert.True(t, *container.SecurityContext.RunAsNonRoot)
+}
+
+func TestEnsureESSFSGroup(t *testing.T) {
+	spec := &corev1.PodSpec{}
+	EnsureESSFSGroup(spec)
+	assert.Equal(t, EssAgentUID, *spec.SecurityContext.FSGroup)
+	assert.Equal(t, corev1.FSGroupChangeOnRootMismatch, *spec.SecurityContext.FSGroupChangePolicy)
+
+	otherGroup := int64(2000)
+	spec.SecurityContext.FSGroup = &otherGroup
+	EnsureESSFSGroup(spec)
+	assert.Equal(t, otherGroup, *spec.SecurityContext.FSGroup, "must preserve an explicitly configured fsGroup")
 }

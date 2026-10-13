@@ -1,18 +1,22 @@
 # Caches Runbook
 
-## UCC & DDCS
+## OVCC and OVDC
 
 Caching is a critical component of the rendering pipeline. However, being that these
 services are caches, data loss is tolerated by the rendering pipeline. Offline pods
 or missing data will result in reduced simulation performance, i.e. increased load times.
 
-Each DDCS replica/pod is a partition of the data set. Partial data loss in DDCS
+Each OVDC replica/pod is a partition of the data set. Partial data loss in OVDC
 will trigger re-computation for some or all of the data set.
 
-UCC replicas serve as a pull-through cache for USD assets and are populated on-demand
+OVCC replicas serve as a pull-through cache for USD assets and are populated on-demand
 during scene load time. Each replica will contain a distinct
 copy of the source content. Data loss of a pod means traffic serviced by that peer
 may see reduced performance as the cache is rebuilt from requests to the source.
+
+Use the [OVDC runbooks](https://docs.omniverse.nvidia.com/ovcaches/ovderivedcache/latest/runbooks/index.html)
+and [OVCC runbooks](https://docs.omniverse.nvidia.com/ovcaches/ovcontentcache/latest/runbooks/index.html)
+for component-specific metrics and troubleshooting.
 
 ### Cache Co-locality
 

@@ -20,10 +20,10 @@ Common operator questions and where to look on this page or in linked references
 
 Self-hosted NVCF control-plane observability enables users to monitor the health and performance of their NVCF deployment. The observability solution is designed to be:
 
-- **Cloud-agnostic**: Works in any Kubernetes environment (cloud provider, on-premises, or air-gapped)
-- **Offline-capable**: Fully functional in isolated networks without external dependencies
-- **Bring-Your-Own (BYO)**: Integrates with your existing observability platforms
-- **No vendor lock-in**: Uses open standards (Prometheus, OpenTelemetry, OTLP)
+- Cloud-agnostic: Works in any Kubernetes environment (cloud provider, on-premises, or air-gapped)
+- Offline-capable: Fully functional in isolated networks without external dependencies
+- Bring-Your-Own (BYO): Integrates with your existing observability platforms
+- No vendor lock-in: Uses open standards (Prometheus, OpenTelemetry, OTLP)
 
 The observability solution currently provides:
 
@@ -33,7 +33,7 @@ The observability solution currently provides:
 - [Dashboards]: Reference Grafana dashboards for key metrics
 
 <Note>
-**Looking for a quick start?** If you want to quickly deploy example observability components
+Looking for a quick start? If you want to quickly deploy example observability components
 to explore metrics, logs, and dashboards, see [self-hosted-example-dashboards](./example-dashboards.md).
 
 The example deployments are designed for development and testing only, and are not suitable
@@ -46,7 +46,7 @@ integrate with your own observability infrastructure.
 
 NVCF self-hosted observability is currently in Early Access (EA). During EA, NVCF provides interfaces and documentation for you to integrate with your own observability backend:
 
-**What's Provided:**
+What's Provided:
 
 - Documented metrics for critical control-plane services
 - Example scrape targets for prometheus-operator ServiceMonitor configuration
@@ -56,7 +56,7 @@ NVCF self-hosted observability is currently in Early Access (EA). During EA, NVC
 - Configuration and deployment documentation
 - Example dashboards for key metrics
 
-**Your Responsibility:**
+Your Responsibility:
 
 - Configure storage for bundled VictoriaMetrics or connect an existing backend
 - Configure compute-plane collection for split deployments
@@ -67,27 +67,27 @@ NVCF self-hosted observability is currently in Early Access (EA). During EA, NVC
 
 The following control-plane services expose metrics and logs for monitoring:
 
-**Core NVCF Services:**
+Core NVCF Services:
 
-- **NVCF API**: Main API for function management and invocation
-- **Invocation Service**: Handles function invocation requests
-- **SPOT Instance Service (SIS)**: Manages worker pod and cluster state
-- **State Metrics Service**: Aggregates and exports NVCF-specific metrics
-- **Function Autoscaler**: Calculates desired function instance counts
+- NVCF API: Main API for function management and invocation
+- Invocation Service: Handles function invocation requests
+- SPOT Instance Service (SIS): Manages worker pod and cluster state
+- State Metrics Service: Aggregates and exports NVCF-specific metrics
+- Function Autoscaler: Calculates desired function instance counts
 
-**Supporting Services:**
+Supporting Services:
 
-- **Cassandra (C\*)**: Primary database for control-plane state
-- **OpenBao/Vault**: Secret management and S2S authentication
-- **Encrypted Secrets Service (ESS)**: Function and account secrets
-- **NATS Core**: Pub/sub messaging
-- **NATS JetStream**: Persistent messaging
+- Cassandra (C\*): Primary database for control-plane state
+- OpenBao/Vault: Secret management and S2S authentication
+- Encrypted Secrets Service (ESS): Function and account secrets
+- NATS Core: Pub/sub messaging
+- NATS JetStream: Persistent messaging
 
-**Worker Pod Components:**
+Worker Pod Components:
 
-- **Utils Container**: Proxy to NATS from user applications
-- **Init Container**: Setup and resource loading
-- **Inference Container**: Inference workload
+- Utils Container: Proxy to NATS from user applications
+- Init Container: Setup and resource loading
+- Inference Container: Inference workload
 
 ## Architecture
 
@@ -95,11 +95,11 @@ The following control-plane services expose metrics and logs for monitoring:
 
 All control-plane services expose Prometheus-compatible metrics endpoints. You can scrape these metrics using:
 
-- **Prometheus Operator**: Create ServiceMonitor resources based on the provided scrape targets
-- **Prometheus**: Configure scrape targets manually
-- **OpenTelemetry Collector**: Use the Prometheus receiver
+- Prometheus Operator: Create ServiceMonitor resources based on the provided scrape targets
+- Prometheus: Configure scrape targets manually
+- OpenTelemetry Collector: Use the Prometheus receiver
 
-**Metrics Documentation:**
+Metrics Documentation:
 
 Detailed metrics documentation is available for each service, including metric names,
 types, labels, and descriptions. See the per-service metrics reference under the
@@ -137,7 +137,7 @@ Profiles set defaults. Individual components can use `install`, `existing`, or
 
 The bundled VictoriaMetrics instance runs in `monitoring` by default. Configure
 its persistent volume in the Helmfile environment if the defaults are not
-suitable. See [Helmfile Installation](/nvcf/self-managed/helmfile-installation#observability-configuration).
+suitable. See [Helmfile Installation](../self-managed/helmfile-installation.md#observability-configuration).
 
 Use `metricsBackend.mode: existing` to connect a customer-managed backend:
 
@@ -158,16 +158,16 @@ for PromQL queries. Configure collector remote-write authentication separately.
 
 The shared collector discovers targets only in its Kubernetes cluster. In a
 split deployment, configure compute-plane collection separately. See [Cluster
-Monitoring](/nvcf/compute-plane/cluster-monitoring).
+Monitoring](../compute-plane/cluster-management/monitoring.md).
 
 ### Logging
 
-**Log Format:**
+Log Format:
 
 - All services emit logs to stdout/stderr (standard for Kubernetes)
 - Sensitive data redaction must be configured by the log collector
 
-**Log Collection:**
+Log Collection:
 
 You can collect logs using any Kubernetes-compatible log aggregator:
 
@@ -176,7 +176,7 @@ You can collect logs using any Kubernetes-compatible log aggregator:
 - Filebeat (for Elasticsearch)
 - OpenTelemetry Collector (filelog receiver)
 
-**System Logs:**
+System Logs:
 
 System logs are available at standard UNIX locations and from the systemd journal.
 
@@ -341,7 +341,7 @@ Reference Grafana dashboards are provided for control-plane services showing cri
 
 - State Metrics Service
 
-**Dashboard Location:**
+Dashboard Location:
 
 Dashboards are provided in native Grafana JSON format for [file-provisioning](https://grafana.com/docs/grafana/latest/administration/provisioning/#dashboards).
 
@@ -354,7 +354,7 @@ Published dashboards will be available in the
 
 For troubleshooting common observability issues:
 
-**Metrics not appearing:**
+Metrics not appearing:
 
 1. Verify the service is exposing metrics:
 
@@ -396,9 +396,9 @@ For troubleshooting common observability issues:
    ```
 
 For shared stack or Function Autoscaler issues, see
-[Function Autoscaler Operations](/nvcf/self-managed/operations).
+[Function Autoscaler Operations](../self-managed/autoscaling/operations.md).
 
-**Logs not being collected:**
+Logs not being collected:
 
 1. Verify log collector DaemonSet is running:
 
@@ -440,7 +440,7 @@ For shared stack or Function Autoscaler issues, see
 
 ## Security
 
-**Metrics Endpoints:**
+Metrics Endpoints:
 
 - Metrics endpoints should be accessed over HTTP in-cluster only
 
@@ -455,9 +455,9 @@ For shared stack or Function Autoscaler issues, see
 
 ## Related Documentation
 
-- [Function Autoscaling](/nvcf/self-managed/function-autoscaling-overview)
+- [Function Autoscaling](../self-managed/autoscaling/index.md)
 - [Function Autoscaler Observability](./metrics/function-autoscaler/metrics.md)
-- [Cluster Monitoring](/nvcf/compute-plane/cluster-monitoring)
+- [Cluster Monitoring](../compute-plane/cluster-management/monitoring.md)
 - [OpenTelemetry documentation](https://opentelemetry.io/docs/)
 - [Prometheus documentation](https://prometheus.io/docs/)
 

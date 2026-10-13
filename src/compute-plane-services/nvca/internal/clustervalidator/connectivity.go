@@ -21,6 +21,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -76,15 +77,16 @@ func (e Endpoint) DisplayAddr() string {
 	return fmt.Sprintf("%s:%d", e.Host, e.Port)
 }
 
-// TestEndpoint checks connectivity to the endpoint based on its protocol.
-func TestEndpoint(ep Endpoint) bool {
+// TestEndpoint checks connectivity to the endpoint based on its protocol. Every
+// probe is bounded by defaultConnectTimeout and by ctx.
+func TestEndpoint(ctx context.Context, ep Endpoint) bool {
 	switch ep.Protocol {
 	case protocolHTTPS:
-		return testHTTPS(ep.URL)
+		return testHTTPS(ctx, ep.URL)
 	case protocolTCP:
-		return testTCP(ep.Host, ep.Port, false)
+		return testTCP(ctx, ep.Host, ep.Port, false)
 	case protocolTCPTLS:
-		return testTCP(ep.Host, ep.Port, true)
+		return testTCP(ctx, ep.Host, ep.Port, true)
 	default:
 		return false
 	}
@@ -93,7 +95,7 @@ func TestEndpoint(ep Endpoint) bool {
 // testHTTPS performs an HTTP HEAD request. Any response (including HTTP errors,
 // TLS handshake errors, or non-HTTP responses like gRPC) indicates the server
 // is reachable.
-func testHTTPS(url string) bool {
+func testHTTPS(ctx context.Context, url string) bool {
 	client := &http.Client{
 		Timeout: defaultConnectTimeout,
 		Transport: &http.Transport{
@@ -106,7 +108,7 @@ func testHTTPS(url string) bool {
 		},
 	}
 
-	req, err := http.NewRequest(http.MethodHead, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 	if err != nil {
 		return false
 	}
@@ -154,10 +156,14 @@ func isTLSOrProtocolError(err error) bool {
 }
 
 // testTCP dials a TCP connection (optionally wrapping with TLS). An SSL
-// handshake error still counts as reachable.
-func testTCP(host string, port int, useTLS bool) bool {
+// handshake error still counts as reachable, but a handshake that gets no
+// answer does not: a wedged server can complete TCP from its listen backlog
+// and never reply to the ClientHello.
+func testTCP(ctx context.Context, host string, port int, useTLS bool) bool {
+	ctx, cancel := context.WithTimeout(ctx, defaultConnectTimeout)
+	defer cancel()
 	addr := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-	conn, err := net.DialTimeout("tcp", addr, defaultConnectTimeout)
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return false
 	}
@@ -168,7 +174,11 @@ func testTCP(host string, port int, useTLS bool) bool {
 			ServerName: host,
 			MinVersion: tls.VersionTLS12,
 		})
-		if err := tlsConn.Handshake(); err != nil {
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			var netErr net.Error
+			if ctx.Err() != nil || (errors.As(err, &netErr) && netErr.Timeout()) {
+				return false
+			}
 			// TLS error means the server responded, so it is reachable.
 			return true
 		}

@@ -10,24 +10,15 @@ The default chart values do not set the required image registry and repository. 
 
 ## Chart Layout
 
-This subtree intentionally keeps a release chart even though the NVCA source
-tree also contains a source chart:
+`deploy/helm/nvca-operator/nvca-operator` is the only chart. Edit it directly.
 
-- `src/compute-plane-services/nvca/deployments/nvca-operator` is the source
-  chart kept next to the operator and agent code. Use it when chart behavior is
-  coupled to NVCA code changes.
-- `deploy/helm/nvca-operator/nvca-operator` is the NVCF release chart for
-  self-managed deployments. `make vendor-chart` regenerates it from the source
-  chart and then applies the release-specific defaults, chart name
-  `helm-nvca-operator`, version metadata, self-managed placeholder endpoints,
-  image defaults, supplemental image metadata, and license headers.
-- Keeping both charts avoids a release chart that must reach back into the NVCA
-  source tree at publish time, while still making behavior changes start beside
-  the code they ship with.
+It is published on two lanes from this one source. The NGC lane renames it to
+`nvca-operator` and injects the control-plane endpoints that cannot live in a
+public repository. The OCI lane publishes it as `helm-nvca-operator`, which the
+compute-plane stack pins.
 
-Do not edit the vendored chart copy in isolation for source chart behavior.
-Make the source chart change first, run `make vendor-chart`, and commit the
-resulting release chart diff.
+The chart ships neutral defaults: values that belong to a particular deployment
+are supplied by whoever installs it, not shipped as published defaults.
 
 Example:
 
@@ -90,7 +81,7 @@ Important settings to review before deployment:
 - `imagePullSecretName` and `generateImagePullSecret` for private registry access
 - `replicaCount`, resource requests, and limits for your environment
 - `otelCollector.enabled` and `otelCollector.config.*` for the optional event-collection sidecar
-- `clusterValidator.*` for the cluster validation hook image and behavior
+- `clusterValidator.*` for the cluster-validator: the operator's init container, the CronJob, and under role `control-plane` the runs the operator starts when the validator spec changes
 
 The default values include development-oriented placeholders. Override them before using the chart in any shared or production environment.
 

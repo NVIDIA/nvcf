@@ -21,6 +21,7 @@ use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 
+use crate::runtime_state::PylonRuntimeState;
 use crate::stats::{PylonMetrics, RegistrationStreamClosure};
 use stargate_auth::AuthTokenProvider;
 use stargate_proto::REGISTRATION_HEARTBEAT_MS_METADATA;
@@ -29,9 +30,9 @@ use stargate_proto::pb::{InferenceServerAck, InferenceServerRegistration, Infere
 use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
 
 use super::grpc_endpoint::{
-    StargateGrpcEndpoint, connect_stargate_grpc_channel, log_stargate_grpc_certificate_failure,
+    StargateGrpcEndpoint, classify_stargate_grpc_certificate_failure,
+    connect_stargate_grpc_channel, grpc_error_chain, log_stargate_grpc_certificate_failure,
 };
-use super::reconnect::{ReconnectBackoff, StreamOpenFailureLog};
 use super::reverse_tunnel::{
     ReverseTunnelState, reverse_tunnel_endpoint_from_ack, run_reverse_tunnel_loop,
 };
@@ -45,13 +46,8 @@ pub(super) async fn run_router_registration_stream(
     config: Arc<RegistrationSessionConfig>,
     stop: CancellationToken,
 ) {
-    let router_addr = router_endpoint.authority_addr().to_string();
+    let router_addr = router_endpoint.metric_addr();
     let mut last_certificate_failure = None;
-    let mut open_failures = StreamOpenFailureLog::new("register_inference_server");
-    let mut backoff = ReconnectBackoff::new(
-        config.reconnect_initial_backoff,
-        config.reconnect_max_backoff,
-    );
     let mut closures =
         RegistrationStreamClosures::new(config.forwarding.metrics.as_deref(), &router_addr);
 
@@ -66,22 +62,30 @@ pub(super) async fn run_router_registration_stream(
             ) => connection,
         };
         let (mut ack_stream, update_tx) = match connection {
-            Ok(connection) => {
-                last_certificate_failure = None;
-                open_failures.record_opened();
-                connection
-            }
+            Ok(connection) => connection,
             Err(error) => {
+                closures.record_open_failure(&error);
                 last_certificate_failure = log_stargate_grpc_certificate_failure(
                     &router_endpoint,
                     "register_inference_server",
                     error.as_ref(),
                     last_certificate_failure,
                 );
-                closures.record_open_failure(&error);
-                let delay = backoff.next_delay();
-                open_failures.record(&router_addr, error.as_ref(), delay);
-                if !wait_before_reconnect(&router_addr, delay, &stop).await {
+                if classify_stargate_grpc_certificate_failure(error.as_ref()).is_none() {
+                    tracing::warn!(
+                        transport = "grpc",
+                        operation = "register_inference_server",
+                        endpoint = %router_endpoint,
+                        cluster_id = %config.cluster_id,
+                        error = %grpc_error_chain(error.as_ref()),
+                        "Stargate gRPC operation failed"
+                    );
+                }
+                if stop
+                    .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
+                    .await
+                    .is_none()
+                {
                     return;
                 }
                 continue;
@@ -120,7 +124,13 @@ pub(super) async fn run_router_registration_stream(
                 reverse_connected,
             )
         };
-        let initial_registration = current_registration(reverse_state_rx.borrow().is_connected());
+        // Routers act on these stats, so publish request state changes as
+        // they happen. Coalescing bounds the update rate under load; the
+        // heartbeat interval below remains the liveness signal.
+        let (mut registration_changes, initial_registration) =
+            subscribe_then_snapshot(&config.forwarding.runtime_state, || {
+                current_registration(reverse_state_rx.borrow().is_connected())
+            });
         let mut advertised_status =
             RouterAdvertisedStatusTracker::new(config.forwarding.metrics.as_deref(), &router_addr);
         advertised_status.record_reverse_tunnel_connected(false);
@@ -133,7 +143,11 @@ pub(super) async fn run_router_registration_stream(
             if let Some(task) = reverse_task {
                 task.shutdown(TASK_SHUTDOWN_TIMEOUT).await;
             }
-            if !wait_before_reconnect(&router_addr, backoff.next_delay(), &stop).await {
+            if stop
+                .run_until_cancelled(tokio::time::sleep(Duration::from_millis(200)))
+                .await
+                .is_none()
+            {
                 return;
             }
             continue;
@@ -143,6 +157,8 @@ pub(super) async fn run_router_registration_stream(
 
         let mut tick_interval = tokio::time::interval(config.min_update_interval);
         tick_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut changes_open = true;
+        let mut coalesced_send_at: Option<Instant> = None;
 
         let stopped = loop {
             let reverse_connected = tokio::select! {
@@ -167,20 +183,55 @@ pub(super) async fn run_router_registration_stream(
                     }
                     connected
                 }
+                changed = registration_changes.changed(),
+                    if changes_open && coalesced_send_at.is_none() =>
+                {
+                    if changed.is_err() {
+                        changes_open = false;
+                        continue;
+                    }
+                    let send_at = last_send + config.stats_update_coalesce;
+                    if Instant::now() < send_at {
+                        coalesced_send_at = Some(send_at);
+                        continue;
+                    }
+                    reverse_state_rx.borrow().is_connected()
+                }
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+                    coalesced_send_at.unwrap_or_else(Instant::now),
+                )), if coalesced_send_at.is_some() => {
+                    reverse_state_rx.borrow().is_connected()
+                }
                 maybe_ack = ack_stream.message() => {
                     let ack = match maybe_ack {
-                        Ok(Some(ack)) => ack,
+                        Ok(Some(ack)) => {
+                            last_certificate_failure = None;
+                            ack
+                        }
                         Ok(None) => {
+                            tracing::warn!(
+                                transport = "grpc",
+                                operation = "register_inference_server_stream",
+                                endpoint = %router_endpoint,
+                                cluster_id = %config.cluster_id,
+                                "Stargate registration response stream ended"
+                            );
                             closures.record(RegistrationStreamClosure::EndOfStream);
                             break false;
                         }
-                        Err(status) => {
-                            closures.record_status(&status);
+                        Err(error) => {
+                            tracing::warn!(
+                                transport = "grpc",
+                                operation = "register_inference_server_stream",
+                                endpoint = %router_endpoint,
+                                cluster_id = %config.cluster_id,
+                                error = %grpc_error_chain(&error),
+                                "Stargate gRPC operation failed"
+                            );
+                            closures.record_status(&error);
                             break false;
                         }
                     };
-                    closures.record_admitted();
-                    backoff.reset();
                     if config.reverse_tunnel {
                         let endpoint = reverse_tunnel_endpoint_from_ack(&ack);
                         reverse_state_tx.send_if_modified(move |state| {
@@ -190,6 +241,9 @@ pub(super) async fn run_router_registration_stream(
                     continue;
                 }
             };
+            // Everything changed so far is included in this snapshot.
+            registration_changes.borrow_and_update();
+            coalesced_send_at = None;
             let registration_update = current_registration(reverse_connected);
             let advertised = advertised_model_statuses(&registration_update);
             if !send_registration_update(&update_tx, registration_update, &stop).await {
@@ -203,26 +257,29 @@ pub(super) async fn run_router_registration_stream(
             last_send = Instant::now();
         };
 
+        drop(advertised_status);
         if let Some(task) = reverse_task {
             task.shutdown(TASK_SHUTDOWN_TIMEOUT).await;
         }
-        if stopped || !wait_before_reconnect(&router_addr, backoff.next_delay(), &stop).await {
+        if stopped
+            || stop
+                .run_until_cancelled(tokio::time::sleep(Duration::from_secs(1)))
+                .await
+                .is_none()
+        {
             return;
         }
     }
 }
 
-/// Sleeps before the next attempt to open a registration stream. Returns
-/// `false` when `stop` is cancelled first.
-async fn wait_before_reconnect(router: &str, delay: Duration, stop: &CancellationToken) -> bool {
-    tracing::debug!(
-        router,
-        retry_in_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
-        "waiting before reopening stargate registration stream"
-    );
-    stop.run_until_cancelled(tokio::time::sleep(delay))
-        .await
-        .is_some()
+/// Subscribes before taking the snapshot, so a change that lands after the
+/// snapshot read is still pending on the returned receiver.
+pub(super) fn subscribe_then_snapshot<T>(
+    runtime_state: &PylonRuntimeState,
+    snapshot: impl FnOnce() -> T,
+) -> (watch::Receiver<u64>, T) {
+    let changes = runtime_state.subscribe_registration_changes();
+    (changes, snapshot())
 }
 
 pub(super) async fn send_registration_update(
@@ -233,104 +290,6 @@ pub(super) async fn send_registration_update(
     stop.run_until_cancelled(update_tx.send(update))
         .await
         .is_some_and(|result| result.is_ok())
-}
-
-/// Counts and logs why registration streams to one router end. A closure logs
-/// at warn when its reason differs from the previous closure since the router
-/// last acknowledged a registration, and at debug otherwise, so a router that
-/// keeps rejecting this Pylon does not flood the log on every retry.
-/// Connection failures stay at debug here: the certificate failure log reports
-/// TLS problems and `StreamOpenFailureLog` reports each distinct open failure.
-#[derive(Debug)]
-pub(super) struct RegistrationStreamClosures<'a> {
-    metrics: Option<&'a PylonMetrics>,
-    router_addr: &'a str,
-    last_logged: Option<RegistrationStreamClosure>,
-}
-
-impl<'a> RegistrationStreamClosures<'a> {
-    /// Publishes every closure reason for the router at zero.
-    pub(super) fn new(metrics: Option<&'a PylonMetrics>, router_addr: &'a str) -> Self {
-        if let Some(metrics) = metrics {
-            metrics.init_registration_stream_closures(router_addr);
-        }
-        Self {
-            metrics,
-            router_addr,
-            last_logged: None,
-        }
-    }
-
-    /// Re-arms warn logging once the router acknowledges a registration.
-    pub(super) fn record_admitted(&mut self) {
-        self.last_logged = None;
-    }
-
-    pub(super) fn record(&mut self, closure: RegistrationStreamClosure) {
-        self.count_and_log(closure, None, None);
-    }
-
-    pub(super) fn record_status(&mut self, status: &tonic::Status) {
-        self.count_and_log(
-            closure_for_status(status),
-            Some(status.code()),
-            Some(status.message()),
-        );
-    }
-
-    pub(super) fn record_open_failure(&mut self, error: &anyhow::Error) {
-        if let Some(status) = error.downcast_ref::<tonic::Status>() {
-            self.record_status(status);
-            return;
-        }
-        let closure = if error.downcast_ref::<tonic::transport::Error>().is_some() {
-            RegistrationStreamClosure::Connect
-        } else {
-            RegistrationStreamClosure::Other
-        };
-        self.count_and_log(closure, None, Some(&format!("{error:#}")));
-    }
-
-    fn count_and_log(
-        &mut self,
-        closure: RegistrationStreamClosure,
-        code: Option<tonic::Code>,
-        detail: Option<&str>,
-    ) {
-        if let Some(metrics) = self.metrics {
-            metrics.observe_registration_stream_closure(self.router_addr, closure);
-        }
-        let code = code.map(|code| format!("{code:?}"));
-        let repeated = self.last_logged == Some(closure);
-        self.last_logged = Some(closure);
-        if repeated || closure == RegistrationStreamClosure::Connect {
-            tracing::debug!(
-                router = self.router_addr,
-                reason = closure.as_str(),
-                code = code.as_deref(),
-                detail,
-                "stargate registration stream closed; retrying"
-            );
-        } else {
-            tracing::warn!(
-                router = self.router_addr,
-                reason = closure.as_str(),
-                code = code.as_deref(),
-                detail,
-                "stargate registration stream closed; retrying"
-            );
-        }
-    }
-}
-
-pub(super) fn closure_for_status(status: &tonic::Status) -> RegistrationStreamClosure {
-    match status.code() {
-        tonic::Code::Unauthenticated => RegistrationStreamClosure::Unauthenticated,
-        tonic::Code::InvalidArgument => RegistrationStreamClosure::InvalidArgument,
-        tonic::Code::PermissionDenied => RegistrationStreamClosure::PermissionDenied,
-        tonic::Code::Unavailable => RegistrationStreamClosure::Unavailable,
-        _ => RegistrationStreamClosure::Other,
-    }
 }
 
 #[derive(Debug)]
@@ -430,7 +389,10 @@ pub(super) async fn open_registration_stream(
         min_update_interval.as_millis().to_string().parse()?,
     );
     if let Some(provider) = auth_token_provider {
-        let token = provider.resolve_token().await?;
+        let token = provider
+            .resolve_token()
+            .await
+            .context("failed to resolve registration token")?;
         request.metadata_mut().insert(
             "authorization",
             format!("Bearer {token}")
@@ -444,4 +406,63 @@ pub(super) async fn open_registration_stream(
         .await?
         .into_inner();
     Ok((ack_stream, update_tx))
+}
+
+/// Counts why registration streams to one router end, so a router that keeps
+/// rejecting this Pylon shows up in metrics. The reconnect loop logs each
+/// failure itself.
+#[derive(Debug)]
+pub(super) struct RegistrationStreamClosures<'a> {
+    metrics: Option<&'a PylonMetrics>,
+    router_addr: &'a str,
+}
+
+impl<'a> RegistrationStreamClosures<'a> {
+    /// Publishes every closure reason for the router at zero.
+    pub(super) fn new(metrics: Option<&'a PylonMetrics>, router_addr: &'a str) -> Self {
+        if let Some(metrics) = metrics {
+            metrics.init_registration_stream_closures(router_addr);
+        }
+        Self {
+            metrics,
+            router_addr,
+        }
+    }
+
+    pub(super) fn record(&mut self, closure: RegistrationStreamClosure) {
+        self.observe(closure);
+    }
+
+    pub(super) fn record_status(&mut self, status: &tonic::Status) {
+        self.observe(closure_for_status(status));
+    }
+
+    pub(super) fn record_open_failure(&mut self, error: &anyhow::Error) {
+        if let Some(status) = error.downcast_ref::<tonic::Status>() {
+            self.record_status(status);
+            return;
+        }
+        let closure = if error.downcast_ref::<tonic::transport::Error>().is_some() {
+            RegistrationStreamClosure::Connect
+        } else {
+            RegistrationStreamClosure::Other
+        };
+        self.observe(closure);
+    }
+
+    fn observe(&self, closure: RegistrationStreamClosure) {
+        if let Some(metrics) = self.metrics {
+            metrics.observe_registration_stream_closure(self.router_addr, closure);
+        }
+    }
+}
+
+pub(super) fn closure_for_status(status: &tonic::Status) -> RegistrationStreamClosure {
+    match status.code() {
+        tonic::Code::Unauthenticated => RegistrationStreamClosure::Unauthenticated,
+        tonic::Code::InvalidArgument => RegistrationStreamClosure::InvalidArgument,
+        tonic::Code::PermissionDenied => RegistrationStreamClosure::PermissionDenied,
+        tonic::Code::Unavailable => RegistrationStreamClosure::Unavailable,
+        _ => RegistrationStreamClosure::Other,
+    }
 }

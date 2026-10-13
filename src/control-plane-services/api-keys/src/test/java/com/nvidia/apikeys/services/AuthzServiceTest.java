@@ -73,6 +73,7 @@ class AuthzServiceTest {
         // Assert
         assertNotNull(response);
         assertEquals("test-nca-id", response.getNcaId());
+        assertEquals("test-nca-id", response.getOwnerNcaId());
         assertTrue(response.isAllowed());
         assertNotNull(response.getPolicy());
         assertEquals("test-policy", response.getPolicy().get("policy").asString());
@@ -103,6 +104,7 @@ class AuthzServiceTest {
         // Assert
         assertNotNull(response);
         assertEquals("test-nca-id", response.getNcaId());
+        assertEquals("test-nca-id", response.getOwnerNcaId());
         assertTrue(response.isAllowed());
         assertNotNull(response.getPolicy());
         assertEquals("nvct-test-policy", response.getPolicy().get("policy").asString());

@@ -974,6 +974,16 @@ async fn send_upstream_request(
             upstream_headers.append(name, value.clone());
         }
     }
+    if path_and_query.split('?').next() == Some("/v1/messages") {
+        let private_headers: Vec<_> = upstream_headers
+            .keys()
+            .filter(|name| !is_messages_backend_header(name))
+            .cloned()
+            .collect();
+        for name in private_headers {
+            upstream_headers.remove(name);
+        }
+    }
     if !health_request {
         if let Some(priority) = priority {
             span.record("priority", priority);
@@ -1028,6 +1038,25 @@ pub(super) enum UpstreamRequestError {
     Build(#[source] anyhow::Error),
     #[error("upstream http request failed: {0}")]
     Send(#[source] ReqwestError),
+}
+
+// Routing metadata stays on the tunnel for admission, then stops at the
+// model API boundary. Messages forwards only protocol and trace headers.
+fn is_messages_backend_header(name: &HeaderName) -> bool {
+    matches!(
+        name.as_str(),
+        "content-type"
+            | "content-length"
+            | "accept"
+            | "accept-encoding"
+            | "anthropic-version"
+            | "anthropic-beta"
+            | "user-agent"
+            | "traceparent"
+            | "tracestate"
+            | "baggage"
+            | "x-request-id"
+    )
 }
 
 fn validate_request_body(

@@ -147,7 +147,6 @@ pub(crate) struct PylonStartupPlan {
     output_token_calibration: OutputTokenCalibrationMode,
     health_paths: UpstreamHealthPaths,
     startup_health_wait: StartupHealthWait,
-    registration_reconnect_max_backoff: Duration,
     metrics_addr: SocketAddr,
     auth_token_provider: Option<Arc<AuthTokenProvider>>,
     backend_tunnel: BackendTunnelStartup,
@@ -208,7 +207,6 @@ impl PylonStartupPlan {
             output_token_calibration: args.output_token_calibration,
             health_paths: UpstreamHealthPaths::new(args.upstream_health_paths.clone()),
             startup_health_wait: startup_health_wait_from_args(args),
-            registration_reconnect_max_backoff: registration_reconnect_max_backoff_from_args(args)?,
             metrics_addr: format!("{}:{}", args.metrics_host, args.metrics_port).parse()?,
             auth_token_provider: auth_token_provider_from_args(args),
             backend_tunnel: BackendTunnelStartup::from_args(args)?,
@@ -244,16 +242,6 @@ fn validate_grpc_tls_ca_requires_https(args: &Args) -> Result<()> {
         args.stargate_address
     );
     Ok(())
-}
-
-fn registration_reconnect_max_backoff_from_args(args: &Args) -> Result<Duration> {
-    ensure!(
-        args.registration_reconnect_max_backoff_ms > 0,
-        "--registration-reconnect-max-backoff-ms must be greater than zero"
-    );
-    Ok(Duration::from_millis(
-        args.registration_reconnect_max_backoff_ms,
-    ))
 }
 
 fn startup_health_wait_from_args(args: &Args) -> StartupHealthWait {
@@ -625,7 +613,7 @@ fn registration_config_from_plan(
         cluster_id: plan.cluster_id.clone(),
         inference_server_url,
         min_update_interval: Duration::from_millis(args.min_update_interval_ms),
-        reconnect_max_backoff: plan.registration_reconnect_max_backoff,
+        stats_update_coalesce: Duration::from_millis(args.stats_update_coalesce_ms),
         reverse_tunnel: plan.backend_tunnel.is_reverse(),
         tls_cert_pem,
         grpc_tls_ca_cert_pem,
@@ -1962,41 +1950,6 @@ mod tests {
         assert!(message.contains(&stargate_address), "{message}");
         control_plane.assert_no_calls();
         control_plane.shutdown().await;
-    }
-
-    #[test]
-    fn registration_reconnect_max_backoff_defaults_to_thirty_seconds_and_reaches_registration() {
-        for (extra, expected) in [
-            (&[][..], Duration::from_secs(30)),
-            (
-                &["--registration-reconnect-max-backoff-ms", "2500"][..],
-                Duration::from_millis(2500),
-            ),
-        ] {
-            let (args, plan) = startup(extra);
-            let config = registration_config_from_plan(
-                &args,
-                &plan,
-                test_forwarding(&plan),
-                "quic://127.0.0.1:4567".to_string(),
-                None,
-                None,
-            );
-
-            assert_eq!(config.reconnect_max_backoff, expected, "{extra:?}");
-        }
-        assert_eq!(
-            pylon_lib::DEFAULT_REGISTRATION_RECONNECT_MAX_BACKOFF,
-            Duration::from_secs(30)
-        );
-    }
-
-    #[test]
-    fn zero_registration_reconnect_max_backoff_fails_the_startup_plan() {
-        assert_eq!(
-            startup_plan_error(&["--registration-reconnect-max-backoff-ms", "0"]),
-            "--registration-reconnect-max-backoff-ms must be greater than zero"
-        );
     }
 
     #[test]

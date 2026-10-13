@@ -64,6 +64,7 @@ func newConfigMapClient(
 		withWebhookConfigMapper(),
 		withSharedStorageImageMapper(),
 		withMiniServiceMapper(),
+		withFNDServiceMapper(),
 		withOTelCollectorMapper(),
 		withAgentConfigMapper(),
 	}

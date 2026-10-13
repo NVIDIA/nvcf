@@ -30,6 +30,11 @@ set. Every Pylon must also select exactly one local stats initialization source:
 [Pylon onboarding](docs/operations/pylon-onboarding.md) for the complete
 lifecycle and calibration contract.
 
+Pulsar weights clusters by generation maximum input TPS by default. Upgrade
+Pylons and registration relays before Stargates; see
+[load-balancer configuration](docs/load-balancer-configuration.md#pulsar) for
+the rollout order and the mean-weighting option.
+
 Pylon gates startup on an upstream health probe. It tries `/health` and then
 `/v1/health/ready`, reuses whichever path answers first, and forwards Stargate's
 `/health` RTT probe to that same path, so engines that serve only the
@@ -152,25 +157,9 @@ zero for each router Pylon targets:
 - `connect`: Pylon could not open the gRPC connection.
 - `other`: any other status or local failure.
 
-Pylon logs a closure at warn with its `router` and `reason` when the reason
-differs from the previous closure since the router last acknowledged a
-registration, and at debug otherwise. `connect` closures always log at debug.
-
-Pylon waits before reopening a registration stream to a router. The first wait
-after a failed open or a closed stream is 1 s, and each further failure doubles
-it up to `--registration-reconnect-max-backoff-ms`
-(`PYLON_REGISTRATION_RECONNECT_MAX_BACKOFF_MS`, default `30000`; `0` is
-rejected). Every wait carries up to 20 percent jitter either way and never
-exceeds the cap. The wait returns to 1 s once the router acknowledges a
-registration, so a router that keeps rejecting Pylon, for example for a wrong
-credential or `cluster_id`, sees about one attempt per cap interval instead of a
-tight retry loop. Stargate discovery (`WatchStargates`) retries every second.
-
-When a registration or discovery stream fails to open for any reason other than
-a TLS certificate failure, which has its own error log, Pylon logs
-`failed to open stargate gRPC stream; retrying` at warn with `router`,
-`operation`, `error` and `retry_in_ms`. It logs each distinct error at warn once
-until a stream opens, and at debug while the same error repeats.
+Pylon waits 1 s before reopening a registration stream to a router after a
+failed open or a closed stream. Stargate discovery (`WatchStargates`) retries
+every second as well.
 
 `--grpc-tls-ca-cert-path` (`STARGATE_GRPC_TLS_CA_CERT_PATH`) requires an
 `https://` `--stargate-address`. A custom CA cannot apply to plaintext gRPC, so

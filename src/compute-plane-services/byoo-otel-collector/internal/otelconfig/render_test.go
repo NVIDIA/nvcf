@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -125,6 +126,8 @@ func TestRenderOtelConfigRejectsRecordSamplingOutsideHashSeed(t *testing.T) {
 }
 
 func TestRenderOtelConfigWithMetricSubsetPipeline(t *testing.T) {
+	writeClientCertPair(t, "example-metrics")
+
 	gotCfg, err := RenderOtelConfigFromBytes(
 		[]byte(`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": "PROMETHEUS", "endpoint": "https://metrics.example.invalid/api/v1/write", "name": "example-metrics"}}}`),
 		TemplateConfig{
@@ -167,6 +170,8 @@ func TestRenderOtelConfigWithMetricSubsetPipeline(t *testing.T) {
 }
 
 func TestRenderOtelConfigWithDebugMode(t *testing.T) {
+	writeClientCertPair(t, "example-metrics")
+
 	gotCfg, err := RenderOtelConfigFromBytes(
 		[]byte(`{"telemetries": {"logsTelemetry": {"protocol": "HTTP", "provider": "SPLUNK", "endpoint": "https://logs.example.invalid", "name": "example-logs"}, "metricsTelemetry": {"protocol": "HTTP", "provider": "PROMETHEUS", "endpoint": "https://metrics.example.invalid/api/v1/write", "name": "example-metrics"}}}`),
 		TemplateConfig{
@@ -192,7 +197,7 @@ func TestRenderOtelConfigWithDebugMode(t *testing.T) {
 }
 
 func TestRenderOtelConfigWithMetricSubsetPipelineMatchesExample(t *testing.T) {
-	t.Setenv("ESS_SECRETS_PATH", "")
+	secretsDir := writeClientCertPair(t, "workload-metrics")
 
 	gotCfg, err := RenderOtelConfigFromBytes(
 		[]byte(`{"telemetries": {"metricsTelemetry": {"protocol": "HTTP", "provider": "PROMETHEUS", "endpoint": "https://workload-metrics.example.invalid/api/v1/write", "name": "workload-metrics"}}}`),
@@ -216,6 +221,8 @@ func TestRenderOtelConfigWithMetricSubsetPipelineMatchesExample(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to render metric subset config: %v", err)
 	}
+	// The example documents the in-pod secrets path, as update-examples.sh does.
+	gotCfg = bytes.ReplaceAll(gotCfg, []byte(secretsDir), []byte("/etc/byoo-otel-collector/secrets"))
 
 	const examplePath = "../../examples/otelconfigs/k8s/config_function_container_metric_subset.yaml"
 	if os.Getenv("UPDATE_METRIC_SUBSET_EXAMPLE") == "true" {
@@ -827,6 +834,8 @@ func TestApplyExporterHelperConfigUsesSupportedSettings(t *testing.T) {
 }
 
 func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
+	writeClientCertPair(t, "example-metrics")
+
 	cfg := TelemetryConfig{
 		Telemetries: Telemetries{
 			Metrics: &Telemetry{
@@ -913,6 +922,8 @@ func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
 }
 
 func TestGenerateExportersAndServiceAddsWorkloadMetricsDropLabelsWithoutMetricSubset(t *testing.T) {
+	writeClientCertPair(t, "example-metrics")
+
 	cfg := TelemetryConfig{
 		Telemetries: Telemetries{
 			Metrics: &Telemetry{
@@ -1055,13 +1066,145 @@ func Test_exporterMetrics_Datadog_ProtocolAgnostic(t *testing.T) {
 	}
 }
 
+// writeTLSSecretFiles writes one file per secret key, the way the secrets
+// extractor lays out an ESS secret, and points the renderer at them.
+func writeTLSSecretFiles(t *testing.T, telemetryName string, secrets map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for key, value := range secrets {
+		path := filepath.Join(dir, fmt.Sprintf("%s-%s", telemetryName, key))
+		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+			t.Fatalf("failed to write secret file %s: %v", path, err)
+		}
+	}
+	t.Setenv("ESS_SECRETS_PATH", dir)
+	return dir
+}
+
+// writeClientCertPair gives a remote-write telemetry the credentials it needs
+// to render, for tests that are not about TLS.
+func writeClientCertPair(t *testing.T, telemetryName string) string {
+	t.Helper()
+	return writeTLSSecretFiles(t, telemetryName, map[string]string{"clientCert": "fake-cert", "clientKey": "fake-key"})
+}
+
+// The remote-write TLS secret needs a clientCert/clientKey pair, a caFile, or
+// both. The secrets extractor writes a key submitted as "" as an empty file,
+// and pointing the collector at an empty CA file stops it from starting, so a
+// blank value must be treated the same as a missing one.
+func Test_exporterMetrics_RemoteWriteTLS(t *testing.T) {
+	const telemetryName = "example-metrics"
+	tests := []struct {
+		name    string
+		secrets map[string]string
+		wantTLS []string
+		wantErr string
+	}{
+		{
+			name:    "client cert pair",
+			secrets: map[string]string{"clientCert": "fake-cert", "clientKey": "fake-key"},
+			wantTLS: []string{"cert_file", "key_file"},
+		},
+		{
+			name:    "client cert pair and CA",
+			secrets: map[string]string{"clientCert": "fake-cert", "clientKey": "fake-key", "caFile": "fake-ca"},
+			wantTLS: []string{"cert_file", "key_file", "ca_file"},
+		},
+		{
+			name:    "CA only",
+			secrets: map[string]string{"caFile": "fake-ca"},
+			wantTLS: []string{"ca_file"},
+		},
+		{
+			name:    "empty CA is dropped",
+			secrets: map[string]string{"clientCert": "fake-cert", "clientKey": "fake-key", "caFile": ""},
+			wantTLS: []string{"cert_file", "key_file"},
+		},
+		{
+			name:    "whitespace-only CA is dropped",
+			secrets: map[string]string{"clientCert": "fake-cert", "clientKey": "fake-key", "caFile": " \n"},
+			wantTLS: []string{"cert_file", "key_file"},
+		},
+		{
+			name:    "empty client cert pair is dropped",
+			secrets: map[string]string{"clientCert": "", "clientKey": "", "caFile": "fake-ca"},
+			wantTLS: []string{"ca_file"},
+		},
+		{
+			name:    "client cert without key",
+			secrets: map[string]string{"clientCert": "fake-cert", "clientKey": "", "caFile": "fake-ca"},
+			wantErr: "clientCert is set but clientKey is empty or missing",
+		},
+		{
+			name:    "client key without cert",
+			secrets: map[string]string{"clientKey": "fake-key"},
+			wantErr: "clientKey is set but clientCert is empty or missing",
+		},
+		{
+			name:    "every credential empty",
+			secrets: map[string]string{"clientCert": "", "clientKey": "", "caFile": ""},
+			wantErr: "needs clientCert and clientKey, caFile, or both",
+		},
+		{
+			name:    "no credentials",
+			secrets: map[string]string{},
+			wantErr: "needs clientCert and clientKey, caFile, or both",
+		},
+	}
+
+	for _, provider := range []Provider{ProviderThanos, ProviderPrometheus} {
+		for _, tt := range tests {
+			t.Run(string(provider)+"/"+tt.name, func(t *testing.T) {
+				dir := writeTLSSecretFiles(t, telemetryName, tt.secrets)
+				cfg := TelemetryConfig{
+					Telemetries: Telemetries{
+						Metrics: &Telemetry{
+							Name:     telemetryName,
+							Protocol: ProtocolHTTP,
+							Provider: provider,
+							Endpoint: "https://metrics.example.invalid/api/v1/write",
+						},
+					},
+				}
+				otelConfig := &OpenTelemetryConfig{}
+				initializeConfigMaps(otelConfig)
+
+				exporterId, err := exporterMetrics(cfg, otelConfig)
+				if tt.wantErr != "" {
+					assert.ErrorContains(t, err, tt.wantErr)
+					assert.ErrorContains(t, err, telemetryName, "error must name the telemetry")
+					return
+				}
+				if err != nil {
+					t.Fatalf("exporterMetrics() unexpected error = %v", err)
+				}
+
+				tls, ok := otelConfig.Exporters[exporterId]["tls"].(map[string]string)
+				if !ok {
+					t.Fatalf("expected exporter[\"tls\"] to be a map[string]string, got %T", otelConfig.Exporters[exporterId]["tls"])
+				}
+				secretPaths := map[string]string{
+					"cert_file": filepath.Join(dir, telemetryName+"-clientCert"),
+					"key_file":  filepath.Join(dir, telemetryName+"-clientKey"),
+					"ca_file":   filepath.Join(dir, telemetryName+"-caFile"),
+				}
+				wantTLS := map[string]string{}
+				for _, key := range tt.wantTLS {
+					wantTLS[key] = secretPaths[key]
+				}
+				assert.Equal(t, wantTLS, tls)
+			})
+		}
+	}
+}
+
 // TestMetricsPipelineDropsEmptyResourceAttrs pins the invariant that motivated
 // the processor: a Prometheus-compatible receiver rejects an entire write
 // request when any series carries a label with an empty value, so every
 // attribute the Prometheus receiver can leave empty must be removed before the
 // metrics reach the exporter.
 func TestMetricsPipelineDropsEmptyResourceAttrs(t *testing.T) {
-	t.Setenv("ESS_SECRETS_PATH", "")
+	writeClientCertPair(t, "m")
 
 	for _, provider := range []string{string(ProviderThanos), string(ProviderPrometheus)} {
 		t.Run(provider, func(t *testing.T) {
@@ -1146,7 +1289,7 @@ func indexOf(haystack []string, needle string) int {
 // rest of target_info, including caller-supplied OTLP resource attributes,
 // intact.
 func TestResourceProcessorInsertsInstanceID(t *testing.T) {
-	t.Setenv("ESS_SECRETS_PATH", "")
+	writeClientCertPair(t, "m")
 
 	for _, backend := range []BackendType{K8s, VM} {
 		for _, workload := range []WorkloadType{Container, Helm} {

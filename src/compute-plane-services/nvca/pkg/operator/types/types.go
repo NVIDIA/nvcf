@@ -45,6 +45,11 @@ const (
 	DefaultNVCASystemNamespace   = "nvca-system"
 	DefaultNVCARequestsNamespace = "nvcf-backend"
 
+	// CreatedByOperatorAnnotation marks a namespace the operator created, as
+	// opposed to a pre-existing namespace it only labels. Uninstall deletes a
+	// configured requests namespace only when it carries this annotation.
+	CreatedByOperatorAnnotation = "nvca.nvcf.nvidia.io/created-by-operator"
+
 	// CRD names
 	StorageRequestCRDName = "storagerequests.nvca.nvcf.nvidia.io"
 	MiniServicesCRDName   = "miniservices.nvca.nvcf.nvidia.io"

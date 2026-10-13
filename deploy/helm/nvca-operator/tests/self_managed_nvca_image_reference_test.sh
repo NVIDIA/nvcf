@@ -95,6 +95,9 @@ yq eval '
 ' "${repo_root}/nvca-operator/values.yaml" > "${legacy_values}"
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --set-string ngcConfig.clusterSource=self-managed \
   --values "${repo_root}/nvca-operator/values.yaml" \
@@ -108,6 +111,9 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
   > "${manifest}"
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --set-string ngcConfig.clusterSource=self-managed \
   --values "${repo_root}/nvca-operator/values.yaml" \
@@ -123,6 +129,9 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
   > "${stage_manifest}"
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --set-string ngcConfig.clusterSource=self-managed \
   --values "${repo_root}/nvca-operator/values.yaml" \
@@ -138,6 +147,9 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
   > "${manifest_with_byoo_override}"
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --values "${legacy_values}" \
   --set-string selfManaged.icmsServiceURL=http://sis.example.invalid:8080 \
@@ -149,6 +161,9 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
   > "${legacy_stage_manifest}"
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --set-string ngcConfig.clusterSource=self-managed \
   --values "${repo_root}/nvca-operator/values.yaml" \
@@ -163,6 +178,9 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
   > "${manifest_without_byoo_default}"
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --set-string ngcConfig.clusterSource=self-managed \
   --values "${repo_root}/nvca-operator/values.yaml" \
@@ -177,6 +195,9 @@ helm template nvca-operator "${repo_root}/nvca-operator" \
   > "${manifest_without_nvca_image_override}"
 
 helm template nvca-operator "${repo_root}/nvca-operator" \
+  --set-string "ngcConfig.serviceKey=test-service-key" \
+  --set-string "nameOverride=nvca-operator" \
+  --set-string "fullnameOverride=nvca-operator" \
   --namespace nvca-operator \
   --set-string ngcConfig.clusterSource=self-managed \
   --values "${repo_root}/nvca-operator/values.yaml" \

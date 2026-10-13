@@ -60,13 +60,24 @@ standalone installation path.
 
 ## Gang schedule a StatefulSet with KAI
 
-Use a StatefulSet with parallel Pod management for a direct KAI workload:
+Create a `PodGroup` with `minMember` equal to the replica count, and join the
+StatefulSet Pods to it:
 
 ```yaml
+apiVersion: scheduling.run.ai/v2alpha2
+kind: PodGroup
+metadata:
+  name: distributed-worker
+spec:
+  minMember: 2
+  queue: default-queue
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: distributed-worker
+  annotations:
+    kai.scheduler/skip-podgrouper: "true"
 spec:
   podManagementPolicy: Parallel
   replicas: 2
@@ -77,6 +88,8 @@ spec:
     metadata:
       labels:
         app: distributed-worker
+      annotations:
+        pod-group-name: distributed-worker
     spec:
       containers:
         - name: worker
@@ -84,15 +97,18 @@ spec:
 ```
 
 When the `KAIScheduler` feature is enabled, NVCA assigns the KAI scheduler and
-queue to the Pod template. KAI creates one `PodGroup` for the StatefulSet and
-waits until every replica can be placed.
+queue to the Pod template. KAI holds the Pods until `minMember` of them can be
+placed. Without the `PodGroup`, KAI groups the StatefulSet with `minMember: 1`
+and schedules Pods as they fit. The `kai.scheduler/skip-podgrouper`
+annotation requires KAI Scheduler v0.15.0 or later.
 
 Add topology annotations only when the gang must also fit in a specific
 hardware domain. See [Topology-Aware Scheduling](./topology-aware-scheduling.md).
 
 <Warning>
 KAI creates a separate `PodGroup` for each Deployment replica. Use a
-StatefulSet when all replicas must be scheduled as one gang.
+StatefulSet with an explicit `PodGroup` when all replicas must be scheduled
+as one gang.
 </Warning>
 
 The

@@ -39,6 +39,38 @@ exports_files(
     visibility = [":java_notice_consumers"],
 )
 
+# The nvca-operator chart lives under deploy/, which is excluded from gazelle
+# and so has no package of its own. Its storage-capability catalog is consumed
+# by Go tests under src/, so it is exported from the root package here.
+filegroup(
+    name = "nvca-operator-storage-capability-catalog",
+    srcs = [
+        "deploy/helm/nvca-operator/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.schema.json",
+        "deploy/helm/nvca-operator/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.yaml",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# The self-managed and compute-plane stacks, also outside gazelle, for the
+# nvcf-cli tests that pin the CLI's view of the stacks to their source.
+# ROOT_GLOBS in .github/workflows/bazel.yml lists the same directories, so a
+# change to them runs those tests.
+filegroup(
+    name = "nvcf-cli-stacks",
+    srcs = glob(
+        [
+            "deploy/stacks/nvcf-compute-plane/**",
+            "deploy/stacks/self-managed/**",
+        ],
+        exclude = [
+            "deploy/stacks/*/out/**",
+            "deploy/stacks/*/testdata/**",
+            "deploy/stacks/*/tests/**",
+        ],
+    ),
+    visibility = ["//src/clis/nvcf-cli:__subpackages__"],
+)
+
 # Gazelle manages only the native Go subtrees listed in go.work.bazel.
 # nv-boot-parent and Cloud Tasks are also owned by the root Bazel module, but
 # their checked-in Java BUILD files are maintained manually and remain outside
@@ -58,7 +90,7 @@ exports_files(
 # gazelle:exclude bazel-out
 # gazelle:exclude bazel-testlogs
 # gazelle:exclude ci
-# gazelle:exclude deploy
+# gazelle:exclude deploy  # keeps gazelle out; .bazelignore deliberately does not ignore it
 # gazelle:exclude docs
 # gazelle:exclude examples
 # gazelle:exclude fern

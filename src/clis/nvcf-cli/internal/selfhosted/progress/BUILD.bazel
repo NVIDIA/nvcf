@@ -33,6 +33,7 @@ go_library(
     importpath = "nvcf-cli/internal/selfhosted/progress",
     visibility = ["//src/clis/nvcf-cli:__subpackages__"],
     deps = [
+        "//src/clis/nvcf-cli/internal/selfhosted/severity",
         "@com_github_charmbracelet_bubbles//progress",
         "@com_github_charmbracelet_bubbles//spinner",
         "@com_github_charmbracelet_bubbletea//:bubbletea",
@@ -68,6 +69,7 @@ go_test(
     data = glob(["testdata/**"]),
     embed = [":progress"],
     deps = [
+        "//src/clis/nvcf-cli/internal/selfhosted/severity",
         "@com_github_charmbracelet_bubbletea//:bubbletea",
         "@com_github_muesli_termenv//:termenv",
         "@com_github_stretchr_testify//assert",

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Package x509bundle provides X.509 bundle related functionality.
 //
 // A bundle represents a collection of X.509 authorities, i.e., those that

@@ -71,7 +71,7 @@ selection explicit.
 ### Download from NGC
 
 The CLI is available as a resource from NGC. See
-[download-nvcf-cli](/nvcf/overview/image-mirroring) for detailed download and extraction
+[download-nvcf-cli](image-mirroring.md) for detailed download and extraction
 instructions.
 
 The downloaded package includes:
@@ -110,7 +110,7 @@ For self-hosted deployments, the CLI must be configured to communicate with
 your gateway. The gateway uses hostname-based routing for HTTP services.
 
 <Note>
-For Gateway routing details, including architecture diagrams, verification commands, and production DNS/HTTPS setup, see [gateway-routing](/nvcf/self-managed/gateway-routing).
+For Gateway routing details, including architecture diagrams, verification commands, and production DNS/HTTPS setup, see [gateway-routing](../self-managed/gateway-routing.md).
 
 </Note>
 
@@ -121,7 +121,7 @@ the CLI. The CLI calls the configured API, API Keys,
 invocation, and gRPC endpoints during token minting, cluster registration,
 health checks, and function operations.
 
-Complete [Gateway quickstart](/nvcf/self-managed/gateway-routing#gateway-quickstart) before you
+Complete [Gateway quickstart](../self-managed/gateway-routing.md#gateway-quickstart) before you
 configure the CLI. That procedure installs the Gateway API CRDs, creates and
 labels the required namespaces, installs Envoy Gateway, creates the GatewayClass
 and Gateway, waits for the Gateway to be programmed, and exports:
@@ -305,7 +305,7 @@ api_keys_service_url: "https://api-keys.nvcf.example.com"
 ```
 
 <Note>
-For complete instructions on setting up DNS records and TLS certificates, see [production-dns-https](/nvcf/self-managed/gateway-routing) in the Gateway Routing guide.
+For complete instructions on setting up DNS records and TLS certificates, see [production-dns-https](../self-managed/gateway-routing.md) in the Gateway Routing guide.
 
 </Note>
 
@@ -359,7 +359,7 @@ Or use the `--debug` flag or `NVCF_DEBUG=true` environment variable per-command.
 ```
 
 <Note>
-For immediate testing, you can use `load_tester_supreme` from `nvcf-onprem` (see [self-hosted-artifact-manifest](/nvcf/overview/manifest)), which supports the `{"message": "hello world"}` request body above. For more function samples, see the [NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples) repository and [function-creation](./function-creation.md) for function creation documentation.
+For immediate testing, you can use `load_tester_supreme` from `nvcf-onprem` (see [self-hosted-artifact-manifest](manifest.md)), which supports the `{"message": "hello world"}` request body above. For more function samples, see the [NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples) repository and [function-creation](./function-creation.md) for function creation documentation.
 
 </Note>
 
@@ -464,7 +464,7 @@ Default task key scopes:
 
 ### Self-hosted Deployment Commands
 
-Use these commands to install and inspect self-hosted NVCF deployments. For the local k3d installation flow, see [Quickstart](/nvcf/overview/quickstart).
+Use these commands to install and inspect self-hosted NVCF deployments. For the local k3d installation flow, see [Quickstart](quickstart.md).
 
 | Command | Description |
 | --- | --- |
@@ -503,7 +503,7 @@ Bundle sources:
 `self-hosted up` supports only a single local k3d cluster. It requires
 `--env local`, a current `k3d-*` kube context, and no split-context flags. For
 separate control-plane and GPU clusters, use the explicit control-plane and
-compute-plane install primitives with [Self-Managed Clusters](/nvcf/compute-plane/self-managed-clusters).
+compute-plane install primitives with [Self-Managed Clusters](../compute-plane/cluster-management/self-managed.md).
 
 ### Cluster Registration
 
@@ -579,7 +579,7 @@ the cluster; the NVCA Operator chart does not consume it.
 For load-balancer-fronted gateways that route by hostname, add the matching host-header
 overrides (`selfManaged.icmsServiceHostHeaderOverride`,
 `selfManaged.revalServiceHostHeaderOverride`, `selfManaged.natsHostOverride`) to these
-values. See [self-managed-clusters](/nvcf/compute-plane/self-managed-clusters) for how the
+values. See [self-managed-clusters](../compute-plane/cluster-management/self-managed.md) for how the
 register values feed the operator install and when host-header overrides are required.
 
 List the self-hosted cluster registrations stored in ICMS with the admin token:
@@ -749,7 +749,7 @@ All `function create` flags:
 | `--secrets` | Secrets in `name=value` format (repeatable) |
 | `--tags` | Comma-separated tags |
 | `--models` | Model artifacts in `name:version:uri` format (repeatable) |
-| `--llm-model` | LLM model config in `name=MODEL,uris=URI\|URI,routingMethod=round_robin\|power_of_two\|groq_multiregion\|pulsar\|random,tokenRateLimit=LIMIT` format (repeatable). Token limits use `<value>-<unit>` with `S`, `M`, `H`, `D`, or `W`, for example `1000-S`. Use JSON input for combined token limits because inline model specs use commas as field separators. |
+| `--llm-model` | LLM model config in `name=MODEL,uris=URI\|URI,routingMethod=METHOD[;PARAM=VALUE...],tokenRateLimit=LIMIT` format (repeatable). The CLI forwards `routingMethod` unchanged; the API checks it. Token limits use `<value>-<unit>` with `S`, `M`, `H`, `D`, or `W`, for example `1000-S`. Use JSON input for combined token limits because inline model specs use commas as field separators. |
 | `--llm-default-priority` | Function-level default request priority. Lower values have higher priority, and `0` is highest. |
 | `--llm-per-account-priority` | Per-account override in `<nca-id>:<priority>` format. Repeatable; supports up to 64 distinct NCA ID overrides. Requires a default priority. |
 | `--resources` | Resource artifacts in `name:version:uri` format (repeatable) |
@@ -799,7 +799,7 @@ LLM functions use `functionType: "LLM"` and define model routing metadata under 
 }
 ```
 
-For LLM models, `llmConfig.routingMethod` accepts `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`.
+For LLM models, `llmConfig.routingMethod` is a routing algorithm name, optionally followed by tuning parameters, such as `pulsar;seed=stable-a`. The CLI forwards the value unchanged and prints the API error for a malformed value. For algorithms, parameters, and errors, see [LLM Request Router Load Balancing](../self-managed/llm-request-router-load-balancing.md#tune-a-model-with-a-routing-expression).
 Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`.
 `llmConfig.tokenRateLimit` accepts one or more comma-separated positive integer token limits in `<value>-<unit>` format. Supported units are `S` (seconds), `M` (minutes), `H` (hours), `D` (days), and `W` (weeks). Use `1000-S` for a single limit, or `1000-S,5000-M,100000-H,500000-D,1000000-W` for a combined limit with distinct units. Use JSON input for combined limits because inline CLI model specs use commas as field separators.
 
@@ -1054,7 +1054,7 @@ Additional `function invoke` flags:
 
 ### Registry Credentials Commands
 
-Manage container registry credentials for function images and Helm charts. For comprehensive setup instructions including IAM configuration for AWS ECR, see [third-party-registries-self-hosted](/nvcf/self-managed/third-party-registries).
+Manage container registry credentials for function images and Helm charts. For comprehensive setup instructions including IAM configuration for AWS ECR, see [third-party-registries-self-hosted](../self-managed/third-party-registries.md).
 
 | Command | Description |
 | --- | --- |
@@ -1102,7 +1102,7 @@ Manage container registry credentials for function images and Helm charts. For c
 ```
 
 <Note>
-Registry credential changes take up to about 5 minutes to take effect for task creation. `nvcf-cli registry-credential list` and `get` show the new value immediately, but task processing caches account credentials for about 5 minutes (`nvct.nvcf.cache-ttl`), so a task can keep using the previous value until the cache refreshes. After rotating or deleting a credential, allow up to about 5 minutes, or restart the task service to apply it immediately. See [Credential Propagation Delay](/nvcf/self-managed/third-party-registries).
+Registry credential changes take up to about 5 minutes to take effect for task creation. `nvcf-cli registry-credential list` and `get` show the new value immediately, but task processing caches account credentials for about 5 minutes (`nvct.nvcf.cache-ttl`), so a task can keep using the previous value until the cache refreshes. After rotating or deleting a credential, allow up to about 5 minutes, or restart the task service to apply it immediately. See [Credential Propagation Delay](../self-managed/third-party-registries.md).
 </Note>
 
 ## Troubleshooting
@@ -1179,4 +1179,4 @@ Registry credential changes take up to about 5 minutes to take effect for task c
 | `task results` | `NVCF_NVCT_API_KEY` | `list_results` | `NVCF_NVCT_API_KEY` |
 | `task update-secrets` | `NVCF_NVCT_API_KEY` | `update_secrets` | `NVCF_NVCT_API_KEY` |
 
-For additional troubleshooting, see [self-hosted-troubleshooting](/nvcf/self-managed/troubleshooting).
+For additional troubleshooting, see [self-hosted-troubleshooting](../self-managed/troubleshooting.md).
