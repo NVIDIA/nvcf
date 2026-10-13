@@ -26,6 +26,7 @@ Automatic recipes select pinned model and runtime settings from the chart. Suppl
 | GLM-5.3 UD-IQ2_M, two nodes | [glm-5.3.yaml](values/glm-5.3.yaml) | [Automatic, two nodes](../ADVANCED.md#helm-glm-recipe). Latest trials stopped at the host-memory guard. |
 | Qwen3.8-Flash-Next NVFP4, NVMe offload | [qwen3.8-flash-next-nvme.yaml](values/qwen3.8-flash-next-nvme.yaml) | [Automatic, one node](../ADVANCED.md#helm-flash-next-recipes). Startup and short-prompt gateway checks passed at context 8,192 and concurrency 1. |
 | Qwen3.8-Flash-Next NVFP4, tensor parallel | [qwen3.8-flash-next-tp2.yaml](values/qwen3.8-flash-next-tp2.yaml) | [Automatic, two nodes](../ADVANCED.md#helm-flash-next-recipes). Live validation pending. |
+| Qwen3.8-Flash-Next NVFP4, Station | [qwen3.8-flash-next-station.yaml](values/qwen3.8-flash-next-station.yaml) | [Automatic, one node](../ADVANCED.md#helm-flash-next-recipes). Short-prompt gateway checks passed at context 8,192 and concurrency 1. |
 
 Planned and unavailable catalog entries have no installable values file. Their missing artifacts or chart support must be resolved first.
 

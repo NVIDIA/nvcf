@@ -1150,7 +1150,7 @@
     {
       "id": "qwen3.8-flash-next",
       "name": "Qwen3.8-Flash-Next",
-      "description": "Qwen3.8-Flash-Next is a large mixture-of-experts language model with 512 routed experts, 10 of them active per token, a mix of linear and full attention layers, and a 262,144-token context window. This card lists an NVFP4 build from RadixArk, served by SGLang on one DGX Spark with local NVMe storage or on two DGX Sparks joined by a 200 Gbps link.",
+      "description": "Qwen3.8-Flash-Next is a large mixture-of-experts language model with 512 routed experts, 10 of them active per token, a mix of linear and full attention layers, and a 262,144-token context window. This card lists an NVFP4 build from RadixArk, served by SGLang on one DGX Spark with local NVMe storage, on two DGX Sparks joined by a 200 Gbps link, or on one DGX Station.",
       "releaseName": "qwen-flash",
       "precision": "NVFP4",
       "repository": "RadixArk/Qwen3.8-Flash-Next-NVFP4",
@@ -1305,6 +1305,104 @@
             "memoryMode": "unified"
           },
           "minFabricGbps": 200
+        },
+        {
+          "id": "station-nvfp4",
+          "nodes": 1,
+          "memoryGiB": 64,
+          "memoryLimitGiB": 256,
+          "cpu": 8,
+          "cacheGiB": 160,
+          "minFreeDiskGiB": 150,
+          "maxContext": 8192,
+          "maxConcurrency": 1,
+          "maxTotalTokens": 9216,
+          "offload": false,
+          "flags": [
+            "--quantization",
+            "modelopt_fp4",
+            "--fp4-gemm-backend",
+            "flashinfer_cutlass",
+            "--page-size",
+            "64",
+            "--chunked-prefill-size",
+            "4096",
+            "--speculative-algorithm",
+            "NEXTN",
+            "--speculative-num-steps",
+            "3",
+            "--speculative-eagle-topk",
+            "1",
+            "--speculative-num-draft-tokens",
+            "4",
+            "--reasoning-parser",
+            "qwen3",
+            "--mem-fraction-static",
+            "0.85",
+            "--max-mamba-cache-size",
+            "40",
+            "--no-ple-offload-embedding",
+            "--weight-loader-prefetch-checkpoints",
+            "--weight-loader-prefetch-num-threads",
+            "8",
+            "--weight-loader-drop-cache-after-load",
+            "--model-loader-extra-config",
+            "{\"enable_multithread_load\":false}"
+          ],
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB300",
+              "NVIDIA GB300"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB300"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "discrete",
+            "minDeviceMemoryGiB": 192
+          },
+          "releaseCheckpointFileCache": true,
+          "validatedWorkload": {
+            "date": "2026-10-13",
+            "profile": "station-nvfp4",
+            "modelRevision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+            "runtimeImage": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
+            "contextLength": 8192,
+            "concurrency": 1,
+            "tokenCapacity": 9216,
+            "requestType": "short-prompt-smoke",
+            "fullContextExercised": false,
+            "performanceBenchmarked": false,
+            "qualityEvaluated": false
+          },
+          "automaticHelmValidation": {
+            "date": "2026-10-13",
+            "profile": "station-nvfp4",
+            "modelRevision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+            "runtimeImage": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
+            "contextLength": 8192,
+            "concurrency": 1,
+            "tokenCapacity": 9216,
+            "requestType": "short-prompt-smoke",
+            "fullContextExercised": false,
+            "performanceBenchmarked": false,
+            "qualityEvaluated": false,
+            "status": "smoke-tested",
+            "reason": "Helm install passed placement, GPU qualification, cache integrity, readiness, registration, gateway discovery, chat, streaming and authentication at context 8192 and concurrency 1. The profile releases the checkpoint file cache before startup and prefetches checkpoints, because on GB300 the cached files otherwise use the GPU memory the KV cache needs. Context-boundary, stop and resume, reinstall and throughput checks remain pending.",
+            "checks": [
+              "placement",
+              "gpu-qualification",
+              "cache-integrity",
+              "readiness",
+              "registration",
+              "discovery",
+              "chat",
+              "streaming",
+              "authentication"
+            ]
+          }
         }
       ]
     },

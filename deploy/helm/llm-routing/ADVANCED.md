@@ -290,12 +290,13 @@ To require offline reuse without rebuilding, set `reuseCaches: true`, `artifacts
 
 ### Helm Flash-Next recipes
 
-Flash-Next uses recipe `qwen3.8-flash-next` with two NVFP4 profiles. Both use automatic startup: one Helm install qualifies the hardware, verifies or downloads the pinned checkpoint, and starts serving. Each profile's live validation is recorded separately in the catalog.
+Flash-Next uses recipe `qwen3.8-flash-next` with three NVFP4 profiles. Both use automatic startup: one Helm install qualifies the hardware, verifies or downloads the pinned checkpoint, and starts serving. Each profile's live validation is recorded separately in the catalog.
 
 | Profile | Placement | Additional requirements |
 | --- | --- | --- |
 | `spark-nvfp4-nvme` | One GB10 node | Local NVMe-backed pod ephemeral storage, 56 GiB offload allocation and a separate 180 GiB cache |
 | `spark-nvfp4-tp2` | Two GB10 nodes | A shared fabric of at least 200 Gbps, with each node's fabric IPv4 address and interface |
+| `station-nvfp4` | One GB300 node | A 160 GiB cache. No NVMe offload or fabric link. The profile releases the checkpoint file cache and prefetches checkpoints, because GB300 otherwise keeps the cached files in GPU memory. Loading takes about 20 minutes |
 
 List recipe and profile names before selecting a placement:
 

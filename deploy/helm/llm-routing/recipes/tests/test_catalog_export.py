@@ -115,7 +115,9 @@ class CommonCatalogTests(unittest.TestCase):
                 deployment = profile["deployment"]
                 self.assertEqual(deployment["lifecycle"], "automatic")
                 self.assertEqual(deployment["values"], {"recipe": "qwen3.8-flash-next", "profileName": profile["id"]})
-                self.assertIn("nodeCapabilities", deployment["requiredSiteValues"])
+                # Only a profile with NVMe offload or a fabric link needs verified node capabilities.
+                needs_facts = profile["fabric"] is not None or "offloadBytes" in profile["perNode"][0]["storage"]
+                self.assertEqual("nodeCapabilities" in deployment["requiredSiteValues"], needs_facts)
                 self.assertEqual(deployment["guide"], "../ADVANCED.md#helm-flash-next-recipes")
 
     def test_flash_validation_records_are_independent_per_profile(self):
