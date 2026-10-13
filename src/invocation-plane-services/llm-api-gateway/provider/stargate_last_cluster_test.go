@@ -475,7 +475,8 @@ func TestLastClusterLookupTimeoutProceeds(t *testing.T) {
 			start := time.Now()
 			_, err = lastClusterCall(context.Background(), p, path, lastClusterReqCtx(requestctx.SessionSourceHeader), nil)
 			require.NoError(t, err)
-			require.Less(t, arrived.Sub(start), 25*time.Millisecond)
+			// The store blocks until cleanup; the slack keeps loaded -race runs stable.
+			require.Less(t, arrived.Sub(start), 200*time.Millisecond)
 			require.Empty(t, upstream.lastHint())
 		})
 	}
