@@ -94,7 +94,7 @@ func precreateUnixSocketDirs(filesImg string, placeholderPID int, log *logrus.En
 	mntnsPath := fmt.Sprintf("/proc/%d/ns/mnt", placeholderPID)
 	created := 0
 	for d := range dirs {
-		mk := exec.Command("nsenter", "--mount="+mntnsPath, "--", "mkdir", "-p", d) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
+		mk := exec.Command("nsenter", "--mount="+mntnsPath, "--", inContainerTool(placeholderPID, "mkdir"), "-p", d) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
 		if err := mk.Run(); err != nil {
 			log.WithError(err).WithField("dir", d).Warn("Failed to mkdir unix-socket parent dir in placeholder")
 			continue
@@ -419,6 +419,13 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 			} else {
 				log.WithField("sourcePodIP", metadata.SourcePodIP).Info("Aliased source pod IP on placeholder lo")
 			}
+		}
+
+		// Stage the bundle first: the steps below and criu's own tmpfs
+		// restore run tools inside the placeholder, and must not depend
+		// on what the workload image ships.
+		if sErr := a.stageV2Bundle(fmt.Sprintf("/proc/%d/root", placeholderMntnsPID), log); sErr != nil {
+			log.WithError(sErr).Warn("Failed to stage the criu bundle into the placeholder; the replay uses the image's tools")
 		}
 
 		// Pre-create parent dirs of every path-bound unix socket the dump

@@ -94,6 +94,23 @@ const v2ImagesDirInContainer = "/opt/nvsnap-imgs"
 // ENOENT inside the container (first criu-v2 e2e, 2026-07-12).
 const v2BinDirInContainer = "/criu-bundle"
 
+// placeholderTools are the bundle's own copies of the tools run inside a
+// container's mount namespace, where the workload image may have none
+// (distroless) or ones without the options used (busybox): GNU tar and the
+// gzip it runs for criu's tmpfs contents, and mkdir for the agent's replay.
+var placeholderTools = []string{"tar", "gzip", "mkdir"}
+
+// inContainerTool is the path to run name at inside the mount namespace of
+// host pid pid: the staged bundle copy when there is one, else name from the
+// container's PATH.
+func inContainerTool(pid int, name string) string {
+	staged := v2BinDirInContainer + "/" + name
+	if fileExists(fmt.Sprintf("/proc/%d/root%s", pid, staged)) {
+		return staged
+	}
+	return name
+}
+
 // stageV2Bundle copies the criu bundle into the container rootfs at
 // /criu-bundle, including lib/ (criu's INTERP and RUNPATH point there —
 // it runs against its own staged glibc, never the container's).
@@ -115,6 +132,14 @@ func (a *Agent) stageV2Bundle(root string, log *logrus.Entry) error {
 	// gpushare do not; only a gpushare capture needs it).
 	if tool := filepath.Join(bundleDir, gpushareToolName); fileExists(tool) {
 		stage[tool] = gpushareToolName
+	}
+	// The tools run inside the container's mount namespace: criu's tmpfs
+	// restore and the agent's replay steps. Base images before they were
+	// bundled do not carry them.
+	for _, name := range placeholderTools {
+		if tool := filepath.Join(bundleDir, name); fileExists(tool) {
+			stage[tool] = name
+		}
 	}
 	for src, name := range stage {
 		if err := copyFileExec(src, filepath.Join(stageDir, name)); err != nil {

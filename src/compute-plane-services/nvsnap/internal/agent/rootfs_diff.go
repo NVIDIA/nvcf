@@ -224,7 +224,7 @@ func mirrorIntoMntns(srcDiff string, placeholderPID int, excludeMountpoints []st
 
 	mntnsPath := fmt.Sprintf("/proc/%d/ns/mnt", placeholderPID)
 	dstTar := exec.Command("nsenter", "--mount="+mntnsPath, "--", //nolint:gosec // args are internally constructed (PIDs/paths), not user input
-		"tar",
+		inContainerTool(placeholderPID, "tar"),
 		"-C", "/",
 		"-xf", "-",
 		"--xattrs",
@@ -368,12 +368,12 @@ func untarIntoMntns(placeholderPID int, mp, tarFile string, log *logrus.Entry) e
 	// /opt/nvsnap) has no directory here yet, and tar -C refuses a missing
 	// one ("Cannot open: No such file or directory", 2026-10-04). Create
 	// it on the placeholder's rootfs first; /dev/shm already exists.
-	mkdir := exec.Command("nsenter", "--mount="+mntnsPath, "--", "mkdir", "-p", mp) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
+	mkdir := exec.Command("nsenter", "--mount="+mntnsPath, "--", inContainerTool(placeholderPID, "mkdir"), "-p", mp) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
 	if out, err := mkdir.CombinedOutput(); err != nil {
 		return fmt.Errorf("nsenter+mkdir (pid=%d, mp=%s): %w (output: %s)", placeholderPID, mp, err, strings.TrimSpace(string(out)))
 	}
 	cmd := exec.Command("nsenter", "--mount="+mntnsPath, "--", //nolint:gosec // args are internally constructed (PIDs/paths), not user input
-		"tar",
+		inContainerTool(placeholderPID, "tar"),
 		"-C", mp,
 		"-xf", "-",
 		"--xattrs",
