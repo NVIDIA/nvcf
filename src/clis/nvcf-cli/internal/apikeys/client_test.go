@@ -193,3 +193,12 @@ func TestGenerateAPIKey_RejectsUnexpectedResponsePrefix(t *testing.T) {
 	assert.ErrorContains(t, err, "failed to parse API key response")
 	assert.ErrorContains(t, err, "invalid character")
 }
+
+func TestGenerateAPIKey_EventLedgerDefaultScopes(t *testing.T) {
+	payload, _ := captureRequest(t, &Config{
+		ServiceID:     "svc-id",
+		DefaultScopes: DefaultEventLedgerScopes(),
+	}, nil)
+
+	assert.Equal(t, []string{"fnds:getEvents"}, scopesFrom(policyFrom(t, payload)))
+}

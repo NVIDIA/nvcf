@@ -75,7 +75,18 @@ type ControlPlane struct {
 // Addons groups optional control-plane add-on coordinates. Each add-on is
 // independent and omitted when the control plane does not run it.
 type Addons struct {
-	LLM LLMAddon `yaml:"llm,omitempty"`
+	LLM         LLMAddon         `yaml:"llm,omitempty"`
+	EventLedger EventLedgerAddon `yaml:"eventLedger,omitempty"`
+}
+
+// EventLedgerAddon advertises whether the control plane runs the Event Ledger
+// and where the compute plane reaches it. Register renders it into the
+// compute-plane values that turn on the NVCA OTel collector. ServiceURL is
+// empty when the compute plane shares the control-plane cluster and uses the
+// in-cluster Service.
+type EventLedgerAddon struct {
+	Enabled    bool   `yaml:"enabled,omitempty"`
+	ServiceURL string `yaml:"serviceURL,omitempty"`
 }
 
 // LLMAddon advertises the LLM add-on coordinates. RequestRouterAddress is the
@@ -367,6 +378,7 @@ func (v *validator) validateTransportTLS() {
 // validateAddons validates optional control-plane add-on coordinates. The LLM
 // request router address, when advertised, must be a host:port.
 func (v *validator) validateAddons() {
+	validateHTTPURL(v.add, "controlPlane.addons.eventLedger.serviceURL", v.doc.ControlPlane.Addons.EventLedger.ServiceURL, false)
 	addr := strings.TrimSpace(v.doc.ControlPlane.Addons.LLM.RequestRouterAddress)
 	if addr == "" {
 		return

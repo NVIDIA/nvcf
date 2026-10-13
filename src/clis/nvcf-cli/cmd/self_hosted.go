@@ -26,6 +26,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"nvcf-cli/internal/client"
+	"nvcf-cli/internal/selfhosted/controlplaneprofile"
 	"nvcf-cli/internal/selfhosted/kubectx"
 )
 
@@ -68,15 +69,20 @@ type registerEndpointValues struct {
 	ReValServiceHostHeaderOverride string
 	NATSURL                        string
 	NATSHostOverride               string
+	// EventLedger is set from the control plane's event-ledger release; see
+	// resolveEventLedgerAddon.
+	EventLedger controlplaneprofile.EventLedgerAddon
 }
 
 type localEndpointDefaults struct {
-	BaseHTTPURL string
-	InvokeURL   string
-	APIKeysURL  string
-	APIHost     string
-	InvokeHost  string
-	APIKeysHost string
+	BaseHTTPURL     string
+	InvokeURL       string
+	APIKeysURL      string
+	APIHost         string
+	InvokeHost      string
+	APIKeysHost     string
+	EventLedgerURL  string
+	EventLedgerHost string
 }
 
 const (
@@ -225,12 +231,14 @@ func localEndpointDefaultsFromICMSURL(rawURL string) (localEndpointDefaults, boo
 		return next.String()
 	}
 	return localEndpointDefaults{
-		BaseHTTPURL: urlFor("api"),
-		InvokeURL:   urlFor("invocation"),
-		APIKeysURL:  urlFor("api-keys"),
-		APIHost:     "api." + domain,
-		InvokeHost:  "invocation." + domain,
-		APIKeysHost: "api-keys." + domain,
+		BaseHTTPURL:     urlFor("api"),
+		InvokeURL:       urlFor("invocation"),
+		APIKeysURL:      urlFor("api-keys"),
+		APIHost:         "api." + domain,
+		InvokeHost:      "invocation." + domain,
+		APIKeysHost:     "api-keys." + domain,
+		EventLedgerURL:  urlFor(eventLedgerHostService),
+		EventLedgerHost: eventLedgerHostService + "." + domain,
 	}, true
 }
 
@@ -249,6 +257,8 @@ func applyLocalEndpointDefaults(icmsURL string) {
 	setEnvDefault("API_HOST", defaults.APIHost)
 	setEnvDefault("INVOKE_HOST", defaults.InvokeHost)
 	setEnvDefault("API_KEYS_HOST", defaults.APIKeysHost)
+	setEnvDefault("EVENT_LEDGER_URL", defaults.EventLedgerURL)
+	setEnvDefault("EVENT_LEDGER_HOST", defaults.EventLedgerHost)
 }
 
 func setEnvDefault(name, value string) {

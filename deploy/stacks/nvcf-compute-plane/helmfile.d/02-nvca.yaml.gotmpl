@@ -113,7 +113,10 @@ helmDefaults:
 {{- $nvcaOp := dig "nvcaOperator" dict .Values.global }}
 {{- $selfManaged := dig "selfManaged" dict $nvcaOp }}
 {{- $otelCollector := dig "otelCollector" dict $selfManaged }}
-{{- $otelCollectorEnabled := dig "enabled" false $otelCollector }}
+{{- /* The CLI sets selfManaged.otelCollector.enabled in the registration values
+       when the control plane runs the Event Ledger. Either source can enable it. */}}
+{{- $registrationOTelCollector := dig "selfManaged" "otelCollector" dict $registrationValues }}
+{{- $otelCollectorEnabled := or (dig "enabled" false $otelCollector) (dig "enabled" false $registrationOTelCollector) }}
 {{- $defaultOTelCollectorImageRepository := printf "%s/%s/nvcf-otel-collector" .Values.global.image.registry .Values.global.image.repository }}
 {{- $otelCollectorImageRepository := dig "imageRepository" $defaultOTelCollectorImageRepository $otelCollector }}
 

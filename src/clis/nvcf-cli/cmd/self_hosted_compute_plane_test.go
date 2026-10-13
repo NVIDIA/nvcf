@@ -1072,6 +1072,51 @@ func TestReadNVCAValuesMetadata(t *testing.T) {
 		assert.Equal(t, "nca-from-generated", meta.NCAID)
 	})
 
+	t.Run("generated values enable the otel collector when the event ledger is advertised", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "gpu-e-register-values.yaml")
+		require.NoError(t, writeComputePlaneNVCAValues(computePlaneNVCAValuesRequest{
+			Path:           path,
+			ClusterName:    "gpu-e",
+			NCAID:          "nca-from-generated",
+			Region:         "us-west-1",
+			IdentitySource: "psat",
+			Registration:   &selfhosted.RegisterResponse{ClusterID: "cluster-id", ClusterGroupID: "group-id"},
+			EventLedger:    controlplaneprofile.EventLedgerAddon{Enabled: true, ServiceURL: "https://events.example.com"},
+		}))
+
+		body, err := os.ReadFile(path)
+		require.NoError(t, err)
+		var values struct {
+			SelfManaged struct {
+				EventLedgerServiceURL string `yaml:"eventLedgerServiceURL"`
+				OTelCollector         *struct {
+					Enabled bool `yaml:"enabled"`
+				} `yaml:"otelCollector"`
+			} `yaml:"selfManaged"`
+		}
+		require.NoError(t, yaml.Unmarshal(body, &values))
+		assert.Equal(t, "https://events.example.com", values.SelfManaged.EventLedgerServiceURL)
+		require.NotNil(t, values.SelfManaged.OTelCollector)
+		assert.True(t, values.SelfManaged.OTelCollector.Enabled)
+	})
+
+	t.Run("generated values omit the otel collector when the event ledger is absent", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "gpu-f-register-values.yaml")
+		require.NoError(t, writeComputePlaneNVCAValues(computePlaneNVCAValuesRequest{
+			Path:           path,
+			ClusterName:    "gpu-f",
+			NCAID:          "nca-from-generated",
+			Region:         "us-west-1",
+			IdentitySource: "psat",
+			Registration:   &selfhosted.RegisterResponse{ClusterID: "cluster-id", ClusterGroupID: "group-id"},
+		}))
+
+		body, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.NotContains(t, string(body), "otelCollector")
+		assert.NotContains(t, string(body), "eventLedgerServiceURL")
+	})
+
 	t.Run("generated values render transport trust through agent config merge", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "gpu-d-register-values.yaml")
 		require.NoError(t, writeComputePlaneNVCAValues(computePlaneNVCAValuesRequest{

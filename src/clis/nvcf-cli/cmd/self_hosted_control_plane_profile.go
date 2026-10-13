@@ -64,6 +64,9 @@ func writeControlPlaneProfile(req controlPlaneProfileWriteRequest) (string, erro
 		req.StackDomain = domain
 	}
 	doc := buildControlPlaneProfile(req)
+	doc.ControlPlane.Addons.EventLedger = resolveEventLedgerAddon(
+		req.Ctx, req.Env, req.ControlPlaneContext, req.ComputePlaneContext,
+		resolveProfileICMSURL(req.ICMSURL, req.Env, req.StackDomain))
 	rootCAPEM := strings.TrimSpace(req.RootCAPEM)
 	if rootCAPEM == "" && req.SourceRootCA {
 		sourceRootCA, err := shouldSourceControlPlaneRootCA(req.StackPath, req.Env)

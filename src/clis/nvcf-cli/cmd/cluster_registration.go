@@ -31,6 +31,7 @@ import (
 
 	"nvcf-cli/internal/client"
 	"nvcf-cli/internal/logging"
+	"nvcf-cli/internal/selfhosted/controlplaneprofile"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -565,14 +566,20 @@ type helmValues struct {
 }
 
 type selfManagedValues struct {
-	IdentitySource                 string `yaml:"identitySource"`
-	Region                         string `yaml:"region"`
-	ICMSServiceURL                 string `yaml:"icmsServiceURL,omitempty"`
-	ICMSServiceHostHeaderOverride  string `yaml:"icmsServiceHostHeaderOverride,omitempty"`
-	ReValServiceURL                string `yaml:"revalServiceURL,omitempty"`
-	ReValServiceHostHeaderOverride string `yaml:"revalServiceHostHeaderOverride,omitempty"`
-	NATSURL                        string `yaml:"natsURL,omitempty"`
-	NATSHostOverride               string `yaml:"natsHostOverride,omitempty"`
+	IdentitySource                 string                   `yaml:"identitySource"`
+	Region                         string                   `yaml:"region"`
+	ICMSServiceURL                 string                   `yaml:"icmsServiceURL,omitempty"`
+	ICMSServiceHostHeaderOverride  string                   `yaml:"icmsServiceHostHeaderOverride,omitempty"`
+	ReValServiceURL                string                   `yaml:"revalServiceURL,omitempty"`
+	ReValServiceHostHeaderOverride string                   `yaml:"revalServiceHostHeaderOverride,omitempty"`
+	NATSURL                        string                   `yaml:"natsURL,omitempty"`
+	NATSHostOverride               string                   `yaml:"natsHostOverride,omitempty"`
+	EventLedgerServiceURL          string                   `yaml:"eventLedgerServiceURL,omitempty"`
+	OTelCollector                  *otelCollectorValuesYAML `yaml:"otelCollector,omitempty"`
+}
+
+type otelCollectorValuesYAML struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 // printRegistrationOutput prints the registration result and helm values YAML.
@@ -625,7 +632,16 @@ func newSelfManagedValuesFromEndpoints(identitySource, region string, endpoints 
 		ReValServiceHostHeaderOverride: endpoints.ReValServiceHostHeaderOverride,
 		NATSURL:                        endpoints.NATSURL,
 		NATSHostOverride:               endpoints.NATSHostOverride,
+		EventLedgerServiceURL:          endpoints.EventLedger.ServiceURL,
+		OTelCollector:                  endpointsOTelCollector(endpoints.EventLedger),
 	}
+}
+
+func endpointsOTelCollector(el controlplaneprofile.EventLedgerAddon) *otelCollectorValuesYAML {
+	if !el.Enabled {
+		return nil
+	}
+	return &otelCollectorValuesYAML{Enabled: true}
 }
 
 // lookupExistingCluster finds an existing cluster by name via the ICMS

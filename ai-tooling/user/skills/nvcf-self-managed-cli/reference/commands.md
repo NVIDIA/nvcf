@@ -24,6 +24,8 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 | `self-hosted down --all [--confirm]` | Orchestrator: tear down every registered compute plane + control plane | progress | Bounded parallelism via `--all-concurrency` (default 4); `--confirm` required in non-interactive |
 | `self-hosted down --plan-only ...` | Orchestrator dry-run: phases + helm releases + ICMS rows + ETAs (no helm/helmfile contact) | JSONL | **Always run before any actual `down`** |
 
+When the control plane runs the Event Ledger, `self-hosted up`, `self-hosted install --compute-plane`, and `compute-plane register` turn on the NVCA OTel collector for the new cluster. `up` and `install` detect it from the `event-ledger` Helm release on the control-plane context. `compute-plane register` reads `controlPlane.addons.eventLedger` from the control-plane profile. If the check fails, the collector stays off.
+
 ## Cluster management
 
 | Command | Purpose | Notes |
@@ -73,11 +75,20 @@ Task commands require `NVCF_API_KEY` set to a task-scoped key and `NVCF_BASE_NVC
 |---|---|---|
 | `init` | Mint admin token from API Keys via public api gateway | Idempotent; writes `~/.nvcf-cli.state`; clears saved function state and all API keys (function and task) |
 | `status` | Show CLI state (token, last endpoints, function context) | Distinct from `self-hosted status` |
-| `api-key generate [--for function\|task] [--description=…] [--expires-in=…]` | Mint API keys | Default (no `--for`): generates both a function key and a task key; `--for function` or `--for task` generates one only; `--scopes` requires `--for` |
+| `api-key generate [--for function\|task\|event-ledger] [--description=…] [--expires-in=…]` | Mint API keys | Default (no `--for`): generates a function key, a task key and an Event Ledger key; `--for function`, `--for task` or `--for event-ledger` generates one only (the Event Ledger key has the `fnds:getEvents` scope and is stored as `eventLedgerApiKey`); `--scopes` requires `--for` |
 | `api-key generate --validate` | Mint and immediately validate each generated key | Validates each key against its correct audience (NVCF for function keys, NVCT for task keys) |
 | `api-key list` | List API keys for current owner | Lists NVCF-scoped keys only |
 | `api-key delete KEY-ID` / `api-key revoke KEY-ID` | Remove an API key | **Confirm with user** |
-| `api-key show` | Show currently saved API key from state | |
+| `api-key show` | Show the saved function, task and Event Ledger keys from state | |
+
+## Event Ledger
+
+Event Ledger commands need the Event Ledger addon on the control plane and an API key with the `fnds:getEvents` read scope (`api-key generate --for event-ledger`). The URL comes from `--event-ledger-url`, `EVENT_LEDGER_URL`, or `event_ledger_url`. Without one, it is derived from `base_http_url` by replacing the leading `api.` with `events.`. Set `event_ledger_host` (or `EVENT_LEDGER_HOST`) when the gateway routes by Host header.
+
+| Command | Purpose | Notes |
+|---|---|---|
+| `stats get [--function-version-id=VID] [--event-filter=NAME[,NAME]]` | Latest event for every instance of a function version | Uses the saved version ID when the flag is omitted; `--json` for machine-readable output |
+| `stages events list [--function-version-id=VID] --deployment-id=ID --gpu-specification-id=ID` | Event history of one instance, most recent first | Needs at least one of `--instance-id`, `--deployment-id`, `--gpu-specification-id`, `--cluster-id`, matching how the events were ingested. Run `stats get` first to see the contexts |
 
 ## Agent skill
 

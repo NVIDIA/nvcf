@@ -44,6 +44,8 @@ global:
       otelCollector:
         # Self-hosted registries do not always mirror this optional image.
         # Enable it only after publishing the collector in global.image.
+        # nvcf-cli also enables it through the registration values when the
+        # control plane runs the Event Ledger.
         enabled: false
         imageTag: "0.160.0-nv-0.2.5"
       # ICMS (SIS) service URL: required; set per environment.
