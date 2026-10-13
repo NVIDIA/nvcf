@@ -69,9 +69,14 @@ public class TokenService {
         return notaryClient.issueWorkerAccessAssertionToken(ncaId, taskId);
     }
 
-    public void validateWorkerAccessAssertion(String ncaId, UUID taskId) {
+    /**
+     * Validates the caller's worker credential for the task.
+     *
+     * @return true when the caller authenticated with a delegated (ICMS-introspected) token
+     */
+    public boolean validateWorkerAccessAssertion(String ncaId, UUID taskId) {
         accountService.getAccountName(ncaId);
-        workerAssertionValidator.validate(getAccessToken(), ncaId, taskId);
+        return workerAssertionValidator.validate(getAccessToken(), ncaId, taskId);
     }
 
     private static String getAccessToken() {

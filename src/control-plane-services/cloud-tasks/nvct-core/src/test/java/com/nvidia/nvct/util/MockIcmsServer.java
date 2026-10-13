@@ -187,6 +187,34 @@ public class MockIcmsServer {
         }
     }
 
+    public static final String WORKER_TOKEN_INTROSPECT_PATH = "/v1/icms/workers/tokens/introspect";
+
+    /** Stubs the worker token introspection endpoint to return the given JSON body for any token. */
+    public static void stubWorkerTokenIntrospect(String responseJson) {
+        mockIcmsServer.stubFor(post(urlPathEqualTo(WORKER_TOKEN_INTROSPECT_PATH))
+                                       .atPriority(1)
+                                       .willReturn(aResponse().withStatus(200)
+                                                           .withHeader(CONTENT_TYPE, APPLICATION_JSON_VALUE)
+                                                           .withBody(responseJson)));
+    }
+
+    /** Stubs an active introspection result bound to the given task and NCA. */
+    public static void stubWorkerTokenIntrospectActive(String ncaId, UUID taskId, String instanceId) {
+        stubWorkerTokenIntrospect("""
+                {"active": true, "sub": "system:serviceaccount:%s:nvcf-worker",
+                 "aud": "nvcf-icms:cl-test", "iss": "https://kubernetes.default.svc",
+                 "exp": %d, "client_id": "cl-test", "instance_id": "%s", "worker_id": "utils",
+                 "request_id": "req-1", "task_id": "%s", "nca_id": "%s", "token_type": "psat"}
+                """.formatted(instanceId, Instant.now().plusSeconds(600).getEpochSecond(),
+                              instanceId, taskId, ncaId));
+    }
+
+    public static int workerTokenIntrospectCallCount() {
+        return mockIcmsServer.countRequestsMatching(
+                com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor(
+                        urlPathEqualTo(WORKER_TOKEN_INTROSPECT_PATH)).build()).getCount();
+    }
+
     public static void stubTerminateInstanceNotFound() {
         mockIcmsServer.stubFor(
                 delete(urlPathMatching("/v1/si/accounts/.*/workloads/.*"))
