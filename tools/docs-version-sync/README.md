@@ -508,3 +508,53 @@ Native release notes live in `fern/changelog/`. Dated MDX files use `##` heading
 for cards and frontmatter tags for filters. Keep links relative and record the
 edition and exact artifact versions in release entries. Qualification remains a
 reviewed declaration; a development entry is not release approval.
+
+### Opt-in umbrella publication
+
+The `Publish Umbrella Release` workflow runs only on explicit dispatch from
+`main`. Its default mode validates and assembles without remote writes. `draft`
+uploads a candidate; `promote` requires a qualified manifest and exposes it only
+after every asset passes readback. Neither component releases nor docs edits
+start this workflow. It never edits the docs registry or the repository's
+latest-release pointer.
+
+Release owners allocate an unused version, review the complete combination,
+and commit `deploy/releases/X.Y.Z/manifest.json` and customer `notes.md` beside
+it. Qualification must link to public evidence of whole-combination runtime
+and upgrade testing. Artifact existence alone is not qualification. Never reuse
+a published or reserved docs version for a different combination.
+
+The workflow downloads the exact public component inventories, reassembles the
+bundle, and checks the committed manifest, predecessor, source tags, inventory
+hashes, compatibility, and notes. Publication independently checks anonymous
+access to the stable component releases and their inventories. The reviewed
+manifest records source and toolchain provenance; `release-assets.json` records
+the resulting immutable bytes.
+
+```bash
+go run -C tools/docs-version-sync . umbrella publish \
+  --repo /path/to/nvcf --target FULL_REVIEWED_COMMIT \
+  --assets /tmp/umbrella-assets
+```
+
+The command above performs local validation only. Add `--write` to upload a
+draft and `--promote` to expose a qualified release. Writes require
+`GITHUB_TOKEN`. The GitHub release API is the archive distribution contract;
+this workflow does not introduce an OCI package or change existing OCI stack
+publication.
+
+An interrupted upload leaves a draft. Retry with the same commit and bytes.
+Existing assets are downloaded and compared, never overwritten. If an asset is
+incomplete or differs, stop and inspect the draft; this tool deliberately does
+not delete assets. A published release cannot be repaired in place. Restore
+missing infrastructure or allocate another product version after review.
+
+Docs activation is a separate reviewed registry change. Supply that PR with
+the released manifest and its digest; subsequent prose corrections require no
+product publication. Keep the current docs publisher and default until its
+mixed-version preview and rollback gates pass.
+
+Run `go test -C tools/docs-version-sync -run TestUmbrellaPublisher -v` for the
+isolated API rehearsal. It assembles a real fixture bundle, interrupts upload,
+retries, reads every asset back, checks immutable reruns and corruption, and
+verifies trigger isolation. This test does not publish to GitHub.

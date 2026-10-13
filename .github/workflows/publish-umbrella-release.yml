@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+name: Publish Umbrella Release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Reviewed umbrella version with manifest and notes committed on main
+        required: true
+        type: string
+      mode:
+        description: Validate locally, upload a draft, or promote a qualified release
+        type: choice
+        default: validate
+        options: [validate, draft, promote]
+permissions:
+  contents: write
+concurrency:
+  group: umbrella-release
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: tools/docs-version-sync/go.mod
+      - name: Validate and assemble exact reviewed inputs
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          manifest="deploy/releases/$RELEASE_VERSION/manifest.json"
+          inventories="$RUNNER_TEMP/umbrella-inventories"
+          mkdir -p "$inventories"
+          go build -C tools/docs-version-sync -o "$RUNNER_TEMP/docs-version-sync" .
+          # Validate the manifest before using its tag and asset names in requests.
+          "$RUNNER_TEMP/docs-version-sync" umbrella manifest --manifest "$manifest"
+          while IFS=$'\t' read -r tag asset; do
+            curl --fail --location --retry 3 \
+              "https://github.com/NVIDIA/nvcf/releases/download/$tag/$asset" \
+              -o "$inventories/$asset"
+          done < <(jq -r '.stacks[] | [.source_tag, .inventory_asset] | @tsv' "$manifest")
+          previous=()
+          previous_version=$(jq -r '.previous_version // empty' "$manifest")
+          if [[ -n "$previous_version" ]]; then
+            previous=(--previous "deploy/releases/$previous_version/manifest.json")
+          fi
+          "$RUNNER_TEMP/docs-version-sync" umbrella bundle --repo . \
+            --manifest "$manifest" --inventories "$inventories" \
+            "${previous[@]}" --out "$RUNNER_TEMP/umbrella-assets"
+          "$RUNNER_TEMP/docs-version-sync" umbrella publish --repo . \
+            --target "$GITHUB_SHA" --assets "$RUNNER_TEMP/umbrella-assets"
+      - name: Upload draft or promote after asset readback
+        if: inputs.mode != 'validate'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_MODE: ${{ inputs.mode }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          promotion=()
+          if [[ "$RELEASE_MODE" == promote ]]; then promotion=(--promote); fi
+          "$RUNNER_TEMP/docs-version-sync" umbrella publish --repo . \
+            --target "$GITHUB_SHA" --assets "$RUNNER_TEMP/umbrella-assets" \
+            --write "${promotion[@]}"
+      - name: Record verified candidate identity
+        shell: bash
+        run: |
+          cat "$RUNNER_TEMP/umbrella-assets/release-assets.json" >> "$GITHUB_STEP_SUMMARY"
