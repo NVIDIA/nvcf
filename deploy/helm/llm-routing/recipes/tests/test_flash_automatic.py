@@ -86,12 +86,12 @@ class FlashHelmTests(unittest.TestCase):
                 mutate(values)
                 self.assertIn(message, self.render(values, success=False))
 
-    def test_tp2_suspend_withdraws_endpoint_and_preserves_rank_caches(self):
+    def test_tp2_suspend_keeps_endpoint_and_preserves_rank_caches(self):
         docs = self.render(dict(self.values(True), suspended=True))
         self.assertEqual(len([d for d in docs if d['kind'] == 'PersistentVolumeClaim']), 2)
         self.assertTrue(all(d['metadata']['annotations']['helm.sh/resource-policy'] == 'keep' for d in docs if d['kind'] == 'PersistentVolumeClaim'))
         self.assertTrue(all(d['spec']['replicas'] == 0 for d in docs if d['kind'] == 'Deployment'))
-        self.assertFalse(any(d['kind'] == 'InferenceEndpoint' for d in docs))
+        self.assertEqual(sum(d['kind'] == 'InferenceEndpoint' for d in docs), 1)
 
 
 class FlashRuntimeTests(unittest.TestCase):

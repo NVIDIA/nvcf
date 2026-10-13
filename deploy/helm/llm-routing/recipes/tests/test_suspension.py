@@ -29,16 +29,17 @@ class SuspensionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         return {(doc['kind'], doc['metadata']['name']): doc for doc in yaml.safe_load_all(result.stdout) if doc}
 
-    def test_suspend_withdraws_endpoint_stops_workloads_and_preserves_claims(self):
+    def test_suspend_keeps_endpoint_registered_stops_workloads_and_preserves_claims(self):
         for name, chart, values in self.cases():
             with self.subTest(profile=name):
                 active = self.render(chart, values)
                 suspended = self.render(chart, dict(values, suspended=True))
                 self.assertEqual(active, self.render(chart, dict(values, suspended=False)))
                 expected = copy.deepcopy(active)
+                # The endpoint stays so the gateway registry and the demo UI list the stopped model as unhealthy.
                 endpoints = [key for key in expected if key[0] == 'InferenceEndpoint']
                 self.assertEqual(len(endpoints), 1)
-                del expected[endpoints[0]]
+                self.assertEqual(suspended[endpoints[0]], active[endpoints[0]])
                 deployments = [obj for obj in expected.values() if obj['kind'] == 'Deployment']
                 self.assertTrue(deployments)
                 for obj in deployments:

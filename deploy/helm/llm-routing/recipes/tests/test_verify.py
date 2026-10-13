@@ -28,6 +28,27 @@ class VerifyTests(unittest.TestCase):
         self.assertEqual([c.args[0] for c in client.auth.call_args_list], ['model-a', 'model-b'])
         self.assertEqual([c.kwargs.get('stream', False) for c in client.completion.call_args_list], [False, True, False, True])
 
+    def test_default_budget_is_unchanged_and_custom_budget_is_recorded(self):
+        client = self.client()
+        result = verify.verify(client, ['model-a'])
+        self.assertNotIn('maxTokens', result)
+        self.assertTrue(all('max_tokens' not in c.kwargs for c in client.completion.call_args_list))
+        client = self.client()
+        result = verify.verify(client, ['model-a'], max_tokens=2048)
+        self.assertEqual(result['maxTokens'], 2048)
+        self.assertEqual([c.kwargs['max_tokens'] for c in client.completion.call_args_list], [2048, 2048])
+        for bad in (0, -1, '5', True):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                verify.verify(self.client(), ['model-a'], max_tokens=bad)
+
+    def test_cli_rejects_a_nonpositive_budget_before_cluster_access(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory)/'evidence.json'
+            with patch.object(verify.llm, 'selected_context') as context, \
+                 contextlib.redirect_stderr(__import__('io').StringIO()), self.assertRaises(SystemExit):
+                verify.main(['--model', 'model-a', '--max-tokens', '0', '--output', str(path)])
+            context.assert_not_called()
+
     def test_empty_duplicate_or_invalid_models_do_not_send_requests(self):
         for models in ([], [''], ['a', 'a'], [1]):
             with self.subTest(models=models), self.assertRaises(ValueError):

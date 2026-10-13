@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: Apache-2.0
+# Replace the node names with three available GB10 nodes.
+# Override runtimeClassName and storageClassName for your cluster.
+# Three-node profile. Not yet validated on hardware.
+recipe: glm-5.3
+profileName: gb10-x3
+nodes:
+- gpu-node-1
+- gpu-node-2
+- gpu-node-3
+runtimeClassName: nvidia
+storageClassName: local-path
+sharedCAConfigMap: llm-gateway-stack-ca

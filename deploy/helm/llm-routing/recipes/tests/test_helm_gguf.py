@@ -196,10 +196,156 @@ class AutomaticChartTests(unittest.TestCase):
     def test_suspend_retains_claims_and_stops_all_owned_deployments(self):
         objects = render(values(suspended=True))
         self.assertEqual([item['spec']['replicas'] for item in objects if item['kind'] == 'Deployment'], [0, 0, 0])
-        self.assertFalse(any(item['kind'] == 'InferenceEndpoint' for item in objects))
+        self.assertEqual(sum(item['kind'] == 'InferenceEndpoint' for item in objects), 1)
         for item in objects:
             if item['kind'] == 'PersistentVolumeClaim':
                 self.assertEqual(item['metadata']['annotations']['helm.sh/resource-policy'], 'keep')
+
+
+def three_node_values(**overrides):
+    config = dict(recipe='glm-5.3', profileName='gb10-x3', nodes=['model-0', 'model-1', 'model-2'], sharedCAConfigMap='stack-ca')
+    config.update(overrides)
+    return config
+
+
+class ThreeNodeChartTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.objects = render(three_node_values())
+        cls.config = json.loads(object_named(cls.objects, 'ConfigMap', 'gguf-test-automatic')['data']['automatic.json'])
+
+    def test_the_default_profile_is_still_the_two_node_profile(self):
+        config = json.loads(object_named(render(), 'ConfigMap', 'gguf-test-automatic')['data']['automatic.json'])
+        self.assertEqual(config['profile']['id'], 'gb10-x2')
+        self.assertEqual(config['devices'], 'CUDA0,RPC0')
+        self.assertEqual(config['rpcEndpoints'], ['gguf-test-rpc-n1:50052'])
+
+    def test_one_leader_and_two_workers_each_own_a_node_a_claim_and_a_service(self):
+        self.assertEqual(self.config['profile']['id'], 'gb10-x3')
+        self.assertEqual(self.config['claims'], ['gguf-test-artifacts', 'gguf-test-rpc-cache-n1', 'gguf-test-rpc-cache-n2'])
+        self.assertEqual([item['metadata']['name'] for item in self.objects if item['kind'] == 'PersistentVolumeClaim'], self.config['claims'])
+        names = ['gguf-test', 'gguf-test-rpc-n1', 'gguf-test-rpc-n2']
+        for index, name in enumerate(names):
+            spec = object_named(self.objects, 'Deployment', name)['spec']['template']['spec']
+            self.assertEqual(spec['nodeSelector']['kubernetes.io/hostname'], 'model-' + str(index))
+            self.assertEqual(next(v for v in spec['volumes'] if v['name'] == 'cache')['persistentVolumeClaim']['claimName'], self.config['claims'][index])
+            self.assertEqual(spec['containers'][0]['resources'], self.config['profile']['roles'][index]['resources'])
+            self.assertEqual(object_named(self.objects, 'Service', name)['spec']['selector']['app.kubernetes.io/component'], 'model' if index == 0 else 'rpc')
+        for name in names[1:]:
+            pod = object_named(self.objects, 'Deployment', name)['spec']['template']['spec']
+            self.assertEqual([c['name'] for c in pod['initContainers']], ['placement', 'hardware', 'fetch-runtime'])
+            self.assertEqual(pod['containers'][0]['readinessProbe']['exec']['command'], ['python3', '/checks/rpc-health.py'])
+        role = object_named(self.objects, 'ClusterRole', next(i['metadata']['name'] for i in self.objects if i['kind'] == 'ClusterRole'))
+        self.assertEqual(role['rules'][0]['resourceNames'], ['model-0', 'model-1', 'model-2'])
+        placement = object_named(self.objects, 'Role', 'gguf-test-placement')
+        self.assertEqual(placement['rules'][0]['resourceNames'], self.config['claims'])
+        for index in range(3):
+            targets = json.loads(object_named(self.objects, 'ConfigMap', 'gguf-test-automatic')['data']['placement-n%d.json' % index])
+            self.assertEqual(targets['targets'], [{'node': 'model-' + str(index)}])
+            self.assertEqual(targets['claimName'], self.config['claims'][index])
+
+    def test_each_service_selects_exactly_its_own_pod_so_workers_are_never_shared(self):
+        # An RPC server serves one client at a time. A Service that also selects another
+        # worker would route two of the leader's GPUs to the same server and deadlock the load.
+        deployments = [item for item in self.objects if item['kind'] == 'Deployment' and item['metadata']['name'] != 'gguf-test-artifacts']
+        for service in (item for item in self.objects if item['kind'] == 'Service' and item['metadata']['name'] != 'gguf-test-artifacts'):
+            selector = service['spec']['selector']
+            matching = [d['metadata']['name'] for d in deployments
+                        if all(d['spec']['template']['metadata']['labels'].get(key) == value for key, value in selector.items())]
+            self.assertEqual(matching, [service['metadata']['name']], service['metadata']['name'])
+        for deployment in deployments:
+            selector = deployment['spec']['selector']['matchLabels']
+            labels = deployment['spec']['template']['metadata']['labels']
+            self.assertTrue(all(labels.get(key) == value for key, value in selector.items()))
+            self.assertNotIn('recipe-rank', selector)
+
+    def test_the_leader_serves_through_every_worker_with_one_split_entry_per_gpu(self):
+        model = object_named(self.objects, 'Deployment', 'gguf-test')['spec']['template']['spec']['containers'][0]
+        environment = {item['name']: item['value'] for item in model['env']}
+        self.assertEqual(environment['RPC_ENDPOINTS'], 'gguf-test-rpc-n1:50052,gguf-test-rpc-n2:50052')
+        args = json.loads(environment['SERVER_ARGS'])
+        self.assertEqual(args[args.index('--device') + 1], 'CUDA0,RPC0,RPC1')
+        split = args[args.index('--tensor-split') + 1]
+        self.assertEqual(split, ','.join(map(str, self.config['profile']['tensorSplit'])))
+        self.assertEqual(len(split.split(',')), 3)
+        self.assertEqual(self.config['rpcEndpoints'], ['gguf-test-rpc-n1:50052', 'gguf-test-rpc-n2:50052'])
+
+    def test_memory_follows_the_recipe_rules_for_a_three_way_split(self):
+        profile = self.config['profile']
+        recipe = self.config['recipe']
+        tuning = self.config['tuning']
+        kv_gib = recipe['kvCacheKiBPerToken'] * tuning['contextPerSlot'] * tuning['slots'] / 1024**2
+        share = (self.config['lock']['weightGiB'] + kv_gib) / 3
+        rules = recipe['memory']['unified']
+        self.assertEqual(profile['minAvailableMemoryGiB'], math.ceil(share) + rules['checkOverShareGiB'])
+        for role in profile['roles']:
+            self.assertEqual(role['resources']['requests']['memory'], str(math.floor(share) - rules['requestUnderShareGiB']) + 'Gi')
+            self.assertEqual(role['resources']['limits']['memory'], str(math.ceil(share) + rules['limitOverShareGiB']) + 'Gi')
+            self.assertEqual(role['resources']['requests']['nvidia.com/gpu'], 1)
+
+    def test_topology_must_match_the_selected_profile(self):
+        cases = [three_node_values(nodes=['a', 'b']), three_node_values(nodes=['a', 'b', 'b']),
+                 three_node_values(nodes=['a', 'b', 'c', 'd']), three_node_values(nodes=['a', 'b', 'INVALID']),
+                 three_node_values(profileName='gb10-x2')]
+        for config in cases:
+            with self.subTest(nodes=config['nodes'], profile=config.get('profileName')):
+                self.assertNotEqual(render(config, check=False).returncode, 0)
+
+    def test_retained_caches_need_one_claim_per_worker(self):
+        objects = render(three_node_values(reuseCaches=True, artifacts={'existingClaim': 'kept-model'},
+                                           rpc={'cache': {'existingClaims': ['kept-rpc-1', 'kept-rpc-2']}}))
+        self.assertFalse(any(item['kind'] == 'PersistentVolumeClaim' for item in objects))
+        config = json.loads(object_named(objects, 'ConfigMap', 'gguf-test-automatic')['data']['automatic.json'])
+        self.assertEqual(config['claims'], ['kept-model', 'kept-rpc-1', 'kept-rpc-2'])
+        partial = render(three_node_values(artifacts={'existingClaim': 'kept-model'}, rpc={'cache': {'existingClaims': ['kept-rpc-1', '']}}))
+        self.assertEqual([item['metadata']['name'] for item in partial if item['kind'] == 'PersistentVolumeClaim'], ['gguf-test-rpc-cache-n2'])
+        rejected = [three_node_values(rpc={'cache': {'existingClaims': ['only-one']}}),
+                    three_node_values(rpc={'cache': {'existingClaim': 'single'}}),
+                    three_node_values(rpc={'cache': {'existingClaim': 'single', 'existingClaims': ['a', 'b']}}),
+                    three_node_values(artifacts={'existingClaim': 'dup'}, rpc={'cache': {'existingClaims': ['dup', 'other']}}),
+                    three_node_values(rpc={'cache': {'existingClaims': ['dup', 'dup']}}),
+                    three_node_values(reuseCaches=True, artifacts={'existingClaim': 'kept-model'}, rpc={'cache': {'existingClaims': ['kept-rpc-1', '']}})]
+        for config in rejected:
+            with self.subTest(rpc=config.get('rpc'), artifacts=config.get('artifacts')):
+                self.assertNotEqual(render(config, check=False).returncode, 0)
+
+    def test_suspend_stops_the_leader_every_worker_and_the_artifact_server(self):
+        objects = render(three_node_values(suspended=True))
+        self.assertEqual([item['spec']['replicas'] for item in objects if item['kind'] == 'Deployment'], [0, 0, 0, 0])
+        self.assertEqual(sum(item['kind'] == 'InferenceEndpoint' for item in objects), 1)
+
+    def test_the_catalog_records_the_three_node_result_and_keeps_the_two_node_failure(self):
+        exported = next(recipe for recipe in json.loads((ROOT / 'index.json').read_text())['recipes'] if recipe['id'] == 'glm-5.3')
+        profile = next(item for item in exported['profiles'] if item['id'] == 'gb10-x3')
+        self.assertEqual(profile['modelNodeCount'], 3)
+        self.assertEqual([node['role'] for node in profile['perNode']], ['model', 'rpc', 'rpc'])
+        self.assertEqual(profile['deployment']['values'], {'recipe': 'glm-5.3', 'profileName': 'gb10-x3'})
+        self.assertEqual(profile['validation']['automaticHelmStatus'], 'smoke-tested')
+        record = profile['validation']['automaticHelmWorkload']
+        self.assertEqual((record['contextLength'], record['concurrency'], record['tensorSplit']), (2048, 1, [1, 1, 1]))
+        self.assertIn('distributed-runtime-qualification', record['checks'])
+        self.assertFalse(record['fullContextExercised'] or record['performanceBenchmarked'] or record['qualityEvaluated'])
+        self.assertEqual(profile['minimumAvailableMemoryBytesPerNode'], 76 * 1024**3)
+        self.assertEqual(next(item for item in exported['profiles'] if item['id'] == 'gb10-x2')['validation']['automaticHelmStatus'], 'failed')
+
+    def test_chain_check_visits_every_ordered_gpu_pair(self):
+        source = (CHART / 'files/rpc-chain-check.cpp').read_text()
+        self.assertNotIn('argc != 3', source)
+        self.assertIn('count * (count - 1)', source)
+
+        def pairs(count):
+            visited = []
+            for pair in range(count * (count - 1)):
+                direction, low, index = pair % 2, 0, pair // 2
+                while index >= count - 1 - low:
+                    index -= count - 1 - low
+                    low += 1
+                high = low + 1 + index
+                visited.append((high, low) if direction else (low, high))
+            return visited
+        self.assertEqual(pairs(2), [(0, 1), (1, 0)])
+        for count in (3, 4):
+            self.assertEqual(sorted(pairs(count)), sorted((a, b) for a in range(count) for b in range(count) if a != b))
 
 
 class SourceBuildTests(unittest.TestCase):
@@ -658,6 +804,23 @@ class RuntimeTests(unittest.TestCase):
         auto.emit.assert_called_once_with('distributed_qualification_pass', gpus=2)
         child.terminate.assert_called_once()
         child.wait.assert_called_once()
+
+    def test_three_gpu_qualification_tests_every_pair_and_checks_all_gpus_together(self):
+        self.config['rpcEndpoints'] = ['worker-1:50052', 'worker-2:50052']
+        child = MagicMock()
+        with patch.object(auto.subprocess, 'Popen', return_value=child), patch.object(auto, 'wait_endpoints') as wait, \
+                patch.object(auto.subprocess, 'run') as run:
+            auto.qualify(self.config, self.root)
+        endpoints = ['127.0.0.1:50052', 'worker-1:50052', 'worker-2:50052']
+        wait.assert_called_once_with(endpoints)
+        calls = [call.args[0] for call in run.call_args_list]
+        self.assertEqual([pathlib.Path(call[0]).name for call in calls[:4]], ['test-rpc-multi-server'] * 3 + ['rpc-gpu-check'])
+        self.assertEqual(calls[4][0], auto.sys.executable)
+        self.assertEqual([call[1:] for call in calls[:3]], [[endpoints[0], endpoints[1]], [endpoints[0], endpoints[2]], [endpoints[1], endpoints[2]]])
+        self.assertEqual(calls[3][1:], endpoints)
+        self.assertEqual(run.call_args_list[4].kwargs['env']['RPC_ENDPOINTS'], ','.join(endpoints))
+        auto.emit.assert_called_once_with('distributed_qualification_pass', gpus=3)
+        child.terminate.assert_called_once()
 
     def test_reuse_verifies_entire_pinned_model_without_network(self):
         model = self.root / 'model'

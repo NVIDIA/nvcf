@@ -64,7 +64,7 @@ metadata:
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ $name }}-placement}
 subjects: [{kind: ServiceAccount, name: {{ $name }}-placement, namespace: {{ .Release.Namespace }}}]
 {{- range $i, $role := $config.profile.roles }}
-{{- $existing := ternary $.Values.artifacts.existingClaim $.Values.rpc.cache.existingClaim (eq $i 0) }}
+{{- $existing := index $config.existing $i }}
 {{- if not $existing }}
 ---
 apiVersion: v1
@@ -91,7 +91,7 @@ spec:
     matchLabels: {app.kubernetes.io/instance: {{ $name }}, app.kubernetes.io/component: {{ $role.role }}}
   template:
     metadata:
-      labels: {app.kubernetes.io/instance: {{ $name }}, app.kubernetes.io/component: {{ $role.role }}}
+      labels: {app.kubernetes.io/instance: {{ $name }}, app.kubernetes.io/component: {{ $role.role }}, recipe-rank: {{ $i | quote }}}
       annotations:
         checksum/config: {{ $config | toJson | sha256sum | quote }}
         checksum/scripts: {{ $scripts | toJson | sha256sum | quote }}
@@ -173,7 +173,7 @@ spec:
             - {name: FIRST_SHARD, value: {{ $config.recipe.firstShard | quote }}}
             - {name: SERVED_MODEL, value: {{ $config.recipe.servedName | quote }}}
             - {name: RPC_ENDPOINTS, value: {{ join "," $config.rpcEndpoints | quote }}}
-            - {name: SERVER_ARGS, value: {{ concat $config.recipe.serverArgs $tuningArgs (list "--device" "CUDA0,RPC0" "--tensor-split" (join "," $config.profile.tensorSplit)) | toJson | quote }}}
+            - {name: SERVER_ARGS, value: {{ concat $config.recipe.serverArgs $tuningArgs (list "--device" $config.devices "--tensor-split" (join "," $config.profile.tensorSplit)) | toJson | quote }}}
           ports: [{name: http, containerPort: 8000}]
           startupProbe:
             httpGet: {path: /health, port: http}
@@ -230,7 +230,7 @@ kind: Service
 metadata:
   name: {{ if eq $i 0 }}{{ $name }}{{ else }}{{ $name }}-rpc-{{ $role.id }}{{ end }}
 spec:
-  selector: {app.kubernetes.io/instance: {{ $name }}, app.kubernetes.io/component: {{ $role.role }}}
+  selector: {app.kubernetes.io/instance: {{ $name }}, app.kubernetes.io/component: {{ $role.role }}, recipe-rank: {{ $i | quote }}}
   ports: [{name: {{ if eq $i 0 }}http{{ else }}rpc{{ end }}, port: {{ if eq $i 0 }}8000{{ else }}50052{{ end }}, targetPort: {{ if eq $i 0 }}http{{ else }}rpc{{ end }}}]
 {{- end }}
 ---
@@ -291,7 +291,6 @@ spec:
         - podSelector:
             matchLabels: {app.kubernetes.io/instance: {{ $name }}}
       ports: [{protocol: TCP, port: 8080}, {protocol: TCP, port: 50052}]
-{{- if not .Values.suspended }}
 ---
 apiVersion: pylon.nvidia.com/v1alpha1
 kind: InferenceEndpoint
@@ -305,4 +304,3 @@ spec:
   canary: {{ $config.recipe.canary | toJson }}
   maxEngineConcurrency: {{ $tuning.slots }}
   gpu: {product: {{ index $config.profile.hardware.gpuProducts 0 | quote }}}
-{{- end }}
