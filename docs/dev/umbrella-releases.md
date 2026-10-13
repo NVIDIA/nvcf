@@ -73,7 +73,10 @@ deletions while permitting creation by the release workflow. Keep component tag
 rules intact. The umbrella tag namespace intentionally does not match component
 release triggers. Record the effective rules in the release review.
 
-Run `Publish Umbrella Release` from `main` with `mode=validate`, then `draft`.
+Run `Publish Umbrella Release` from `main` with `version=X.Y.Z` and
+`target=FULL_REVIEWED_PRODUCT_COMMIT`. Use `mode=validate`, then `draft`.
+Keep that full target SHA for retries and promotion, even if `main` advances.
+The target must already belong to `main` and contain the final manifest and notes.
 The publisher uploads missing assets, verifies existing bytes, and leaves an
 interrupted upload as a draft. Retry identical inputs. A checksum conflict
 requires investigation; do not replace a published asset.
@@ -127,6 +130,10 @@ Set `fern/editions.yml`'s `default` to the new version and put its selector
 first. Retain every old version, all six tabs, Development, site settings,
 redirects, anchors, and downloads. Review this small canonical activation diff
 separately from the prepared sources and artifact publication.
+
+Commit the reviewed canonical inputs before running the publisher check.
+It requires clean `docs/` and `fern/` trees, including untracked and ignored
+files. Preview checks also support working-tree edits.
 
 Run the integration checks and both preview configurations:
 
