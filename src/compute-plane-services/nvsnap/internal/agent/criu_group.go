@@ -248,9 +248,6 @@ func (c *criuAutoRestorer) considerGroupCapture(ctx context.Context, pod *corev1
 	if !ok || (size > 1 && !c.a.captureOptedIn(pod)) {
 		return
 	}
-	if _, dir := snapshotPointDir(pod); dir != "" {
-		return // captured at its snapshot point (snapshot_point.go), not once it serves
-	}
 	scope, err := c.a.criuGroupScope(ctx, pod.Namespace)
 	if err != nil {
 		c.a.log.WithError(err).WithField("namespace", pod.Namespace).Warn("CRIU group capture: cannot read the namespace's scope")
@@ -267,27 +264,23 @@ func (c *criuAutoRestorer) considerGroupCapture(ctx context.Context, pod *corev1
 		return
 	}
 	go func() {
-		if retry := c.captureGroup(ctx, pod, scope, size, false); retry {
+		if retry := c.captureGroup(ctx, pod, scope, size); retry {
 			// Not ready yet: a later event of the pod tries again.
 			c.attempted.Delete("capture/" + string(pod.UID))
 		}
 	}()
 }
 
-// captureGroup captures leader's instance. atPoint: leader's engine is
-// paused at its snapshot point, so it counts as ready and there is no
-// serving to warm up. retry is true when the instance was not ready for it
-// yet.
-func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod, scope string, size int, atPoint bool) (retry bool) {
+// captureGroup captures leader's instance. retry is true when the
+// instance was not ready for it yet.
+func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod, scope string, size int) (retry bool) {
 	a := c.a
 	log := a.log.WithFields(logrus.Fields{"pod": leader.Namespace + "/" + leader.Name, "size": size})
 	cms := a.kubeClient.CoreV1().ConfigMaps(a.criuFailedNamespace())
-	if !atPoint {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-time.After(criuGroupWarmup):
-		}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(criuGroupWarmup):
 	}
 	pods, err := a.kubeClient.CoreV1().Pods(leader.Namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -297,8 +290,7 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	// The ranks need not share one configuration: a Grove leader and its
 	// workers come from different templates. Pods of one template must.
 	ranks, err := instanceRanks(pods.Items, leader, size, modelvolume.CacheOrdinalAnnotation, modelvolume.CacheGroupSizeAnnotation, func(p *corev1.Pod) bool {
-		ready := rootfsonly.IsPodReady(p) || (atPoint && p.UID == leader.UID)
-		return p.Annotations[cacheURIAnnotation] != "" && p.Annotations[webhook.CRIURestoreAnnotation] == "" && ready
+		return p.Annotations[cacheURIAnnotation] != "" && p.Annotations[webhook.CRIURestoreAnnotation] == "" && rootfsonly.IsPodReady(p)
 	})
 	if err == nil {
 		err = ranksAgreePerTemplate(ranks)

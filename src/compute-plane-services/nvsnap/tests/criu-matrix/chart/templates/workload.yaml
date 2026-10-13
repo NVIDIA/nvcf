@@ -107,18 +107,9 @@ spec:
           args: ["--model", "{{ $v.model }}", "--tensor-parallel-size", "{{ $tp }}", "--max-model-len", "{{ $v.maxModelLen }}", "--gpu-memory-utilization", "{{ $v.gpuMemoryUtilization }}"]
           env:
             - {name: HF_HUB_DISABLE_XET, value: "1"}
-            {{- if $v.dynamo.snapshotPoint }}
-            - {name: DYN_SNAPSHOT_CONTROL_DIR, value: /snapshot-control}
-            {{- end }}
             {{- with $v.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if $v.dynamo.snapshotPoint }}
-          volumeMounts:
-            - {name: snapshot-control, mountPath: /snapshot-control}
-        volumes:
-          - {name: snapshot-control, emptyDir: {}}
-          {{- end }}
 {{- else }}
 {{- fail (printf "kind %q: want StatefulSet, Deployment, Pod, LeaderWorkerSet or DynamoGraphDeployment" .Values.kind) }}
 {{- end }}

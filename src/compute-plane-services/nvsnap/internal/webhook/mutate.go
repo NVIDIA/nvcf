@@ -542,7 +542,6 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	// rides along with whichever patches they return.
 	injectPatches = append(injectPatches, m.gpusharePatches(ctx, pod)...)
 	injectPatches = append(injectPatches, m.debugEnvPatches(pod)...)
-	injectPatches = append(injectPatches, m.snapshotPointPatches(ctx, pod)...)
 
 	raw, ok := pod.Annotations[RestoreFromAnnotation]
 	if !ok || raw == "" {

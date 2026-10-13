@@ -52,12 +52,6 @@ dynamo:
   # them (NATS request plane), as production Dynamo functions do. Discovery
   # stays Kubernetes either way: the operator sets it.
   etcdNats: false
-  # Declare the worker's snapshot point (DYN_SNAPSHOT_CONTROL_DIR): nvsnap
-  # captures the engine loaded and paused, before it registers, and
-  # releases it with the identity of the pod it runs in. Without it a
-  # restored worker keeps the registrations of the instance it was
-  # captured from and serves nothing.
-  snapshotPoint: false
   etcdImage: quay.io/coreos/etcd:v3.5.17
   natsImage: docker.io/library/nats:2.10-alpine
 
