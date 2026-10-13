@@ -124,8 +124,10 @@ Fallback input throughput counts only uncached prompt tokens when usage reports
 `cached_tokens` (Chat `prompt_tokens_details` or Responses
 `input_tokens_details`), and total prompt tokens otherwise. Chat Completions
 usage is available only when the client sets `stream_options.include_usage=true`
-or the deployment sets `--force-chat-completions-include-usage`. Engines that
-report cached tokens may omit Chat details on a cache miss, so once a model
+or the deployment sets `--force-chat-completions-include-usage`. vLLM reports
+Chat cached tokens only when started with `--enable-prompt-tokens-details`;
+vLLM Responses usage and Dynamo vLLM workers report them by default. Engines
+that report cached tokens may omit Chat details on a cache miss, so once a model
 generation's streamed Chat usage reports cached-token details, later Chat usage
 without them counts as a miss. A request that expects usage holds newer
 requests out of the rate until its usage arrives. Cache hits that leave fewer
