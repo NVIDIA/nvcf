@@ -145,17 +145,18 @@ impl StatsAggregator {
         );
         let calibration = generated_request_kind(&observation.request_id)
             == Some(GeneratedRequestKind::Calibration);
-        let streamed_chat =
-            observation.endpoint == RequestObservationEndpoint::ChatCompletions && !calibration;
+        let chat = observation.endpoint == RequestObservationEndpoint::ChatCompletions;
+        let uncached_input_tokens = match event.cached_input_tokens() {
+            // Cached tokens above the prompt total are inconsistent; the
+            // request then counts total tokens and is not max-eligible.
+            Some(cached) => observation.input_tokens.checked_sub(cached),
+            None => {
+                (chat && model_state.chat_cache_details_observed && event.input_tokens_explicit())
+                    .then_some(observation.input_tokens)
+            }
+        };
         model_state.chat_cache_details_observed |=
-            streamed_chat && event.uncached_input_tokens().is_some();
-        let uncached_input_tokens = event.uncached_input_tokens().or_else(|| {
-            (streamed_chat
-                && model_state.chat_cache_details_observed
-                && event.input_tokens_explicit()
-                && !event.input_cache_details_invalid())
-            .then_some(observation.input_tokens)
-        });
+            chat && event.cached_input_tokens().is_some() && uncached_input_tokens.is_some();
         if generation_endpoint
             && let Some(interval) = event.input_interval()
             && let Some(window_rate) = model_state.request_input_intervals.observe(

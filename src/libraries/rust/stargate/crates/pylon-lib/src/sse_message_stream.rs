@@ -36,10 +36,7 @@ pub(crate) struct GeneratedOutput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ExactUsage {
     pub(crate) input_tokens: Option<u64>,
-    pub(crate) uncached_input_tokens: Option<u64>,
-    // Cached-token details were present but malformed or larger than the
-    // prompt. Distinct from omitted details, which some engines use on a miss.
-    pub(crate) cached_input_tokens_invalid: bool,
+    pub(crate) cached_input_tokens: Option<u64>,
     pub(crate) output_tokens: Option<u64>,
     pub(crate) reasoning_tokens: Option<u64>,
 }
@@ -779,27 +776,11 @@ fn exact_usage(
         &usage["prompt_tokens_details"]["cached_tokens"],
         &response_usage["input_tokens_details"]["cached_tokens"],
     ]);
-    let (uncached_input_tokens, cached_input_exceeds_total) = match (
-        invalid_cached_input_tokens,
-        input_tokens,
-        cached_input_tokens,
-    ) {
-        (false, Some(input), Some(cached)) => match input.checked_sub(cached) {
-            Some(uncached) => (Some(uncached), false),
-            None => (None, true),
-        },
-        _ => (None, false),
-    };
-    // Only an omitted or null details field means "not reported". A present
-    // details value without a numeric cached_tokens is invalid.
-    let cached_input_tokens_invalid = invalid_cached_input_tokens
-        || cached_input_exceeds_total
-        || [
-            &usage["prompt_tokens_details"],
-            &response_usage["input_tokens_details"],
-        ]
-        .into_iter()
-        .any(|details| !details.is_null() && details["cached_tokens"].as_u64().is_none());
+    let cached_input_exceeds_total = cached_input_tokens
+        .zip(input_tokens)
+        .is_some_and(|(cached, input)| cached > input);
+    // Malformed cached-token details count as omitted.
+    let cached_input_tokens = cached_input_tokens.filter(|_| !invalid_cached_input_tokens);
     let (output_tokens, invalid_output_tokens) = merge_u64_fields([
         &usage["completion_tokens"],
         &response_usage["output_tokens"],
@@ -809,8 +790,7 @@ fn exact_usage(
         return (
             (input_tokens.is_some() || output_tokens.is_some()).then_some(ExactUsage {
                 input_tokens,
-                uncached_input_tokens,
-                cached_input_tokens_invalid,
+                cached_input_tokens,
                 output_tokens,
                 reasoning_tokens: None,
             }),
@@ -834,18 +814,9 @@ fn exact_usage(
     ]);
     let (accepted_prediction_tokens, invalid_accepted_prediction_tokens) =
         merge_u64_fields([&completion_details["accepted_prediction_tokens"]]);
-    let chat_input_details = &usage["prompt_tokens_details"];
-    let responses_input_details = &response_usage["input_tokens_details"];
-    let invalid_container = [
-        usage,
-        response_usage,
-        completion_details,
-        output_details,
-        chat_input_details,
-        responses_input_details,
-    ]
-    .into_iter()
-    .any(|value| !value.is_null() && value.as_object().is_none());
+    let invalid_container = [usage, response_usage, completion_details, output_details]
+        .into_iter()
+        .any(|value| !value.is_null() && value.as_object().is_none());
     let unknown_output_details =
         output_details_have_unknown_fields(completion_details, CHAT_OUTPUT_DETAIL_FIELDS)
             || output_details_have_unknown_fields(output_details, RESPONSES_OUTPUT_DETAIL_FIELDS);
@@ -874,8 +845,7 @@ fn exact_usage(
         (input_tokens.is_some() || output_tokens.is_some() || reasoning_tokens.is_some())
             .then_some(ExactUsage {
                 input_tokens,
-                uncached_input_tokens,
-                cached_input_tokens_invalid,
+                cached_input_tokens,
                 output_tokens,
                 reasoning_tokens,
             }),
@@ -1477,8 +1447,7 @@ mod tests {
                 r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":8,"completion_tokens":3,"completion_tokens_details":{"reasoning_tokens":2}}}"#,
                 ExactUsage {
                     input_tokens: Some(8),
-                    uncached_input_tokens: None,
-                    cached_input_tokens_invalid: false,
+                    cached_input_tokens: None,
                     output_tokens: Some(3),
                     reasoning_tokens: Some(2),
                 },
@@ -1488,74 +1457,17 @@ mod tests {
                 r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"input_tokens":5,"output_tokens":2,"output_tokens_details":{"reasoning_tokens":1}}}}"#,
                 ExactUsage {
                     input_tokens: Some(5),
-                    uncached_input_tokens: None,
-                    cached_input_tokens_invalid: false,
+                    cached_input_tokens: None,
                     output_tokens: Some(2),
                     reasoning_tokens: Some(1),
                 },
                 false,
             ),
             (
-                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":64}}}"#,
-                ExactUsage {
-                    input_tokens: Some(100),
-                    uncached_input_tokens: Some(36),
-                    cached_input_tokens_invalid: false,
-                    output_tokens: Some(3),
-                    reasoning_tokens: None,
-                },
-                false,
-            ),
-            (
-                r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"input_tokens":80,"output_tokens":2,"input_tokens_details":{"cached_tokens":30}}}}"#,
-                ExactUsage {
-                    input_tokens: Some(80),
-                    uncached_input_tokens: Some(50),
-                    cached_input_tokens_invalid: false,
-                    output_tokens: Some(2),
-                    reasoning_tokens: None,
-                },
-                false,
-            ),
-            (
-                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":8}}}"#,
-                ExactUsage {
-                    input_tokens: Some(5),
-                    uncached_input_tokens: None,
-                    cached_input_tokens_invalid: true,
-                    output_tokens: Some(3),
-                    reasoning_tokens: None,
-                },
-                true,
-            ),
-            (
-                r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"input_tokens":5,"output_tokens":2,"input_tokens_details":{"cached_tokens":8}}}}"#,
-                ExactUsage {
-                    input_tokens: Some(5),
-                    uncached_input_tokens: None,
-                    cached_input_tokens_invalid: true,
-                    output_tokens: Some(2),
-                    reasoning_tokens: None,
-                },
-                true,
-            ),
-            (
-                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":"64"}}}"#,
-                ExactUsage {
-                    input_tokens: Some(100),
-                    uncached_input_tokens: None,
-                    cached_input_tokens_invalid: true,
-                    output_tokens: Some(3),
-                    reasoning_tokens: None,
-                },
-                true,
-            ),
-            (
                 r#"{"object":"chat.completion.chunk","output_tokens_so_far":7,"choices":[]}"#,
                 ExactUsage {
                     input_tokens: None,
-                    uncached_input_tokens: None,
-                    cached_input_tokens_invalid: false,
+                    cached_input_tokens: None,
                     output_tokens: Some(7),
                     reasoning_tokens: None,
                 },
@@ -1565,8 +1477,7 @@ mod tests {
                 r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":8,"completion_tokens_details":{"reasoning_tokens":2,"rejected_prediction_tokens":1}}}"#,
                 ExactUsage {
                     input_tokens: Some(8),
-                    uncached_input_tokens: None,
-                    cached_input_tokens_invalid: false,
+                    cached_input_tokens: None,
                     output_tokens: None,
                     reasoning_tokens: Some(2),
                 },
@@ -1581,61 +1492,55 @@ mod tests {
     }
 
     #[test]
-    fn cached_details_are_omitted_valid_or_invalid() {
-        for (data, uncached, invalid) in [
+    fn parses_cached_prompt_tokens() {
+        for (usage, cached, calibration_ineligible) in [
+            (r#""prompt_tokens":100"#, None, false),
             (
-                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3}}"#,
+                r#""prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":64}"#,
+                Some(64),
+                false,
+            ),
+            (
+                r#""prompt_tokens":100,"prompt_tokens_details":{}"#,
                 None,
                 false,
             ),
             (
-                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3,"prompt_tokens_details":null}}"#,
+                r#""prompt_tokens":100,"prompt_tokens_details":5"#,
                 None,
                 false,
             ),
             (
-                r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"input_tokens":100,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}}}"#,
-                Some(100),
-                false,
-            ),
-            (
-                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3,"prompt_tokens_details":5}}"#,
+                r#""prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":"64"}"#,
                 None,
                 true,
             ),
             (
-                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3,"prompt_tokens_details":{}}}"#,
-                None,
+                r#""prompt_tokens":5,"prompt_tokens_details":{"cached_tokens":8}"#,
+                Some(8),
                 true,
-            ),
-            (
-                r#"{"object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":null}}}"#,
-                None,
-                true,
-            ),
-            (
-                r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"input_tokens":100,"output_tokens":2,"input_tokens_details":{}}}}"#,
-                None,
-                true,
-            ),
-            (
-                r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"input_tokens":100,"output_tokens":2,"input_tokens_details":{"cached_tokens":null}}}}"#,
-                None,
-                true,
-            ),
-            (
-                r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"input_tokens":100,"output_tokens":2,"input_tokens_details":null}}}"#,
-                None,
-                false,
             ),
         ] {
-            let usage = parse_data(data)
+            let data =
+                format!(r#"{{"object":"chat.completion.chunk","choices":[],"usage":{{{usage}}}}}"#);
+            let parsed = parse_data(&data);
+            let usage = parsed.facts.exact_usage.expect("usage should parse");
+            assert_eq!(usage.cached_input_tokens, cached, "{data}");
+            assert_eq!(
+                parsed.facts.calibration_ineligible, calibration_ineligible,
+                "{data}"
+            );
+        }
+        let parsed = parse_data(
+            r#"{"type":"response.completed","response":{"output":[{"type":"message"}],"usage":{"input_tokens":80,"output_tokens":2,"input_tokens_details":{"cached_tokens":30}}}}"#,
+        );
+        assert_eq!(
+            parsed
                 .facts
                 .exact_usage
-                .expect("usage should parse");
-            assert_eq!(usage.uncached_input_tokens, uncached, "{data}");
-            assert_eq!(usage.cached_input_tokens_invalid, invalid, "{data}");
-        }
+                .and_then(|usage| usage.cached_input_tokens),
+            Some(30)
+        );
     }
 
     #[test]
@@ -1711,8 +1616,7 @@ mod tests {
                 parsed.facts.exact_usage,
                 Some(ExactUsage {
                     input_tokens: None,
-                    uncached_input_tokens: None,
-                    cached_input_tokens_invalid: false,
+                    cached_input_tokens: None,
                     output_tokens: Some(5),
                     reasoning_tokens: None,
                 })

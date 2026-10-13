@@ -125,8 +125,7 @@ pub struct RequestObservationEvent {
     pub(crate) changed_generations: Vec<ModelGeneration>,
     pub(crate) input_interval: Option<RequestInputInterval>,
     pub(crate) input_tokens_explicit: bool,
-    pub(crate) uncached_input_tokens: Option<u64>,
-    pub(crate) input_cache_details_invalid: bool,
+    pub(crate) cached_input_tokens: Option<u64>,
     pub(crate) input_usage_expected: bool,
     pub(crate) output_calibration: OutputCalibrationFacts,
     pub(crate) upstream_duration: Option<Duration>,
@@ -525,8 +524,7 @@ impl PylonRuntimeState {
                 changed_generations: Vec::new(),
                 input_interval: None,
                 input_tokens_explicit: false,
-                uncached_input_tokens: None,
-                input_cache_details_invalid: false,
+                cached_input_tokens: None,
                 input_usage_expected: false,
                 output_calibration: OutputCalibrationFacts::default(),
                 upstream_duration: None,
@@ -587,8 +585,7 @@ impl PylonRuntimeState {
                 changed_generations: Vec::new(),
                 input_interval: None,
                 input_tokens_explicit: false,
-                uncached_input_tokens: None,
-                input_cache_details_invalid: false,
+                cached_input_tokens: None,
                 input_usage_expected: false,
                 output_calibration: OutputCalibrationFacts::default(),
                 upstream_duration: None,
@@ -739,12 +736,8 @@ impl RequestObservationEvent {
         self.input_tokens_explicit
     }
 
-    pub(crate) fn uncached_input_tokens(&self) -> Option<u64> {
-        self.uncached_input_tokens
-    }
-
-    pub(crate) fn input_cache_details_invalid(&self) -> bool {
-        self.input_cache_details_invalid
+    pub(crate) fn cached_input_tokens(&self) -> Option<u64> {
+        self.cached_input_tokens
     }
 
     pub(crate) fn input_usage_expected(&self) -> bool {
@@ -818,8 +811,7 @@ mod tests {
                 changed_generations: Vec::new(),
                 input_interval: None,
                 input_tokens_explicit: false,
-                uncached_input_tokens: None,
-                input_cache_details_invalid: false,
+                cached_input_tokens: None,
                 input_usage_expected: false,
                 output_calibration: OutputCalibrationFacts::default(),
                 upstream_duration: None,

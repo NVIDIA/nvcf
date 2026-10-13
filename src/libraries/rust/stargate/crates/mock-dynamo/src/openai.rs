@@ -159,22 +159,8 @@ struct AssistantMessage<'a> {
 #[derive(Serialize)]
 struct ChatUsage {
     prompt_tokens: usize,
-    // Like vLLM, Chat usage omits the details on a cache miss.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    prompt_tokens_details: Option<ChatPromptTokensDetails>,
     completion_tokens: usize,
     total_tokens: usize,
-}
-
-#[derive(Serialize)]
-struct ChatPromptTokensDetails {
-    cached_tokens: u64,
-}
-
-impl ChatPromptTokensDetails {
-    fn on_cache_hit(cached_tokens: u64) -> Option<Self> {
-        (cached_tokens > 0).then_some(Self { cached_tokens })
-    }
 }
 
 #[derive(Serialize)]
@@ -365,9 +351,6 @@ pub(crate) async fn chat_completions(
         }],
         usage: ChatUsage {
             prompt_tokens: input_tokens,
-            prompt_tokens_details: ChatPromptTokensDetails::on_cache_hit(
-                kv_cache_access.reused_input_tokens,
-            ),
             completion_tokens: output_tokens,
             total_tokens: input_tokens.saturating_add(output_tokens),
         },
@@ -625,7 +608,6 @@ pub(crate) enum ChatStreamChunk<'a> {
     Stop,
     Usage {
         input_tokens: usize,
-        cached_input_tokens: u64,
         output_tokens: usize,
     },
 }
@@ -643,12 +625,10 @@ pub(crate) fn chat_chunk_json(
         ChatStreamChunk::Stop => Some((None, None, Some("stop"))),
         ChatStreamChunk::Usage {
             input_tokens,
-            cached_input_tokens,
             output_tokens,
         } => {
             usage = Some(Some(ChatUsage {
                 prompt_tokens: input_tokens,
-                prompt_tokens_details: ChatPromptTokensDetails::on_cache_hit(cached_input_tokens),
                 completion_tokens: output_tokens,
                 total_tokens: input_tokens.saturating_add(output_tokens),
             }));
@@ -686,7 +666,6 @@ fn stream_response(config: StreamResponseConfig) -> Response {
         mut pacing,
         kind,
     } = config;
-    let cached_input_tokens = kv_cache_access.reused_input_tokens;
     let stream = async_stream::stream! {
         let mut output_text = String::new();
         if let StreamKind::Responses { created_at } = kind {
@@ -768,9 +747,6 @@ fn stream_response(config: StreamResponseConfig) -> Response {
                         }],
                         "usage": {
                             "input_tokens": input_tokens,
-                            "input_tokens_details": {
-                                "cached_tokens": cached_input_tokens,
-                            },
                             "output_tokens": output_tokens,
                             "total_tokens": input_tokens.saturating_add(output_tokens),
                         },
@@ -784,7 +760,7 @@ fn stream_response(config: StreamResponseConfig) -> Response {
 
         if let StreamKind::Chat { include_usage, .. } = kind {
             if include_usage {
-                yield Ok(chat_sse_event(&id, &model, ChatStreamChunk::Usage { input_tokens, cached_input_tokens, output_tokens }, true));
+                yield Ok(chat_sse_event(&id, &model, ChatStreamChunk::Usage { input_tokens, output_tokens }, true));
             }
             yield Ok(Event::default().data("[DONE]"));
         }

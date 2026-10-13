@@ -2357,7 +2357,7 @@ async fn quic_tunnel_preserves_cached_prompt_usage_for_fallback_stats() {
 
     let event = recv_terminal_event(&rx).await;
     assert_eq!(event.observation().input_tokens, 13);
-    assert_eq!(event.uncached_input_tokens(), Some(5));
+    assert_eq!(event.cached_input_tokens(), Some(8));
 
     tunnel.shutdown().await;
 }

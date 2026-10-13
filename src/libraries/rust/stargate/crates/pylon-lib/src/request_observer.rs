@@ -162,30 +162,6 @@ enum ChatChoiceState {
     Finished,
 }
 
-// Cached-prompt evidence for one request, kept as the cached count so a later
-// larger prompt total recomputes the uncached remainder.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum InputCacheEvidence {
-    Omitted,
-    Cached(u64),
-    Invalid,
-}
-
-impl InputCacheEvidence {
-    // Returns the uncached prompt tokens for `input_tokens`, and whether the
-    // details are invalid, including cached tokens above the prompt total.
-    fn usage(self, input_tokens: u64) -> (Option<u64>, bool) {
-        match self {
-            Self::Omitted => (None, false),
-            Self::Cached(cached) => match input_tokens.checked_sub(cached) {
-                Some(uncached) => (Some(uncached), false),
-                None => (None, true),
-            },
-            Self::Invalid => (None, true),
-        }
-    }
-}
-
 pub(crate) struct RequestObserver {
     endpoint: RequestObservationEndpoint,
     request_id: String,
@@ -196,7 +172,7 @@ pub(crate) struct RequestObserver {
     request_input_tokens: u64,
     input_tokens: u64,
     input_tokens_explicit: bool,
-    input_cache_evidence: InputCacheEvidence,
+    cached_input_tokens: Option<u64>,
     input_usage_expected: bool,
     generation: Option<ModelGeneration>,
     embedding_items: Option<u64>,
@@ -232,7 +208,7 @@ impl RequestObserver {
             request_input_tokens: input_tokens,
             input_tokens,
             input_tokens_explicit: false,
-            input_cache_evidence: InputCacheEvidence::Omitted,
+            cached_input_tokens: None,
             input_usage_expected: false,
             generation,
             embedding_items: None,
@@ -326,57 +302,33 @@ impl RequestObserver {
         );
     }
 
-    #[cfg(test)]
-    pub(crate) fn observe_input_tokens_total(&mut self, input_tokens: u64) {
-        self.observe_input_usage(input_tokens, None);
-    }
-
+    // Usage that omits cached-token details keeps the earlier cached count, so a
+    // later larger prompt total recomputes the uncached remainder.
     pub(crate) fn observe_input_usage(
         &mut self,
         input_tokens: u64,
-        uncached_input_tokens: Option<u64>,
+        cached_input_tokens: Option<u64>,
     ) {
-        self.observe_input_usage_details(input_tokens, uncached_input_tokens, false);
-    }
-
-    // `cache_details_invalid` marks cached-token details that were present but
-    // malformed or larger than the prompt, as distinct from omitted details.
-    // A later report that omits details keeps the earlier valid or invalid
-    // details; it is not evidence that nothing was cached.
-    pub(crate) fn observe_input_usage_details(
-        &mut self,
-        input_tokens: u64,
-        uncached_input_tokens: Option<u64>,
-        cache_details_invalid: bool,
-    ) {
-        if self.input_tokens_explicit && input_tokens < self.input_tokens {
-            tracing::warn!(
-                request_id = self.request_id,
-                prior_input_tokens = self.input_tokens,
-                input_tokens,
-                "ignoring regressing explicit input token counter"
-            );
-            return;
+        let cached_input_tokens = cached_input_tokens.or(self.cached_input_tokens);
+        if self.input_tokens_explicit {
+            if input_tokens < self.input_tokens {
+                tracing::warn!(
+                    request_id = self.request_id,
+                    prior_input_tokens = self.input_tokens,
+                    input_tokens,
+                    "ignoring regressing explicit input token counter"
+                );
+                return;
+            }
+            if input_tokens == self.input_tokens && cached_input_tokens == self.cached_input_tokens
+            {
+                return;
+            }
         }
-        let input_cache_evidence = if cache_details_invalid {
-            InputCacheEvidence::Invalid
-        } else if let Some(uncached_input_tokens) = uncached_input_tokens {
-            input_tokens
-                .checked_sub(uncached_input_tokens)
-                .map_or(InputCacheEvidence::Invalid, InputCacheEvidence::Cached)
-        } else {
-            self.input_cache_evidence
-        };
-        let changed = input_tokens != self.input_tokens
-            || !self.input_tokens_explicit
-            || input_cache_evidence.usage(input_tokens)
-                != self.input_cache_evidence.usage(self.input_tokens);
         self.input_tokens = input_tokens;
         self.input_tokens_explicit = true;
-        self.input_cache_evidence = input_cache_evidence;
-        if changed {
-            self.emit();
-        }
+        self.cached_input_tokens = cached_input_tokens;
+        self.emit();
     }
 
     pub(crate) fn observe_estimated_output_tokens_total(&mut self, output_tokens: u64) {
@@ -567,8 +519,6 @@ impl RequestObserver {
     }
     fn emit(&mut self) {
         let backend = self.state.backend();
-        let (uncached_input_tokens, input_cache_details_invalid) =
-            self.input_cache_evidence.usage(self.input_tokens);
         let input_interval = backend.and_then(|backend| {
             backend
                 .first_generated_output_at
@@ -615,8 +565,7 @@ impl RequestObserver {
                 changed_generations: Vec::new(),
                 input_interval,
                 input_tokens_explicit: self.input_tokens_explicit,
-                uncached_input_tokens,
-                input_cache_details_invalid,
+                cached_input_tokens: self.cached_input_tokens,
                 input_usage_expected: self.input_usage_expected,
                 output_calibration: backend
                     .map_or_else(OutputCalibrationFacts::default, |backend| {
@@ -1352,7 +1301,7 @@ mod tests {
         observer.on_upstream_response_headers(200);
         recv_observation(&rx, "response-header observation should be emitted").await;
 
-        observer.observe_input_tokens_total(7);
+        observer.observe_input_usage(7, None);
         let usage = rx
             .recv_async()
             .await
@@ -1373,99 +1322,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_cached_details_are_distinct_from_omitted_details() {
-        let (mut observer, rx, _) = responding_observer("req-invalid-details").await;
-
-        observer.observe_input_usage(100, None);
-        let omitted = rx
-            .recv_async()
-            .await
-            .expect("omitted details should be emitted");
-        assert!(omitted.input_tokens_explicit());
-        assert_eq!(omitted.uncached_input_tokens(), None);
-        assert!(!omitted.input_cache_details_invalid());
-
-        observer.observe_input_usage_details(100, None, true);
-        let invalid = rx
-            .recv_async()
-            .await
-            .expect("invalid details should be emitted");
-        assert_eq!(invalid.uncached_input_tokens(), None);
-        assert!(invalid.input_cache_details_invalid());
-    }
-
-    #[tokio::test]
-    async fn omitted_details_keep_earlier_cache_evidence() {
-        for (earlier_uncached, earlier_invalid) in [(Some(14), false), (None, true)] {
-            let (mut observer, rx, _) = responding_observer("req-kept-details").await;
-            observer.observe_input_usage_details(8_000, earlier_uncached, earlier_invalid);
-            rx.recv_async()
-                .await
-                .expect("earlier details should be emitted");
-
-            observer.observe_input_usage(8_000, None);
-            assert!(
-                rx.try_recv().is_err(),
-                "omitted details must not change the request's usage"
-            );
-            observer.observe_input_usage(8_001, None);
-            let later = rx
+    async fn omitted_cached_details_keep_the_earlier_cached_count() {
+        let (mut observer, rx, _) = responding_observer("req-cached-count").await;
+        for (input_tokens, cached, expected) in [
+            (128, Some(0), Some(0)),
+            (8_000, None, Some(0)),
+            (8_000, Some(300), Some(300)),
+        ] {
+            observer.observe_input_usage(input_tokens, cached);
+            let event = rx
                 .recv_async()
                 .await
-                .expect("a larger prompt count should be emitted");
-            assert_eq!(
-                later.uncached_input_tokens(),
-                earlier_uncached.map(|uncached| uncached + 1),
-                "the kept cached count applies to the larger prompt"
-            );
-            assert_eq!(later.input_cache_details_invalid(), earlier_invalid);
-
-            observer.observe_input_usage_details(8_001, Some(300), false);
-            let valid = rx
-                .recv_async()
-                .await
-                .expect("a later valid report should be emitted");
-            assert_eq!(valid.uncached_input_tokens(), Some(300));
-            assert!(!valid.input_cache_details_invalid());
+                .expect("input usage should be emitted");
+            assert_eq!(event.cached_input_tokens(), expected);
+            assert_eq!(event.into_observation().input_tokens, input_tokens);
         }
-    }
-
-    #[tokio::test]
-    async fn omitted_details_recompute_uncached_from_a_growing_prompt() {
-        let (mut observer, rx, _) = responding_observer("req-growing-prompt").await;
-        observer.observe_input_usage_details(128, Some(128), false);
-        let early = rx
-            .recv_async()
-            .await
-            .expect("early usage should be emitted");
-        assert_eq!(early.uncached_input_tokens(), Some(128));
-
         observer.observe_input_usage(8_000, None);
-        let full = rx
-            .recv_async()
-            .await
-            .expect("full prompt usage should be emitted");
-        assert_eq!(
-            full.uncached_input_tokens(),
-            Some(8_000),
-            "zero cached tokens still mean zero cached tokens for the full prompt"
-        );
-        assert!(!full.input_cache_details_invalid());
+        assert!(rx.is_empty(), "unchanged usage should not emit");
     }
 
     #[tokio::test]
     async fn exact_input_usage_does_not_regress() {
         let (mut observer, rx, _) = responding_observer("req-input-regression").await;
 
-        observer.observe_input_tokens_total(7);
+        observer.observe_input_usage(7, None);
         let first = recv_observation(&rx, "first input usage should be emitted").await;
         assert_eq!(first.input_tokens, 7);
 
-        observer.observe_input_tokens_total(9);
+        observer.observe_input_usage(9, None);
         let increased = recv_observation(&rx, "increased input usage should be emitted").await;
         assert_eq!(increased.input_tokens, 9);
 
-        observer.observe_input_tokens_total(8);
+        observer.observe_input_usage(8, None);
         assert!(rx.is_empty(), "regressing input usage should not emit");
         assert_eq!(observer.input_tokens, 9);
     }
