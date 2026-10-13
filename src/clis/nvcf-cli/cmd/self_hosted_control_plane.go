@@ -96,6 +96,8 @@ func runControlPlaneProfileValidate(c *cobra.Command, _ []string) error {
 func runControlPlaneProfileExport(c *cobra.Command, _ []string) error {
 	resolved, err := selfhosted.ResolveStack(c.Context(), selfhosted.StackOptions{
 		Source:        selfHostedControlPlaneStack,
+		Umbrella:      selfHostedUmbrellaOptions(),
+		Plane:         "control-plane",
 		BuiltInOCIRef: builtInControlPlaneStackOCI(),
 	})
 	if err != nil {

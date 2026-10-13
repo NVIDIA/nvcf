@@ -116,6 +116,8 @@ func runSelfHostedComputePlaneInstall(c *cobra.Command, _ []string) error {
 
 	resolved, err := selfhosted.ResolveStack(c.Context(), selfhosted.StackOptions{
 		Source:        selfHostedComputePlaneStack,
+		Umbrella:      selfHostedUmbrellaOptions(),
+		Plane:         "compute-plane",
 		BuiltInOCIRef: builtInComputePlaneStackOCI(),
 	})
 	if err != nil {
@@ -466,6 +468,7 @@ func writeComputePlaneRegisterSummary(c *cobra.Command, summary computePlaneRegi
 		fmt.Fprintf(out, "  %s\n", shellCommand("helm", "upgrade", "--install", "nvca-operator", summary.Handoff.Chart, "--version", summary.Handoff.Version, "--namespace", "nvca-operator", "--create-namespace", "--values", summary.Handoff.ValuesPath))
 		fmt.Fprintln(out, "computePlaneInstallCommand:")
 		installArgs := []string{"nvcf", "self-hosted", "compute-plane", "install"}
+		installArgs = append(installArgs, summary.Handoff.UmbrellaArgs...)
 		if summary.Handoff.StackArg != "" {
 			installArgs = append(installArgs, "--compute-plane-stack", summary.Handoff.StackArg)
 		}
@@ -550,16 +553,19 @@ func loadControlPlaneProfileForComputeRegister(path, clusterName string) (*contr
 }
 
 type computePlaneRegisterHandoff struct {
-	StackArg   string
-	StackPath  string
-	ValuesPath string
-	Chart      string
-	Version    string
+	UmbrellaArgs []string
+	StackArg     string
+	StackPath    string
+	ValuesPath   string
+	Chart        string
+	Version      string
 }
 
 func prepareComputePlaneRegisterHandoff(c *cobra.Command, clusterName string) (*computePlaneRegisterHandoff, error) {
 	resolved, err := selfhosted.ResolveStack(c.Context(), selfhosted.StackOptions{
 		Source:        selfHostedComputePlaneStack,
+		Umbrella:      selfHostedUmbrellaOptions(),
+		Plane:         "compute-plane",
 		BuiltInOCIRef: builtInComputePlaneStackOCI(),
 	})
 	if err != nil {
@@ -579,12 +585,26 @@ func prepareComputePlaneRegisterHandoff(c *cobra.Command, clusterName string) (*
 	if err != nil {
 		return nil, err
 	}
+	var umbrellaArgs []string
+	if resolved.Umbrella != nil {
+		if selfHostedUmbrellaRelease != "" {
+			umbrellaArgs = []string{"--umbrella-release", resolved.Umbrella.Version}
+		} else {
+			absolute, err := filepath.Abs(selfHostedUmbrellaBundle)
+			if err != nil {
+				return nil, err
+			}
+			umbrellaArgs = []string{"--umbrella-bundle", absolute}
+		}
+		umbrellaArgs = append(umbrellaArgs, "--umbrella-sha256", resolved.Umbrella.SHA256)
+	}
 	return &computePlaneRegisterHandoff{
-		StackArg:   selfHostedComputePlaneStack,
-		StackPath:  resolved.Path,
-		ValuesPath: valuesPath,
-		Chart:      chart,
-		Version:    version,
+		UmbrellaArgs: umbrellaArgs,
+		StackArg:     selfHostedComputePlaneStack,
+		StackPath:    resolved.Path,
+		ValuesPath:   valuesPath,
+		Chart:        chart,
+		Version:      version,
 	}, nil
 }
 

@@ -108,6 +108,8 @@ func runUninstallDestroy(c *cobra.Command) error {
 	}
 	resolved, err := selfhosted.ResolveStack(ctx, selfhosted.StackOptions{
 		Source:        stackSource,
+		Umbrella:      selfHostedUmbrellaOptions(),
+		Plane:         plane,
 		BuiltInOCIRef: stackOCI,
 	})
 	if err != nil {

@@ -256,6 +256,8 @@ func runDownAllClustersPhases(c *cobra.Command, ctx context.Context, sink progre
 func localDownFallbackClusterNames(ctx context.Context) ([]string, error) {
 	resolved, err := selfhosted.ResolveStack(ctx, selfhosted.StackOptions{
 		Source:        selfHostedComputePlaneStack,
+		Umbrella:      selfHostedUmbrellaOptions(),
+		Plane:         "compute-plane",
 		BuiltInOCIRef: builtInComputePlaneStackOCI(),
 	})
 	if err != nil {
@@ -315,6 +317,8 @@ func runDownComputePlaneForCluster(c *cobra.Command, ctx context.Context, sink p
 
 	resolved, err := selfhosted.ResolveStack(ctx, selfhosted.StackOptions{
 		Source:        selfHostedComputePlaneStack,
+		Umbrella:      selfHostedUmbrellaOptions(),
+		Plane:         "compute-plane",
 		BuiltInOCIRef: builtInComputePlaneStackOCI(),
 	})
 	if err != nil {
@@ -452,6 +456,8 @@ func runDownControlPlane(c *cobra.Command, ctx context.Context, sink progress.Ev
 
 	resolved, err := selfhosted.ResolveStack(ctx, selfhosted.StackOptions{
 		Source:        selfHostedControlPlaneStack,
+		Umbrella:      selfHostedUmbrellaOptions(),
+		Plane:         "control-plane",
 		BuiltInOCIRef: builtInControlPlaneStackOCI(),
 	})
 	if err != nil {

@@ -170,7 +170,14 @@ func runSelfHostedStatus(cobraCmd *cobra.Command, _ []string) error {
 		return err
 	}
 
+	selected, err := selectedUmbrellaStack(ctx)
+	if err != nil {
+		return err
+	}
 	sink := selectStatusRenderer(out, statusWatch)
+	if selected != nil {
+		coll = &statusWithSelection{StatusCollector: coll, detail: "Selected " + stackDescriptor(selected)}
+	}
 	return runStatusLoop(ctx, coll, sink, statusWatch, statusWatchInterval)
 }
 
@@ -260,4 +267,17 @@ func isWriterTTY(w io.Writer) bool {
 		return false
 	}
 	return term.IsTerminal(int(f.Fd()))
+}
+
+// Selection is diagnostic context; snapshots continue to describe observed cluster state.
+type statusWithSelection struct {
+	StatusCollector
+	detail string
+}
+
+func (collector *statusWithSelection) Collect(ctx context.Context, sink progress.EventSink) error {
+	if err := sink.Emit(ctx, progress.LastProgress{Detail: collector.detail, At: time.Now().UTC()}); err != nil {
+		return err
+	}
+	return collector.StatusCollector.Collect(ctx, sink)
 }

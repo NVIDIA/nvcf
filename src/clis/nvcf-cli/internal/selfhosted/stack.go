@@ -31,6 +31,8 @@ import (
 
 // StackOptions controls how ResolveStack locates the helmfile bundle.
 type StackOptions struct {
+	Umbrella *UmbrellaOptions
+	Plane    string
 	// Source is the user-supplied --control-plane-stack= or --compute-plane-stack= value,
 	// or empty to fall through to BuiltInOCIRef.
 	Source string
@@ -45,6 +47,7 @@ type StackOptions struct {
 // ResolvedStack is the on-disk location of a resolved helmfile bundle and
 // metadata about how it was obtained.
 type ResolvedStack struct {
+	Umbrella *UmbrellaIdentity
 	// Path is a directory on disk containing helmfile.d/, environments/, etc.
 	Path string
 	// Source is the URI scheme used to resolve this stack: "local" | "git" | "oci".
@@ -69,6 +72,9 @@ type ResolvedStack struct {
 // Users who want a non-git https URL treated as not-git can either supply
 // a local path or an oci:// reference. (Tracked: spec §12 follow-up.)
 func ResolveStack(ctx context.Context, opts StackOptions) (*ResolvedStack, error) {
+	if opts.Umbrella != nil {
+		return resolveUmbrellaStack(ctx, opts)
+	}
 	src := opts.Source
 	if src == "" {
 		if opts.BuiltInOCIRef == "" {

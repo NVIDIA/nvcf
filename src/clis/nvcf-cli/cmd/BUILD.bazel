@@ -132,6 +132,7 @@ go_test(
         "self_hosted_install_test.go",
         "self_hosted_status_test.go",
         "self_hosted_test.go",
+        "self_hosted_umbrella_test.go",
         "self_hosted_uninstall_test.go",
         "self_hosted_up_test.go",
         "task_test.go",

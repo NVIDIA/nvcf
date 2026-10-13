@@ -119,6 +119,10 @@ func runSelfHostedInstall(c *cobra.Command, _ []string) error {
 		return fmt.Errorf("--compute-plane requires --cluster-name")
 	}
 
+	plane := "compute-plane"
+	if installControlPlane {
+		plane = "control-plane"
+	}
 	var stackSource, stackOCI string
 	if installControlPlane {
 		stackSource = selfHostedControlPlaneStack
@@ -129,6 +133,8 @@ func runSelfHostedInstall(c *cobra.Command, _ []string) error {
 	}
 	resolved, err := selfhosted.ResolveStack(c.Context(), selfhosted.StackOptions{
 		Source:        stackSource,
+		Umbrella:      selfHostedUmbrellaOptions(),
+		Plane:         plane,
 		BuiltInOCIRef: stackOCI,
 	})
 	if err != nil {
@@ -273,6 +279,10 @@ func authGatePhase5ForcedRefresh(ctx context.Context, sink progress.EventSink, p
 }
 
 func stackDescriptor(r *selfhosted.ResolvedStack) string {
+	if r.Umbrella != nil {
+		u := r.Umbrella
+		return fmt.Sprintf("NVCF %s (%s), %s; control-plane %s, compute-plane %s, observability %s; %s", u.Version, u.Status, u.SHA256, u.Stacks["control-plane"].Version, u.Stacks["compute-plane"].Version, u.Stacks["observability"].Version, r.Path)
+	}
 	if r.OCIRef != "" {
 		return r.OCIRef
 	}

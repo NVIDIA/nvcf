@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - 'tools/docs-version-sync/**'
+      - 'src/clis/nvcf-cli/**'
       - '.github/workflows/umbrella-release-validation.yml'
       - '.github/workflows/publish-umbrella-release.yml'
       - '.github/workflows/release-tags.yml'
@@ -25,6 +26,7 @@ jobs:
       HELMFILE_VERSION: '1.1.9'
       HELMFILE_SHA256: 'ee71196bb12460905b8cbe0ef67b28db51ef681b777cc212d8c0956475b51905'
       NVCF_UMBRELLA_RENDER_E2E: '1'
+      NVCF_UMBRELLA_CLI_E2E: '1'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:

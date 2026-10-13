@@ -18,6 +18,7 @@ limitations under the License.
 package cmd
 
 import (
+	"context"
 	"net"
 	"net/url"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"nvcf-cli/internal/client"
+	"nvcf-cli/internal/selfhosted"
 	"nvcf-cli/internal/selfhosted/kubectx"
 )
 
@@ -41,6 +43,10 @@ and 'install --compute-plane' explicitly.`,
 
 // Persistent flags shared by all self-hosted subcommands.
 var (
+	selfHostedUmbrellaRelease     string
+	selfHostedUmbrellaBundle      string
+	selfHostedUmbrellaSHA256      string
+	selfHostedUmbrellaCacheDir    string
 	selfHostedControlPlaneStack   string
 	selfHostedComputePlaneStack   string
 	selfHostedEnv                 string
@@ -91,6 +97,10 @@ const (
 func init() {
 	rootCmd.AddCommand(selfHostedCmd)
 
+	selfHostedCmd.PersistentFlags().StringVar(&selfHostedUmbrellaCacheDir, "umbrella-cache-dir", "", "Optional isolated cache directory for umbrella bundles")
+	selfHostedCmd.PersistentFlags().StringVar(&selfHostedUmbrellaRelease, "umbrella-release", "", "Exact qualified NVCF umbrella release X.Y.Z")
+	selfHostedCmd.PersistentFlags().StringVar(&selfHostedUmbrellaBundle, "umbrella-bundle", "", "Local umbrella archive (requires --umbrella-sha256)")
+	selfHostedCmd.PersistentFlags().StringVar(&selfHostedUmbrellaSHA256, "umbrella-sha256", "", "Trusted umbrella archive digest, sha256:HEX; optional additional pin for --umbrella-release")
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedControlPlaneStack, "control-plane-stack", "",
 		"Control-plane stack source: local path, git URL, or oci:// URL (default: built-in OCI URL pinned to this CLI version)")
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedComputePlaneStack, "compute-plane-stack", "",
@@ -131,6 +141,9 @@ func init() {
 		"kubeconfig context for compute plane (split-cluster mode; pair with --control-plane-context)")
 
 	selfHostedCmd.PersistentPreRunE = func(_ *cobra.Command, _ []string) error {
+		if err := validateSelfHostedUmbrellaSelection(); err != nil {
+			return err
+		}
 		return kubectx.ValidateFlags(selfHostedControlPlaneContext, selfHostedComputePlaneContext)
 	}
 }
@@ -383,4 +396,31 @@ func hostWithOptionalPort(host, port string) string {
 		return host
 	}
 	return net.JoinHostPort(host, port)
+}
+
+func selfHostedUmbrellaOptions() *selfhosted.UmbrellaOptions {
+	if selfHostedUmbrellaRelease == "" && selfHostedUmbrellaBundle == "" && selfHostedUmbrellaSHA256 == "" {
+		return nil
+	}
+	return &selfhosted.UmbrellaOptions{Release: selfHostedUmbrellaRelease, Bundle: selfHostedUmbrellaBundle, SHA256: selfHostedUmbrellaSHA256, CacheDir: selfHostedUmbrellaCacheDir}
+}
+
+func validateSelfHostedUmbrellaSelection() error {
+	for _, source := range []string{selfHostedControlPlaneStack, selfHostedComputePlaneStack} {
+		if err := selfhosted.ValidateUmbrellaOptions(selfHostedUmbrellaOptions(), source); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func selectedUmbrellaStack(ctx context.Context) (*selfhosted.ResolvedStack, error) {
+	if selfHostedUmbrellaOptions() == nil {
+		return nil, nil
+	}
+	if err := validateSelfHostedUmbrellaSelection(); err != nil {
+		return nil, err
+	}
+	return selfhosted.ResolveStack(ctx, selfhosted.StackOptions{Umbrella: selfHostedUmbrellaOptions(),
+		Plane: "control-plane"})
 }

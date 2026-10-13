@@ -181,6 +181,21 @@ func init() {
 }
 
 func runSelfHostedCheck(c *cobra.Command, _ []string) error {
+	selected, resolveErr := selectedUmbrellaStack(c.Context())
+	if resolveErr != nil {
+		return resolveErr
+	}
+	if selected != nil {
+		compute, err := selfhosted.ResolveStack(c.Context(), selfhosted.StackOptions{Umbrella: selfHostedUmbrellaOptions(),
+			Plane: "compute-plane"})
+		if err != nil {
+			return err
+		}
+		originalControl, originalCompute := selfHostedControlPlaneStack, selfHostedComputePlaneStack
+		selfHostedControlPlaneStack, selfHostedComputePlaneStack = selected.Path, compute.Path
+		defer func() { selfHostedControlPlaneStack, selfHostedComputePlaneStack = originalControl, originalCompute }()
+	}
+
 	// A reader of stdout or stderr that exits early, such as grep -m1, head or
 	// a jq that fails on a line, or one a signal to the process group ends,
 	// would otherwise have the next write kill the process mid-run, with the
@@ -335,6 +350,9 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	}
 	if starter, ok := sink.(interface{ Start() }); ok {
 		starter.Start()
+	}
+	if selected != nil {
+		_ = sink.Emit(c.Context(), progress.LastProgress{Detail: "Selected " + stackDescriptor(selected), At: time.Now().UTC()})
 	}
 	// After the first signal or quit key, say at once how to remove what the
 	// runs in progress may leave, before anything can end the process.

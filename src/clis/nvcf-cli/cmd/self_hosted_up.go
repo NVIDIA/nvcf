@@ -374,11 +374,16 @@ func (r *selfHostedUpRun) resolveStack() (*selfhosted.ResolvedStack, error) {
 	p2Start := r.emitPhase(2, upPhaseResolve)
 	resolved, err := selfhosted.ResolveStack(r.ctx, selfhosted.StackOptions{
 		Source:        selfHostedControlPlaneStack,
+		Umbrella:      selfHostedUmbrellaOptions(),
+		Plane:         "control-plane",
 		BuiltInOCIRef: builtInControlPlaneStackOCI(),
 	})
 	if err != nil {
 		r.emitFailure(selfhosted.Failure{Phase: selfhosted.PhaseResolve, Err: err}, p2Start)
 		return nil, err
+	}
+	if resolved.Umbrella != nil {
+		_ = r.sink.Emit(r.ctx, progress.LastProgress{Num: 2, Detail: "Selected " + stackDescriptor(resolved), At: time.Now().UTC()})
 	}
 	r.emitPhaseDone(2, upPhaseResolve, p2Start)
 	if r.ctx.Err() != nil {
@@ -390,6 +395,8 @@ func (r *selfHostedUpRun) resolveStack() (*selfhosted.ResolvedStack, error) {
 func (r *selfHostedUpRun) resolveComputeStack() (string, error) {
 	computeResolved, err := selfhosted.ResolveStack(r.ctx, selfhosted.StackOptions{
 		Source:        selfHostedComputePlaneStack,
+		Umbrella:      selfHostedUmbrellaOptions(),
+		Plane:         "compute-plane",
 		BuiltInOCIRef: builtInComputePlaneStackOCI(),
 	})
 	if err != nil {
