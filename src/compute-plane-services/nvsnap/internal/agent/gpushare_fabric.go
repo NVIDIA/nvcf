@@ -134,9 +134,15 @@ type GPUShareGroupInfo struct {
 	Session string `json:"session"`
 	Index   int    `json:"index"`
 	Size    int    `json:"size"`
+	// Companion marks a member without GPUs: restored stopped and
+	// continued once the GPU ranks resume (criu_companion.go).
+	Companion bool `json:"companion,omitempty"`
 }
 
 func gpushareGroupInfo(req CheckpointRequest) *GPUShareGroupInfo {
+	if req.Companion && req.GroupSession != "" {
+		return &GPUShareGroupInfo{Session: req.GroupSession, Index: req.GPUShareGroupIndex, Size: req.GPUShareGroupSize, Companion: true}
+	}
 	if req.GPUShareFabricSession == "" {
 		return nil
 	}
@@ -147,6 +153,8 @@ func gpushareGroupInfo(req CheckpointRequest) *GPUShareGroupInfo {
 type restoreV2Group struct {
 	Session, InetAddrMap string
 	Namespace, Pod       string
+	// LeaveStopped restores a companion stopped (criu_companion.go).
+	LeaveStopped bool
 }
 
 // restoreSession is one pod's directory in a group restore.
@@ -797,6 +805,16 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 		bases[i] = base
 		members[i] = &httpFabricMember{client: fabricHTTPClient, base: base, session: session, ns: m.Namespace, pod: m.PodName}
 	}
+	// Companions have no GPU state: no fabric session, no vote. Only the
+	// GPU members take part in the fabric.
+	var fabric []fabricMember
+	var fabricIdx []int
+	for i, m := range req.Members {
+		if !m.Companion {
+			fabric = append(fabric, members[i])
+			fabricIdx = append(fabricIdx, i)
+		}
+	}
 
 	res := &GroupCheckpointResult{Session: session, Members: make([]GroupMemberResult, len(req.Members))}
 	var mu sync.Mutex
@@ -804,7 +822,11 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 	var wg sync.WaitGroup
 	for i, m := range req.Members {
 		m.LeaveRunning = req.LeaveRunning
-		m.GPUShareFabricSession = session
+		if m.Companion {
+			m.GroupSession = session
+		} else {
+			m.GPUShareFabricSession = session
+		}
 		m.GPUShareGroupIndex, m.GPUShareGroupSize = i, len(req.Members)
 		wg.Add(1)
 		go func(i int, m CheckpointRequest) {
@@ -822,9 +844,9 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 	done := func(i int) bool {
 		mu.Lock()
 		defer mu.Unlock()
-		return finished[i]
+		return finished[fabricIdx[i]]
 	}
-	res.Fabric = driveFabric(ctx, members, done, fabricDriveOpts{Vote: true}, log)
+	res.Fabric = driveFabric(ctx, fabric, done, fabricDriveOpts{Vote: true}, log)
 	wg.Wait()
 
 	var failed []string

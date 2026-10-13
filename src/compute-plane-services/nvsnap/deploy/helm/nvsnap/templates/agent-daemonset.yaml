@@ -148,6 +148,9 @@ spec:
             - --webhook-key=/etc/nvsnap/webhook/tls.key
             # The download Job requests no GPU; it runs on the agent's nodes.
             - {{ printf "--webhook-agent-placement=%s" (dict "nodeSelector" .Values.agent.nodeSelector "nodeAffinity" .Values.agent.nodeAffinity | toJson) | quote }}
+            {{- with .Values.webhook.dynamoNamespace }}
+            - --webhook-dynamo-namespace={{ . }}
+            {{- end }}
             {{- if and .Values.agent.l2.waitImage .Values.agent.l2.waitImage.repository .Values.agent.l2.waitImage.tag }}
             # nvsnap#147: nvsnap-l2-wait init container for L2 restore.
             # Webhook prepends this onto pods annotated with

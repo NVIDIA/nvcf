@@ -25,6 +25,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	corev1 "k8s.io/api/core/v1"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -298,7 +299,10 @@ type Agent struct {
 
 	// criuRestore restores CRIU checkpoints into placeholder pods when CRIU
 	// is the cluster's capture method (criu_auto_restore.go).
-	criuRestore     *criuAutoRestorer
+	criuRestore *criuAutoRestorer
+	// specCacheURI hashes a pod's configuration as admission does (the
+	// webhook's SpecCacheURI); nil when the webhook is off.
+	specCacheURI    func(*corev1.Pod) (string, bool)
 	criuRestoreOnce sync.Once
 	// checkpointing holds the pods being checkpointed (namespace/pod).
 	checkpointing sync.Map
@@ -564,6 +568,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}/unlock", a.fabricUnlockHandler).Methods("PUT")
 	router.HandleFunc("/v1/gpushare/group-restore", a.groupRestoreHandler).Methods("POST")
 	router.HandleFunc("/v1/restore", a.restoreHandler).Methods("POST")
+	// Instance companions (criu_companion.go): a rank's connections, and
+	// the continue of a companion restored stopped.
+	router.HandleFunc("/v1/pods/{namespace}/{pod}/peers", a.peersHandler).Methods("GET")
+	router.HandleFunc("/v1/restore/continue", a.continueHandler).Methods("POST")
 	router.HandleFunc("/v1/restore/manifest", a.getPlaceholderManifestHandler).Methods("POST")
 	router.HandleFunc("/v1/checkpoints", a.listCheckpointsHandler).Methods("GET")
 	// A ready rank's cache tree for the agent collecting its set

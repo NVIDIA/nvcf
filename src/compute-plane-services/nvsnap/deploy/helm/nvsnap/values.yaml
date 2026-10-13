@@ -536,6 +536,15 @@ webhook:
   # is stale.
   inject: true
 
+  # Fixed Dynamo namespace (DYN_NAMESPACE and DYN_NAMESPACE_PREFIX) for
+  # Dynamo components whose etcd and NATS are services of their own
+  # Kubernetes namespace. The operator derives the Dynamo namespace from the
+  # Kubernetes namespace, which is new for every instance; a restored
+  # component would keep the old one and the new instance's frontend would
+  # not find it. Components that reach a shared etcd or NATS keep the
+  # operator's name. Empty disables.
+  dynamoNamespace: nvcf-nvsnap
+
   # Operator salt folded into every cache identity the webhook composes.
   # The identity covers image, model, arguments, cache-relevant env, driver
   # and GPU class, but not a change whose effect exists only on a fresh

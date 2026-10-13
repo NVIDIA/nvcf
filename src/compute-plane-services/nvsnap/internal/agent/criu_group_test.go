@@ -39,7 +39,8 @@ func TestParseCRIUGroup(t *testing.T) {
 	data := map[string]string{"state": "complete", "size": "2", "gpushare": "true",
 		"checkpoint.0": "a", "checkpoint.1": "b", "node.0": "n0", "node.1": "n1"}
 	g, ok := parseCRIUGroup("k1", data)
-	if !ok || !reflect.DeepEqual(g, webhook.CRIUGroup{Key: "k1", Checkpoints: []string{"a", "b"}, Nodes: []string{"n0", "n1"}, GPUShare: true}) {
+	if !ok || !reflect.DeepEqual(g, webhook.CRIUGroup{Key: "k1", Checkpoints: []string{"a", "b"}, Nodes: []string{"n0", "n1"}, GPUShare: true,
+		Companion: []bool{false, false}, Slot: -1}) {
 		t.Fatalf("got %+v %v", g, ok)
 	}
 	for name, mut := range map[string]func(map[string]string){
@@ -106,12 +107,7 @@ func TestCRIUGroupCaptureLeader(t *testing.T) {
 	restored.Annotations[webhook.CRIURestoreAnnotation] = "a"
 	bare := stsRank("src", "0", "1", "", true)
 	bare.OwnerReferences = nil
-	ownInstance := stsRank("kimi-0", "0", "2", "sts-a", true)
-	ownInstance.Namespace = "sr-instance-a"
-	for i := range ownInstance.Spec.Containers {
-		ownInstance.Spec.Containers[i].Env = append(ownInstance.Spec.Containers[i].Env, corev1.EnvVar{Name: "DISCOVERY_NAMESPACE", Value: "sr-instance-a-graph"})
-	}
-	for name, p := range map[string]corev1.Pod{"rank 1": r1, "not ready": notReady, "restored": restored, "a bare pod": bare, "a pod naming its instance": ownInstance} {
+	for name, p := range map[string]corev1.Pod{"rank 1": r1, "not ready": notReady, "restored": restored, "a bare pod": bare} {
 		if _, _, ok := criuGroupCaptureLeader(&p); ok {
 			t.Errorf("%s drives a capture", name)
 		}

@@ -32,6 +32,10 @@ const (
 	// CRIURestoredAnnotation marks a placeholder the agent restored into, so
 	// an agent that restarts does not restore into it again.
 	CRIURestoredAnnotation = "nvsnap.io/criu-restored"
+	// CRIUGroupCompanionAnnotation marks a placeholder that restores a
+	// companion of the instance: a pod without GPUs that its GPU ranks
+	// were connected to (an etcd, a NATS), captured and restored with them.
+	CRIUGroupCompanionAnnotation = "nvsnap.io/criu-group-companion"
 )
 
 // CRIUGroup is a complete group capture: the checkpoint of each rank, in
@@ -41,12 +45,40 @@ type CRIUGroup struct {
 	Checkpoints []string
 	Nodes       []string
 	GPUShare    bool
+	// Companion marks the members without GPUs (by slot), captured with
+	// the GPU ranks, which hold slots 0 to Ranks()-1.
+	Companion []bool
+	// Slot is the member a companion's own configuration names, when the
+	// record was found through a companion's alias; -1 otherwise.
+	Slot int
 }
 
-// criuGroupRestorePatches admits pod as its rank's restore placeholder when
-// a group capture of its configuration and size exists, else returns nil.
+// Ranks is the number of GPU ranks of the group.
+func (g CRIUGroup) Ranks() int {
+	n := 0
+	for i := range g.Checkpoints {
+		if i >= len(g.Companion) || !g.Companion[i] {
+			n++
+		}
+	}
+	return n
+}
+
+// companionSlot reports whether the record names the looked-up pod as one
+// of its companions.
+func (g CRIUGroup) companionSlot() (int, bool) {
+	if g.Slot < 0 || g.Slot >= len(g.Checkpoints) || g.Slot >= len(g.Companion) || !g.Companion[g.Slot] {
+		return 0, false
+	}
+	return g.Slot, true
+}
+
+// criuGroupRestorePatches admits pod as its member's restore placeholder
+// when a group capture of its configuration exists, else returns nil: a
+// GPU rank by its ordinal in its instance, a companion by the slot its own
+// configuration names.
 func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) []PatchOp {
-	if m.CRIUGroups == nil || gpuRequest(pod) == 0 || pod.Annotations[CRIUGroupAnnotation] != "" {
+	if m.CRIUGroups == nil || pod.Annotations[CRIUGroupAnnotation] != "" {
 		return nil
 	}
 	uri, ok := m.cacheURI(pod)
@@ -59,22 +91,39 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 	}
 	key := g.Key
 	log := m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "criuGroup": key})
-	if name := NamesOwnInstance(pod); name != "" {
-		log.WithField("env", name).Info("CRIU group restore: the pod names its own instance in its configuration; it starts from the caches")
+	slot, companion := g.companionSlot()
+	if gpuRequest(pod) == 0 && !companion {
 		return nil
 	}
-	ordinal, size := podOrdinal(pod), m.groupSize(ctx, pod)
-	if size != len(g.Checkpoints) || ordinal >= size {
-		log.WithFields(logrus.Fields{"ordinal": ordinal, "size": size, "captured": len(g.Checkpoints)}).
-			Info("CRIU group restore: the capture is of a different instance size; cold start")
-		return nil
-	}
-	// Only an instance of several ranks waits for all of them; one pod
-	// restores alone whatever its controller.
-	if size > 1 && m.CRIUGroupAdmits != nil {
-		if ok, why := m.CRIUGroupAdmits(ctx, pod); !ok {
-			log.WithField("reason", why).Info("CRIU group restore: the instance cannot restore as a group; cold start")
+	size := len(g.Checkpoints)
+	var ordinal int
+	if companion {
+		ordinal = slot
+		if m.CRIUCompanionAdmits != nil {
+			if ok, why := m.CRIUCompanionAdmits(ctx, pod); !ok {
+				log.WithField("reason", why).Info("CRIU group restore: the companion cannot restore with its instance; cold start")
+				return nil
+			}
+		}
+	} else {
+		if name := NamesOwnInstance(pod); name != "" && !m.dynamoRestorable(pod) {
+			log.WithField("env", name).Info("CRIU group restore: the pod names its own instance in its configuration; it starts from the caches")
 			return nil
+		}
+		ranks := m.groupSize(ctx, pod)
+		ordinal = podOrdinal(pod)
+		if ranks != g.Ranks() || ordinal >= ranks {
+			log.WithFields(logrus.Fields{"ordinal": ordinal, "size": ranks, "captured": g.Ranks()}).
+				Info("CRIU group restore: the capture is of a different instance size; cold start")
+			return nil
+		}
+		// Only an instance of several ranks waits for all of them; one
+		// pod restores alone whatever its controller.
+		if ranks > 1 && m.CRIUGroupAdmits != nil {
+			if ok, why := m.CRIUGroupAdmits(ctx, pod); !ok {
+				log.WithField("reason", why).Info("CRIU group restore: the instance cannot restore as a group; cold start")
+				return nil
+			}
 		}
 	}
 	if m.CRIURestoreBlocked != nil {
@@ -86,7 +135,7 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 		}
 	}
 	man := checkpointstore.Manifest{SourcePodMeta: map[string]string{}}
-	if g.GPUShare {
+	if g.GPUShare && !companion {
 		man.SourcePodMeta["gpushare"] = "true"
 	}
 	if ordinal < len(g.Nodes) && g.Nodes[ordinal] != "" {
@@ -103,6 +152,11 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 		PatchOp{Op: "add", Path: "/metadata/annotations/" + jsonPointerEscape(CRIUGroupOrdinalAnnotation), Value: strconv.Itoa(ordinal)},
 		PatchOp{Op: "add", Path: "/metadata/annotations/" + jsonPointerEscape(CRIUGroupSizeAnnotation), Value: strconv.Itoa(size)},
 	)
+	if companion {
+		cp = append(cp, PatchOp{Op: "add", Path: "/metadata/annotations/" + jsonPointerEscape(CRIUGroupCompanionAnnotation), Value: "true"})
+		log.WithFields(logrus.Fields{"checkpoint": id, "slot": ordinal, "size": size}).Info("CRIU group restore: pod admitted as its instance's companion placeholder")
+		return mergePatchPlan(cp)
+	}
 	// The restored processes keep the files they had open on the model
 	// and cache volumes, so the placeholder gets the same mounts the
 	// captured pod had. The placeholder's volumes come first: the

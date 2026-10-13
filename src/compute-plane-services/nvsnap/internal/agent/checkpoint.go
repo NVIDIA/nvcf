@@ -220,6 +220,11 @@ type CheckpointRequest struct {
 	// by them.
 	GPUShareGroupIndex int `json:"gpushareGroupIndex,omitempty"`
 	GPUShareGroupSize  int `json:"gpushareGroupSize,omitempty"`
+	// Companion captures a member of a group checkpoint that has no GPUs
+	// (criu_companion.go): it takes the group's place (GroupSession and
+	// the index and size above) without the fabric session.
+	Companion    bool   `json:"companion,omitempty"`
+	GroupSession string `json:"groupSession,omitempty"`
 
 	// CaptureID names one instance capture (criu_group.go): the checkpoint
 	// gets an identity of its own instead of the content hash, which
@@ -666,7 +671,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 	// Step 4.7: Get pod IP for stable network identity (MUST be before CRIU dump)
 	// After CRIU dump, the process may be gone and /proc/<pid> won't exist.
 	podIP := a.getPodIP(int(containerInfo.PID))
-	if req.GPUShareFabricSession != "" && podIP == "" {
+	if (req.GPUShareFabricSession != "" || req.GroupSession != "") && podIP == "" {
 		// A group restore maps each pod's old address to its new one; a
 		// member without one would leave its peers' connections unmapped.
 		return nil, fmt.Errorf("gpushare: fabric session %s: cannot determine the pod IP of %s/%s", req.GPUShareFabricSession, req.Namespace, req.PodName)

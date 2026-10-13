@@ -37,6 +37,10 @@ type groupRestoreHarness struct {
 	mu       sync.Mutex
 	requests []RestoreRequest
 	ins      map[string]string
+	// gpuDone is when the last GPU member's restore returned; continued
+	// the companions continued, and when.
+	gpuDone   time.Time
+	continued map[string]time.Time
 }
 
 func newGroupRestoreHarness(t *testing.T, ckpts map[string]*CheckpointMetadata) *groupRestoreHarness {
@@ -63,6 +67,17 @@ func newGroupRestoreHarness(t *testing.T, ckpts map[string]*CheckpointMetadata) 
 		_ = json.NewEncoder(w).Encode(md)
 	}).Methods("GET")
 	r.HandleFunc("/v1/restore", h.restore).Methods("POST")
+	r.HandleFunc("/v1/restore/continue", func(w http.ResponseWriter, r *http.Request) {
+		var req ContinueRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		h.mu.Lock()
+		if h.continued == nil {
+			h.continued = map[string]time.Time{}
+		}
+		h.continued[req.PodName] = time.Now()
+		h.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]int{"continued": 1})
+	}).Methods("POST")
 	h.srv = httptest.NewServer(r)
 	t.Cleanup(h.srv.Close)
 	return h
@@ -94,6 +109,16 @@ func (h *groupRestoreHarness) restore(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("restore failed: verdict %q %v", v, err), http.StatusInternalServerError)
 		return
 	}
+	if req.LeaveStopped {
+		// A companion: no GPU state, no handle list.
+		_ = json.NewEncoder(w).Encode(&RestoreResult{NewPodName: req.PlaceholderPodName})
+		return
+	}
+	defer func() {
+		h.mu.Lock()
+		h.gpuDone = time.Now()
+		h.mu.Unlock()
+	}()
 	// The tool's resume: its list, then the merged one.
 	if err := writeFileAtomic(sess.hostDir, "out", []byte(req.PlaceholderPodName+"-old "+req.PlaceholderPodName+"-new\n")); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -211,5 +236,39 @@ func TestGroupRestore_RejectsCheckpointsOfOtherInstances(t *testing.T) {
 	defer h.mu.Unlock()
 	if len(h.requests) != 0 {
 		t.Errorf("%d restores started before the plan was checked", len(h.requests))
+	}
+}
+
+func TestGroupRestore_CompanionRestoresStoppedAndContinuesAfterTheRanks(t *testing.T) {
+	ckpts := map[string]*CheckpointMetadata{
+		"c0": {SourcePodIP: "10.0.0.1", GPUShareGroup: &GPUShareGroupInfo{Session: "sx", Index: 0, Size: 3}},
+		"c1": {SourcePodIP: "10.0.0.2", GPUShareGroup: &GPUShareGroupInfo{Session: "sx", Index: 1, Size: 3}},
+		"e":  {SourcePodIP: "10.0.0.5", GPUShareGroup: &GPUShareGroupInfo{Session: "sx", Index: 2, Size: 3, Companion: true}},
+	}
+	h := newGroupRestoreHarness(t, ckpts)
+	groupRestoreCluster(t, h, map[string]string{"new-0": "10.1.0.10", "new-1": "10.1.0.11", "etcd": "10.1.0.15"})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	req := GroupRestoreRequest{Members: []GroupRestoreMember{
+		{CheckpointID: "c0", PlaceholderNamespace: "llm", PlaceholderPodName: "new-0"},
+		{CheckpointID: "c1", PlaceholderNamespace: "llm", PlaceholderPodName: "new-1"},
+		{CheckpointID: "e", PlaceholderNamespace: "llm", PlaceholderPodName: "etcd"},
+	}}
+	if _, err := h.a.groupRestore(ctx, req, quietFabricLog()); err != nil {
+		t.Fatalf("group restore: %v", err)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.requests {
+		if r.LeaveStopped != (r.PlaceholderPodName == "etcd") {
+			t.Errorf("%s restored with leaveStopped=%v; only the companion is restored stopped", r.PlaceholderPodName, r.LeaveStopped)
+		}
+	}
+	at, ok := h.continued["etcd"]
+	if !ok || len(h.continued) != 1 {
+		t.Fatalf("continued = %v, want the companion only", h.continued)
+	}
+	if at.Before(h.gpuDone) {
+		t.Errorf("companion continued at %v, before the last GPU rank resumed at %v", at, h.gpuDone)
 	}
 }

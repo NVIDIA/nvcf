@@ -94,6 +94,16 @@ func (m *Mutator) cacheURI(pod *corev1.Pod) (string, bool) {
 	return "cache://" + key, true
 }
 
+// SpecCacheURI is cacheURI of the pod's spec alone, as admission sees it:
+// a running pod's status names the resolved image digest, which admission
+// does not have. The agent hashes a companion this way to record the
+// configuration its replacement is admitted by.
+func (m *Mutator) SpecCacheURI(pod *corev1.Pod) (string, bool) {
+	spec := pod.DeepCopy()
+	spec.Status = corev1.PodStatus{}
+	return m.cacheURI(spec)
+}
+
 // groupSize is how many ranks the pod's group has: the Grove scaling
 // group's pod count, else the LeaderWorkerSet size annotation, else the
 // owning StatefulSet's replicas, else 1. A set is only collected once every

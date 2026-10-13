@@ -232,6 +232,7 @@ func (a *Agent) groupRestore(ctx context.Context, req GroupRestoreRequest, log *
 				ReservePIDs:              m.ReservePIDs,
 				GPUShareFabricSession:    res.Session,
 				InetAddrMap:              addrMap,
+				LeaveStopped:             entries[i].Group.Companion,
 			})
 			mu.Lock()
 			defer mu.Unlock()
@@ -254,6 +255,20 @@ func (a *Agent) groupRestore(ctx context.Context, req GroupRestoreRequest, log *
 	for _, m := range res.Members {
 		if m.Error != "" {
 			failed = append(failed, m.Pod+": "+m.Error)
+		}
+	}
+	if len(failed) == 0 {
+		// Every GPU rank has resumed: the companions, restored stopped, run
+		// now, so their clocks start with the ranks' (criu_companion.go).
+		for i, m := range req.Members {
+			if !entries[i].Group.Companion {
+				continue
+			}
+			if err := postContinue(ctx, bases[i], ContinueRequest{Namespace: m.PlaceholderNamespace, PodName: m.PlaceholderPodName,
+				ContainerName: m.PlaceholderContainerName}); err != nil {
+				res.Members[i].Error = "continue: " + err.Error()
+				failed = append(failed, res.Members[i].Pod+": continue: "+err.Error())
+			}
 		}
 	}
 	if len(failed) == 0 {

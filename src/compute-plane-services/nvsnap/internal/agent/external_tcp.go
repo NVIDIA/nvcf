@@ -100,42 +100,43 @@ func mustCIDR(s string) *net.IPNet {
 	return n
 }
 
-// closeExternalTCPInNS enters the network namespace of pidInNS, lists
-// all TCP_ESTABLISHED sockets, and destroys those whose peer satisfies
-// isExternalPeer. Returns the number of sockets destroyed and an error
-// only when the netns enumeration itself fails — per-socket destroy
-// errors are logged and skipped (we want best-effort: closing 9 of 10
-// is still progress, and SOCK_DESTROY can return ENOENT if the kernel
-// already closed the socket between enumerate and destroy).
-//
-// MUST be called from a goroutine where runtime.LockOSThread is held;
-// the caller is responsible for that + restoring the original netns.
-// We do the lock/restore inside this function for safety.
+// closeExternalTCPInNS destroys the TCP_ESTABLISHED sockets of the
+// network namespace of pidInNS whose peer satisfies isExternalPeer.
+// Returns the number destroyed and an error only when the namespace
+// cannot be listed; per-socket destroy errors are logged and skipped
+// (SOCK_DESTROY returns ENOENT for a socket the kernel closed meanwhile).
 func closeExternalTCPInNS(pidInNS int, log *logrus.Entry) (int, error) {
+	return destroyTCPInNS(pidInNS, func(remote net.IP) bool { return !isExternalPeer(remote) },
+		"Destroyed external TCP socket pre-checkpoint (nvsnap#187)", log)
+}
+
+// inNetNS runs f on a thread in the network namespace of pid.
+func inNetNS(pid int, f func() error) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-
 	origNs, err := netns.Get()
 	if err != nil {
-		return 0, fmt.Errorf("get current netns: %w", err)
+		return fmt.Errorf("get current netns: %w", err)
 	}
 	defer func() { _ = origNs.Close() }()
-	targetNs, err := netns.GetFromPid(pidInNS)
+	targetNs, err := netns.GetFromPid(pid)
 	if err != nil {
-		return 0, fmt.Errorf("get netns for pid %d: %w", pidInNS, err)
+		return fmt.Errorf("get netns for pid %d: %w", pid, err)
 	}
 	defer func() { _ = targetNs.Close() }()
 	if err := netns.Set(targetNs); err != nil {
-		return 0, fmt.Errorf("setns to target: %w", err)
+		return fmt.Errorf("setns to target: %w", err)
 	}
-	// Always restore the original netns — even on early return.
-	defer func() {
-		if err := netns.Set(origNs); err != nil {
-			log.WithError(err).Error("Failed to restore original netns; OS thread will exit on goroutine end")
-		}
-	}()
+	// Restore the original netns even on early return: a thread left in
+	// another namespace is unusable, and it exits with the goroutine.
+	defer func() { _ = netns.Set(origNs) }()
+	return f()
+}
 
-	destroyed := 0
+// establishedTCP lists the TCP_ESTABLISHED sockets of the current
+// network namespace.
+func establishedTCP(log *logrus.Entry) []*netlink.Socket {
+	var out []*netlink.Socket
 	for _, family := range []uint8{syscall.AF_INET, syscall.AF_INET6} {
 		sockets, err := netlink.SocketDiagTCP(family)
 		if err != nil {
@@ -143,28 +144,53 @@ func closeExternalTCPInNS(pidInNS int, log *logrus.Entry) (int, error) {
 			continue
 		}
 		for _, s := range sockets {
-			if s.State != tcpStateEstablished {
-				continue
+			if s.State == tcpStateEstablished {
+				out = append(out, s)
 			}
-			if !isExternalPeer(s.ID.Destination) {
+		}
+	}
+	return out
+}
+
+// destroyTCPInNS destroys the TCP_ESTABLISHED sockets of the network
+// namespace of pidInNS whose peer keep rejects, logging each with msg.
+func destroyTCPInNS(pidInNS int, keep func(remote net.IP) bool, msg string, log *logrus.Entry) (int, error) {
+	destroyed := 0
+	err := inNetNS(pidInNS, func() error {
+		for _, s := range establishedTCP(log) {
+			if keep(s.ID.Destination) {
 				continue
 			}
 			local := &net.TCPAddr{IP: s.ID.Source, Port: int(s.ID.SourcePort)}
 			remote := &net.TCPAddr{IP: s.ID.Destination, Port: int(s.ID.DestinationPort)}
 			if err := netlink.SocketDestroy(local, remote); err != nil {
-				log.WithError(err).WithFields(logrus.Fields{
-					"local":  local.String(),
-					"remote": remote.String(),
-				}).Warn("SocketDestroy failed; continuing")
+				log.WithError(err).WithFields(logrus.Fields{"local": local.String(), "remote": remote.String()}).
+					Warn("SocketDestroy failed; continuing")
 				continue
 			}
 			destroyed++
-			log.WithFields(logrus.Fields{
-				"local":  local.String(),
-				"remote": remote.String(),
-				"family": family,
-			}).Info("Destroyed external TCP socket pre-checkpoint (nvsnap#187)")
+			log.WithFields(logrus.Fields{"local": local.String(), "remote": remote.String()}).Info(msg)
 		}
-	}
-	return destroyed, nil
+		return nil
+	})
+	return destroyed, err
+}
+
+// tcpPeersInNS returns the peer addresses of the established TCP sockets
+// of the network namespace of pidInNS, loopback excluded.
+func tcpPeersInNS(pidInNS int, log *logrus.Entry) ([]net.IP, error) {
+	seen := map[string]bool{}
+	var peers []net.IP
+	err := inNetNS(pidInNS, func() error {
+		for _, s := range establishedTCP(log) {
+			ip := s.ID.Destination
+			if ip.IsLoopback() || seen[ip.String()] {
+				continue
+			}
+			seen[ip.String()] = true
+			peers = append(peers, ip)
+		}
+		return nil
+	})
+	return peers, err
 }

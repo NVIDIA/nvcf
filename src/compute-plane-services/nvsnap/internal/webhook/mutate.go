@@ -349,6 +349,16 @@ type Mutator struct {
 	// Job runs within it.
 	AgentPlacement AgentPlacement
 
+	// DynamoNamespace is the fixed Dynamo namespace the webhook gives
+	// every Dynamo component whose etcd and NATS are its instance's own
+	// (dynamo.go). Empty leaves the operator's.
+	DynamoNamespace string
+
+	// CRIUCompanionAdmits reports whether a pod without GPUs may be admitted
+	// as a companion of a group restore: not while a GPU rank of its
+	// namespace already runs. Nil admits.
+	CRIUCompanionAdmits func(ctx context.Context, pod *corev1.Pod) (bool, string)
+
 	// NvSnapServerURL is the in-cluster URL the nvsnap-l2-wait init
 	// container POSTs to. Typically
 	// http://nvsnap-server.<ns>.svc.cluster.local:8080. Empty
@@ -542,6 +552,7 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	// rides along with whichever patches they return.
 	injectPatches = append(injectPatches, m.gpusharePatches(ctx, pod)...)
 	injectPatches = append(injectPatches, m.debugEnvPatches(pod)...)
+	injectPatches = append(injectPatches, m.dynamoNamespacePatches(pod)...)
 
 	raw, ok := pod.Annotations[RestoreFromAnnotation]
 	if !ok || raw == "" {

@@ -196,6 +196,9 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 				stdioInheritFDs(pidnsCapture)...)...)
 		log.WithField("externalMounts", len(pidnsCapture.Mounts)).Info("criu-v2: restoring into a nested pid namespace")
 	}
+	if group.LeaveStopped {
+		args = append(args, "--leave-stopped")
+	}
 	rctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	_, criuSpan := tracing.Tracer().Start(ctx, "restore.criu")
@@ -252,6 +255,11 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		return nil, fmt.Errorf("criu-v2 restore: %w (output: %s; restore.log tail: %s)", err, strings.TrimSpace(string(out)), tail)
 	}
 	criuSpan.End()
+	if group.InetAddrMap != "" {
+		// Before the unlock: a connection to a peer outside the group goes
+		// to an address of the captured instance (criu_companion.go).
+		resetDeadPeers(hostPID, keepAddresses("", group.InetAddrMap), log)
+	}
 
 	fabricDir := ""
 	if sess != nil {
