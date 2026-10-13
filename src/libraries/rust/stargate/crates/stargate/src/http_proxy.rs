@@ -259,6 +259,7 @@ fn prepare_proxy_request(
                 algorithm = %definition.config().algorithm(),
                 outcome = outcome.as_str(),
                 expression = %raw,
+                effective = %definition.effective_config(),
                 "routing expression configuration built"
             );
         }
