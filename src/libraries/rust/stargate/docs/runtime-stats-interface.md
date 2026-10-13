@@ -72,7 +72,10 @@ Waiting for the backend's own update covers two cases:
 
 The trade-off is that a reservation on a backend that stops reporting stays
 counted, in routing and in `stargate_routing_reservations_active`, until that
-backend reports or its registration ends.
+backend reports or its registration ends. Only registration liveness bounds
+those reservations, so setting `--registration-update-idle-timeout-ms` to `0`
+leaves them unbounded for a backend that keeps serving requests without sending
+updates.
 
 Pylons that send only heartbeats keep each reservation until the first
 heartbeat received at or after its soft expiry, which includes the request.

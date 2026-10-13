@@ -978,16 +978,30 @@ fn timeline_cluster(
     (cluster, backends)
 }
 
-/// Applies a registration update from `backend` received at `updated_at`.
+/// Applies a registration update from `backend` received and applied at
+/// `received_at`.
 fn report_at(
     cluster: &RoutedClusterState,
     backend: &RoutedInferenceServerSnapshot,
-    updated_at: Instant,
+    received_at: Instant,
+    queue_size: u64,
+) {
+    report_received_at(cluster, backend, received_at, received_at, queue_size);
+}
+
+/// Applies at `applied_at` a registration update from `backend` that
+/// Stargate received at `received_at`.
+fn report_received_at(
+    cluster: &RoutedClusterState,
+    backend: &RoutedInferenceServerSnapshot,
+    received_at: Instant,
+    applied_at: Instant,
     queue_size: u64,
 ) {
     let mut update = backend.clone();
     update.stats.queue_size = queue_size;
-    update.snapshot_updated_at = updated_at;
+    update.snapshot_updated_at = applied_at;
+    update.update_received_at = received_at;
     cluster.upsert_backend(Arc::new(update));
 }
 
@@ -1037,6 +1051,85 @@ fn reservation_counts_past_soft_expiry_until_its_backend_reports() {
     assert_eq!(routing_reservations_active(&metrics, &target), 0);
 
     reservation.release();
+    assert_eq!(routing_reservations_active(&metrics, &target), 0);
+}
+
+#[test]
+fn settlement_uses_update_receipt_time_not_apply_time() {
+    let (cluster, backends) = timeline_cluster("cluster-receipt-time", &["backend-a"]);
+    let target = make_target(Some("rk-receipt-time"), "model-receipt-time");
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    let received_before_dispatch = Instant::now();
+    let at = |millis| received_before_dispatch + Duration::from_millis(millis);
+    let _reservation = cluster
+        .reserve_backend_at(
+            &backends[0].registration,
+            at(1),
+            Duration::from_millis(60),
+            metrics.clone(),
+            &target,
+        )
+        .expect("stored backend should accept reservation");
+
+    // Connection and RTT awaits can delay applying an update well past the
+    // soft expiry; the update still predates the request.
+    report_received_at(&cluster, &backends[0], at(0), at(100), 3);
+    assert_eq!(
+        queued(&cluster),
+        4,
+        "an update received before dispatch must not settle when applied late"
+    );
+    assert_eq!(routing_reservations_active(&metrics, &target), 1);
+
+    report_received_at(&cluster, &backends[0], at(61), at(100), 3);
+    assert_eq!(queued(&cluster), 3);
+    assert_eq!(routing_reservations_active(&metrics, &target), 0);
+}
+
+#[tokio::test]
+async fn registration_update_settles_by_its_receipt_time() {
+    let scenario = RegistrationScenario::new(Some("rk-receipt-apply"));
+    let running = scenario.start("inst-receipt-apply", 8888);
+    let model_id = "model-receipt-apply";
+    let update = scenario.update(&running, model_id, Active, ModelStats::default());
+    scenario.publish_connected(&running, &update).await;
+
+    let selected_cluster = scenario.selected_cluster(model_id).await;
+    let target = scenario.target(model_id);
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    let received_before_dispatch = Instant::now();
+    let reservation = selected_cluster
+        .reserve_backend_with_ttl(
+            &running.generation(),
+            37,
+            4,
+            Duration::from_millis(1),
+            metrics.clone(),
+            &target,
+        )
+        .expect("active backend should accept reservation");
+    let received_after_expiry = Instant::now() + Duration::from_millis(1);
+
+    let apply_received = |received_at| {
+        scenario.state.apply_received_registration_update(
+            &running,
+            &update,
+            true,
+            Some(Duration::from_millis(5)),
+            received_at,
+        )
+    };
+    apply_received(received_before_dispatch).await;
+    assert_eq!(
+        scenario.only_cluster(model_id).await.stats.queue_size,
+        1,
+        "an update received before dispatch must not settle the reservation"
+    );
+    apply_received(received_after_expiry).await;
+    assert_eq!(scenario.only_cluster(model_id).await.stats.queue_size, 0);
+    assert_eq!(routing_reservations_active(&metrics, &target), 0);
+
+    drop(reservation);
     assert_eq!(routing_reservations_active(&metrics, &target), 0);
 }
 

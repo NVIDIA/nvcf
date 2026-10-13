@@ -230,6 +230,9 @@ pub struct RoutedInferenceServerSnapshot {
     pub stats: ModelStats,
     pub rtt: Duration,
     pub snapshot_updated_at: Instant,
+    // When Stargate received the registration update carrying these stats.
+    // It can precede `snapshot_updated_at` by connection and RTT awaits.
+    pub(crate) update_received_at: Instant,
     pub status: InferenceServerStatus,
     pub reverse_tunnel: bool,
 }
@@ -249,10 +252,16 @@ impl RoutedInferenceServerSnapshot {
             stats,
             rtt,
             snapshot_updated_at,
+            update_received_at: snapshot_updated_at,
             status,
             reverse_tunnel: registration.identity.reverse_tunnel,
             registration,
         }
+    }
+
+    pub(super) fn with_update_received_at(mut self, update_received_at: Instant) -> Self {
+        self.update_received_at = update_received_at;
+        self
     }
 
     pub(super) fn assert_registration_identity(&self) {

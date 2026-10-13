@@ -311,7 +311,7 @@ impl ClusterRoutingGeneration {
             // The update's receipt time, not when it was applied here, bounds
             // what the backend could have reported.
             if updated_backend_index == Some(index) {
-                pending.settle_on_backend_update(self.backends[index].snapshot_updated_at);
+                pending.settle_on_backend_update(self.backends[index].update_received_at);
             }
             pending.is_active()
         });

@@ -841,6 +841,7 @@ mod tests {
             stats: ModelStats::default(),
             rtt: Duration::from_millis(1),
             snapshot_updated_at: Instant::now(),
+            update_received_at: Instant::now(),
             status: InferenceServerStatus::Active,
             reverse_tunnel: false,
         };
