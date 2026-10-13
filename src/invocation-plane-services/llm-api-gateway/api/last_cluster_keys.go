@@ -69,18 +69,25 @@ func (h *Handlers) setResponsesLastClusterKeys(reqCtx *requestctx.RequestContext
 		Instructions json.RawMessage `json:"instructions"`
 		Prompt       json.RawMessage `json:"prompt"`
 	}
-	if err := json.Unmarshal(rawBody, &body); err != nil || len(body.Input) == 0 || bytes.Equal(bytes.TrimSpace(body.Input), []byte("null")) {
+	if err := json.Unmarshal(rawBody, &body); err != nil {
+		return
+	}
+	input := bytes.TrimSpace(body.Input)
+	if len(input) == 0 || bytes.Equal(input, []byte("null")) {
 		return
 	}
 	var items []json.RawMessage
-	var text string
-	if err := json.Unmarshal(body.Input, &text); err == nil {
+	if input[0] == '"' {
+		var text string
+		if err := json.Unmarshal(input, &text); err != nil {
+			return
+		}
 		item, err := json.Marshal(map[string]string{"content": text, "role": "user"})
 		if err != nil {
 			return
 		}
 		items = []json.RawMessage{item}
-	} else if err := json.Unmarshal(body.Input, &items); err != nil {
+	} else if err := json.Unmarshal(input, &items); err != nil {
 		return
 	}
 	// Input.UnmarshalJSON decodes arrays directly into []InputItem, preserving indices.

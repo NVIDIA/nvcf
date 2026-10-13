@@ -451,9 +451,10 @@ keys the store by a prefix chain:
 
 Clients that append to their history and resend it verbatim, including tool
 loops, find the cluster that served the previous turn. Edited, truncated, or
-summarized history and assistant prefill continuation miss and route as new
-sessions. Responses requests with `previous_response_id` or an
-`item_reference` item are skipped. A first turn skips the store read, counts
+summarized history misses and routes as a new session when the change falls in
+the part hashed for lookup. Assistant prefill continuation is outside this
+guarantee and usually misses. Responses requests with `previous_response_id` or
+an `item_reference` item are skipped. A first turn skips the store read, counts
 as a `miss`, and is written on a 2xx response. Delivery is best-effort: writes
 are asynchronous, entries expire after the TTL, and with Olric off each replica
 has its own store. The `x-cache-affinity-key` header and router placement do

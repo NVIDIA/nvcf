@@ -19,6 +19,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -444,5 +445,56 @@ func TestResponsesLastClusterOutputTypes(t *testing.T) {
 				t.Fatal("client input created a cut")
 			}
 		})
+	}
+}
+
+// lastClusterBenchmarkBody returns a request with 200 messages of about 2 KB
+// each, alternating user and assistant and ending with a user turn.
+func lastClusterBenchmarkBody(b *testing.B, field string) []byte {
+	b.Helper()
+	items := make([]map[string]string, 200)
+	for i := range items {
+		role := "user"
+		if i%2 == 0 {
+			role = "assistant"
+		}
+		items[i] = map[string]string{"role": role, "content": fmt.Sprintf("%04d %s", i, strings.Repeat("x", 2043))}
+	}
+	body, err := json.Marshal(map[string]any{"model": "fn-alpha/company-name/model-name", field: items})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return body
+}
+
+func BenchmarkChatLastClusterKeys(b *testing.B) {
+	h, body := enabledLastClusterHandlers(), lastClusterBenchmarkBody(b, "messages")
+	b.SetBytes(int64(len(body)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		reqCtx := lastClusterPayloadContext()
+		h.setChatLastClusterKeys(reqCtx, body)
+		if reqCtx.LastClusterWriteKey == "" {
+			b.Fatal("missing write value")
+		}
+	}
+}
+
+func BenchmarkResponsesLastClusterKeys(b *testing.B) {
+	h, body := enabledLastClusterHandlers(), lastClusterBenchmarkBody(b, "input")
+	var req openairesponses.CreateRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(body)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		reqCtx := lastClusterPayloadContext()
+		h.setResponsesLastClusterKeys(reqCtx, &req, body)
+		if reqCtx.LastClusterWriteKey == "" {
+			b.Fatal("missing write value")
+		}
 	}
 }

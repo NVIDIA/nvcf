@@ -99,11 +99,12 @@ uses the hint only for models whose routing algorithm sets
   - Values come from the raw request JSON. Object key order and whitespace
     outside strings do not change them. They are scoped by endpoint, org and
     project, routing key, and model.
-  - Clients that append to their history and resend it verbatim, including
-    tool loops, find the cluster that served the previous turn. Edited,
-    truncated, or summarized history and assistant prefill continuation miss
-    and route as new sessions. Responses requests with `previous_response_id`
-    or an `item_reference` item are skipped.
+  - Clients that append to their history and resend it verbatim, including tool
+    loops, find the cluster that served the previous turn. Edited, truncated,
+    or summarized history misses and routes as a new session when the change
+    falls in the part hashed for lookup. Assistant prefill continuation is
+    outside this guarantee and usually misses. Responses requests with
+    `previous_response_id` or an `item_reference` item are skipped.
   - A first turn has no lookup value. It skips the store read, counts as
     `miss`, and is written on 2xx.
   - Delivery is best-effort. A turn that arrives before the previous write

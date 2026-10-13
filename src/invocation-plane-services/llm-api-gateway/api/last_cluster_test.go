@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -38,15 +39,18 @@ import (
 )
 
 // lastClusterAPI serves the gateway routes against a fake Stargate that sets
-// x-stargate-cluster-id and records the last-cluster hint per request.
+// x-stargate-cluster-id and records each outbound request.
 type lastClusterAPI struct {
-	e          *echo.Echo
-	tracker    *lastcluster.Tracker
-	store      *lastcluster.LocalStore
-	mu         sync.Mutex
-	hints      []string
-	affinities []string
-	bodies     []string
+	e        *echo.Echo
+	tracker  *lastcluster.Tracker
+	store    *lastcluster.LocalStore
+	mu       sync.Mutex
+	requests []upstreamRequest
+}
+
+type upstreamRequest struct {
+	method, uri, body string
+	header            http.Header
 }
 
 func newLastClusterAPI(t *testing.T, enabled bool) *lastClusterAPI {
@@ -58,9 +62,7 @@ func newLastClusterAPI(t *testing.T, enabled bool) *lastClusterAPI {
 			t.Error(err)
 		}
 		gw.mu.Lock()
-		gw.hints = append(gw.hints, r.Header.Get("X-Stargate-Last-Cluster-Id"))
-		gw.affinities = append(gw.affinities, r.Header.Get("X-Cache-Affinity-Key"))
-		gw.bodies = append(gw.bodies, string(body))
+		gw.requests = append(gw.requests, upstreamRequest{method: r.Method, uri: r.URL.RequestURI(), body: string(body), header: r.Header.Clone()})
 		gw.mu.Unlock()
 		w.Header().Set("X-Stargate-Cluster-Id", "cluster-b")
 		w.Header().Set(echo.HeaderContentType, "text/event-stream")
@@ -113,10 +115,14 @@ func (a *lastClusterAPI) post(t *testing.T, path, payload string, header http.He
 	return rec
 }
 
-func (a *lastClusterAPI) lastHint() string {
+func (a *lastClusterAPI) lastRequest() upstreamRequest {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.hints[len(a.hints)-1]
+	return a.requests[len(a.requests)-1]
+}
+
+func (a *lastClusterAPI) lastHint() string {
+	return a.lastRequest().header.Get("X-Stargate-Last-Cluster-Id")
 }
 
 func TestLastClusterSessionFlows(t *testing.T) {
@@ -223,40 +229,59 @@ func lastClusterFixturePath(endpoint string) string {
 	}
 }
 
-func (a *lastClusterAPI) lastRequest() (affinity, body string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.affinities[len(a.affinities)-1], a.bodies[len(a.bodies)-1]
-}
-
+// TestLastClusterPayloadFeatureOff checks that enabling the feature changes
+// nothing on the wire except the last-cluster hint. Only X-Request-Id, a
+// per-request UUID, is excluded from the comparison.
 func TestLastClusterPayloadFeatureOff(t *testing.T) {
 	for _, fixture := range lastClusterChainFixtures() {
-		t.Run(fixture.name, func(t *testing.T) {
-			enabled, disabled := newLastClusterAPI(t, true), newLastClusterAPI(t, false)
-			path := lastClusterFixturePath(fixture.endpoint)
-			for i, body := range fixture.turns {
-				on := enabled.post(t, path, body, nil)
-				off := disabled.post(t, path, body, nil)
-				onAffinity, onBody := enabled.lastRequest()
-				offAffinity, offBody := disabled.lastRequest()
-				expectedAffinity := lastClusterFixtureAffinity(t, fixture.endpoint, body)
-				if offAffinity != expectedAffinity || onAffinity != expectedAffinity {
-					t.Fatalf("turn %d affinities on=%q off=%q, want %q", i+1, onAffinity, offAffinity, expectedAffinity)
-				}
-				if on.Header().Get(HeaderMultiTurnSessionID) != expectedAffinity || off.Header().Get(HeaderMultiTurnSessionID) != expectedAffinity {
-					t.Fatalf("turn %d changed session response header", i+1)
-				}
-				if onBody != offBody {
-					t.Fatalf("turn %d feature flag changed outbound body", i+1)
-				}
-				if hint := disabled.lastHint(); hint != "" {
-					t.Fatalf("disabled hint = %q, want none", hint)
-				}
+		for _, stream := range []bool{false, true} {
+			name := fixture.name
+			if stream {
+				name += "/stream"
 			}
-			if n := disabled.store.Len(); n != 0 {
-				t.Fatalf("disabled store entries = %d, want 0", n)
-			}
-		})
+			t.Run(name, func(t *testing.T) {
+				enabled, disabled := newLastClusterAPI(t, true), newLastClusterAPI(t, false)
+				path := lastClusterFixturePath(fixture.endpoint)
+				for i, body := range fixture.turns {
+					if stream {
+						body = strings.Replace(body, "{", `{"stream":true,`, 1)
+					}
+					on := enabled.post(t, path, body, nil)
+					off := disabled.post(t, path, body, nil)
+					onReq, offReq := enabled.lastRequest(), disabled.lastRequest()
+					for _, req := range []upstreamRequest{onReq, offReq} {
+						if req.header.Get(HeaderRequestID) == "" {
+							t.Fatalf("turn %d missing %s", i+1, HeaderRequestID)
+						}
+						req.header.Del(HeaderRequestID)
+					}
+					wantHint := "cluster-b"
+					if i == 0 {
+						wantHint = ""
+					}
+					if hint := onReq.header.Get("X-Stargate-Last-Cluster-Id"); hint != wantHint {
+						t.Fatalf("turn %d enabled hint = %q, want %q", i+1, hint, wantHint)
+					}
+					if hint := offReq.header.Get("X-Stargate-Last-Cluster-Id"); hint != "" {
+						t.Fatalf("turn %d disabled hint = %q, want none", i+1, hint)
+					}
+					onReq.header.Del("X-Stargate-Last-Cluster-Id")
+					if !reflect.DeepEqual(onReq, offReq) {
+						t.Fatalf("turn %d feature flag changed outbound request:\non:  %+v\noff: %+v", i+1, onReq, offReq)
+					}
+					expectedAffinity := lastClusterFixtureAffinity(t, fixture.endpoint, body)
+					if got := offReq.header.Get("X-Cache-Affinity-Key"); got != expectedAffinity {
+						t.Fatalf("turn %d affinity = %q, want %q", i+1, got, expectedAffinity)
+					}
+					if on.Header().Get(HeaderMultiTurnSessionID) != expectedAffinity || off.Header().Get(HeaderMultiTurnSessionID) != expectedAffinity {
+						t.Fatalf("turn %d changed session response header", i+1)
+					}
+				}
+				if n := disabled.store.Len(); n != 0 {
+					t.Fatalf("disabled store entries = %d, want 0", n)
+				}
+			})
+		}
 	}
 }
 
