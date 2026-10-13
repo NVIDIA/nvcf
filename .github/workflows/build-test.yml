@@ -257,7 +257,10 @@ jobs:
           persist-credentials: false
 
       - name: Run release helper tests
-        run: python3 tools/ci/test-github-release.py
+        run: |
+          python3 tools/ci/test-github-release.py
+          python3 tools/ci/test-github-release-maintenance.py
+          python3 tools/ci/test-maintenance-release-workflows.py
 
       - name: Test stack pin branch refresh
         run: bash tools/ci/test-prepare-stack-pin-branch

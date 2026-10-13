@@ -1509,21 +1509,15 @@ def publish_framework_dependency_release(root, service, components, dry_run, dra
     if not framework_paths:
         return False
 
-    last_tag = latest_service_tag(service, root)
-    if not last_tag:
+    stable = stable_reachable_versions(root, service)
+    if not stable:
         print(
             f"[github-release] {service['id']}: no existing release tag to bump from; "
             "skipping Java framework dependency release"
         )
         return False
 
-    current_version = version_from_tag(service, last_tag, root)
-    if not re.fullmatch(STABLE_SEMVER_PATTERN, current_version):
-        print(
-            f"[github-release] {service['id']}: last tag {last_tag} is not a stable X.Y.Z; "
-            "skipping Java framework dependency release"
-        )
-        return False
+    current_version, last_tag = max(stable, key=lambda item: semverish_sort_key(item[0]))
 
     commits = release_worthy_framework_commits_since(root, framework_paths, last_tag)
     if not commits:

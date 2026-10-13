@@ -137,6 +137,54 @@ rules:
 - `chore:`, `ci:`, `docs:`, `style:`, `refactor:`, `test:`, and
   `build:` do not create releases
 
+## Self-managed component maintenance tags
+
+Use `<path>/v<X.Y.Z>-sm.<N>` for an explicitly reviewed backport of a
+released component or chart baseline. For example, a backport based on
+`deploy/helm/cloud-functions/v1.27.1` can publish as
+`deploy/helm/cloud-functions/v1.27.1-sm.1`. This identifies the original
+baseline without implying that the next ordinary patch contains the same
+changes. A new component without a released baseline needs an explicitly
+reviewed initial version and source commit instead.
+
+Start from the exact released tag and keep the change scoped to the
+maintenance fix. Use a review branch outside the automatic stack release
+branch pattern. A push to a matching `release-deploy/stacks/.../vX.Y`
+branch can publish a stable stack patch; it is not a staging area.
+
+The first maintenance publication uses `sm.1`. Later publications for the
+same baseline increment the counter. Never move an existing tag or reuse
+its version for changed content. The parser accepts canonical nonnegative
+integers, including zero, for consistency with `rc` and `dev`; zero is not
+selected by this publication convention. Leading zeros are invalid.
+
+Before creating a maintenance tag, ensure its source commit includes:
+
+- `tools/ci/github-release` support for `sm.N`, with maintenance GitHub
+  Releases marked as prereleases and excluded from the latest release.
+- Maintenance-tag exclusions in `chart-version-bump.yml` and
+  `stack-pin-bump.yml` when those workflows exist on the baseline.
+- The corresponding parser, publication, and workflow regression tests.
+
+The tag workflow executes the tooling from the tagged checkout. Updating
+only `main` does not update historical release branches. Backport the
+small compatibility changes and tests to each candidate before tagging;
+do not copy unrelated current release metadata or workflows over an older
+baseline. Validate the source, registration, and publisher support for
+the exact candidate version first.
+
+Create the reviewed tag explicitly after its release gates pass. Keep a
+version-file component's `VERSION` as stable `X.Y.Z`; the explicit tag
+carries the maintenance suffix. Do not use `anchor` to publish a
+maintenance fix: that command also changes semantic-release notes.
+
+Maintenance releases do not automatically update chart or stack pins,
+advance stable release baselines, or become ordinary stable releases.
+Review consumer pins explicitly against the published artifact and its
+digest. A component release does not qualify a stack or publish a docs
+edition. Those require the final resolved inventory, compatibility and
+upgrade validation, and the separate docs edition workflow below.
+
 ## Java framework dependency releases
 
 `semantic-release-monorepo` scopes a service's commits to its own

@@ -227,6 +227,23 @@ class GithubReleaseTest(unittest.TestCase):
                     self.assertIn(self.JAVA_FRAMEWORK_PATH, text)
                     self.assertIn("fix(nv-boot): bump shared framework", text)
 
+    def test_maintenance_tags_do_not_change_stable_framework_release_baselines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_java_repo(root)
+            self.commit_framework_change(root)
+            for service_id, path, version in self.JAVA_SERVICES:
+                with self.subTest(service=service_id):
+                    git(root, "tag", f"{path}/v{version}-sm.1")
+                    service = self.java_service_metadata(service_id, path)
+                    self.assertEqual(
+                        self.github_release.release_baseline_version(root, service), version
+                    )
+                    created, text = self.fanout_dry_run(root, service)
+                    self.assertTrue(created)
+                    expected = self.github_release.next_patch_version(version)
+                    self.assertIn(f"would create {path}/v{expected}", text)
+
     def test_framework_fanout_skips_a_component_that_is_not_a_java_service(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -2692,6 +2709,7 @@ class FollowerReleaseTest(unittest.TestCase):
             # A release candidate cut afterwards sorts above the stable release.
             self.touch(root, "src/compute-plane-services/nvca/b.go", "feat(nvca): start the next line")
             git(root, "tag", "src/compute-plane-services/nvca/v3.13.0-rc.1")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.13.0-sm.1")
 
             self.github_release.publish_follower_release(
                 root, self.follower_metadata(), self.metadata(), dry_run=False, draft=False
@@ -2942,6 +2960,7 @@ class DecoupledVersionSourceTest(unittest.TestCase):
             self.init_multi_path_repo(root, remote=Path(tmp) / "remote.git")
             git(root, "tag", "deploy/helm/nvca-operator/v1.28.5")
             git(root, "tag", "deploy/helm/nvca-operator/v1.29.0-rc.1")
+            git(root, "tag", "deploy/helm/nvca-operator/v1.29.0-sm.1")
             self.touch(root, "src/compute-plane-services/nvca/a.go", "feat(nvca): add a thing")
             git(root, "tag", "src/compute-plane-services/nvca/v3.13.0")
 
