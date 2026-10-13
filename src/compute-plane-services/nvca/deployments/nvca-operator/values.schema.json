@@ -9,6 +9,10 @@
         "optionalResourceQuantity": {
             "type": "string",
             "pattern": "^$|^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+|[numkMGTPE]|[KMGTPE]i)?$"
+        },
+        "optionalDuration": {
+            "type": "string",
+            "pattern": "^$|^[+-]?0$|^\\+?(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+$"
         }
     },
     "properties": {
@@ -449,7 +453,12 @@
                     "maxLength": 63,
                     "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$",
                     "not": {
-                        "enum": ["default", "kube-system", "kube-public", "kube-node-lease"]
+                        "enum": [
+                            "default",
+                            "kube-system",
+                            "kube-public",
+                            "kube-node-lease"
+                        ]
                     }
                 },
                 "namespaceLabels": {
@@ -485,34 +494,42 @@
                     "properties": {
                         "credRenewInterval": {
                             "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
                             "default": ""
                         },
                         "heartbeatInterval": {
                             "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
                             "default": ""
                         },
                         "syncQueueInterval": {
                             "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
                             "default": ""
                         },
                         "syncRequestStatusInterval": {
                             "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
                             "default": ""
                         },
                         "syncAcknowledgeRequestInterval": {
                             "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
                             "default": ""
                         },
                         "periodicInstanceStatusInterval": {
                             "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
                             "default": ""
                         },
                         "icmsRequestAckInterval": {
                             "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
                             "default": ""
                         },
                         "icmsRequestAckRetryTimeout": {
                             "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
                             "default": ""
                         }
                     }
@@ -1090,8 +1107,8 @@
                 },
                 "icmsServiceURL": {
                     "type": "string",
-                    "description": "URL of the SIS/ICMS service for self-managed clusters. Required when ngcConfig.clusterSource is \"self-managed\".",
-                    "default": ""
+                    "description": "URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.",
+                    "default": "http://icms.example.invalid:8080"
                 },
                 "icmsServiceHostHeaderOverride": {
                     "type": "string",
@@ -1100,8 +1117,8 @@
                 },
                 "revalServiceURL": {
                     "type": "string",
-                    "description": "URL of the ReVal service for self-managed clusters. Required when ngcConfig.clusterSource is \"self-managed\".",
-                    "default": ""
+                    "description": "URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.",
+                    "default": "http://reval.example.invalid:8080"
                 },
                 "revalServiceHostHeaderOverride": {
                     "type": "string",
@@ -1110,8 +1127,8 @@
                 },
                 "natsURL": {
                     "type": "string",
-                    "description": "URL of the NATS service for self-managed clusters. Required when ngcConfig.clusterSource is \"self-managed\".",
-                    "default": ""
+                    "description": "URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.",
+                    "default": "nats://nats.example.invalid:4222"
                 },
                 "natsHostOverride": {
                     "type": "string",
