@@ -39,7 +39,7 @@ const containerMountinfo = `100 90 0:300 / / rw - overlay overlay rw
 `
 
 func TestPIDNSExternalMounts(t *testing.T) {
-	got, gpu := pidNSExternalMounts(parseMountinfo(containerMountinfo))
+	got, gpu := pidNSExternalMounts(parseMountinfo(containerMountinfo), nil)
 	want := []string{"/sys/fs/cgroup", "/etc/hosts", "/dev/termination-log", "/etc/hostname", "/data",
 		"/lib/firmware/nvidia/610.57.04/gsp_tu10x.bin", "/dev/nvidiactl"}
 	if !reflect.DeepEqual(got, want) {
@@ -52,6 +52,31 @@ func TestPIDNSExternalMounts(t *testing.T) {
 	}
 }
 
+// A tmpfs kubelet keeps a volume in (the service account token) comes
+// from the pod restored into; the container's own tmpfs mounts stay CRIU's.
+func TestPIDNSExternalMounts_KubeletVolume(t *testing.T) {
+	podVolume := func(mp string) bool { return mp == "/run/secrets/kubernetes.io/serviceaccount" }
+	got, _ := pidNSExternalMounts(parseMountinfo(containerMountinfo), podVolume)
+	want := []string{"/sys/fs/cgroup", "/etc/hosts", "/dev/termination-log", "/etc/hostname",
+		"/run/secrets/kubernetes.io/serviceaccount", "/data", "/lib/firmware/nvidia/610.57.04/gsp_tu10x.bin", "/dev/nvidiactl"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("external mounts: got %v, want %v", got, want)
+	}
+}
+
+func TestKubeletVolume(t *testing.T) {
+	vol, plain := t.TempDir(), t.TempDir()
+	if err := os.Symlink("..2026_10_13_00_00_00.1", filepath.Join(vol, "..data")); err != nil {
+		t.Fatal(err)
+	}
+	if !kubeletVolume(vol) {
+		t.Error("a directory with ..data is a kubelet volume")
+	}
+	if kubeletVolume(plain) {
+		t.Error("a plain directory is not")
+	}
+}
+
 // A GPU-identity mount bound out of a filesystem the container's other
 // mounts also come from (the node's /run) skips only what lies under it.
 func TestPIDNSExternalMounts_SharedFilesystem(t *testing.T) {
@@ -60,7 +85,7 @@ func TestPIDNSExternalMounts_SharedFilesystem(t *testing.T) {
 102 100 0:26 /containerd/s/resolv.conf /etc/resolv.conf rw - tmpfs tmpfs rw
 103 100 0:26 /nvidia-container-devices/GPU-7e1f1942/caps /run/caps ro - tmpfs tmpfs rw
 `
-	got, gpu := pidNSExternalMounts(parseMountinfo(mi))
+	got, gpu := pidNSExternalMounts(parseMountinfo(mi), nil)
 	if !reflect.DeepEqual(got, []string{"/etc/resolv.conf"}) {
 		t.Errorf("external mounts: got %v, want only /etc/resolv.conf", got)
 	}

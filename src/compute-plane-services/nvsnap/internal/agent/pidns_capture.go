@@ -292,8 +292,14 @@ func unescapeMountinfo(s string) string {
 // the CDI driver files) and the cgroup mount are external; restore binds
 // the placeholder's copy of each.
 //
+// A tmpfs that kubelet writes a volume into (a secret, the service
+// account token, the downward API: podVolume reports them) is external
+// too. Its contents are the pod's identity, which a restored process must
+// take from the pod it is restored into: replayed, the old pod's token is
+// refused once that pod is gone.
+//
 // The GPU-identity mounts are returned apart, as gpu: the dump skips them.
-func pidNSExternalMounts(entries []mountinfoEntry) (external, gpu []string) {
+func pidNSExternalMounts(entries []mountinfoEntry, podVolume func(mountpoint string) bool) (external, gpu []string) {
 	rootOf := map[string]bool{} // devices mounted at their own root here
 	for _, e := range entries {
 		if e.Root == "/" {
@@ -330,12 +336,20 @@ func pidNSExternalMounts(entries []mountinfoEntry) (external, gpu []string) {
 			gpu = append(gpu, e.MountPoint)
 			continue
 		}
-		if criuNativeFS[e.FSType] && rootOf[e.Dev] {
+		if criuNativeFS[e.FSType] && rootOf[e.Dev] && (podVolume == nil || !podVolume(e.MountPoint)) {
 			continue
 		}
 		external = append(external, e.MountPoint)
 	}
 	return external, gpu
+}
+
+// kubeletVolume reports a directory kubelet keeps a volume in (secret,
+// configMap, projected, downwardAPI): it publishes the files through a
+// ..data symlink it swaps on every update.
+func kubeletVolume(dir string) bool {
+	st, err := os.Lstat(filepath.Join(dir, "..data"))
+	return err == nil && st.Mode()&os.ModeSymlink != 0
 }
 
 // entriesAt returns the entries mounted at mountpoints.
@@ -542,7 +556,9 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 		return fmt.Errorf("pid-namespace dump: read mounts: %w", err)
 	}
 	entries := parseMountinfo(string(mi))
-	mounts, gpuMounts := pidNSExternalMounts(entries)
+	mounts, gpuMounts := pidNSExternalMounts(entries, func(mp string) bool {
+		return kubeletVolume(filepath.Join(procBase, strconv.Itoa(hostPID), "root", mp))
+	})
 	if mp := deletedMount(entriesAt(entries, mounts)); mp != "" {
 		// Its restore cannot rebuild it; refuse rather than record a
 		// capture that will never restore.
@@ -689,7 +705,7 @@ func installPlaceholderGPUs(procBase string, placeholderPID, nestedPID int) ([]s
 	if err != nil {
 		return nil, err
 	}
-	_, gpu := pidNSExternalMounts(parseMountinfo(string(mi)))
+	_, gpu := pidNSExternalMounts(parseMountinfo(string(mi)), nil)
 	src := filepath.Join(procBase, strconv.Itoa(placeholderPID), "root")
 	dst := filepath.Join(procBase, strconv.Itoa(nestedPID), "root")
 	var made []string
