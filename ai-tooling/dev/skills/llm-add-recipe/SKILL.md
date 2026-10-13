@@ -115,9 +115,10 @@ For GGUF, create `recipes/<recipe-id>/recipe.json`, `model.lock.json`,
 revision, tuning and startup settings. The lock records checkpoint files and
 integrity data. Profiles own the runtime image, hardware, role resources and
 workload limits. Match context and concurrency to the selected memory-mode
-tuning. Copy these files into
+tuning. Copy `recipe.json`, `model.lock.json` and `profiles.json` into
 `recipes/charts/gguf-backend/files/recipes/<recipe-id>/` and extend the bundled
-metadata equality and rendering tests for that recipe.
+metadata equality and rendering tests for that recipe. Do not copy `NOTICE`:
+`export_catalog.py` writes each model chart's `NOTICE` from the recipe notices.
 
 For either backend:
 

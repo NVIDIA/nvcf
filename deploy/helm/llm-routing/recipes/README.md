@@ -43,7 +43,7 @@ python3 export_catalog.py
 python3 export_catalog.py --check
 ```
 
-Resolve each deployment's `chart.localPath` and `guide` relative to its containing `index.json`. The index points to chart source directories and repository guides. `chart.archive` names the archive `helm package` produces. `licenseNotice` is `NOTICE` when terms are recorded and `null` otherwise; the maintained terms are in the recipe's `NOTICE`, `NOTICE.<recipe-id>`, or the shared SGLang `NOTICE` in this directory.
+Resolve each deployment's `chart.localPath` and `guide` relative to its containing `index.json`. The index points to chart source directories and repository guides. `chart.archive` names the archive `helm package` produces. `licenseNotice` is `NOTICE` when terms are recorded and `null` otherwise; the maintained terms are in the recipe's `NOTICE`, `NOTICE.<recipe-id>`, or the shared SGLang `NOTICE` in this directory. Each model chart ships a root `NOTICE` that lists its bundled recipes and carries their terms. `export_catalog.py` generates it from those files, so edit the recipe notices instead.
 
 Chart packages include the same pinned metadata. Tests check synchronization. The common index records runtime smoke tests separately from automatic Helm lifecycle validation.
 

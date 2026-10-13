@@ -601,7 +601,7 @@ For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the
    ```bash
    mkdir -p "$CHART_SOURCE/files/recipes/$RECIPE_ID" &&
    cp "recipes/$RECIPE_ID/recipe.json" "recipes/$RECIPE_ID/model.lock.json" \
-     "recipes/$RECIPE_ID/profiles.json" "recipes/$RECIPE_ID/NOTICE" \
+     "recipes/$RECIPE_ID/profiles.json" \
      "$CHART_SOURCE/files/recipes/$RECIPE_ID/"
    ```
 
@@ -626,7 +626,7 @@ For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the
      --namespace llm-stack --output yaml > "$MODEL_VALUES"
    ```
 
-   Extend the recipe's tests, including any explicit supported-ID inventories. Then regenerate the index, test, lint and render. Stop if a check fails:
+   Extend the recipe's tests, including any explicit supported-ID inventories. Then regenerate the index and chart notices, test, lint and render. Stop if a check fails:
 
    ```bash
    python3 recipes/export_catalog.py &&

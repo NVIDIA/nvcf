@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -55,6 +56,25 @@ class CommonCatalogTests(unittest.TestCase):
             self.assertRegex(release, r'^[a-z0-9][a-z0-9-]*$')
             for profile in self.recipes[identifier]['profiles']:
                 self.assertEqual(profile['deployment']['releaseName'], release)
+
+    def test_committed_chart_notices_are_current(self):
+        notices = catalog.chart_notices()
+        self.assertEqual({path.relative_to(ROOT) for path in notices},
+                         {Path("charts/sglang/NOTICE"), Path("charts/gguf-backend/NOTICE")})
+        for path, notice in notices.items():
+            self.assertEqual(path.read_text(), notice, path)
+
+    def test_recipe_without_maintained_notice_fails_export(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gguf = {"id": "example-gguf", "runtime": {"backend": "llama.cpp"}}
+            with self.assertRaisesRegex(ValueError, "Missing model notice for example-gguf"):
+                catalog.recipe_notice(root, gguf)
+            (root / "NOTICE").write_text("shared SGLang terms\n")
+            with self.assertRaisesRegex(ValueError, "Missing model notice for example-gguf"):
+                catalog.recipe_notice(root, gguf)
+            self.assertEqual(catalog.recipe_notice(root, {"id": "example", "runtime": {"backend": "sglang"}}),
+                             root / "NOTICE")
 
     def test_available_and_planned_notice_paths_share_one_bundle_file(self):
         for identifier, recipe in self.recipes.items():

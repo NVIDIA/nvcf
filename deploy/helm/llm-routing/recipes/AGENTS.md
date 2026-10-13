@@ -8,7 +8,7 @@ Read `../README.md` for the Helm installation path and `../ADVANCED.md` for conf
 
 `planned.json` records unavailable models and upstream candidates. Keep their deployment profiles empty until an executable recipe is implemented.
 
-`export_catalog.py` generates the common `index.json` from these sources. Regenerate the index after changing metadata or chart versions, then run `python3 export_catalog.py --check`. Resource metadata must reflect effective pod scheduling, serving, preparation and auxiliary workloads separately. Unified GPU memory shares the host memory pool.
+`export_catalog.py` generates the common `index.json` and each model chart's `NOTICE` from these sources. Do not edit a chart `NOTICE` by hand. Regenerate after changing metadata, notices or chart versions, then run `python3 export_catalog.py --check`. Resource metadata must reflect effective pod scheduling, serving, preparation and auxiliary workloads separately. Unified GPU memory shares the host memory pool.
 
 The automatic SGLang and GGUF charts use `recipe`, `profileName`, explicit `nodes`, `storageClassName`, `runtimeClassName` and `sharedCAConfigMap`. Keep model preparation and startup inside Kubernetes. Keep supported installation and recovery on the automatic Helm lifecycle. Retain model PVCs and mount externally supplied claims without adopting them. `reuseCaches` requires complete pinned artifacts and performs local verification before serving.
 
