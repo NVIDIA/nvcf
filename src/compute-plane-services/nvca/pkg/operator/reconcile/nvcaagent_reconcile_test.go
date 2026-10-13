@@ -5761,35 +5761,48 @@ func TestNewAgentConfigConfigMapRequestsNamespaceOverride(t *testing.T) {
 	assert.Equal(t, "team-x", cfg.Agent.RequestsNamespace)
 }
 
-// TestNewAgentConfigConfigMapRejectsNegativeHeartbeatInterval is a regression
-// test for rejected negative worker.timeouts intervals: such a value used to
-// reach getAgentConfigToMerge as a FatalError, which crash-looped the operator.
+// TestNewAgentConfigConfigMapRejectsBadHeartbeatInterval is a regression test
+// for rejected worker.timeouts intervals: a negative value, or one that
+// overflows time.Duration and passes the Helm schema pattern, used to reach
+// getAgentConfigToMerge as a FatalError, which crash-looped the operator.
 // The rejected value was never applied, so this is also not
 // invalidAgentConfigError: AgentStatus is left alone, same as any other error
 // SyncNVCFBackendHealth does not specifically recognize.
-func TestNewAgentConfigConfigMapRejectsNegativeHeartbeatInterval(t *testing.T) {
-	ctx := newTestContext()
-	clients := mockKubeClientsForIntegrationTests()
-	bc := &BackendK8sCache{
-		clients:           clients,
-		envType:           nvidiaiov1.EnvTypeStage,
-		operatorNamespace: NVCAOperatorNamespace,
+func TestNewAgentConfigConfigMapRejectsBadHeartbeatInterval(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantErr string
+	}{
+		{name: "negative", value: "-1s", wantErr: "agent.heartbeatInterval: must not be negative"},
+		{name: "overflows time.Duration", value: "999999999999999999h", wantErr: "Agent.HeartbeatInterval"},
 	}
-	_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      agentConfigMergeConfigMapName,
-			Namespace: NVCAOperatorNamespace,
-		},
-		Data: map[string]string{agentConfigFile: "agent:\n  heartbeatInterval: -1s\n"},
-	}, metav1.CreateOptions{})
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			clients := mockKubeClientsForIntegrationTests()
+			bc := &BackendK8sCache{
+				clients:           clients,
+				envType:           nvidiaiov1.EnvTypeStage,
+				operatorNamespace: NVCAOperatorNamespace,
+			}
+			_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      agentConfigMergeConfigMapName,
+					Namespace: NVCAOperatorNamespace,
+				},
+				Data: map[string]string{agentConfigFile: "agent:\n  heartbeatInterval: " + tt.value + "\n"},
+			}, metav1.CreateOptions{})
+			require.NoError(t, err)
 
-	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
-	_, err = bc.newAgentConfigConfigMap(ctx, nb)
-	require.Error(t, err)
-	assert.False(t, nvcaoperatorerrors.IsFatal(err), "must not be fatal, or the operator crash-loops")
-	assert.False(t, isInvalidAgentConfigError(err), "must not touch AgentStatus; the running agent is unaffected")
-	assert.ErrorContains(t, err, "agent.heartbeatInterval: must not be negative")
+			nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
+			_, err = bc.newAgentConfigConfigMap(ctx, nb)
+			require.Error(t, err)
+			assert.False(t, nvcaoperatorerrors.IsFatal(err), "must not be fatal, or the operator crash-loops")
+			assert.False(t, isInvalidAgentConfigError(err), "must not touch AgentStatus; the running agent is unaffected")
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
 }
 
 func TestOTelCollectorEnvUsesEffectiveRequestsNamespace(t *testing.T) {

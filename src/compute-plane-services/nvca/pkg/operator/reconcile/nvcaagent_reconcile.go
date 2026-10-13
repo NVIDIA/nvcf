@@ -1651,7 +1651,9 @@ func isResourceQuantityDecodeError(err error) bool {
 
 // isAgentTimeConfigError reports whether DecodeConfig's cfg.Validate() stage
 // failed specifically on AgentTimeConfig.Validate()'s negative-duration check,
-// identified by its typed error.
+// or while decoding an agent timeout interval that time.ParseDuration rejects
+// (for example a value that overflows time.Duration). Both are identified by
+// typed errors.
 // A negative worker.timeouts interval is a recoverable agent-config-merge
 // content problem, like a malformed resource.Quantity, not evidence of a
 // corrupt ConfigMap or an operator bug. This intentionally does not match
@@ -1660,8 +1662,9 @@ func isResourceQuantityDecodeError(err error) bool {
 // structural misconfigurations that TestGetAgentConfigToMerge_Rejects*AsFatal
 // requires stay fatal.
 func isAgentTimeConfigError(err error) bool {
-	var target *nvcaconfig.NegativeDurationError
-	return errors.As(err, &target)
+	var negative *nvcaconfig.NegativeDurationError
+	var decode *nvcaconfig.AgentTimeDecodeError
+	return errors.As(err, &negative) || errors.As(err, &decode)
 }
 
 func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
