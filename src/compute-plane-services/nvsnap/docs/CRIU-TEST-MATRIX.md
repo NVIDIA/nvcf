@@ -74,7 +74,8 @@ with the cold deploy of the same case.
 | `sts-tp2` | StatefulSet | 2 | `exec`, TP=2 over the network | group capture, address remap of the ranks' connections | restored | Verified: cold 150 s, restored 39 s |
 | `lws-tp2` | LeaderWorkerSet | 2 | `exec`, TP=2 | LWS grouping and rank | restored | New (needs the LWS CRD) |
 | `deploy-sglang` | Deployment | 1 | SGLang, pid 1 | a second engine | restored | New |
-| `dynamo-grove-tp2` | DynamoGraphDeployment | 2 + frontend | Dynamo vLLM worker over two nodes | Grove PodCliques, the shape production Dynamo functions run | restored | New (needs the Dynamo operator) |
+| `dynamo-1gpu` | DynamoGraphDeployment | 1 + frontend | Dynamo vLLM worker on one GPU, snapshot point | capture at the snapshot point, registration under the restored pod's identity | restored | New (needs the Dynamo operator) |
+| `dynamo-grove-tp2` | DynamoGraphDeployment | 2 + frontend | Dynamo vLLM worker over two nodes, snapshot point | Grove PodCliques, the shape production Dynamo functions run | restored | Captured at the snapshot point; restore blocked on the allocation issue below |
 | `deploy-noshell` | Deployment | 1 | `exec`, image with no shell | every injected step (model wait, cache seed, prewarm, placeholder) runs without `/bin/sh` | restored | New (needs a GPU image without a shell) |
 
 Real models, deployed as their own functions:
@@ -123,11 +124,26 @@ Every case mounts a memory-backed `/dev/shm` (`shmSize`): NCCL keeps its
 buffers there, and the container default of 64 MiB does not fit two ranks.
 Without it rank 0 fails at startup and the other ranks wait for it forever.
 
+## Dynamo workers
+
+A Dynamo worker registers with its instance's discovery under its pod's
+identity, which it keeps in memory. Captured after that, it cannot serve in
+another instance. A case sets `dynamo.snapshotPoint`, which declares
+`DYN_SNAPSHOT_CONTROL_DIR`: the worker pauses its loaded engine before it
+registers, the agent captures it there, then releases it with the identity
+of the pod it runs in, on a cold start and after a restore.
+
+Only rank 0 of a multi-pod instance takes the point. The webhook empties the
+variable on the other ranks, which Dynamo refuses it on, and gives them the
+NCCL settings rank 0's engine sets for itself.
+
 ## Not covered
 
 - Ray-based multi-node engines (`ray start --address`): not recognized as
   multi-node, so a Ray worker pod could be captured alone.
-- Grove instances (Dynamo operator): grouping is implemented and unit-tested;
-  `dynamo-grove-tp2` is the case that runs it, not yet run on a cluster.
+- An engine that creates GPU memory after a gpushare capture: a new
+  allocation can be refused ("operation not supported"). vLLM's sleep mode,
+  which the Dynamo snapshot point uses, does so on wake. Under investigation
+  in the gpushare library.
 - Pods with an IMEX channel restore only when the channel is the same on the
   new pods.
