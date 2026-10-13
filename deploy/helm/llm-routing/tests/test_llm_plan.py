@@ -125,6 +125,10 @@ class PlanTests(unittest.TestCase):
                 self.assertIsNone(report['deployment'])
 
     def test_helm_inventory_reads_model_values_and_detects_suspended_alias(self):
+        self.storage.return_value.update(
+            claims=[retained_claim('alias-cache-0', 'alias', 'available-0')],
+            caches=[{'namespace': 'llm-stack', 'claim': 'alias-cache-0', 'nodes': ['available-0'],
+                     'bytesUsed': None, 'usageStatus': 'not-mounted'}])
         def run(command):
             self.assertEqual(command[:5], ['helm', '--kube-context', 'test-cluster', '--namespace', 'llm-stack'])
             if command[5] == 'list':
@@ -132,12 +136,20 @@ class PlanTests(unittest.TestCase):
                 return json.dumps([{'name': 'alias', 'chart': 'pylon-sglang-recipe-0.2.0', 'status': 'deployed'},
                                    {'name': 'llm-stack', 'chart': 'llm-shared-stack-0.1.0', 'status': 'deployed'}])
             self.assertEqual(command[5:], ['get', 'values', 'alias', '--all', '--output', 'json'])
-            return json.dumps({'recipe': 'qwen3.8-27b', 'suspended': True, 'nodes': ['available-0']})
+            return json.dumps({'recipe': 'qwen3.8-27b', 'profileName': 'spark-fp8',
+                               'suspended': True, 'nodes': ['available-0'], 'unrelated': 'do-not-export'})
         with patch.object(llm, 'model_releases', self.original_model_releases), patch.object(llm, 'run', side_effect=run) as calls:
             report = self.plan(snapshot(2), '--release', 'duplicate')
         self.assertEqual(report['status'], 'existing')
         self.assertEqual(report['existingDeployments'][0]['release'], 'alias')
         self.assertEqual(calls.call_count, 2)
+        self.assertIn('EXISTING DEPLOYMENT: alias', self.output.getvalue())
+        cache = report['storage']['caches'][0]
+        self.assertEqual((cache['release'], cache['recipe'], cache['profile']),
+                         ('alias', 'qwen3.8-27b', 'spark-fp8'))
+        self.assertEqual(cache['usageStatus'], 'not-mounted')
+        self.assertIsNone(cache['bytesUsed'])
+        self.assertNotIn('do-not-export', json.dumps(report))
 
     def test_helm_release_name_used_by_another_recipe_does_not_generate_install(self):
         responses = [json.dumps([{'name': 'qwen-fp8', 'chart': 'pylon-sglang-recipe-0.2.0', 'status': 'deployed'}]),
@@ -576,6 +588,36 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(parsed['storage']['caches'][0]['bytesUsed'], 123456)
         self.assertIsNone(parsed['storage']['caches'][1]['bytesUsed'])
         self.assertEqual(parsed['storage']['caches'][1]['usageStatus'], 'not-mounted')
+        self.assertIsNone(parsed['storage']['caches'][1]['recipe'])
+        self.assertIsNone(parsed['storage']['caches'][1]['profile'])
+
+    def test_cache_table_follows_gpu_node_order_with_unknown_nodes_last(self):
+        report = self.plan(snapshot(2))
+        report['nodes'].reverse()
+        caches = [
+            ('a-cache', ['available-0'], 'recipe-a'),
+            ('unknown-node', [], None),
+            ('z-cache', ['available-1'], 'recipe-z'),
+            ('other-node', ['other-node'], 'recipe-a'),
+            ('b-cache', ['available-1'], 'recipe-a'),
+            ('a-second-cache', ['available-1'], 'recipe-a'),
+            ('shared-cache', ['available-0', 'available-1'], 'recipe-a')]
+        report['storage']['caches'] = [
+            {'claim': name, 'namespace': 'llm-stack', 'nodes': nodes, 'recipe': recipe,
+             'profile': 'spark-profile' if recipe else None, 'bytesUsed': None, 'usageStatus': 'not-mounted'}
+            for name, nodes, recipe in caches]
+        before = copy.deepcopy(report)
+        with patch.object(llm, 'print_table', wraps=llm.print_table) as table:
+            llm.print_capacity_plan(report)
+        gpu, cache = table.call_args_list
+        self.assertEqual([row[0] for row in gpu.args[1]], ['available-1', 'available-0'])
+        self.assertEqual(cache.args[0], ['NODE', 'RECIPE', 'PROFILE', 'CACHE', 'NAMESPACE', 'DISK USED'])
+        self.assertEqual([row[3] for row in cache.args[1]],
+                         ['a-second-cache', 'b-cache', 'z-cache', 'shared-cache', 'a-cache', 'other-node', 'unknown-node'])
+        self.assertEqual(cache.args[1][3][0], 'available-1, available-0')
+        self.assertEqual(cache.args[1][-1][:3], ['Unknown', 'Unknown', 'Unknown'])
+        self.assertTrue(all(row[-1] == 'Not mounted' for row in cache.args[1]))
+        self.assertEqual(report, before)
 
     def test_storage_inventory_failure_is_not_presented_as_no_caches(self):
         with patch.object(model_storage, 'collect', return_value={'caches': [], 'warnings': ['Forbidden']}):
@@ -596,6 +638,105 @@ class PlanTests(unittest.TestCase):
             report = llm.main(['--context', context, 'plan', '--model', 'qwen3.8-27b'])
         command = shlex.split(report['deployment']['command'])
         self.assertEqual(command[command.index('--kube-context')+1], context)
+
+
+class CacheRecipeMetadataTests(unittest.TestCase):
+    def setUp(self):
+        self.catalog = json.loads((HERE / 'recipes/index.json').read_text())
+
+    def storage(self, owners):
+        claims = [dict(retained_claim(name, release), namespace=namespace, releaseNamespace=owner_namespace)
+                  for name, namespace, release, owner_namespace in owners]
+        return {'claims': claims, 'caches': [
+            {'namespace': claim['namespace'], 'claim': claim['claim'], 'nodes': claim['nodes'],
+             'bytesUsed': None, 'usageStatus': 'not-mounted'} for claim in claims], 'warnings': []}
+
+    def test_owner_values_are_scoped_by_namespace_and_read_once_per_release(self):
+        storage = self.storage([('first-cache', 'one', 'custom', 'one'),
+                                ('second-cache', 'one', 'custom', 'one'),
+                                ('first-cache', 'two', 'custom', 'two')])
+        def run(command):
+            namespace = command[4]
+            self.assertEqual(command, ['helm', '--kube-context', 'test-cluster', '--namespace', namespace,
+                                       'get', 'values', 'custom', '--all', '--output', 'json'])
+            return json.dumps({'recipe': 'recipe-' + namespace, 'profileName': 'profile-' + namespace})
+        with patch.object(llm, 'run', side_effect=run) as calls:
+            llm.cache_recipe_metadata('test-cluster', storage, {}, self.catalog)
+        self.assertEqual(calls.call_count, 2)
+        self.assertEqual([(row['recipe'], row['profile']) for row in storage['caches']],
+                         [('recipe-one', 'profile-one'), ('recipe-one', 'profile-one'), ('recipe-two', 'profile-two')])
+
+    def test_missing_or_unavailable_owner_does_not_guess_from_claim_name(self):
+        storage = self.storage([('qwen-fp8-cache-0', 'one', '', None),
+                                ('qwen-fp8-cache-1', 'one', 'qwen-fp8', None),
+                                ('qwen-fp8-cache-2', 'one', 'qwen-fp8', 'other'),
+                                ('qwen-fp8-cache-3', 'one', 'deleted-release', 'one'),
+                                ('qwen-fp8-cache-4', 'one', 'deleted-release', 'one')])
+        with patch.object(llm, 'run', side_effect=RuntimeError('release not found')) as calls:
+            llm.cache_recipe_metadata('test-cluster', storage, {}, self.catalog)
+        self.assertEqual(calls.call_count, 1)
+        self.assertEqual(storage['warnings'], [])
+        for row in storage['caches']:
+            self.assertIsNone(row['recipe'])
+            self.assertIsNone(row['profile'])
+            self.assertIsNone(row['bytesUsed'])
+            self.assertEqual(row['usageStatus'], 'not-mounted')
+        self.assertEqual(storage['caches'][-1]['metadataError'], 'release not found')
+
+    def test_missing_profile_and_invalid_values_remain_unknown(self):
+        for values in ({'recipe': 'qwen3.8-27b'}, {'recipe': 'qwen3.8-27b', 'profileName': ''},
+                       {'recipe': 'qwen3.8-27b', 'profileName': ['spark-fp8']}, []):
+            with self.subTest(values=values):
+                storage = self.storage([('custom-cache', 'one', 'custom', 'one')])
+                with patch.object(llm, 'run', return_value=json.dumps(values)):
+                    llm.cache_recipe_metadata('test-cluster', storage, {}, self.catalog)
+                self.assertIsNone(storage['caches'][0]['profile'])
+                self.assertEqual(storage['caches'][0]['recipe'], 'qwen3.8-27b' if isinstance(values, dict) else None)
+
+    def test_implicit_profile_uses_owned_runtime_config_and_actual_claims(self):
+        for recipe, suffix, config_key, identity, claims_key in (
+                ('qwen3.8-27b-nvfp4', 'runtime', 'config.json', {'model': {'id': 'qwen3.8-27b-nvfp4'}}, 'claimNames'),
+                ('glm-5.3', 'automatic', 'automatic.json', {'recipe': {'name': 'GLM-5.3'}}, 'claims')):
+            with self.subTest(recipe=recipe):
+                storage = self.storage([('first-cache', 'one', 'custom', 'one'),
+                                        ('second-cache', 'one', 'custom', 'one'),
+                                        ('old-cache', 'one', 'custom', 'one')])
+                config = {**identity, 'profile': {'id': 'deployed-profile'}, 'unused': 'do-not-export',
+                          claims_key: ['first-cache', 'second-cache']}
+                resource = {'metadata': {'annotations': {'meta.helm.sh/release-name': 'custom',
+                                                        'meta.helm.sh/release-namespace': 'one'}},
+                            'data': {config_key: json.dumps(config)}}
+                with patch.object(llm, 'run', side_effect=[json.dumps({'recipe': recipe, 'profileName': ''}),
+                                                          json.dumps(resource)]) as calls:
+                    llm.cache_recipe_metadata('test-cluster', storage, {}, self.catalog)
+                self.assertEqual(calls.call_count, 2)
+                self.assertEqual(calls.call_args.args[0], ['kubectl', '--context', 'test-cluster', '--namespace', 'one',
+                                                          'get', 'configmap', 'custom-' + suffix, '-o', 'json'])
+                self.assertEqual([row['profile'] for row in storage['caches']], ['deployed-profile', 'deployed-profile', None])
+                self.assertNotIn('do-not-export', json.dumps(storage))
+
+    def test_implicit_profile_rejects_foreign_or_mismatched_runtime_config(self):
+        for change in ('owner', 'namespace', 'recipe', 'invalid-json', 'invalid-shape'):
+            with self.subTest(change=change):
+                storage = self.storage([('custom-cache', 'one', 'custom', 'one')])
+                annotations = {'meta.helm.sh/release-name': 'custom', 'meta.helm.sh/release-namespace': 'one'}
+                config = {'model': {'id': 'qwen3.8-27b-nvfp4'}, 'profile': {'id': 'spark-nvfp4'},
+                          'claimNames': ['custom-cache']}
+                if change == 'owner':
+                    annotations['meta.helm.sh/release-name'] = 'other'
+                elif change == 'namespace':
+                    annotations['meta.helm.sh/release-namespace'] = 'other'
+                elif change == 'recipe':
+                    config['model']['id'] = 'other'
+                elif change == 'invalid-shape':
+                    config['profile'] = None
+                resource = {'metadata': {'annotations': annotations},
+                            'data': {'config.json': 'invalid' if change == 'invalid-json' else json.dumps(config)}}
+                with patch.object(llm, 'run', side_effect=[json.dumps({'recipe': 'qwen3.8-27b-nvfp4'}),
+                                                          json.dumps(resource)]):
+                    llm.cache_recipe_metadata('test-cluster', storage, {}, self.catalog)
+                self.assertIsNone(storage['caches'][0]['profile'])
+                self.assertTrue(storage['caches'][0]['metadataError'])
 
 
 if __name__ == '__main__':
