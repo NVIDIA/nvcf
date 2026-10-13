@@ -14,7 +14,7 @@
 // limitations under the License.
 
 use super::registration::{RegistrationClusterGeneration, RegistrationGeneration};
-use super::reservations::{PendingClusterReservation, RoutingReservation};
+use super::reservations::{PendingClusterReservation, ReservationTtl, RoutingReservation};
 use super::*;
 use crate::load_balancer::LoadBalancerTargetState;
 use parking_lot::Mutex;
@@ -154,7 +154,7 @@ impl SelectedRoutedCluster {
             registration,
             input_tokens,
             priority,
-            |_rtt| ttl,
+            |_rtt| ReservationTtl::fixed(ttl),
             metrics,
             target,
         )
@@ -167,7 +167,7 @@ impl SelectedRoutedCluster {
         registration: &Arc<RegistrationGeneration>,
         input_tokens: u64,
         priority: u32,
-        ttl_for_rtt: impl FnOnce(Duration) -> Duration,
+        ttl_for_rtt: impl FnOnce(Duration) -> ReservationTtl,
         metrics: Arc<StargateMetrics>,
         target: &RoutingTargetKey,
     ) -> Option<RoutingReservation> {

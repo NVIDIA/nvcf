@@ -25,7 +25,7 @@ use stargate_protocol::tunnel_contract::{
 };
 use tracing::{Instrument, Span, field, info, warn};
 
-use crate::routing_state::{RoutedInferenceServerSnapshot, RoutingReservation};
+use crate::routing_state::{ReservationTtl, RoutedInferenceServerSnapshot, RoutingReservation};
 
 use super::ProxyAppState;
 use super::retry::{
@@ -127,12 +127,13 @@ impl ProxyRequestRun<'_> {
                 &chosen.registration,
                 self.request.request_inputs.input_tokens,
                 self.request.request_inputs.priority,
-                |rtt| {
-                    clamp_routing_reservation_ttl(
+                |rtt| ReservationTtl {
+                    soft: clamp_routing_reservation_ttl(
                         rtt,
                         self.app.routing_reservation_ttl_min,
                         self.app.routing_reservation_ttl_max,
-                    )
+                    ),
+                    hard: self.app.routing_reservation_ttl_max,
                 },
                 self.app.metrics.clone(),
                 &crate::routing_state::RoutingTargetKey::new(

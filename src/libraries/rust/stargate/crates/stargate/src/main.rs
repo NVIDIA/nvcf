@@ -161,12 +161,16 @@ struct Args {
         value_name = "MS"
     )]
     registration_update_max_idle_timeout_ms: u64,
-    /// Minimum backend RTT-based routing reservation lifetime. The default
+    /// Minimum soft TTL for a routing reservation. The soft TTL is the
+    /// selected backend's RTT clamped to the min and max; after it, the
+    /// backend's next registration update ends the reservation. The default
     /// matches Pylon's default stats update coalescing interval, so a request
     /// stays counted until the first change-driven update that can include it.
     #[arg(long, default_value_t = 10, value_name = "MS")]
     routing_reservation_ttl_min_ms: u64,
-    /// Maximum backend RTT-based routing reservation lifetime.
+    /// Maximum soft TTL and hard lifetime for a routing reservation. A
+    /// reservation ends this long after dispatch even if its backend has sent
+    /// no registration update, which bounds the load held for a silent backend.
     #[arg(long, default_value_t = 1000, value_name = "MS")]
     routing_reservation_ttl_max_ms: u64,
     /// Grace period for shutdown tasks after Stargate starts draining.

@@ -17,7 +17,9 @@ use super::registration::{
     RegistrationClusterGeneration, test_registration_generation,
     test_registration_generation_in_cluster,
 };
-use super::reservations::{UNEXPIRING_TEST_RESERVATION_TTL, update_reserved_priority_queue_time};
+use super::reservations::{
+    ReservationTtl, UNEXPIRING_TEST_RESERVATION_TTL, update_reserved_priority_queue_time,
+};
 use super::snapshots::{ClusterBackendUpsert, RoutedClusterState, RoutingTargetGeneration};
 use super::*;
 use crate::load_balancer::{
@@ -895,7 +897,7 @@ async fn reservation_survives_registration_update_until_expiry() {
 }
 
 #[tokio::test]
-async fn reservation_is_in_snapshot_before_expiry_and_pruned_at_expiry() {
+async fn reservation_is_in_snapshot_before_hard_deadline_and_pruned_at_it() {
     let scenario = RegistrationScenario::new(Some("rk-res-expiry"));
     let running = scenario.start("inst-res-expiry", 8888);
     let update = scenario.update(
@@ -909,9 +911,9 @@ async fn reservation_is_in_snapshot_before_expiry_and_pruned_at_expiry() {
     let selected_cluster = scenario.selected_cluster("model-res-expiry").await;
     let target = scenario.target("model-res-expiry");
     let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
-    // The registration update below prunes with the real clock, so the TTL must
-    // outlast any scheduler stall. The boundary checks use explicit instants
-    // relative to expires_at instead.
+    // The registration update below is received on the real clock, so the
+    // soft expiry must outlast any scheduler stall. A fixed TTL puts the hard
+    // deadline at the same instant, which the boundary checks read directly.
     let reservation = selected_cluster
         .reserve_backend_with_ttl(
             &running.generation(),
@@ -938,7 +940,7 @@ async fn reservation_is_in_snapshot_before_expiry_and_pruned_at_expiry() {
             .stats
             .queue_size,
         1,
-        "reservation should count just before its expiry boundary"
+        "reservation should count just before its hard deadline"
     );
     assert_eq!(
         selected_cluster
@@ -947,7 +949,7 @@ async fn reservation_is_in_snapshot_before_expiry_and_pruned_at_expiry() {
             .stats
             .queue_size,
         0,
-        "reservation should not count at its expiry boundary"
+        "reservation should not count at its hard deadline"
     );
     assert_eq!(selected_cluster.pending_reservation_count(), 0);
     assert_eq!(routing_reservations_active(&metrics, &target), 0);
@@ -955,43 +957,256 @@ async fn reservation_is_in_snapshot_before_expiry_and_pruned_at_expiry() {
     reservation.release();
 }
 
-#[tokio::test]
-async fn snapshot_read_prunes_ten_thousand_idle_expired_reservations() {
-    let scenario = RegistrationScenario::new(Some("rk-res-prune"));
-    let running = scenario.start("inst-res-prune", 8888);
-    let update = scenario.update(
-        &running,
-        "model-res-prune",
-        Active,
-        priority_stats(100.0, [(4, 5)]),
-    );
-    scenario.publish_connected(&running, &update).await;
+const TIMELINE_TTL_MAX: Duration = Duration::from_millis(1000);
 
-    let selected_cluster = scenario.selected_cluster("model-res-prune").await;
-    let target = scenario.target("model-res-prune");
+/// Soft TTL for a backend RTT under the default bounds, with the hard
+/// deadline at the configured maximum.
+fn timeline_ttl(soft_ms: u64) -> ReservationTtl {
+    ReservationTtl {
+        soft: Duration::from_millis(soft_ms),
+        hard: TIMELINE_TTL_MAX,
+    }
+}
+
+/// Builds one routed cluster whose backends share a cluster generation. Each
+/// backend reports an empty queue, so `queue_size` counts live reservations.
+fn timeline_cluster(
+    cluster_id: &str,
+    backend_ids: &[&str],
+) -> (Arc<RoutedClusterState>, Vec<RoutedInferenceServerSnapshot>) {
+    let first = backend!(cluster_id, backend_ids[0], 1.0, 100.0, 60);
+    let cluster_generation = first.registration.cluster_generation.clone();
+    let mut backends = vec![first];
+    for backend_id in &backend_ids[1..] {
+        backends.push(backend!(
+            cluster_generation.clone() => cluster_id, backend_id, 1.0, 100.0, 60
+        ));
+    }
+    let cluster = Arc::new(RoutedClusterState::new(cluster_generation));
+    for backend in &backends {
+        cluster.upsert_backend(Arc::new(backend.clone()));
+    }
+    (cluster, backends)
+}
+
+/// Applies a registration update from `backend` received at `updated_at`.
+fn report_at(
+    cluster: &RoutedClusterState,
+    backend: &RoutedInferenceServerSnapshot,
+    updated_at: Instant,
+    queue_size: u64,
+) {
+    let mut update = backend.clone();
+    update.stats.queue_size = queue_size;
+    update.snapshot_updated_at = updated_at;
+    cluster.upsert_backend(Arc::new(update));
+}
+
+fn queued_at(cluster: &RoutedClusterState, now: Instant) -> u64 {
+    cluster
+        .routing_snapshot_at(now)
+        .expect("cluster should remain routable")
+        .stats
+        .queue_size
+}
+
+#[test]
+fn reservation_counts_past_soft_expiry_until_its_backend_reports() {
+    let (cluster, backends) = timeline_cluster("cluster-soft-expiry", &["backend-a"]);
+    let target = make_target(Some("rk-soft-expiry"), "model-soft-expiry");
     let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
-    let mut last_expiry = Instant::now();
-    for _ in 0..10_000 {
-        let reservation = selected_cluster
-            .reserve_backend_with_ttl(
-                &running.generation(),
-                1,
-                0,
-                Duration::from_millis(1),
+    let dispatched_at = Instant::now();
+    let at = |millis| dispatched_at + Duration::from_millis(millis);
+    let reservation = cluster
+        .reserve_backend_at(
+            &backends[0].registration,
+            dispatched_at,
+            timeline_ttl(60),
+            metrics.clone(),
+            &target,
+        )
+        .expect("stored backend should accept reservation");
+
+    assert_eq!(queued_at(&cluster, at(59)), 1);
+    assert_eq!(
+        queued_at(&cluster, at(61)),
+        1,
+        "soft expiry alone must not end the reservation"
+    );
+
+    report_at(&cluster, &backends[0], at(1), 3);
+    assert_eq!(
+        queued_at(&cluster, at(61)),
+        4,
+        "an update before the soft expiry keeps the reservation on top of its stats"
+    );
+    assert_eq!(routing_reservations_active(&metrics, &target), 1);
+
+    report_at(&cluster, &backends[0], at(60), 3);
+    assert_eq!(
+        queued_at(&cluster, at(61)),
+        3,
+        "an update at the soft expiry replaces the reservation with reported stats"
+    );
+    assert_eq!(cluster.pending_reservation_count(), 0);
+    assert_eq!(routing_reservations_active(&metrics, &target), 0);
+
+    reservation.release();
+    assert_eq!(routing_reservations_active(&metrics, &target), 0);
+}
+
+#[test]
+fn reservation_without_backend_update_ends_at_hard_deadline() {
+    let (cluster, backends) = timeline_cluster("cluster-hard-deadline", &["backend-a"]);
+    let target = make_target(Some("rk-hard-deadline"), "model-hard-deadline");
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    let dispatched_at = Instant::now();
+    let reservation = cluster
+        .reserve_backend_at(
+            &backends[0].registration,
+            dispatched_at,
+            timeline_ttl(60),
+            metrics.clone(),
+            &target,
+        )
+        .expect("stored backend should accept reservation");
+
+    assert_eq!(
+        queued_at(
+            &cluster,
+            dispatched_at + TIMELINE_TTL_MAX - Duration::from_millis(1)
+        ),
+        1
+    );
+    assert_eq!(queued_at(&cluster, dispatched_at + TIMELINE_TTL_MAX), 0);
+    assert_eq!(cluster.pending_reservation_count(), 0);
+    assert_eq!(routing_reservations_active(&metrics, &target), 0);
+
+    drop(reservation);
+    assert_eq!(routing_reservations_active(&metrics, &target), 0);
+}
+
+#[test]
+fn silent_backend_keeps_reservations_until_hard_deadline() {
+    // A hung backend keeps its connection but stops sending updates. Its
+    // reservations must keep steering traffic away until the hard deadline
+    // even while another backend in the cluster keeps reporting.
+    let (cluster, backends) = timeline_cluster("cluster-hung", &["backend-a", "backend-b"]);
+    let (reporting, silent) = (&backends[0], &backends[1]);
+    let target = make_target(Some("rk-hung"), "model-hung");
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    let dispatched_at = Instant::now();
+    let reservations: Vec<_> = (0..20)
+        .map(|_| {
+            cluster
+                .reserve_backend_at(
+                    &silent.registration,
+                    dispatched_at,
+                    timeline_ttl(1),
+                    metrics.clone(),
+                    &target,
+                )
+                .expect("stored backend should accept reservation")
+        })
+        .collect();
+    let before_deadline = dispatched_at + TIMELINE_TTL_MAX - Duration::from_millis(1);
+
+    report_at(
+        &cluster,
+        reporting,
+        dispatched_at + Duration::from_millis(2),
+        0,
+    );
+    assert_eq!(
+        queued_at(&cluster, dispatched_at + Duration::from_millis(2)),
+        20
+    );
+    report_at(&cluster, reporting, before_deadline, 0);
+    assert_eq!(queued_at(&cluster, before_deadline), 20);
+    assert_eq!(routing_reservations_active(&metrics, &target), 20);
+
+    assert_eq!(queued_at(&cluster, dispatched_at + TIMELINE_TTL_MAX), 0);
+    assert_eq!(routing_reservations_active(&metrics, &target), 0);
+    for reservation in reservations {
+        reservation.release();
+    }
+    assert_eq!(routing_reservations_active(&metrics, &target), 0);
+}
+
+#[test]
+fn backend_update_does_not_settle_another_backends_reservation() {
+    let (cluster, backends) = timeline_cluster("cluster-per-backend", &["backend-a", "backend-b"]);
+    let (backend_a, backend_b) = (&backends[0], &backends[1]);
+    let target = make_target(Some("rk-per-backend"), "model-per-backend");
+    let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+    let dispatched_at = Instant::now();
+    let at = |millis| dispatched_at + Duration::from_millis(millis);
+    let reserve = |backend: &RoutedInferenceServerSnapshot| {
+        cluster
+            .reserve_backend_at(
+                &backend.registration,
+                dispatched_at,
+                timeline_ttl(60),
                 metrics.clone(),
                 &target,
             )
-            .expect("active backend should accept reservation");
-        last_expiry = last_expiry.max(reservation.0.expires_at());
-    }
+            .expect("stored backend should accept reservation")
+    };
+    let _on_a = reserve(backend_a);
+    let _on_b = reserve(backend_b);
 
-    assert_eq!(selected_cluster.pending_reservation_count(), 10_000);
-    assert_eq!(routing_reservations_active(&metrics, &target), 10_000);
-    selected_cluster
-        .routing_snapshot_at(last_expiry + Duration::from_millis(1))
-        .expect("cluster should remain routable");
-    assert_eq!(selected_cluster.pending_reservation_count(), 0);
+    report_at(&cluster, backend_a, at(100), 0);
+    assert_eq!(
+        queued_at(&cluster, at(100)),
+        1,
+        "backend A's update settles only backend A's reservation"
+    );
+    assert_eq!(routing_reservations_active(&metrics, &target), 1);
+
+    report_at(&cluster, backend_b, at(100), 0);
+    assert_eq!(queued_at(&cluster, at(100)), 0);
     assert_eq!(routing_reservations_active(&metrics, &target), 0);
+}
+
+#[test]
+fn backend_update_or_hard_deadline_prunes_ten_thousand_idle_reservations() {
+    for prune_by_update in [true, false] {
+        let (cluster, backends) = timeline_cluster("cluster-res-prune", &["backend-a"]);
+        let target = make_target(Some("rk-res-prune"), "model-res-prune");
+        let metrics = crate::metrics::StargateMetrics::new().expect("metrics should initialize");
+        let dispatched_at = Instant::now();
+        for _ in 0..10_000 {
+            let _reservation = cluster
+                .reserve_backend_at(
+                    &backends[0].registration,
+                    dispatched_at,
+                    timeline_ttl(1),
+                    metrics.clone(),
+                    &target,
+                )
+                .expect("stored backend should accept reservation");
+        }
+
+        assert_eq!(cluster.pending_reservation_count(), 10_000);
+        assert_eq!(routing_reservations_active(&metrics, &target), 10_000);
+        assert_eq!(
+            queued_at(&cluster, dispatched_at + Duration::from_millis(2)),
+            10_000,
+            "a read after the soft expiry must not prune without a backend update"
+        );
+        if prune_by_update {
+            report_at(
+                &cluster,
+                &backends[0],
+                dispatched_at + Duration::from_millis(1),
+                0,
+            );
+        } else {
+            queued_at(&cluster, dispatched_at + TIMELINE_TTL_MAX);
+        }
+        assert_eq!(cluster.pending_reservation_count(), 0);
+        assert_eq!(routing_reservations_active(&metrics, &target), 0);
+    }
 }
 
 #[tokio::test]

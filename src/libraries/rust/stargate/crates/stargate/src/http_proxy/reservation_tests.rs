@@ -229,6 +229,12 @@ async fn register_backend(
             reverse_tunnel: false,
         })
         .expect("registration should begin");
+    report_idle(app, &running, rtt).await;
+    running
+}
+
+/// Applies a registration update reporting an empty queue.
+async fn report_idle(app: &ProxyAppState, running: &RunningRegistration, rtt: Duration) {
     let update = InferenceServerRegistration {
         models: HashMap::from([(
             MODEL.to_string(),
@@ -244,9 +250,8 @@ async fn register_backend(
         ..Default::default()
     };
     app.state
-        .apply_registration_update(&running, &update, false, Some(rtt))
+        .apply_registration_update(running, &update, false, Some(rtt))
         .await;
-    running
 }
 
 async fn send_request(app: &ProxyAppState, request_id: &str) -> Result<HeaderMap, StatusCode> {
@@ -370,9 +375,10 @@ async fn unexpired_reservation_raises_expected_queue_header_for_later_requests()
 
 #[tokio::test]
 async fn expired_reservation_is_excluded_from_expected_queue_header() {
-    // A zero TTL sets the expiry to the dispatch instant. `Instant` is
-    // monotonic, so every later snapshot read is at or past the expiry
-    // boundary without sleeping or controlling the clock.
+    // A zero maximum TTL sets the hard deadline to the dispatch instant.
+    // `Instant` is monotonic, so every later snapshot read is at or past the
+    // deadline without a registration update, sleeping, or controlling the
+    // clock.
     let app = proxy_app(Duration::ZERO, Duration::ZERO);
     let tunnel = MockTunnel::start(OK_REPLY);
     let running = register_backend(&app, "inst-a", &tunnel, Duration::from_millis(10)).await;
@@ -395,6 +401,40 @@ async fn expired_reservation_is_excluded_from_expected_queue_header() {
             .get_sample_count(),
         2,
         "both dispatches must have reserved before expiring"
+    );
+
+    app.state.end_registration(running).await;
+}
+
+#[tokio::test]
+async fn soft_expired_reservation_counts_until_the_backend_reports() {
+    // A zero RTT and minimum put the soft expiry at the dispatch instant, so
+    // only the missing registration update keeps the reservation counted.
+    let app = proxy_app(Duration::ZERO, UNEXPIRING_TTL);
+    let tunnel = MockTunnel::start(OK_REPLY);
+    let running = register_backend(&app, "inst-a", &tunnel, Duration::ZERO).await;
+
+    for request_id in ["req-silent-1", "req-silent-2"] {
+        send_request(&app, request_id)
+            .await
+            .expect("request should be proxied");
+    }
+
+    assert_eq!(
+        tunnel.expected_queue_ms_headers(),
+        [
+            Some(BASE_QUEUE_MS),
+            Some(BASE_QUEUE_MS + RESERVATION_QUEUE_MS)
+        ],
+        "a soft-expired reservation must count until its backend reports"
+    );
+    assert_eq!(counted_reservations(&app).await, 2);
+
+    report_idle(&app, &running, Duration::ZERO).await;
+    assert_eq!(
+        counted_reservations(&app).await,
+        0,
+        "an update after the soft expiry replaces reservations with reported stats"
     );
 
     app.state.end_registration(running).await;

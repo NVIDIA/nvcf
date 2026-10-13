@@ -24,15 +24,43 @@ use std::time::Instant;
 #[cfg(test)]
 pub(super) const UNEXPIRING_TEST_RESERVATION_TTL: Duration = Duration::from_secs(600);
 
+/// Lifetime bounds assigned to a routing reservation at dispatch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ReservationTtl {
+    /// Time after dispatch when the backend's next registration update is
+    /// expected to include the request.
+    pub(crate) soft: Duration,
+    /// Time after dispatch when the reservation ends even if the backend has
+    /// not sent a registration update since the soft expiry.
+    pub(crate) hard: Duration,
+}
+
+impl ReservationTtl {
+    /// Ends the reservation at `ttl` regardless of registration updates.
+    #[cfg(test)]
+    pub(crate) fn fixed(ttl: Duration) -> Self {
+        Self {
+            soft: ttl,
+            hard: ttl,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct PendingClusterReservation {
     pub(super) inference_server_id: String,
     pub(super) registration: Option<Arc<RegistrationGeneration>>,
     pub(super) input_tokens: u64,
     pub(super) priority: u32,
-    // `None` when the TTL is too large to represent as an `Instant`; such a
-    // reservation only ends by release or backend removal.
+    // After this instant, a registration update from the reserved backend
+    // ends the reservation. `None` when the TTL is too large to represent as
+    // an `Instant`.
     expires_at: Option<Instant>,
+    // At this instant the reservation ends without a registration update, so
+    // a backend that stops reporting cannot keep its stale load forever.
+    // `None` when the TTL is too large to represent as an `Instant`; such a
+    // reservation only ends by update, release, or backend removal.
+    hard_deadline: Option<Instant>,
     active: AtomicBool,
     metrics: Option<Arc<StargateMetrics>>,
     routing_key: Option<String>,
@@ -44,7 +72,7 @@ impl PendingClusterReservation {
         registration: Arc<RegistrationGeneration>,
         input_tokens: u64,
         priority: u32,
-        ttl: Duration,
+        ttl: ReservationTtl,
         metrics: Option<Arc<StargateMetrics>>,
         target: &RoutingTargetKey,
     ) -> Arc<Self> {
@@ -59,12 +87,12 @@ impl PendingClusterReservation {
         )
     }
 
-    fn new_at(
+    pub(super) fn new_at(
         registration: Option<Arc<RegistrationGeneration>>,
         input_tokens: u64,
         priority: u32,
         now: Instant,
-        ttl: Duration,
+        ttl: ReservationTtl,
         metrics: Option<Arc<StargateMetrics>>,
         target: &RoutingTargetKey,
     ) -> Arc<Self> {
@@ -75,13 +103,14 @@ impl PendingClusterReservation {
             });
         // Compute expiry before touching metrics so an unrepresentable TTL
         // cannot panic after the active gauge was incremented.
-        let expires_at = now.checked_add(ttl);
+        let expires_at = now.checked_add(ttl.soft);
+        let hard_deadline = now.checked_add(ttl.hard);
         if let Some(metrics) = &metrics {
             metrics
                 .inc_routing_reservations_active(target.routing_key.as_deref(), &target.model_id);
             metrics
                 .routing_reservation_ttl_seconds(target.routing_key.as_deref(), &target.model_id)
-                .observe(ttl.as_secs_f64());
+                .observe(ttl.soft.as_secs_f64());
         }
         Arc::new(Self {
             inference_server_id,
@@ -89,6 +118,7 @@ impl PendingClusterReservation {
             input_tokens,
             priority,
             expires_at,
+            hard_deadline,
             active: AtomicBool::new(true),
             metrics,
             routing_key: target.routing_key.clone(),
@@ -106,11 +136,34 @@ impl PendingClusterReservation {
             .expect("test reservation should have a representable expiry")
     }
 
+    #[cfg(test)]
+    pub(super) fn hard_deadline(&self) -> Instant {
+        self.hard_deadline
+            .expect("test reservation should have a representable hard deadline")
+    }
+
+    /// Returns whether the reservation still counts at `now`. Passing the
+    /// soft expiry alone does not end it; only the hard deadline does.
     pub(super) fn is_active_at(&self, now: Instant) -> bool {
-        if self.expires_at.is_some_and(|expires_at| now >= expires_at) {
+        if self
+            .hard_deadline
+            .is_some_and(|hard_deadline| now >= hard_deadline)
+        {
             self.deactivate();
         }
         self.is_active()
+    }
+
+    /// Ends the reservation when a registration update from its own backend,
+    /// received at `updated_at`, arrived at or after the soft expiry and so
+    /// can already include the request. Earlier updates leave it counting.
+    pub(super) fn settle_on_backend_update(&self, updated_at: Instant) {
+        if self
+            .expires_at
+            .is_some_and(|expires_at| updated_at >= expires_at)
+        {
+            self.deactivate();
+        }
     }
 
     pub(super) fn deactivate(&self) {
@@ -131,7 +184,8 @@ impl Drop for PendingClusterReservation {
     }
 }
 
-// Cancellation is explicit because a successful attempt remains pending until its TTL expires.
+// Cancellation is explicit because a successful attempt remains pending until
+// its backend reports after the soft expiry or the hard deadline passes.
 #[derive(Debug)]
 pub(crate) struct RoutingReservation(pub(super) Arc<PendingClusterReservation>);
 
@@ -219,7 +273,7 @@ mod tests {
                 8_000,
                 0,
                 Instant::now(),
-                Duration::from_millis(1),
+                ReservationTtl::fixed(Duration::from_millis(1)),
                 None,
                 &target,
             );
@@ -237,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn reservation_expires_at_its_fixed_ttl_boundary() {
+    fn soft_expiry_waits_for_a_backend_update_at_or_after_it() {
         let target = RoutingTargetKey::new(Some("routing".to_string()), "model");
         let dispatched_at = Instant::now();
         let pending = PendingClusterReservation::new_at(
@@ -245,13 +299,52 @@ mod tests {
             10,
             0,
             dispatched_at,
-            Duration::from_millis(60),
+            ReservationTtl {
+                soft: Duration::from_millis(60),
+                hard: Duration::from_millis(1000),
+            },
+            None,
+            &target,
+        );
+        let at = |millis| dispatched_at + Duration::from_millis(millis);
+
+        assert!(pending.is_active_at(at(59)));
+        assert!(
+            pending.is_active_at(at(61)),
+            "passing the soft expiry without a backend update must not end it"
+        );
+        pending.settle_on_backend_update(at(59));
+        assert!(
+            pending.is_active(),
+            "an update received before the soft expiry cannot include the request"
+        );
+        pending.settle_on_backend_update(at(60));
+        assert!(!pending.is_active());
+    }
+
+    #[test]
+    fn hard_deadline_ends_reservation_without_a_backend_update() {
+        let target = RoutingTargetKey::new(Some("routing".to_string()), "model");
+        let dispatched_at = Instant::now();
+        let pending = PendingClusterReservation::new_at(
+            None,
+            10,
+            0,
+            dispatched_at,
+            ReservationTtl {
+                soft: Duration::from_millis(1),
+                hard: Duration::from_millis(1000),
+            },
             None,
             &target,
         );
 
-        assert!(pending.is_active_at(dispatched_at + Duration::from_millis(59)));
-        assert!(!pending.is_active_at(dispatched_at + Duration::from_millis(60)));
+        assert_eq!(
+            pending.hard_deadline(),
+            dispatched_at + Duration::from_millis(1000)
+        );
+        assert!(pending.is_active_at(dispatched_at + Duration::from_millis(999)));
+        assert!(!pending.is_active_at(dispatched_at + Duration::from_millis(1000)));
         assert!(!pending.is_active());
     }
 
@@ -264,7 +357,7 @@ mod tests {
             1,
             0,
             Instant::now(),
-            Duration::from_millis(60),
+            ReservationTtl::fixed(Duration::from_millis(60)),
             Some(metrics.clone()),
             &target,
         );
@@ -308,7 +401,7 @@ mod tests {
             1,
             0,
             Instant::now(),
-            Duration::from_millis(60),
+            ReservationTtl::fixed(Duration::from_millis(60)),
             Some(metrics.clone()),
             &target,
         );
@@ -337,7 +430,7 @@ mod tests {
             1,
             0,
             dispatched_at,
-            Duration::MAX,
+            ReservationTtl::fixed(Duration::MAX),
             Some(metrics.clone()),
             &target,
         );
@@ -346,6 +439,11 @@ mod tests {
         assert!(
             pending.is_active_at(dispatched_at + Duration::from_secs(365 * 24 * 60 * 60)),
             "an unrepresentable expiry must not expire early"
+        );
+        pending.settle_on_backend_update(dispatched_at + Duration::from_secs(365 * 24 * 60 * 60));
+        assert!(
+            pending.is_active(),
+            "an unrepresentable soft expiry must not settle on an update"
         );
         RoutingReservation(pending).release();
         assert!(active_reservation_gauge(&metrics).ends_with(" 0"));
