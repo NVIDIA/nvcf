@@ -82,6 +82,11 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
+                "disableQuicGso": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Disable QUIC UDP segmentation offload for transport pods"
+                },
                 "image": {
                     "type": "object",
                     "additionalProperties": false,

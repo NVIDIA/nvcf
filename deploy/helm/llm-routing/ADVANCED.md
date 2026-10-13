@@ -203,6 +203,8 @@ CODEX_CA_CERTIFICATE="$LLM_GATEWAY_CA" codex --profile glm
 
 Automatic SGLang startup checks its cache before downloading. Reinstalling the same release in the same namespace on the original node reuses its retained claim without extra flags. Completed files are verified locally, including complete Hugging Face snapshots without a recipe completion marker. Missing files are downloaded into that cache. A cache marked complete but failing validation stops startup instead of silently replacing its contents.
 
+SGLang and TVM-FFI compiled kernels also live on the model cache volume. Their runtime-specific cache keys allow compatible restarts to reuse compilation results.
+
 To use a differently named claim in the same namespace, set `cache.existingClaim`. To require a complete offline cache and prohibit model downloads, also set `reuseCaches: true`:
 
 ```yaml
@@ -265,22 +267,37 @@ Complete uninstall combines [removing the model release](README.md#uninstall-kee
 
 ### Helm GLM recipe
 
-GLM has two automatic GB10 profiles. The committed [three-node values](recipes/values/glm-5.3-x3.yaml) select `gb10-x3`, which splits the weights evenly over one leader and two RPC workers and is the profile that passed gateway checks. The committed [two-node values](recipes/values/glm-5.3.yaml) select `gb10-x2`, which stops at the host-memory guard during loading. The commands below use the three-node profile. Replace `gpu-node-1`, `gpu-node-2` and `gpu-node-3` with distinct available nodes. Override `runtimeClassName` and `storageClassName` if your cluster uses different names.
+GLM has two automatic GB10 profiles. The committed [three-node values](recipes/values/glm-5.3-x3.yaml) select `gb10-x3`, which splits the weights evenly over one leader and two RPC workers and is the Spark profile that passed gateway checks. The committed [two-node values](recipes/values/glm-5.3.yaml) select `gb10-x2`, which stops at the host-memory guard during loading. For two GB300 nodes, the [Station values](recipes/values/glm-5.3-station.yaml) select `gb300-x2` with one leader and one RPC worker.
 
-Install it with the shared stack already running:
+Use the command for your hardware with the shared stack already running. Replace `my-cluster` with your Kubernetes context and the node placeholders with distinct available nodes. Override `runtimeClassName` and `storageClassName` if your cluster uses different names.
+
+Three Spark nodes:
 
 ```bash
 helm upgrade --install glm dev-artifacts/charts/pylon-gguf-backend-0.2.0.tgz \
-  --namespace llm-stack \
+  --kube-context my-cluster --namespace llm-stack \
   --values recipes/values/glm-5.3-x3.yaml \
   --set 'nodes[0]=gpu-node-1' --set 'nodes[1]=gpu-node-2' --set 'nodes[2]=gpu-node-3' \
   --wait --timeout 120m &&
-kubectl --namespace llm-stack wait \
+kubectl --context my-cluster --namespace llm-stack wait \
   --for=condition=Registered inferenceendpoint/glm --timeout=5m &&
 echo 'Model installed and registered.'
 ```
 
-Kubernetes checks placement, builds the pinned llama.cpp runtime, starts each worker RPC server and qualifies every GPU, including each pair. It then verifies or downloads the pinned GGUF cache and starts the model server. The served model ID is `GLM-5.3-UD-IQ2_M`. Use that ID for [gateway verification](#verification). The common catalog lists its per-node resource and storage requirements. The three-node profile passed gateway discovery, chat, streaming and authentication at context 2,048 and concurrency 1. Loading about 148 GiB to the workers took roughly 30 minutes on the pod network. Stop/resume, longer context, throughput and output quality are untested. The two-node profile's Helm trials stopped at the host-memory guard during loading, so use three nodes. Each RPC worker has its own Service and cache claim, named `<release>-rpc-n1`, `<release>-rpc-n2` and so on. Set `rpc.cache.existingClaims` to one retained claim per worker. `rpc.cache.existingClaim` still serves a single worker.
+Two Station nodes:
+
+```bash
+helm upgrade --install glm dev-artifacts/charts/pylon-gguf-backend-0.2.0.tgz \
+  --kube-context my-cluster --namespace llm-stack \
+  --values recipes/values/glm-5.3-station.yaml \
+  --set 'nodes[0]=station-node-1' --set 'nodes[1]=station-node-2' \
+  --wait --timeout 120m &&
+kubectl --context my-cluster --namespace llm-stack wait \
+  --for=condition=Registered inferenceendpoint/glm --timeout=5m &&
+echo 'Model installed and registered.'
+```
+
+Kubernetes checks placement, builds the pinned llama.cpp runtime, starts each worker RPC server and qualifies every GPU, including each pair. It then verifies or downloads the pinned GGUF cache and starts the model server. The served model ID is `GLM-5.3-UD-IQ2_M`. Use that ID for [gateway verification](#verification). The common catalog lists its per-node resource and storage requirements. The three-node Spark profile passed gateway discovery, chat, streaming and authentication at context 2,048 and concurrency 1. Loading about 148 GiB to the workers took roughly 30 minutes on the pod network. Stop/resume, longer context, throughput and output quality are untested for that Spark profile. The two-node Spark profile's Helm trials stopped at the host-memory guard during loading, so use three Spark nodes. Each RPC worker has its own Service and cache claim, named `<release>-rpc-n1`, `<release>-rpc-n2` and so on. Set `rpc.cache.existingClaims` to one retained claim per worker. `rpc.cache.existingClaim` still serves a single worker.
 
 By default (`reuseCaches: false`), a changed image, llama.cpp revision or CUDA architecture rebuilds compiled runtime state while preserving model files and cached source archives. Unchanged runtimes are verified and reused.
 
@@ -288,12 +305,13 @@ To require offline reuse without rebuilding, set `reuseCaches: true`, `artifacts
 
 ### Helm Flash-Next recipes
 
-Flash-Next uses recipe `qwen3.8-flash-next` with two NVFP4 profiles. Both use automatic startup: one Helm install qualifies the hardware, verifies or downloads the pinned checkpoint, and starts serving. Each profile's live validation is recorded separately in the catalog.
+Flash-Next uses recipe `qwen3.8-flash-next` with three NVFP4 profiles. Both use automatic startup: one Helm install qualifies the hardware, verifies or downloads the pinned checkpoint, and starts serving. Each profile's live validation is recorded separately in the catalog.
 
 | Profile | Placement | Additional requirements |
 | --- | --- | --- |
 | `spark-nvfp4-nvme` | One GB10 node | Local NVMe-backed pod ephemeral storage, 56 GiB offload allocation and a separate 180 GiB cache |
 | `spark-nvfp4-tp2` | Two GB10 nodes | A shared fabric of at least 200 Gbps, with each node's fabric IPv4 address and interface |
+| `station-nvfp4` | One GB300 node | A 160 GiB cache. No NVMe offload or fabric link. The profile releases the checkpoint file cache and prefetches checkpoints, because GB300 otherwise keeps the cached files in GPU memory. Loading takes about 20 minutes |
 
 List recipe and profile names before selecting a placement:
 
@@ -463,6 +481,15 @@ The post-upgrade Job checks gateway access, discovery and authentication. Check 
 
 Before rolling back, inspect the saved values and the manifests for the target revision. A Helm rollback restores that revision's templates and may also revert its templated CRD schema. Only use a revision compatible with current InferenceEndpoint objects, credentials and runtime contracts.
 
+If a pod network drops UDP segmentation offload (GSO) batches, large requests
+can time out in the QUIC tunnel while short requests and direct backend HTTP
+succeed. With images built from the matching sources, set
+`gatewayStack.llm-request-router.llmRequestRouter.transport.disableQuicGso: true`
+and `operator.pylon.disableQuicGso: true` in private site values, then upgrade
+the shared release. Both peers use ordinary UDP packets with the same TLS and
+authentication. The default keeps GSO enabled. Retest cross-node chat and
+streaming after applying this network-specific workaround.
+
 ## Shared-stack uninstall
 
 Remove model releases first, keeping the shared operator running until their InferenceEndpoints and transport pods finish cleanup. Use the [model lifecycle commands](README.md#4-stop-or-uninstall-a-model) and the [cache cleanup procedure](#remove-downloaded-model-files). Check the installed models before uninstalling the shared release:
@@ -494,7 +521,7 @@ python3 recipes/verify.py --namespace llm-stack \
   --output /path/to/private/gateway-results.json
 ```
 
-The verifier opens a temporary connection through the installed shared stack. `--context`, `--ca-configmap` and `--api-key-file` override connection settings. It writes results to the requested path and cleans up its connection files when finished.
+The verifier opens a temporary connection through the installed shared stack. `--context`, `--ca-configmap` and `--api-key-file` override connection settings. Generation uses the model server defaults unless `--max-tokens` is supplied to limit output. The verifier requires a complete answer and reports token-limited generation as incomplete. It writes results to the requested path and cleans up its connection files when finished.
 
 Recipe qualification has separate stages: hardware compatibility and placement, preparation, runtime readiness, registration, and gateway inference. Offline tests establish rendering and local behavior. Accept a hardware trial only after its exact model pins and profile pass discovery, chat, streaming, authentication, retained-cache restart and isolation from another running model. Record the tested context and concurrency separately from the profile's candidate limits.
 
@@ -671,7 +698,7 @@ For GGUF, set `BACKEND=gguf-backend` and `BACKEND_TEST=test_helm_gguf.py` in the
 
    Confirm the deployed revision and pod configuration match the intended chart and pins. Check logs, memory and restarts. Exercise the intended context/concurrency and [cache-preserving lifecycle](#independent-model-lifecycle). If a check fails, adjust maintained metadata, repeat steps 2-4, then upgrade and retest. Preserve caches and other models.
 
-6. Record the tested profile, artifact pins, date, workload and passed checks in the existing validation fields. Update the README validation summary. Repeat synchronization, export, checks and packaging above, using a fresh `PACKAGE_DIR`. Compare the final rendered pod templates with the tested deployment. Metadata can change the configuration checksum and trigger a rollout, so repeat affected live checks with the final archive when that happens. Then refresh the distribution from that verified package:
+6. Record the tested profile, artifact pins, date, workload and passed checks in recipe metadata. Keep hardware and installation links in the README. Repeat synchronization, export, checks and packaging above, using a fresh `PACKAGE_DIR`. Compare the final rendered pod templates with the tested deployment. Metadata can change the configuration checksum and trigger a rollout, so repeat affected live checks with the final archive when that happens. Then refresh the distribution from that verified package:
 
    ```bash
    cp -R "$PACKAGE_DIR/." dev-artifacts/charts/ &&

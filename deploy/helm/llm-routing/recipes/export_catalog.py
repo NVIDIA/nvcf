@@ -83,6 +83,16 @@ def helm_validation(record, profile, revision, image):
     return {"automaticHelmStatus": status, "automaticHelmWorkload": copy.deepcopy(record)}
 
 
+def profile_runtime(model, profile):
+    """The runtime image and version of a profile. A profile can override both when its hardware was tested on another build."""
+    if ("image" in profile) != ("runtime" in profile):
+        raise ValueError("A profile that overrides the runtime must set both image and runtime: " + profile["id"])
+    image, version = profile.get("image", model["image"]), profile.get("runtime", model["runtime"])
+    if not re.fullmatch(r".+@sha256:[0-9a-f]{64}", image):
+        raise ValueError("Profile runtime image must be digest-pinned: " + profile["id"])
+    return image, version
+
+
 def profile_validation(model, profile, key):
     record = profile.get(key, model.get(key))
     if record and record.get("profile") != profile["id"]:
@@ -110,6 +120,7 @@ def sglang_recipes(root):
         profiles = []
         for profile in model["profiles"]:
             hardware = copy.deepcopy(profile["hardware"])
+            image, version = profile_runtime(model, profile)
             validated = profile_validation(model, profile, "validatedWorkload")
             if validated:
                 validated.setdefault("requestType", "short-prompt-smoke")
@@ -126,12 +137,13 @@ def sglang_recipes(root):
                     "resources": resource_requirements(profile["cpu"], profile["memoryGiB"],
                         profile["memoryLimitGiB"], hardware["gpuCount"]), "storage": copy.deepcopy(storage)}
                     for rank in range(profile["nodes"])],
+                **({"runtime": {"backend": "sglang", "version": version, "image": image}} if "image" in profile else {}),
                 "fabric": {"minimumGbps": profile["minFabricGbps"]} if profile.get("fabric") else None,
                 "workload": {"defaultContextTokens": 8192, "defaultConcurrency": 1,
                     "maximumContextTokens": profile["maxContext"], "maximumConcurrency": profile["maxConcurrency"]},
                 "validation": {"runtimeStatus": "smoke-tested" if validated else "pending",
                     "workload": validated, **helm_validation(profile_validation(model, profile, "automaticHelmValidation"), profile["id"],
-                        model["revision"], model["image"])},
+                        model["revision"], image)},
                 "deployment": {"chart": copy.deepcopy(chart), "releaseName": model["releaseName"],
                     "lifecycle": "automatic",
                     "values": {"recipe": model["id"], "profileName": profile["id"]},

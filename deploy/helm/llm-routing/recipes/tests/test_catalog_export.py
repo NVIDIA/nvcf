@@ -115,7 +115,9 @@ class CommonCatalogTests(unittest.TestCase):
                 deployment = profile["deployment"]
                 self.assertEqual(deployment["lifecycle"], "automatic")
                 self.assertEqual(deployment["values"], {"recipe": "qwen3.8-flash-next", "profileName": profile["id"]})
-                self.assertIn("nodeCapabilities", deployment["requiredSiteValues"])
+                # Only a profile with NVMe offload or a fabric link needs verified node capabilities.
+                needs_facts = profile["fabric"] is not None or "offloadBytes" in profile["perNode"][0]["storage"]
+                self.assertEqual("nodeCapabilities" in deployment["requiredSiteValues"], needs_facts)
                 self.assertEqual(deployment["guide"], "../ADVANCED.md#helm-flash-next-recipes")
 
     def test_flash_validation_records_are_independent_per_profile(self):
@@ -240,6 +242,40 @@ class CommonCatalogTests(unittest.TestCase):
                     self.assertNotIn(candidate["model"]["revision"], content)
                     self.assertNotIn(candidate["runtime"]["image"], content)
 
+    def override_runtime(self, **fields):
+        real_read = catalog.read
+
+        def read(path):
+            data = real_read(path)
+            if Path(path).name == "catalog.json":
+                data = copy.deepcopy(data)
+                data["models"][0]["profiles"][0].update(fields)
+            return data
+        return patch.object(catalog, "read", side_effect=read)
+
+    def test_a_profile_runtime_override_needs_both_fields_a_digest_and_matching_validation(self):
+        digest = "example/runtime@sha256:" + "c" * 64
+        for fields, message in (({"image": digest}, "both image and runtime"), ({"runtime": "SGLang"}, "both image and runtime"),
+                                ({"image": "example/runtime:latest", "runtime": "SGLang"}, "digest-pinned"),
+                                ({"image": digest, "runtime": "SGLang"}, "pins changed")):
+            with self.subTest(fields=fields), self.override_runtime(**fields), self.assertRaisesRegex(ValueError, message):
+                catalog.build(ROOT)
+
+    def test_deepseek_station_profile_uses_two_exclusive_gpus_and_its_own_pinned_runtime(self):
+        recipe = self.recipes["deepseek-v4-flash"]
+        self.assertRegex(recipe["model"]["revision"], r"^[0-9a-f]{40}$")
+        self.assertRegex(recipe["runtime"]["image"], r"@sha256:[0-9a-f]{64}$")
+        profiles = {profile["id"]: profile for profile in recipe["profiles"]}
+        self.assertEqual(set(profiles), {"spark-tp2", "station-fp4-tp2"})
+        station = profiles["station-fp4-tp2"]
+        self.assertEqual(station["modelNodeCount"], 2)
+        self.assertEqual(len(station["perNode"]), 2)
+        self.assertEqual(station["hardware"]["memoryMode"], "discrete")
+        self.assertRegex(station["runtime"]["image"], r"@sha256:[0-9a-f]{64}$")
+        self.assertNotEqual(station["runtime"]["image"], recipe["runtime"]["image"])
+        self.assertNotIn("runtime", profiles["spark-tp2"])
+        self.assertEqual(recipe["model"]["repository"], "deepseek-ai/DeepSeek-V4-Flash")
+
     def test_upstream_candidates_reject_deployment_and_mutable_references(self):
         for field, value, message in (("chart", "example", "installable deployment"),
                                       ("model", {"revision": "main"}, "immutable"),
@@ -307,6 +343,13 @@ class CommonCatalogTests(unittest.TestCase):
                 with self.subTest(backend=backend, description=bad), patch.object(catalog, "read", side_effect=with_description(bad, backend)), \
                         self.assertRaisesRegex(ValueError, "short single-line ASCII"):
                     catalog.build(ROOT)
+
+    def test_deepseek_evidence_uses_publisher_checkpoint_and_primary_tp2_example(self):
+        source = next(m for m in catalog.read(ROOT / "catalog.json")["models"] if m["id"] == "deepseek-v4-flash")
+        evidence = source["artifactEvidence"]
+        self.assertIn("https://github.com/sgl-project/sglang/blob/main/docs/demo/deepseek_v4_flash.ipynb", evidence["sources"])
+        self.assertRegex(evidence["checkedAt"], r"^\d{4}-\d{2}-\d{2}$")
+        self.assertGreater(evidence["weightBytes"], 0)
 
     def test_chart_references_resolve_to_local_packages(self):
         for recipe in self.recipes.values():
@@ -376,7 +419,7 @@ class CommonCatalogTests(unittest.TestCase):
                 self.assertIn(recipe["id"], supported)
                 self.assertEqual(profile["deployment"]["lifecycle"], "automatic")
 
-    def test_runtime_smoke_results_do_not_claim_new_helm_validation(self):
+    def test_validation_records_preserve_scope_and_artifact_pins(self):
         for recipe in self.recipes.values():
             for profile in recipe["profiles"]:
                 validation = profile["validation"]
@@ -384,10 +427,19 @@ class CommonCatalogTests(unittest.TestCase):
                 if validation["automaticHelmStatus"] == "smoke-tested":
                     record = validation["automaticHelmWorkload"]
                     self.assertEqual(record["modelRevision"], recipe["model"]["revision"])
-                    self.assertEqual(record["runtimeImage"], recipe["runtime"]["image"])
+                    self.assertEqual(record["runtimeImage"], profile.get("runtime", recipe["runtime"])["image"])
                     self.assertEqual(record["profile"], profile["id"])
                 if validation["workload"]:
-                    self.assertFalse(validation["workload"]["fullContextExercised"])
+                    if validation["workload"].get("contextBoundaryExercised"):
+                        record = validation["automaticHelmWorkload"]
+                        self.assertIn("context-boundary", record["checks"])
+                        self.assertEqual(record["observedWorkload"]["boundaryHttpStatus"], 200)
+                        self.assertEqual(record["observedWorkload"]["boundaryPromptTokens"] +
+                                         record["observedWorkload"]["boundaryMaxOutputTokens"],
+                                         record["contextLength"])
+                    if validation["workload"]["fullContextExercised"]:
+                        self.assertGreaterEqual(validation["workload"]["maximumObservedTotalTokens"],
+                                                validation["workload"]["contextLength"])
                     self.assertFalse(validation["workload"]["performanceBenchmarked"])
                     self.assertFalse(validation["workload"]["qualityEvaluated"])
                 else:

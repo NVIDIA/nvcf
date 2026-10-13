@@ -416,7 +416,7 @@ async fn relay_stream<const CONFIRM_DELIVERY: bool>(
 }
 
 pub fn build_relay_transport_config(config: RelayEndpointConfig) -> Result<Arc<TransportConfig>> {
-    let mut transport = TransportConfig::default();
+    let mut transport = stargate_tls::build_quic_transport_config()?;
     let idle_timeout = config
         .max_idle_timeout
         .try_into()

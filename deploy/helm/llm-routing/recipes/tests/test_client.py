@@ -45,9 +45,11 @@ class ClientTests(unittest.TestCase):
             result = c.completion(MODEL, 'calculate', True)
         payload = request.call_args.args[1]
         self.assertEqual(payload['model'], MODEL)
-        self.assertEqual(payload['reasoning_effort'], 'low')
-        self.assertEqual(payload['chat_template_kwargs'], {'clear_thinking': True})
-        self.assertEqual(payload['max_tokens'], 512)
+        self.assertNotIn('reasoning_effort', payload)
+        self.assertNotIn('chat_template_kwargs', payload)
+        self.assertNotIn('max_tokens', payload)
+        self.assertNotIn('temperature', payload)
+        self.assertNotIn('seed', payload)
         self.assertEqual(payload['stream_options'], {'include_usage': True})
         self.assertEqual(result['content'], '323')
         self.assertEqual(result['reasoningCharacters'], 5)
@@ -170,7 +172,7 @@ class ClientTests(unittest.TestCase):
                          [path for path in ('/v1/chat/completions', '/v1/responses', '/v1/embeddings') for _ in range(2)])
         self.assertEqual(request.call_args_list[0].args[-1], None)
         self.assertEqual([r['credential'] for r in results], ['missing', 'invalid']*3+['valid'])
-        completion.assert_called_once_with(MODEL, 'Reply with the word ready.')
+        completion.assert_called_once_with(MODEL, 'Reply with the word ready.', max_tokens=None)
         for connection, _ in responses:
             connection.close.assert_called_once()
         self.assertNotIn(c.key, json.dumps(results))
@@ -185,6 +187,32 @@ class ClientTests(unittest.TestCase):
                     c.auth(MODEL)
                 completion.assert_not_called()
                 responses[accepted_index][0].close.assert_called_once()
+
+    def test_auth_completion_budget_preserves_strict_validation(self):
+        c = client.Client('https://localhost:18443')
+        c.key = 'test-only-key'
+        for budget in (None, 2048):
+            for finish in ('stop', 'length'):
+                with self.subTest(budget=budget, finish=finish):
+                    response = Mock(status=200)
+                    response.read.return_value = json.dumps({
+                        'model': MODEL, 'usage': {'completion_tokens': 10},
+                        'choices': [{'finish_reason': finish, 'message': {'content': 'ready'}}],
+                    }).encode()
+                    responses = [(Mock(), Mock(status=401)) for _ in range(6)] + [(Mock(), response)]
+                    kwargs = {} if budget is None else {'max_tokens': budget}
+                    with patch.object(c, 'request', side_effect=responses) as request:
+                        if finish == 'stop':
+                            self.assertEqual(c.auth(MODEL, **kwargs)[-1]['status'], 200)
+                        else:
+                            with self.assertRaisesRegex(RuntimeError, 'incomplete generation'):
+                                c.auth(MODEL, **kwargs)
+                    if budget is None:
+                        self.assertNotIn('max_tokens', request.call_args.args[1])
+                    else:
+                        self.assertEqual(request.call_args.args[1]['max_tokens'], budget)
+                    for connection, _ in responses:
+                        connection.close.assert_called_once()
 
     def test_empty_key_file_cannot_silently_skip_gateway_auth_verification(self):
         with tempfile.TemporaryDirectory() as directory:

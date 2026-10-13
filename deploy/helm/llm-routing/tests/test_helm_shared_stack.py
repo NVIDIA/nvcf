@@ -116,6 +116,22 @@ class SharedHelmTests(unittest.TestCase):
             '--watch-namespaces=test-models' in container.get('args', []) for container in item['spec']['template']['spec']['containers']))
         self.assertEqual(operator['metadata']['namespace'], 'test-models')
 
+    def test_quic_gso_workaround_is_opt_in_and_reaches_both_peers(self):
+        def settings(resources):
+            containers = [c for obj in resources if obj['kind'] == 'Deployment'
+                          for c in obj['spec']['template']['spec']['containers']]
+            return ([env for c in containers for env in c.get('env', [])],
+                    [arg for c in containers for arg in c.get('args', [])])
+        env, args = settings(self.render())
+        self.assertNotIn('STARGATE_QUIC_DISABLE_GSO', [e['name'] for e in env])
+        self.assertNotIn('--pylon-disable-quic-gso', args)
+        values = copy.deepcopy(self.values)
+        values['gatewayStack']['llm-request-router']['llmRequestRouter']['transport'] = {'disableQuicGso': True}
+        values['operator']['pylon']['disableQuicGso'] = True
+        env, args = settings(self.render(values))
+        self.assertIn({'name': 'STARGATE_QUIC_DISABLE_GSO', 'value': 'true'}, env)
+        self.assertIn('--pylon-disable-quic-gso', args)
+
     def test_gateway_verification_hook_has_bounded_cpu_only_execution(self):
         resources = self.render()
         jobs = [item for item in resources if item['kind'] == 'Job']

@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
-use quinn::{ClientConfig, ServerConfig};
+use quinn::{ClientConfig, ServerConfig, TransportConfig};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, Error, SignatureScheme};
@@ -618,16 +618,46 @@ pub fn build_quic_server_config_from_pem(
         .with_single_cert(cert_chain, key)
         .context("failed to build TLS server config")?;
     tls.alpn_protocols = alpn_protocols;
-    Ok(ServerConfig::with_crypto(Arc::new(
+    let mut config = ServerConfig::with_crypto(Arc::new(
         quinn::crypto::rustls::QuicServerConfig::try_from(tls)
             .context("failed to build QUIC server config")?,
-    )))
+    ));
+    config.transport_config(Arc::new(build_quic_transport_config()?));
+    Ok(config)
 }
 
 fn quic_client_config(tls: rustls::ClientConfig) -> Result<ClientConfig> {
-    Ok(ClientConfig::new(Arc::new(
+    let mut config = ClientConfig::new(Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(tls)?,
-    )))
+    ));
+    config.transport_config(Arc::new(build_quic_transport_config()?));
+    Ok(config)
+}
+
+/// Keep QUIC usable on overlays that silently drop UDP GSO batches.
+/// Unset or false preserves Quinn's default segmentation offload behavior.
+pub fn build_quic_transport_config() -> Result<TransportConfig> {
+    let value = std::env::var("STARGATE_QUIC_DISABLE_GSO");
+    let value = match value {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => return Err(error).context("invalid STARGATE_QUIC_DISABLE_GSO"),
+    };
+    quic_transport_config(value.as_deref())
+}
+
+fn quic_transport_config(disable_gso: Option<&str>) -> Result<TransportConfig> {
+    let disabled = match disable_gso {
+        None | Some("false" | "0") => false,
+        Some("true" | "1") => true,
+        Some(_) => bail!("STARGATE_QUIC_DISABLE_GSO must be true, false, 1 or 0"),
+    };
+    let mut transport = TransportConfig::default();
+    transport.enable_segmentation_offload(!disabled);
+    if disabled {
+        tracing::info!(segmentation_offload = false, "configured QUIC transport");
+    }
+    Ok(transport)
 }
 
 #[derive(Debug)]
@@ -679,6 +709,20 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn quic_gso_override_preserves_defaults_and_rejects_invalid_values() {
+        for value in [None, Some("false"), Some("0")] {
+            let config = quic_transport_config(value).unwrap();
+            assert!(format!("{config:?}").contains("enable_segmentation_offload: true"));
+        }
+        for value in [Some("true"), Some("1")] {
+            let config = quic_transport_config(value).unwrap();
+            assert!(format!("{config:?}").contains("enable_segmentation_offload: false"));
+        }
+        assert!(quic_transport_config(Some("yes")).is_err());
+        assert!(quic_transport_config(Some("")).is_err());
+    }
 
     fn test_dir() -> TempDir {
         TempDir::new().expect("create TLS test directory")

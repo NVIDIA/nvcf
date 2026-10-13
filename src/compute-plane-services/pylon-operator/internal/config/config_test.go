@@ -332,3 +332,12 @@ func TestFlagValueStrings(t *testing.T) {
 	v := int32Value(3)
 	assert.Equal(t, "3", v.String())
 }
+
+func TestDisableQuicGSO(t *testing.T) {
+	c, err := parse(t)
+	require.NoError(t, err)
+	assert.False(t, c.PylonDisableQuicGSO)
+	c, err = parse(t, "--pylon-disable-quic-gso")
+	require.NoError(t, err)
+	assert.True(t, c.PylonDisableQuicGSO)
+}

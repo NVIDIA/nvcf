@@ -41,6 +41,7 @@
 {{- $lock := .Files.Get (printf "%smodel.lock.json" $base) | fromJson -}}
 {{- $image := $metadata.runtimeImage -}}
 {{- if and $v.image (ne $v.image $image) }}{{ fail "Automatic runtime image is pinned by the recipe profile" }}{{ end -}}
+{{- $runtimeProfile := omit $profile "validation" "validatedWorkload" "automaticHelmValidation" "qualification" "artifactEvidence" -}}
 {{- $claims := list (default (printf "%s-artifacts" .Release.Name) $v.artifacts.existingClaim) -}}
 {{- $endpoints := list -}}
 {{- $devices := list "CUDA0" -}}
@@ -49,7 +50,7 @@
 {{- $endpoints = append $endpoints (printf "%s-rpc-%s:50052" $.Release.Name $role.id) -}}
 {{- $devices = append $devices (printf "RPC%d" $i) -}}
 {{- end -}}
-{{- dict "recipe" $recipe "tuning" $tuning "lock" $lock "profile" $profile "image" $image "reuseCaches" $v.reuseCaches "claims" $claims "existing" $existing "devices" (join "," $devices) "runtimeURL" (printf "http://%s-artifacts:8080/runtime.tar.gz" .Release.Name) "rpcEndpoints" $endpoints | toJson -}}
+{{- dict "recipe" $recipe "tuning" $tuning "lock" $lock "profile" $runtimeProfile "image" $image "reuseCaches" $v.reuseCaches "claims" $claims "existing" $existing "devices" (join "," $devices) "runtimeURL" (printf "http://%s-artifacts:8080/runtime.tar.gz" .Release.Name) "rpcEndpoints" $endpoints | toJson -}}
 {{- end -}}
 
 {{- define "gguf.nodeRole" -}}

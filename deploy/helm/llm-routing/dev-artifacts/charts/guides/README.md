@@ -7,13 +7,13 @@ Install the shared routing release `llm-stack` in namespace `llm-stack`, then in
 ### Cluster
 
 - Kubernetes that you reach with kubectl and Helm, using a context that can create CustomResourceDefinitions and namespaces.
-- Linux ARM64 GPU nodes whose GPU matches a recipe profile. The [recipe catalog](recipes/index.json) includes GB10 (Spark) and GB300 (Station) profiles. `python3 llm.py recipes` lists them.
+- Linux ARM64 GPU nodes whose GPU matches a recipe profile. The [recipe catalog](../../../recipes/index.json) includes GB10 (Spark) and GB300 (Station) profiles. `python3 llm.py recipes` lists them.
 - One whole GPU per node for each model: no MIG, time-slicing or MPS, and no `NoSchedule` or `NoExecute` taints on model nodes.
 - The NVIDIA driver and container toolkit on each GPU node, and a RuntimeClass named `nvidia`.
 - The [NVIDIA device plugin](https://github.com/NVIDIA/k8s-device-plugin) advertising `nvidia.com/gpu`. Use v0.17.4 or later on GB10.
 - The node label `nvidia.com/gpu.product` on each GPU node. [GPU Feature Discovery](https://github.com/NVIDIA/k8s-device-plugin/tree/main/docs/gpu-feature-discovery) sets it, or apply it on Spark with `kubectl label node NODE nvidia.com/gpu.product=NVIDIA-GB10`. Use `NVIDIA-GB300` for Station. Capacity planning and the in-chart placement check match it against the recipe profile.
 - A StorageClass named `local-path`, or another class passed to `llm.py plan --storage-class`, with `WaitForFirstConsumer` binding and unrestricted topology. Each model cache is node-local disk on its model node.
-- The shared stack images on every eligible node. No published images exist yet. The committed [image values](dev-artifacts/values.yaml) reference development images with `Never` pull policy, so [prepare and preload them](dev-artifacts/README.md) on your nodes first. The verification Job also needs `python:3.12-alpine`, pulled or preloaded.
+- The shared stack images on every eligible node. No published images exist yet. The committed [image values](../../../dev-artifacts/values.yaml) reference development images with `Never` pull policy, so [prepare and preload them](../../../dev-artifacts/README.md) on your nodes first. The verification Job also needs `python:3.12-alpine`, pulled or preloaded.
 - Outbound access from the nodes to Hugging Face for model weights, Docker Hub for `lmsysorg/sglang`, nvcr.io, and GitHub for the llama.cpp source used by GGUF recipes.
 
 k3s provides the `nvidia` RuntimeClass when the container toolkit is installed before k3s starts. It also installs Traefik ingress and the `local-path` StorageClass by default.
@@ -51,7 +51,7 @@ Helm installs the gateway, router and namespace-scoped operator with an empty mo
 
 ### Add monitoring (optional)
 
-To collect gateway and model metrics in VictoriaMetrics and view them in Grafana, install the independent monitoring release described in [Optional monitoring](recipes/MONITORING.md). It runs in namespace `llm-stack` and installs and uninstalls separately from the models.
+To collect gateway and model metrics in VictoriaMetrics and view them in Grafana, install the independent monitoring release described in [Optional monitoring](../../../recipes/MONITORING.md). It runs in namespace `llm-stack` and installs and uninstalls separately from the models.
 
 ## 2. Install a model
 
@@ -69,7 +69,7 @@ Check current GPU allocation and downloaded model caches. Add `--json` for JSON 
 python3 llm.py plan --model qwen3.8-27b
 ```
 
-Install and register Qwen FP8 below, replacing `PROFILE_FROM_PLANNER` and `NODE_FROM_PLANNER` with your chosen profile and node. To reuse retained downloads, keep the original release name, namespace and cache node. Completed model files are verified and reused automatically; missing files are downloaded. No cache flag or values file is required. [Model values examples](recipes/README.md#committed-values) are available for optional overrides and other recipes.
+Install and register Qwen FP8 below, replacing `PROFILE_FROM_PLANNER` and `NODE_FROM_PLANNER` with your chosen profile and node. To reuse retained downloads, keep the original release name, namespace and cache node. Completed model files are verified and reused automatically; missing files are downloaded. No cache flag or values file is required. [Model values examples](../../../recipes/README.md#committed-values) are available for optional overrides and other recipes.
 
 ```bash
 helm upgrade --install qwen-fp8 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
@@ -111,16 +111,16 @@ Both models use the same gateway and caller credential. Each keeps its own Helm 
 
 | Recipe | Precision | Hardware |
 | --- | --- | --- |
-| [Qwen3.8-27B](#2-install-a-model) | FP8 | [1 GB10 (Spark)](recipes/values/qwen3.8-27b.yaml) or [1 GB300 (Station)](recipes/values/qwen3.8-27b-station.yaml) |
-| [Qwen3.8-27B](#add-a-second-model) | NVIDIA NVFP4 | [1 GB10 (Spark)](recipes/values/qwen3.8-27b-nvfp4.yaml) |
-| [GLM-5.3](ADVANCED.md#helm-glm-recipe) | UD-IQ2_M | [3 GB10s (Spark)](recipes/values/glm-5.3-x3.yaml), or [2 GB10s (Spark)](recipes/values/glm-5.3.yaml). The two-node profile stops at the host-memory guard |
-| [Qwen3.5-4B](recipes/values/qwen3.5-4b.yaml) | BF16 | [1 GB10 (Spark)](recipes/values/qwen3.5-4b.yaml). Thinks by default, so verify with `recipes/verify.py --max-tokens 2048` |
-| [Nemotron Nano 12B v2](recipes/values/nemotron-nano-12b-v2.yaml) | BF16 | [1 GB10 (Spark)](recipes/values/nemotron-nano-12b-v2.yaml). No tool-call parser configured |
-| [Nemotron 3.5 Lightning](recipes/values/nemotron-3.5-lightning.yaml) | NVFP4 | [1 GB10 (Spark)](recipes/values/nemotron-3.5-lightning.yaml). Pinned SGLang development image |
-| [Qwen3.8-Flash-Next](ADVANCED.md#helm-flash-next-recipes) | NVFP4 | [1 GB10 (Spark) with local NVMe](recipes/values/qwen3.8-flash-next-nvme.yaml) or [2 GB10s (Spark) with a 200 Gbps link](recipes/values/qwen3.8-flash-next-tp2.yaml) |
-| [DeepSeek V4 Flash](recipes/values/deepseek-v4-flash.yaml) | FP4 experts, FP8 attention | [2 GB10s (Spark) with a 200 Gbps link](recipes/values/deepseek-v4-flash.yaml). A three-way split is not valid for this model. Needs 200 GiB of cache per node |
+| [Qwen3.8-27B](#2-install-a-model) | FP8 | [1 GB10 (Spark)](../../../recipes/values/qwen3.8-27b.yaml) or [1 GB300 (Station)](../../../recipes/values/qwen3.8-27b-station.yaml) |
+| [Qwen3.8-27B](#add-a-second-model) | NVIDIA NVFP4 | [1 GB10 (Spark)](../../../recipes/values/qwen3.8-27b-nvfp4.yaml) |
+| [GLM-5.3](ADVANCED.md#helm-glm-recipe) | UD-IQ2_M | [3 GB10s (Spark)](../../../recipes/values/glm-5.3-x3.yaml), or [2 GB10s (Spark)](../../../recipes/values/glm-5.3.yaml). The two-node Spark profile stops at the host-memory guard. Or [2 GB300s (Station)](../../../recipes/values/glm-5.3-station.yaml) |
+| [Qwen3.5-4B](../../../recipes/values/qwen3.5-4b.yaml) | BF16 | [1 GB10 (Spark)](../../../recipes/values/qwen3.5-4b.yaml) or [1 GB300 (Station)](../../../recipes/values/qwen3.5-4b-station.yaml) |
+| [Nemotron Nano 12B v2](../../../recipes/values/nemotron-nano-12b-v2.yaml) | BF16 | [1 GB10 (Spark)](../../../recipes/values/nemotron-nano-12b-v2.yaml) or [1 GB300 (Station)](../../../recipes/values/nemotron-nano-12b-v2-station.yaml). No tool-call parser configured |
+| [Nemotron 3.5 Lightning](../../../recipes/values/nemotron-3.5-lightning.yaml) | NVFP4 | [1 GB10 (Spark)](../../../recipes/values/nemotron-3.5-lightning.yaml) or [1 GB300 (Station)](../../../recipes/values/nemotron-3.5-lightning-station.yaml). Pinned SGLang development image |
+| [Qwen3.8-Flash-Next](ADVANCED.md#helm-flash-next-recipes) | NVFP4 | [1 GB10 (Spark) with local NVMe](../../../recipes/values/qwen3.8-flash-next-nvme.yaml) or [2 GB10s (Spark) with a 200 Gbps link](../../../recipes/values/qwen3.8-flash-next-tp2.yaml), or [1 GB300 (Station)](../../../recipes/values/qwen3.8-flash-next-station.yaml) |
+| [DeepSeek V4 Flash](../../../recipes/values/deepseek-v4-flash.yaml) | FP4 experts, FP8 attention | [2 GB10s (Spark) with a 200 Gbps link](../../../recipes/values/deepseek-v4-flash.yaml) or [2 GB300s (Station) with a link of at least 200 Gbps](../../../recipes/values/deepseek-v4-flash-station.yaml). A three-way split is not valid for this model. Cache per node: 200 GiB on Spark, 220 GiB on Station |
 
-Planned recipes have no installable profile. See the [catalog](recipes/index.json) for profile details and the [Flash-Next guide](ADVANCED.md#helm-flash-next-recipes) for NVMe and two-node setup.
+See the [catalog](../../../recipes/index.json) for profile details and validation scope. Two-node SGLang profiles require verified fabric addresses and interfaces in their values files.
 
 ## 3. Discover and call models
 

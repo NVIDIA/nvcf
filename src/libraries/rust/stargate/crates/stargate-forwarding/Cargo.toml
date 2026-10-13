@@ -30,6 +30,7 @@ workspace = true
 anyhow = { workspace = true }
 futures = { workspace = true }
 quinn = { workspace = true }
+stargate-tls = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
@@ -37,4 +38,3 @@ tracing = { workspace = true }
 http = { workspace = true }
 rustls = { workspace = true }
 rustls-pemfile = { workspace = true }
-stargate-tls = { workspace = true }

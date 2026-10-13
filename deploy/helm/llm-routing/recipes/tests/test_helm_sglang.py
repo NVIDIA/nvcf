@@ -65,6 +65,47 @@ class HelmSGLangTests(unittest.TestCase):
     def configuration(self, docs):
         return json.loads(next(doc for doc in docs if doc['kind'] == 'ConfigMap')['data']['config.json'])
 
+    def test_qualification_records_do_not_roll_out_but_execution_settings_do(self):
+        with tempfile.TemporaryDirectory() as directory:
+            chart = pathlib.Path(directory) / 'sglang'
+            shutil.copytree(CHART, chart)
+            path = chart / 'files/profiles.json'
+            data = json.loads(path.read_text())
+            values = {**self.values('qwen3.5-4b'), 'profileName': 'station-bf16'}
+            station = next(profile for profile in data['qwen3.5-4b']['profiles'] if profile['id'] == 'station-bf16')
+            with patch(__name__ + '.CHART', chart):
+                before = self.render(values)
+                for owner in (data['qwen3.5-4b'], station):
+                    for key in ('validation', 'validatedWorkload', 'automaticHelmValidation', 'qualification', 'artifactEvidence'):
+                        owner[key] = {'new': 'qualification evidence'}
+                path.write_text(json.dumps(data))
+                recorded = self.render(values)
+                self.assertEqual(before, recorded)
+                station['maxTotalTokens'] += 1024
+                path.write_text(json.dumps(data))
+                changed = self.render(values)
+                def checksum(objects):
+                    return next(o for o in objects if o['kind'] == 'Deployment')['spec']['template']['metadata']['annotations']['checksum/config']
+                self.assertNotEqual(checksum(before), checksum(changed))
+
+    def test_a_profile_can_pin_its_own_runtime_image_and_the_others_keep_the_model_image(self):
+        override = 'example/runtime@sha256:' + 'c' * 64
+        with tempfile.TemporaryDirectory() as directory:
+            chart = pathlib.Path(directory) / 'sglang'
+            shutil.copytree(CHART, chart)
+            path = chart / 'files/profiles.json'
+            data = json.loads(path.read_text())
+            station = next(profile for profile in data['qwen3.5-4b']['profiles'] if profile['id'] == 'station-bf16')
+            station.update(image=override, runtime='SGLang example')
+            path.write_text(json.dumps(data))
+            def images(profile):
+                with patch(__name__ + '.CHART', chart):
+                    docs = self.render({**self.values('qwen3.5-4b'), 'profileName': profile})
+                deployment = next(doc for doc in docs if doc['kind'] == 'Deployment')
+                return {container['image'] for container in deployment['spec']['template']['spec']['containers']}
+            self.assertEqual(images('station-bf16'), {override})
+            self.assertEqual(images('spark-bf16'), {data['qwen3.5-4b']['image']})
+
     def test_bundled_profiles_match_catalog_pins_and_workload_envelopes(self):
         bundled = json.loads((CHART/'files/profiles.json').read_text())
         catalog = {model['id']: model for model in json.loads((ROOT/'catalog.json').read_text())['models']}
@@ -73,6 +114,26 @@ class HelmSGLangTests(unittest.TestCase):
             for field in ('id', 'repository', 'revision', 'image', 'profiles'):
                 self.assertEqual(model[field], catalog[name][field])
 
+    def test_deepseek_tp2_uses_fabric_and_preserves_each_cache(self):
+        values = yaml.safe_load((ROOT / 'values/deepseek-v4-flash-station.yaml').read_text())
+        docs = self.render(values)
+        config = self.configuration(docs)
+        self.assertEqual(config['profile']['nodes'], 2)
+        self.assertEqual(config['profile']['maxTotalTokens'], 16384)
+        self.assertEqual(len([d for d in docs if d['kind'] == 'PersistentVolumeClaim']), 2)
+        ranks = [d for d in docs if d['kind'] == 'Deployment']
+        self.assertEqual(len(ranks), 2)
+        for rank, deployment in enumerate(ranks):
+            pod = deployment['spec']['template']['spec']
+            self.assertTrue(pod['hostNetwork'])
+            main = pod['containers'][0]
+            self.assertEqual(main['resources']['requests']['nvidia.com/gpu'], '1')
+            env = {v['name']: v.get('value') for v in main['env']}
+            self.assertEqual(env['NCCL_SOCKET_IFNAME'], '=eth1')
+            self.assertEqual(env['NCCL_IB_DISABLE'], '1')
+        values.pop('nodeCapabilities')
+        self.assertIn('nodeCapabilities.fabric', self.render(values, success=False))
+
     def test_small_values_install_both_pinned_profiles_with_automatic_startup(self):
         pins = json.loads((CHART/'files/profiles.json').read_text())
         for name in ('qwen3.8-27b', 'qwen3.8-27b-nvfp4', 'nemotron-nano-12b-v2', 'nemotron-3.5-lightning', 'qwen3.5-4b'):
@@ -80,7 +141,8 @@ class HelmSGLangTests(unittest.TestCase):
                 docs = self.render(self.values(name))
                 config = self.configuration(docs)
                 self.assertEqual(config['model']['revision'], pins[name]['revision'])
-                self.assertEqual(config['profile'], pins[name]['profiles'][0])
+                self.assertEqual(config['profile'], {k: v for k, v in pins[name]['profiles'][0].items()
+                    if k not in ('validation', 'validatedWorkload', 'automaticHelmValidation', 'qualification', 'artifactEvidence')})
                 self.assertFalse(any(doc['kind'] == 'Job' for doc in docs))
                 deployment = next(doc for doc in docs if doc['kind'] == 'Deployment')
                 self.assertEqual(deployment['spec']['strategy'], {'type': 'Recreate'})
@@ -161,6 +223,7 @@ class HelmSGLangTests(unittest.TestCase):
         env = {value['name']: value.get('value') for value in pod['containers'][0]['env']}
         self.assertEqual(env['HF_HUB_OFFLINE'], '1')
         self.assertEqual(env['TRANSFORMERS_OFFLINE'], '1')
+        self.assertEqual(env['TVM_FFI_CACHE_DIR'], '/cache/tvm-ffi')
         self.assertEqual(self.configuration(docs)['claimName'], 'previous-model-cache')
 
     def test_automatic_suspend_keeps_endpoint_cache_service_and_pins(self):
@@ -257,6 +320,17 @@ class AutomaticRuntimeTests(unittest.TestCase):
         self.config = copy.deepcopy(fixture.config)
         self.config['profile'].update(nodes=1, memoryGiB=4, flags=[], offload=False)
         self.config.update(contextLength=128, concurrency=1, ports={'http': 30000})
+
+    def test_token_cache_headroom_preserves_request_limits_and_rejects_undersizing(self):
+        self.config['profile']['maxTotalTokens'] = 256
+        args = runtime.command(self.config, self.fixture.snapshot, 0)
+        self.assertEqual(args[args.index('--max-total-tokens') + 1], '256')
+        self.assertEqual(args[args.index('--context-length') + 1], '128')
+        self.assertEqual(args[args.index('--max-running-requests') + 1], '1')
+        for value in (127, 0, True, '256'):
+            self.config['profile']['maxTotalTokens'] = value
+            with self.assertRaisesRegex(RuntimeError, 'must cover'):
+                runtime.command(self.config, self.fixture.snapshot, 0)
 
     def test_existing_cache_is_validated_locally_and_partial_shards_fail_before_serve(self):
         with patch.dict('sys.modules', {'huggingface_hub': None}), patch.object(runtime, 'log'):
