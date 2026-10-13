@@ -379,12 +379,15 @@ Re-enabling is simpler than disabling. Setting `adminIssuerProxy.enabled: true` 
 The route's hostname may have no DNS record, which does not by itself make it unreachable — a load balancer that forwards the `Host` header passes the request to the Gateway regardless. Check the edge, not only the cluster:
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' \
-  -H "Host: api-keys.<your-domain>" \
-  https://<load-balancer-address>/v1/admin/keys
+curl -sk -o /dev/null -w '%{http_code}\n' \
+  --resolve api-keys.<your-domain>:443:<load-balancer-address> \
+  https://api-keys.<your-domain>/v1/admin/keys
+echo "curl exit: $?"
 ```
 
-`404` means no route is attached. Anything else means the route is still being served.
+`--resolve` rather than `-H "Host: …"`: the `Host` header is an HTTP header and does not set the TLS server name, so against a load-balancer IP the certificate is checked against that IP and the request can fail before the Gateway ever sees it. `-k` because this hostname usually has no certificate of its own — the question here is whether a route exists, not whether TLS is valid.
+
+Read the two results together. **Exit 0 with `404`** means no route is attached, which is the outcome you want. **Exit 0 with anything else** means the route is still being served. **A non-zero curl exit** means the request never reached the Gateway, so the check is inconclusive rather than a pass — the printed status will be `000`.
 
 ## Observability
 
