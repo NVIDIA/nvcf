@@ -116,6 +116,9 @@ func validateUmbrellaDocsCatalog(root string, manifest *umbrellaManifest, data [
 	if err := validateUmbrellaDocsCatalogIdentity(manifest, catalog); err != nil {
 		return err
 	}
+	if err := validateUmbrellaDocsOutputs(expected.Outputs, catalog.Outputs); err != nil {
+		return err
+	}
 	// Presentation may evolve; release inputs and published artifact locations cannot.
 	actual := *catalog
 	actual.Outputs = nil
@@ -134,6 +137,33 @@ func validateUmbrellaDocsCatalog(root string, manifest *umbrellaManifest, data [
 	}
 	if !equal {
 		return fmt.Errorf("docs revision changed immutable product catalog inputs")
+	}
+	return nil
+}
+
+func validateUmbrellaDocsOutputs(expected, actual []OutputFile) error {
+	paths := make(map[string]bool)
+	blocks := make(map[OutputBlock]int)
+	for _, output := range actual {
+		if paths[output.Path] {
+			return fmt.Errorf("docs revision repeats generated output %s", output.Path)
+		}
+		paths[output.Path] = true
+		for _, block := range output.Blocks {
+			blocks[block]++
+		}
+	}
+	for _, output := range expected {
+		// Inline renderers select by path, so those paths must remain registered.
+		if (len(output.Blocks) == 0 || inlineVersionSyncer(output.Path) != nil) && !paths[output.Path] {
+			return fmt.Errorf("docs revision removed required output %s", output.Path)
+		}
+		for _, block := range output.Blocks {
+			if blocks[block] == 0 {
+				return fmt.Errorf("docs revision removed required output block %s (%s)", block.Marker, block.Renderer)
+			}
+			blocks[block]--
+		}
 	}
 	return nil
 }

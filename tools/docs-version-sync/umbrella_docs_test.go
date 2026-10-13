@@ -17,6 +17,17 @@ func TestUmbrellaDocsRevisionE2E(t *testing.T) {
 	if err := registerEdition(root, editionRelease{Version: "1.0.0", Ref: "docs/releases/1.0.0", Commit: legacyCommit}, true); err != nil {
 		t.Fatal(err)
 	}
+	catalog.Outputs = []OutputFile{{Path: "docs/overview/generated.md", Blocks: []OutputBlock{
+		{Marker: "manifest", Renderer: "manifest-artifact-registry-paths"},
+		{Marker: "compatibility", Renderer: "compatibility-matrix"},
+	}}}
+	if err := WriteCatalog(filepath.Join(root, "docs/version-catalog/main.yaml"), catalog); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, "docs/overview/generated.md"), "{/* docs-version-sync:BEGIN manifest */}\nstale\n{/* docs-version-sync:END manifest */}\n{/* docs-version-sync:BEGIN compatibility */}\nstale\n{/* docs-version-sync:END compatibility */}\n")
+	if err := SyncDocs(root, catalog, false); err != nil {
+		t.Fatal(err)
+	}
 	manifest := umbrellaTestManifest()
 	// Optional empty YAML lists can become omitted on serialization.
 	raw, err := os.ReadFile(filepath.Join(root, "docs/version-catalog/main.yaml"))
@@ -63,7 +74,7 @@ func TestUmbrellaDocsRevisionE2E(t *testing.T) {
 	common := []string{"--repo", root, "--version", manifest.Version, "--product-commit", product, "--manifest-sha256", umbrellaDigest(data)}
 	prep := filepath.Join(t.TempDir(), "prepared")
 	args := append([]string{"umbrella", "docs-prepare"}, common...)
-	args = append(args, "--commit", legacyCommit, "--out", prep)
+	args = append(args, "--commit", manifest.SourceCommit, "--out", prep)
 	invoke("", args...)
 	editionGit(t, prep, "config", "user.name", "Fixture")
 	editionGit(t, prep, "config", "user.email", "fixture@example.com")
@@ -118,6 +129,42 @@ func TestUmbrellaDocsRevisionE2E(t *testing.T) {
 	if before != editionGit(t, root, "tag", "--list") {
 		t.Fatal("docs correction changed product tags")
 	}
+	// Removing any renderer must not let stale generated content escape validation.
+	for _, change := range []string{"all outputs", "one block", "renderer"} {
+		t.Run(change, func(t *testing.T) {
+			editionGit(t, prep, "checkout", second, "--", "docs/version-catalog/main.yaml", "docs/overview/generated.md")
+			changed, err := LoadCatalog(filepath.Join(prep, "docs/version-catalog/main.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch change {
+			case "all outputs":
+				changed.Outputs = nil
+			case "one block":
+				changed.Outputs[0].Blocks = changed.Outputs[0].Blocks[:1]
+			case "renderer":
+				changed.Outputs[0].Blocks[1].Renderer = "manifest-artifact-registry-paths"
+			}
+			if err := WriteCatalog(filepath.Join(prep, "docs/version-catalog/main.yaml"), changed); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, filepath.Join(prep, "docs/overview/generated.md"), "stale generated versions\n")
+			revise("removed required output", commitDocs("# Missing validation: "+change+"\n"))
+		})
+	}
+	editionGit(t, prep, "checkout", second, "--", "docs/version-catalog/main.yaml", "docs/overview/generated.md")
+	moved, err := LoadCatalog(filepath.Join(prep, "docs/version-catalog/main.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	editionGit(t, prep, "mv", "docs/overview/generated.md", "docs/overview/relocated.md")
+	moved.Outputs[0].Path = "docs/overview/relocated.md"
+	if err := WriteCatalog(filepath.Join(prep, "docs/version-catalog/main.yaml"), moved); err != nil {
+		t.Fatal(err)
+	}
+	revise("", commitDocs("# Relocated generated content\n"))
+	editionGit(t, prep, "mv", "docs/overview/relocated.md", "docs/overview/generated.md")
+	editionGit(t, prep, "checkout", second, "--", "docs/version-catalog/main.yaml")
 	changed, err := LoadCatalog(filepath.Join(prep, "docs/version-catalog/main.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -138,5 +185,31 @@ func TestUmbrellaDocsRevisionE2E(t *testing.T) {
 	editionGit(t, root, "branch", "-f", "docs/releases/1.0.0", product)
 	if err := validateEditionRegistry(root, true); err == nil || !strings.Contains(err.Error(), "moved") {
 		t.Fatalf("accepted moved legacy branch: %v", err)
+	}
+}
+
+func TestUmbrellaDocsOutputCoverage(t *testing.T) {
+	block := OutputBlock{Marker: "manifest", Renderer: "manifest-artifact-registry-paths"}
+	expected := []OutputFile{
+		{Path: "docs/overview/image-mirroring.md", Blocks: []OutputBlock{block}},
+		{Path: "docs/compute-plane/cluster-management/reference.md"},
+	}
+	for _, tc := range []struct {
+		name    string
+		outputs []OutputFile
+	}{
+		{"missing inline-only path", expected[:1]},
+		{"moved inline renderer", []OutputFile{{Path: "docs/moved.md", Blocks: []OutputBlock{block}}, expected[1]}},
+		{"duplicate path", []OutputFile{expected[0], expected[0], expected[1]}},
+		{"missing block", []OutputFile{{Path: expected[0].Path}, expected[1]}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateUmbrellaDocsOutputs(expected, tc.outputs); err == nil {
+				t.Fatal("accepted reduced output coverage")
+			}
+		})
+	}
+	if err := validateUmbrellaDocsOutputs(expected, expected); err != nil {
+		t.Fatal(err)
 	}
 }
