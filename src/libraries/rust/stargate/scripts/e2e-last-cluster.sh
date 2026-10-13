@@ -18,7 +18,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: scripts/e2e-last-cluster.sh [--algorithm NAME]... [--mode on|off]... [--no-build]
+Usage: scripts/e2e-last-cluster.sh [--no-build]
 
 Runs the LLM API gateway against a real Stargate, two Pylons, and two
 mock-dynamo backends on loopback, and reproduces the overflow cache-thrash
@@ -31,67 +31,43 @@ scenario for last_cluster_affinity:
   5. The next 10 gateway requests in the session (same prompt_cache_key)
      must stay on B with the flag on, and return to A with the flag off.
 
-Mode "on" enables STARGATE_LAST_CLUSTER_ENABLED in the gateway and
-last_cluster_affinity in Stargate. Mode "off" disables both. Each
-algorithm and mode pair runs against a fresh set of processes. The script
-exits non-zero when any expectation fails.
+The scenario runs for wait-and-widen and pulsar-wait-and-widen, each with the
+flag on (STARGATE_LAST_CLUSTER_ENABLED in the gateway and
+last_cluster_affinity in Stargate) and off, against a fresh set of processes.
+The script exits non-zero when any expectation fails.
 
 Options:
-  --algorithm NAME  wait-and-widen or pulsar-wait-and-widen. Repeatable.
-                    Default: both.
-  --mode MODE       on or off. Repeatable. Default: both.
-  --no-build        Reuse existing release binaries and gateway build.
+  --no-build        Reuse the binaries in target/release. To run without
+                    the gateway source or go, copy a prebuilt
+                    llm-api-gateway there first.
 
 Environment:
   E2E_PORT_BASE     First loopback port, default 27100. Uses 32 ports.
-  E2E_WORK_DIR      Logs and configs, default a new mktemp directory.
-  E2E_KEEP_WORK_DIR Set to 1 to keep the work directory after success.
-  E2E_GATEWAY_BIN   Prebuilt llm-api-gateway binary to use with --no-build.
-                    Without it, --no-build still builds the gateway.
+  E2E_WORK_DIR      Logs and configs, kept after the run. Default: a new
+                    mktemp directory, removed on success.
 
 Requires curl, jq, and sha256sum or shasum. Building also needs cargo and go.
 EOF
 }
 
-stargate_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-gateway_root="${stargate_root}/../../../invocation-plane-services/llm-api-gateway"
-release_dir="${stargate_root}/target/release"
-
-algorithms=()
-modes=()
 build=1
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --algorithm) algorithms+=("$2"); shift 2 ;;
-        --mode) modes+=("$2"); shift 2 ;;
-        --no-build) build=0; shift ;;
-        -h|--help) usage; exit 0 ;;
-        *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
-    esac
-done
-[[ ${#algorithms[@]} -gt 0 ]] || algorithms=(wait-and-widen pulsar-wait-and-widen)
-[[ ${#modes[@]} -gt 0 ]] || modes=(on off)
-for algorithm in "${algorithms[@]}"; do
-    case "${algorithm}" in
-        wait-and-widen|pulsar-wait-and-widen) ;;
-        *) echo "unsupported algorithm: ${algorithm}" >&2; exit 2 ;;
-    esac
-done
-for mode in "${modes[@]}"; do
-    case "${mode}" in
-        on|off) ;;
-        *) echo "unsupported mode: ${mode}" >&2; exit 2 ;;
-    esac
-done
+case "${1:-}" in
+    "") ;;
+    --no-build) build=0 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
+esac
 
 for tool in curl jq; do
     command -v "${tool}" >/dev/null || { echo "${tool} is required" >&2; exit 2; }
 done
 
+stargate_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+gateway_root="${stargate_root}/../../../invocation-plane-services/llm-api-gateway"
+release_dir="${stargate_root}/target/release"
 port_base="${E2E_PORT_BASE:-27100}"
 work_dir="${E2E_WORK_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/stargate-e2e-last-cluster.XXXXXX")}"
 mkdir -p "${work_dir}"
-gateway_bin="${E2E_GATEWAY_BIN:-${work_dir}/llm-api-gateway}"
 
 model="e2e-model"
 routing_key="e2e"
@@ -101,7 +77,6 @@ follow_up_count=10
 # holder_tokens tokens, so they keep A full for about 3 seconds.
 token_delay_ms=50
 holder_tokens=60
-session_tokens=2
 max_engine_concurrency=2
 
 sg_grpc=$((port_base))
@@ -132,9 +107,7 @@ on_exit() {
     cleanup
     if [[ ${status} -ne 0 ]]; then
         echo "FAIL: logs kept in ${work_dir}" >&2
-    elif [[ "${E2E_KEEP_WORK_DIR:-0}" == "1" || -n "${E2E_WORK_DIR:-}" ]]; then
-        echo "logs kept in ${work_dir}"
-    else
+    elif [[ -z "${E2E_WORK_DIR:-}" ]]; then
         rm -rf "${work_dir}"
     fi
     exit "${status}"
@@ -151,15 +124,6 @@ port_open() {
     (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
 }
 
-check_ports_free() {
-    local port
-    for port in "$@"; do
-        if port_open "${port}"; then
-            fail "port ${port} is already in use; set E2E_PORT_BASE"
-        fi
-    done
-}
-
 wait_for() {
     local description="$1" deadline=$((SECONDS + 30))
     shift
@@ -169,62 +133,11 @@ wait_for() {
     done
 }
 
-check_gateway_build() {
-    [[ -d "${gateway_root}" ]] || fail "missing gateway source at ${gateway_root}; set E2E_GATEWAY_BIN"
-    command -v go >/dev/null || fail "go is required to build the gateway; set E2E_GATEWAY_BIN"
-}
-
-build_gateway() {
-    check_gateway_build
-    echo "building llm-api-gateway"
-    (cd "${gateway_root}" && go build -o "${gateway_bin}" ./cmd/llm-api-gateway)
-}
-
-build_binaries() {
-    # Fail before the long cargo build when the gateway cannot be built.
-    check_gateway_build
-    echo "building stargate, pylon, and mock-dynamo (release)"
-    (cd "${stargate_root}" && cargo build --locked --release -q -p stargate -p pylon -p mock-dynamo)
-    build_gateway
-}
-
-write_lb_config() {
-    local algorithm="$1" flag="$2" path="$3" virtual_nodes=""
-    if [[ "${algorithm}" == "wait-and-widen" ]]; then
-        virtual_nodes='"cache_affinity_virtual_nodes": 8,'
-    fi
-    cat >"${path}" <<EOF
-{
-  "default": "power-of-n",
-  "models": {
-    "${model}": {
-      "algorithm": "${algorithm}",
-      "seed": "e2e-seed",
-      "require_cache_affinity_key": true,
-      ${virtual_nodes}
-      "cache_affinity_backend_selection_count": 1,
-      "cache_affinity_wait_ms": 300,
-      "cache_affinity_input_tokens_scale": 0.1,
-      "last_cluster_affinity": ${flag}
-    }
-  }
-}
-EOF
-}
-
 start() {
-    local name="$1" log="$2"
-    shift 2
+    local log="$1"
+    shift
     "$@" >"${log}" 2>&1 &
     pids+=("$!")
-}
-
-stargate_metric_sum() {
-    local name="$1" filter="$2"
-    curl -sf "http://127.0.0.1:${sg_metrics}/metrics" |
-        awk -v name="${name}" -v filter="${filter}" '
-            index($0, name "{") == 1 && index($0, filter) > 0 { sum += $NF }
-            END { printf "%d\n", sum }'
 }
 
 mock_count() {
@@ -236,16 +149,15 @@ mock_count() {
 
 # Prints the cluster whose mock-dynamo served the request run by "$@".
 served_by() {
-    local before_a before_b after_a after_b
+    local before_a before_b delta
     before_a=$(mock_count 0)
     before_b=$(mock_count 1)
     "$@"
-    after_a=$(mock_count 0)
-    after_b=$(mock_count 1)
-    case "$((after_a - before_a)):$((after_b - before_b))" in
+    delta="$(($(mock_count 0) - before_a)):$(($(mock_count 1) - before_b))"
+    case "${delta}" in
         1:0) echo "cluster-a" ;;
         0:1) echo "cluster-b" ;;
-        *) fail "could not attribute request: a +$((after_a - before_a)), b +$((after_b - before_b))" ;;
+        *) fail "could not attribute request (a:b delta ${delta})" ;;
     esac
 }
 
@@ -255,17 +167,17 @@ affinity_key() {
     printf 'mt:v1:session:%s' "$(printf '%s' "${session_id}" | "${hasher[@]}" | cut -d' ' -f1)"
 }
 
-# Sends a direct Stargate request with the session's affinity key and no
-# last-cluster hint. Holders use this to occupy the session's rank-1 cluster.
+# Sends a direct Stargate request with the given affinity key and no
+# last-cluster hint.
 stargate_request() {
-    local request_id="$1" tokens="$2"
+    local request_id="$1" affinity="$2" tokens="$3"
     curl -sf -N -o /dev/null "http://127.0.0.1:${sg_http}/v1/chat/completions" \
         -H 'content-type: application/json' \
         -H "x-request-id: ${request_id}" \
         -H "x-routing-key: ${routing_key}" \
         -H "x-model: ${model}" \
         -H 'x-input-tokens: 8' \
-        -H "x-cache-affinity-key: $(affinity_key)" \
+        -H "x-cache-affinity-key: ${affinity}" \
         -d "{\"model\":\"${model}\",\"stream\":true,\"max_tokens\":${tokens},\"messages\":[{\"role\":\"user\",\"content\":\"hold\"}]}"
 }
 
@@ -276,24 +188,46 @@ gateway_request() {
     status=$(curl -s -N -o "${run_dir}/last-gateway-response.txt" -w '%{http_code}' \
         "http://127.0.0.1:${gw_http}/v1/chat/completions" \
         -H 'content-type: application/json' \
-        -d "{\"model\":\"${routing_key}/${model}\",\"stream\":true,\"max_tokens\":${session_tokens},\"prompt_cache_key\":\"${session_id}\",\"messages\":[{\"role\":\"user\",\"content\":\"turn\"}]}")
+        -d "{\"model\":\"${routing_key}/${model}\",\"stream\":true,\"max_tokens\":2,\"prompt_cache_key\":\"${session_id}\",\"messages\":[{\"role\":\"user\",\"content\":\"turn\"}]}")
     [[ "${status}" == "200" ]] || fail "gateway request returned ${status}: $(cat "${run_dir}/last-gateway-response.txt")"
 }
 
-start_stack() {
-    local algorithm="$1" mode="$2" flag=false gateway_flag=false index name
-    [[ "${mode}" == "on" ]] && flag=true && gateway_flag=true
-    check_ports_free "${sg_grpc}" "${sg_http}" "${sg_metrics}" "${sg_discovery}" \
-        "${worker_auth}" "${gw_http}" "${gw_metrics}" \
-        "$(mock_port 0)" "$(mock_port 1)" "$(pylon_metrics_port 0)" "$(pylon_metrics_port 1)"
-    write_lb_config "${algorithm}" "${flag}" "${run_dir}/lb-config.json"
+both_tunnels_connected() {
+    grep -q "reverse tunnel connected" "${run_dir}/pylon-a.log" &&
+        grep -q "reverse tunnel connected" "${run_dir}/pylon-b.log"
+}
 
-    start worker-auth "${run_dir}/worker-auth.log" \
+start_stack() {
+    local algorithm="$1" flag="$2" index name port
+    for port in "${sg_grpc}" "${sg_http}" "${sg_metrics}" "${sg_discovery}" "${worker_auth}" \
+        "${gw_http}" "${gw_metrics}" "$(mock_port 0)" "$(mock_port 1)" \
+        "$(pylon_metrics_port 0)" "$(pylon_metrics_port 1)"; do
+        if port_open "${port}"; then
+            fail "port ${port} is already in use; set E2E_PORT_BASE"
+        fi
+    done
+    cat >"${run_dir}/lb-config.json" <<EOF
+{
+  "default": "power-of-n",
+  "models": {
+    "${model}": {
+      "algorithm": "${algorithm}",
+      "seed": "e2e-seed",
+      "cache_affinity_backend_selection_count": 1,
+      "cache_affinity_wait_ms": 300,
+      "cache_affinity_input_tokens_scale": 0.1,
+      "last_cluster_affinity": ${flag}
+    }
+  }
+}
+EOF
+
+    start "${run_dir}/worker-auth.log" \
         "${release_dir}/stargate-worker-auth-gateway" \
         --listen-addr "127.0.0.1:${worker_auth}" \
         --worker "token-a=${routing_key}" --worker "token-b=${routing_key}"
     wait_for "worker-auth fixture" port_open "${worker_auth}"
-    start stargate "${run_dir}/stargate.log" env RUST_LOG=info \
+    start "${run_dir}/stargate.log" env RUST_LOG=info \
         "${release_dir}/stargate" \
         --stargate-id e2e-stargate \
         --listen-addr "127.0.0.1:${sg_grpc}" \
@@ -312,7 +246,7 @@ start_stack() {
 
     for index in 0 1; do
         name="${cluster_names[${index}]}"
-        start "mock-${name}" "${run_dir}/mock-${name}.log" \
+        start "${run_dir}/mock-${name}.log" \
             "${release_dir}/mock-dynamo" \
             --http-listen-addr "127.0.0.1:$(mock_port "${index}")" \
             --model-name "${model}" \
@@ -323,7 +257,7 @@ start_stack() {
     for index in 0 1; do
         name="${cluster_names[${index}]}"
         wait_for "mock-dynamo ${name}" curl -sf "http://127.0.0.1:$(mock_port "${index}")/health"
-        start "pylon-${name}" "${run_dir}/pylon-${name}.log" env RUST_LOG=info \
+        start "${run_dir}/pylon-${name}.log" env RUST_LOG=info \
             "${release_dir}/pylon" \
             --upstream-http-base-url "http://127.0.0.1:$(mock_port "${index}")" \
             --model-name "${model}" \
@@ -343,7 +277,7 @@ start_stack() {
             --metrics-port "$(pylon_metrics_port "${index}")"
     done
 
-    start gateway "${run_dir}/gateway.log" env \
+    start "${run_dir}/gateway.log" env \
         NVCF_GATEWAY_ADDR="127.0.0.1:${gw_http}" \
         METRICS_PORT="${gw_metrics}" \
         NVCF_REGION=local \
@@ -352,125 +286,79 @@ start_stack() {
         OLRIC_ENABLED=false \
         RATE_LIMIT_ENABLED=false \
         STARGATE_URL="http://127.0.0.1:${sg_http}" \
-        STARGATE_LAST_CLUSTER_ENABLED="${gateway_flag}" \
-        "${gateway_bin}"
+        STARGATE_LAST_CLUSTER_ENABLED="${flag}" \
+        "${release_dir}/llm-api-gateway"
     wait_for "gateway readiness" curl -sf "http://127.0.0.1:${gw_http}/readyz"
     wait_for "both pylon reverse tunnels" both_tunnels_connected
-    # Both clusters must be routable. A warm-up through Stargate with a
-    # throwaway affinity key confirms the routing target exists.
-    wait_for "stargate routing" curl -sf -N -o /dev/null \
-        "http://127.0.0.1:${sg_http}/v1/chat/completions" \
-        -H 'content-type: application/json' -H 'x-request-id: e2e-warmup' \
-        -H "x-routing-key: ${routing_key}" -H "x-model: ${model}" \
-        -H 'x-input-tokens: 1' -H 'x-cache-affinity-key: e2e-warmup' \
-        -d "{\"model\":\"${model}\",\"stream\":true,\"max_tokens\":1,\"messages\":[{\"role\":\"user\",\"content\":\"warm\"}]}"
-}
-
-both_tunnels_connected() {
-    grep -q "reverse tunnel connected" "${run_dir}/pylon-a.log" &&
-        grep -q "reverse tunnel connected" "${run_dir}/pylon-b.log"
+    wait_for "stargate routing" stargate_request e2e-warmup e2e-warmup 1
+    # Let both Pylons publish a stats update after the warm-up.
+    sleep 1
 }
 
 run_case() {
-    local algorithm="$1" mode="$2"
-    run_dir="${work_dir}/${algorithm}-${mode}"
+    local algorithm="$1" flag="$2"
+    run_dir="${work_dir}/${algorithm}-${flag}"
     mkdir -p "${run_dir}"
-    echo
-    echo "=== ${algorithm}, last-cluster ${mode} ==="
-    start_stack "${algorithm}" "${mode}"
-    # Let both Pylons publish a stats update after the warm-up.
-    sleep 1
+    echo "=== ${algorithm}, last_cluster_affinity=${flag} ==="
+    start_stack "${algorithm}" "${flag}"
 
-    local holder_pids=() rank_one rank_two first overflow follow_ups=()
-    local session_before returning_before new_fallback_before
-    session_before=$(stargate_metric_sum stargate_routing_session_selections_total "model=\"${model}\"")
-
-    # Fill rank 1. Each holder is a direct Stargate request in session S with
-    # no hint, so it lands on the session's rank-1 cluster while it has room.
-    local before_a before_b
+    # Fill rank 1. Holders are direct Stargate requests in session S with no
+    # hint, so they land on the session's rank-1 cluster while it has room.
+    local before_a before_b holders index pid holder_pids=()
     before_a=$(mock_count 0)
     before_b=$(mock_count 1)
     for index in $(seq 1 "${max_engine_concurrency}"); do
-        stargate_request "e2e-holder-${index}" "${holder_tokens}" &
+        stargate_request "e2e-holder-${index}" "$(affinity_key)" "${holder_tokens}" &
         holder_pids+=("$!")
         sleep 0.3
     done
     sleep 0.3
-    local holders_a=$(($(mock_count 0) - before_a)) holders_b=$(($(mock_count 1) - before_b))
-    if [[ ${holders_a} -eq ${max_engine_concurrency} && ${holders_b} -eq 0 ]]; then
-        rank_one="cluster-a"
-        rank_two="cluster-b"
-    elif [[ ${holders_b} -eq ${max_engine_concurrency} && ${holders_a} -eq 0 ]]; then
-        rank_one="cluster-b"
-        rank_two="cluster-a"
-    else
-        fail "holders did not land on one cluster: a=${holders_a} b=${holders_b}"
-    fi
-    echo "session rank 1 (A): ${rank_one}; rank 2 (B): ${rank_two}; A is full"
+    local rank_one rank_two
+    holders="$(($(mock_count 0) - before_a)):$(($(mock_count 1) - before_b))"
+    case "${holders}" in
+        "${max_engine_concurrency}:0") rank_one=cluster-a; rank_two=cluster-b ;;
+        "0:${max_engine_concurrency}") rank_one=cluster-b; rank_two=cluster-a ;;
+        *) fail "holders did not land on one cluster (a:b ${holders})" ;;
+    esac
 
-    returning_before=$(stargate_metric_sum stargate_routing_session_selections_total 'session_state="returning"')
-    new_fallback_before=$(stargate_metric_sum stargate_routing_session_selections_total 'selection="fallback",session_state="new"')
-
-    first=$(served_by gateway_request)
-    echo "first gateway request (no hint): ${first}"
-    [[ "${first}" == "${rank_two}" ]] || fail "first request should overflow to ${rank_two}, got ${first}"
-    overflow="${first}"
+    local served expected
+    served=$(served_by gateway_request)
+    [[ "${served}" == "${rank_two}" ]] || fail "first request should overflow to ${rank_two}, got ${served}"
 
     for pid in "${holder_pids[@]}"; do
         wait "${pid}" || fail "holder request failed"
     done
     # A drained. Give Pylon time to publish the idle stats.
     sleep 1
-    echo "A drained"
 
-    local index
+    if [[ "${flag}" == true ]]; then
+        expected="${rank_two}"
+    else
+        expected="${rank_one}"
+    fi
     for index in $(seq 1 "${follow_up_count}"); do
-        follow_ups+=("$(served_by gateway_request)")
+        served=$(served_by gateway_request)
+        [[ "${served}" == "${expected}" ]] || fail "follow-up ${index} went to ${served}, expected ${expected}"
         # The gateway stores the last cluster in the background.
         sleep 0.1
     done
-    echo "follow-up clusters: ${follow_ups[*]}"
-
-    local expected on_b=0 on_a=0 cluster
-    for cluster in "${follow_ups[@]}"; do
-        if [[ "${cluster}" == "${overflow}" ]]; then on_b=$((on_b + 1)); else on_a=$((on_a + 1)); fi
-    done
-    echo "follow-ups on B: ${on_b}/${follow_up_count}; on A: ${on_a}/${follow_up_count}"
-
-    local returning new_fallback session_total
-    returning=$(($(stargate_metric_sum stargate_routing_session_selections_total 'session_state="returning"') - returning_before))
-    new_fallback=$(($(stargate_metric_sum stargate_routing_session_selections_total 'selection="fallback",session_state="new"') - new_fallback_before))
-    session_total=$(($(stargate_metric_sum stargate_routing_session_selections_total "model=\"${model}\"") - session_before))
-    echo "stargate session selections: returning=${returning} new-fallback=${new_fallback} total=${session_total}"
-    curl -sf "http://127.0.0.1:${gw_metrics}/metrics" | grep -E '^llm_api_gateway_last_cluster_(lookups|writes)_total' | grep -v ' 0$' || true
-
-    if [[ "${mode}" == "on" ]]; then
-        expected="${overflow}"
-        [[ ${on_b} -eq ${follow_up_count} ]] || fail "flag on: expected ${follow_up_count}/${follow_up_count} follow-ups on ${expected}"
-        [[ ${returning} -eq ${follow_up_count} ]] || fail "flag on: expected ${follow_up_count} returning selections, got ${returning}"
-        [[ ${new_fallback} -eq 1 ]] || fail "flag on: expected 1 new fallback selection, got ${new_fallback}"
-    else
-        expected="${rank_one}"
-        [[ ${on_a} -eq ${follow_up_count} ]] || fail "flag off: expected ${follow_up_count}/${follow_up_count} follow-ups on ${expected}"
-        [[ ${session_total} -eq 0 ]] || fail "flag off: expected no session selections, got ${session_total}"
-    fi
-    echo "PASS: ${algorithm}, last-cluster ${mode}"
+    echo "PASS: ${algorithm}, last_cluster_affinity=${flag}"
     cleanup
 }
 
 if [[ ${build} -eq 1 ]]; then
-    build_binaries
-else
-    [[ -x "${gateway_bin}" ]] || build_gateway
+    mkdir -p "${release_dir}"
+    echo "building llm-api-gateway, stargate, pylon, and mock-dynamo"
+    (cd "${gateway_root}" && go build -o "${release_dir}/llm-api-gateway" ./cmd/llm-api-gateway)
+    (cd "${stargate_root}" && cargo build --locked --release -q -p stargate -p pylon -p mock-dynamo)
 fi
-for binary in stargate pylon mock-dynamo stargate-worker-auth-gateway; do
+for binary in llm-api-gateway stargate pylon mock-dynamo stargate-worker-auth-gateway; do
     [[ -x "${release_dir}/${binary}" ]] || fail "missing ${release_dir}/${binary}; run without --no-build"
 done
 
-for algorithm in "${algorithms[@]}"; do
-    for mode in "${modes[@]}"; do
-        run_case "${algorithm}" "${mode}"
+for algorithm in wait-and-widen pulsar-wait-and-widen; do
+    for flag in true false; do
+        run_case "${algorithm}" "${flag}"
     done
 done
-echo
 echo "all cases passed"

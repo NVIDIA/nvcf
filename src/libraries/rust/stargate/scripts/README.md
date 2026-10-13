@@ -65,7 +65,6 @@ overflow.
 
 ```bash
 scripts/e2e-last-cluster.sh
-scripts/e2e-last-cluster.sh --algorithm pulsar-wait-and-widen --mode on
 ```
 
 Run `scripts/e2e-last-cluster.sh --help` for the scenario, options, and
