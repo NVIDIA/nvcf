@@ -30,6 +30,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
@@ -202,8 +205,8 @@ func lastClusterCall(
 
 // TestLastClusterRoundTrip covers every session source on every path: an
 // eligible session's second request carries the hint, the same session with
-// another model or routing key does not, and payload sessions never touch the
-// store.
+// another model or routing key does not, and payload sessions without
+// prefix-chain values never touch the store.
 func TestLastClusterRoundTrip(t *testing.T) {
 	for _, path := range lastClusterPaths {
 		for _, source := range []string{
@@ -367,6 +370,106 @@ func TestLastClusterStoreErrorsTransparent(t *testing.T) {
 			gets, sets, _ := store.snapshot()
 			require.Equal(t, 1, gets)
 			require.Equal(t, 1, sets)
+		})
+	}
+}
+
+// payloadTurnCtx returns a payload session request context carrying the
+// prefix-chain values for the given wire messages.
+func payloadTurnCtx(t *testing.T, endpoint string, messages ...string) *requestctx.RequestContext {
+	t.Helper()
+	items := make([]json.RawMessage, len(messages))
+	output := make([]bool, len(messages))
+	for i, message := range messages {
+		items[i] = json.RawMessage(message)
+		output[i] = strings.Contains(message, `"role":"assistant"`)
+	}
+	var leading []json.RawMessage
+	if endpoint == lastcluster.EndpointMessages {
+		leading = []json.RawMessage{nil}
+	}
+	lookup, write, err := lastcluster.PayloadSessionValues(lastcluster.PayloadInput{
+		Endpoint: endpoint,
+		Leading:  leading,
+		Items:    items,
+		Output:   output,
+	})
+	require.NoError(t, err)
+	reqCtx := lastClusterReqCtx(requestctx.SessionSourcePayload)
+	reqCtx.LastClusterLookupKey = lookup
+	reqCtx.LastClusterWriteKey = write
+	return reqCtx
+}
+
+// lastClusterLookupResults returns the lookup counter by result.
+func lastClusterLookupResults(t *testing.T, reader *sdkmetric.ManualReader) map[string]int64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	out := map[string]int64{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "llm_api_gateway_last_cluster_lookups_total" {
+				continue
+			}
+			for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
+				value, _ := dp.Attributes.Value("result")
+				out[value.AsString()] = dp.Value
+			}
+		}
+	}
+	return out
+}
+
+func TestLastClusterPayloadSessionTwoTurns(t *testing.T) {
+	for _, path := range lastClusterPaths {
+		t.Run(path, func(t *testing.T) {
+			reader := sdkmetric.NewManualReader()
+			meterProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+			oldMeterProvider := otel.GetMeterProvider()
+			otel.SetMeterProvider(meterProvider)
+			t.Cleanup(func() {
+				otel.SetMeterProvider(oldMeterProvider)
+				_ = meterProvider.Shutdown(context.Background())
+			})
+			ctx := context.Background()
+			store := &lastClusterStore{values: map[string]string{}}
+			p, tracker, hints := newLastClusterProvider(t, store, http.StatusOK, nil)
+			lastHint := func() string {
+				all := hints()
+				return all[len(all)-1]
+			}
+			call := func(reqCtx *requestctx.RequestContext) {
+				_, err := lastClusterCall(t, p, path, reqCtx, nil)
+				require.NoError(t, err)
+			}
+			endpoint := lastcluster.EndpointChatCompletions
+			if path == "Proxy" {
+				endpoint = lastcluster.EndpointMessages
+			}
+
+			u1 := `{"role":"user","content":"u1"}`
+			turn1 := payloadTurnCtx(t, endpoint, u1)
+			require.Empty(t, turn1.LastClusterLookupKey)
+			call(turn1)
+			require.Empty(t, lastHint(), "first turn must carry no hint")
+			tracker.Drain(ctx)
+			gets, sets, values := store.snapshot()
+			require.Zero(t, gets, "first turn must not read the store")
+			require.Equal(t, 1, sets)
+			require.Equal(t, map[string]int64{"miss": 1}, lastClusterLookupResults(t, reader))
+			require.Equal(t, "cluster-b", values[lastcluster.Key(turn1.RoutingKey, turn1.Model, turn1.LastClusterWriteKey)])
+
+			turn2 := payloadTurnCtx(t, endpoint, u1, `{"role":"assistant","content":"a1"}`, `{"role":"user","content":"u2"}`)
+			require.Equal(t, turn1.LastClusterWriteKey, turn2.LastClusterLookupKey)
+			call(turn2)
+			require.Equal(t, "cluster-b", lastHint())
+			tracker.Drain(ctx)
+			gets, sets, values = store.snapshot()
+			require.Equal(t, 1, gets)
+			require.Equal(t, 2, sets)
+			require.Equal(t, map[string]int64{"miss": 1, "hit": 1}, lastClusterLookupResults(t, reader))
+			require.Equal(t, "cluster-b", values[lastcluster.Key(turn2.RoutingKey, turn2.Model, turn2.LastClusterWriteKey)])
 		})
 	}
 }

@@ -44,6 +44,11 @@ type RequestContext struct {
 	SessionID        string
 	SessionSource    string
 	CacheAffinityKey string
+	// LastClusterLookupKey and LastClusterWriteKey are set only for payload
+	// sessions when last-cluster hints are on. They are opaque prefix-chain
+	// values; the lookup value is empty on the first turn.
+	LastClusterLookupKey string
+	LastClusterWriteKey  string
 	// Priority is the caller priority resolved by NVCF API at auth time, or nil
 	// when no priority config applies. Lower value is higher priority, 0 is
 	// highest. Forwarded to Stargate as the X-Priority header when set.

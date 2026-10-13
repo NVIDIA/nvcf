@@ -427,9 +427,36 @@ header. When the model's `wait-and-widen` or `pulsar-wait-and-widen`
 configuration sets `last_cluster_affinity: true`, a returning session stays on
 its last cluster and a new session skips the affinity wait.
 
-Only sessions from `prompt_cache_key`, `conversation.id`,
+Sessions from `prompt_cache_key`, `conversation.id`,
 `x-multi-turn-session-id`, or `x-claude-code-session-id` are eligible. Sessions
-keyed by a messages or input hash change key every turn and are skipped.
+that fall back to a messages or input hash are also eligible, with no extra
+setting.
+
+A messages or input hash changes every turn, so for those sessions the gateway
+keys the store by a prefix chain:
+
+- It writes the cluster under a hash of the full conversation.
+- It looks up under a hash of the conversation before the last contiguous run
+  of model-output items. For chat and Messages these are assistant messages.
+  For Responses they are assistant `message`, `reasoning`, `function_call`,
+  `custom_tool_call`, `web_search_call`, `code_interpreter_call`, `mcp_call`,
+  `mcp_list_tools`, and `mcp_approval_request` items.
+- Messages hashes `system` first. Responses hashes `instructions` and `prompt`
+  first.
+- Values come from the raw request JSON. Object key order and whitespace
+  outside strings do not change them. They are scoped by endpoint, org and
+  project, routing key, and model.
+
+Clients that append to their history and resend it verbatim, including tool
+loops, find the cluster that served the previous turn. Edited, truncated, or
+summarized history misses and routes as a new session when the change falls in
+the part hashed for lookup. Assistant prefill continuation is outside this
+guarantee and usually misses. Responses requests with `previous_response_id` or
+an `item_reference` item are skipped. A first turn skips the store read, counts
+as a `miss`, and is written on a 2xx response. Delivery is best-effort: writes
+are asynchronous, entries expire after the TTL, and with Olric off each replica
+has its own store. The `x-cache-affinity-key` header and router placement do
+not change.
 
 | Env var | Helm value | Default | Effect |
 | --- | --- | --- | --- |

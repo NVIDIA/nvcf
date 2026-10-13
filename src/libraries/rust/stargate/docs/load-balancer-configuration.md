@@ -389,6 +389,12 @@ Stargate keeps no per-session state. The trusted gateway remembers the
 next request as `x-stargate-last-cluster-id`. See the
 [API gateway contract](api-gateway-contract.md) for the gateway rules.
 
+When the gateway derives `x-cache-affinity-key` from the request payload, the
+key changes every turn. The gateway still carries the hint across turns by
+keying its own store by conversation prefix, so a later turn can arrive as
+`returning` with a different `x-cache-affinity-key`. Stargate derives the
+affinity order from the new key and then promotes the hinted cluster.
+
 This section uses these terms:
 
 - Affinity order: the ordered cluster list derived from the affinity key.

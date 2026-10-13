@@ -151,8 +151,14 @@ Last-cluster rules for the gateway:
   tuple.
 - Always delete an inbound `x-stargate-last-cluster-id` before building the
   Stargate request, including on paths that clone inbound headers.
-- Set the header only from the gateway's own store, and only for sessions with
-  a stable key. Skip payload-derived affinity keys, which change every turn.
+- Set the header only from the gateway's own store.
+- A payload-derived affinity key changes every turn, so do not key the store by
+  it. The LLM API gateway keys payload sessions by a prefix chain: it writes
+  under a hash of the full conversation and looks up under a hash of the
+  conversation before the last run of model output. Append-only clients then
+  find the previous turn's cluster. History edited or truncated in the part
+  hashed for lookup misses and is sent without the header. A gateway that
+  cannot derive such values must skip payload sessions.
 - Store the `x-stargate-cluster-id` of a 2xx response when the response
   headers arrive, not at stream end. Do not store on non-2xx responses or
   transport errors.
