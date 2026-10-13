@@ -1336,6 +1336,11 @@ notary:
 {{- if and $cpuWorkloadsEnabled (not $cpuSisChartVersion) (not $cpuSisChartPath) }}
 {{- fail "cpuWorkloads.enabled=true needs an sis chart that supports CPU-only workloads, and the chart this stack pins (2.6.0) does not. Set cpuWorkloads.sisChartVersion to a released chart that does, or sis.chartPath to a chart built from this repository" }}
 {{- end }}
+{{- /* The chart this stack pins does not support CPU-only workloads either, so naming it explicitly is refused too.
+       Remove this check when the pin moves to a chart that does. */}}
+{{- if and $cpuWorkloadsEnabled (eq (toString $cpuSisChartVersion) "2.6.0") }}
+{{- fail "cpuWorkloads.sisChartVersion 2.6.0 is the chart this stack pins, and it does not support CPU-only workloads. Name a released chart that does, or set sis.chartPath to a chart built from this repository" }}
+{{- end }}
 {{- if and $cpuSisChartVersion (not $cpuWorkloadsEnabled) }}
 {{- fail "cpuWorkloads.sisChartVersion requires cpuWorkloads.enabled=true" }}
 {{- end }}

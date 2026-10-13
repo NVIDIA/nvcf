@@ -255,4 +255,19 @@ fi
 grep -Fq 'must not be empty' "$work_dir/write-values.log" ||
   fail "the empty sis chart version did not say it must not be empty"
 
+write_environment <<'EOF'
+global:
+  image:
+    registry: nvcr.io
+    repository: test/nvcf
+cpuWorkloads:
+  enabled: true
+  sisChartVersion: 2.6.0
+EOF
+if render_values "$work_dir/pinned-version-values.yaml" api; then
+  fail "the pinned sis chart version was accepted as a chart that supports CPU workloads"
+fi
+grep -Fq 'does not support CPU-only workloads' "$work_dir/write-values.log" ||
+  fail "the pinned sis chart version did not say it is unsupported"
+
 echo "cpu-workloads-wiring: OK"
