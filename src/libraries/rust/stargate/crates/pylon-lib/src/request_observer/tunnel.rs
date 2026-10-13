@@ -51,6 +51,10 @@ impl TunnelRequestObserver {
         }
     }
 
+    pub(crate) fn set_input_usage_expected(&mut self, expected: bool) {
+        self.observer.set_input_usage_expected(expected);
+    }
+
     pub(crate) fn on_backend_submission(&mut self, submitted_at: Instant) {
         self.observer.on_backend_submission(submitted_at);
     }

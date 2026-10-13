@@ -173,6 +173,21 @@ Transient errors, malformed events, and EOF do not switch `auto` to fallback.
 Fallback reads streamed OpenAI usage fields such as `usage.completion_tokens` or
 `output_tokens_so_far`. Text peeking is last resort.
 
+Fallback input throughput counts only uncached prompt tokens when usage reports
+`cached_tokens` (Chat `prompt_tokens_details` or Responses
+`input_tokens_details`), and total prompt tokens otherwise. Chat Completions
+usage is available only when the client sets `stream_options.include_usage=true`
+or the deployment sets `--force-chat-completions-include-usage`. vLLM reports
+Chat cached tokens only when started with `--enable-prompt-tokens-details`;
+vLLM Responses usage and Dynamo vLLM workers report them by default. Engines
+that report cached tokens may omit Chat details on a cache miss, so once a model
+generation's streamed Chat usage reports cached-token details, later Chat usage
+without them counts as a miss. A request that expects usage holds newer
+requests out of the rate until its usage arrives, for at most 120 seconds after
+newer requests reach first output. Cache hits that leave fewer than 256 uncached
+prompt tokens are left out, because their time to first output is mostly fixed
+overhead.
+
 ## Optional KV Stats
 
 `/kv-cache/stats` may report runtime machine state:
@@ -208,11 +223,19 @@ counter-derived output window.
 
 If request stats go stale, volatile output TPS is cleared. Sticky input TPS
 stays until a later valid sample replaces it.
-The maximum is the greatest `last_mean_input_tps` published for the current
-model generation, including a configured initial TPS. It follows the smoothed
-mean rather than individual samples, so the mean dilutes one outlier sample.
-Lower means do not reduce it, and generation replacement clears it. It is
-absent until the first mean is published.
+The maximum is the greatest max-eligible `last_mean_input_tps` published for the
+current model generation. A configured `--initial-input-tps`, engine stats
+stream counters, embeddings samples, and calibration can raise it. An OpenAI
+fallback mean raises it only when every request in its window counted uncached
+prompt tokens under the Fallback rules above. Other fallback means update
+`last_mean_input_tps` but not the maximum, because cached input may be counted
+as prefill. The maximum follows the smoothed mean rather than individual
+samples, so the mean dilutes one outlier sample. Lower means do not reduce it,
+and generation replacement clears it. It is absent until the first max-eligible
+mean. A backend whose fallback usage never reports cached-token details, such
+as Chat traffic without `include_usage`, or whose traffic is only near-full
+cache hits, never gets a maximum this way. Use `--do-calibration` or `--initial-input-tps` for such
+backends, because default Pulsar ranking requires a maximum (see below).
 
 Pylon publishes `pylon_model_max_input_tps` when the maximum is known and removes
 the series when the model is removed or replaced with unknown maximum state.
@@ -235,8 +258,9 @@ Before registration, Pylon initializes each model generation from exactly one
 source. `--initial-input-tps` installs the configured value. Local calibration
 installs nothing: it runs an increasing request ramp until a load-step timeout,
 and those requests' exact-generation observer events build the same distribution
-used at runtime. Duplicate engine events for calibration IDs are ignored. Pylon
-logs the current stats at timeout without reinjecting them.
+used at runtime. Each calibration request starts with a unique prompt prefix, so
+it cannot hit the prefix cache. Duplicate engine events for calibration IDs are
+ignored. Pylon logs the current stats at timeout without reinjecting them.
 Later valid runtime samples continue updating either unpinned distribution.
 
 Labels:
