@@ -33,6 +33,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/semaphore"
 
+	config "ai-api-gateway-service/gateway_config"
 	"ai-api-gateway-service/middleware"
 )
 
@@ -142,6 +143,17 @@ func recordShadowDispatchSummary(ctx context.Context, targetModels []string, dis
 		attrs = append(attrs, traceAttrShadowDroppedTargetModels.StringSlice(droppedTargetModels))
 	}
 	span.SetAttributes(attrs...)
+}
+
+func setShadowSamplingMethodsAttribute(ctx context.Context, methods []config.ShadowSamplingMethod) {
+	if len(methods) == 0 {
+		return
+	}
+	names := make([]string, len(methods))
+	for i, method := range methods {
+		names[i] = string(method)
+	}
+	trace.SpanFromContext(ctx).SetAttributes(traceAttrShadowSamplingMethods.StringSlice(names))
 }
 
 func shadowDroppedReason(err error) string {

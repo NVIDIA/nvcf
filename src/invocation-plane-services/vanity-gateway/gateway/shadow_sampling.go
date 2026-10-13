@@ -19,11 +19,13 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	config "ai-api-gateway-service/gateway_config"
@@ -44,6 +46,7 @@ type shadowRequestSampler struct {
 	bodyFields            map[string]json.RawMessage
 	bodyParsed            bool
 	results               map[config.ShadowSamplingMethod]shadowSamplingResult
+	decidedMethods        []config.ShadowSamplingMethod
 }
 
 func newShadowRequestSampler(
@@ -85,13 +88,28 @@ func admittedShadowsWithSampler(shadows []shadowConfig, sampler *shadowRequestSa
 			if !ok {
 				continue
 			}
-			if bucket < shadow.percentage {
+			isAdmitted := bucket < shadow.percentage
+			sampler.recordDecision(method, isAdmitted)
+			if isAdmitted {
 				admitted = append(admitted, shadow)
 			}
 			break
 		}
 	}
 	return admitted
+}
+
+// recordDecision counts the method that made a shadow's final admission
+// decision and remembers it, once per method, for the request span.
+func (s *shadowRequestSampler) recordDecision(method config.ShadowSamplingMethod, admitted bool) {
+	ctx := context.Background()
+	if s.request != nil {
+		ctx = s.request.Context()
+	}
+	recordShadowSamplingDecision(ctx, s.endpoint, method, admitted)
+	if !slices.Contains(s.decidedMethods, method) {
+		s.decidedMethods = append(s.decidedMethods, method)
+	}
 }
 
 func (s *shadowRequestSampler) bucket(method config.ShadowSamplingMethod) (int, bool) {
@@ -125,8 +143,11 @@ func (s *shadowRequestSampler) bucket(method config.ShadowSamplingMethod) (int, 
 func (s *shadowRequestSampler) promptCacheKey() ([]byte, bool) {
 	if raw, ok := s.parsedBodyFields()["prompt_cache_key"]; ok {
 		var value string
-		if json.Unmarshal(raw, &value) == nil && value != "" {
-			return []byte(value), true
+		if json.Unmarshal(raw, &value) == nil {
+			value = strings.TrimSpace(value)
+			if value != "" {
+				return []byte(value), true
+			}
 		}
 	}
 
@@ -155,9 +176,48 @@ func (s *shadowRequestSampler) firstMessageMaterial() ([]byte, bool) {
 	case shadowSamplingEndpointChatCompletions:
 		return canonicalChatFirstMessage(fields)
 	case shadowSamplingEndpointResponses:
+		// A request that continues earlier turns usually carries only its newest
+		// input. The gateway cannot reliably identify the original first message
+		// from it, and hashing the newest input would key the decision on the
+		// follow-up text, not the conversation. Skip the method conservatively so
+		// sampling moves to the next one.
+		if continuesEarlierTurns(fields) {
+			return nil, false
+		}
 		return canonicalResponsesFirstMessage(fields)
 	default:
 		return nil, false
+	}
+}
+
+// continuesEarlierTurns reports whether a Responses body points at turns the
+// backend already stores, through previous_response_id or conversation. The
+// gateway cannot reliably tell which message started such a conversation.
+func continuesEarlierTurns(fields map[string]json.RawMessage) bool {
+	return hasJSONValue(fields, "previous_response_id") || hasJSONValue(fields, "conversation")
+}
+
+// hasJSONValue reports whether a field holds a value. A missing field, null, an
+// empty string, and an empty object count as no value. Anything else counts,
+// including shapes the API does not define, so sampling errs toward skipping.
+func hasJSONValue(fields map[string]json.RawMessage, name string) bool {
+	raw, ok := fields[name]
+	if !ok {
+		return false
+	}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return true
+	}
+	switch value := value.(type) {
+	case nil:
+		return false
+	case string:
+		return value != ""
+	case map[string]any:
+		return len(value) > 0
+	default:
+		return true
 	}
 }
 

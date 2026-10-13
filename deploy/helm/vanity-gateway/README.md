@@ -217,11 +217,12 @@ is admitted without parsing sampling material or drawing a random bucket.
 `promptCacheKey` and `firstMessageHash` are limited to `chatCompletions` and
 `responses`. `promptCacheKey` first uses a nonempty string
 `prompt_cache_key` from the JSON body, then checks `promptCacheKeyHeaders` in
-order. This route-level header list applies to both shadow forms. It defaults to
-`x-multi-turn-session-id`; set it to `[]` to disable header lookup. A header is
-usable only when it has exactly one nonempty value after trimming. Only the
-value is hashed, so equal values receive equal buckets across body and header
-sources and across both endpoints. `Authorization` and `Proxy-Authorization`
+order. The body value is trimmed like header values, and a whitespace-only value
+is unavailable. This route-level header list applies to both shadow forms. It
+defaults to `x-multi-turn-session-id`; set it to `[]` to disable header lookup.
+A header is usable only when it has exactly one nonempty value after trimming.
+Only the value is hashed, so equal values receive equal buckets across body and
+header sources and across both endpoints. `Authorization` and `Proxy-Authorization`
 are rejected case-insensitively so credentials cannot be used as prompt cache
 keys.
 
@@ -231,7 +232,13 @@ first `user` message. For Responses it hashes nonempty `instructions` and the
 first user input; a string `input` is user content. Object-key order is
 normalized, while array and content-part order is preserved. Later turns are
 ignored. Sampling is stateless and does not recover input through conversations,
-`previous_response_id`, or streamed deltas.
+`previous_response_id`, or streamed deltas. A Responses request that continues
+earlier turns, through a nonempty `previous_response_id` or a `conversation`,
+usually carries only its newest input. The gateway cannot reliably identify the
+original first message from it, so `firstMessageHash` is skipped and sampling
+continues to the next configured method, ending at `random`. Send the same
+`prompt_cache_key` or session header on every turn to keep a conversation in one
+sample.
 
 All deterministic methods use SHA-256, the first 8 digest bytes as a big-endian
 integer, and modulo 100. Missing bearer credentials now reach the implicit

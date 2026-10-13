@@ -261,10 +261,12 @@ credentials from skipping the target to using the implicit random fallback.
 `perBearerKey` is key-level sampling. It is not true user or session sampling
 and can skew shadow volume when a few bearer keys dominate traffic.
 
-The `promptCacheKey` method first checks the JSON body for a nonempty string
-`prompt_cache_key`. If it is unavailable, the gateway checks
-`promptCacheKeyHeaders` in configured order. A header is usable only when it has
-exactly one value and that value is nonempty after trimming. The first usable
+The `promptCacheKey` method first checks the JSON body for a string
+`prompt_cache_key` that is nonempty after trimming surrounding whitespace. If it
+is unavailable, the gateway checks `promptCacheKeyHeaders` in configured order.
+A header is usable only when it has exactly one value and that value is nonempty
+after trimming. Body and header values are trimmed the same way, so one key
+cannot land in different buckets depending on where it was sent. The first usable
 body or header value makes the final admission decision. A valid rejection does
 not try another source or method. Only the resolved value is hashed, so the same
 value has the same bucket across the body, different header names, Chat
@@ -288,6 +290,18 @@ and `responses` mapping sections. Sampling is stateless. The gateway does not
 resolve conversations, `previous_response_id`, or streamed deltas to recover
 earlier input. If a request does not carry the required material, evaluation
 continues to the next method.
+
+A Responses request that continues earlier turns, through a nonempty
+`previous_response_id` or a `conversation` (a nonempty string or an object),
+usually carries only its newest input. The gateway cannot reliably identify the
+original first message from it, so `firstMessageHash` is skipped for that request
+and evaluation continues to the next configured method, ending at `random`.
+Without this rule, the follow-up text would decide the sample, and the same text
+from different sessions would always get the same decision. A missing, null,
+empty-string, or `{}` value does not skip the method. This is not conversation
+stickiness. To keep a conversation in one sample, send the same
+`prompt_cache_key` or session header on every turn and list `promptCacheKey`
+first.
 
 Shadow traffic is not supported for multipart image endpoints: `imageEdits` and
 `imageVariations`. Config validation rejects effective shadow settings in those
@@ -570,6 +584,17 @@ unreachable, and everything else keeps serving.
 dropped before replay. The `openai_model_name` label identifies the shadow
 target. The `reason` label is one of `body_read_error`, `body_rewrite_error`,
 or `concurrency_limit`.
+
+`nvcf_ai_api_gateway_shadow_sampling_decisions_total` counts shadow admission
+decisions, one per shadow target below 100 percent on each request. It shows
+which sampling method made the final decision, so a rollout can measure how
+much traffic is sticky and how often sampling falls back to `random`. The
+`sampling_endpoint` label is `chatCompletions`, `responses`, or `other`. The
+`method` label is `promptCacheKey`, `firstMessageHash`, `perBearerKey`, or
+`random`. The `outcome` label is `admitted` or `rejected`. All label
+combinations are emitted at zero on startup. The primary request span records
+the deciding methods in the `shadow.sampling_methods` attribute. Neither
+records cache keys, credentials, or message content.
 
 `gateway_proxy_outcome` labels the origin of covered non-2xx responses on the
 Gateway server metric (`http_server_request_duration_seconds`) and as the

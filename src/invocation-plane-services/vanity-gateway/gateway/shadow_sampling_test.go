@@ -100,6 +100,43 @@ func TestPromptCacheKeyUsesBodyThenConfiguredHeaders(t *testing.T) {
 	}
 }
 
+func TestPromptCacheKeyBodyValueIsTrimmedLikeHeaders(t *testing.T) {
+	for _, body := range []string{
+		`{"prompt_cache_key":"session-123"}`,
+		`{"prompt_cache_key":"  session-123\n"}`,
+		`{"prompt_cache_key":"\tsession-123 "}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			sampler := newShadowRequestSampler(
+				httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil),
+				[]byte(body),
+				shadowSamplingEndpointChatCompletions,
+				nil,
+				fixedRandomBucket(0),
+			)
+
+			bucket, ok := sampler.bucket(config.ShadowSamplingMethodPromptCacheKey)
+			require.True(t, ok)
+			assert.Equal(t, 95, bucket)
+		})
+	}
+}
+
+func TestPromptCacheKeyWhitespaceOnlyBodyValueFallsThrough(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	body := []byte(`{"prompt_cache_key":"   "}`)
+
+	noHeader := newShadowRequestSampler(req, body, shadowSamplingEndpointChatCompletions, []string{"X-Session-ID"}, fixedRandomBucket(0))
+	_, ok := noHeader.bucket(config.ShadowSamplingMethodPromptCacheKey)
+	assert.False(t, ok)
+
+	req.Header.Set("X-Session-ID", "session-123")
+	withHeader := newShadowRequestSampler(req, body, shadowSamplingEndpointChatCompletions, []string{"X-Session-ID"}, fixedRandomBucket(0))
+	bucket, ok := withHeader.bucket(config.ShadowSamplingMethodPromptCacheKey)
+	require.True(t, ok)
+	assert.Equal(t, 95, bucket)
+}
+
 func TestPromptCacheKeyCachesFirstUsableSource(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	req.Header.Set("X-Session-ID", "session-123")
@@ -239,6 +276,131 @@ func TestFirstMessageHashIgnoresFormattingObjectOrderAndLaterTurns(t *testing.T)
 	secondMaterial, ok := canonicalChatFirstMessage(second)
 	require.True(t, ok)
 	assert.Equal(t, firstMaterial, secondMaterial)
+}
+
+func responsesSampler(body string, headers map[string]string, endpoint shadowSamplingEndpoint, randomBucket int) *shadowRequestSampler {
+	path := "/v1/responses"
+	if endpoint == shadowSamplingEndpointChatCompletions {
+		path = "/v1/chat/completions"
+	}
+	req := httptest.NewRequest(http.MethodPost, path, nil)
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	return newShadowRequestSampler(req, []byte(body), endpoint, []string{"X-Session-ID"}, fixedRandomBucket(randomBucket))
+}
+
+func TestFirstMessageHashIsUnavailableWhenResponsesRequestContinuesEarlierTurns(t *testing.T) {
+	tests := []struct {
+		name   string
+		fields string
+	}{
+		{name: "previous response id", fields: `"previous_response_id":"resp_1"`},
+		{name: "previous response id non-string", fields: `"previous_response_id":7`},
+		{name: "conversation string", fields: `"conversation":"conv_123"`},
+		{name: "conversation object id", fields: `"conversation":{"id":"conv_123"}`},
+		{name: "conversation object without id", fields: `"conversation":{"name":"x"}`},
+		{name: "conversation object null id", fields: `"conversation":{"id":null}`},
+		{name: "conversation number", fields: `"conversation":5`},
+		{name: "conversation boolean", fields: `"conversation":true`},
+		{name: "conversation array", fields: `"conversation":["conv_123"]`},
+		{name: "both fields", fields: `"previous_response_id":"resp_1","conversation":{"id":"conv_123"}`},
+	}
+	inputs := map[string]string{
+		"string input":    `"input":"Explain pods"`,
+		"user item input": `"input":[{"role":"user","content":"Explain pods"}]`,
+		"with run config": `"instructions":"Be helpful.","input":"thanks"`,
+	}
+
+	for _, tc := range tests {
+		for inputName, input := range inputs {
+			t.Run(tc.name+"/"+inputName, func(t *testing.T) {
+				sampler := responsesSampler("{"+tc.fields+","+input+"}", nil, shadowSamplingEndpointResponses, 0)
+				_, ok := sampler.bucket(config.ShadowSamplingMethodFirstMessageHash)
+				assert.False(t, ok)
+			})
+		}
+	}
+}
+
+func TestFirstMessageHashKeepsExistingBehaviorWithoutEarlierTurns(t *testing.T) {
+	bucketFor := func(body string) int {
+		bucket, ok := responsesSampler(body, nil, shadowSamplingEndpointResponses, 0).bucket(config.ShadowSamplingMethodFirstMessageHash)
+		require.True(t, ok, body)
+		return bucket
+	}
+
+	want := bucketFor(`{"input":"Explain pods"}`)
+	for _, fields := range []string{
+		`"previous_response_id":null`,
+		`"previous_response_id":""`,
+		`"conversation":null`,
+		`"conversation":""`,
+		`"conversation":{}`,
+		`"previous_response_id":"","conversation":{}`,
+	} {
+		t.Run(fields, func(t *testing.T) {
+			assert.Equal(t, want, bucketFor(`{`+fields+`,"input":"Explain pods"}`))
+		})
+	}
+}
+
+func TestFirstMessageHashChatCompletionsIgnoresEarlierTurnFields(t *testing.T) {
+	body := `{"previous_response_id":"resp_1","conversation":{"id":"conv_123"},"messages":[{"role":"user","content":"Hello"}]}`
+	_, ok := responsesSampler(body, nil, shadowSamplingEndpointChatCompletions, 0).bucket(config.ShadowSamplingMethodFirstMessageHash)
+	assert.True(t, ok)
+}
+
+func TestResponsesRequestsContinuingEarlierTurnsUseTheNextConfiguredMethod(t *testing.T) {
+	// The key and session header rank first, then the first message, then the
+	// bearer credential, then the implicit random fallback.
+	shadows := []shadowConfig{{
+		modelName:  "shadow",
+		percentage: 50,
+		samplingMethods: testShadowSamplingMethods(
+			config.ShadowSamplingMethodPromptCacheKey,
+			config.ShadowSamplingMethodFirstMessageHash,
+			config.ShadowSamplingMethodPerBearerKey,
+		),
+	}}
+	continuations := map[string]string{
+		"previous response id": `"previous_response_id":"resp_1"`,
+		"conversation string":  `"conversation":"conv_123"`,
+		"conversation object":  `"conversation":{"id":"conv_123"}`,
+	}
+
+	for name, continuation := range continuations {
+		body := func(extra string) string {
+			return `{` + continuation + extra + `,"input":"Explain pods"}`
+		}
+		decide := func(body string, headers map[string]string, randomBucket int) (int, []config.ShadowSamplingMethod) {
+			sampler := responsesSampler(body, headers, shadowSamplingEndpointResponses, randomBucket)
+			return len(admittedShadowsWithSampler(shadows, sampler)), sampler.decidedMethods
+		}
+
+		t.Run(name+"/body key decides", func(t *testing.T) {
+			// Bucket 95 for session-123 is rejected at 50 percent.
+			admitted, decidedBy := decide(body(`,"prompt_cache_key":"session-123"`), nil, 0)
+			assert.Zero(t, admitted)
+			assert.Equal(t, []config.ShadowSamplingMethod{config.ShadowSamplingMethodPromptCacheKey}, decidedBy)
+		})
+		t.Run(name+"/session header decides", func(t *testing.T) {
+			admitted, decidedBy := decide(body(""), map[string]string{"X-Session-ID": "session-123"}, 0)
+			assert.Zero(t, admitted)
+			assert.Equal(t, []config.ShadowSamplingMethod{config.ShadowSamplingMethodPromptCacheKey}, decidedBy)
+		})
+		t.Run(name+"/bearer decides before random", func(t *testing.T) {
+			_, decidedBy := decide(body(""), map[string]string{"Authorization": "Bearer key-1"}, 0)
+			assert.Equal(t, []config.ShadowSamplingMethod{config.ShadowSamplingMethodPerBearerKey}, decidedBy)
+		})
+		t.Run(name+"/random is the last resort", func(t *testing.T) {
+			admitted, decidedBy := decide(body(""), nil, 10)
+			assert.Equal(t, 1, admitted)
+			assert.Equal(t, []config.ShadowSamplingMethod{config.ShadowSamplingMethodRandom}, decidedBy)
+			admitted, _ = decide(body(""), nil, 90)
+			assert.Zero(t, admitted)
+		})
+	}
 }
 
 func TestFirstMessageHashRequiresNonemptyUserContent(t *testing.T) {

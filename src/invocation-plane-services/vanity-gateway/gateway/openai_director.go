@@ -806,6 +806,7 @@ func (d *ModelDirector) dispatchShadowIfNeeded(resolved resolvedOpenAIRequest, m
 		d.randomShadowBucket,
 	)
 	shadows := admittedShadowsWithSampler(resolved.functionInfo.shadows, sampler)
+	setShadowSamplingMethodsAttribute(resolved.request.Context(), sampler.decidedMethods)
 	if len(shadows) == 0 {
 		return func(error) {}
 	}

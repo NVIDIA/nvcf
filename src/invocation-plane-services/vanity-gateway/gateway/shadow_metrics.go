@@ -25,6 +25,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
+
+	config "ai-api-gateway-service/gateway_config"
 )
 
 const (
@@ -32,11 +34,20 @@ const (
 	shadowMetricsScope       = "ai-api-gateway-service/gateway"
 	shadowDroppedModelLabel  = "openai_model_name"
 	shadowDroppedReasonLabel = "reason"
+
+	shadowSamplingDecisionsMetricName = "nvcf_ai_api_gateway_shadow_sampling_decisions"
+	shadowSamplingEndpointLabel       = "sampling_endpoint"
+	shadowSamplingMethodLabel         = "method"
+	shadowSamplingOutcomeLabel        = "outcome"
+	shadowSamplingOutcomeAdmitted     = "admitted"
+	shadowSamplingOutcomeRejected     = "rejected"
+	shadowSamplingEndpointOther       = "other"
 )
 
 var (
-	shadowDroppedCounter otelmetric.Int64Counter = metricnoop.Int64Counter{}
-	shadowDroppedReasons                         = []string{
+	shadowDroppedCounter           otelmetric.Int64Counter = metricnoop.Int64Counter{}
+	shadowSamplingDecisionsCounter otelmetric.Int64Counter = metricnoop.Int64Counter{}
+	shadowDroppedReasons                                   = []string{
 		shadowDroppedReasonBodyReadError,
 		shadowDroppedReasonBodyRewriteError,
 		shadowDroppedReasonConcurrencyLimit,
@@ -44,11 +55,18 @@ var (
 )
 
 func setupShadowMetrics() error {
-	counter, err := newShadowDroppedCounter(otel.GetMeterProvider().Meter(shadowMetricsScope))
+	meter := otel.GetMeterProvider().Meter(shadowMetricsScope)
+	droppedCounter, err := newShadowDroppedCounter(meter)
 	if err != nil {
 		return err
 	}
-	shadowDroppedCounter = counter
+	decisionsCounter, err := newShadowSamplingDecisionsCounter(meter)
+	if err != nil {
+		return err
+	}
+	shadowDroppedCounter = droppedCounter
+	shadowSamplingDecisionsCounter = decisionsCounter
+	initializeShadowSamplingMetrics()
 	return nil
 }
 
@@ -87,6 +105,67 @@ func recordShadowDropMetric(ctx context.Context, targetModel, reason string, cou
 		otelmetric.WithAttributes(
 			attribute.String(shadowDroppedModelLabel, targetModel),
 			attribute.String(shadowDroppedReasonLabel, reason),
+		),
+	)
+}
+
+func newShadowSamplingDecisionsCounter(meter otelmetric.Meter) (otelmetric.Int64Counter, error) {
+	counter, err := meter.Int64Counter(
+		shadowSamplingDecisionsMetricName,
+		otelmetric.WithDescription("Number of shadow admission decisions by endpoint, deciding sampling method, and outcome."),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create shadow sampling decisions counter: %w", err)
+	}
+	return counter, nil
+}
+
+// initializeShadowSamplingMetrics emits every valid label combination at zero
+// so the series exist on the first scrape. Request-body methods are limited to
+// the Chat Completions and Responses endpoints, as in config validation.
+func initializeShadowSamplingMetrics() {
+	bodyEndpoints := []shadowSamplingEndpoint{shadowSamplingEndpointChatCompletions, shadowSamplingEndpointResponses}
+	allEndpoints := append([]shadowSamplingEndpoint{shadowSamplingEndpointNone}, bodyEndpoints...)
+	for _, admitted := range []bool{true, false} {
+		for _, endpoint := range allEndpoints {
+			for _, method := range []config.ShadowSamplingMethod{
+				config.ShadowSamplingMethodRandom,
+				config.ShadowSamplingMethodPerBearerKey,
+			} {
+				recordShadowSamplingDecisionCount(context.Background(), endpoint, method, admitted, 0)
+			}
+		}
+		for _, endpoint := range bodyEndpoints {
+			for _, method := range []config.ShadowSamplingMethod{
+				config.ShadowSamplingMethodPromptCacheKey,
+				config.ShadowSamplingMethodFirstMessageHash,
+			} {
+				recordShadowSamplingDecisionCount(context.Background(), endpoint, method, admitted, 0)
+			}
+		}
+	}
+}
+
+func recordShadowSamplingDecision(ctx context.Context, endpoint shadowSamplingEndpoint, method config.ShadowSamplingMethod, admitted bool) {
+	recordShadowSamplingDecisionCount(ctx, endpoint, method, admitted, 1)
+}
+
+func recordShadowSamplingDecisionCount(ctx context.Context, endpoint shadowSamplingEndpoint, method config.ShadowSamplingMethod, admitted bool, count int64) {
+	endpointLabel := string(endpoint)
+	if endpoint == shadowSamplingEndpointNone {
+		endpointLabel = shadowSamplingEndpointOther
+	}
+	outcome := shadowSamplingOutcomeRejected
+	if admitted {
+		outcome = shadowSamplingOutcomeAdmitted
+	}
+	shadowSamplingDecisionsCounter.Add(
+		ctx,
+		count,
+		otelmetric.WithAttributes(
+			attribute.String(shadowSamplingEndpointLabel, endpointLabel),
+			attribute.String(shadowSamplingMethodLabel, string(method)),
+			attribute.String(shadowSamplingOutcomeLabel, outcome),
 		),
 	)
 }

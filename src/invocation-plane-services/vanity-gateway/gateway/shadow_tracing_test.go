@@ -598,6 +598,10 @@ func TestPerTargetSamplingRecordsOnlyAdmittedShadow(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, []string{"shadow-admitted"}, targetModels.AsStringSlice())
 
+	samplingMethods, ok := spanAttr(primarySpans[0], traceAttrShadowSamplingMethods)
+	require.True(t, ok)
+	assert.Equal(t, []string{"random"}, samplingMethods.AsStringSlice())
+
 	_, hasDroppedReasons := spanAttr(primarySpans[0], traceAttrShadowDroppedReasons)
 	assert.False(t, hasDroppedReasons)
 	_, hasDroppedTargetModels := spanAttr(primarySpans[0], traceAttrShadowDroppedTargetModels)
