@@ -32,14 +32,10 @@ test "$(yq ea -r 'select(.kind == "Deployment") | [.spec.template.spec.container
   fail "generic chart must leave the metrics endpoint disabled by default"
 test "$(yq ea -r '[select(.kind == "ServiceMonitor")] | length' "$default_manifest")" = 0 ||
   fail "generic chart must not create a ServiceMonitor by default"
-test "$(read_config "$default_manifest" STARGATE_LAST_CLUSTER_ENABLED)" = false ||
-  fail "generic chart must leave last-cluster hints disabled by default"
-test "$(read_config "$default_manifest" STARGATE_LAST_CLUSTER_TTL)" = 10m ||
-  fail "last-cluster TTL default must be 10m"
-test "$(read_config "$default_manifest" STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT)" = 20ms ||
-  fail "last-cluster lookup timeout default must be 20ms"
-test "$(read_config "$default_manifest" STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES)" = 100000 ||
-  fail "last-cluster local store cap default must be 100000"
+for kv in ENABLED=false TTL=10m LOOKUP_TIMEOUT=20ms LOCAL_MAX_ENTRIES=100000; do
+  test "$(read_config "$default_manifest" "STARGATE_LAST_CLUSTER_${kv%%=*}")" = "${kv#*=}" ||
+    fail "STARGATE_LAST_CLUSTER_${kv%%=*} default must be ${kv#*=}"
+done
 
 helm template llm-api-gateway "$chart_dir" \
   --namespace nvcf \
@@ -53,10 +49,11 @@ helm template llm-api-gateway "$chart_dir" \
 
 test "$(read_config "$override_manifest" NVCF_GRPC_INSECURE)" = true ||
   fail "explicit plaintext transport override did not reach the ConfigMap"
-test "$(read_config "$override_manifest" STARGATE_LAST_CLUSTER_ENABLED)" = true ||
-  fail "last-cluster opt-in did not reach the ConfigMap"
-test "$(read_config "$override_manifest" STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES)" = 1000000 ||
-  fail "large last-cluster cap must render as a plain integer"
+# 1000000 checks that a large cap renders as a plain integer.
+for kv in ENABLED=true LOCAL_MAX_ENTRIES=1000000; do
+  test "$(read_config "$override_manifest" "STARGATE_LAST_CLUSTER_${kv%%=*}")" = "${kv#*=}" ||
+    fail "STARGATE_LAST_CLUSTER_${kv%%=*} override must render as ${kv#*=}"
+done
 test "$(yq ea -r 'select(.kind == "Deployment") | [.spec.template.spec.containers[0].ports[] | select(.name == "metrics")] | length' "$override_manifest")" = 1 ||
   fail "explicit metrics override did not expose the metrics container port"
 test "$(yq ea -r '[select(.kind == "ServiceMonitor" and .metadata.name == "llm-api-gateway-metrics")] | length' "$override_manifest")" = 1 ||

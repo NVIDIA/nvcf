@@ -152,14 +152,12 @@ Last-cluster rules for the gateway:
 - Always delete an inbound `x-stargate-last-cluster-id` before building the
   Stargate request, including on paths that clone inbound headers.
 - Set the header only from the gateway's own store, and only for sessions with
-  a stable key. Skip sessions whose affinity key is derived from the payload,
-  because it changes every turn.
+  a stable key. Skip payload-derived affinity keys, which change every turn.
 - Store the `x-stargate-cluster-id` of a 2xx response when the response
   headers arrive, not at stream end. Do not store on non-2xx responses or
   transport errors.
-- Keep the lookup bounded and off the critical path: on a miss, store error,
-  or timeout, send the request without the header.
-- Writes must never delay or fail the client response.
+- Bound the lookup. On a miss, store error, or timeout, send the request
+  without the header. Writes must never delay or fail the client response.
 
 Internal headers:
 

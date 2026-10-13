@@ -302,14 +302,11 @@ Minimal configuration:
 ## `pulsar-wait-and-widen`
 
 `pulsar-wait-and-widen` is `wait-and-widen` with the Pulsar ranking as the
-source of affinity. Every request goes through the affinity phase described
-below, including a request whose rank-1 cluster is eligible: queue admission
-with `max_queued`, the affinity wait, and the affinity prefill discount. The
-rank-1 cluster receives no request without a load check.
+source of affinity. Every request goes through the affinity phase below, even
+when its rank-1 cluster is eligible.
 
-The affinity group is the top
-`cache_affinity_backend_selection_count` clusters of the Pulsar ranking. The
-count defaults to `1`, the primary, and `0` also means `1`. WaitAndWiden
+The affinity group is the top `cache_affinity_backend_selection_count` clusters
+of the Pulsar ranking. The count defaults to `1`, the primary, and `0` also means `1`. WaitAndWiden
 selection runs within the group, and `cache_affinity_input_tokens_scale`
 discounts the request prefill there. Until `cache_affinity_wait_ms` (X) has
 elapsed, the proxy waits and rechecks the group instead of falling back.
@@ -362,14 +359,10 @@ Minimal configuration:
 
 ### Upgrade from the eligible-primary shortcut
 
-Earlier releases sent a request straight to an eligible rank-1 cluster when
-the configuration set neither `max_queue_time_floor_ms` nor
-`max_queue_time_ceil_ms`. That path ignored load, so a full rank-1 cluster kept
-taking requests without limit, and a hot affinity key slowed every other key
-that shared its rank-1 cluster.
-
-That shortcut is removed. A configuration without queue-SLO fields that keeps
-the defaults (`max_queued: 0`, `cache_affinity_wait_ms: 0`) now overflows as
+Earlier releases sent a request straight to an eligible rank-1 cluster, with
+no load check, when neither `max_queue_time_floor_ms` nor
+`max_queue_time_ceil_ms` was set. That shortcut is removed. A configuration
+without queue-SLO fields that keeps the defaults (`max_queued: 0`, `cache_affinity_wait_ms: 0`) now overflows as
 soon as its rank-1 cluster has no free engine slot. Before upgrading, review
 `pulsar-wait-and-widen` configurations without queue-SLO fields:
 
@@ -451,9 +444,8 @@ Retry exclusion and KV free-token checks apply to the last cluster as they do
 to any other candidate. An excluded or KV-infeasible last cluster behaves like
 an ineligible rank-1 cluster. With k = 1, the request waits until X and then
 widens. With a larger group, the other group members can still serve the
-request during X. The promotion applies to one request. Per-key hash ring selections keep the
-original order, so a later request for the same key without the header uses
-the original affinity order.
+request during X. The promotion is per request: a later request for the same
+key without the header uses the original affinity order.
 
 Example for `pulsar-wait-and-widen` with k = 1, ranking A through E, and last
 cluster D:
@@ -466,29 +458,8 @@ X <= elapsed < X+S       D  A  B
 X+S <= elapsed           D  A  B  C  E
 ```
 
-This keeps a session on the cluster that holds its KV cache. Without the hint,
-a session that overflowed to a lower-ranked cluster returns to rank 1 when
-rank 1 frees up and loses the cache it built on the overflow cluster.
-
-Example:
-
-```json
-{
-  "default": "power-of-n",
-  "models": {
-    "model-a": {
-      "algorithm": "pulsar-wait-and-widen",
-      "seed": "model-a-v1",
-      "require_cache_affinity_key": true,
-      "max_queued": 2,
-      "cache_affinity_wait_ms": 300,
-      "cache_affinity_input_tokens_scale": 0.1,
-      "band_widen_interval_ms": 100,
-      "last_cluster_affinity": true
-    }
-  }
-}
-```
+This keeps a session that overflowed on the cluster that holds its KV cache,
+instead of moving it back to rank 1 when rank 1 frees up.
 
 ### Rollout order
 
@@ -565,7 +536,7 @@ apply only when the selection count is set.
 | `max_queued` | unsigned integer | `0` | Additional queued requests allowed above `max_engine_concurrency`. A reported concurrency of `0` disables this capacity check. |
 | `ignore_queue_time` | boolean | `false` | Removes queue delay from TTFT bucket formation. Queue-SLO filtering and the configured comparator are unchanged. |
 | `ignore_input_processing_time` | boolean | `false` | Removes request prefill time from TTFT bucket formation. The configured comparator is unchanged. |
-| `last_cluster_affinity` | boolean | `false` | Classifies requests as new or returning sessions from `x-stargate-last-cluster-id`. See [Session-aware routing](#session-aware-routing). Rejected for other algorithms and in routing expressions. |
+| `last_cluster_affinity` | boolean | `false` | Classifies requests as new or returning sessions from `x-stargate-last-cluster-id`. See [Session-aware routing](#session-aware-routing). |
 
 Stargate does not range-check `next_bucket_unlock_factor`. Values from `0` to
 `1` unlock a later bucket between no wait and the full TTFT gap. Values outside
@@ -645,9 +616,9 @@ x-routing-method: pulsar;seed=stable-a;consider_kv_free_tokens=true
 ```
 
 Parameter names are the configuration fields above and must apply to the
-selected algorithm. `last_cluster_affinity` is not an expression parameter;
-set it in the configuration file. Omitted fields keep their configured values. The value is
-an RFC 8941 Item with Parameters, at most 1024 bytes and 32 parameters, with
+selected algorithm, except `last_cluster_affinity`, which only the
+configuration file sets. Omitted fields keep their configured values. The value
+is an RFC 8941 Item with Parameters, at most 1024 bytes and 32 parameters, with
 every parameter written as `key=value` and no commas. Quote a number that needs
 more than three fractional digits, such as `next_bucket_unlock_factor="0.0625"`.
 An expression may set `cache_affinity_virtual_nodes` to at most 1024.
@@ -720,18 +691,11 @@ The existing fallback selection series therefore records global escalation;
 deployments that previously saw only primary selections can see new fallback
 counts. Metric names and label sets are unchanged.
 
-With `last_cluster_affinity`, `stargate_routing_session_selections_total`
-counts selections by `session_state` (`new`, `returning`, or `stale`) and
-`selection`. For `returning`, `primary` means the request went to its last
-cluster. For `new` and `stale`, `primary` means the selected cluster came from
-the affinity group. The counter starts at zero for every state and selection
-pair of a routing key, model, and algorithm once Stargate classifies a request
-for them. Requests that are not classified record nothing. The proxy request
-span records the state in `routing.session_state`. A `debug` log line records
-the state and whether the last cluster was promoted, with the request ID,
-model, and routing key. For a promoted `pulsar-wait-and-widen` request, the
-rank in `stargate_routing_selections_total` is relative to the reordered
-ranking.
+With `last_cluster_affinity`, classified requests also record
+`stargate_routing_session_selections_total`, the `routing.session_state` span
+attribute, and a `debug` log line with the state and whether the last cluster
+was promoted. For a promoted `pulsar-wait-and-widen` request, the rank in
+`stargate_routing_selections_total` is relative to the reordered ranking.
 
 ## Validation checklist
 
