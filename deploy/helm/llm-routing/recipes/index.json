@@ -364,7 +364,7 @@
       "id": "glm-5.3",
       "name": "GLM-5.3",
       "servedModelId": "GLM-5.3-UD-IQ2_M",
-      "description": "GLM-5.3 is a 754 billion parameter mixture-of-experts language model from Z.ai. This card serves Unsloth's UD-IQ2_M 2-bit GGUF quantization, about 239 GB of weights, with llama.cpp. The profile that works spans three DGX Sparks, one leader and two RPC workers, at a 2,048-token context.",
+      "description": "GLM-5.3 is a 754 billion parameter mixture-of-experts language model from Z.ai. This card serves Unsloth's UD-IQ2_M 2-bit GGUF quantization, about 239 GB of weights, with llama.cpp. It runs on three DGX Sparks, one leader and two RPC workers, at a 2,048-token context, or on two DGX Station nodes at an 8,192-token context.",
       "availability": {
         "status": "available",
         "deployable": true
