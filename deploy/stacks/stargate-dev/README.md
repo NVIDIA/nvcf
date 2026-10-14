@@ -362,9 +362,10 @@ present, and, before the MockDC phase, that the registration Service is
 exposed on `router.address`. The `observability` phase is not supported
 locally, and `deploy.py` exits with an error if you request it.
 
-Hub addresses come from Docker. If a hub cluster is recreated, run `images`
-again to refresh `router.address` and `router.remoteWatchUrls`, then apply
-every phase again.
+`images` reads each hub's address from its single node's InternalIP through
+the hub kube context. If a hub cluster is recreated or its node address
+changes, run `images` again to refresh `router.address` and
+`router.remoteWatchUrls`, then apply every phase again.
 
 Each Pylon calibrates its backend for about a minute after the MockDC phase
 before it registers. Until then `verify` fails with `membership is not ready`;

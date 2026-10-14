@@ -94,10 +94,6 @@ def cluster_names(configs: dict[str, dict]) -> list[str]:
     ]
 
 
-def server_container(cluster: str) -> str:
-    return f"k3d-{cluster}-server-0"
-
-
 def bazel_command() -> str:
     for name in ("bazel", "bazelisk"):
         if shutil.which(name):
@@ -185,15 +181,20 @@ def cluster_create_command(name: str, agents: int) -> list[str]:
     ]
 
 
-def container_ip(container: str) -> str:
-    inspected = json.loads(deploy.run(["docker", "inspect", container]).stdout)
-    networks = inspected[0]["NetworkSettings"]["Networks"]
-    address = networks.get(NETWORK, {}).get("IPAddress", "")
-    if not address:
+def hub_address(context: str) -> str:
+    # k3s ServiceLB answers on the node address, and each hub has one node.
+    nodes = json.loads(deploy.kubectl(context, "get", "nodes", "-o", "json").stdout)
+    addresses = [
+        address["address"]
+        for node in nodes["items"]
+        for address in node["status"].get("addresses", [])
+        if address["type"] == "InternalIP"
+    ]
+    if len(addresses) != 1:
         raise DeploymentError(
-            f"{container} has no address on Docker network {NETWORK}"
+            f"{context} must have exactly one node with an InternalIP, found {addresses}"
         )
-    return address
+    return addresses[0]
 
 
 def ensure_clusters(configs: dict[str, dict]) -> None:
@@ -475,7 +476,7 @@ def values_document(digests: dict[str, str], address: str, peer: str) -> str:
 
 
 def images(state_dir: Path) -> None:
-    deploy.require_tools("docker")
+    deploy.require_tools("docker", "kubectl")
     bazel = bazel_command()
     configs = load_regions()
     state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -483,7 +484,7 @@ def images(state_dir: Path) -> None:
         raise DeploymentError(f"{REGISTRY_CONTAINER} is missing; run local.py up first")
     registry = registry_host_address()
     addresses = {
-        region: container_ip(server_container(config["clusters"]["stargate"]["name"]))
+        region: hub_address(config["clusters"]["stargate"]["kubeContext"])
         for region, config in configs.items()
     }
     digests = {

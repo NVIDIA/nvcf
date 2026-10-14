@@ -74,7 +74,6 @@ class TopologyTests(unittest.TestCase):
         for name in names:
             self.assertLessEqual(len(name), 32, name)
             self.assertRegex(name, DNS_LABEL)
-            self.assertLessEqual(len(LOCAL.server_container(name)), 63)
 
     def test_router_certificate_names_the_hostname_and_a_wildcard(self) -> None:
         for config in CONFIGS.values():
@@ -119,26 +118,33 @@ class ClusterCreationTests(unittest.TestCase):
         self.assertEqual(merge[3], names[-1])
         self.assertIn("--kubeconfig-switch-context=false", merge)
 
-    def test_container_ip_reads_the_shared_network_address(self) -> None:
-        inspected = json.dumps(
-            [
+    def test_hub_address_is_the_single_node_internal_ip(self) -> None:
+        def nodes(*addresses: str) -> str:
+            return json.dumps(
                 {
-                    "NetworkSettings": {
-                        "Networks": {
-                            "bridge": {"IPAddress": "10.0.0.2"},
-                            LOCAL.NETWORK: {"IPAddress": "172.30.0.4"},
+                    "items": [
+                        {
+                            "status": {
+                                "addresses": [
+                                    {"type": "Hostname", "address": "node"},
+                                    {"type": "InternalIP", "address": address},
+                                ]
+                            }
                         }
-                    }
+                        for address in addresses
+                    ]
                 }
-            ]
-        )
-        with patch_run(FakeRun([(["docker", "inspect"], inspected)])):
-            self.assertEqual(LOCAL.container_ip("node"), "172.30.0.4")
+            )
 
-        missing = json.dumps([{"NetworkSettings": {"Networks": {}}}])
-        with patch_run(FakeRun([(["docker"], missing)])):
-            with self.assertRaises(LOCAL.DeploymentError):
-                LOCAL.container_ip("node")
+        with patch_run(FakeRun([(["kubectl"], nodes("172.30.0.4"))])) as fake:
+            self.assertEqual(LOCAL.hub_address("k3d-hub"), "172.30.0.4")
+        (command,) = fake.matching("kubectl")
+        self.assertEqual(command[:3], ["kubectl", "--context", "k3d-hub"])
+
+        for output in (nodes(), nodes("172.30.0.4", "172.30.0.5")):
+            with patch_run(FakeRun([(["kubectl"], output)])):
+                with self.assertRaises(LOCAL.DeploymentError):
+                    LOCAL.hub_address("k3d-hub")
 
 
 class SecretTests(unittest.TestCase):
@@ -261,8 +267,8 @@ class ImageTests(unittest.TestCase):
     ) -> None:
         fake = FakeRun()
         addresses = {"local-a": "172.30.0.2", "local-b": "172.30.0.9"}
-        servers = {
-            LOCAL.server_container(hub(region)["name"]): address
+        hubs = {
+            hub(region)["kubeContext"]: address
             for region, address in addresses.items()
         }
         with (
@@ -275,7 +281,7 @@ class ImageTests(unittest.TestCase):
                 LOCAL, "registry_host_address", return_value="127.0.0.1:41234"
             ),
             mock.patch.object(LOCAL, "pushed_digest", return_value=DIGEST),
-            mock.patch.object(LOCAL, "container_ip", side_effect=servers.__getitem__),
+            mock.patch.object(LOCAL, "hub_address", side_effect=hubs.__getitem__),
             quiet(),
         ):
             LOCAL.images(Path(directory))
