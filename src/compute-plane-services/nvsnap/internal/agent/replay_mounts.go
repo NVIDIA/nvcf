@@ -98,6 +98,18 @@ func ReplayEmptyDirMaxBytes() int64 {
 	return defaultReplayEmptyDirMaxBytes
 }
 
+// onAllowlist reports whether mp is one of allowlist's mountpoints, which
+// are always replayed, whatever their size: the cachedir in particular
+// holds files an engine keeps open (a JIT log).
+func onAllowlist(mp string, allowlist []string) bool {
+	for _, a := range allowlist {
+		if mp == a {
+			return true
+		}
+	}
+	return false
+}
+
 // isEmptyDirMount reports whether a mount with mountinfo root root is a
 // kubelet emptyDir volume.
 func isEmptyDirMount(root string) bool {

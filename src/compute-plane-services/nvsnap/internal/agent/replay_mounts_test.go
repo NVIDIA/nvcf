@@ -249,3 +249,12 @@ func TestDefaultReplayAllowlistCoversTheCachedir(t *testing.T) {
 		t.Errorf("/dev/shm stays on the default allowlist, got %v", got)
 	}
 }
+
+// The allowlist is replayed whatever its size; the size limit is for the
+// other emptyDirs only.
+func TestOnAllowlist(t *testing.T) {
+	al := []string{"/dev/shm", "/opt/nvsnap"}
+	if !onAllowlist("/opt/nvsnap", al) || onAllowlist("/opt/nvsnap/cache", al) || onAllowlist("/var/lib/etcd", al) {
+		t.Error("onAllowlist must match allowlisted mountpoints exactly")
+	}
+}

@@ -1332,7 +1332,9 @@ func (a *Agent) captureReplayMounts(ctx context.Context, containerInfo *containe
 		if classifyMount(mi.Root, mi.MountPoint, mi.FsType, mi.Opts, allowlist) != MountClassReplay {
 			continue
 		}
-		if isEmptyDirMount(mi.Root) {
+		// The size limit is for the emptyDirs replayed as such, not for
+		// the allowlist (nvsnap's cachedir is an emptyDir, and larger).
+		if isEmptyDirMount(mi.Root) && !onAllowlist(mi.MountPoint, allowlist) {
 			over, n, err := treeBytesOver(fmt.Sprintf("/proc/%d/root%s", containerInfo.PID, mi.MountPoint), emptyDirMax)
 			if err != nil || over {
 				log.WithError(err).WithFields(logrus.Fields{"mp": mi.MountPoint, "bytes": n, "limit": emptyDirMax}).
