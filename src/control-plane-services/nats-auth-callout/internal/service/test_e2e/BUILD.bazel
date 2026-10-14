@@ -18,6 +18,7 @@ load("@rules_go//go:def.bzl", "go_test")
 go_test(
     name = "test_e2e_test",
     srcs = [
+        "connection_e2e_test.go",
         "nkey_e2e_test.go",
         "oauth_e2e_test.go",
         "service_e2e_test.go",
@@ -30,13 +31,17 @@ go_test(
         "//src/control-plane-services/nats-auth-callout/internal/plugins/oauth/test_helpers",
         "//src/control-plane-services/nats-auth-callout/internal/plugins/types",
         "//src/control-plane-services/nats-auth-callout/internal/plugins/webhook",
+        "//src/control-plane-services/nats-auth-callout/internal/router",
         "//src/control-plane-services/nats-auth-callout/internal/service",
         "@com_github_nats_io_nats_go//:nats_go",
         "@com_github_nats_io_nats_server_v2//server",
         "@com_github_nats_io_nats_server_v2//test",
         "@com_github_nats_io_nkeys//:nkeys",
+        "@com_github_prometheus_client_golang//prometheus",
         "@org_golang_x_sync//errgroup",
         "@org_uber_go_zap//:zap",
+        "@org_uber_go_zap//zapcore",
         "@org_uber_go_zap//zaptest",
+        "@org_uber_go_zap//zaptest/observer",
     ],
 )
