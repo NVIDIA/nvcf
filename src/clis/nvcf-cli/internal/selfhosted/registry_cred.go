@@ -653,10 +653,14 @@ func stackGateways(merged map[string]any) []string {
 	return out
 }
 
+// readValuesFile is how ValuesFileReadable reads a file. A var so tests can
+// fail the read, which a file mode cannot do for every user.
+var readValuesFile = os.ReadFile
+
 // ValuesFileReadable reports whether path can be read and holds a values map,
 // the test loadValuesFiles applies before layering a file.
 func ValuesFileReadable(path string) bool {
-	data, err := os.ReadFile(path)
+	data, err := readValuesFile(path)
 	if err != nil {
 		return false
 	}
