@@ -6,6 +6,8 @@ Install the shared routing release `llm-stack` in namespace `llm-stack`, then in
 
 ### Cluster
 
+No cluster yet? [Prepare a k3s GPU cluster](cluster/README.md) from your own GPU machines first. It covers node requirements, k3s, GPU scheduling and workstation access.
+
 - Kubernetes that you reach with kubectl and Helm, using a context that can create CustomResourceDefinitions and namespaces.
 - Linux ARM64 GPU nodes whose GPU matches a recipe profile. The [recipe catalog](recipes/index.json) includes GB10 (Spark) and GB300 (Station) profiles. `python3 llm.py recipes` lists them.
 - One whole GPU per node for each model: no MIG, time-slicing or MPS, and no `NoSchedule` or `NoExecute` taints on model nodes.
@@ -13,7 +15,7 @@ Install the shared routing release `llm-stack` in namespace `llm-stack`, then in
 - The [NVIDIA device plugin](https://github.com/NVIDIA/k8s-device-plugin) advertising `nvidia.com/gpu`. Use v0.17.4 or later on GB10.
 - The node label `nvidia.com/gpu.product` on each GPU node. [GPU Feature Discovery](https://github.com/NVIDIA/k8s-device-plugin/tree/main/docs/gpu-feature-discovery) sets it, or apply it on Spark with `kubectl label node NODE nvidia.com/gpu.product=NVIDIA-GB10`. Use `NVIDIA-GB300` for Station. Capacity planning and the in-chart placement check match it against the recipe profile.
 - A StorageClass named `local-path`, or another class passed to `llm.py plan --storage-class`, with `WaitForFirstConsumer` binding and unrestricted topology. Each model cache is node-local disk on its model node.
-- The shared stack images on every eligible node. No published images exist yet. The committed [image values](dev-artifacts/values.yaml) reference development images with `Never` pull policy, so [prepare and preload them](dev-artifacts/README.md) on your nodes first. The verification Job also needs `python:3.12-alpine`, pulled or preloaded.
+- Pull access from the nodes to the published shared stack images. [values.registry.yaml](values.registry.yaml) selects them and the `ngc-ncp-dev` pull Secret created below. The verification Job also needs `python:3.12-alpine`, pulled or preloaded.
 - Outbound access from the nodes to Hugging Face for model weights, Docker Hub for `lmsysorg/sglang`, nvcr.io, and GitHub for the llama.cpp source used by GGUF recipes.
 
 k3s provides the `nvidia` RuntimeClass when the container toolkit is installed before k3s starts. It also installs Traefik ingress and the `local-path` StorageClass by default.
@@ -21,30 +23,33 @@ k3s provides the `nvidia` RuntimeClass when the container toolkit is installed b
 ### Workstation
 
 - kubectl, Helm 3.10 or newer, and Python 3.11 or newer.
+- An NGC API key with access to the `0651155215864979/ncp-dev` registry, which hosts the charts and shared images.
 - A checkout of this repository. Run all commands from `deploy/helm/llm-routing` in one terminal. The supported release and namespace are both `llm-stack`.
 
 ### Check the cluster
 
-Replace `YOUR_CONTEXT` with your kubeconfig context, then check and load any missing shared images:
+Replace `YOUR_CONTEXT` with your kubeconfig context and set `NGC_API_KEY`. Log Helm in to the registry and create the image pull Secret:
 
 ```bash
 kubectl config use-context YOUR_CONTEXT
-python3 dev-artifacts/build.py --load-only --allow-containerd-import
+echo "$NGC_API_KEY" | helm registry login nvcr.io --username '$oauthtoken' --password-stdin
+kubectl create namespace llm-stack
+kubectl --namespace llm-stack create secret docker-registry ngc-ncp-dev \
+  --docker-server=nvcr.io --docker-username='$oauthtoken' --docker-password="$NGC_API_KEY"
 ```
 
-Then run preflight to check tools, cluster access, GPU compatibility, runtime, storage configuration and image availability:
+Then run preflight to check tools, cluster access, GPU compatibility, runtime and storage configuration:
 
 ```bash
-python3 llm.py preflight --values dev-artifacts/values.yaml
+python3 llm.py preflight
 ```
 
 ## 1. Install shared infrastructure
 
-
 ```bash
-helm upgrade --install llm-stack dev-artifacts/charts/llm-shared-stack-0.1.0.tgz \
+helm upgrade --install llm-stack oci://nvcr.io/0651155215864979/ncp-dev/llm-shared-stack --version 0.2.0-iiab \
   --namespace llm-stack --create-namespace \
-  --values dev-artifacts/values.yaml --wait --timeout 10m
+  --values values.registry.yaml --wait --timeout 10m
 ```
 
 Helm installs the gateway, router and namespace-scoped operator with an empty model registry. A chart verification Job checks gateway TLS, model discovery, acceptance of the caller key and rejection of an invalid key before Helm reports success. The same checks run on upgrades with registered models. The chart generates the caller credential and TLS material on first installation and preserves them on upgrades. The operator watches `llm-stack`. The operator chart defaults `installCRDs` to `true`, so the shared release owns the templated InferenceEndpoint CRD and updates its schema on upgrades. For an externally managed CRD, set `operator.installCRDs=false`. The CRD is retained on uninstall.
@@ -72,7 +77,7 @@ python3 llm.py plan --model qwen3.8-27b
 Install and register Qwen FP8 below, replacing `PROFILE_FROM_PLANNER` and `NODE_FROM_PLANNER` with your chosen profile and node. To reuse retained downloads, keep the original release name, namespace and cache node. Completed model files are verified and reused automatically; missing files are downloaded. No cache flag or values file is required. [Model values examples](recipes/README.md#committed-values) are available for optional overrides and other recipes.
 
 ```bash
-helm upgrade --install qwen-fp8 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
+helm upgrade --install qwen-fp8 oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.3.0-iiab \
   --namespace llm-stack \
   --set recipe=qwen3.8-27b --set profileName=PROFILE_FROM_PLANNER \
   --set 'nodes[0]=NODE_FROM_PLANNER' \
@@ -95,7 +100,7 @@ python3 llm.py plan --model qwen3.8-27b-nvfp4
 Each recipe reserves its own GPU. Running both precisions on one-GPU nodes requires two distinct available nodes before installation. For the second model, replace `PROFILE_FROM_PLANNER` with its profile and `SECOND_NODE_FROM_PLANNER` with an available node different from the first model's node. If no GPU is free, [stop another model](#stop-and-resume) before installing.
 
 ```bash
-helm upgrade --install qwen-nvfp4 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
+helm upgrade --install qwen-nvfp4 oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.3.0-iiab \
   --namespace llm-stack \
   --set recipe=qwen3.8-27b-nvfp4 --set profileName=PROFILE_FROM_PLANNER \
   --set 'nodes[0]=SECOND_NODE_FROM_PLANNER' \
@@ -113,14 +118,14 @@ Both models use the same gateway and caller credential. Each keeps its own Helm 
 | --- | --- | --- |
 | [Qwen3.8-27B](#2-install-a-model) | FP8 | [1 GB10 (Spark)](recipes/values/qwen3.8-27b.yaml) or [1 GB300 (Station)](recipes/values/qwen3.8-27b-station.yaml) |
 | [Qwen3.8-27B](#add-a-second-model) | NVIDIA NVFP4 | [1 GB10 (Spark)](recipes/values/qwen3.8-27b-nvfp4.yaml) |
-| [GLM-5.3](ADVANCED.md#helm-glm-recipe) | UD-IQ2_M | [3 GB10s (Spark)](recipes/values/glm-5.3-x3.yaml), or [2 GB10s (Spark)](recipes/values/glm-5.3.yaml). The two-node profile stops at the host-memory guard |
-| [Qwen3.5-4B](recipes/values/qwen3.5-4b.yaml) | BF16 | [1 GB10 (Spark)](recipes/values/qwen3.5-4b.yaml). Thinks by default, so verify with `recipes/verify.py --max-tokens 2048` |
-| [Nemotron Nano 12B v2](recipes/values/nemotron-nano-12b-v2.yaml) | BF16 | [1 GB10 (Spark)](recipes/values/nemotron-nano-12b-v2.yaml). No tool-call parser configured |
-| [Nemotron 3.5 Lightning](recipes/values/nemotron-3.5-lightning.yaml) | NVFP4 | [1 GB10 (Spark)](recipes/values/nemotron-3.5-lightning.yaml). Pinned SGLang development image |
-| [Qwen3.8-Flash-Next](ADVANCED.md#helm-flash-next-recipes) | NVFP4 | [1 GB10 (Spark) with local NVMe](recipes/values/qwen3.8-flash-next-nvme.yaml) or [2 GB10s (Spark) with a 200 Gbps link](recipes/values/qwen3.8-flash-next-tp2.yaml) |
-| [DeepSeek V4 Flash](recipes/values/deepseek-v4-flash.yaml) | FP4 experts, FP8 attention | [2 GB10s (Spark) with a 200 Gbps link](recipes/values/deepseek-v4-flash.yaml). A three-way split is not valid for this model. Needs 200 GiB of cache per node |
+| [GLM-5.3](ADVANCED.md#helm-glm-recipe) | UD-IQ2_M | [3 GB10s (Spark)](recipes/values/glm-5.3-x3.yaml), or [2 GB10s (Spark)](recipes/values/glm-5.3.yaml). The two-node Spark profile stops at the host-memory guard. Or [2 GB300s (Station)](recipes/values/glm-5.3-station.yaml) |
+| [Qwen3.5-4B](recipes/values/qwen3.5-4b.yaml) | BF16 | [1 GB10 (Spark)](recipes/values/qwen3.5-4b.yaml) or [1 GB300 (Station)](recipes/values/qwen3.5-4b-station.yaml) |
+| [Nemotron Nano 12B v2](recipes/values/nemotron-nano-12b-v2.yaml) | BF16 | [1 GB10 (Spark)](recipes/values/nemotron-nano-12b-v2.yaml) or [1 GB300 (Station)](recipes/values/nemotron-nano-12b-v2-station.yaml). No tool-call parser configured |
+| [Nemotron 3.5 Lightning](recipes/values/nemotron-3.5-lightning.yaml) | NVFP4 | [1 GB10 (Spark)](recipes/values/nemotron-3.5-lightning.yaml) or [1 GB300 (Station)](recipes/values/nemotron-3.5-lightning-station.yaml). Pinned SGLang development image |
+| [Qwen3.8-Flash-Next](ADVANCED.md#helm-flash-next-recipes) | NVFP4 | [1 GB10 (Spark) with local NVMe](recipes/values/qwen3.8-flash-next-nvme.yaml) or [2 GB10s (Spark) with a 200 Gbps link](recipes/values/qwen3.8-flash-next-tp2.yaml), or [1 GB300 (Station)](recipes/values/qwen3.8-flash-next-station.yaml) |
+| [DeepSeek V4 Flash](recipes/values/deepseek-v4-flash.yaml) | FP4 experts, FP8 attention | [2 GB10s (Spark) with a 200 Gbps link](recipes/values/deepseek-v4-flash.yaml) or [2 GB300s (Station) with a link of at least 200 Gbps](recipes/values/deepseek-v4-flash-station.yaml). A three-way split is not valid for this model. Cache per node: 200 GiB on Spark, 220 GiB on Station |
 
-Planned recipes have no installable profile. See the [catalog](recipes/index.json) for profile details and the [Flash-Next guide](ADVANCED.md#helm-flash-next-recipes) for NVMe and two-node setup.
+See the [catalog](recipes/index.json) for profile details and validation scope. Two-node SGLang profiles require verified fabric addresses and interfaces in their values files.
 
 ## 3. Discover and call models
 
@@ -163,7 +168,7 @@ These actions affect one model release. Keep the shared gateway and operator ins
 Stop the FP8 release installed above. Use the same chart version that installed the release:
 
 ```bash
-helm upgrade qwen-fp8 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
+helm upgrade qwen-fp8 oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.3.0-iiab \
   --namespace llm-stack \
   --reuse-values --set suspended=true --timeout 10m &&
 kubectl -n llm-stack wait --for=delete pod \
@@ -175,7 +180,7 @@ Wait for the pods to terminate before assigning their GPUs to another model. The
 Resume when those GPUs are available again:
 
 ```bash
-helm upgrade qwen-fp8 dev-artifacts/charts/pylon-sglang-recipe-0.2.0.tgz \
+helm upgrade qwen-fp8 oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.3.0-iiab \
   --namespace llm-stack \
   --reuse-values --set suspended=false --wait --timeout 120m
 ```

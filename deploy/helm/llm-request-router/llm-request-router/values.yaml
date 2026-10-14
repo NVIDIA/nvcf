@@ -244,6 +244,8 @@ llmRequestRouter:
     allowInsecureRemoteWatchHttp: false
 
   transport:
+    # Enable only on networks that drop UDP segmentation offload batches.
+    disableQuicGso: false
     quicConnectTimeoutMs: 2000
     # Wait for response headers from Pylon. Engines may hold headers while a
     # request is queued, so keep this above the longest queue wait callers

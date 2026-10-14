@@ -85,6 +85,8 @@ type Config struct {
 	RouterGRPCAddress string
 	// PylonImage is the image of the transport pods.
 	PylonImage string
+	// PylonDisableQuicGSO disables UDP segmentation offload on transport pods.
+	PylonDisableQuicGSO bool
 	// PylonImagePullPolicy is the transport container's imagePullPolicy.
 	// Empty leaves the Kubernetes default, which is Always for a :latest or
 	// untagged image and IfNotPresent otherwise.
@@ -130,6 +132,7 @@ func (c *Config) BindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.ClusterID, "cluster-id", "", "Name of this installation's cluster, a DNS label. Required.")
 	fs.StringVar(&c.RouterGRPCAddress, "router-grpc-address", "", "gRPC address of the LLM request router that transport pods register with. Required.")
 	fs.StringVar(&c.PylonImage, "pylon-image", "", "Container image of the Pylon transport pods. Required.")
+	fs.BoolVar(&c.PylonDisableQuicGSO, "pylon-disable-quic-gso", false, "Disable QUIC UDP segmentation offload on networks that drop GSO batches.")
 	fs.StringVar(&c.PylonImagePullPolicy, "pylon-image-pull-policy", "", "imagePullPolicy of the Pylon transport container: Always, IfNotPresent or Never. Empty uses the Kubernetes default.")
 	fs.Var((*nameList)(&c.PylonImagePullSecrets), "pylon-image-pull-secrets", "Comma-separated image pull Secrets of the Pylon transport pods. Each must exist in every namespace with an InferenceEndpoint. Empty uses none.")
 	fs.Var((*namespaceList)(&c.WatchNamespaces), "watch-namespaces", "Comma-separated namespaces to watch. Empty watches all namespaces.")

@@ -4,11 +4,11 @@ Read `../README.md` for the Helm installation path and `../ADVANCED.md` for conf
 
 ## Metadata and chart ownership
 
-`catalog.json` owns SGLang model pins and hardware profiles. Each GGUF recipe folder owns `recipe.json`, `model.lock.json`, `profiles.json` and `NOTICE`. Keep model-specific settings in those sources. The charts bundle copies for independent Helm packaging. Keep bundled metadata synchronized and covered by equality tests. `charts/sglang/files/placement.py` owns the shared placement check. Run `python3 sync-placement.py` after editing it, then `python3 sync-placement.py --check` to verify the GGUF chart copy.
+`catalog.json` owns SGLang model pins and hardware profiles. Each GGUF recipe folder owns `recipe.json`, `model.lock.json`, `profiles.json` and `NOTICE`. Keep model-specific settings in those sources. The charts bundle copies for independent Helm packaging. A profile can set both `image` and `runtime` when its hardware was tested on another runtime build. The model-level pair applies to every other profile, and each Helm validation record must name its profile's effective image. Keep bundled metadata synchronized and covered by equality tests. `charts/sglang/files/placement.py` owns the shared placement check. Run `python3 sync-placement.py` after editing it, then `python3 sync-placement.py --check` to verify the GGUF chart copy.
 
 `planned.json` records unavailable models and upstream candidates. Keep their deployment profiles empty until an executable recipe is implemented.
 
-`export_catalog.py` generates the common `index.json` from these sources. Regenerate the index after changing metadata or chart versions, then run `python3 export_catalog.py --check`. Resource metadata must reflect effective pod scheduling, serving, preparation and auxiliary workloads separately. Unified GPU memory shares the host memory pool.
+`export_catalog.py` generates the common `index.json` and each model chart's `NOTICE` from these sources. Do not edit a chart `NOTICE` by hand. Regenerate after changing metadata, notices or chart versions, then run `python3 export_catalog.py --check`. Resource metadata must reflect effective pod scheduling, serving, preparation and auxiliary workloads separately. Unified GPU memory shares the host memory pool.
 
 The automatic SGLang and GGUF charts use `recipe`, `profileName`, explicit `nodes`, `storageClassName`, `runtimeClassName` and `sharedCAConfigMap`. Keep model preparation and startup inside Kubernetes. Keep supported installation and recovery on the automatic Helm lifecycle. Retain model PVCs and mount externally supplied claims without adopting them. `reuseCaches` requires complete pinned artifacts and performs local verification before serving.
 

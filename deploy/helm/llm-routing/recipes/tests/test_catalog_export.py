@@ -4,6 +4,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -55,6 +56,25 @@ class CommonCatalogTests(unittest.TestCase):
             self.assertRegex(release, r'^[a-z0-9][a-z0-9-]*$')
             for profile in self.recipes[identifier]['profiles']:
                 self.assertEqual(profile['deployment']['releaseName'], release)
+
+    def test_committed_chart_notices_are_current(self):
+        notices = catalog.chart_notices()
+        self.assertEqual({path.relative_to(ROOT) for path in notices},
+                         {Path("charts/sglang/NOTICE"), Path("charts/gguf-backend/NOTICE")})
+        for path, notice in notices.items():
+            self.assertEqual(path.read_text(), notice, path)
+
+    def test_recipe_without_maintained_notice_fails_export(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            gguf = {"id": "example-gguf", "runtime": {"backend": "llama.cpp"}}
+            with self.assertRaisesRegex(ValueError, "Missing model notice for example-gguf"):
+                catalog.recipe_notice(root, gguf)
+            (root / "NOTICE").write_text("shared SGLang terms\n")
+            with self.assertRaisesRegex(ValueError, "Missing model notice for example-gguf"):
+                catalog.recipe_notice(root, gguf)
+            self.assertEqual(catalog.recipe_notice(root, {"id": "example", "runtime": {"backend": "sglang"}}),
+                             root / "NOTICE")
 
     def test_available_and_planned_notice_paths_share_one_bundle_file(self):
         for identifier, recipe in self.recipes.items():
@@ -115,7 +135,9 @@ class CommonCatalogTests(unittest.TestCase):
                 deployment = profile["deployment"]
                 self.assertEqual(deployment["lifecycle"], "automatic")
                 self.assertEqual(deployment["values"], {"recipe": "qwen3.8-flash-next", "profileName": profile["id"]})
-                self.assertIn("nodeCapabilities", deployment["requiredSiteValues"])
+                # Only a profile with NVMe offload or a fabric link needs verified node capabilities.
+                needs_facts = profile["fabric"] is not None or "offloadBytes" in profile["perNode"][0]["storage"]
+                self.assertEqual("nodeCapabilities" in deployment["requiredSiteValues"], needs_facts)
                 self.assertEqual(deployment["guide"], "../ADVANCED.md#helm-flash-next-recipes")
 
     def test_flash_validation_records_are_independent_per_profile(self):
@@ -240,6 +262,40 @@ class CommonCatalogTests(unittest.TestCase):
                     self.assertNotIn(candidate["model"]["revision"], content)
                     self.assertNotIn(candidate["runtime"]["image"], content)
 
+    def override_runtime(self, **fields):
+        real_read = catalog.read
+
+        def read(path):
+            data = real_read(path)
+            if Path(path).name == "catalog.json":
+                data = copy.deepcopy(data)
+                data["models"][0]["profiles"][0].update(fields)
+            return data
+        return patch.object(catalog, "read", side_effect=read)
+
+    def test_a_profile_runtime_override_needs_both_fields_a_digest_and_matching_validation(self):
+        digest = "example/runtime@sha256:" + "c" * 64
+        for fields, message in (({"image": digest}, "both image and runtime"), ({"runtime": "SGLang"}, "both image and runtime"),
+                                ({"image": "example/runtime:latest", "runtime": "SGLang"}, "digest-pinned"),
+                                ({"image": digest, "runtime": "SGLang"}, "pins changed")):
+            with self.subTest(fields=fields), self.override_runtime(**fields), self.assertRaisesRegex(ValueError, message):
+                catalog.build(ROOT)
+
+    def test_deepseek_station_profile_uses_two_exclusive_gpus_and_its_own_pinned_runtime(self):
+        recipe = self.recipes["deepseek-v4-flash"]
+        self.assertRegex(recipe["model"]["revision"], r"^[0-9a-f]{40}$")
+        self.assertRegex(recipe["runtime"]["image"], r"@sha256:[0-9a-f]{64}$")
+        profiles = {profile["id"]: profile for profile in recipe["profiles"]}
+        self.assertEqual(set(profiles), {"spark-tp2", "station-fp4-tp2"})
+        station = profiles["station-fp4-tp2"]
+        self.assertEqual(station["modelNodeCount"], 2)
+        self.assertEqual(len(station["perNode"]), 2)
+        self.assertEqual(station["hardware"]["memoryMode"], "discrete")
+        self.assertRegex(station["runtime"]["image"], r"@sha256:[0-9a-f]{64}$")
+        self.assertNotEqual(station["runtime"]["image"], recipe["runtime"]["image"])
+        self.assertNotIn("runtime", profiles["spark-tp2"])
+        self.assertEqual(recipe["model"]["repository"], "deepseek-ai/DeepSeek-V4-Flash")
+
     def test_upstream_candidates_reject_deployment_and_mutable_references(self):
         for field, value, message in (("chart", "example", "installable deployment"),
                                       ("model", {"revision": "main"}, "immutable"),
@@ -308,14 +364,23 @@ class CommonCatalogTests(unittest.TestCase):
                         self.assertRaisesRegex(ValueError, "short single-line ASCII"):
                     catalog.build(ROOT)
 
-    def test_chart_references_resolve_to_local_packages(self):
+    def test_deepseek_evidence_uses_publisher_checkpoint_and_primary_tp2_example(self):
+        source = next(m for m in catalog.read(ROOT / "catalog.json")["models"] if m["id"] == "deepseek-v4-flash")
+        evidence = source["artifactEvidence"]
+        self.assertIn("https://github.com/sgl-project/sglang/blob/main/docs/demo/deepseek_v4_flash.ipynb", evidence["sources"])
+        self.assertRegex(evidence["checkedAt"], r"^\d{4}-\d{2}-\d{2}$")
+        self.assertGreater(evidence["weightBytes"], 0)
+
+    def test_chart_references_resolve_to_source_and_published_charts(self):
+        # Every executable recipe names its published chart; without one, the
+        # planner would install the source chart instead.
         for recipe in self.recipes.values():
             for profile in recipe["profiles"]:
                 chart = profile["deployment"]["chart"]
                 self.assertTrue((ROOT / chart["localPath"] / "Chart.yaml").is_file())
                 self.assertEqual(chart["archive"], f"{chart['name']}-{chart['version']}.tgz")
-                self.assertEqual(chart["publication"], "local")
-                self.assertIsNone(chart["repository"])
+                self.assertEqual(chart["publication"], "oci")
+                self.assertTrue(chart["repository"].endswith("/" + chart["name"]))
 
     def test_optional_oci_repositories_are_independent_per_recipe_and_backend(self):
         original_read = catalog.read
@@ -342,8 +407,10 @@ class CommonCatalogTests(unittest.TestCase):
                 self.assertEqual(chart['publication'], 'oci' if recipe['id'] in expected else 'local')
                 self.assertEqual(chart['localPath'], baseline['localPath'])
                 self.assertEqual(chart['archive'], baseline['archive'])
-        self.assertTrue(all(p['deployment']['chart']['repository'] is None
-                            for recipe in catalog.build()['recipes'] for p in recipe['profiles']))
+        def repositories(recipes):
+            return {recipe['id']: {p['id']: p['deployment']['chart']['repository'] for p in recipe['profiles']}
+                    for recipe in recipes}
+        self.assertEqual(repositories(catalog.build()['recipes']), repositories(self.recipes.values()))
 
     def test_chart_repositories_reject_malformed_or_incomplete_references(self):
         good = 'oci://registry.example.com/charts/pylon-sglang-recipe'
@@ -376,7 +443,7 @@ class CommonCatalogTests(unittest.TestCase):
                 self.assertIn(recipe["id"], supported)
                 self.assertEqual(profile["deployment"]["lifecycle"], "automatic")
 
-    def test_runtime_smoke_results_do_not_claim_new_helm_validation(self):
+    def test_validation_records_preserve_scope_and_artifact_pins(self):
         for recipe in self.recipes.values():
             for profile in recipe["profiles"]:
                 validation = profile["validation"]
@@ -384,10 +451,19 @@ class CommonCatalogTests(unittest.TestCase):
                 if validation["automaticHelmStatus"] == "smoke-tested":
                     record = validation["automaticHelmWorkload"]
                     self.assertEqual(record["modelRevision"], recipe["model"]["revision"])
-                    self.assertEqual(record["runtimeImage"], recipe["runtime"]["image"])
+                    self.assertEqual(record["runtimeImage"], profile.get("runtime", recipe["runtime"])["image"])
                     self.assertEqual(record["profile"], profile["id"])
                 if validation["workload"]:
-                    self.assertFalse(validation["workload"]["fullContextExercised"])
+                    if validation["workload"].get("contextBoundaryExercised"):
+                        record = validation["automaticHelmWorkload"]
+                        self.assertIn("context-boundary", record["checks"])
+                        self.assertEqual(record["observedWorkload"]["boundaryHttpStatus"], 200)
+                        self.assertEqual(record["observedWorkload"]["boundaryPromptTokens"] +
+                                         record["observedWorkload"]["boundaryMaxOutputTokens"],
+                                         record["contextLength"])
+                    if validation["workload"]["fullContextExercised"]:
+                        self.assertGreaterEqual(validation["workload"]["maximumObservedTotalTokens"],
+                                                validation["workload"]["contextLength"])
                     self.assertFalse(validation["workload"]["performanceBenchmarked"])
                     self.assertFalse(validation["workload"]["qualityEvaluated"])
                 else:

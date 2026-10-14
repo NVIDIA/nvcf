@@ -21,7 +21,7 @@ def verify(client, models, max_tokens=None):
         results.append({'model': model, 'discovery': client.discovery(model),
                         'chat': client.completion(model, 'Say hello in one short sentence.', **budget),
                         'stream': client.completion(model, 'Say hello in one short sentence.', stream=True, **budget),
-                        'auth': client.auth(model)})
+                        'auth': client.auth(model, **budget)})
     result = {'passed': True, 'models': results}
     if max_tokens is not None:
         result['maxTokens'] = max_tokens
@@ -35,7 +35,7 @@ def main(argv=None):
     parser.add_argument('--ca-configmap')
     parser.add_argument('--api-key-file', type=pathlib.Path)
     parser.add_argument('--model', action='append', required=True)
-    parser.add_argument('--max-tokens', type=int, help='Completion budget for models that reason before answering. Default 512.')
+    parser.add_argument('--max-tokens', type=int, help='Maximum generated tokens. Defaults to the model server setting.')
     parser.add_argument('--output', type=pathlib.Path, required=True)
     args = parser.parse_args(argv)
     if args.output.exists():

@@ -1,5 +1,0 @@
-.charts-*/
-.values-*.tmp
-
-# This temporary workflow distributes prepared chart packages through Git.
-!charts/*.tgz

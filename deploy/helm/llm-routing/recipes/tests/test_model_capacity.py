@@ -230,6 +230,45 @@ class ModelCapacityTests(unittest.TestCase):
 
 
 class CapacityPrimitiveTests(unittest.TestCase):
+    def test_demo_station_profiles_use_gpu_labels_without_manual_capabilities(self):
+        snapshot = inventory(2)
+        for item in snapshot['nodes']:
+            item['metadata']['labels'].update({
+                'nvidia.com/gpu.product': 'NVIDIA-GB300', 'nvidia.com/gpu.memory': '256703'})
+            item['status']['allocatable'].update(cpu='72', memory='732Gi')
+        for model, profile, count in (
+                ('qwen3.5-4b', 'station-bf16', 1),
+                ('nemotron-nano-12b-v2', 'station-bf16', 1),
+                ('nemotron-3.5-lightning', 'station-nvfp4', 1),
+                ('glm-5.3', 'gb300-x2', 2)):
+            with self.subTest(model=model):
+                report = check(snapshot, model)
+                self.assertEqual(report['status'], 'fits', report)
+                self.assertEqual(report['chosenProfile'], profile)
+                self.assertEqual(len(report['chosenNodes']), count)
+                unknown = copy.deepcopy(snapshot)
+                for item in unknown['nodes']:
+                    del item['metadata']['labels']['nvidia.com/gpu.memory']
+                self.assertEqual(check(unknown, model)['status'], 'blocked')
+        snapshot['pods'] = [pod('busy', **{'nvidia.com/gpu': '1'})]
+        self.assertEqual(check(snapshot, 'qwen3.5-4b')['chosenNodes'], ['node-1'])
+        self.assertEqual(check(snapshot, 'glm-5.3')['status'], 'blocked')
+
+    def test_deepseek_tp2_uses_gpu_labels_and_requires_only_fabric_facts(self):
+        snapshot = inventory(2)
+        for item in snapshot['nodes']:
+            item['metadata']['labels'].update({'nvidia.com/gpu.product': 'NVIDIA-GB300',
+                                              'nvidia.com/gpu.memory': '256703'})
+            item['status']['allocatable'].update(cpu='72', memory='732Gi')
+        facts = {'nodes': {'node-' + str(i): {'fabric': 'pair', 'gbps': 400, 'interface': 'eth1',
+                          'address': '192.0.2.' + str(i + 1)} for i in range(2)}}
+        self.assertEqual(check(snapshot, 'deepseek-v4-flash')['status'], 'blocked')
+        report = check(snapshot, 'deepseek-v4-flash', capabilities=facts)
+        self.assertEqual(report['status'], 'fits', report)
+        self.assertEqual(report['chosenNodes'], ['node-0', 'node-1'])
+        del snapshot['nodes'][0]['metadata']['labels']['nvidia.com/gpu.memory']
+        self.assertEqual(check(snapshot, 'deepseek-v4-flash', capabilities=facts)['status'], 'blocked')
+
     def test_kubernetes_quantities_are_exact_and_invalid_values_fail(self):
         for value, expected in [('1000m', 1), ('1.5Gi', 1610612736), ('128G', 128000000000)]:
             self.assertEqual(model_capacity.quantity(value), expected)

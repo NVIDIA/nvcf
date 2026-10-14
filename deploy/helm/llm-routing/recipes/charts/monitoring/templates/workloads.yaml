@@ -117,11 +117,14 @@ spec:
         {{- else }}
         - name: data
           emptyDir: {sizeLimit: 512Mi}
-        {{- range $name, $key := dict "datasource" "datasource.yaml" "provider" "dashboard.yaml" "dashboard" "dashboard.json" }}
+        {{- range $name, $keys := dict "datasource" (list "datasource.yaml") "provider" (list "dashboard.yaml") "dashboard" (list "dashboard.json" "dashboard-collector.json") }}
         - name: {{ $name }}
           configMap:
             name: {{ $.Release.Name }}-grafana
-            items: [{key: {{ $key }}, path: {{ $key }}}]
+            items:
+              {{- range $keys }}
+              - {key: {{ . }}, path: {{ . }}}
+              {{- end }}
         {{- end }}
         {{- end }}
 ---

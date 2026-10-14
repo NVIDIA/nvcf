@@ -32,6 +32,8 @@ router:
   grpcAddress: ""
 
 pylon:
+  # Enable only on networks that drop UDP segmentation offload batches.
+  disableQuicGso: false
   # Image of the Pylon transport pods the operator creates. repository and tag
   # are required; a tag starting with sha256: is used as a digest. Passed as
   # --pylon-image. pullPolicy is the transport container's imagePullPolicy,

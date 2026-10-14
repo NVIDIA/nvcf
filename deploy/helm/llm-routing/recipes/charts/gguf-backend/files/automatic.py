@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import itertools
 import json
+import math
 import os
 import pathlib
 import platform
@@ -89,6 +90,12 @@ def hardware(config, cuda=None):
     require(cuda.get_device_name() in profile['hardware']['cudaDeviceNames'], 'CUDA device differs from profile')
     capability = '.'.join(map(str, cuda.get_device_capability()))
     require(capability == profile['hardware']['computeCapability'], 'CUDA compute capability differs from profile')
+    if hardware_profile.get('memoryMode') == 'discrete':
+        minimum = hardware_profile.get('minDeviceMemoryGiB')
+        require(type(minimum) in (int, float) and math.isfinite(minimum) and minimum > 0,
+                'Discrete profiles require a positive minDeviceMemoryGiB')
+        require(cuda.get_device_properties(0).total_memory >= minimum * 1024**3,
+                'Insufficient CUDA device memory for profile')
     emit('hardware_pass', gpu=cuda.get_device_name(), capability=capability)
 
 
