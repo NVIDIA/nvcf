@@ -155,6 +155,9 @@ jobs:
       - name: Test ReVal authorization configuration
         run: bash deploy/helm/helm-reval/tests/auth-config.sh
 
+      - name: Test NVCT API sidecar release artifacts
+        run: bash deploy/helm/cloud-tasks/tests/sidecar_release_artifacts_test.sh
+
       - name: Check for uncommitted helm dependency artifacts
         run: |
           set -euo pipefail
