@@ -94,11 +94,13 @@ var stagesEventsListCmd = &cobra.Command{
 	Short: "List the event history of one instance of a function version",
 	Long: `List the Event Ledger event history for one context of a function version, most recent first.
 
-The context filters must match how the events were ingested. Run 'stats get'
+The context filters are optional and must match how the events were ingested. With
+no filter, the command returns the events stored without a context. Run 'stats get'
 first to see the contexts that exist. Requires an API key with the
 fnds:getEvents read scope.
 
 Examples:
+  nvcf-cli stages events list --function-version-id <uuid>
   nvcf-cli stages events list --function-version-id <uuid> --deployment-id <uuid> --gpu-specification-id gpu-a100
   nvcf-cli stages events list --function-version-id <uuid> --resource-id <id> --attribute-key <key> --attribute-value <value>`,
 	Args:         cobra.NoArgs,
@@ -153,9 +155,6 @@ func runStagesEventsList(cmd *cobra.Command, _ []string) error {
 		GPUSpecification: eventsGPUSpecificationID,
 		ClusterID:        eventsClusterID,
 		ResourceID:       eventsResourceID,
-	}
-	if ec == (eventledger.EventsContext{}) {
-		return fmt.Errorf("at least one of --instance-id, --deployment-id, --gpu-specification-id, --cluster-id, or --resource-id is required; run 'nvcf-cli stats get' to list contexts")
 	}
 	if (eventsAttributeKey == "") != (eventsAttributeValue == "") {
 		return fmt.Errorf("--attribute-key and --attribute-value must be used together")

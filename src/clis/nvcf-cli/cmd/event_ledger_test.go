@@ -76,12 +76,14 @@ func TestStatsGetRendersContexts(t *testing.T) {
 	assert.Contains(t, out.String(), "cluster_id=c1,instance_id=i1")
 }
 
-func TestStagesEventsListRequiresContextFilter(t *testing.T) {
-	setupEventLedgerCommandTest(t, func(http.ResponseWriter, *http.Request) {
-		t.Error("no request expected without a context filter")
+func TestStagesEventsListWithoutContextFilterSendsNoContext(t *testing.T) {
+	setupEventLedgerCommandTest(t, func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v3/ledger/namespace/"+testFunctionVersionID+"/events", r.URL.Path)
+		assert.Empty(t, r.URL.RawQuery, "no context parameter is sent without a filter")
+		_, _ = w.Write([]byte(`{"namespace":"ns","context":"","events":[]}`))
 	})
-	err := stagesEventsListCmd.RunE(stagesEventsListCmd, nil)
-	require.ErrorContains(t, err, "at least one of")
+
+	require.NoError(t, stagesEventsListCmd.RunE(stagesEventsListCmd, nil))
 }
 
 func TestStagesEventsListRendersEvents(t *testing.T) {
@@ -120,7 +122,7 @@ func TestEventLedgerAPIKeyPrefersDedicatedKey(t *testing.T) {
 	assert.Equal(t, "nvapi-fn", eventLedgerAPIKey(&client.Config{APIKey: "nvapi-fn"}))
 }
 
-func TestStagesEventsListResourceIDCountsAsContextAndSendsAttributeFilter(t *testing.T) {
+func TestStagesEventsListSendsResourceIDAndAttributeFilter(t *testing.T) {
 	setupEventLedgerCommandTest(t, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		assert.Equal(t, "res-1", q.Get("resource_id"))

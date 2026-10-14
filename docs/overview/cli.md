@@ -641,9 +641,10 @@ Ledger at `event_ledger_url`. When that is not set, it replaces the leading
 | `stages events list` | List the event history of one instance, most recent first (supports `--function-version-id`, `--instance-id`, `--deployment-id`, `--gpu-specification-id`, `--cluster-id`, and `--resource-id`, plus `--attribute-key` with `--attribute-value`) |
 
 `--function-version-id` must be a UUID and defaults to the saved version ID. `stages events list`
-needs at least one context filter (`--instance-id`, `--deployment-id`,
-`--gpu-specification-id`, `--cluster-id`, or `--resource-id`) that matches how the
-events were ingested. Run `stats get` first to see the contexts that exist.
+takes optional context filters (`--instance-id`, `--deployment-id`,
+`--gpu-specification-id`, `--cluster-id`, and `--resource-id`) that must match how
+the events were ingested. With no filter it returns the events stored without a
+context. Run `stats get` first to see the contexts that exist.
 `--attribute-key` and `--attribute-value` must be given together and keep only
 events whose attribute with that key has that value.
 
