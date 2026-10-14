@@ -617,6 +617,13 @@ consumes that file. If you skip registration, installation fails with a
 "Registration values not found" error.
 </Info>
 
+<Note>
+`nvcf-cli init` mints its token through Admin Issuer Proxy. On a stack where that component is
+disabled the command fails with `API error 404` — export `NVCF_TOKEN` with a token from your own
+identity provider before registering instead. See
+[Disabling Admin Issuer Proxy](./control-plane-operations.md).
+</Note>
+
 ## Step 6: Verify the agent is healthy
 
 Confirm the NVCA operator is deployed and the backend reports the agent healthy.

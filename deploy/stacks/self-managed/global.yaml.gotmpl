@@ -359,18 +359,9 @@ openbao:
       tag: {{ dig "openbao" "migrations" "image" "tag" "" .Values }}
       {{- end }}
 
-    env:
-      {{- with dig "openbao" "migrations" "env" (list) .Values }}
-      {{- toYaml . | nindent 6 }}
-      {{- end }}
-      - name: ADDONS_LLM_ENABLED
-        value: {{ dig "addons" "llm" "enabled" false .Values | quote }}
-      # Same value that gates the release. OpenBao state outlives the release,
-      # so without this the sign capability stays behind after an uninstall.
-      - name: ADMIN_ISSUER_PROXY_ENABLED
-        value: {{ dig "adminIssuerProxy" "enabled" true .Values | quote }}
-      - name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS
-        value: {{ dig "addons" "llm" "pki" "allowedDomains" "" .Values | quote }}
+    # No env here. openbao-migrations-env.yaml.gotmpl is applied after this file
+    # and Helm replaces lists rather than merging them, so anything set here is
+    # discarded. Every migrations.env entry belongs in that overlay.
 
     # merge the rest of the user-supplied migrations block, but drop
     # image and env sub-blocks so we don't clobber the defaults above.

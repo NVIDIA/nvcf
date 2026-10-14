@@ -7,13 +7,16 @@
 set -euo pipefail
 
 stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+stacks_dir="$(cd "$stack_dir/.." && pwd)"
 work_dir="$(mktemp -d)"
-test_stack_dir="$work_dir/self-managed"
+test_stacks_dir="$work_dir/stacks"
+test_stack_dir="$test_stacks_dir/self-managed"
 environment_name="admin-issuer-proxy-wiring-test"
 environment_file="$test_stack_dir/environments/$environment_name.yaml"
 secrets_file="$test_stack_dir/secrets/$environment_name-secrets.yaml"
 ui_entries='[.nvcfUi.controlPlane.components[] | select(.name == "admin-issuer-proxy")] | length'
 bao_flag='[.openbao.migrations.env[] | select(.name == "ADMIN_ISSUER_PROXY_ENABLED")] | .[0].value'
+llm_flag='[.openbao.migrations.env[] | select(.name == "ADDONS_LLM_ENABLED")] | .[0].value'
 trap 'rm -rf "$work_dir"' EXIT
 
 fail() {
@@ -21,14 +24,23 @@ fail() {
   exit 1
 }
 
-mkdir -p "$test_stack_dir"
-cp -R "$stack_dir"/. "$test_stack_dir"
+# The whole helmfile.d is rendered, and it references the sibling stacks, so
+# they come along. Rendering a single file is what let the overlay discard
+# ADMIN_ISSUER_PROXY_ENABLED unnoticed.
+mkdir -p "$test_stacks_dir"
+cp -R "$stacks_dir"/. "$test_stacks_dir"
 mkdir -p "$(dirname "$secrets_file")"
 printf '{}\n' >"$secrets_file"
 
+for stack_environments in "$test_stacks_dir"/*/environments; do
+  test -d "$stack_environments" || continue
+  test -e "$stack_environments/$environment_name.yaml" ||
+    printf '{}\n' >"$stack_environments/$environment_name.yaml"
+done
+
 # global.yaml.gotmpl marks the shared and grpc gateway values as required.
 helmfile_common=(
-  --file "$test_stack_dir/helmfile.d/02-core.yaml.gotmpl"
+  --file "$test_stack_dir/helmfile.d"
   --environment default
   --state-values-set ingress.gatewayApi.controllerNamespace=envoy-gateway-system
   --state-values-set ingress.gatewayApi.gateways.shared.name=shared-gw
@@ -50,6 +62,15 @@ run_helmfile() {
 render_list() {
   run_helmfile list --output json >"$1"
   test -s "$1" || fail "helmfile wrote no release list to $1"
+}
+
+# openbao-migrations-env.yaml.gotmpl is applied last and Helm replaces lists, so
+# the flag only exists on the openbao-server release in 01-dependencies. The whole
+# directory is rendered above: selecting a single file is what let the overlay
+# discard the value unnoticed.
+render_openbao_values() {
+  run_helmfile --selector name=openbao-server write-values --output-file-template "$1" >/dev/null
+  test -s "$1" || fail "helmfile wrote no openbao-server values to $1"
 }
 
 # Every release renders the whole of global.yaml.gotmpl, so the api release
@@ -95,8 +116,12 @@ assert_yaml_value "$work_dir/values-default.yaml" '.adminIssuerProxy.gateway.ena
   "default: the route must stay enabled"
 assert_yaml_value "$work_dir/values-default.yaml" "$ui_entries" 1 \
   "default: the UI must health-check admin-issuer-proxy"
-assert_yaml_value "$work_dir/values-default.yaml" "$bao_flag" true \
+render_openbao_values "$work_dir/openbao-default.yaml"
+assert_yaml_value "$work_dir/openbao-default.yaml" "$bao_flag" true \
   "default: the OpenBao role must still be created"
+# The overlay owns the whole list; a regression here silently drops the others.
+assert_yaml_value "$work_dir/openbao-default.yaml" "$llm_flag" false \
+  "default: the overlay's existing entries must survive alongside it"
 
 # 2. adminIssuerProxy.enabled: false disables the release and drops its UI health
 #    entry, while the other releases stay enabled.
@@ -120,7 +145,8 @@ assert_yaml_value "$work_dir/values-off.yaml" "$ui_entries" 0 \
   "off: the UI must not health-check a release that is not installed"
 # OpenBao state outlives the release, so a gate on the release alone would
 # leave the sign capability behind for anything running as its service account.
-assert_yaml_value "$work_dir/values-off.yaml" "$bao_flag" false \
+render_openbao_values "$work_dir/openbao-off.yaml"
+assert_yaml_value "$work_dir/openbao-off.yaml" "$bao_flag" false \
   "off: the OpenBao role must not be created either"
 
 # 3. adminIssuerProxy.gateway.enabled: false drops only the route; the release
@@ -141,7 +167,8 @@ render_values "$work_dir/values-route-off.yaml"
 assert_yaml_value "$work_dir/values-route-off.yaml" '.adminIssuerProxy.gateway.enabled' false \
   "route off: adminIssuerProxy.gateway.enabled must reach the release values"
 # Dropping the route is not a reason to withdraw the proxy's own credentials.
-assert_yaml_value "$work_dir/values-route-off.yaml" "$bao_flag" true \
+render_openbao_values "$work_dir/openbao-route-off.yaml"
+assert_yaml_value "$work_dir/openbao-route-off.yaml" "$bao_flag" true \
   "route off: the OpenBao role must be unaffected"
 
 echo "admin-issuer-proxy-wiring: all checks passed"

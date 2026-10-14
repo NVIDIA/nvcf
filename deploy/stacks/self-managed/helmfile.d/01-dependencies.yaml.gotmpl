@@ -129,12 +129,13 @@ releases:
     condition: openbao.enabled # From defaults.yaml or env overrides
     namespace: vault-system
     <<: *dependency # Inherits base values from the dependency template
-    # Secret values own migrations.env. Apply the generated LLM addition last
-    # so it preserves that list while adding the addon migration switch.
+    # Secret values own migrations.env. Helm replaces lists rather than
+    # merging them, so every entry is built in the overlay and applied last:
+    # anything set earlier, global.yaml.gotmpl included, would be discarded.
     values:
       - ../global.yaml.gotmpl
       - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
-      - ../openbao-migrations-llm-env.yaml.gotmpl
+      - ../openbao-migrations-env.yaml.gotmpl
     needs:
       - nats-system/nats
 

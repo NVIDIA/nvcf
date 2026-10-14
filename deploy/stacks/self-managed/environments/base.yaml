@@ -598,9 +598,10 @@ adminIssuerProxy:
   # Defaults to true so existing installs are unchanged.
   #
   # false drops the release, its Gateway route, its NVCF UI health entry, and
-  # the OpenBao role that lets it sign admin-scoped tokens. `nvcf-cli init`
-  # calls POST /v1/admin/keys, so it stops working against this stack; obtain
-  # the first admin token from your own identity provider instead.
+  # the OpenBao role that lets it sign admin-scoped tokens. `nvcf-cli init` and
+  # `nvcf-cli refresh` both call POST /v1/admin/keys, so both stop working
+  # against this stack; obtain the admin token from your own identity provider
+  # and set NVCF_TOKEN instead.
   #
   # On a stack where it is already installed this uninstalls nothing: the
   # release and the OpenBao role both already exist and stay. Until the role is
