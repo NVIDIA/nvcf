@@ -96,6 +96,7 @@ Environment variables consumed by the entrypoint:
 | `ADDONS_NVCF_UI_ENABLED` | `false` | Run the nvcf-ui addon under `addons/nvcf-ui/setup_nvcf-ui.sh` (fail-hard when enabled, see [addons/nvcf-ui/README.md](addons/nvcf-ui/README.md)) |
 | `DEFAULT_CASSANDRA_PASSWORD` | `ch@ng3m3` (override required) | See above |
 | `NVCF_API_SIDECARS_IMAGE_PULL_SECRET` | `""` | Image pull secret name passed to the NVCF API sidecar mount |
+| `ADMIN_ISSUER_PROXY_ENABLED` | `true` | Run `migrations/10_setup_admin-issuer.sh`. Set `false` alongside `adminIssuerProxy.enabled: false` so the admin signing role, policy and auth role are not created for a proxy that is not installed. Unlike the addon switches this defaults to `true`, so an existing install is unchanged |
 | `MIGRATIONS_ALLOW_FAILURES` | `false` | Emergency rollback only. When `true`, the entrypoint exits 0 even if core migrations or opted-in addons failed. Default behavior fails the Job non-zero so a misconfigured deployment blocks the Helm hook Job instead of silently leaving OpenBao in a partial state. |
 | `BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS` | `60` | Total time `enable_secrets_mount` waits for a kv-v2 mount's storage upgrade (HTTP 400 "Upgrading from non-versioned to versioned data") to finish before failing the migration. Errors outside that wait fail immediately. |
 

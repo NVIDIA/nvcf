@@ -174,7 +174,36 @@ original order. Repeated options and empty values are preserved.
 | `When I successfully invoke the function selected by NVCF CLI over plaintext gRPC service {string} method {string} with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke --grpc --grpc-plaintext` with the visible service, method, request, timeout, and poll duration. |
 | `When I successfully invoke model {string} at {string} with timeout {string} seconds:` (JSON docstring) | Runs `function invoke` with the visible model, inference URL, exact request body, and timeout. |
 | `When I successfully invoke the function selected by NVCF CLI through Vanity Gateway host {string} path {string} with timeout {string} seconds:` (JSON docstring) | Sends an exact-host HTTP request through the local Envoy listener with the saved function API key passed over sensitive stdin, never argv or command logs. |
-| `When I successfully undeploy the function selected by NVCF CLI` | Runs `function delete --deployment-only`. Function selection remains owned by CLI state. |
+| `When I successfully undeploy the function selected by NVCF CLI` | Runs `function delete --deployment-only`. Function selection remains owned by CLI state. A successful run is remembered, so a queued teardown undeploy skips it. |
+
+### HTTP requests (Given / When / Then)
+
+These steps use the in-process HTTP client (`harness.HTTPClient`), not the command runner, so headers never reach `out/<run-id>/logs`. Redirects are not followed. Pending headers apply to the next send or poll step only.
+
+| Step | Notes |
+|------|-------|
+| `Given the HTTP request header {string} is {string}` | Queues one request header for the next request. `${VAR}` expansion applies to the value. |
+| `Given the HTTP request header {string} is the NVCF CLI admin token with prefix {string}` | Queues a header whose value is the prefix plus the admin token stored by `nvcf-cli init` in the state file of the selected NVCF CLI config. The token never enters argv, env, or logs. |
+| `When I send a {string} request to {string}` | Sends the request with the queued headers and records status and body. `${VAR}` expansion applies to the URL. A non-2xx status is not a step failure. |
+| `When I send a {string} request to {string} with body:` (docstring) | As above with the interpolated docstring as the request body. |
+| `When I poll {string} {string} for up to {int} seconds until the HTTP response body contains {string}` | Repeats the request every 5 seconds until the body contains the text or the deadline passes. Used for eventually consistent reads. |
+| `Then the HTTP status should be {int}` | Last response status. The failure message includes a truncated body with API keys (`nvapi-...`) and JWTs masked. HTTP failure messages mask them everywhere they print a body or an expected value. |
+| `Then the HTTP status should be {int} or {int}` | Last response status equals either value. |
+| `Then the HTTP response body should contain {string}` | Substring match. The interpolated value must be non-empty. |
+| `Then the HTTP response body should not contain {string}` | Negative substring match. The interpolated value must be non-empty. |
+| `Then the HTTP response JSON field {string} should equal {string}` | Dotted path (object keys, array indexes) compared as text. |
+| `Then the HTTP response JSON field {string} should be at least {int}` | Dotted path parsed as a number and compared to a minimum. |
+| `When I export the HTTP response JSON field {string} to environment variable {string}` | Exports the field under the named env var. Fails when the field is missing or empty. Snapshotted by the env Ledger; restored at suite teardown. The value is never echoed. |
+
+### Scenario teardown (Given / When)
+
+Cleanup written as a later step is skipped when an earlier step fails, because the live runner stops at the first failed step. These steps queue cleanup that runs after the scenario ends instead, whether it passed or failed. Queued actions run in reverse order through a Godog After hook, a failing action does not stop the rest, and every failure is reported by failing the scenario. The queue is cleared before each scenario.
+
+| Step | Notes |
+|------|-------|
+| `When I send a {string} request to {string} at scenario teardown expecting status {int}` | Queues the request instead of sending it now. It takes the queued headers like the send step, so declare a credential just before it. `${VAR}` expansion applies to the URL when the step runs, so the variable must already be exported. Any status other than the expected one fails the scenario. |
+| `When the function selected by NVCF CLI is undeployed at scenario teardown` | Queues `function delete --deployment-only` for the selected CLI config. Register it after the function is created and before the deploy step, so a failed deploy is still cleaned up. It does nothing when the scenario already undeployed the function with the undeploy step. A "Deployment not found" result counts as done, and any other failure fails the scenario. |
+| `When the function selected by NVCF CLI is deleted at scenario teardown` | Queues `function delete` for the selected CLI config. Register it before the undeploy teardown step so it runs after the undeploy. Any failure fails the scenario. |
 
 ### Assertions (Then / And)
 

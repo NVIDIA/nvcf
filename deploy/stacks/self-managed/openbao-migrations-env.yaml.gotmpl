@@ -11,3 +11,5 @@ openbao:
         value: {{ dig "addons" "llm" "enabled" false .Values | quote }}
       - name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS
         value: {{ dig "addons" "llm" "pki" "allowedDomains" "" .Values | quote }}
+      - name: ADMIN_ISSUER_PROXY_ENABLED
+        value: {{ dig "adminIssuerProxy" "enabled" true .Values | quote }}

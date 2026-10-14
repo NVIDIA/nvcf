@@ -106,19 +106,23 @@ py_test(
 rust_test(
     name = "stargate_test",
     crate = ":stargate_lib",
-    # The load_balancer suite's `bundled_benchmark_lb_configs_parse` test
-    # reads the workspace's `benches/` directory via
-    # `env!("CARGO_MANIFEST_DIR")/../../benches`. CARGO_MANIFEST_DIR
-    # resolves to the source path in Bazel's sandbox, not the runfiles
-    # tree where `data` files land, so just adding the filegroup is not
-    # enough -- the test still panics. Skip it in Bazel (`cargo test`
-    # keeps running it). A follow-up can re-enable it via the `runfiles`
-    # crate + a separate env-var pointing at the data-staged path.
-    args = [
-        "--skip",
-        "load_balancer::tests::bundled_benchmark_lb_configs_parse",
+    # The routing-method drift tests include the manifest and the NVCF
+    # routing docs at compile time.
+    compile_data = [
+        "src/load_balancer/routing_methods.json",
+        "//:stargate-routing-method-docs",
     ],
-    data = ["//src/libraries/rust/stargate:benches"],
+    # Tests read `benches/` and the routing simulator configs through
+    # `env!("CARGO_MANIFEST_DIR")`. Resolve it within the test's runfiles
+    # tree, where `data` lands, instead of the build sandbox's source
+    # directory.
+    data = [
+        "//src/libraries/rust/stargate:benches",
+        "//src/libraries/rust/stargate/crates/stargate-routing-sim:configs",
+    ],
+    rustc_env = {
+        "CARGO_MANIFEST_DIR": "src/libraries/rust/stargate/crates/stargate",
+    },
     # Test target needs the workspace-local deps in addition to the
     # third-party dev deps. `pylon-lib` is a dev-dependency only here.
     deps = _WORKSPACE_DEPS + [

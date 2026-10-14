@@ -893,10 +893,13 @@ authentication hop.
 
 ## Troubleshooting
 
-`404 no_eligible_candidates` from `llm.invocation.<domain>` means the request
-reached the LLM Gateway, but the requested function or model was unknown or was
-not registered on the selected request router. Similar `503` candidate errors
-mean the router knows the target but has no active eligible backend. Check:
+A `404` with `no eligible candidates` from `llm.invocation.<domain>` means the
+request reached the LLM Gateway, but the requested function or model was
+unknown or was not registered on the selected request router. Chat completions
+return `{"message":"no eligible candidates"}`. Other inference endpoints return
+the router body, `{"error":"no eligible candidates","code":"no_eligible_candidates"}`.
+Similar `503` candidate errors mean the router knows the target but has no
+active eligible backend. Check:
 
 - The LLM function is deployed and its pod is `Running`.
 - The request `model` value uses `<function-id>/<model-name>`.
