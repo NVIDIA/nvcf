@@ -132,7 +132,7 @@ The BFF reads its configuration from the environment. The Helm chart sets these 
 
 ## Deploying with Helm
 
-The chart is in `helm/`; its values sit under `nvcfSparkUi` in `helm/values.yaml`. Before installing, make the image available to your cluster. The release's namespace must hold:
+The chart is in `helm/`; its values sit under `nvcfSparkUi` in `helm/values.yaml`. [helm/README.md](helm/README.md) walks through the install and explains each value. Before installing, make the image available to your cluster. The release's namespace must hold:
 
 - a Secret with the BFF's gateway API key (`gateway.apiKey.secret` and `.key`; default `demo-ui-api-key`, field `api-key`);
 - the gateway's CA certificate in a ConfigMap (`gateway.ca.configMap` and `.key`; default `llm-gateway-stack-ca`, key `ca.crt`);
