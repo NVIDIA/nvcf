@@ -259,6 +259,9 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		// Before the unlock: a connection to a peer outside the group goes
 		// to an address of the captured instance (criu_companion.go).
 		resetDeadPeers(hostPID, keepAddresses("", group.InetAddrMap), log)
+		if err := natInstanceAddresses(hostPID, group.InetAddrMap, log); err != nil {
+			return nil, fmt.Errorf("criu-v2: lead the instance's captured addresses to its restored pods: %w", err)
+		}
 	}
 
 	fabricDir := ""
