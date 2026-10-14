@@ -36,7 +36,7 @@ router:
   remoteWatchUrls: []
   hostname: router.use1.stargate-dev.example.invalid
   acmCertificateArn: arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000
-  # Add every public NAT Gateway egress IP used by the two MockDC clusters.
+  # Include NAT egress IPs of all connected MockDC and hub clusters.
   loadBalancerSourceRanges:
     - 192.0.2.1/32
 

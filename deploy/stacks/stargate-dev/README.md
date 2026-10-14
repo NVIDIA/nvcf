@@ -69,7 +69,8 @@ AWS resources you provide:
   `router.remoteWatchUrls` (`https://<peer router.hostname>:50071`), each hub's
   ranges must include the MockDC NAT egress IPs of every connected region,
   because peer-region Pylons register over gRPC on 50071 and tunnel over
-  QUIC on 50072.
+  QUIC on 50072. Include every connected hub's NAT egress IPs too, because
+  peer-hub routers watch this hub over gRPC on 50071.
 - A container registry with Stargate, dev auth, MockDynamo, and Pylon images,
   pinned by digest. Bazel builds them from
   `//src/libraries/rust/stargate/crates/stargate:image` (which includes the
