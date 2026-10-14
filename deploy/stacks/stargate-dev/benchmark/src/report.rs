@@ -240,21 +240,6 @@ pub fn inspect(path: &Path, limit: RunLimit, cold_capacity: bool) -> Result<Veri
     Ok(VerifiedReport { sha256, metrics })
 }
 
-pub fn verify_accepted(
-    path: &Path,
-    expected_sha256: &str,
-    limit: RunLimit,
-    cold_capacity: bool,
-) -> Result<VerifiedReport> {
-    let report = inspect(path, limit, cold_capacity)?;
-    ensure!(
-        report.sha256 == expected_sha256,
-        "accepted Spark report checksum changed: {}",
-        path.display()
-    );
-    Ok(report)
-}
-
 fn divide(numerator: Option<f64>, denominator: Option<f64>) -> Option<f64> {
     let numerator = numerator?;
     let denominator = denominator?;
@@ -611,12 +596,15 @@ mod tests {
         let bytes = format!("{}\n \t", serde_json::to_string(&report)?);
         fs::write(&path, &bytes)?;
         let expected = format!("{:x}", Sha256::digest(bytes.as_bytes()));
-        let verified = verify_accepted(&path, &expected, RunLimit::Requests(10), false)?;
+        let verified = inspect(&path, RunLimit::Requests(10), false)?;
         assert_eq!(verified.sha256, expected);
         assert_eq!(verified.metrics.cache_hit_pct(), Some(25.0));
         assert_eq!(verified.metrics.cached_tokens, 17);
         fs::write(&path, format!("{bytes}\n"))?;
-        assert!(verify_accepted(&path, &expected, RunLimit::Requests(10), false).is_err());
+        assert_ne!(
+            inspect(&path, RunLimit::Requests(10), false)?.sha256,
+            expected
+        );
         Ok(())
     }
 

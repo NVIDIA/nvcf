@@ -514,19 +514,7 @@ impl Execution<'_> {
             .zip(prepared)
             .map(|(stream, prepared)| {
                 let path = prepared.directory.join("spark.json");
-                let verified = report::inspect(
-                    &self.output.join(&path),
-                    stream.limit,
-                    arm.kind == ArmKind::Capacity,
-                )?;
-                crate::schedule::verify(&self.output.join(&path), stream, &verified.metrics)?;
-                if warmup || arm.kind == ArmKind::Smoke {
-                    ensure!(
-                        verified.metrics.failed == 0,
-                        "smoke or warm-up requests failed: {}",
-                        path.display()
-                    );
-                }
+                let verified = accept_report(&self.output.join(&path), stream, arm, warmup, None)?;
                 Ok(AcceptedReport {
                     stream: stream.name.clone(),
                     path,
@@ -785,6 +773,33 @@ pub fn render(output: &Path) -> Result<()> {
     report::render(&output, &rows)
 }
 
+/// Accept one Spark report: its counts and cache observations, the recorded
+/// checksum when one exists, its rate schedule, and no failed requests in a
+/// smoke or warm-up stream.
+fn accept_report(
+    path: &Path,
+    stream: &Stream,
+    arm: &Arm,
+    warmup: bool,
+    expected_sha256: Option<&str>,
+) -> Result<report::VerifiedReport> {
+    let verified = report::inspect(path, stream.limit, arm.kind == ArmKind::Capacity)?;
+    if let Some(expected) = expected_sha256 {
+        ensure!(
+            verified.sha256 == expected,
+            "accepted Spark report checksum changed: {}",
+            path.display()
+        );
+    }
+    crate::schedule::verify(path, stream, &verified.metrics)?;
+    ensure!(
+        !(warmup || arm.kind == ArmKind::Smoke) || verified.metrics.failed == 0,
+        "smoke or warm-up requests failed: {}",
+        path.display()
+    );
+    Ok(verified)
+}
+
 fn load_receipt(output: &Path, arm: &Arm) -> Result<Option<AcceptedArm>> {
     let path = receipt_path(output, arm);
     if !path.exists() {
@@ -808,7 +823,7 @@ fn load_receipt(output: &Path, arm: &Arm) -> Result<Option<AcceptedArm>> {
         receipt.warmup.is_some() == arm.warmup.is_some(),
         "accepted receipt has incomplete warm-up evidence"
     );
-    let verify = |stream: &Stream, accepted: &AcceptedReport| -> Result<report::Metrics> {
+    let verify = |stream: &Stream, accepted: &AcceptedReport, warmup: bool| {
         ensure!(
             stream.name == accepted.stream
                 && accepted.path
@@ -818,13 +833,13 @@ fn load_receipt(output: &Path, arm: &Arm) -> Result<Option<AcceptedArm>> {
                         .join("spark.json"),
             "accepted report does not match the planned stream"
         );
-        let verified = report::verify_accepted(
+        let verified = accept_report(
             &below(output, &accepted.path)?,
-            &accepted.sha256,
-            stream.limit,
-            arm.kind == ArmKind::Capacity,
+            stream,
+            arm,
+            warmup,
+            Some(&accepted.sha256),
         )?;
-        crate::schedule::verify(&below(output, &accepted.path)?, stream, &verified.metrics)?;
         if !stream.rate_steps.is_empty() {
             ensure!(
                 receipt
@@ -833,24 +848,14 @@ fn load_receipt(output: &Path, arm: &Arm) -> Result<Option<AcceptedArm>> {
                 "accepted rate schedule lacks request timeline evidence"
             );
         }
-        Ok(verified.metrics)
+        Ok::<_, anyhow::Error>(verified.metrics)
     };
     if let (Some(stream), Some(accepted)) = (&arm.warmup, &receipt.warmup) {
-        ensure!(
-            verify(stream, accepted)?.failed == 0,
-            "accepted warm-up report contains failures"
-        );
+        verify(stream, accepted, true)?;
     }
     let mut metrics = Vec::new();
     for (stream, accepted) in arm.streams.iter().zip(&receipt.reports) {
-        let measured = verify(stream, accepted)?;
-        if arm.kind == ArmKind::Smoke {
-            ensure!(
-                measured.failed == 0,
-                "accepted smoke report contains failures"
-            );
-        }
-        metrics.push(measured);
+        metrics.push(verify(stream, accepted, false)?);
     }
     for name in ["pods.before.json", "pods.after.json"] {
         ensure!(

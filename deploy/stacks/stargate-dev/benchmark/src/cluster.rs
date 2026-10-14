@@ -40,6 +40,13 @@ pub struct Clusters {
     pub mockdcs: Vec<Cluster>,
 }
 
+impl Region {
+    /// The hub cluster followed by the MockDC clusters.
+    pub fn all_clusters(&self) -> impl Iterator<Item = &Cluster> {
+        std::iter::once(&self.clusters.stargate).chain(&self.clusters.mockdcs)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Cluster {
@@ -107,9 +114,7 @@ impl Topology {
                 region.clusters.mockdcs.len() == 2,
                 "region {name} must define two MockDCs"
             );
-            for cluster in
-                std::iter::once(&region.clusters.stargate).chain(&region.clusters.mockdcs)
-            {
+            for cluster in region.all_clusters() {
                 ensure!(
                     contexts.insert(cluster.kube_context.clone()),
                     "duplicate Kubernetes context {}",
@@ -330,9 +335,7 @@ impl Topology {
         let mut deployments = BTreeMap::new();
         let mut policies = BTreeMap::new();
         for region in &self.regions {
-            for cluster in
-                std::iter::once(&region.clusters.stargate).chain(&region.clusters.mockdcs)
-            {
+            for cluster in region.all_clusters() {
                 let listing = self
                     .read_json(
                         &cluster.kube_context,
@@ -373,9 +376,7 @@ impl Topology {
     pub async fn pod_state(&self) -> Result<Value> {
         let mut pods = BTreeMap::new();
         for region in &self.regions {
-            for cluster in
-                std::iter::once(&region.clusters.stargate).chain(&region.clusters.mockdcs)
-            {
+            for cluster in region.all_clusters() {
                 let listing = self
                     .read_json(
                         &cluster.kube_context,
@@ -446,54 +447,56 @@ impl Topology {
         Ok(serde_json::to_value(stats)?)
     }
 
+    /// Restart every (context, namespace, deployment) target, then wait for
+    /// all of them to roll out.
+    async fn restart_and_wait(&self, targets: &[(&str, &str, String)]) -> Result<()> {
+        for (context, namespace, deployment) in targets {
+            self.write(
+                context,
+                namespace,
+                &["rollout", "restart", deployment.as_str()],
+                Duration::from_secs(120),
+            )
+            .await?;
+        }
+        for (context, namespace, deployment) in targets {
+            self.read(
+                context,
+                namespace,
+                &["rollout", "status", deployment.as_str(), "--timeout=5m"],
+                Duration::from_secs(330),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
     pub async fn reset_caches(&self) -> Result<CacheReset> {
         let before = self.cache_stats().await?;
-        for (region, cluster, deployment) in self.backend_targets() {
-            self.write(
-                &cluster.kube_context,
-                &region.namespace,
-                &["rollout", "restart", &format!("deployment/{deployment}")],
-                Duration::from_secs(120),
-            )
-            .await?;
-        }
-        for (region, cluster, deployment) in self.backend_targets() {
-            self.read(
-                &cluster.kube_context,
-                &region.namespace,
-                &[
-                    "rollout",
-                    "status",
-                    &format!("deployment/{deployment}"),
-                    "--timeout=5m",
-                ],
-                Duration::from_secs(330),
-            )
-            .await?;
-        }
-        for region in &self.regions {
-            self.write(
-                &region.clusters.stargate.kube_context,
-                &region.namespace,
-                &["rollout", "restart", "deployment/llm-request-router"],
-                Duration::from_secs(120),
-            )
-            .await?;
-        }
-        for region in &self.regions {
-            self.read(
-                &region.clusters.stargate.kube_context,
-                &region.namespace,
-                &[
-                    "rollout",
-                    "status",
-                    "deployment/llm-request-router",
-                    "--timeout=5m",
-                ],
-                Duration::from_secs(330),
-            )
-            .await?;
-        }
+        // Backends restart first so the routers come back to empty caches.
+        let backends: Vec<_> = self
+            .backend_targets()
+            .map(|(region, cluster, name)| {
+                (
+                    cluster.kube_context.as_str(),
+                    region.namespace.as_str(),
+                    format!("deployment/{name}"),
+                )
+            })
+            .collect();
+        self.restart_and_wait(&backends).await?;
+        let routers: Vec<_> = self
+            .regions
+            .iter()
+            .map(|region| {
+                (
+                    region.clusters.stargate.kube_context.as_str(),
+                    region.namespace.as_str(),
+                    "deployment/llm-request-router".to_owned(),
+                )
+            })
+            .collect();
+        self.restart_and_wait(&routers).await?;
         let calibration = self.wait_ready().await?;
         let after = self.cache_stats().await?;
         check_empty_caches(&after)?;
@@ -665,9 +668,10 @@ fn required_str<'a>(value: &'a Value, pointer: &str) -> Result<&'a str> {
 }
 
 fn check_deployment(deployment: &Value, name: &str, replicas: u64) -> Result<()> {
+    let configured = deployment.pointer("/spec/replicas").and_then(Value::as_u64);
     ensure!(
-        deployment.pointer("/spec/replicas").and_then(Value::as_u64) == Some(replicas),
-        "Deployment {name} has the wrong configured replica count"
+        configured == Some(replicas),
+        "Deployment {name} is configured for {configured:?} replicas; expected {replicas}"
     );
     for field in ["readyReplicas", "updatedReplicas", "availableReplicas"] {
         let count = deployment
@@ -715,7 +719,7 @@ fn check_registration_service(service: &Value) -> Result<()> {
         .collect();
     ensure!(
         actual == BTreeSet::from([(Some(50071), Some("TCP")), (Some(50072), Some("UDP"))]),
-        "backend-router Service exposes unexpected ports"
+        "backend-router Service exposes {actual:?}; expected 50071/TCP and 50072/UDP"
     );
     ensure!(
         service
@@ -727,14 +731,18 @@ fn check_registration_service(service: &Value) -> Result<()> {
     Ok(())
 }
 
-fn container_args<'a>(pod: &'a Value, name: &str) -> Result<Vec<&'a str>> {
-    let containers = pod
-        .pointer("/spec/containers")
-        .and_then(Value::as_array)
-        .context("Pod containers missing")?;
-    let container = containers
+/// Find the element named `name` in the Kubernetes array at `pointer`, such
+/// as a Pod's containers or container statuses.
+pub(crate) fn named<'a>(value: &'a Value, pointer: &str, name: &str) -> Option<&'a Value> {
+    value
+        .pointer(pointer)?
+        .as_array()?
         .iter()
-        .find(|container| container.get("name").and_then(Value::as_str) == Some(name))
+        .find(|item| item.get("name").and_then(Value::as_str) == Some(name))
+}
+
+fn container_args<'a>(pod: &'a Value, name: &str) -> Result<Vec<&'a str>> {
+    let container = named(pod, "/spec/containers", name)
         .with_context(|| format!("Pod lacks {name} container"))?;
     container
         .get("args")
@@ -964,45 +972,10 @@ fn check_empty_caches(stats: &Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::FakeCommand;
-
-    fn respond(
-        fake: &FakeCommand,
-        context: &str,
-        namespace: &str,
-        arguments: &[&str],
-        responses: &[(i32, &str, &str)],
-    ) {
-        let mut full = vec![
-            "--context",
-            context,
-            "-n",
-            namespace,
-            "--request-timeout=25s",
-        ];
-        full.extend_from_slice(arguments);
-        fake.respond(&full, responses);
-    }
-
-    fn ready_deployment(replicas: u64) -> Value {
-        json!({"metadata": {"generation": 1}, "spec": {"replicas": replicas}, "status": {
-            "observedGeneration": 1, "readyReplicas": replicas, "updatedReplicas": replicas, "availableReplicas": replicas
-        }})
-    }
+    use crate::test_support::{FakeCommand, healthy_west_region, kubectl as respond, mockdc_pod};
 
     fn pod(name: &str, identity: &str, terminating: bool) -> Value {
-        let mut pod = json!({
-            "metadata": {"name": name},
-            "spec": {"containers": [
-                {"name": "mock-dynamo", "args": []},
-                {"name": "pylon", "args": [format!("--inference-server-id={identity}"),
-                    "--engine-stats-stream=off", "--max-engine-concurrency=17", "--do-calibration",
-                    "--calibration-max-concurrency=13", "--active-canary-interval-ms=0"]}
-            ]},
-            "status": {"containerStatuses": [
-                {"name": "mock-dynamo", "ready": true}, {"name": "pylon", "ready": true}
-            ]}
-        });
+        let mut pod = mockdc_pod(name, identity);
         if terminating {
             pod["metadata"]["deletionTimestamp"] = json!("2026-09-17T00:00:00Z");
         }
@@ -1191,7 +1164,7 @@ mod tests {
         let mut topology = Topology::load("us-west-2", &[])?;
         topology.executable = fake.executable();
         let region = topology.primary();
-        for cluster in std::iter::once(&region.clusters.stargate).chain(&region.clusters.mockdcs) {
+        for cluster in region.all_clusters() {
             let before = json!({"items":[{"metadata":{"name":"service", "generation":1}, "spec":{
                 "replicas":1, "template":{"metadata":{"annotations":{"restartedAt":"before"}}, "spec":{
                     "containers":[{"name":"service","image":"old","resources":{"limits":{"cpu":"1"}}, "args":["--fixed"],"env":[]}]
@@ -1253,94 +1226,7 @@ mod tests {
         fake.default_response(&[(0, "", "")]);
         let mut topology = Topology::load("us-west-2", &[])?;
         topology.executable = fake.executable();
-        let region = topology.primary();
-        let context = &region.clusters.stargate.kube_context;
-        let namespace = &region.namespace;
-        for (name, replicas) in [
-            ("stargate-dev-auth", 1),
-            ("llm-request-router", 3),
-            ("llm-request-router-backend-router", 3),
-        ] {
-            respond(
-                &fake,
-                context,
-                namespace,
-                &["get", "deployment", name, "-o", "json"],
-                &[(0, &ready_deployment(replicas).to_string(), "")],
-            );
-        }
-        let service = json!({"spec":{"type":"LoadBalancer","ports":[{"port":50071,"protocol":"TCP"},{"port":50072,"protocol":"UDP"}]},
-            "status":{"loadBalancer":{"ingress":[{"hostname":"example.invalid"}]}}});
-        respond(
-            &fake,
-            context,
-            namespace,
-            &[
-                "get",
-                "service",
-                "llm-request-router-backend-router",
-                "-o",
-                "json",
-            ],
-            &[(0, &service.to_string(), "")],
-        );
-        let routers = json!({"items":[{"metadata":{"name":"router-0"}}, {"metadata":{"name":"router-1"}}, {"metadata":{"name":"router-2"}}]});
-        respond(
-            &fake,
-            context,
-            namespace,
-            &["get", "pods", "-l", ROUTER_SELECTOR, "-o", "json"],
-            &[(0, &routers.to_string(), "")],
-        );
-        for index in 0..3 {
-            let path = format!(
-                "--raw=/api/v1/namespaces/{namespace}/pods/router-{index}:9090/proxy/metrics"
-            );
-            let metrics = format!(
-                "stargate_active_inference_servers{{model=\"{}\",routing_key=\"{}\"}} 4\n",
-                region.model_name, region.routing_key
-            );
-            respond(
-                &fake,
-                context,
-                namespace,
-                &["get", &path],
-                &[(0, &metrics, "")],
-            );
-        }
-        for mockdc in &region.clusters.mockdcs {
-            let pods = json!({"items":[pod("backend-0", &format!("{}-backend-0", mockdc.name), false), pod("backend-1", &format!("{}-backend-1", mockdc.name), false)]});
-            let selector = format!("app.kubernetes.io/instance={}", mockdc.name);
-            respond(
-                &fake,
-                &mockdc.kube_context,
-                namespace,
-                &["get", "pods", "-l", &selector, "-o", "json"],
-                &[(0, &pods.to_string(), "")],
-            );
-            for index in 0..2 {
-                let path = format!(
-                    "--raw=/api/v1/namespaces/{namespace}/pods/backend-{index}:9089/proxy/metrics"
-                );
-                let metrics = format!(
-                    concat!(
-                        "pylon_engine_stats_stream_events_total 0\n",
-                        "pylon_engine_stats_stream_connected 0\n",
-                        "pylon_model_calibration_duration_ms_count{{model=\"{}\",outcome=\"completed\"}} 1\n",
-                        "pylon_model_last_mean_input_tps{{model=\"{}\"}} 321\n",
-                        "pylon_model_stats_source{{model=\"{}\",source=\"engine_stats_stream\"}} 0\n",
-                    ),
-                    region.model_name, region.model_name, region.model_name
-                );
-                respond(
-                    &fake,
-                    &mockdc.kube_context,
-                    namespace,
-                    &["get", &path],
-                    &[(0, &metrics, "")],
-                );
-            }
-        }
+        healthy_west_region(&fake);
         for (region, cluster, service) in topology.backend_targets() {
             let path = format!(
                 "--raw=/api/v1/namespaces/{}/services/http:{service}:http/proxy/kv-cache/stats",

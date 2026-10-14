@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use serde_json::{Value, json};
-use support::FakeCommand;
+use support::{FakeCommand, healthy_west_region, kubectl};
 
 const SUITE: &str = r#"
 version: 1
@@ -34,24 +34,6 @@ fn mixed_suite() -> String {
     hot: {rate: 2, workers: 2, minPromptBytes: 256, maxPromptBytes: 512}
     short: {rate: 1, workers: 1, promptBytesByTurn: [256, 512]}
 "#
-}
-
-fn kubectl(
-    fake: &FakeCommand,
-    context: &str,
-    namespace: &str,
-    args: &[&str],
-    responses: &[(i32, &str, &str)],
-) {
-    let mut command = vec![
-        "--context",
-        context,
-        "-n",
-        namespace,
-        "--request-timeout=25s",
-    ];
-    command.extend_from_slice(args);
-    fake.respond(&command, responses);
 }
 
 /// Simulate a one-region deployment and a Spark Pod named `spark-test`.
@@ -107,16 +89,6 @@ fn environment(fake: &FakeCommand) -> PathBuf {
                 fake.respond(&args, &[(0, "", "")]);
             }
         }
-        for (name, replicas) in [
-            ("stargate-dev-auth", 1),
-            ("llm-request-router", 3),
-            ("llm-request-router-backend-router", 3),
-        ] {
-            kubectl(fake, context, namespace, &["get", "deployment", name, "-o", "json"], &[(0, &json!({
-                "metadata":{"generation":1},"spec":{"replicas":replicas},
-                "status":{"readyReplicas":replicas,"updatedReplicas":replicas,"availableReplicas":replicas,"observedGeneration":1}
-            }).to_string(), "")]);
-        }
         kubectl(
             fake,
             context,
@@ -140,51 +112,7 @@ fn environment(fake: &FakeCommand) -> PathBuf {
             )],
         );
         if context.starts_with("mockdc") {
-            let pods: Vec<_> = (0..2).map(|index| json!({
-                "metadata":{"name":format!("backend-{index}")},
-                "spec":{"containers":[{"name":"mock-dynamo","args":[]},{"name":"pylon","args":[
-                    format!("--inference-server-id={context}-backend-{index}"),
-                    "--engine-stats-stream=off", "--active-canary-interval-ms=0", "--do-calibration",
-                    "--max-engine-concurrency=25", "--calibration-max-concurrency=25"
-                ]}]},
-                "status":{"containerStatuses":[{"name":"mock-dynamo","ready":true},{"name":"pylon","ready":true}]}
-            })).collect();
-            kubectl(
-                fake,
-                context,
-                namespace,
-                &[
-                    "get",
-                    "pods",
-                    "-l",
-                    &format!("app.kubernetes.io/instance={context}"),
-                    "-o",
-                    "json",
-                ],
-                &[(0, &json!({"items":pods}).to_string(), "")],
-            );
             for index in 0..2 {
-                kubectl(
-                    fake,
-                    context,
-                    namespace,
-                    &[
-                        "get",
-                        &format!(
-                            "--raw=/api/v1/namespaces/{namespace}/pods/backend-{index}:9089/proxy/metrics"
-                        ),
-                    ],
-                    &[(
-                        0,
-                        concat!(
-                            "pylon_engine_stats_stream_events_total 0\n",
-                            "pylon_engine_stats_stream_connected 0\n",
-                            "pylon_model_calibration_duration_ms_count{model=\"stargate-dev-model\",outcome=\"completed\"} 1\n",
-                            "pylon_model_last_mean_input_tps{model=\"stargate-dev-model\"} 321\n",
-                        ),
-                        "",
-                    )],
-                );
                 kubectl(fake, context, namespace, &["get", &format!("--raw=/api/v1/namespaces/{namespace}/services/http:{context}-stargate-dev-mockdc-backend-{index}:http/proxy/kv-cache/stats")], &[(0, &json!({"kv_cache_entries":0,"kv_cache_used_tokens":0,"kv_cache_hit_count":0,"kv_cache_miss_count":0,"kv_cache_eviction_count":0,"kv_cache_evicted_tokens":0}).to_string(), "")]);
             }
         }
@@ -197,42 +125,7 @@ fn environment(fake: &FakeCommand) -> PathBuf {
         &["get", "configmap", "llm-request-router-lb", "-o", "json"],
         &[(0, r#"{"data":{"lb-config.json":"{\"n\":2}"}}"#, "")],
     );
-    kubectl(fake, context, namespace, &["get", "service", "llm-request-router-backend-router", "-o", "json"], &[(0, &json!({"spec":{"type":"LoadBalancer","ports":[{"port":50071,"protocol":"TCP"},{"port":50072,"protocol":"UDP"}]},"status":{"loadBalancer":{"ingress":[{"hostname":"test.invalid"}]}}}).to_string(), "")]);
-    let pods: Vec<_> = (0..3)
-        .map(|index| json!({"metadata":{"name":format!("router-{index}")}}))
-        .collect();
-    kubectl(
-        fake,
-        context,
-        namespace,
-        &[
-            "get",
-            "pods",
-            "-l",
-            "app.kubernetes.io/name=llm-request-router,app.kubernetes.io/instance=llm-request-router",
-            "-o",
-            "json",
-        ],
-        &[(0, &json!({"items":pods}).to_string(), "")],
-    );
-    for index in 0..3 {
-        kubectl(
-            fake,
-            context,
-            namespace,
-            &[
-                "get",
-                &format!(
-                    "--raw=/api/v1/namespaces/{namespace}/pods/router-{index}:9090/proxy/metrics"
-                ),
-            ],
-            &[(
-                0,
-                "stargate_active_inference_servers{model=\"stargate-dev-model\",routing_key=\"stargate-dev\"} 4\n",
-                "",
-            )],
-        );
-    }
+    healthy_west_region(fake);
     root
 }
 

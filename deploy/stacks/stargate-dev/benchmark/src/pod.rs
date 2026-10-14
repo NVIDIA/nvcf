@@ -17,7 +17,9 @@ use tokio::time::{Instant, sleep};
 use uuid::Uuid;
 
 use crate::artifact::{atomic_json, below, hash_file, read_json};
-use crate::cluster::{Topology, authentication_error, read_with_retries, transient_control_error};
+use crate::cluster::{
+    Topology, authentication_error, named, read_with_retries, transient_control_error,
+};
 use crate::process::capture;
 use crate::workload::Fingerprint;
 
@@ -133,7 +135,7 @@ impl<'a> Runner<'a> {
         .await
     }
 
-    async fn pod(&self, target: &Target) -> Result<Option<Value>> {
+    async fn pod(&self, target: &Target) -> Result<Value> {
         let value = self
             .topology
             .read(
@@ -150,37 +152,21 @@ impl<'a> Runner<'a> {
                 CONTROL_TIMEOUT,
             )
             .await?;
-        if value.trim().is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(
-            serde_json::from_str(&value).context("parse Spark Pod")?,
-        ))
+        ensure!(!value.trim().is_empty(), "Spark Pod does not exist");
+        serde_json::from_str(&value).context("parse Spark Pod")
     }
 
     pub async fn current_container(&self) -> Result<Container> {
-        let pod = self
-            .pod(&self.target())
-            .await?
-            .context("Spark Pod does not exist")?;
-        describe_container(&pod)
+        describe_container(&self.pod(&self.target()).await?)
     }
 
     async fn identity(&self, target: &Target) -> Result<Identity> {
-        let pod = self
-            .pod(target)
-            .await?
-            .context("Spark Pod does not exist")?;
-        selected_identity(&pod)
+        selected_identity(&self.pod(target).await?)
     }
 
     pub async fn inspect(&self) -> Result<Environment> {
         let target = self.target();
-        let pod = self
-            .pod(&target)
-            .await?
-            .context("Spark Pod does not exist")?;
-        let container = describe_container(&pod)?;
+        let container = describe_container(&self.pod(&target).await?)?;
         checked(
             self.read_exec(&target, &["bash", "-c", REQUIRE_TOOLS])
                 .await?,
@@ -239,24 +225,8 @@ impl<'a> Runner<'a> {
         )?;
         for (name, fingerprint) in fingerprints {
             let final_path = format!("{directory}/{name}");
-            let response = self
-                .read_exec(
-                    &target,
-                    &[
-                        "bash",
-                        "-c",
-                        "if test -e \"$1\"; then printf present; else printf absent; fi",
-                        "--",
-                        &final_path,
-                    ],
-                )
-                .await?;
-            let exists = match checked(response, "inspect remote workload")?.as_slice() {
-                b"present" => true,
-                b"absent" => false,
-                _ => bail!("invalid remote workload existence response"),
-            };
-            if !exists {
+            let mut actual = self.remote_hash(&target, &final_path).await?;
+            if actual.is_none() {
                 let staged = format!("{directory}/.upload-{}", Uuid::new_v4());
                 let local = below(output, &Path::new("workloads").join(name))?;
                 let mut copy =
@@ -270,7 +240,7 @@ impl<'a> Runner<'a> {
                     "stage Spark workload upload",
                 )?;
                 ensure!(
-                    self.remote_hash(&target, &staged).await? == fingerprint.sha256,
+                    self.remote_hash(&target, &staged).await?.as_ref() == Some(&fingerprint.sha256),
                     "staged workload checksum differs: {name}"
                 );
                 checked(
@@ -278,10 +248,10 @@ impl<'a> Runner<'a> {
                         .await?,
                     "commit remote workload",
                 )?;
+                actual = self.remote_hash(&target, &final_path).await?;
             }
-            let actual = self.remote_hash(&target, &final_path).await?;
             ensure!(
-                actual == fingerprint.sha256,
+                actual.as_ref() == Some(&fingerprint.sha256),
                 "uploaded workload checksum differs: {name}"
             );
         }
@@ -458,9 +428,7 @@ impl<'a> Runner<'a> {
         let output = self
             .read_exec(&launch.target, &["tail", "-c", &start, &remote])
             .await?;
-        if !output.status.success()
-            && String::from_utf8_lossy(&output.stderr).contains("No such file or directory")
-        {
+        if missing_file(&output) {
             return Ok(());
         }
         let bytes = checked(output, "read Spark log")?;
@@ -475,9 +443,7 @@ impl<'a> Runner<'a> {
 
     async fn read_file(&self, target: &Target, path: &str) -> Result<Option<Vec<u8>>> {
         let output = self.read_exec(target, &["cat", path]).await?;
-        if !output.status.success()
-            && String::from_utf8_lossy(&output.stderr).contains("No such file or directory")
-        {
+        if missing_file(&output) {
             return Ok(None);
         }
         Ok(Some(checked(output, "read remote Spark state")?))
@@ -542,11 +508,13 @@ impl<'a> Runner<'a> {
         group_running(&output, pid)
     }
 
-    async fn remote_hash(&self, target: &Target, path: &str) -> Result<String> {
-        let output = checked(
-            self.read_exec(target, &["sha256sum", path]).await?,
-            "hash remote Spark artifact",
-        )?;
+    /// Hash a remote file, or return `None` when it does not exist.
+    async fn remote_hash(&self, target: &Target, path: &str) -> Result<Option<String>> {
+        let output = self.read_exec(target, &["sha256sum", path]).await?;
+        if missing_file(&output) {
+            return Ok(None);
+        }
+        let output = checked(output, "hash remote Spark artifact")?;
         let text = std::str::from_utf8(&output).context("remote checksum is not UTF-8")?;
         let hash = text
             .split_whitespace()
@@ -556,7 +524,7 @@ impl<'a> Runner<'a> {
             hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
             "invalid remote SHA-256"
         );
-        Ok(hash.to_owned())
+        Ok(Some(hash.to_owned()))
     }
 
     pub async fn download(&self, launch: &Launch, local_report: &Path) -> Result<()> {
@@ -577,7 +545,10 @@ impl<'a> Runner<'a> {
             "unsupported Spark artifact"
         );
         let remote = format!("{}/{name}", launch.directory);
-        let expected = self.remote_hash(&launch.target, &remote).await?;
+        let expected = self
+            .remote_hash(&launch.target, &remote)
+            .await?
+            .context("remote Spark artifact is missing")?;
         let parent = local_report.parent().context("report has no parent")?;
         fs::create_dir_all(parent)?;
         let temporary = tempfile::NamedTempFile::new_in(parent)?;
@@ -778,22 +749,17 @@ fn validate_name(name: &str) -> Result<()> {
     Ok(())
 }
 
+fn missing_file(output: &Output) -> bool {
+    !output.status.success()
+        && String::from_utf8_lossy(&output.stderr).contains("No such file or directory")
+}
+
 fn selected_container(pod: &Value) -> Result<&Value> {
-    pod.pointer("/spec/containers")
-        .and_then(Value::as_array)
-        .context("Spark Pod containers missing")?
-        .iter()
-        .find(|container| container.get("name").and_then(Value::as_str) == Some(CONTAINER))
-        .context("Pod has no spark container")
+    named(pod, "/spec/containers", CONTAINER).context("Pod has no spark container")
 }
 
 fn selected_status(pod: &Value) -> Result<&Value> {
-    pod.pointer("/status/containerStatuses")
-        .and_then(Value::as_array)
-        .context("Spark Pod statuses missing")?
-        .iter()
-        .find(|container| container.get("name").and_then(Value::as_str) == Some(CONTAINER))
-        .context("Spark container status missing")
+    named(pod, "/status/containerStatuses", CONTAINER).context("Spark container status missing")
 }
 
 fn selected_identity(pod: &Value) -> Result<Identity> {
