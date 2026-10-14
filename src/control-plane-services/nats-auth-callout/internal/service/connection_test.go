@@ -52,6 +52,7 @@ func TestConnectionFailureReason_ClassifiesErrors(t *testing.T) {
 		{"nil", nil, reasonNone},
 		{"authorization violation", nats.ErrAuthorization, reasonAuth},
 		{"authentication expired", nats.ErrAuthExpired, reasonAuth},
+		{"authentication revoked", nats.ErrAuthRevoked, reasonAuth},
 		{"account authentication expired", nats.ErrAccountAuthExpired, reasonAuth},
 		{"wrapped authorization violation", fmt.Errorf("connect: %w", nats.ErrAuthorization), reasonAuth},
 		{"unknown certificate authority", fmt.Errorf("handshake: %w", x509.UnknownAuthorityError{}), reasonTLS},

@@ -124,7 +124,7 @@ func connectionFailureReason(err error) string {
 		return reasonNone
 	}
 	if errors.Is(err, nats.ErrAuthorization) || errors.Is(err, nats.ErrAuthExpired) ||
-		errors.Is(err, nats.ErrAccountAuthExpired) {
+		errors.Is(err, nats.ErrAuthRevoked) || errors.Is(err, nats.ErrAccountAuthExpired) {
 		return reasonAuth
 	}
 	var (
