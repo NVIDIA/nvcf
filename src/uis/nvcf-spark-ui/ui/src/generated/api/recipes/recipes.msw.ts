@@ -106,6 +106,19 @@ export const getGetRecipesResponseMock = (
 					undefined,
 				]),
 			},
+			runtime: faker.helpers.arrayElement([
+				{
+					...{
+						backend: faker.string.alpha({ length: { min: 10, max: 20 } }),
+						version: faker.string.alpha({ length: { min: 10, max: 20 } }),
+						image: faker.helpers.arrayElement([
+							faker.string.alpha({ length: { min: 10, max: 20 } }),
+							undefined,
+						]),
+					},
+				},
+				undefined,
+			]),
 			modelNodeCount: faker.number.int({ min: 1 }),
 			gpusPerNode: faker.number.int({ min: 1 }),
 			perNode: Array.from(

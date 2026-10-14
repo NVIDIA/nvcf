@@ -18,6 +18,7 @@
 import type { Recipe } from "~/generated/model/recipe";
 import type { RecipeCatalog } from "~/generated/model/recipeCatalog";
 import type { RecipeProfile } from "~/generated/model/recipeProfile";
+import type { RecipeRuntime } from "~/generated/model/recipeRuntime";
 import type { RecipeValidation } from "~/generated/model/recipeValidation";
 
 /**
@@ -48,6 +49,7 @@ function profile(
 	options: {
 		chart?: string;
 		release?: string;
+		runtime?: RecipeRuntime;
 		nodes?: number;
 		product?: string;
 		memoryGiB: number;
@@ -62,6 +64,7 @@ function profile(
 	const capabilities = options.nvme || options.fabricGbps !== undefined;
 	return {
 		id,
+		...(options.runtime ? { runtime: options.runtime } : {}),
 		hardware: {
 			gpuProducts: [options.product ?? "NVIDIA-GB10"],
 			gpuCount: 1,
@@ -202,6 +205,14 @@ export const recipeCatalog: RecipeCatalog = {
 			runtime: SGLANG,
 			profiles: [
 				profile("nemotron-5-super-49b", "station-gb300-x2", {
+					// Tested on a newer build than the recipe's, as DeepSeek V4 Flash's
+					// DGX Station profile is.
+					runtime: {
+						...SGLANG,
+						version: "SGLang v0.5.21",
+						image:
+							"lmsysorg/sglang@sha256:7d3f0c2a9b81e4f5a6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8f9a0b1c2d",
+					},
 					nodes: 2,
 					product: "NVIDIA-GB300",
 					memoryGiB: 240,

@@ -172,6 +172,25 @@ describe("configurations", () => {
 		expect(configs[1]?.hardware).toBe("DGX Station");
 	});
 
+	it("runs each configuration on its profile's own runtime, else the build's", () => {
+		const [m] = groupRecipes([
+			recipe("m", {
+				runtime: { backend: "sglang", version: "SGLang v0.5.19" },
+				profiles: [
+					profile("spark"),
+					profile("station", {
+						runtime: { backend: "sglang", version: "SGLang v0.5.21" },
+					}),
+				],
+			}),
+		]);
+		if (!m) throw new Error("no model");
+		expect(configurations(m).map((c) => c.runtime?.version)).toEqual([
+			"SGLang v0.5.19",
+			"SGLang v0.5.21",
+		]);
+	});
+
 	it("leaves out builds that can't be deployed", () => {
 		const [nano] = groupRecipes([planned]);
 		if (!nano) throw new Error("no model");

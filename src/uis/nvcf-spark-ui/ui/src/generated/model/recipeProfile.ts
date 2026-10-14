@@ -25,6 +25,7 @@ import type { RecipeDeployment } from "./recipeDeployment.ts";
 import type { RecipeFabric } from "./recipeFabric.ts";
 import type { RecipeHardware } from "./recipeHardware.ts";
 import type { RecipeNodeRole } from "./recipeNodeRole.ts";
+import type { RecipeRuntime } from "./recipeRuntime.ts";
 import type { RecipeValidation } from "./recipeValidation.ts";
 import type { RecipeWorkload } from "./recipeWorkload.ts";
 
@@ -32,6 +33,8 @@ export interface RecipeProfile {
 	/** The chart's `profileName` value, e.g. `spark-fp8`. */
 	id: string;
 	hardware: RecipeHardware;
+	/** The runtime this profile runs on, when its hardware was tested on another build than the recipe's. Absent: the recipe's own runtime. */
+	runtime?: RecipeRuntime;
 	/** @minimum 1 */
 	modelNodeCount: number;
 	/** @minimum 1 */

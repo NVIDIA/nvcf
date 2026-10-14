@@ -34,6 +34,11 @@ export function ConfigurationTile({ config }: { config: RecipeConfiguration }) {
 	const validation = validationLabel(profile);
 	const run = lastValidation(profile);
 	const context = profile.workload?.maximumContextTokens;
+	// Named only when the profile was tested on another build than the recipe's.
+	const ownRuntime =
+		config.runtime?.version !== build.runtime?.version
+			? config.runtime?.version
+			: undefined;
 	return (
 		<div className="flex min-w-0 flex-col gap-1">
 			<Text kind="label/semibold/md">
@@ -52,6 +57,14 @@ export function ConfigurationTile({ config }: { config: RecipeConfiguration }) {
 					.filter(Boolean)
 					.join(" · ")}
 			</Text>
+			{ownRuntime ? (
+				<Text
+					className="text-secondary [overflow-wrap:anywhere]"
+					kind="body/regular/sm"
+				>
+					Runs on {ownRuntime}
+				</Text>
+			) : null}
 			{validation ? (
 				<div className="flex flex-wrap items-center gap-2 pt-1">
 					<Badge color={validation.color} kind="solid">

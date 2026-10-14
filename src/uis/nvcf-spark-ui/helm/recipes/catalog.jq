@@ -21,12 +21,18 @@
 #   oci://nvcr.io/org/<chart>, a placeholder until the charts are published);
 # - a one-line description for a model the export describes none for, for its
 #   card (the UI mocks' copy);
-# and standardizes the runtime's version: the export gives runtimes built from
-# source a git `revision` instead, which becomes `version` ("llama.cpp f872b59").
+# and standardizes each runtime's version, a recipe's or a profile's own: the
+# export gives runtimes built from source a git `revision` instead, which
+# becomes `version` ("llama.cpp f872b59").
 # Values the export already has are kept.
 #
 #   jq -f helm/recipes/catalog.jq index.json > recipes.json
 #   jq --arg repository oci://registry.example.com/recipes -f helm/recipes/catalog.jq index.json
+
+def standardized:
+  if . != null and .version == null and .revision != null
+  then .version = "\(.backend) \(.revision[0:7])" | del(.revision)
+  else . end;
 
 {
   "qwen3.8-27b": "Instruction-tuned, 27B parameters",
@@ -41,12 +47,9 @@
 | .recipes |= map(
     (if .description == null and $descriptions[.id] != null
      then .description = $descriptions[.id] else . end)
-    | .runtime |= (
-        if . != null and .version == null and .revision != null
-        then .version = "\(.backend) \(.revision[0:7])" | del(.revision)
-        else . end
-      )
+    | .runtime |= standardized
     | .profiles |= map(
-        .deployment.chart.repository = (.deployment.chart.repository // "\($repository)/\(.deployment.chart.name)")
+        (if has("runtime") then .runtime |= standardized else . end)
+        | .deployment.chart.repository = (.deployment.chart.repository // "\($repository)/\(.deployment.chart.name)")
       )
   )

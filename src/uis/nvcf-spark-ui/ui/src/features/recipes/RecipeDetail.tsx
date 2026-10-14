@@ -63,7 +63,8 @@ function facts(model: RecipeModel): string {
 		...new Set(values.filter((v): v is string => Boolean(v))),
 	];
 	const names = unique(builds.map((b) => b.servedModelId));
-	const engines = unique(builds.map((b) => b.runtime?.version));
+	// A profile tested on another build runs on its own runtime.
+	const engines = unique(configurations(model).map((c) => c.runtime?.version));
 	const licenses = unique(builds.map((b) => b.license));
 	return [
 		names.length > 0 ? `Served as ${names.join(", ")}` : undefined,
@@ -133,7 +134,11 @@ function RecipeDetail() {
 				}
 			>
 				<div className="flex flex-col gap-1">
-					<Text className="text-secondary" kind="body/regular/sm">
+					{/* Runtime versions can carry a 40-character commit, which must wrap. */}
+					<Text
+						className="text-secondary [overflow-wrap:anywhere]"
+						kind="body/regular/sm"
+					>
 						{facts(model)}
 					</Text>
 					{deployments[0] ? (

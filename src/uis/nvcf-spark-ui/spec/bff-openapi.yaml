@@ -220,6 +220,12 @@ components:
           description: The chart's `profileName` value, e.g. `spark-fp8`.
         hardware:
           $ref: "#/components/schemas/RecipeHardware"
+        runtime:
+          description: >-
+            The runtime this profile runs on, when its hardware was tested on another
+            build than the recipe's. Absent: the recipe's own runtime.
+          allOf:
+            - $ref: "#/components/schemas/RecipeRuntime"
         modelNodeCount:
           type: integer
           minimum: 1

@@ -64,6 +64,18 @@ describe("RecipeDetail", () => {
 		expect(
 			screen.getByRole("link", { name: "Model deployment recipes" }),
 		).toHaveAttribute("href", "/recipes");
+		expect(screen.queryByText(/^Runs on /)).not.toBeInTheDocument();
+	});
+
+	it("names a configuration's own runtime when it was tested on another build", async () => {
+		renderRecipe("/recipes/nemotron-5-super-49b");
+
+		expect(
+			await screen.findByRole("radio", { name: /Runs on SGLang v0\.5\.21/ }),
+		).toBeInTheDocument();
+		expect(
+			screen.getByText(/· Runs on SGLang v0\.5\.21 ·/),
+		).toBeInTheDocument();
 	});
 
 	it("marks a deployed model and links to its endpoint", async () => {

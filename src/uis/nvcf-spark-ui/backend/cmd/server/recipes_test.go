@@ -33,7 +33,7 @@ import (
 var noRecipes = newRecipeCatalog("", zerolog.Nop())
 
 // catalogFixture is the recipe charts' index.json (NVIDIA/nvcf
-// feat/inference-in-a-box at b2dd4a388), passed through helm/recipes/catalog.jq
+// feat/inference-in-a-box at eff1029a7), passed through helm/recipes/catalog.jq
 // as the ConfigMap is.
 const catalogFixture = "testdata/recipes.json"
 
@@ -81,7 +81,7 @@ func TestParseRecipeCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fixture: %v", err)
 	}
-	if recipes != 5 || bytes.ContainsRune(body, '\n') {
+	if recipes != 8 || bytes.ContainsRune(body, '\n') {
 		t.Errorf("got %d recipes, compacted=%t", recipes, !bytes.ContainsRune(body, '\n'))
 	}
 	if _, n, err := parseRecipeCatalog([]byte(`{"schemaVersion":1,"recipes":[]}`)); err != nil || n != 0 {

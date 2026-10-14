@@ -24,6 +24,7 @@ import {
 import type { Recipe } from "~/generated/model/recipe";
 import type { RecipeChart } from "~/generated/model/recipeChart";
 import type { RecipeProfile } from "~/generated/model/recipeProfile";
+import type { RecipeRuntime } from "~/generated/model/recipeRuntime";
 import type { RecipeValidationRun } from "~/generated/model/recipeValidationRun";
 import { RegistryHealth } from "~/generated/model/registryHealth";
 
@@ -67,6 +68,8 @@ export interface RecipeConfiguration {
 	nodeCount: number;
 	/** The most any one node reserves for the model. */
 	memoryPerNodeBytes: number | undefined;
+	/** What it runs on: the profile's own runtime, else the build's. */
+	runtime: RecipeRuntime | undefined;
 }
 
 export function recipeSlug(name: string): string {
@@ -138,6 +141,7 @@ export function configurations(model: RecipeModel): RecipeConfiguration[] {
 					nodeCount: profile.modelNodeCount,
 					memoryPerNodeBytes:
 						memory.length > 0 ? Math.max(...memory) : undefined,
+					runtime: profile.runtime ?? build.runtime ?? undefined,
 				};
 			}),
 		);
