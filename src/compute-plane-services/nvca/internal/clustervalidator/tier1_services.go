@@ -20,6 +20,7 @@ package clustervalidator
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -44,7 +45,8 @@ const tier1ServiceAdvice = "A Service that selects none of its release's pods ha
 	"it fail although its workload is Ready. An upgrade that changed the pod labels leaves this when it patched " +
 	"the Service but could not change the workload's immutable selector. Check the release " +
 	"(helm -n <namespace> history <release>), then roll it back, or recreate the workload so its pods carry the " +
-	"labels the Service selects."
+	"labels the Service selects. Where the finding says the workload's template matches, its pods were not " +
+	"replaced: resume or repair its rollout, lower its partition, or under OnDelete delete its pods one at a time."
 
 // releaseOf is the Helm release that installed obj: the one Helm stamped on
 // it, or else its app.kubernetes.io/instance label.
@@ -63,7 +65,9 @@ func releaseOf(obj metav1.Object) string {
 // pod that is down is left to the readiness findings, as is one whose release
 // has no Ready pod, and the headless Service a StatefulSet governs is not
 // judged. It lists the Services of ns once, its pods once when a Service is
-// judged, and its StatefulSets once when one selects no such pod.
+// judged, and its StatefulSets once when one selects no such pod. Whether a
+// Deployment is rolling out is told as for its readiness (deploymentReadiness),
+// which reads the cluster only to date a rollout its status does not bound.
 func (s *tier1Scan) judgeServices(
 	ctx context.Context, client kubernetes.Interface, ns string, deploys []appsv1.Deployment,
 ) {
@@ -96,6 +100,7 @@ func (s *tier1Scan) judgeServices(
 		return
 	}
 	var sets *appsv1.StatefulSetList
+	rolling := func(d *appsv1.Deployment) bool { return deploymentReadiness(d, s.dates).rolling }
 	for _, svc := range judged {
 		sel := labels.SelectorFromSet(svc.Spec.Selector)
 		if slices.ContainsFunc(pods.Items, func(p corev1.Pod) bool {
@@ -112,18 +117,21 @@ func (s *tier1Scan) judgeServices(
 				return
 			}
 		}
-		if gap := selectorGap(svc, deploys, sets.Items, pods.Items); gap != "" {
+		if gap := selectorGap(svc, deploys, sets.Items, pods.Items, rolling); gap != "" {
 			s.serviceGaps = append(s.serviceGaps, gap)
 		}
 	}
 }
 
 // podWorkload is a Deployment or StatefulSet as selectorGap judges it.
+// heldBack says why its controller is not replacing its pods with ones from
+// its template, or is "" while it is.
 type podWorkload struct {
 	kind     string
 	obj      metav1.Object
 	selector *metav1.LabelSelector
 	labels   map[string]string
+	heldBack func() string
 }
 
 // mayServe reports whether p serves, or may yet serve, a Service's traffic:
@@ -133,27 +141,60 @@ func mayServe(p *corev1.Pod) bool {
 }
 
 // selectorGap says how svc, whose selector matches no pod in its namespace
-// that may serve, selects none of the Ready pods of a workload of its release
-// (relabelled), or is "" when nothing shows that.
-func selectorGap(svc *corev1.Service, deploys []appsv1.Deployment, sets []appsv1.StatefulSet,
-	pods []corev1.Pod) string {
+// that may serve, selects none of the Ready pods of a workload of its release,
+// or is "" when nothing shows that. A workload whose template the selector
+// matches is no gap while it rolls out (deploymentRolling for a Deployment),
+// since its new pods will match, nor while it has no Ready pod, which is left
+// to the readiness findings, nor when it is another release's. One of the
+// Service's release that has settled with Ready pods of an older template is,
+// since nothing replaces them: under OnDelete, at a held partition, paused,
+// with a rollout past its deadline or not progressing, or a StatefulSet with
+// no rollout in progress. Otherwise the gap is a workload whose template the
+// selector misses (relabelled).
+func selectorGap(svc *corev1.Service, deploys []appsv1.Deployment, sets []appsv1.StatefulSet, pods []corev1.Pod,
+	deploymentRolling func(*appsv1.Deployment) bool) string {
 	var workloads []podWorkload
 	for i := range deploys {
 		d := &deploys[i]
-		workloads = append(workloads, podWorkload{"Deployment", d, d.Spec.Selector, d.Spec.Template.Labels})
+		workloads = append(workloads, podWorkload{"Deployment", d, d.Spec.Selector, d.Spec.Template.Labels,
+			func() string { return deploymentHeldBack(d, deploymentRolling) }})
 	}
 	for i := range sets {
 		st := &sets[i]
 		if svc.Spec.ClusterIP == corev1.ClusterIPNone && st.Spec.ServiceName == svc.Name {
 			return ""
 		}
-		workloads = append(workloads, podWorkload{"StatefulSet", st, st.Spec.Selector, st.Spec.Template.Labels})
+		workloads = append(workloads, podWorkload{"StatefulSet", st, st.Spec.Selector, st.Spec.Template.Labels,
+			func() string { return statefulSetHeldBack(st, pods) }})
 	}
 	sel := labels.SelectorFromSet(svc.Spec.Selector)
-	if slices.ContainsFunc(workloads, func(w podWorkload) bool { return sel.Matches(labels.Set(w.labels)) }) {
-		return ""
-	}
 	release := releaseOf(svc)
+	settled := ""
+	for _, w := range workloads {
+		if !sel.Matches(labels.Set(w.labels)) {
+			continue
+		}
+		if releaseOf(w.obj) != release {
+			return ""
+		}
+		ready := readyPodsSelected(w.selector, pods)
+		if len(ready) == 0 {
+			return ""
+		}
+		why := w.heldBack()
+		if why == "" {
+			return ""
+		}
+		if settled == "" {
+			settled = fmt.Sprintf("Service %s/%s selects %s, which matches no pod, while the %d Ready pod(s) of %s "+
+				"%s/%s of release %s, whose template it matches, are %s, and are not replaced because %s",
+				svc.Namespace, svc.Name, labels.Set(svc.Spec.Selector), len(ready), w.kind, w.obj.GetNamespace(),
+				w.obj.GetName(), release, podLabelling(svc.Spec.Selector, ready), why)
+		}
+	}
+	if settled != "" {
+		return settled
+	}
 	var own []podWorkload
 	var ready [][]*corev1.Pod
 	var releaseReady []*corev1.Pod
@@ -187,14 +228,91 @@ func selectorGap(svc *corev1.Service, deploys []appsv1.Deployment, sets []appsv1
 			lacked = append(lacked, k)
 		}
 	}
-	labelled := "labelled " + carried.String()
-	if len(lacked) > 0 {
-		slices.Sort(lacked)
-		labelled += ", with no " + strings.Join(lacked, " or ") + " label"
-	}
 	return fmt.Sprintf("Service %s/%s selects %s, which matches no pod, while the %d Ready pod(s) of %s %s/%s of "+
 		"release %s are %s", svc.Namespace, svc.Name, labels.Set(svc.Spec.Selector), len(ready[best]), w.kind,
-		w.obj.GetNamespace(), w.obj.GetName(), release, labelled)
+		w.obj.GetNamespace(), w.obj.GetName(), release, labelledAs(carried.String(), lacked))
+}
+
+// labelledAs words the labels a finding says pods carry: carried, in the form
+// labels.Set prints, then the selector keys they lack.
+func labelledAs(carried string, lacked []string) string {
+	words := "labelled"
+	if carried != "" {
+		words += " " + carried
+		if len(lacked) > 0 {
+			words += ","
+		}
+	}
+	if len(lacked) > 0 {
+		slices.Sort(lacked)
+		words += " with no " + strings.Join(lacked, " or ") + " label"
+	}
+	return words
+}
+
+// podLabelling words, as labelledAs does, the labels pods carry for the keys
+// of selector: each with its value, or with the values they carry where those
+// differ.
+func podLabelling(selector map[string]string, pods []*corev1.Pod) string {
+	var carried, lacked []string
+	for _, k := range slices.Sorted(maps.Keys(selector)) {
+		var values []string
+		for _, p := range pods {
+			if v, ok := p.Labels[k]; ok && !slices.Contains(values, v) {
+				values = append(values, v)
+			}
+		}
+		slices.Sort(values)
+		switch len(values) {
+		case 0:
+			lacked = append(lacked, k)
+		case 1:
+			carried = append(carried, k+"="+values[0])
+		default:
+			carried = append(carried, k+" in ("+strings.Join(values, ",")+")")
+		}
+	}
+	return labelledAs(strings.Join(carried, ","), lacked)
+}
+
+// deploymentHeldBack says why d's controller is not replacing its pods with
+// ones from its template, or is "" while it rolls out (rolling, as Tier-1
+// tells it with deploymentRollingOut).
+func deploymentHeldBack(d *appsv1.Deployment, rolling func(*appsv1.Deployment) bool) string {
+	switch {
+	case d.Spec.Paused:
+		return "it is paused"
+	case deploymentRolloutStalled(d):
+		return "its rollout exceeded its progress deadline"
+	case rolling(d):
+		return ""
+	}
+	return "its rollout is not progressing"
+}
+
+// statefulSetHeldBack says why sts's controller is not replacing its pods
+// with ones from its template, or is "" while it is: a RollingUpdate to an
+// update revision other than its current one, unless held at its partition
+// with every member Ready (heldAtPartition), as Tier-2 tells it, or a
+// template the controller has not yet observed. Under OnDelete it replaces
+// no pod.
+func statefulSetHeldBack(sts *appsv1.StatefulSet, pods []corev1.Pod) string {
+	switch {
+	case sts.Spec.UpdateStrategy.Type == appsv1.OnDeleteStatefulSetStrategyType:
+		return "its updateStrategy is OnDelete"
+	case sts.Status.ObservedGeneration < sts.Generation:
+		return ""
+	case sts.Status.UpdateRevision == "" || sts.Status.UpdateRevision == sts.Status.CurrentRevision:
+		return "it has no rollout in progress"
+	}
+	want := int32(1)
+	if sts.Spec.Replicas != nil {
+		want = *sts.Spec.Replicas
+	}
+	if partition, held := heldAtPartition(sts, want, readyMembers(sts, pods)); held {
+		return fmt.Sprintf("its rollout is held at partition %d", partition)
+	}
+	return ""
 }
 
 // agreeing counts the keys of selector that tpl carries with its value.

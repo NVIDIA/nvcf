@@ -23,6 +23,7 @@ import (
 	"maps"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -267,6 +268,188 @@ func TestCheckTier1Deployments_SelectorKeysThePodsLack(t *testing.T) {
 			"pod, while the 1 Ready pod(s) of Deployment vault-system/openbao-server of release openbao-server are "+
 			"labelled app.kubernetes.io/instance=openbao-server,app.kubernetes.io/name=openbao,component=server, "+
 			"with no openbao-active label", injectorName)
+	}
+}
+
+// templateAheadDeployment is the reval Deployment, edited by edit, whose
+// template carries a key its selector does not, which its replicas pods, ready
+// of them Ready, were created without, and a Service selecting its template.
+func templateAheadDeployment(replicas, ready int32, edit func(*appsv1.Deployment)) []runtime.Object {
+	old := releaseLabels("reval", "reval")
+	added := maps.Clone(old)
+	added["app.kubernetes.io/component"] = "server"
+	objs := releaseDeployment("nvcf", "reval", old, replicas, ready)
+	d := objs[0].(*appsv1.Deployment)
+	d.Spec.Template.Labels = maps.Clone(added)
+	d.Status.UpdatedReplicas = 0
+	edit(d)
+	return append(objs, releaseService("nvcf", "reval", "reval", added))
+}
+
+// A Deployment whose template the Service matches is no gap while it rolls
+// out, since its new pods will match. One that has settled with its Ready pods
+// still on an older template, paused or with a rollout that is not moving,
+// leaves the Service with no endpoint, and is named with why nothing replaces
+// them. One with no Ready pod is the readiness finding's, and another
+// release's is not the Service's.
+func TestCheckTier1Deployments_SettledDeploymentPodsLackTheTemplatesLabels(t *testing.T) {
+	progressing := appsv1.DeploymentCondition{Type: appsv1.DeploymentProgressing, Status: corev1.ConditionTrue,
+		Reason: "ReplicaSetUpdated"}
+	for name, tc := range map[string]struct {
+		ready int32
+		edit  func(*appsv1.Deployment)
+		why   string
+	}{
+		"paused": {1, func(d *appsv1.Deployment) { d.Spec.Paused = true }, "it is paused"},
+		"past its progress deadline": {1, func(d *appsv1.Deployment) {
+			d.Status.Conditions = []appsv1.DeploymentCondition{{Type: appsv1.DeploymentProgressing,
+				Status: corev1.ConditionFalse, Reason: "ProgressDeadlineExceeded"}}
+		}, "its rollout exceeded its progress deadline"},
+		"refused its new pods": {1, func(d *appsv1.Deployment) {
+			d.Status.Conditions = []appsv1.DeploymentCondition{progressing, {Type: appsv1.DeploymentReplicaFailure,
+				Status: corev1.ConditionTrue, Reason: "FailedCreate"}}
+		}, "its rollout is not progressing"},
+		"progressing": {1, func(d *appsv1.Deployment) {
+			d.Status.Conditions = []appsv1.DeploymentCondition{progressing}
+		}, ""},
+		"paused with no Ready pod": {0, func(d *appsv1.Deployment) { d.Spec.Paused = true }, ""},
+		"another release's, paused": {1, func(d *appsv1.Deployment) {
+			d.Spec.Paused = true
+			d.Annotations[helmReleaseAnnotation] = "other"
+		}, ""},
+	} {
+		state, log, _ := runTier1Services(t, true, nil, templateAheadDeployment(2, 2*tc.ready, tc.edit)...)
+		require.NotNil(t, state.Tier1DeploymentsOK, name)
+		if tc.why == "" {
+			assert.NotContains(t, log, "matches no pod", name)
+			assert.Equal(t, tc.ready > 0, *state.Tier1DeploymentsOK, "%s: %s", name, log)
+			if tc.ready == 0 {
+				assert.Contains(t, log, "nvcf/reval (ready: 0, want: 2)", name)
+			}
+			continue
+		}
+		assert.False(t, *state.Tier1DeploymentsOK, name)
+		assert.Contains(t, log, "Service nvcf/reval selects app.kubernetes.io/component=server,"+
+			"app.kubernetes.io/instance=reval,app.kubernetes.io/name=reval, which matches no pod, while the 2 Ready "+
+			"pod(s) of Deployment nvcf/reval of release reval, whose template it matches, are labelled "+
+			"app.kubernetes.io/instance=reval,app.kubernetes.io/name=reval, with no app.kubernetes.io/component "+
+			"label, and are not replaced because "+tc.why+"\n", name)
+	}
+}
+
+// templateAheadStatefulSet is an OpenBao-like server StatefulSet of 3 pods,
+// ready of them Ready, edited by edit, whose template carries a key its pods
+// were created without, mid-way to a new revision, and a Service selecting its
+// template.
+func templateAheadStatefulSet(ready int32, edit func(*appsv1.StatefulSet)) []runtime.Object {
+	objs := makeQuorumSTS("openbao", "vault-system", 3, ready, []string{"node-1", "node-2", "node-3"})
+	objs = rollTo(objs, "openbao-r2", time.Now().Add(-time.Minute))
+	sts := objs[0].(*appsv1.StatefulSet)
+	sts.Annotations = map[string]string{helmReleaseAnnotation: "openbao"}
+	sts.Spec.Template.Labels = map[string]string{"app": "openbao", "component": "server"}
+	edit(sts)
+	objs = append(objs, releaseService("vault-system", "openbao", "openbao", maps.Clone(sts.Spec.Template.Labels)))
+	return append(objs, releaseDeployment("nvcf", "reval", releaseLabels("reval", "reval"), 1, 1)...)
+}
+
+// A StatefulSet replaces its pods with its template's only under a
+// RollingUpdate in progress. Under OnDelete, as OpenBao's server runs, with a
+// rollout held at a partition with every pod Ready, or with no rollout in
+// progress, its Ready pods keep the labels they were created with, and a
+// Service that selects the template has no endpoint. A rollout moving, or not
+// held because a pod is down, is no gap, nor is a template the controller has
+// yet to observe or a StatefulSet with no Ready pod.
+func TestCheckTier1Deployments_SettledStatefulSetPodsLackTheTemplatesLabels(t *testing.T) {
+	strategy := func(s appsv1.StatefulSetUpdateStrategy) func(*appsv1.StatefulSet) {
+		return func(sts *appsv1.StatefulSet) { sts.Spec.UpdateStrategy = s }
+	}
+	held := int32(3)
+	onDelete := strategy(appsv1.StatefulSetUpdateStrategy{Type: appsv1.OnDeleteStatefulSetStrategyType})
+	rolling := strategy(appsv1.StatefulSetUpdateStrategy{Type: appsv1.RollingUpdateStatefulSetStrategyType})
+	partitioned := strategy(appsv1.StatefulSetUpdateStrategy{Type: appsv1.RollingUpdateStatefulSetStrategyType,
+		RollingUpdate: &appsv1.RollingUpdateStatefulSetStrategy{Partition: &held}})
+	for name, tc := range map[string]struct {
+		ready int32
+		edit  func(*appsv1.StatefulSet)
+		why   string
+	}{
+		"OnDelete":                         {3, onDelete, "its updateStrategy is OnDelete"},
+		"held at a partition, every Ready": {3, partitioned, "its rollout is held at partition 3"},
+		"RollingUpdate with no rollout": {3, func(sts *appsv1.StatefulSet) {
+			rolling(sts)
+			sts.Status.UpdateRevision = sts.Status.CurrentRevision
+		}, "it has no rollout in progress"},
+		"RollingUpdate in progress":  {3, rolling, ""},
+		"at a partition, a pod down": {2, partitioned, ""},
+		"OnDelete with no Ready pod": {0, onDelete, ""},
+		"template not yet observed": {3, func(sts *appsv1.StatefulSet) {
+			rolling(sts)
+			sts.Generation = 2
+			sts.Status.UpdateRevision = sts.Status.CurrentRevision
+		}, ""},
+	} {
+		state, log, _ := runTier1Services(t, true, nil, templateAheadStatefulSet(tc.ready, tc.edit)...)
+		require.NotNil(t, state.Tier1DeploymentsOK, name)
+		if tc.why == "" {
+			assert.True(t, *state.Tier1DeploymentsOK, "%s: %s", name, log)
+			assert.NotContains(t, log, "matches no pod", name)
+			continue
+		}
+		assert.False(t, *state.Tier1DeploymentsOK, name)
+		assert.Contains(t, log, "Service vault-system/openbao selects app=openbao,component=server, which matches "+
+			"no pod, while the 3 Ready pod(s) of StatefulSet vault-system/openbao of release openbao, whose template "+
+			"it matches, are labelled app=openbao, with no component label, and are not replaced because "+tc.why+
+			"\n", name)
+	}
+}
+
+// selectorGap asks whether a Deployment rolls out, which may read the
+// cluster, only of one of the Service's release whose template the Service
+// matches and that has Ready pods, and reads nothing itself. Another
+// release's Deployment whose template the Service also matches is not asked
+// about and leaves no gap, whether it comes before the Service's own or after.
+func TestSelectorGap_AsksOnlyWhetherItsOwnSettledCandidateRollsOut(t *testing.T) {
+	objs := append(templateAheadDeployment(1, 1, func(*appsv1.Deployment) {}),
+		namedDeployment("nvcf", "unmatched", "unmatched", releaseLabels("unmatched", "unmatched"), 1, 1)...)
+	var deploys []appsv1.Deployment
+	var pods []corev1.Pod
+	var svc *corev1.Service
+	for _, o := range objs {
+		switch v := o.(type) {
+		case *appsv1.Deployment:
+			deploys = append(deploys, *v)
+		case *corev1.Pod:
+			pods = append(pods, *v)
+		case *corev1.Service:
+			svc = v
+		}
+	}
+	own, unmatched := deploys[0], deploys[1]
+	other := *own.DeepCopy()
+	other.Name = "other"
+	other.Annotations[helmReleaseAnnotation] = "other"
+	for name, tc := range map[string]struct {
+		deploys []appsv1.Deployment
+		asked   []string
+		settled bool
+	}{
+		"its own":                     {[]appsv1.Deployment{own, unmatched}, []string{"reval"}, true},
+		"another release's before it": {[]appsv1.Deployment{other, own}, nil, false},
+		"another release's after it":  {[]appsv1.Deployment{own, other}, []string{"reval"}, false},
+	} {
+		for _, rolls := range []bool{true, false} {
+			var asked []string
+			gap := selectorGap(svc, tc.deploys, nil, pods, func(d *appsv1.Deployment) bool {
+				asked = append(asked, d.Name)
+				return rolls
+			})
+			assert.Equal(t, tc.asked, asked, "%s, rolling %t", name, rolls)
+			if rolls || !tc.settled {
+				assert.Empty(t, gap, "%s, rolling %t", name, rolls)
+			} else {
+				assert.True(t, strings.HasSuffix(gap, "because its rollout is not progressing"), "%s: %s", name, gap)
+			}
+		}
 	}
 }
 

@@ -5960,8 +5960,7 @@ func (s *tier2Scan) assessRollout(
 		sts.Status.UpdateRevision == "" || sts.Status.CurrentRevision == sts.Status.UpdateRevision {
 		return false, false, false
 	}
-	if partition := rollingUpdatePartition(sts); partition > 0 &&
-		int(sts.Status.UpdatedReplicas) >= int(want)-partition && ready >= want {
+	if partition, held := heldAtPartition(sts, want, ready); held {
 		// A rollout staged with a partition has updated every pod it will
 		// until the partition is lowered, and CurrentRevision does not move
 		// until then. With every pod Ready nothing is in progress, so this is
@@ -6426,6 +6425,15 @@ func rollingUpdatePartition(sts *appsv1.StatefulSet) int {
 		return int(*ru.Partition)
 	}
 	return 0
+}
+
+// heldAtPartition reports whether sts's RollingUpdate is held at its
+// partition, which it returns: it has updated every pod the partition lets
+// it, and ready of its want members are all Ready, so nothing is in progress
+// until the partition is lowered.
+func heldAtPartition(sts *appsv1.StatefulSet, want, ready int32) (int, bool) {
+	partition := rollingUpdatePartition(sts)
+	return partition, partition > 0 && int(sts.Status.UpdatedReplicas) >= int(want)-partition && ready >= want
 }
 
 // podOrdinal is a StatefulSet pod's ordinal, from its pod-index label or its
