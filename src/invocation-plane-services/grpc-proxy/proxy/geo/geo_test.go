@@ -184,7 +184,7 @@ func getSampleRoutingJsonValid() []byte {
 func getTestConfig() *TestConfig {
 	return &TestConfig{
 		SecretsPath:              "vault/secrets.json",
-		GeoSsaAddr:               "https://ikp3ttn3ycpy1gpxrubl0kut4l2dgvos1e3sxzsezt8.stg.ssa.nvidia.com",
+		GeoOAuth2Addr:            "https://oauth2.example.com",
 		GeoGLPSAddr:              "https://glps-stg.nvidia.com",
 		GeoTableS3Region:         "us-west-2",
 		GeoTableS3BucketName:     "nv-nvcf-location-to-zone-route-maps-stg",
@@ -272,7 +272,7 @@ func TestMain(m *testing.M) {
 
 type TestConfig struct {
 	SecretsPath              string
-	GeoSsaAddr               string
+	GeoOAuth2Addr            string
 	GeoGLPSAddr              string
 	GeoTableS3Region         string
 	GeoTableS3BucketName     string
