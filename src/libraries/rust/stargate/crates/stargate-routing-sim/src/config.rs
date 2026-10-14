@@ -114,6 +114,21 @@ pub struct StargateConfig {
     pub max_request_retries: u32,
     pub routing_key: String,
     pub model_id: String,
+    /// Bounds on a routing reservation's soft TTL, which is the selected
+    /// backend's RTT. Same defaults as Stargate's
+    /// `--routing-reservation-ttl-min-ms` and `--routing-reservation-ttl-max-ms`.
+    #[serde(default = "default_routing_reservation_ttl_min_ms")]
+    pub routing_reservation_ttl_min_ms: u64,
+    #[serde(default = "default_routing_reservation_ttl_max_ms")]
+    pub routing_reservation_ttl_max_ms: u64,
+}
+
+fn default_routing_reservation_ttl_min_ms() -> u64 {
+    1
+}
+
+fn default_routing_reservation_ttl_max_ms() -> u64 {
+    1000
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -298,6 +313,14 @@ impl SimConfig {
         };
         if !input_tps_valid {
             bail!("pylon.input_tps needs positive rates, max >= mean, and a positive window");
+        }
+        // Stargate rejects inverted bounds at startup.
+        if self.stargate.routing_reservation_ttl_min_ms
+            > self.stargate.routing_reservation_ttl_max_ms
+        {
+            bail!(
+                "stargate.routing_reservation_ttl_min_ms must not exceed routing_reservation_ttl_max_ms"
+            );
         }
         if self.client.timeout_ms == 0 {
             bail!("client.timeout_ms must be positive");

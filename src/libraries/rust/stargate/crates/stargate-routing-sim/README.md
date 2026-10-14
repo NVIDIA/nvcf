@@ -5,8 +5,13 @@ configurations. It calls the production `LoadBalancer` implementations from the
 `stargate` crate in virtual time. It models the surrounding system:
 
 - Stargate: one load-balancer instance per Stargate, stale per-backend stats,
-  optimistic reservations cleared by heartbeats, the routing wait and retry
-  loop, and queue-mismatch reroutes.
+  routing reservations, the routing wait and retry loop, and queue-mismatch
+  reroutes. Reservations use Stargate's own settlement code. Each one counts
+  from routing, and its soft TTL is the Stargate-to-backend RTT, bounded by
+  `stargate.routing_reservation_ttl_min_ms` (default `1`) and
+  `stargate.routing_reservation_ttl_max_ms` (default `1000`). It ends when
+  that Stargate receives an update from the reserved backend at or after the
+  soft expiry, or when a queue-mismatch rejection releases it.
 - Session-aware routing: each growing-session turn carries the cluster that
   served the session's last successful turn as its last-cluster hint, as the
   gateway sends `x-stargate-last-cluster-id`. First turns carry none. Policies
@@ -104,6 +109,9 @@ served by their hinted cluster. Simulator summaries also count
   sessions remember a cluster only after a turn succeeds. The gateway contract
   stores the cluster when 2xx response headers arrive, so a turn that fails
   after its headers would update the gateway's hint but not the simulator's.
+- Request heads leave Stargate as soon as a backend is selected, so a
+  reservation's soft expiry starts at routing. Tunnel stream opening delays
+  are not modeled.
 - `max_input_work_seconds` admission, `consider_kv_free_tokens`, priorities,
   and registration churn are not modeled. Simulated Pylons publish no KV-cache
   stats.

@@ -16,8 +16,9 @@
 //! Discrete-event loop around the production load balancers.
 //!
 //! Each Stargate owns one real `LoadBalancer` instance and a view of backend
-//! stats that is only as fresh as the last Pylon heartbeat it received, plus
-//! its own optimistic reservations. The proxy routing loop
+//! stats that is only as fresh as the last Pylon update it received, plus its
+//! own routing reservations, which settle by Stargate's own rules. The proxy
+//! routing loop
 //! (`stargate/src/http_proxy/run.rs` and `routing.rs`) is mirrored here: timed
 //! waits recheck at most every 25 ms until the routing wait deadline, generic
 //! no-choice retries sleep 1-9 ms while the max-wait budget remains, and
@@ -40,7 +41,8 @@ use stargate::load_balancer::{
     create_load_balancer_with_config,
 };
 use stargate::routing::{
-    RoutedClusterSnapshot, RoutingTargetKey, apply_reservation, queue_time_estimate_ms_for_priority,
+    DetachedRoutingReservation, RoutedClusterSnapshot, RoutingTargetKey,
+    queue_time_estimate_ms_for_priority, routing_reservation_ttl,
 };
 use stargate_proto::pb::{InferenceServerStatus, ModelStats};
 
@@ -130,7 +132,7 @@ enum EngineState {
 
 struct Reservation {
     id: u64,
-    input_tokens: u64,
+    pending: DetachedRoutingReservation,
 }
 
 struct StargateView {
@@ -169,6 +171,8 @@ struct Simulation<'a> {
     publish_pending: Vec<bool>,
     /// Backend that served each growing session's last successful turn.
     session_last_backend: Vec<Option<usize>>,
+    /// Virtual time zero as a real instant, for Stargate's reservation clock.
+    epoch: Instant,
 }
 
 pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
@@ -204,6 +208,7 @@ fn simulate<'a>(spec: &RunSpec<'a>) -> anyhow::Result<Simulation<'a>> {
 fn build<'a>(spec: &RunSpec<'a>) -> anyhow::Result<Simulation<'a>> {
     let config = spec.config;
     let algorithm = spec.policy.algorithm_config()?;
+    let epoch = Instant::now();
     let mut backends = Vec::new();
     let mut stargates = Vec::new();
     for (region_index, region) in config.topology.regions.iter().enumerate() {
@@ -273,6 +278,7 @@ fn build<'a>(spec: &RunSpec<'a>) -> anyhow::Result<Simulation<'a>> {
         last_publish: vec![0; backend_count],
         publish_pending: vec![false; backend_count],
         session_last_backend: vec![None; session_count],
+        epoch,
     })
 }
 
@@ -371,13 +377,22 @@ impl Simulation<'_> {
                 stargate,
                 stats,
             } => {
+                let received_at = self.instant(self.now);
                 let view = &mut self.stargates[stargate];
                 view.stats[backend] = stats;
-                // A processed heartbeat replaces every pending reservation
-                // for that backend (`cluster_snapshots.rs`).
-                view.reservations[backend].clear();
+                // Only the reserved backend's own update, received at or
+                // after a reservation's soft expiry, ends it
+                // (`cluster_snapshots.rs`).
+                view.reservations[backend].retain(|reservation| {
+                    reservation.pending.settle_on_backend_update(received_at);
+                    reservation.pending.is_active()
+                });
             }
         }
+    }
+
+    fn instant(&self, at: Micros) -> Instant {
+        self.epoch + Duration::from_micros(at)
     }
 
     fn one_way(&self, region_a: usize, region_b: usize) -> Micros {
@@ -402,7 +417,7 @@ impl Simulation<'_> {
             .map(|(index, backend)| {
                 let mut stats = ModelStats::clone(&view.stats[index]);
                 for reservation in &view.reservations[index] {
-                    apply_reservation(&mut stats, reservation.input_tokens, 0);
+                    reservation.pending.apply(&mut stats);
                 }
                 RoutedClusterSnapshot {
                     cluster_id: backend.id.clone(),
@@ -508,11 +523,32 @@ impl Simulation<'_> {
     fn dispatch(&mut self, request: usize, backend: usize, expected_queue_ms: Option<u64>) {
         let stargate = self.requests[request].plan.stargate;
         self.next_reservation += 1;
-        let reservation = Reservation {
+        // The soft TTL is the selected backend's health-check RTT within the
+        // configured bounds (`http_proxy/attempt.rs`).
+        let stargate_config = &self.config.stargate;
+        let ttl = routing_reservation_ttl(
+            Duration::from_secs_f64(
+                self.rtt_ms(
+                    self.stargates[stargate].region,
+                    self.backends[backend].region,
+                ) / 1000.0,
+            ),
+            Duration::from_millis(stargate_config.routing_reservation_ttl_min_ms),
+            Duration::from_millis(stargate_config.routing_reservation_ttl_max_ms),
+        );
+        let pending = DetachedRoutingReservation::new(
+            self.requests[request].plan.input_tokens,
+            0,
+            ttl,
+            &self.target,
+        );
+        // Tunnel stream opening is not modeled, so the request head leaves
+        // Stargate as soon as the backend is selected.
+        pending.arm_at(self.instant(self.now));
+        self.stargates[stargate].reservations[backend].push(Reservation {
             id: self.next_reservation,
-            input_tokens: self.requests[request].plan.input_tokens,
-        };
-        self.stargates[stargate].reservations[backend].push(reservation);
+            pending,
+        });
         let record = &mut self.requests[request].record;
         record.dispatched_at = Some(self.now);
         record.backend = Some(backend);
@@ -572,7 +608,13 @@ impl Simulation<'_> {
 
     fn mismatch_rejected(&mut self, request: usize, backend: usize, reservation: u64) {
         let stargate = self.requests[request].plan.stargate;
-        self.stargates[stargate].reservations[backend].retain(|pending| pending.id != reservation);
+        // The rejection releases the reservation early.
+        self.stargates[stargate].reservations[backend].retain(|pending| {
+            if pending.id == reservation {
+                pending.pending.release();
+            }
+            pending.pending.is_active()
+        });
         if self.requests[request].resolved {
             return;
         }
@@ -751,7 +793,7 @@ impl Simulation<'_> {
         }
         self.fail(request, |record| record.timed_out = true);
         // Disconnects propagate to the engine; free the slot the way a dropped
-        // MockDynamo stream does. Reservations stay until the next heartbeat.
+        // MockDynamo stream does. Reservations settle as usual.
         let state = &mut self.requests[request];
         let Some(backend_index) = state.record.backend else {
             return;
@@ -1020,6 +1062,61 @@ mod tests {
     }
 
     #[test]
+    fn reservations_settle_on_the_first_own_backend_update_after_the_soft_ttl() {
+        let mut config = config(serde_json::json!({
+            "rates_rps": [1.0], "warmup_s": 0.0, "measure_s": 1.0,
+            "fixed": {"sessions": 4, "input_tokens_min": 100, "input_tokens_max": 100, "output_tokens": 1}
+        }));
+        // Region a to region b is 40 ms; a 30 ms maximum caps the TTL.
+        for (max_ttl_ms, ttl_ms) in [(1000, 40.0), (30, 30.0)] {
+            config.stargate.routing_reservation_ttl_max_ms = max_ttl_ms;
+            let spec = RunSpec {
+                config: &config,
+                policy: &config.policies[0],
+                rate_rps: 20.0,
+                seed: 1,
+            };
+            let mut simulation = build(&spec).expect("simulation builds");
+            let stargate = simulation.requests[0].plan.stargate;
+            let region = simulation.stargates[stargate].region;
+            let remote: Vec<usize> = (0..simulation.backends.len())
+                .filter(|&backend| simulation.backends[backend].region != region)
+                .collect();
+            let (backend, other) = (remote[0], remote[1]);
+            let reserved = |simulation: &Simulation<'_>| {
+                simulation.candidates(stargate)[backend].stats.queue_size
+            };
+            let update_at = |simulation: &mut Simulation<'_>, from: usize, at_ms: f64| {
+                simulation.now = micros_from_ms(at_ms);
+                let stats = Rc::new(simulation.backends[from].stats());
+                simulation.handle(Event::StatsArrive {
+                    backend: from,
+                    stargate,
+                    stats,
+                });
+            };
+
+            simulation.dispatch(0, backend, None);
+            assert_eq!(reserved(&simulation), 1);
+            update_at(&mut simulation, backend, ttl_ms - 1.0);
+            assert_eq!(reserved(&simulation), 1, "update before the soft expiry");
+            update_at(&mut simulation, other, ttl_ms);
+            assert_eq!(reserved(&simulation), 1, "another backend's update");
+            update_at(&mut simulation, backend, ttl_ms);
+            assert_eq!(reserved(&simulation), 0, "own update at the soft expiry");
+
+            // A queue-mismatch rejection releases the reservation at once.
+            let rejected = (1..simulation.requests.len())
+                .find(|&request| simulation.requests[request].plan.stargate == stargate)
+                .expect("another request enters through the same Stargate");
+            simulation.dispatch(rejected, backend, None);
+            assert_eq!(reserved(&simulation), 1);
+            simulation.mismatch_rejected(rejected, backend, simulation.next_reservation);
+            assert_eq!(reserved(&simulation), 0, "released by the rejection");
+        }
+    }
+
+    #[test]
     fn affinity_waits_without_max_wait_widen_instead_of_failing() {
         let mut config = config(serde_json::json!({
             "rates_rps": [1.0], "warmup_s": 1.0, "measure_s": 4.0,
@@ -1063,7 +1160,7 @@ mod tests {
             "fixed": {"sessions": 1, "input_tokens_min": 1, "input_tokens_max": 1, "output_tokens": 1}
         }));
         type Breakage = (&'static str, fn(&mut SimConfig));
-        let breakages: [Breakage; 6] = [
+        let breakages: [Breakage; 7] = [
             ("heartbeat_ms", |config| config.pylon.heartbeat_ms = 0.0004),
             ("measure_s", |config| config.workload.measure_s = 0.0),
             ("rtt_ms", |config| config.topology.rtt_ms[0][1] = f64::NAN),
@@ -1075,6 +1172,9 @@ mod tests {
             }),
             ("gpu_workers", |config| {
                 config.topology.regions[0].gpu_workers = Some(0);
+            }),
+            ("routing_reservation_ttl_min_ms", |config| {
+                config.stargate.routing_reservation_ttl_min_ms = 2000;
             }),
         ];
         for (field, break_config) in breakages {
