@@ -110,24 +110,17 @@ func (store *Store) Get(ctx context.Context, key string, rate limiter.Rate) (lim
 			return limiter.Context{}, err
 		}
 	} else {
-		if result != nil && result.TTL() > 0 {
-			// update the existing value by incrementing 1
+		// Default: reset to 1 with a fresh TTL (the key has no TTL, or it already lapsed).
+		putOptions := newKeyPutOptions(rate)
+		if result != nil && result.TTL() > time.Now().UnixMilli() {
+			// Live key: increment it and keep its exact expiry.
 			old, _ := result.Int()
 			value = old + 1
-			putOption := olric.PX(time.Until(time.UnixMilli(result.TTL())))
-			err := store.dmap.Put(ctx, fullKey, value, putOption)
-			if err != nil {
-				zap.L().Error("Failed to update value", zap.Error(err))
-				return limiter.Context{}, err
-			}
-		} else {
-			// when ttl is 0, reset the value to 1 and (re)apply the TTL on this
-			// same write so a key whose TTL already expired can't go immortal.
-			err = store.dmap.Put(ctx, fullKey, value, newKeyPutOptions(rate)...)
-			if err != nil {
-				zap.L().Error("Failed to update value", zap.Error(err))
-				return limiter.Context{}, err
-			}
+			putOptions = []olric.PutOption{preserveExpiryOption(result.TTL())}
+		}
+		if err = store.dmap.Put(ctx, fullKey, value, putOptions...); err != nil {
+			zap.L().Error("Failed to update value", zap.Error(err))
+			return limiter.Context{}, err
 		}
 	}
 	span.SetAttributes(attribute.String("value", strconv.Itoa(value)))
@@ -161,6 +154,16 @@ func (store *Store) Get(ctx context.Context, key string, rate limiter.Rate) (lim
 // lifetime.
 func expirationFromTTLMillis(ttlMillis int64) time.Time {
 	return time.UnixMilli(ttlMillis)
+}
+
+// preserveExpiryOption re-writes a live key with its existing absolute expiry
+// (Unix ms, as returned by GetResponse.TTL()). It uses PXAT rather than
+// PX(time.Until(expiry)) for two reasons: Olric computes now+PX on the server,
+// so a relative PX pushes the expiry later on every increment (a hot key can
+// then never expire), and a remainder under 1ms truncates to PX(0) on the wire,
+// which Olric treats as "no TTL".
+func preserveExpiryOption(ttlMillis int64) olric.PutOption {
+	return olric.PXAT(time.Duration(ttlMillis) * time.Millisecond)
 }
 
 // newKeyPutOptions returns the Olric put options used whenever a key is
