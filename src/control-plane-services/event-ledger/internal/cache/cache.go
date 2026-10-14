@@ -22,7 +22,6 @@ package cache
 import (
 	"container/list"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -95,15 +94,19 @@ type key struct {
 	eventName string
 }
 
+// keyOf returns the cache key of a database record.
+func keyOf(record data_access.EventV3UpsertRecord) key {
+	return key{namespace: record.Namespace, context: record.Context, eventName: record.EventName}
+}
+
 // entry is the cached state for a key.
 type entry struct {
-	// timestamp is the timestamp of the latest event seen for the key.
-	timestamp time.Time
-	// source and details are the payload of the latest event, needed to write
-	// the events table. They are empty for the stats table, which stores
-	// neither. details is shared between copies and must not be mutated.
-	source  string
-	details json.RawMessage
+	// record is the latest event for the key, in the form the database takes, so a
+	// flush can pass it on as it is. Its namespace, context and event name repeat
+	// the key, which the map still needs because a record holds a slice and so
+	// cannot be a map key. Its Details is shared between copies and must not be
+	// mutated.
+	record data_access.EventV3UpsertRecord
 	// pending is true when the latest event has not yet been written to the database.
 	pending bool
 	// lastWritten is the time of the last successful database write.
@@ -248,8 +251,8 @@ func (handler *CachingDBHandler) flushDue(dueKeys []key) {}
 // lookup returns a copy of the entry for cachedKey, and whether it exists. It returns
 // a copy because the read lock is released on return; a pointer would let the
 // caller read fields while a writer mutates them, which is a data race. The
-// copy is cheap because details is a slice header, not a copy of the payload,
-// and cheaper than holding a lock for the caller.
+// copy is cheap because the record's Details is a slice header, not a copy of the
+// payload, and cheaper than holding a lock for the caller.
 func (handler *CachingDBHandler) lookup(cachedKey key) (entry, bool) {
 	handler.entriesMu.RLock()
 	defer handler.entriesMu.RUnlock()
@@ -258,14 +261,6 @@ func (handler *CachingDBHandler) lookup(cachedKey key) (entry, bool) {
 		return entry{}, false
 	}
 	return cachedEntry.entry, true
-}
-
-// event is an incoming event to record in the cache. processEvent stores details
-// without copying it, so the caller must not mutate it afterwards.
-type event struct {
-	timestamp time.Time
-	source    string
-	details   json.RawMessage
 }
 
 // outcome reports what processEvent did with an incoming event, and so what the
@@ -287,14 +282,16 @@ const (
 	outcomeStale
 )
 
-// processEvent records ev for cachedKey and reports what the caller must do. It compares and
-// updates under one write lock so concurrent events for a key cannot both
-// decide they are the newest. When the entry becomes pending, it schedules the
-// flush on the timing wheel. It does not write ev itself to the database, but
-// a miss can push the cache over MaxSize, and the pending entry evicted to make
-// room is written before processEvent returns, with retries if the write fails.
-func (handler *CachingDBHandler) processEvent(cachedKey key, ev event, now time.Time) outcome {
-	out, evicted := handler.recordEvent(cachedKey, ev, now)
+// processEvent records the event in record and reports what the caller must do.
+// It stores the record's Details without copying it, so the caller must not
+// mutate it afterwards. It compares and updates under one write lock so
+// concurrent events for a key cannot both decide they are the newest. When the
+// entry becomes pending, it schedules the flush on the timing wheel. It does not
+// write the event itself to the database, but a miss can push the cache over
+// MaxSize, and the pending entry evicted to make room is written before
+// processEvent returns, with retries if the write fails.
+func (handler *CachingDBHandler) processEvent(record data_access.EventV3UpsertRecord, now time.Time) outcome {
+	out, evicted := handler.recordEvent(record, now)
 	handler.metrics.recordOutcome(out)
 	handler.flushEvicted(evicted)
 	return out
@@ -302,32 +299,31 @@ func (handler *CachingDBHandler) processEvent(cachedKey key, ev event, now time.
 
 // recordEvent updates the cache under the write lock. It returns the pending
 // entries it evicted, which the caller writes once the lock is released.
-func (handler *CachingDBHandler) recordEvent(cachedKey key, ev event, now time.Time) (outcome, []data_access.EventV3UpsertRecord) {
+func (handler *CachingDBHandler) recordEvent(record data_access.EventV3UpsertRecord, now time.Time) (outcome, []data_access.EventV3UpsertRecord) {
+	cachedKey := keyOf(record)
 	handler.entriesMu.Lock()
 	defer handler.entriesMu.Unlock()
 
 	cachedEntry, ok := handler.entries[cachedKey]
 	if !ok {
 		// A miss is written at once by the caller, which is why the entry starts clean.
-		handler.addEntry(cachedKey, ev, now, false)
+		handler.addEntry(cachedKey, record, now, false)
 		return outcomeMiss, handler.evictOverflow()
 	}
-	if !ev.timestamp.After(cachedEntry.timestamp) {
+	if !record.Timestamp.After(cachedEntry.record.Timestamp) {
 		return outcomeStale, nil
 	}
-	if handler.replaceEntry(cachedKey, cachedEntry, ev, now) {
+	if handler.replaceEntry(cachedKey, cachedEntry, record, now) {
 		return outcomeAlreadyPending, nil
 	}
 	return outcomeBecamePending, nil
 }
 
-// addEntry stores ev as a new entry for cachedKey, at the front of the recency
+// addEntry stores record as a new entry for cachedKey, at the front of the recency
 // list. The caller holds entriesMu.
-func (handler *CachingDBHandler) addEntry(cachedKey key, ev event, now time.Time, pending bool) {
+func (handler *CachingDBHandler) addEntry(cachedKey key, record data_access.EventV3UpsertRecord, now time.Time, pending bool) {
 	cachedEntry := &cached{entry: entry{
-		timestamp:   ev.timestamp,
-		source:      ev.source,
-		details:     ev.details,
+		record:      record,
 		pending:     pending,
 		lastUpdated: now,
 	}}
@@ -341,13 +337,11 @@ func (handler *CachingDBHandler) addEntry(cachedKey key, ev event, now time.Time
 	}
 }
 
-// replaceEntry makes ev the latest event of an existing entry and marks it
+// replaceEntry makes record the latest event of an existing entry and marks it
 // pending, and reports whether it already was. The caller holds entriesMu.
-func (handler *CachingDBHandler) replaceEntry(cachedKey key, cachedEntry *cached, ev event, now time.Time) bool {
+func (handler *CachingDBHandler) replaceEntry(cachedKey key, cachedEntry *cached, record data_access.EventV3UpsertRecord, now time.Time) bool {
 	wasPending := cachedEntry.pending
-	cachedEntry.timestamp = ev.timestamp
-	cachedEntry.source = ev.source
-	cachedEntry.details = ev.details
+	cachedEntry.record = record
 	cachedEntry.pending = true
 	cachedEntry.lastUpdated = now
 	handler.recency.MoveToFront(cachedEntry.recencyNode)
@@ -425,18 +419,7 @@ func (handler *CachingDBHandler) remove(node *list.Element, reason evictionReaso
 	if !cachedEntry.pending {
 		return data_access.EventV3UpsertRecord{}, false
 	}
-	return recordOf(cachedKey, cachedEntry.entry), true
-}
-
-func recordOf(cachedKey key, cachedEntry entry) data_access.EventV3UpsertRecord {
-	return data_access.EventV3UpsertRecord{
-		Namespace: cachedKey.namespace,
-		Context:   cachedKey.context,
-		EventName: cachedKey.eventName,
-		Source:    cachedEntry.source,
-		Details:   cachedEntry.details,
-		Timestamp: cachedEntry.timestamp,
-	}
+	return cachedEntry.record, true
 }
 
 // flushEvicted writes recs to the database, retrying a failed write with
@@ -523,38 +506,39 @@ func waitOrDone(ctx context.Context, delay time.Duration) bool {
 // eviction write. If every try fails, the event is kept as a pending entry and
 // scheduled for a later flush, so it is written even if the source never sends it
 // again, and the write error is returned for the caller to report.
-func (handler *CachingDBHandler) writeMiss(ctx context.Context, cachedKey key, ev event) error {
+func (handler *CachingDBHandler) writeMiss(ctx context.Context, record data_access.EventV3UpsertRecord) error {
 	ctx, cancel := context.WithTimeout(ctx, evictionFlushTimeout)
 	defer cancel()
-	attempts, err := handler.flushWithRetry(ctx, recordOf(cachedKey, entry{timestamp: ev.timestamp, source: ev.source, details: ev.details}))
+	attempts, err := handler.flushWithRetry(ctx, record)
 	if err == nil {
 		return nil
 	}
-	handler.flushEvicted(handler.keepPending(cachedKey, ev, time.Now()))
+	handler.flushEvicted(handler.keepPending(record, time.Now()))
 	logging.GetLogger(ctx).WarnContext(ctx, "kept a cache miss for a later flush after its write failed",
 		zap.Int("attempts", attempts),
-		zap.String("namespace", cachedKey.namespace),
-		zap.String("context", cachedKey.context),
-		zap.String("event_name", cachedKey.eventName))
+		zap.String("namespace", record.Namespace),
+		zap.String("context", record.Context),
+		zap.String("event_name", record.EventName))
 	return err
 }
 
-// keepPending makes ev the pending entry for cachedKey and schedules its flush,
+// keepPending makes record the pending entry for its key and schedules its flush,
 // unless a newer event is already stored, which is pending or is written by its
 // own caller. The entry may be gone, evicted while the write was in flight, so it
 // is created again, and the pending entries that makes room by evicting are
 // returned for the caller to write once the lock is released.
-func (handler *CachingDBHandler) keepPending(cachedKey key, ev event, now time.Time) []data_access.EventV3UpsertRecord {
+func (handler *CachingDBHandler) keepPending(record data_access.EventV3UpsertRecord, now time.Time) []data_access.EventV3UpsertRecord {
+	cachedKey := keyOf(record)
 	handler.entriesMu.Lock()
 	defer handler.entriesMu.Unlock()
 
 	cachedEntry, exists := handler.entries[cachedKey]
 	if !exists {
-		handler.addEntry(cachedKey, ev, now, true)
+		handler.addEntry(cachedKey, record, now, true)
 		return handler.evictOverflow()
 	}
-	if !ev.timestamp.Before(cachedEntry.timestamp) {
-		handler.replaceEntry(cachedKey, cachedEntry, ev, now)
+	if !record.Timestamp.Before(cachedEntry.record.Timestamp) {
+		handler.replaceEntry(cachedKey, cachedEntry, record, now)
 	}
 	return nil
 }

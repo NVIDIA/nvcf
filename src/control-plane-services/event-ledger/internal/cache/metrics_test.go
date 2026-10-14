@@ -150,7 +150,7 @@ func TestMetrics_HitsAndMissesFollowTheOutcome(t *testing.T) {
 			handler, _, reader := newMetricsHandler(t, evictionConfig(10))
 
 			for _, step := range tt.events {
-				handler.processEvent(keyN(step.keyIndex), event{timestamp: at(step.second)}, at(step.second))
+				handler.processEvent(recordFor(keyN(step.keyIndex), at(step.second)), at(step.second))
 			}
 
 			requireCounter(t, reader, tt.wantHits, hitsMetricName)
@@ -162,9 +162,9 @@ func TestMetrics_HitsAndMissesFollowTheOutcome(t *testing.T) {
 func TestMetrics_EvictionsAreLabelledByReason(t *testing.T) {
 	t.Run("size eviction", func(t *testing.T) {
 		handler, _, reader := newMetricsHandler(t, evictionConfig(1))
-		handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+		handler.processEvent(recordFor(keyN(1), at(1)), at(1))
 
-		handler.processEvent(keyN(2), event{timestamp: at(2)}, at(2))
+		handler.processEvent(recordFor(keyN(2), at(2)), at(2))
 
 		requireCounter(t, reader, 1, evictionsMetricName, sizeEviction)
 		requireCounter(t, reader, 0, evictionsMetricName, inactiveEviction)
@@ -172,8 +172,8 @@ func TestMetrics_EvictionsAreLabelledByReason(t *testing.T) {
 
 	t.Run("inactivity eviction", func(t *testing.T) {
 		handler, _, reader := newMetricsHandler(t, evictionConfig(10))
-		handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
-		handler.processEvent(keyN(2), event{timestamp: at(1)}, at(1))
+		handler.processEvent(recordFor(keyN(1), at(1)), at(1))
+		handler.processEvent(recordFor(keyN(2), at(1)), at(1))
 
 		handler.evictInactive(at(1000))
 
@@ -183,7 +183,7 @@ func TestMetrics_EvictionsAreLabelledByReason(t *testing.T) {
 
 	t.Run("nothing evicted", func(t *testing.T) {
 		handler, _, reader := newMetricsHandler(t, evictionConfig(10))
-		handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+		handler.processEvent(recordFor(keyN(1), at(1)), at(1))
 
 		handler.evictInactive(at(2))
 
@@ -197,11 +197,11 @@ func TestMetrics_EntriesGaugeFollowsInsertsAndEvictions(t *testing.T) {
 	assert.EqualValues(t, 0, entriesGauge(t, reader))
 
 	for entryCount := 1; entryCount <= 3; entryCount++ {
-		handler.processEvent(keyN(entryCount), event{timestamp: at(entryCount)}, at(entryCount))
+		handler.processEvent(recordFor(keyN(entryCount), at(entryCount)), at(entryCount))
 		assert.EqualValues(t, entryCount, entriesGauge(t, reader), "after insert %d", entryCount)
 	}
 
-	handler.processEvent(keyN(4), event{timestamp: at(4)}, at(4))
+	handler.processEvent(recordFor(keyN(4), at(4)), at(4))
 	assert.EqualValues(t, 3, entriesGauge(t, reader), "an insert at the limit evicts one, so the size stays")
 
 	handler.evictInactive(at(1000))
@@ -213,7 +213,7 @@ func TestMetrics_FlushesAreCountedByResult(t *testing.T) {
 		handler, _, reader := newMetricsHandler(t, evictionConfig(1))
 		makePending(handler, keyN(1), 1)
 
-		handler.processEvent(keyN(2), event{timestamp: at(10)}, at(10))
+		handler.processEvent(recordFor(keyN(2), at(10)), at(10))
 
 		requireCounter(t, reader, 1, flushesMetricName, successfulFlush)
 		requireCounter(t, reader, 0, flushesMetricName, failedFlush)
@@ -225,7 +225,7 @@ func TestMetrics_FlushesAreCountedByResult(t *testing.T) {
 			flushed.err = errors.New("database unavailable")
 			makePending(handler, keyN(1), 1)
 
-			handler.processEvent(keyN(2), event{timestamp: at(10)}, at(10))
+			handler.processEvent(recordFor(keyN(2), at(10)), at(10))
 
 			requireCounter(t, reader, 0, flushesMetricName, successfulFlush)
 			requireCounter(t, reader, 1, flushesMetricName, failedFlush)
@@ -239,7 +239,7 @@ func TestMetrics_FlushesAreCountedByResult(t *testing.T) {
 			flushed.failFirst = 2
 			makePending(handler, keyN(1), 1)
 
-			handler.processEvent(keyN(2), event{timestamp: at(10)}, at(10))
+			handler.processEvent(recordFor(keyN(2), at(10)), at(10))
 
 			requireCounter(t, reader, 1, flushesMetricName, successfulFlush)
 			requireCounter(t, reader, 0, flushesMetricName, failedFlush)
@@ -248,9 +248,9 @@ func TestMetrics_FlushesAreCountedByResult(t *testing.T) {
 
 	t.Run("evicting a clean entry flushes nothing", func(t *testing.T) {
 		handler, _, reader := newMetricsHandler(t, evictionConfig(1))
-		handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+		handler.processEvent(recordFor(keyN(1), at(1)), at(1))
 
-		handler.processEvent(keyN(2), event{timestamp: at(2)}, at(2))
+		handler.processEvent(recordFor(keyN(2), at(2)), at(2))
 
 		requireCounter(t, reader, 0, flushesMetricName, successfulFlush)
 		requireCounter(t, reader, 0, flushesMetricName, failedFlush)
@@ -300,7 +300,7 @@ func TestMetrics_ConcurrentEventsAreAllCounted(t *testing.T) {
 			defer wg.Done()
 			for eventIndex := range eventsPerWriter {
 				sequence := int(clock.Add(1))
-				handler.processEvent(keyN((writer+eventIndex)%12), event{timestamp: at(sequence)}, at(sequence))
+				handler.processEvent(recordFor(keyN((writer+eventIndex)%12), at(sequence)), at(sequence))
 				if eventIndex%9 == 0 {
 					handler.evictInactive(at(sequence))
 				}

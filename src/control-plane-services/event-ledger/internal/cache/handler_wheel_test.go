@@ -97,38 +97,38 @@ func scheduledSlot(handler *CachingDBHandler, scheduledKey key) (int, bool) {
 
 // makePending sends two events so the key's entry is pending, and so scheduled.
 func makePending(handler *CachingDBHandler, pendingKey key, firstSecond int) {
-	handler.processEvent(pendingKey, event{timestamp: at(firstSecond)}, at(firstSecond))
-	handler.processEvent(pendingKey, event{timestamp: at(firstSecond + 1)}, at(firstSecond+1))
+	handler.processEvent(recordFor(pendingKey, at(firstSecond)), at(firstSecond))
+	handler.processEvent(recordFor(pendingKey, at(firstSecond+1)), at(firstSecond+1))
 }
 
 func TestProcessEvent_SchedulesAFlushOnlyWhenAnEntryBecomesPending(t *testing.T) {
 	tests := []struct {
 		name          string
-		steps         []event
+		timestamps    []time.Time
 		wantOutcome   outcome
 		wantScheduled int
 	}{
 		{
 			name:          "a miss is written by the caller, not scheduled",
-			steps:         []event{{timestamp: at(1)}},
+			timestamps:    []time.Time{at(1)},
 			wantOutcome:   outcomeMiss,
 			wantScheduled: 0,
 		},
 		{
 			name:          "a newer event on a clean entry is scheduled",
-			steps:         []event{{timestamp: at(1)}, {timestamp: at(2)}},
+			timestamps:    []time.Time{at(1), at(2)},
 			wantOutcome:   outcomeBecamePending,
 			wantScheduled: 1,
 		},
 		{
 			name:          "a newer event on a pending entry is not scheduled again",
-			steps:         []event{{timestamp: at(1)}, {timestamp: at(2)}, {timestamp: at(3)}},
+			timestamps:    []time.Time{at(1), at(2), at(3)},
 			wantOutcome:   outcomeAlreadyPending,
 			wantScheduled: 1,
 		},
 		{
 			name:          "a stale event schedules nothing",
-			steps:         []event{{timestamp: at(5)}, {timestamp: at(1)}},
+			timestamps:    []time.Time{at(5), at(1)},
 			wantOutcome:   outcomeStale,
 			wantScheduled: 0,
 		},
@@ -138,8 +138,8 @@ func TestProcessEvent_SchedulesAFlushOnlyWhenAnEntryBecomesPending(t *testing.T)
 			handler, _ := newTestHandlerWith(t, evictionConfig(10))
 
 			var lastOutcome outcome
-			for _, step := range tt.steps {
-				lastOutcome = handler.processEvent(keyN(1), step, step.timestamp)
+			for _, timestamp := range tt.timestamps {
+				lastOutcome = handler.processEvent(recordFor(keyN(1), timestamp), timestamp)
 			}
 
 			assert.Equal(t, tt.wantOutcome, lastOutcome)
@@ -317,7 +317,7 @@ func TestProcessEvent_EvictingAPendingEntryClearsItsScheduledFlush(t *testing.T)
 	_, scheduled := scheduledSlot(handler, keyN(1))
 	require.True(t, scheduled)
 
-	handler.processEvent(keyN(2), event{timestamp: at(10)}, at(10))
+	handler.processEvent(recordFor(keyN(2), at(10)), at(10))
 
 	assert.Len(t, flushed.records(), 1, "the pending entry was written when it was evicted")
 	_, scheduled = scheduledSlot(handler, keyN(1))
@@ -338,11 +338,11 @@ func TestEvictInactive_ClearsTheScheduledFlushOfAnEvictedEntry(t *testing.T) {
 
 func TestProcessEvent_EvictingACleanEntryLeavesOtherScheduledFlushesAlone(t *testing.T) {
 	handler, flushed := newTestHandlerWith(t, evictionConfig(2))
-	handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+	handler.processEvent(recordFor(keyN(1), at(1)), at(1))
 	makePending(handler, keyN(2), 2)
 
 	// Key 1 is the least recently updated and is clean, so it is the one evicted.
-	handler.processEvent(keyN(3), event{timestamp: at(10)}, at(10))
+	handler.processEvent(recordFor(keyN(3), at(10)), at(10))
 
 	assert.Empty(t, flushed.records(), "a clean entry is already in the database")
 	requireKeys(t, handler, []int{2, 3}, []int{1})
@@ -356,9 +356,9 @@ func TestProcessEvent_RecreatedKeyGetsAFullFlushInterval(t *testing.T) {
 	handler, _ := newTestHandlerWith(t, evictionConfig(1))
 	makePending(handler, keyN(1), 1)
 	advanceTimes(wheelOf(handler), 4)
-	handler.processEvent(keyN(2), event{timestamp: at(10)}, at(10))
-	handler.processEvent(keyN(1), event{timestamp: at(20)}, at(20))
-	handler.processEvent(keyN(1), event{timestamp: at(21)}, at(21))
+	handler.processEvent(recordFor(keyN(2), at(10)), at(10))
+	handler.processEvent(recordFor(keyN(1), at(20)), at(20))
+	handler.processEvent(recordFor(keyN(1), at(21)), at(21))
 	_, scheduled := scheduledSlot(handler, keyN(1))
 	require.True(t, scheduled, "the new pending entry is scheduled")
 
@@ -394,7 +394,7 @@ func TestEviction_UnschedulesWhileHoldingTheCacheLock(t *testing.T) {
 		{
 			name: "size eviction",
 			evict: func(handler *CachingDBHandler) {
-				handler.processEvent(keyN(2), event{timestamp: at(10)}, at(10))
+				handler.processEvent(recordFor(keyN(2), at(10)), at(10))
 			},
 		},
 		{
@@ -477,7 +477,7 @@ func TestProcessEvent_ConcurrentEvictionKeepsTheWheelWithinPendingEntries(t *tes
 					defer wg.Done()
 					for eventIndex := range tt.eventsPerWriter {
 						sequence := int(clock.Add(1))
-						handler.processEvent(keyN((writer+eventIndex)%tt.keyCount), event{timestamp: at(sequence)}, at(sequence))
+						handler.processEvent(recordFor(keyN((writer+eventIndex)%tt.keyCount), at(sequence)), at(sequence))
 						if eventIndex%7 == 0 {
 							handler.evictInactive(at(sequence))
 						}
@@ -529,7 +529,7 @@ func TestProcessEvent_ConcurrentEventsWhileTheWheelAdvances(t *testing.T) {
 			defer wg.Done()
 			for eventIndex := range eventsPerWriter {
 				sequence := int(clock.Add(1))
-				handler.processEvent(keyN((writer+eventIndex)%keyCount), event{timestamp: at(sequence)}, at(sequence))
+				handler.processEvent(recordFor(keyN((writer+eventIndex)%keyCount), at(sequence)), at(sequence))
 			}
 		}()
 	}

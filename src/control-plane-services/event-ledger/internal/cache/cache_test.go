@@ -40,15 +40,15 @@ type fakeDB struct {
 	data_access.DBHandlerV2
 }
 
-func (h *CachingDBHandler) insert(cachedKey key, e entry) {
-	h.entriesMu.Lock()
-	defer h.entriesMu.Unlock()
-	if old, ok := h.entries[cachedKey]; ok {
-		h.recency.Remove(old.recencyNode)
+func (handler *CachingDBHandler) insert(cachedKey key, newEntry entry) {
+	handler.entriesMu.Lock()
+	defer handler.entriesMu.Unlock()
+	if replaced, ok := handler.entries[cachedKey]; ok {
+		handler.recency.Remove(replaced.recencyNode)
 	}
-	cachedEntry := &cached{entry: e}
-	cachedEntry.recencyNode = h.recency.PushFront(cachedKey)
-	h.entries[cachedKey] = cachedEntry
+	cachedEntry := &cached{entry: newEntry}
+	cachedEntry.recencyNode = handler.recency.PushFront(cachedKey)
+	handler.entries[cachedKey] = cachedEntry
 }
 
 // discardFlush is a FlushFunc that drops what it is given, for tests that do not
@@ -128,9 +128,7 @@ func TestLookup_AfterInsertHits(t *testing.T) {
 	k := key{namespace: "ns", context: "ctx", eventName: "evt"}
 	ts := time.Date(2026, 9, 19, 14, 32, 10, 0, time.UTC)
 	want := entry{
-		timestamp:   ts,
-		source:      "nvidia-cluster-agent",
-		details:     json.RawMessage(`{"downloadProgress":0.75}`),
+		record:      recordWith(k, ts, "nvidia-cluster-agent", json.RawMessage(`{"downloadProgress":0.75}`)),
 		pending:     true,
 		lastWritten: ts.Add(-time.Minute),
 		lastUpdated: ts,
@@ -143,18 +141,18 @@ func TestLookup_AfterInsertHits(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
-func TestLookup_StatsEntryWithoutPayloadHits(t *testing.T) {
+func TestLookup_EntryWithoutPayloadHits(t *testing.T) {
 	h := newTestHandler(t)
 	k := key{namespace: "ns", context: "ctx", eventName: "evt"}
 	ts := time.Date(2026, 9, 19, 14, 32, 10, 0, time.UTC)
-	h.insert(k, entry{timestamp: ts})
+	h.insert(k, entry{record: recordFor(k, ts)})
 
 	got, ok := h.lookup(k)
 
 	require.True(t, ok)
-	assert.Equal(t, ts, got.timestamp)
-	assert.Empty(t, got.source)
-	assert.Nil(t, got.details)
+	assert.Equal(t, ts, got.record.Timestamp)
+	assert.Empty(t, got.record.Source)
+	assert.Nil(t, got.record.Details)
 }
 
 func TestLookup_ReturnsCopy(t *testing.T) {
@@ -203,7 +201,7 @@ func TestLookup_ConcurrentWithReplace(t *testing.T) {
 	h := newTestHandler(t)
 	k := key{namespace: "ns", context: "ctx", eventName: "evt"}
 	base := time.Date(2026, 9, 19, 14, 32, 10, 0, time.UTC)
-	h.insert(k, entry{timestamp: base, lastUpdated: base, details: json.RawMessage("0")})
+	h.insert(k, entry{record: recordWith(k, base, "", json.RawMessage("0")), lastUpdated: base})
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -211,7 +209,7 @@ func TestLookup_ConcurrentWithReplace(t *testing.T) {
 		defer wg.Done()
 		for i := 1; i <= iterations; i++ {
 			ts := base.Add(time.Duration(i) * time.Second)
-			h.insert(k, entry{timestamp: ts, lastUpdated: ts, details: json.RawMessage(strconv.Itoa(i)), pending: i%2 == 0})
+			h.insert(k, entry{record: recordWith(k, ts, "", json.RawMessage(strconv.Itoa(i))), lastUpdated: ts, pending: i%2 == 0})
 		}
 	}()
 
@@ -227,21 +225,21 @@ func TestLookup_ConcurrentWithReplace(t *testing.T) {
 				}
 				// timestamp and lastUpdated are always written together, so a
 				// mismatch means the reader saw a partially written entry.
-				if !assert.True(t, got.timestamp.Equal(got.lastUpdated)) {
+				if !assert.True(t, got.record.Timestamp.Equal(got.lastUpdated)) {
 					return
 				}
 				// details is written with the timestamp, so it must name the
 				// same iteration.
-				step := int(got.timestamp.Sub(base) / time.Second)
-				if !assert.Equal(t, strconv.Itoa(step), string(got.details)) {
+				step := int(got.record.Timestamp.Sub(base) / time.Second)
+				if !assert.Equal(t, strconv.Itoa(step), string(got.record.Details)) {
 					return
 				}
 				// The writer only moves forward, so a reader must never see
 				// time go backwards.
-				if !assert.False(t, got.timestamp.Before(last)) {
+				if !assert.False(t, got.record.Timestamp.Before(last)) {
 					return
 				}
-				last = got.timestamp
+				last = got.record.Timestamp
 			}
 		}()
 	}
@@ -249,7 +247,7 @@ func TestLookup_ConcurrentWithReplace(t *testing.T) {
 
 	got, ok := h.lookup(k)
 	require.True(t, ok)
-	assert.Equal(t, base.Add(iterations*time.Second), got.timestamp)
+	assert.Equal(t, base.Add(iterations*time.Second), got.record.Timestamp)
 }
 
 func TestLookup_ConcurrentInsertsOfDistinctKeys(t *testing.T) {
@@ -269,7 +267,7 @@ func TestLookup_ConcurrentInsertsOfDistinctKeys(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for n := range keysPerWriter {
-				h.insert(keyFor(w, n), entry{timestamp: ts})
+				h.insert(keyFor(w, n), entry{record: recordFor(keyFor(w, n), ts)})
 				// A reader on the same goroutine's own key must see it.
 				_, ok := h.lookup(keyFor(w, n))
 				assert.True(t, ok)
@@ -295,17 +293,15 @@ var (
 func TestProcessEvent_MissStoresCleanEntry(t *testing.T) {
 	h := newTestHandler(t)
 	now := testBase.Add(time.Hour)
-	ev := event{timestamp: testBase, source: "nvidia-cluster-agent", details: json.RawMessage(`{"downloadProgress":0.75}`)}
+	record := recordWith(testKey, testBase, "nvidia-cluster-agent", json.RawMessage(`{"downloadProgress":0.75}`))
 
-	got := h.processEvent(testKey, ev, now)
+	got := h.processEvent(record, now)
 
 	assert.Equal(t, outcomeMiss, got)
 	e, ok := h.lookup(testKey)
 	require.True(t, ok)
 	assert.Equal(t, entry{
-		timestamp:   testBase,
-		source:      "nvidia-cluster-agent",
-		details:     json.RawMessage(`{"downloadProgress":0.75}`),
+		record:      record,
 		pending:     false,
 		lastWritten: now,
 		lastUpdated: now,
@@ -315,19 +311,17 @@ func TestProcessEvent_MissStoresCleanEntry(t *testing.T) {
 func TestProcessEvent_NewerEventReplacesCleanEntryAndMarksPending(t *testing.T) {
 	h := newTestHandler(t)
 	firstSeen := testBase.Add(time.Hour)
-	h.processEvent(testKey, event{timestamp: testBase, source: "old", details: json.RawMessage(`{"p":1}`)}, firstSeen)
+	h.processEvent(recordWith(testKey, testBase, "old", json.RawMessage(`{"p":1}`)), firstSeen)
 	now := firstSeen.Add(time.Second)
 	newer := testBase.Add(time.Second)
 
-	got := h.processEvent(testKey, event{timestamp: newer, source: "new", details: json.RawMessage(`{"p":2}`)}, now)
+	got := h.processEvent(recordWith(testKey, newer, "new", json.RawMessage(`{"p":2}`)), now)
 
 	assert.Equal(t, outcomeBecamePending, got)
 	e, ok := h.lookup(testKey)
 	require.True(t, ok)
 	assert.Equal(t, entry{
-		timestamp:   newer,
-		source:      "new",
-		details:     json.RawMessage(`{"p":2}`),
+		record:      recordWith(testKey, newer, "new", json.RawMessage(`{"p":2}`)),
 		pending:     true,
 		lastWritten: firstSeen,
 		lastUpdated: now,
@@ -336,23 +330,17 @@ func TestProcessEvent_NewerEventReplacesCleanEntryAndMarksPending(t *testing.T) 
 
 func TestProcessEvent_NewerEventOnPendingEntryKeepsItPending(t *testing.T) {
 	h := newTestHandler(t)
-	h.processEvent(testKey, event{timestamp: testBase}, testBase)
-	h.processEvent(testKey, event{timestamp: testBase.Add(time.Second)}, testBase)
+	h.processEvent(recordFor(testKey, testBase), testBase)
+	h.processEvent(recordFor(testKey, testBase.Add(time.Second)), testBase)
 	now := testBase.Add(time.Minute)
 
-	got := h.processEvent(testKey, event{
-		timestamp: testBase.Add(2 * time.Second),
-		source:    "latest",
-		details:   json.RawMessage(`{"p":3}`),
-	}, now)
+	got := h.processEvent(recordWith(testKey, testBase.Add(2*time.Second), "latest", json.RawMessage(`{"p":3}`)), now)
 
 	assert.Equal(t, outcomeAlreadyPending, got)
 	e, ok := h.lookup(testKey)
 	require.True(t, ok)
 	assert.Equal(t, entry{
-		timestamp:   testBase.Add(2 * time.Second),
-		source:      "latest",
-		details:     json.RawMessage(`{"p":3}`),
+		record:      recordWith(testKey, testBase.Add(2*time.Second), "latest", json.RawMessage(`{"p":3}`)),
 		pending:     true,
 		lastWritten: testBase,
 		lastUpdated: now,
@@ -374,16 +362,14 @@ func TestProcessEvent_OlderOrEqualEventIsDiscarded(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			h := newTestHandler(t)
 			h.insert(testKey, entry{
-				timestamp:   testBase,
-				source:      "kept",
-				details:     json.RawMessage(`{"kept":true}`),
+				record:      recordWith(testKey, testBase, "kept", json.RawMessage(`{"kept":true}`)),
 				pending:     tt.pending,
 				lastWritten: testBase,
 				lastUpdated: testBase,
 			})
 			before, _ := h.lookup(testKey)
 
-			got := h.processEvent(testKey, event{timestamp: tt.ts, source: "dropped", details: json.RawMessage(`{}`)}, testBase.Add(time.Hour))
+			got := h.processEvent(recordWith(testKey, tt.ts, "dropped", json.RawMessage(`{}`)), testBase.Add(time.Hour))
 
 			assert.Equal(t, outcomeStale, got)
 			after, ok := h.lookup(testKey)
@@ -396,10 +382,10 @@ func TestProcessEvent_OlderOrEqualEventIsDiscarded(t *testing.T) {
 func TestProcessEvent_KeysAreIndependent(t *testing.T) {
 	h := newTestHandler(t)
 	other := key{namespace: "ns", context: "ctx", eventName: "other"}
-	h.processEvent(testKey, event{timestamp: testBase}, testBase)
+	h.processEvent(recordFor(testKey, testBase), testBase)
 
 	// An event for another key is a miss even if it is older than the first.
-	got := h.processEvent(other, event{timestamp: testBase.Add(-time.Hour)}, testBase)
+	got := h.processEvent(recordFor(other, testBase.Add(-time.Hour)), testBase)
 
 	assert.Equal(t, outcomeMiss, got)
 }
@@ -416,8 +402,8 @@ func TestProcessEvent_ConcurrentFirstEventsProduceOneMiss(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ev := event{timestamp: testBase.Add(time.Duration(i) * time.Second), source: strconv.Itoa(i)}
-			results[i] = h.processEvent(testKey, ev, testBase)
+			record := recordWith(testKey, testBase.Add(time.Duration(i)*time.Second), strconv.Itoa(i), nil)
+			results[i] = h.processEvent(record, testBase)
 		}()
 	}
 	wg.Wait()
@@ -431,8 +417,8 @@ func TestProcessEvent_ConcurrentFirstEventsProduceOneMiss(t *testing.T) {
 	assert.Equal(t, 1, misses)
 	e, ok := h.lookup(testKey)
 	require.True(t, ok)
-	assert.Equal(t, testBase.Add((goroutines-1)*time.Second), e.timestamp)
-	assert.Equal(t, strconv.Itoa(goroutines-1), e.source)
+	assert.Equal(t, testBase.Add((goroutines-1)*time.Second), e.record.Timestamp)
+	assert.Equal(t, strconv.Itoa(goroutines-1), e.record.Source)
 }
 
 // Run with -race. Of many concurrent newer events on a clean entry, exactly one
@@ -440,7 +426,7 @@ func TestProcessEvent_ConcurrentFirstEventsProduceOneMiss(t *testing.T) {
 func TestProcessEvent_ConcurrentNewerEventsBecomePendingOnce(t *testing.T) {
 	const goroutines = 64
 	h := newTestHandler(t)
-	h.processEvent(testKey, event{timestamp: testBase}, testBase)
+	h.processEvent(recordFor(testKey, testBase), testBase)
 	results := make([]outcome, goroutines)
 
 	var wg sync.WaitGroup
@@ -448,12 +434,8 @@ func TestProcessEvent_ConcurrentNewerEventsBecomePendingOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ev := event{
-				timestamp: testBase.Add(time.Duration(i+1) * time.Second),
-				source:    strconv.Itoa(i + 1),
-				details:   json.RawMessage(strconv.Itoa(i + 1)),
-			}
-			results[i] = h.processEvent(testKey, ev, testBase)
+			record := recordWith(testKey, testBase.Add(time.Duration(i+1)*time.Second), strconv.Itoa(i+1), json.RawMessage(strconv.Itoa(i+1)))
+			results[i] = h.processEvent(record, testBase)
 		}()
 	}
 	wg.Wait()
@@ -469,9 +451,9 @@ func TestProcessEvent_ConcurrentNewerEventsBecomePendingOnce(t *testing.T) {
 	e, ok := h.lookup(testKey)
 	require.True(t, ok)
 	assert.True(t, e.pending)
-	assert.Equal(t, testBase.Add(goroutines*time.Second), e.timestamp)
-	assert.Equal(t, strconv.Itoa(goroutines), e.source)
-	assert.Equal(t, strconv.Itoa(goroutines), string(e.details))
+	assert.Equal(t, testBase.Add(goroutines*time.Second), e.record.Timestamp)
+	assert.Equal(t, strconv.Itoa(goroutines), e.record.Source)
+	assert.Equal(t, strconv.Itoa(goroutines), string(e.record.Details))
 }
 
 func TestInactiveTTL_IsFlushIntervalPlusTenPercent(t *testing.T) {
@@ -558,6 +540,25 @@ func keyN(i int) key {
 	return key{namespace: "ns", context: "ctx", eventName: "evt-" + strconv.Itoa(i)}
 }
 
+// recordFor returns an event record for cachedKey with the given timestamp and no
+// payload.
+func recordFor(cachedKey key, timestamp time.Time) data_access.EventV3UpsertRecord {
+	return recordWith(cachedKey, timestamp, "", nil)
+}
+
+// recordWith returns an event record for cachedKey with the given timestamp,
+// source and details.
+func recordWith(cachedKey key, timestamp time.Time, source string, details json.RawMessage) data_access.EventV3UpsertRecord {
+	return data_access.EventV3UpsertRecord{
+		Namespace: cachedKey.namespace,
+		Context:   cachedKey.context,
+		EventName: cachedKey.eventName,
+		Source:    source,
+		Details:   details,
+		Timestamp: timestamp,
+	}
+}
+
 func at(seconds int) time.Time {
 	return testBase.Add(time.Duration(seconds) * time.Second)
 }
@@ -582,10 +583,10 @@ func requireKeys(t *testing.T, h *CachingDBHandler, present []int, absent []int)
 func TestProcessEvent_InsertBeyondMaxSizeEvictsLeastRecentlyUpdated(t *testing.T) {
 	h, _ := newTestHandlerWith(t, evictionConfig(3))
 	for i := 1; i <= 3; i++ {
-		h.processEvent(keyN(i), event{timestamp: at(i)}, at(i))
+		h.processEvent(recordFor(keyN(i), at(i)), at(i))
 	}
 
-	got := h.processEvent(keyN(4), event{timestamp: at(4)}, at(4))
+	got := h.processEvent(recordFor(keyN(4), at(4)), at(4))
 
 	assert.Equal(t, outcomeMiss, got)
 	requireKeys(t, h, []int{2, 3, 4}, []int{1})
@@ -595,11 +596,11 @@ func TestProcessEvent_InsertBeyondMaxSizeEvictsLeastRecentlyUpdated(t *testing.T
 func TestProcessEvent_NewerEventRefreshesRecency(t *testing.T) {
 	h, _ := newTestHandlerWith(t, evictionConfig(3))
 	for i := 1; i <= 3; i++ {
-		h.processEvent(keyN(i), event{timestamp: at(i)}, at(i))
+		h.processEvent(recordFor(keyN(i), at(i)), at(i))
 	}
-	h.processEvent(keyN(1), event{timestamp: at(10)}, at(10))
+	h.processEvent(recordFor(keyN(1), at(10)), at(10))
 
-	h.processEvent(keyN(4), event{timestamp: at(11)}, at(11))
+	h.processEvent(recordFor(keyN(4), at(11)), at(11))
 
 	requireKeys(t, h, []int{1, 3, 4}, []int{2})
 	assertConsistent(t, h)
@@ -608,20 +609,20 @@ func TestProcessEvent_NewerEventRefreshesRecency(t *testing.T) {
 func TestProcessEvent_StaleEventDoesNotRefreshRecency(t *testing.T) {
 	h, _ := newTestHandlerWith(t, evictionConfig(3))
 	for i := 1; i <= 3; i++ {
-		h.processEvent(keyN(i), event{timestamp: at(i)}, at(i))
+		h.processEvent(recordFor(keyN(i), at(i)), at(i))
 	}
-	assert.Equal(t, outcomeStale, h.processEvent(keyN(1), event{timestamp: at(0)}, at(10)))
+	assert.Equal(t, outcomeStale, h.processEvent(recordFor(keyN(1), at(0)), at(10)))
 
-	h.processEvent(keyN(4), event{timestamp: at(11)}, at(11))
+	h.processEvent(recordFor(keyN(4), at(11)), at(11))
 
 	requireKeys(t, h, []int{2, 3, 4}, []int{1})
 }
 
 func TestProcessEvent_MaxSizeOneKeepsNewestEntry(t *testing.T) {
 	h, _ := newTestHandlerWith(t, evictionConfig(1))
-	h.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+	h.processEvent(recordFor(keyN(1), at(1)), at(1))
 
-	h.processEvent(keyN(2), event{timestamp: at(2)}, at(2))
+	h.processEvent(recordFor(keyN(2), at(2)), at(2))
 
 	requireKeys(t, h, []int{2}, []int{1})
 	assertConsistent(t, h)
@@ -631,7 +632,7 @@ func TestProcessEvent_CacheStaysAtMaxSizeOverManyInserts(t *testing.T) {
 	h, _ := newTestHandlerWith(t, evictionConfig(5))
 
 	for i := 1; i <= 100; i++ {
-		h.processEvent(keyN(i), event{timestamp: at(i)}, at(i))
+		h.processEvent(recordFor(keyN(i), at(i)), at(i))
 	}
 
 	requireKeys(t, h, []int{96, 97, 98, 99, 100}, []int{1, 50, 95})
@@ -641,11 +642,11 @@ func TestProcessEvent_CacheStaysAtMaxSizeOverManyInserts(t *testing.T) {
 
 func TestProcessEvent_EvictedPendingEntryIsFlushedWithLatestEvent(t *testing.T) {
 	h, rec := newTestHandlerWith(t, evictionConfig(2))
-	h.processEvent(keyN(1), event{timestamp: at(1), source: "s1", details: json.RawMessage(`{"p":1}`)}, at(1))
-	h.processEvent(keyN(1), event{timestamp: at(2), source: "s2", details: json.RawMessage(`{"p":2}`)}, at(2))
-	h.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+	h.processEvent(recordWith(keyN(1), at(1), "s1", json.RawMessage(`{"p":1}`)), at(1))
+	h.processEvent(recordWith(keyN(1), at(2), "s2", json.RawMessage(`{"p":2}`)), at(2))
+	h.processEvent(recordFor(keyN(2), at(3)), at(3))
 
-	h.processEvent(keyN(3), event{timestamp: at(4)}, at(4))
+	h.processEvent(recordFor(keyN(3), at(4)), at(4))
 
 	assert.Equal(t, []data_access.EventV3UpsertRecord{{
 		Namespace: "ns",
@@ -659,9 +660,9 @@ func TestProcessEvent_EvictedPendingEntryIsFlushedWithLatestEvent(t *testing.T) 
 
 func TestProcessEvent_EvictedCleanEntryIsNotFlushed(t *testing.T) {
 	h, rec := newTestHandlerWith(t, evictionConfig(1))
-	h.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+	h.processEvent(recordFor(keyN(1), at(1)), at(1))
 
-	h.processEvent(keyN(2), event{timestamp: at(2)}, at(2))
+	h.processEvent(recordFor(keyN(2), at(2)), at(2))
 
 	assert.Empty(t, rec.records())
 }
@@ -672,7 +673,7 @@ func TestProcessEvent_FailedEvictionFlushStillEvicts(t *testing.T) {
 		recorder.err = errors.New("database unavailable")
 		makePending(handler, keyN(1), 1)
 
-		got := handler.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+		got := handler.processEvent(recordFor(keyN(2), at(3)), at(3))
 
 		assert.Equal(t, outcomeMiss, got)
 		assert.Len(t, recorder.records(), evictionFlushAttempts)
@@ -693,7 +694,7 @@ func TestFlushEvicted_RetriesWithDoublingDelays(t *testing.T) {
 		makePending(handler, keyN(1), 1)
 		start := time.Now()
 
-		handler.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+		handler.processEvent(recordFor(keyN(2), at(3)), at(3))
 
 		var offsets []time.Duration
 		for _, attemptTime := range attemptTimes {
@@ -722,7 +723,7 @@ func TestFlushEvicted_StopsRetryingOnceAWriteSucceeds(t *testing.T) {
 		require.NoError(t, err)
 		makePending(handler, keyN(1), 1)
 
-		handler.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+		handler.processEvent(recordFor(keyN(2), at(3)), at(3))
 
 		assert.Equal(t, 3, calls)
 	})
@@ -740,7 +741,7 @@ func TestFlushEvicted_StopsRetryingWhenTheTimeoutEndsDuringTheFlush(t *testing.T
 		require.NoError(t, err)
 		makePending(handler, keyN(1), 1)
 
-		handler.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+		handler.processEvent(recordFor(keyN(2), at(3)), at(3))
 
 		assert.Equal(t, 1, calls, "a retry after the deadline would fail at once")
 	})
@@ -758,7 +759,7 @@ func TestFlushEvicted_StopsRetryingWhenTheTimeoutEndsDuringAWait(t *testing.T) {
 		require.NoError(t, err)
 		makePending(handler, keyN(1), 1)
 
-		handler.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+		handler.processEvent(recordFor(keyN(2), at(3)), at(3))
 
 		assert.Equal(t, 1, calls, "the wait would have ended after the timeout")
 	})
@@ -843,12 +844,13 @@ func TestFlushWithRetry_ReportsHowManyWritesItMade(t *testing.T) {
 
 func TestWriteMiss_SuccessLeavesTheEntryClean(t *testing.T) {
 	handler, recorder := newTestHandlerWith(t, evictionConfig(10))
-	handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+	record := recordWith(keyN(1), at(1), "src", json.RawMessage(`{"n":1}`))
+	handler.processEvent(record, at(1))
 
-	err := handler.writeMiss(context.Background(), keyN(1), event{timestamp: at(1)})
+	err := handler.writeMiss(context.Background(), record)
 
 	require.NoError(t, err)
-	assert.Len(t, recorder.records(), 1)
+	assert.Equal(t, []data_access.EventV3UpsertRecord{record}, recorder.records(), "the miss itself is written")
 	cachedEntry, _ := handler.lookup(keyN(1))
 	assert.False(t, cachedEntry.pending)
 	_, scheduled := scheduledSlot(handler, keyN(1))
@@ -859,9 +861,9 @@ func TestWriteMiss_RetriesBeforeGivingUp(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		handler, recorder := newTestHandlerWith(t, evictionConfig(10))
 		recorder.failFirst = 2
-		handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+		handler.processEvent(recordFor(keyN(1), at(1)), at(1))
 
-		err := handler.writeMiss(context.Background(), keyN(1), event{timestamp: at(1)})
+		err := handler.writeMiss(context.Background(), recordFor(keyN(1), at(1)))
 
 		require.NoError(t, err)
 		assert.Len(t, recorder.records(), 3)
@@ -875,9 +877,9 @@ func TestWriteMiss_FailureKeepsTheEventPendingAndScheduled(t *testing.T) {
 		handler, recorder := newTestHandlerWith(t, evictionConfig(10))
 		recorder.err = errors.New("database unavailable")
 		probe := installLockProbe(handler)
-		handler.processEvent(keyN(1), event{timestamp: at(1), source: "src"}, at(1))
+		handler.processEvent(recordWith(keyN(1), at(1), "src", nil), at(1))
 
-		err := handler.writeMiss(context.Background(), keyN(1), event{timestamp: at(1), source: "src"})
+		err := handler.writeMiss(context.Background(), recordWith(keyN(1), at(1), "src", nil))
 
 		require.ErrorIs(t, err, recorder.err)
 		assert.Len(t, recorder.records(), evictionFlushAttempts)
@@ -892,11 +894,11 @@ func TestWriteMiss_FailureKeepsTheEventPendingAndScheduled(t *testing.T) {
 
 func TestWriteMiss_FailureStillKeepsTheEventWhenTheContextHasEnded(t *testing.T) {
 	handler, recorder := newTestHandlerWith(t, evictionConfig(10))
-	handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+	handler.processEvent(recordFor(keyN(1), at(1)), at(1))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := handler.writeMiss(ctx, keyN(1), event{timestamp: at(1)})
+	err := handler.writeMiss(ctx, recordFor(keyN(1), at(1)))
 
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Empty(t, recorder.records(), "no write is made once the context has ended")
@@ -908,14 +910,14 @@ func TestWriteMiss_FailureCreatesAgainAnEntryEvictedMeanwhile(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		handler, recorder := newTestHandlerWith(t, evictionConfig(1))
 		recorder.err = errors.New("database unavailable")
-		handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
-		handler.processEvent(keyN(2), event{timestamp: at(2)}, at(2))
+		handler.processEvent(recordFor(keyN(1), at(1)), at(1))
+		handler.processEvent(recordFor(keyN(2), at(2)), at(2))
 		requireKeys(t, handler, []int{2}, []int{1})
 		recorder.mu.Lock()
 		recorder.recs = nil
 		recorder.mu.Unlock()
 
-		err := handler.writeMiss(context.Background(), keyN(1), event{timestamp: at(1)})
+		err := handler.writeMiss(context.Background(), recordFor(keyN(1), at(1)))
 
 		require.Error(t, err)
 		cachedEntry, ok := handler.lookup(keyN(1))
@@ -939,11 +941,11 @@ func TestWriteMiss_FailureWritesThePendingEntryItEvictsToMakeRoom(t *testing.T) 
 		}
 		handler, err := NewCachingDBHandler(&fakeDB{}, evictionConfig(1), flush, discardMeter())
 		require.NoError(t, err)
-		handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+		handler.processEvent(recordFor(keyN(1), at(1)), at(1))
 		makePending(handler, keyN(2), 2)
 		written = map[string]int{}
 
-		require.Error(t, handler.writeMiss(context.Background(), keyN(1), event{timestamp: at(1)}))
+		require.Error(t, handler.writeMiss(context.Background(), recordFor(keyN(1), at(1))))
 
 		assert.Equal(t, 1, written[keyN(2).eventName], "the entry pushed out was written")
 		requireKeys(t, handler, []int{1}, []int{2})
@@ -955,23 +957,23 @@ func TestKeepPending_IgnoresAnOlderEventThanTheStoredOne(t *testing.T) {
 	handler := newTestHandler(t)
 	makePending(handler, keyN(1), 1)
 
-	evicted := handler.keepPending(keyN(1), event{timestamp: at(1), source: "old"}, at(10))
+	evicted := handler.keepPending(recordWith(keyN(1), at(1), "old", nil), at(10))
 
 	assert.Empty(t, evicted)
 	cachedEntry, _ := handler.lookup(keyN(1))
-	assert.Equal(t, at(2), cachedEntry.timestamp)
-	assert.Empty(t, cachedEntry.source)
+	assert.Equal(t, at(2), cachedEntry.record.Timestamp)
+	assert.Empty(t, cachedEntry.record.Source)
 }
 
 func TestKeepPending_ReplacesAnOlderStoredEntry(t *testing.T) {
 	handler := newTestHandler(t)
-	handler.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
+	handler.processEvent(recordFor(keyN(1), at(1)), at(1))
 
-	handler.keepPending(keyN(1), event{timestamp: at(5), source: "new"}, at(10))
+	handler.keepPending(recordWith(keyN(1), at(5), "new", nil), at(10))
 
 	cachedEntry, _ := handler.lookup(keyN(1))
-	assert.Equal(t, at(5), cachedEntry.timestamp)
-	assert.Equal(t, "new", cachedEntry.source)
+	assert.Equal(t, at(5), cachedEntry.record.Timestamp)
+	assert.Equal(t, "new", cachedEntry.record.Source)
 	assert.True(t, cachedEntry.pending)
 	_, scheduled := scheduledSlot(handler, keyN(1))
 	assert.True(t, scheduled)
@@ -983,7 +985,7 @@ func TestKeepPending_DoesNotScheduleAnEntryTwice(t *testing.T) {
 	makePending(handler, keyN(1), 1)
 	scheduledBefore := probe.scheduleCalls.Load()
 
-	handler.keepPending(keyN(1), event{timestamp: at(2)}, at(10))
+	handler.keepPending(recordFor(keyN(1), at(2)), at(10))
 
 	assert.Equal(t, scheduledBefore, probe.scheduleCalls.Load())
 }
@@ -1016,10 +1018,10 @@ func TestProcessEvent_EvictionFlushRunsWithoutTheLock(t *testing.T) {
 	}
 	h, err := NewCachingDBHandler(&fakeDB{}, evictionConfig(1), flush, discardMeter())
 	require.NoError(t, err)
-	h.processEvent(keyN(1), event{timestamp: at(1)}, at(1))
-	h.processEvent(keyN(1), event{timestamp: at(2)}, at(2))
+	h.processEvent(recordFor(keyN(1), at(1)), at(1))
+	h.processEvent(recordFor(keyN(1), at(2)), at(2))
 
-	h.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+	h.processEvent(recordFor(keyN(2), at(3)), at(3))
 
 	assert.True(t, lockWasFree, "flush must not run while the cache lock is held")
 	assert.True(t, entryWasGone, "the evicted entry must already be removed when it is flushed")
@@ -1038,7 +1040,7 @@ func TestEvictInactive_UsesInactivityTTL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h, _ := newTestHandlerWith(t, evictionConfig(10))
-			h.processEvent(keyN(1), event{timestamp: testBase}, testBase)
+			h.processEvent(recordFor(keyN(1), testBase), testBase)
 
 			got := h.evictInactive(testBase.Add(tt.age))
 
@@ -1051,9 +1053,9 @@ func TestEvictInactive_UsesInactivityTTL(t *testing.T) {
 
 func TestEvictInactive_KeepsActiveEntries(t *testing.T) {
 	h, _ := newTestHandlerWith(t, evictionConfig(10))
-	h.processEvent(keyN(1), event{timestamp: at(0)}, at(0))
-	h.processEvent(keyN(2), event{timestamp: at(10)}, at(10))
-	h.processEvent(keyN(3), event{timestamp: at(20)}, at(20))
+	h.processEvent(recordFor(keyN(1), at(0)), at(0))
+	h.processEvent(recordFor(keyN(2), at(10)), at(10))
+	h.processEvent(recordFor(keyN(3), at(20)), at(20))
 
 	got := h.evictInactive(at(25))
 
@@ -1064,8 +1066,8 @@ func TestEvictInactive_KeepsActiveEntries(t *testing.T) {
 
 func TestEvictInactive_NewerEventRefreshesTTL(t *testing.T) {
 	h, _ := newTestHandlerWith(t, evictionConfig(10))
-	h.processEvent(keyN(1), event{timestamp: at(0)}, at(0))
-	h.processEvent(keyN(1), event{timestamp: at(10)}, at(10))
+	h.processEvent(recordFor(keyN(1), at(0)), at(0))
+	h.processEvent(recordFor(keyN(1), at(10)), at(10))
 
 	got := h.evictInactive(at(15))
 
@@ -1075,9 +1077,9 @@ func TestEvictInactive_NewerEventRefreshesTTL(t *testing.T) {
 
 func TestEvictInactive_FlushesPendingEntriesOnly(t *testing.T) {
 	h, rec := newTestHandlerWith(t, evictionConfig(10))
-	h.processEvent(keyN(1), event{timestamp: at(0)}, at(0))
-	h.processEvent(keyN(1), event{timestamp: at(1), source: "latest"}, at(1))
-	h.processEvent(keyN(2), event{timestamp: at(0)}, at(0))
+	h.processEvent(recordFor(keyN(1), at(0)), at(0))
+	h.processEvent(recordWith(keyN(1), at(1), "latest", nil), at(1))
+	h.processEvent(recordFor(keyN(2), at(0)), at(0))
 
 	got := h.evictInactive(at(100))
 
@@ -1153,16 +1155,6 @@ func checkConcurrentEviction(t *testing.T, maxSize, evictEvery int) {
 		mu         sync.Mutex
 		missWrites []data_access.EventV3UpsertRecord
 		latestSent = map[key]time.Time{}
-		recordFor  = func(cachedKey key, ev event) data_access.EventV3UpsertRecord {
-			return data_access.EventV3UpsertRecord{
-				Namespace: cachedKey.namespace,
-				Context:   cachedKey.context,
-				EventName: cachedKey.eventName,
-				Source:    ev.source,
-				Details:   ev.details,
-				Timestamp: ev.timestamp,
-			}
-		}
 	)
 
 	var wg sync.WaitGroup
@@ -1174,11 +1166,7 @@ func checkConcurrentEviction(t *testing.T, maxSize, evictEvery int) {
 				sequence := int(clock.Add(1))
 				cachedKey := keyN((writer*7 + iteration) % stressKeyCount)
 				timestamp := at(sequence)
-				ev := event{
-					timestamp: timestamp,
-					source:    "writer-" + strconv.Itoa(writer),
-					details:   json.RawMessage(strconv.Itoa(sequence)),
-				}
+				record := recordWith(cachedKey, timestamp, "writer-"+strconv.Itoa(writer), json.RawMessage(strconv.Itoa(sequence)))
 
 				mu.Lock()
 				if timestamp.After(latestSent[cachedKey]) {
@@ -1187,9 +1175,9 @@ func checkConcurrentEviction(t *testing.T, maxSize, evictEvery int) {
 				mu.Unlock()
 
 				// A miss is written by the caller, so the test records it here.
-				if handler.processEvent(cachedKey, ev, timestamp) == outcomeMiss {
+				if handler.processEvent(record, timestamp) == outcomeMiss {
 					mu.Lock()
-					missWrites = append(missWrites, recordFor(cachedKey, ev))
+					missWrites = append(missWrites, record)
 					mu.Unlock()
 				}
 				if evictEvery > 0 && iteration%evictEvery == 0 {
@@ -1213,7 +1201,7 @@ func checkConcurrentEviction(t *testing.T, maxSize, evictEvery int) {
 
 	for cachedKey, newest := range latestSent {
 		lookedUpEntry, inCache := handler.lookup(cachedKey)
-		stillCached := inCache && lookedUpEntry.timestamp.Equal(newest)
+		stillCached := inCache && lookedUpEntry.record.Timestamp.Equal(newest)
 		wasWritten := persisted[persistedEvent{cachedKey: cachedKey, nanos: newest.UnixNano()}]
 		assert.True(t, stillCached || wasWritten, "the newest event for %v was lost", cachedKey)
 	}
@@ -1240,20 +1228,20 @@ func TestProcessEvent_NewerEventDuringEvictionFlushIsAMiss(t *testing.T) {
 	}
 	handler, err := NewCachingDBHandler(&fakeDB{}, evictionConfig(1), flush, discardMeter())
 	require.NoError(t, err)
-	handler.processEvent(keyN(1), event{timestamp: at(1), details: json.RawMessage(`{"progress":1}`)}, at(1))
-	handler.processEvent(keyN(1), event{timestamp: at(2), details: json.RawMessage(`{"progress":2}`)}, at(2))
+	handler.processEvent(recordWith(keyN(1), at(1), "", json.RawMessage(`{"progress":1}`)), at(1))
+	handler.processEvent(recordWith(keyN(1), at(2), "", json.RawMessage(`{"progress":2}`)), at(2))
 
 	evictionDone := make(chan struct{})
 	go func() {
 		defer close(evictionDone)
 		// This miss overflows the cache and evicts key 1, whose flush then blocks.
-		handler.processEvent(keyN(2), event{timestamp: at(3)}, at(3))
+		handler.processEvent(recordFor(keyN(2), at(3)), at(3))
 	}()
 	<-flushStarted
 
 	newerOutcome := make(chan outcome, 1)
 	go func() {
-		newerOutcome <- handler.processEvent(keyN(1), event{timestamp: at(10), details: json.RawMessage(`{"progress":10}`)}, at(10))
+		newerOutcome <- handler.processEvent(recordWith(keyN(1), at(10), "", json.RawMessage(`{"progress":10}`)), at(10))
 	}()
 	select {
 	case got := <-newerOutcome:
@@ -1269,7 +1257,7 @@ func TestProcessEvent_NewerEventDuringEvictionFlushIsAMiss(t *testing.T) {
 	assert.JSONEq(t, `{"progress":2}`, string(inFlight.Details))
 	cachedEntry, ok := handler.lookup(keyN(1))
 	require.True(t, ok)
-	assert.Equal(t, at(10), cachedEntry.timestamp)
+	assert.Equal(t, at(10), cachedEntry.record.Timestamp)
 	assert.False(t, cachedEntry.pending, "the newer event was stored as a clean miss")
 	assertConsistent(t, handler)
 }
