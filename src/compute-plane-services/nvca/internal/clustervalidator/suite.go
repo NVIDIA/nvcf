@@ -557,6 +557,12 @@ func (su *suite) controlPlaneChecks() []check {
 			critical: func(s *ValidationState) outcome { return rowOutcome(s.Tier2StatefulSetsOK) },
 		},
 		su.haGuaranteeCheck(),
+		{
+			name:     haTopologyLabel,
+			run:      func(ctx context.Context, s *ValidationState) { checkHATopology(ctx, su.client, s) },
+			adopt:    func(dst, src *ValidationState) { dst.HATopologyOK = src.HATopologyOK },
+			critical: haTopologyOutcome,
+		},
 	}
 }
 

@@ -37,6 +37,11 @@ rules:
     apiGroup: ""
     resources: [services, events]
     verbs: [list]
+  - roles: [control-plane]
+    scope: cluster
+    apiGroup: ""
+    resources: [persistentvolumeclaims, persistentvolumes]
+    verbs: [list]
   - roles: [compute-plane, control-plane]
     scope: cluster
     apiGroup: admissionregistration.k8s.io

@@ -194,6 +194,9 @@ type ValidationState struct {
 	// judged from their rendered terms, and those it could not judge since
 	// they render no hostname pod anti-affinity or spread for their pods.
 	HAPlacementAssessed, HAPlacementNotAssessed int
+	// HATopologyOK is nil without an HA mode, under the compute-plane role, or
+	// when something it needed could not be read.
+	HATopologyOK *bool
 
 	// EndpointResults captures per-endpoint reachability outcomes for the
 	// summary ConfigMap / metrics pipeline. Keyed by the user-supplied
@@ -519,7 +522,7 @@ func controlPlaneRows(state *ValidationState) []summaryRow {
 	addCP(state.Tier1DeploymentsOK, "Tier-1 Deployments", "All Ready", "Not Ready", true)
 	addCP(state.Tier2StatefulSetsOK, "Tier-2 StatefulSets", tier2PassMessage(state), "Quorum or Placement Failed",
 		true)
-	return append(rows, haGuaranteeRow(state))
+	return append(rows, haGuaranteeRow(state), haTopologyRow(state))
 }
 
 // printSummary outputs the final validation results and returns an error if

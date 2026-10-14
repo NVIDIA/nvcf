@@ -1107,6 +1107,10 @@ func validatorClusterRules(role string) []rbacv1.PolicyRule {
 	}
 	return append([]rbacv1.PolicyRule{
 		{APIGroups: []string{""}, Resources: []string{"nodes", "services", "events"}, Verbs: []string{"list"}},
+		// HA Topology: a quorum member's claims and the volumes bound to them.
+		// A volume whose node affinity requires one node pins the member to it.
+		{APIGroups: []string{""}, Resources: []string{"persistentvolumeclaims", "persistentvolumes"},
+			Verbs: []string{"list"}},
 		// The node-to-node probe creates and deletes its own namespace,
 		// DaemonSet and checker pods, reads each checker pod until it exits,
 		// and sweeps those of dead runs.
