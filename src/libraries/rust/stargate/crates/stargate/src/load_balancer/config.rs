@@ -240,6 +240,12 @@ pub struct WaitAndWidenAlgorithmConfig {
     pub ignore_queue_time: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ignore_input_processing_time: Option<bool>,
+    /// Use `x-stargate-last-cluster-id` to tell new sessions from returning
+    /// ones. New sessions skip the affinity wait and prefill discount;
+    /// returning sessions put their last cluster first in the affinity order.
+    /// Defaults to `false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_cluster_affinity: Option<bool>,
 }
 
 impl WaitAndWidenAlgorithmConfig {

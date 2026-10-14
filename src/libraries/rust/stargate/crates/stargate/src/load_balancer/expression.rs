@@ -628,6 +628,14 @@ mod tests {
         for (raw, class) in [
             ("fastest;seed=x", "unknown_method"),
             ("pulsar;widen=2", "unknown_parameter"),
+            (
+                "wait-and-widen;last_cluster_affinity=true",
+                "unknown_parameter",
+            ),
+            (
+                "pulsar-wait-and-widen;last_cluster_affinity=true",
+                "unknown_parameter",
+            ),
             ("round-robin;seed=x", "not_applicable"),
             ("pulsar-wait-and-widen;comparator=ttft", "not_applicable"),
             (

@@ -24,6 +24,7 @@ use crate::common::{
     make_stargate_runtime_for_tunnel_case, make_stargate_runtime_with_lb,
     reverse_registration_config, start_dummy_inst, strict_queue_mismatch_retry, wait_for_routing,
     wait_for_routing_with_cache_affinity, wait_until, with_proxy_headers,
+    with_proxy_headers_input_tokens,
 };
 use axum::Router;
 use axum::body::{Body, Bytes};
@@ -34,9 +35,9 @@ use axum::routing::{get, post};
 use prometheus::{Encoder, TextEncoder};
 use pylon_lib::{
     CurrentModelStats, InferenceServerRegistrationClient, InferenceServerRegistrationConfig,
-    PylonRuntimeState, QuicHttpTunnelConfig, QuicHttpTunnelHandle, RequestObservation,
-    RequestObservationEndpoint, RequestObservationState, TunnelTransportProtocol,
-    start_quic_http_tunnel,
+    PylonQueueMismatchRetryConfig, PylonRuntimeState, QuicHttpTunnelConfig, QuicHttpTunnelHandle,
+    RequestObservation, RequestObservationEndpoint, RequestObservationState,
+    TunnelTransportProtocol, start_quic_http_tunnel,
 };
 use stargate::proxy::ProxyRetryConfig;
 use stargate::routing::RoutingTargetKey;
@@ -3208,6 +3209,139 @@ async fn queue_mismatch_single_backend_returns_overload() {
     fixture.shutdown().await;
 }
 
+/// Starts a chat backend that holds every request until `burst` requests have
+/// arrived, so the whole burst is queued at the Pylon at the same time. The
+/// returned receiver counts arrivals.
+async fn start_burst_gated_chat_backend(
+    burst: usize,
+) -> (std::net::SocketAddr, tokio::sync::watch::Receiver<usize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (arrived_tx, arrived_rx) = tokio::sync::watch::channel(0usize);
+    let arrived_tx = Arc::new(arrived_tx);
+    let arrived_rx_for_app = arrived_rx.clone();
+    let app = Router::new()
+        .route(
+            "/v1/chat/completions",
+            post(move || {
+                let arrived_tx = arrived_tx.clone();
+                let mut arrived_rx = arrived_rx_for_app.clone();
+                async move {
+                    arrived_tx.send_modify(|arrived| *arrived += 1);
+                    // Bounded so a partial burst still completes and the test
+                    // reports which requests were rejected.
+                    let _ = tokio::time::timeout(
+                        Duration::from_secs(5),
+                        arrived_rx.wait_for(|arrived| *arrived >= burst),
+                    )
+                    .await;
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "text/event-stream")
+                        .body(Body::from(
+                            "data: {\"object\":\"chat.completion.chunk\"}\n\ndata: [DONE]\n\n",
+                        ))
+                        .expect("success response should build")
+                }
+            }),
+        )
+        .route("/health", get(|| async { "ok" }));
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (addr, arrived_rx)
+}
+
+/// Regression test for #2114. Stargate sends its queue estimate from a stats
+/// snapshot that lags the Pylon's live queue, for example while other routers
+/// release requests to the same backend. With the production queue-mismatch
+/// thresholds, that drift must not make the Pylon reject a burst the only
+/// backend has capacity for: Stargate has no sibling to retry, so each
+/// rejection would become a 503 without a selected backend.
+#[tokio::test]
+async fn stale_queue_estimate_does_not_reject_burst_to_single_backend() {
+    const BURST: usize = 16;
+    let mut fixture = ProxyFixture::start("test-sg-queue-drift-burst").await;
+    let model = "queue-drift-burst-model";
+    // The advertised snapshot shows an empty queue at 1000 input tokens/s.
+    let runtime = active_runtime(model);
+    // The Pylon already holds 2 s of input work from other routers that the
+    // snapshot has not caught up with.
+    for i in 0..4 {
+        observe_connecting_request(&runtime, model, format!("other-router-work-{i}"), 500);
+    }
+    let (backend_addr, arrived) = start_burst_gated_chat_backend(BURST).await;
+    let mut tunnel_config = QuicHttpTunnelConfig::new(
+        "127.0.0.1:0".parse().unwrap(),
+        format!("http://{backend_addr}"),
+    );
+    tunnel_config.forwarding.runtime_state = runtime.clone();
+    // Production thresholds, not the strict ones other mismatch tests use.
+    tunnel_config.forwarding.queue_mismatch_retry = PylonQueueMismatchRetryConfig::default();
+    let tunnel = start_quic_http_tunnel(tunnel_config)
+        .await
+        .expect("burst backend tunnel failed to start");
+    fixture.register(
+        active_registration_config_with_state(
+            fixture.grpc_addr,
+            "queue-drift-backend",
+            "",
+            format!("quic://{}", tunnel.listen_addr()),
+            format!("http://{backend_addr}"),
+            runtime,
+        ),
+        "burst backend registration failed",
+    );
+    fixture.own_tunnel(tunnel);
+    fixture.wait_for_clusters(model, 1).await;
+
+    let client = reqwest::Client::new();
+    let url = format!("http://{}/v1/chat/completions", fixture.http_addr);
+    let body = streaming_chat_body(model);
+    let responses = futures::future::join_all((0..BURST).map(|i| {
+        with_proxy_headers_input_tokens(
+            client.post(&url),
+            model,
+            &format!("queue-drift-burst-{i}"),
+            100,
+        )
+        .json(&body)
+        .send()
+    }))
+    .await;
+    for (i, response) in responses.into_iter().enumerate() {
+        let response = response.expect("burst request failed");
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "burst request {i} was rejected"
+        );
+        assert_eq!(
+            response_header(&response, "x-inference-server-id"),
+            Some("queue-drift-backend")
+        );
+        let _ = response.bytes().await;
+    }
+    assert_eq!(
+        *arrived.borrow(),
+        BURST,
+        "every burst request should reach the backend"
+    );
+    let metrics = fixture.metrics();
+    for rejection in [
+        r#"result="upstream_429""#,
+        r#"reason="no_eligible_backend""#,
+    ] {
+        assert!(
+            !metrics
+                .lines()
+                .any(|line| line.contains(model) && line.contains(rejection)),
+            "unexpected {rejection} sample:\n{metrics}"
+        );
+    }
+    fixture.shutdown().await;
+}
+
 #[tokio::test]
 async fn retryable_application_errors_preserve_response_after_retries_stop() {
     for status in [
@@ -3712,4 +3846,82 @@ async fn exercise_native_messages_contract(protocol: TunnelTransportProtocol, re
     }
     fixture.shutdown().await;
     backend_task.abort();
+}
+
+#[tokio::test]
+async fn last_cluster_hint_classifies_only_flagged_affinity_requests() {
+    let flagged_model = "last-cluster-on-model";
+    let unflagged_model = "last-cluster-off-model";
+    let cluster_id = "last-cluster-cluster";
+
+    init_crypto();
+    let mut config_file = tempfile::NamedTempFile::new().expect("failed to create temp file");
+    std::io::Write::write_all(
+        &mut config_file,
+        br#"{
+            "default": "power-of-n",
+            "request_algorithms": {"power-of-n": "power-of-n"},
+            "models": {
+                "last-cluster-on-model": {
+                    "algorithm": "wait-and-widen",
+                    "seed": "test-seed",
+                    "cache_affinity_backend_selection_count": 1,
+                    "last_cluster_affinity": true
+                },
+                "last-cluster-off-model": {
+                    "algorithm": "wait-and-widen",
+                    "seed": "test-seed",
+                    "cache_affinity_backend_selection_count": 1
+                }
+            }
+        }"#,
+    )
+    .expect("failed to write config");
+    let config_path = config_file.path().to_str().unwrap().to_string();
+    let (grpc_addr, http_addr, runtime) =
+        make_stargate_runtime_with_lb("last-cluster-header", Some(config_path));
+    let handle = runtime.start().await.expect("stargate failed to start");
+    let mut fixture = ProxyFixture::new(grpc_addr, http_addr, handle);
+    for model in [flagged_model, unflagged_model] {
+        fixture
+            .add_dummy_backend(
+                &format!("{model}-backend"),
+                cluster_id,
+                model,
+                active_runtime(model),
+            )
+            .await;
+        wait_for_routing(http_addr, model, Duration::from_secs(5)).await;
+    }
+
+    // (model, x-routing-method, x-cache-affinity-key, classified requests)
+    for (model, routing_method, affinity_key, expected) in [
+        (flagged_model, None, Some("session-a"), 1.0),
+        (flagged_model, None, None, 0.0),
+        (flagged_model, Some("power-of-n"), Some("session-a"), 0.0),
+        (unflagged_model, None, Some("session-a"), 0.0),
+    ] {
+        let before = fixture.metrics();
+        let mut request = fixture
+            .chat_request(model, "last-cluster-request")
+            .header("x-stargate-last-cluster-id", cluster_id);
+        if let Some(routing_method) = routing_method {
+            request = request.header("x-routing-method", routing_method);
+        }
+        if let Some(affinity_key) = affinity_key {
+            request = request.header("x-cache-affinity-key", affinity_key);
+        }
+        let response = request.send().await.expect("request failed");
+        assert_eq!(response.status(), StatusCode::OK);
+        let _ = response.bytes().await;
+        assert_metric_delta(
+            &before,
+            &fixture.metrics(),
+            "stargate_routing_session_selections_total",
+            &[&format!(r#"model="{model}""#)],
+            expected,
+        );
+    }
+
+    fixture.shutdown().await;
 }

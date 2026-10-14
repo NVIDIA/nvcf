@@ -72,6 +72,75 @@ conversation. The gateway preserves the raw body field for the model backend.
 It forwards only a SHA-256-derived value in the internal
 `x-cache-affinity-key` header to Stargate.
 
+### Last-cluster hints
+
+With `STARGATE_LAST_CLUSTER_ENABLED=true`, the gateway remembers which
+Stargate cluster served each session's last successful request and sends it
+back on the session's next request as `x-stargate-last-cluster-id`. Stargate
+uses the hint only for models whose routing algorithm sets
+`last_cluster_affinity`.
+
+- A session is the tuple of routing key, model, and cache affinity key.
+- Sessions from `prompt_cache_key`, `conversation_id`, or the
+  `x-multi-turn-session-id` or `x-claude-code-session-id` header are eligible.
+  Payload-derived sessions are also eligible. No extra setting is needed.
+- A payload-derived affinity key hashes the full message list, which changes
+  every turn. For these sessions the gateway keys the store by a prefix chain
+  instead:
+  - It writes the cluster under a hash of the full conversation.
+  - It looks up under a hash of the conversation before the last contiguous
+    run of model-output items. For chat and Messages these are assistant
+    messages. For Responses they are assistant `message`, `reasoning`,
+    `function_call`, `custom_tool_call`, `web_search_call`,
+    `code_interpreter_call`, `mcp_call`, `mcp_list_tools`, and
+    `mcp_approval_request` items.
+  - Messages hashes `system` first. Responses hashes `instructions` and
+    `prompt` first.
+  - Values come from the raw request JSON. Object key order and whitespace
+    outside strings do not change them. They are scoped by endpoint, org and
+    project, routing key, and model.
+  - Clients that append to their history and resend it verbatim, including tool
+    loops, find the cluster that served the previous turn. Edited, truncated,
+    or summarized history misses and routes as a new session when the change
+    falls in the part hashed for lookup. Assistant prefill continuation is
+    outside this guarantee and usually misses. Responses requests with
+    `previous_response_id` or an `item_reference` item are skipped.
+  - A first turn has no lookup value. It skips the store read, counts as
+    `miss`, and is written on 2xx.
+  - Delivery is best-effort. A turn that arrives before the previous write
+    lands, reaches a replica with a different local store, or arrives after
+    the TTL routes as a new session.
+  - `CacheAffinityKey`, the `x-cache-affinity-key` header, and hash-ring and
+    Pulsar placement do not change.
+- The gateway writes the `x-stargate-cluster-id` of a 2xx Stargate response
+  when the response headers arrive, before a stream ends. Non-2xx responses and
+  transport errors never change the stored value. Writes run in the background
+  and never delay or fail the client response.
+- On a lookup miss, error, or timeout, the request proceeds without the hint.
+- At most 1024 lookups and 1024 writes may wait on the store at once, counting
+  calls that outlived their timeout. Past the cap, a lookup returns without the
+  hint (`timeout`) and a write is dropped (`error`).
+- On shutdown the gateway stops serving, waits for in-flight requests, drains
+  pending writes, and then stops the Olric node. The drain and the Olric
+  shutdown are each bounded by `OLRIC_SHUTDOWN_TIMEOUT`.
+- Store keys are `lc:v1:` plus the hex SHA-256 of the length-prefixed routing
+  key, model, and cache affinity key or payload prefix-chain value. Raw routing
+  keys never appear in store keys. Affinity keys, session IDs, and message
+  content never appear in store keys or logs. Cluster IDs over 256 bytes are
+  not stored.
+- With `OLRIC_ENABLED=true`, entries live in the `stargate-last-cluster` DMap
+  of the embedded Olric cluster, so every replica sees them. With Olric off,
+  each replica keeps its own LRU capped at
+  `STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES`.
+- Header-keyed sessions overwrite one entry each. Payload chains add roughly
+  one entry per successful payload request per TTL window, so 100 requests per
+  second with the default `10m` TTL hold about 60,000 entries. Olric has no
+  entry cap. The local store keeps its
+  `STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES` cap.
+- The gateway always strips a client-supplied `x-stargate-last-cluster-id`,
+  whether or not the feature is enabled, and keeps stripping `x-stargate-*`
+  response headers from client responses.
+
 When `NVCF_GRPC_ADDR` is configured, the gateway authenticates each request
 through the NVCF LLM gRPC auth service, derives the per-caller rate-limit key
 from `authContext["ncaId"]`, optionally scopes it further by project, and keeps
@@ -146,6 +215,14 @@ Useful overrides:
   413 (default `0`, no limit)
 - `STARGATE_CONNECT_TIMEOUT` to control Stargate dial timeout
 - `STARGATE_REQUEST_TIMEOUT` to cap end-to-end Stargate request time
+- `STARGATE_LAST_CLUSTER_ENABLED=true` to send session last-cluster hints to
+  Stargate (default `false`)
+- `STARGATE_LAST_CLUSTER_TTL` for the last-cluster entry lifetime, reset on
+  every write (default `10m`)
+- `STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT` for the lookup deadline on the
+  request path (default `20ms`)
+- `STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES` for the per-replica store size
+  when Olric is off (default `100000`)
 - `NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT` to cap how long one response write
   may stall on a client that stopped reading (default `60s`, `0s` disables).
   It applies only while a write is in progress, so long streams, long
@@ -160,7 +237,9 @@ Useful overrides:
 - `NVCF_GRPC_TIMEOUT` to cap each gRPC auth or policy call
 - `RATE_LIMIT_ENABLED=false` to disable rate limiting locally
 - `RATE_LIMIT_FAIL_OPEN=false` to make Olric or limiter failures fatal
-- `OLRIC_ENABLED=false` to skip starting the embedded Olric node
+- `OLRIC_ENABLED=false` to skip starting the embedded Olric node. When it is
+  `true`, the node starts even if rate limiting is off, and it also holds
+  last-cluster hints
 - `OLRIC_BIND_PORT`, `OLRIC_MEMBERLIST_BIND_PORT`, and `OLRIC_PEERS` for
   multi-instance Olric clustering
 - `OTEL_SERVICE_NAME` to override the emitted service name
@@ -177,6 +256,12 @@ The label is present on HTTP request, upstream request, token usage, provider
 time, first-token time, and stream duration metrics. Infrastructure metrics for
 authentication, pub/sub, rate-limit synchronization, and Olric remain
 function-independent.
+
+Last-cluster store lookups and writes record `llm_api_gateway_last_cluster_*`
+metrics, listed in the
+[metrics reference](../../../docs/observability/metrics/llm-api-gateway/metrics.md),
+and create the `llm-api-gateway.last_cluster_lookup` and
+`llm-api-gateway.last_cluster_write` spans.
 
 Example request-rate query:
 

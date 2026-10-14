@@ -248,6 +248,7 @@ mod tests {
             received_at: Instant::now(),
             request_slo: None,
             excluded_cluster_ids: Some(excluded_cluster_ids),
+            last_cluster: None,
         };
         PowerOfNLoadBalancer {
             sample_count,
@@ -272,6 +273,7 @@ mod tests {
             received_at: Instant::now(),
             request_slo: None,
             excluded_cluster_ids,
+            last_cluster: None,
         };
         sample_candidates(&request, candidates, sample_count, rng)
             .as_slice()
@@ -442,6 +444,7 @@ mod tests {
             received_at: Instant::now(),
             request_slo: None,
             excluded_cluster_ids: None,
+            last_cluster: None,
         };
         let load_balancer = PowerOfNLoadBalancer {
             sample_count: 3,

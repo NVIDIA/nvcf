@@ -154,10 +154,19 @@ type umbrellaFixture struct {
 }
 
 func newUmbrellaFixture(t *testing.T) umbrellaFixture {
+	return newUmbrellaFixtureWithSources(t, nil)
+}
+
+func newUmbrellaFixtureWithSources(t *testing.T, sources map[string]map[string]string) umbrellaFixture {
 	t.Helper()
 	fixture := umbrellaFixture{root: initTestGitRepo(t), inventories: t.TempDir(), catalog: editionTestCatalog(), manifestPath: filepath.Join(t.TempDir(), "manifest.json")}
+	writeFile(t, filepath.Join(fixture.root, "LICENSE"), "Fixture license\n")
+	writeFile(t, filepath.Join(fixture.root, "NOTICE"), "Fixture notices\n")
 	for _, name := range releaseSetStackNames {
 		metadata, _ := fixture.catalog.ReleaseSet.Stacks.byName(name)
+		for path, data := range sources[name] {
+			writeFile(t, filepath.Join(fixture.root, path), data)
+		}
 		writeFile(t, filepath.Join(fixture.root, name+".txt"), name+" source\n")
 		editionGit(t, fixture.root, "add", ".")
 		editionGit(t, fixture.root, "commit", "-m", name+" source")

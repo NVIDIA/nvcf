@@ -33,7 +33,7 @@ use reqwest::header::HeaderMap;
 pub struct CurrentModelStats {
     // Sticky runtime-observed mean input TPS for this backend.
     pub last_mean_input_tps: f64,
-    // Greatest last_mean_input_tps of this model generation. None until the first mean.
+    // Greatest max-eligible last_mean_input_tps of this model generation, if any.
     pub max_input_tps: Option<f64>,
     // Token/sec output rate for streaming generation endpoints. Embeddings item
     // cardinality is observed separately and is not exported through this field.
@@ -123,6 +123,8 @@ pub struct RequestObservationEvent {
     pub(crate) changed_generations: Vec<ModelGeneration>,
     pub(crate) input_interval: Option<RequestInputInterval>,
     pub(crate) input_tokens_explicit: bool,
+    pub(crate) cached_input_tokens: Option<u64>,
+    pub(crate) input_usage_expected: bool,
     pub(crate) output_calibration: OutputCalibrationFacts,
     pub(crate) upstream_duration: Option<Duration>,
 }
@@ -520,6 +522,8 @@ impl PylonRuntimeState {
                 changed_generations: Vec::new(),
                 input_interval: None,
                 input_tokens_explicit: false,
+                cached_input_tokens: None,
+                input_usage_expected: false,
                 output_calibration: OutputCalibrationFacts::default(),
                 upstream_duration: None,
             },
@@ -579,6 +583,8 @@ impl PylonRuntimeState {
                 changed_generations: Vec::new(),
                 input_interval: None,
                 input_tokens_explicit: false,
+                cached_input_tokens: None,
+                input_usage_expected: false,
                 output_calibration: OutputCalibrationFacts::default(),
                 upstream_duration: None,
             },
@@ -728,6 +734,14 @@ impl RequestObservationEvent {
         self.input_tokens_explicit
     }
 
+    pub(crate) fn cached_input_tokens(&self) -> Option<u64> {
+        self.cached_input_tokens
+    }
+
+    pub(crate) fn input_usage_expected(&self) -> bool {
+        self.input_usage_expected
+    }
+
     pub(crate) fn output_calibration(&self) -> OutputCalibrationFacts {
         self.output_calibration
     }
@@ -795,6 +809,8 @@ mod tests {
                 changed_generations: Vec::new(),
                 input_interval: None,
                 input_tokens_explicit: false,
+                cached_input_tokens: None,
+                input_usage_expected: false,
                 output_calibration: OutputCalibrationFacts::default(),
                 upstream_duration: None,
             },
