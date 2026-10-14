@@ -20,9 +20,13 @@ package cmd
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"nvcf-cli/internal/selfhosted/controlplaneprofile"
 )
@@ -70,6 +74,22 @@ func TestResolveEventLedgerAddon(t *testing.T) {
 		got := resolveEventLedgerAddon(nil, "prd", "", "", icmsURL) //nolint:staticcheck
 		assert.True(t, got.Enabled)
 	})
+}
+
+func TestEventLedgerDeployedTimesOut(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\nexec sleep 5\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "helm"), []byte(script), 0o755))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	prev := eventLedgerLookupTimeout
+	t.Cleanup(func() { eventLedgerLookupTimeout = prev })
+	eventLedgerLookupTimeout = 100 * time.Millisecond
+
+	start := time.Now()
+	deployed, err := helmEventLedgerDeployed(context.Background(), "")
+	assert.False(t, deployed)
+	assert.Error(t, err)
+	assert.Less(t, time.Since(start), 3*time.Second)
 }
 
 func TestNewSelfManagedValuesEventLedger(t *testing.T) {

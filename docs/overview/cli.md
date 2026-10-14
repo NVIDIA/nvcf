@@ -619,7 +619,7 @@ with the corresponding NVCF API scope.
 
 | Command | Description |
 | --- | --- |
-| `api-key generate` | Generate function and task API keys (both by default; use `--for function` or `--for task` for one) |
+| `api-key generate` | Generate function, task and Event Ledger API keys (all three by default; use `--for function`, `--for task` or `--for event-ledger` for one) |
 | `api-key list` | List all API keys |
 | `api-key show` | Show the saved function, task and Event Ledger keys from state |
 | `api-key delete` | Delete a specific API key (supports `--force`) |

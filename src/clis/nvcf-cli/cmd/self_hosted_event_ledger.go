@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"nvcf-cli/internal/logging"
 	"nvcf-cli/internal/selfhosted/controlplaneprofile"
@@ -34,14 +35,20 @@ const (
 	eventLedgerHostService = "events"
 )
 
+var eventLedgerLookupTimeout = 30 * time.Second
+
 // eventLedgerDeployed reports whether the control plane has the event-ledger
 // release deployed. The stack gates that release on addons.eventLedger.enabled.
-var eventLedgerDeployed = func(ctx context.Context, kubeContext string) (bool, error) {
+var eventLedgerDeployed = helmEventLedgerDeployed
+
+func helmEventLedgerDeployed(ctx context.Context, kubeContext string) (bool, error) {
 	args := []string{}
 	if kubeContext != "" {
 		args = append(args, "--kube-context", kubeContext)
 	}
 	args = append(args, "list", "--namespace", eventLedgerNamespace, "--deployed", "--short")
+	ctx, cancel := context.WithTimeout(ctx, eventLedgerLookupTimeout)
+	defer cancel()
 	out, err := exec.CommandContext(ctx, "helm", args...).CombinedOutput()
 	if err != nil {
 		return false, fmt.Errorf("helm list: %w: %s", err, strings.TrimSpace(string(out)))
