@@ -510,6 +510,7 @@ swag init -g cmd/nvcf-nats-auth-callout-service/main.go -o api/
 | Endpoint     | Method | Description                                               |
 | ------------ | ------ | --------------------------------------------------------- |
 | `/healthz`   | GET    | Liveness: 503 only when the NATS connection is closed     |
+| `/health`    | GET    | Alias of `/healthz`                                       |
 | `/readyz`    | GET    | Readiness: 503 while the NATS connection is not connected |
 | `/v1/ping`   | GET    | API ping endpoint                                         |
 | `/metrics`   | GET    | Prometheus metrics (when enabled)                         |

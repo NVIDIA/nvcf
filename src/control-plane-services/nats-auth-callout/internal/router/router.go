@@ -113,9 +113,9 @@ func (r *Router) GetMetricsHandler() http.Handler {
 // prometheusMiddleware creates a middleware for recording prometheus metrics
 func (r *Router) prometheusMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// skip metrics collection for health probe and metrics endpoints
+		// skip metrics collection for healthz and metrics endpoints
 		path := c.Request.URL.Path
-		if path == "/healthz" || path == "/readyz" || path == "/health" || path == "/metrics" {
+		if path == "/healthz" || path == "/metrics" {
 			c.Next()
 			return
 		}

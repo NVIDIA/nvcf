@@ -212,15 +212,15 @@ func TestHealthProbes_FollowNATSStatus(t *testing.T) {
 	}
 }
 
-func TestPrometheusMiddleware_ProbePaths_NotCounted(t *testing.T) {
+func TestPrometheusMiddleware_ProbePaths_CountedExceptHealthz(t *testing.T) {
 	router := New(zap.NewNop(), &Config{ServiceName: "test-service", Metrics: &MetricsConfig{Enabled: true}})
 	tests := []struct {
 		path        string
 		wantCounted bool
 	}{
 		{"/healthz", false},
-		{"/readyz", false},
-		{"/health", false},
+		{"/readyz", true},
+		{"/health", true},
 		{"/v1/ping", true},
 	}
 	for _, tt := range tests {
