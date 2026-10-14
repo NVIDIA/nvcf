@@ -44,6 +44,9 @@ pylon:
   calibrationMaxConcurrency: 25
   initialInputTps: ""
   activeCanaryIntervalMs: 0
+  # Fallback statistics count only uncached prompt tokens, and raise the
+  # maximum input TPS, when streamed Chat usage reports cached tokens.
+  forceChatCompletionsIncludeUsage: true
 
 resources:
   mockDynamo:

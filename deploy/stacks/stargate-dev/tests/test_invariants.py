@@ -527,6 +527,7 @@ class RenderedStackTests(unittest.TestCase):
                     arguments,
                 )
             self.assertIn("--disable-stats-stream", mock_dynamo["args"])
+            self.assertIn("--force-chat-completions-include-usage", arguments)
             self.assertEqual(deployment["spec"]["strategy"], {"type": "Recreate"})
             anti_affinity = deployment["spec"]["template"]["spec"]["affinity"][
                 "podAntiAffinity"

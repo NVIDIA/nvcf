@@ -149,6 +149,9 @@ spec:
             {{- if $initialInputTps }}
             - --initial-input-tps={{ $initialInputTps }}
             {{- end }}
+            {{- if $.Values.pylon.forceChatCompletionsIncludeUsage }}
+            - --force-chat-completions-include-usage
+            {{- end }}
           ports:
             - name: metrics
               containerPort: 9089
