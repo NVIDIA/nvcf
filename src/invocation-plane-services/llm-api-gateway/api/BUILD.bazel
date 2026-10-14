@@ -108,6 +108,7 @@ go_test(
         "responses_handler_test.go",
         "routing_key_case_test.go",
         "session_affinity_test.go",
+        "stargate_error_test.go",
         "token_count_test.go",
         "upstream_framing_test.go",
         "write_deadline_test.go",
