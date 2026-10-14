@@ -700,6 +700,7 @@ async fn gather_scaling_inputs(
         return Ok(None);
     };
 
+    let utilization_end_time = control_plane_query_end_time.unwrap_or_else(Utc::now);
     let raw_utilization = get_function_utilization_history(
         timeseries_db_client,
         function_id,
@@ -707,7 +708,7 @@ async fn gather_scaling_inputs(
         env,
         metric_source,
         ignore_env,
-        control_plane_query_end_time.unwrap_or_else(Utc::now),
+        utilization_end_time,
         utilization_lookback,
         scaling_settings.utilization_window_seconds,
     )
@@ -744,6 +745,7 @@ async fn gather_scaling_inputs(
             metric_source,
             current_instances,
             utilization_samples,
+            window_end: utilization_end_time.timestamp(),
             recently_invoked,
         },
         gateway_target,
@@ -960,6 +962,7 @@ async fn make_scaling_requests(
                         &inputs,
                         &policy,
                         scaling_settings.decay_factor,
+                        scaling_settings.lookback,
                         last_predicted_instance_count,
                     ) else {
                         tracing::info!(
@@ -1530,7 +1533,10 @@ mod tests {
             Some(MetricSource::LlmGateway)
         );
         assert_eq!(gathered.inputs.current_instances, 2);
-        assert_eq!(gathered.inputs.utilization_samples, vec![25.0]);
+        assert_eq!(
+            gathered.inputs.utilization_samples,
+            vec![(1_700_000_000, 25.0)]
+        );
         assert!(gathered.inputs.recently_invoked);
         let target = gathered.gateway_target.expect("gateway target");
         assert_eq!(target.function_version_id, active_version);
@@ -1891,7 +1897,7 @@ mod tests {
 
         assert_eq!(inputs.current_instances, 5);
         assert_eq!(inputs.metric_source, MetricSource::WorkerThreads);
-        assert_eq!(inputs.utilization_samples, vec![5.0]);
+        assert_eq!(inputs.utilization_samples, vec![(1_700_000_000, 5.0)]);
         assert!(inputs.recently_invoked);
     }
 
