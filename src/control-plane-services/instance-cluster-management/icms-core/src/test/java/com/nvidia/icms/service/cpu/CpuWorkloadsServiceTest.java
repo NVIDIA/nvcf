@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -40,12 +41,14 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV3Udt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
-import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
@@ -167,46 +170,44 @@ class CpuWorkloadsServiceTest {
     }
 
     @Test
-    void guard_pendingWhenClustersCannotBeRead_andRetriesAfterTheInterval() {
+    void guard_pendingWhenClustersCannotBeRead_andTheBackgroundRetryRecovers() {
         CpuWorkloadsConfigurationProperties properties = new CpuWorkloadsConfigurationProperties();
         properties.setEnabled(true);
-        properties.setGuardRetryInterval(Duration.ofSeconds(30));
         ClusterRepository repository = mock(ClusterRepository.class);
         doThrow(new RuntimeException("database unavailable"))
                 .when(repository).forEachClusterPage(anyInt(), any());
-        AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
-        Clock clock = new Clock() {
-            @Override public java.time.ZoneId getZone() { return ZoneOffset.UTC; }
-            @Override public Clock withZone(java.time.ZoneId zone) { return this; }
-            @Override public Instant instant() { return now.get(); }
-        };
-        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository, clock);
+        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository);
 
-        // First call tries, fails, and reports a generic pending reason.
+        // Startup tries, fails, and reports a generic pending reason.
+        service.onApplicationReady();
         assertEquals(CpuWorkloadsStatus.REASON_GUARD_PENDING, service.status().reason());
         assertEquals(CpuWorkloadsState.BLOCKED, service.status().state());
         verify(repository, times(1)).forEachClusterPage(anyInt(), any());
 
-        // Within the retry interval it does not hammer the database.
-        now.set(now.get().plusSeconds(10));
+        // Requests only read the result. They never reach the database.
         service.status();
+        service.isReady();
         verify(repository, times(1)).forEachClusterPage(anyInt(), any());
 
-        // After the interval it retries and, once the read works, becomes ready.
+        // The background retry reads again and, once the read works, the state becomes ready.
         doAnswer(invocation -> {
             Consumer<List<ClusterEntity>> consumer = invocation.getArgument(1);
             consumer.accept(List.of());
             return null;
         }).when(repository).forEachClusterPage(anyInt(), any());
-        now.set(now.get().plusSeconds(30));
+        service.retryGuard();
         assertEquals(CpuWorkloadsState.READY, service.status().state());
+        verify(repository, times(2)).forEachClusterPage(anyInt(), any());
+
+        // A clean result is never read again.
+        service.retryGuard();
+        verify(repository, times(2)).forEachClusterPage(anyInt(), any());
     }
 
     @Test
     void guard_blocked_recoversAfterTheCollisionIsFixedWithoutARestart() {
         CpuWorkloadsConfigurationProperties properties = new CpuWorkloadsConfigurationProperties();
         properties.setEnabled(true);
-        properties.setGuardRetryInterval(Duration.ofSeconds(30));
         ClusterRepository repository = mock(ClusterRepository.class);
         AtomicReference<List<ClusterEntity>> stored = new AtomicReference<>(
                 List.of(cluster("c1", Set.of(gpu("CPU", gpuType(1))))));
@@ -215,23 +216,67 @@ class CpuWorkloadsServiceTest {
             consumer.accept(stored.get());
             return null;
         }).when(repository).forEachClusterPage(anyInt(), any());
-        AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
-        Clock clock = new Clock() {
-            @Override public java.time.ZoneId getZone() { return ZoneOffset.UTC; }
-            @Override public Clock withZone(java.time.ZoneId zone) { return this; }
-            @Override public Instant instant() { return now.get(); }
-        };
-        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository, clock);
+        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository);
+        service.onApplicationReady();
         assertEquals(CpuWorkloadsStatus.REASON_COLLISION_DETECTED, service.status().reason());
 
-        // Fixed in the data, but the retry interval has not passed: still blocked, no re-read.
+        // Fixed in the data, but only the background retry reads it again: requests stay blocked.
         stored.set(List.of());
-        now.set(now.get().plusSeconds(10));
         assertEquals(CpuWorkloadsState.BLOCKED, service.status().state());
         verify(repository, times(1)).forEachClusterPage(anyInt(), any());
 
-        now.set(now.get().plusSeconds(30));
+        service.retryGuard();
         assertEquals(CpuWorkloadsState.READY, service.status().state());
+    }
+
+    @Test
+    void retryGuard_doesNothingWhenTheSwitchIsOff() {
+        CpuWorkloadsConfigurationProperties properties = new CpuWorkloadsConfigurationProperties();
+        ClusterRepository repository = mock(ClusterRepository.class);
+        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository);
+
+        service.retryGuard();
+
+        verify(repository, times(0)).forEachClusterPage(anyInt(), any());
+    }
+
+    @Test
+    void status_doesNotWaitForAGuardScanThatIsRunning() throws Exception {
+        CpuWorkloadsConfigurationProperties properties = new CpuWorkloadsConfigurationProperties();
+        properties.setEnabled(true);
+        ClusterRepository repository = mock(ClusterRepository.class);
+        CountDownLatch scanStarted = new CountDownLatch(1);
+        CountDownLatch releaseScan = new CountDownLatch(1);
+        // The first read fails, so the result is not clean. The background retry then blocks inside the
+        // read, as a slow database would.
+        doThrow(new RuntimeException("database unavailable"))
+                .doAnswer(invocation -> {
+                    scanStarted.countDown();
+                    releaseScan.await();
+                    return null;
+                })
+                .when(repository).forEachClusterPage(anyInt(), any());
+        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository);
+        service.onApplicationReady();
+
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> scan = executor.submit(service::retryGuard);
+            assertTrue(scanStarted.await(5, TimeUnit.SECONDS), "the background scan did not start");
+
+            // While the scan is stuck, requests still get the cached result at once, whichever
+            // entry point they use.
+            assertTimeoutPreemptively(Duration.ofSeconds(2), () -> {
+                assertEquals(CpuWorkloadsState.BLOCKED, service.status().state());
+                assertFalse(service.isReady());
+            });
+
+            releaseScan.countDown();
+            scan.get(5, TimeUnit.SECONDS);
+        } finally {
+            releaseScan.countDown();
+            executor.shutdownNow();
+        }
     }
 
     @Test
@@ -263,6 +308,7 @@ class CpuWorkloadsServiceTest {
             return null;
         }).when(repository).forEachClusterPage(anyInt(), any());
         CpuWorkloadsService service = new CpuWorkloadsService(properties, repository);
+        service.onApplicationReady();
         assertTrue(service.isReady());
 
         stored.set(List.of(cluster("c1", Set.of(gpu("cpu", gpuType(1))))));
@@ -277,6 +323,7 @@ class CpuWorkloadsServiceTest {
         properties.setEnabled(true);
         ClusterRepository repository = mock(ClusterRepository.class);
         CpuWorkloadsService service = new CpuWorkloadsService(properties, repository);
+        service.onApplicationReady();
         assertTrue(service.isReady());
 
         properties.setEnabled(false);

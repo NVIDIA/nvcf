@@ -62,6 +62,9 @@ public final class CpuWorkloadsTestFixtures {
             consumer.accept(clusters);
             return null;
         }).when(clusterRepository).forEachClusterPage(anyInt(), any());
-        return new CpuWorkloadsService(properties, clusterRepository);
+        CpuWorkloadsService service = new CpuWorkloadsService(properties, clusterRepository);
+        // Startup runs the collision guard once. Requests only read its result.
+        service.onApplicationReady();
+        return service;
     }
 }

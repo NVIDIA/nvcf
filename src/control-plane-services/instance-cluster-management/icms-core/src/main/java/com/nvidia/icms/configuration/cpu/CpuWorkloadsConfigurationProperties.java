@@ -41,6 +41,6 @@ public class CpuWorkloadsConfigurationProperties {
     /** Number of cluster rows read per page by the collision guard. */
     private int guardPageSize = 200;
 
-    /** Minimum time between two attempts of the collision guard after a failed attempt. */
+    /** Time between two background attempts of the collision guard while its result is not clean. */
     private Duration guardRetryInterval = Duration.ofSeconds(30);
 }

@@ -24,8 +24,6 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
-import java.time.Clock;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -35,6 +33,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.cloud.context.scope.refresh.RefreshScopeRefreshedEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 /**
@@ -74,35 +73,25 @@ public class CpuWorkloadsService {
 
     private final CpuWorkloadsConfigurationProperties properties;
     private final ClusterRepository clusterRepository;
-    private final Clock clock;
 
+    // Written only by the collision guard, read by every request without a lock.
     private volatile GuardResult guardResult = GuardResult.UNEVALUATED;
-    private volatile Instant lastAttempt = Instant.MIN;
 
     @Autowired
     public CpuWorkloadsService(
             CpuWorkloadsConfigurationProperties properties, ClusterRepository clusterRepository) {
-        this(properties, clusterRepository, Clock.systemUTC());
-    }
-
-    CpuWorkloadsService(
-            CpuWorkloadsConfigurationProperties properties,
-            ClusterRepository clusterRepository,
-            Clock clock) {
         this.properties = properties;
         this.clusterRepository = clusterRepository;
-        this.clock = clock;
     }
 
-    /** Current status. Runs the collision guard lazily when it has not completed yet. */
+    /**
+     * Current status. It returns the last result of the collision guard and never reads cluster
+     * records, so a request never waits for the guard. The guard runs at startup, after a refresh, and
+     * in the background while its result is not clean ({@link #retryGuard()}).
+     */
     public CpuWorkloadsStatus status() {
         if (!properties.isEnabled()) {
             return CpuWorkloadsStatus.DISABLED;
-        }
-        // Anything but a clean result is retried, so the state recovers once the collision is
-        // fixed or the cluster records become readable, without an ICMS restart.
-        if (guardResult != GuardResult.CLEAN && retryDue()) {
-            evaluateGuardIfDue();
         }
         return switch (guardResult) {
             case CLEAN -> CpuWorkloadsStatus.READY;
@@ -133,12 +122,15 @@ public class CpuWorkloadsService {
         }
     }
 
-    private boolean retryDue() {
-        return !clock.instant().isBefore(lastAttempt.plus(properties.getGuardRetryInterval()));
-    }
-
-    private synchronized void evaluateGuardIfDue() {
-        if (guardResult != GuardResult.CLEAN && retryDue()) {
+    /**
+     * Runs the collision guard again in the background while its result is not clean, so the state
+     * recovers once the collision is fixed or the cluster records become readable, without an ICMS
+     * restart. A clean result is never read again, and a disabled switch does nothing.
+     */
+    @Scheduled(initialDelayString = "${icms.cpu-workloads.guard-retry-interval:PT30S}",
+            fixedDelayString = "${icms.cpu-workloads.guard-retry-interval:PT30S}")
+    public void retryGuard() {
+        if (properties.isEnabled() && guardResult != GuardResult.CLEAN) {
             evaluateGuard();
         }
     }
@@ -148,7 +140,6 @@ public class CpuWorkloadsService {
      * name that is not a valid CPU shape. Details go to the log only.
      */
     private synchronized void evaluateGuard() {
-        lastAttempt = clock.instant();
         try {
             List<String> collisions = new ArrayList<>();
             clusterRepository.forEachClusterPage(
