@@ -16,6 +16,7 @@
 use std::time::Duration;
 
 use serde::Serialize;
+use stargate::load_balancer::SessionState;
 
 use crate::backend::Backend;
 use crate::sim::RunSpec;
@@ -40,6 +41,11 @@ pub struct RequestRecord {
     pub first_token_at: Option<Micros>,
     pub completed_at: Option<Micros>,
     pub attempt: u32,
+    /// Backend sent as the request's last-cluster hint: the one that served
+    /// the session's last successful turn.
+    pub last_backend: Option<usize>,
+    /// Classification by a load balancer with `last_cluster_affinity`.
+    pub session_state: Option<SessionState>,
     /// The last allowed attempt of a growing-session turn failed.
     pub abandoned_session: bool,
     pub no_route: bool,
@@ -101,6 +107,13 @@ pub struct RunSummary {
     pub cross_region_fraction: f64,
     /// Successful requests not served by their first-ranked candidate.
     pub off_primary_fraction: f64,
+    /// Measured requests sent with a last-cluster hint.
+    pub hinted_requests: usize,
+    /// Successful hinted requests served by their hinted cluster.
+    pub hinted_on_last_cluster_fraction: f64,
+    /// Measured requests by `last_cluster_affinity` classification. All zero
+    /// when the policy does not classify sessions.
+    pub session_states: SessionStateCounts,
     /// Highest per-backend share of successful requests divided by the mean share.
     pub backend_load_peak_to_mean: f64,
     /// Successful requests by the backend that served them.
@@ -118,6 +131,28 @@ pub struct BackendSummary {
     /// Backend arrival to first token: engine queueing plus prefill.
     pub backend_ttft_ms: Percentiles,
     pub reused_input_token_fraction: f64,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct SessionStateCounts {
+    pub new: usize,
+    pub returning: usize,
+    pub stale: usize,
+}
+
+impl SessionStateCounts {
+    fn count(records: &[&RequestRecord]) -> Self {
+        let mut counts = Self::default();
+        for record in records {
+            match record.session_state {
+                Some(SessionState::New) => counts.new += 1,
+                Some(SessionState::Returning) => counts.returning += 1,
+                Some(SessionState::Stale) => counts.stale += 1,
+                None => {}
+            }
+        }
+        counts
+    }
 }
 
 /// Nearest-rank percentiles; all zero when there are no samples.
@@ -201,6 +236,11 @@ pub fn summarize(
         measured.iter().filter(|record| predicate(record)).count()
     };
     let mean_backend = succeeded.len() as f64 / backends.len() as f64;
+    let hinted_succeeded: Vec<&RequestRecord> = succeeded
+        .iter()
+        .copied()
+        .filter(|record| record.last_backend.is_some())
+        .collect();
 
     RunSummary {
         policy: spec.policy.name.clone(),
@@ -279,6 +319,15 @@ pub fn summarize(
                 .count() as f64,
             succeeded.len() as f64,
         ),
+        hinted_requests: count(|record| record.last_backend.is_some()),
+        hinted_on_last_cluster_fraction: ratio(
+            hinted_succeeded
+                .iter()
+                .filter(|record| record.backend == record.last_backend)
+                .count() as f64,
+            hinted_succeeded.len() as f64,
+        ),
+        session_states: SessionStateCounts::count(&measured),
         backend_load_peak_to_mean: ratio(
             served.iter().map(Vec::len).max().unwrap_or_default() as f64,
             mean_backend,

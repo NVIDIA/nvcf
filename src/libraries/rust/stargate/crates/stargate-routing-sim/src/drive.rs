@@ -19,7 +19,9 @@
 //! config and seed, against a Stargate HTTP endpoint. Prompts are not sent as
 //! text: each request declares its size with `x-input-tokens` and
 //! `x-output-tokens`, which Stargate routes on and MockDynamo honors, and its
-//! session with `x-cache-affinity-key`.
+//! session with `x-cache-affinity-key`. Like the gateway, the driver sends
+//! each growing-session turn the `x-stargate-cluster-id` of the session's
+//! last successful response as `x-stargate-last-cluster-id`.
 //!
 //! One process drives one region. It sends only the requests whose planned
 //! Stargate is in that region, so a fleet run uses one driver per region with
@@ -88,6 +90,9 @@ pub struct FleetRecord {
     pub e2e_us: Option<Micros>,
     /// `x-stargate-cluster-id` of the backend that served the request.
     pub cluster_id: Option<String>,
+    /// `x-stargate-last-cluster-id` sent with the request.
+    #[serde(default)]
+    pub last_cluster_id: Option<String>,
     /// `x-kv-cache-reused-input-tokens` from MockDynamo.
     pub reused_input_tokens: Option<u64>,
     /// The last allowed attempt of a growing-session turn failed.
@@ -187,7 +192,7 @@ pub async fn drive(args: DriveArgs) -> anyhow::Result<()> {
         if driver.records.is_closed() {
             break;
         }
-        driver.spawn_request(request.clone());
+        driver.spawn_request(request.clone(), None);
     }
     driver.tracker.close();
     driver.tracker.wait().await;
@@ -260,8 +265,9 @@ impl Driver {
     }
 
     /// Runs `request` at its arrival and, for growing sessions, its
-    /// follow-ups.
-    fn spawn_request(self: &Arc<Self>, request: PlannedRequest) {
+    /// follow-ups. `last_cluster` is the cluster that served the session's
+    /// last successful turn.
+    fn spawn_request(self: &Arc<Self>, request: PlannedRequest, last_cluster: Option<String>) {
         if request.arrival >= self.plan.measure_end {
             return;
         }
@@ -273,18 +279,24 @@ impl Driver {
             if driver.records.is_closed() {
                 return;
             }
-            let mut record = driver.send(&request).await;
+            let mut record = driver.send(&request, last_cluster.as_deref()).await;
             let now = driver.now();
             if record.succeeded() {
-                driver.schedule_next_turn(&request, now);
+                let last_cluster = record.cluster_id.clone().or(last_cluster);
+                driver.schedule_next_turn(&request, now, last_cluster);
             } else {
-                driver.fail(&request, &mut record, now);
+                driver.fail(&request, &mut record, now, last_cluster);
             }
             driver.records.send(record).ok();
         });
     }
 
-    fn schedule_next_turn(self: &Arc<Self>, request: &PlannedRequest, responded_at: Micros) {
+    fn schedule_next_turn(
+        self: &Arc<Self>,
+        request: &PlannedRequest,
+        responded_at: Micros,
+        last_cluster: Option<String>,
+    ) {
         let turn = request.turn + 1;
         let Some(think) = self
             .plan
@@ -299,7 +311,7 @@ impl Driver {
             .plan
             .turn_request(request.session, turn, 0, responded_at + think)
             .expect("the next turn exists in the plan");
-        self.spawn_request(next);
+        self.spawn_request(next, last_cluster);
     }
 
     /// Retries a failed growing-session turn with backoff, or marks the
@@ -309,6 +321,7 @@ impl Driver {
         request: &PlannedRequest,
         record: &mut FleetRecord,
         failed_at: Micros,
+        last_cluster: Option<String>,
     ) {
         let Some(growing) = &self.args.config.workload.growing else {
             return;
@@ -323,10 +336,10 @@ impl Driver {
             .plan
             .turn_request(request.session, request.turn, attempt, start)
             .expect("a failed turn exists in the plan");
-        self.spawn_request(retry);
+        self.spawn_request(retry, last_cluster);
     }
 
-    async fn send(&self, request: &PlannedRequest) -> FleetRecord {
+    async fn send(&self, request: &PlannedRequest, last_cluster: Option<&str>) -> FleetRecord {
         let args = &self.args;
         let at = request.arrival;
         // Fixed sessions repeat session, turn, and attempt, so a sequence
@@ -354,6 +367,7 @@ impl Driver {
             ttft_us: None,
             e2e_us: None,
             cluster_id: None,
+            last_cluster_id: last_cluster.map(str::to_string),
             reused_input_tokens: None,
             abandoned_session: false,
         };
@@ -363,7 +377,7 @@ impl Driver {
             "stream": true,
             "max_tokens": request.output_tokens,
         });
-        let builder = self
+        let mut builder = self
             .client
             .post(self.url.clone())
             .header("x-request-id", &request_id)
@@ -374,6 +388,9 @@ impl Driver {
                 format!("{}-session-{}", args.run_label, request.session),
             )
             .json(&body);
+        if let Some(last_cluster) = last_cluster {
+            builder = builder.header("x-stargate-last-cluster-id", last_cluster);
+        }
 
         let response = match builder.send().await {
             Ok(response) => response,
@@ -476,7 +493,7 @@ fn transport_error(error: &reqwest::Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Mutex;
 
     use axum::Router;
@@ -587,7 +604,7 @@ mod tests {
             futures::stream::iter([Ok("data: [DONE]\n\n")]).boxed()
         };
         Response::builder()
-            .header("x-stargate-cluster-id", "backend-a")
+            .header("x-stargate-cluster-id", format!("cluster-{request_id}"))
             .header("x-kv-cache-reused-input-tokens", "100")
             .body(Body::from_stream(first.chain(rest)))
             .unwrap()
@@ -608,8 +625,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn driver_runs_every_owned_turn_and_retries_failures() {
+    /// Drives region a of the test config against the `stargate` stub and
+    /// returns the written records and the headers the stub received.
+    async fn run_driver(name: &str) -> (Vec<FleetRecord>, Vec<HeaderMap>) {
         let seen = Arc::new(Seen::default());
         let app = Router::new().route(
             "/v1/chat/completions",
@@ -621,8 +639,10 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let records =
-            std::env::temp_dir().join(format!("routing-sim-driver-{}.jsonl", std::process::id()));
+        let records = std::env::temp_dir().join(format!(
+            "routing-sim-driver-{name}-{}.jsonl",
+            std::process::id()
+        ));
         let start_at_unix_ms = u64::try_from(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -653,6 +673,13 @@ mod tests {
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
         std::fs::remove_file(&records).ok();
+        let sent = std::mem::take(&mut *seen.headers.lock().unwrap());
+        (written, sent)
+    }
+
+    #[tokio::test]
+    async fn driver_runs_every_owned_turn_and_retries_failures() {
+        let (written, sent) = run_driver("turns").await;
         let config = config();
         let plan = plan(&config.workload, &[1.0, 1.0], 20.0, 7);
         let owned: HashSet<u32> = plan
@@ -672,7 +699,6 @@ mod tests {
             .map(|record| record.request_id.as_str())
             .collect();
         assert_eq!(request_ids.len(), written.len(), "request IDs are unique");
-        let sent = std::mem::take(&mut *seen.headers.lock().unwrap());
         assert_eq!(sent.len(), written.len());
         for headers in &sent {
             let header = |name: &str| headers[name].to_str().unwrap();
@@ -718,7 +744,10 @@ mod tests {
                 complete_sessions += 1;
             }
             for record in turns.iter().filter(|record| record.succeeded()) {
-                assert_eq!(record.cluster_id.as_deref(), Some("backend-a"));
+                assert_eq!(
+                    record.cluster_id,
+                    Some(format!("cluster-{}", record.request_id))
+                );
                 assert_eq!(record.reused_input_tokens, Some(100));
                 assert!(record.ttft_us.unwrap() <= record.e2e_us.unwrap());
             }
@@ -749,5 +778,50 @@ mod tests {
             complete_sessions > 0,
             "some session ran every turn and abandoned the last one"
         );
+    }
+
+    #[tokio::test]
+    async fn driver_sends_each_session_its_last_successful_cluster() {
+        let (written, sent) = run_driver("last-cluster").await;
+        let sent_hints: HashMap<&str, Option<&str>> = sent
+            .iter()
+            .map(|headers| {
+                (
+                    headers["x-request-id"].to_str().unwrap(),
+                    headers
+                        .get("x-stargate-last-cluster-id")
+                        .map(|value| value.to_str().unwrap()),
+                )
+            })
+            .collect();
+        let mut hinted = 0;
+        for record in &written {
+            // Failed attempts, including turn 2's first attempt whose 2xx
+            // stream failed, do not replace the remembered cluster.
+            let expected = written
+                .iter()
+                .filter(|earlier| {
+                    earlier.session == record.session
+                        && earlier.turn < record.turn
+                        && earlier.succeeded()
+                })
+                .max_by_key(|earlier| earlier.turn)
+                .and_then(|earlier| earlier.cluster_id.clone());
+            assert_eq!(
+                expected.is_none(),
+                record.turn == 0,
+                "{}",
+                record.request_id
+            );
+            assert_eq!(
+                sent_hints[record.request_id.as_str()],
+                expected.as_deref(),
+                "{}",
+                record.request_id
+            );
+            assert_eq!(record.last_cluster_id, expected);
+            hinted += usize::from(expected.is_some());
+        }
+        assert!(hinted > 0, "some session ran a later turn");
     }
 }

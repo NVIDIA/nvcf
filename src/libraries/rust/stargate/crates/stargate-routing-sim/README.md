@@ -7,6 +7,11 @@ configurations. It calls the production `LoadBalancer` implementations from the
 - Stargate: one load-balancer instance per Stargate, stale per-backend stats,
   optimistic reservations cleared by heartbeats, the routing wait and retry
   loop, and queue-mismatch reroutes.
+- Session-aware routing: each growing-session turn carries the cluster that
+  served the session's last successful turn as its last-cluster hint, as the
+  gateway sends `x-stargate-last-cluster-id`. First turns carry none. Policies
+  with `last_cluster_affinity` classify each request once and keep that
+  classification across its routing waits and reroutes.
 - Pylon: live request phases, queue estimates, queue-mismatch admission, and
   the fallback input-throughput window that sets `last_mean_input_tps` and
   `max_input_tps`.
@@ -54,6 +59,11 @@ stargate-routing-sim drive --config bench.json --region usw2 \
   --start-at-unix-ms "$START_MS" --records usw2.jsonl
 ```
 
+Like the gateway, the driver sends each growing-session turn the
+`x-stargate-cluster-id` of the session's last successful response as
+`x-stargate-last-cluster-id`. A success is a 2xx response whose stream
+reached `[DONE]`; failed attempts keep the earlier value.
+
 Each in-flight request holds a connection, so raise the driver's open-file
 limit (`ulimit -n`) for high rates. Running out of descriptors is recorded as
 `driver-nofile`, not as a fleet failure. A request succeeds only when its
@@ -70,6 +80,11 @@ stargate-routing-sim summarize-fleet --config bench.json \
   --backend-gpus backend-gpus.json --output summary.json
 ```
 
+Fleet and simulator summaries both report `hinted_requests` and
+`hinted_on_last_cluster_fraction`, the share of successful hinted requests
+served by their hinted cluster. Simulator summaries also count
+`session_states` for policies with `last_cluster_affinity`.
+
 ## Fidelity limits
 
 - Engine step costs are estimates until calibrated against a real engine.
@@ -84,6 +99,11 @@ stargate-routing-sim summarize-fleet --config bench.json \
   fires during the final one-way trip back to the Stargate.
 - One backend per routed cluster. Shared-engine cluster aggregation and
   sibling-backend retries are not modeled.
+- Fixed sessions send no last-cluster hint, so a policy with
+  `last_cluster_affinity` classifies all their requests as `new`. Growing
+  sessions remember a cluster only after a turn succeeds. The gateway contract
+  stores the cluster when 2xx response headers arrive, so a turn that fails
+  after its headers would update the gateway's hint but not the simulator's.
 - `max_input_work_seconds` admission, `consider_kv_free_tokens`, priorities,
   and registration churn are not modeled. Simulated Pylons publish no KV-cache
   stats.

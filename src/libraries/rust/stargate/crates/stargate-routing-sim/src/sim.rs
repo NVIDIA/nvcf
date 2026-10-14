@@ -22,7 +22,9 @@
 //! waits recheck at most every 25 ms until the routing wait deadline, generic
 //! no-choice retries sleep 1-9 ms while the max-wait budget remains, and
 //! Pylon queue-mismatch rejections release the reservation and reroute with
-//! the backend excluded.
+//! the backend excluded. Growing-session turns carry the cluster that served
+//! the session's last successful turn as their last-cluster hint, as the
+//! gateway sends it in `x-stargate-last-cluster-id`.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
@@ -34,7 +36,8 @@ use mock_engine::{EngineEvent, RequestSpec};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use stargate::load_balancer::{
-    LoadBalancer, LoadBalancerDecision, LoadBalancerRequest, create_load_balancer_with_config,
+    LastClusterHint, LoadBalancer, LoadBalancerDecision, LoadBalancerRequest,
+    create_load_balancer_with_config,
 };
 use stargate::routing::{
     RoutedClusterSnapshot, RoutingTargetKey, apply_reservation, queue_time_estimate_ms_for_priority,
@@ -140,6 +143,9 @@ struct StargateView {
 struct RequestState {
     plan: PlannedRequest,
     cache_affinity_key: String,
+    /// Pins the session classification across this request's routing waits
+    /// and reroutes, as the proxy's per-request hint does.
+    last_cluster: LastClusterHint,
     excluded: HashSet<String>,
     record: RequestRecord,
     engine: EngineState,
@@ -161,9 +167,41 @@ struct Simulation<'a> {
     unresolved: usize,
     last_publish: Vec<Micros>,
     publish_pending: Vec<bool>,
+    /// Backend that served each growing session's last successful turn.
+    session_last_backend: Vec<Option<usize>>,
 }
 
 pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
+    let started = Instant::now();
+    let simulation = simulate(spec)?;
+    let records = simulation
+        .requests
+        .into_iter()
+        .map(|request| request.record)
+        .collect::<Vec<_>>();
+    Ok(summarize(
+        spec,
+        &records,
+        simulation.workload.measure_start,
+        simulation.workload.measure_end,
+        &simulation.backends,
+        started.elapsed(),
+    ))
+}
+
+/// Runs every request in the plan to resolution.
+fn simulate<'a>(spec: &RunSpec<'a>) -> anyhow::Result<Simulation<'a>> {
+    let mut simulation = build(spec)?;
+    simulation.schedule_initial_events();
+    simulation.run_to_completion();
+    debug_assert!(
+        simulation.backends.iter().all(Backend::is_idle),
+        "every resolved request left Pylon and the engine"
+    );
+    Ok(simulation)
+}
+
+fn build<'a>(spec: &RunSpec<'a>) -> anyhow::Result<Simulation<'a>> {
     let config = spec.config;
     let algorithm = spec.policy.algorithm_config()?;
     let mut backends = Vec::new();
@@ -209,12 +247,12 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
     );
     let requests = std::mem::take(&mut workload.requests)
         .into_iter()
-        .map(|plan| request_state(plan, &stargates))
+        .map(|plan| request_state(plan, &stargates, None))
         .collect::<Vec<_>>();
 
-    let (measure_start, measure_end) = (workload.measure_start, workload.measure_end);
     let backend_count = backends.len();
-    let mut simulation = Simulation {
+    let session_count = workload.sessions.len();
+    Ok(Simulation {
         config,
         workload,
         now: 0,
@@ -234,37 +272,27 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
         next_reservation: 0,
         last_publish: vec![0; backend_count],
         publish_pending: vec![false; backend_count],
-    };
-    simulation.schedule_initial_events();
-    let started = Instant::now();
-    simulation.run_to_completion();
-    debug_assert!(
-        simulation.backends.iter().all(Backend::is_idle),
-        "every resolved request left Pylon and the engine"
-    );
-    let records = simulation
-        .requests
-        .into_iter()
-        .map(|request| request.record)
-        .collect::<Vec<_>>();
-    Ok(summarize(
-        spec,
-        &records,
-        measure_start,
-        measure_end,
-        &simulation.backends,
-        started.elapsed(),
-    ))
+        session_last_backend: vec![None; session_count],
+    })
 }
 
-fn request_state(plan: PlannedRequest, stargates: &[StargateView]) -> RequestState {
+/// `last_cluster` is the backend that served the session's last successful
+/// turn; its ID is the cluster ID in that backend's routing snapshots.
+fn request_state(
+    plan: PlannedRequest,
+    stargates: &[StargateView],
+    last_cluster: Option<(usize, String)>,
+) -> RequestState {
+    let (last_backend, last_cluster_id) = last_cluster.unzip();
     RequestState {
         cache_affinity_key: format!("session-{}", plan.session),
+        last_cluster: LastClusterHint::new(last_cluster_id),
         record: RequestRecord {
             arrival: plan.arrival,
             input_tokens: plan.input_tokens,
             stargate_region: stargates[plan.stargate].region,
             attempt: plan.attempt,
+            last_backend,
             ..RequestRecord::default()
         },
         plan,
@@ -418,12 +446,17 @@ impl Simulation<'_> {
             received_at,
             request_slo: self.config.client.request_slo_ms.map(Duration::from_millis),
             excluded_cluster_ids: (!excluded.is_empty()).then_some(excluded),
-            last_cluster: None,
+            last_cluster: Some(&state.last_cluster),
         };
         let decision = self.stargates[stargate]
             .load_balancer
             .decide(&lb_request, &candidates);
-        self.requests[request].record.route_attempts += 1;
+        let state = &mut self.requests[request];
+        state.record.route_attempts += 1;
+        state.record.session_state = state
+            .last_cluster
+            .classification()
+            .map(|classification| classification.state);
 
         match decision {
             LoadBalancerDecision::Selected(choice) => {
@@ -625,6 +658,12 @@ impl Simulation<'_> {
         let state = &mut self.requests[request];
         state.engine = EngineState::Finished;
         let (input_tokens, stargate) = (state.plan.input_tokens, state.plan.stargate);
+        if let Some(last) = self
+            .session_last_backend
+            .get_mut(self.requests[request].plan.session as usize)
+        {
+            *last = Some(backend);
+        }
         self.backends[backend].complete(input_tokens);
         let return_delay = self.one_way(
             self.backends[backend].region,
@@ -698,8 +737,11 @@ impl Simulation<'_> {
             .workload
             .turn_request(session, turn, attempt, self.now)
             .expect("scheduled turns exist in the plan");
+        let last_cluster = self.session_last_backend[session as usize]
+            .map(|backend| (backend, self.backends[backend].id.clone()));
         let request = self.requests.len();
-        self.requests.push(request_state(plan, &self.stargates));
+        self.requests
+            .push(request_state(plan, &self.stargates, last_cluster));
         self.schedule_arrival(request);
     }
 
@@ -772,6 +814,8 @@ impl Simulation<'_> {
 
 #[cfg(test)]
 mod tests {
+    use stargate::load_balancer::SessionState;
+
     use super::*;
 
     fn config(workload: serde_json::Value) -> SimConfig {
@@ -853,6 +897,18 @@ mod tests {
         }
     }
 
+    fn growing() -> serde_json::Value {
+        serde_json::json!({
+            "rates_rps": [1.0], "warmup_s": 1.0, "measure_s": 4.0,
+            "growing": {
+                "system_prompt_tokens": 500, "user_tokens_min": 50, "user_tokens_max": 200,
+                "output_tokens_min": 16, "output_tokens_max": 64,
+                "turns_min": 2, "turns_max": 4, "think_time_mean_s": 0.2,
+                "max_context_tokens": 8000, "max_turn_attempts": 2, "retry_backoff_s": 0.1
+            }
+        })
+    }
+
     #[test]
     fn fixed_sessions_resolve_every_request() {
         let config = config(serde_json::json!({
@@ -867,29 +923,13 @@ mod tests {
 
     #[test]
     fn growing_sessions_resolve_with_retries() {
-        let config = config(serde_json::json!({
-            "rates_rps": [1.0], "warmup_s": 1.0, "measure_s": 4.0,
-            "growing": {
-                "system_prompt_tokens": 500, "user_tokens_min": 50, "user_tokens_max": 200,
-                "output_tokens_min": 16, "output_tokens_max": 64,
-                "turns_min": 2, "turns_max": 4, "think_time_mean_s": 0.2,
-                "max_context_tokens": 8000, "max_turn_attempts": 2, "retry_backoff_s": 0.1
-            }
-        }));
+        let config = config(growing());
         assert_runs_resolve_every_request(&config, 60.0);
     }
 
     #[test]
     fn short_client_timeouts_cancel_engine_work_and_retry_turns() {
-        let mut config = config(serde_json::json!({
-            "rates_rps": [1.0], "warmup_s": 1.0, "measure_s": 4.0,
-            "growing": {
-                "system_prompt_tokens": 500, "user_tokens_min": 50, "user_tokens_max": 200,
-                "output_tokens_min": 16, "output_tokens_max": 64,
-                "turns_min": 2, "turns_max": 4, "think_time_mean_s": 0.2,
-                "max_context_tokens": 8000, "max_turn_attempts": 2, "retry_backoff_s": 0.1
-            }
-        }));
+        let mut config = config(growing());
         config.client.timeout_ms = 250;
         config.client.max_wait_ms = Some(100);
         let summaries = run_policies(&config, 60.0);
@@ -904,6 +944,79 @@ mod tests {
                 .iter()
                 .any(|summary| summary.abandoned_sessions > 0)
         );
+    }
+
+    #[test]
+    fn last_cluster_affinity_classifies_later_turns_as_returning() {
+        let mut config = config(growing());
+        config.policies = [false, true]
+            .into_iter()
+            .flat_map(|enabled| {
+                [
+                    serde_json::json!({
+                        "algorithm": "wait-and-widen",
+                        "cache_affinity_backend_selection_count": 1,
+                        "cache_affinity_wait_ms": 100,
+                        "last_cluster_affinity": enabled
+                    }),
+                    serde_json::json!({
+                        "algorithm": "pulsar-wait-and-widen", "seed": "s",
+                        "cache_affinity_wait_ms": 100,
+                        "last_cluster_affinity": enabled
+                    }),
+                ]
+                .map(|load_balancer| PolicyConfig {
+                    name: format!("{}-{enabled}", load_balancer["algorithm"]),
+                    load_balancer,
+                })
+            })
+            .collect();
+        config.validate().expect("session-aware policies are valid");
+        for policy in &config.policies {
+            let enabled = policy.load_balancer["last_cluster_affinity"] == true;
+            let simulation = simulate(&RunSpec {
+                config: &config,
+                policy,
+                rate_rps: 60.0,
+                seed: 1,
+            })
+            .expect("run completes");
+            let served = |record: &RequestRecord| {
+                record
+                    .completed_at
+                    .is_some_and(|_| !record.timed_out)
+                    .then_some(record.backend)
+                    .flatten()
+            };
+            let mut returning = 0;
+            for request in &simulation.requests {
+                let (plan, record) = (&request.plan, &request.record);
+                // The hint names the backend that served the previous turn.
+                let previous = (plan.turn > 0).then(|| {
+                    simulation
+                        .requests
+                        .iter()
+                        .filter(|earlier| {
+                            earlier.plan.session == plan.session
+                                && earlier.plan.turn + 1 == plan.turn
+                        })
+                        .find_map(|earlier| served(&earlier.record))
+                        .expect("a later turn follows a successful turn")
+                });
+                assert_eq!(record.last_backend, previous, "{}", policy.name);
+                if record.route_attempts == 0 {
+                    continue;
+                }
+                let expected = match (enabled, plan.turn) {
+                    (false, _) => None,
+                    (true, 0) => Some(SessionState::New),
+                    (true, _) => Some(SessionState::Returning),
+                };
+                assert_eq!(record.session_state, expected, "{}", policy.name);
+                returning += usize::from(previous.is_some());
+            }
+            assert!(returning > 0, "{}: later turns ran", policy.name);
+        }
     }
 
     #[test]
