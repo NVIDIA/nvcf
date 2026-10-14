@@ -35,15 +35,11 @@ import (
 	"nvcf-cli/internal/logging"
 )
 
-const (
-	eventLedgerFlagURL             = "event-ledger-url"
-	eventLedgerFlagFunctionVersion = "function-version-id"
-)
+const eventLedgerFlagFunctionVersion = "function-version-id"
 
 var functionVersionIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 var (
-	eventLedgerURLFlag             string
 	eventLedgerFunctionVersionFlag string
 	statsEventFilter               []string
 	eventsInstanceID               string
@@ -67,7 +63,7 @@ var statsGetCmd = &cobra.Command{
 
 Requires an API key with the fnds:getEvents read scope; generate one with
 "api-key generate --for event-ledger". The Event Ledger is
-reached at --event-ledger-url, EVENT_LEDGER_URL, or event_ledger_url; when none
+reached at EVENT_LEDGER_URL or event_ledger_url; when none
 is set the URL is derived from base_http_url by replacing the leading "api."
 with "events.".
 
@@ -116,7 +112,6 @@ func init() {
 	stagesEventsCmd.AddCommand(stagesEventsListCmd)
 
 	for _, c := range []*cobra.Command{statsGetCmd, stagesEventsListCmd} {
-		c.Flags().StringVar(&eventLedgerURLFlag, eventLedgerFlagURL, "", "Event Ledger base URL (default: derived from base_http_url)")
 		c.Flags().StringVar(&eventLedgerFunctionVersionFlag, eventLedgerFlagFunctionVersion, "", "function version ID (default: the saved version ID)")
 	}
 	statsGetCmd.Flags().StringSliceVar(&statsEventFilter, "event-filter", nil, "only include these event names (comma-separated)")
@@ -199,7 +194,7 @@ func newEventLedgerClient() (*eventledger.Client, string, time.Duration, error) 
 		return nil, "", 0, fmt.Errorf("invalid function version ID %q: must be a UUID", namespace)
 	}
 	c, err := eventledger.NewClient(eventledger.Config{
-		ServiceURL: resolveEventLedgerURL(eventLedgerURLFlag, config.BaseHTTPURL),
+		ServiceURL: resolveEventLedgerURL(config.BaseHTTPURL),
 		HostHeader: viper.GetString("event_ledger_host"),
 		APIKey:     eventLedgerAPIKey(config),
 		Timeout:    config.DefaultTimeout,
@@ -210,12 +205,9 @@ func newEventLedgerClient() (*eventledger.Client, string, time.Duration, error) 
 	return c, namespace, config.DefaultTimeout, nil
 }
 
-// resolveEventLedgerURL picks the Event Ledger URL: flag, then
-// EVENT_LEDGER_URL / event_ledger_url, then the "events." sibling of the API URL.
-func resolveEventLedgerURL(flagValue, baseHTTPURL string) string {
-	if flagValue != "" {
-		return flagValue
-	}
+// resolveEventLedgerURL picks the Event Ledger URL: EVENT_LEDGER_URL /
+// event_ledger_url, then the "events." sibling of the API URL.
+func resolveEventLedgerURL(baseHTTPURL string) string {
 	if v := viper.GetString("event_ledger_url"); v != "" {
 		return v
 	}

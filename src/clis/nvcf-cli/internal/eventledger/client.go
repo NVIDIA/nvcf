@@ -50,7 +50,7 @@ type Client struct {
 // NewClient validates cfg and returns a Client.
 func NewClient(cfg Config) (*Client, error) {
 	if strings.TrimSpace(cfg.ServiceURL) == "" {
-		return nil, fmt.Errorf("event ledger URL is not set (use --event-ledger-url, EVENT_LEDGER_URL, or event_ledger_url)")
+		return nil, fmt.Errorf("event ledger URL is not set (use EVENT_LEDGER_URL or event_ledger_url)")
 	}
 	if strings.TrimSpace(cfg.APIKey) == "" {
 		return nil, fmt.Errorf("an API key is required (run 'nvcf-cli api-key generate' or set NVCF_API_KEY)")

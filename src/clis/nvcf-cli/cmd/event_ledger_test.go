@@ -44,7 +44,6 @@ func setupEventLedgerCommandTest(t *testing.T, handler http.HandlerFunc) {
 	t.Cleanup(viper.Reset)
 
 	jsonOutput = false
-	eventLedgerURLFlag = ""
 	eventLedgerFunctionVersionFlag = testFunctionVersionID
 	statsEventFilter = nil
 	eventsInstanceID, eventsDeploymentID, eventsGPUSpecificationID, eventsClusterID = "", "", "", ""
@@ -109,12 +108,11 @@ func TestResolveEventLedgerURL(t *testing.T) {
 	t.Cleanup(viper.Reset)
 	viper.Reset()
 
-	assert.Equal(t, "https://flag.example.com", resolveEventLedgerURL("https://flag.example.com", "https://api.example.com"))
-	assert.Equal(t, "https://events.example.com", resolveEventLedgerURL("", "https://api.example.com"))
-	assert.Empty(t, resolveEventLedgerURL("", "https://gateway.example.com"), "no events host can be derived without an api. prefix")
+	assert.Equal(t, "https://events.example.com", resolveEventLedgerURL("https://api.example.com"))
+	assert.Empty(t, resolveEventLedgerURL("https://gateway.example.com"), "no events host can be derived without an api. prefix")
 
 	viper.Set("event_ledger_url", "https://configured.example.com")
-	assert.Equal(t, "https://configured.example.com", resolveEventLedgerURL("", "https://api.example.com"))
+	assert.Equal(t, "https://configured.example.com", resolveEventLedgerURL("https://api.example.com"))
 }
 
 func TestEventLedgerAPIKeyPrefersDedicatedKey(t *testing.T) {

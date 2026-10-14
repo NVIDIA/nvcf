@@ -83,7 +83,7 @@ Task commands require `NVCF_API_KEY` set to a task-scoped key and `NVCF_BASE_NVC
 
 ## Event Ledger
 
-Event Ledger commands need the Event Ledger addon on the control plane and an API key with the `fnds:getEvents` read scope (`api-key generate --for event-ledger`). The URL comes from `--event-ledger-url`, `EVENT_LEDGER_URL`, or `event_ledger_url`. Without one, it is derived from `base_http_url` by replacing the leading `api.` with `events.`. Set `event_ledger_host` (or `EVENT_LEDGER_HOST`) when the gateway routes by Host header.
+Event Ledger commands need the Event Ledger addon on the control plane and an API key with the `fnds:getEvents` read scope (`api-key generate --for event-ledger`). The URL comes from `EVENT_LEDGER_URL` or `event_ledger_url`. Without one, it is derived from `base_http_url` by replacing the leading `api.` with `events.`. Set `event_ledger_host` (or `EVENT_LEDGER_HOST`) when the gateway routes by Host header.
 
 | Command | Purpose | Notes |
 |---|---|---|
