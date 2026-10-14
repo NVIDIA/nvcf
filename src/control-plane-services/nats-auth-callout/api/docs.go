@@ -79,6 +79,35 @@ const docTemplate = `{
                 }
             }
         },
+        "/readyz": {
+            "get": {
+                "description": "return 503 while the service cannot serve auth requests (NATS connection down)",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Health"
+                ],
+                "summary": "Readiness check interface",
+                "responses": {
+                    "200": {
+                        "description": "Ready",
+                        "schema": {
+                            "$ref": "#/definitions/models.HealthResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Not ready",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/v1/ping": {
             "get": {
                 "security": [

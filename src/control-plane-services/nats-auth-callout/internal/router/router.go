@@ -39,6 +39,9 @@ type Config struct {
 	ServiceName    string
 	TracingEnabled bool
 	Metrics        *MetricsConfig
+	// ReadinessCheck reports whether the service can serve auth requests; /readyz
+	// returns 503 while it returns an error. Nil means always ready.
+	ReadinessCheck func() error
 }
 
 // MetricsConfig holds metrics-specific configuration
@@ -128,6 +131,7 @@ func (r *Router) prometheusMiddleware() gin.HandlerFunc {
 func (r *Router) setupRoutes() {
 	// Health check interface (no version)
 	r.engine.GET("/healthz", r.handleHealthz)
+	r.engine.GET("/readyz", r.handleReadyz)
 
 	// The go-lib handler owns method handling: GET returns build info, other
 	// methods get 405 with Allow: GET. TestInfoEndpoint_RejectsNonGET pins that
@@ -199,6 +203,30 @@ func (r *Router) handlePing(c *gin.Context) {
 // @Failure		500	{object}	models.ErrorResponse	"Internal server error"
 // @Router			/healthz [get]
 func (r *Router) handleHealthz(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"status": "ok",
+	})
+}
+
+// handleReadyz handle readiness check endpoint
+// @Summary		Readiness check interface
+// @Description	return 503 while the service cannot serve auth requests (NATS connection down)
+// @Tags			Health
+// @Accept			json
+// @Produce		json
+// @Success		200	{object}	models.HealthResponse	"Ready"
+// @Failure		503	{object}	models.ErrorResponse	"Not ready"
+// @Router			/readyz [get]
+func (r *Router) handleReadyz(c *gin.Context) {
+	if r.config.ReadinessCheck != nil {
+		if err := r.config.ReadinessCheck(); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"status": "unavailable",
+				"error":  err.Error(),
+			})
+			return
+		}
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"status": "ok",
 	})
