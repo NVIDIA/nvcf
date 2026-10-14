@@ -79,6 +79,11 @@ rules:
     verbs: [get]
   - roles: [control-plane]
     scope: cluster
+    apiGroup: policy
+    resources: [poddisruptionbudgets]
+    verbs: [list]
+  - roles: [control-plane]
+    scope: cluster
     apiGroup: gateway.networking.k8s.io
     resources: [gatewayclasses, gateways, httproutes, grpcroutes, tcproutes, udproutes]
     verbs: [list]

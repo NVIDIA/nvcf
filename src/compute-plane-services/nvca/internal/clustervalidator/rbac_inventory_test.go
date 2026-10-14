@@ -364,11 +364,23 @@ func rolloutDatingActions(t *testing.T) []ktesting.Action {
 	return client.Actions()
 }
 
+// haGuaranteeActions runs the HA Guarantee under an HA mode, which reads the
+// PodDisruptionBudgets: no run without a mode does.
+func haGuaranteeActions(t *testing.T) []ktesting.Action {
+	t.Helper()
+	var client *fake.Clientset
+	state, _ := newHAFixture(t, HAModeEnforced).run(t, false, func(c *fake.Clientset) { client = c })
+	require.NotNil(t, state.HAGuaranteeOK)
+	require.True(t, *state.HAGuaranteeOK, "warnings: %q", state.Warnings)
+	return client.Actions()
+}
+
 func TestRBACInventory_ControlPlane(t *testing.T) {
 	actions := controlPlaneRunActions(t)
 	actions = append(actions, rolloutDatingActions(t)...)
 	actions = append(actions, nodeToNodeActions(t)...)
 	actions = append(actions, namedStorageClassActions(t)...)
+	actions = append(actions, haGuaranteeActions(t)...)
 	assertInventoryMatches(t, RoleControlPlane, actions)
 }
 

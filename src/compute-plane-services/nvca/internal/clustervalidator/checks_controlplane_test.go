@@ -751,9 +751,10 @@ func TestCheckTier2StatefulSets_BelowQuorumFails(t *testing.T) {
 }
 
 // Two peers on one node means a single node loss takes out the quorum, which is
-// the whole point of the placement half of this check.
+// the whole point of the placement half of this check. A required anti-affinity
+// term asks for distinct nodes outright, so without an HA mode it fails.
 func TestCheckTier2StatefulSets_CoLocatedPeersFail(t *testing.T) {
-	objs := makeQuorumSTS("cassandra", "cassandra-system", 3, 3, []string{"node-1", "node-1", "node-2"})
+	objs := requireSpread(makeQuorumSTS("cassandra", "cassandra-system", 3, 3, []string{"node-1", "node-1", "node-2"}))
 	client := fake.NewSimpleClientset(objs...)
 	state := &ValidationState{Log: testLog()}
 	checkTier2StatefulSets(context.Background(), client, state)
@@ -3327,11 +3328,20 @@ func TestCheckTier2StatefulSets_StartingRolloutPodIsTolerated(t *testing.T) {
 }
 
 // A tolerated rollout still gets the placement scan: the two Ready peers on one
-// node are one node loss from losing quorum, as they would be at 3/3.
+// node are one node loss from losing quorum, as they would be at 3/3. Under a
+// required term that fails; under a preferred one it is a failover risk beside
+// the rollout.
 func TestCheckTier2StatefulSets_TolerateRolloutStillChecksPlacement(t *testing.T) {
-	state := runTier2(rollingNATSWithDownPod([]string{"node-1", "node-1"}, "nats-r2", nil))
+	state := runTier2(requireSpread(rollingNATSWithDownPod([]string{"node-1", "node-1"}, "nats-r2", nil)))
 	require.NotNil(t, state.Tier2StatefulSetsOK)
 	assert.False(t, *state.Tier2StatefulSetsOK)
+
+	state = runTier2(rollingNATSWithDownPod([]string{"node-1", "node-1"}, "nats-r2", nil))
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK)
+	joined := strings.Join(state.Warnings, "; ")
+	assert.Contains(t, joined, "failover risk: nats-system/nats pods nats-0 and nats-1 share node node-1")
+	assert.Contains(t, joined, "nats-system/nats: rolling update in progress (ready: 2/3)")
 }
 
 // A rollout staged with a partition stops once it has updated the pods at and
@@ -4414,7 +4424,7 @@ func TestEnvoyRows_NonEnvoyGatewayIsOutOfScope(t *testing.T) {
 	state.ControlPlaneHealthy, state.WebhooksSupported, state.NetworkPoliciesSupported = true, true, true
 	state.NodesAllReady = true
 	state.DefaultStorageClassOK, state.GatewayAPICRDsOK = &ok, &ok
-	state.NodeToNodeOK, state.Tier2StatefulSetsOK = &ok, &ok
+	state.NodeToNodeOK, state.Tier2StatefulSetsOK, state.HAGuaranteeOK = &ok, &ok, &ok
 	assert.NoError(t, printSummary(state), "rows that are not critical do not block the verdict")
 
 	// The same Gateway on an Envoy class with no controller anywhere still

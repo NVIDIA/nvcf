@@ -553,7 +553,16 @@ func TestSuite_EveryBlockingRowIsRechecked(t *testing.T) {
 		"Tier-2 failed": {controlPlane, func(s *ValidationState) { s.Tier2StatefulSetsOK = cpRow(false) },
 			"Tier-2 StatefulSets"},
 		"Tier-2 unobserved": {controlPlane, func(s *ValidationState) { s.Tier2StatefulSetsOK = nil }, "Tier-2 StatefulSets"},
-		"GPU failed":        {compute, func(s *ValidationState) { s.GPUAvailable = false }, GPUResourcesLabel},
+		"HA Guarantee failed": {controlPlane, func(s *ValidationState) {
+			s.HAMode, s.HAGuaranteeOK = HAModePreferred, cpRow(false)
+		}, haGuaranteeLabel},
+		"HA Guarantee unobserved": {controlPlane, func(s *ValidationState) {
+			s.HAMode, s.HAGuaranteeOK = HAModeEnforced, nil
+		}, haGuaranteeLabel},
+		"HA Guarantee placement failed without an HA mode": {controlPlane, func(s *ValidationState) {
+			s.HAGuaranteeOK = cpRow(false)
+		}, haGuaranteeLabel},
+		"GPU failed": {compute, func(s *ValidationState) { s.GPUAvailable = false }, GPUResourcesLabel},
 		"GPU unobserved": {compute, func(s *ValidationState) {
 			s.markUnobserved(CheckKeyGPUResources)
 		}, GPUResourcesLabel},
@@ -582,6 +591,10 @@ func TestSuite_EveryBlockingRowIsRechecked(t *testing.T) {
 		}},
 		"overlay not applicable": {controlPlane, func(s *ValidationState) {
 			s.NodeToNodeOK, s.NodeToNodeNotApplicable = nil, "one eligible node"
+		}},
+		"HA Guarantee under mode none": {controlPlane, func(s *ValidationState) { s.HAMode = HAModeNone }},
+		"HA Guarantee under mode none, with a result": {controlPlane, func(s *ValidationState) {
+			s.HAMode, s.HAGuaranteeOK = HAModeNone, cpRow(false)
 		}},
 		"NotReady worker and unconfirmed policies": {compute, func(s *ValidationState) {
 			s.NodesAllReady, s.NotReadyNodes, s.NetworkPoliciesSupported = false, 1, false
@@ -618,4 +631,164 @@ func TestValidationState_ForkCarriesNoResults(t *testing.T) {
 	assert.Empty(t, f.Unobserved)
 	f.markUnobserved("other")
 	assert.NotContains(t, s.Unobserved, "other")
+}
+
+// The Tier-1, Tier-2 and HA Guarantee rows judge the same workloads from reads
+// of their own. When the recheck runs one of them again it runs the others
+// too, so the rows it publishes come from the same moment: before, a member
+// that went down between the passes failed the rechecked HA Guarantee row
+// beside a Tier-2 row that still said the quorum was whole.
+func TestSuite_RecheckRunsTheRowsThatJudgeTheSameWorkloadsTogether(t *testing.T) {
+	const tier1, tier2 = "Tier-1 Deployments", "Tier-2 StatefulSets"
+	for name, tc := range map[string]struct {
+		failing string
+		again   []string
+	}{
+		"HA Guarantee failed": {haGuaranteeLabel, []string{tier1, tier2, haGuaranteeLabel}},
+		"Tier-2 failed":       {tier2, []string{tier1, tier2, haGuaranteeLabel}},
+		"Tier-1 failed":       {tier1, []string{tier1, tier2, haGuaranteeLabel}},
+		"storage failed":      {"Default StorageClass", []string{"Default StorageClass"}},
+	} {
+		su := &suite{}
+		checks := su.checks(RoleControlPlane)
+		runs := map[string]int{}
+		for i := range checks {
+			c := &checks[i]
+			name := c.name
+			c.run = func(_ context.Context, s *ValidationState) {
+				runs[name]++
+				// The first pass passes all but the failing check; the second
+				// sees the cluster as it now is, with every row failed.
+				ok := runs[name] == 1 && name != tc.failing
+				s.DefaultStorageClassOK, s.Tier1DeploymentsOK, s.Tier2StatefulSetsOK = cpRow(ok), cpRow(ok), cpRow(ok)
+				s.HAGuaranteeOK = cpRow(ok)
+			}
+		}
+		state := healthyControlPlaneState()
+		state.Log, state.HAMode = testLog(), HAModePreferred
+		results := make([]*ValidationState, len(checks))
+		for i, c := range checks {
+			results[i] = state.fork()
+			c.run(context.Background(), results[i])
+		}
+		su.recheck(context.Background(), state, checks, results, make([][]string, len(checks)))
+
+		var again []string
+		for i, c := range checks {
+			if runs[c.name] > 1 {
+				again = append(again, c.name)
+				assert.Equal(t, failed, c.critical(results[i]), "%s: %s keeps its second result", name, c.name)
+			}
+		}
+		assert.ElementsMatch(t, tc.again, again, name)
+	}
+}
+
+// A check run again only for a check it is linked to keeps what its first run
+// observed when the recheck cannot observe it.
+func TestSuite_LinkedRecheckThatCannotObserveKeepsTheFirstResult(t *testing.T) {
+	var tier2Runs int
+	tier2 := check{
+		name: "Tier-2 StatefulSets",
+		run: func(_ context.Context, s *ValidationState) {
+			if tier2Runs++; tier2Runs == 1 {
+				s.Tier2StatefulSetsOK = cpRow(true)
+			}
+		},
+		adopt:    func(dst, src *ValidationState) { dst.Tier2StatefulSetsOK = src.Tier2StatefulSetsOK },
+		critical: func(s *ValidationState) outcome { return rowOutcome(s.Tier2StatefulSetsOK) },
+	}
+	ha := check{
+		name:     haGuaranteeLabel,
+		linked:   []string{tier2.name},
+		run:      func(_ context.Context, s *ValidationState) { s.HAGuaranteeOK = cpRow(false) },
+		adopt:    func(dst, src *ValidationState) { dst.HAGuaranteeOK = src.HAGuaranteeOK },
+		critical: func(s *ValidationState) outcome { return rowOutcome(s.HAGuaranteeOK) },
+	}
+	log, buf := bufferLog()
+	state := &ValidationState{Log: log}
+	(&suite{}).runChecks(context.Background(), state, []check{tier2, ha}, true)
+	assert.Equal(t, 2, tier2Runs)
+	require.NotNil(t, state.Tier2StatefulSetsOK)
+	assert.True(t, *state.Tier2StatefulSetsOK)
+	assert.Contains(t, buf.String(), "The recheck could not observe Tier-2 StatefulSets; what its first run "+
+		"observed stands")
+}
+
+// Only a check run again because it is linked to one that did not pass keeps
+// a first pass the recheck cannot observe. A check the network-checks
+// ConfigMap drives did not run on a first pass that could not load the
+// ConfigMap, so its passed first result observed nothing: when the recheck
+// loads the ConfigMap and cannot observe the check, the check stays unknown.
+func TestSuite_RecheckDoesNotKeepAFirstPassThatRanOnNothing(t *testing.T) {
+	su := &suite{}
+	loads := 0
+	load := check{
+		name: "Network Checks",
+		run: func(_ context.Context, s *ValidationState) {
+			if loads++; loads == 1 {
+				s.NetworkChecksErr = "could not load: denied"
+				return
+			}
+			su.netCfg = &NetworkCheckConfig{Enforcement: &EnforcementConfig{Enabled: true, Critical: true}}
+		},
+		adopt:    func(dst, src *ValidationState) { dst.NetworkChecksErr = src.NetworkChecksErr },
+		critical: func(s *ValidationState) outcome { return flagOutcome(true, s.NetworkChecksErr != "") },
+	}
+	enforcement := check{
+		name:       "Network Policy Enforcement",
+		configured: true,
+		run: func(_ context.Context, s *ValidationState) {
+			// Configured and critical, and its probe could not run.
+			s.EnforcementCritical = su.netCfg != nil
+		},
+		adopt: func(dst, src *ValidationState) {
+			dst.EnforcementOK, dst.EnforcementCritical = src.EnforcementOK, src.EnforcementCritical
+		},
+		critical: func(s *ValidationState) outcome {
+			if !s.EnforcementCritical {
+				return passed
+			}
+			return rowOutcome(s.EnforcementOK)
+		},
+	}
+	log, buf := bufferLog()
+	state := &ValidationState{Log: log}
+	checks := []check{load, enforcement}
+	results := make([]*ValidationState, len(checks))
+	for i, c := range checks {
+		results[i] = state.fork()
+		c.run(context.Background(), results[i])
+	}
+	require.Equal(t, passed, enforcement.critical(results[1]))
+	su.recheck(context.Background(), state, checks, results, make([][]string, len(checks)))
+	assert.Equal(t, unobserved, enforcement.critical(results[1]))
+	assert.NotContains(t, buf.String(), "what its first run observed stands")
+}
+
+// End to end: the network-checks ConfigMap cannot be read on the first pass,
+// loads on the recheck and asks for critical enforcement, whose probe
+// namespace cannot be created. Critical enforcement was never observed, so the
+// run is not published Ready.
+func TestRun_RecheckThatFirstRunsAConfiguredCheckCannotPassItUnobserved(t *testing.T) {
+	cfg := inventoryNetworkChecks(false)
+	cfg.Data[configDataKey] = "enforcement:\n  enabled: true\n  critical: true\n  timeoutSeconds: 5\n"
+	client := readyComputeCluster(cfg)
+	var denied atomic.Bool
+	client.PrependReactor("get", "configmaps", func(a ktesting.Action) (bool, runtime.Object, error) {
+		if a.(ktesting.GetAction).GetName() == cfg.Name && denied.CompareAndSwap(false, true) {
+			return true, nil, apierrors.NewForbidden(corev1.Resource("configmaps"), cfg.Name, errors.New("denied"))
+		}
+		return false, nil, nil
+	})
+	client.PrependReactor("create", "namespaces", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(corev1.Resource("namespaces"), "", errors.New("denied"))
+	})
+
+	out, err := runPublishing(context.Background(), t, client, cfg.Namespace, cfg.Name, RoleComputePlane)
+	require.Error(t, err, out)
+	s := readPublishedSummary(t, client, recheckSummaryNS)
+	assert.False(t, s.VerdictReady)
+	assert.NotContains(t, out, "The recheck could not observe Network Policy Enforcement; what its first run "+
+		"observed stands")
 }

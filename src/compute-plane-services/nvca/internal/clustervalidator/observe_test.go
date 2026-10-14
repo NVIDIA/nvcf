@@ -911,6 +911,7 @@ func TestTLSProbe_HandshakeWithNoAnswerIsBounded(t *testing.T) {
 // Changing one must be a deliberate change on both sides.
 func TestLauncherContractStrings(t *testing.T) {
 	assert.Equal(t, "Validator role: ", RoleMarker)
+	assert.Equal(t, "HA mode: ", HAModeMarker)
 	assert.Equal(t, "Check Results:", SummaryStart)
 	assert.Equal(t, "Cluster is ", VerdictLinePrefix)
 	assert.Equal(t, "NVCF-Ready", VerdictReady)
