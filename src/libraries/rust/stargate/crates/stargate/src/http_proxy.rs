@@ -39,6 +39,8 @@ mod request;
 mod reservation_tests;
 mod retry;
 mod routing;
+#[cfg(test)]
+mod routing_method_drift_tests;
 mod run;
 mod trace;
 mod unread_body;
@@ -490,14 +492,7 @@ mod test_support {
             ]
         );
 
-        let algorithms = [
-            "power-of-n",
-            "wait-and-widen",
-            "round-robin",
-            "random",
-            "pulsar",
-            "pulsar-wait-and-widen",
-        ];
+        let algorithms = crate::load_balancer::routing_methods::routing_methods().names();
         let caches = ["hit", "build", "rebuild"];
         for (algorithm, cache, _) in &series {
             assert!(algorithms.contains(&algorithm.as_str()), "{algorithm}");

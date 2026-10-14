@@ -9,9 +9,8 @@ exports_files([
 ])
 
 # Bundled load-balancer benchmark configs. Staged as `data` for the
-# stargate crate's tests (the bundled_benchmark_lb_configs_parse suite
-# reads them; it is skipped under Bazel today, but the filegroup keeps
-# the label resolvable for when it is re-enabled via the runfiles crate).
+# stargate-bench tests and for the stargate tests, which parse them and
+# check their algorithm names.
 filegroup(
     name = "benches",
     srcs = glob(["benches/**"]),

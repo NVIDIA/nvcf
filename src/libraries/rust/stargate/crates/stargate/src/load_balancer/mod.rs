@@ -36,6 +36,8 @@ mod random;
 mod request;
 mod round_robin;
 mod router;
+#[cfg(test)]
+pub(crate) mod routing_methods;
 mod session;
 mod target_state;
 #[cfg(test)]
