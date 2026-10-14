@@ -482,7 +482,19 @@ jq -e '
 
 # A main image digest pins both workloads when the backend router follows the
 # main image (its pinned tag cleared), and only the router otherwise.
-digest="sha256:$(printf '%064d' 0)"
+digest="sha256:$(printf 'abcdef0123456789%.0s' {1..4})"
+for invalid_digest in \
+  "${digest#sha256:}" \
+  "${digest%?}" \
+  "${digest}0" \
+  "sha256:A${digest#sha256:a}" \
+  "sha256:g${digest#sha256:a}" \
+  "sha512:${digest#sha256:}"; do
+  assert_render_fails "image digest must have the form sha256:<64 lowercase hex characters>" \
+    --set llmRequestRouter.image.repository=nvcf/stargate \
+    --set-string llmRequestRouter.image.digest="$invalid_digest" \
+    --set llmRequestRouter.backendRouter.enabled=true
+done
 digest_images="$(helm template llm-request-router "$chart_dir" \
   --namespace nvcf \
   --set llmRequestRouter.image.registry=registry.example.invalid \

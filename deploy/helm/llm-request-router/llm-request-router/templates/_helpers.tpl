@@ -296,6 +296,9 @@ digest pins the image and replaces the tag.
 {{- $name = printf "%s/%s" .registry .repository -}}
 {{- end -}}
 {{- if .digest -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" .digest) -}}
+{{- fail "image digest must have the form sha256:<64 lowercase hex characters>" -}}
+{{- end -}}
 {{- printf "%s@%s" $name .digest -}}
 {{- else -}}
 {{- printf "%s:%s" $name .tag -}}
