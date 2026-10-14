@@ -411,8 +411,8 @@ pub struct ScalingDecision {
 }
 
 /// `lookback` is the configured lookback. The average and instantaneous gates
-/// only see samples within it; a stickiness gate sees its own, possibly longer,
-/// window. All windows end at `window_end`.
+/// only see samples within it; a stickiness gate only sees its own window.
+/// All windows end at `window_end`.
 pub fn get_desired_instances(
     samples: &[(i64, f64)],
     window_end: i64,
@@ -477,8 +477,9 @@ pub fn get_desired_instances(
 /// With stickiness, at least `required_minutes` of the last `window_minutes`
 /// samples must breach. Without it, the check is instantaneous, which is just
 /// the same rule over a window of one (only the most recent sample counts).
-/// Only samples within the gate's lookback of `window_end` are considered, so
-/// gaps in the series never pull in data older than the window.
+/// A stickiness gate only considers samples within its own window of
+/// `window_end`, so gaps in the series never pull in older data. The
+/// instantaneous gate considers samples within the configured `lookback`.
 /// `label` is used only for the trace line so the gate is debuggable in prod.
 fn breached_enough(
     samples: &[(i64, f64)],
@@ -492,7 +493,7 @@ fn breached_enough(
         Some(s) => (
             s.window_minutes as usize,
             s.required_minutes as usize,
-            s.lookback(lookback),
+            Duration::from_secs(u64::from(s.window_minutes) * 60),
         ),
         None => (1, 1, lookback),
     };
@@ -1135,6 +1136,15 @@ mod tests {
         // Low utilization 46-60 minutes ago, then only the last 5 minutes reported.
         let mut samples: Vec<_> = (46..=60).rev().map(|m| at(m, 5.0)).collect();
         samples.extend((0..5).rev().map(|m| at(m, 5.0)));
+        let result = get_desired_instances(&samples, WINDOW_END, LOOKBACK, &policy, 10, 0.0);
+        assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(10));
+    }
+
+    /// A window shorter than the lookback only counts samples inside itself.
+    #[test]
+    fn test_short_stickiness_gate_ignores_samples_older_than_its_window() {
+        let policy = sticky_policy(None, sticky(3, 2));
+        let samples = [at(9, 5.0), at(8, 5.0)];
         let result = get_desired_instances(&samples, WINDOW_END, LOOKBACK, &policy, 10, 0.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(10));
     }

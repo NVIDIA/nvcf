@@ -143,7 +143,7 @@ Both fields are ISO-8601 durations:
 - `size` is the length of the sliding window. Must be `<= PT1H`.
 - `threshold` is the amount of time within the window that utilization must stay past the scaling threshold. Must be `< size`.
 
-Utilization is sampled once per minute, so both durations are rounded to the nearest minute. Any non-zero duration counts as at least one minute.
+Utilization is sampled once per minute, so both durations are rounded to the nearest minute. Any positive duration counts as at least one minute.
 
 The threshold can be set to zero, but this would nullify the utilization metric. The scaling logic would effectively be collapsed into only scaling to/from zero/one instance(s).
 
