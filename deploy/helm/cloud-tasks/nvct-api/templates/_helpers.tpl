@@ -77,11 +77,8 @@ to avoid collisions across installs in the same namespace). Override via
 {{- end -}}
 
 {{/*
-Release-artifact annotations for task worker sidecar images, matching
-nvcf-api.sidecarReleaseArtifacts. Stack release-artifact tooling skips values
-that contain "${", so each ${nvct.sidecars.*} reference is resolved from
-NVCT_SIDECARS_HOSTNAME / NVCT_SIDECARS_REPOSITORY. Nothing is emitted unless
-both are set.
+Stack release tooling skips "${...}" values, so resolve each sidecar image as nvcf-api.sidecarReleaseArtifacts does.
+Emits nothing unless both NVCT_SIDECARS_HOSTNAME and NVCT_SIDECARS_REPOSITORY are set.
 */}}
 {{- define "nvct-api.sidecarReleaseArtifacts" -}}
 {{- $env := .Values.nvctApi.env | default dict -}}

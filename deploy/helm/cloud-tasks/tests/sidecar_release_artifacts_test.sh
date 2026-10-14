@@ -70,6 +70,18 @@ while read -r key value; do
   fi
 done <<< "${placeholder_sidecars}"
 
+# Fixed annotation names anchor the naming rule, so a shared mistake in the
+# helper and the loop above cannot pass unnoticed.
+for name in \
+  "release-artifact-init-container-image" \
+  "release-artifact-utils-container-image" \
+  "release-artifact-ess-agent-container-image"; do
+  if ! grep -Fq "${name}: \"${hostname}/${repository}/" "${manifest}"; then
+    echo "expected rendered remote-config ConfigMap to include annotation: ${name}" >&2
+    exit 1
+  fi
+done
+
 # Sidecar values without the placeholder prefix are not worker images and must
 # not be reported as release artifacts.
 for absent in \
