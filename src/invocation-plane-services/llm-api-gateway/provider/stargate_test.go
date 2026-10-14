@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	echo "github.com/labstack/echo/v4"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -643,6 +644,22 @@ func TestStargateProviderCompletePropagatesStreamingHTTPError(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, response)
 	require.Contains(t, err.Error(), "stream denied")
+}
+
+func TestCheckHTTPErrorKeepsStargateErrorCodeForLogs(t *testing.T) {
+	t.Parallel()
+
+	err := checkHTTPError(&http.Response{
+		StatusCode: http.StatusNotFound,
+		Header:     http.Header{headerStargateErrorCode: []string{"no_eligible_candidates"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":"no eligible candidates","code":"no_eligible_candidates"}`)),
+	})
+
+	var httpErr *echo.HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	require.Equal(t, http.StatusNotFound, httpErr.Code)
+	require.Equal(t, "no eligible candidates", httpErr.Message)
+	require.EqualError(t, httpErr.Internal, "stargate error code no_eligible_candidates")
 }
 
 func TestStargateProviderCompletePropagatesMalformedStreamChunk(t *testing.T) {
