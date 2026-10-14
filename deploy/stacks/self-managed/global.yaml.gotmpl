@@ -363,8 +363,8 @@ openbao:
     # and Helm replaces lists rather than merging them, so anything set here is
     # discarded. Every migrations.env entry belongs in that overlay.
 
-    # merge the rest of the user-supplied migrations block, but drop
-    # image and env sub-blocks so we don't clobber the defaults above.
+    # Copy the rest of the user-supplied migrations block, except image, which
+    # is built above from global.image, and env, which belongs to the overlay.
     {{- with .Values.openbao.migrations }}
     {{- range $key, $value := . }}
     {{- if and (ne $key "image") (ne $key "env") }}
