@@ -158,8 +158,8 @@ func (r *Router) setupRoutes() {
 	r.engine.GET("/", r.handleRoot)
 
 	// Add routes
-	// The control-plane health monitor polls /health, so it reports the NATS dependency like /readyz.
-	r.engine.GET("/health", r.handleReadyz)
+	// Existing deployments use /health as a liveness probe, so it must not fail during NATS outages.
+	r.engine.GET("/health", r.handleHealthz)
 
 	r.engine.GET("/ping", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
