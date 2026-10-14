@@ -43,7 +43,8 @@ func healthyControlPlaneState() *ValidationState {
 		ControlPlaneHealthy: true, NodesAllReady: true, WebhooksSupported: true, NetworkPoliciesSupported: true,
 		DefaultStorageClassOK: cpRow(true), GatewayAPICRDsOK: cpRow(true), EnvoyGatewayOK: cpRow(true),
 		GatewayRoutesOK: cpRow(true), ExternalLBOK: cpRow(true), NodeToNodeOK: cpRow(true),
-		Tier1DeploymentsOK: cpRow(true), Tier2StatefulSetsOK: cpRow(true),
+		Tier1DeploymentsOK: cpRow(true), Tier2StatefulSetsOK: cpRow(true), HAGuaranteeOK: cpRow(true),
+		HATopologyOK: cpRow(true),
 	}
 }
 

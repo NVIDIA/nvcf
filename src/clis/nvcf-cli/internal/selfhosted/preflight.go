@@ -407,8 +407,12 @@ type RoleConfig struct {
 	// local credential check also uses. Ignored for the compute-plane validator.
 	ClusterValidatorRegistries []RegistryEntry
 
-	// ClusterValidatorEnv is passed to the validator container for both roles.
+	// ClusterValidatorEnv is passed to the validator container.
 	ClusterValidatorEnv map[string]string
+	// ClusterValidatorHAModeExplicit marks an NVCF_HA_MODE in
+	// ClusterValidatorEnv that the operator passed with --mode. A validator
+	// that does not take it then fails the check rather than warning.
+	ClusterValidatorHAModeExplicit bool
 	// ClusterValidatorTolerations are added to the validator Job's
 	// control-plane tolerations.
 	ClusterValidatorTolerations []corev1.Toleration
@@ -830,6 +834,8 @@ func clusterValidatorCheck(rc RoleConfig, role string) binaryCheckSpec {
 				return r
 			}
 			gradeValidatorTranscript(&r, result, role, kubeContext)
+			gradeHAModeSupport(&r, result, role, rc.ClusterValidatorEnv[validatorHAModeEnv],
+				rc.ClusterValidatorHAModeExplicit)
 			return r
 		},
 	}
@@ -872,10 +878,12 @@ func gradeValidatorTranscript(r *CheckResult, result ClusterValidatorResult, rol
 				validatorEndedEarly(result)
 			return
 		}
+		rows := failedValidatorRows(result.Logs, "")
 		r.Message = fmt.Sprintf("cluster-validator reported failures (exit code %d)", result.ExitCode)
-		if rows := failedValidatorRows(result.Logs, ""); len(rows) > 0 {
+		if len(rows) > 0 {
 			r.Message = "cluster-validator reported failures: " + strings.Join(rows, "; ")
 		}
+		r.Message += degradedHANote(result.Logs, rows)
 		return
 	}
 	// The validator exits non-zero when the cluster is Not-Ready, so a Job
@@ -910,9 +918,11 @@ func gradeValidatorTranscript(r *CheckResult, result ClusterValidatorResult, rol
 		// to clear, so --wait keeps polling on it.
 		r.Severity = SeverityWarning
 		r.Transient = isRolloutTranscript(result.Logs)
-		r.Message = "cluster-validator passed with warnings; run with --show-logs for details"
+		degraded := degradedHANote(result.Logs, nil)
+		r.Message = "cluster-validator passed with warnings" + degraded + "; run with --show-logs for details"
 		if r.Transient {
-			r.Message = "cluster-validator passed with a rollout in progress; --wait polls until it completes"
+			r.Message = "cluster-validator passed with a rollout in progress" + degraded +
+				"; --wait polls until it completes"
 		}
 		return
 	}
@@ -958,6 +968,88 @@ func validatorEndedEarly(result ClusterValidatorResult) string {
 // the check set it runs. Must match RoleMarker in
 // nvca/internal/clustervalidator/validator.go.
 const validatorRoleMarker = "Validator role: "
+
+// validatorHAModeEnv names the HA mode the control-plane validator judges the
+// cluster against. A validator that reads it prints validatorHAModeMarker
+// after its role line. Must match the HA mode marker in
+// nvca/internal/clustervalidator/validator.go.
+const (
+	validatorHAModeEnv    = "NVCF_HA_MODE"
+	validatorHAModeMarker = "HA mode: "
+)
+
+// gradeHAModeSupport grades a run given HA mode preferred or enforced whose
+// transcript shows the checks it ran but not the HA mode line. Its image
+// predates the HA rows and checked nothing the mode requires: a warning, or an
+// error when the operator asked for the mode with --mode. Mode none asks for no
+// HA check, and such an image runs the same checks for it as one that reads
+// the mode. A transcript that does not show the checks is no evidence either
+// way, and its grade already says so.
+func gradeHAModeSupport(r *CheckResult, result ClusterValidatorResult, role, mode string, explicit bool) {
+	logs := result.Logs
+	if mode == "" || mode == "none" || result.Err != nil || strings.Contains(logs, validatorHAModeMarker) {
+		return
+	}
+	ranRole := strings.Contains(logs, validatorRoleMarker+role) &&
+		(strings.Contains(logs, validatorVerdictReady) || strings.Contains(logs, validatorVerdictNotReady))
+	if !ranRole && !(role == validatorRoleControlPlane && isLegacyComputePlaneTranscript(logs)) {
+		return
+	}
+	note := "the cluster-validator image does not support --mode, so the HA invariants of mode " + mode +
+		" were not checked; use an image from an NVCA release that supports it"
+	if r.Severity == SeverityInfo {
+		r.Message = "cluster-validator passed, but " + note
+		r.Severity = SeverityWarning
+	} else {
+		r.Message += "; " + note
+	}
+	r.Passed = false
+	if explicit {
+		r.Severity = SeverityError
+		r.Transient = false
+	}
+}
+
+// validatorHARows label the summary rows of the control-plane HA checks. The
+// validator lists each HA finding under its warnings prefixed with its row's
+// label, as it does the Tier rows' findings. Must match the row labels in
+// nvca/internal/clustervalidator.
+var validatorHARows = []string{"HA Guarantee", "HA Topology"}
+
+// validatorHANotAssessed starts the warning a validator run without an HA mode
+// gives when the HA Guarantee row judged no workload: nothing was assessed, so
+// nothing is degraded. Must match the HA Guarantee warnings in
+// nvca/internal/clustervalidator.
+const validatorHANotAssessed = "HA Guarantee: rendered placement not assessed"
+
+// degradedHANote names the HA rows a transcript failed, did not observe or
+// warned about, other than those already named in rows: a line from the
+// summary on that carries the row's label and a failure or warning mark, other
+// than the warning that no placement was assessed. A finding printed before
+// the summary is not the row's outcome.
+func degradedHANote(logs string, rows []string) string {
+	i := strings.LastIndex(logs, validatorSummaryStart)
+	if i < 0 {
+		return ""
+	}
+	lines := strings.Split(logs[i:], "\n")
+	var degraded []string
+	for _, label := range validatorHARows {
+		if slices.ContainsFunc(rows, func(row string) bool { return strings.HasPrefix(row, label+":") }) {
+			continue
+		}
+		if slices.ContainsFunc(lines, func(line string) bool {
+			return strings.Contains(line, label+":") && !strings.Contains(line, validatorHANotAssessed) &&
+				(strings.Contains(line, validatorFailIcon) || strings.Contains(line, validatorWarnIcon))
+		}) {
+			degraded = append(degraded, label)
+		}
+	}
+	if len(degraded) == 0 {
+		return ""
+	}
+	return " (degraded: " + strings.Join(degraded, ", ") + ")"
+}
 
 // The verdict lines printSummary prints. The with-warnings line contains the
 // plain one. Must match printSummary in nvca/internal/clustervalidator.
@@ -1182,7 +1274,8 @@ func buildRegistryCredentialCategory(cfg PreflightConfig) categorySpec {
 // install a refused NGC key is a warning only where the cluster's pull
 // secrets are read and none holds it. Everything else the probe can report,
 // from an unreachable registry to a missing local credential, is a warning or
-// an informational pass.
+// an informational pass. A registry on the loopback is probed only where this
+// machine holds a credential for it, and otherwise passes at info.
 func registryCredentialCheck(
 	checker RegistryCredentialChecker, entry RegistryEntry, label string, postInstall bool,
 	clusterSecrets ClusterPullSecretChecker,
@@ -1207,6 +1300,17 @@ func registryCredentialCheck(
 		worst:      severity,
 		Run: func(ctx context.Context) CheckResult {
 			r := CheckResult{ID: id, Severity: severity}
+			if entry.Local {
+				// A store that could not be read may hold one, so only a read
+				// that found none skips the probe.
+				if read := registryCredentialsFrom(ctx).read(ctx, entry.Registry); !read.ok && read.err == nil {
+					r.Passed = true
+					r.Severity = SeverityInfo
+					r.Message = label + ": local image, not probed: each node pulls it from its own image store " +
+						"or loopback registry, which this machine cannot see"
+					return r
+				}
+			}
 			err := checker(ctx, entry.Registry, entry.RepoHint, entry.Critical, entry.Charts && !postInstall)
 			if err == nil {
 				r.Passed = true
@@ -1236,6 +1340,15 @@ func registryCredentialCheck(
 				r.Passed = true
 				r.Severity = SeverityInfo
 			case probeAnonymous, probeNotVerified:
+				if outcome.anonymousRefused {
+					if entry.Repository {
+						r.Severity = SeverityWarning
+						r.Err = err
+						break
+					}
+					// A path images sit under may be no repository at all.
+					r.Message = label + ": " + anonymousDetail
+				}
 				r.Passed = true
 				r.Severity = SeverityInfo
 			case probeNoCredential, probeUnverifiable:

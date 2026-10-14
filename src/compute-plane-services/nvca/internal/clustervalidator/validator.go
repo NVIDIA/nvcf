@@ -96,7 +96,10 @@ type ValidationState struct {
 
 	// Role is "control-plane" or "compute-plane" (empty = compute-plane default).
 	// printSummary uses it to include only the checks relevant to the role.
-	Role                Role
+	Role Role
+	// HAMode is the highAvailability.mode a control-plane run checks against
+	// (HAModeEnv), empty when not supplied.
+	HAMode              HAMode
 	ControlPlaneHealthy bool
 	// NodesAllReady tracks whether all worker nodes are Ready. False means at
 	// least one NotReady node. Warning only — does not flip cluster readiness.
@@ -176,6 +179,24 @@ type ValidationState struct {
 	// Tier2PlacementNotAssessed counts the passing quorum StatefulSets with no
 	// pod anti-affinity or hostname spread, whose placement was not judged.
 	Tier2PlacementNotAssessed int
+	// Tier2PeersSharingANode counts the passing quorum StatefulSets whose Ready
+	// peers share a node, which their preferred anti-affinity or hostname
+	// spread allows.
+	Tier2PeersSharingANode int
+	// Tier2PlacementDelegated counts the passing quorum StatefulSets whose
+	// placement the HA Guarantee row judges.
+	Tier2PlacementDelegated int
+	// HAGuaranteeOK is nil under HA mode none, or when something it needed
+	// could not be observed.
+	HAGuaranteeOK *bool
+	// HAPlacementAssessed and HAPlacementNotAssessed count, without an HA
+	// mode, the replica-safe Deployments whose placement the HA Guarantee row
+	// judged from their rendered terms, and those it could not judge since
+	// they render no hostname pod anti-affinity or spread for their pods.
+	HAPlacementAssessed, HAPlacementNotAssessed int
+	// HATopologyOK is nil without an HA mode, under the compute-plane role, or
+	// when something it needed could not be read.
+	HATopologyOK *bool
 
 	// EndpointResults captures per-endpoint reachability outcomes for the
 	// summary ConfigMap / metrics pipeline. Keyed by the user-supplied
@@ -323,6 +344,11 @@ func Run(
 	// image that predates role support never prints it, so they can report
 	// "too old for this role" instead of failing on the checks it ran instead.
 	log.Info(RoleMarker + string(effectiveRole(role)))
+	var haMode HAMode
+	var haWarnings []string
+	if effectiveRole(role) == RoleControlPlane {
+		haMode, haWarnings = readHAMode(log, os.Getenv(HAModeEnv))
+	}
 	log.Info("")
 	log.Infof("%s╔═══════════════════════════════════════════════════════════╗%s", colorBlue, colorReset)
 	log.Infof("%s║     NVIDIA Cloud BYOC Cluster Readiness Check             ║%s", colorBlue, colorReset)
@@ -335,6 +361,8 @@ func Run(
 		ControlPlaneHealthy: true,
 		PostInstall:         postInstallMode(os.Getenv(PostInstallEnv)),
 		NodesAllReady:       true,
+		HAMode:              haMode,
+		Warnings:            haWarnings,
 	}
 
 	if err := checkPrerequisites(ctx, client, state); err != nil {
@@ -492,12 +520,9 @@ func controlPlaneRows(state *ValidationState) []summaryRow {
 	addOrNA(state.NodeToNodeNotApplicable, state.NodeToNodeOK, "Node-to-Node Communication",
 		"Verified", "Failed", true)
 	addCP(state.Tier1DeploymentsOK, "Tier-1 Deployments", "All Ready", "Not Ready", true)
-	tier2Pass := "Quorum and Placement OK"
-	if n := state.Tier2PlacementNotAssessed; n > 0 {
-		tier2Pass = fmt.Sprintf("Ready (placement not assessed for %d)", n)
-	}
-	addCP(state.Tier2StatefulSetsOK, "Tier-2 StatefulSets", tier2Pass, "Quorum or Placement Failed", true)
-	return rows
+	addCP(state.Tier2StatefulSetsOK, "Tier-2 StatefulSets", tier2PassMessage(state), "Quorum or Placement Failed",
+		true)
+	return append(rows, haGuaranteeRow(state), haTopologyRow(state))
 }
 
 // printSummary outputs the final validation results and returns an error if

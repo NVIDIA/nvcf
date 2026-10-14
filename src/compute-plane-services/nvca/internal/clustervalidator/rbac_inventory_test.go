@@ -364,11 +364,48 @@ func rolloutDatingActions(t *testing.T) []ktesting.Action {
 	return client.Actions()
 }
 
+// haGuaranteeActions runs the HA Guarantee under an HA mode, which reads the
+// PodDisruptionBudgets: no run without a mode does.
+func haGuaranteeActions(t *testing.T) []ktesting.Action {
+	t.Helper()
+	var client *fake.Clientset
+	state, _ := newHAFixture(t, HAModeEnforced).run(t, false, func(c *fake.Clientset) { client = c })
+	require.NotNil(t, state.HAGuaranteeOK)
+	require.True(t, *state.HAGuaranteeOK, "warnings: %q", state.Warnings)
+	return client.Actions()
+}
+
+// haTopologyActions judges the HA topology of an installed stack whose NATS
+// servers claim volumes, with the default StorageClass and then the one the
+// stack names: it reads the claims and volumes too.
+func haTopologyActions(t *testing.T) []ktesting.Action {
+	t.Helper()
+	var actions []ktesting.Action
+	for _, named := range []string{"", "standard"} {
+		t.Setenv(storageClassEnv, named)
+		nats := claimed(natsSet(corev1.PodSpec{}), 3)
+		objs := append(threeZones(3), nats, openBaoSet(corev1.PodSpec{}), cassandraSet(corev1.PodSpec{}))
+		for i, zone := range []string{"zone-a", "zone-b", "zone-c"} {
+			pvc, pv := memberVolume(nats, i, "standard", inZone(zone))
+			objs = append(objs, pvc, pv)
+		}
+		objs = append(objs, tier1Deployment("nvcf", "api", "api", 2, corev1.PodSpec{}), delayedDefault())
+		client := fake.NewSimpleClientset(objs...)
+		state := runTopologyWith(t, client, HAModeEnforced, true)
+		require.NotNil(t, state.HATopologyOK, "warnings: %q", state.Warnings)
+		require.True(t, *state.HATopologyOK)
+		actions = append(actions, client.Actions()...)
+	}
+	return actions
+}
+
 func TestRBACInventory_ControlPlane(t *testing.T) {
 	actions := controlPlaneRunActions(t)
 	actions = append(actions, rolloutDatingActions(t)...)
 	actions = append(actions, nodeToNodeActions(t)...)
 	actions = append(actions, namedStorageClassActions(t)...)
+	actions = append(actions, haGuaranteeActions(t)...)
+	actions = append(actions, haTopologyActions(t)...)
 	assertInventoryMatches(t, RoleControlPlane, actions)
 }
 

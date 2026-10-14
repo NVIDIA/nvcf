@@ -68,7 +68,7 @@ func TestMain(m *testing.M) {
 	}
 	// A developer's own toggles, validator settings and NGC keys would change
 	// what every check test runs. The NVCF_ prefixed names are viper's
-	// automatic aliases of the cluster_validator_* config keys.
+	// automatic aliases of the cluster_validator_* and ha_mode config keys.
 	for _, k := range []string{
 		"NVCF_CLI_SELFHOSTED_LOCAL_ONLY", "NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION",
 		"NVCF_CLI_SELFHOSTED_SKIP_INOTIFY",
@@ -77,7 +77,7 @@ func TestMain(m *testing.M) {
 		"NVCF_CLI_CLUSTER_VALIDATOR_EXTERNAL_COMPONENTS",
 		"NVCF_CLUSTER_VALIDATOR_IMAGE", "NVCF_CLUSTER_VALIDATOR_REGISTRIES",
 		"NVCF_CLUSTER_VALIDATOR_PROBE_IMAGE", "NVCF_CLUSTER_VALIDATOR_TOLERATIONS",
-		"NVCF_CLUSTER_VALIDATOR_EXTERNAL_COMPONENTS", "NVCF_EXTERNAL_COMPONENTS",
+		"NVCF_CLUSTER_VALIDATOR_EXTERNAL_COMPONENTS", "NVCF_EXTERNAL_COMPONENTS", "NVCF_HA_MODE",
 		"NVCF_OPENBAO_NAMESPACE", "NVCF_ENVOY_GATEWAY_NAMESPACE", "NVCF_GATEWAY_NAMES",
 		"NVCF_N2N_PROBE_IMAGE", "NVCF_STORAGE_CLASS", "HELMFILE_ENV",
 		"NGC_IMAGE_PULL_API_KEY", "NVCF_NGCR_API_KEY", "NVCF_NGC_API_KEY", "NGC_API_KEY",
@@ -166,6 +166,7 @@ func resetCheckFlags(t *testing.T) {
 		checkClusterValidatorTolerations = nil
 		checkClusterValidatorExternal = nil
 		checkShowLogs = false
+		checkHAMode = ""
 		selfHostedJSON, selfHostedPlain = false, false
 		selfHostedOutput = "text"
 		selfHostedWait = ""
@@ -183,9 +184,14 @@ func resetCheckFlags(t *testing.T) {
 			"cluster_validator_probe_image":         "cluster-validator-probe-image",
 			"cluster_validator_tolerations":         "cluster-validator-tolerations",
 			"cluster_validator_external_components": "cluster-validator-external-components",
+			"ha_mode":                               "mode",
 		} {
 			_ = viper.BindPFlag(key, selfHostedCheckCmd.Flags().Lookup(flag))
 		}
+		// initConfig's env mapping, which viper.Reset() drops too: --mode
+		// is also read as NVCF_HA_MODE through it.
+		viper.SetEnvPrefix("NVCF")
+		viper.AutomaticEnv()
 	}
 	reset()
 	t.Cleanup(reset)

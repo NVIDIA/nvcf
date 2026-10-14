@@ -1107,6 +1107,10 @@ func validatorClusterRules(role string) []rbacv1.PolicyRule {
 	}
 	return append([]rbacv1.PolicyRule{
 		{APIGroups: []string{""}, Resources: []string{"nodes", "services", "events"}, Verbs: []string{"list"}},
+		// HA Topology: a quorum member's claims and the volumes bound to them.
+		// A volume whose node affinity requires one node pins the member to it.
+		{APIGroups: []string{""}, Resources: []string{"persistentvolumeclaims", "persistentvolumes"},
+			Verbs: []string{"list"}},
 		// The node-to-node probe creates and deletes its own namespace,
 		// DaemonSet and checker pods, reads each checker pod until it exits,
 		// and sweeps those of dead runs.
@@ -1135,6 +1139,9 @@ func validatorClusterRules(role string) []rbacv1.PolicyRule {
 		{APIGroups: []string{"gateway.networking.k8s.io"}, Resources: []string{
 			"gateways", "gatewayclasses", "httproutes", "grpcroutes", "tcproutes", "udproutes",
 		}, Verbs: []string{"list"}},
+		// HA Guarantee: one list finds the PodDisruptionBudget each NVCF
+		// workload needs under an HA mode, and any that blocks a node drain.
+		{APIGroups: []string{"policy"}, Resources: []string{"poddisruptionbudgets"}, Verbs: []string{"list"}},
 	}, shared...)
 }
 
@@ -1429,7 +1436,8 @@ func ensureClusterValidatorConfig(
 // The reachability endpoints are the registries the install pulls from, as
 // EnumerateRegistries resolved them for the local credential check, and all of
 // them are non-critical. A registry only the stack's charts come from is left
-// out: helm pulls the charts on the operator's machine, not in the cluster.
+// out: helm pulls the charts on the operator's machine, not in the cluster. So
+// is a registry on the loopback, which in a pod names the pod itself.
 // The validator dials them from a pod with no proxy support, but nodes pull
 // through the container runtime, often via an HTTPS_PROXY or a registry
 // mirror that pods cannot use: a failed in-pod dial is worth a warning, not
@@ -1441,7 +1449,7 @@ func buildControlPlaneValidatorConfig(registries []RegistryEntry) string {
 	for _, reg := range registries {
 		host, port := parseRegistryHostPort(reg.Registry)
 		// A registry probed for two repository scopes is one endpoint.
-		if host == "" || listed[reg.Registry] || reg.ChartsOnly {
+		if host == "" || listed[reg.Registry] || reg.ChartsOnly || reg.Local {
 			continue
 		}
 		listed[reg.Registry] = true

@@ -40,6 +40,7 @@ without them every selected role checks the current kubeconfig context.
 | `--compute-plane` | Check the installed compute plane: leftover namespaces, node inotify limits, SIS reachability at a configured ICMS URL, and the compute-plane cluster-validator | `false` |
 | `--all` | Both `--control-plane` and `--compute-plane`, SIS reachability included, with or without `--pre` | `false` |
 | `--cluster-name NAME` | Cluster name shown in the output header. No check uses it, and `check` does not require it | - |
+| `--mode none\|preferred\|enforced` | High-availability mode the control plane was installed with. The control-plane validator checks the HA guarantee and topology that mode requires: its `HA Guarantee` and `HA Topology` rows. Replica count and PodDisruptionBudget findings, and fewer than 3 schedulable nodes for the quorum services, fail under `preferred` and `enforced`; placement, zone and node capacity findings warn under `preferred` and fail under `enforced`; under `none` both rows are not applicable. Before install only nodes without `NoSchedule` or `NoExecute` taints count for the quorum services, since their tolerations cannot be read yet. Resolution order: flag, `NVCF_HA_MODE`, config key `ha_mode`, then the stack's `highAvailability.mode` (see [Settings read from the stack](#settings-read-from-the-stack)). With none of them the validator warns that no mode was supplied and judges placement from the rendered terms only: replicas or quorum members on one node fail under a required hostname anti-affinity term and warn under a preferred term or a hostname spread, and `HA Topology` is not assessed. Case-insensitive; any other value is a usage error (exit `1`, no events). Only the control-plane validator is given the mode. A validator image that does not support it prints no `HA mode:` line: under `preferred` or `enforced` the `cluster-validator` row then warns that the mode was not checked, or fails when the mode came from this flag; under `none` such an image runs the same checks, so the row does not grade it. The row names each HA row that warned or failed, as in `(degraded: HA Topology)`, but not the warning that no placement was assessed without a mode | from the stack |
 | `--skip-inotify-check` | Skip the per-node inotify-limits probe. Needed when the kubeconfig user cannot create pods in `default`, or when the probe image is on a registry that needs credentials, since the probe pods get no pull secret. Its `node-inotify-limits` row passes at info and says it was skipped. Env: `NVCF_CLI_SELFHOSTED_SKIP_INOTIFY`, on with `true`, `1`, `yes`, `y` or `on` and off with `false`, `0`, `no`, `n` or `off`, in any case. Any other value is an error | `false` |
 
 ### Cluster-validator flags
@@ -59,7 +60,7 @@ and deleting test namespaces an earlier validator run left behind.
 | Flag | Purpose | Default |
 |---|---|---|
 | `--cluster-validator-image REF` | Validator image. Resolution order: flag, `NVCF_CLI_CLUSTER_VALIDATOR_IMAGE`, config key `cluster_validator_image`. A ref with no tag discovers the latest stable tag from the registry. If no tag can be discovered, the validator does not run and its row fails the check, saying to pin a tag; `--wait` tries again on every poll. Unset everywhere, the validator does not run and each role's `cluster-validator` row is a warning, so the verdict is `warnings` | - |
-| `--cluster-validator-registries host[:port][/path],...` | Extra registries to check: their credentials from this machine, and their reachability from a pod of the control-plane validator. A path scopes the credential check, as in `harbor.example.com/nvcf`. They are added to the registries the install pulls from: the validator image's registry, the stack's `global.image.registry` and `global.image.repository`, its OCI chart source, and `quay.io` for the cert-manager ACME solver unless the stack leaves cert-manager out or sets `certManager.acmesolver.image`. `nvcr.io` is probed, as a warning only, when neither the image nor the stack names a registry. The in-pod probes leave out a registry only the charts come from, since `helm` pulls them on this machine, and are warnings only, since the pod has no proxy. A malformed entry fails the command. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES`; config key `cluster_validator_registries`, a list of strings in this form | - |
+| `--cluster-validator-registries host[:port][/path],...` | Extra registries to check: their credentials from this machine, and their reachability from a pod of the control-plane validator. A path scopes the credential check, as in `harbor.example.com/nvcf`. They are added to the registries the install pulls from: the validator image's registry, the stack's `global.image.registry` and `global.image.repository`, its OCI chart source, and `quay.io` for the cert-manager ACME solver unless the stack leaves cert-manager out or sets `certManager.acmesolver.image`. `nvcr.io` is probed, as a warning only, when neither the image nor the stack names a registry. The in-pod probes leave out a registry only the charts come from, since `helm` pulls them on this machine, and a `localhost` or loopback registry, which in a pod is the pod itself. They are warnings only, since the pod has no proxy. A malformed entry fails the command. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES`; config key `cluster_validator_registries`, a list of strings in this form | - |
 | `--cluster-validator-probe-image REF` | Image for the node inotify probe and the control-plane validator's node-to-node overlay probe. Needs `sh` and a busybox-style `nc`. Set a mirror for air-gapped clusters. Env: `NVCF_CLI_CLUSTER_VALIDATOR_PROBE_IMAGE`; config key `cluster_validator_probe_image` | `busybox:1.36` from Docker Hub |
 | `--cluster-validator-external-components NAME,...` | Stack dependencies that run outside the stack, or not at all, so the validator does not look for them in the cluster: a subset of `nats`, `openbao` and `cassandra`. An unknown name fails the command. Repeatable or comma-separated. Falls back to `NVCF_EXTERNAL_COMPONENTS`, then to the components whose `<name>.enabled` the stack's environment file sets to anything but `true`. Env: `NVCF_CLI_CLUSTER_VALIDATOR_EXTERNAL_COMPONENTS`; config key `cluster_validator_external_components`, a list of names | from the stack |
 | `--cluster-validator-tolerations key[=value][:effect],...` | Tolerations added to the validator Job, beside the control-plane ones it always carries, for clusters whose nodes use other taints. Effect is `NoSchedule`, `PreferNoSchedule` or `NoExecute`. A malformed entry fails the command. Repeatable or comma-separated. Env: `NVCF_CLI_CLUSTER_VALIDATOR_TOLERATIONS`; config key `cluster_validator_tolerations`, a list of strings in this form, not Kubernetes toleration objects | - |
@@ -126,7 +127,15 @@ cannot reach, a token service that fails, and a missing local credential are
 warnings. A
 registry the probe cannot speak to, such as ECR or one using Basic auth, is
 skipped with a command to check it by hand. A registry that lets this
-machine in anonymously is reported as such, not as valid credentials.
+machine in anonymously is reported as such, not as valid credentials. With
+no local credential, a repository anyone may pull is info: `quay.io` is
+probed for the ACME solver's repository, since it refuses an anonymous token
+with no scope. Anonymous pull refused for the validator image's or the
+solver's repository is a warning; for the stack's path, which may be no
+repository, it stays info. An image on `localhost` or a loopback address,
+such as one imported into a k3d or kind cluster, is info and not probed
+unless this machine holds a credential for that registry: each node pulls it
+from its own image store or loopback registry.
 
 ### Settings read from the stack
 
@@ -139,6 +148,7 @@ environment variable or config key wins over the stack.
 | Envoy Gateway namespace | `ingress.gatewayApi.controllerNamespace` | `NVCF_ENVOY_GATEWAY_NAMESPACE` |
 | External components | `nats`, `openbao` or `cassandra` whose `enabled` is set and is not `true` | `--cluster-validator-external-components`, or `NVCF_EXTERNAL_COMPONENTS` |
 | StorageClass | `global.storageClass`. When set, the validator checks that this class exists instead of requiring a default class | `NVCF_STORAGE_CLASS` |
+| HA mode | `highAvailability.mode`, `preferred` from `base.yaml` unless the environment file sets another. A value the stack cannot render is not forwarded. The control-plane validator only | `--mode`, or `NVCF_HA_MODE`; config key `ha_mode` |
 | OpenBao namespace | - | `NVCF_OPENBAO_NAMESPACE` |
 | Overlay probe image | - | `--cluster-validator-probe-image`, or `NVCF_N2N_PROBE_IMAGE` |
 
@@ -149,7 +159,8 @@ when they describe the install:
   default is used only for a plane `--pre` checks before its install,
   since `up` installs with it. Otherwise pass the `--env` the install used.
 - `environments/<env>.yaml` is read, layered over `base.yaml`. `base.yaml`
-  alone is not used.
+  alone is not used: when `<env>.yaml` cannot be read or is not valid YAML,
+  nothing is read from the stack.
 - The file comes from the stack the install used: `--control-plane-stack`
   (`--compute-plane-stack` for the registries when the registry check
   belongs to the compute plane), else the CLI's built-in stack. A local

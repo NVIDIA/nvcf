@@ -20,6 +20,7 @@ package clustervalidator
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -38,7 +39,8 @@ var recheckDelay = 10 * time.Second
 // rows to another state. critical reports how the check's critical rows came
 // out; it is nil for a check with no critical row. configured marks a check
 // the network-checks ConfigMap drives. reads names the earlier check whose
-// result run reads.
+// result run reads. linked names the checks that judge the same workloads
+// from reads of their own: the recheck runs them together, either way round.
 type check struct {
 	name       string
 	run        func(ctx context.Context, s *ValidationState)
@@ -46,6 +48,7 @@ type check struct {
 	critical   func(s *ValidationState) outcome
 	configured bool
 	reads      string
+	linked     []string
 }
 
 // outcome is how the critical rows of a check came out: all passed (or did
@@ -182,29 +185,33 @@ func runRecordingErrors(ctx context.Context, c check, s *ValidationState) []stri
 }
 
 // recheck runs again each check in checks whose result in results has a
-// critical row that did not pass, and replaces that result, along with the
-// result of a check that reads a replaced one. A recheck that could not observe
-// a check its first pass saw fail keeps the failure. One that passes a check
-// whose first run failed adds a warning naming what that run saw, from its
-// error lines in saw. A check cut short by the run's deadline would report the
-// deadline rather than the cluster, so it, and every check after it, keeps its
-// first result.
+// critical row that did not pass, and each check linked to one of them, and
+// replaces that result, along with the result of a check that reads a replaced
+// one (recheckReplaces). A check cut short by the run's deadline would report
+// the deadline rather than the cluster, so it, and every check after it, keeps
+// its first result.
 func (su *suite) recheck(
 	ctx context.Context, state *ValidationState, checks []check, results []*ValidationState, saw [][]string,
 ) {
+	rerun := map[string]bool{}
 	var names []string
 	for i, c := range checks {
 		if c.blocks(results[i]) {
+			rerun[c.name] = true
 			names = append(names, c.name)
 		}
 	}
 	if len(names) == 0 {
 		return
 	}
+	linked := linkReruns(checks, rerun)
 	log := state.Log
 	printHeader(log, "Recheck")
 	printInfo(log, fmt.Sprintf("Critical checks that did not pass run once more before the verdict, so a "+
 		"transient error does not decide it: %s", strings.Join(names, ", ")))
+	if len(linked) > 0 {
+		printInfo(log, fmt.Sprintf("%s run again with them, since they judge the same workloads", joinAnd(linked)))
+	}
 	if ctx.Err() != nil || !sleepCtx(ctx, recheckDelay) {
 		printWarning(log, "The run has no time left to recheck them; their first results stand")
 		recheckCutShort(state, checks, results, 0)
@@ -215,13 +222,11 @@ func (su *suite) recheck(
 	facts := state.fork()
 	replaced := map[string]bool{}
 	for i, c := range checks {
-		again := c.blocks(results[i]) || (c.reads != "" && replaced[c.reads])
+		readsReplaced := c.reads != "" && replaced[c.reads]
 		// A check the ConfigMap drives did not run when only the recheck could
 		// load it.
-		if c.configured && !hadConfig && su.netCfg != nil {
-			again = true
-		}
-		if again {
+		loaded := c.configured && !hadConfig && su.netCfg != nil
+		if rerun[c.name] || readsReplaced || loaded {
 			r := facts.fork()
 			c.run(ctx, r)
 			if ctx.Err() != nil {
@@ -230,20 +235,64 @@ func (su *suite) recheck(
 				recheckCutShort(state, checks, results, i)
 				return
 			}
-			switch {
-			case c.critical != nil && c.critical(results[i]) == failed && c.critical(r) == unobserved:
-				printWarning(log, fmt.Sprintf("The recheck could not observe %s; the failure its first run "+
-					"observed stands", c.name))
-			default:
-				if c.critical != nil && c.critical(results[i]) == failed && c.critical(r) == passed {
-					r.Warnings = append(r.Warnings, clearedWarning(c.name, saw[i]))
-				}
+			byLink := slices.Contains(linked, c.name) && !readsReplaced && !loaded
+			if recheckReplaces(log, c, byLink, results[i], r, saw[i]) {
 				results[i] = r
 				replaced[c.name] = true
 			}
 		}
 		c.adopt(facts, results[i])
 	}
+}
+
+// linkReruns adds to rerun each check linked, directly or through another, to
+// one in it, and returns the names of those it added, in check order.
+func linkReruns(checks []check, rerun map[string]bool) []string {
+	first := maps.Clone(rerun)
+	for grew := true; grew; {
+		grew = false
+		for _, c := range checks {
+			for _, l := range c.linked {
+				if rerun[c.name] != rerun[l] {
+					rerun[c.name], rerun[l], grew = true, true, true
+				}
+			}
+		}
+	}
+	var linked []string
+	for _, c := range checks {
+		if rerun[c.name] && !first[c.name] {
+			linked = append(linked, c.name)
+		}
+	}
+	return linked
+}
+
+// recheckReplaces reports whether second, the recheck's result of c, replaces
+// first, its first result. A recheck that could not observe c keeps a failure
+// its first run observed, and, for a check run again only because it is
+// linked to one that did not pass (byLink), whatever its first run observed:
+// any other check that passed first may have run on nothing, as one the
+// network-checks ConfigMap drives does when the first pass could not load it.
+// A recheck that passes c where its first run failed adds a warning naming
+// what that run saw, from its error lines in saw.
+func recheckReplaces(log *logrus.Entry, c check, byLink bool, first, second *ValidationState, saw []string) bool {
+	if c.critical == nil {
+		return true
+	}
+	switch was, now := c.critical(first), c.critical(second); {
+	case was == failed && now == unobserved:
+		printWarning(log, fmt.Sprintf("The recheck could not observe %s; the failure its first run observed "+
+			"stands", c.name))
+		return false
+	case byLink && now == unobserved:
+		printWarning(log, fmt.Sprintf("The recheck could not observe %s; what its first run observed stands",
+			c.name))
+		return false
+	case was == failed && now == passed:
+		second.Warnings = append(second.Warnings, clearedWarning(c.name, saw))
+	}
+	return true
 }
 
 // clearedWarning is the warning for critical check name that failed its first
@@ -421,6 +470,12 @@ func (su *suite) checks(role Role) []check {
 	)
 }
 
+// The names of the Tier-1 and Tier-2 checks.
+const (
+	tier1CheckName = "Tier-1 Deployments"
+	tier2CheckName = "Tier-2 StatefulSets"
+)
+
 // controlPlaneChecks check gateway infrastructure, storage, inter-node overlay
 // connectivity and HA readiness. GPU operator and SMB CSI are compute-plane
 // concerns and are skipped.
@@ -484,7 +539,7 @@ func (su *suite) controlPlaneChecks() []check {
 			},
 		},
 		{
-			name: "Tier-1 Deployments",
+			name: tier1CheckName,
 			run: func(ctx context.Context, s *ValidationState) {
 				checkTier1DeploymentsFor(ctx, su.client, su.gatewayView(ctx).own, s)
 			},
@@ -492,13 +547,21 @@ func (su *suite) controlPlaneChecks() []check {
 			critical: func(s *ValidationState) outcome { return rowOutcome(s.Tier1DeploymentsOK) },
 		},
 		{
-			name: "Tier-2 StatefulSets",
+			name: tier2CheckName,
 			run:  func(ctx context.Context, s *ValidationState) { checkTier2StatefulSets(ctx, su.client, s) },
 			adopt: func(dst, src *ValidationState) {
-				dst.Tier2StatefulSetsOK, dst.Tier2PlacementNotAssessed =
-					src.Tier2StatefulSetsOK, src.Tier2PlacementNotAssessed
+				dst.Tier2StatefulSetsOK, dst.Tier2PlacementNotAssessed, dst.Tier2PeersSharingANode =
+					src.Tier2StatefulSetsOK, src.Tier2PlacementNotAssessed, src.Tier2PeersSharingANode
+				dst.Tier2PlacementDelegated = src.Tier2PlacementDelegated
 			},
 			critical: func(s *ValidationState) outcome { return rowOutcome(s.Tier2StatefulSetsOK) },
+		},
+		su.haGuaranteeCheck(),
+		{
+			name:     haTopologyLabel,
+			run:      func(ctx context.Context, s *ValidationState) { checkHATopology(ctx, su.client, s) },
+			adopt:    func(dst, src *ValidationState) { dst.HATopologyOK = src.HATopologyOK },
+			critical: haTopologyOutcome,
 		},
 	}
 }

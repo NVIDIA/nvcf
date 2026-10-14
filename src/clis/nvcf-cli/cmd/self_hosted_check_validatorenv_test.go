@@ -213,15 +213,19 @@ func TestCheck_RegistriesEnvVarIsSplitOnCommas(t *testing.T) {
 	assert.Contains(t, regs, "ghcr.io")
 }
 
-// The stack's Gateways reach the Job; an explicit setting wins. No HA mode is
-// forwarded: the validator reads it from the anti-affinity the stack renders.
+// The stack's Gateways reach the Job; an explicit setting wins. The HA mode
+// is forwarded, to the control-plane Job only: the compute-plane checks have
+// no HA rows.
 func TestClusterValidatorJobEnv_ForwardsStackGateways(t *testing.T) {
+	resetCheckFlags(t)
 	t.Setenv("NVCF_GATEWAY_NAMES", "")
 	t.Setenv("NVCF_HA_MODE", "preferred")
 	stack := selfhosted.StackValues{Gateways: []string{"gw/grpc-gw", "gw/shared-gw"}}
 	env := clusterValidatorJobEnv(stack)
 	assert.Equal(t, "gw/grpc-gw,gw/shared-gw", env["NVCF_GATEWAY_NAMES"])
-	assert.NotContains(t, env, "NVCF_HA_MODE")
+	assert.NotContains(t, env, "NVCF_HA_MODE", "the env both roles share")
+	mode, _ := controlPlaneHAMode(stack)
+	assert.Equal(t, "preferred", controlPlaneValidatorEnv(env, mode)["NVCF_HA_MODE"])
 
 	t.Setenv("NVCF_GATEWAY_NAMES", "edge/nvcf-gw")
 	env = clusterValidatorJobEnv(stack)
@@ -507,4 +511,180 @@ func TestClusterValidatorJobEnv_ExternalComponents(t *testing.T) {
 	checkPre = true
 	err := runSelfHostedCheck(selfHostedCheckCmd, nil)
 	require.ErrorContains(t, err, `unknown component "redis"`)
+}
+
+// The control-plane validator judges the cluster against an HA mode: --mode,
+// then NVCF_HA_MODE, then the config key ha_mode, then the stack's
+// highAvailability.mode when the stack values describe the install. Only
+// --mode is explicit. The env both roles share is never modified.
+func TestControlPlaneHAMode_Precedence(t *testing.T) {
+	resetCheckFlags(t)
+	t.Setenv("NVCF_HA_MODE", "")
+	type got struct {
+		mode     string
+		explicit bool
+	}
+	resolve := func(stack selfhosted.StackValues) got {
+		mode, explicit := controlPlaneHAMode(stack)
+		return got{mode, explicit}
+	}
+	preferred := selfhosted.StackValues{HAMode: "preferred"}
+
+	assert.Equal(t, got{}, resolve(selfhosted.StackValues{}), "nothing known: the validator says no mode was supplied")
+	assert.Equal(t, got{"preferred", false}, resolve(preferred))
+
+	withConfigFile(t, "ha_mode: None\n")
+	assert.Equal(t, got{"none", false}, resolve(preferred), "the config key beats the stack")
+
+	t.Setenv("NVCF_HA_MODE", " Enforced ")
+	assert.Equal(t, got{"enforced", false}, resolve(preferred), "NVCF_HA_MODE beats the config key")
+
+	require.NoError(t, selfHostedCheckCmd.Flags().Set("mode", "preferred"))
+	assert.Equal(t, got{"preferred", true}, resolve(selfhosted.StackValues{HAMode: "enforced"}), "--mode beats all")
+
+	shared := map[string]string{"NVCF_STORAGE_CLASS": "fast-ssd"}
+	cp := controlPlaneValidatorEnv(shared, "enforced")
+	assert.Equal(t, map[string]string{"NVCF_STORAGE_CLASS": "fast-ssd", "NVCF_HA_MODE": "enforced"}, cp)
+	assert.Equal(t, map[string]string{"NVCF_STORAGE_CLASS": "fast-ssd"}, shared, "the shared env is not modified")
+	assert.NotContains(t, controlPlaneValidatorEnv(shared, ""), "NVCF_HA_MODE")
+}
+
+// recordValidatorEnv records the env each role's validator Job is given and
+// answers as a validator that takes NVCF_HA_MODE does.
+func recordValidatorEnv(mu *sync.Mutex, got map[string]map[string]string) checkStubs {
+	validator := func(_ context.Context, p selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+		mu.Lock()
+		defer mu.Unlock()
+		got[p.Role] = p.Env
+		logs := "Validator role: " + p.Role + "\n"
+		if mode := p.Env["NVCF_HA_MODE"]; mode != "" {
+			logs += "HA mode: " + mode + "\n"
+		}
+		return selfhosted.ClusterValidatorResult{Passed: true, Logs: logs + "Cluster is NVCF-Ready\n"}
+	}
+	return checkStubs{validator: validator}
+}
+
+// The mode reaches the control-plane validator Job and not the compute-plane
+// one, whichever setting names it.
+func TestCheck_HAModeReachesOnlyTheControlPlaneValidator(t *testing.T) {
+	for name, tc := range map[string]struct {
+		env  string
+		args []string
+	}{
+		"--mode":       {args: []string{"--mode", "Enforced"}},
+		"NVCF_HA_MODE": {env: "enforced"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("NVCF_HA_MODE", tc.env)
+			var mu sync.Mutex
+			got := map[string]map[string]string{}
+			run := runCheck(t, recordValidatorEnv(&mu, got), append([]string{"--all",
+				"--cluster-validator-image", pinnedValidatorImage}, tc.args...)...)
+			require.Equal(t, 0, run.code(), run.stderr)
+			assert.Equal(t, "enforced", got["control-plane"]["NVCF_HA_MODE"])
+			require.Contains(t, got, "compute-plane")
+			assert.NotContains(t, got["compute-plane"], "NVCF_HA_MODE")
+		})
+	}
+}
+
+// The stack's highAvailability.mode reaches the validator only when the
+// stack values describe the install, as every stack-derived setting does.
+// base.yaml sets preferred, and an environment file can set another mode.
+func TestCheck_StackHAModeNeedsTheEnvironmentFile(t *testing.T) {
+	t.Setenv("HELMFILE_ENV", "")
+	t.Setenv("NVCF_CLI_DEFAULT_CONTROL_PLANE_STACK", "")
+	stack := t.TempDir()
+	envDir := filepath.Join(stack, "environments")
+	require.NoError(t, os.MkdirAll(envDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(envDir, "base.yaml"),
+		[]byte("highAvailability:\n  mode: preferred\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(envDir, "prod.yaml"), []byte("global: {}\n"), 0o644))
+	run := func(args ...string) map[string]string {
+		var mu sync.Mutex
+		got := map[string]map[string]string{}
+		r := runCheck(t, recordValidatorEnv(&mu, got), append([]string{"--control-plane",
+			"--control-plane-stack", stack, "--cluster-validator-image", pinnedValidatorImage}, args...)...)
+		require.Equal(t, 0, r.code(), r.stderr)
+		return got["control-plane"]
+	}
+
+	assert.Equal(t, "preferred", run("--env", "prod")["NVCF_HA_MODE"], "base.yaml's mode")
+	assert.NotContains(t, run(), "NVCF_HA_MODE", "the defaulted --env is not the install's environment")
+
+	require.NoError(t, os.WriteFile(filepath.Join(envDir, "prod.yaml"),
+		[]byte("highAvailability:\n  mode: enforced\n"), 0o644))
+	assert.Equal(t, "enforced", run("--env", "prod")["NVCF_HA_MODE"])
+	assert.Equal(t, "none", run("--env", "prod", "--mode", "none")["NVCF_HA_MODE"], "--mode beats the stack")
+
+	require.NoError(t, os.WriteFile(filepath.Join(envDir, "prod.yaml"),
+		[]byte("highAvailability:\n  mode: Enforced\n"), 0o644))
+	assert.NotContains(t, run("--env", "prod"), "NVCF_HA_MODE", "a mode the stack cannot render describes no install")
+}
+
+// A mode other than none, preferred or enforced is a usage error, whichever
+// setting names it: exit 1 before any event, tag discovery or cluster call.
+func TestCheck_InvalidHAModeIsAUsageError(t *testing.T) {
+	prev := resolveLatestValidatorTagForSelfHosted
+	t.Cleanup(func() { resolveLatestValidatorTagForSelfHosted = prev })
+	var discoveries atomic.Int32
+	resolveLatestValidatorTagForSelfHosted = func(context.Context, string) (string, bool) {
+		discoveries.Add(1)
+		return "", false
+	}
+	for name, tc := range map[string]struct {
+		env, config string
+		args        []string
+		want        string
+	}{
+		"--mode":       {args: []string{"--mode", "strict"}, want: `--mode "strict"`},
+		"NVCF_HA_MODE": {env: "best-effort", want: `NVCF_HA_MODE "best-effort"`},
+		"config":       {config: "ha_mode: required\n", want: `config key ha_mode "required"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("NVCF_HA_MODE", tc.env)
+			if tc.config != "" {
+				withConfigFile(t, tc.config)
+			}
+			run := runCheck(t, checkStubs{}, append([]string{"--all",
+				"--cluster-validator-image", "nvcr.io/nvidia/nvcf-byoc/cluster-validator"}, tc.args...)...)
+			require.Error(t, run.err)
+			assert.Equal(t, tc.want+": use one of none, preferred, enforced", run.err.Error())
+			assert.Equal(t, 1, run.code())
+			assert.NotContains(t, run.stderr, `"event"`)
+			assert.Empty(t, run.validators)
+			assert.Empty(t, run.stale)
+		})
+	}
+	assert.Zero(t, discoveries.Load())
+}
+
+// A validator image that predates the HA rows ignores the mode it is given
+// and prints no HA mode line. The run then warns that the mode was not
+// checked, and fails when the operator asked for it with --mode.
+func TestCheck_ValidatorWithoutHAModeSupport(t *testing.T) {
+	ready := selfhosted.ClusterValidatorResult{Passed: true,
+		Logs: "Validator role: control-plane\nCluster is NVCF-Ready\n"}
+	validator := func(context.Context, selfhosted.ClusterValidatorParams) selfhosted.ClusterValidatorResult {
+		return ready
+	}
+	old := checkStubs{validator: validator}
+	args := []string{"--control-plane", "--cluster-validator-image", pinnedValidatorImage}
+
+	t.Setenv("NVCF_HA_MODE", "")
+	run := runCheck(t, old, args...)
+	assert.Equal(t, 0, run.code(), "no mode, nothing ignored")
+	assert.Equal(t, "info", run.row(t, "control-plane-cluster", "cluster-validator")["severity"])
+
+	t.Setenv("NVCF_HA_MODE", "enforced")
+	run = runCheck(t, old, args...)
+	assert.Equal(t, 0, run.code(), run.stderr)
+	row := run.row(t, "control-plane-cluster", "cluster-validator")
+	assert.Equal(t, "warning", row["severity"])
+	assert.Contains(t, row["message"], "image does not support --mode, so the HA invariants of mode enforced")
+
+	run = runCheck(t, old, append(args, "--mode", "enforced")...)
+	assert.Equal(t, 2, run.code(), run.stderr)
+	assert.Equal(t, "error", run.row(t, "control-plane-cluster", "cluster-validator")["severity"])
 }

@@ -196,6 +196,10 @@ const (
 	// Control-plane HA readiness checks.
 	CheckKeyTier1Deployments  = "tier1_deployments"
 	CheckKeyTier2StatefulSets = "tier2_statefulsets"
+	// CheckKeyHAGuarantee and CheckKeyHATopology have no result under HA mode
+	// none, and CheckKeyHATopology none without a mode either.
+	CheckKeyHAGuarantee = "ha_guarantee"
+	CheckKeyHATopology  = "ha_topology"
 )
 
 // AllCheckKeys is the canonical ordering used for documentation and
@@ -221,6 +225,8 @@ var AllCheckKeys = []string{
 	CheckKeyNodeToNode,
 	CheckKeyTier1Deployments,
 	CheckKeyTier2StatefulSets,
+	CheckKeyHAGuarantee,
+	CheckKeyHATopology,
 }
 
 // buildSummary projects a ValidationState into the wire format. Checks
@@ -294,6 +300,12 @@ func buildSummary(state *ValidationState, startedAt time.Time, verdictReady bool
 	}
 	if state.Tier2StatefulSetsOK != nil {
 		s.Checks[CheckKeyTier2StatefulSets] = *state.Tier2StatefulSetsOK
+	}
+	if state.HAGuaranteeOK != nil && !haPlacementUnassessed(state) {
+		s.Checks[CheckKeyHAGuarantee] = *state.HAGuaranteeOK
+	}
+	if state.HATopologyOK != nil {
+		s.Checks[CheckKeyHATopology] = *state.HATopologyOK
 	}
 
 	// An always-run check that could not read what it checks has no result,

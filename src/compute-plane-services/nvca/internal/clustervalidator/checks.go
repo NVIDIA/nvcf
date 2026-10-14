@@ -4780,8 +4780,10 @@ func stackOwned(ns string, obj metav1.Object) bool {
 // checkTier1DeploymentsFor verifies that every NVCF Deployment in the
 // control-plane namespaces, every Envoy proxy of an NVCF Gateway wherever it
 // runs, and after install the Envoy Gateway controller that runs the NVCF
-// Gateways, has all its pods Ready. Any under-replicated one means HA headroom is gone and a second
-// failure causes a full outage.
+// Gateways, has all its pods Ready. Any under-replicated one means HA headroom
+// is gone and a second failure causes a full outage. After install it also
+// fails an NVCF Service that selects none of its release's Ready pods
+// (judgeServices), which serves nothing however Ready they are.
 //
 // The check is generic; no hardcoded Deployment names. New services added to
 // those namespaces are automatically covered.
@@ -4845,7 +4847,12 @@ type tier1Scan struct {
 	scaledToZero    []string
 	gatewayGaps     []string
 	notAssessed     []string
-	checkedCount    int
+	// serviceGaps are the NVCF Services that select none of their release's
+	// pods (judgeServices), and servicesUnread says a namespace's could not
+	// be judged.
+	serviceGaps    []string
+	servicesUnread bool
+	checkedCount   int
 	// unread holds each namespace whose Deployments could not be read, with
 	// the cause, and unreadErrs the errors themselves.
 	unread       []string
@@ -4934,6 +4941,9 @@ func (s *tier1Scan) scanNamespace(ctx context.Context, client kubernetes.Interfa
 			}
 			s.assess(deploymentReadiness(d, s.dates))
 		}
+	}
+	if s.state.PostInstall && !s.proxyOnly[ns] {
+		s.judgeServices(ctx, client, ns, deploys.Items)
 	}
 }
 
@@ -5166,7 +5176,7 @@ func (s *tier1Scan) reportFindings() bool {
 		workloads = append(workloads, fmt.Sprintf("scaled to zero replicas: %s", strings.Join(s.scaledToZero, ", ")))
 	}
 	missing := s.controlPlaneMissing()
-	total := len(workloads) + len(s.gatewayGaps) + len(s.controllerMissing)
+	total := len(workloads) + len(s.gatewayGaps) + len(s.controllerMissing) + len(s.serviceGaps)
 	if missing {
 		total++
 	}
@@ -5196,6 +5206,10 @@ func (s *tier1Scan) reportFindings() bool {
 		s.state.Recommendations = append(s.state.Recommendations,
 			"A Deployment scaled to zero serves nothing: restore its replicaCount in the self-managed stack "+
 				"values, or scale it back up (kubectl -n <namespace> scale deployment <name> --replicas=<n>).")
+	}
+	printFindingBlock(s.log, "Services that select none of their release's pods", s.serviceGaps)
+	if len(s.serviceGaps) > 0 {
+		s.state.Recommendations = append(s.state.Recommendations, tier1ServiceAdvice)
 	}
 	printFindingBlock(s.log, "Envoy Gateway controller", s.controllerMissing)
 	if len(s.controllerMissing) > 0 {
@@ -5516,7 +5530,7 @@ func (s *tier1Scan) verdict(proxiesUnobserved, coverageUndecided bool) {
 	case s.reportFindings():
 		s.setOK(false)
 	case proxiesUnobserved || coverageUndecided || len(s.unread) > 0 || s.controllerErr != nil ||
-		s.controllerUnconfirmed || len(s.controllerUndecided) > 0:
+		s.controllerUnconfirmed || len(s.controllerUndecided) > 0 || s.servicesUnread:
 		// Something was never observed, so "all ready" is not a claim we can
 		// make even though everything we could see passed.
 		if len(s.unread) > 0 {
@@ -5567,11 +5581,14 @@ func (s *tier1Scan) verdict(proxiesUnobserved, coverageUndecided bool) {
 // Tier-2 stateful components (NATS JetStream, OpenBao Raft, Cassandra).
 // Any StatefulSet with an odd spec.replicas of 3 or more is treated as a quorum
 // component and checked for:
-//  1. readyReplicas == spec.replicas
-//  2. all pods on distinct nodes, when the StatefulSet spreads its pods
+//  1. every member Ready, counted from its pods as the HA Guarantee row counts
+//     them: a terminating pod is not Ready, though the status still counts it
+//  2. all pods on distinct nodes, when the StatefulSet spreads its pods, as
+//     tier2PlacementFor decides for the HA mode: under preferred or enforced
+//     the HA Guarantee row judges the stack's own quorum members instead
 //
-// Whether a component is meant to be highly available is read from what was
-// rendered rather than passed in: the stack gives its quorum StatefulSets pod
+// Whether a component is meant to be highly available for its quorum is read
+// from what was rendered: the stack gives its quorum StatefulSets pod
 // anti-affinity under highAvailability.mode preferred or enforced, and none
 // under mode none. A spread component below three replicas has lost its
 // quorum. One that is not spread is checked for readiness only, since one
@@ -5594,7 +5611,8 @@ func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, st
 	printHeader(state.Log, "Tier-2 StatefulSet Quorum and Placement")
 	external, invalid := externalComponents()
 	scan := &tier2Scan{log: state.Log, state: state, shared: sharedTier1Namespaces(), external: external,
-		seen: map[string]bool{}, denied: map[string]bool{}}
+		seen: map[string]bool{}, denied: map[string]bool{}, pods: map[string][]corev1.Pod{},
+		podErrs: map[string]error{}}
 	if len(invalid) > 0 {
 		scan.warn(fmt.Sprintf("ignoring %s entries %s; use %s", externalComponentsEnv,
 			strings.Join(invalid, ", "), strings.Join(quorumComponentNames(), ", ")))
@@ -5651,7 +5669,13 @@ type tier2Scan struct {
 	notAssessed []string
 	// unspread holds assessed StatefulSets whose placement is not judged:
 	// nothing asks for their pods on distinct nodes.
-	unspread     []string
+	unspread []string
+	// sharing holds the StatefulSets whose peers share a node, a failover
+	// risk only warned about (tier2PlacementWarns).
+	sharing []string
+	// delegated holds the StatefulSets whose placement the HA Guarantee row
+	// judges (tier2PlacementDelegated).
+	delegated    []string
 	checkedCount int
 	// unread holds each namespace whose StatefulSets could not be read, with
 	// the cause, and unreadErrs the errors themselves.
@@ -5664,6 +5688,10 @@ type tier2Scan struct {
 	// could not be read, so an unreadable object cannot masquerade as a clean
 	// placement or rollout result.
 	unobserved []string
+	// pods holds each namespace's pods, listed once, and podErrs why a
+	// namespace's could not be.
+	pods    map[string][]corev1.Pod
+	podErrs map[string]error
 }
 
 func (s *tier2Scan) warn(msg string) {
@@ -5724,6 +5752,7 @@ func (s *tier2Scan) assess(ctx context.Context, client kubernetes.Interface, ns 
 	}
 	want := *sts.Spec.Replicas
 	spread := spreadsAcrossNodes(sts)
+	placement := tier2PlacementFor(s.state.HAMode, sts)
 	switch {
 	case known && want == 0:
 		// Scaled to zero is the component down, however it was installed.
@@ -5746,51 +5775,87 @@ func (s *tier2Scan) assess(ctx context.Context, client kubernetes.Interface, ns 
 		s.skippedParity = append(s.skippedParity, fmt.Sprintf("%s/%s (replicas=%d)", ns, sts.Name, want))
 		return
 	}
-	if !spread {
+	switch placement {
+	case tier2PlacementUnjudged:
 		s.unspread = append(s.unspread, fmt.Sprintf("%s/%s (replicas=%d)", ns, sts.Name, want))
+	case tier2PlacementDelegated:
+		s.delegated = append(s.delegated, ns+"/"+sts.Name)
 	}
 
 	failures, unobserved := len(s.failures), len(s.unobserved)
-	if s.assessMembers(ctx, client, ns, sts, want, spread) &&
+	if rolling, ready := s.assessMembers(ctx, client, ns, sts, want, placement.judged()); rolling &&
 		len(s.failures) == failures && len(s.unobserved) == unobserved {
 		// Only a rollout this run tolerated is reported as in progress. One
 		// it failed or could not judge is not something to wait for.
-		s.warn(fmt.Sprintf("%s/%s: %s (ready: %d/%d)",
-			ns, sts.Name, RollingUpdateMarker, sts.Status.ReadyReplicas, want))
+		s.warn(fmt.Sprintf("%s/%s: %s (ready: %d/%d)", ns, sts.Name, RollingUpdateMarker, ready, want))
 		s.rollingCount++
 	}
 }
 
+// namespacePods lists the pods of ns, once per scan.
+func (s *tier2Scan) namespacePods(ctx context.Context, client kubernetes.Interface, ns string) ([]corev1.Pod, error) {
+	if pods, read := s.pods[ns]; read || s.podErrs[ns] != nil {
+		return pods, s.podErrs[ns]
+	}
+	list, err := observe(ctx, func(c context.Context) (*corev1.PodList, error) {
+		return client.CoreV1().Pods(ns).List(c, metav1.ListOptions{})
+	})
+	if err != nil {
+		s.podErrs[ns] = err
+		return nil, err
+	}
+	s.pods[ns] = list.Items
+	return list.Items, nil
+}
+
+// readyMember reports whether p counts as a Ready member: Ready and not
+// terminating. The HA Guarantee row counts its members this way too.
+func readyMember(p *corev1.Pod) bool { return p.DeletionTimestamp == nil && isPodReady(p) }
+
+// readyMembers counts the pods of sts that are Ready members. Its status
+// counts a terminating pod as Ready until the kubelet stops it.
+func readyMembers(sts *appsv1.StatefulSet, pods []corev1.Pod) int32 {
+	var n int32
+	for i := range pods {
+		if metav1.IsControlledBy(&pods[i], sts) && readyMember(&pods[i]) {
+			n++
+		}
+	}
+	return n
+}
+
 // assessMembers judges sts's readiness, a rollout in flight and placement, and
-// reports whether a rollout is in flight.
+// reports whether a rollout is in flight and how many members are Ready. The
+// members are counted from its pods; where they cannot be read its status
+// still shows a member down, but its count of Ready members is unconfirmed.
 func (s *tier2Scan) assessMembers(
 	ctx context.Context, client kubernetes.Interface, ns string, sts *appsv1.StatefulSet, want int32, spread bool,
-) bool {
-	rolling, oneDownRolling, decided := s.assessRollout(ns, sts, want)
+) (bool, int32) {
+	pods, podsErr := s.namespacePods(ctx, client, ns)
+	ready := sts.Status.ReadyReplicas
+	if podsErr == nil {
+		ready = readyMembers(sts, pods)
+	}
+	rolling, oneDownRolling, decided := s.assessRollout(ns, sts, want, ready)
 	if decided {
-		return rolling
+		return rolling, ready
 	}
 	s.checkedCount++
-	if sts.Status.ReadyReplicas < want && !oneDownRolling {
-		s.fail(tier2NotReadyAdvice, "%s/%s: readyReplicas=%d (need %d)", ns, sts.Name, sts.Status.ReadyReplicas, want)
-		return rolling
+	if ready < want && !oneDownRolling {
+		s.fail(tier2NotReadyAdvice, "%s/%s: Ready %d of %d", ns, sts.Name, ready, want)
+		return rolling, ready
+	}
+	if podsErr != nil {
+		// Not a failure: we could not look. Recording it in failures would
+		// report a broken quorum for an RBAC gap on pods, while the identical
+		// gap on statefulsets is correctly reported as unknown.
+		s.warn(fmt.Sprintf("%s/%s: %s", ns, sts.Name, readFailure("its pods", podsErr)))
+		s.unobserved = append(s.unobserved, ns+"/"+sts.Name)
+		return rolling, ready
 	}
 	if !oneDownRolling && !spread {
 		// Ready, and its placement is not something it asked for.
-		return rolling
-	}
-
-	selector := metav1.FormatLabelSelector(sts.Spec.Selector)
-	pods, err := observe(ctx, func(c context.Context) (*corev1.PodList, error) {
-		return client.CoreV1().Pods(ns).List(c, metav1.ListOptions{LabelSelector: selector})
-	})
-	if err != nil {
-		// Not a placement failure: we could not look. Recording it in failures
-		// would report a broken quorum for an RBAC gap on pods, while the
-		// identical gap on statefulsets is correctly reported as unknown.
-		s.warn(fmt.Sprintf("%s/%s: %s", ns, sts.Name, readFailure("its pods", err)))
-		s.unobserved = append(s.unobserved, ns+"/"+sts.Name)
-		return rolling
+		return rolling, ready
 	}
 
 	// A rollout with one pod down is tolerated only while it can still
@@ -5813,12 +5878,12 @@ func (s *tier2Scan) assessMembers(
 		if lowered, recorded := partitionWrittenAt(sts); recorded {
 			started = laterOf(started, lowered)
 		}
-		reason, undated := stalledRollout(sts, pods.Items, started, time.Now())
+		reason, undated := stalledRollout(sts, pods, started, time.Now())
 		switch {
 		case reason != "":
-			s.fail(tier2NotReadyAdvice, "%s/%s: readyReplicas=%d (need %d), rolling update is not progressing: %s",
-				ns, sts.Name, sts.Status.ReadyReplicas, want, reason)
-			return rolling
+			s.fail(tier2NotReadyAdvice, "%s/%s: Ready %d of %d, rolling update is not progressing: %s",
+				ns, sts.Name, ready, want, reason)
+			return rolling, ready
 		case undated:
 			// A pod is down and nothing dates the rollout, so how long it has
 			// been down is unknown: tolerating it would be unbounded.
@@ -5829,14 +5894,14 @@ func (s *tier2Scan) assessMembers(
 			s.warn(fmt.Sprintf("%s/%s: a pod is down and when its rollout began is unknown: %s",
 				ns, sts.Name, cause))
 			s.unobserved = append(s.unobserved, ns+"/"+sts.Name)
-			return rolling
+			return rolling, ready
 		}
 		s.rollingUnderReplicated++
 	}
 	if spread {
-		s.assessPlacement(ns, sts, pods.Items)
+		s.assessPlacement(ns, sts, pods)
 	}
-	return rolling
+	return rolling, ready
 }
 
 // spreadsAcrossNodes reports whether sts asks for its own pods on distinct
@@ -5893,22 +5958,22 @@ func selectsLabels(sel *metav1.LabelSelector, set labels.Set) bool {
 	return err == nil && s.Matches(set)
 }
 
-// assessRollout handles a RollingUpdate in flight (rolling). StatefulSets roll
-// one pod at a time, so readyReplicas == want-1 is the steady state for the
-// whole of any pod template change, such as an image bump, and is tolerated
-// while the rollout can finish (oneDownRolling). More than one pod down fails, which decides the
-// StatefulSet. Under OnDelete the controller never advances CurrentRevision on
-// its own, so a revision mismatch says nothing and readiness is assessed
-// directly.
+// assessRollout handles a RollingUpdate in flight (rolling), with ready of its
+// want members Ready. StatefulSets roll one pod at a time, so want-1 Ready is
+// the steady state for the whole of any pod template change, such as an image
+// bump, and is tolerated while the rollout can finish (oneDownRolling). More
+// than one pod down fails, which decides the StatefulSet. Under OnDelete the
+// controller never advances CurrentRevision on its own, so a revision mismatch
+// says nothing and readiness is assessed directly.
 func (s *tier2Scan) assessRollout(
-	ns string, sts *appsv1.StatefulSet, want int32,
+	ns string, sts *appsv1.StatefulSet, want, ready int32,
 ) (rolling, oneDownRolling, decided bool) {
 	if sts.Spec.UpdateStrategy.Type == appsv1.OnDeleteStatefulSetStrategyType ||
 		sts.Status.UpdateRevision == "" || sts.Status.CurrentRevision == sts.Status.UpdateRevision {
 		return false, false, false
 	}
 	if partition := rollingUpdatePartition(sts); partition > 0 &&
-		int(sts.Status.UpdatedReplicas) >= int(want)-partition && sts.Status.ReadyReplicas >= want {
+		int(sts.Status.UpdatedReplicas) >= int(want)-partition && ready >= want {
 		// A rollout staged with a partition has updated every pod it will
 		// until the partition is lowered, and CurrentRevision does not move
 		// until then. With every pod Ready nothing is in progress, so this is
@@ -5918,33 +5983,32 @@ func (s *tier2Scan) assessRollout(
 		return false, false, false
 	}
 	switch {
-	case sts.Status.ReadyReplicas >= want:
+	case ready >= want:
 		return true, false, false
-	case sts.Status.ReadyReplicas == want-1:
+	case ready == want-1:
 		return true, true, false
 	default:
 		s.fail(tier2NotReadyAdvice,
-			"%s/%s: readyReplicas=%d (need %d), more pods down than a rolling update takes down at once",
-			ns, sts.Name, sts.Status.ReadyReplicas, want)
+			"%s/%s: Ready %d of %d, more pods down than a rolling update takes down at once",
+			ns, sts.Name, ready, want)
 		s.checkedCount++
 		return true, false, true
 	}
 }
 
 // assessPlacement fails two Ready peers on one node: one node loss from losing
-// quorum. Only Ready pods owned by this StatefulSet count; phase stays Running
-// through CrashLoopBackOff, and a surplus pod left over from a rollout would
-// otherwise read as a co-location. A tolerated rollout is scanned too.
+// quorum. Only Ready members owned by this StatefulSet count; phase stays
+// Running through CrashLoopBackOff, and a surplus pod left over from a rollout
+// would otherwise read as a co-location. A tolerated rollout is scanned too.
 func (s *tier2Scan) assessPlacement(ns string, sts *appsv1.StatefulSet, pods []corev1.Pod) {
 	nodeOwner := make(map[string]string)
 	for j := range pods {
 		p := &pods[j]
-		if !metav1.IsControlledBy(p, sts) || !isPodReady(p) {
+		if !metav1.IsControlledBy(p, sts) || !readyMember(p) {
 			continue
 		}
 		if first, dup := nodeOwner[p.Spec.NodeName]; dup {
-			s.fail(tier2CoLocatedAdvice, "%s/%s: pods %s and %s are co-located on node %s",
-				ns, sts.Name, first, p.Name, p.Spec.NodeName)
+			s.coLocated(ns, sts, first, p.Name, p.Spec.NodeName)
 		} else {
 			nodeOwner[p.Spec.NodeName] = p.Name
 		}
@@ -5954,7 +6018,8 @@ func (s *tier2Scan) assessPlacement(ns string, sts *appsv1.StatefulSet, pods []c
 func (s *tier2Scan) setOK(ok bool) {
 	s.state.Tier2StatefulSetsOK = &ok
 	if ok {
-		s.state.Tier2PlacementNotAssessed = len(s.unspread)
+		s.state.Tier2PlacementNotAssessed, s.state.Tier2PeersSharingANode = len(s.unspread), len(s.sharing)
+		s.state.Tier2PlacementDelegated = len(s.delegated)
 	}
 }
 
@@ -6049,12 +6114,7 @@ func (s *tier2Scan) verdict() {
 				"%d quorum StatefulSet(s) healthy, %d %s but at their replica target",
 				s.checkedCount, s.rollingCount, MidRolloutMarker))
 		}
-		if len(s.unspread) == 0 {
-			printSuccess(s.log, fmt.Sprintf("All %d quorum StatefulSet(s) Ready on distinct nodes", s.checkedCount))
-		} else {
-			printSuccess(s.log, fmt.Sprintf("All %d quorum StatefulSet(s) Ready (%d on distinct nodes, %d placement "+
-				"not assessed)", s.checkedCount, s.checkedCount-len(s.unspread), len(s.unspread)))
-		}
+		printSuccess(s.log, s.readyMessage())
 		s.setOK(true)
 	}
 }

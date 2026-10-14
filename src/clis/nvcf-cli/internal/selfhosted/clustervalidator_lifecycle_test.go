@@ -1320,6 +1320,195 @@ func TestClusterValidatorCheck_FailuresNameTheirRows(t *testing.T) {
 	assert.Contains(t, evicted.Message, "its pod ended before the validator printed a verdict (Evicted)")
 }
 
+// gradeWithHAMode runs the control-plane validator check on a stub that
+// returns res, with mode forwarded as NVCF_HA_MODE, from --mode when explicit.
+func gradeWithHAMode(res ClusterValidatorResult, mode string, explicit bool) CheckResult {
+	cv := func(context.Context, ClusterValidatorParams) ClusterValidatorResult { return res }
+	env := map[string]string{}
+	if mode != "" {
+		env["NVCF_HA_MODE"] = mode
+	}
+	return clusterValidatorCheck(RoleConfig{ClusterValidator: cv, ClusterValidatorImage: "img:1", KubeContext: "ctx-a",
+		ClusterValidatorEnv: env, ClusterValidatorHAModeExplicit: explicit},
+		validatorRoleControlPlane).Run(context.Background())
+}
+
+// controlPlaneTranscript is a control-plane run that reaches verdict, with
+// the HA mode line when haMode is set, the summary rows given, and its
+// warnings listed after the verdict as the validator lists them.
+func controlPlaneTranscript(haMode string, rows []string, verdict string, warnings ...string) string {
+	var b strings.Builder
+	b.WriteString("Validator role: control-plane\n")
+	if haMode != "" {
+		b.WriteString("HA mode: " + haMode + "\n")
+	}
+	b.WriteString("Check Results:\n")
+	for _, row := range rows {
+		b.WriteString(row + "\n")
+	}
+	b.WriteString("Cluster is " + verdict + "\n")
+	if len(warnings) > 0 {
+		b.WriteString("Warnings (manual verification required):\n")
+		for i, w := range warnings {
+			fmt.Fprintf(&b, "  %d. \u26a0 %s\n", i+1, w)
+		}
+	}
+	return b.String()
+}
+
+// A validator given an HA mode prints the line that shows it took it. One that
+// ends its run without that line predates the HA rows and checked nothing the
+// mode requires: a warning, or an error when the operator asked for the mode
+// with --mode. Only a transcript that shows the requested checks is evidence
+// of that; one that cannot be read already says what it does not show.
+func TestClusterValidatorCheck_HAModeTheImageIgnores(t *testing.T) {
+	tier1 := []string{"\u2713    Tier-1 Deployments: All Ready"}
+	ready := ClusterValidatorResult{Passed: true, Logs: controlPlaneTranscript("", tier1, "NVCF-Ready")}
+
+	clean := gradeWithHAMode(ready, "", false)
+	assert.True(t, clean.Passed, "no mode was forwarded, so none was ignored")
+	assert.Equal(t, SeverityInfo, clean.Severity)
+
+	took := gradeWithHAMode(ClusterValidatorResult{Passed: true,
+		Logs: controlPlaneTranscript("enforced", tier1, "NVCF-Ready")}, "enforced", true)
+	assert.True(t, took.Passed)
+	assert.Equal(t, SeverityInfo, took.Severity)
+
+	const note = "the cluster-validator image does not support --mode, so the HA invariants of mode "
+	fromStack := gradeWithHAMode(ready, "preferred", false)
+	assert.False(t, fromStack.Passed)
+	assert.Equal(t, SeverityWarning, fromStack.Severity)
+	assert.False(t, fromStack.Transient, "a newer image is needed; polling again cannot clear it")
+	assert.Equal(t, "cluster-validator passed, but "+note+"preferred were not checked; use an image from "+
+		"an NVCA release that supports it", fromStack.Message)
+
+	flag := gradeWithHAMode(ready, "enforced", true)
+	assert.True(t, flag.IsBlockingFailure(), "--mode asked for the HA invariants")
+	assert.Contains(t, flag.Message, note+"enforced were not checked")
+
+	// Mode none asks for no HA check, and an image that predates the HA rows
+	// runs the same checks for it as one that reads the mode.
+	for _, explicit := range []bool{false, true} {
+		none := gradeWithHAMode(ready, "none", explicit)
+		assert.True(t, none.Passed, "explicit=%v", explicit)
+		assert.Equal(t, SeverityInfo, none.Severity, "explicit=%v", explicit)
+		assert.Equal(t, "cluster passed cluster-validator built-in checks", none.Message, "explicit=%v", explicit)
+		assert.NotContains(t, none.Message, "--mode")
+	}
+
+	rolling := gradeWithHAMode(ClusterValidatorResult{Passed: true, Logs: controlPlaneTranscript("", tier1,
+		"NVCF-Ready (with warnings)", "Tier-2 StatefulSets: nats-system/nats: rolling update in progress")},
+		"preferred", false)
+	assert.Equal(t, SeverityWarning, rolling.Severity)
+	assert.True(t, rolling.Transient, "the rollout still keeps --wait polling")
+	assert.Contains(t, rolling.Message, "rollout in progress")
+	assert.Contains(t, rolling.Message, note+"preferred")
+
+	failed := gradeWithHAMode(ClusterValidatorResult{ExitCode: 3, Logs: controlPlaneTranscript("",
+		[]string{"\u2717    Tier-1 Deployments: Not Ready"}, "NVCF-Not-Ready")}, "preferred", false)
+	assert.Equal(t, SeverityError, failed.Severity)
+	assert.Equal(t, "cluster-validator reported failures: Tier-1 Deployments: Not Ready; "+note+
+		"preferred were not checked; use an image from an NVCA release that supports it", failed.Message)
+
+	legacy := ClusterValidatorResult{ExitCode: 1, Logs: cleanValidatorOutput(legacyValidatorTranscript(true))}
+	old := gradeWithHAMode(legacy, "preferred", false)
+	assert.Equal(t, SeverityWarning, old.Severity)
+	assert.Contains(t, old.Message, "does not support the control-plane checks")
+	assert.Contains(t, old.Message, note+"preferred")
+	assert.True(t, gradeWithHAMode(legacy, "enforced", true).IsBlockingFailure())
+	legacyNone := gradeWithHAMode(legacy, "none", true)
+	assert.Equal(t, old.Transient, legacyNone.Transient)
+	assert.Equal(t, SeverityWarning, legacyNone.Severity, "only the role support is graded under none")
+	assert.NotContains(t, legacyNone.Message, "--mode")
+
+	unread := gradeWithHAMode(ClusterValidatorResult{Passed: true, JobName: "job-1",
+		LogsErr: errors.New(`cannot get resource "pods/log"`)}, "enforced", true)
+	assert.True(t, unread.Passed, "an unread transcript is no evidence the mode was ignored")
+	assert.NotContains(t, unread.Message, "--mode")
+
+	noRoleLine := gradeWithHAMode(ClusterValidatorResult{Passed: true, JobName: "job-1",
+		Logs: "Cluster is NVCF-Ready\n"}, "enforced", true)
+	assert.Equal(t, SeverityWarning, noRoleLine.Severity, "the run's checks are unconfirmed, not failed")
+	assert.True(t, noRoleLine.Transient)
+	assert.NotContains(t, noRoleLine.Message, "--mode")
+}
+
+// The row names each HA row that warned or failed, so a reader of --json sees
+// which guarantee degraded without the transcript. The validator lists each
+// HA finding under Warnings prefixed with its row's label, as it does the
+// Tier rows' findings.
+func TestClusterValidatorCheck_NamesDegradedHARows(t *testing.T) {
+	met := []string{"\u2713    HA Guarantee: Met", "\u2713    HA Topology: Met"}
+	guarantee := "HA Guarantee: nvcf/api: no zone topology spread, mode preferred wants one"
+	topology := "HA Topology: 2 zones among schedulable nodes, mode preferred wants 3; a 2+1 quorum split is not AZ-HA"
+
+	warned := gradeWithHAMode(ClusterValidatorResult{Passed: true, Logs: controlPlaneTranscript("preferred", met,
+		"NVCF-Ready (with warnings)", guarantee, topology)}, "preferred", false)
+	assert.Equal(t, SeverityWarning, warned.Severity)
+	assert.False(t, warned.Transient)
+	assert.Equal(t, "cluster-validator passed with warnings (degraded: HA Guarantee, HA Topology); "+
+		"run with --show-logs for details", warned.Message)
+
+	other := gradeWithHAMode(ClusterValidatorResult{Passed: true, Logs: controlPlaneTranscript("preferred", met,
+		"NVCF-Ready (with warnings)", "Node-to-Node Communication: not applicable")}, "preferred", false)
+	assert.Equal(t, "cluster-validator passed with warnings; run with --show-logs for details", other.Message)
+
+	rolling := gradeWithHAMode(ClusterValidatorResult{Passed: true, Logs: controlPlaneTranscript("preferred", met,
+		"NVCF-Ready (with warnings)", "Tier-1 Deployments: nvcf/api: rollout in progress (updated: 1/2)",
+		topology)}, "preferred", false)
+	assert.True(t, rolling.Transient)
+	assert.Equal(t, "cluster-validator passed with a rollout in progress (degraded: HA Topology); "+
+		"--wait polls until it completes", rolling.Message)
+
+	failed := gradeWithHAMode(ClusterValidatorResult{ExitCode: 3, Logs: controlPlaneTranscript("enforced",
+		[]string{"\u2717    HA Guarantee: Failed", "\u2713    HA Topology: Met"}, "NVCF-Not-Ready",
+		"HA Guarantee: nvcf/api: spec.replicas 1, mode enforced requires at least 2", topology)}, "enforced", true)
+	assert.Equal(t, SeverityError, failed.Severity)
+	assert.Equal(t, "cluster-validator reported failures: HA Guarantee: Failed (degraded: HA Topology)",
+		failed.Message, "a failed row is named once, as a failure")
+
+	unknown := gradeWithHAMode(ClusterValidatorResult{ExitCode: 3, Logs: controlPlaneTranscript("enforced",
+		[]string{"\u26a0    HA Guarantee: Status Unknown (not fully observed)", "\u2713    HA Topology: Met"},
+		"NVCF-Not-Ready")}, "enforced", true)
+	assert.Equal(t, "cluster-validator reported failures: HA Guarantee: Status Unknown (not fully observed)",
+		unknown.Message)
+
+	notApplicable := gradeWithHAMode(ClusterValidatorResult{Passed: true, Logs: controlPlaneTranscript("none",
+		[]string{"\u2139    HA Guarantee: Not Applicable (HA mode none)",
+			"\u2139    HA Topology: Not Applicable (HA mode none)"}, "NVCF-Ready")}, "none", false)
+	assert.True(t, notApplicable.Passed)
+	assert.Equal(t, "cluster passed cluster-validator built-in checks", notApplicable.Message)
+
+	// Without a mode, a run whose HA Guarantee row assessed no placement says
+	// so in a warning on the row: nothing was assessed, so nothing degraded.
+	// A placement finding it warns about without a mode is named as ever.
+	noTerms := "HA Guarantee: rendered placement not assessed: none of the 11 HA workload(s) renders hostname pod " +
+		"anti-affinity or a hostname spread for its own pods, and no HA mode was supplied to judge them against"
+	noWorkload := "HA Guarantee: rendered placement not assessed: no HA workload was found, and no HA mode was " +
+		"supplied to judge one against"
+	notSupplied := "HA mode not supplied; the HA invariants were checked against the rendered placement only"
+	unassessed := []string{"\u2139    HA Guarantee: Rendered Placement Not Assessed (HA mode not supplied)",
+		"\u2139    HA Topology: Not Assessed (HA mode not supplied)"}
+	for _, warning := range []string{noTerms, noWorkload} {
+		nothing := gradeWithHAMode(ClusterValidatorResult{Passed: true, Logs: controlPlaneTranscript("", unassessed,
+			"NVCF-Ready (with warnings)", notSupplied, warning)}, "", false)
+		assert.Equal(t, "cluster-validator passed with warnings; run with --show-logs for details",
+			nothing.Message, warning)
+	}
+	coLocated := gradeWithHAMode(ClusterValidatorResult{Passed: true, Logs: controlPlaneTranscript("",
+		[]string{"\u2713    HA Guarantee: Rendered Placement Met (1 assessed) (with warnings)"},
+		"NVCF-Ready (with warnings)", notSupplied, "HA Guarantee: nvcf/nvcf-api: all 2 Ready replicas run on node "+
+			"node-a; its preferred hostname pod anti-affinity or hostname spread asks for distinct nodes")}, "", false)
+	assert.Equal(t, "cluster-validator passed with warnings (degraded: HA Guarantee); run with --show-logs for "+
+		"details", coLocated.Message)
+
+	// A finding the run printed before its summary is not a row's outcome.
+	inline := gradeWithHAMode(ClusterValidatorResult{Passed: true, Logs: "Validator role: control-plane\n" +
+		"HA mode: preferred\n\u26a0  HA Guarantee: checking nvcf/api\nCheck Results:\n" + met[0] + "\n" +
+		"Cluster is NVCF-Ready (with warnings)\n"}, "preferred", false)
+	assert.Equal(t, "cluster-validator passed with warnings; run with --show-logs for details", inline.Message)
+}
+
 // The Job's status can trail its pod's by more than the poll: the pod has
 // succeeded while the Job still reads as running. The run waits for the Job,
 // the authority, and grades on it.

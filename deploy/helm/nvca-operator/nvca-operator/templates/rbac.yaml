@@ -64,6 +64,12 @@ rules:
     # not network the pod.
     resources: ["services", "events"]
     verbs: ["list"]
+  - apiGroups: [""]
+    # HA Topology: a quorum member's claims and the volumes bound to them. A
+    # volume whose node affinity requires one node pins the member to it,
+    # and a class whose volumes do so cannot reattach after that node fails.
+    resources: ["persistentvolumeclaims", "persistentvolumes"]
+    verbs: ["list"]
   - apiGroups: ["storage.k8s.io"]
     # The StorageClass check: list finds the default class, and get reads the
     # class clusterValidator.storageClass names. Without them the critical
@@ -94,6 +100,11 @@ rules:
     # tell which of them Envoy Gateway runs, so another team's proxy is not
     # blamed on NVCF.
     resources: ["gatewayclasses", "gateways", "httproutes", "grpcroutes", "tcproutes", "udproutes"]
+    verbs: ["list"]
+  - apiGroups: ["policy"]
+    # HA Guarantee: one list finds the PodDisruptionBudget each NVCF
+    # workload needs under an HA mode, and any that blocks a node drain.
+    resources: ["poddisruptionbudgets"]
     verbs: ["list"]
   {{- else }}
   - apiGroups: ["storage.k8s.io"]

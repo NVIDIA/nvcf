@@ -1340,6 +1340,9 @@ func clusterValidatorCheckKeys() []string {
 		// Control-plane HA readiness keys.
 		"tier1_deployments",
 		"tier2_statefulsets",
+		// Absent under NVCF_HA_MODE none; ha_topology also without a mode.
+		"ha_guarantee",
+		"ha_topology",
 	}
 }
 
