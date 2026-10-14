@@ -76,7 +76,16 @@ func DecodeConfig(data []byte, extraConfigDatas ...[]byte) (cfg Config, err erro
 		}
 	}
 	if err := v.Unmarshal(&cfg, NewViperDecoderConfig()); err != nil {
-		return cfg, fmt.Errorf("decode merged config: %w", err)
+		err = fmt.Errorf("decode merged config: %w", err)
+		if onlyAgentTimeFieldsFailed(err) {
+			// Decoding stopped before cfg.Validate() ran, so check the fields that did
+			// decode: an unrelated validation failure must stay unrecoverable.
+			if verr := cfg.Validate(); verr != nil {
+				return cfg, fmt.Errorf("validate merged config: %w", verr)
+			}
+			return cfg, &AgentTimeDecodeError{err: err}
+		}
+		return cfg, err
 	}
 	if err := cfg.Validate(); err != nil {
 		return cfg, fmt.Errorf("validate merged config: %w", err)
@@ -153,4 +162,61 @@ func EncodeConfig(cfg Config, extraConfigs ...Config) ([]byte, error) {
 	}
 
 	return buf.Bytes(), nil
+}
+
+// AgentTimeDecodeError reports that decoding failed only on agent timeout
+// interval fields, for example a duration that overflows time.Duration.
+// Callers detect it with errors.As to tell a recoverable bad timeout value
+// apart from other decode failures.
+//
+// +k8s:deepcopy-gen=false
+type AgentTimeDecodeError struct {
+	err error
+}
+
+func (e *AgentTimeDecodeError) Error() string { return e.err.Error() }
+
+func (e *AgentTimeDecodeError) Unwrap() error { return e.err }
+
+// agentTimeDecodeFieldNames returns the mapstructure error names of every
+// AgentTimeConfig field, derived by reflection so a new timeout field is
+// covered automatically.
+func agentTimeDecodeFieldNames() map[string]bool {
+	t := reflect.TypeFor[AgentTimeConfig]()
+	names := make(map[string]bool, t.NumField())
+	for i := range t.NumField() {
+		names["Agent."+t.Field(i).Name] = true
+	}
+	return names
+}
+
+// onlyAgentTimeFieldsFailed reports whether err contains at least one
+// mapstructure decode failure and every one of them is on an agent timeout
+// field. Any other failing field keeps the whole error unrecoverable.
+func onlyAgentTimeFieldsFailed(err error) bool {
+	timeFields := agentTimeDecodeFieldNames()
+	found := false
+	ok := true
+	var walk func(error)
+	walk = func(e error) {
+		if e == nil {
+			return
+		}
+		if de, isDecode := e.(*mapstructure.DecodeError); isDecode {
+			found = true
+			if !timeFields[de.Name()] {
+				ok = false
+			}
+		}
+		switch u := e.(type) {
+		case interface{ Unwrap() []error }:
+			for _, c := range u.Unwrap() {
+				walk(c)
+			}
+		case interface{ Unwrap() error }:
+			walk(u.Unwrap())
+		}
+	}
+	walk(err)
+	return found && ok
 }

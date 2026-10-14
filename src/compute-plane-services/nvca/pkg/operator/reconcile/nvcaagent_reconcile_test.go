@@ -51,6 +51,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	nvcaoperatorerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/errors"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 )
 
@@ -5491,6 +5492,77 @@ func TestNewAgentConfigConfigMapRequestsNamespaceOverride(t *testing.T) {
 	cfg, err := nvcaconfig.DecodeConfig([]byte(cm.Data[agentConfigFile]))
 	require.NoError(t, err)
 	assert.Equal(t, "team-x", cfg.Agent.RequestsNamespace)
+}
+
+// TestNewAgentConfigConfigMapRejectsBadHeartbeatInterval is a regression test
+// for rejected worker.timeouts intervals: a negative value, or one that
+// overflows time.Duration and passes the Helm schema pattern, used to reach
+// getAgentConfigToMerge as a FatalError, which crash-looped the operator.
+// The rejected value was never applied, so this is also not
+// invalidAgentConfigError: AgentStatus is left alone, same as any other error
+// SyncNVCFBackendHealth does not specifically recognize.
+func TestNewAgentConfigConfigMapRejectsBadHeartbeatInterval(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		wantErr string
+	}{
+		{name: "negative", value: "-1s", wantErr: "agent.heartbeatInterval: must not be negative"},
+		{name: "overflows time.Duration", value: "999999999999999999h", wantErr: "Agent.HeartbeatInterval"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			clients := mockKubeClientsForIntegrationTests()
+			bc := &BackendK8sCache{
+				clients:           clients,
+				envType:           nvidiaiov1.EnvTypeStage,
+				operatorNamespace: NVCAOperatorNamespace,
+			}
+			_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      agentConfigMergeConfigMapName,
+					Namespace: NVCAOperatorNamespace,
+				},
+				Data: map[string]string{agentConfigFile: "agent:\n  heartbeatInterval: " + tt.value + "\n"},
+			}, metav1.CreateOptions{})
+			require.NoError(t, err)
+
+			nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
+			_, err = bc.newAgentConfigConfigMap(ctx, nb)
+			require.Error(t, err)
+			assert.False(t, nvcaoperatorerrors.IsFatal(err), "must not be fatal, or the operator crash-loops")
+			assert.False(t, isInvalidAgentConfigError(err), "must not touch AgentStatus; the running agent is unaffected")
+			assert.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
+// TestNewAgentConfigConfigMapKeepsTimeoutDecodeMixedWithValidationFailureFatal
+// guards that an overflowing timeout does not mask an unrelated cfg.Validate()
+// failure: the mixed config is structurally invalid, so it stays fatal.
+func TestNewAgentConfigConfigMapKeepsTimeoutDecodeMixedWithValidationFailureFatal(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{
+		clients:           clients,
+		envType:           nvidiaiov1.EnvTypeStage,
+		operatorNamespace: NVCAOperatorNamespace,
+	}
+	_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      agentConfigMergeConfigMapName,
+			Namespace: NVCAOperatorNamespace,
+		},
+		Data: map[string]string{agentConfigFile: "agent:\n  heartbeatInterval: 999999999999999999h\n  byooOtelCollector:\n    logSampling:\n      samplingPercentage: -1\n"},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
+	_, err = bc.newAgentConfigConfigMap(ctx, nb)
+	require.Error(t, err)
+	assert.True(t, nvcaoperatorerrors.IsFatal(err))
+	assert.ErrorContains(t, err, "log sampling")
 }
 
 func TestOTelCollectorEnvUsesEffectiveRequestsNamespace(t *testing.T) {

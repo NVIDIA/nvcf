@@ -9,6 +9,10 @@
         "optionalResourceQuantity": {
             "type": "string",
             "pattern": "^$|^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+|[numkMGTPE]|[KMGTPE]i)?$"
+        },
+        "optionalDuration": {
+            "type": "string",
+            "pattern": "^$|^[+-]?0$|^\\+?(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+$"
         }
     },
     "properties": {
@@ -490,34 +494,42 @@
                     "properties": {
                         "credRenewInterval": {
                             "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
                             "default": ""
                         },
                         "heartbeatInterval": {
                             "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
                             "default": ""
                         },
                         "syncQueueInterval": {
                             "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
                             "default": ""
                         },
                         "syncRequestStatusInterval": {
                             "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
                             "default": ""
                         },
                         "syncAcknowledgeRequestInterval": {
                             "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
                             "default": ""
                         },
                         "periodicInstanceStatusInterval": {
                             "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
                             "default": ""
                         },
                         "icmsRequestAckInterval": {
                             "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
                             "default": ""
                         },
                         "icmsRequestAckRetryTimeout": {
                             "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
                             "default": ""
                         }
                     }

@@ -726,6 +726,20 @@ type AgentTimeConfig struct {
 	ICMSRequestAckRetryTimeout     time.Duration `yaml:",omitempty"`
 }
 
+// NegativeDurationError reports a negative agent timeout interval. Callers
+// detect it with errors.As to tell a recoverable bad timeout value apart from
+// other config validation failures.
+//
+// +k8s:deepcopy-gen=false
+type NegativeDurationError struct {
+	Field string
+	Value time.Duration
+}
+
+func (e *NegativeDurationError) Error() string {
+	return fmt.Sprintf("%s: must not be negative, got %s", e.Field, e.Value)
+}
+
 // Validate rejects negative durations. A negative interval is not a valid
 // periodic timer period and would otherwise reach time.NewTicker undetected,
 // which panics at agent startup with "non-positive interval for NewTicker".
@@ -747,7 +761,7 @@ func (t AgentTimeConfig) Validate() error {
 	}
 	for _, f := range fields {
 		if f.value < 0 {
-			return fmt.Errorf("%s: must not be negative, got %s", f.name, f.value)
+			return &NegativeDurationError{Field: f.name, Value: f.value}
 		}
 	}
 	return nil
