@@ -92,7 +92,7 @@ func NewFromConfig(ctx context.Context, config *config.ServiceConfig, logger *za
 		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
 	}
 	s.nc = nc
-	setConnectionStatus(nc.Status())
+	updateConnectionStatus(nc)
 	logger.Info("Connected to NATS server", zap.String("url", config.NatsURL))
 
 	pm := plugins.NewManager(config, logger)

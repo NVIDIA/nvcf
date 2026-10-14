@@ -25,6 +25,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/nats-io/nats.go"
@@ -144,5 +145,53 @@ func TestConnectionOptions_HandlersLogAndCountEvents(t *testing.T) {
 				t.Errorf("want one %q line at %s, got %v", tt.wantLog, tt.wantLevel, entries)
 			}
 		})
+	}
+}
+
+func TestConnectionOptions_DisconnectFromClose_NotCounted(t *testing.T) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	s := &Service{logger: zap.New(core)}
+	opts := &nats.Options{}
+	for _, apply := range s.connectionOptions() {
+		if err := apply(opts); err != nil {
+			t.Fatalf("apply option: %v", err)
+		}
+	}
+	counter := NATSConnectionEventsTotal.WithLabelValues(eventDisconnect, reasonNone)
+	before := testutil.ToFloat64(counter)
+
+	// nats.go passes a nil error to the disconnect callback only when the connection is closing.
+	opts.DisconnectedErrCB(&nats.Conn{}, nil)
+
+	if got := testutil.ToFloat64(counter) - before; got != 0 {
+		t.Errorf("disconnect/none events increased by %v, want 0", got)
+	}
+	if n := logs.FilterMessage("NATS connection lost").Len(); n != 0 {
+		t.Errorf("got %d %q lines, want none", n, "NATS connection lost")
+	}
+}
+
+type fixedStatus nats.Status
+
+func (f fixedStatus) Status() nats.Status { return nats.Status(f) }
+
+func TestUpdateConnectionStatus_ConcurrentUpdates_LeaveOneStatusSet(t *testing.T) {
+	for range 200 {
+		var wg sync.WaitGroup
+		for _, status := range []nats.Status{nats.CONNECTED, nats.RECONNECTING, nats.CLOSED, nats.DISCONNECTED} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				updateConnectionStatus(fixedStatus(status))
+			}()
+		}
+		wg.Wait()
+		set := 0
+		for _, s := range connectionStatuses {
+			set += int(testutil.ToFloat64(NATSConnectionStatus.WithLabelValues(statusLabel(s))))
+		}
+		if set != 1 {
+			t.Fatalf("%d statuses set after concurrent updates, want 1", set)
+		}
 	}
 }

@@ -24,6 +24,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/nats-io/nats.go"
 	"go.uber.org/zap"
@@ -63,25 +64,25 @@ func (s *Service) connectionOptions() []nats.Option {
 	return []nats.Option{
 		nats.MaxReconnects(-1),
 		nats.DisconnectErrHandler(func(nc *nats.Conn, err error) {
-			// nats.go also calls this handler on Close; the closed handler reports that case.
-			if nc.IsClosed() {
+			// nats.go passes a nil error only when the connection is closing; the closed handler reports that.
+			if err == nil {
 				return
 			}
-			recordConnectionEvent(eventDisconnect, err, nc.Status())
+			recordConnectionEvent(eventDisconnect, err, nc)
 			s.logger.Warn("NATS connection lost", zap.Error(err), zap.Stringer("status", nc.Status()))
 		}),
 		nats.ReconnectErrHandler(func(nc *nats.Conn, err error) {
-			recordConnectionEvent(eventReconnectFailed, err, nc.Status())
+			recordConnectionEvent(eventReconnectFailed, err, nc)
 			// Attempts repeat every few seconds during an outage; the disconnect warning already reports it.
 			s.logger.Debug("NATS reconnect attempt failed", zap.Error(err))
 		}),
 		nats.ReconnectHandler(func(nc *nats.Conn) {
-			recordConnectionEvent(eventReconnect, nil, nc.Status())
+			recordConnectionEvent(eventReconnect, nil, nc)
 			s.logger.Info("NATS connection restored", zap.String("url", nc.ConnectedUrlRedacted()))
 		}),
 		nats.ClosedHandler(func(nc *nats.Conn) {
 			err := nc.LastError()
-			recordConnectionEvent(eventClosed, err, nc.Status())
+			recordConnectionEvent(eventClosed, err, nc)
 			if s.stopping.Load() {
 				s.logger.Info("NATS connection closed", zap.Error(err))
 				return
@@ -89,7 +90,7 @@ func (s *Service) connectionOptions() []nats.Option {
 			s.logger.Error("NATS connection closed", zap.Error(err))
 		}),
 		nats.ErrorHandler(func(nc *nats.Conn, sub *nats.Subscription, err error) {
-			recordConnectionEvent(eventError, err, nc.Status())
+			recordConnectionEvent(eventError, err, nc)
 			fields := []zap.Field{zap.Error(err)}
 			if sub != nil {
 				fields = append(fields, zap.String("subject", sub.Subject))
@@ -99,9 +100,9 @@ func (s *Service) connectionOptions() []nats.Option {
 	}
 }
 
-func recordConnectionEvent(event string, err error, status nats.Status) {
+func recordConnectionEvent(event string, err error, nc *nats.Conn) {
 	NATSConnectionEventsTotal.WithLabelValues(event, connectionFailureReason(err)).Inc()
-	setConnectionStatus(status)
+	updateConnectionStatus(nc)
 }
 
 func setConnectionStatus(current nats.Status) {
@@ -143,4 +144,14 @@ func connectionFailureReason(err error) string {
 		return reasonTimeout
 	}
 	return reasonOther
+}
+
+// connectionStatusMu makes reading the live status and updating the gauge one
+// step, so startup and callback updates cannot leave a stale or second status set.
+var connectionStatusMu sync.Mutex
+
+func updateConnectionStatus(nc interface{ Status() nats.Status }) {
+	connectionStatusMu.Lock()
+	defer connectionStatusMu.Unlock()
+	setConnectionStatus(nc.Status())
 }
