@@ -67,90 +67,107 @@ function ChatWorkspace({ model }: { model: string }) {
 	const endpoint = data.models.find((m) => m.model === model);
 	const routable = endpoint?.health === RegistryHealth.Healthy;
 	const chat = useChat(model);
-	useStickToBottom(chat.turns);
+	const { scrollerRef, contentRef, pin } = useStickToBottom<
+		HTMLDivElement,
+		HTMLElement
+	>();
 
 	return (
-		// Fills the viewport below the AppBar and main's padding, so the composer
-		// rests at the bottom even before the first message.
-		<div className="mx-auto flex min-h-[calc(100dvh-var(--nv-app-bar-height)-3rem)] w-full max-w-[800px] flex-col gap-6">
-			<PageHeader
-				kind="flat"
-				slotActions={
-					chat.turns.length > 0 && (
-						<Button
-							className="pointer-coarse:min-h-11"
-							kind="tertiary"
-							onClick={chat.reset}
-							size="small"
-						>
-							<RotateCcwIcon aria-hidden />
-							New chat
-						</Button>
-					)
-				}
-				slotHeading={
-					<span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-						<h1 className="[overflow-wrap:anywhere]">{model}</h1>
-						{endpoint && <HealthStatus health={endpoint.health} />}
-					</span>
-				}
-				slotSubheading="Playground"
-			/>
-
-			{!routable && (
-				<Banner
+		// Exactly fills the viewport below the AppBar and main's padding, so the
+		// page itself never scrolls: the conversation scrolls inside, and the
+		// composer stays put below it, however the reply streams in. The scroller
+		// spans the full width, so the wheel works anywhere beside the column.
+		<div className="flex h-[calc(100dvh-var(--nv-app-bar-height)-3rem)] w-full flex-col gap-6">
+			<div className="mx-auto flex w-full max-w-[800px] shrink-0 flex-col gap-6">
+				<PageHeader
+					kind="flat"
 					slotActions={
-						<Button asChild kind="secondary" size="tiny">
-							<Link search={{ model }} to="/registry">
-								View in registry
-							</Link>
-						</Button>
+						chat.turns.length > 0 && (
+							<Button
+								className="pointer-coarse:min-h-11"
+								kind="tertiary"
+								onClick={chat.reset}
+								size="small"
+							>
+								<RotateCcwIcon aria-hidden />
+								New chat
+							</Button>
+						)
 					}
-					status="warning"
-				>
-					{endpoint
-						? "This endpoint is unhealthy, so the gateway can't route to it. Chat comes back as soon as it's healthy."
-						: "This model isn't registered with the gateway. Chat comes back as soon as it registers."}
-				</Banner>
-			)}
+					slotHeading={
+						<span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+							<h1 className="[overflow-wrap:anywhere]">{model}</h1>
+							{endpoint && <HealthStatus health={endpoint.health} />}
+						</span>
+					}
+					slotSubheading="Playground"
+				/>
 
-			<section aria-label="Conversation" className="flex flex-1 flex-col gap-6">
-				{chat.turns.length === 0 ? (
-					<div className="flex flex-1 flex-col items-center justify-center gap-2 py-12 text-center">
-						<Text asChild kind="title/sm">
-							<h2>Try {model}</h2>
-						</Text>
-						<Text className="max-w-md text-secondary" kind="body/regular/md">
-							Messages go through the LLM API Gateway, and the reply streams in
-							as the model writes it.
-						</Text>
-					</div>
-				) : (
-					chat.turns.map((turn, index) =>
-						turn.role === "user" ? (
-							<UserMessage key={turn.id} turn={turn} />
-						) : (
-							<AssistantMessage
-								key={turn.id}
-								onRetry={
-									index === chat.turns.length - 1 ? chat.retry : undefined
-								}
-								turn={turn}
-							/>
-						),
-					)
+				{!routable && (
+					<Banner
+						slotActions={
+							<Button asChild kind="secondary" size="tiny">
+								<Link search={{ model }} to="/registry">
+									View in registry
+								</Link>
+							</Button>
+						}
+						status="warning"
+					>
+						{endpoint
+							? "This endpoint is unhealthy, so the gateway can't route to it. Chat comes back as soon as it's healthy."
+							: "This model isn't registered with the gateway. Chat comes back as soon as it registers."}
+					</Banner>
 				)}
-			</section>
+			</div>
+
+			<div className="min-h-0 flex-1 overflow-y-auto" ref={scrollerRef}>
+				<section
+					aria-label="Conversation"
+					className="mx-auto flex min-h-full w-full max-w-[800px] flex-col gap-6"
+					ref={contentRef}
+				>
+					{chat.turns.length === 0 ? (
+						<div className="flex flex-1 flex-col items-center justify-center gap-2 py-12 text-center">
+							<Text asChild kind="title/sm">
+								<h2>Try {model}</h2>
+							</Text>
+							<Text className="max-w-md text-secondary" kind="body/regular/md">
+								Messages go through the LLM API Gateway, and the reply streams
+								in as the model writes it.
+							</Text>
+						</div>
+					) : (
+						chat.turns.map((turn, index) =>
+							turn.role === "user" ? (
+								<UserMessage key={turn.id} turn={turn} />
+							) : (
+								<AssistantMessage
+									key={turn.id}
+									onRetry={
+										index === chat.turns.length - 1 ? chat.retry : undefined
+									}
+									turn={turn}
+								/>
+							),
+						)
+					)}
+				</section>
+			</div>
 
 			<p aria-live="polite" className="sr-only">
 				{announcement(chat.turns.at(-1))}
 			</p>
 
-			<div className="sticky bottom-0 bg-surface-sunken pt-2 pb-[max(1rem,env(safe-area-inset-bottom))]">
+			<div className="mx-auto w-full max-w-[800px] shrink-0 pb-[max(1rem,env(safe-area-inset-bottom))]">
 				<ChatComposer
 					disabled={!routable}
 					initialValue={EXAMPLE_PROMPT}
-					onSend={chat.send}
+					onSend={(text) => {
+						// Sending brings the reader back to the end, to watch the reply.
+						pin();
+						chat.send(text);
+					}}
 					onStop={chat.stop}
 					streaming={chat.streaming}
 				/>

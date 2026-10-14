@@ -154,6 +154,78 @@ test.describe("playground", () => {
 			await expect(page.getByText(/^Stopped/)).toBeVisible();
 			await expect(page.getByRole("button", { name: "Send" })).toBeVisible();
 		});
+
+		test("holds the message box still, and the reader where they scroll", async ({
+			page,
+		}, testInfo) => {
+			test.skip(
+				testInfo.project.name !== "desktop",
+				"one size proves the behavior; the resize test covers the layout",
+			);
+			test.setTimeout(90_000);
+			// Short, so the conversation overflows within a few lines.
+			await page.setViewportSize({ width: 1280, height: 520 });
+			await page.goto(glmPlayground);
+			await page.getByRole("button", { name: "Send" }).click();
+			await expect(page.getByText(/^Thinking…/)).toBeVisible();
+
+			const box = page.getByRole("textbox", { name: "Message" });
+			const boxTop = async () => (await box.boundingBox())?.y;
+			const resting = await boxTop();
+			const conversation = page.getByRole("region", { name: "Conversation" });
+			const scroller = conversation.locator("xpath=..");
+			const metrics = () =>
+				scroller.evaluate((el) => ({
+					top: el.scrollTop,
+					end: el.scrollHeight - el.clientHeight,
+					page: window.scrollY,
+				}));
+			const grows = async (by: number) => {
+				const { end } = await metrics();
+				await expect
+					.poll(async () => (await metrics()).end, { timeout: 30_000 })
+					.toBeGreaterThan(end + by);
+			};
+
+			// The reply overflows, and the conversation follows it.
+			await expect
+				.poll(async () => (await metrics()).end, { timeout: 30_000 })
+				.toBeGreaterThan(40);
+			await grows(20);
+			await expect
+				.poll(async () => {
+					const { top, end } = await metrics();
+					return end - top;
+				})
+				.toBeLessThanOrEqual(2);
+
+			// The reader scrolls up to reread: new lines leave them there.
+			await conversation.hover();
+			await page.mouse.wheel(0, -200);
+			await expect
+				.poll(async () => {
+					const { top, end } = await metrics();
+					return end - top;
+				})
+				.toBeGreaterThan(40);
+			const { top: reading } = await metrics();
+			await grows(20);
+			expect(Math.abs((await metrics()).top - reading)).toBeLessThanOrEqual(1);
+
+			// Back at the end, it follows again.
+			await page.mouse.wheel(0, 5_000);
+			await grows(20);
+			await expect
+				.poll(async () => {
+					const { top, end } = await metrics();
+					return end - top;
+				})
+				.toBeLessThanOrEqual(2);
+
+			// Throughout, the page never scrolled and the message box never moved.
+			expect((await metrics()).page).toBe(0);
+			expect(await boxTop()).toBe(resting);
+		});
 	});
 
 	for (const [scenario, message] of [

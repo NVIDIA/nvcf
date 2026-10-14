@@ -15,59 +15,148 @@
  * limitations under the License.
  */
 
-import { renderHook } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
+import { createElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useStickToBottom } from "./useStickToBottom";
 
+/** The conversation's visible height, in px. */
+const VIEW = 400;
+
+function Harness() {
+	const { scrollerRef, contentRef, pin } = useStickToBottom();
+	return createElement(
+		"div",
+		null,
+		createElement(
+			"div",
+			{ "data-testid": "scroller", ref: scrollerRef },
+			createElement("section", { ref: contentRef }),
+		),
+		createElement("button", { onClick: pin, type: "button" }, "Pin"),
+	);
+}
+
 describe("useStickToBottom", () => {
-	let scrollTo: ReturnType<typeof vi.spyOn>;
+	let resize: () => void;
+	let scroller: HTMLElement;
+	let top: number;
+	let height: number;
 
 	beforeEach(() => {
-		scrollTo = vi.spyOn(window, "scrollTo").mockImplementation(() => {});
-		Object.defineProperty(document.documentElement, "scrollHeight", {
-			configurable: true,
-			value: 5_000,
+		vi.stubGlobal(
+			"ResizeObserver",
+			class {
+				constructor(callback: () => void) {
+					resize = callback;
+				}
+				observe() {}
+				disconnect() {}
+				unobserve() {}
+			},
+		);
+		render(createElement(Harness));
+		scroller = screen.getByTestId("scroller");
+		height = 1_000;
+		top = height - VIEW;
+		Object.defineProperties(scroller, {
+			scrollHeight: { configurable: true, get: () => height },
+			clientHeight: { configurable: true, get: () => VIEW },
+			scrollTop: {
+				configurable: true,
+				get: () => top,
+				set: (value: number) => {
+					top = Math.max(0, Math.min(value, height - VIEW));
+				},
+			},
 		});
+		// The conversation starts at its end, as the browser reports it.
+		scroller.dispatchEvent(new Event("scroll"));
 	});
 
 	afterEach(() => {
-		vi.restoreAllMocks();
+		vi.unstubAllGlobals();
 	});
 
-	function scrollPageTo(y: number) {
-		vi.spyOn(window, "scrollY", "get").mockReturnValue(y);
-		window.dispatchEvent(new Event("scroll"));
+	/** The reply streams in: the content grows, and the observer reports it. */
+	function grow(by = 500) {
+		height += by;
+		act(() => resize());
+	}
+
+	function scrollTo(y: number) {
+		top = y;
+		scroller.dispatchEvent(new Event("scroll"));
+	}
+
+	function touch(type: string, clientY: number) {
+		scroller.dispatchEvent(
+			Object.assign(new Event(type), { touches: [{ clientY }] }),
+		);
 	}
 
 	it("follows new content while the reader is at the end", () => {
-		const { rerender } = renderHook(
-			({ content }) => useStickToBottom(content),
-			{
-				initialProps: { content: "a" },
-			},
-		);
-		scrollTo.mockClear();
-
-		rerender({ content: "ab" });
-
-		expect(scrollTo).toHaveBeenCalledWith({ top: 5_000 });
+		grow();
+		expect(top).toBe(height - VIEW);
 	});
 
-	it("stays put after the reader scrolls up, until they scroll back down", () => {
-		const { rerender } = renderHook(
-			({ content }) => useStickToBottom(content),
-			{
-				initialProps: { content: "a" },
-			},
-		);
-		scrollPageTo(0);
-		scrollTo.mockClear();
+	it("stays put once the reader wheels up, even before the page scrolls", () => {
+		scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+		grow();
+		expect(top).toBe(600);
+	});
 
-		rerender({ content: "ab" });
-		expect(scrollTo).not.toHaveBeenCalled();
+	it("stays released through the first, small steps of a smooth scroll up", () => {
+		scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+		// 30px up: still near the end, but moving away from it.
+		scrollTo(570);
+		grow();
+		expect(top).toBe(570);
+	});
 
-		scrollPageTo(5_000 - window.innerHeight);
-		rerender({ content: "abc" });
-		expect(scrollTo).toHaveBeenCalledWith({ top: 5_000 });
+	it("keeps following when the reader wheels down", () => {
+		scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: 120 }));
+		grow();
+		expect(top).toBe(height - VIEW);
+	});
+
+	it("lets the reader page or swipe back up", () => {
+		scroller.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp" }));
+		grow();
+		expect(top).toBe(600);
+
+		scrollTo(height - VIEW);
+		touch("touchstart", 100);
+		touch("touchmove", 160);
+		grow();
+		expect(top).toBe(1_100);
+	});
+
+	it("releases when the scrollbar is dragged away from the end", () => {
+		scroller.dispatchEvent(new Event("pointerdown"));
+		scrollTo(100);
+		window.dispatchEvent(new Event("pointerup"));
+		grow();
+		expect(top).toBe(100);
+	});
+
+	it("follows again once the reader is back at the end", () => {
+		scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+		scrollTo(0);
+		grow();
+		expect(top).toBe(0);
+
+		scrollTo(height - VIEW - 40);
+		grow();
+		expect(top).toBe(height - VIEW);
+	});
+
+	it("jumps to the end and follows again when pinned", () => {
+		scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+		scrollTo(0);
+		act(() => screen.getByRole("button", { name: "Pin" }).click());
+		expect(top).toBe(height - VIEW);
+		grow();
+		expect(top).toBe(height - VIEW);
 	});
 });
