@@ -153,8 +153,6 @@ func gpushareGroupInfo(req CheckpointRequest) *GPUShareGroupInfo {
 type restoreV2Group struct {
 	Session, InetAddrMap string
 	Namespace, Pod       string
-	// LeaveStopped restores a companion stopped (criu_companion.go).
-	LeaveStopped bool
 }
 
 // restoreSession is one pod's directory in a group restore.
@@ -459,6 +457,9 @@ type fabricDriveOpts struct {
 	// Unlock: hold every member until all are restored, then unlock them
 	// together (group restore). The exchange waits for the unlock.
 	Unlock bool
+	// NoExchange: this drive does not exchange handle lists (another drive
+	// of the session does, over the members that have them).
+	NoExchange bool
 }
 
 // driveFabric runs one session until every member's operation has returned
@@ -548,7 +549,7 @@ func driveFabric(ctx context.Context, members []fabricMember, done func(i int) b
 			}
 		}
 
-		if !exchanged && (!opts.Unlock || out.Unlocked) {
+		if !exchanged && !opts.NoExchange && (!opts.Unlock || out.Unlocked) {
 			if exchange == nil {
 				var merged bytes.Buffer
 				ready := true

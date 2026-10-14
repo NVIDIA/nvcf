@@ -573,7 +573,6 @@ func (a *Agent) Run(ctx context.Context) error {
 	// Instance companions (criu_companion.go): a rank's connections, and
 	// the continue of a companion restored stopped.
 	router.HandleFunc("/v1/pods/{namespace}/{pod}/peers", a.peersHandler).Methods("GET")
-	router.HandleFunc("/v1/restore/continue", a.continueHandler).Methods("POST")
 	router.HandleFunc("/v1/group-freeze/{session}/{namespace}/{pod}", a.freezeHandler).Methods("GET", "POST")
 	router.HandleFunc("/v1/restore/manifest", a.getPlaceholderManifestHandler).Methods("POST")
 	router.HandleFunc("/v1/checkpoints", a.listCheckpointsHandler).Methods("GET")

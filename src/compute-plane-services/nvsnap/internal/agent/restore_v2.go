@@ -196,9 +196,6 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 				stdioInheritFDs(pidnsCapture)...)...)
 		log.WithField("externalMounts", len(pidnsCapture.Mounts)).Info("criu-v2: restoring into a nested pid namespace")
 	}
-	if group.LeaveStopped {
-		args = append(args, "--leave-stopped")
-	}
 	rctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	_, criuSpan := tracing.Tracer().Start(ctx, "restore.criu")
@@ -266,6 +263,60 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 
 	fabricDir := ""
 	if sess != nil {
+		fabricDir = sess.containerDir
+	}
+	// resumeGPU reloads the restored processes' GPU memory (gpushare).
+	resumeGPU := func() error {
+		_, gsSpan := tracing.Tracer().Start(ctx, "restore.gpushare_resume")
+		gpuMap := gs.StorePath + "/" + gpushareGPUMapFile
+		resumePID := hostPID
+		if pidns {
+			// The restored processes live in the nested pid namespace; their
+			// saved pids are pids there. They resume on the placeholder's
+			// GPUs, whose entries the dump left out.
+			p, err := nestedInitHostPID(procBase, hostPID)
+			if err != nil {
+				gsSpan.End()
+				return fmt.Errorf("gpushare resume: %w", err)
+			}
+			resumePID = p
+			made, err := installPlaceholderGPUs(procBase, hostPID, p)
+			if err != nil {
+				gsSpan.End()
+				return fmt.Errorf("gpushare resume: give the restored tree the pod's GPUs: %w", err)
+			}
+			log.WithField("gpuEntries", made).Info("criu-v2: the restored tree has the pod's GPUs")
+		}
+		if sess != nil {
+			// The restored processes write their handle lists into the
+			// session directory, as the user they run as; the agent made it
+			// as root. The capture side hands its session over the same way.
+			if err := ownSessionDir(procBase, resumePID, sess.hostDir); err != nil {
+				gsSpan.End()
+				return fmt.Errorf("gpushare resume: hand the fabric session to the restored processes' user: %w", err)
+			}
+		}
+		if err := gpushareResumeWithGPUsOf(ctx, resumePID, hostPID, gs.PIDs, gpuMap, fabricDir, log); err != nil {
+			gsSpan.RecordError(err)
+			gsSpan.SetStatus(codes.Error, "gpushare resume failed")
+			gsSpan.End()
+			return fmt.Errorf("gpushare resume: %w", err)
+		}
+		gsSpan.End()
+		return nil
+	}
+
+	if sess != nil {
+		// A GPU rank of a group reloads its GPU memory before it reports
+		// restored, its network still locked: the instance's members
+		// without GPU state are restored only once every rank has, so an
+		// etcd among them does not count the reload against its leases
+		// (gpushare_group_restore.go).
+		if gs != nil {
+			if err := resumeGPU(); err != nil {
+				return nil, err
+			}
+		}
 		// Every pod of the instance must be restored before any of them
 		// sends: hold the lock until the driver says so, then release it in
 		// this pod's network namespace.
@@ -281,46 +332,10 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 				return nil, err
 			}
 		}
-		fabricDir = sess.containerDir
-	}
-
-	if gs != nil {
-		_, gsSpan := tracing.Tracer().Start(ctx, "restore.gpushare_resume")
-		gpuMap := gs.StorePath + "/" + gpushareGPUMapFile
-		resumePID := hostPID
-		if pidns {
-			// The restored processes live in the nested pid namespace; their
-			// saved pids are pids there. They resume on the placeholder's
-			// GPUs, whose entries the dump left out.
-			p, err := nestedInitHostPID(procBase, hostPID)
-			if err != nil {
-				gsSpan.End()
-				return nil, fmt.Errorf("gpushare resume: %w", err)
-			}
-			resumePID = p
-			made, err := installPlaceholderGPUs(procBase, hostPID, p)
-			if err != nil {
-				gsSpan.End()
-				return nil, fmt.Errorf("gpushare resume: give the restored tree the pod's GPUs: %w", err)
-			}
-			log.WithField("gpuEntries", made).Info("criu-v2: the restored tree has the pod's GPUs")
+	} else if gs != nil {
+		if err := resumeGPU(); err != nil {
+			return nil, err
 		}
-		if sess != nil {
-			// The restored processes write their handle lists into the
-			// session directory, as the user they run as; the agent made it
-			// as root. The capture side hands its session over the same way.
-			if err := ownSessionDir(procBase, resumePID, sess.hostDir); err != nil {
-				gsSpan.End()
-				return nil, fmt.Errorf("gpushare resume: hand the fabric session to the restored processes' user: %w", err)
-			}
-		}
-		if err := gpushareResumeWithGPUsOf(ctx, resumePID, hostPID, gs.PIDs, gpuMap, fabricDir, log); err != nil {
-			gsSpan.RecordError(err)
-			gsSpan.SetStatus(codes.Error, "gpushare resume failed")
-			gsSpan.End()
-			return nil, fmt.Errorf("gpushare resume: %w", err)
-		}
-		gsSpan.End()
 	}
 
 	duration := time.Since(startTime).Seconds()

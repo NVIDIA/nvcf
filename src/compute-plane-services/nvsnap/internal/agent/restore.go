@@ -155,9 +155,6 @@ type RestoreRequest struct {
 	// driver reports every pod restored.
 	GPUShareFabricSession string `json:"gpushareFabricSession,omitempty"`
 	InetAddrMap           string `json:"inetAddrMap,omitempty"`
-	// LeaveStopped leaves the restored processes stopped: a group restore's
-	// companion, continued once the GPU ranks resume (/v1/restore/continue).
-	LeaveStopped bool `json:"leaveStopped,omitempty"`
 
 	// PlaceholderContainerName picks the container in a multi-container
 	// placeholder pod; empty takes the first one.
@@ -503,7 +500,6 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		return a.restoreV2(ctx, &metadata, checkpointDir, placeholderInfo, startTime, restoreV2Group{
 			Session: req.GPUShareFabricSession, InetAddrMap: req.InetAddrMap,
 			Namespace: req.PlaceholderNamespace, Pod: req.PlaceholderPodName,
-			LeaveStopped: req.LeaveStopped,
 		}, log)
 	}
 

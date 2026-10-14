@@ -12,10 +12,13 @@ package agent
 //
 // Restored processes run in a time namespace that continues their clocks
 // from the capture (CRIU restores the dumped clock offsets), so neither a
-// worker nor its etcd sees the time the instance was down. The two must
-// also resume together: a companion is restored stopped and continued once
-// every GPU rank has resumed, so the leases its etcd holds do not run out
-// before the workers renew them.
+// worker nor its etcd sees the time the instance was down. A clock starts
+// again at its process's restore, though, and a GPU rank's reload of its GPU
+// memory (minutes for a large model) runs with the rank frozen. So the
+// companions are restored only once every rank has reloaded, with the
+// instance's network locked until the last of them is restored: an etcd
+// then never counts the reload against the leases the ranks could not
+// renew (gpushare_group_restore.go).
 //
 // The members reach a companion through a Service, whose address is new in
 // the new instance and leads to the new pods only once they are Ready. A
@@ -27,7 +30,6 @@ package agent
 // at once and reconnects by name.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -38,7 +40,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -299,66 +300,6 @@ func fetchPeers(ctx context.Context, base, ns, pod, container string) ([]string,
 	}
 	var ips []string
 	return ips, json.Unmarshal(b, &ips)
-}
-
-// ContinueRequest names a restored container whose processes the restore
-// left stopped.
-type ContinueRequest struct {
-	Namespace     string `json:"namespace"`
-	PodName       string `json:"podName"`
-	ContainerName string `json:"containerName,omitempty"`
-}
-
-// continueHandler sends SIGCONT to every process of a restored container.
-func (a *Agent) continueHandler(w http.ResponseWriter, r *http.Request) {
-	var req ContinueRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("invalid request: %v", err), http.StatusBadRequest)
-		return
-	}
-	info, err := a.runtime.FindContainerByPod(r.Context(), req.Namespace, req.PodName, req.ContainerName)
-	if err != nil || info == nil || info.PID == 0 {
-		http.Error(w, fmt.Sprintf("container not found: %v", err), http.StatusNotFound)
-		return
-	}
-	n := continueTree(hostProcBase(), int(info.PID))
-	a.log.WithFields(logrus.Fields{"pod": req.Namespace + "/" + req.PodName, "processes": n}).Info("CRIU group restore: companion continued")
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]int{"continued": n})
-}
-
-// continueTree sends SIGCONT to the container's processes, the restored
-// tree under its placeholder included.
-func continueTree(procBase string, hostPID int) int {
-	n := 0
-	for _, p := range processTree(procBase, hostPID) {
-		if syscall.Kill(p, syscall.SIGCONT) == nil {
-			n++
-		}
-	}
-	return n
-}
-
-func postContinue(ctx context.Context, base string, req ContinueRequest) error {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
-	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/restore/continue", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	hreq.Header.Set("Content-Type", "application/json")
-	resp, err := fabricHTTPClient.Do(hreq)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
-		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(b)))
-	}
-	return nil
 }
 
 // resetDeadPeers closes, in a restored pod's network namespace, the
