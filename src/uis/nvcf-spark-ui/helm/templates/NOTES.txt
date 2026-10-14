@@ -1,0 +1,36 @@
+{{- /*
+SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/ -}}
+{{- $values := .Values.nvcfSparkUi -}}
+{{- $fullname := include "nvcf-spark-ui.fullname" . -}}
+The NVCF Gateway UI is installed as {{ $fullname }} in namespace {{ .Release.Namespace }}.
+
+{{- if $values.ingress.enabled }}
+
+Open it through the ingress: http://{{ $values.ingress.host | default "<any node address>" }}{{ $values.ingress.path }}
+{{- else if eq $values.service.type "NodePort" }}
+
+Open it on the node port:
+  kubectl -n {{ .Release.Namespace }} get service {{ $fullname }} -o jsonpath='{.spec.ports[0].nodePort}'
+{{- else }}
+
+Reach it with a port-forward:
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ $fullname }} {{ $values.service.port }}
+  then open http://localhost:{{ $values.service.port }}
+{{- end }}
+
+It reads the gateway key from Secret {{ $values.gateway.apiKey.secret }} (key {{ $values.gateway.apiKey.key }}). After the key rotates, run
+helm upgrade to roll the pod.

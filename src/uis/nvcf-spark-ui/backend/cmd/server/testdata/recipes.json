@@ -1,0 +1,2602 @@
+{
+  "schemaVersion": 1,
+  "units": {
+    "memory": "bytes",
+    "storage": "bytes",
+    "cpu": "millicores",
+    "context": "tokens"
+  },
+  "resourceScope": "Per model pod scheduling reservation, including init containers. additionalWorkloads lists separate per-node pods. Shared gateway, operator and Pylon resources are additional.",
+  "memoryAccounting": "Unified-memory profiles use one shared host/GPU memory pool. Do not add a separate GPU memory allocation.",
+  "placement": "Choose an eligible profile and supply distinct compatible nodes with exclusive available GPUs.",
+  "recipes": [
+    {
+      "id": "deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash",
+      "servedModelId": "deepseek-v4-flash",
+      "description": "DeepSeek V4 Flash is a mixture-of-experts language model with 284 billion parameters, 13 billion active per token, and support for up to 1 million tokens of context. This recipe serves it with FP4 expert weights across two DGX Spark nodes joined by a 200 Gbps link, or across two DGX Station nodes, with an 8,192-token context.",
+      "availability": {
+        "status": "available",
+        "deployable": true
+      },
+      "precision": "FP4 experts, FP8 attention",
+      "license": "MIT",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "deepseek-ai/DeepSeek-V4-Flash",
+        "revision": "60d8d70770c6776ff598c94bb586a859a38244f1",
+        "weightBytes": null
+      },
+      "runtime": {
+        "backend": "sglang",
+        "version": "SGLang v0.5.21 (cu130, pinned multi-arch digest)",
+        "image": "lmsysorg/sglang@sha256:b1259f3ea3275f66237c498ea388919729018bc9f01c3d638391e06e2cf3f469"
+      },
+      "profiles": [
+        {
+          "id": "spark-tp2",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 2,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 107374182400,
+                "memoryLimitBytes": 120259084288,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 214748364800,
+                "minimumFreeBytesBeforeDownload": 193273528320
+              }
+            },
+            {
+              "rank": 1,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 107374182400,
+                "memoryLimitBytes": 120259084288,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 214748364800,
+                "minimumFreeBytesBeforeDownload": 193273528320
+              }
+            }
+          ],
+          "fabric": {
+            "minimumGbps": 200
+          },
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 8192,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-12",
+              "profile": "spark-tp2",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "lifecycleIsolationVerified": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-12",
+              "profile": "spark-tp2",
+              "modelRevision": "60d8d70770c6776ff598c94bb586a859a38244f1",
+              "runtimeImage": "lmsysorg/sglang@sha256:b1259f3ea3275f66237c498ea388919729018bc9f01c3d638391e06e2cf3f469",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "cacheMode": "fresh-download-then-retained",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
+            },
+            "releaseName": "deepseek-v4",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "deepseek-v4-flash",
+              "profileName": "spark-tp2"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap",
+              "nodeCapabilities"
+            ],
+            "guide": "../README.md"
+          }
+        },
+        {
+          "id": "station-fp4-tp2",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB300",
+              "NVIDIA GB300"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB300"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "discrete",
+            "minDeviceMemoryGiB": 160
+          },
+          "modelNodeCount": 2,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 8000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 137438953472,
+                "memoryLimitBytes": 343597383680,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 236223201280,
+                "minimumFreeBytesBeforeDownload": 193273528320
+              }
+            },
+            {
+              "rank": 1,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 8000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 137438953472,
+                "memoryLimitBytes": 343597383680,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 236223201280,
+                "minimumFreeBytesBeforeDownload": 193273528320
+              }
+            }
+          ],
+          "runtime": {
+            "backend": "sglang",
+            "version": "SGLang v0.5.21 (e00930c5489053f26d86b179cee0d087f846acbb)",
+            "image": "lmsysorg/sglang@sha256:1f176b3a1dd1205d2a462ab80ea9fc17769a32e53cb6f3c690efa2dc2c384977"
+          },
+          "fabric": {
+            "minimumGbps": 200
+          },
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 8192,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "pending",
+            "workload": null,
+            "automaticHelmStatus": "pending",
+            "automaticHelmWorkload": null
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
+            },
+            "releaseName": "deepseek-v4",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "deepseek-v4-flash",
+              "profileName": "station-fp4-tp2"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap",
+              "nodeCapabilities"
+            ],
+            "guide": "../README.md"
+          }
+        }
+      ]
+    },
+    {
+      "id": "glm-5.3",
+      "name": "GLM-5.3",
+      "servedModelId": "GLM-5.3-UD-IQ2_M",
+      "description": "GLM-5.3 is a 754 billion parameter mixture-of-experts language model from Z.ai. This card serves Unsloth's UD-IQ2_M 2-bit GGUF quantization, about 239 GB of weights, with llama.cpp. It runs on three DGX Sparks, one leader and two RPC workers, at a 2,048-token context, or on two DGX Station nodes at an 8,192-token context.",
+      "availability": {
+        "status": "available",
+        "deployable": true
+      },
+      "precision": "UD-IQ2_M",
+      "license": "glm-5.3",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "unsloth/GLM-5.3-GGUF",
+        "revision": "346b3591c7f28d1a23716f97a065ecf12ec14771",
+        "weightBytes": 238577585701
+      },
+      "runtime": {
+        "backend": "llama.cpp",
+        "image": "nvcr.io/nvidia/vllm@sha256:67c617846180989a71e0f353c8b101e9808dc7c2638b60f890064e3d7b660282",
+        "version": "llama.cpp f872b59"
+      },
+      "profiles": [
+        {
+          "id": "gb10-x2",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuCount": 1,
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA_GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "computeCapability": "12.1",
+            "memoryMode": "unified",
+            "minHostMemoryGiB": 120
+          },
+          "modelNodeCount": 2,
+          "gpusPerNode": 1,
+          "minimumAvailableMemoryBytesPerNode": 121332826112,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 8000,
+                "cpuLimitMillicores": 12000,
+                "memoryRequestBytes": 118111600640,
+                "memoryLimitBytes": 122406567936,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "servingResources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": 12000,
+                "memoryRequestBytes": 118111600640,
+                "memoryLimitBytes": 122406567936,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 429496729600
+              },
+              "preparationResources": {
+                "cpuRequestMillicores": 8000,
+                "cpuLimitMillicores": 12000,
+                "memoryRequestBytes": 25769803776,
+                "memoryLimitBytes": 42949672960,
+                "gpuRequest": 0,
+                "gpuLimit": 0
+              },
+              "additionalWorkloads": [
+                {
+                  "role": "artifacts",
+                  "sharesModelClaim": true,
+                  "resources": {
+                    "cpuRequestMillicores": 100,
+                    "cpuLimitMillicores": 1000,
+                    "memoryRequestBytes": 134217728,
+                    "memoryLimitBytes": 536870912,
+                    "gpuRequest": 0,
+                    "gpuLimit": 0
+                  }
+                }
+              ]
+            },
+            {
+              "rank": 1,
+              "role": "rpc",
+              "resources": {
+                "cpuRequestMillicores": 2000,
+                "cpuLimitMillicores": 8000,
+                "memoryRequestBytes": 118111600640,
+                "memoryLimitBytes": 122406567936,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "servingResources": {
+                "cpuRequestMillicores": 2000,
+                "cpuLimitMillicores": 8000,
+                "memoryRequestBytes": 118111600640,
+                "memoryLimitBytes": 122406567936,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 171798691840
+              }
+            }
+          ],
+          "workload": {
+            "defaultContextTokens": 2048,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 2048,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "hardware-validated",
+            "automaticHelmStatus": "failed",
+            "automaticHelmWorkload": {
+              "status": "failed",
+              "date": "2026-10-12",
+              "profile": "gb10-x2",
+              "modelRevision": "346b3591c7f28d1a23716f97a065ecf12ec14771",
+              "runtimeImage": "nvcr.io/nvidia/vllm@sha256:67c617846180989a71e0f353c8b101e9808dc7c2638b60f890064e3d7b660282",
+              "contextLength": 2048,
+              "concurrency": 1,
+              "tensorSplit": [
+                1,
+                1
+              ],
+              "cacheMode": "fresh-download-then-retained",
+              "reason": "host_available",
+              "phase": "model-loading",
+              "checksPassed": [
+                "placement",
+                "gpu-qualification",
+                "distributed-runtime-qualification",
+                "runtime-integrity",
+                "model-integrity"
+              ],
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "attempts": [
+                {
+                  "tensorSplit": [
+                    50,
+                    50
+                  ],
+                  "stoppedNode": "rpc-worker",
+                  "phase": "model-loading",
+                  "reason": "host_available",
+                  "availableGiB": 0.69
+                },
+                {
+                  "tensorSplit": [
+                    52,
+                    48
+                  ],
+                  "stoppedNode": "leader",
+                  "phase": "model-loading",
+                  "reason": "host_available",
+                  "availableGiB": 0.72
+                },
+                {
+                  "tensorSplit": [
+                    51,
+                    49
+                  ],
+                  "stoppedNode": "leader",
+                  "phase": "model-loading",
+                  "reason": "host_available",
+                  "availableGiB": 0.55
+                }
+              ],
+              "minimumAvailableGiB": 1.0
+            },
+            "scope": "The combined two-GB10 deployment passed inference and worker recovery. Automatic Helm trials on 2026-10-07 and 2026-10-12 passed qualification and weight verification, then stopped at the host-memory guard during model loading. The 2026-10-12 trials at tensor splits 50/50, 52/48 and 51/49 each ended with under 1 GiB of host memory available on one node, below the 1 GiB floor. The guard was left unchanged.",
+            "workload": {
+              "contextLength": 2048,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-gguf-backend",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/gguf-backend",
+              "archive": "pylon-gguf-backend-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-gguf-backend",
+              "publication": "oci"
+            },
+            "releaseName": "glm",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "glm-5.3",
+              "profileName": "gb10-x2"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../ADVANCED.md#helm-glm-recipe"
+          }
+        },
+        {
+          "id": "gb10-x3",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuCount": 1,
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA_GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "computeCapability": "12.1",
+            "memoryMode": "unified",
+            "minHostMemoryGiB": 120
+          },
+          "modelNodeCount": 3,
+          "gpusPerNode": 1,
+          "minimumAvailableMemoryBytesPerNode": 81604378624,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 8000,
+                "cpuLimitMillicores": 12000,
+                "memoryRequestBytes": 78383153152,
+                "memoryLimitBytes": 82678120448,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "servingResources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": 12000,
+                "memoryRequestBytes": 78383153152,
+                "memoryLimitBytes": 82678120448,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 429496729600
+              },
+              "preparationResources": {
+                "cpuRequestMillicores": 8000,
+                "cpuLimitMillicores": 12000,
+                "memoryRequestBytes": 25769803776,
+                "memoryLimitBytes": 42949672960,
+                "gpuRequest": 0,
+                "gpuLimit": 0
+              },
+              "additionalWorkloads": [
+                {
+                  "role": "artifacts",
+                  "sharesModelClaim": true,
+                  "resources": {
+                    "cpuRequestMillicores": 100,
+                    "cpuLimitMillicores": 1000,
+                    "memoryRequestBytes": 134217728,
+                    "memoryLimitBytes": 536870912,
+                    "gpuRequest": 0,
+                    "gpuLimit": 0
+                  }
+                }
+              ]
+            },
+            {
+              "rank": 1,
+              "role": "rpc",
+              "resources": {
+                "cpuRequestMillicores": 2000,
+                "cpuLimitMillicores": 8000,
+                "memoryRequestBytes": 78383153152,
+                "memoryLimitBytes": 82678120448,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "servingResources": {
+                "cpuRequestMillicores": 2000,
+                "cpuLimitMillicores": 8000,
+                "memoryRequestBytes": 78383153152,
+                "memoryLimitBytes": 82678120448,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 171798691840
+              }
+            },
+            {
+              "rank": 2,
+              "role": "rpc",
+              "resources": {
+                "cpuRequestMillicores": 2000,
+                "cpuLimitMillicores": 8000,
+                "memoryRequestBytes": 78383153152,
+                "memoryLimitBytes": 82678120448,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "servingResources": {
+                "cpuRequestMillicores": 2000,
+                "cpuLimitMillicores": 8000,
+                "memoryRequestBytes": 78383153152,
+                "memoryLimitBytes": 82678120448,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 171798691840
+              }
+            }
+          ],
+          "workload": {
+            "defaultContextTokens": 2048,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 2048,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "pending",
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "status": "smoke-tested",
+              "date": "2026-10-12",
+              "profile": "gb10-x3",
+              "modelRevision": "346b3591c7f28d1a23716f97a065ecf12ec14771",
+              "runtimeImage": "nvcr.io/nvidia/vllm@sha256:67c617846180989a71e0f353c8b101e9808dc7c2638b60f890064e3d7b660282",
+              "contextLength": 2048,
+              "concurrency": 1,
+              "tensorSplit": [
+                1,
+                1,
+                1
+              ],
+              "requestType": "short-prompt-smoke",
+              "cacheMode": "leader-cache-reused",
+              "lowestObservedAvailableGiB": 33.2,
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "distributed-runtime-qualification",
+                "runtime-integrity",
+                "model-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication"
+              ],
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "scope": "Three-GB10 layer split of the pinned checkpoint, with one leader and two RPC workers. On 2026-10-12 the automatic Helm install passed placement, three-GPU distributed qualification, runtime and model integrity, readiness, gateway discovery, chat, streaming and authentication at context 2,048 and concurrency 1. Each node held about 74 GiB of weights and kept at least 33 GiB of host memory available, so the 1 GiB host-memory guard did not trigger. Stop/resume, longer context, throughput and output quality are untested. The two-node profile stopped at the host-memory guard.",
+            "workload": {
+              "contextLength": 2048,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-gguf-backend",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/gguf-backend",
+              "archive": "pylon-gguf-backend-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-gguf-backend",
+              "publication": "oci"
+            },
+            "releaseName": "glm",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "glm-5.3",
+              "profileName": "gb10-x3"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../ADVANCED.md#helm-glm-recipe"
+          }
+        },
+        {
+          "id": "gb300-x2",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuCount": 1,
+            "gpuProducts": [
+              "NVIDIA-GB300",
+              "NVIDIA GB300"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB300"
+            ],
+            "computeCapability": "10.3",
+            "memoryMode": "discrete",
+            "minHostMemoryGiB": 384,
+            "minDeviceMemoryGiB": 160
+          },
+          "modelNodeCount": 2,
+          "gpusPerNode": 1,
+          "minimumAvailableMemoryBytesPerNode": 137438953472,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 8000,
+                "cpuLimitMillicores": 12000,
+                "memoryRequestBytes": 137438953472,
+                "memoryLimitBytes": 343597383680,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "servingResources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": 12000,
+                "memoryRequestBytes": 137438953472,
+                "memoryLimitBytes": 343597383680,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 429496729600
+              },
+              "preparationResources": {
+                "cpuRequestMillicores": 8000,
+                "cpuLimitMillicores": 12000,
+                "memoryRequestBytes": 25769803776,
+                "memoryLimitBytes": 42949672960,
+                "gpuRequest": 0,
+                "gpuLimit": 0
+              },
+              "additionalWorkloads": [
+                {
+                  "role": "artifacts",
+                  "sharesModelClaim": true,
+                  "resources": {
+                    "cpuRequestMillicores": 100,
+                    "cpuLimitMillicores": 1000,
+                    "memoryRequestBytes": 134217728,
+                    "memoryLimitBytes": 536870912,
+                    "gpuRequest": 0,
+                    "gpuLimit": 0
+                  }
+                }
+              ]
+            },
+            {
+              "rank": 1,
+              "role": "rpc",
+              "resources": {
+                "cpuRequestMillicores": 2000,
+                "cpuLimitMillicores": 8000,
+                "memoryRequestBytes": 137438953472,
+                "memoryLimitBytes": 343597383680,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "servingResources": {
+                "cpuRequestMillicores": 2000,
+                "cpuLimitMillicores": 8000,
+                "memoryRequestBytes": 137438953472,
+                "memoryLimitBytes": 343597383680,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 171798691840
+              }
+            }
+          ],
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 8192,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "pending",
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-11",
+              "status": "smoke-tested",
+              "profile": "gb300-x2",
+              "modelRevision": "346b3591c7f28d1a23716f97a065ecf12ec14771",
+              "runtimeImage": "nvcr.io/nvidia/vllm@sha256:67c617846180989a71e0f353c8b101e9808dc7c2638b60f890064e3d7b660282",
+              "llamaCppRevision": "f872b591121761ac7b2af18283bd99bdc092a63a",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "tensorSplit": [
+                1,
+                1
+              ],
+              "cacheMode": "retained-verified",
+              "runtimeBundleSHA256": "7be1e75ccc18c5c5ae45aa44a2ae0860ab075fb0b85fd37e4526a905b8d97d71",
+              "requestType": "short-chat-stream-and-context-boundary",
+              "reason": "Packaged Helm deployment passed hardware and two-GPU RPC computation checks, pinned runtime and weight verification, gateway inference, streaming, authentication and retained-cache lifecycle checks.",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "checksPassed": [
+                "placement",
+                "gpu-qualification",
+                "runtime-build",
+                "distributed-runtime-qualification",
+                "runtime-integrity",
+                "model-integrity",
+                "readiness",
+                "registration",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication",
+                "context-boundary",
+                "stop-resume",
+                "uninstall-reinstall",
+                "cache-identities-preserved",
+                "shared-availability",
+                "final-package-equivalence"
+              ],
+              "pendingChecks": [],
+              "pendingWorkloads": [
+                "long-thinking",
+                "tool-calling",
+                "long-context-streaming",
+                "larger-context",
+                "higher-concurrency",
+                "quality-evaluation",
+                "throughput-benchmark",
+                "generation-to-context-limit"
+              ],
+              "otherModelIsolation": {
+                "status": "not-exercised",
+                "reason": "This profile uses both available GPUs. Shared CPU services were checked while the model was stopped."
+              },
+              "observedWorkload": {
+                "shortPromptTokens": 19,
+                "shortCompletionTokens": 6,
+                "maximumOutputTokensRequested": 512,
+                "boundaryPromptTokens": 8160,
+                "boundaryCompletionTokens": 3,
+                "boundaryMaxOutputTokens": 32,
+                "boundaryHttpStatus": 200,
+                "boundarySeconds": 27.16
+              },
+              "runtimeBuild": {
+                "sourceArchiveSHA256": "5f8d1a182d19e2b79e02b27e9784bafde801489bbb739a8384f77878f0b697a7",
+                "options": [
+                  "-DCMAKE_BUILD_TYPE=Release",
+                  "-DBUILD_SHARED_LIBS=OFF",
+                  "-DGGML_CUDA=ON",
+                  "-DGGML_RPC=ON",
+                  "-DGGML_NATIVE=OFF",
+                  "-DCMAKE_CUDA_ARCHITECTURES=103a-real",
+                  "-DLLAMA_BUILD_COMMON=ON",
+                  "-DLLAMA_BUILD_TESTS=ON",
+                  "-DLLAMA_BUILD_TOOLS=ON",
+                  "-DLLAMA_BUILD_SERVER=ON",
+                  "-DLLAMA_BUILD_APP=OFF",
+                  "-DLLAMA_BUILD_EXAMPLES=OFF",
+                  "-DLLAMA_BUILD_UI=OFF",
+                  "-DLLAMA_USE_PREBUILT_UI=OFF",
+                  "-DLLAMA_OPENSSL=OFF"
+                ],
+                "binaries": {
+                  "llama-server": "6a9cf5c73cb4019f619a862a354f69b3de121ad2cbd7e5bc87a447396bd9d2f7",
+                  "llama-cli": "718285a53085383c824095355b23118fbcf21ac85897dd963eff0bfa6d6dc93f",
+                  "ggml-rpc-server": "79c62c482615558f3334c86a017e1d6fb935b31ae73fc898f70262ccedab983a",
+                  "test-rpc-multi-server": "2f3efc591631dd2a00efaf2b9d845926ce94c9be3aad60454903daeadf2527be",
+                  "rpc-gpu-check": "c64e0b3cc07bb205df3b3e230194cc2abc05a9bd8f46eb89d4068d7b72b3e664"
+                }
+              },
+              "modelPodRestarts": 0,
+              "initContainerRestarts": 0,
+              "sharedTransport": {
+                "disableQuicGso": true,
+                "imageTag": "dev-20261011050719-7b10c0"
+              },
+              "measuredMemory": {
+                "glm": {
+                  "hostCgroupPeakGiB": 220.52,
+                  "hostCgroupEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+                  "gpuMemoryMiB": "NVIDIA GB300, 256703, 111573"
+                },
+                "glm-rpc-n1": {
+                  "hostCgroupPeakGiB": 1.94,
+                  "hostCgroupEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+                  "gpuMemoryMiB": "NVIDIA GB300, 256703, 114621"
+                }
+              },
+              "contextBoundaryExercised": true
+            },
+            "scope": "Two GB300 GPUs, 8192 configured context and one request at a time. The recorded short chat, stream and boundary request passed. Broader workloads remain pending.",
+            "workload": {
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-gguf-backend",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/gguf-backend",
+              "archive": "pylon-gguf-backend-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-gguf-backend",
+              "publication": "oci"
+            },
+            "releaseName": "glm",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "glm-5.3",
+              "profileName": "gb300-x2"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../ADVANCED.md#helm-glm-recipe"
+          }
+        }
+      ]
+    },
+    {
+      "id": "nemotron-3.5-lightning",
+      "name": "Nemotron 3.5 Lightning 30B-A3B",
+      "servedModelId": "nemotron-3.5-lightning",
+      "description": "NVIDIA Nemotron 3.5 Lightning is a 30 billion parameter mixture-of-experts model that activates 3 billion parameters per token. It combines Mamba-2, mixture-of-experts and attention layers and supports up to 1 million tokens of context. This recipe serves the NVFP4 build on one DGX Spark, with up to 16,384 tokens of context, or on one DGX Station, with up to 8,192 tokens, with reasoning and tool-call parsing enabled.",
+      "availability": {
+        "status": "available",
+        "deployable": true
+      },
+      "precision": "NVFP4",
+      "license": "OpenMDW-1.1",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4",
+        "revision": "bee7596271d1495f6992ae224aefde4410e816b8",
+        "weightBytes": null
+      },
+      "runtime": {
+        "backend": "sglang",
+        "version": "SGLang dev-nemotron3-5-lightning (pinned multi-arch digest)",
+        "image": "lmsysorg/sglang@sha256:a04d9a1a7ffe371b05230aecab001d4ba2bfa0e5c137bc56409ecc4cbc3ac864"
+      },
+      "profiles": [
+        {
+          "id": "spark-nvfp4",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 107374182400,
+                "memoryLimitBytes": 120259084288,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 64424509440,
+                "minimumFreeBytesBeforeDownload": 42949672960
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 16384,
+            "maximumConcurrency": 2
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-09",
+              "profile": "spark-nvfp4",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "lifecycleIsolationVerified": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-09",
+              "profile": "spark-nvfp4",
+              "modelRevision": "bee7596271d1495f6992ae224aefde4410e816b8",
+              "runtimeImage": "lmsysorg/sglang@sha256:a04d9a1a7ffe371b05230aecab001d4ba2bfa0e5c137bc56409ecc4cbc3ac864",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "cacheMode": "fresh-download",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
+            },
+            "releaseName": "nemotron-lightning",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "nemotron-3.5-lightning",
+              "profileName": "spark-nvfp4"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../README.md"
+          }
+        },
+        {
+          "id": "station-nvfp4",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB300",
+              "NVIDIA GB300"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB300"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "discrete",
+            "minDeviceMemoryGiB": 64
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 68719476736,
+                "memoryLimitBytes": 137438953472,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 68719476736,
+                "minimumFreeBytesBeforeDownload": 34359738368
+              }
+            }
+          ],
+          "runtime": {
+            "backend": "sglang",
+            "version": "SGLang dev-nemotron3-5-lightning (pinned ARM64 digest)",
+            "image": "lmsysorg/sglang@sha256:ee63304703432429d55cf2e4579b70c5a334ed4cc49194fb5290c077fcbbd4a0"
+          },
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 8192,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-13",
+              "profile": "station-nvfp4",
+              "modelRevision": "bee7596271d1495f6992ae224aefde4410e816b8",
+              "runtimeImage": "lmsysorg/sglang@sha256:ee63304703432429d55cf2e4579b70c5a334ed4cc49194fb5290c077fcbbd4a0",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "tokenCapacity": 9216,
+              "requestType": "short-chat-stream-and-auth-with-runtime-defaults",
+              "promptTokens": [
+                22,
+                23
+              ],
+              "maximumObservedTotalTokens": 1025,
+              "generationSettings": {
+                "outputTokenBudget": "server-default",
+                "sampling": "server-default",
+                "thinking": "model-default",
+                "omittedRequestFields": [
+                  "max_tokens",
+                  "temperature",
+                  "seed",
+                  "reasoning_effort",
+                  "chat_template_kwargs"
+                ]
+              },
+              "fullContextExercised": false,
+              "contextBoundaryExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-13",
+              "profile": "station-nvfp4",
+              "modelRevision": "bee7596271d1495f6992ae224aefde4410e816b8",
+              "runtimeImage": "lmsysorg/sglang@sha256:ee63304703432429d55cf2e4579b70c5a334ed4cc49194fb5290c077fcbbd4a0",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "tokenCapacity": 9216,
+              "requestType": "short-chat-stream-and-auth-with-runtime-defaults",
+              "promptTokens": [
+                22,
+                23
+              ],
+              "maximumObservedTotalTokens": 1025,
+              "generationSettings": {
+                "outputTokenBudget": "server-default",
+                "sampling": "server-default",
+                "thinking": "model-default",
+                "omittedRequestFields": [
+                  "max_tokens",
+                  "temperature",
+                  "seed",
+                  "reasoning_effort",
+                  "chat_template_kwargs"
+                ]
+              },
+              "fullContextExercised": false,
+              "contextBoundaryExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "status": "smoke-tested",
+              "reason": "Packaged Helm upgrade passed readiness, registration, discovery, chat, streaming and authentication with model-default thinking and server-default output and sampling settings. All three generated responses finished with stop and included final answers. Retained verified weights were reused and cache identities were preserved. Context-boundary and lifecycle checks have not been repeated with these generation defaults.",
+              "cacheMode": "retained-verified",
+              "checks": [
+                "packaged-helm-upgrade",
+                "readiness",
+                "registration",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication",
+                "cache-integrity",
+                "retained-cache-reuse",
+                "cache-identity-preserved"
+              ],
+              "pendingChecks": [
+                "context-boundary",
+                "stop-resume",
+                "uninstall-reinstall",
+                "other-model-isolation",
+                "long-thinking-requests",
+                "long-context-streaming",
+                "tool-calling",
+                "quality-evaluation",
+                "throughput-benchmark"
+              ],
+              "observedWorkload": {
+                "chat": {
+                  "promptTokens": 23,
+                  "completionTokens": 1002,
+                  "reasoningTokens": 999,
+                  "totalTokens": 1025,
+                  "finishReason": "stop"
+                },
+                "stream": {
+                  "promptTokens": 23,
+                  "completionTokens": 852,
+                  "reasoningTokens": 849,
+                  "totalTokens": 875,
+                  "finishReason": "stop",
+                  "completionMarkerReceived": true
+                },
+                "authenticatedChat": {
+                  "promptTokens": 22,
+                  "completionTokens": 92,
+                  "reasoningTokens": 90,
+                  "totalTokens": 114,
+                  "finishReason": "stop"
+                }
+              },
+              "modelPodRestarts": 0,
+              "resolvedFailures": [
+                {
+                  "check": "retained-cache-recipe-identity",
+                  "observed": "Initial startup rejected a retained cache marker containing the previous nemotron3.5-lightning recipe ID.",
+                  "fix": "All retained checkpoint blobs passed verification before the marker recipe ID was migrated to nemotron-3.5-lightning. Repository and model revision were unchanged. A fresh serving pod then passed readiness and inference with zero restarts."
+                }
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
+            },
+            "releaseName": "nemotron-lightning",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "nemotron-3.5-lightning",
+              "profileName": "station-nvfp4"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../README.md"
+          }
+        }
+      ]
+    },
+    {
+      "id": "nemotron-nano-12b-v2",
+      "name": "Nemotron Nano 12B v2",
+      "servedModelId": "nemotron-nano-12b-v2",
+      "description": "NVIDIA Nemotron Nano 12B v2 is a 12.3 billion parameter hybrid language model built mostly from Mamba-2 and MLP layers with only six attention layers, and it supports up to 131,072 tokens of context. This recipe serves the BF16 build on one DGX Spark, with up to 16,384 tokens of context, or on one DGX Station, with up to 8,192 tokens.",
+      "availability": {
+        "status": "available",
+        "deployable": true
+      },
+      "precision": "BF16",
+      "license": "NVIDIA Open Model License",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "nvidia/NVIDIA-Nemotron-Nano-12B-v2",
+        "revision": "f428df0ec725fed457b89cfca54dc26500fb88c1",
+        "weightBytes": null
+      },
+      "runtime": {
+        "backend": "sglang",
+        "version": "SGLang v0.5.19",
+        "image": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513"
+      },
+      "profiles": [
+        {
+          "id": "spark-bf16",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 68719476736,
+                "memoryLimitBytes": 85899345920,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 64424509440,
+                "minimumFreeBytesBeforeDownload": 42949672960
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 16384,
+            "maximumConcurrency": 2
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-09",
+              "profile": "spark-bf16",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "lifecycleIsolationVerified": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-09",
+              "profile": "spark-bf16",
+              "modelRevision": "f428df0ec725fed457b89cfca54dc26500fb88c1",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "cacheMode": "retained-offline",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
+            },
+            "releaseName": "nemotron-nano",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "nemotron-nano-12b-v2",
+              "profileName": "spark-bf16"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../README.md"
+          }
+        },
+        {
+          "id": "station-bf16",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB300",
+              "NVIDIA GB300"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB300"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "discrete",
+            "minDeviceMemoryGiB": 64
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 68719476736,
+                "memoryLimitBytes": 137438953472,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 68719476736,
+                "minimumFreeBytesBeforeDownload": 32212254720
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 8192,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-11",
+              "profile": "station-bf16",
+              "modelRevision": "f428df0ec725fed457b89cfca54dc26500fb88c1",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "tokenCapacity": 9216,
+              "requestType": "short-thinking-chat-and-explicit-no-thinking-context-boundary",
+              "promptTokens": [
+                19,
+                8160
+              ],
+              "maximumObservedTotalTokens": 8163,
+              "maximumOutputTokensRequested": 512,
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "contextBoundaryExercised": true
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-11",
+              "profile": "station-bf16",
+              "modelRevision": "f428df0ec725fed457b89cfca54dc26500fb88c1",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "tokenCapacity": 9216,
+              "requestType": "short-thinking-chat-and-explicit-no-thinking-context-boundary",
+              "promptTokens": [
+                19,
+                8160
+              ],
+              "maximumObservedTotalTokens": 8163,
+              "maximumOutputTokensRequested": 512,
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "status": "smoke-tested",
+              "reason": "Packaged Helm deployment passed readiness, registration, discovery, ordinary chat, streaming and authentication. Explicit /no_think plus enable_thinking=false passed an 8160-token prompt with up to 32 output tokens. Stop/resume and uninstall/reinstall reused the original verified cache, restored discovery and inference, and preserved the original model availability.",
+              "cacheMode": "retained-verified",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "packaged-helm-install",
+                "packaged-helm-upgrade",
+                "readiness",
+                "registration",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication",
+                "context-boundary",
+                "stop-resume",
+                "uninstall-reinstall",
+                "cache-identity-preserved",
+                "other-model-isolation",
+                "final-package-equivalence"
+              ],
+              "pendingChecks": [],
+              "observedWorkload": {
+                "shortPromptTokens": 19,
+                "shortCompletionTokens": 88,
+                "maximumOutputTokensRequested": 512,
+                "streamReasoningCharacters": 327,
+                "boundaryPromptTokens": 8160,
+                "boundaryCompletionTokens": 3,
+                "boundaryMaxOutputTokens": 32,
+                "boundaryHttpStatus": 200,
+                "boundarySeconds": 0.8605
+              },
+              "measuredMemoryGiB": {
+                "weights": 22.94,
+                "recurrentState": 1.25,
+                "kvCache": 0.22,
+                "observedHostCgroupPeak": 17.34
+              },
+              "modelPodRestarts": 0,
+              "resolvedFailures": [
+                {
+                  "check": "mamba-cache-overlap",
+                  "fix": "Disable overlap scheduling for the no_buffer cache strategy."
+                },
+                {
+                  "check": "no-thinking-final-answer",
+                  "fix": "Use the toggle-aware qwen3 reasoning parser. Non-thinking calls pair the checkpoint /no_think marker with enable_thinking=false."
+                },
+                {
+                  "check": "slow-memory-mapped-weight-load",
+                  "fix": "Use the native non-mmap loader, reading one shard at a time. Hardware and host/device memory checks remain enabled.",
+                  "beforeLoadSeconds": 529.49,
+                  "reinstallLoadSeconds": 19.59
+                },
+                {
+                  "check": "cross-node-full-context-gateway",
+                  "failure": "Repeated HTTP 502 from UDP GSO packet loss across the pod overlay. Direct backend HTTP succeeded.",
+                  "fix": "Shared router and Pylon use STARGATE_QUIC_DISABLE_GSO=true through their Helm values. Verified over a cross-node tunnel."
+                }
+              ],
+              "sharedTransport": {
+                "disableQuicGso": true,
+                "imageTag": "dev-20261011050719-7b10c0"
+              },
+              "contextBoundaryExercised": true,
+              "finalChartRetest": {
+                "retainedTvmKernelCache": true,
+                "sharedBlobCacheValidation": true,
+                "recipeReasoningDefaults": true,
+                "checks": [
+                  "readiness",
+                  "registration",
+                  "discovery",
+                  "chat",
+                  "streaming",
+                  "authentication",
+                  "context-boundary",
+                  "cache-identities-preserved",
+                  "other-model-availability"
+                ]
+              },
+              "hostCgroupPeakGiB": 23.37,
+              "hostCgroupEvents": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0"
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
+            },
+            "releaseName": "nemotron-nano",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "nemotron-nano-12b-v2",
+              "profileName": "station-bf16"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../README.md"
+          }
+        }
+      ]
+    },
+    {
+      "id": "qwen3.5-4b",
+      "name": "Qwen3.5-4B",
+      "servedModelId": "qwen3.5-4b",
+      "description": "Qwen3.5-4B is a 4.7 billion parameter language model from Qwen that mixes linear and full attention layers and supports up to 262,144 tokens of context. This recipe serves the BF16 build on one DGX Spark, with up to 32,768 tokens of context and 4 concurrent requests, or on one DGX Station, with up to 8,192 tokens and 1 request at a time.",
+      "availability": {
+        "status": "available",
+        "deployable": true
+      },
+      "precision": "BF16",
+      "license": "Apache-2.0",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "Qwen/Qwen3.5-4B",
+        "revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+        "weightBytes": null
+      },
+      "runtime": {
+        "backend": "sglang",
+        "version": "SGLang v0.5.19",
+        "image": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513"
+      },
+      "profiles": [
+        {
+          "id": "spark-bf16",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 51539607552,
+                "memoryLimitBytes": 68719476736,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 32212254720,
+                "minimumFreeBytesBeforeDownload": 21474836480
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 32768,
+            "maximumConcurrency": 4
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-09",
+              "profile": "spark-bf16",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "lifecycleIsolationVerified": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-09",
+              "profile": "spark-bf16",
+              "modelRevision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "completionBudgetTokens": 2048,
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "cacheMode": "fresh-download",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
+            },
+            "releaseName": "qwen35-4b",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.5-4b",
+              "profileName": "spark-bf16"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../README.md"
+          }
+        },
+        {
+          "id": "station-bf16",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB300",
+              "NVIDIA GB300"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB300"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "discrete",
+            "minDeviceMemoryGiB": 32
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 34359738368,
+                "memoryLimitBytes": 68719476736,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 25769803776,
+                "minimumFreeBytesBeforeDownload": 12884901888
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 8192,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-13",
+              "profile": "station-bf16",
+              "modelRevision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "tokenCapacity": 9216,
+              "requestType": "short-chat-stream-and-auth-with-runtime-defaults",
+              "promptTokens": [
+                16,
+                17
+              ],
+              "maximumObservedTotalTokens": 1570,
+              "generationSettings": {
+                "outputTokenBudget": "server-default",
+                "sampling": "server-default",
+                "thinking": "model-default",
+                "omittedRequestFields": [
+                  "max_tokens",
+                  "temperature",
+                  "seed",
+                  "reasoning_effort",
+                  "chat_template_kwargs"
+                ]
+              },
+              "fullContextExercised": false,
+              "contextBoundaryExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-13",
+              "profile": "station-bf16",
+              "modelRevision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "tokenCapacity": 9216,
+              "requestType": "short-chat-stream-and-auth-with-runtime-defaults",
+              "promptTokens": [
+                16,
+                17
+              ],
+              "maximumObservedTotalTokens": 1570,
+              "generationSettings": {
+                "outputTokenBudget": "server-default",
+                "sampling": "server-default",
+                "thinking": "model-default",
+                "omittedRequestFields": [
+                  "max_tokens",
+                  "temperature",
+                  "seed",
+                  "reasoning_effort",
+                  "chat_template_kwargs"
+                ]
+              },
+              "fullContextExercised": false,
+              "contextBoundaryExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "status": "smoke-tested",
+              "reason": "Packaged Helm upgrade passed readiness, registration, discovery, chat, streaming and authentication with model-default thinking and server-default output and sampling settings. All three generated responses finished with stop and included final answers. Retained verified weights were reused and cache identities were preserved. Context-boundary and lifecycle checks have not been repeated with these generation defaults.",
+              "cacheMode": "retained-verified",
+              "checks": [
+                "packaged-helm-upgrade",
+                "readiness",
+                "registration",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication",
+                "cache-integrity",
+                "retained-cache-reuse",
+                "cache-identity-preserved"
+              ],
+              "pendingChecks": [
+                "context-boundary",
+                "stop-resume",
+                "uninstall-reinstall",
+                "other-model-isolation",
+                "long-thinking-requests",
+                "long-context-streaming",
+                "tool-calling",
+                "quality-evaluation",
+                "throughput-benchmark"
+              ],
+              "observedWorkload": {
+                "chat": {
+                  "promptTokens": 17,
+                  "completionTokens": 1553,
+                  "reasoningTokens": 1549,
+                  "totalTokens": 1570,
+                  "finishReason": "stop"
+                },
+                "stream": {
+                  "promptTokens": 17,
+                  "completionTokens": 651,
+                  "reasoningTokens": 646,
+                  "totalTokens": 668,
+                  "finishReason": "stop",
+                  "completionMarkerReceived": true
+                },
+                "authenticatedChat": {
+                  "promptTokens": 16,
+                  "completionTokens": 138,
+                  "reasoningTokens": 135,
+                  "totalTokens": 154,
+                  "finishReason": "stop"
+                }
+              },
+              "modelPodRestarts": 0
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
+            },
+            "releaseName": "qwen35-4b",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.5-4b",
+              "profileName": "station-bf16"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../README.md"
+          }
+        }
+      ]
+    },
+    {
+      "id": "qwen3.8-27b",
+      "name": "Qwen3.8-27B",
+      "servedModelId": "qwen3.8-27b",
+      "description": "Qwen3.8-27B is a 27 billion parameter language model from Qwen that mixes linear and full attention layers and supports up to 262,144 tokens of context. This card lists an FP8 build for one DGX Spark or one DGX Station and an NVIDIA NVFP4 build for one DGX Spark, served by SGLang with a short context of up to 9,216 tokens.",
+      "availability": {
+        "status": "available",
+        "deployable": true
+      },
+      "precision": "FP8",
+      "license": "Apache-2.0",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "Qwen/Qwen3.8-27B-FP8",
+        "revision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+        "weightBytes": null
+      },
+      "runtime": {
+        "backend": "sglang",
+        "version": "SGLang v0.5.19",
+        "image": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513"
+      },
+      "profiles": [
+        {
+          "id": "spark-fp8",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 111669149696,
+                "memoryLimitBytes": 120259084288,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 85899345920,
+                "minimumFreeBytesBeforeDownload": 42949672960
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 9216,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-06",
+              "profile": "spark-fp8",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-07",
+              "profile": "spark-fp8",
+              "modelRevision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "cacheMode": "retained-offline",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication",
+                "original-release-restoration"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
+            },
+            "releaseName": "qwen-fp8",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.8-27b",
+              "profileName": "spark-fp8"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../README.md"
+          }
+        },
+        {
+          "id": "station-fp8",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB300",
+              "NVIDIA GB300"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB300"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "discrete",
+            "minDeviceMemoryGiB": 64
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 68719476736,
+                "memoryLimitBytes": 137438953472,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 85899345920,
+                "minimumFreeBytesBeforeDownload": 42949672960
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 8192,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-09",
+              "profile": "station-fp8",
+              "modelRevision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "promptTokens": [
+                47,
+                56
+              ],
+              "maximumObservedTotalTokens": 126,
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-09",
+              "profile": "station-fp8",
+              "modelRevision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "status": "smoke-tested",
+              "reason": "Fresh packaged Helm installation, registration, discovery, short arithmetic chat and streaming passed. The earlier 8160-token context-boundary request returned HTTP 502 and has not been retested. Full-context and lifecycle validation remain pending.",
+              "cacheMode": "fresh-download",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "packaged-helm-install",
+                "readiness",
+                "registration",
+                "discovery",
+                "chat",
+                "streaming",
+                "arithmetic-smoke"
+              ],
+              "failedChecks": [
+                "context-boundary"
+              ],
+              "failedWorkload": {
+                "requestType": "context-boundary-smoke",
+                "tokenizerPromptTokens": 8160,
+                "maxOutputTokens": 32,
+                "httpStatus": 502,
+                "backendExecutionConfirmed": false
+              },
+              "pendingChecks": [
+                "context-boundary-retest",
+                "authentication-rejection",
+                "stop-resume",
+                "uninstall-reinstall",
+                "final-package-live-verification"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
+            },
+            "releaseName": "qwen-fp8",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.8-27b",
+              "profileName": "station-fp8"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../README.md"
+          }
+        }
+      ]
+    },
+    {
+      "id": "qwen3.8-27b-nvfp4",
+      "name": "Qwen3.8-27B",
+      "servedModelId": "qwen3.8-27b-nvfp4",
+      "description": "Qwen3.8-27B is a 27 billion parameter language model from Qwen that mixes linear and full attention layers and supports up to 262,144 tokens of context. This card lists an FP8 build for one DGX Spark or one DGX Station and an NVIDIA NVFP4 build for one DGX Spark, served by SGLang with a short context of up to 9,216 tokens.",
+      "availability": {
+        "status": "available",
+        "deployable": true
+      },
+      "precision": "NVFP4",
+      "license": "Apache-2.0",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "nvidia/Qwen3.8-27B-NVFP4",
+        "revision": "482ca0f3832238542f8f5295dde86b5f22711d80",
+        "weightBytes": null
+      },
+      "runtime": {
+        "backend": "sglang",
+        "version": "SGLang v0.5.19",
+        "image": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513"
+      },
+      "profiles": [
+        {
+          "id": "spark-nvfp4",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 111669149696,
+                "memoryLimitBytes": 120259084288,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 85899345920,
+                "minimumFreeBytesBeforeDownload": 42949672960
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 9216,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-06",
+              "profile": "spark-nvfp4",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "lifecycleIsolationVerified": true,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-07",
+              "profile": "spark-nvfp4",
+              "modelRevision": "482ca0f3832238542f8f5295dde86b5f22711d80",
+              "runtimeImage": "lmsysorg/sglang@sha256:4cba07b0c68725991890c64843403396effb7faa39ac47261166b2299095c513",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "cacheMode": "retained-offline",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "readiness",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication",
+                "other-model-isolation",
+                "original-release-restoration"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
+            },
+            "releaseName": "qwen-nvfp4",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.8-27b-nvfp4",
+              "profileName": "spark-nvfp4"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../README.md"
+          }
+        }
+      ]
+    },
+    {
+      "id": "qwen3.8-flash-next",
+      "name": "Qwen3.8-Flash-Next",
+      "servedModelId": "qwen3.8-flash-next",
+      "description": "Qwen3.8-Flash-Next is a large mixture-of-experts language model with 512 routed experts, 10 of them active per token, a mix of linear and full attention layers, and a 262,144-token context window. This card lists an NVFP4 build from RadixArk, served by SGLang on one DGX Spark with local NVMe storage, on two DGX Sparks joined by a 200 Gbps link, or on one DGX Station.",
+      "availability": {
+        "status": "available",
+        "deployable": true
+      },
+      "precision": "NVFP4",
+      "license": "Qwen Community 1.0 (base model); derivative card declares other",
+      "licenseNotice": "NOTICE",
+      "model": {
+        "repository": "RadixArk/Qwen3.8-Flash-Next-NVFP4",
+        "revision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+        "weightBytes": null
+      },
+      "runtime": {
+        "backend": "sglang",
+        "version": "SGLang dev-qwen38-next-local (pinned ARM64 digest)",
+        "image": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06"
+      },
+      "profiles": [
+        {
+          "id": "spark-nvfp4-nvme",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 118111600640,
+                "memoryLimitBytes": 122406567936,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 193273528320,
+                "minimumFreeBytesBeforeDownload": 150323855360,
+                "offloadBytes": 60129542144,
+                "offloadMedium": "local-nvme"
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 262144,
+            "maximumConcurrency": 8
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-07",
+              "profile": "spark-nvfp4-nvme",
+              "modelRevision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+              "runtimeImage": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-07",
+              "profile": "spark-nvfp4-nvme",
+              "modelRevision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+              "runtimeImage": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "status": "smoke-tested",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "local-pcie-nvme",
+                "embedding-offload",
+                "readiness",
+                "registration",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
+            },
+            "releaseName": "qwen-flash",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.8-flash-next",
+              "profileName": "spark-nvfp4-nvme"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap",
+              "nodeCapabilities"
+            ],
+            "guide": "../ADVANCED.md#helm-flash-next-recipes"
+          }
+        },
+        {
+          "id": "spark-nvfp4-tp2",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB10",
+              "NVIDIA GB10"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB10"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "unified"
+          },
+          "modelNodeCount": 2,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 118111600640,
+                "memoryLimitBytes": 122406567936,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 193273528320,
+                "minimumFreeBytesBeforeDownload": 150323855360
+              }
+            },
+            {
+              "rank": 1,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 4000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 118111600640,
+                "memoryLimitBytes": 122406567936,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 193273528320,
+                "minimumFreeBytesBeforeDownload": 150323855360
+              }
+            }
+          ],
+          "fabric": {
+            "minimumGbps": 200
+          },
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 262144,
+            "maximumConcurrency": 24
+          },
+          "validation": {
+            "runtimeStatus": "pending",
+            "workload": null,
+            "automaticHelmStatus": "pending",
+            "automaticHelmWorkload": null
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
+            },
+            "releaseName": "qwen-flash",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.8-flash-next",
+              "profileName": "spark-nvfp4-tp2"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap",
+              "nodeCapabilities"
+            ],
+            "guide": "../ADVANCED.md#helm-flash-next-recipes"
+          }
+        },
+        {
+          "id": "station-nvfp4",
+          "hardware": {
+            "os": "linux",
+            "architecture": "arm64",
+            "gpuProducts": [
+              "NVIDIA-GB300",
+              "NVIDIA GB300"
+            ],
+            "cudaDeviceNames": [
+              "NVIDIA GB300"
+            ],
+            "gpuCount": 1,
+            "memoryMode": "discrete",
+            "minDeviceMemoryGiB": 192
+          },
+          "modelNodeCount": 1,
+          "gpusPerNode": 1,
+          "perNode": [
+            {
+              "rank": 0,
+              "role": "model",
+              "resources": {
+                "cpuRequestMillicores": 8000,
+                "cpuLimitMillicores": null,
+                "memoryRequestBytes": 68719476736,
+                "memoryLimitBytes": 274877906944,
+                "gpuRequest": 1,
+                "gpuLimit": 1
+              },
+              "storage": {
+                "claimRequestBytes": 171798691840,
+                "minimumFreeBytesBeforeDownload": 161061273600
+              }
+            }
+          ],
+          "fabric": null,
+          "workload": {
+            "defaultContextTokens": 8192,
+            "defaultConcurrency": 1,
+            "maximumContextTokens": 8192,
+            "maximumConcurrency": 1
+          },
+          "validation": {
+            "runtimeStatus": "smoke-tested",
+            "workload": {
+              "date": "2026-10-13",
+              "profile": "station-nvfp4",
+              "modelRevision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+              "runtimeImage": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "tokenCapacity": 9216,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false
+            },
+            "automaticHelmStatus": "smoke-tested",
+            "automaticHelmWorkload": {
+              "date": "2026-10-13",
+              "profile": "station-nvfp4",
+              "modelRevision": "7b719225242aacd3dbd3f9407468c2ee9a9d2594",
+              "runtimeImage": "lmsysorg/sglang@sha256:a1e17bbf0e9618364dc6395a4de5f9c3e8dfc9f43d603995b7a6aebc83de6e06",
+              "contextLength": 8192,
+              "concurrency": 1,
+              "tokenCapacity": 9216,
+              "requestType": "short-prompt-smoke",
+              "fullContextExercised": false,
+              "performanceBenchmarked": false,
+              "qualityEvaluated": false,
+              "status": "smoke-tested",
+              "reason": "Helm install passed placement, GPU qualification, cache integrity, readiness, registration, gateway discovery, chat, streaming and authentication at context 8192 and concurrency 1. The profile releases the checkpoint file cache before startup and prefetches checkpoints, because on GB300 the cached files otherwise use the GPU memory the KV cache needs. Context-boundary, stop and resume, reinstall and throughput checks remain pending.",
+              "checks": [
+                "placement",
+                "gpu-qualification",
+                "cache-integrity",
+                "readiness",
+                "registration",
+                "discovery",
+                "chat",
+                "streaming",
+                "authentication"
+              ]
+            }
+          },
+          "deployment": {
+            "chart": {
+              "name": "pylon-sglang-recipe",
+              "version": "0.3.0-iiab",
+              "localPath": "charts/sglang",
+              "archive": "pylon-sglang-recipe-0.3.0-iiab.tgz",
+              "repository": "oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe",
+              "publication": "oci"
+            },
+            "releaseName": "qwen-flash",
+            "lifecycle": "automatic",
+            "values": {
+              "recipe": "qwen3.8-flash-next",
+              "profileName": "station-nvfp4"
+            },
+            "requiredSiteValues": [
+              "nodes",
+              "runtimeClassName",
+              "storageClassName",
+              "sharedCAConfigMap"
+            ],
+            "guide": "../ADVANCED.md#helm-flash-next-recipes"
+          }
+        }
+      ]
+    }
+  ]
+}

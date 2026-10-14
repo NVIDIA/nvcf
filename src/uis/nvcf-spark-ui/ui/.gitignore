@@ -1,0 +1,11 @@
+node_modules
+.DS_Store
+coverage
+dist
+*.local
+.env
+.tanstack
+# Playwright
+test-results
+playwright-report
+blob-report

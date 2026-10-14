@@ -1,0 +1,152 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# All values are namespaced under nvcfSparkUi, as nvcf-ui's are under nvcfUi,
+# so a stack chart can feed this one a single block.
+nvcfSparkUi:
+  replicaCount: 1
+
+  image:
+    repository: nvcf-spark-ui
+    pullPolicy: IfNotPresent
+    # Overrides the image tag, which defaults to the chart appVersion.
+    tag: ""
+
+  imagePullSecrets: []
+  nameOverride: ""
+  fullnameOverride: ""
+
+  # A dedicated ServiceAccount, with no API token mounted: the BFF doesn't call
+  # the Kubernetes API yet. The read-only RBAC for InferenceEndpoints, pods and
+  # nodes comes with the /api/v1/endpoints route.
+  serviceAccount:
+    annotations: {}
+
+  podAnnotations: {}
+  podLabels: {}
+
+  podSecurityContext:
+    runAsNonRoot: true
+    # Gives the mounted key file (mode 0440) this group, so the non-root
+    # server can read it and nothing else can.
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+
+  # 65532 is distroless's "nonroot" user, which the image runs as.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+
+  service:
+    # ClusterIP behind an ingress, or NodePort on a cluster without one.
+    type: ClusterIP
+    port: 8300
+    # With type NodePort: the node port to use, or empty to let Kubernetes pick.
+    nodePort: null
+
+  # Expose the UI through an Ingress, such as k3s's Traefik. It routes `path`
+  # and everything under it to the BFF, which serves the UI and its API.
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    # Empty matches every host, such as the nodes' addresses.
+    host: ""
+    path: /
+
+  # The LLM API Gateway the BFF forwards to (README.md, "Configuration").
+  gateway:
+    # The gateway's in-cluster Service. Never an ingress or a port-forward.
+    url: https://llm-api-gateway:8080
+    # The stack CA the gateway's certificate is signed by, from a ConfigMap in
+    # the release namespace. Empty name: trust the system roots instead.
+    ca:
+      configMap: llm-gateway-stack-ca
+      key: ca.crt
+    # The UI's own caller key, from a Secret in the release namespace that the
+    # stack chart creates. The pod is rolled when the key changes, on the next
+    # helm upgrade (see the checksum annotation in the Deployment).
+    apiKey:
+      secret: demo-ui-api-key
+      key: api-key
+    # Limit on registry and model reads, in seconds; null keeps the default (15).
+    timeoutSeconds: null
+    # Write deadline of one chat stream, in seconds; null keeps the default
+    # (600), 0 removes it.
+    chatTimeoutSeconds: null
+
+  # Addresses the UI shows (GET /api/v1/config). Both optional.
+  ui:
+    # The gateway as clients outside the cluster reach it, for the curl
+    # snippets; empty shows a $GW_URL placeholder. It must not be this UI's own
+    # address plus /v1, which the BFF serves itself.
+    gatewayPublicUrl: ""
+    # The Grafana dashboard each endpoint links to: absolute, or a path such as
+    # /grafana/d/llm-demo for a Grafana behind the same ingress. Empty hides
+    # the link.
+    grafanaUrl: ""
+
+  # The recipe catalog (GET /api/v1/recipes): the recipe charts' index.json, in
+  # a ConfigMap the operator creates and updates, outside this chart (make
+  # recipes-configmap; helm/recipes/catalog.jq adds each chart's OCI repository). It is mounted as
+  # a directory, so an update reaches the pod within about a minute and the BFF
+  # serves it without a restart. Until the ConfigMap exists, the recipes page
+  # says the catalog is unavailable.
+  recipes:
+    # Empty uses <fullname>-recipes.
+    configMap: ""
+    key: index.json
+
+  config:
+    # Server connection timeouts, in whole seconds (READ_HEADER_TIMEOUT_SECONDS
+    # and so on). Null keeps the server default; 0 disables that deadline and
+    # restores unbounded behavior, so only use it with a proven need. Chat
+    # streams extend their own write deadline, so writeSeconds needn't cover
+    # them.
+    timeouts:
+      readHeaderSeconds: 10
+      readSeconds: 30
+      writeSeconds: 60
+      idleSeconds: 120
+
+  # The BFF is a small Go server; this is ample for a booth.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+  # Probe timing; the probes themselves GET /status, which has no dependencies.
+  livenessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readinessProbe:
+    initialDelaySeconds: 2
+    periodSeconds: 10
+    timeoutSeconds: 3
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
