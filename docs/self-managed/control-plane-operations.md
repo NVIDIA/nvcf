@@ -308,7 +308,7 @@ An install whose callers already get tokens from their own identity provider has
 <Warning>
 `nvcf-cli init` and `nvcf-cli refresh` both call `POST /v1/admin/keys` through the same `generateAdminTokenViaAPI` function. Once the proxy is removed, both fail:
 
-```
+```text
 $ nvcf-cli init
 Error: failed to generate admin token: API error 404: 
 Usage:
@@ -342,7 +342,7 @@ This value controls two things that must stay in step:
 
 | What | Effect |
 | --- | --- |
-| The Helm release | Not installed, so no Deployment, Service, HTTPRoute or ReferenceGrant |
+| The Helm release | Not installed, so no Deployment, Service, ServiceAccount, HTTPRoute, ReferenceGrant or PodDisruptionBudget |
 | The OpenBao migration | `10_setup_admin-issuer.sh` is skipped, so the signing role, policy and auth role are never created |
 
 The NVCF UI health list drops its Admin Issuer Proxy entry at the same time, so the UI does not report a missing component.
@@ -357,8 +357,7 @@ Setting the value to `false` on a stack where the proxy is already installed doe
 
 Removal is two steps, and both are required.
 
-**1. Uninstall the release.** This removes everything the chart owns: the Deployment, Service,
-ServiceAccount, PodDisruptionBudget, HTTPRoute and ReferenceGrant.
+**1. Uninstall the release.** This removes everything the chart owns: the Deployment, Service, ServiceAccount, HTTPRoute and ReferenceGrant, plus the PodDisruptionBudget if `adminIssuerProxy.podDisruptionBudget.enabled` is set.
 
 ```bash
 helm uninstall admin-issuer-proxy -n api-keys

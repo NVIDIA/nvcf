@@ -497,6 +497,13 @@ global:
       natsHostOverride: "nats.${GATEWAY_ADDR}"
 ```
 
+<Note>
+Both subsections below run `nvcf-cli init`, which mints its token through Admin Issuer Proxy. On a
+stack where that component is disabled the command fails with `API error 404`: skip it, and export
+`NVCF_TOKEN` with a token from your own identity provider before registering. See
+[Disabling Admin Issuer Proxy](./control-plane-operations.md).
+</Note>
+
 Then follow the matching subsection below.
 
 ### Single-cluster
@@ -616,13 +623,6 @@ writes `registration/${CLUSTER_NAME}-register-values.yaml`, and `make install`
 consumes that file. If you skip registration, installation fails with a
 "Registration values not found" error.
 </Info>
-
-<Note>
-`nvcf-cli init` mints its token through Admin Issuer Proxy. On a stack where that component is
-disabled the command fails with `API error 404` — export `NVCF_TOKEN` with a token from your own
-identity provider before registering instead. See
-[Disabling Admin Issuer Proxy](./control-plane-operations.md).
-</Note>
 
 ## Step 6: Verify the agent is healthy
 
