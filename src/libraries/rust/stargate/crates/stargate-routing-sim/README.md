@@ -18,8 +18,17 @@ configurations. It calls the production `LoadBalancer` implementations from the
   with `last_cluster_affinity` classify each request once and keep that
   classification across its routing waits and reroutes.
 - Pylon: live request phases, queue estimates, queue-mismatch admission, and
-  the fallback input-throughput window that sets `last_mean_input_tps` and
-  `max_input_tps`.
+  Pylon's own OpenAI fallback window from `pylon-lib`, which sets
+  `last_mean_input_tps` and `max_input_tps`. The model is a deployment where
+  every chat request expects usage (`--force-chat-completions-include-usage`)
+  and MockDynamo reports cached prompt tokens in it. A request enters the
+  window at first output and waits for usage, which arrives at completion
+  and counts uncached prompt tokens. A waiting request holds newer requests
+  out of the rate, and cache hits that leave fewer than 256 uncached tokens
+  are left out. A request cancelled after first output never reports usage,
+  so it counts total prompt tokens. The maximum rises only from windows whose
+  requests all reported usage. The `initial` value stands in for startup
+  calibration and sets both values until the window replaces the mean.
 - Engine: the `mock-engine` crate that MockDynamo also runs. Each backend is a
   Dynamo deployment with `num_gpu_workers` workers that batch prefill and
   decode in shared steps, keep their own KV caches, and receive requests by
@@ -112,6 +121,9 @@ served by their hinted cluster. Simulator summaries also count
 - Request heads leave Stargate as soon as a backend is selected, so a
   reservation's soft expiry starts at routing. Tunnel stream opening delays
   are not modeled.
+- The fallback window sees each request's usage once, at completion, and every
+  request's usage reports cached tokens. Pylon's `--min-input-tokens` is its
+  default of `1`. Calibration traffic is not simulated.
 - `max_input_work_seconds` admission, `consider_kv_free_tokens`, priorities,
   and registration churn are not modeled. Simulated Pylons publish no KV-cache
   stats.

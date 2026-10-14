@@ -46,7 +46,7 @@ use stargate::routing::{
 };
 use stargate_proto::pb::{InferenceServerStatus, ModelStats};
 
-use crate::backend::Backend;
+use crate::backend::{Backend, InputInterval};
 use crate::config::{PolicyConfig, SimConfig};
 use crate::metrics::{RequestRecord, RunSummary, summarize};
 use crate::time::{Micros, micros_from_duration, micros_from_ms};
@@ -219,6 +219,7 @@ fn build<'a>(spec: &RunSpec<'a>) -> anyhow::Result<Simulation<'a>> {
                 region.backend_speed,
                 config.backend_engine(region, backend_index),
                 &config.pylon,
+                epoch,
             )?);
         }
         for _ in 0..region.stargates {
@@ -682,12 +683,9 @@ impl Simulation<'_> {
         let state = &mut self.requests[request];
         state.record.reused_input_tokens = reused;
         state.record.backend_first_token_at = Some(at);
-        let submitted = state
-            .record
-            .backend_received_at
-            .expect("engine requests reached their backend");
+        let interval = input_interval(&state.record).expect("first output was recorded");
         let (input_tokens, stargate) = (state.plan.input_tokens, state.plan.stargate);
-        self.backends[backend].first_token(input_tokens, submitted, at, &self.config.pylon);
+        self.backends[backend].first_token(request, input_tokens, interval);
         let return_delay = self.one_way(
             self.backends[backend].region,
             self.stargates[stargate].region,
@@ -700,13 +698,15 @@ impl Simulation<'_> {
         let state = &mut self.requests[request];
         state.engine = EngineState::Finished;
         let (input_tokens, stargate) = (state.plan.input_tokens, state.plan.stargate);
+        let interval = input_interval(&state.record).expect("completed requests had first output");
+        let reused = state.record.reused_input_tokens;
         if let Some(last) = self
             .session_last_backend
             .get_mut(self.requests[request].plan.session as usize)
         {
             *last = Some(backend);
         }
-        self.backends[backend].complete(input_tokens);
+        self.backends[backend].complete(request, input_tokens, reused, interval);
         let return_delay = self.one_way(
             self.backends[backend].region,
             self.stargates[stargate].region,
@@ -803,8 +803,8 @@ impl Simulation<'_> {
         }
         state.engine = EngineState::Finished;
         let input_tokens = state.plan.input_tokens;
-        let decoding = state.record.backend_first_token_at.is_some();
-        self.backends[backend_index].cancel(self.now, request, input_tokens, decoding);
+        let interval = input_interval(&state.record);
+        self.backends[backend_index].cancel(self.now, request, input_tokens, interval);
         self.reschedule_wake(backend_index);
         self.stats_changed(backend_index);
     }
@@ -852,6 +852,14 @@ impl Simulation<'_> {
         mark(&mut state.record);
         self.unresolved -= 1;
     }
+}
+
+/// Engine submit to first output, once the request has produced first output.
+fn input_interval(record: &RequestRecord) -> Option<InputInterval> {
+    Some(InputInterval {
+        submitted: record.backend_received_at?,
+        first_output: record.backend_first_token_at?,
+    })
 }
 
 #[cfg(test)]

@@ -19,16 +19,21 @@
 //! It owns scheduling, batching, KV caching, and worker routing.
 //!
 //! Pylon: tracks live requests by phase and publishes the same `ModelStats`
-//! fields that `pylon-lib/src/queue_admission.rs` derives for routing.
+//! fields that `pylon-lib/src/queue_admission.rs` derives for routing. The
+//! fallback input throughput runs Pylon's own window from `pylon-lib`.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use mock_engine::{Engine, EngineConfig, EngineEvent, RequestSpec};
+use pylon_lib::{
+    InputIntervalSample, RequestInputInterval, RequestInputIntervalWindow, StatsCollectorConfig,
+};
 use stargate_proto::pb::ModelStats;
 use stargate_protocol::common::{has_available_engine_slot, queue_time_delta_ms};
 
 use crate::config::{InputTpsModel, PylonConfig, QueueMismatchConfig};
-use crate::time::{Micros, micros_from_ms};
+use crate::time::Micros;
 
 pub struct Backend {
     pub id: String,
@@ -46,28 +51,74 @@ pub struct Backend {
     input_tps: InputTpsEstimate,
 }
 
+/// Engine submit and first output times of a request, as Pylon saw them.
+#[derive(Clone, Copy, Debug)]
+pub struct InputInterval {
+    pub submitted: Micros,
+    pub first_output: Micros,
+}
+
 /// Pylon's reported input throughput.
 struct InputTpsEstimate {
     last_mean: f64,
     max: f64,
-    /// (submitted, first output, input tokens), ordered by first output.
-    window: VecDeque<(Micros, Micros, u64)>,
+    fallback: Option<FallbackWindow>,
+}
+
+/// Pylon's OpenAI fallback window, driven in virtual time.
+struct FallbackWindow {
+    window: RequestInputIntervalWindow,
+    config: StatsCollectorConfig,
+    /// Virtual time zero as a real instant. The window only compares and
+    /// subtracts instants, so this mapping reproduces virtual durations.
+    epoch: Instant,
+}
+
+/// What a request's usage told Pylon when its window entry was observed.
+#[derive(Clone, Copy, Debug)]
+enum InputUsage {
+    /// First output arrived and usage is still expected.
+    Pending,
+    /// Final usage, with the engine's cached prompt token count.
+    Reported { cached_tokens: u64 },
+    /// The request ended without usage.
+    Missing,
 }
 
 impl Backend {
+    /// `epoch` is the real instant that stands for virtual time zero.
     pub fn new(
         id: String,
         region: usize,
         speed: f64,
         engine: EngineConfig,
         pylon: &PylonConfig,
+        epoch: Instant,
     ) -> anyhow::Result<Self> {
         let capacity = speed * engine.num_gpu_workers as f64;
-        let (last_mean, max) = match pylon.input_tps {
-            InputTpsModel::Constant { mean, max } => (mean * capacity, max * capacity),
-            InputTpsModel::FallbackWindow { initial, .. } => {
-                (initial * capacity, initial * capacity)
-            }
+        let input_tps = match pylon.input_tps {
+            InputTpsModel::Constant { mean, max } => InputTpsEstimate {
+                last_mean: mean * capacity,
+                max: max * capacity,
+                fallback: None,
+            },
+            InputTpsModel::FallbackWindow {
+                initial,
+                window,
+                duration_floor_ms,
+            } => InputTpsEstimate {
+                last_mean: initial * capacity,
+                max: initial * capacity,
+                fallback: Some(FallbackWindow {
+                    window: RequestInputIntervalWindow::default(),
+                    config: StatsCollectorConfig {
+                        smoothing_window_size: window,
+                        duration_floor: Duration::from_secs_f64(duration_floor_ms / 1000.0),
+                        ..StatsCollectorConfig::default()
+                    },
+                    epoch,
+                }),
+            },
         };
         let max_engine_concurrency = engine.max_concurrency();
         Ok(Self {
@@ -81,11 +132,7 @@ impl Backend {
             output_phase_requests: 0,
             prompt_work_tokens: 0,
             total_input_tokens: 0,
-            input_tps: InputTpsEstimate {
-                last_mean,
-                max,
-                window: VecDeque::new(),
-            },
+            input_tps,
         })
     }
 
@@ -148,94 +195,102 @@ impl Backend {
         self.engine.next_event_time()
     }
 
-    /// Pylon observed first output for a request it submitted at `submitted`.
-    pub fn first_token(
-        &mut self,
-        input_tokens: u64,
-        submitted: Micros,
-        first_output: Micros,
-        pylon: &PylonConfig,
-    ) {
+    /// Pylon observed first output. The request's usage arrives at the end
+    /// of its stream.
+    pub fn first_token(&mut self, request: usize, input_tokens: u64, interval: InputInterval) {
         self.input_phase_requests -= 1;
         self.output_phase_requests += 1;
         self.prompt_work_tokens -= input_tokens;
-        if let InputTpsModel::FallbackWindow {
-            window,
-            duration_floor_ms,
-            ..
-        } = pylon.input_tps
-        {
-            self.observe_input_interval(
-                submitted,
-                first_output,
-                input_tokens,
-                window,
-                duration_floor_ms,
-            );
-        }
+        self.observe_input_interval(request, input_tokens, interval, InputUsage::Pending);
     }
 
-    fn observe_input_interval(
+    /// Pylon saw the request finish. Its final usage reports the prompt
+    /// tokens the engine served from its prefix cache.
+    pub fn complete(
         &mut self,
-        submitted: Micros,
-        first_output: Micros,
+        request: usize,
         input_tokens: u64,
-        window: usize,
-        duration_floor_ms: f64,
+        cached_tokens: u64,
+        interval: InputInterval,
     ) {
-        if first_output <= submitted {
-            return;
-        }
-        let estimate = &mut self.input_tps;
-        // Events arrive in time order, so first-output order is append order.
-        estimate
-            .window
-            .push_back((submitted, first_output, input_tokens));
-        while estimate.window.len() > window {
-            estimate.window.pop_front();
-        }
-        let tokens: u64 = estimate.window.iter().map(|entry| entry.2).sum();
-        let mut intervals: Vec<(Micros, Micros)> = estimate
-            .window
-            .iter()
-            .map(|entry| (entry.0, entry.1))
-            .collect();
-        intervals.sort_unstable();
-        let mut union: Micros = 0;
-        let (mut start, mut end) = intervals[0];
-        for &(next_start, next_end) in &intervals[1..] {
-            if next_start <= end {
-                end = end.max(next_end);
-            } else {
-                union += end - start;
-                (start, end) = (next_start, next_end);
-            }
-        }
-        union += end - start;
-        let seconds = union.max(micros_from_ms(duration_floor_ms)) as f64 / 1_000_000.0;
-        let rate = tokens as f64 / seconds;
-        if rate.is_finite() && rate > 0.0 {
-            estimate.last_mean = rate;
-            estimate.max = estimate.max.max(rate);
-        }
-    }
-
-    /// Pylon saw the request finish.
-    pub fn complete(&mut self, input_tokens: u64) {
         self.output_phase_requests -= 1;
         self.total_input_tokens -= input_tokens;
+        self.observe_input_interval(
+            request,
+            input_tokens,
+            interval,
+            InputUsage::Reported { cached_tokens },
+        );
     }
 
-    /// The client disconnected; the engine drops the request.
-    pub fn cancel(&mut self, now: Micros, request: usize, input_tokens: u64, decoding: bool) {
-        if decoding {
+    /// The client disconnected; the engine drops the request. `interval` is
+    /// set when the request had produced first output.
+    pub fn cancel(
+        &mut self,
+        now: Micros,
+        request: usize,
+        input_tokens: u64,
+        interval: Option<InputInterval>,
+    ) {
+        if let Some(interval) = interval {
             self.output_phase_requests -= 1;
+            self.observe_input_interval(request, input_tokens, interval, InputUsage::Missing);
         } else {
             self.input_phase_requests -= 1;
             self.prompt_work_tokens -= input_tokens;
         }
         self.total_input_tokens -= input_tokens;
         self.engine.cancel(now, request as u64);
+    }
+
+    /// Feeds one request event to Pylon's fallback window. Builds the sample
+    /// the way `record_fallback_observation` in
+    /// `pylon-lib/src/stats/projection.rs` does for a streamed Chat
+    /// Completions request that expects usage
+    /// (`--force-chat-completions-include-usage`) from an engine whose usage
+    /// always reports cached prompt tokens, as MockDynamo's does.
+    fn observe_input_interval(
+        &mut self,
+        request: usize,
+        input_tokens: u64,
+        interval: InputInterval,
+        usage: InputUsage,
+    ) {
+        let estimate = &mut self.input_tps;
+        let Some(fallback) = &mut estimate.fallback else {
+            return;
+        };
+        // Cached tokens above the prompt total are inconsistent; the request
+        // then counts total tokens and is not max-eligible. Without reported
+        // cached tokens, Pylon counts a Chat request as a miss only once its
+        // usage is explicit, which a request without usage never is.
+        let uncached_tokens = match usage {
+            InputUsage::Reported { cached_tokens } => input_tokens.checked_sub(cached_tokens),
+            InputUsage::Pending | InputUsage::Missing => None,
+        };
+        let at = |micros: Micros| fallback.epoch + Duration::from_micros(micros);
+        let request_id = request.to_string();
+        let sample = InputIntervalSample {
+            request_id: &request_id,
+            interval: RequestInputInterval {
+                submitted_at: at(interval.submitted),
+                first_generated_output_at: at(interval.first_output),
+            },
+            prompt_tokens: input_tokens,
+            input_tokens: uncached_tokens.unwrap_or(input_tokens),
+            input_tokens_explicit: matches!(usage, InputUsage::Reported { .. }),
+            max_input_tps_eligible: uncached_tokens.is_some(),
+            pending: matches!(usage, InputUsage::Pending),
+        };
+        let Some(rate) = fallback.window.observe(sample, &fallback.config) else {
+            return;
+        };
+        // `ModelMetricsState::publish_mean_input_tps`: the window rate is the
+        // published mean, and only a max-eligible mean raises the maximum.
+        estimate.last_mean = rate.input_tps;
+        if rate.max_input_tps_eligible {
+            estimate.max = estimate.max.max(rate.input_tps);
+        }
     }
 
     pub fn stats(&self) -> ModelStats {
@@ -303,10 +358,51 @@ mod tests {
         }
     }
 
+    fn interval(submitted_ms: u64, first_output_ms: u64) -> InputInterval {
+        InputInterval {
+            submitted: submitted_ms * 1000,
+            first_output: first_output_ms * 1000,
+        }
+    }
+
+    /// A backend whose fallback window starts from 500 tokens/s.
+    fn fallback_backend(window: usize, requests: usize, input_tokens: u64) -> Backend {
+        let mut pylon = pylon();
+        pylon.input_tps = InputTpsModel::FallbackWindow {
+            initial: 500.0,
+            window,
+            duration_floor_ms: 10.0,
+        };
+        let mut backend =
+            Backend::new("b".into(), 0, 1.0, engine(), &pylon, Instant::now()).unwrap();
+        for request in 0..requests {
+            backend.accept(0, request, spec(input_tokens));
+        }
+        backend
+    }
+
+    fn input_tps(backend: &Backend) -> (f64, f64) {
+        let stats = backend.stats();
+        (
+            stats.last_mean_input_tps,
+            stats
+                .max_input_tps
+                .expect("simulated Pylons report a maximum"),
+        )
+    }
+
+    fn assert_tps(actual: (f64, f64), expected: (f64, f64)) {
+        assert!(
+            (actual.0 - expected.0).abs() < 1e-6 && (actual.1 - expected.1).abs() < 1e-6,
+            "{actual:?} != {expected:?}"
+        );
+    }
+
     #[test]
     fn pylon_stats_track_phases_and_engine_concurrency() {
         let pylon = pylon();
-        let mut backend = Backend::new("b".into(), 0, 1.0, engine(), &pylon).unwrap();
+        let mut backend =
+            Backend::new("b".into(), 0, 1.0, engine(), &pylon, Instant::now()).unwrap();
         backend.accept(0, 0, spec(100));
         backend.accept(0, 1, spec(100));
         backend.accept(0, 2, spec(100));
@@ -316,8 +412,8 @@ mod tests {
         assert_eq!(stats.queued_input_size, 300);
         assert_eq!(stats.queue_time_estimate_ms_by_priority.get(&0), Some(&300));
 
-        backend.first_token(100, 0, 10_000, &pylon);
-        backend.cancel(20_000, 2, 100, false);
+        backend.first_token(0, 100, interval(0, 10));
+        backend.cancel(20_000, 2, 100, None);
         let stats = backend.stats();
         assert_eq!(stats.num_running_queries, 2);
         assert_eq!(stats.queued_input_size, 100);
@@ -326,7 +422,8 @@ mod tests {
     #[test]
     fn mismatch_rejects_only_when_full_and_far_above_expected() {
         let pylon = pylon();
-        let mut backend = Backend::new("b".into(), 0, 1.0, engine(), &pylon).unwrap();
+        let mut backend =
+            Backend::new("b".into(), 0, 1.0, engine(), &pylon, Instant::now()).unwrap();
         backend.accept(0, 0, spec(1000));
         assert!(!backend.rejects(Some(0), &pylon.queue_mismatch));
         backend.accept(0, 1, spec(1000));
@@ -337,26 +434,44 @@ mod tests {
     }
 
     #[test]
-    fn fallback_window_rate_uses_interval_union_and_keeps_peak() {
-        let mut pylon = pylon();
-        pylon.input_tps = InputTpsModel::FallbackWindow {
-            initial: 500.0,
-            window: 2,
-            duration_floor_ms: 10.0,
-        };
-        let mut backend = Backend::new("b".into(), 0, 1.0, engine(), &pylon).unwrap();
-        for request in 0..3 {
-            backend.accept(0, request, spec(1000));
-        }
-        // Two overlapping one-second intervals: 2,000 tokens over 1.5 s.
-        backend.first_token(1000, 0, 1_000_000, &pylon);
-        backend.first_token(1000, 500_000, 1_500_000, &pylon);
-        let stats = backend.stats();
-        assert!((stats.last_mean_input_tps - 2000.0 / 1.5).abs() < 1e-6);
-        // A cache hit with a 20 ms interval replaces the oldest entry.
-        backend.first_token(1000, 1_980_000, 2_000_000, &pylon);
-        let stats = backend.stats();
-        assert!((stats.last_mean_input_tps - 2000.0 / 1.02).abs() < 1e-6);
-        assert_eq!(stats.max_input_tps, Some(stats.last_mean_input_tps));
+    fn fallback_rate_waits_for_usage_and_counts_uncached_tokens() {
+        let mut backend = fallback_backend(8, 2, 1000);
+        // Two overlapping one-second intervals over 1.5 s.
+        backend.first_token(0, 1000, interval(0, 1000));
+        backend.first_token(1, 1000, interval(500, 1500));
+        assert_tps(input_tps(&backend), (500.0, 500.0));
+        // The older request still expects usage, so it holds the newer one
+        // out of the rate.
+        backend.complete(1, 1000, 0, interval(500, 1500));
+        assert_tps(input_tps(&backend), (500.0, 500.0));
+        // 200 cached tokens leave 800 + 1,000 uncached tokens over 1.5 s.
+        backend.complete(0, 1000, 200, interval(0, 1000));
+        let rate = 1800.0 / 1.5;
+        assert_tps(input_tps(&backend), (rate, rate));
+    }
+
+    #[test]
+    fn fallback_rate_drops_cache_hits_with_a_short_uncached_remainder() {
+        let mut backend = fallback_backend(8, 2, 1000);
+        backend.first_token(0, 1000, interval(0, 1000));
+        backend.complete(0, 1000, 0, interval(0, 1000));
+        assert_tps(input_tps(&backend), (1000.0, 1000.0));
+        // 255 uncached tokens over 10 ms would be 25,500 tokens/s.
+        backend.first_token(1, 1000, interval(2000, 2010));
+        backend.complete(1, 1000, 745, interval(2000, 2010));
+        assert_tps(input_tps(&backend), (1000.0, 1000.0));
+    }
+
+    #[test]
+    fn fallback_maximum_rises_only_from_windows_that_reported_cached_tokens() {
+        let mut backend = fallback_backend(1, 2, 1000);
+        // A request cancelled after first output never reports usage, so it
+        // counts total prompt tokens and its window cannot raise the maximum.
+        backend.first_token(0, 1000, interval(0, 1000));
+        backend.cancel(1_100_000, 0, 1000, Some(interval(0, 1000)));
+        assert_tps(input_tps(&backend), (1000.0, 500.0));
+        backend.first_token(1, 1000, interval(2000, 2500));
+        backend.complete(1, 1000, 0, interval(2000, 2500));
+        assert_tps(input_tps(&backend), (2000.0, 2000.0));
     }
 }

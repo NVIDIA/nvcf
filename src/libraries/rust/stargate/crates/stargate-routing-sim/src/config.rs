@@ -88,9 +88,15 @@ pub enum InputTpsModel {
     /// Fixed values per GPU worker and unit of backend speed, as if seeded and
     /// never observed.
     Constant { mean: f64, max: f64 },
-    /// OpenAI fallback stats: the rate over the most recent requests' input
-    /// tokens divided by the union of their submit-to-first-output intervals
-    /// (`pylon-lib/src/stats/aggregator.rs`). The maximum is a high-water mark.
+    /// OpenAI fallback stats from Pylon's own window
+    /// (`pylon-lib/src/stats/aggregator.rs`): the most recent requests'
+    /// uncached prompt tokens divided by the union of their
+    /// submit-to-first-output intervals. Every request expects usage, as with
+    /// `--force-chat-completions-include-usage`, and its usage reports cached
+    /// prompt tokens at completion. A request waiting for usage holds newer
+    /// requests out of the rate, and cache hits that leave fewer than 256
+    /// uncached tokens are left out. The maximum is a high-water mark of
+    /// windows whose requests all reported usage.
     FallbackWindow {
         /// Value left by startup calibration, per GPU worker and unit of
         /// backend speed.
