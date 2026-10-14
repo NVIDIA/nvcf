@@ -133,7 +133,7 @@ fn every_shipped_suite_plans_each_pair_once_per_default_algorithm() {
         for line in listed.lines() {
             let (name, rest) = line.split_once(": ").unwrap();
             let scenarios: BTreeSet<_> = rest
-                .split_once("rate caps: ")
+                .split_once("scenarios: ")
                 .unwrap()
                 .1
                 .split(", ")

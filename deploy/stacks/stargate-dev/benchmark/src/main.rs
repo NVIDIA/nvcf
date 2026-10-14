@@ -115,7 +115,7 @@ async fn execute(cli: Cli) -> Result<()> {
                 let plan = suite.plan(name, &Algorithm::DEFAULT_PAIR)?;
                 writeln!(
                     std::io::stdout().lock(),
-                    "{name}: at least {:.1} measured minutes at rate caps: {}",
+                    "{name}: at least {:.1} measured minutes, scenarios: {}",
                     plan.minimum_measured_minutes(),
                     scenarios.join(", ")
                 )?;

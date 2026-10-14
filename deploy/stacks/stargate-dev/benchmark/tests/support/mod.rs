@@ -159,8 +159,8 @@ pub fn mockdc_pod(name: &str, identity: &str) -> Value {
 /// Respond to `verify --region us-west-2` reads for a healthy region: the hub
 /// Deployments and registration Service, three routers that each see the
 /// four backends, and two calibrated MockDC Pods per MockDC cluster. Contexts,
-/// cluster names, namespace, model, and routing key come from the
-/// environment file the controller embeds.
+/// cluster names, namespace, model, and routing key are read from
+/// environments/us-west-2.yaml, the file the controller embeds.
 pub fn healthy_west_region(fake: &FakeCommand) {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../environments/us-west-2.yaml");
     let region: Value = serde_yaml_ng::from_str(&fs::read_to_string(path).unwrap()).unwrap();
