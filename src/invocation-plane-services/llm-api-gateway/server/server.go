@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	echo "github.com/labstack/echo/v4"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/lastcluster"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimitsync"
@@ -35,11 +37,51 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/util"
 )
 
+// Gateway is the gateway's Echo server plus the shared state that must
+// outlive in-flight handlers. Shut it down with Shutdown, not Echo.Shutdown.
+type Gateway struct {
+	*echo.Echo
+	state     stateShutdown
+	stateOnce sync.Once
+}
+
+// Shutdown stops the HTTP server and waits for in-flight handlers, then
+// releases the shared state once: the rate-limit sync runtime stops, pending
+// last-cluster writes are drained, and the Olric node leaves the cluster.
+func (g *Gateway) Shutdown(ctx context.Context) error {
+	err := g.Echo.Shutdown(ctx)
+	g.stateOnce.Do(g.state.run)
+	return err
+}
+
+// stateShutdown releases shared state after the HTTP server has stopped.
+type stateShutdown struct {
+	stopLimiter func()
+	drain       func(context.Context)
+	stopOlric   func(context.Context)
+	timeout     time.Duration
+}
+
+// run stops the rate limiter, drains last-cluster writes, and then stops
+// Olric, so neither the limiter nor the drain writes to a node that already
+// left the cluster.
+func (s stateShutdown) run() {
+	s.stopLimiter()
+	timeout := s.timeout
+	if timeout <= 0 {
+		timeout = util.DefaultOlricShutdownTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	s.drain(ctx)
+	cancel()
+	s.stopOlric(context.Background())
+}
+
 func New(
 	cfg *config.Config,
 	inferenceProvider provider.InferenceProvider,
 	authClient api.InvocationAuthClient,
-) (*echo.Echo, error) {
+) (*Gateway, error) {
 	if cfg != nil && cfg.Telemetry.ServiceName != "" {
 		telemetry.SetServiceName(cfg.Telemetry.ServiceName)
 	}
@@ -65,9 +107,37 @@ func New(
 		})
 	}
 
-	limiter, err := newRateLimiter(cfg, e)
+	// context.Background for startup: Echo gives us no hook-scoped ctx, and a
+	// startup failure cannot be undone by callers. The telemetry logger is
+	// initialised per-call, so ctx only affects tracing and logs.
+	ctx := context.Background()
+	olric, err := startOlric(ctx, cfg)
 	if err != nil {
 		return nil, err
+	}
+
+	limiter, stopLimiter, err := newRateLimiter(cfg, olric.node)
+	if err != nil {
+		olric.stop(ctx)
+		return nil, err
+	}
+
+	tracker, err := newLastClusterTracker(ctx, cfg, olric.node)
+	if err != nil {
+		stopLimiter()
+		olric.stop(ctx)
+		return nil, err
+	}
+	if stargate, ok := inferenceProvider.(*provider.StargateProvider); ok {
+		stargate.SetLastClusterTracker(tracker)
+	}
+
+	// A nil tracker drains immediately.
+	state := stateShutdown{
+		stopLimiter: stopLimiter,
+		drain:       tracker.Drain,
+		stopOlric:   olric.stop,
+		timeout:     cfg.Olric.ShutdownTimeout,
 	}
 
 	handlers := api.NewHandlers(
@@ -77,7 +147,7 @@ func New(
 	)
 	api.RegisterRoutes(e, handlers)
 
-	return e, nil
+	return &Gateway{Echo: e, state: state}, nil
 }
 
 // Start serves e on addr until the server is shut down. Use it instead of
@@ -88,38 +158,61 @@ func Start(e *echo.Echo, addr string) error {
 	return e.Server.ListenAndServe()
 }
 
-func newRateLimiter(cfg *config.Config, e *echo.Echo) (ratelimit.RateLimiter, error) {
-	if !cfg.RateLimiter.Enabled {
-		return ratelimit.AllowAll, nil
-	}
+// olricRuntime is the embedded Olric node shared by the rate limiter and the
+// last-cluster store. node is nil when Olric is disabled.
+type olricRuntime struct {
+	node      *util.OlricNode
+	collector *telemetry.OlricCollector
+	timeout   time.Duration
+}
 
+// startOlric starts the embedded Olric node whenever Olric is enabled, even
+// when the rate limiter is off, so other gateway state can use it.
+func startOlric(ctx context.Context, cfg *config.Config) (*olricRuntime, error) {
+	runtime := &olricRuntime{timeout: cfg.Olric.ShutdownTimeout}
 	if !cfg.Olric.Enabled {
-		if cfg.RateLimiter.FailOpen {
-			return ratelimit.AllowAll, nil
-		}
-		return ratelimit.RejectAll, nil
+		return runtime, nil
 	}
-
-	// context.Background for startup: Echo gives us no hook-scoped ctx, and a
-	// rate-limiter startup failure cannot be undone by callers. The telemetry
-	// logger is initialised per-call, so ctx only affects tracing and logs.
-	ctx := context.Background()
 	node, err := util.NewOlricNode(ctx, cfg.Olric)
 	if err != nil {
 		return nil, fmt.Errorf("start olric node: %w", err)
 	}
-
-	olricCollector, err := telemetry.NewOlricCollector(node.Client, node.SelfAddr)
+	collector, err := telemetry.NewOlricCollector(node.Client, node.SelfAddr)
 	if err != nil {
 		util.ShutdownOlricNode(ctx, node, cfg.Olric.ShutdownTimeout)
 		return nil, fmt.Errorf("start olric metrics collector: %w", err)
 	}
+	runtime.node = node
+	runtime.collector = collector
+	return runtime, nil
+}
+
+func (r *olricRuntime) stop(ctx context.Context) {
+	if r.node == nil {
+		return
+	}
+	r.collector.Stop()
+	util.ShutdownOlricNode(ctx, r.node, r.timeout)
+}
+
+// newRateLimiter builds the limiter on the shared Olric node. The returned
+// stop function is never nil.
+func newRateLimiter(cfg *config.Config, node *util.OlricNode) (ratelimit.RateLimiter, func(), error) {
+	noop := func() {}
+	if !cfg.RateLimiter.Enabled {
+		return ratelimit.AllowAll, noop, nil
+	}
+
+	if node == nil {
+		if cfg.RateLimiter.FailOpen {
+			return ratelimit.AllowAll, noop, nil
+		}
+		return ratelimit.RejectAll, noop, nil
+	}
 
 	syncRuntime, err := ratelimitsync.NewPublisherRuntime(cfg)
 	if err != nil {
-		olricCollector.Stop()
-		util.ShutdownOlricNode(ctx, node, cfg.Olric.ShutdownTimeout)
-		return nil, err
+		return nil, nil, err
 	}
 
 	limiter, err := ratelimit.NewRateLimiter(
@@ -128,22 +221,16 @@ func newRateLimiter(cfg *config.Config, e *echo.Echo) (ratelimit.RateLimiter, er
 		ratelimit.WithSynchronizer(syncRuntime.Synchronizer),
 	)
 	if err != nil {
-		olricCollector.Stop()
 		syncRuntime.Stop()
-		util.ShutdownOlricNode(ctx, node, cfg.Olric.ShutdownTimeout)
-		return nil, err
+		return nil, nil, err
 	}
 
 	if err := syncRuntime.Start(); err != nil {
-		olricCollector.Stop()
 		syncRuntime.Stop()
-		util.ShutdownOlricNode(ctx, node, cfg.Olric.ShutdownTimeout)
-		return nil, err
+		return nil, nil, err
 	}
 
-	e.Server.RegisterOnShutdown(func() {
-		olricCollector.Stop()
-
+	stop := func() {
 		// The sync synchronizer's Stop() blocks on the publisher loop draining
 		// its in-flight publish goroutines; bound it so a stuck remote cannot
 		// delay the gateway's shutdown indefinitely. We reuse the Olric
@@ -161,10 +248,48 @@ func newRateLimiter(cfg *config.Config, e *echo.Echo) (ratelimit.RateLimiter, er
 				Dur("timeout", cfg.Olric.ShutdownTimeout).
 				Msg("rate limit sync runtime did not stop within shutdown timeout")
 		}
-		util.ShutdownOlricNode(context.Background(), node, cfg.Olric.ShutdownTimeout)
-	})
+	}
+	return limiter, stop, nil
+}
 
-	return limiter, nil
+// newLastClusterTracker returns nil when last-cluster hints are disabled. It
+// uses the shared Olric DMap when Olric is enabled, and an in-process LRU
+// otherwise.
+func newLastClusterTracker(
+	ctx context.Context,
+	cfg *config.Config,
+	node *util.OlricNode,
+) (*lastcluster.Tracker, error) {
+	lcCfg := cfg.Stargate.LastCluster
+	if !lcCfg.Enabled {
+		return nil, nil
+	}
+
+	var (
+		store     lastcluster.Store
+		storeKind string
+	)
+	if node != nil {
+		dm, err := node.Client.NewDMap(lastcluster.DMapName)
+		if err != nil {
+			return nil, fmt.Errorf("create olric dmap %q: %w", lastcluster.DMapName, err)
+		}
+		store, storeKind = lastcluster.NewOlricStore(dm), "olric"
+	} else {
+		store, storeKind = lastcluster.NewLocalStore(lcCfg.LocalMaxEntries), "local"
+	}
+
+	telemetry.Logger(ctx).Info().
+		Str("store", storeKind).
+		Dur("ttl", lcCfg.TTL).
+		Dur("lookup_timeout", lcCfg.LookupTimeout).
+		Int("local_max_entries", lcCfg.LocalMaxEntries).
+		Msg("stargate last-cluster hints enabled")
+
+	return lastcluster.NewTracker(store, lastcluster.Options{
+		TTL:           lcCfg.TTL,
+		LookupTimeout: lcCfg.LookupTimeout,
+	}), nil
 }
 
 // timeAfterOrForever returns a channel that never fires when timeout <= 0,

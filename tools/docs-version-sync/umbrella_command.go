@@ -22,12 +22,18 @@ type umbrellaPreparation struct {
 
 func runUmbrella(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: docs-version-sync umbrella <prepare|check> [flags]")
+		return fmt.Errorf("usage: docs-version-sync umbrella <prepare|check|bundle|verify-bundle> [flags]")
 	}
 	command := args[0]
+	if command == "publish" {
+		return runUmbrellaPublish(args[1:])
+	}
 	allowed := map[string]string{
-		"prepare": "repo source version change qualification helm-version helmfile-version previous inventories out",
-		"check":   "repo manifest previous inventories",
+		"prepare":       "repo source version change qualification helm-version helmfile-version previous inventories out",
+		"check":         "repo manifest previous inventories",
+		"bundle":        "repo manifest previous inventories out",
+		"verify-bundle": "repo manifest bundle sha256",
+		"manifest":      "manifest",
 	}
 	fields, ok := allowed[command]
 	if !ok {
@@ -38,7 +44,9 @@ func runUmbrella(args []string) error {
 	manifestPath := flags.String("manifest", "", "umbrella manifest to validate")
 	previousPath := flags.String("previous", "", "preceding qualified umbrella manifest")
 	inventories := flags.String("inventories", "", "directory containing the three released inventory JSON files")
-	out := flags.String("out", "", "candidate manifest output; existing different content is never overwritten")
+	out := flags.String("out", "", "manifest file or new bundle directory; existing output must match exactly")
+	bundle := flags.String("bundle", "", "umbrella archive to verify")
+	digest := flags.String("sha256", "", "expected archive digest from the trusted release asset index")
 	plan := umbrellaPreparation{}
 	flags.StringVar(&plan.Source, "source", "", "full reviewed source commit containing the catalog")
 	flags.StringVar(&plan.Version, "version", "", "exact umbrella version X.Y.Z")
@@ -60,6 +68,19 @@ func runUmbrella(args []string) error {
 	})
 	if invalid != "" {
 		return fmt.Errorf("--%s is not valid for umbrella %s", invalid, command)
+	}
+	if command == "manifest" {
+		if *manifestPath == "" {
+			return fmt.Errorf("umbrella manifest requires --manifest")
+		}
+		_, _, err := loadUmbrellaManifest(*manifestPath)
+		return err
+	}
+	if command == "verify-bundle" {
+		if *bundle == "" || *manifestPath == "" || *digest == "" {
+			return fmt.Errorf("umbrella verify-bundle requires --bundle, --manifest, and --sha256")
+		}
+		return verifyUmbrellaBundleFile(resolveRepoPath(*rootFlag, *bundle), resolveRepoPath(*rootFlag, *manifestPath), *digest)
 	}
 	root := *rootFlag
 	var err error
@@ -88,11 +109,17 @@ func runUmbrella(args []string) error {
 		return prepareUmbrellaManifest(root, inventoryDir, resolveRepoPath(root, *out), previous, plan)
 	}
 	if *manifestPath == "" {
-		return fmt.Errorf("umbrella check requires --manifest")
+		return fmt.Errorf("umbrella %s requires --manifest", command)
 	}
 	manifest, data, err := loadUmbrellaManifest(resolveRepoPath(root, *manifestPath))
 	if err != nil {
 		return err
+	}
+	if command == "bundle" {
+		if *out == "" {
+			return fmt.Errorf("umbrella bundle requires --out")
+		}
+		return assembleUmbrellaBundle(root, inventoryDir, resolveRepoPath(root, *out), manifest, data, previous)
 	}
 	if err := checkUmbrellaInputs(root, inventoryDir, manifest, data, previous); err != nil {
 		return err
