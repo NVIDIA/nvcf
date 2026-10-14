@@ -89,6 +89,10 @@ so it refuses the switch until `cpuWorkloads.sisChartVersion` or `sis.chartPath`
 - On startup ICMS checks stored clusters for a real GPU already named `CPU` in any letter
   case. If one exists the state is `BLOCKED` (`COLLISION_DETECTED`) and CPU shapes are
   rejected until the GPU is renamed.
+- While the switch is on, the name `CPU` is reserved. Until the state is `READY`, a registration that
+  uses the name for anything but a CPU shape is refused with a 400 that asks for the GPU to be
+  renamed, so that nothing under that name can be stored behind a running check. That includes a
+  cluster that re-registers a real GPU under that name. With the switch off nothing changes.
 - Outside `READY`, a request or registration that uses a CPU shape fails with HTTP 409 and
   the message `CPU_WORKLOADS_NOT_READY`.
 - CPU shapes do not support reservations. Capacity is counted in instances, and usage is

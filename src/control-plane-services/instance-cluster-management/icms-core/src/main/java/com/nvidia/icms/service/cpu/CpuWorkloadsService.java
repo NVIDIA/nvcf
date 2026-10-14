@@ -24,8 +24,6 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
-import java.time.Clock;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -63,6 +61,11 @@ public class CpuWorkloadsService implements DisposableBean {
                     + "valid label value), gpuCount 0 and positive cpuCores, systemMemory and storage. "
                     + "Instance type '%s' does not qualify.";
 
+    private static final String RESERVED_WHILE_ENABLED_MESSAGE =
+            "GPU name '%s' is reserved for CPU-only workloads while they are enabled on this ICMS, and "
+                    + "instance type '%s' does not qualify. Rename the GPU before registering it, or turn "
+                    + "CPU workloads off.";
+
     private static final String ONE_SHAPE_MESSAGE =
             "GPU name '%s' requires exactly one CPU shape per cluster in this release.";
 
@@ -87,12 +90,6 @@ public class CpuWorkloadsService implements DisposableBean {
     // Written only by the collision guard, read by every request without a lock.
     private volatile GuardResult guardResult = GuardResult.UNEVALUATED;
 
-    // When the last registration was let through that may hold a GPU under the reserved name. It is
-    // let through at validation, and stored later, so a scan cannot call the result clean until a quiet
-    // period has passed without such a registration. The registration may have been stored after the
-    // scan read its cluster.
-    private volatile Instant lastPossibleCollisionRegistration = Instant.MIN;
-    private final Clock clock;
 
     @Autowired
     public CpuWorkloadsService(
@@ -108,18 +105,9 @@ public class CpuWorkloadsService implements DisposableBean {
             CpuWorkloadsConfigurationProperties properties,
             ClusterRepository clusterRepository,
             Executor refreshExecutor) {
-        this(properties, clusterRepository, refreshExecutor, Clock.systemUTC());
-    }
-
-    CpuWorkloadsService(
-            CpuWorkloadsConfigurationProperties properties,
-            ClusterRepository clusterRepository,
-            Executor refreshExecutor,
-            Clock clock) {
         this.properties = properties;
         this.clusterRepository = clusterRepository;
         this.refreshExecutor = refreshExecutor;
-        this.clock = clock;
     }
 
     @Override
@@ -198,20 +186,12 @@ public class CpuWorkloadsService implements DisposableBean {
      * name that is not a valid CPU shape. Details go to the log only.
      */
     private synchronized void evaluateGuard() {
-        Instant scanStart = clock.instant();
         try {
             List<String> collisions = new ArrayList<>();
             clusterRepository.forEachClusterPage(
                     properties.getGuardPageSize(),
                     page -> page.forEach(cluster -> findCollision(cluster).ifPresent(collisions::add)));
-            if (collisions.isEmpty() && !registrationsAreQuiet(scanStart)) {
-                // A GPU under the reserved name was let through shortly before or during the scan, and it
-                // may be stored after its cluster was read. Do not call that clean. A later attempt, once
-                // the quiet period has passed, reads it.
-                guardResult = GuardResult.UNEVALUATED;
-                log.warn("CPU workloads guard saw a registration under the reserved name shortly before or "
-                        + "during its scan, will scan again");
-            } else if (collisions.isEmpty()) {
+            if (collisions.isEmpty()) {
                 guardResult = GuardResult.CLEAN;
                 log.info("CPU workloads guard passed: no GPU is registered under the reserved name");
             } else {
@@ -224,16 +204,6 @@ public class CpuWorkloadsService implements DisposableBean {
             guardResult = GuardResult.UNEVALUATED;
             log.error("CPU workloads guard could not read cluster records, will retry", e);
         }
-    }
-
-    /**
-     * True when no registration that may hold a GPU under the reserved name was let through during the
-     * scan, or within the grace period before it started. The grace period covers the time a
-     * registration takes from validation to being stored.
-     */
-    private boolean registrationsAreQuiet(Instant scanStart) {
-        return !lastPossibleCollisionRegistration
-                .plus(properties.getGuardRegistrationGrace()).isAfter(scanStart);
     }
 
     private static Optional<String> findCollision(ClusterEntity cluster) {
@@ -279,8 +249,11 @@ public class CpuWorkloadsService implements DisposableBean {
      *
      * <p>READY: a GPU named {@code CPU} in any letter case must be exactly {@code CPU} and have
      * only valid CPU shapes. Other states: any CPU shape is rejected with
-     * {@link CpuWorkloadsNotReadyException}. GPUs under other names, and non-shape entries under
-     * the reserved name, are not affected, so existing registrations keep working.
+     * {@link CpuWorkloadsNotReadyException}. While the switch is on but the guard is not ready, an
+     * entry under the reserved name that is not a CPU shape is refused too, so that nothing under that
+     * name can be stored behind a running scan. With the switch off, nothing changes: GPUs under other
+     * names, and non-shape entries under the reserved name, are not affected. GPUs under other names
+     * are never affected.
      */
     public void validateGpus(Collection<GpuV5Udt> gpus) {
         validateViews(gpus.stream().map(CpuWorkloadsService::toView).toList());
@@ -307,11 +280,14 @@ public class CpuWorkloadsService implements DisposableBean {
             } else if (gpu.instanceTypes().stream().anyMatch(
                     i -> CpuShapes.isCpuShapeEntry(gpu.name(), i.name(), i.gpuCount()))) {
                 throw new CpuWorkloadsNotReadyException(status);
-            } else {
-                // Let through while the guard is not ready: a real GPU under the reserved name. It is stored
-                // after this validation, possibly after a running scan has read its cluster, so no scan
-                // may end clean until a quiet period has passed.
-                lastPossibleCollisionRegistration = clock.instant();
+            } else if (properties.isEnabled()) {
+                // The switch is on and the guard has not reported a clean result, so nothing under the
+                // reserved name may be stored: a real GPU stored now could land behind a scan that has
+                // already read its cluster, and the result would stay clean while it exists. The name is
+                // reserved while CPU workloads are enabled, so such a GPU must be renamed first.
+                throw new IcmsBadRequestException(String.format(
+                        RESERVED_WHILE_ENABLED_MESSAGE, gpu.name(),
+                        gpu.instanceTypes().stream().map(InstanceView::name).findFirst().orElse("any")));
             }
         }
     }

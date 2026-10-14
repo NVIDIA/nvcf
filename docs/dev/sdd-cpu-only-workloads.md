@@ -609,6 +609,12 @@ What we chose, when the switch is on:
   shape name and a valid label, cores positive, memory and storage positive Kubernetes quantities.
   A cluster registers exactly one CPU shape, and only under the name CPU.
 - A real GPU already named CPU, in any letter case, makes the state BLOCKED until it is renamed.
+- While the switch is on, the name CPU is reserved. Until the state is READY, a registration that uses
+  the name for anything but a CPU shape is refused with a 400 that asks for the GPU to be renamed. That
+  includes a cluster that re-registers a real GPU under that name. This is what keeps the collision
+  check sound: a GPU stored while a check is running could land behind the cluster the check already
+  read, and a clean result is never read again. It needs no shared state between ICMS replicas. With the
+  switch off, nothing changes.
 - A zero GPU count stays zero, and capacity is counted in instances.
 - Usage events do not bill CPU instances as GPU hours. Reservations for a CPU shape are refused.
 - CPU metrics are separate. The GPU-named metrics leave CPU out (decision 20).
