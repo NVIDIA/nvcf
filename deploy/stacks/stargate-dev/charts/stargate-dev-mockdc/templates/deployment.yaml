@@ -16,8 +16,8 @@ metadata:
     stargate.nvidia.com/backend-index: {{ $index | quote }}
 spec:
   replicas: 1
-  # Replace the pod in place so the new pod can take the node its
-  # predecessor held; backends of one cluster never share a node.
+  # Replace the pod before starting its successor so only one Pylon
+  # advertises each backend ID.
   strategy:
     type: Recreate
   selector:
@@ -47,11 +47,13 @@ spec:
           type: RuntimeDefault
       affinity:
         podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - topologyKey: kubernetes.io/hostname
-              labelSelector:
-                matchLabels:
-                  {{- include "stargate-dev-mockdc.selectorLabels" $ | nindent 18 }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "stargate-dev-mockdc.selectorLabels" $ | nindent 20 }}
       containers:
         - name: mock-dynamo
           image: {{ printf "%s@%s" $.Values.images.mockDynamo.repository $.Values.images.mockDynamo.digest }}

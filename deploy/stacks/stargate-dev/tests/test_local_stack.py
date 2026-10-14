@@ -186,9 +186,10 @@ class LocalDeployTests(unittest.TestCase):
         ):
             self.apply("mockdc", self.contexts(), ingress_ip="172.30.0.9")
 
-    def test_mockdc_phase_requires_two_schedulable_nodes(self) -> None:
-        with self.assertRaisesRegex(DEPLOY.DeploymentError, "1 Ready schedulable"):
-            self.apply("mockdc", self.contexts(), nodes=1)
+    def test_mockdc_phase_accepts_single_node_clusters(self) -> None:
+        calls = self.apply("mockdc", self.contexts(), nodes=1)
+        self.assertTrue(any(command[0] == "helmfile" for command, _ in calls))
+        self.assertFalse(any("nodes" in command for command, _ in calls))
 
     def test_missing_context_names_the_local_bootstrap(self) -> None:
         with self.assertRaisesRegex(DEPLOY.DeploymentError, "local.py up"):

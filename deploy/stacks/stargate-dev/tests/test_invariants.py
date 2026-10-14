@@ -466,11 +466,25 @@ class RenderedStackTests(unittest.TestCase):
                 ],
             )
             anti_affinity = pod["spec"]["affinity"]["podAntiAffinity"]
+            self.assertNotIn(
+                "requiredDuringSchedulingIgnoredDuringExecution", anti_affinity
+            )
+            preference = anti_affinity[
+                "preferredDuringSchedulingIgnoredDuringExecution"
+            ][0]
+            self.assertEqual(preference["weight"], 100)
             self.assertEqual(
-                anti_affinity["requiredDuringSchedulingIgnoredDuringExecution"][0][
-                    "topologyKey"
-                ],
+                preference["podAffinityTerm"]["topologyKey"],
                 "kubernetes.io/hostname",
+            )
+            backend_labels = deployment["spec"]["selector"]["matchLabels"]
+            self.assertEqual(
+                preference["podAffinityTerm"]["labelSelector"]["matchLabels"],
+                {
+                    key: value
+                    for key, value in backend_labels.items()
+                    if key != "stargate.nvidia.com/backend-index"
+                },
             )
 
         self.assertEqual(

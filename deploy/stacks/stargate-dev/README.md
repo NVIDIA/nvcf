@@ -50,10 +50,9 @@ AWS resources you provide:
   `environments/<region>.yaml`. Deployment preflight checks both and
   requires cluster-admin access. A values file cannot override `clusters`,
   `region`, `namespace`, `modelName`, `routingKey`, or `platform`.
-- At least two schedulable nodes in each MockDC cluster. The cluster's two
-  backends use required Pod anti-affinity on `kubernetes.io/hostname`, so a
-  single-node cluster leaves one backend Pending. The MockDC phase preflight
-  checks the count.
+- Enough CPU and memory in each MockDC cluster for both backend Pods.
+  Backends prefer different nodes to reduce contention but can share a
+  single node. Co-located backends share host resources during benchmarks.
 - NetworkPolicy enforcement on each hub cluster, for example the Amazon VPC
   CNI with `enableNetworkPolicy=true`. A NetworkPolicy limits the dev auth
   fixture's gRPC port to the router Pods. Without enforcement, any Pod in the
@@ -326,9 +325,9 @@ using AWS.
   clusters, `stargate-dev-<region>-mockdc-1` and
   `stargate-dev-<region>-mockdc-2`. Kube contexts are `k3d-<cluster name>`,
   for example `k3d-stargate-dev-local-a-hub`.
-- A hub cluster is one server node. Each MockDC cluster has two agent nodes,
-  so the backend anti-affinity rule can schedule both backends. Backends use
-  small `numGpuWorkers` values.
+- A hub cluster is one server node. Each MockDC cluster includes two agent
+  nodes for extra capacity. The backends prefer different nodes but can share
+  one node. Backends use small `numGpuWorkers` values.
 - All clusters join the Docker network `stargate-dev-local`. Pylons reach the
   hub registration Services directly on that network. The two hubs are
   connected, so each hub sees all 8 backends.
@@ -403,10 +402,9 @@ python3 scripts/deploy.py apply --region local-b --phase mockdc --credentials .l
 
 In local mode, `deploy.py` skips the AWS CLI, EKS, and account checks. It
 still checks that each kube context exists, that the router Secrets are
-present, and, before the MockDC phase, that each MockDC cluster has two
-schedulable nodes and that the registration Service is exposed on
-`router.address`. The `observability` phase is not supported
-locally, and `deploy.py` exits with an error if you request it.
+present, and, before the MockDC phase, that the registration Service is exposed
+on `router.address`. The `observability` phase is not supported locally, and
+`deploy.py` exits with an error if you request it.
 
 `images` reads each hub's address from its single node's InternalIP through
 the hub kube context. If a hub cluster is recreated or its node address

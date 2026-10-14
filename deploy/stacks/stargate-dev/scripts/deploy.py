@@ -304,28 +304,6 @@ def require_secret(context: str, namespace: str, name: str, keys: set[str]) -> N
             ) from error
 
 
-def require_schedulable_nodes(context: str, count: int) -> None:
-    nodes = json.loads(kubectl(context, "get", "nodes", "-o", "json").stdout)["items"]
-    schedulable = [
-        node
-        for node in nodes
-        if not node.get("spec", {}).get("unschedulable")
-        and not any(
-            taint.get("effect") in ("NoSchedule", "NoExecute")
-            for taint in node.get("spec", {}).get("taints", [])
-        )
-        and any(
-            condition.get("type") == "Ready" and condition.get("status") == "True"
-            for condition in node.get("status", {}).get("conditions", [])
-        )
-    ]
-    if len(schedulable) < count:
-        raise DeploymentError(
-            f"{context} has {len(schedulable)} Ready schedulable nodes; "
-            f"the MockDC backends use required anti-affinity and need {count}"
-        )
-
-
 def role_names(region: str) -> tuple[str, str]:
     # helmfile.yaml.gotmpl derives the same role ARNs.
     prefix = f"stargate-dev-{region}"
@@ -375,7 +353,6 @@ def verify_prerequisite_resources(config: dict, phase: str) -> None:
         )
     elif phase == "mockdc":
         for mockdc in config["clusters"]["mockdcs"]:
-            require_schedulable_nodes(mockdc["kubeContext"], 2)
             require_secret(
                 mockdc["kubeContext"],
                 namespace,

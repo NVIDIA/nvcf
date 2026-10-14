@@ -61,7 +61,7 @@ def region_clusters(config: dict) -> list[tuple[dict, int]]:
     """Return each cluster in a region with its k3d agent count.
 
     A hub is one server node, so k3s ServiceLB exposes the registration
-    Service on that node's address. MockDC backends need two nodes.
+    Service on that node's address. MockDCs include agents for extra capacity.
     """
     clusters = config["clusters"]
     return [(clusters["stargate"], 0)] + [
