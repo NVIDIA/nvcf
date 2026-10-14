@@ -251,6 +251,10 @@ belong in `tools/ci/helm-validate-values/`, not under chart `ci/` dirs.
 
 Use Conventional Commits v1.0.0. Include issue references in the footer when required by the change type. For GitHub PR work, use a public `NVIDIA/nvcf` issue reference.
 
+Sign off every commit with `git commit -s` (Developer Certificate of Origin,
+see `CONTRIBUTING.md`). The DCO check rejects pull requests with unsigned
+commits, including commits made by agents.
+
 Format:
 
 ```text
