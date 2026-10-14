@@ -25,7 +25,9 @@ use stargate_protocol::tunnel_contract::{
 };
 use tracing::{Instrument, Span, field, info, warn};
 
-use crate::routing_state::{RoutedInferenceServerSnapshot, RoutingReservation};
+use crate::routing_state::{
+    RoutedInferenceServerSnapshot, RoutingReservation, routing_reservation_ttl,
+};
 
 use super::ProxyAppState;
 use super::retry::{
@@ -42,16 +44,6 @@ use super::upstream::{
 
 const HEADER_CHOSEN_INFERENCE_SERVER_URL: &str = "x-inference-server-url";
 const HEADER_CHOSEN_CLUSTER_ID: &str = "x-stargate-cluster-id";
-
-fn clamp_routing_reservation_ttl(
-    rtt: std::time::Duration,
-    min: std::time::Duration,
-    max: std::time::Duration,
-) -> std::time::Duration {
-    // Startup rejects min > max; `Duration::clamp` would panic on every
-    // dispatch if a programmatic config bypassed that check, so max wins.
-    rtt.max(min).min(max)
-}
 
 #[derive(Default)]
 pub(super) struct ProxyAttemptCounters {
@@ -128,7 +120,7 @@ impl ProxyRequestRun<'_> {
                 self.request.request_inputs.input_tokens,
                 self.request.request_inputs.priority,
                 |rtt| {
-                    clamp_routing_reservation_ttl(
+                    routing_reservation_ttl(
                         rtt,
                         self.app.routing_reservation_ttl_min,
                         self.app.routing_reservation_ttl_max,
@@ -594,13 +586,13 @@ mod tests {
         let min = Duration::from_millis(1);
         let max = Duration::from_millis(1000);
 
-        assert_eq!(clamp_routing_reservation_ttl(Duration::ZERO, min, max), min);
+        assert_eq!(routing_reservation_ttl(Duration::ZERO, min, max), min);
         assert_eq!(
-            clamp_routing_reservation_ttl(Duration::from_millis(60), min, max),
+            routing_reservation_ttl(Duration::from_millis(60), min, max),
             Duration::from_millis(60)
         );
         assert_eq!(
-            clamp_routing_reservation_ttl(Duration::from_secs(5), min, max),
+            routing_reservation_ttl(Duration::from_secs(5), min, max),
             max
         );
     }
@@ -611,7 +603,7 @@ mod tests {
         let max = Duration::from_millis(10);
 
         for rtt in [Duration::ZERO, Duration::from_millis(15), Duration::MAX] {
-            assert_eq!(clamp_routing_reservation_ttl(rtt, min, max), max);
+            assert_eq!(routing_reservation_ttl(rtt, min, max), max);
         }
     }
 
