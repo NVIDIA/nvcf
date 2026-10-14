@@ -14,6 +14,13 @@ _WORKSPACE_DEPS = [
     "//src/libraries/rust/stargate/crates/stargate:stargate_lib",
 ]
 
+# Simulator configs. The stargate crate's tests check their algorithm names.
+filegroup(
+    name = "configs",
+    srcs = glob(["configs/**"]),
+    visibility = ["//src/libraries/rust/stargate/crates/stargate:__pkg__"],
+)
+
 rust_binary(
     name = "stargate-routing-sim",
     srcs = glob(["src/**/*.rs"]),
