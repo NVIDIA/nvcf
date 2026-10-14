@@ -262,6 +262,12 @@ public class BaseFunctionInvocationTest {
                                            TEST_PUBLIC_FUNCTION_NCA_ID);
     }
 
+    protected void shareFunctionVersion(UUID functionId, UUID versionId, String ncaId) {
+        authorizedPartiesService.createAuthorizedParties(
+                functionId, Optional.of(versionId), TEST_NCA_ID,
+                List.of(AuthorizedPartyDto.builder().ncaId(ncaId).build()));
+    }
+
     private AuthorizedPartiesByFunctionDto associateAuthParties(
             UUID id,
             String ncaId,

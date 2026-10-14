@@ -17,15 +17,17 @@ mod cache_affinity;
 mod estimates;
 mod fast_path;
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
 use rand::Rng;
 
+use super::session::{self, MissingLastCluster};
 use super::{
     ClusterComparator, LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice,
-    LoadBalancerDecision, LoadBalancerRequest, Ttft, ttft,
+    LoadBalancerDecision, LoadBalancerRequest, Ttft, WaitAndWidenAlgorithmConfig, ttft,
 };
 use crate::routing_state::RoutedClusterSnapshot;
 use cache_affinity::CacheAffinitySelector;
@@ -52,19 +54,20 @@ pub(super) struct WaitAndWidenLoadBalancer {
 
 #[derive(Clone, Debug)]
 pub(super) struct WaitAndWidenConfig {
-    comparator: Option<ClusterComparator>,
+    pub(super) comparator: Option<ClusterComparator>,
     pub(super) seed: Option<String>,
     pub(super) cache_affinity_virtual_nodes: usize,
     pub(super) cache_affinity_backend_selection_count: Option<usize>,
     pub(super) cache_affinity_input_tokens_scale: f64,
     pub(super) cache_affinity_wait: Duration,
-    queue_slo: Option<RangeInclusive<Duration>>,
+    pub(super) queue_slo: Option<RangeInclusive<Duration>>,
     pub(super) ttft_bucket_size: Duration,
     pub(super) next_bucket_unlock_factor: f64,
     pub(super) sample_count: usize,
     pub(super) max_queued: u64,
     pub(super) ignore_queue_time: bool,
     pub(super) ignore_input_processing_time: bool,
+    pub(super) last_cluster_affinity: bool,
 }
 
 impl WaitAndWidenConfig {
@@ -100,7 +103,31 @@ impl WaitAndWidenConfig {
             max_queued: config.max_queued.unwrap_or(0),
             ignore_queue_time: config.ignore_queue_time.unwrap_or(false),
             ignore_input_processing_time: config.ignore_input_processing_time.unwrap_or(false),
+            last_cluster_affinity: config.last_cluster_affinity.unwrap_or(false),
         })
+    }
+
+    /// The inverse of `from_algorithm_config`: the values this algorithm routes with, as config.
+    pub(super) fn to_algorithm_config(&self) -> WaitAndWidenAlgorithmConfig {
+        WaitAndWidenAlgorithmConfig {
+            seed: self.seed.clone(),
+            comparator: self.comparator,
+            cache_affinity_virtual_nodes: Some(self.cache_affinity_virtual_nodes),
+            cache_affinity_backend_selection_count: self.cache_affinity_backend_selection_count,
+            cache_affinity_input_tokens_scale: Some(self.cache_affinity_input_tokens_scale),
+            cache_affinity_wait_ms: Some(millis(self.cache_affinity_wait)),
+            band_widen_interval_ms: None,
+            fallback_max_queued: None,
+            max_queue_time_floor_ms: self.queue_slo.as_ref().map(|slo| millis(*slo.start())),
+            max_queue_time_ceil_ms: self.queue_slo.as_ref().map(|slo| millis(*slo.end())),
+            ttft_bucket_size_ms: Some(millis(self.ttft_bucket_size)),
+            next_bucket_unlock_factor: Some(self.next_bucket_unlock_factor),
+            n: Some(self.sample_count),
+            max_queued: Some(self.max_queued),
+            ignore_queue_time: Some(self.ignore_queue_time),
+            ignore_input_processing_time: Some(self.ignore_input_processing_time),
+            last_cluster_affinity: Some(self.last_cluster_affinity),
+        }
     }
 
     pub(super) fn max_queue_time(&self, request: &LoadBalancerRequest<'_>) -> Option<Duration> {
@@ -148,6 +175,11 @@ impl WaitAndWidenConfig {
     }
 }
 
+// Config durations are built from u64 milliseconds, so the conversion back cannot overflow.
+pub(super) fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
 impl_display!(WaitAndWidenLoadBalancer, "wait-and-widen");
 
 impl LoadBalancer for WaitAndWidenLoadBalancer {
@@ -179,14 +211,25 @@ impl WaitAndWidenLoadBalancer {
             self.cache_affinity
                 .candidate_indices(&self.config, request, candidates)
         {
+            // Session rules adjust a per-request copy; the ring cache keeps
+            // the original selection.
+            let plan = session::plan_affinity(
+                self.config.last_cluster_affinity,
+                request,
+                candidates,
+                Cow::Borrowed(affinity_indices.as_slice()),
+                MissingLastCluster::InsertAndTruncate,
+                self.config.cache_affinity_wait,
+                self.config.cache_affinity_input_tokens_scale,
+            );
             // Every attempt checks affinity first, even after the hold expires.
             // Affinity uses the same TTFT buckets, admission and comparator as
             // global routing. A busy ring primary must not bypass those rules.
             let affinity_bucket_wait = match self.decide_from_candidate_indices(
                 request,
                 candidates,
-                &affinity_indices,
-                self.config.cache_affinity_input_tokens_scale,
+                &plan.order,
+                plan.input_tokens_scale,
                 elapsed,
             ) {
                 LoadBalancerDecision::Selected(choice) => {
@@ -195,8 +238,8 @@ impl WaitAndWidenLoadBalancer {
                 LoadBalancerDecision::Wait(delay) => Some(delay),
                 LoadBalancerDecision::Unavailable => None,
             };
-            if elapsed < self.config.cache_affinity_wait {
-                let remaining = self.config.cache_affinity_wait - elapsed;
+            if elapsed < plan.affinity_wait {
+                let remaining = plan.affinity_wait - elapsed;
                 return LoadBalancerDecision::Wait(
                     affinity_bucket_wait.map_or(remaining, |delay| delay.min(remaining)),
                 );
@@ -209,10 +252,10 @@ impl WaitAndWidenLoadBalancer {
                 candidates.iter(),
                 candidates,
                 1.0,
-                elapsed.saturating_sub(self.config.cache_affinity_wait),
+                elapsed.saturating_sub(plan.affinity_wait),
             ) {
                 LoadBalancerDecision::Selected(mut choice) => {
-                    choice.rank_depth = affinity_indices.len() + 1;
+                    choice.rank_depth = plan.order.len() + 1;
                     LoadBalancerDecision::Selected(choice)
                 }
                 LoadBalancerDecision::Wait(delay) => LoadBalancerDecision::Wait(
@@ -244,10 +287,6 @@ impl WaitAndWidenLoadBalancer {
             config,
             cache_affinity: CacheAffinitySelector::default(),
         }
-    }
-
-    pub(super) fn has_queue_slo(&self, request: &LoadBalancerRequest<'_>) -> bool {
-        self.config.max_queue_time(request).is_some()
     }
 
     #[cfg(test)]

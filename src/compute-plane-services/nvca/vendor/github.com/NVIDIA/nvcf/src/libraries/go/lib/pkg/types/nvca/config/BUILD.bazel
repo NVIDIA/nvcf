@@ -6,6 +6,7 @@ go_library(
         "autobind_env.go",
         "config.go",
         "doc.go",
+        "keys.go",
         "types.go",
         "zz_generated.deepcopy.go",
     ],

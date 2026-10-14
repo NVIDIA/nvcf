@@ -23,6 +23,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimit"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/requestctx"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/telemetry"
 )
 
@@ -88,11 +89,12 @@ func (h *MessagesHandlers) ServeMessages(ec echo.Context) error {
 				return err
 			}
 		} else if sessionID := c.Request().Header.Get("x-claude-code-session-id"); sessionID != "" {
-			if err := setSessionAffinity(reqCtx, "claude_code_header", sessionID); err != nil {
+			if err := setSessionAffinity(reqCtx, requestctx.SessionSourceClaudeCodeHeader, sessionID); err != nil {
 				return err
 			}
 		} else {
 			setPayloadSessionAffinity(reqCtx, request.Messages)
+			h.handlers.setMessagesLastClusterKeys(reqCtx, messages, request.System)
 		}
 	}
 	outboundBody, err := rewriteMessagesBody(body, routedModel)

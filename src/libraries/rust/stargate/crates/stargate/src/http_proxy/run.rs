@@ -113,6 +113,7 @@ impl<'a> ProxyRequestRun<'a> {
             received_at: self.request.request_start,
             request_slo: request_inputs.request_slo_ms.map(Duration::from_millis),
             excluded_cluster_ids: self.excluded_cluster_ids(),
+            last_cluster: Some(&request_inputs.last_cluster),
         }
     }
 
@@ -161,6 +162,9 @@ impl<'a> ProxyRequestRun<'a> {
                     )
                 })
         };
+        // Before any wait or rejection, so a request that times out or is
+        // rejected still carries its session state.
+        crate::load_balancer::record_session_state(&self.request.request_inputs.last_cluster);
 
         if let LoadBalancerDecision::Wait(remaining) = decision
             && let Some(delay) =
@@ -197,6 +201,16 @@ impl<'a> ProxyRequestRun<'a> {
         selected_cluster.record_selection_metrics(
             self.app.metrics.as_ref(),
             &self.request.request_inputs.target,
+        );
+        crate::load_balancer::record_session_selection(
+            self.app.metrics.as_ref(),
+            self.request.lb_resolution.config(),
+            &selected_cluster.routing_algorithm,
+            &self.request.request_inputs.request_id,
+            &self.request.request_inputs.target,
+            &self.request.request_inputs.last_cluster,
+            &selected_cluster.cluster.snapshot().cluster_id,
+            selected_cluster.selection.choice.rank_depth,
         );
         let comparator = self.request.lb_resolution.config().comparator();
 
@@ -313,7 +327,7 @@ pub(super) struct SelectedClusterRun {
 }
 
 impl SelectedClusterRun {
-    fn new(
+    pub(super) fn new(
         target_snapshot: RoutingTargetSnapshot,
         selection: LoadBalancerCandidateSelection,
         priority: u32,
@@ -364,6 +378,7 @@ mod tests {
     use prometheus::Encoder;
     use stargate_proto::pb::{InferenceServerStatus, ModelStats};
 
+    use super::super::upstream::headers_for_upstream_attempt;
     use super::*;
     use crate::load_balancer::{
         LoadBalancerAlgorithm, LoadBalancerCandidateChoice, LoadBalancerCandidateSelection,
@@ -390,6 +405,7 @@ mod tests {
 
     fn request_inputs() -> ProxyRequestInputs {
         ProxyRequestInputs {
+            request_id: "req-1".to_string(),
             target: target(),
             input_tokens: 128,
             priority: 0,
@@ -398,6 +414,7 @@ mod tests {
             cache_affinity_key: None,
             routing_algorithm_override: None,
             routing_expression: None,
+            last_cluster: Default::default(),
         }
     }
 
@@ -420,6 +437,7 @@ mod tests {
             stats: ModelStats::default(),
             rtt: Duration::from_millis(1),
             snapshot_updated_at: Instant::now(),
+            update_received_at: Instant::now(),
             status: InferenceServerStatus::Active,
             reverse_tunnel: false,
         }
@@ -516,6 +534,89 @@ mod tests {
             ),
             "selected cluster should preserve routing selection metric labels, got:\n{body}"
         );
+    }
+
+    #[tokio::test]
+    async fn upstream_expected_queue_header_includes_an_active_reservation() {
+        let app = super::super::test_support::test_proxy_app_state();
+        let target = target();
+        let identity = RegistrationIdentity {
+            inference_server_id: "inst-a".to_string(),
+            cluster_id: "cluster-a".to_string(),
+            inference_server_url: "quic://127.0.0.1:5000".to_string(),
+            routing_key: target.routing_key.clone(),
+            reverse_tunnel: false,
+        };
+        let registration = app.state.begin_registration(&identity).unwrap();
+        let update = stargate_proto::pb::InferenceServerRegistration {
+            inference_server_id: identity.inference_server_id.clone(),
+            cluster_id: identity.cluster_id.clone(),
+            inference_server_url: identity.inference_server_url.clone(),
+            models: std::collections::HashMap::from([(
+                target.model_id.clone(),
+                stargate_proto::pb::InferenceServerModelRegistration {
+                    stats: Some(ModelStats {
+                        last_mean_input_tps: 100.0,
+                        max_engine_concurrency: 1,
+                        queue_time_estimate_ms_by_priority: std::collections::HashMap::from([(
+                            0, 0,
+                        )]),
+                        ..ModelStats::default()
+                    }),
+                    status: InferenceServerStatus::Active.into(),
+                },
+            )]),
+            reverse_tunnel: false,
+        };
+        app.state
+            .apply_registration_update(
+                &registration,
+                &update,
+                true,
+                Some(Duration::from_millis(10)),
+            )
+            .await;
+
+        let before = app
+            .state
+            .routing_target_snapshot(&target)
+            .await
+            .expect("registered backend should be routable")
+            .into_selected_cluster(0);
+        let _reservation = before
+            .reserve_backend(&registration.generation(), 10, 0)
+            .expect("active backend should accept reservation");
+        let resolution = app
+            .lb_router
+            .resolve_algorithm_override(&target.model_id, None)
+            .unwrap();
+        let selected = SelectedClusterRun::new(
+            app.state
+                .routing_target_snapshot(&target)
+                .await
+                .expect("target should remain routable"),
+            resolution.selection(LoadBalancerCandidateChoice::with_rank_depth_1(0)),
+            0,
+        );
+        let expected_queue_ms = selected
+            .expected_queue_ms
+            .expect("reservation should contribute a queue estimate");
+        assert!(expected_queue_ms > 0);
+        let headers = headers_for_upstream_attempt(
+            &HeaderMap::new(),
+            &tracing::info_span!("reservation_queue_header_test"),
+            Some(expected_queue_ms),
+        );
+
+        assert_eq!(
+            headers
+                .get(stargate_protocol::tunnel_contract::HEADER_STARGATE_EXPECTED_QUEUE_MS)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            expected_queue_ms.to_string()
+        );
+        app.state.end_registration(registration).await;
     }
 
     #[tokio::test]

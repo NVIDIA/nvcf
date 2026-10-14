@@ -15,7 +15,9 @@ test:
 	@tests/gateway-routes-default-ownership.sh
 	@tests/grpc-proxy-nats-endpoint.sh
 	@tests/llm-pki-openbao-migration.sh
+	@tests/nonroot-llm-migrations.sh
 	@tests/api-keys-startup-probe.sh
+	@tests/nonroot-api-keys.sh
 	@tests/upgrade-receipt-wiring.sh
 	@tests/cassandra-openbao-credential-wiring.sh
 	@tests/llm-pki-release.sh
@@ -31,11 +33,13 @@ test:
 	@tests/ess-base-url-wiring.sh
 	@tests/nvct-remote-config-wiring.sh
 	@tests/icms-condition-wiring.sh
+	@tests/nonroot-icms-migrations.sh
 	@tests/nats-placement-tags.sh
 	@tests/nats-tls-wiring.sh
 	@tests/nats-auth-callout-wiring.sh
 	@tests/notary-image-repository.sh
 	@tests/nvcf-ui-migrations-image-tag.sh
+	@tests/nonroot-ui-migrations.sh
 	@tests/ha-value-wiring.sh
 	@tests/ha-chart-render.sh
 

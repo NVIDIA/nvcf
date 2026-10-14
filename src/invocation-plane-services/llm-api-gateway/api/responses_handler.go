@@ -82,6 +82,8 @@ func (h *ResponsesHandlers) CreateResponse(ec echo.Context) error {
 		return err
 	}
 
+	h.handlers.setResponsesLastClusterKeys(c.RequestContext(), &request, body)
+
 	clientWantsStream := ptr.Deref(request.Stream)
 	normalized, outboundBody, err := h.prepareNativeResponsesRequest(c, &request, body)
 	if err != nil {
@@ -136,6 +138,7 @@ func (h *ResponsesHandlers) prepareNativeResponsesRequest(
 		countRequest.Model,
 		countRequest,
 	)
+	estimatedInputTokens += estimatedTokenCountForText(customToolFormatText(request.Tools))
 	inputTokens := estimatedInputTokens
 	maxOutputTokens := maxOutputTokensForRequest(countRequest)
 	checkRequest := ratelimit.ResourceRequest{

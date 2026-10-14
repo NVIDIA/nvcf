@@ -61,16 +61,15 @@ assert_absent() {
   fi
 }
 
-# byoo.resources/otelCollector/additionalResourceOverhead/fluentbit.resources default to {}
-# so a no-op chart upgrade does not change the agent's built-in resource defaults; only
-# logChunking and utils.resources ship non-empty chart defaults.
+# byoo values default to {} so a no-op chart upgrade does not change the agent's
+# built-in defaults; only utils.resources ships a non-empty chart default. An empty
+# logChunking also keeps a legacy mergeConfig override from meeting a chart-owned block.
 render "${default_manifest}"
 assert_absent "${default_manifest}" '.agent.BYOOResources' "BYOOResources should be unset by default"
 assert_absent "${default_manifest}" '.agent.byooOtelCollector' "byooOtelCollector should be unset by default"
 assert_absent "${default_manifest}" '.agent.additionalResourceOverhead' "additionalResourceOverhead should be unset by default"
 assert_absent "${default_manifest}" '.agent.BYOOFluentBitResources' "BYOOFluentBitResources should be unset by default"
-assert_equal "0" "$(agent_config_value "${default_manifest}" '.agent.byooLogChunking.maxPayloadBytes')" "unexpected default BYOO log chunk payload size"
-assert_equal "false" "$(agent_config_value "${default_manifest}" '.agent.byooLogChunking.dryRun')" "unexpected default BYOO log chunk dry-run"
+assert_absent "${default_manifest}" '.agent.byooLogChunking' "byooLogChunking should be unset by default"
 assert_equal "4" "$(agent_config_value "${default_manifest}" '.agent.UtilsResources.cpu')" "unexpected utils CPU sizing"
 assert_equal "4Gi" "$(agent_config_value "${default_manifest}" '.agent.UtilsResources.memory')" "unexpected utils memory sizing"
 
@@ -127,3 +126,107 @@ assert_equal "131072" "$(agent_config_value "${legacy_manifest}" '.agent.byooLog
 assert_equal "6" "$(agent_config_value "${legacy_manifest}" '.agent.UtilsResources.cpu')" "legacy utils resources did not override the chart default"
 assert_equal "dynamographdeployments" "$(agent_config_value "${legacy_manifest}" '.cluster.validationPolicy.allowedExtraKubernetesTypes[0].resource')" "legacy validation policy was dropped"
 assert_equal "true" "$(yq -er 'select(.kind == "ConfigMap" and .metadata.name == "agent-config-merge") | .metadata.annotations."nvcf.nvidia.com/legacy-first-class-config"' "${legacy_manifest}")" "legacy BYOO config was not annotated"
+
+# NVCA reads config keys case-insensitively. A legacy mergeConfig key that
+# differs from a chart-generated key only by case must replace the chart value
+# under the chart spelling instead of rendering a second spelling.
+assert_render_fails() {
+  local expected="$1"
+  shift
+  local output="${tmp_dir}/render-error.txt"
+
+  if render "${tmp_dir}/unused-manifest.yaml" "$@" 2> "${output}"; then
+    echo "expected render to fail with: ${expected}" >&2
+    exit 1
+  fi
+  if ! grep -qF -- "${expected}" "${output}"; then
+    echo "render failed without the expected message: ${expected}" >&2
+    cat "${output}" >&2
+    exit 1
+  fi
+}
+
+agent_key_spellings() {
+  local manifest="$1"
+  local folded_key="$2"
+
+  agent_config_value "${manifest}" ".agent | keys | map(select(downcase == \"${folded_key}\")) | join(\",\")"
+}
+
+legacy_case_values="${tmp_dir}/legacy-case-values.yaml"
+cat > "${legacy_case_values}" <<'EOF_VALUES'
+agentConfig:
+  mergeConfig: |
+    agent:
+      BYOOLogChunking:
+        dryRun: false
+        exporterBatchMaxSizeBytes: 1000000
+        maxBodyBytes: 262144
+EOF_VALUES
+legacy_case_manifest="${tmp_dir}/legacy-case-manifest.yaml"
+render "${legacy_case_manifest}" --values "${legacy_case_values}"
+assert_equal "BYOOLogChunking" "$(agent_key_spellings "${legacy_case_manifest}" "byoologchunking")" "legacy BYOOLogChunking should render once when the chart sets no log chunking"
+assert_equal "262144" "$(agent_config_value "${legacy_case_manifest}" '.agent.BYOOLogChunking.maxBodyBytes')" "legacy BYOO log chunk size was dropped"
+assert_equal "1000000" "$(agent_config_value "${legacy_case_manifest}" '.agent.BYOOLogChunking.exporterBatchMaxSizeBytes')" "legacy BYOO log chunk field was dropped"
+
+legacy_with_chart_manifest="${tmp_dir}/legacy-with-chart-manifest.yaml"
+render "${legacy_with_chart_manifest}" --values "${legacy_case_values}" --set byoo.logChunking.dryRun=true
+assert_equal "byooLogChunking" "$(agent_key_spellings "${legacy_with_chart_manifest}" "byoologchunking")" "legacy BYOOLogChunking should merge into the chart spelling when byoo.logChunking is set"
+assert_equal "262144" "$(agent_config_value "${legacy_with_chart_manifest}" '.agent.byooLogChunking.maxBodyBytes')" "legacy BYOO log chunk size was dropped"
+
+nested_case_values="${tmp_dir}/nested-case-values.yaml"
+cat > "${nested_case_values}" <<'EOF_VALUES'
+agentConfig:
+  mergeConfig: |
+    agent:
+      BYOOLogChunking:
+        MaxPayloadBytes: 131072
+      byooResources:
+        limits:
+          cpu: 1500m
+EOF_VALUES
+nested_case_manifest="${tmp_dir}/nested-case-manifest.yaml"
+render "${nested_case_manifest}" --values "${explicit_values}" --values "${nested_case_values}"
+assert_equal "byooLogChunking" "$(agent_key_spellings "${nested_case_manifest}" "byoologchunking")" "legacy BYOOLogChunking should render once under the chart spelling"
+assert_equal "131072" "$(agent_config_value "${nested_case_manifest}" '.agent.byooLogChunking.maxPayloadBytes')" "nested legacy spelling did not override the chart value"
+assert_absent "${nested_case_manifest}" '.agent.byooLogChunking.MaxPayloadBytes' "nested legacy spelling should take the chart spelling"
+assert_equal "BYOOResources" "$(agent_key_spellings "${nested_case_manifest}" "byooresources")" "legacy byooResources should render once under the chart spelling"
+assert_equal "1500m" "$(agent_config_value "${nested_case_manifest}" '.agent.BYOOResources.limits.cpu')" "legacy byooResources did not override the chart value"
+assert_equal "4Gi" "$(agent_config_value "${nested_case_manifest}" '.agent.BYOOResources.requests.memory')" "chart BYOO resources were not merged with the legacy override"
+
+both_spellings_values="${tmp_dir}/both-spellings-values.yaml"
+cat > "${both_spellings_values}" <<'EOF_VALUES'
+agentConfig:
+  mergeConfig: |
+    agent:
+      BYOOLogChunking:
+        maxBodyBytes: 262144
+      byooLogChunking:
+        maxPayloadBytes: 0
+EOF_VALUES
+assert_render_fails 'agentConfig.mergeConfig: keys "BYOOLogChunking" and "byooLogChunking" under "agent" differ only by case; keep one spelling' \
+  --values "${both_spellings_values}"
+
+list_item_values="${tmp_dir}/list-item-values.yaml"
+cat > "${list_item_values}" <<'EOF_VALUES'
+agentConfig:
+  mergeConfig: |
+    cluster:
+      validationPolicy:
+        allowedExtraKubernetesTypes:
+          - group: nvidia.com
+            kind: DynamoGraphDeployment
+            Kind: DynamoGraphDeployment
+EOF_VALUES
+assert_render_fails 'agentConfig.mergeConfig: keys "Kind" and "kind" under "cluster.validationPolicy.allowedExtraKubernetesTypes[0]" differ only by case' \
+  --values "${list_item_values}"
+
+first_class_values="${tmp_dir}/first-class-case-values.yaml"
+cat > "${first_class_values}" <<'EOF_VALUES'
+byoo:
+  logChunking:
+    maxPayloadBytes: 1
+    MaxPayloadBytes: 2
+EOF_VALUES
+assert_render_fails 'effective agent configuration: keys "MaxPayloadBytes" and "maxPayloadBytes" under "agent.byooLogChunking" differ only by case' \
+  --values "${first_class_values}"
