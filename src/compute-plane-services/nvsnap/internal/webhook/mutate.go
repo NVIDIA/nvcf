@@ -353,6 +353,9 @@ type Mutator struct {
 	// every Dynamo component whose etcd and NATS are its instance's own
 	// (dynamo.go). Empty leaves the operator's.
 	DynamoNamespace string
+	// DynamoLeaseTTL, in seconds, is the etcd lease TTL (ETCD_LEASE_TTL)
+	// those components get unless they set one; 0 leaves Dynamo's default.
+	DynamoLeaseTTL int
 
 	// CRIUCompanionAdmits reports whether a pod without GPUs may be admitted
 	// as a companion of a group restore: not while a GPU rank of its
