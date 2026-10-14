@@ -111,7 +111,7 @@ nvctApi:
     #   configData:
     #     nvct:
     #       sidecars:
-    #         init-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf_worker_init:2.103.0"
+    #         init-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf-worker-init-oss:1.2.1"
     #       scheduled-routines:
     #         migration-job-1: # use specific migration job name here
     #           enabled: false

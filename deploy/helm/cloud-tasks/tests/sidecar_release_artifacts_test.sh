@@ -58,6 +58,13 @@ if [[ -z "${placeholder_sidecars}" ]]; then
   exit 1
 fi
 
+# nvcf_worker_* is the managed worker line, which is never published to the
+# public catalog; self-managed task workers must use the -oss builds.
+if grep -E '/nvcf_worker_(init|task|utils):' <<< "${placeholder_sidecars}"; then
+  echo "nvct-api sidecars must use the open-source worker images (nvcf-worker-*-oss)" >&2
+  exit 1
+fi
+
 while read -r key value; do
   name="release-artifact-${key}"
   [[ "${name}" == *-image ]] || name="${name}-image"
