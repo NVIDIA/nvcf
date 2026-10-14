@@ -39,6 +39,8 @@ import com.nvidia.apikeys.config.IntegrationTestConfiguration.TestCleanerExtensi
 import com.nvidia.apikeys.persistance.dao.KeysDao;
 import com.nvidia.apikeys.persistance.dao.KeysV2Dao;
 import com.nvidia.apikeys.persistance.dao.OwnerStatusByAccountDao;
+import com.nvidia.apikeys.persistance.dao.RowUpdateLockDao;
+import com.nvidia.apikeys.persistance.models.KeyV2Model;
 import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountAndServiceModel;
 import com.nvidia.apikeys.persistance.models.OwnerStatusByAccountModel;
 import com.nvidia.apikeys.utils.TestClock;
@@ -101,6 +103,9 @@ class KeysV2ServiceIntegrationTest {
     @Autowired
     private OwnerStatusByAccountDao ownerStatusDao;
 
+    @Autowired
+    private RowUpdateLockDao rowUpdateLockDao;
+
     @BeforeEach
     void setUp() {
         TestClock.setBaseClock(TestClock.fixed(TEST_TIME, ZoneId.systemDefault()));
@@ -112,58 +117,61 @@ class KeysV2ServiceIntegrationTest {
     }
 
     @Test
-    void createWritesKeysV2ForNewAccount() {
-        assertThat(service.create(KEY_V2_VO_1)).isEqualTo(KEY_V2_VO_1);
+    void createKeyWritesKeysV2ForNewAccount() {
+        assertThat(createKey(KEY_V2_VO_1)).isEqualTo(KEY_V2_VO_1);
 
-        assertThat(service.getByHash(API_KEY_HASH_1)).contains(KEY_V2_VO_1);
-        assertThat(service.get(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
+        assertThat(service.getKeyByHash(API_KEY_HASH_1)).contains(KEY_V2_VO_1);
+        assertThat(service.getKeyById(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
                 .contains(KEY_V2_VO_1);
-        assertThat(service.list(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1))
+        assertThat(service.listKeys(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1))
                 .extracting(KeysByOwnerAndAccountAndServiceVo::getKeyId)
                 .containsExactly(KEY_ID_1);
         assertThat(countRows("keys_v2")).isOne();
         assertThat(countRows("keys")).isZero();
+        assertThat(lockExists(KeyV2Model.TABLE_NAME)).isTrue();
+        assertThat(lockExists("keys")).isFalse();
     }
 
     @Test
-    void createWritesKeysV2ForLegacyAccount() {
-        assertThat(service.create(LEGACY_KEY_V2)).isEqualTo(LEGACY_KEY_V2);
+    void createKeyWritesKeysV2ForLegacyAccount() {
+        assertThat(createKey(LEGACY_KEY_V2)).isEqualTo(LEGACY_KEY_V2);
 
-        assertThat(service.get(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
+        assertThat(service.getKeyById(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
                 .contains(LEGACY_KEY_V2);
         assertThat(countRows("keys_v2")).isOne();
         assertThat(countRows("keys")).isZero();
         assertThat(keysDao.getKeyByHash(API_KEY_HASH_1)).isEmpty();
+        assertThat(lockExists(KeyV2Model.TABLE_NAME)).isTrue();
     }
 
     @Test
-    void createRejectsOwnerSuspendedForNewAccount() {
-        ownerStatusDao.saveOwnerStatusForAccount(
+    void createKeyRejectsOwnerSuspendedForNewAccount() {
+        ownerStatusDao.saveOwnerStatusByAccount(
                 NCA_ID_1, USER, USER_KEY_OWNER_ID_1, KeyOwnerStatus.SUSPENDED);
 
         assertThrowsExceptionWithDetails(
-                ForbiddenException.class, () -> service.create(KEY_V2_VO_1), "Key owner suspended.");
+                ForbiddenException.class, () -> createKey(KEY_V2_VO_1), "Key owner suspended.");
         assertThat(countRows("keys_v2")).isZero();
     }
 
     @Test
-    void createRejectsOwnerSuspendedForIssuerService() {
-        service.updateOwnerStatusForAccountAndService(
+    void createKeyRejectsOwnerSuspendedForIssuerService() {
+        service.updateOwnerStatusByAccountAndService(
                 NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KeyOwnerStatus.SUSPENDED);
 
         assertThrowsExceptionWithDetails(
-                ForbiddenException.class, () -> service.create(KEY_V2_VO_1), "Key owner suspended.");
+                ForbiddenException.class, () -> createKey(KEY_V2_VO_1), "Key owner suspended.");
         assertThat(countRows("keys_v2")).isZero();
     }
 
     @Test
-    void createRejectsSuspendedLegacyOwnerForLegacyAccount() {
+    void createKeyRejectsSuspendedLegacyOwnerForLegacyAccount() {
         keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
         keysDao.save(KEY_OWNER_VO_1.toBuilder().ownerStatus(KeyOwnerStatus.SUSPENDED).build());
 
         assertThrowsExceptionWithDetails(
                 ForbiddenException.class,
-                () -> service.create(LEGACY_KEY_V2.toBuilder()
+                () -> createKey(LEGACY_KEY_V2.toBuilder()
                                              .keyId(KEY_ID_2)
                                              .keyHash("v2-hash-2")
                                              .build()),
@@ -172,39 +180,50 @@ class KeysV2ServiceIntegrationTest {
     }
 
     @Test
-    void createRejectsHashAlreadyInLegacyTables() {
+    void createKeyRejectsHashAlreadyInLegacyTables() {
         keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
 
         assertThrowsExceptionWithDetails(
-                ConflictException.class, () -> service.create(LEGACY_KEY_V2), "Key already exists");
+                ConflictException.class, () -> createKey(LEGACY_KEY_V2), "Key already exists");
         assertThat(countRows("keys_v2")).isZero();
-        assertThat(service.getByHash(API_KEY_HASH_1)).contains(LEGACY_KEY_V2);
+        assertThat(service.getKeyByHash(API_KEY_HASH_1)).contains(LEGACY_KEY_V2);
         assertThat(keysDao.getKeyByHash(API_KEY_HASH_1)).contains(KEY_VO_1);
     }
 
     @Test
-    void createRejectsHashAlreadyInKeysV2() {
-        service.create(KEY_V2_VO_1);
+    void createKeyRejectsHashAlreadyInKeysV2() {
+        createKey(KEY_V2_VO_1);
         var duplicate = KEY_V2_VO_1.toBuilder()
                 .keyId(KEY_ID_2)
                 .ownerId("other-owner")
                 .build();
 
         assertThrowsExceptionWithDetails(
-                ConflictException.class, () -> service.create(duplicate), "Key already exists");
-        assertThat(service.getByHash(API_KEY_HASH_1)).contains(KEY_V2_VO_1);
-        assertThat(service.list(NCA_ID_1, USER, "other-owner", SERVICE_ID_1)).isEmpty();
+                ConflictException.class, () -> createKey(duplicate), "Key already exists");
+        assertThat(service.getKeyByHash(API_KEY_HASH_1)).contains(KEY_V2_VO_1);
+        assertThat(service.listKeys(NCA_ID_1, USER, "other-owner", SERVICE_ID_1)).isEmpty();
         assertThat(countRows("keys_v2")).isOne();
+    }
+
+    @Test
+    void createKeyRejectsWhenAuthzLockAlreadyHeld() {
+        assertThat(rowUpdateLockDao.lock(
+                KeyV2Model.TABLE_NAME, KeysService.UPDATE_LOCK_KEY_PREFIX + API_KEY_HASH_1,
+                TEST_TIME, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS)).isTrue();
+
+        assertThrowsExceptionWithDetails(
+                TooManyRequestsException.class, () -> createKey(KEY_V2_VO_1), "Slow down.");
+        assertThat(countRows("keys_v2")).isZero();
     }
 
     @Test
     void readsFallBackToLegacyTablesForLegacyAccount() {
         keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
 
-        assertThat(service.getByHash(API_KEY_HASH_1)).contains(LEGACY_KEY_V2);
-        assertThat(service.get(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
+        assertThat(service.getKeyByHash(API_KEY_HASH_1)).contains(LEGACY_KEY_V2);
+        assertThat(service.getKeyById(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
                 .contains(LEGACY_KEY_V2);
-        assertThat(service.list(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
+        assertThat(service.listKeys(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
                 .singleElement()
                 .satisfies(key -> {
                     assertThat(key.getKeyId()).isEqualTo(KEY_ID_1);
@@ -217,9 +236,9 @@ class KeysV2ServiceIntegrationTest {
     void readsDoNotFallBackToLegacyTablesForOtherAccounts() {
         keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
 
-        assertThat(service.get(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
+        assertThat(service.getKeyById(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
                 .isEmpty();
-        assertThat(service.list(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME)).isEmpty();
+        assertThat(service.listKeys(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME)).isEmpty();
     }
 
     @Test
@@ -228,27 +247,27 @@ class KeysV2ServiceIntegrationTest {
         var migrated = LEGACY_KEY_V2.toBuilder().description("migrated").build();
         keysV2Dao.save(migrated);
 
-        assertThat(service.getByHash(API_KEY_HASH_1)).contains(migrated);
-        assertThat(service.get(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
+        assertThat(service.getKeyByHash(API_KEY_HASH_1)).contains(migrated);
+        assertThat(service.getKeyById(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
                 .contains(migrated);
     }
 
     @Test
-    void listReturnsMigratedKeyOnce() {
+    void listKeysReturnsMigratedKeyOnce() {
         keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
         keysDao.save(LEGACY_KEY_VO_2, KEY_OWNER_VO_1);
         keysV2Dao.save(LEGACY_KEY_V2);
 
-        assertThat(service.list(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
+        assertThat(service.listKeys(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
                 .extracting(KeysByOwnerAndAccountAndServiceVo::getKeyId)
                 .containsExactly(KEY_ID_1, KEY_ID_2);
     }
 
     @Test
-    void updateStatusOfLegacyKeyWritesLegacyTables() {
+    void updateKeyStatusOfLegacyKeyWritesLegacyTables() {
         keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
 
-        var updated = service.updateStatus(
+        var updated = service.updateKeyStatus(
                 LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1,
                 KeyStatus.SUSPENDED);
 
@@ -266,11 +285,11 @@ class KeysV2ServiceIntegrationTest {
     }
 
     @Test
-    void updateStatusOfMigratedKeyWritesKeysV2Only() {
+    void updateKeyStatusOfMigratedKeyWritesKeysV2Only() {
         keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
         keysV2Dao.save(LEGACY_KEY_V2);
 
-        service.updateStatus(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1,
+        service.updateKeyStatus(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1,
                              KeyStatus.REVOKED);
 
         assertThat(keysV2Dao.getKeyByHash(API_KEY_HASH_1))
@@ -284,48 +303,55 @@ class KeysV2ServiceIntegrationTest {
     }
 
     @Test
-    void updateStatusRejectsChangeFromRevoked() {
-        service.create(KEY_V2_VO_1);
-        service.updateStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1,
+    void updateKeyStatusRejectsChangeFromRevoked() {
+        createKey(KEY_V2_VO_1);
+        service.updateKeyStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1,
                              KeyStatus.REVOKED);
 
         assertThrowsExceptionWithDetails(
                 ConflictException.class,
-                () -> service.updateStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1,
+                () -> service.updateKeyStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1,
                                            KEY_ID_1, KeyStatus.ACTIVE),
                 "Key status cannot change from REVOKED");
-        assertThat(service.get(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
+        assertThat(service.getKeyById(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
                 .get()
                 .extracting(KeyV2Vo::getKeyStatus)
                 .isEqualTo(KeyStatus.REVOKED);
     }
 
     @Test
-    void updateAuthorizationsOfV2KeyLocksKeysV2Row() {
-        service.create(KEY_V2_VO_1);
+    void updateKeyAuthorizationsOfV2KeyLocksKeysV2Row() {
+        createKey(KEY_V2_VO_1);
+        assertThat(lockExists(KeyV2Model.TABLE_NAME)).isTrue();
+        assertThat(lockExists("keys")).isFalse();
+        assertThrowsExceptionWithDetails(
+                TooManyRequestsException.class,
+                () -> service.updateKeyAuthorizations(
+                        NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1,
+                        KEY_AUTHZ_2, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS),
+                "Slow down.");
 
-        service.updateAuthorizations(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1,
+        deleteLock(KeyV2Model.TABLE_NAME);
+        service.updateKeyAuthorizations(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1,
                                      KEY_AUTHZ_2, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS);
 
         assertThat(keysV2Dao.getKeyByHash(API_KEY_HASH_1))
                 .get()
                 .extracting(KeyV2Vo::getAuthorizations)
                 .isEqualTo(KEY_AUTHZ_2);
-        assertThat(lockExists("keys_v2")).isTrue();
-        assertThat(lockExists("keys")).isFalse();
         assertThrowsExceptionWithDetails(
                 TooManyRequestsException.class,
-                () -> service.updateAuthorizations(
+                () -> service.updateKeyAuthorizations(
                         NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1,
                         KEY_AUTHZ_2, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS),
                 "Slow down.");
     }
 
     @Test
-    void updateAuthorizationsOfLegacyKeyLocksLegacyRow() {
+    void updateKeyAuthorizationsOfLegacyKeyLocksLegacyRow() {
         keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
 
-        service.updateAuthorizations(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME,
+        service.updateKeyAuthorizations(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME,
                                      KEY_ID_1, KEY_AUTHZ_2, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS);
 
         assertThat(keysDao.getKeyByHash(API_KEY_HASH_1))
@@ -337,38 +363,38 @@ class KeysV2ServiceIntegrationTest {
         assertThat(countRows("keys_v2")).isZero();
         assertThrowsExceptionWithDetails(
                 TooManyRequestsException.class,
-                () -> service.updateAuthorizations(
+                () -> service.updateKeyAuthorizations(
                         LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1,
                         KEY_AUTHZ_2, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS),
                 "Slow down.");
     }
 
     @Test
-    void updateAuthorizationsRejectsInactiveKey() {
-        service.create(KEY_V2_VO_1);
-        service.updateStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1,
+    void updateKeyAuthorizationsRejectsInactiveKey() {
+        createKey(KEY_V2_VO_1);
+        service.updateKeyStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1,
                              KeyStatus.SUSPENDED);
 
         assertThrowsExceptionWithDetails(
                 BadRequestException.class,
-                () -> service.updateAuthorizations(
+                () -> service.updateKeyAuthorizations(
                         NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1,
                         KEY_AUTHZ_2, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS),
                 "Key is not active");
-        assertThat(lockExists("keys_v2")).isFalse();
+        assertThat(lockExists(KeyV2Model.TABLE_NAME)).isTrue();
     }
 
     @Test
-    void deleteRemovesV2AndLegacyCopies() {
+    void deleteKeyByIdRemovesV2AndLegacyCopies() {
         keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
         keysV2Dao.save(LEGACY_KEY_V2);
 
-        service.delete(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1);
+        service.deleteKeyById(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1);
 
-        assertThat(service.getByHash(API_KEY_HASH_1)).isEmpty();
-        assertThat(service.get(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
+        assertThat(service.getKeyByHash(API_KEY_HASH_1)).isEmpty();
+        assertThat(service.getKeyById(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
                 .isEmpty();
-        assertThat(service.list(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME)).isEmpty();
+        assertThat(service.listKeys(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME)).isEmpty();
         assertThat(keysDao.getKeyByOwnerAndServiceAndId(USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1,
                                                         KEY_ID_1)).isEmpty();
         assertThat(countRows("keys")).isZero();
@@ -376,34 +402,34 @@ class KeysV2ServiceIntegrationTest {
     }
 
     @Test
-    void deleteRemovesLegacyOnlyKey() {
+    void deleteKeyByIdRemovesLegacyOnlyKey() {
         keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
         keysDao.save(LEGACY_KEY_VO_2, KEY_OWNER_VO_1);
 
-        service.delete(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1);
+        service.deleteKeyById(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1);
 
         assertThat(keysDao.getKeyByHash(API_KEY_HASH_1)).isEmpty();
-        assertThat(service.list(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
+        assertThat(service.listKeys(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
                 .extracting(KeysByOwnerAndAccountAndServiceVo::getKeyId)
                 .containsExactly(KEY_ID_2);
     }
 
     @Test
-    void deleteOfMissingKeyThrowsNotFound() {
+    void deleteKeyByIdOfMissingKeyThrowsNotFound() {
         keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
 
         assertThrowsExceptionWithDetails(
                 NotFoundException.class,
-                () -> service.delete(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1),
+                () -> service.deleteKeyById(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1),
                 "Key not found");
         assertThat(keysDao.getKeyByHash(API_KEY_HASH_1)).isPresent();
     }
 
     @Test
-    void ownerStatusForAccountIsStoredWithLegacyOwner() {
+    void ownerStatusByAccountIsStoredWithLegacyOwner() {
         keysDao.save(KEY_VO_1, KEY_OWNER_VO_1);
 
-        var saved = service.updateOwnerStatusForAccount(
+        var saved = service.updateOwnerStatusByAccount(
                 LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, KeyOwnerStatus.SUSPENDED);
 
         assertThat(saved.getNcaId()).isEqualTo(LEGACY_NCA_ID);
@@ -412,32 +438,32 @@ class KeysV2ServiceIntegrationTest {
                 .get()
                 .extracting(owner -> owner.getOwnerStatus())
                 .isEqualTo(KeyOwnerStatus.SUSPENDED);
-        assertThat(service.getOwnerStatusForAccount(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1))
+        assertThat(service.getOwnerStatusByAccount(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1))
                 .get()
                 .extracting(OwnerStatusByAccountModel::getOwnerStatus)
                 .isEqualTo(KeyOwnerStatus.SUSPENDED);
-        assertThat(ownerStatusDao.getOwnerStatusForAccount(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1))
+        assertThat(ownerStatusDao.getOwnerStatusByAccount(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1))
                 .isEmpty();
-        assertThat(service.getOwnerStatusForAccountAndService(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
+        assertThat(service.getOwnerStatusByAccountAndService(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
                 .isEmpty();
         assertThrowsExceptionWithDetails(
                 BadRequestException.class,
-                () -> service.updateOwnerStatusForAccountAndService(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1,
+                () -> service.updateOwnerStatusByAccountAndService(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1,
                                                   SERVICE_NAME, KeyOwnerStatus.SUSPENDED),
                 "Owner status for account and service is not supported for account 'test-nca-id'");
     }
 
     @Test
     void ownerStatusForOtherAccountsUsesOwnerStatusTables() {
-        service.updateOwnerStatusForAccount(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, KeyOwnerStatus.SUSPENDED);
-        service.updateOwnerStatusForAccountAndService(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1,
+        service.updateOwnerStatusByAccount(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, KeyOwnerStatus.SUSPENDED);
+        service.updateOwnerStatusByAccountAndService(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1,
                                     KeyOwnerStatus.SUSPENDED);
 
-        assertThat(service.getOwnerStatusForAccount(NCA_ID_1, USER, USER_KEY_OWNER_ID_1))
+        assertThat(service.getOwnerStatusByAccount(NCA_ID_1, USER, USER_KEY_OWNER_ID_1))
                 .get()
                 .extracting(OwnerStatusByAccountModel::getOwnerStatus)
                 .isEqualTo(KeyOwnerStatus.SUSPENDED);
-        assertThat(service.getOwnerStatusForAccountAndService(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1))
+        assertThat(service.getOwnerStatusByAccountAndService(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1))
                 .get()
                 .extracting(OwnerStatusByAccountAndServiceModel::getOwnerStatus)
                 .isEqualTo(KeyOwnerStatus.SUSPENDED);
@@ -445,11 +471,11 @@ class KeysV2ServiceIntegrationTest {
     }
 
     @Test
-    void ownerStatusForAccountAndServiceRoundTrip() {
-        assertThat(service.getOwnerStatusForAccountAndService(
+    void ownerStatusByAccountAndServiceRoundTrip() {
+        assertThat(service.getOwnerStatusByAccountAndService(
                 NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1)).isEmpty();
 
-        var saved = service.updateOwnerStatusForAccountAndService(
+        var saved = service.updateOwnerStatusByAccountAndService(
                 NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KeyOwnerStatus.SUSPENDED);
 
         assertThat(saved.getNcaId()).isEqualTo(NCA_ID_1);
@@ -457,22 +483,22 @@ class KeysV2ServiceIntegrationTest {
         assertThat(saved.getOwnerId()).isEqualTo(USER_KEY_OWNER_ID_1);
         assertThat(saved.getIssuerServiceId()).isEqualTo(SERVICE_ID_1);
         assertThat(saved.getOwnerStatus()).isEqualTo(KeyOwnerStatus.SUSPENDED);
-        assertThat(service.getOwnerStatusForAccountAndService(
+        assertThat(service.getOwnerStatusByAccountAndService(
                 NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1))
                 .get()
                 .extracting(OwnerStatusByAccountAndServiceModel::getOwnerStatus)
                 .isEqualTo(KeyOwnerStatus.SUSPENDED);
-        assertThat(service.getOwnerStatusForAccount(NCA_ID_1, USER, USER_KEY_OWNER_ID_1)).isEmpty();
+        assertThat(service.getOwnerStatusByAccount(NCA_ID_1, USER, USER_KEY_OWNER_ID_1)).isEmpty();
         assertThat(countRows("owner_status_by_account")).isZero();
         assertThat(countRows("owner_status_by_account_and_service")).isOne();
     }
 
     @Test
-    void ownerStatusForAccountAndServiceDoesNotAffectOtherIssuers() {
-        service.updateOwnerStatusForAccountAndService(
+    void ownerStatusByAccountAndServiceDoesNotAffectOtherIssuers() {
+        service.updateOwnerStatusByAccountAndService(
                 NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KeyOwnerStatus.SUSPENDED);
 
-        assertThat(service.getOwnerStatusForAccountAndService(
+        assertThat(service.getOwnerStatusByAccountAndService(
                 NCA_ID_1, USER, USER_KEY_OWNER_ID_1, OTHER_SERVICE_ID)).isEmpty();
         var otherIssuerKey = KEY_V2_VO_1.toBuilder()
                 .issuerServiceId(OTHER_SERVICE_ID)
@@ -480,16 +506,16 @@ class KeysV2ServiceIntegrationTest {
                 .keyId(KEY_ID_2)
                 .keyHash("hash-other-issuer")
                 .build();
-        assertThat(service.create(otherIssuerKey)).isEqualTo(otherIssuerKey);
+        assertThat(createKey(otherIssuerKey)).isEqualTo(otherIssuerKey);
         assertThrowsExceptionWithDetails(
-                ForbiddenException.class, () -> service.create(KEY_V2_VO_1), "Key owner suspended.");
+                ForbiddenException.class, () -> createKey(KEY_V2_VO_1), "Key owner suspended.");
     }
 
     @Test
-    void missingOwnerStatusForAccountAndServiceAllowsCreate() {
-        assertThat(service.getOwnerStatusForAccountAndService(
+    void missingOwnerStatusByAccountAndServiceAllowsCreate() {
+        assertThat(service.getOwnerStatusByAccountAndService(
                 NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1)).isEmpty();
-        assertThat(service.create(KEY_V2_VO_1)).isEqualTo(KEY_V2_VO_1);
+        assertThat(createKey(KEY_V2_VO_1)).isEqualTo(KEY_V2_VO_1);
     }
 
     private static long countRows(String table) {
@@ -497,10 +523,21 @@ class KeysV2ServiceIntegrationTest {
                 "SELECT COUNT(*) FROM " + KEY_SPACE + "." + table).one().getLong(0);
     }
 
+    private KeyV2Vo createKey(KeyV2Vo key) {
+        return service.createKey(key, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS);
+    }
+
     private static boolean lockExists(String table) {
         return IntegrationTestConfiguration.CQL_SESSION.execute(
                 "SELECT updated_at FROM " + KEY_SPACE + ".row_update_lock"
                         + " WHERE table_name = ? AND record_key = ?",
                 table, KeysService.UPDATE_LOCK_KEY_PREFIX + API_KEY_HASH_1).one() != null;
+    }
+
+    private static void deleteLock(String table) {
+        IntegrationTestConfiguration.CQL_SESSION.execute(
+                "DELETE FROM " + KEY_SPACE + ".row_update_lock"
+                        + " WHERE table_name = ? AND record_key = ?",
+                table, KeysService.UPDATE_LOCK_KEY_PREFIX + API_KEY_HASH_1);
     }
 }

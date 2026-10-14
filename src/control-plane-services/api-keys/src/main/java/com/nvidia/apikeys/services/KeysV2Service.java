@@ -94,13 +94,17 @@ public class KeysV2Service {
     /**
      * Every new key goes to keys_v2, including keys for the legacy account. The hash is unique
      * across keys_v2 and the legacy keys table, so a leftover v1 key cannot be shadowed.
+     * Takes the keys_v2 authorization lock before the write, matching v1 create, so an
+     * authorization update cannot run until minAuthzUpdateIntervalSeconds has passed.
      */
-    public KeyV2Vo create(KeyV2Vo key) {
+    public KeyV2Vo createKey(KeyV2Vo key, int minAuthzUpdateIntervalSeconds) {
         assertOwnerActive(getEffectiveOwnerStatus(
                 key.getNcaId(), key.getOwnerType(), key.getOwnerId(), key.getIssuerServiceId()));
-        if (getByHash(key.getKeyHash()).isPresent()) {
+        if (getKeyByHash(key.getKeyHash()).isPresent()) {
             throw new ConflictException(MESG_KEY_ALREADY_EXISTS);
         }
+        lockForAuthorizationUpdates(
+                KeyV2Model.TABLE_NAME, key.getKeyHash(), minAuthzUpdateIntervalSeconds);
         keysV2Dao.save(key);
         recordKeyAction(key, CREATE);
         return key;
@@ -109,7 +113,7 @@ public class KeysV2Service {
     /**
      * Introspection lookup. Checks keys_v2 first and falls back to the legacy keys table.
      */
-    public Optional<KeyV2Vo> getByHash(String keyHash) {
+    public Optional<KeyV2Vo> getKeyByHash(String keyHash) {
         return keysV2Dao.getKeyByHash(keyHash)
                 .or(() -> keysDao.getKeyByHash(keyHash).map(legacyAccount::fromLegacy));
     }
@@ -117,7 +121,7 @@ public class KeysV2Service {
     /**
      * Checks keys_v2 first. For the legacy account, falls back to the legacy tables.
      */
-    public Optional<KeyV2Vo> get(
+    public Optional<KeyV2Vo> getKeyById(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             String keyId) {
         return find(ncaId, ownerType, ownerId, issuerServiceId, keyId).map(StoredKey::key);
@@ -127,7 +131,7 @@ public class KeysV2Service {
      * Keys in keys_v2, followed by legacy keys when the account is the legacy account. A key
      * already migrated to keys_v2 is listed once, from keys_v2.
      */
-    public List<KeysByOwnerAndAccountAndServiceVo> list(
+    public List<KeysByOwnerAndAccountAndServiceVo> listKeys(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId) {
         List<KeysByOwnerAndAccountAndServiceVo> keys;
         try (var v2Keys = keysV2Dao.list(ncaId, ownerType, ownerId, issuerServiceId)) {
@@ -151,7 +155,7 @@ public class KeysV2Service {
     /**
      * Sets ACTIVE, SUSPENDED, or REVOKED. EXPIRED and REVOKED keys keep their status.
      */
-    public KeyV2Vo updateStatus(
+    public KeyV2Vo updateKeyStatus(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             String keyId, KeyStatus status) {
         var stored = load(ncaId, ownerType, ownerId, issuerServiceId, keyId);
@@ -173,7 +177,7 @@ public class KeysV2Service {
         return updated;
     }
 
-    public KeyV2Vo updateAuthorizations(
+    public KeyV2Vo updateKeyAuthorizations(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             String keyId, String authorizations, int minAuthzUpdateIntervalSeconds) {
         var stored = load(ncaId, ownerType, ownerId, issuerServiceId, keyId);
@@ -183,12 +187,7 @@ public class KeysV2Service {
         }
 
         var tableName = stored.legacy() ? KeyModel.TABLE_NAME : KeyV2Model.TABLE_NAME;
-        var lockAcquired = rowUpdateLockDao.lock(
-                tableName, UPDATE_LOCK_KEY_PREFIX + key.getKeyHash(), clock.instant(),
-                minAuthzUpdateIntervalSeconds);
-        if (!lockAcquired) {
-            throw new TooManyRequestsException(ERROR_SLOW_DOWN);
-        }
+        lockForAuthorizationUpdates(tableName, key.getKeyHash(), minAuthzUpdateIntervalSeconds);
 
         var updated = key.toBuilder().authorizations(authorizations).build();
         save(stored, updated);
@@ -200,7 +199,7 @@ public class KeysV2Service {
      * Removes the key from keys_v2 and, for the legacy account, from the legacy tables, so a key
      * that exists in both while migration runs cannot reappear through the legacy fallback.
      */
-    public void delete(
+    public void deleteKeyById(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             String keyId) {
         var v2Key = keysV2Dao.get(ncaId, ownerType, ownerId, issuerServiceId, keyId);
@@ -220,49 +219,49 @@ public class KeysV2Service {
      * Owner status for the account. For the legacy account this is the owner status stored with
      * the owner's legacy keys.
      */
-    public Optional<OwnerStatusByAccountModel> getOwnerStatusForAccount(
+    public Optional<OwnerStatusByAccountModel> getOwnerStatusByAccount(
             String ncaId, KeyOwnerType ownerType, String ownerId) {
         if (legacyAccount.isLegacy(ncaId)) {
             return keysDao.getKeyOwner(ownerType, ownerId)
                     .filter(owner -> owner.getOwnerStatus() != null)
-                    .map(owner -> toOwnerStatusForAccount(ncaId, owner));
+                    .map(owner -> toOwnerStatusByAccount(ncaId, owner));
         }
-        return ownerStatusDao.getOwnerStatusForAccount(ncaId, ownerType, ownerId);
+        return ownerStatusDao.getOwnerStatusByAccount(ncaId, ownerType, ownerId);
     }
 
     /**
      * Owner status for the account and issuer service. The legacy account has no
      * account-and-service records.
      */
-    public Optional<OwnerStatusByAccountAndServiceModel> getOwnerStatusForAccountAndService(
+    public Optional<OwnerStatusByAccountAndServiceModel> getOwnerStatusByAccountAndService(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId) {
         if (legacyAccount.isLegacy(ncaId)) {
             return Optional.empty();
         }
-        return ownerStatusDao.getOwnerStatusForAccountAndService(
+        return ownerStatusDao.getOwnerStatusByAccountAndService(
                 ncaId, ownerType, ownerId, issuerServiceId);
     }
 
-    public OwnerStatusByAccountModel updateOwnerStatusForAccount(
+    public OwnerStatusByAccountModel updateOwnerStatusByAccount(
             String ncaId, KeyOwnerType ownerType, String ownerId, KeyOwnerStatus status) {
         if (legacyAccount.isLegacy(ncaId)) {
             var owner = keyOwnerService.loadKeyOwnerByTypeAndIdOrCreateNew(ownerType, ownerId);
             var saved = keyOwnerService.updateKeyOwner(owner, status, clock.instant());
-            return toOwnerStatusForAccount(ncaId, saved);
+            return toOwnerStatusByAccount(ncaId, saved);
         }
-        var saved = ownerStatusDao.saveOwnerStatusForAccount(ncaId, ownerType, ownerId, status);
+        var saved = ownerStatusDao.saveOwnerStatusByAccount(ncaId, ownerType, ownerId, status);
         recordOwnerAction(ownerType, ownerId, status, VALUE_NOT_APPLICABLE);
         return saved;
     }
 
-    public OwnerStatusByAccountAndServiceModel updateOwnerStatusForAccountAndService(
+    public OwnerStatusByAccountAndServiceModel updateOwnerStatusByAccountAndService(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             KeyOwnerStatus status) {
         if (legacyAccount.isLegacy(ncaId)) {
             throw new BadRequestException(
                     MESG_OWNER_STATUS_FOR_ACCOUNT_AND_SERVICE_UNSUPPORTED.formatted(ncaId));
         }
-        var saved = ownerStatusDao.saveOwnerStatusForAccountAndService(
+        var saved = ownerStatusDao.saveOwnerStatusByAccountAndService(
                 ncaId, ownerType, ownerId, issuerServiceId, status);
         recordOwnerAction(ownerType, ownerId, status, issuerServiceId);
         return saved;
@@ -322,13 +321,23 @@ public class KeysV2Service {
         return ownerStatusDao.getEffectiveStatus(ncaId, ownerType, ownerId, issuerServiceId);
     }
 
+    private void lockForAuthorizationUpdates(
+            String tableName, String keyHash, int minAuthzUpdateIntervalSeconds) {
+        var lockAcquired = rowUpdateLockDao.lock(
+                tableName, UPDATE_LOCK_KEY_PREFIX + keyHash, clock.instant(),
+                minAuthzUpdateIntervalSeconds);
+        if (!lockAcquired) {
+            throw new TooManyRequestsException(ERROR_SLOW_DOWN);
+        }
+    }
+
     private static void assertOwnerActive(KeyOwnerStatus status) {
         if (status != KeyOwnerStatus.ACTIVE) {
             throw new ForbiddenException(MESG_OWNER_SUSPENDED);
         }
     }
 
-    private static OwnerStatusByAccountModel toOwnerStatusForAccount(
+    private static OwnerStatusByAccountModel toOwnerStatusByAccount(
             String ncaId, KeyOwnerVo owner) {
         return OwnerStatusByAccountModel.builder()
                 .ncaId(ncaId)

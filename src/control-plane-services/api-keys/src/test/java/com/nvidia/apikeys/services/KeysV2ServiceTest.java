@@ -110,15 +110,21 @@ class KeysV2ServiceTest {
                                     rowUpdateLockDao, legacyAccount, clock, actionRecorder);
         lenient().when(keysV2Dao.getKeyByHash(anyString())).thenReturn(Optional.empty());
         lenient().when(keysDao.getKeyByHash(anyString())).thenReturn(Optional.empty());
+        lenient().when(clock.instant()).thenReturn(TEST_TIME);
+        lenient().when(rowUpdateLockDao.lock(anyString(), anyString(), any(), anyInt()))
+                .thenReturn(true);
     }
 
     @Test
-    void createWritesKeysV2ForNewAccount() {
+    void createKeyWritesKeysV2ForNewAccount() {
         when(ownerStatusDao.getEffectiveStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1))
                 .thenReturn(KeyOwnerStatus.ACTIVE);
 
-        assertThat(service.create(KEY_V2_VO_1)).isEqualTo(KEY_V2_VO_1);
+        assertThat(service.createKey(KEY_V2_VO_1, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS))
+                .isEqualTo(KEY_V2_VO_1);
 
+        verify(rowUpdateLockDao).lock(KeyV2Model.TABLE_NAME, "authz-for-key-hash-" + API_KEY_HASH_1,
+                                      TEST_TIME, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS);
         verify(keysV2Dao).save(KEY_V2_VO_1);
         verify(keysDao, never()).save(any(KeyVo.class), any());
         verifyNoInteractions(keyOwnerService);
@@ -126,23 +132,29 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void createRejectsSuspendedOwnerForNewAccount() {
+    void createKeyRejectsSuspendedOwnerForNewAccount() {
         when(ownerStatusDao.getEffectiveStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1))
                 .thenReturn(KeyOwnerStatus.SUSPENDED);
 
         assertThrowsExceptionWithDetails(
-                ForbiddenException.class, () -> service.create(KEY_V2_VO_1), "Key owner suspended.");
+                ForbiddenException.class,
+                () -> service.createKey(KEY_V2_VO_1, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS),
+                "Key owner suspended.");
 
         verify(keysV2Dao, never()).save(any());
+        verify(rowUpdateLockDao, never()).lock(anyString(), anyString(), any(), anyInt());
         verifyNoInteractions(actionRecorder);
     }
 
     @Test
-    void createWritesKeysV2ForLegacyAccount() {
+    void createKeyWritesKeysV2ForLegacyAccount() {
         when(keysDao.getKeyOwner(USER, USER_KEY_OWNER_ID_1)).thenReturn(Optional.of(KEY_OWNER_VO_1));
 
-        assertThat(service.create(LEGACY_KEY_V2)).isEqualTo(LEGACY_KEY_V2);
+        assertThat(service.createKey(LEGACY_KEY_V2, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS))
+                .isEqualTo(LEGACY_KEY_V2);
 
+        verify(rowUpdateLockDao).lock(KeyV2Model.TABLE_NAME, "authz-for-key-hash-" + API_KEY_HASH_1,
+                                      TEST_TIME, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS);
         verify(keysV2Dao).save(LEGACY_KEY_V2);
         verify(keysDao, never()).save(any(KeyVo.class), any());
         verifyNoInteractions(ownerStatusDao, keyOwnerService);
@@ -150,156 +162,180 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void createRejectsSuspendedLegacyOwnerForLegacyAccount() {
+    void createKeyRejectsSuspendedLegacyOwnerForLegacyAccount() {
         when(keysDao.getKeyOwner(USER, USER_KEY_OWNER_ID_1)).thenReturn(Optional.of(
                 KEY_OWNER_VO_1.toBuilder().ownerStatus(KeyOwnerStatus.SUSPENDED).build()));
 
         assertThrowsExceptionWithDetails(
-                ForbiddenException.class, () -> service.create(LEGACY_KEY_V2), "Key owner suspended.");
+                ForbiddenException.class,
+                () -> service.createKey(LEGACY_KEY_V2, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS),
+                "Key owner suspended.");
 
         verify(keysV2Dao, never()).save(any());
+        verify(rowUpdateLockDao, never()).lock(anyString(), anyString(), any(), anyInt());
         verifyNoInteractions(actionRecorder);
     }
 
     @Test
-    void createTreatsUnknownLegacyOwnerAsActiveAndAcceptsUnmappedIssuer() {
+    void createKeyTreatsUnknownLegacyOwnerAsActiveAndAcceptsUnmappedIssuer() {
         var key = LEGACY_KEY_V2.toBuilder().issuerServiceId("other-service").build();
         when(keysDao.getKeyOwner(USER, USER_KEY_OWNER_ID_1)).thenReturn(Optional.empty());
 
-        assertThat(service.create(key)).isEqualTo(key);
+        assertThat(service.createKey(key, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS)).isEqualTo(key);
 
         verify(keysV2Dao).save(key);
     }
 
     @Test
-    void createRejectsHashAlreadyInKeysV2() {
+    void createKeyRejectsHashAlreadyInKeysV2() {
         when(ownerStatusDao.getEffectiveStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1))
                 .thenReturn(KeyOwnerStatus.ACTIVE);
         when(keysV2Dao.getKeyByHash(API_KEY_HASH_1)).thenReturn(Optional.of(KEY_V2_VO_1));
 
         var duplicate = KEY_V2_VO_1.toBuilder().keyId(KEY_ID_1 + "-dup").build();
         assertThrowsExceptionWithDetails(
-                ConflictException.class, () -> service.create(duplicate), "Key already exists");
+                ConflictException.class,
+                () -> service.createKey(duplicate, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS),
+                "Key already exists");
 
         verify(keysV2Dao, never()).save(any());
+        verify(rowUpdateLockDao, never()).lock(anyString(), anyString(), any(), anyInt());
         verifyNoInteractions(actionRecorder);
     }
 
     @Test
-    void createRejectsHashAlreadyInLegacyTables() {
+    void createKeyRejectsHashAlreadyInLegacyTables() {
         when(keysDao.getKeyOwner(USER, USER_KEY_OWNER_ID_1)).thenReturn(Optional.of(KEY_OWNER_VO_1));
         when(keysDao.getKeyByHash(API_KEY_HASH_1)).thenReturn(Optional.of(KEY_VO_1));
 
         assertThrowsExceptionWithDetails(
-                ConflictException.class, () -> service.create(LEGACY_KEY_V2), "Key already exists");
+                ConflictException.class,
+                () -> service.createKey(LEGACY_KEY_V2, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS),
+                "Key already exists");
+
+        verify(keysV2Dao, never()).save(any());
+        verify(rowUpdateLockDao, never()).lock(anyString(), anyString(), any(), anyInt());
+        verifyNoInteractions(actionRecorder);
+    }
+
+    @Test
+    void createKeyRejectsWhenAuthzLockNotAcquired() {
+        when(ownerStatusDao.getEffectiveStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1))
+                .thenReturn(KeyOwnerStatus.ACTIVE);
+        when(rowUpdateLockDao.lock(anyString(), anyString(), any(), anyInt())).thenReturn(false);
+
+        assertThrowsExceptionWithDetails(
+                TooManyRequestsException.class,
+                () -> service.createKey(KEY_V2_VO_1, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS),
+                "Slow down.");
 
         verify(keysV2Dao, never()).save(any());
         verifyNoInteractions(actionRecorder);
     }
 
     @Test
-    void getByHashPrefersKeysV2() {
+    void getKeyByHashPrefersKeysV2() {
         when(keysV2Dao.getKeyByHash(API_KEY_HASH_1)).thenReturn(Optional.of(KEY_V2_VO_1));
 
-        assertThat(service.getByHash(API_KEY_HASH_1)).contains(KEY_V2_VO_1);
+        assertThat(service.getKeyByHash(API_KEY_HASH_1)).contains(KEY_V2_VO_1);
 
         verifyNoInteractions(keysDao);
     }
 
     @Test
-    void getByHashFallsBackToLegacyKeys() {
+    void getKeyByHashFallsBackToLegacyKeys() {
         when(keysV2Dao.getKeyByHash(API_KEY_HASH_1)).thenReturn(Optional.empty());
         when(keysDao.getKeyByHash(API_KEY_HASH_1)).thenReturn(Optional.of(KEY_VO_1));
 
-        assertThat(service.getByHash(API_KEY_HASH_1)).contains(LEGACY_KEY_V2);
+        assertThat(service.getKeyByHash(API_KEY_HASH_1)).contains(LEGACY_KEY_V2);
     }
 
     @Test
-    void getByHashIsEmptyWhenNeitherTableHasTheKey() {
+    void getKeyByHashIsEmptyWhenNeitherTableHasTheKey() {
         when(keysV2Dao.getKeyByHash(API_KEY_HASH_1)).thenReturn(Optional.empty());
         when(keysDao.getKeyByHash(API_KEY_HASH_1)).thenReturn(Optional.empty());
 
-        assertThat(service.getByHash(API_KEY_HASH_1)).isEmpty();
+        assertThat(service.getKeyByHash(API_KEY_HASH_1)).isEmpty();
     }
 
     @Test
-    void getReadsKeysV2ForNewAccount() {
+    void getKeyByIdReadsKeysV2ForNewAccount() {
         stubKeyV2();
 
-        assertThat(service.get(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
+        assertThat(service.getKeyById(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
                 .contains(KEY_V2_VO_1);
 
         verifyNoInteractions(keysDao);
     }
 
     @Test
-    void getIsEmptyWithoutManagementRow() {
+    void getKeyByIdIsEmptyWithoutManagementRow() {
         when(keysV2Dao.get(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
                 .thenReturn(Optional.empty());
 
-        assertThat(service.get(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
+        assertThat(service.getKeyById(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
                 .isEmpty();
 
         verify(keysV2Dao, never()).getKeyByHash(anyString());
     }
 
     @Test
-    void getFallsBackToLegacyTablesWithLegacyServiceIdForLegacyAccount() {
+    void getKeyByIdFallsBackToLegacyTablesWithLegacyServiceIdForLegacyAccount() {
         stubLegacyKey();
 
-        assertThat(service.get(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
+        assertThat(service.getKeyById(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
                 .contains(LEGACY_KEY_V2);
 
         verify(keysV2Dao, never()).getKeyByHash(anyString());
     }
 
     @Test
-    void getPrefersKeysV2ForLegacyAccount() {
+    void getKeyByIdPrefersKeysV2ForLegacyAccount() {
         when(keysV2Dao.get(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
                 .thenReturn(Optional.of(KeysByOwnerAndAccountAndServiceVo.from(LEGACY_KEY_V2)));
         when(keysV2Dao.getKeyByHash(API_KEY_HASH_1)).thenReturn(Optional.of(LEGACY_KEY_V2));
 
-        assertThat(service.get(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
+        assertThat(service.getKeyById(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
                 .contains(LEGACY_KEY_V2);
 
         verifyNoInteractions(keysDao);
     }
 
     @Test
-    void getSkipsLegacyTablesForUnmappedIssuerOnLegacyAccount() {
+    void getKeyByIdSkipsLegacyTablesForUnmappedIssuerOnLegacyAccount() {
         when(keysV2Dao.get(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, "other-service", KEY_ID_1))
                 .thenReturn(Optional.empty());
 
-        assertThat(service.get(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, "other-service", KEY_ID_1))
+        assertThat(service.getKeyById(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, "other-service", KEY_ID_1))
                 .isEmpty();
 
         verifyNoInteractions(keysDao);
     }
 
     @Test
-    void getDoesNotFallBackForNewAccount() {
+    void getKeyByIdDoesNotFallBackForNewAccount() {
         when(keysV2Dao.get(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
                 .thenReturn(Optional.empty());
 
-        assertThat(service.get(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
+        assertThat(service.getKeyById(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
                 .isEmpty();
 
         verifyNoInteractions(keysDao);
     }
 
     @Test
-    void listReadsKeysV2ForNewAccount() {
+    void listKeysReadsKeysV2ForNewAccount() {
         when(keysV2Dao.list(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1))
                 .thenReturn(Stream.of(KEY_V2_ROW_1));
 
-        assertThat(service.list(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1))
+        assertThat(service.listKeys(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1))
                 .containsExactly(KEY_V2_ROW_1);
 
         verifyNoInteractions(keysDao);
     }
 
     @Test
-    void listCombinesKeysV2AndLegacyTablesForLegacyAccount() {
+    void listKeysCombinesKeysV2AndLegacyTablesForLegacyAccount() {
         var v2Row = KeysByOwnerAndAccountAndServiceVo.from(
                 LEGACY_KEY_V2.toBuilder().keyId("v2-key-id").build());
         when(keysV2Dao.list(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
@@ -307,12 +343,12 @@ class KeysV2ServiceTest {
         when(keysDao.list(USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1))
                 .thenReturn(List.of(KEY_BY_OWNER_AND_SERVICE_VO_1));
 
-        assertThat(service.list(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
+        assertThat(service.listKeys(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
                 .containsExactly(v2Row, KeysByOwnerAndAccountAndServiceVo.from(LEGACY_KEY_V2));
     }
 
     @Test
-    void listReturnsMigratedKeyOnceFromKeysV2() {
+    void listKeysReturnsMigratedKeyOnceFromKeysV2() {
         var migrated = KeysByOwnerAndAccountAndServiceVo.from(
                 LEGACY_KEY_V2.toBuilder().keyStatus(KeyStatus.SUSPENDED).build());
         when(keysV2Dao.list(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
@@ -320,26 +356,26 @@ class KeysV2ServiceTest {
         when(keysDao.list(USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1))
                 .thenReturn(List.of(KEY_BY_OWNER_AND_SERVICE_VO_1));
 
-        assertThat(service.list(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
+        assertThat(service.listKeys(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
                 .containsExactly(migrated);
     }
 
     @Test
-    void listSkipsLegacyTablesForUnmappedIssuerOnLegacyAccount() {
+    void listKeysSkipsLegacyTablesForUnmappedIssuerOnLegacyAccount() {
         when(keysV2Dao.list(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, "other-service"))
                 .thenReturn(Stream.empty());
 
-        assertThat(service.list(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, "other-service")).isEmpty();
+        assertThat(service.listKeys(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, "other-service")).isEmpty();
 
         verifyNoInteractions(keysDao);
     }
 
     @Test
-    void updateStatusSavesKeysV2ForNewAccount() {
+    void updateKeyStatusSavesKeysV2ForNewAccount() {
         stubKeyV2();
         var suspended = KEY_V2_VO_1.toBuilder().keyStatus(KeyStatus.SUSPENDED).build();
 
-        assertThat(service.updateStatus(
+        assertThat(service.updateKeyStatus(
                 NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1, KeyStatus.SUSPENDED))
                 .isEqualTo(suspended);
 
@@ -348,12 +384,12 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void updateStatusSavesLegacyTablesForLegacyAccount() {
+    void updateKeyStatusSavesLegacyTablesForLegacyAccount() {
         stubLegacyKey();
         when(keyOwnerService.loadKeyOwnerByTypeAndIdOrCreateNew(USER, USER_KEY_OWNER_ID_1))
                 .thenReturn(KEY_OWNER_VO_1);
 
-        var revoked = service.updateStatus(
+        var revoked = service.updateKeyStatus(
                 LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1, KeyStatus.REVOKED);
 
         assertThat(revoked).isEqualTo(LEGACY_KEY_V2.toBuilder().keyStatus(KeyStatus.REVOKED).build());
@@ -363,13 +399,13 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void updateStatusSavesKeysV2ForKeysV2KeyOnLegacyAccount() {
+    void updateKeyStatusSavesKeysV2ForKeysV2KeyOnLegacyAccount() {
         when(keysV2Dao.get(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
                 .thenReturn(Optional.of(KeysByOwnerAndAccountAndServiceVo.from(LEGACY_KEY_V2)));
         when(keysV2Dao.getKeyByHash(API_KEY_HASH_1)).thenReturn(Optional.of(LEGACY_KEY_V2));
         var suspended = LEGACY_KEY_V2.toBuilder().keyStatus(KeyStatus.SUSPENDED).build();
 
-        service.updateStatus(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1,
+        service.updateKeyStatus(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1,
                              KeyStatus.SUSPENDED);
 
         verify(keysV2Dao).save(suspended);
@@ -377,10 +413,10 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void updateStatusToCurrentStatusWritesNothing() {
+    void updateKeyStatusToCurrentStatusWritesNothing() {
         stubKeyV2();
 
-        assertThat(service.updateStatus(
+        assertThat(service.updateKeyStatus(
                 NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1, KeyStatus.ACTIVE))
                 .isEqualTo(KEY_V2_VO_1);
 
@@ -390,7 +426,7 @@ class KeysV2ServiceTest {
 
     @ParameterizedTest
     @EnumSource(value = KeyStatus.class, names = {"EXPIRED", "REVOKED"})
-    void updateStatusRejectsFinalStatus(KeyStatus finalStatus) {
+    void updateKeyStatusRejectsFinalStatus(KeyStatus finalStatus) {
         var key = KEY_V2_VO_1.toBuilder().keyStatus(finalStatus).build();
         when(keysV2Dao.get(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
                 .thenReturn(Optional.of(KEY_V2_ROW_1));
@@ -398,7 +434,7 @@ class KeysV2ServiceTest {
 
         assertThrowsExceptionWithDetails(
                 ConflictException.class,
-                () -> service.updateStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1,
+                () -> service.updateKeyStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1,
                                            KEY_ID_1, KeyStatus.ACTIVE),
                 "Key status cannot change from " + finalStatus);
 
@@ -406,19 +442,19 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void updateStatusOfMissingKeyIsNotFound() {
+    void updateKeyStatusOfMissingKeyIsNotFound() {
         when(keysV2Dao.get(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
                 .thenReturn(Optional.empty());
 
         assertThrowsExceptionWithDetails(
                 NotFoundException.class,
-                () -> service.updateStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1,
+                () -> service.updateKeyStatus(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1,
                                            KEY_ID_1, KeyStatus.SUSPENDED),
                 "Key not found");
     }
 
     @Test
-    void updateAuthorizationsLocksKeysV2AndSaves() {
+    void updateKeyAuthorizationsLocksKeysV2AndSaves() {
         stubKeyV2();
         when(clock.instant()).thenReturn(TEST_TIME);
         when(rowUpdateLockDao.lock(KeyV2Model.TABLE_NAME, "authz-for-key-hash-" + API_KEY_HASH_1,
@@ -426,7 +462,7 @@ class KeysV2ServiceTest {
                 .thenReturn(true);
         var updated = KEY_V2_VO_1.toBuilder().authorizations(KEY_AUTHZ_2).build();
 
-        assertThat(service.updateAuthorizations(
+        assertThat(service.updateKeyAuthorizations(
                 NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1, KEY_AUTHZ_2,
                 MIN_AUTHZ_UPDATE_INTERVAL_SECONDS))
                 .isEqualTo(updated);
@@ -436,7 +472,7 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void updateAuthorizationsLocksLegacyKeysForLegacyAccount() {
+    void updateKeyAuthorizationsLocksLegacyKeysForLegacyAccount() {
         stubLegacyKey();
         when(clock.instant()).thenReturn(TEST_TIME);
         when(rowUpdateLockDao.lock(KeyModel.TABLE_NAME, "authz-for-key-hash-" + API_KEY_HASH_1,
@@ -445,21 +481,21 @@ class KeysV2ServiceTest {
         when(keyOwnerService.loadKeyOwnerByTypeAndIdOrCreateNew(USER, USER_KEY_OWNER_ID_1))
                 .thenReturn(KEY_OWNER_VO_1);
 
-        service.updateAuthorizations(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME,
+        service.updateKeyAuthorizations(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME,
                                      KEY_ID_1, KEY_AUTHZ_2, MIN_AUTHZ_UPDATE_INTERVAL_SECONDS);
 
         verify(keysDao).save(KEY_VO_1.toBuilder().authorizations(KEY_AUTHZ_2).build(), KEY_OWNER_VO_1);
     }
 
     @Test
-    void updateAuthorizationsWithoutLockIsRejected() {
+    void updateKeyAuthorizationsWithoutLockIsRejected() {
         stubKeyV2();
         when(clock.instant()).thenReturn(TEST_TIME);
         when(rowUpdateLockDao.lock(anyString(), anyString(), any(), anyInt())).thenReturn(false);
 
         assertThrowsExceptionWithDetails(
                 TooManyRequestsException.class,
-                () -> service.updateAuthorizations(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1,
+                () -> service.updateKeyAuthorizations(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1,
                                                    KEY_ID_1, KEY_AUTHZ_2,
                                                    MIN_AUTHZ_UPDATE_INTERVAL_SECONDS),
                 "Slow down.");
@@ -468,7 +504,7 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void updateAuthorizationsRejectsInactiveKey() {
+    void updateKeyAuthorizationsRejectsInactiveKey() {
         when(keysV2Dao.get(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
                 .thenReturn(Optional.of(KEY_V2_ROW_1));
         when(keysV2Dao.getKeyByHash(API_KEY_HASH_1))
@@ -476,7 +512,7 @@ class KeysV2ServiceTest {
 
         assertThrowsExceptionWithDetails(
                 BadRequestException.class,
-                () -> service.updateAuthorizations(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1,
+                () -> service.updateKeyAuthorizations(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1,
                                                    KEY_ID_1, KEY_AUTHZ_2,
                                                    MIN_AUTHZ_UPDATE_INTERVAL_SECONDS),
                 "Key is not active");
@@ -485,11 +521,11 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void deleteRemovesKeysV2RowsForNewAccount() {
+    void deleteKeyByIdRemovesKeysV2RowsForNewAccount() {
         when(keysV2Dao.get(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
                 .thenReturn(Optional.of(KEY_V2_ROW_1));
 
-        service.delete(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1);
+        service.deleteKeyById(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1);
 
         verify(keysV2Dao).delete(KEY_V2_ROW_1);
         verifyNoInteractions(keysDao);
@@ -498,13 +534,13 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void deleteRemovesLegacyRowsForLegacyAccount() {
+    void deleteKeyByIdRemovesLegacyRowsForLegacyAccount() {
         when(keysV2Dao.get(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
                 .thenReturn(Optional.empty());
         when(keysDao.getKeyByOwnerAndServiceAndId(USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
                 .thenReturn(Optional.of(KEY_BY_OWNER_AND_SERVICE_VO_1));
 
-        service.delete(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1);
+        service.deleteKeyById(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1);
 
         verify(keysDao).deleteKey(KEY_BY_OWNER_AND_SERVICE_VO_1);
         verify(keysV2Dao, never()).delete(any());
@@ -513,14 +549,14 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void deleteRemovesBothCopiesOfMigratedKeyForLegacyAccount() {
+    void deleteKeyByIdRemovesBothCopiesOfMigratedKeyForLegacyAccount() {
         var migrated = KeysByOwnerAndAccountAndServiceVo.from(LEGACY_KEY_V2);
         when(keysV2Dao.get(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1))
                 .thenReturn(Optional.of(migrated));
         when(keysDao.getKeyByOwnerAndServiceAndId(USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
                 .thenReturn(Optional.of(KEY_BY_OWNER_AND_SERVICE_VO_1));
 
-        service.delete(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1);
+        service.deleteKeyById(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME, KEY_ID_1);
 
         verify(keysV2Dao).delete(migrated);
         verify(keysDao).deleteKey(KEY_BY_OWNER_AND_SERVICE_VO_1);
@@ -528,34 +564,34 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void deleteOfMissingKeyIsNotFound() {
+    void deleteKeyByIdOfMissingKeyIsNotFound() {
         when(keysV2Dao.get(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1))
                 .thenReturn(Optional.empty());
 
         assertThrowsExceptionWithDetails(
                 NotFoundException.class,
-                () -> service.delete(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1),
+                () -> service.deleteKeyById(NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KEY_ID_1),
                 "Key not found");
 
         verify(keysV2Dao, never()).delete(any());
     }
 
     @Test
-    void getOwnerStatusForAccountReadsOwnerStatusTableForNewAccount() {
-        var status = ownerStatusForAccount(NCA_ID_1, KeyOwnerStatus.SUSPENDED);
-        when(ownerStatusDao.getOwnerStatusForAccount(NCA_ID_1, USER, USER_KEY_OWNER_ID_1))
+    void getOwnerStatusByAccountReadsOwnerStatusTableForNewAccount() {
+        var status = ownerStatusByAccount(NCA_ID_1, KeyOwnerStatus.SUSPENDED);
+        when(ownerStatusDao.getOwnerStatusByAccount(NCA_ID_1, USER, USER_KEY_OWNER_ID_1))
                 .thenReturn(Optional.of(status));
 
-        assertThat(service.getOwnerStatusForAccount(NCA_ID_1, USER, USER_KEY_OWNER_ID_1)).contains(status);
+        assertThat(service.getOwnerStatusByAccount(NCA_ID_1, USER, USER_KEY_OWNER_ID_1)).contains(status);
 
         verifyNoInteractions(keysDao);
     }
 
     @Test
-    void getOwnerStatusForAccountReadsLegacyOwnerForLegacyAccount() {
+    void getOwnerStatusByAccountReadsLegacyOwnerForLegacyAccount() {
         when(keysDao.getKeyOwner(USER, USER_KEY_OWNER_ID_1)).thenReturn(Optional.of(KEY_OWNER_VO_1));
 
-        var status = service.getOwnerStatusForAccount(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1);
+        var status = service.getOwnerStatusByAccount(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1);
 
         assertThat(status).hasValueSatisfying(value -> {
             assertThat(value.getNcaId()).isEqualTo(LEGACY_NCA_ID);
@@ -567,28 +603,28 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void getOwnerStatusForAccountIsEmptyForUnknownLegacyOwner() {
+    void getOwnerStatusByAccountIsEmptyForUnknownLegacyOwner() {
         when(keysDao.getKeyOwner(USER, USER_KEY_OWNER_ID_1)).thenReturn(Optional.empty());
 
-        assertThat(service.getOwnerStatusForAccount(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1)).isEmpty();
+        assertThat(service.getOwnerStatusByAccount(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1)).isEmpty();
     }
 
     @Test
-    void getOwnerStatusForAccountAndServiceIsEmptyForLegacyAccount() {
-        assertThat(service.getOwnerStatusForAccountAndService(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
+    void getOwnerStatusByAccountAndServiceIsEmptyForLegacyAccount() {
+        assertThat(service.getOwnerStatusByAccountAndService(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, SERVICE_NAME))
                 .isEmpty();
 
         verifyNoInteractions(ownerStatusDao);
     }
 
     @Test
-    void updateOwnerStatusForAccountSavesOwnerStatusTableForNewAccount() {
-        var saved = ownerStatusForAccount(NCA_ID_1, KeyOwnerStatus.SUSPENDED);
-        when(ownerStatusDao.saveOwnerStatusForAccount(
+    void updateOwnerStatusByAccountSavesOwnerStatusTableForNewAccount() {
+        var saved = ownerStatusByAccount(NCA_ID_1, KeyOwnerStatus.SUSPENDED);
+        when(ownerStatusDao.saveOwnerStatusByAccount(
                 NCA_ID_1, USER, USER_KEY_OWNER_ID_1, KeyOwnerStatus.SUSPENDED))
                 .thenReturn(saved);
 
-        assertThat(service.updateOwnerStatusForAccount(
+        assertThat(service.updateOwnerStatusByAccount(
                 NCA_ID_1, USER, USER_KEY_OWNER_ID_1, KeyOwnerStatus.SUSPENDED))
                 .isEqualTo(saved);
 
@@ -598,7 +634,7 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void updateOwnerStatusForAccountUpdatesLegacyOwnerForLegacyAccount() {
+    void updateOwnerStatusByAccountUpdatesLegacyOwnerForLegacyAccount() {
         var suspended = KEY_OWNER_VO_1.toBuilder().ownerStatus(KeyOwnerStatus.SUSPENDED).build();
         when(keyOwnerService.loadKeyOwnerByTypeAndIdOrCreateNew(USER, USER_KEY_OWNER_ID_1))
                 .thenReturn(KEY_OWNER_VO_1);
@@ -606,7 +642,7 @@ class KeysV2ServiceTest {
         when(keyOwnerService.updateKeyOwner(KEY_OWNER_VO_1, KeyOwnerStatus.SUSPENDED, TEST_TIME))
                 .thenReturn(suspended);
 
-        var saved = service.updateOwnerStatusForAccount(
+        var saved = service.updateOwnerStatusByAccount(
                 LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1, KeyOwnerStatus.SUSPENDED);
 
         assertThat(saved.getNcaId()).isEqualTo(LEGACY_NCA_ID);
@@ -615,7 +651,7 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void updateOwnerStatusForAccountAndServiceSavesOwnerStatusTableForNewAccount() {
+    void updateOwnerStatusByAccountAndServiceSavesOwnerStatusTableForNewAccount() {
         var saved = OwnerStatusByAccountAndServiceModel.builder()
                 .ncaId(NCA_ID_1)
                 .ownerType(USER)
@@ -623,11 +659,11 @@ class KeysV2ServiceTest {
                 .issuerServiceId(SERVICE_ID_1)
                 .ownerStatus(KeyOwnerStatus.ACTIVE)
                 .build();
-        when(ownerStatusDao.saveOwnerStatusForAccountAndService(
+        when(ownerStatusDao.saveOwnerStatusByAccountAndService(
                 NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KeyOwnerStatus.ACTIVE))
                 .thenReturn(saved);
 
-        assertThat(service.updateOwnerStatusForAccountAndService(
+        assertThat(service.updateOwnerStatusByAccountAndService(
                 NCA_ID_1, USER, USER_KEY_OWNER_ID_1, SERVICE_ID_1, KeyOwnerStatus.ACTIVE))
                 .isEqualTo(saved);
 
@@ -636,10 +672,10 @@ class KeysV2ServiceTest {
     }
 
     @Test
-    void updateOwnerStatusForAccountAndServiceIsRejectedForLegacyAccount() {
+    void updateOwnerStatusByAccountAndServiceIsRejectedForLegacyAccount() {
         assertThrowsExceptionWithDetails(
                 BadRequestException.class,
-                () -> service.updateOwnerStatusForAccountAndService(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1,
+                () -> service.updateOwnerStatusByAccountAndService(LEGACY_NCA_ID, USER, USER_KEY_OWNER_ID_1,
                                                   SERVICE_NAME, KeyOwnerStatus.SUSPENDED),
                 "Owner status for account and service is not supported for account '%s'"
                         .formatted(LEGACY_NCA_ID));
@@ -666,7 +702,7 @@ class KeysV2ServiceTest {
                                       key.getIssuerServiceId(), key.getAudienceServiceIds());
     }
 
-    private static OwnerStatusByAccountModel ownerStatusForAccount(String ncaId, KeyOwnerStatus status) {
+    private static OwnerStatusByAccountModel ownerStatusByAccount(String ncaId, KeyOwnerStatus status) {
         return OwnerStatusByAccountModel.builder()
                 .ncaId(ncaId)
                 .ownerType(USER)

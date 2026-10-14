@@ -55,14 +55,14 @@ class OwnerStatusDaoIntegrationTest {
 
     @Test
     void missingStatusIsActive() {
-        assertThat(dao.getOwnerStatusForAccount(NCA_1, USER, OWNER)).isEmpty();
-        assertThat(dao.getOwnerStatusForAccountAndService(NCA_1, USER, OWNER, SERVICE_A)).isEmpty();
+        assertThat(dao.getOwnerStatusByAccount(NCA_1, USER, OWNER)).isEmpty();
+        assertThat(dao.getOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_A)).isEmpty();
         assertThat(dao.getEffectiveStatus(NCA_1, USER, OWNER, SERVICE_A)).isEqualTo(ACTIVE);
     }
 
     @Test
     void accountSuspensionAppliesToEveryIssuerInThatAccount() {
-        dao.saveOwnerStatusForAccount(NCA_1, USER, OWNER, SUSPENDED);
+        dao.saveOwnerStatusByAccount(NCA_1, USER, OWNER, SUSPENDED);
 
         assertThat(dao.getEffectiveStatus(NCA_1, USER, OWNER, SERVICE_A)).isEqualTo(SUSPENDED);
         assertThat(dao.getEffectiveStatus(NCA_1, USER, OWNER, SERVICE_B)).isEqualTo(SUSPENDED);
@@ -71,7 +71,7 @@ class OwnerStatusDaoIntegrationTest {
 
     @Test
     void serviceSuspensionAppliesOnlyToThatIssuerAndAccount() {
-        dao.saveOwnerStatusForAccountAndService(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
+        dao.saveOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
 
         assertThat(dao.getEffectiveStatus(NCA_1, USER, OWNER, SERVICE_A)).isEqualTo(SUSPENDED);
         assertThat(dao.getEffectiveStatus(NCA_1, USER, OWNER, SERVICE_B)).isEqualTo(ACTIVE);
@@ -79,17 +79,17 @@ class OwnerStatusDaoIntegrationTest {
     }
 
     @Test
-    void ownerStatusForAccountWinsOverActiveOwnerStatusForAccountAndService() {
-        dao.saveOwnerStatusForAccount(NCA_1, USER, OWNER, SUSPENDED);
-        dao.saveOwnerStatusForAccountAndService(NCA_1, USER, OWNER, SERVICE_A, ACTIVE);
+    void ownerStatusByAccountWinsOverActiveOwnerStatusByAccountAndService() {
+        dao.saveOwnerStatusByAccount(NCA_1, USER, OWNER, SUSPENDED);
+        dao.saveOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_A, ACTIVE);
 
         assertThat(dao.getEffectiveStatus(NCA_1, USER, OWNER, SERVICE_A)).isEqualTo(SUSPENDED);
     }
 
     @Test
-    void ownerStatusForAccountAndServiceWinsOverActiveOwnerStatusForAccount() {
-        dao.saveOwnerStatusForAccount(NCA_1, USER, OWNER, ACTIVE);
-        dao.saveOwnerStatusForAccountAndService(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
+    void ownerStatusByAccountAndServiceWinsOverActiveOwnerStatusByAccount() {
+        dao.saveOwnerStatusByAccount(NCA_1, USER, OWNER, ACTIVE);
+        dao.saveOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
 
         assertThat(dao.getEffectiveStatus(NCA_1, USER, OWNER, SERVICE_A)).isEqualTo(SUSPENDED);
         assertThat(dao.getEffectiveStatus(NCA_1, USER, OWNER, SERVICE_B)).isEqualTo(ACTIVE);
@@ -97,43 +97,43 @@ class OwnerStatusDaoIntegrationTest {
 
     @Test
     void reactivatingAccountRestoresActiveStatus() {
-        dao.saveOwnerStatusForAccount(NCA_1, USER, OWNER, SUSPENDED);
-        dao.saveOwnerStatusForAccount(NCA_1, USER, OWNER, ACTIVE);
+        dao.saveOwnerStatusByAccount(NCA_1, USER, OWNER, SUSPENDED);
+        dao.saveOwnerStatusByAccount(NCA_1, USER, OWNER, ACTIVE);
 
         assertThat(dao.getEffectiveStatus(NCA_1, USER, OWNER, SERVICE_A)).isEqualTo(ACTIVE);
     }
 
     @Test
     void suspensionDoesNotAffectOtherOwnersInTheAccount() {
-        dao.saveOwnerStatusForAccount(NCA_1, USER, OWNER, SUSPENDED);
-        dao.saveOwnerStatusForAccountAndService(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
+        dao.saveOwnerStatusByAccount(NCA_1, USER, OWNER, SUSPENDED);
+        dao.saveOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
 
         assertThat(dao.getEffectiveStatus(NCA_1, USER, "owner-2@example.com", SERVICE_A))
                 .isEqualTo(ACTIVE);
-        assertThat(dao.getOwnerStatusForAccount(NCA_1, USER, "owner-2@example.com")).isEmpty();
+        assertThat(dao.getOwnerStatusByAccount(NCA_1, USER, "owner-2@example.com")).isEmpty();
     }
 
     @Test
-    void ownerStatusForAccountAndServiceDoesNotCreateOwnerStatusForAccount() {
-        dao.saveOwnerStatusForAccountAndService(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
+    void ownerStatusByAccountAndServiceDoesNotCreateOwnerStatusByAccount() {
+        dao.saveOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
 
-        assertThat(dao.getOwnerStatusForAccount(NCA_1, USER, OWNER)).isEmpty();
-        assertThat(dao.getOwnerStatusForAccountAndService(NCA_1, USER, OWNER, SERVICE_B)).isEmpty();
-        assertThat(dao.getOwnerStatusForAccountAndService(NCA_2, USER, OWNER, SERVICE_A)).isEmpty();
+        assertThat(dao.getOwnerStatusByAccount(NCA_1, USER, OWNER)).isEmpty();
+        assertThat(dao.getOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_B)).isEmpty();
+        assertThat(dao.getOwnerStatusByAccountAndService(NCA_2, USER, OWNER, SERVICE_A)).isEmpty();
     }
 
     @Test
     void saveReturnsStoredRow() {
-        OwnerStatusByAccountModel saved = dao.saveOwnerStatusForAccount(NCA_1, USER, OWNER, SUSPENDED);
+        OwnerStatusByAccountModel saved = dao.saveOwnerStatusByAccount(NCA_1, USER, OWNER, SUSPENDED);
         OwnerStatusByAccountAndServiceModel savedService =
-                dao.saveOwnerStatusForAccountAndService(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
+                dao.saveOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
 
-        assertThat(dao.getOwnerStatusForAccount(NCA_1, USER, OWNER))
+        assertThat(dao.getOwnerStatusByAccount(NCA_1, USER, OWNER))
                 .get()
                 .usingRecursiveComparison()
                 .ignoringFields("createdAt", "updatedAt")
                 .isEqualTo(saved);
-        assertThat(dao.getOwnerStatusForAccountAndService(NCA_1, USER, OWNER, SERVICE_A))
+        assertThat(dao.getOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_A))
                 .get()
                 .usingRecursiveComparison()
                 .ignoringFields("createdAt", "updatedAt")
@@ -142,35 +142,35 @@ class OwnerStatusDaoIntegrationTest {
 
     @Test
     void reactivatingKeepsCreatedAtAndRefreshesUpdatedAt() {
-        dao.saveOwnerStatusForAccount(NCA_1, USER, OWNER, SUSPENDED);
-        Instant createdAt = dao.getOwnerStatusForAccount(NCA_1, USER, OWNER)
+        dao.saveOwnerStatusByAccount(NCA_1, USER, OWNER, SUSPENDED);
+        Instant createdAt = dao.getOwnerStatusByAccount(NCA_1, USER, OWNER)
                 .map(OwnerStatusByAccountModel::getCreatedAt)
                 .orElseThrow();
 
-        dao.saveOwnerStatusForAccount(NCA_1, USER, OWNER, ACTIVE);
+        dao.saveOwnerStatusByAccount(NCA_1, USER, OWNER, ACTIVE);
 
-        assertThat(dao.getOwnerStatusForAccount(NCA_1, USER, OWNER))
+        assertThat(dao.getOwnerStatusByAccount(NCA_1, USER, OWNER))
                 .get()
                 .satisfies(status -> {
                     assertThat(status.getOwnerStatus()).isEqualTo(ACTIVE);
                     assertThat(status.getCreatedAt()).isEqualTo(createdAt);
                     assertThat(status.getUpdatedAt()).isNotNull();
                 });
-        assertThat(dao.getOwnerStatusForAccount(NCA_1, USER, OWNER))
+        assertThat(dao.getOwnerStatusByAccount(NCA_1, USER, OWNER))
                 .map(OwnerStatusByAccountModel::getNcaId)
                 .contains(NCA_1);
     }
 
     @Test
-    void ownerStatusForAccountAndServiceKeepsCreatedAtOnUpdate() {
-        dao.saveOwnerStatusForAccountAndService(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
-        Instant createdAt = dao.getOwnerStatusForAccountAndService(NCA_1, USER, OWNER, SERVICE_A)
+    void ownerStatusByAccountAndServiceKeepsCreatedAtOnUpdate() {
+        dao.saveOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_A, SUSPENDED);
+        Instant createdAt = dao.getOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_A)
                 .map(OwnerStatusByAccountAndServiceModel::getCreatedAt)
                 .orElseThrow();
 
-        dao.saveOwnerStatusForAccountAndService(NCA_1, USER, OWNER, SERVICE_A, ACTIVE);
+        dao.saveOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_A, ACTIVE);
 
-        assertThat(dao.getOwnerStatusForAccountAndService(NCA_1, USER, OWNER, SERVICE_A))
+        assertThat(dao.getOwnerStatusByAccountAndService(NCA_1, USER, OWNER, SERVICE_A))
                 .get()
                 .satisfies(status -> {
                     assertThat(status.getOwnerStatus()).isEqualTo(ACTIVE);

@@ -53,6 +53,8 @@ multi-tenant behavior to them. Keys issued to an account use `KeysV2Dao`,
 
 `KeysV2Service` serves the v2 API. New keys always go to `keys_v2`. Create
 rejects a hash that already exists in `keys_v2` or the legacy `keys` table.
+Create takes the `keys_v2` authorization lock before the write, matching v1, so
+an authorization update cannot run until `minAuthzUpdateIntervalSeconds` passes.
 For the configured `apikeys.nca-id`, reads check `keys_v2` first and fall back
 to the legacy DAOs, and updates and deletes go to the table that holds the key.
 `LegacyAccountTranslator` maps v2 service IDs (the keys of
