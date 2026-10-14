@@ -115,6 +115,10 @@ func TestRejectsInvalidEchoControls(t *testing.T) {
 			path: "/v1/chat/completions",
 			body: echoBody(echoChatBody, `,"x_load_tester_echo":"yes"`),
 		},
+		"null body value": {
+			path: "/v1/chat/completions",
+			body: echoBody(echoChatBody, `,"x_load_tester_echo":null`),
+		},
 		"non-boolean header value": {
 			path:    "/v1/chat/completions",
 			body:    echoBody(echoChatBody, ""),

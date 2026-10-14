@@ -825,11 +825,12 @@ func boolControl(r *http.Request, header, body string, raw json.RawMessage) (boo
 		}
 		return false, source, fmt.Errorf("%s must be true or false", source)
 	}
-	var value bool
-	if err := json.Unmarshal(bodyValue, &value); err != nil {
+	// Unmarshal accepts null into a bool, so decode into *bool to reject it.
+	var value *bool
+	if err := json.Unmarshal(bodyValue, &value); err != nil || value == nil {
 		return false, source, fmt.Errorf("%s must be true or false", source)
 	}
-	return value, source, nil
+	return *value, source, nil
 }
 
 func textControl(r *http.Request, header, body string, raw json.RawMessage) (string, bool, string, error) {
