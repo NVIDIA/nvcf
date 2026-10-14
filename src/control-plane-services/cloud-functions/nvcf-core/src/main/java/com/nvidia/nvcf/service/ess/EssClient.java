@@ -299,7 +299,10 @@ public class EssClient {
                         log.error(mesg);
                         return new UpstreamException(mesg);
                     });
-        } catch (NotFoundException ex) {
+        } catch (UpstreamException ex) {
+            if (!(ex.getCause() instanceof NotFoundException)) {
+                throw ex;
+            }
             return Optional.empty();
         }
     }
