@@ -11,9 +11,11 @@ deploy_nvcf:
   image: nvcr.io/0651155215864979/ncp-dev/nvcf-cli:1.4.0
   variables:
     KUBECONFIG: $KUBECONFIG_FILE
+    HA_MODE: preferred # the stack environment's highAvailability.mode
   script:
     - nvcf-cli self-hosted check --pre --json 2>&1 >/dev/null | grep '^{' | jq -se 'any(.[]; .event == "final" and .success)' || exit 2
     - nvcf-cli self-hosted up --cluster-name=$CLUSTER_NAME --token=$NVCF_ADMIN_JWT --non-interactive --json
+    - nvcf-cli self-hosted check --control-plane --mode $HA_MODE --json 2>&1 >/dev/null | grep '^{' | jq -se 'any(.[]; .event == "final" and .success)' || exit 2
     - nvcf-cli self-hosted status --json 2>&1 >/dev/null | grep '^{' | jq -se 'any(.[]; .verdict == "healthy")'
 ```
 
@@ -26,6 +28,7 @@ Notes:
 - Slurp with `jq -s` before testing a condition. Without it `jq -e` takes its exit status from the last event alone.
 - stderr also carries plain-text notices, so filter to JSON lines. Do not add `--show-logs` here: it appends a non-JSON transcript to the same stream.
 - The plain-text notice that says how to remove objects a validator run left in the cluster is filtered out with the rest. Read the same commands from the `final` event instead, for example `jq -r '.[] | select(.event == "final") | .cleanup[]?'` on the slurped stream.
+- The post-install `check --control-plane --mode $HA_MODE` gates on the HA guarantee the install was meant to give: set `HA_MODE` to the `highAvailability.mode` the stack environment installs with (`preferred` unless it sets another). Replica counts, PodDisruptionBudgets and fewer than 3 schedulable nodes for the quorum services fail under `preferred` and `enforced`; placement, zone and node capacity findings fail only under `enforced`. With `--mode preferred` or `--mode enforced`, a validator image that cannot check the mode fails the step rather than passing it.
 - Final status check gates downstream stages on `verdict == "healthy"`.
 
 ## GitOps (Argo / Flux) pattern

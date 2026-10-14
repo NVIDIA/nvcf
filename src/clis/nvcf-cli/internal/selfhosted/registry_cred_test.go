@@ -513,6 +513,55 @@ func TestLoadStackValues_StorageClass(t *testing.T) {
 	assert.Equal(t, "fast-ssd", LoadStackValues([]string{base, env}).StorageClass)
 }
 
+// highAvailability.mode is read as global.yaml.gotmpl reads it, layered like
+// every other value: "none" when the values leave it out, and nothing when
+// the stack cannot render it, since no install has such a mode.
+func TestLoadStackValues_HAMode(t *testing.T) {
+	dir := t.TempDir()
+	base, env := filepath.Join(dir, "base.yaml"), filepath.Join(dir, "prod.yaml")
+	require.NoError(t, writeFile(base, []byte("highAvailability:\n  mode: preferred\n")))
+	assert.Equal(t, "preferred", LoadStackValues([]string{base}).HAMode)
+	assert.Empty(t, LoadStackValues(nil).HAMode, "nothing read")
+
+	for body, want := range map[string]string{
+		"highAvailability:\n  mode: enforced\n": "enforced",
+		"highAvailability:\n  mode: none\n":     "none",
+		"global: {}\n":                          "preferred",
+		"highAvailability: {}\n":                "preferred",
+		// helmfile layers these over base.yaml's mode as they are, and the
+		// stack then fails to render.
+		"highAvailability:\n  mode: null\n":      "",
+		"highAvailability: null\n":               "",
+		"highAvailability: enforced\n":           "",
+		"highAvailability:\n  mode: Preferred\n": "",
+		"highAvailability:\n  mode: \"\"\n":      "",
+		"highAvailability:\n  mode: true\n":      "",
+	} {
+		require.NoError(t, writeFile(env, []byte(body)))
+		assert.Equal(t, want, LoadStackValues([]string{base, env}).HAMode, body)
+	}
+
+	require.NoError(t, writeFile(env, []byte("global: {}\n")))
+	assert.Equal(t, "none", LoadStackValues([]string{env}).HAMode, "the template's default without base.yaml")
+}
+
+// An HA mode an operator names is read case-insensitively and trimmed; empty
+// names none. Anything else is an error that names the value and the modes.
+func TestParseHAMode(t *testing.T) {
+	for raw, want := range map[string]string{
+		"": "", "  ": "", "none": "none", "Preferred": "preferred", " ENFORCED ": "enforced",
+	} {
+		got, err := ParseHAMode(raw)
+		require.NoError(t, err, raw)
+		assert.Equal(t, want, got, raw)
+	}
+	for _, raw := range []string{"strict", "best-effort", "pref", "none,preferred"} {
+		_, err := ParseHAMode(raw)
+		require.Error(t, err, raw)
+		assert.Equal(t, fmt.Sprintf("%q: use one of none, preferred, enforced", raw), err.Error())
+	}
+}
+
 // A registry value carrying a path is valid for the stack, which renders
 // registry + "/" + repository. It must still be probed, and it must still
 // suppress the nvcr.io guess, rather than dropping the whole category.

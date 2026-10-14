@@ -546,6 +546,10 @@ type StackValues struct {
 	// The validator reads it as NVCF_STORAGE_CLASS and then checks that class
 	// instead of requiring a default one.
 	StorageClass string
+	// HAMode is highAvailability.mode as global.yaml.gotmpl reads it: "none"
+	// when the values leave it out. Empty when no values file was read, or
+	// when the stack cannot render the value, so no install has it.
+	HAMode string
 }
 
 // LoadStackValues reads files in order and layers each over the previous,
@@ -570,7 +574,46 @@ func LoadStackValues(files []string) StackValues {
 		Gateways:              stackGateways(merged),
 		ExternalComponents:    stackExternalComponents(merged),
 		StorageClass:          digString(merged, "global", "storageClass"),
+		HAMode:                stackHAMode(merged, found),
 	}
+}
+
+// HAModes are the values highAvailability.mode takes.
+var HAModes = []string{"none", "preferred", "enforced"}
+
+// stackHAMode reads highAvailability.mode as the stack's dig with a "none"
+// default does. A layered null, an empty or non-string value, or a
+// highAvailability that is not a map, the stack fails to render.
+func stackHAMode(merged map[string]any, found bool) string {
+	if !found {
+		return ""
+	}
+	ha, set := merged["highAvailability"]
+	if !set {
+		return "none"
+	}
+	block, ok := ha.(map[string]any)
+	if !ok {
+		return ""
+	}
+	raw, set := block["mode"]
+	if !set {
+		return "none"
+	}
+	if mode, ok := raw.(string); ok && slices.Contains(HAModes, mode) {
+		return mode
+	}
+	return ""
+}
+
+// ParseHAMode returns the HA mode an operator names, trimmed and in lower
+// case. Empty names none. Any other value is an error naming it.
+func ParseHAMode(raw string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	if mode == "" || slices.Contains(HAModes, mode) {
+		return mode, nil
+	}
+	return "", fmt.Errorf("%q: use one of %s", raw, strings.Join(HAModes, ", "))
 }
 
 // stackExternalComponents returns the validator's external components the
