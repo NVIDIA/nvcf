@@ -46,12 +46,18 @@ Tools on `PATH`: the AWS CLI, `kubectl`, `helm` with the `helm-diff` plugin,
 AWS resources you provide:
 
 - An AWS account. Export its ID as `STARGATE_DEV_AWS_ACCOUNT_ID`.
-- Per region, three EKS clusters whose names, kube contexts, and Kubernetes
-  version match `environments/<region>.yaml`. Deployment preflight checks
-  each value and requires cluster-admin access.
+- Per region, three EKS clusters whose names and kube contexts match
+  `environments/<region>.yaml`. Deployment preflight checks both and
+  requires cluster-admin access. A values file cannot override `clusters`,
+  `region`, `namespace`, `modelName`, `routingKey`, or `platform`.
 - At least two schedulable nodes in each MockDC cluster. The cluster's two
   backends use required Pod anti-affinity on `kubernetes.io/hostname`, so a
-  single-node cluster leaves one backend Pending.
+  single-node cluster leaves one backend Pending. The MockDC phase preflight
+  checks the count.
+- NetworkPolicy enforcement on each hub cluster, for example the Amazon VPC
+  CNI with `enableNetworkPolicy=true`. A NetworkPolicy limits the dev auth
+  fixture's gRPC port to the router Pods. Without enforcement, any Pod in the
+  hub cluster can reach it, and only the service token protects it.
 - The AWS Load Balancer Controller on each hub cluster. The registration
   endpoint is a network load balancer with TLS on port 50071 and UDP on 50072.
 - DNS records for `router.hostname` and `*.<router.hostname>` that point at
@@ -103,7 +109,8 @@ Replace these in your protected values file. Do not commit real values.
 The observability phase derives its IAM role ARNs from
 `STARGATE_DEV_AWS_ACCOUNT_ID` and the region:
 `stargate-dev-<region>-amp-writer` for Alloy and `stargate-dev-<region>-grafana`
-for Grafana. `scripts/observability.py` creates both roles.
+for Grafana. `scripts/observability.py` creates both roles, and the phase
+preflight checks that they and an active AMP workspace exist.
 
 `deploymentReady` stays `false` in the checked-in files, and the apply wrapper
 refuses to deploy until the protected values set it to `true`.
@@ -145,6 +152,37 @@ in order: `stargate`, then `mockdc`, then optionally `observability`.
    `kubectl --context <hub context> -n stargate-dev-observability port-forward svc/stargate-dev-grafana 3000:80`.
    The admin password is in the `admin-password` key of the
    `stargate-dev-grafana` Secret in the same namespace.
+
+## Teardown
+
+Remove the releases in reverse phase order, with the same environment as the
+apply:
+
+```sh
+export STARGATE_DEV_AWS_ACCOUNT_ID=<your account ID>
+export STARGATE_DEV_VALUES_FILE=/secure/path/us-west-2/values.yaml
+export STARGATE_DEV_CREDENTIALS_FILE=/secure/path/credentials.json
+helmfile --environment us-west-2 --selector phase=observability destroy
+helmfile --environment us-west-2 --selector phase=mockdc destroy
+helmfile --environment us-west-2 --selector phase=stargate destroy
+```
+
+Destroying the `stargate` phase deletes the backend-router Service and its
+network load balancer. Confirm the load balancer is gone before you delete
+the hub EKS cluster; deleting the cluster first can leave it behind.
+
+`scripts/observability.py` resources stay until you delete them. Each region
+has an AMP workspace with the alias `stargate-dev` and two IAM roles, each
+with one inline policy named after the role:
+
+```sh
+aws amp list-workspaces --region us-west-2 --alias stargate-dev
+aws amp delete-workspace --region us-west-2 --workspace-id <workspace ID>
+for role in stargate-dev-us-west-2-amp-writer stargate-dev-us-west-2-grafana; do
+  aws iam delete-role-policy --role-name "$role" --policy-name "$role"
+  aws iam delete-role --role-name "$role"
+done
+```
 
 ## Rust benchmark workflow
 
@@ -358,8 +396,9 @@ python3 scripts/deploy.py apply --region local-b --phase mockdc --credentials .l
 
 In local mode, `deploy.py` skips the AWS CLI, EKS, and account checks. It
 still checks that each kube context exists, that the router Secrets are
-present, and, before the MockDC phase, that the registration Service is
-exposed on `router.address`. The `observability` phase is not supported
+present, and, before the MockDC phase, that each MockDC cluster has two
+schedulable nodes and that the registration Service is exposed on
+`router.address`. The `observability` phase is not supported
 locally, and `deploy.py` exits with an error if you request it.
 
 `images` reads each hub's address from its single node's InternalIP through

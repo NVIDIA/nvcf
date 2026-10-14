@@ -596,6 +596,13 @@ class RenderedStackTests(unittest.TestCase):
             ],
             "HTTP2Only",
         )
+        # The default policy still accepts TLS 1.0 and 1.1.
+        self.assertEqual(
+            service["metadata"]["annotations"][
+                "service.beta.kubernetes.io/aws-load-balancer-ssl-negotiation-policy"
+            ],
+            "ELBSecurityPolicy-TLS13-1-2-2021-06",
+        )
 
     def test_observability_is_one_namespace_scoped_collector_per_cluster(self) -> None:
         alloy_deployments = [

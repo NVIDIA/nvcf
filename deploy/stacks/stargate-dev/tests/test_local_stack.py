@@ -64,7 +64,9 @@ class LocalDeployTests(unittest.TestCase):
         }
         self.values.write_text(yaml.safe_dump(values), encoding="utf-8")
 
-    def fake_run(self, contexts: list[str], ingress_ip: str = HUB_ADDRESS):
+    def fake_run(
+        self, contexts: list[str], ingress_ip: str = HUB_ADDRESS, nodes: int = 3
+    ):
         calls = []
 
         def run(command, *, env=None, check=True):
@@ -93,6 +95,11 @@ class LocalDeployTests(unittest.TestCase):
                             key: "cGVt" for key in ("tls.crt", "tls.key", "ca.crt")
                         }
                     }
+                )
+            elif "nodes" in command:
+                ready = {"conditions": [{"type": "Ready", "status": "True"}]}
+                stdout = json.dumps(
+                    {"items": [{"spec": {}, "status": ready}] * nodes}
                 )
             elif "service" in command:
                 stdout = json.dumps(
@@ -145,13 +152,19 @@ class LocalDeployTests(unittest.TestCase):
     def test_aws_regions_default_to_the_aws_platform(self) -> None:
         self.assertFalse(DEPLOY.is_local(DEPLOY.load_region("us-west-2")))
 
-    def test_values_file_cannot_change_the_platform(self) -> None:
-        for platform in ("local", "aws"):
-            with self.subTest(platform=platform):
-                self.values.write_text(
-                    yaml.safe_dump({"platform": platform}), encoding="utf-8"
-                )
-                with self.assertRaisesRegex(DEPLOY.DeploymentError, "platform"):
+    def test_values_file_cannot_change_the_platform_or_topology(self) -> None:
+        for key, value in (
+            ("platform", "local"),
+            ("platform", "aws"),
+            ("region", "us-east-1"),
+            ("namespace", "other"),
+            ("modelName", "other"),
+            ("routingKey", "other"),
+            ("clusters", {"stargate": {"kubeContext": "other"}}),
+        ):
+            with self.subTest(key=key, value=value):
+                self.values.write_text(yaml.safe_dump({key: value}), encoding="utf-8")
+                with self.assertRaisesRegex(DEPLOY.DeploymentError, key):
                     DEPLOY.load_deployment_values("us-west-2", self.values)
 
     def test_stargate_phase_runs_without_aws(self) -> None:
@@ -178,8 +191,16 @@ class LocalDeployTests(unittest.TestCase):
 
     def test_mockdc_phase_requires_the_service_on_router_address(self) -> None:
         self.apply("mockdc", self.contexts())
-        with self.assertRaisesRegex(DEPLOY.DeploymentError, "router.address"):
+        with self.assertRaisesRegex(
+            DEPLOY.DeploymentError,
+            rf"router.address {HUB_ADDRESS} \(ingress IPs: 172.30.0.9\)"
+            ".*local.py images",
+        ):
             self.apply("mockdc", self.contexts(), ingress_ip="172.30.0.9")
+
+    def test_mockdc_phase_requires_two_schedulable_nodes(self) -> None:
+        with self.assertRaisesRegex(DEPLOY.DeploymentError, "1 Ready schedulable"):
+            self.apply("mockdc", self.contexts(), nodes=1)
 
     def test_missing_context_names_the_local_bootstrap(self) -> None:
         with self.assertRaisesRegex(DEPLOY.DeploymentError, "local.py up"):

@@ -24,6 +24,16 @@ ACCOUNT_ENV = "STARGATE_DEV_AWS_ACCOUNT_ID"
 ROUTER_TLS_SECRET = "stargate-router-tls"
 ROUTER_CA_SECRET = "stargate-router-ca"
 PLACEHOLDER_NETWORK = ipaddress.ip_network("192.0.2.0/24")
+# The benchmark controller embeds the environment files, so a values file
+# must not move the deployment to other clusters, namespaces, or identities.
+PROTECTED_KEYS = (
+    "platform",
+    "region",
+    "namespace",
+    "modelName",
+    "routingKey",
+    "clusters",
+)
 
 
 class DeploymentError(RuntimeError):
@@ -150,20 +160,21 @@ def load_deployment_values(region: str, values_path: Path) -> dict:
     config = load_region(region)
     merge_values(config, load_yaml(STACK_DIR / "values" / "versions.yaml"))
     values = load_yaml(values_path.expanduser().resolve())
-    if "platform" in values:
+    protected = sorted(key for key in PROTECTED_KEYS if key in values)
+    if protected:
         raise DeploymentError(
-            f"{values_path} must not set platform; it comes from the environment file"
+            f"{values_path} must not set {', '.join(protected)}; "
+            "they come from the environment file"
         )
     merge_values(config, values)
     return config
 
 
-def validate_deployment_inputs(config: dict, phase: str) -> None:
+def validate_deployment_inputs(config: dict, phase: str, account: str) -> None:
     if not config.get("deploymentReady"):
         raise DeploymentError(
             "regional values are placeholders; set deploymentReady after filling them"
         )
-    account = os.environ.get(ACCOUNT_ENV, "")
     if phase == "observability":
         amp = config.get("observability", {}).get("amp", {})
         workspace_id = amp.get("workspaceId", "")
@@ -270,10 +281,6 @@ def verify_cluster(
         raise DeploymentError(
             f"kube context {context} does not point at EKS cluster {name}"
         )
-    if describe.get("version") != config["kubernetesVersion"]:
-        raise DeploymentError(
-            f"EKS cluster {name} does not run Kubernetes {config['kubernetesVersion']}"
-        )
 
     if (
         kubectl(context, "auth", "can-i", "*", "*", "--all-namespaces").stdout.strip()
@@ -302,10 +309,69 @@ def require_secret(context: str, namespace: str, name: str, keys: set[str]) -> N
             ) from error
 
 
+def require_schedulable_nodes(context: str, count: int) -> None:
+    nodes = json.loads(kubectl(context, "get", "nodes", "-o", "json").stdout)["items"]
+    schedulable = [
+        node
+        for node in nodes
+        if not node.get("spec", {}).get("unschedulable")
+        and not any(
+            taint.get("effect") in ("NoSchedule", "NoExecute")
+            for taint in node.get("spec", {}).get("taints", [])
+        )
+        and any(
+            condition.get("type") == "Ready" and condition.get("status") == "True"
+            for condition in node.get("status", {}).get("conditions", [])
+        )
+    ]
+    if len(schedulable) < count:
+        raise DeploymentError(
+            f"{context} has {len(schedulable)} Ready schedulable nodes; "
+            f"the MockDC backends use required anti-affinity and need {count}"
+        )
+
+
+def role_names(region: str) -> tuple[str, str]:
+    # helmfile.yaml.gotmpl derives the same role ARNs.
+    prefix = f"stargate-dev-{region}"
+    return f"{prefix}-amp-writer", f"{prefix}-grafana"
+
+
+def verify_observability_resources(config: dict) -> None:
+    region = config["region"]
+    workspace_id = config["observability"]["amp"]["workspaceId"]
+    hint = f"run python3 scripts/observability.py --region {region} first"
+    try:
+        workspace = json.loads(
+            run(
+                [
+                    "aws",
+                    "amp",
+                    "describe-workspace",
+                    "--region",
+                    region,
+                    "--workspace-id",
+                    workspace_id,
+                    "--output",
+                    "json",
+                ]
+            ).stdout
+        )["workspace"]
+        for name in role_names(region):
+            run(["aws", "iam", "get-role", "--role-name", name, "--output", "json"])
+    except DeploymentError as error:
+        raise DeploymentError(f"{error}; {hint}") from error
+    status = workspace.get("status", {}).get("statusCode")
+    if status != "ACTIVE":
+        raise DeploymentError(f"AMP workspace {workspace_id} is {status}; {hint}")
+
+
 def verify_prerequisite_resources(config: dict, phase: str) -> None:
     namespace = config["namespace"]
     stargate = config["clusters"]["stargate"]
-    if phase == "stargate":
+    if phase == "observability":
+        verify_observability_resources(config)
+    elif phase == "stargate":
         require_secret(
             stargate["kubeContext"],
             namespace,
@@ -314,6 +380,7 @@ def verify_prerequisite_resources(config: dict, phase: str) -> None:
         )
     elif phase == "mockdc":
         for mockdc in config["clusters"]["mockdcs"]:
+            require_schedulable_nodes(mockdc["kubeContext"], 2)
             require_secret(
                 mockdc["kubeContext"],
                 namespace,
@@ -339,9 +406,14 @@ def verify_stargate_endpoint(config: dict) -> None:
     )
     ingress = service.get("status", {}).get("loadBalancer", {}).get("ingress", [])
     if is_local(config):
-        if str(config["router"]["address"]) not in {item.get("ip") for item in ingress}:
+        address = str(config["router"]["address"])
+        observed = sorted(str(item.get("ip")) for item in ingress)
+        if address not in observed:
             raise DeploymentError(
-                "backend-router Service is not exposed on router.address"
+                f"backend-router Service is not exposed on router.address {address} "
+                f"(ingress IPs: {', '.join(observed) or 'none'}); if the hub was "
+                "recreated, run python3 scripts/local.py images, then apply every "
+                "phase again"
             )
         return
     if not any(item.get("hostname") for item in ingress):
@@ -381,8 +453,8 @@ def apply(
         if credentials_path is None:
             raise DeploymentError(f"--credentials is required for the {phase} phase")
         load_credentials(credentials_path)
-    validate_deployment_inputs(config, phase)
     account = "" if local else aws_account()
+    validate_deployment_inputs(config, phase, account)
     contexts = configured_contexts()
     clusters = [config["clusters"]["stargate"]]
     if phase in ("mockdc", "observability"):

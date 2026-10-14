@@ -185,6 +185,7 @@ releases:
                 service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
                 service.beta.kubernetes.io/aws-load-balancer-ssl-cert: {{ .Values.router.acmCertificateArn | quote }}
                 service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "50071"
+                service.beta.kubernetes.io/aws-load-balancer-ssl-negotiation-policy: ELBSecurityPolicy-TLS13-1-2-2021-06
                 service.beta.kubernetes.io/aws-load-balancer-alpn-policy: HTTP2Only
                 service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
                 service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: TCP

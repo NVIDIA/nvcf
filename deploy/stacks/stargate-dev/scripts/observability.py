@@ -164,12 +164,6 @@ def ensure_role(name: str, trust_policy: dict, permissions: dict) -> None:
     )
 
 
-def role_names(region: str) -> tuple[str, str]:
-    # helmfile.yaml.gotmpl derives the same role ARNs.
-    prefix = f"stargate-dev-{region}"
-    return f"{prefix}-amp-writer", f"{prefix}-grafana"
-
-
 def provision(region: str, values_path: Path) -> dict:
     config = deploy.load_deployment_values(region, values_path)
     if deploy.is_local(config):
@@ -186,7 +180,7 @@ def provision(region: str, values_path: Path) -> dict:
         ALLOY_SERVICE_ACCOUNT,
     )
     grafana_trust = trust_policy(config, account, [stargate], GRAFANA_SERVICE_ACCOUNT)
-    writer_role_name, grafana_role_name = role_names(region)
+    writer_role_name, grafana_role_name = deploy.role_names(region)
 
     amp = ensure_amp(region)
     ensure_role(

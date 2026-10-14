@@ -25,6 +25,9 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(OBSERVABILITY)
 
 
+ACCOUNT = "123456789012"
+
+
 class ObservabilityProvisioningTests(unittest.TestCase):
     CONFIG = {
         "observability": {"namespace": "metrics"},
@@ -41,7 +44,7 @@ class ObservabilityProvisioningTests(unittest.TestCase):
 
     def test_role_names_are_scoped_to_the_region(self) -> None:
         self.assertEqual(
-            OBSERVABILITY.role_names("us-east-1"),
+            OBSERVABILITY.deploy.role_names("us-east-1"),
             ("stargate-dev-us-east-1-amp-writer", "stargate-dev-us-east-1-grafana"),
         )
 
@@ -195,12 +198,45 @@ class DeployPreflightTests(unittest.TestCase):
     def test_observability_phase_rejects_checked_in_placeholders(self) -> None:
         deploy = OBSERVABILITY.deploy
         config = self.ready_config()
-        with mock.patch.dict("os.environ", {deploy.ACCOUNT_ENV: "123456789012"}):
-            with self.assertRaisesRegex(deploy.DeploymentError, "workspaceId"):
-                deploy.validate_deployment_inputs(config, "observability")
+        with self.assertRaisesRegex(deploy.DeploymentError, "workspaceId"):
+            deploy.validate_deployment_inputs(config, "observability", ACCOUNT)
 
-            config["observability"]["amp"]["workspaceId"] = "ws-1234"
-            deploy.validate_deployment_inputs(config, "observability")
+        config["observability"]["amp"]["workspaceId"] = "ws-1234"
+        deploy.validate_deployment_inputs(config, "observability", ACCOUNT)
+
+    def test_observability_phase_requires_the_workspace_and_roles(self) -> None:
+        deploy = OBSERVABILITY.deploy
+        config = self.ready_config()
+        config["observability"]["amp"]["workspaceId"] = "ws-1234"
+
+        def aws(status: str = "ACTIVE", missing_role: str = ""):
+            def run(command, **_kwargs):
+                if command[1:3] == ["amp", "describe-workspace"]:
+                    workspace = {"workspace": {"status": {"statusCode": status}}}
+                    return subprocess.CompletedProcess(
+                        command, 0, stdout=json.dumps(workspace), stderr=""
+                    )
+                if missing_role and missing_role in command:
+                    raise deploy.DeploymentError("aws failed: NoSuchEntity")
+                return subprocess.CompletedProcess(command, 0, stdout="{}", stderr="")
+
+            return mock.Mock(side_effect=run)
+
+        with mock.patch.object(deploy, "run", aws()) as run:
+            deploy.verify_prerequisite_resources(config, "observability")
+        self.assertEqual(
+            [call.args[0][4] for call in run.call_args_list[1:]],
+            ["stargate-dev-us-west-2-amp-writer", "stargate-dev-us-west-2-grafana"],
+        )
+        for fake in (
+            aws(status="CREATING"),
+            aws(missing_role="stargate-dev-us-west-2-grafana"),
+        ):
+            with mock.patch.object(deploy, "run", fake):
+                with self.assertRaisesRegex(
+                    deploy.DeploymentError, "scripts/observability.py"
+                ):
+                    deploy.verify_prerequisite_resources(config, "observability")
 
     def test_stargate_phase_rejects_placeholder_images_and_hostname(self) -> None:
         deploy = OBSERVABILITY.deploy
@@ -213,17 +249,37 @@ class DeployPreflightTests(unittest.TestCase):
                 "loadBalancerSourceRanges": ["8.8.8.8/32"],
             }
         )
-        with mock.patch.dict("os.environ", {deploy.ACCOUNT_ENV: "123456789012"}):
-            with self.assertRaisesRegex(deploy.DeploymentError, "digest"):
-                deploy.validate_deployment_inputs(config, "stargate")
+        with self.assertRaisesRegex(deploy.DeploymentError, "digest"):
+            deploy.validate_deployment_inputs(config, "stargate", ACCOUNT)
 
-            for image in config["images"].values():
-                image["digest"] = "sha256:" + "a" * 64
-            with self.assertRaisesRegex(deploy.DeploymentError, "hostname"):
-                deploy.validate_deployment_inputs(config, "stargate")
+        for image in config["images"].values():
+            image["digest"] = "sha256:" + "a" * 64
+        with self.assertRaisesRegex(deploy.DeploymentError, "hostname"):
+            deploy.validate_deployment_inputs(config, "stargate", ACCOUNT)
 
-            config["router"]["hostname"] = "router.example.com"
-            deploy.validate_deployment_inputs(config, "stargate")
+        config["router"]["hostname"] = "router.example.com"
+        deploy.validate_deployment_inputs(config, "stargate", ACCOUNT)
+        with self.assertRaisesRegex(deploy.DeploymentError, "acmCertificateArn"):
+            deploy.validate_deployment_inputs(config, "stargate", "210987654321")
+
+    def test_account_is_checked_before_the_certificate_arn(self) -> None:
+        deploy = OBSERVABILITY.deploy
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(deploy, "require_tools"),
+            mock.patch.object(
+                deploy, "run", return_value=subprocess.CompletedProcess([], 0)
+            ),
+            mock.patch.object(deploy, "load_credentials"),
+            mock.patch.object(
+                deploy, "load_deployment_values", return_value=self.ready_config()
+            ),
+            mock.patch.dict("os.environ", {deploy.ACCOUNT_ENV: "not-an-account"}),
+        ):
+            with self.assertRaisesRegex(deploy.DeploymentError, "12-digit"):
+                deploy.apply(
+                    "us-west-2", "stargate", Path(directory), Path("values.yaml")
+                )
 
     def test_context_lookup_does_not_load_raw_credentials(self) -> None:
         deploy = OBSERVABILITY.deploy
