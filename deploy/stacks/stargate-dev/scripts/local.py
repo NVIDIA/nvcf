@@ -501,8 +501,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     os.umask(0o077)
     args = parse_args(argv)
-    commands = {"up": lambda: up(STATE_DIR), "images": lambda: images(STATE_DIR)}
-    return deploy.cli(commands.get(args.command, down))
+    commands = {
+        "up": lambda: up(STATE_DIR),
+        "images": lambda: images(STATE_DIR),
+        "down": down,
+    }
+    return deploy.cli(commands[args.command])
 
 
 if __name__ == "__main__":

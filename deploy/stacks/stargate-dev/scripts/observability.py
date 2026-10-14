@@ -231,12 +231,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
-    def run() -> None:
+    def print_values() -> None:
         values = provision(args.region, args.values)
         print(f"# Merge into {args.values}, then apply the observability phase.")
         print(yaml.safe_dump(values, sort_keys=False), end="")
 
-    return deploy.cli(run)
+    return deploy.cli(print_values)
 
 
 if __name__ == "__main__":
