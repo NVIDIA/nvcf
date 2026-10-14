@@ -33,11 +33,21 @@ For documentation changes, check whitespace and link targets.
 
 ## Routing methods
 
-`crates/stargate/src/load_balancer/routing_methods.json` lists every
-load-balancing algorithm name, alias, and routing-expression parameter. When
-you add, rename, or remove one, update that file and run
-`cargo test --locked -p stargate --lib routing_method`. A failure names the
-other code, docs, and configs to update.
+`routing_methods.json` lists every load-balancing algorithm name, alias, and
+routing-expression parameter. When you add, rename, or remove one, update that
+file and run `cargo test --locked -p stargate --lib routing_method`. A failure
+names the other code, docs, and configs to update.
+
+The function API in `src/control-plane-services/cloud-functions/nvcf-core`
+stores `routingMethod` after a format check only. Its
+`LlmRoutingMethodValidatorTest` reads the manifest and fails if that check
+would reject a listed name, alias, or parameter. Run it from the repository
+root:
+
+```sh
+bazel test //src/control-plane-services/cloud-functions/nvcf-core:tests \
+  --test_arg=--exclude-classname='^(?!com\.nvidia\.nvcf\.rest\.function\.management\.dto\.LlmRoutingMethodValidatorTest$).*$'
+```
 
 ## Code style
 
