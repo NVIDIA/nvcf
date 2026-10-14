@@ -23,6 +23,13 @@ toolchain. Tests do not require cluster access. CLI fixtures retain their own
 executable copy for resume.
 The repository's `.github/workflows/build-test.yml` runs these Rust checks.
 
+Meaningful changes must also satisfy the
+[Stargate mock integration and performance gates](../../../../src/libraries/rust/stargate/AGENTS.md#mandatory-pull-request-validation).
+The kubectl stand-in does not satisfy the runtime integration gate. Run a
+campaign against real Stargate with mock inference backends and retain accepted
+artifacts. Measurement or workload changes need a fixed workload and independent
+raw measurements so changed reporting cannot hide a performance regression.
+
 ## Local end-to-end check
 
 To run the CLI against real clusters without AWS, bring up the `local-a` and

@@ -19,8 +19,8 @@ Useful pointers:
 - `tools/AGENTS.md` for repo tooling
 - `tests/bdd/AGENTS.md` for behavior-driven development (BDD) scenarios and
   suite rules
-- `src/libraries/rust/stargate/AGENTS.md` for Stargate deployment invariants,
-  including router transport assumptions to use during implementation and review
+- `src/libraries/rust/stargate/AGENTS.md` for mandatory Stargate mock and performance
+  validation, including related chart, deployment, benchmark, and CI changes
 - `imports.yaml` for subtree ownership and commit pins
 - `.cursor/skills/documentation-style/SKILL.md` for docs style
 - `.cursor/skills/` for root dev-skill symlink fanout
