@@ -988,6 +988,23 @@ func runClearAllAPIKeys(cmd *cobra.Command, args []string) error {
 	deletedCount := deleteAllKeys(ctx, nvcfClient, functionKeys, "function")
 	deletedCount += deleteAllKeys(ctx, nvctClient, taskKeys, "task")
 
+	// Clear the local API key from state only when clearing the current actor's
+	// keys (no explicit owner override) and something was actually deleted.
+	clearedLocal := false
+	if ownerOverride == "" && deletedCount > 0 {
+		if err := LoadStateForCurrentCommand(); err == nil {
+			currentState := GetCurrentState()
+			if hasSavedAPIKeys(currentState) {
+				clearSavedAPIKeys(currentState)
+				if err := SaveStateForCurrentCommand(); err != nil {
+					logging.Warning("Failed to clear local API key from state: %v", err)
+				} else {
+					clearedLocal = true
+				}
+			}
+		}
+	}
+
 	if IsJSONOutput() {
 		return OutputJSON(map[string]interface{}{
 			"ownerIds": ownerIds,
@@ -997,21 +1014,8 @@ func runClearAllAPIKeys(cmd *cobra.Command, args []string) error {
 	}
 
 	logging.Success("Successfully deleted %d out of %d API key(s)", deletedCount, total)
-
-	// Clear the local API key from state only when clearing the current actor's
-	// keys (no explicit owner override) and something was actually deleted.
-	if ownerOverride == "" && deletedCount > 0 {
-		if err := LoadStateForCurrentCommand(); err == nil {
-			currentState := GetCurrentState()
-			if hasSavedAPIKeys(currentState) {
-				clearSavedAPIKeys(currentState)
-				if err := SaveStateForCurrentCommand(); err != nil {
-					logging.Warning("Failed to clear local API key from state: %v", err)
-				} else {
-					logging.Info("Cleared local API key from state since it may have been deleted")
-				}
-			}
-		}
+	if clearedLocal {
+		logging.Info("Cleared local API key from state since it may have been deleted")
 	}
 
 	return nil

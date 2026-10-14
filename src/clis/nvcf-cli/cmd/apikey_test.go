@@ -668,6 +668,38 @@ func TestApikeyClearAll_ClearsAllSavedKeys(t *testing.T) {
 	assertSavedAPIKeysCleared(t)
 }
 
+func TestApikeyClearAll_JSONClearsAllSavedKeys(t *testing.T) {
+	resetApikeyFlags(t)
+	srv, _ := fakeAPIKeysListServer(t, []string{"fn-1"}, []string{"task-1"})
+	configureApikeyTest(t, srv.URL)
+	seedSavedAPIKeys(t)
+
+	clearForce = true
+	jsonOutput = true
+	t.Cleanup(func() { clearForce = false; jsonOutput = false })
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = w
+	runErr := runClearAllAPIKeys(nil, nil)
+	require.NoError(t, w.Close())
+	os.Stdout = oldStdout
+	require.NoError(t, runErr)
+
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, r)
+	require.NoError(t, err)
+	var out struct {
+		Deleted int `json:"deleted"`
+	}
+	start := bytes.Index(buf.Bytes(), []byte("\n{"))
+	require.GreaterOrEqual(t, start, 0, "no JSON object in output: %q", buf.String())
+	require.NoError(t, json.Unmarshal(buf.Bytes()[start:], &out))
+	assert.Equal(t, 2, out.Deleted)
+	assertSavedAPIKeysCleared(t)
+}
+
 func TestApikeyShow_ListsAllSavedKeys(t *testing.T) {
 	resetApikeyFlags(t)
 	srv, _, _ := fakeAPIKeysServer(t)
