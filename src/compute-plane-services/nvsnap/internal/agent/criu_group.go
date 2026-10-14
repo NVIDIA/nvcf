@@ -334,7 +334,12 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		uris = append(uris, r.Annotations[cacheURIAnnotation])
 	}
 	for _, p := range companions {
-		u, ok := a.specCacheURI(p)
+		// The identity its replacement is admitted by: the stamp admission
+		// left, else (pods admitted before the stamp) its spec re-hashed.
+		u, ok := p.Annotations[webhook.AdmittedConfigAnnotation], p.Annotations[webhook.AdmittedConfigAnnotation] != ""
+		if !ok {
+			u, ok = a.specCacheURI(p)
+		}
 		if !ok {
 			log.WithField("companion", p.Name).Warn("CRIU group capture: skipped; no configuration for a companion")
 			return false

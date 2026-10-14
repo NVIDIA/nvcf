@@ -555,6 +555,8 @@ func (m *Mutator) Mutate(ctx context.Context, pod *corev1.Pod) ([]PatchOp, error
 	// Patches accumulated by the model-volume and cachedir branches below,
 	// merged ahead of the restore-from patches.
 	var injectPatches []PatchOp
+	// The identity of the spec as received, before any patch below.
+	injectPatches = append(injectPatches, m.admittedConfigPatches(pod)...)
 	// gpushare placement is independent of every other decision below and
 	// rides along with whichever patches they return.
 	injectPatches = append(injectPatches, m.gpusharePatches(ctx, pod)...)
