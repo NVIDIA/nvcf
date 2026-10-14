@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import com.nvidia.boot.exceptions.NotFoundException;
+import com.nvidia.boot.exceptions.UpstreamException;
 import com.nvidia.nvct.IntegrationTestConfiguration;
 import com.nvidia.nvct.NvctTestApp;
 import com.nvidia.nvct.grpc.TestTaskService;
@@ -87,8 +88,9 @@ class ClientServiceTest {
 
     @Test
     void shouldFailToGetClient() {
-        assertThatExceptionOfType(NotFoundException.class).isThrownBy(
-                () -> clientService.getClient("non-existent-client"));
+        assertThatExceptionOfType(UpstreamException.class).isThrownBy(
+                () -> clientService.getClient("non-existent-client"))
+                .withCauseInstanceOf(NotFoundException.class);
     }
 
     @Test

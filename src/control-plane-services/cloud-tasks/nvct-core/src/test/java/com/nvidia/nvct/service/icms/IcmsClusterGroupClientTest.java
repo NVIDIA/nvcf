@@ -129,10 +129,11 @@ class IcmsClusterGroupClientTest {
         MockIcmsServer.start(icmsBaseUrl, jsonMapper, contexts, clusterGroupResponseState);
         switch (clusterGroupResponseState) {
             case WITH_ERROR_BODY_400:
-                assertThatExceptionOfType(BadRequestException.class)
+                assertThatExceptionOfType(UpstreamException.class)
                         .isThrownBy(() -> icmsClusterGroupClient.getClusterGroups(
                                 TEST_NCA_ID, InstanceUsageTypeEnum.DEFAULT))
-                        .withMessageContaining("pretend bad deployment spec");
+                        .withMessageContaining("pretend bad deployment spec")
+                        .withCauseInstanceOf(BadRequestException.class);
                 break;
 
             case WITHOUT_ERROR_BODY_500:

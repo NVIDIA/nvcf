@@ -134,7 +134,7 @@ class ListTasksWithBasicDetailsTest {
                                                              List.of(SCOPE_LIST_TASKS),
                                                              100),
                              Set.of(TEST_TASK_ID_1, TEST_TASK_ID_2),
-                             HttpStatus.NOT_FOUND),
+                             HttpStatus.BAD_GATEWAY),
                 // Missing scope.
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_ID, List.of(), 100),
                              Set.of(TEST_TASK_ID_1, TEST_TASK_ID_2),

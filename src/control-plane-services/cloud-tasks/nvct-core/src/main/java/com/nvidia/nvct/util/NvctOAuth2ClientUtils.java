@@ -29,6 +29,7 @@ import static org.springframework.http.HttpStatus.UNPROCESSABLE_CONTENT;
 
 import tools.jackson.databind.json.JsonMapper;
 import com.nvidia.boot.exceptions.BadRequestException;
+import com.nvidia.boot.exceptions.BootResponseException;
 import com.nvidia.boot.exceptions.ConflictException;
 import com.nvidia.boot.exceptions.ForbiddenException;
 import com.nvidia.boot.exceptions.NotFoundException;
@@ -130,7 +131,9 @@ public final class NvctOAuth2ClientUtils {
                 .jitter(0.75)
                 .doBeforeRetry(retrySignal -> log.info("Before retrying {} call", svcName))
                 .doAfterRetry(retrySignal -> log.info("After retrying {} call", svcName))
-                .filter(throwable -> throwable instanceof UpstreamException
+                .filter(throwable -> throwable instanceof UpstreamException upstreamException
+                        && !(upstreamException.getCause() instanceof BootResponseException cause
+                             && cause.getStatusCode().is4xxClientError())
                         || isTokenServer5xx(throwable))
                 .onRetryExhaustedThrow((retryBackoffSpec, retrySignal) -> {
                     log.error("{} failed to process after max retries", svcName);
@@ -225,31 +228,44 @@ public final class NvctOAuth2ClientUtils {
                 .flatMap(body -> {
                     var detail = getDetailFromProblemDetailsResponse(JSON_MAPPER, serviceName, body);
                     if (status.isSameCodeAs(UNAUTHORIZED)) {
-                        return Mono.error(new UnauthorizedException(detail));
+                        return Mono.error(
+                                new UpstreamException(detail,
+                                                      new UnauthorizedException(detail)));
                     }
                     if (status.isSameCodeAs(PAYMENT_REQUIRED)) {
-                        return Mono.error(new PaymentRequiredException(detail));
+                        return Mono.error(
+                                new UpstreamException(detail,
+                                                      new PaymentRequiredException(detail)));
                     }
                     if (status.isSameCodeAs(FORBIDDEN)) {
-                        return Mono.error(new ForbiddenException(detail));
+                        return Mono.error(
+                                new UpstreamException(detail, new ForbiddenException(detail)));
                     }
                     if (status.isSameCodeAs(NOT_FOUND)) {
-                        return Mono.error(new NotFoundException(detail));
+                        return Mono.error(
+                                new UpstreamException(detail, new NotFoundException(detail)));
                     }
                     if (status.isSameCodeAs(CONFLICT)) {
-                        return Mono.error(new ConflictException(detail));
+                        return Mono.error(
+                                new UpstreamException(detail, new ConflictException(detail)));
                     }
                     if (status.isSameCodeAs(TOO_MANY_REQUESTS)) {
-                        return Mono.error(new TooManyRequestsException(detail));
+                        return Mono.error(
+                                new UpstreamException(detail,
+                                                      new TooManyRequestsException(detail)));
                     }
                     if (status.isSameCodeAs(INSUFFICIENT_STORAGE)) {
-                        return Mono.error(new UpstreamException(detail));
+                        return Mono.error(
+                                new UpstreamException(detail, new UpstreamException(detail)));
                     }
                     if (status.isSameCodeAs(UNPROCESSABLE_CONTENT)) {
-                        return Mono.error(new UnprocessableEntityException(detail));
+                        return Mono.error(
+                                new UpstreamException(detail,
+                                                      new UnprocessableEntityException(detail)));
                     }
                     if (status.isSameCodeAs(BAD_REQUEST)) {
-                        return Mono.error(new BadRequestException(detail));
+                        return Mono.error(
+                                new UpstreamException(detail, new BadRequestException(detail)));
                     }
                     return Mono.error(new UpstreamException(detail));
                 });
