@@ -52,6 +52,7 @@ to all POST routes.
 | Stream error | `X-Load-Tester-Stream-Error-After-Chunks` | `x_load_tester_stream_error_after_chunks` | unset | End a stream with an OpenAI-shaped error after this many chunks. |
 | Stream truncate | `X-Load-Tester-Stream-Truncate-After-Chunks` | `x_load_tester_stream_truncate_after_chunks` | unset | Close a stream without its completion event after this many chunks. |
 | Concurrency limit | `X-Load-Tester-Max-Concurrency` | `x_load_tester_max_concurrency` | `0` | Return 429 when the global in-flight request count exceeds this value. |
+| Echo | `X-Load-Tester-Echo` | `x_load_tester_echo` | `false` | Return the raw request body as the output text. |
 
 Timing values are non-negative integer milliseconds and are capped at five
 minutes. Output is capped at 1 MiB and the startup chunk limit. The
@@ -61,6 +62,29 @@ accepts values from 1 through 60000. It is read once when the server starts.
 are mutually exclusive.
 For a deterministic concurrency test, send the same concurrency limit header
 on every request in the load test.
+
+## Echo control
+
+Set `x_load_tester_echo` to `true`, or send `X-Load-Tester-Echo: true`, to
+return the request body exactly as the sample received it. Use it to check that
+a gateway forwards request fields without adding, dropping, or rewriting them.
+
+Echo applies to Chat Completions and Responses, streaming and non-streaming.
+The output text is the raw body, so parse it as JSON and compare fields. A body
+control is part of the echoed body. Echo cannot be combined with `Chunk`,
+`Chunk-Bytes`, or `Output-Chunks`, and the 1 MiB output cap applies. Other
+routes reject the control with 400.
+
+```bash
+curl -sS http://localhost:8000/v1/chat/completions \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "model": "test-model",
+    "messages": [{"role": "user", "content": "hello"}],
+    "chat_template_kwargs": {"enable_thinking": false},
+    "x_load_tester_echo": true
+  }' | jq -r '.choices[0].message.content | fromjson'
+```
 
 ## Anthropic Messages
 

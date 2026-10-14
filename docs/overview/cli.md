@@ -268,6 +268,16 @@ After configuring the CLI, verify connectivity:
 # [SUCCESS] Admin token generated and saved
 ```
 
+<Note>
+`nvcf-cli init` and `nvcf-cli refresh` both mint their token through Admin Issuer Proxy, which a
+self-hosted deployment can turn off. Where it is disabled, both commands fail with
+`API error 404` and there is no flag to supply a token you already hold. Export `NVCF_TOKEN`, or set
+`token` in your config file, with a token from your own identity provider instead — the CLI reads
+both ahead of the state file `init` writes. See
+[Disabling Admin Issuer Proxy](../self-managed/control-plane-operations.md).
+
+</Note>
+
 If you see a 404 error, verify:
 
 1. The `api_keys_host` value matches your HTTPRoute hostname

@@ -60,6 +60,7 @@ const (
 	headerStreamErrorAfter    = "X-Load-Tester-Stream-Error-After-Chunks"
 	headerStreamTruncateAfter = "X-Load-Tester-Stream-Truncate-After-Chunks"
 	headerMaxConcurrency      = "X-Load-Tester-Max-Concurrency"
+	headerEcho                = "X-Load-Tester-Echo"
 
 	bodyQueueDelay          = "x_load_tester_queue_delay_ms"
 	bodyTTFT                = "x_load_tester_ttft_ms"
@@ -73,6 +74,7 @@ const (
 	bodyStreamErrorAfter    = "x_load_tester_stream_error_after_chunks"
 	bodyStreamTruncateAfter = "x_load_tester_stream_truncate_after_chunks"
 	bodyMaxConcurrency      = "x_load_tester_max_concurrency"
+	bodyEcho                = "x_load_tester_echo"
 
 	loadTesterHeaderPrefix = "x-load-tester-"
 )
@@ -116,6 +118,10 @@ type benchmarkBodyControls struct {
 	StreamErrorAfter    json.RawMessage `json:"x_load_tester_stream_error_after_chunks"`
 	StreamTruncateAfter json.RawMessage `json:"x_load_tester_stream_truncate_after_chunks"`
 	MaxConcurrency      json.RawMessage `json:"x_load_tester_max_concurrency"`
+	Echo                json.RawMessage `json:"x_load_tester_echo"`
+
+	// requestBody is the raw body for routes that support the echo control.
+	requestBody []byte
 }
 
 type responsesRequest struct {
@@ -394,10 +400,12 @@ func handleResponses(w http.ResponseWriter, r *http.Request, config serverConfig
 		return
 	}
 	var request responsesRequest
-	if err := decodeJSON(w, r, &request); err != nil {
+	raw, err := decodeJSONBody(w, r, &request)
+	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid JSON request body", "")
 		return
 	}
+	request.requestBody = raw
 	tuning, release, ok := startBenchmark(w, r, config, request.benchmarkBodyControls)
 	if !ok {
 		return
@@ -425,10 +433,12 @@ func handleChatCompletions(w http.ResponseWriter, r *http.Request, config server
 		return
 	}
 	var request chatCompletionsRequest
-	if err := decodeJSON(w, r, &request); err != nil {
+	raw, err := decodeJSONBody(w, r, &request)
+	if err != nil {
 		writeAPIError(w, http.StatusBadRequest, "invalid JSON request body", "")
 		return
 	}
+	request.requestBody = raw
 	tuning, release, ok := startBenchmark(w, r, config, request.benchmarkBodyControls)
 	if !ok {
 		return
@@ -598,6 +608,7 @@ func startBenchmarkWithErrors(w http.ResponseWriter, r *http.Request, config ser
 }
 
 func resolveBenchmarkTuning(r *http.Request, body benchmarkBodyControls, maxOutputChunks int) (benchmarkTuning, error) {
+	requestBody := body.requestBody
 	if hasLoadTesterHeader(r) {
 		body = benchmarkBodyControls{}
 	}
@@ -644,8 +655,22 @@ func resolveBenchmarkTuning(r *http.Request, body benchmarkBodyControls, maxOutp
 	if hasChunkBytes && tuning.ChunkBytes > 0 && hasChunk {
 		return benchmarkTuning{}, fmt.Errorf("%s and %s cannot be combined", chunkName, chunkBytesName)
 	}
-	if tuning.OutputChunks, _, _, err = integerControl(r, headerOutputChunks, bodyOutputChunks, body.OutputChunks, 1, 1, maxOutputChunks); err != nil {
+	var hasOutputChunks bool
+	if tuning.OutputChunks, hasOutputChunks, _, err = integerControl(r, headerOutputChunks, bodyOutputChunks, body.OutputChunks, 1, 1, maxOutputChunks); err != nil {
 		return benchmarkTuning{}, err
+	}
+	echo, echoName, err := boolControl(r, headerEcho, bodyEcho, body.Echo)
+	if err != nil {
+		return benchmarkTuning{}, err
+	}
+	if echo {
+		if requestBody == nil {
+			return benchmarkTuning{}, fmt.Errorf("%s is not supported on this endpoint", echoName)
+		}
+		if hasChunk || hasChunkBytes || hasOutputChunks {
+			return benchmarkTuning{}, fmt.Errorf("%s cannot be combined with output content controls", echoName)
+		}
+		tuning.Chunk = string(requestBody)
 	}
 	var statusName string
 	if tuning.StatusCode, _, statusName, err = integerControl(r, headerStatusCode, bodyStatusCode, body.StatusCode, 0, 0, 599); err != nil {
@@ -786,6 +811,28 @@ func integerControl(r *http.Request, header, body string, raw json.RawMessage, d
 	return int(parsed64), true, source, nil
 }
 
+func boolControl(r *http.Request, header, body string, raw json.RawMessage) (bool, string, error) {
+	headerValue, bodyValue, present, source, fromHeader, err := controlValue(r, header, body, raw)
+	if err != nil || !present {
+		return false, source, err
+	}
+	if fromHeader {
+		switch headerValue {
+		case "true":
+			return true, source, nil
+		case "false":
+			return false, source, nil
+		}
+		return false, source, fmt.Errorf("%s must be true or false", source)
+	}
+	// Unmarshal accepts null into a bool, so decode into *bool to reject it.
+	var value *bool
+	if err := json.Unmarshal(bodyValue, &value); err != nil || value == nil {
+		return false, source, fmt.Errorf("%s must be true or false", source)
+	}
+	return *value, source, nil
+}
+
 func textControl(r *http.Request, header, body string, raw json.RawMessage) (string, bool, string, error) {
 	headerValue, bodyValue, present, source, fromHeader, err := controlValue(r, header, body, raw)
 	if err != nil {
@@ -896,19 +943,24 @@ func randomDuration(max time.Duration) time.Duration {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) error {
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytes)
-	decoder := json.NewDecoder(r.Body)
+	_, err := decodeJSONBody(w, r, destination)
+	return err
+}
+
+// decodeJSONBody decodes one JSON object and returns the bytes it was read from.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, destination any) ([]byte, error) {
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBytes))
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	if err := decoder.Decode(destination); err != nil {
-		return err
+		return nil, err
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			return err
-		}
-		return errors.New("request body must contain one JSON object")
+		return nil, errors.New("request body must contain one JSON object")
 	}
-	return nil
+	return raw, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
