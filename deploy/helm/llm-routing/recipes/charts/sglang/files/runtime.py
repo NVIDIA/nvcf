@@ -444,44 +444,6 @@ def reuse_snapshot(model, cache=pathlib.Path('/cache'), require_complete=True, w
     return snapshot
 
 
-def downloaded_bytes(model, cache):
-    """Credit only blobs belonging to the pinned revision, without changing the cache."""
-    from huggingface_hub import HfApi
-    info = HfApi().model_info(model['repository'], revision=model['revision'], files_metadata=True, timeout=30)
-    if info.sha != model['revision'] or not info.siblings:
-        raise RuntimeError('Download metadata does not match the pinned model revision')
-    blobs = cache / 'huggingface/hub' / ('models--' + model['repository'].replace('/', '--')) / 'blobs'
-    if not blobs.resolve().is_relative_to(cache.resolve()):
-        raise RuntimeError('Model blob directory escapes the cache')
-    total, seen = 0, set()
-    for file in info.siblings:
-        digest = file.lfs.sha256 if file.lfs else file.blob_id
-        size = file.size
-        if not isinstance(digest, str) or not re.fullmatch(r'[a-f0-9]{64}|[a-f0-9]{40}', digest) or type(size) is not int or size < 0:
-            raise RuntimeError('Pinned download metadata lacks a valid blob identity or size')
-        if digest in seen:
-            continue
-        seen.add(digest)
-        path = blobs / digest
-        if path.is_file() and not path.is_symlink() and path.stat().st_size == size:
-            checksum = hashlib.sha256() if len(digest) == 64 else hashlib.sha1(usedforsecurity=False)
-            if len(digest) == 40:
-                checksum.update(('blob ' + str(size) + '\0').encode())
-            with path.open('rb') as stream:
-                for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b''):
-                    checksum.update(chunk)
-            if checksum.hexdigest() == digest:
-                total += size
-            continue
-        path = blobs / (digest + '.incomplete')
-        # hf_transfer restarts incomplete files from the beginning.
-        if os.environ.get('HF_HUB_ENABLE_HF_TRANSFER', '').upper() not in ('1', 'ON', 'YES', 'TRUE') and path.is_file() and not path.is_symlink():
-            stat = path.stat()
-            if stat.st_size <= size:
-                total += min(stat.st_size, stat.st_blocks * 512)
-    return total
-
-
 def prepare_checkpoint(config, cache):
     model = config['model']
     if config.get('reuseCaches') or (cache / (model['revision'] + '.complete')).exists():
@@ -497,12 +459,8 @@ def prepare_checkpoint(config, cache):
     else:
         log('download_pass', model=model['id'], revision=model['revision'], reused=True)
         return snapshot
-    required = config['profile']['minFreeDiskGiB'] * GIB
-    free = shutil.disk_usage(cache).free
-    if free < required:
-        cached = downloaded_bytes(model, cache)
-        if free < max(0, required - cached):
-            raise RuntimeError(f'Insufficient cache disk space for the model checkpoint: {free} free bytes, {max(0, required - cached)} still required')
+    if shutil.disk_usage(cache).free < config['profile']['minFreeDiskGiB'] * GIB:
+        raise RuntimeError('Insufficient cache disk space for the model checkpoint')
     from huggingface_hub import snapshot_download
     snapshot_download(repo_id=model['repository'], revision=model['revision'], cache_dir=str(cache / 'huggingface/hub'))
     snapshot = reuse_snapshot(model, cache, require_complete=False)
