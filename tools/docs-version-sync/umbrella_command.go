@@ -25,11 +25,15 @@ func runUmbrella(args []string) error {
 		return fmt.Errorf("usage: docs-version-sync umbrella <prepare|check|bundle|verify-bundle> [flags]")
 	}
 	command := args[0]
+	if command == "publish" {
+		return runUmbrellaPublish(args[1:])
+	}
 	allowed := map[string]string{
 		"prepare":       "repo source version change qualification helm-version helmfile-version previous inventories out",
 		"check":         "repo manifest previous inventories",
 		"bundle":        "repo manifest previous inventories out",
 		"verify-bundle": "repo manifest bundle sha256",
+		"manifest":      "manifest",
 	}
 	fields, ok := allowed[command]
 	if !ok {
@@ -64,6 +68,13 @@ func runUmbrella(args []string) error {
 	})
 	if invalid != "" {
 		return fmt.Errorf("--%s is not valid for umbrella %s", invalid, command)
+	}
+	if command == "manifest" {
+		if *manifestPath == "" {
+			return fmt.Errorf("umbrella manifest requires --manifest")
+		}
+		_, _, err := loadUmbrellaManifest(*manifestPath)
+		return err
 	}
 	if command == "verify-bundle" {
 		if *bundle == "" || *manifestPath == "" || *digest == "" {
