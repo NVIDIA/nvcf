@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import importlib.util
 import io
 import json
 import re
@@ -17,14 +16,9 @@ from unittest import mock
 import yaml
 
 STACK_DIR = Path(__file__).resolve().parents[1]
-SCRIPTS_DIR = STACK_DIR / "scripts"
-sys.path.insert(0, str(SCRIPTS_DIR))
-SPEC = importlib.util.spec_from_file_location(
-    "stargate_dev_local", SCRIPTS_DIR / "local.py"
-)
-LOCAL = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-SPEC.loader.exec_module(LOCAL)
+sys.path.insert(0, str(STACK_DIR / "scripts"))
+
+import local as LOCAL  # noqa: E402
 
 DNS_LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 DIGEST = "sha256:" + "ab" * 32

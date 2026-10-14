@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
-import importlib.util
 import json
 import subprocess
 import sys
@@ -14,15 +13,10 @@ from unittest import mock
 
 
 STACK_DIR = Path(__file__).resolve().parents[1]
-SCRIPTS_DIR = STACK_DIR / "scripts"
-sys.path.insert(0, str(SCRIPTS_DIR))
-OBSERVABILITY_PATH = SCRIPTS_DIR / "observability.py"
-SPEC = importlib.util.spec_from_file_location(
-    "stargate_dev_observability", OBSERVABILITY_PATH
-)
-OBSERVABILITY = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-SPEC.loader.exec_module(OBSERVABILITY)
+sys.path.insert(0, str(STACK_DIR / "scripts"))
+
+import deploy  # noqa: E402
+import observability as OBSERVABILITY  # noqa: E402
 
 
 ACCOUNT = "123456789012"
@@ -44,7 +38,7 @@ class ObservabilityProvisioningTests(unittest.TestCase):
 
     def test_role_names_are_scoped_to_the_region(self) -> None:
         self.assertEqual(
-            OBSERVABILITY.deploy.role_names("us-east-1"),
+            deploy.role_names("us-east-1"),
             ("stargate-dev-us-east-1-amp-writer", "stargate-dev-us-east-1-grafana"),
         )
 
@@ -107,7 +101,6 @@ class ObservabilityProvisioningTests(unittest.TestCase):
             "ensure_role": mock.Mock(),
         }
         defaults.update(patches)
-        deploy = OBSERVABILITY.deploy
         with (
             mock.patch.object(deploy, "require_tools"),
             mock.patch.object(
@@ -121,10 +114,10 @@ class ObservabilityProvisioningTests(unittest.TestCase):
     def test_missing_oidc_provider_fails_before_creating_resources(self) -> None:
         ensure_amp = mock.Mock()
         ensure_role = mock.Mock()
-        with self.assertRaises(OBSERVABILITY.deploy.DeploymentError):
+        with self.assertRaises(deploy.DeploymentError):
             self.provision(
                 oidc_provider=mock.Mock(
-                    side_effect=OBSERVABILITY.deploy.DeploymentError("no provider")
+                    side_effect=deploy.DeploymentError("no provider")
                 ),
                 ensure_amp=ensure_amp,
                 ensure_role=ensure_role,
@@ -133,7 +126,6 @@ class ObservabilityProvisioningTests(unittest.TestCase):
         ensure_role.assert_not_called()
 
     def test_local_regions_are_refused_before_any_aws_call(self) -> None:
-        deploy = OBSERVABILITY.deploy
         aws = mock.Mock(side_effect=AssertionError("must not call AWS"))
         with (
             tempfile.TemporaryDirectory() as directory,
@@ -171,7 +163,6 @@ class DeployPreflightTests(unittest.TestCase):
         )
 
     def test_router_tls_secret_requires_the_upstream_ca(self) -> None:
-        deploy = OBSERVABILITY.deploy
         with mock.patch.object(
             deploy, "kubectl", return_value=self.secret("tls.crt", "tls.key")
         ):
@@ -187,7 +178,6 @@ class DeployPreflightTests(unittest.TestCase):
 
     @staticmethod
     def ready_config() -> dict:
-        deploy = OBSERVABILITY.deploy
         config = deploy.load_region("us-west-2")
         deploy.merge_values(
             config, deploy.load_yaml(STACK_DIR / "values" / "versions.yaml")
@@ -196,7 +186,6 @@ class DeployPreflightTests(unittest.TestCase):
         return config
 
     def test_observability_phase_rejects_checked_in_placeholders(self) -> None:
-        deploy = OBSERVABILITY.deploy
         config = self.ready_config()
         with self.assertRaisesRegex(deploy.DeploymentError, "workspaceId"):
             deploy.validate_deployment_inputs(config, "observability", ACCOUNT)
@@ -205,7 +194,6 @@ class DeployPreflightTests(unittest.TestCase):
         deploy.validate_deployment_inputs(config, "observability", ACCOUNT)
 
     def test_observability_phase_requires_the_workspace_and_roles(self) -> None:
-        deploy = OBSERVABILITY.deploy
         config = self.ready_config()
         config["observability"]["amp"]["workspaceId"] = "ws-1234"
 
@@ -239,7 +227,6 @@ class DeployPreflightTests(unittest.TestCase):
                     deploy.verify_prerequisite_resources(config, "observability")
 
     def test_stargate_phase_rejects_placeholder_images_and_hostname(self) -> None:
-        deploy = OBSERVABILITY.deploy
         config = self.ready_config()
         config["router"].update(
             {
@@ -263,14 +250,13 @@ class DeployPreflightTests(unittest.TestCase):
             deploy.validate_deployment_inputs(config, "stargate", "210987654321")
 
     def test_account_is_checked_before_the_certificate_arn(self) -> None:
-        deploy = OBSERVABILITY.deploy
         with (
             tempfile.TemporaryDirectory() as directory,
             mock.patch.object(deploy, "require_tools"),
             mock.patch.object(
                 deploy, "run", return_value=subprocess.CompletedProcess([], 0)
             ),
-            mock.patch.object(deploy, "load_credentials"),
+            mock.patch.object(deploy, "check_credentials"),
             mock.patch.object(
                 deploy, "load_deployment_values", return_value=self.ready_config()
             ),
@@ -282,7 +268,6 @@ class DeployPreflightTests(unittest.TestCase):
                 )
 
     def test_context_lookup_does_not_load_raw_credentials(self) -> None:
-        deploy = OBSERVABILITY.deploy
         kubeconfig = {
             "clusters": [{"name": "c", "cluster": {"server": "https://hub/"}}],
             "contexts": [{"name": "hub", "context": {"cluster": "c"}}],

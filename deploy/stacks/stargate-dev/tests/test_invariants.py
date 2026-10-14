@@ -19,6 +19,10 @@ import yaml
 STACK_DIR = Path(__file__).resolve().parents[1]
 ACCOUNT_ID = "123456789012"
 DIGEST_IMAGE = re.compile(r"^[^@]+@sha256:[a-f0-9]{64}$")
+CREDENTIALS = {
+    "serviceToken": "service-test-token-that-is-long-enough",
+    "workerToken": "shared-worker-test-token-that-is-long-enough",
+}
 
 
 def helmfile(
@@ -112,46 +116,15 @@ class RenderedStackTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.temporary = tempfile.TemporaryDirectory()
         root = Path(cls.temporary.name)
-        cls.credentials = {
-            "serviceToken": "service-test-token-that-is-long-enough",
-            "workerToken": "shared-worker-test-token-that-is-long-enough",
-        }
+        cls.credentials = CREDENTIALS
         credential_path = cls.credential_path = root / "credentials.json"
-        credential_path.write_text(json.dumps(cls.credentials), encoding="utf-8")
+        credential_path.write_text(json.dumps(CREDENTIALS), encoding="utf-8")
         credential_path.chmod(0o600)
         cls.output_dir = root / "rendered"
         cls.output_dir.mkdir(mode=0o700)
-        values_path = root / "values.yaml"
-        values_path.write_text("{}\n", encoding="utf-8")
-        environment = os.environ.copy()
-        environment["STARGATE_DEV_CREDENTIALS_FILE"] = str(credential_path)
-        environment["STARGATE_DEV_VALUES_FILE"] = str(values_path)
-        environment["STARGATE_DEV_AWS_ACCOUNT_ID"] = ACCOUNT_ID
-
-        subprocess.run(
-            [
-                "helmfile",
-                "--environment",
-                "us-west-2",
-                "template",
-                "--output-dir",
-                str(cls.output_dir),
-            ],
-            cwd=STACK_DIR,
-            env=environment,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        state = subprocess.run(
-            ["helmfile", "--environment", "us-west-2", "build"],
-            cwd=STACK_DIR,
-            env=environment,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
+        output = ("template", "--output-dir", str(cls.output_dir))
+        helmfile("us-west-2", {}, credential_path, *output)
+        state = helmfile("us-west-2", {}, credential_path, "build")
         cls.state_documents = [
             document for document in yaml.safe_load_all(state) if document
         ]
@@ -168,6 +141,13 @@ class RenderedStackTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls) -> None:
         cls.temporary.cleanup()
+
+    def find(self, kind: str, name: str) -> dict:
+        return next(
+            resource
+            for _, resource in self.resources(kind)
+            if resource["metadata"]["name"] == name
+        )
 
     def resources(self, kind: str) -> list[tuple[Path, dict]]:
         return [
@@ -236,13 +216,8 @@ class RenderedStackTests(unittest.TestCase):
         # Rendering also checks every region file against the chart schemas.
         # Peer-region Pylons register with the us-west-2 hub, so its dev auth
         # must accept their worker token and routing key.
-        west_auth = json.loads(
-            next(
-                resource
-                for _, resource in self.resources("Secret")
-                if resource["metadata"]["name"] == "stargate-dev-auth-credentials"
-            )["stringData"]["config.json"]
-        )
+        auth_secret = self.find("Secret", "stargate-dev-auth-credentials")
+        west_auth = json.loads(auth_secret["stringData"]["config.json"])
         remote = "https://router.usw2.stargate-dev.example.invalid:50071"
         for region_name, code in [
             ("us-east-1", "ue1"),
@@ -349,11 +324,7 @@ class RenderedStackTests(unittest.TestCase):
         self.assertEqual(replicas["llm-request-router"], 3)
         self.assertEqual(replicas["llm-request-router-backend-router"], 3)
 
-        auth_secret = next(
-            resource
-            for _, resource in self.resources("Secret")
-            if resource["metadata"]["name"] == "stargate-dev-auth-credentials"
-        )
+        auth_secret = self.find("Secret", "stargate-dev-auth-credentials")
         auth_config = json.loads(auth_secret["stringData"]["config.json"])
         self.assertEqual(
             auth_config,
@@ -371,11 +342,7 @@ class RenderedStackTests(unittest.TestCase):
             {self.credentials["workerToken"]},
         )
 
-        router = next(
-            resource
-            for _, resource in deployments
-            if resource["metadata"]["name"] == "llm-request-router"
-        )
+        router = self.find("Deployment", "llm-request-router")
         router_args = router["spec"]["template"]["spec"]["containers"][0]["args"]
         self.assertIn(
             "--lb-config-path=/etc/llm-request-router/lb-config.json",
@@ -384,11 +351,7 @@ class RenderedStackTests(unittest.TestCase):
         self.assertFalse(
             any(arg.startswith("--readiness-stabilization-") for arg in router_args)
         )
-        load_balancer_config = next(
-            resource
-            for _, resource in self.resources("ConfigMap")
-            if resource["metadata"]["name"] == "llm-request-router-lb"
-        )
+        load_balancer_config = self.find("ConfigMap", "llm-request-router-lb")
         raw_load_balancer_config = load_balancer_config["data"]["lb-config.json"]
         model_policy = json.loads(raw_load_balancer_config)["models"][
             "stargate-dev-model"
@@ -405,11 +368,7 @@ class RenderedStackTests(unittest.TestCase):
             hashlib.sha256(raw_load_balancer_config.encode()).hexdigest(),
         )
 
-        backend_router = next(
-            resource
-            for _, resource in deployments
-            if resource["metadata"]["name"] == "llm-request-router-backend-router"
-        )
+        backend_router = self.find("Deployment", "llm-request-router-backend-router")
         backend_router_pod = backend_router["spec"]["template"]["spec"]
         self.assertIn(
             "--upstream-tls-cert-path=/var/run/stargate/tls/ca.crt",
@@ -541,11 +500,7 @@ class RenderedStackTests(unittest.TestCase):
                 if token in text:
                     self.assertIn(path, secret_files)
 
-        router_deployment = next(
-            resource
-            for _, resource in self.resources("Deployment")
-            if resource["metadata"]["name"] == "llm-request-router"
-        )
+        router_deployment = self.find("Deployment", "llm-request-router")
         volumes = router_deployment["spec"]["template"]["spec"]["volumes"]
         self.assertIn(
             "stargate-dev-auth-credentials",
@@ -652,32 +607,20 @@ class RenderedStackTests(unittest.TestCase):
         ]
         self.assertFalse(alloy_services)
 
-        grafana = next(
-            resource
-            for _, resource in self.resources("Deployment")
-            if resource["metadata"]["name"] == "stargate-dev-grafana"
-        )
+        grafana = self.find("Deployment", "stargate-dev-grafana")
         self.assertEqual(grafana["metadata"]["namespace"], "stargate-dev-observability")
         self.assertEqual(grafana["spec"]["replicas"], 1)
         self.assertFalse(
             grafana["spec"]["template"]["spec"]["automountServiceAccountToken"]
         )
-        grafana_service_account = next(
-            resource
-            for _, resource in self.resources("ServiceAccount")
-            if resource["metadata"]["name"] == "stargate-dev-grafana"
-        )
+        grafana_service_account = self.find("ServiceAccount", "stargate-dev-grafana")
         self.assertEqual(
             grafana_service_account["metadata"]["annotations"][
                 "eks.amazonaws.com/role-arn"
             ],
             f"arn:aws:iam::{ACCOUNT_ID}:role/stargate-dev-us-west-2-grafana",
         )
-        grafana_service = next(
-            resource
-            for _, resource in self.resources("Service")
-            if resource["metadata"]["name"] == "stargate-dev-grafana"
-        )
+        grafana_service = self.find("Service", "stargate-dev-grafana")
         self.assertEqual(grafana_service["spec"]["type"], "ClusterIP")
 
         grafana_config = next(

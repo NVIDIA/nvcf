@@ -18,7 +18,6 @@ import os
 import secrets
 import shutil
 import socket
-import sys
 import tempfile
 from pathlib import Path
 
@@ -42,31 +41,15 @@ CERTIFICATE_DAYS = 365
 NEW_KEY = ["-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes"]
 IMAGE_TAG = "local"
 
-# Values key -> (Bazel oci_load target, tag it loads, local repository name).
-# The stargate and dev auth images load under the same package tag, so they
+# Values key -> (Bazel oci_load target, local repository name). Each target
+# loads <package>:latest, so the stargate and dev auth images share a tag and
 # are built and pushed one at a time.
-STARGATE_PACKAGE = "src/libraries/rust/stargate/crates/stargate"
+CRATES = "//src/libraries/rust/stargate/crates"
 IMAGES = {
-    "stargate": (
-        f"//{STARGATE_PACKAGE}:image_load",
-        f"{STARGATE_PACKAGE}:latest",
-        "stargate",
-    ),
-    "auth": (
-        f"//{STARGATE_PACKAGE}:dev_auth_image_load",
-        f"{STARGATE_PACKAGE}:latest",
-        "stargate-dev-auth",
-    ),
-    "mockDynamo": (
-        "//src/libraries/rust/stargate/crates/mock-dynamo:image_load",
-        "src/libraries/rust/stargate/crates/mock-dynamo:latest",
-        "mock-dynamo",
-    ),
-    "pylon": (
-        "//src/libraries/rust/stargate/crates/pylon:image_load",
-        "src/libraries/rust/stargate/crates/pylon:latest",
-        "pylon",
-    ),
+    "stargate": (f"{CRATES}/stargate:image_load", "stargate"),
+    "auth": (f"{CRATES}/stargate:dev_auth_image_load", "stargate-dev-auth"),
+    "mockDynamo": (f"{CRATES}/mock-dynamo:image_load", "mock-dynamo"),
+    "pylon": (f"{CRATES}/pylon:image_load", "pylon"),
 }
 
 
@@ -291,27 +274,14 @@ def router_files(state_dir: Path, region: str) -> tuple[Path, Path]:
     return state_dir / f"router-{region}.crt", state_dir / f"router-{region}.key"
 
 
-def router_certificate_is_current(
-    state_dir: Path, certificate: Path, hostname: str
-) -> bool:
-    command = [
-        "openssl",
-        "verify",
-        "-CAfile",
-        str(state_dir / "ca.crt"),
-        "-verify_hostname",
-        hostname,
-        str(certificate),
-    ]
-    return deploy.run(command, check=False).returncode == 0
-
-
 def ensure_router_certificate(state_dir: Path, region: str, hostname: str) -> None:
     certificate, key = router_files(state_dir, region)
+    verify = ["openssl", "verify", "-CAfile", str(state_dir / "ca.crt")]
+    verify += ["-verify_hostname", hostname, str(certificate)]
     if (
         key.is_file()
         and certificate.is_file()
-        and router_certificate_is_current(state_dir, certificate, hostname)
+        and deploy.run(verify, check=False).returncode == 0
     ):
         return
     config = write_config(state_dir, hostname)
@@ -442,18 +412,13 @@ def pushed_digest(registry: str, repository: str) -> str:
     return digests.pop()
 
 
-def publish_image(
-    bazel: str, registry: str, target: str, loaded: str, repository: str
-) -> str:
+def publish_image(bazel: str, registry: str, target: str, repository: str) -> str:
     deploy.run([bazel, "run", target], cwd=REPO_ROOT, capture=False)
+    loaded = target.removeprefix("//").rpartition(":")[0] + ":latest"
     pushed = f"{registry}/{repository}:{IMAGE_TAG}"
     deploy.run(["docker", "tag", loaded, pushed])
     deploy.run(["docker", "push", pushed], capture=False)
     return pushed_digest(registry, repository)
-
-
-def values_path(state_dir: Path, region: str) -> Path:
-    return state_dir / f"values-{region}.yaml"
 
 
 def values_document(digests: dict[str, str], address: str, peer: str) -> str:
@@ -464,7 +429,7 @@ def values_document(digests: dict[str, str], address: str, peer: str) -> str:
                 "repository": f"{REGISTRY_ADDRESS}/{repository}",
                 "digest": digests[key],
             }
-            for key, (_, _, repository) in IMAGES.items()
+            for key, (_, repository) in IMAGES.items()
         },
         "router": {
             "address": address,
@@ -488,12 +453,12 @@ def images(state_dir: Path) -> None:
         for region, config in configs.items()
     }
     digests = {
-        key: publish_image(bazel, registry, target, loaded, repository)
-        for key, (target, loaded, repository) in IMAGES.items()
+        key: publish_image(bazel, registry, target, repository)
+        for key, (target, repository) in IMAGES.items()
     }
     # Each hub watches the other, so both regions see every backend.
     for region, peer in zip(REGIONS, reversed(REGIONS)):
-        path = values_path(state_dir, region)
+        path = state_dir / f"values-{region}.yaml"
         path.write_text(
             values_document(digests, addresses[region], addresses[peer]),
             encoding="utf-8",
@@ -536,22 +501,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     os.umask(0o077)
     args = parse_args(argv)
-    try:
-        if args.command == "up":
-            up(STATE_DIR)
-        elif args.command == "images":
-            images(STATE_DIR)
-        else:
-            down()
-    except (
-        DeploymentError,
-        json.JSONDecodeError,
-        OSError,
-        yaml.YAMLError,
-    ) as error:
-        print(f"error: {error}", file=sys.stderr)
-        return 1
-    return 0
+    commands = {"up": lambda: up(STATE_DIR), "images": lambda: images(STATE_DIR)}
+    return deploy.cli(commands.get(args.command, down))
 
 
 if __name__ == "__main__":

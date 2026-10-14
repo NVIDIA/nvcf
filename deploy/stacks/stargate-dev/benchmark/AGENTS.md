@@ -35,8 +35,8 @@ cargo run --locked --release -- verify --region local-a --peer-region local-b
 ```
 
 `cluster.rs` embeds each environment file with `include_str!`. When you add a
-region file under `../environments/`, add it there and to the `range` list of
-environments in `../helmfile.yaml.gotmpl`.
+region file under `../environments/`, add it there as well. The helmfile reads
+every file in that directory as an environment.
 
 ## Contracts
 

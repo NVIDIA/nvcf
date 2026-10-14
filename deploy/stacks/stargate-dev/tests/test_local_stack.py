@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
-import importlib.util
 import io
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,24 +16,15 @@ from unittest import mock
 
 import yaml
 
-from test_invariants import helmfile, render
+from test_invariants import CREDENTIALS, STACK_DIR, helmfile, render
 
+sys.path.insert(0, str(STACK_DIR / "scripts"))
 
-STACK_DIR = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location(
-    "stargate_dev_deploy_local", STACK_DIR / "scripts" / "deploy.py"
-)
-DEPLOY = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-SPEC.loader.exec_module(DEPLOY)
+import deploy as DEPLOY  # noqa: E402
 
 LOCAL_REGIONS = ("local-a", "local-b")
 HUB_ADDRESS = "172.30.0.3"
 DIGEST = "sha256:" + "a" * 64
-CREDENTIALS = {
-    "serviceToken": "service-test-token-that-is-long-enough",
-    "workerToken": "shared-worker-test-token-that-is-long-enough",
-}
 
 
 def without_account(environment: dict[str, str]) -> dict[str, str]:
@@ -69,11 +60,13 @@ class LocalDeployTests(unittest.TestCase):
     ):
         calls = []
 
-        def run(command, *, env=None, check=True):
-            calls.append(command)
+        def run(command, *, env=None, check=True, capture=True):
+            calls.append((command, env))
             if command[0] == "aws":
                 raise AssertionError("local mode must not call the AWS CLI")
-            if command[:2] == ["helm", "diff"]:
+            if command[0] == "helmfile":
+                stdout = ""
+            elif command[:2] == ["helm", "diff"]:
                 stdout = "3.15.0"
             elif command[1:3] == ["config", "view"]:
                 stdout = json.dumps(
@@ -113,16 +106,14 @@ class LocalDeployTests(unittest.TestCase):
 
     def apply(self, phase: str, contexts: list[str], **kwargs):
         run, calls = self.fake_run(contexts, **kwargs)
-        helmfile = mock.Mock(return_value=subprocess.CompletedProcess([], 0))
         with (
             mock.patch.object(DEPLOY, "run", side_effect=run),
             mock.patch.object(DEPLOY.shutil, "which", return_value="/usr/bin/tool"),
-            mock.patch.object(DEPLOY.subprocess, "run", helmfile),
             mock.patch.dict(os.environ, without_account(os.environ), clear=True),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             DEPLOY.apply("local-a", phase, self.credentials, self.values)
-        return calls, helmfile
+        return calls
 
     def contexts(self) -> list[str]:
         region = DEPLOY.load_region("local-a")
@@ -168,12 +159,11 @@ class LocalDeployTests(unittest.TestCase):
                     DEPLOY.load_deployment_values("us-west-2", self.values)
 
     def test_stargate_phase_runs_without_aws(self) -> None:
-        calls, helmfile = self.apply("stargate", self.contexts())
-        self.assertFalse(any(command[0] == "aws" for command in calls))
-        self.assertFalse(any("auth" in command for command in calls))
-        (call,) = helmfile.call_args_list
+        calls = self.apply("stargate", self.contexts())
+        self.assertFalse(any("auth" in command for command, _ in calls))
+        ((command, env),) = [call for call in calls if call[0][0] == "helmfile"]
         self.assertEqual(
-            call.args[0],
+            command,
             [
                 "helmfile",
                 "--environment",
@@ -184,10 +174,8 @@ class LocalDeployTests(unittest.TestCase):
                 "--suppress-secrets",
             ],
         )
-        self.assertNotIn(DEPLOY.ACCOUNT_ENV, call.kwargs["env"])
-        self.assertEqual(
-            call.kwargs["env"]["STARGATE_DEV_VALUES_FILE"], str(self.values.resolve())
-        )
+        self.assertNotIn(DEPLOY.ACCOUNT_ENV, env)
+        self.assertEqual(env["STARGATE_DEV_VALUES_FILE"], str(self.values.resolve()))
 
     def test_mockdc_phase_requires_the_service_on_router_address(self) -> None:
         self.apply("mockdc", self.contexts())

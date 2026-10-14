@@ -4,7 +4,6 @@
 
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
 
@@ -231,19 +230,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    try:
+
+    def run() -> None:
         values = provision(args.region, args.values)
         print(f"# Merge into {args.values}, then apply the observability phase.")
         print(yaml.safe_dump(values, sort_keys=False), end="")
-    except (
-        deploy.DeploymentError,
-        json.JSONDecodeError,
-        OSError,
-        yaml.YAMLError,
-    ) as error:
-        print(f"error: {error}", file=sys.stderr)
-        return 1
-    return 0
+
+    return deploy.cli(run)
 
 
 if __name__ == "__main__":

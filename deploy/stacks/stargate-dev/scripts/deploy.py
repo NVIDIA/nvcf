@@ -13,6 +13,7 @@ import shutil
 import stat
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import yaml
@@ -105,16 +106,7 @@ def require_tools(*names: str) -> None:
         raise DeploymentError(f"required command not found: {', '.join(missing)}")
 
 
-def credential_values(credentials: dict) -> list[str]:
-    values = [credentials.get("serviceToken"), credentials.get("workerToken")]
-    if any(not isinstance(value, str) or len(value) < 32 for value in values):
-        raise DeploymentError("credential bundle contains an invalid token")
-    if len(set(values)) != len(values):
-        raise DeploymentError("credential bundle tokens must be distinct")
-    return values
-
-
-def load_credentials(path: Path) -> dict:
+def check_credentials(path: Path) -> None:
     path = path.expanduser().resolve()
     info = path.stat()
     if not stat.S_ISREG(info.st_mode):
@@ -127,8 +119,11 @@ def load_credentials(path: Path) -> dict:
         credentials = json.load(file)
     if not isinstance(credentials, dict):
         raise DeploymentError("credential bundle must contain a JSON object")
-    credential_values(credentials)
-    return credentials
+    tokens = [credentials.get("serviceToken"), credentials.get("workerToken")]
+    if any(not isinstance(token, str) or len(token) < 32 for token in tokens):
+        raise DeploymentError("credential bundle contains an invalid token")
+    if len(set(tokens)) != len(tokens):
+        raise DeploymentError("credential bundle tokens must be distinct")
 
 
 def init_credentials(path: Path) -> None:
@@ -452,7 +447,7 @@ def apply(
     if phase != "observability":
         if credentials_path is None:
             raise DeploymentError(f"--credentials is required for the {phase} phase")
-        load_credentials(credentials_path)
+        check_credentials(credentials_path)
     account = "" if local else aws_account()
     validate_deployment_inputs(config, phase, account)
     contexts = configured_contexts()
@@ -486,8 +481,7 @@ def apply(
         "apply",
         "--suppress-secrets",
     ]
-    result = subprocess.run(command, cwd=STACK_DIR, env=environment, check=False)
-    if result.returncode:
+    if run(command, env=environment, check=False, capture=False).returncode:
         raise DeploymentError("helmfile apply failed")
     print(f"applied {phase} phase for {region}")
 
@@ -515,23 +509,22 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
-    os.umask(0o077)
-    args = parse_args()
+def cli(action: Callable[[], None]) -> int:
+    """Run a command-line action and report expected failures without a traceback."""
     try:
-        if args.command == "init":
-            init_credentials(args.credentials)
-        else:
-            apply(args.region, args.phase, args.credentials, args.values)
-    except (
-        DeploymentError,
-        json.JSONDecodeError,
-        OSError,
-        yaml.YAMLError,
-    ) as error:
+        action()
+    except (DeploymentError, json.JSONDecodeError, OSError, yaml.YAMLError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     return 0
+
+
+def main() -> int:
+    os.umask(0o077)
+    args = parse_args()
+    if args.command == "init":
+        return cli(lambda: init_credentials(args.credentials))
+    return cli(lambda: apply(args.region, args.phase, args.credentials, args.values))
 
 
 if __name__ == "__main__":
