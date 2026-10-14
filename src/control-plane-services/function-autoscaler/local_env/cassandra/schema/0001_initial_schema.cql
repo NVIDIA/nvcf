@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS nvcf_autoscaler.recently_invoked_functions (
 CREATE TABLE IF NOT EXISTS nvcf_autoscaler.locks (
     lock_name text PRIMARY KEY,
     node_id text,
-    acquired_at timestamp
+    acquired_at timestamp,
+    lock_token text
 ) WITH default_time_to_live = 600;
 
 CREATE TABLE IF NOT EXISTS nvcf_autoscaler.healthy_nodes (
