@@ -1340,6 +1340,17 @@
                     "description": "StorageClass the stack binds its PVCs to (global.storageClass); when set, it must exist and no default StorageClass is required",
                     "default": ""
                 },
+                "haMode": {
+                    "type": "string",
+                    "enum": [
+                        "",
+                        "none",
+                        "preferred",
+                        "enforced"
+                    ],
+                    "description": "High-availability mode the stack was installed with (highAvailability.mode). Under role control-plane the validator checks the HA guarantee and topology that mode requires; empty, it judges placement from the rendered terms and warns that no mode was supplied",
+                    "default": ""
+                },
                 "nodeToNodeProbeImage": {
                     "type": "string",
                     "description": "Image for the node-to-node overlay probe; needs sh and busybox-style nc and must be pullable without imagePullSecrets. When empty, networkChecks.enforcement.testImage if set, else busybox:1.36 from Docker Hub. make render-values-from-stack sets it to busybox:1.36 under the stack's repository on a registry other than NGC (nvcr.io or a subdomain), and leaves it empty on NGC, which has no busybox",
