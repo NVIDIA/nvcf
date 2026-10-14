@@ -41,7 +41,11 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV3Udt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -229,11 +233,22 @@ class CpuWorkloadsServiceTest {
         assertEquals(CpuWorkloadsState.READY, service.status().state());
     }
 
+    private static final class FakeClock extends Clock {
+        private final AtomicReference<Instant> now = new AtomicReference<>(Instant.parse("2026-01-01T00:00:00Z"));
+
+        @Override public ZoneId getZone() { return ZoneOffset.UTC; }
+        @Override public Clock withZone(ZoneId zone) { return this; }
+        @Override public Instant instant() { return now.get(); }
+
+        void advance(Duration duration) { now.set(now.get().plus(duration)); }
+    }
+
     @Test
     void guard_registrationDuringAScan_isNotMissedByACleanResult() {
         CpuWorkloadsConfigurationProperties properties = new CpuWorkloadsConfigurationProperties();
         properties.setEnabled(true);
         ClusterRepository repository = mock(ClusterRepository.class);
+        FakeClock clock = new FakeClock();
         AtomicReference<CpuWorkloadsService> serviceRef = new AtomicReference<>();
         AtomicReference<List<ClusterEntity>> stored = new AtomicReference<>(List.of());
         AtomicReference<Boolean> registerDuringScan = new AtomicReference<>(true);
@@ -244,12 +259,13 @@ class CpuWorkloadsServiceTest {
             if (registerDuringScan.getAndSet(false)) {
                 // A real GPU named cpu is registered now. The guard is not ready, so it is let through, and
                 // it is stored after the row it would have been in was read.
+                clock.advance(Duration.ofSeconds(1));
                 serviceRef.get().validateGpus(Set.of(gpu("cpu", gpuType(1))));
                 stored.set(List.of(cluster("c1", Set.of(gpu("cpu", gpuType(1))))));
             }
             return null;
         }).when(repository).forEachClusterPage(anyInt(), any());
-        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository, Runnable::run);
+        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository, Runnable::run, clock);
         serviceRef.set(service);
 
         service.onApplicationReady();
@@ -259,8 +275,64 @@ class CpuWorkloadsServiceTest {
         assertFalse(service.isReady());
 
         // The next attempt reads the stored GPU and reports the collision.
+        clock.advance(Duration.ofSeconds(30));
         service.retryGuard();
         assertEquals(CpuWorkloadsStatus.REASON_COLLISION_DETECTED, service.status().reason());
+    }
+
+    @Test
+    void guard_registrationValidatedBeforeTheScanAndStoredAfterIt_isNotMissedByACleanResult() {
+        CpuWorkloadsConfigurationProperties properties = new CpuWorkloadsConfigurationProperties();
+        properties.setEnabled(true);
+        ClusterRepository repository = mock(ClusterRepository.class);
+        FakeClock clock = new FakeClock();
+        AtomicReference<List<ClusterEntity>> stored = new AtomicReference<>(List.of());
+        doAnswer(invocation -> {
+            Consumer<List<ClusterEntity>> consumer = invocation.getArgument(1);
+            consumer.accept(stored.get());
+            return null;
+        }).when(repository).forEachClusterPage(anyInt(), any());
+        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository, Runnable::run, clock);
+
+        // 1. A registration is validated and let through, because the guard is not ready.
+        service.validateGpus(Set.of(gpu("cpu", gpuType(1))));
+        // 2. The guard scans before the registration is stored. It finds nothing.
+        clock.advance(Duration.ofSeconds(1));
+        service.onApplicationReady();
+        // 3. The registration is stored after its cluster was scanned.
+        stored.set(List.of(cluster("c1", Set.of(gpu("cpu", gpuType(1))))));
+
+        // The scan saw nothing, but it ran right after a registration was let through, so it is not clean.
+        assertEquals(CpuWorkloadsState.BLOCKED, service.status().state());
+
+        // The retry reads the stored GPU and reports the collision.
+        clock.advance(Duration.ofSeconds(30));
+        service.retryGuard();
+        assertEquals(CpuWorkloadsStatus.REASON_COLLISION_DETECTED, service.status().reason());
+    }
+
+    @Test
+    void guard_registrationThatWasNeverStored_becomesCleanAfterTheQuietPeriod() {
+        CpuWorkloadsConfigurationProperties properties = new CpuWorkloadsConfigurationProperties();
+        properties.setEnabled(true);
+        ClusterRepository repository = mock(ClusterRepository.class);
+        FakeClock clock = new FakeClock();
+        doAnswer(invocation -> {
+            Consumer<List<ClusterEntity>> consumer = invocation.getArgument(1);
+            consumer.accept(List.of());
+            return null;
+        }).when(repository).forEachClusterPage(anyInt(), any());
+        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository, Runnable::run, clock);
+
+        service.validateGpus(Set.of(gpu("cpu", gpuType(1))));
+        clock.advance(Duration.ofSeconds(1));
+        service.onApplicationReady();
+        assertEquals(CpuWorkloadsState.BLOCKED, service.status().state());
+
+        // The registration failed before it was stored. Once the grace period has passed, the guard is clean.
+        clock.advance(properties.getGuardRegistrationGrace().plusSeconds(1));
+        service.retryGuard();
+        assertEquals(CpuWorkloadsState.READY, service.status().state());
     }
 
     @Test

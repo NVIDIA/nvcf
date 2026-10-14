@@ -24,6 +24,8 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuUdt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -32,7 +34,6 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -86,10 +87,12 @@ public class CpuWorkloadsService implements DisposableBean {
     // Written only by the collision guard, read by every request without a lock.
     private volatile GuardResult guardResult = GuardResult.UNEVALUATED;
 
-    // Counts the registrations that were let through while the guard was not ready and that may hold a
-    // GPU under the reserved name. A scan that ran while the count changed cannot call the result
-    // clean, because the registration may have been stored after the scan read its cluster.
-    private final AtomicLong possibleCollisionRegistrations = new AtomicLong();
+    // When the last registration was let through that may hold a GPU under the reserved name. It is
+    // let through at validation, and stored later, so a scan cannot call the result clean until a quiet
+    // period has passed without such a registration. The registration may have been stored after the
+    // scan read its cluster.
+    private volatile Instant lastPossibleCollisionRegistration = Instant.MIN;
+    private final Clock clock;
 
     @Autowired
     public CpuWorkloadsService(
@@ -105,9 +108,18 @@ public class CpuWorkloadsService implements DisposableBean {
             CpuWorkloadsConfigurationProperties properties,
             ClusterRepository clusterRepository,
             Executor refreshExecutor) {
+        this(properties, clusterRepository, refreshExecutor, Clock.systemUTC());
+    }
+
+    CpuWorkloadsService(
+            CpuWorkloadsConfigurationProperties properties,
+            ClusterRepository clusterRepository,
+            Executor refreshExecutor,
+            Clock clock) {
         this.properties = properties;
         this.clusterRepository = clusterRepository;
         this.refreshExecutor = refreshExecutor;
+        this.clock = clock;
     }
 
     @Override
@@ -186,18 +198,19 @@ public class CpuWorkloadsService implements DisposableBean {
      * name that is not a valid CPU shape. Details go to the log only.
      */
     private synchronized void evaluateGuard() {
-        long registrationsBefore = possibleCollisionRegistrations.get();
+        Instant scanStart = clock.instant();
         try {
             List<String> collisions = new ArrayList<>();
             clusterRepository.forEachClusterPage(
                     properties.getGuardPageSize(),
                     page -> page.forEach(cluster -> findCollision(cluster).ifPresent(collisions::add)));
-            if (collisions.isEmpty() && possibleCollisionRegistrations.get() != registrationsBefore) {
-                // A GPU under the reserved name was registered while the scan ran, and it may have been
-                // stored after its cluster was read. Do not call that clean. The next attempt reads it.
+            if (collisions.isEmpty() && !registrationsAreQuiet(scanStart)) {
+                // A GPU under the reserved name was let through shortly before or during the scan, and it
+                // may be stored after its cluster was read. Do not call that clean. A later attempt, once
+                // the quiet period has passed, reads it.
                 guardResult = GuardResult.UNEVALUATED;
-                log.warn("CPU workloads guard saw a registration under the reserved name during its scan, "
-                        + "will scan again");
+                log.warn("CPU workloads guard saw a registration under the reserved name shortly before or "
+                        + "during its scan, will scan again");
             } else if (collisions.isEmpty()) {
                 guardResult = GuardResult.CLEAN;
                 log.info("CPU workloads guard passed: no GPU is registered under the reserved name");
@@ -211,6 +224,16 @@ public class CpuWorkloadsService implements DisposableBean {
             guardResult = GuardResult.UNEVALUATED;
             log.error("CPU workloads guard could not read cluster records, will retry", e);
         }
+    }
+
+    /**
+     * True when no registration that may hold a GPU under the reserved name was let through during the
+     * scan, or within the grace period before it started. The grace period covers the time a
+     * registration takes from validation to being stored.
+     */
+    private boolean registrationsAreQuiet(Instant scanStart) {
+        return !lastPossibleCollisionRegistration
+                .plus(properties.getGuardRegistrationGrace()).isAfter(scanStart);
     }
 
     private static Optional<String> findCollision(ClusterEntity cluster) {
@@ -285,9 +308,10 @@ public class CpuWorkloadsService implements DisposableBean {
                     i -> CpuShapes.isCpuShapeEntry(gpu.name(), i.name(), i.gpuCount()))) {
                 throw new CpuWorkloadsNotReadyException(status);
             } else {
-                // Let through while the guard is not ready: a real GPU under the reserved name. It may be
-                // stored while a scan is running, so a scan in progress must not end clean.
-                possibleCollisionRegistrations.incrementAndGet();
+                // Let through while the guard is not ready: a real GPU under the reserved name. It is stored
+                // after this validation, possibly after a running scan has read its cluster, so no scan
+                // may end clean until a quiet period has passed.
+                lastPossibleCollisionRegistration = clock.instant();
             }
         }
     }

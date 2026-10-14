@@ -43,4 +43,11 @@ public class CpuWorkloadsConfigurationProperties {
 
     /** Time between two background attempts of the collision guard while its result is not clean. */
     private Duration guardRetryInterval = Duration.ofSeconds(30);
+
+    /**
+     * How long the collision guard waits, after a registration that may hold a GPU under the reserved
+     * name was let through, before it may report a clean result. It covers the time a registration takes
+     * from validation to being stored. The guard retries every {@code guardRetryInterval} meanwhile.
+     */
+    private Duration guardRegistrationGrace = Duration.ofMinutes(2);
 }
