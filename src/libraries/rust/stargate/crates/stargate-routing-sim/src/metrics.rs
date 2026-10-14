@@ -43,6 +43,9 @@ pub struct RequestRecord {
     /// The last allowed attempt of a growing-session turn failed.
     pub abandoned_session: bool,
     pub no_route: bool,
+    /// The last routing decision saw a non-excluded backend with a free
+    /// engine slot.
+    pub last_view_had_free_slot: bool,
     pub retries_exhausted: bool,
     pub timed_out: bool,
 }
@@ -78,6 +81,9 @@ pub struct RunSummary {
     /// Successful requests whose first token met the TTFT SLO.
     pub good: usize,
     pub failed_no_route: usize,
+    /// No-route failures whose last routing decision saw a backend with a
+    /// free engine slot.
+    pub failed_no_route_with_free_slot: usize,
     pub failed_retries_exhausted: usize,
     pub failed_timeout: usize,
     /// Measured requests that retry a failed turn.
@@ -210,6 +216,9 @@ pub fn summarize(
         succeeded: succeeded.len(),
         good,
         failed_no_route: count(|record| record.no_route),
+        failed_no_route_with_free_slot: count(|record| {
+            record.no_route && record.last_view_had_free_slot
+        }),
         failed_retries_exhausted: count(|record| record.retries_exhausted),
         failed_timeout: count(|record| record.timed_out),
         retried_requests: count(|record| record.attempt > 0),
