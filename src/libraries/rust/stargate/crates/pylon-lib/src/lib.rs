@@ -61,10 +61,13 @@ pub use request_observer::{
     RequestObservation, RequestObservationEndpoint, RequestObservationState,
 };
 pub use request_quality_monitor::RequestQualityMonitorConfig;
-pub use runtime_state::{CurrentModelStats, PylonRuntimeState, RequestObservationEvent};
+pub use runtime_state::{
+    CurrentModelStats, PylonRuntimeState, RequestInputInterval, RequestObservationEvent,
+};
 pub use stats::{
-    EngineStatsStreamConfig, EngineStatsStreamHandle, EngineStatsStreamMode, MetricsServerHandle,
-    PylonMetrics, RequestCounterUpdate, RequestCounterUpdateInput, StatsAggregatorUpdate,
+    EngineStatsStreamConfig, EngineStatsStreamHandle, EngineStatsStreamMode, InputIntervalRate,
+    InputIntervalSample, MetricsServerHandle, PylonMetrics, RequestCounterUpdate,
+    RequestCounterUpdateInput, RequestInputIntervalWindow, StatsAggregatorUpdate,
     StatsCollectorConfig, StatsCollectorHandle, StatsUpdateSource,
     parse_engine_stats_line_for_benchmark, start_engine_stats_stream, start_metrics_server,
     start_stats_collector, start_stats_collector_with_engine_stats,
