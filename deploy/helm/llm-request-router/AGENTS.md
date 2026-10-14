@@ -20,7 +20,7 @@ Meaningful Stargate chart changes must satisfy the
 Deploy the candidate chart in the chosen runtime mock test. Render checks alone
 do not validate registration, transport, readiness, or request handling.
 Resource, scheduling, and router-policy changes require baseline/candidate
-performance evidence.
+[performance evidence](../../../src/libraries/rust/stargate/AGENTS.md#performance-regression-gate).
 
 Follow the root local QA safety rules before changing a test environment.
 Use plain ASCII in committed prose and keep secrets out of render output.
