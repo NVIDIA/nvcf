@@ -15,6 +15,7 @@ go_library(
         "output.go",
         "suite.go",
         "summary.go",
+        "tier1_services.go",
         "validator.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator",
@@ -59,6 +60,7 @@ alias(
 go_test(
     name = "clustervalidator_test",
     srcs = [
+        "availability_tier2_test.go",
         "checks_controlplane_test.go",
         "checks_rollout_test.go",
         "checks_test.go",
@@ -73,6 +75,7 @@ go_test(
         "rbac_inventory_test.go",
         "suite_test.go",
         "summary_test.go",
+        "tier1_services_test.go",
         "validator_test.go",
     ],
     # The RBAC contract the chart and nvcf-cli validator roles are tested against.
