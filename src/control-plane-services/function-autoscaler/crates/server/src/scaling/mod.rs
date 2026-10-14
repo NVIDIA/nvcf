@@ -218,6 +218,18 @@ pub struct ResolvedScalingPolicy {
     pub scale_down_stickiness: Option<Stickiness>,
 }
 
+impl ResolvedScalingPolicy {
+    /// Utilization history to fetch so every stickiness window sees one sample
+    /// per minute of its length. Never shorter than `default`.
+    pub fn utilization_lookback(&self, default: Duration) -> Duration {
+        [&self.scale_up_stickiness, &self.scale_down_stickiness]
+            .into_iter()
+            .flatten()
+            .map(|s| Duration::from_secs(u64::from(s.window_minutes) * 60))
+            .fold(default, Duration::max)
+    }
+}
+
 /// Entry stored in cache per function_version_id
 #[derive(Debug, Clone)]
 pub struct CustomScalingConfig {
@@ -912,6 +924,113 @@ mod tests {
         let samples = [90.0, 90.0, 90.0, 90.0, 90.0, 90.0, 90.0, 15.0, 10.0, 12.0];
         let result = get_desired_instances(&samples, &policy, 10, 0.0);
         assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(8));
+    }
+
+    // ---- Stickiness windows longer than the default lookback ----
+
+    fn sticky(window_minutes: u32, required_minutes: u32) -> Option<Stickiness> {
+        Some(Stickiness {
+            window_minutes,
+            required_minutes,
+        })
+    }
+
+    fn sticky_policy(
+        scale_up_stickiness: Option<Stickiness>,
+        scale_down_stickiness: Option<Stickiness>,
+    ) -> ResolvedScalingPolicy {
+        ResolvedScalingPolicy {
+            scale_up_stickiness,
+            scale_down_stickiness,
+            ..default_policy()
+        }
+    }
+
+    /// `quiet` non-breaching samples followed by `hot` samples at 100%.
+    fn breach_tail(quiet: usize, hot: usize) -> Vec<f64> {
+        let mut samples = vec![50.0; quiet];
+        samples.extend(vec![100.0; hot]);
+        samples
+    }
+
+    #[test]
+    fn test_lookback_without_stickiness_uses_default() {
+        let default = Duration::from_secs(600);
+        assert_eq!(default_policy().utilization_lookback(default), default);
+    }
+
+    #[test]
+    fn test_lookback_short_windows_keep_default() {
+        let default = Duration::from_secs(600);
+        let policy = sticky_policy(sticky(5, 3), sticky(10, 9));
+        assert_eq!(policy.utilization_lookback(default), default);
+    }
+
+    #[test]
+    fn test_lookback_covers_largest_stickiness_window() {
+        let default = Duration::from_secs(600);
+        assert_eq!(
+            sticky_policy(sticky(30, 15), None).utilization_lookback(default),
+            Duration::from_secs(30 * 60)
+        );
+        assert_eq!(
+            sticky_policy(sticky(15, 5), sticky(60, 45)).utilization_lookback(default),
+            Duration::from_secs(60 * 60)
+        );
+    }
+
+    #[test]
+    fn test_lookback_keeps_larger_configured_default() {
+        let default = Duration::from_secs(2 * 60 * 60);
+        let policy = sticky_policy(sticky(60, 30), None);
+        assert_eq!(policy.utilization_lookback(default), default);
+    }
+
+    /// Regression for a 30m window / 15m threshold at sustained 100%: the
+    /// 31 one-minute samples fetched over a 30m lookback satisfy the gate.
+    #[test]
+    fn test_long_window_scales_up_with_full_window_of_samples() {
+        let policy = sticky_policy(sticky(30, 15), None);
+        let samples = vec![100.0; 31];
+        let result = get_desired_instances(&samples, &policy, 10, 0.0);
+        assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(12));
+    }
+
+    /// The 11 samples a 600s lookback yields can never satisfy 15 required
+    /// minutes; fewer samples than required must not count as a breach.
+    #[test]
+    fn test_long_window_not_met_with_insufficient_samples() {
+        let policy = sticky_policy(sticky(30, 15), None);
+        let result = get_desired_instances(&[100.0; 11], &policy, 10, 0.0);
+        assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(10));
+    }
+
+    #[test]
+    fn test_long_window_breach_shorter_than_threshold_does_not_scale() {
+        let policy = sticky_policy(sticky(30, 15), None);
+        let result = get_desired_instances(&breach_tail(17, 14), &policy, 10, 0.0);
+        assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(10));
+    }
+
+    #[test]
+    fn test_long_window_breach_exactly_threshold_scales() {
+        let policy = sticky_policy(sticky(30, 15), None);
+        let result = get_desired_instances(&breach_tail(16, 15), &policy, 10, 0.0);
+        assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(12));
+    }
+
+    #[test]
+    fn test_one_hour_window_counts_samples_across_whole_window() {
+        let policy = sticky_policy(sticky(60, 45), None);
+        // 61 samples from a 1h lookback; the oldest falls outside the window.
+        let mut samples = breach_tail(16, 45);
+        assert_eq!(samples.len(), 61);
+        let result = get_desired_instances(&samples, &policy, 10, 0.0);
+        assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(12));
+
+        samples[16] = 50.0;
+        let result = get_desired_instances(&samples, &policy, 10, 0.0);
+        assert_eq!(result.as_ref().map(|d| d.desired_instances), Some(10));
     }
 
     // ---- decide_scaling: the single decision path shared by all metric sources ----
