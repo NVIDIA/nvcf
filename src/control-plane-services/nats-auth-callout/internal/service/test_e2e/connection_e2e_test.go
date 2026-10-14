@@ -27,6 +27,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/router"
 
 	"github.com/nats-io/nats-server/v2/test"
+	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -61,6 +62,7 @@ func TestService_NATSOutage_ReportsConnectionState(t *testing.T) {
 	expectStatusGauge(t, "connected", "connected")
 	disconnectsBefore := connectionEventCount(t, "disconnect")
 	reconnectsBefore := connectionEventCount(t, "reconnect")
+	reconnectFailuresBefore := connectionEventCount(t, "reconnect_failed")
 
 	setup.NATSServer.Shutdown()
 	waitFor(t, 5*time.Second, "readiness to fail after NATS shutdown", func() bool {
@@ -72,6 +74,17 @@ func TestService_NATSOutage_ReportsConnectionState(t *testing.T) {
 	expectStatusGauge(t, "NATS down", "reconnecting")
 	if got := connectionEventCount(t, "disconnect"); got <= disconnectsBefore {
 		t.Errorf("disconnect events = %v, want more than %v", got, disconnectsBefore)
+	}
+
+	// By default nats.go stops after DefaultMaxReconnect attempts, DefaultReconnectWait
+	// apart (about 2 minutes), so a 3-minute outage shows the client keeps retrying.
+	if !testing.Short() {
+		time.Sleep(nats.DefaultMaxReconnect * nats.DefaultReconnectWait * 3 / 2)
+		expectProbes("NATS down 3 min", http.StatusOK, http.StatusServiceUnavailable)
+		expectStatusGauge(t, "NATS down 3 min", "reconnecting")
+		if got := connectionEventCount(t, "reconnect_failed") - reconnectFailuresBefore; got <= nats.DefaultMaxReconnect {
+			t.Errorf("failed reconnect attempts = %v, want more than %d", got, nats.DefaultMaxReconnect)
+		}
 	}
 
 	restarted, _ := test.RunServerWithConfig(setup.ConfigPath)
