@@ -418,6 +418,7 @@ impl Simulation<'_> {
             received_at,
             request_slo: self.config.client.request_slo_ms.map(Duration::from_millis),
             excluded_cluster_ids: (!excluded.is_empty()).then_some(excluded),
+            last_cluster: None,
         };
         let decision = self.stargates[stargate]
             .load_balancer
