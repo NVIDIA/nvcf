@@ -322,7 +322,11 @@ var (
 	// The rank and instance placement a controller injects: a pod's index
 	// in its instance (LeaderWorkerSet, indexed Job, torchrun) and the
 	// address of its instance's leader.
-	roleEnvExact = []string{"ETCD_ENDPOINTS", "NATS_SERVER", "NATS_URL", "NODE_RANK", "RANK", "GROUP_RANK",
+	// ETCD_LEASE_TTL is wiring too, and the webhook sets it on Dynamo
+	// components (webhook/dynamo.go): a companion is hashed from its running
+	// spec and its replacement from the one admission sees, so anything the
+	// webhook adds must not be in the identity.
+	roleEnvExact = []string{"ETCD_ENDPOINTS", "ETCD_LEASE_TTL", "NATS_SERVER", "NATS_URL", "NODE_RANK", "RANK", "GROUP_RANK",
 		"LOCAL_RANK", "LWS_WORKER_INDEX", "LWS_LEADER_ADDRESS", "JOB_COMPLETION_INDEX"}
 
 	// roleFlagInString removes the same flags from a shell-script arg (the
