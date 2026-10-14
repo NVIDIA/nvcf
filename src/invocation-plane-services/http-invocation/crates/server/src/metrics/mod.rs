@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::nats::{classify_event, NatsFailureReason};
 use crate::telemetry::settings::MetricsSettings;
 use async_nats::{Event, Statistics};
 use axum_prometheus::AXUM_HTTP_REQUESTS_DURATION_SECONDS;
@@ -35,7 +36,7 @@ struct Metric {
 /// client. Defined once here and reused so the value stays consistent.
 pub const CLIENT_EARLY_DISCONNECT_STATUS: &str = "499";
 
-const COUNTERS: [Metric; 19] = [
+const COUNTERS: [Metric; 20] = [
     FUNCTION_INVOCATION_ERROR,
     FUNCTION_REQUEST,
     NATS_IN_BYTES,
@@ -44,6 +45,7 @@ const COUNTERS: [Metric; 19] = [
     NATS_OUT_MESSAGES,
     NATS_CONNECTS,
     TOTAL_NATS_ERRORS,
+    NATS_FAILURES,
     NATS_EVENT_CONNECTED,
     NATS_EVENT_DISCONNECTED,
     NATS_EVENT_LAMEDUCK_MODE,
@@ -65,9 +67,8 @@ const SECONDS_DURATION_BUCKETS: &[f64; 15] = &[
 // Reduces each (function_id, function_version_id) histogram from 18 to 12 series
 // (15 to 9 finite buckets, plus +Inf, sum, and count), a 33.3% reduction, while
 // preserving useful resolution for AI inference latency.
-const FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS: &[f64; 9] = &[
-    0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0,
-];
+const FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS: &[f64; 9] =
+    &[0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0];
 
 const FUNCTION_REQUEST_LATENCY: Metric = Metric {
     name: "function.request.latency",
@@ -117,6 +118,11 @@ const NATS_CONNECTS: Metric = Metric {
 const TOTAL_NATS_ERRORS: Metric = Metric {
     name: "total.nats.errors",
     description: "Total errors of NATS.",
+};
+
+const NATS_FAILURES: Metric = Metric {
+    name: "nats.failures",
+    description: "NATS connection failures by normalized reason.",
 };
 
 const NATS_EVENT_CONNECTED: Metric = Metric {
@@ -294,7 +300,15 @@ pub fn record_nats_error_total() {
     counter!(TOTAL_NATS_ERRORS.name).increment(1);
 }
 
+pub fn record_nats_failure(reason: NatsFailureReason, source: &'static str) {
+    let labels = [("reason", reason.as_str()), ("source", source)];
+    counter!(NATS_FAILURES.name, &labels).increment(1);
+}
+
 pub fn record_nats_event(event: &Event) {
+    if let Some(reason) = classify_event(event) {
+        record_nats_failure(reason, "event");
+    }
     match event {
         Event::Connected => {
             counter!(NATS_EVENT_CONNECTED.name).increment(1);
@@ -353,6 +367,7 @@ fn register_histogram(metric: Metric) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_nats::{ClientError, ServerError};
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
     use metrics_util::MetricKind;
 
@@ -423,5 +438,105 @@ mod tests {
             .expect("app.invocation.error should include an empty function_id label");
 
         assert_eq!(value, &DebugValue::Counter(1));
+    }
+
+    fn failure_counter_value(
+        metrics: &[(
+            metrics_util::CompositeKey,
+            Option<metrics::Unit>,
+            Option<metrics::SharedString>,
+            DebugValue,
+        )],
+        name: &str,
+        reason: &str,
+        source: &str,
+    ) -> Option<u64> {
+        metrics.iter().find_map(|(key, _, _, value)| {
+            let labels = key.key().labels();
+            let matches = key.key().name() == name
+                && labels
+                    .clone()
+                    .any(|l| l.key() == "reason" && l.value() == reason)
+                && labels
+                    .clone()
+                    .any(|l| l.key() == "source" && l.value() == source);
+            match (matches, value) {
+                (true, DebugValue::Counter(v)) => Some(*v),
+                _ => None,
+            }
+        })
+    }
+
+    #[test]
+    fn nats_error_events_record_failure_reason_and_keep_event_counters() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            record_nats_event(&Event::ServerError(ServerError::AuthorizationViolation));
+            record_nats_event(&Event::ClientError(ClientError::Other(
+                "IO error: invalid peer certificate: Expired".into(),
+            )));
+            record_nats_event(&Event::Connected);
+        });
+
+        let metrics = snapshotter.snapshot().into_vec();
+        assert_eq!(
+            failure_counter_value(&metrics, NATS_FAILURES.name, "authentication", "event"),
+            Some(1)
+        );
+        assert_eq!(
+            failure_counter_value(&metrics, NATS_FAILURES.name, "tls_cert_expired", "event"),
+            Some(1)
+        );
+        for name in [
+            NATS_EVENT_SERVER_ERROR.name,
+            NATS_EVENT_CLIENT_ERROR.name,
+            NATS_EVENT_CONNECTED.name,
+        ] {
+            assert!(
+                metrics
+                    .iter()
+                    .any(|(key, _, _, _)| key.key().name() == name),
+                "{name} should still be recorded"
+            );
+        }
+    }
+
+    #[test]
+    fn non_error_events_do_not_record_failures() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            record_nats_event(&Event::Connected);
+            record_nats_event(&Event::Disconnected);
+        });
+
+        assert!(!snapshotter
+            .snapshot()
+            .into_vec()
+            .iter()
+            .any(|(key, _, _, _)| key.key().name() == NATS_FAILURES.name));
+    }
+
+    #[test]
+    fn connect_failure_records_reason_and_source() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            record_nats_failure(NatsFailureReason::Timeout, "connect");
+        });
+
+        assert_eq!(
+            failure_counter_value(
+                &snapshotter.snapshot().into_vec(),
+                NATS_FAILURES.name,
+                "timeout",
+                "connect"
+            ),
+            Some(1)
+        );
     }
 }
