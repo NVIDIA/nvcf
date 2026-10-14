@@ -238,9 +238,12 @@ Stargate does not validate client API keys. The controller sets a fixed
 placeholder `OPENAI_API_KEY` for the Spark process.
 
 `--expected-config` checks the policy in every selected region before traffic;
-it does not apply configuration. Put the complete selected JSON object in
-`router.loadBalancerConfig` in each region's protected deployment values when
-applying the policy.
+it does not apply configuration. The stack deploys
+`loadtest/queue-bounds-none-max-queued-4.json` as the router policy by default,
+so the command above passes against a default deployment. To benchmark a
+different policy, set the complete JSON object as `router.loadBalancerConfig`
+in each region's protected deployment values and pass the same object to
+`--expected-config`.
 
 Each MockDC backend runs MockDynamo's batched engine with `numGpuWorkers`
 workers, 1,000,000 KV tokens per worker, and the engine's default step costs.

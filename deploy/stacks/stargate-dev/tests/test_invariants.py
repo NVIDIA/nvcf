@@ -17,6 +17,7 @@ import yaml
 
 
 STACK_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_ROUTING_POLICY = STACK_DIR / "loadtest" / "queue-bounds-none-max-queued-4.json"
 ACCOUNT_ID = "123456789012"
 DIGEST_IMAGE = re.compile(r"^[^@]+@sha256:[a-f0-9]{64}$")
 CREDENTIALS = {
@@ -190,6 +191,14 @@ class RenderedStackTests(unittest.TestCase):
         )
         self.assertEqual(json.loads(configmap["data"]["lb-config.json"]), policy)
 
+    def test_default_routing_policy_must_configure_the_model(self) -> None:
+        with self.assertRaises(subprocess.CalledProcessError) as raised:
+            self.render("us-west-2", {"modelName": "other"}, "-l", "phase=stargate")
+        self.assertIn(
+            "queue-bounds-none-max-queued-4.json does not configure model other",
+            raised.exception.stderr,
+        )
+
     def test_auth_pod_rolls_when_its_credential_bundle_changes(self) -> None:
         def auth_checksum(values: dict) -> str:
             resources = self.render("us-west-2", values, "-l", "component=auth")
@@ -353,14 +362,12 @@ class RenderedStackTests(unittest.TestCase):
         )
         load_balancer_config = self.find("ConfigMap", "llm-request-router-lb")
         raw_load_balancer_config = load_balancer_config["data"]["lb-config.json"]
-        model_policy = json.loads(raw_load_balancer_config)["models"][
-            "stargate-dev-model"
-        ]
-        self.assertEqual(model_policy["algorithm"], "wait-and-widen")
-        self.assertEqual(model_policy["cache_affinity_wait_ms"], 200)
-        self.assertEqual(model_policy["max_queued"], 1)
-        self.assertEqual(model_policy["max_queue_time_floor_ms"], 100)
-        self.assertEqual(model_policy["max_queue_time_ceil_ms"], 5000)
+        # The stack default is the policy the documented benchmark run passes
+        # to --expected-config, which compares parsed JSON.
+        self.assertEqual(
+            json.loads(raw_load_balancer_config),
+            json.loads(DEFAULT_ROUTING_POLICY.read_text(encoding="utf-8")),
+        )
         self.assertEqual(
             router["spec"]["template"]["metadata"]["annotations"][
                 "checksum/load-balancer-config"
