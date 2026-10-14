@@ -5581,12 +5581,14 @@ func (s *tier1Scan) verdict(proxiesUnobserved, coverageUndecided bool) {
 // Tier-2 stateful components (NATS JetStream, OpenBao Raft, Cassandra).
 // Any StatefulSet with an odd spec.replicas of 3 or more is treated as a quorum
 // component and checked for:
-//  1. every member Ready, counted from its pods: a terminating pod is not
-//     Ready, though the status still counts it
-//  2. all pods on distinct nodes, when the StatefulSet spreads its pods
+//  1. every member Ready, counted from its pods as the HA Guarantee row counts
+//     them: a terminating pod is not Ready, though the status still counts it
+//  2. all pods on distinct nodes, when the StatefulSet spreads its pods, as
+//     tier2PlacementFor decides for the HA mode: under preferred or enforced
+//     the HA Guarantee row judges the stack's own quorum members instead
 //
-// Whether a component is meant to be highly available is read from what was
-// rendered rather than passed in: the stack gives its quorum StatefulSets pod
+// Whether a component is meant to be highly available for its quorum is read
+// from what was rendered: the stack gives its quorum StatefulSets pod
 // anti-affinity under highAvailability.mode preferred or enforced, and none
 // under mode none. A spread component below three replicas has lost its
 // quorum. One that is not spread is checked for readiness only, since one
@@ -5667,7 +5669,13 @@ type tier2Scan struct {
 	notAssessed []string
 	// unspread holds assessed StatefulSets whose placement is not judged:
 	// nothing asks for their pods on distinct nodes.
-	unspread     []string
+	unspread []string
+	// sharing holds the StatefulSets whose peers share a node, a failover
+	// risk only warned about (tier2PlacementWarns).
+	sharing []string
+	// delegated holds the StatefulSets whose placement the HA Guarantee row
+	// judges (tier2PlacementDelegated).
+	delegated    []string
 	checkedCount int
 	// unread holds each namespace whose StatefulSets could not be read, with
 	// the cause, and unreadErrs the errors themselves.
@@ -5744,6 +5752,7 @@ func (s *tier2Scan) assess(ctx context.Context, client kubernetes.Interface, ns 
 	}
 	want := *sts.Spec.Replicas
 	spread := spreadsAcrossNodes(sts)
+	placement := tier2PlacementFor(s.state.HAMode, sts)
 	switch {
 	case known && want == 0:
 		// Scaled to zero is the component down, however it was installed.
@@ -5766,12 +5775,15 @@ func (s *tier2Scan) assess(ctx context.Context, client kubernetes.Interface, ns 
 		s.skippedParity = append(s.skippedParity, fmt.Sprintf("%s/%s (replicas=%d)", ns, sts.Name, want))
 		return
 	}
-	if !spread {
+	switch placement {
+	case tier2PlacementUnjudged:
 		s.unspread = append(s.unspread, fmt.Sprintf("%s/%s (replicas=%d)", ns, sts.Name, want))
+	case tier2PlacementDelegated:
+		s.delegated = append(s.delegated, ns+"/"+sts.Name)
 	}
 
 	failures, unobserved := len(s.failures), len(s.unobserved)
-	if rolling, ready := s.assessMembers(ctx, client, ns, sts, want, spread); rolling &&
+	if rolling, ready := s.assessMembers(ctx, client, ns, sts, want, placement.judged()); rolling &&
 		len(s.failures) == failures && len(s.unobserved) == unobserved {
 		// Only a rollout this run tolerated is reported as in progress. One
 		// it failed or could not judge is not something to wait for.
@@ -5797,7 +5809,7 @@ func (s *tier2Scan) namespacePods(ctx context.Context, client kubernetes.Interfa
 }
 
 // readyMember reports whether p counts as a Ready member: Ready and not
-// terminating.
+// terminating. The HA Guarantee row counts its members this way too.
 func readyMember(p *corev1.Pod) bool { return p.DeletionTimestamp == nil && isPodReady(p) }
 
 // readyMembers counts the pods of sts that are Ready members. Its status
@@ -5996,8 +6008,7 @@ func (s *tier2Scan) assessPlacement(ns string, sts *appsv1.StatefulSet, pods []c
 			continue
 		}
 		if first, dup := nodeOwner[p.Spec.NodeName]; dup {
-			s.fail(tier2CoLocatedAdvice, "%s/%s: pods %s and %s are co-located on node %s",
-				ns, sts.Name, first, p.Name, p.Spec.NodeName)
+			s.coLocated(ns, sts, first, p.Name, p.Spec.NodeName)
 		} else {
 			nodeOwner[p.Spec.NodeName] = p.Name
 		}
@@ -6007,7 +6018,8 @@ func (s *tier2Scan) assessPlacement(ns string, sts *appsv1.StatefulSet, pods []c
 func (s *tier2Scan) setOK(ok bool) {
 	s.state.Tier2StatefulSetsOK = &ok
 	if ok {
-		s.state.Tier2PlacementNotAssessed = len(s.unspread)
+		s.state.Tier2PlacementNotAssessed, s.state.Tier2PeersSharingANode = len(s.unspread), len(s.sharing)
+		s.state.Tier2PlacementDelegated = len(s.delegated)
 	}
 }
 
@@ -6102,12 +6114,7 @@ func (s *tier2Scan) verdict() {
 				"%d quorum StatefulSet(s) healthy, %d %s but at their replica target",
 				s.checkedCount, s.rollingCount, MidRolloutMarker))
 		}
-		if len(s.unspread) == 0 {
-			printSuccess(s.log, fmt.Sprintf("All %d quorum StatefulSet(s) Ready on distinct nodes", s.checkedCount))
-		} else {
-			printSuccess(s.log, fmt.Sprintf("All %d quorum StatefulSet(s) Ready (%d on distinct nodes, %d placement "+
-				"not assessed)", s.checkedCount, s.checkedCount-len(s.unspread), len(s.unspread)))
-		}
+		printSuccess(s.log, s.readyMessage())
 		s.setOK(true)
 	}
 }

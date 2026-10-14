@@ -95,6 +95,11 @@ rules:
     # blamed on NVCF.
     resources: ["gatewayclasses", "gateways", "httproutes", "grpcroutes", "tcproutes", "udproutes"]
     verbs: ["list"]
+  - apiGroups: ["policy"]
+    # HA Guarantee: one list finds the PodDisruptionBudget each NVCF
+    # workload needs under an HA mode, and any that blocks a node drain.
+    resources: ["poddisruptionbudgets"]
+    verbs: ["list"]
   {{- else }}
   - apiGroups: ["storage.k8s.io"]
     resources: ["csidrivers"]

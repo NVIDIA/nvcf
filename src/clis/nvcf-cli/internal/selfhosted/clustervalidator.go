@@ -1135,6 +1135,9 @@ func validatorClusterRules(role string) []rbacv1.PolicyRule {
 		{APIGroups: []string{"gateway.networking.k8s.io"}, Resources: []string{
 			"gateways", "gatewayclasses", "httproutes", "grpcroutes", "tcproutes", "udproutes",
 		}, Verbs: []string{"list"}},
+		// HA Guarantee: one list finds the PodDisruptionBudget each NVCF
+		// workload needs under an HA mode, and any that blocks a node drain.
+		{APIGroups: []string{"policy"}, Resources: []string{"poddisruptionbudgets"}, Verbs: []string{"list"}},
 	}, shared...)
 }
 

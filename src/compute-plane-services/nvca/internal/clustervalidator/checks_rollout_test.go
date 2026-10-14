@@ -555,9 +555,9 @@ func TestCheckTier2StatefulSets_WarnsOnlyAboutToleratedRollouts(t *testing.T) {
 		"no progress": rollTo(createdAt(makeQuorumSTS("nats", "nats-system", 3, 2,
 			[]string{"node-1", "node-2"}), stale), "nats-r2", stale),
 		"two pods down":    twoDown,
-		"co-located peers": rollingNATSWithDownPod([]string{"node-1", "node-1"}, "nats-r2", nil),
-		"co-located, at 3 of 3": rollTo(makeQuorumSTS("nats", "nats-system", 3, 3,
-			[]string{"node-1", "node-1", "node-2"}), "nats-r2", time.Now()),
+		"co-located peers": requireSpread(rollingNATSWithDownPod([]string{"node-1", "node-1"}, "nats-r2", nil)),
+		"co-located, at 3 of 3": requireSpread(rollTo(makeQuorumSTS("nats", "nats-system", 3, 3,
+			[]string{"node-1", "node-1", "node-2"}), "nats-r2", time.Now())),
 	} {
 		state, log := runTier2Logged(objs)
 		require.NotNil(t, state.Tier2StatefulSetsOK, name)

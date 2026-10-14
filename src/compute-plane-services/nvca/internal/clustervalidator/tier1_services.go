@@ -35,7 +35,7 @@ import (
 const helmReleaseAnnotation = "meta.helm.sh/release-name"
 
 // haInstanceLabel is the pod label the stack's charts set to the helmfile
-// release name.
+// release name, and that its HA anti-affinity, spread and PDB selectors match.
 const haInstanceLabel = "app.kubernetes.io/instance"
 
 // tier1ServiceAdvice is the advice for a Service that selects none of its

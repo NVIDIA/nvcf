@@ -145,6 +145,9 @@ var (
 		CheckKeyNodeToNode:          "Node-to-Node:",
 		CheckKeyTier1Deployments:    "Tier-1 Deployments:",
 		CheckKeyTier2StatefulSets:   "Tier-2 StatefulSets:",
+		// Without an HA mode it judges the rendered placement only, and has no
+		// result where it found no workload to judge, which a warning says.
+		CheckKeyHAGuarantee: "HA Guarantee:",
 	}
 )
 
@@ -191,6 +194,7 @@ func TestRun_ControlPlaneRoleDispatch(t *testing.T) {
 	for _, k := range append(append([]string(nil), computePlaneCheckKeys...), configuredCheckKeys...) {
 		assert.NotContains(t, s.Checks, k, "check %q must not be published under the control-plane role", k)
 	}
+	assert.Contains(t, s.Warnings, haModeNotSuppliedWarning)
 }
 
 // The compute-plane role publishes exactly the shared and compute-plane keys.
@@ -235,6 +239,7 @@ func TestPrintSummary_ControlPlaneRole(t *testing.T) {
 			NodeToNodeOK:        &ok,
 			Tier1DeploymentsOK:  &ok,
 			Tier2StatefulSetsOK: &ok,
+			HAGuaranteeOK:       &ok,
 			K8sVersion:          "v1.30.0",
 			TotalNodes:          "2",
 		}
@@ -269,6 +274,7 @@ func TestPrintSummary_ControlPlaneRole(t *testing.T) {
 			NodeToNodeOK:        &ok,
 			Tier1DeploymentsOK:  &ok,
 			Tier2StatefulSetsOK: &ok,
+			HAGuaranteeOK:       &ok,
 			K8sVersion:          "v1.30.0",
 			TotalNodes:          "2",
 		}
@@ -322,6 +328,7 @@ func TestPrintSummary_ControlPlaneRole(t *testing.T) {
 			NodeToNodeOK:             &ok,
 			Tier1DeploymentsOK:       &ok,
 			Tier2StatefulSetsOK:      &ok,
+			HAGuaranteeOK:            &ok,
 			// EnvoyGatewayOK / GatewayRoutesOK / ExternalLBOK nil: all
 			// non-critical, so they stay out of the verdict entirely.
 			K8sVersion: "v1.30.0",
@@ -1304,6 +1311,7 @@ func TestPrintSummary_NotApplicableIsNeitherPassNorUnknown(t *testing.T) {
 		ExternalLBOK:             &ok,
 		Tier1DeploymentsOK:       &ok,
 		Tier2StatefulSetsOK:      &ok,
+		HAGuaranteeOK:            &ok,
 		// NodeToNodeOK deliberately nil, with a not-applicable reason.
 		NodeToNodeNotApplicable: "single schedulable node, no cross-node path",
 		K8sVersion:              "v1.30.0",
