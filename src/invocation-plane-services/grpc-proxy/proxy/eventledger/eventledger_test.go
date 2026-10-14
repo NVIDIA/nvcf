@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,6 +46,23 @@ func testEvent(id string) cloudevents.Event {
 
 func publishCount(result string) float64 {
 	return testutil.ToFloat64(metrics.EventLedgerPublishCounter.WithLabelValues(testEventType, result))
+}
+
+func sendSamples(t *testing.T, result string) uint64 {
+	t.Helper()
+	families, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() != "nvcf_grpc_proxy_service_event_ledger_send_duration_seconds" {
+			continue
+		}
+		for _, m := range family.GetMetric() {
+			if m.GetLabel()[0].GetValue() == result {
+				return m.GetHistogram().GetSampleCount()
+			}
+		}
+	}
+	return 0
 }
 
 func writeSecrets(t *testing.T, secrets string) string {
@@ -84,10 +102,11 @@ func TestPublishSendsStructuredEventWithBearerToken(t *testing.T) {
 }
 
 func TestPublishSendsEventWithOAuth2Token(t *testing.T) {
-	var gotScope string
+	// nvkit may fetch a token from more than one goroutine.
+	var gotScope atomic.Value
 	idp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.NoError(t, r.ParseForm())
-		gotScope = r.Form.Get("scope")
+		gotScope.Store(r.Form.Get("scope"))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"access_token":"oauth-token","token_type":"bearer","expires_in":3600}`))
 	}))
@@ -106,7 +125,7 @@ func TestPublishSendsEventWithOAuth2Token(t *testing.T) {
 	publisher.Close()
 
 	assert.Equal(t, "Bearer oauth-token", gotAuth)
-	assert.Equal(t, scope, gotScope)
+	assert.Equal(t, scope, gotScope.Load())
 }
 
 func TestPublishRetriesUnavailableLedger(t *testing.T) {
@@ -122,11 +141,32 @@ func TestPublishRetriesUnavailableLedger(t *testing.T) {
 
 	publisher := newTestPublisher(t, ledger.URL)
 	sent := publishCount("sent")
+	sends := sendSamples(t, "sent")
 	publisher.Publish(t.Context(), testEvent("event-1"))
 	publisher.Close()
 
 	assert.Equal(t, int32(2), attempts.Load())
 	assert.Equal(t, sent+1, publishCount("sent"))
+	assert.Equal(t, sends+1, sendSamples(t, "sent"))
+}
+
+func TestPublishGivesUpAfterMaxRetries(t *testing.T) {
+	var attempts atomic.Int32
+	ledger := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer ledger.Close()
+
+	publisher := newTestPublisher(t, ledger.URL)
+	failed := publishCount("failed")
+	sends := sendSamples(t, "failed")
+	publisher.Publish(t.Context(), testEvent("event-1"))
+	publisher.Close()
+
+	assert.Equal(t, int32(maxRetries+1), attempts.Load())
+	assert.Equal(t, failed+1, publishCount("failed"))
+	assert.Equal(t, sends+1, sendSamples(t, "failed"))
 }
 
 func TestPublishDoesNotRetryRejectedEvent(t *testing.T) {

@@ -98,6 +98,7 @@ func (p *Publisher) Publish(ctx context.Context, event cloudevents.Event) {
 }
 
 func (p *Publisher) send(ctx context.Context, event cloudevents.Event) {
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(ctx, sendTimeout)
 	defer cancel()
 	// The ledger accepts only structured mode (application/cloudevents+json).
@@ -107,6 +108,7 @@ func (p *Publisher) send(ctx context.Context, event cloudevents.Event) {
 		backoff.NewExponentialBackOff(backoff.WithInitialInterval(retryDelay)), maxRetries), ctx)
 	if err := backoff.Retry(func() error { return p.sendOnce(ctx, event) }, retry); err != nil {
 		metrics.EventLedgerPublishCounter.WithLabelValues(event.Type(), "failed").Inc()
+		metrics.EventLedgerSendDurationSeconds.WithLabelValues("failed").Observe(time.Since(start).Seconds())
 		zap.L().Warn("failed to publish event to event ledger",
 			zap.String("event_type", event.Type()),
 			zap.String("event_id", event.ID()),
@@ -114,6 +116,7 @@ func (p *Publisher) send(ctx context.Context, event cloudevents.Event) {
 		return
 	}
 	metrics.EventLedgerPublishCounter.WithLabelValues(event.Type(), "sent").Inc()
+	metrics.EventLedgerSendDurationSeconds.WithLabelValues("sent").Observe(time.Since(start).Seconds())
 }
 
 // sendOnce makes one delivery attempt. Rejections other than 429 and 5xx are

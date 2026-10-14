@@ -102,6 +102,14 @@ var (
 			Help:      "total events published to the event ledger, by event type and result",
 		}, []string{"event_type", "result"})
 
+	// EventLedgerSendDurationSeconds covers a whole send, including retries.
+	EventLedgerSendDurationSeconds = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: RootNamespace,
+			Name:      "event_ledger_send_duration_seconds",
+			Help:      "time to deliver an event to the event ledger, including retries",
+		}, []string{"result"})
+
 	_ = promauto.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: NatsNamespace,
 		Name:      "out_bytes",

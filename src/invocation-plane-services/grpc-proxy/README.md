@@ -489,7 +489,8 @@ backoff, within 10 seconds. At
 most 1000 sends run at once and further events are dropped. Results are
 counted in `nvcf_grpc_proxy_service_event_ledger_publish_total` by
 `event_type` (the CloudEvent `type`) and `result` (`sent`, `failed`,
-`dropped`).
+`dropped`). Send time, including retries, is recorded in
+`nvcf_grpc_proxy_service_event_ledger_send_duration_seconds` by `result`.
 
 Authentication follows the same rule as the NVCF API client. If the secrets
 file has an `eventLedgerToken` key, that token is sent as a bearer token and
