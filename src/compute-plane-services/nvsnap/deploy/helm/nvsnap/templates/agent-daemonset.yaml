@@ -151,9 +151,6 @@ spec:
             {{- with .Values.webhook.dynamoNamespace }}
             - --webhook-dynamo-namespace={{ . }}
             {{- end }}
-            {{- with .Values.webhook.dynamoLeaseTTL }}
-            - --webhook-dynamo-lease-ttl={{ . }}
-            {{- end }}
             {{- with .Values.webhook.captureLivenessBudget }}
             - --webhook-capture-liveness-budget={{ . }}
             {{- end }}

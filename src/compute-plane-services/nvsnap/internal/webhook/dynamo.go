@@ -15,7 +15,6 @@ package webhook
 
 import (
 	"net/url"
-	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -24,10 +23,7 @@ import (
 const (
 	dynNamespaceEnv       = "DYN_NAMESPACE"
 	dynNamespacePrefixEnv = "DYN_NAMESPACE_PREFIX"
-	// dynLeaseTTLEnv is the TTL, in seconds, of the etcd lease a Dynamo
-	// component registers under (Dynamo's default is 10).
-	dynLeaseTTLEnv  = "ETCD_LEASE_TTL"
-	dynDiscoveryEnv = "DYN_DISCOVERY_BACKEND"
+	dynDiscoveryEnv       = "DYN_DISCOVERY_BACKEND"
 	// DynDiscoveryAnnotation is the operator's per-pod discovery backend.
 	DynDiscoveryAnnotation = "nvidia.com/dynamo-discovery-backend"
 )
@@ -100,17 +96,6 @@ func (m *Mutator) dynamoNamespacePatches(pod *corev1.Pod) []PatchOp {
 		for _, name := range []string{dynNamespaceEnv, dynNamespacePrefixEnv} {
 			if v, set := envValue(c, name); set && v != m.DynamoNamespace {
 				vars = append(vars, corev1.EnvVar{Name: name, Value: m.DynamoNamespace})
-			}
-		}
-		// A lease that outlasts a capture: capturing a running instance
-		// freezes its GPU workers for seconds (longer for a large model),
-		// and an etcd that sees a 10 s lease go unrenewed deregisters the
-		// worker of the instance that keeps serving. A longer TTL costs
-		// nothing but a slower drop of a crashed component from routing.
-		// A value the workload sets itself is kept.
-		if _, names := envValue(c, dynNamespaceEnv); names && m.DynamoLeaseTTL > 0 {
-			if _, set := envValue(c, dynLeaseTTLEnv); !set {
-				vars = append(vars, corev1.EnvVar{Name: dynLeaseTTLEnv, Value: strconv.Itoa(m.DynamoLeaseTTL)})
 			}
 		}
 		patches = append(patches, setContainerEnv(i, c, vars)...)

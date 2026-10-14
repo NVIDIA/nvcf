@@ -203,9 +203,6 @@ func main() {
 	flag.StringVar(&config.Webhook.DynamoNamespace, "webhook-dynamo-namespace", "",
 		"Fixed Dynamo namespace (DYN_NAMESPACE, DYN_NAMESPACE_PREFIX) for Dynamo components whose etcd and NATS are their instance's own; empty keeps the operator's.")
 
-	flag.IntVar(&config.Webhook.DynamoLeaseTTL, "webhook-dynamo-lease-ttl", 0,
-		"etcd lease TTL in seconds (ETCD_LEASE_TTL) for the Dynamo components that get the fixed Dynamo namespace, unless they set one; it must outlast a capture's freeze. 0 keeps Dynamo's default.")
-
 	flag.IntVar(&config.Webhook.CaptureLivenessBudget, "webhook-capture-liveness-budget", 0,
 		"Seconds of silence every liveness probe is widened to tolerate (its failureThreshold raised), so a capture's freeze does not get the pod restarted; 0 leaves probes as they are.")
 
