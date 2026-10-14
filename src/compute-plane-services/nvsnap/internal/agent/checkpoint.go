@@ -707,9 +707,18 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 			replaySpan.RecordError(miErr)
 			log.WithError(miErr).Warn("Failed to parse mountinfo for replay-mount snapshot")
 		}
+		emptyDirMax := ReplayEmptyDirMaxBytes()
 		for _, mi := range mis {
-			if classifyMount(mi.MountPoint, mi.FsType, mi.Opts, allowlist) != MountClassReplay {
+			if classifyMount(mi.Root, mi.MountPoint, mi.FsType, mi.Opts, allowlist) != MountClassReplay {
 				continue
+			}
+			if isEmptyDirMount(mi.Root) {
+				over, n, err := treeBytesOver(fmt.Sprintf("/proc/%d/root%s", containerInfo.PID, mi.MountPoint), emptyDirMax)
+				if err != nil || over {
+					log.WithError(err).WithFields(logrus.Fields{"mp": mi.MountPoint, "bytes": n, "limit": emptyDirMax}).
+						Warn("emptyDir not copied into the checkpoint: too large or unreadable; a restore that needs its files fails and starts cold")
+					continue
+				}
 			}
 			tarRel := filepath.Join("mounts", SanitizeMountPath(mi.MountPoint)+".tar")
 			tarAbs := filepath.Join(checkpointDir, tarRel)
