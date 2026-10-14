@@ -206,7 +206,9 @@ The chart can pass a Stargate load-balancer config in either of two ways:
 - `llmRequestRouter.loadBalancer.config` embeds JSON directly in the release. The chart writes it to a ConfigMap and starts Stargate with `--lb-config-path=/etc/llm-request-router/lb-config.json`.
 - `llmRequestRouter.loadBalancer.configPath` points Stargate at an existing file path and starts it with `--lb-config-path=<configPath>`.
 
-`config` takes precedence over `configPath` when both are set. With `config`, the Pod template carries a `checksum/load-balancer-config` annotation, so changing the policy rolls the router Pods. Upgrading from a chart version without this annotation rolls them once. If neither value is set, Stargate uses its built-in default algorithm, `power-of-two`.
+`config` takes precedence over `configPath` when both are set. If neither value is set, Stargate uses its built-in default algorithm, `power-of-two`.
+
+Stargate reads the load-balancer config only at startup. When `config` is set, the chart adds a `checksum/load-balancer-config` annotation to the router Pod template, so changing the policy rolls the router Pods and they load the new config. Releases that already set `config` see one router rollout when they upgrade from a chart version without this annotation. Releases that use `configPath` or neither value get no annotation; restart the router Pods yourself after changing a file referenced by `configPath`.
 
 See the
 [Stargate load balancer configuration](../../../src/libraries/rust/stargate/docs/load-balancer-configuration.md)
