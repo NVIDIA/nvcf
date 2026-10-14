@@ -67,6 +67,7 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt;
 import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
 import com.nvidia.icms.service.AppAuditService;
 import com.nvidia.icms.service.byoc.nvca.ClusterOidcIdentityService;
+import com.nvidia.icms.service.cpu.CpuWorkloadsTestFixtures;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import com.nvidia.icms.util.AuthUtils;
 import java.util.HashMap;
@@ -121,7 +122,35 @@ class ClusterCreationServiceTest {
         clusterCreationService =
                 new ClusterCreationService(objectMapper, nvcaClusterRepository, clusterRepository,
                                            telemetryEventClient, auditService, nvcaConfigurationProperties,
-                                           nvcaClusterConfigurationRepository, clusterOidcIdentityService);
+                                           nvcaClusterConfigurationRepository, clusterOidcIdentityService,
+                                           CpuWorkloadsTestFixtures.disabled());
+    }
+
+    private static com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt cpuGpu() {
+        return com.nvidia.icms.outbound.cassandra.byoc.entity.GpuV5Udt.builder().name("CPU")
+                .capacity(1).instanceTypes(Set.of(
+                        com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt.builder()
+                                .name("NCP.CPU.4c16g").value("NCP.CPU.4c16g").gpuCount(0)
+                                .cpuCores(4).systemMemory("16Gi").storage("50Gi").isDefault(true).build()))
+                .build();
+    }
+
+    @Test
+    void validateGpusForNewCluster_cpuShapeWhileCpuWorkloadsDisabled_isRejected() {
+        // Shared by cluster create and reconfigure.
+        assertThrows(com.nvidia.icms.errors.CpuWorkloadsNotReadyException.class,
+                () -> clusterCreationService.validateGpusForNewCluster(Set.of(cpuGpu()), Set.of()));
+    }
+
+    @Test
+    void validateGpusForNewCluster_cpuShapeWhenReady_isAccepted() {
+        ClusterCreationService ready = new ClusterCreationService(
+                objectMapper, nvcaClusterRepository, clusterRepository, telemetryEventClient,
+                auditService, nvcaConfigurationProperties, nvcaClusterConfigurationRepository,
+                clusterOidcIdentityService, CpuWorkloadsTestFixtures.ready());
+
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                () -> ready.validateGpusForNewCluster(Set.of(cpuGpu()), Set.of()));
     }
 
     @Test

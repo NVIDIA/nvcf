@@ -28,10 +28,13 @@ import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthEntity;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthKey;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.GpuCapacity;
 import com.nvidia.icms.service.metrics.ClusterGpuUsageMetricsService;
+import com.nvidia.icms.service.cpu.CpuShapes;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.annotation.Nullable;
 import jakarta.validation.constraints.NotNull;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import lombok.AllArgsConstructor;
@@ -128,6 +131,25 @@ public class CloudHealthService {
         return cloudHealthRepository.findByCloudAndZone(resourceProvider, zone);
     }
 
+    private record StoredType(String name, int gpuCount) { }
+
+    private static boolean isStoredCpuShape(ClusterEntity cluster, String gpuName) {
+        // Registrations through the legacy flow are stored in the older columns, so all three are
+        // read.
+        List<List<StoredType>> entries = new ArrayList<>();
+        cluster.getGpusV5().stream().filter(g -> gpuName.equals(g.getName())).forEach(
+                g -> entries.add(g.getInstanceTypes().stream()
+                        .map(i -> new StoredType(i.getName(), i.getGpuCount())).toList()));
+        cluster.getGpusV4().stream().filter(g -> gpuName.equals(g.getName())).forEach(
+                g -> entries.add(g.getInstanceTypes().stream()
+                        .map(i -> new StoredType(i.getName(), i.getGpuCount())).toList()));
+        cluster.getGpus().stream().filter(g -> gpuName.equals(g.getName())).forEach(
+                g -> entries.add(g.getInstanceTypes().stream()
+                        .map(i -> new StoredType(i.getName(), i.getGpuCount())).toList()));
+        return entries.stream().anyMatch(types -> !types.isEmpty() && types.stream().allMatch(
+                t -> CpuShapes.isCpuShapeEntry(gpuName, t.name(), t.gpuCount())));
+    }
+
     private void sendGpuUsageMetrics(String clusterId, Map<String, GpuCapacity> gpuUsage) {
         // Fetch cluster info
         Optional<ClusterEntity> optionalClusterEntity =
@@ -137,6 +159,17 @@ public class CloudHealthService {
 
             // Send gpu capacity metrics
             for (Map.Entry<String, GpuCapacity> entry : gpuUsage.entrySet()) {
+                // CPU capacity is counted in instances. Keep it out of the GPU gauges so the two
+                // units are never summed together. The decision follows the stored shapes, not the
+                // feature state, so capacity never switches gauge when the state changes, and a GPU
+                // that merely carries the same name keeps its GPU gauges.
+                if (isStoredCpuShape(clusterEntity, entry.getKey())) {
+                    clusterGpuUsageMetricsService.recordCpuCapacity(
+                            clusterEntity.getClusterName(), entry.getKey(),
+                            entry.getValue().getCapacity(), entry.getValue().getAvailable(),
+                            entry.getValue().getAllocated(), clusterEntity);
+                    continue;
+                }
                 clusterGpuUsageMetricsService.recordTotalGpus(clusterEntity.getClusterName(), entry.getKey(),
                                                               entry.getValue().getCapacity(), clusterEntity);
                 clusterGpuUsageMetricsService.recordAvailableGpus(clusterEntity.getClusterName(), entry.getKey(),

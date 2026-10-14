@@ -24,6 +24,10 @@ public class MetricsConstants {
     public static final String METER_GPU_TOTAL_COUNT = "gpu.total.count";
     public static final String METER_GPU_AVAILABLE_COUNT = "gpu.available.count";
     public static final String METER_GPU_OCCUPIED_COUNT = "gpu.occupied.count";
+    // CPU-only workloads are counted in instances, not GPUs, so they have their own meters.
+    public static final String METER_CPU_TOTAL_COUNT = "nvcf.icms.cpu.instances.capacity";
+    public static final String METER_CPU_AVAILABLE_COUNT = "nvcf.icms.cpu.instances.available";
+    public static final String METER_CPU_OCCUPIED_COUNT = "nvcf.icms.cpu.instances.occupied";
     public static final String METER_TASK_ERROR = "nvct.task.error";
 
     // Metrics - Tag names

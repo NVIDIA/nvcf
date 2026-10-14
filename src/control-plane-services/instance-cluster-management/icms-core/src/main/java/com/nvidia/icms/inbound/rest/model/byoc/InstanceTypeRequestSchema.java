@@ -44,7 +44,8 @@ public class InstanceTypeRequestSchema {
     String gpuMemory;
 
     @Schema(description = "Number of GPUs to be attached to the worker pod. " +
-            "Supported values 1, 2, 4, 8 (Default value is 1)")
+            "Supported values 1, 2, 4, 8 (Default value is 1). 0 is used only by CPU-only "
+                    + "instance types registered under the GPU name CPU")
     int gpuCount = 1;
 
     @Valid

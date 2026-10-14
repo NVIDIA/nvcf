@@ -51,6 +51,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
@@ -95,6 +96,8 @@ import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.Mockito;
@@ -1341,6 +1344,65 @@ class InternalInstanceServiceTest {
         verify(reservationCapacityValidationHelper).validateAndGetReservationEntity(testReservationId);
         verify(reservationCapacityValidationHelper).validateReservationBackupCapacityForRequestStateUpdate(
                 mockReservation, instanceRequestEntity, 1);
+    }
+
+    /**
+     * CPU workloads do not support reservations. A request status update that carries a reservation is
+     * refused for every capacity type, not only RESERVED_BACKUP, and nothing is persisted or queued.
+     */
+    @ParameterizedTest
+    @EnumSource(value = CapacityType.class, names = {"RESERVED", "RESERVED_BACKUP"})
+    void updateInstanceRequestStatus_withReservedCpuShape_returnsPreConditionFailedAndWritesNothing(
+            CapacityType capacityType) {
+        // Given
+        UUID testReservationId = UUID.randomUUID();
+        SpotInstanceRequestStatusUpdateRequest updateRequest = new SpotInstanceRequestStatusUpdateRequest();
+        updateRequest.setStatus(PENDING_FULFILLMENT);
+        updateRequest.setReservationId(testReservationId);
+        updateRequest.setCapacityType(capacityType);
+        updateRequest.setInstanceCount(1);
+        updateRequest.setPlacement(getDummyInstancePlacement());
+        updateRequest.setMessageBatchId(DUMMY_MESSAGE_BATCH_ID);
+
+        InstanceRequestV2Entity instanceRequestEntity = getInstanceRequestEntity(
+                SpotInstanceRequestState.OPEN, PENDING_EVALUATION, ResourceProvider.OCI);
+        ReservationEntity mockReservation = ReservationEntity.builder()
+                .ncaId(DUMMY_NON_BYOC_NCA_ID)
+                .clusterId(DUMMY_ZONE)
+                .reservationId(testReservationId)
+                .reservedGpuCount(4)
+                .build();
+        when(reservationCapacityValidationHelper.validateAndGetReservationEntity(testReservationId))
+                .thenReturn(Optional.of(mockReservation));
+        doThrow(new PreConditionFailedException(ReservationCapacityValidationHelper.CPU_RESERVATION_MESSAGE))
+                .when(reservationCapacityValidationHelper).rejectCpuShapeWithReservation(instanceRequestEntity);
+
+        doReturn(Optional.of(instanceRequestEntity)).when(instanceRequestV2Repository)
+                .findRequestById(DUMMY_REQUEST_ID);
+        doReturn(30).when(icmsConfigurationProperties).getRequestCancelDurationInMin();
+        doReturn(getDummyInstancePlacementValidationResponse(getDummyInstancePlacement(), CloudProvider.OCI, ResourceProvider.OCI))
+                .when(internalInstanceServiceHelper).validateInstancePlacement(Mockito.any(), Mockito.any(), Mockito.any());
+        when(instanceServiceHelper.getLaunchSpecificationForTelemetry(Mockito.any())).thenReturn(
+                getDummyClientRequestDataModel(DUMMY_NON_BYOC_INSTANCE_TYPE, DUMMY_NON_BYOC_NCA_ID,
+                        DUMMY_REQUEST_ID, CloudProvider.OCI.toString()).getLaunchSpecification());
+
+        // When
+        PreConditionFailedException exception = assertThrows(PreConditionFailedException.class, () ->
+                internalInstanceService.updateInstanceRequestStatus(DUMMY_CLUSTER_ID, DUMMY_REQUEST_ID,
+                        updateRequest, auditProps));
+
+        // Then: refused with 412, the check ran before the backup capacity validation, and no request
+        // status, audit event, queue message or sibling update was written.
+        assertEquals(412, exception.getBody().getStatus());
+        assertEquals(ReservationCapacityValidationHelper.CPU_RESERVATION_MESSAGE, exception.getBody().getDetail());
+        verify(reservationCapacityValidationHelper).rejectCpuShapeWithReservation(instanceRequestEntity);
+        verify(reservationCapacityValidationHelper, never())
+                .validateReservationBackupCapacityForRequestStateUpdate(Mockito.any(), Mockito.any(), Mockito.any());
+        verify(instanceRequestV2Repository, never()).update(Mockito.any());
+        // The service reads the message batch before it reaches the reservation check, which is fine.
+        // Nothing is written.
+        verify(sqsMessageRepository, never()).update(Mockito.any());
+        verifyNoInteractions(auditService, byocService, instanceUpdateService);
     }
 
     @Test

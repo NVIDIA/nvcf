@@ -52,6 +52,7 @@ import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -1686,6 +1687,87 @@ class InstanceUpdateServiceTest {
 
         // Assert
         assertEquals(String.format("Reservation %s is fully utilized", reservationId), preConditionFailedException.getBody().getDetail());
+        verify(telemetryEventClient).triggerEvent(List.of(genericMetric));
+        verify(instanceRequestV2Repository).findRequestById(DUMMY_REQUEST_ID);
+        verify(internalInstanceServiceHelper).validateInstancePlacement(
+                instanceStatusUpdateRequest.getPlacement(), DUMMY_CLUSTER_ID, DUMMY_REQUEST_ID);
+        verify(instanceV2Repository).findInstanceByCustomerAndId(DUMMY_CUSTOMER_1,
+                DUMMY_INSTANCE_ID);
+        verifyNoMoreInteractions(instanceV2Repository);
+        verifyNoInteractions(auditService);
+    }
+
+    // A CPU shape is refused with a reservation for every capacity type, not only RESERVED_BACKUP.
+    @ParameterizedTest
+    @EnumSource(value = SpotInstanceInternalState.class, names = {"STARTING", "RUNNING", "TERMINATED"})
+    void updateInstanceStatus_withReservedCpuShape_throwException(SpotInstanceInternalState state) {
+        // Prepare
+        UUID reservationId = UUID.randomUUID();
+        SpotInstanceStatusUpdateRequest instanceStatusUpdateRequest =
+                getInstanceUpdateRequestForActiveInstanceWithReservationId(state, reservationId, CapacityType.RESERVED);
+
+        // mock request entity to find customer
+        InstanceRequestV2Entity instanceRequestV2Entity = getInstanceRequestV2Entity(SpotInstanceRequestState.OPEN,
+                SpotRequestStatusCode.PENDING_FULFILLMENT);
+        doReturn(Optional.of(instanceRequestV2Entity)).when(
+                instanceRequestV2Repository).findRequestById(DUMMY_REQUEST_ID);
+
+        // Mock for reservation validation
+        ReservationEntity reservationEntity = getDummyReservation(reservationId);
+        when(reservationCapacityValidationHelper.validateAndGetReservationEntity(reservationId))
+                .thenReturn(Optional.of(reservationEntity));
+        doThrow(new PreConditionFailedException(ReservationCapacityValidationHelper.CPU_RESERVATION_MESSAGE))
+                .when(reservationCapacityValidationHelper)
+                .rejectCpuShapeWithReservation(instanceRequestV2Entity);
+
+        GenericMetric genericMetric = new GenericMetric()
+                .withEventName(Events.PRE_CONDITION_FAILED.toString())
+                .withInstanceId(DUMMY_INSTANCE_ID)
+                .withRequestId(DUMMY_REQUEST_ID)
+                .withFunctionVersionId(DUMMY_FUNCTION_VERSION_ID)
+                .withFunctionId(DUMMY_FUNCTION_ID)
+                .withNcaId(DUMMY_NON_BYOC_NCA_ID)
+                .withInstanceType(DUMMY_NON_BYOC_INSTANCE_TYPE)
+                .withClusterId(instanceStatusUpdateRequest.getPlacement().getAvailabilityZone())
+                .withError(ReservationCapacityValidationHelper.CPU_RESERVATION_MESSAGE)
+                .withDeploymentId(instanceRequestV2Entity.getDeploymentId())
+                .withGpuSpecificationId(instanceRequestV2Entity.getGpuSpecificationId())
+                .withFunctionName(null)
+                .withTaskName(null)
+                .withGpuName(DUMMY_GPU)
+                .withCustomer(instanceRequestV2Entity.getCustomer())
+                .withInstanceCount(instanceRequestV2Entity.getInstanceCount())
+                .withResourceProvider(instanceRequestV2Entity.getResourceProvider())
+                .withRequestState(instanceRequestV2Entity.getState().toString())
+                .withCapacityType(instanceStatusUpdateRequest.getCapacityType())
+                .withCloudProvider(CloudProvider.AWS)
+                .withMetadata(Map.of(EventMetaData.REQUEST_BODY.getName(),
+                        GsonCompatMapper.toJson(ignoreSensitiveInformation(instanceStatusUpdateRequest)),
+                        EventMetaData.REQUEST_STATUS.getName(),
+                        instanceRequestV2Entity.getStatusCode()));
+
+        doNothing().when(telemetryEventClient).triggerEvent(List.of(genericMetric));
+        when(internalInstanceServiceHelper.validateInstancePlacement(
+                instanceStatusUpdateRequest.getPlacement(), DUMMY_CLUSTER_ID,
+                DUMMY_REQUEST_ID)).thenReturn(getDummyInstancePlacementValidationResponse(
+                instanceStatusUpdateRequest.getPlacement(), CloudProvider.AWS,
+                ResourceProvider.BYOC));
+        when(instanceServiceHelper.getLaunchSpecificationForTelemetry(Mockito.any())).thenReturn(
+                getDummyClientRequestModel().getLaunchSpecification());
+        when(instanceV2Repository.findInstanceByCustomerAndId(DUMMY_CUSTOMER_1,
+                DUMMY_INSTANCE_ID)).thenReturn(Optional.empty());
+
+        // Act
+        PreConditionFailedException preConditionFailedException = Assertions.assertThrows(PreConditionFailedException.class,
+                () -> instanceUpdateService.updateInstanceStatus(DUMMY_REQUEST_ID, DUMMY_INSTANCE_ID,
+                instanceStatusUpdateRequest,
+                DUMMY_CLUSTER_ID, auditProps));
+
+        // Assert
+        assertEquals(ReservationCapacityValidationHelper.CPU_RESERVATION_MESSAGE, preConditionFailedException.getBody().getDetail());
+        verify(reservationCapacityValidationHelper).rejectCpuShapeWithReservation(instanceRequestV2Entity);
+        verify(reservationCapacityValidationHelper, never())
+                .validateReservationBackupCapacityForInstanceStateUpdate(any(), any());
         verify(telemetryEventClient).triggerEvent(List.of(genericMetric));
         verify(instanceRequestV2Repository).findRequestById(DUMMY_REQUEST_ID);
         verify(internalInstanceServiceHelper).validateInstancePlacement(

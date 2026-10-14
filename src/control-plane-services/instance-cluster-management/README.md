@@ -72,6 +72,34 @@ live in `icms-service/src/main/resources/application-{profile}.yaml` and
 `bootstrap-{profile}.yaml`; `icms-core` keeps test-only configuration under
 `icms-core/src/test/resources`.
 
+## CPU-only workloads
+
+Off by default. Set `icms.cpu-workloads.enabled=true` (environment variable
+`ICMS_CPUWORKLOADS_ENABLED`; in the self-managed stack, `cpuWorkloads.enabled`) to let
+clusters register CPU instance types. The self-managed stack pins an SIS chart that predates the feature,
+so it refuses the switch until `cpuWorkloads.sisChartVersion` or `sis.chartPath` names a chart that has it.
+
+- A CPU shape is registered under the reserved GPU name `CPU`, with an instance type named
+  `<provider>.CPU.<shape>` (for example `NCP.CPU.8c32g`) and `gpuCount` 0.
+- A shape NVCA could not build is refused with a 400: the name and value must be the same shape name and a valid
+  Kubernetes label value, `cpuCores` must be positive, and `systemMemory` and `storage` must be positive
+  Kubernetes quantities such as `16Gi`. Registration forms that carry no storage field are not checked for it.
+- The status is `DISABLED`, `READY` or `BLOCKED`. Clusters read it at
+  `GET /v1/nvca/clusters/{clusterId}/cpu-workloads-status`. The reason is a generic code.
+- On startup ICMS checks stored clusters for a real GPU already named `CPU` in any letter
+  case. If one exists the state is `BLOCKED` (`COLLISION_DETECTED`) and CPU shapes are
+  rejected until the GPU is renamed.
+- While the switch is on, the name `CPU` is reserved. Until the state is `READY`, a registration that
+  uses the name for anything but a CPU shape is refused with a 400 that asks for the GPU to be
+  renamed, so that nothing under that name can be stored behind a running check. That includes a
+  cluster that re-registers a real GPU under that name. With the switch off nothing changes.
+- Outside `READY`, a request or registration that uses a CPU shape fails with HTTP 409 and
+  the message `CPU_WORKLOADS_NOT_READY`.
+- CPU shapes do not support reservations. Capacity is counted in instances, and usage is
+  not billed as GPU hours.
+- An account listed in `icms.gpu-gating` only sees GPUs it lists. Add `CPU` and its shape
+  names to that account's entry before enabling the switch.
+
 See [CLAUDE.md](CLAUDE.md) and [AGENTS.md](AGENTS.md) for deeper architecture and contribution notes.
 
 ## Run the app from IntelliJ IDEA

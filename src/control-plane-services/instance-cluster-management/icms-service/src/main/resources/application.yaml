@@ -200,6 +200,13 @@ icms:
   #       cluster-group-name: <CLUSTER_GROUP_NAME>
   #       cluster-group-id: <CLUSTER_GROUP_ID>
   compute-platforms: []
+  # CPU-only workloads: instance types with no GPU, registered under the reserved GPU name CPU.
+  # Off by default. With it off ICMS behaves as before for every GPU name. The self-managed stack
+  # sets it from its cpuWorkloads.enabled switch through ICMS_CPUWORKLOADS_ENABLED. When on, ICMS
+  # also reports its state to clusters and refuses CPU shapes if a GPU is already registered
+  # under the name CPU in any letter case.
+  cpu-workloads:
+    enabled: false
   # Additional trusted static JWT issuers, validated in addition to the primary
   # issuer-uri (and optional admin-issuer-uri). Empty here: only the primary
   # (and admin) issuer is trusted. A deployment can trust extra issuers by

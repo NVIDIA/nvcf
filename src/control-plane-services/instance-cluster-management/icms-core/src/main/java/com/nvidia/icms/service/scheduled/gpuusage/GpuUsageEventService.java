@@ -35,6 +35,7 @@ import com.nvidia.icms.outbound.cassandra.request.InstanceRequestV2Repository;
 import com.nvidia.icms.outbound.cassandra.request.entity.InstanceRequestV2Entity;
 import com.nvidia.icms.outbound.sqs.model.CapacityType;
 import com.nvidia.icms.service.LatestInstanceStateEventService;
+import com.nvidia.icms.service.cpu.CpuShapes;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.service.scheduled.gpuusage.GpuUsageEventService.InstanceLaunchSpecificationInfo.InstanceLaunchSpecificationInfoBuilder;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;
@@ -358,6 +359,18 @@ public class GpuUsageEventService {
     @VisibleForTesting
      int getGpuCountAssociatedToInstance(CloudProvider cloudProvider,
                                                 InstanceV2Entity instanceV2Entity) {
+
+        // A CPU instance uses no GPU. This must come before the fallback below, which treats a
+        // count of 0 as "unknown" and would bill the instance as one GPU. It does not depend on
+        // the CPU workloads switch, so instances created while it was on stay correct if it is
+        // later turned off. Only an explicitly recorded count of 0 qualifies. A missing count is
+        // unknown, not zero, and a count above zero is never a CPU instance, even when the GPU
+        // carries the reserved name.
+        Integer recordedCount = instanceV2Entity.getGpuCountPerInstance();
+        if (recordedCount != null && CpuShapes.isCpuShapeEntry(
+                instanceV2Entity.getGpu(), instanceV2Entity.getInstanceType(), recordedCount)) {
+            return 0;
+        }
 
         if (instanceV2Entity.getGpuCountPerInstance() != null
                 && instanceV2Entity.getGpuCountPerInstance() != 0) {

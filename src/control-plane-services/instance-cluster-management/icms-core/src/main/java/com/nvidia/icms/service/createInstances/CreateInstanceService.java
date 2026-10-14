@@ -29,7 +29,10 @@ import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.errors.IcmsBadRequestException;
 import com.nvidia.icms.inbound.rest.model.CreateSpotInstancesResponse;
 import com.nvidia.icms.inbound.rest.model.swagger.schema.SpotInstanceRequestSchema;
+import com.nvidia.icms.outbound.cassandra.byoc.entity.InstanceTypeV5Udt;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthEntity;
+import com.nvidia.icms.service.cpu.CpuShapes;
+import com.nvidia.icms.service.internal.ReservationCapacityValidationHelper;
 import com.nvidia.icms.service.byoc.ByocCreateService;
 import com.nvidia.icms.service.byoc.ByocValidationService;
 import com.nvidia.icms.service.byoc.ClusterTargetingHelper;
@@ -143,6 +146,16 @@ public class CreateInstanceService {
             reportAndThrowError(String.format("%s: %s", instanceRequest.getLoggingId(), errMsg), errMsg);
         }
 
+        // CPU workloads do not support reservations. Refuse before anything is queued, instead of
+        // accepting the request and failing when the cluster reports it. Each destination is judged
+        // by the instance type it carries, so a real GPU that is registered under the name CPU, with
+        // a positive GPU count, is not affected.
+        if (filteredDestinations.stream().anyMatch(CreateInstanceService::isReservedCpuShapeDestination)) {
+            reportAndThrowError(String.format("%s: %s", instanceRequest.getLoggingId(),
+                                              ReservationCapacityValidationHelper.CPU_RESERVATION_MESSAGE),
+                                ReservationCapacityValidationHelper.CPU_RESERVATION_MESSAGE);
+        }
+
         filterDestinationBasedOnCapacity(filteredDestinations, cloudHealthByClusterId, instanceRequest);
         if (isSetEmptyOrNull(filteredDestinations)) {
             String errMsg = String.format("There are no available clusters with capacity for %s GPU or %s instance type",
@@ -166,6 +179,16 @@ public class CreateInstanceService {
         throw new IcmsBadRequestException(exceptionError);
     }
 
+
+    private static boolean isReservedCpuShapeDestination(RequestInstanceDestination destination) {
+        if (!destination.isReserved() && !destination.isReservedBackup()) {
+            return false;
+        }
+        InstanceTypeV5Udt instanceType = destination.getInstanceType();
+        return instanceType != null
+                && CpuShapes.isCpuShapeEntry(
+                        destination.getGpuName(), instanceType.getName(), instanceType.getGpuCount());
+    }
 
     protected void filterDestinationBasedOnCapacity(
             @NotNull Set<RequestInstanceDestination> destinations,

@@ -1305,6 +1305,11 @@ public class InstanceUpdateService {
             // Validate and get ReservationEntity
             Optional<ReservationEntity> optionalReservationEntity = reservationCapacityValidationHelper.validateAndGetReservationEntity(statusUpdateRequest.getReservationId());
 
+            // CPU workloads do not support reservations, for any capacity type
+            if (optionalReservationEntity.isPresent()) {
+                reservationCapacityValidationHelper.rejectCpuShapeWithReservation(instanceRequestEntity);
+            }
+
             // Validate RESERVED_BACKUP capacity to prevent over-allocation in reservation
             if (optionalReservationEntity.isPresent() && statusUpdateRequest.getCapacityType().equals(CapacityType.RESERVED_BACKUP)) {
                 reservationCapacityValidationHelper.validateReservationBackupCapacityForInstanceStateUpdate(

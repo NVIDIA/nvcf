@@ -49,8 +49,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.cassandra.core.query.CassandraPageRequest;
+import org.springframework.data.domain.Slice;
 import org.springframework.stereotype.Repository;
 
 @Slf4j
@@ -438,5 +441,21 @@ public class ClusterRepository {
      */
     public List<ClusterEntity> getAllClusters() {
         return clusterByIdRepo.findAll();
+    }
+
+    /**
+     * Reads every {@link ClusterEntity} one page at a time, so callers never hold the whole
+     * table in memory.
+     *
+     * @param pageSize rows per page
+     * @param pageConsumer called once per page, in order
+     */
+    public void forEachClusterPage(int pageSize, Consumer<List<ClusterEntity>> pageConsumer) {
+        Slice<ClusterEntity> slice = clusterByIdRepo.findAll(CassandraPageRequest.first(pageSize));
+        pageConsumer.accept(slice.getContent());
+        while (slice.hasNext()) {
+            slice = clusterByIdRepo.findAll(slice.nextPageable());
+            pageConsumer.accept(slice.getContent());
+        }
     }
 }
