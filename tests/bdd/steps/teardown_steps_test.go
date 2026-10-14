@@ -173,3 +173,63 @@ func TestUndeployTeardownReportsOtherFailures(t *testing.T) {
 		t.Fatal("expected the failure to be reported")
 	}
 }
+
+func TestDeleteTeardownRequiresSelectedConfig(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	if err := sc.theSelectedFunctionIsDeletedAtTeardown(); err == nil {
+		t.Fatal("expected an error without an NVCF CLI config")
+	}
+}
+
+func TestDeleteTeardownDeletesTheFunctionAfterTheUndeploy(t *testing.T) {
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	sc, fake := newScenarioContext(t)
+	sc.NVCFCLIConfig = "/cfg.yaml"
+	if err := sc.theSelectedFunctionIsDeletedAtTeardown(); err != nil {
+		t.Fatal(err)
+	}
+	if err := sc.theSelectedFunctionIsUndeployedAtTeardown(); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.runs) != 0 {
+		t.Fatal("teardown ran at registration")
+	}
+	if err := sc.runTeardown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.runs) != 2 ||
+		!strings.HasSuffix(fake.runs[0].command, "function delete --deployment-only") ||
+		!strings.HasSuffix(fake.runs[1].command, "function delete") {
+		t.Fatalf("want undeploy then delete, got %+v", fake.runs)
+	}
+}
+
+func TestDeleteTeardownStillDeletesAfterTheScenarioUndeployed(t *testing.T) {
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	sc, fake := newScenarioContext(t)
+	sc.NVCFCLIConfig = "/cfg.yaml"
+	if err := sc.theSelectedFunctionIsDeletedAtTeardown(); err != nil {
+		t.Fatal(err)
+	}
+	sc.FunctionUndeployed = true
+	if err := sc.runTeardown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.runs) != 1 || !strings.HasSuffix(fake.runs[0].command, "function delete") {
+		t.Fatalf("runs = %+v", fake.runs)
+	}
+}
+
+func TestDeleteTeardownReportsFailures(t *testing.T) {
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	sc, fake := newScenarioContext(t)
+	sc.NVCFCLIConfig = "/cfg.yaml"
+	fake.result = harness.Result{ExitCode: 1, Stderr: `Error: API error 404: {"detail":"Deployment not found"}`}
+	fake.err = errors.New("exit status 1")
+	if err := sc.theSelectedFunctionIsDeletedAtTeardown(); err != nil {
+		t.Fatal(err)
+	}
+	if err := sc.runTeardown(context.Background()); err == nil {
+		t.Fatal("the deployment-not-found tolerance must not apply to a function delete")
+	}
+}

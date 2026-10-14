@@ -187,7 +187,7 @@ These steps use the in-process HTTP client (`harness.HTTPClient`), not the comma
 | `When I send a {string} request to {string}` | Sends the request with the queued headers and records status and body. `${VAR}` expansion applies to the URL. A non-2xx status is not a step failure. |
 | `When I send a {string} request to {string} with body:` (docstring) | As above with the interpolated docstring as the request body. |
 | `When I poll {string} {string} for up to {int} seconds until the HTTP response body contains {string}` | Repeats the request every 5 seconds until the body contains the text or the deadline passes. Used for eventually consistent reads. |
-| `Then the HTTP status should be {int}` | Last response status. The failure message includes a truncated body. |
+| `Then the HTTP status should be {int}` | Last response status. The failure message includes a truncated body with API keys (`nvapi-...`) and JWTs masked. HTTP failure messages mask them everywhere they print a body or an expected value. |
 | `Then the HTTP status should be {int} or {int}` | Last response status equals either value. |
 | `Then the HTTP response body should contain {string}` | Substring match. The interpolated value must be non-empty. |
 | `Then the HTTP response body should not contain {string}` | Negative substring match. The interpolated value must be non-empty. |
@@ -202,7 +202,8 @@ Cleanup written as a later step is skipped when an earlier step fails, because t
 | Step | Notes |
 |------|-------|
 | `When I send a {string} request to {string} at scenario teardown expecting status {int}` | Queues the request instead of sending it now. It takes the queued headers like the send step, so declare a credential just before it. `${VAR}` expansion applies to the URL when the step runs, so the variable must already be exported. Any status other than the expected one fails the scenario. |
-| `When the function selected by NVCF CLI is undeployed at scenario teardown` | Queues `function delete --deployment-only` for the selected CLI config. It does nothing when the scenario already undeployed the function with the undeploy step. A "Deployment not found" result counts as done, and any other failure fails the scenario. |
+| `When the function selected by NVCF CLI is undeployed at scenario teardown` | Queues `function delete --deployment-only` for the selected CLI config. Register it after the function is created and before the deploy step, so a failed deploy is still cleaned up. It does nothing when the scenario already undeployed the function with the undeploy step. A "Deployment not found" result counts as done, and any other failure fails the scenario. |
+| `When the function selected by NVCF CLI is deleted at scenario teardown` | Queues `function delete` for the selected CLI config. Register it before the undeploy teardown step so it runs after the undeploy. Any failure fails the scenario. |
 
 ### Assertions (Then / And)
 

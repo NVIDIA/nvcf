@@ -39,6 +39,7 @@ const functionDeploymentNotFound = "Deployment not found"
 func registerTeardownSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I send an? "([A-Z]+)" request to "([^"]*)" at scenario teardown expecting status (\d+)$`, sc.iSendHTTPRequestAtTeardown)
 	ctx.Step(`^the function selected by NVCF CLI is undeployed at scenario teardown$`, sc.theSelectedFunctionIsUndeployedAtTeardown)
+	ctx.Step(`^the function selected by NVCF CLI is deleted at scenario teardown$`, sc.theSelectedFunctionIsDeletedAtTeardown)
 }
 
 // addTeardown queues cleanup for the end of the current scenario.
@@ -70,22 +71,45 @@ func (sc *ScenarioContext) iSendHTTPRequestAtTeardown(method, url string, wantSt
 
 // theSelectedFunctionIsUndeployedAtTeardown queues an undeploy of the function
 // the NVCF CLI has selected. It does nothing when the scenario already
-// undeployed the function, and treats a function with no deployment as done.
+// undeployed the function, and treats a function with no deployment as done, so
+// it can be registered before the deploy step.
 func (sc *ScenarioContext) theSelectedFunctionIsUndeployedAtTeardown() error {
+	return sc.addSelectedFunctionTeardown(
+		"undeploy the selected function",
+		[]string{"function", "delete", "--deployment-only"},
+		functionDeploymentNotFound,
+		func() bool { return sc.FunctionUndeployed },
+	)
+}
+
+// theSelectedFunctionIsDeletedAtTeardown queues a delete of the function the
+// NVCF CLI has selected. Register it before the undeploy step so it runs after
+// the undeploy.
+func (sc *ScenarioContext) theSelectedFunctionIsDeletedAtTeardown() error {
+	return sc.addSelectedFunctionTeardown(
+		"delete the selected function",
+		[]string{"function", "delete"},
+		"",
+		func() bool { return false },
+	)
+}
+
+// addSelectedFunctionTeardown queues one NVCF CLI command against the selected
+// function. A failure counts as done when its output contains tolerated.
+func (sc *ScenarioContext) addSelectedFunctionTeardown(description string, args []string, tolerated string, skip func() bool) error {
 	if sc.NVCFCLIConfig == "" {
 		return fmt.Errorf("no NVCF CLI config selected; use 'I use NVCF CLI config' first")
 	}
-	command := dsl.BuildCommand(sc.nvcfCLICommandArgs("function", "delete", "--deployment-only")...)
-	sc.addTeardown("undeploy the selected function", func(ctx context.Context) error {
-		if sc.FunctionUndeployed {
+	command := dsl.BuildCommand(sc.nvcfCLICommandArgs(args...)...)
+	sc.addTeardown(description, func(ctx context.Context) error {
+		if skip() {
 			return nil
 		}
 		result, err := sc.Suite.Runner.Run(ctx, command)
 		if err == nil && result.ExitCode == 0 {
 			return nil
 		}
-		output := combinedOutput(result)
-		if strings.Contains(output, functionDeploymentNotFound) {
+		if tolerated != "" && strings.Contains(combinedOutput(result), tolerated) {
 			return nil
 		}
 		if err != nil {

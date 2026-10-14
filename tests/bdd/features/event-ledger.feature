@@ -174,15 +174,15 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
           "audience_service_ids": ["nvidia-event-ledger-ncp-service-id-ckozoh6f"]
         }
         """
-      Then the HTTP status should be 200
-      When I export the HTTP response JSON field "value" to environment variable "BDD_EL_READ_KEY"
-      And I export the HTTP response JSON field "id" to environment variable "BDD_EL_READ_KEY_ID"
+      When I export the HTTP response JSON field "id" to environment variable "BDD_EL_READ_KEY_ID"
       # Delete the key when the scenario ends, even if it fails.
       Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
       And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
       And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
       And the HTTP request header "Key-Owner-Id" is "svc@nvcf-api.local"
       And I send a "DELETE" request to "http://api-keys.localhost:8080/v1/keys/${BDD_EL_READ_KEY_ID}" at scenario teardown expecting status 204
+      Then the HTTP status should be 200
+      When I export the HTTP response JSON field "value" to environment variable "BDD_EL_READ_KEY"
 
       Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
       When I send a "GET" request to "http://events.localhost:8080/v3/ledger/namespace/bdd-no-such-namespace/stats"
@@ -240,15 +240,15 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
           "audience_service_ids": ["nvidia-event-ledger-ncp-service-id-ckozoh6f"]
         }
         """
-      Then the HTTP status should be 200
-      When I export the HTTP response JSON field "value" to environment variable "BDD_EL_READ_KEY"
-      And I export the HTTP response JSON field "id" to environment variable "BDD_EL_READ_KEY_ID"
+      When I export the HTTP response JSON field "id" to environment variable "BDD_EL_READ_KEY_ID"
       # Delete the key when the scenario ends, even if it fails.
       Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
       And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
       And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
       And the HTTP request header "Key-Owner-Id" is "svc@nvcf-api.local"
       And I send a "DELETE" request to "http://api-keys.localhost:8080/v1/keys/${BDD_EL_READ_KEY_ID}" at scenario teardown expecting status 204
+      Then the HTTP status should be 200
+      When I export the HTTP response JSON field "value" to environment variable "BDD_EL_READ_KEY"
 
       Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_READ_KEY}"
       And the HTTP request header "Content-Type" is "application/cloudevents+json"
@@ -299,15 +299,15 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
           "audience_service_ids": ["nvidia-event-ledger-ncp-service-id-ckozoh6f"]
         }
         """
-      Then the HTTP status should be 200
-      When I export the HTTP response JSON field "value" to environment variable "BDD_EL_WRITE_KEY"
-      And I export the HTTP response JSON field "id" to environment variable "BDD_EL_WRITE_KEY_ID"
+      When I export the HTTP response JSON field "id" to environment variable "BDD_EL_WRITE_KEY_ID"
       # Delete the key when the scenario ends, even if it fails.
       Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
       And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
       And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
       And the HTTP request header "Key-Owner-Id" is "svc@nvcf-api.local"
       And I send a "DELETE" request to "http://api-keys.localhost:8080/v1/keys/${BDD_EL_WRITE_KEY_ID}" at scenario teardown expecting status 204
+      Then the HTTP status should be 200
+      When I export the HTTP response JSON field "value" to environment variable "BDD_EL_WRITE_KEY"
 
       Given the HTTP request header "Authorization" is "Bearer ${BDD_EL_WRITE_KEY}"
       And the HTTP request header "Content-Type" is "application/cloudevents+json"
@@ -421,15 +421,15 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
           "audience_service_ids": ["nvidia-event-ledger-ncp-service-id-ckozoh6f"]
         }
         """
-      Then the HTTP status should be 200
-      When I export the HTTP response JSON field "value" to environment variable "BDD_EL_READ_KEY"
-      And I export the HTTP response JSON field "id" to environment variable "BDD_EL_READ_KEY_ID"
+      When I export the HTTP response JSON field "id" to environment variable "BDD_EL_READ_KEY_ID"
       # Delete the key when the scenario ends, even if it fails.
       Given the HTTP request header "Authorization" is the NVCF CLI admin token with prefix "Bearer "
       And the HTTP request header "Key-Issuer-Service" is "nvcf-api"
       And the HTTP request header "Key-Issuer-Id" is "nvidia-event-ledger-ncp-service-id-ckozoh6f"
       And the HTTP request header "Key-Owner-Id" is "svc@nvcf-api.local"
       And I send a "DELETE" request to "http://api-keys.localhost:8080/v1/keys/${BDD_EL_READ_KEY_ID}" at scenario teardown expecting status 204
+      Then the HTTP status should be 200
+      When I export the HTTP response JSON field "value" to environment variable "BDD_EL_READ_KEY"
 
       When I successfully create function "bdd-event-ledger" from image "nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8" with CLI options:
         | option           | value   |
@@ -438,6 +438,10 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
         | --health-uri     | /health |
         | --health-port    | 8000    |
         | --health-timeout | PT30S   |
+      # Delete the function and undeploy it when the scenario ends, even if the
+      # deploy fails. The undeploy runs first and does nothing if nothing deployed.
+      And the function selected by NVCF CLI is deleted at scenario teardown
+      And the function selected by NVCF CLI is undeployed at scenario teardown
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value           |
         | --gpu           | H100            |
@@ -447,8 +451,6 @@ Feature: Install a local single-cluster NVCF stack and check the event ledger
         | --min-instances | 1               |
         | --max-instances | 1               |
         | --timeout       | 900             |
-      # Undeploy when the scenario ends if it has not already, even if it fails.
-      And the function selected by NVCF CLI is undeployed at scenario teardown
       And I export the function selected by NVCF CLI to environment variables "BDD_EL_FUNCTION_ID" and "BDD_EL_VERSION_ID"
 
       # Events are stored per context, and stats list every context in the

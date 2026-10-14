@@ -222,3 +222,43 @@ func TestAdminTokenHeaderReadsStateFile(t *testing.T) {
 		t.Fatalf("headers = %v", fake.headers)
 	}
 }
+
+func TestFailedStatusCheckDoesNotPrintAnAPIKey(t *testing.T) {
+	body := `{"id":"key-1","value":"nvapi-SuperSecretKeyValue123"}`
+	sc, _ := newHTTPScenario(t, harness.HTTPResponse{Status: 200, Body: body})
+	if err := sc.iSendHTTPRequest(context.Background(), "POST", "http://x/v1/keys"); err != nil {
+		t.Fatal(err)
+	}
+	err := sc.theHTTPStatusShouldBe(201)
+	if err == nil {
+		t.Fatal("expected a status failure")
+	}
+	if strings.Contains(err.Error(), "SuperSecretKeyValue123") || !strings.Contains(err.Error(), `"id":"key-1"`) {
+		t.Fatalf("want the key masked and the rest kept, got %v", err)
+	}
+}
+
+func TestFailedBodyCheckDoesNotPrintAKeyInTheBodyOrTheExpectedText(t *testing.T) {
+	t.Setenv("BDD_HTTP_KEY", "nvapi-ExpectedKeyValue456")
+	sc, _ := newHTTPScenario(t, harness.HTTPResponse{Status: 200, Body: `{"value":"nvapi-BodyKeyValue789"}`})
+	if err := sc.iSendHTTPRequest(context.Background(), "GET", "http://x/"); err != nil {
+		t.Fatal(err)
+	}
+	err := sc.theHTTPBodyShouldContain("${BDD_HTTP_KEY}")
+	if err == nil {
+		t.Fatal("expected a body failure")
+	}
+	for _, leaked := range []string{"ExpectedKeyValue456", "BodyKeyValue789"} {
+		if strings.Contains(err.Error(), leaked) {
+			t.Fatalf("%s leaked: %v", leaked, err)
+		}
+	}
+}
+
+func TestTruncatedBodyDoesNotLeavePartOfAKey(t *testing.T) {
+	body := strings.Repeat("a", maxHTTPFailureBody-10) + "nvapi-PartlyVisibleSecret" + strings.Repeat("b", 50)
+	got := truncateBody(body)
+	if strings.Contains(got, "nvapi-") || strings.Contains(got, "PartlyVisible") {
+		t.Fatalf("part of the key survived truncation: %q", got)
+	}
+}

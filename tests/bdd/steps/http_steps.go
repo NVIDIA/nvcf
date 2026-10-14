@@ -137,7 +137,7 @@ func (sc *ScenarioContext) iPollHTTPUntilBodyContains(ctx context.Context, metho
 				return fmt.Errorf("poll timed out after %d seconds: %w", seconds, err)
 			}
 			return fmt.Errorf("poll timed out after %d seconds: last status %d, body missing %q: %s",
-				seconds, sc.LastHTTP.Status, want, truncateBody(sc.LastHTTP.Body))
+				seconds, sc.LastHTTP.Status, dsl.RedactSecrets(want), truncateBody(sc.LastHTTP.Body))
 		}
 		select {
 		case <-ctx.Done():
@@ -186,7 +186,7 @@ func (sc *ScenarioContext) theHTTPBodyShouldContain(text string) error {
 		return fmt.Errorf("expected text must be non-empty")
 	}
 	if !strings.Contains(resp.Body, want) {
-		return fmt.Errorf("http response body missing %q: %s", want, truncateBody(resp.Body))
+		return fmt.Errorf("http response body missing %q: %s", dsl.RedactSecrets(want), truncateBody(resp.Body))
 	}
 	return nil
 }
@@ -201,7 +201,7 @@ func (sc *ScenarioContext) theHTTPBodyShouldNotContain(text string) error {
 		return fmt.Errorf("unwanted text must be non-empty")
 	}
 	if strings.Contains(resp.Body, unwanted) {
-		return fmt.Errorf("http response body unexpectedly contains %q", unwanted)
+		return fmt.Errorf("http response body unexpectedly contains %q", dsl.RedactSecrets(unwanted))
 	}
 	return nil
 }
@@ -216,7 +216,7 @@ func (sc *ScenarioContext) theHTTPJSONFieldShouldEqual(path, want string) error 
 		return err
 	}
 	if expected := dsl.Interpolate(want); got != expected {
-		return fmt.Errorf("json field %q = %q, want %q", path, got, expected)
+		return fmt.Errorf("json field %q = %q, want %q", path, dsl.RedactSecrets(got), dsl.RedactSecrets(expected))
 	}
 	return nil
 }
@@ -256,9 +256,12 @@ func (sc *ScenarioContext) iExportHTTPJSONField(path, name string) error {
 	return nil
 }
 
+// truncateBody shortens a response body for a failure message. Secrets are
+// masked first so a cut cannot leave a readable part of one.
 func truncateBody(body string) string {
-	if len(body) <= maxHTTPFailureBody {
-		return body
+	redacted := dsl.RedactSecrets(body)
+	if len(redacted) <= maxHTTPFailureBody {
+		return redacted
 	}
-	return body[:maxHTTPFailureBody] + "..." + strconv.Itoa(len(body)) + " bytes"
+	return redacted[:maxHTTPFailureBody] + "..." + strconv.Itoa(len(redacted)) + " bytes"
 }
