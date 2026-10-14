@@ -1182,7 +1182,8 @@ func buildRegistryCredentialCategory(cfg PreflightConfig) categorySpec {
 // install a refused NGC key is a warning only where the cluster's pull
 // secrets are read and none holds it. Everything else the probe can report,
 // from an unreachable registry to a missing local credential, is a warning or
-// an informational pass.
+// an informational pass. A registry on the loopback is probed only where this
+// machine holds a credential for it, and otherwise passes at info.
 func registryCredentialCheck(
 	checker RegistryCredentialChecker, entry RegistryEntry, label string, postInstall bool,
 	clusterSecrets ClusterPullSecretChecker,
@@ -1207,6 +1208,17 @@ func registryCredentialCheck(
 		worst:      severity,
 		Run: func(ctx context.Context) CheckResult {
 			r := CheckResult{ID: id, Severity: severity}
+			if entry.Local {
+				// A store that could not be read may hold one, so only a read
+				// that found none skips the probe.
+				if read := registryCredentialsFrom(ctx).read(ctx, entry.Registry); !read.ok && read.err == nil {
+					r.Passed = true
+					r.Severity = SeverityInfo
+					r.Message = label + ": local image, not probed: each node pulls it from its own image store " +
+						"or loopback registry, which this machine cannot see"
+					return r
+				}
+			}
 			err := checker(ctx, entry.Registry, entry.RepoHint, entry.Critical, entry.Charts && !postInstall)
 			if err == nil {
 				r.Passed = true
@@ -1236,6 +1248,15 @@ func registryCredentialCheck(
 				r.Passed = true
 				r.Severity = SeverityInfo
 			case probeAnonymous, probeNotVerified:
+				if outcome.anonymousRefused {
+					if entry.Repository {
+						r.Severity = SeverityWarning
+						r.Err = err
+						break
+					}
+					// A path images sit under may be no repository at all.
+					r.Message = label + ": " + anonymousDetail
+				}
 				r.Passed = true
 				r.Severity = SeverityInfo
 			case probeNoCredential, probeUnverifiable:
