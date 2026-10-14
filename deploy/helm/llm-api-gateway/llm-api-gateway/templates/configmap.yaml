@@ -27,6 +27,10 @@ data:
   STARGATE_URL: {{ required "llmApiGateway.config.requestRouterUrl is required" $cfg.requestRouterUrl | quote }}
   STARGATE_CONNECT_TIMEOUT: {{ $cfg.requestRouterConnectTimeout | quote }}
   STARGATE_REQUEST_TIMEOUT: {{ $cfg.requestRouterRequestTimeout | quote }}
+  STARGATE_LAST_CLUSTER_ENABLED: {{ $cfg.lastCluster.enabled | toString | quote }}
+  STARGATE_LAST_CLUSTER_TTL: {{ $cfg.lastCluster.ttl | quote }}
+  STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT: {{ $cfg.lastCluster.lookupTimeout | quote }}
+  STARGATE_LAST_CLUSTER_LOCAL_MAX_ENTRIES: {{ $cfg.lastCluster.localMaxEntries | int64 | toString | quote }}
   NVCF_GATEWAY_INFERENCE_WRITE_TIMEOUT: {{ $cfg.inferenceWriteTimeout | quote }}
   NVCF_GRPC_ADDR: {{ $cfg.nvcfGrpcAddr | quote }}
   NVCF_GRPC_INSECURE: {{ $cfg.nvcfGrpcInsecure | toString | quote }}

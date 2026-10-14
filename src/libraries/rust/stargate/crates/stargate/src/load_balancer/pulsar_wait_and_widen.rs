@@ -13,13 +13,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
 use std::time::Duration;
 
 use super::pulsar::PulsarLoadBalancer;
-use super::wait_and_widen::{WaitAndWidenConfig, WaitAndWidenLoadBalancer};
+use super::session::{self, MissingLastCluster};
+use super::wait_and_widen::{WaitAndWidenConfig, WaitAndWidenLoadBalancer, millis};
 use super::{
     LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice, LoadBalancerDecision,
-    LoadBalancerRequest,
+    LoadBalancerRequest, WaitAndWidenAlgorithmConfig,
 };
 use crate::routing_state::RoutedClusterSnapshot;
 
@@ -39,38 +41,84 @@ pub(super) struct PulsarWaitAndWidenLoadBalancer {
     fallback_wait_and_widen: WaitAndWidenLoadBalancer,
     affinity_group_size: usize,
     affinity_wait: Duration,
-    band_widen_interval: Duration,
+    /// Explicit `band_widen_interval_ms`. Unset follows the request's
+    /// effective affinity wait.
+    band_widen_interval: Option<Duration>,
     affinity_input_tokens_scale: f64,
+    last_cluster_affinity: bool,
 }
 
 /// Affinity selection discounts prefill and uses `max_queued`; fallback uses
 /// full prefill cost and `fallback_max_queued`.
 #[derive(Clone, Copy)]
 enum SelectionPhase {
-    Affinity,
+    Affinity { input_tokens_scale: f64 },
     Fallback,
+}
+
+pub(super) struct PulsarWaitAndWidenConfig {
+    pub(super) wait_and_widen: WaitAndWidenConfig,
+    pub(super) affinity_group_size: usize,
+    /// Explicit `band_widen_interval_ms`. Unset follows the request's
+    /// effective affinity wait.
+    pub(super) band_widen_interval: Option<Duration>,
+    pub(super) fallback_max_queued: u64,
+}
+
+impl PulsarWaitAndWidenConfig {
+    pub(super) fn from_algorithm_config(
+        config: &LoadBalancerAlgorithmConfig,
+    ) -> anyhow::Result<Self> {
+        let settings = config
+            .wait_and_widen_settings()
+            .expect("pulsar-wait-and-widen config has wait_and_widen settings");
+        let wait_and_widen = WaitAndWidenConfig::from_algorithm_config(config)?;
+        Ok(Self {
+            // The Pulsar primary is the affinity group unless configured wider.
+            affinity_group_size: wait_and_widen
+                .cache_affinity_backend_selection_count
+                .unwrap_or(1),
+            band_widen_interval: settings.band_widen_interval_ms.map(Duration::from_millis),
+            fallback_max_queued: settings.fallback_max_queued.unwrap_or(0),
+            wait_and_widen,
+        })
+    }
+
+    /// The inverse of `from_algorithm_config`: the values this algorithm routes with, as config.
+    pub(super) fn to_algorithm_config(&self) -> WaitAndWidenAlgorithmConfig {
+        WaitAndWidenAlgorithmConfig {
+            // The Pulsar ranking replaces the affinity ring, so virtual nodes do not route.
+            cache_affinity_virtual_nodes: None,
+            cache_affinity_backend_selection_count: Some(self.affinity_group_size),
+            // With last-cluster affinity, an unset interval follows a wait that
+            // differs per request, so it has no single value to log.
+            band_widen_interval_ms: match self.band_widen_interval {
+                Some(interval) => Some(millis(interval)),
+                None if self.wait_and_widen.last_cluster_affinity => None,
+                None => Some(millis(self.wait_and_widen.cache_affinity_wait)),
+            },
+            fallback_max_queued: Some(self.fallback_max_queued),
+            ..self.wait_and_widen.to_algorithm_config()
+        }
+    }
 }
 
 impl PulsarWaitAndWidenLoadBalancer {
     pub(super) fn new(config: LoadBalancerAlgorithmConfig) -> anyhow::Result<Self> {
-        let settings = config
-            .wait_and_widen_settings()
-            .expect("pulsar-wait-and-widen config has wait_and_widen settings");
-        let wait_and_widen_config = WaitAndWidenConfig::from_algorithm_config(&config)?;
-        let band_widen_interval = settings.band_widen_interval_ms.map_or(
-            wait_and_widen_config.cache_affinity_wait,
-            Duration::from_millis,
-        );
+        let PulsarWaitAndWidenConfig {
+            wait_and_widen: wait_and_widen_config,
+            affinity_group_size,
+            band_widen_interval,
+            fallback_max_queued,
+        } = PulsarWaitAndWidenConfig::from_algorithm_config(&config)?;
         let mut fallback_config = wait_and_widen_config.clone();
-        fallback_config.max_queued = settings.fallback_max_queued.unwrap_or(0);
+        fallback_config.max_queued = fallback_max_queued;
         Ok(Self {
-            // The Pulsar primary is the affinity group unless configured wider.
-            affinity_group_size: wait_and_widen_config
-                .cache_affinity_backend_selection_count
-                .unwrap_or(1),
+            affinity_group_size,
             affinity_wait: wait_and_widen_config.cache_affinity_wait,
             band_widen_interval,
             affinity_input_tokens_scale: wait_and_widen_config.cache_affinity_input_tokens_scale,
+            last_cluster_affinity: wait_and_widen_config.last_cluster_affinity,
             fallback_wait_and_widen: WaitAndWidenLoadBalancer::new(fallback_config),
             wait_and_widen: WaitAndWidenLoadBalancer::new(wait_and_widen_config),
             ranking: PulsarLoadBalancer::new(config),
@@ -88,7 +136,9 @@ impl PulsarWaitAndWidenLoadBalancer {
         elapsed: Duration,
     ) -> LoadBalancerDecision {
         let (selector, input_tokens_scale) = match phase {
-            SelectionPhase::Affinity => (&self.wait_and_widen, self.affinity_input_tokens_scale),
+            SelectionPhase::Affinity { input_tokens_scale } => {
+                (&self.wait_and_widen, input_tokens_scale)
+            }
             SelectionPhase::Fallback => (&self.fallback_wait_and_widen, 1.0),
         };
         let eligible = ranked_indices[..open_end]
@@ -139,36 +189,40 @@ impl PulsarWaitAndWidenLoadBalancer {
         }
     }
 
-    fn decide_at(
+    pub(super) fn decide_at(
         &self,
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
         elapsed: Duration,
     ) -> LoadBalancerDecision {
-        let ranked_indices = self.ranking.compute_ranking(request, candidates);
-        let Some(&primary_index) = ranked_indices.first() else {
+        let ranking = self.ranking.compute_ranking(request, candidates);
+        // Plan before the empty-ranking check so the first decision pins the
+        // session classification even when no candidate has a Pulsar weight.
+        let plan = session::plan_affinity(
+            self.last_cluster_affinity,
+            request,
+            candidates,
+            Cow::Owned(ranking),
+            MissingLastCluster::Keep,
+            self.affinity_wait,
+            self.affinity_input_tokens_scale,
+        );
+        let ranked_indices = &*plan.order;
+        if ranked_indices.is_empty() {
             return LoadBalancerDecision::Unavailable;
-        };
-        if !self.wait_and_widen.has_queue_slo(request)
-            && self
-                .ranking
-                .feasibility(request, &candidates[primary_index])
-                .is_eligible()
-        {
-            return LoadBalancerDecision::Selected(LoadBalancerCandidateChoice {
-                candidate_index: primary_index,
-                rank_depth: 1,
-                selected_after_kv_free_tokens_skip: false,
-            });
         }
+        let affinity_wait = plan.affinity_wait;
+        let band_widen_interval = self.band_widen_interval.unwrap_or(affinity_wait);
 
         // Every attempt checks the affinity group first, even after the wait.
         let group_end = self.affinity_group_size.min(ranked_indices.len());
         let affinity_bucket_wait = match self.decide_from_ranking_prefix(
-            SelectionPhase::Affinity,
+            SelectionPhase::Affinity {
+                input_tokens_scale: plan.input_tokens_scale,
+            },
             request,
             candidates,
-            &ranked_indices,
+            ranked_indices,
             group_end,
             elapsed,
         ) {
@@ -178,8 +232,8 @@ impl PulsarWaitAndWidenLoadBalancer {
             LoadBalancerDecision::Wait(delay) => Some(delay),
             LoadBalancerDecision::Unavailable => None,
         };
-        if elapsed < self.affinity_wait {
-            let remaining = self.affinity_wait - elapsed;
+        if elapsed < affinity_wait {
+            let remaining = affinity_wait - elapsed;
             return LoadBalancerDecision::Wait(
                 affinity_bucket_wait.map_or(remaining, |delay| delay.min(remaining)),
             );
@@ -190,11 +244,11 @@ impl PulsarWaitAndWidenLoadBalancer {
         // covers the whole ranking. Open candidates compete at full prefill
         // cost, as WaitAndWiden global buckets do, and bucket unlocks count
         // from the end of the affinity wait.
-        let widened_for = elapsed - self.affinity_wait;
-        let bands_open = if self.band_widen_interval.is_zero() {
+        let widened_for = elapsed - affinity_wait;
+        let bands_open = if band_widen_interval.is_zero() {
             usize::MAX
         } else {
-            usize::try_from(widened_for.as_nanos() / self.band_widen_interval.as_nanos() + 1)
+            usize::try_from(widened_for.as_nanos() / band_widen_interval.as_nanos() + 1)
                 .unwrap_or(usize::MAX)
         };
         let mut open_end = group_end;
@@ -209,16 +263,15 @@ impl PulsarWaitAndWidenLoadBalancer {
             band_width = band_width.saturating_mul(2);
         }
         let next_band_wait = (open_end < ranked_indices.len()).then(|| {
-            let next_opening = self
-                .band_widen_interval
-                .saturating_mul(u32::try_from(bands_open).unwrap_or(u32::MAX));
+            let next_opening =
+                band_widen_interval.saturating_mul(u32::try_from(bands_open).unwrap_or(u32::MAX));
             next_opening.saturating_sub(widened_for)
         });
         let open_decision = self.decide_from_ranking_prefix(
             SelectionPhase::Fallback,
             request,
             candidates,
-            &ranked_indices,
+            ranked_indices,
             open_end,
             widened_for,
         );
@@ -293,6 +346,7 @@ mod tests {
             received_at: Instant::now(),
             request_slo: None,
             excluded_cluster_ids: None,
+            last_cluster: None,
         }
     }
 
@@ -386,35 +440,49 @@ mod tests {
     }
 
     #[test]
-    fn without_queue_slo_keeps_full_primary() {
+    fn without_queue_slo_full_primary_goes_through_affinity_admission() {
         let target = target();
         let affinity_key = "hybrid-prefix-without-slo";
-        let mut candidates = candidates(3, 0);
-        for candidate in &mut candidates {
-            candidate.stats.max_engine_concurrency = 1;
+        let mut candidates = single_slot_candidates(3);
+        let ranked = pulsar_ranked_indices("hybrid-seed", &target, affinity_key, 0, &candidates);
+        candidates[ranked[2]].stats.num_running_queries = 1;
+        let request = request(&target, Some(affinity_key), Some(0));
+        let choice = |rank: usize| {
+            LoadBalancerDecision::Selected(LoadBalancerCandidateChoice {
+                candidate_index: ranked[rank - 1],
+                rank_depth: rank,
+                selected_after_kv_free_tokens_skip: false,
+            })
+        };
+
+        // Rank 1 is at its engine concurrency limit; rank 2 has a free slot.
+        for (max_queued, wait_ms, primary_running, elapsed_ms, expected) in [
+            (0, 0, 1, 0, choice(2)),
+            // One request queued on rank 1, within max_queued.
+            (4, 0, 2, 0, choice(1)),
+            (
+                0,
+                300,
+                1,
+                0,
+                LoadBalancerDecision::Wait(Duration::from_millis(300)),
+            ),
+            (0, 300, 1, 300, choice(2)),
+        ] {
+            candidates[ranked[0]].stats.num_running_queries = primary_running;
+            let hybrid = PulsarWaitAndWidenLoadBalancer::new(
+                pulsar_wait_and_widen_algorithm_config("hybrid-seed", false, |settings| {
+                    settings.max_queued = Some(max_queued);
+                    settings.cache_affinity_wait_ms = Some(wait_ms);
+                }),
+            )
+            .unwrap();
+            assert_eq!(
+                hybrid.decide_at(&request, &candidates, Duration::from_millis(elapsed_ms)),
+                expected,
+                "max_queued={max_queued} wait={wait_ms} at {elapsed_ms} ms"
+            );
         }
-        let hybrid_request = request(&target, Some(affinity_key), Some(0));
-        let primary_index =
-            pulsar_ranked_indices("hybrid-seed", &target, affinity_key, 0, &candidates)[0];
-        candidates[primary_index].stats.num_running_queries = 1;
-
-        let hybrid = PulsarWaitAndWidenLoadBalancer::new(pulsar_wait_and_widen_algorithm_config(
-            "hybrid-seed",
-            false,
-            |settings| {
-                settings.n = Some(2);
-            },
-        ))
-        .expect("valid hybrid config");
-
-        let chosen = hybrid
-            .choose_for_test(&hybrid_request, &candidates)
-            .expect("no-SLO primary should remain selectable despite live capacity");
-        assert_eq!(
-            chosen.candidate.cluster_id,
-            candidates[primary_index].cluster_id
-        );
-        assert_eq!(chosen.rank_depth, 1);
     }
 
     #[test]

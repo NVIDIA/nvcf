@@ -38,6 +38,7 @@ const (
 	traceAttrShadowDroppedCount        attribute.Key = "shadow.dropped_count"
 	traceAttrShadowDroppedReasons      attribute.Key = "shadow.dropped_reasons"
 	traceAttrShadowDroppedTargetModels attribute.Key = "shadow.dropped_target_models"
+	traceAttrShadowSamplingMethods     attribute.Key = "shadow.sampling_methods"
 	traceAttrShadowTargetModel         attribute.Key = "shadow.target_model"
 	traceAttrShadowTargetModels        attribute.Key = "shadow.target_models"
 

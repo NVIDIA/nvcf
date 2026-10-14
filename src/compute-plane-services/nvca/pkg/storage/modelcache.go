@@ -270,6 +270,16 @@ func (r *Reconciler) doModelCacheSharedFS(ctx context.Context,
 	if err != nil {
 		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, fmt.Errorf("find and decode artifacts: %w", err))
 	}
+	// A shared filesystem whose CSI driver skips fsGroup on ReadWriteMany
+	// claims (OCI FSS, a default NetApp Trident install) leaves a fresh
+	// export owned by root, so the writer the agent selected for this request
+	// may have to run as root. The agent recorded that decision on the
+	// request; apply it here exactly as the regular workflow does.
+	writerIdentity, err := sharedClaimWriterIdentityFromRequest(icmsReq.Annotations)
+	if err != nil {
+		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, fmt.Errorf("read writer identity: %w", err))
+	}
+	ApplySharedClaimWriterIdentity(initJob, writerIdentity)
 	// The writer lands on the model cache class like every other backend. The
 	// class that selected this path, nvcf-miniservice-sc, is only how legacy
 	// selection detects an operator-provided shared filesystem; provisioning on

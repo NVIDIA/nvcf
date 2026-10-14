@@ -40,6 +40,59 @@ Stargate routes on the most recent update plus its own pending reservations.
 Change-driven updates keep that view within the coalescing window and network
 delay of the backend's actual load, instead of up to one heartbeat behind.
 
+Each dispatched request adds a local reservation for the selected backend
+when the backend is selected. The reservation's TTL is the selected backend's
+health-check RTT (not the cluster mean), bounded by
+`--routing-reservation-ttl-min-ms` (default `1`) and
+`--routing-reservation-ttl-max-ms` (default `1000`). The maximum only limits
+the effect of a bad RTT sample; it does not end the reservation. The soft
+expiry is one TTL after Stargate opens the tunnel stream and sends the request
+head. Until then, for example while the stream open waits for tunnel capacity,
+no update can end the reservation. An attempt that ends before sending starts
+the soft expiry when it ends.
+
+The reservation counts until Stargate receives a registration update from the
+selected backend at or after the soft expiry. Receipt time is the settlement
+threshold; it does not show when the update was generated or whether it includes
+the request. The request tunnel and registration stream are independent, so an
+update generated before the backend receives a request can arrive after the
+threshold, while an update that includes the request can arrive before it. This
+can briefly leave the request counted in both reported stats and the
+reservation, or settle the reservation before the request appears in reported
+stats. Updates from other backends in the same cluster never settle it. A queue
+estimate mismatch rejection releases the reservation early, and removing or
+deregistering the backend drops it.
+
+Waiting for the backend's own update covers two cases:
+
+- A backend that hangs but keeps its connection stops sending updates. Its last
+  reported stats still look idle. With a time-based expiry or cap, its
+  reservations would all end together and those idle stats would attract a new
+  burst of requests each time. Held reservations keep steering traffic away
+  until the backend reports again or deregisters.
+- Pylon coalesces change-driven updates (`--stats-update-coalesce-ms`, default
+  `10`). The reservation uses the selected backend's soft-expiry threshold to
+  decide when its own updates can settle it. Because the streams are
+  independent, receipt time is a heuristic and does not prove that an update
+  includes the request. A larger minimum can lengthen the period in which a
+  request is counted in both reported stats and its reservation.
+
+The trade-off is that a reservation on a backend that stops reporting stays
+counted, in routing and in `stargate_routing_reservations_active`, until that
+backend reports or its registration ends. Only registration liveness bounds
+those reservations, so setting `--registration-update-idle-timeout-ms` to `0`
+leaves them unbounded for a backend that keeps serving requests without sending
+updates.
+
+Pylons that send only heartbeats keep each reservation until the first
+heartbeat received at or after its soft expiry. Receipt time does not prove
+that the heartbeat includes the request. The reservation cannot expire while
+waiting for that heartbeat, although the reported stats may still lag the
+request.
+Deploying Pylons with
+change-driven stats updates before this Stargate version is recommended for the
+most current view but is not required.
+
 ## Stream Events
 
 Each non-empty line is JSON with `v: 1` and `type`.
@@ -120,6 +173,21 @@ Transient errors, malformed events, and EOF do not switch `auto` to fallback.
 Fallback reads streamed OpenAI usage fields such as `usage.completion_tokens` or
 `output_tokens_so_far`. Text peeking is last resort.
 
+Fallback input throughput counts only uncached prompt tokens when usage reports
+`cached_tokens` (Chat `prompt_tokens_details` or Responses
+`input_tokens_details`), and total prompt tokens otherwise. Chat Completions
+usage is available only when the client sets `stream_options.include_usage=true`
+or the deployment sets `--force-chat-completions-include-usage`. vLLM reports
+Chat cached tokens only when started with `--enable-prompt-tokens-details`;
+vLLM Responses usage and Dynamo vLLM workers report them by default. Engines
+that report cached tokens may omit Chat details on a cache miss, so once a model
+generation's streamed Chat usage reports cached-token details, later Chat usage
+without them counts as a miss. A request that expects usage holds newer
+requests out of the rate until its usage arrives, for at most 120 seconds after
+newer requests reach first output. Cache hits that leave fewer than 256 uncached
+prompt tokens are left out, because their time to first output is mostly fixed
+overhead.
+
 ## Optional KV Stats
 
 `/kv-cache/stats` may report runtime machine state:
@@ -155,11 +223,19 @@ counter-derived output window.
 
 If request stats go stale, volatile output TPS is cleared. Sticky input TPS
 stays until a later valid sample replaces it.
-The maximum is the greatest `last_mean_input_tps` published for the current
-model generation, including a configured initial TPS. It follows the smoothed
-mean rather than individual samples, so the mean dilutes one outlier sample.
-Lower means do not reduce it, and generation replacement clears it. It is
-absent until the first mean is published.
+The maximum is the greatest max-eligible `last_mean_input_tps` published for the
+current model generation. A configured `--initial-input-tps`, engine stats
+stream counters, embeddings samples, and calibration can raise it. An OpenAI
+fallback mean raises it only when every request in its window counted uncached
+prompt tokens under the Fallback rules above. Other fallback means update
+`last_mean_input_tps` but not the maximum, because cached input may be counted
+as prefill. The maximum follows the smoothed mean rather than individual
+samples, so the mean dilutes one outlier sample. Lower means do not reduce it,
+and generation replacement clears it. It is absent until the first max-eligible
+mean. A backend whose fallback usage never reports cached-token details, such
+as Chat traffic without `include_usage`, or whose traffic is only near-full
+cache hits, never gets a maximum this way. Use `--do-calibration` or `--initial-input-tps` for such
+backends, because default Pulsar ranking requires a maximum (see below).
 
 Pylon publishes `pylon_model_max_input_tps` when the maximum is known and removes
 the series when the model is removed or replaced with unknown maximum state.
@@ -182,8 +258,9 @@ Before registration, Pylon initializes each model generation from exactly one
 source. `--initial-input-tps` installs the configured value. Local calibration
 installs nothing: it runs an increasing request ramp until a load-step timeout,
 and those requests' exact-generation observer events build the same distribution
-used at runtime. Duplicate engine events for calibration IDs are ignored. Pylon
-logs the current stats at timeout without reinjecting them.
+used at runtime. Each calibration request starts with a unique prompt prefix, so
+it cannot hit the prefix cache. Duplicate engine events for calibration IDs are
+ignored. Pylon logs the current stats at timeout without reinjecting them.
 Later valid runtime samples continue updating either unpinned distribution.
 
 Labels:

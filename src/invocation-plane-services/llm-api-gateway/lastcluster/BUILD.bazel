@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "lastcluster",
+    srcs = [
+        "local_store.go",
+        "olric_store.go",
+        "prefix.go",
+        "store.go",
+        "tracker.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/lastcluster",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/invocation-plane-services/llm-api-gateway/requestctx",
+        "//src/invocation-plane-services/llm-api-gateway/telemetry",
+        "@com_github_olric_data_olric//:olric",
+        "@com_github_rs_zerolog//:zerolog",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//codes",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":lastcluster",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "lastcluster_test",
+    srcs = [
+        "local_store_test.go",
+        "olric_store_test.go",
+        "prefix_test.go",
+        "tracker_test.go",
+    ],
+    embed = [":lastcluster"],
+    deps = [
+        "//src/invocation-plane-services/llm-api-gateway/internal/olrictest",
+        "//src/invocation-plane-services/llm-api-gateway/requestctx",
+        "//src/invocation-plane-services/llm-api-gateway/telemetry",
+        "@com_github_rs_zerolog//:zerolog",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//codes",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_sdk//trace/tracetest",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)

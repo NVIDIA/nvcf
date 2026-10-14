@@ -1217,6 +1217,40 @@ class GrpcInvocationServiceTest extends BaseFunctionInvocationTest {
                 .isEqualTo(Status.NOT_FOUND.getCode());
     }
 
+    // A party shared on one version must not reach another version of the same function by
+    // naming it; the request is rejected rather than served by the shared version.
+    @Test
+    void authorizedPartyCannotInvokeUnsharedVersion() {
+        var functionId = UUID.randomUUID();
+        var sharedVersionId = UUID.randomUUID();
+        var unsharedVersionId = UUID.randomUUID();
+        createFunctionVersion(functionId, sharedVersionId);
+        createFunctionVersion(functionId, unsharedVersionId);
+        setFunctionActive(functionId, sharedVersionId);
+        setFunctionActive(functionId, unsharedVersionId);
+        shareFunctionVersion(functionId, sharedVersionId, TEST_AUTHORIZED_NCA_ID_3);
+        setResponse(TEST_AUTHORIZED_NCA_ID_3, TEST_OWNER_ID,
+                    List.of(new Resource("authorized-functions", "*")),
+                    List.of(SCOPE_INVOKE_FUNCTION));
+        var apiKey = "nvapi-stg-version-shared-key";
+
+        assertThat(functionAuth(apiKey, functionId.toString(), sharedVersionId.toString())
+                           .getFunctionVersionsList())
+                .extracting(FunctionVersion::getFunctionVersionId)
+                .containsExactly(sharedVersionId.toString());
+        assertThat(functionAuth(apiKey, functionId.toString(), null)
+                           .getFunctionVersionsList())
+                .extracting(FunctionVersion::getFunctionVersionId)
+                .containsExactly(sharedVersionId.toString());
+        for (var versionId : List.of(unsharedVersionId, UUID.randomUUID())) {
+            assertThatThrownBy(() -> functionAuth(apiKey, functionId.toString(),
+                                                  versionId.toString()))
+                    .isInstanceOf(StatusRuntimeException.class)
+                    .extracting(thrown -> ((StatusRuntimeException) thrown).getStatus().getCode())
+                    .isEqualTo(Status.NOT_FOUND.getCode());
+        }
+    }
+
     @Test
     void allowsStreamingFunctionForClassicInvocation() {
         setFunctionActive(TEST_FUNCTION_ID, TEST_VERSION_ID_1);

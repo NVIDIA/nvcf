@@ -91,6 +91,7 @@ fn request_with_priority<'a>(
         received_at: Instant::now(),
         request_slo: None,
         excluded_cluster_ids: None,
+        last_cluster: None,
     }
 }
 
@@ -197,7 +198,7 @@ fn candidate(id: &str, kv_cache_free_tokens: u64) -> RoutedClusterSnapshot {
     }
 }
 
-fn candidates(ids: &[&str]) -> Vec<RoutedClusterSnapshot> {
+pub(super) fn candidates(ids: &[&str]) -> Vec<RoutedClusterSnapshot> {
     ids.iter().map(|id| candidate(id, 1024)).collect()
 }
 
@@ -790,6 +791,42 @@ fn algorithm_specific_load_balancer_fields_are_rejected_for_other_algorithms() {
         ),
     ] {
         assert_json_rejected::<LoadBalancerAlgorithmConfig>(raw, expected_field);
+    }
+}
+
+#[test]
+fn last_cluster_affinity_is_rejected_for_other_algorithms() {
+    for algorithm in ["power-of-n", "round-robin", "random", "pulsar"] {
+        let raw = format!(r#"{{"algorithm":"{algorithm}","last_cluster_affinity":true}}"#);
+        let error = serde_json::from_str::<LoadBalancerAlgorithmConfig>(&raw)
+            .expect_err("last_cluster_affinity should be rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("last_cluster_affinity") && message.contains(algorithm),
+            "error should name the field and {algorithm}: {message}"
+        );
+    }
+    for raw in [
+        r#"{"default":"power-of-n","models":{"model-a":{"algorithm":"pulsar","last_cluster_affinity":true}}}"#,
+        r#"{"default":"power-of-n","request_algorithms":{"random":{"algorithm":"random","last_cluster_affinity":true}}}"#,
+    ] {
+        assert_json_rejected::<LoadBalancerConfig>(raw, "last_cluster_affinity");
+    }
+}
+
+#[test]
+fn last_cluster_affinity_parses_for_wait_and_widen_algorithms() {
+    for algorithm in ["wait-and-widen", "pulsar-wait-and-widen"] {
+        let config: LoadBalancerAlgorithmConfig = parse_json(&format!(
+            r#"{{"algorithm":"{algorithm}","last_cluster_affinity":true}}"#
+        ));
+        assert_eq!(
+            config
+                .wait_and_widen_settings()
+                .and_then(|settings| settings.last_cluster_affinity),
+            Some(true)
+        );
+        create_load_balancer_with_config(&config).expect("factory should accept the flag");
     }
 }
 
@@ -1436,6 +1473,7 @@ fn wait_and_widen_config_resolves_internal_defaults() {
     assert_eq!(config.max_queued, 0);
     assert!(config.ignore_queue_time);
     assert!(config.ignore_input_processing_time);
+    assert!(!config.last_cluster_affinity);
 
     let target = target();
     let request = request(&target, None, Some(0));
@@ -3510,5 +3548,49 @@ fn wait_and_widen_without_affinity_prefers_a_fast_bucket_with_capacity() {
             candidates[choice.candidate_index].cluster_id,
             "fast-available"
         );
+    }
+}
+
+#[test]
+fn routing_method_override_without_flag_ignores_last_cluster() {
+    let router = router_from_json(
+        r#"{
+            "default": "power-of-n",
+            "models": {
+                "model-a": {
+                    "algorithm": "wait-and-widen",
+                    "cache_affinity_backend_selection_count": 1,
+                    "last_cluster_affinity": true,
+                    "request_algorithms": {
+                        "pulsar-wait-and-widen": {"algorithm": "pulsar-wait-and-widen"}
+                    }
+                }
+            }
+        }"#,
+    );
+    let target = target();
+    let candidates = candidates(&["a", "b", "c"]);
+    let without_flag = "pulsar-wait-and-widen"
+        .parse::<LoadBalancerAlgorithmOverride>()
+        .unwrap();
+    for (algorithm_override, expected) in [
+        (Some(&without_flag), None),
+        (None, Some(SessionState::Returning)),
+    ] {
+        let resolution = router
+            .resolve_algorithm_override("model-a", algorithm_override)
+            .unwrap();
+        let hint = LastClusterHint::new(Some("b".to_string()));
+        let request = LoadBalancerRequest {
+            last_cluster: Some(&hint),
+            ..request(&target, Some("session-prefix"), Some(100))
+        };
+        let _ = router.decide_with_algorithm_resolution(
+            &LoadBalancerTargetState::default(),
+            &request,
+            &candidates,
+            &resolution,
+        );
+        assert_eq!(hint.classification().map(|c| c.state), expected);
     }
 }
