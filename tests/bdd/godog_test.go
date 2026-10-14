@@ -21,7 +21,10 @@ package bdd_tmp
 
 import (
 	"context"
+	"encoding/json"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -2663,6 +2666,28 @@ func TestObservabilityDisabled(t *testing.T) {
 	runLiveFeature(t, "observability-disabled.feature")
 }
 
+// TestEventLedger is the live entry point for the event-ledger feature. It
+// brings up a single-cluster ncp-local cluster, installs the stack with the
+// event ledger enabled, registers the cluster and installs NVCA, then checks
+// the ledger. Skipped under -short.
+func TestEventLedger(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "event-ledger.feature")
+}
+
+// TestEventLedgerControlPlane runs the event-ledger feature without the
+// compute-plane scenarios (NVCA registration and the function deployment), so
+// it needs no GPU capacity or image pull access. It still installs the stack.
+// Skipped under -short.
+func TestEventLedgerControlPlane(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeatureTags(t, "event-ledger.feature", "~@compute-plane")
+}
+
 // TestMultiClusterHelmfile is the live entry point for the
 // multi-cluster Helmfile feature: control-plane install on
 // k3d-ncp-local-cp followed by register + NVCA install on the
@@ -2887,4 +2912,325 @@ func assertFileContains(t *testing.T, path string, needles ...string) {
 func mustResolveFeaturePath(t *testing.T, name string) string {
 	t.Helper()
 	return filepath.Join("features", name)
+}
+
+// eventLedgerHTTPFake answers the event-ledger feature's HTTP calls the way
+// the real services are expected to, and records requests for assertions.
+type eventLedgerHTTPFake struct {
+	destroyed *bool
+	requests  []string
+}
+
+func (f *eventLedgerHTTPFake) Do(_ context.Context, method, rawURL string, headers map[string]string, body string) (harness.HTTPResponse, error) {
+	f.requests = append(f.requests, method+" "+rawURL)
+	hostAndPath := strings.TrimPrefix(rawURL, "http://")
+	host, rest, _ := strings.Cut(hostAndPath, "/")
+	path, query, _ := strings.Cut("/"+rest, "?")
+	auth := headers["Authorization"]
+	admin := auth == "Bearer admin-jwt"
+	reader := auth == "Bearer nvapi-test"
+	writer := auth == "Bearer nvapi-write"
+
+	if strings.HasPrefix(host, "api-keys.") {
+		switch {
+		case !admin || headers["Key-Issuer-Id"] == "":
+			return harness.HTTPResponse{Status: 401}, nil
+		case method == "POST" && strings.Contains(body, "fnds:createEvent"):
+			return harness.HTTPResponse{Status: 200, Body: `{"id":"key-w","value":"nvapi-write"}`}, nil
+		case method == "POST":
+			return harness.HTTPResponse{Status: 200, Body: `{"id":"key-1","value":"nvapi-test"}`}, nil
+		default:
+			return harness.HTTPResponse{Status: 204}, nil
+		}
+	}
+	switch {
+	case path == "/health":
+		return harness.HTTPResponse{Status: 200}, nil
+	case strings.HasPrefix(path, "/v1/"), strings.HasPrefix(path, "/v2/"):
+		return harness.HTTPResponse{Status: 404}, nil
+	case auth == "", strings.HasPrefix(auth, "Bearer eyJ"):
+		return harness.HTTPResponse{Status: 401}, nil
+	case writer && method == "POST" && path == "/v3/ledger/k8s-events":
+		return harness.HTTPResponse{Status: 400, Body: `{"title":"Bad Request","status":400,"detail":"No events found in request"}`}, nil
+	case writer && method == "POST":
+		return harness.HTTPResponse{Status: 200, Body: `{"status":"accepted","success_count":1,"failure_count":0,"total_processed":1}`}, nil
+	case !reader:
+		return harness.HTTPResponse{Status: 403}, nil
+	case method == "POST":
+		return harness.HTTPResponse{Status: 403}, nil
+	}
+	namespace := strings.Split(path, "/")[4]
+	params, _ := url.ParseQuery(query)
+	switch {
+	case params.Has("attribute_key") || strings.HasPrefix(params.Get("instance_id"), "bad") || params.Has("view"):
+		return harness.HTTPResponse{Status: 400}, nil
+	case strings.HasSuffix(path, "/stats"):
+		return f.stats(namespace, params.Get("eventFilter")), nil
+	default:
+		return f.events(namespace, params), nil
+	}
+}
+
+// Contexts the fake keeps for the function version "version-1": the SIS one
+// and an NVCA one that sorts before it, as the ledger lists them when the NVCA
+// collector is enabled. The scenario must still pick the SIS context.
+const (
+	fakeNVCAContext = "cluster_id=c1,instance_id=i1,resource_id=r1"
+	fakeSISContext  = "deployment_id=d1,gpu_specification_id=g1,instance_id=i1"
+)
+
+type fakeEvent struct{ name, source string }
+
+func (f *eventLedgerHTTPFake) contextEvents() map[string][]fakeEvent {
+	sis := []fakeEvent{{"InstanceReady", "nvidia-spot"}}
+	if *f.destroyed {
+		sis = append(sis, fakeEvent{"InstanceDestroyed", "nvidia-spot"})
+	}
+	return map[string][]fakeEvent{
+		fakeNVCAContext: {{"ICMSRequest.InstanceStatusUpdate.running", "nvca"}},
+		fakeSISContext:  sis,
+	}
+}
+
+func (f *eventLedgerHTTPFake) stats(namespace, eventFilter string) harness.HTTPResponse {
+	type row struct {
+		Context   string `json:"context"`
+		EventName string `json:"event_name"`
+	}
+	contexts := []row{}
+	byEvent := map[string]int{}
+	if namespace == "version-1" {
+		events := f.contextEvents()
+		for _, ctx := range []string{fakeNVCAContext, fakeSISContext} {
+			latest := events[ctx][len(events[ctx])-1].name
+			if eventFilter != "" && !strings.Contains(","+eventFilter+",", ","+latest+",") {
+				continue
+			}
+			contexts = append(contexts, row{ctx, latest})
+			byEvent[latest]++
+		}
+	}
+	body, _ := json.Marshal(map[string]any{
+		"namespace": namespace,
+		"summary":   map[string]any{"by_event": byEvent},
+		"contexts":  contexts,
+	})
+	return harness.HTTPResponse{Status: 200, Body: string(body)}
+}
+
+func (f *eventLedgerHTTPFake) events(namespace string, params url.Values) harness.HTTPResponse {
+	var parts []string
+	for _, key := range []string{"cluster_id", "deployment_id", "gpu_specification_id", "instance_id", "resource_id"} {
+		if value := params.Get(key); value != "" {
+			parts = append(parts, key+"="+value)
+		}
+	}
+	eventContext := strings.Join(parts, ",")
+	type event struct {
+		Name    string         `json:"event_name"`
+		Source  string         `json:"source"`
+		Details map[string]any `json:"details"`
+	}
+	events := []event{}
+	if namespace == "version-1" {
+		for _, e := range f.contextEvents()[eventContext] {
+			events = append(events, event{e.name, e.source, map[string]any{"attributes": map[string]string{"functionid": "function-1", "function_id": "function-1"}}})
+		}
+	}
+	body, _ := json.Marshal(map[string]any{"namespace": namespace, "context": eventContext, "events": events})
+	return harness.HTTPResponse{Status: 200, Body: string(body)}
+}
+
+func eventLedgerHelmListJSON() string {
+	return `[
+{"name":"nats","namespace":"nats-system","status":"deployed"},
+{"name":"cert-manager","namespace":"cert-manager","status":"deployed"},
+{"name":"openbao-server","namespace":"vault-system","status":"deployed"},
+{"name":"cassandra","namespace":"cassandra-system","status":"deployed"},
+{"name":"api-keys","namespace":"api-keys","status":"deployed"},
+{"name":"sis","namespace":"sis","status":"deployed"},
+{"name":"api","namespace":"nvcf","status":"deployed"},
+{"name":"event-ledger","namespace":"nvcf","status":"deployed"},
+{"name":"ingress","namespace":"envoy-gateway-system","status":"deployed"},
+{"name":"nvca-operator","namespace":"nvca-operator","status":"deployed"}
+]`
+}
+
+// recordingHTTP is an HTTPClient that records requests and answers every one
+// with a fixed status.
+type recordingHTTP struct {
+	status   int
+	requests []string
+	headers  []map[string]string
+}
+
+func (r *recordingHTTP) Do(_ context.Context, method, url string, headers map[string]string, _ string) (harness.HTTPResponse, error) {
+	r.requests = append(r.requests, method+" "+url)
+	r.headers = append(r.headers, headers)
+	return harness.HTTPResponse{Status: r.status}, nil
+}
+
+func runTeardownFeature(t *testing.T, body string, httpClient harness.HTTPClient) int {
+	t.Helper()
+	feature := filepath.Join(t.TempDir(), "teardown.feature")
+	if err := os.WriteFile(feature, []byte(body), 0o644); err != nil {
+		t.Fatalf("write feature: %v", err)
+	}
+	suite := newWiringSuite(t, newFakeRunner(nil))
+	suite.HTTP = httpClient
+	sc := steps.NewScenarioContext(suite)
+	return godog.TestSuite{
+		Name: "teardown-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format:        "pretty",
+			Paths:         []string{feature},
+			Strict:        true,
+			StopOnFailure: true,
+			Output:        io.Discard,
+		},
+	}.Run()
+}
+
+// TestScenarioTeardownRunsAfterAFailedStep guards the live runner stopping at
+// the first failed step: cleanup written as a later step would be skipped, a
+// teardown must not be.
+func TestScenarioTeardownRunsAfterAFailedStep(t *testing.T) {
+	recorder := &recordingHTTP{status: http.StatusNoContent}
+	status := runTeardownFeature(t, `Feature: teardown
+  Scenario: cleanup survives a failed step
+    Given the HTTP request header "Key-Owner-Id" is "owner"
+    And I send a "DELETE" request to "http://api-keys/v1/keys/key-1" at scenario teardown expecting status 204
+    Then the HTTP status should be 200
+`, recorder)
+	if status == 0 {
+		t.Fatal("the scenario should fail on its assertion")
+	}
+	if len(recorder.requests) != 1 || recorder.requests[0] != "DELETE http://api-keys/v1/keys/key-1" {
+		t.Fatalf("teardown requests = %v", recorder.requests)
+	}
+	if recorder.headers[0]["Key-Owner-Id"] != "owner" {
+		t.Fatalf("teardown headers = %v", recorder.headers[0])
+	}
+}
+
+func TestScenarioTeardownFailureFailsAnOtherwisePassingScenario(t *testing.T) {
+	recorder := &recordingHTTP{status: http.StatusInternalServerError}
+	status := runTeardownFeature(t, `Feature: teardown
+  Scenario: cleanup that fails is reported
+    When I send a "GET" request to "http://example/ok"
+    And I send a "DELETE" request to "http://api-keys/v1/keys/key-1" at scenario teardown expecting status 204
+`, recorder)
+	if status == 0 {
+		t.Fatal("a failed teardown should fail the scenario")
+	}
+}
+
+func TestEventLedgerFeatureFileWiresToSteps(t *testing.T) {
+	const selectedFunctionStatusCommand = `/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml status --json`
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, ".nvcf-cli.nvcf-cli-local.state"), []byte(`{"token":"admin-jwt"}`), 0o600); err != nil {
+		t.Fatalf("seed cli state: %v", err)
+	}
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+	destroyed := false
+	runner := newFakeRunner(map[string]harness.Result{
+		// Conflict precheck: the multi-cluster control plane must be absent.
+		"k3d cluster get ncp-local-cp": {ExitCode: 1},
+		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {
+			ExitCode: 0,
+			Stdout:   eventLedgerHelmListJSON(),
+		},
+		selectedFunctionStatusCommand: {
+			ExitCode: 0,
+			Stdout:   `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`,
+		},
+		`/bin/bash -c 'date -u -d "+1 day" +%Y-%m-%dT%H:%M:%S.000Z'`: {ExitCode: 0, Stdout: "2030-01-01T00:00:00.000Z\n"},
+		`/bin/bash -c 'echo "` + fakeSISContext + `" | tr "," "&"'`: {
+			ExitCode: 0,
+			Stdout:   "deployment_id=d1&gpu_specification_id=g1&instance_id=i1\n",
+		},
+		"kubectl --context k3d-ncp-local --namespace nvcf get service event-ledger -o jsonpath={.spec.ports[*].name}": {
+			ExitCode: 0,
+			Stdout:   "api-port metrics",
+		},
+		"kubectl --context k3d-ncp-local --namespace sis get configmaps -o yaml": {
+			ExitCode: 0,
+			Stdout:   "  ICMS_FNDS_MESSAGES_ENABLED: \"true\"\n  ICMS_FNDS_MESSAGES_V3_ENABLED: \"true\"\n",
+		},
+	})
+	runner.onRun = func(command string) error {
+		if strings.Contains(command, " function delete --deployment-only") {
+			destroyed = true
+		}
+		return nil
+	}
+	suite := newWiringSuite(t, runner)
+	httpFake := &eventLedgerHTTPFake{destroyed: &destroyed}
+	suite.HTTP = httpFake
+	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
+	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "event-ledger.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "event-ledger-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	runs := suite.Runner.(*fakeRunner).runs
+	for _, command := range []string{
+		"make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-event-ledger",
+		"make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local",
+		"make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-event-ledger",
+		"nvcf-cli-local.yaml init",
+	} {
+		if !commandRanThatContains(runs, command) {
+			t.Fatalf("install flow command was never invoked: %s", command)
+		}
+	}
+	if !commandRanThatContains(runs, " function deploy create ") {
+		t.Fatal("function deploy command was never invoked")
+	}
+	if !commandRanThatContains(runs, " function delete --deployment-only") {
+		t.Fatal("function undeploy command was never invoked")
+	}
+	for _, secret := range []string{"admin-jwt", "nvapi-test", "nvapi-write"} {
+		if commandRanThatContains(runs, secret) {
+			t.Fatalf("secret %q leaked into a command line", secret)
+		}
+	}
+	readKeyDeletes, writeKeyDeletes := 0, 0
+	for _, request := range httpFake.requests {
+		switch request {
+		case "DELETE http://api-keys.localhost:8080/v1/keys/key-1":
+			readKeyDeletes++
+		case "DELETE http://api-keys.localhost:8080/v1/keys/key-w":
+			writeKeyDeletes++
+		}
+	}
+	if readKeyDeletes != 3 || writeKeyDeletes != 1 {
+		t.Fatalf("keys deleted: read = %d (want 3), write = %d (want 1)", readKeyDeletes, writeKeyDeletes)
+	}
 }

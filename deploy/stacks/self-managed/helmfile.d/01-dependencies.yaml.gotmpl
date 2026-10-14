@@ -113,7 +113,7 @@ releases:
 
   # --- NVCF NCP Dependencies ---
   - name: nats
-    version: 0.8.4
+    version: 0.8.5
     condition: nats.enabled # From defaults.yaml or env overrides
     namespace: nats-system
     <<: *dependency # Inherits base values from the dependency template
@@ -125,16 +125,17 @@ releases:
     <<: *dependency
 
   - name: openbao-server # this name MUST not change
-    version: 0.32.6
+    version: 0.33.2
     condition: openbao.enabled # From defaults.yaml or env overrides
     namespace: vault-system
     <<: *dependency # Inherits base values from the dependency template
-    # Secret values own migrations.env. Apply the generated LLM addition last
-    # so it preserves that list while adding the addon migration switch.
+    # Secret values own migrations.env. Helm replaces lists rather than
+    # merging them, so every entry is built in the overlay and applied last:
+    # anything set earlier, global.yaml.gotmpl included, would be discarded.
     values:
       - ../global.yaml.gotmpl
       - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
-      - ../openbao-migrations-llm-env.yaml.gotmpl
+      - ../openbao-migrations-env.yaml.gotmpl
     needs:
       - nats-system/nats
 

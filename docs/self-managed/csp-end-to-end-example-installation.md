@@ -497,6 +497,13 @@ global:
       natsHostOverride: "nats.${GATEWAY_ADDR}"
 ```
 
+<Note>
+Both subsections below run `nvcf-cli init`, which mints its token through Admin Issuer Proxy. On a
+stack where that component is disabled the command fails with `API error 404`: skip it, and export
+`NVCF_TOKEN` with a token from your own identity provider before registering. See
+[Disabling Admin Issuer Proxy](./control-plane-operations.md).
+</Note>
+
 Then follow the matching subsection below.
 
 ### Single-cluster

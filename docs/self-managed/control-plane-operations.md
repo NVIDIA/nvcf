@@ -295,6 +295,143 @@ rollback.
 
 </Note>
 
+## Disabling Admin Issuer Proxy
+
+Admin Issuer Proxy is a bootstrap helper. `POST /v1/admin/keys` returns a 12-hour admin JWT, signed by OpenBao as the NVCF API's in-cluster issuer, carrying function, secret, registry-credential and cluster-management scopes.
+
+**It does not authenticate callers** — the stack relies on the gateway in front of it for that.
+
+It exists so a new install with no identity provider can mint its first admin token, and `nvcf-cli init` uses it.
+
+An install whose callers already get tokens from their own identity provider has no use for it, and can remove it.
+
+<Warning>
+`nvcf-cli init` and `nvcf-cli refresh` both call `POST /v1/admin/keys` through the same `generateAdminTokenViaAPI` function. Once the proxy is removed, both fail:
+
+```text
+$ nvcf-cli init
+Error: failed to generate admin token: API error 404: 
+Usage:
+  nvcf-cli init [flags]
+...
+```
+
+It is not a graceful failure. The message is bare because the Gateway returns an empty body for an unrouted host, and Cobra then prints usage as though the command were mistyped, which points the operator at their own typing rather than at the missing component. Neither command has a flag to supply a token you already hold, so there is no fallback inside the CLI.
+
+**What to do instead:** obtain the admin token from your own identity provider and supply it as `NVCF_TOKEN`, the same credential `init` would have written. The CLI resolves a token in the order environment variable, then config file, then the state file `init` writes, so setting it by either of the first two makes `init` unnecessary rather than merely working around it:
+
+```bash
+export NVCF_TOKEN="<token from your identity provider>"
+# or, to persist it, add to ~/.nvcf-cli.yaml:
+#   token: "<token from your identity provider>"
+```
+
+Every other `nvcf-cli` command works unchanged from there. Operators following [the CLI guide](../overview/cli.md) or [the end-to-end installation example](./csp-end-to-end-example-installation.md) should skip the `nvcf-cli init` step on a stack where this proxy is disabled.
+
+</Warning>
+
+### Configuration
+
+```yaml
+# environments/<environment-name>.yaml
+adminIssuerProxy:
+  enabled: false
+```
+
+This value controls two things that must stay in step:
+
+| What | Effect |
+| --- | --- |
+| The Helm release | Not installed, so no Deployment, Service, ServiceAccount, HTTPRoute, ReferenceGrant or PodDisruptionBudget |
+| The OpenBao migration | `10_setup_admin-issuer.sh` is skipped, so the signing role, policy and auth role are never created |
+
+The NVCF UI health list drops its Admin Issuer Proxy entry at the same time, so the UI does not report a missing component.
+
+A related value, `adminIssuerProxy.gateway.enabled: false`, removes only the `api-keys.<domain>/v1/admin/keys` route and keeps the service reachable inside the cluster. Use it when `nvcf-cli init` is still needed from inside the cluster but the endpoint should not be on the public edge.
+
+Setting `adminIssuerProxy.enabled: false` removes the route as well, so the two are not combined.
+
+### Removing it from an existing install
+
+Setting the value to `false` on a stack where the proxy is already installed does **not** remove anything. The release condition stops Helmfile managing the release, and the migration stops creating the OpenBao grant, but both already exist and stay as they are.
+
+Removal is two steps, and both are required.
+
+**1. Uninstall the release.** This removes everything the chart owns: the Deployment, Service, ServiceAccount, HTTPRoute and ReferenceGrant, plus the PodDisruptionBudget if `adminIssuerProxy.podDisruptionBudget.enabled` is set.
+
+```bash
+helm uninstall admin-issuer-proxy -n api-keys
+
+# Verify: nothing left in the namespace, and no route on the shared Gateway
+kubectl get pods,deploy,svc,sa,pdb -n api-keys | grep admin-token-issuer-proxy
+kubectl get httproute,referencegrant -A | grep admin-token-issuer-proxy
+```
+
+**2. Revoke the OpenBao grant.** This is the step that is easy to miss.
+
+OpenBao state is not owned by the Helm release, so uninstalling leaves the signing capability in place: any pod running as the `admin-issuer-proxy` service account in the `api-keys` namespace can still authenticate to OpenBao and sign admin-scoped tokens for the NVCF API issuer.
+
+Until these three objects are deleted, removing the Deployment has reduced the exposed surface without withdrawing the capability.
+
+Retrieve the root token as described in [Troubleshooting](./troubleshooting.md), then:
+
+```bash
+# The JWT auth role bound to the proxy's service account
+kubectl exec -it openbao-server-0 -c openbao -n vault-system -- \
+  env BAO_TOKEN=$BAO_ROOT_TOKEN \
+  bao delete auth/jwt/role/admin-issuer-proxy
+
+# The policy granting it signing rights
+kubectl exec -it openbao-server-0 -c openbao -n vault-system -- \
+  env BAO_TOKEN=$BAO_ROOT_TOKEN \
+  bao delete sys/policies/acl/services-admin-issuer-proxy-jwt-sign-admin-issuer-proxy-rw
+
+# The JWT secret role that mints the admin-scoped token
+kubectl exec -it openbao-server-0 -c openbao -n vault-system -- \
+  env BAO_TOKEN=$BAO_ROOT_TOKEN \
+  bao delete services/nvcf-api/jwt/roles/admin-issuer-proxy
+```
+
+Verify all three are gone:
+
+```bash
+kubectl exec -it openbao-server-0 -c openbao -n vault-system -- \
+  env BAO_TOKEN=$BAO_ROOT_TOKEN \
+  sh -c 'bao list auth/jwt/role; bao policy list; bao list services/nvcf-api/jwt/roles' \
+  | grep admin-issuer-proxy
+```
+
+No output means the grant is withdrawn.
+
+<Note>
+Re-enabling is simpler than disabling. Setting `adminIssuerProxy.enabled: true` reinstalls the release, and the next migration run recreates all three OpenBao objects, so nothing has to be restored by hand.
+
+</Note>
+
+### Verifying at the edge
+
+The route's hostname may have no DNS record, which does not by itself make it unreachable — a load balancer that forwards the `Host` header passes the request to the Gateway regardless. Check the edge, not only the cluster:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' \
+  --resolve api-keys.<your-domain>:443:<load-balancer-address> \
+  https://api-keys.<your-domain>/v1/admin/keys
+echo "curl exit: $?"
+```
+
+`--resolve` rather than `-H "Host: …"`: the `Host` header is an HTTP header and does not set the TLS server name, so against a load-balancer IP the certificate would be checked against that IP and the request could fail before the Gateway ever saw it.
+
+Read the two results together. **Exit 0 with `404`** means no route is attached, which is the outcome you want. **Exit 0 with anything else** means the route is still being served.
+
+**A non-zero curl exit** means the request never reached the Gateway, so the check is inconclusive rather than a pass — the printed status will be `000`.
+
+<Note>
+If curl exits with a certificate error (exit 60), the edge is presenting a certificate that does not cover this hostname — expected when the route's hostname has no certificate of its own. Re-run with `-k` to get past the TLS check and read the routing result.
+
+Only do this when diagnosing that specific failure: `-k` disables certificate verification and says nothing about whether the edge's TLS is sound.
+
+</Note>
+
 ## Observability
 
 For observability configuration and reference architecture, see [self-hosted-observability](../observability/observability.md).

@@ -33,6 +33,7 @@ alias(
 go_test(
     name = "models_test",
     srcs = [
+        "input_fidelity_test.go",
         "openai_marshal_test.go",
         "unmodeled_test.go",
     ],

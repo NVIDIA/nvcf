@@ -16,6 +16,7 @@
 package nvcaconfig
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -731,4 +732,47 @@ func TestNewViperDecoderConfig(t *testing.T) {
 	// Verify the decoder config is created without error
 	opt := NewViperDecoderConfig()
 	assert.NotNil(t, opt)
+}
+
+// TestDecodeConfig_AgentTimeoutDecodeFailure covers durations that match the
+// Helm schema pattern but cannot be parsed by time.ParseDuration, such as one
+// that overflows time.Duration. These fail while decoding, before
+// AgentTimeConfig.Validate(), and must be recoverable rather than fatal.
+func TestDecodeConfig_AgentTimeoutDecodeFailure(t *testing.T) {
+	tests := []struct {
+		name        string
+		yaml        string
+		wantTimeout bool
+	}{
+		{
+			name:        "overflowing heartbeat interval",
+			yaml:        "agent:\n  heartbeatInterval: 999999999999999999h\n",
+			wantTimeout: true,
+		},
+		{
+			name:        "several overflowing timeout fields",
+			yaml:        "agent:\n  heartbeatInterval: 999999999999999999h\n  syncQueueInterval: 999999999999999999h\n",
+			wantTimeout: true,
+		},
+		{
+			name: "unrelated duration field still fails normally",
+			yaml: "agent:\n  logLevel: [1]\n",
+		},
+		{
+			name: "timeout failure mixed with an unrelated failure stays unrecoverable",
+			yaml: "agent:\n  heartbeatInterval: 999999999999999999h\n  logLevel: [1]\n",
+		},
+		{
+			name: "timeout decode failure mixed with an unrelated validation failure stays unrecoverable",
+			yaml: "agent:\n  heartbeatInterval: 999999999999999999h\n  byooOtelCollector:\n    logSampling:\n      samplingPercentage: -1\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := DecodeConfig([]byte(tt.yaml))
+			require.Error(t, err)
+			var target *AgentTimeDecodeError
+			assert.Equal(t, tt.wantTimeout, errors.As(err, &target))
+		})
+	}
 }
