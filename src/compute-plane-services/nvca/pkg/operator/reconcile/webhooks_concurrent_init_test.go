@@ -109,8 +109,7 @@ func (s gatedSecrets) Create(ctx context.Context, sec *v1.Secret, opts metav1.Cr
 
 // Two cold-start reconciles of the same backend that both read the certificate as
 // absent must converge on one CA: the stored serving cert has to verify against the
-// CA Secret and every published caBundle. A reconcile that loses a create race may
-// still fail with AlreadyExists, but the other one must complete.
+// CA Secret and every published caBundle, and neither reconcile may fail.
 func TestConcurrentColdStartWebhookCertsConverge(t *testing.T) {
 	const runs = 10
 
@@ -134,15 +133,9 @@ func TestConcurrentColdStartWebhookCertsConverge(t *testing.T) {
 		}
 		wg.Wait()
 
-		succeeded := 0
-		for _, err := range errs {
-			if err == nil {
-				succeeded++
-				continue
-			}
-			assert.Contains(t, err.Error(), "already exists", "run %d", run)
+		for i, err := range errs {
+			require.NoError(t, err, "run %d, reconcile %d", run, i)
 		}
-		require.Positive(t, succeeded, "run %d: no reconcile completed: %v", run, errs)
 		require.NoError(t, webhookCAConsistency(ctx, bc, nb, now), "run %d", run)
 	}
 }
@@ -245,6 +238,118 @@ func TestEnsureWebhookCert_AdoptsCertOnUpdateConflict(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, conflicted.Load())
 	assert.Equal(t, winner, got)
+}
+
+// hideFirstGet makes the first get of resource report NotFound, as if another writer
+// created the object right after this reconcile read it.
+func hideFirstGet(cs *fake.Clientset, resource, name string) {
+	var hidden atomic.Bool
+	cs.PrependReactor("get", resource, func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.(k8stesting.GetAction).GetName() != name || hidden.Swap(true) {
+			return false, nil, nil
+		}
+		return true, nil, k8serrors.NewNotFound(schema.GroupResource{Resource: resource}, name)
+	})
+}
+
+// conflictFirstUpdate makes the first update of resource fail with Conflict, as if
+// another writer changed the object right after this reconcile read it.
+func conflictFirstUpdate(cs *fake.Clientset, resource, name string) *atomic.Bool {
+	var conflicted atomic.Bool
+	cs.PrependReactor("update", resource, func(a k8stesting.Action) (bool, runtime.Object, error) {
+		obj := a.(k8stesting.UpdateAction).GetObject().(metav1.Object)
+		if obj.GetName() != name || conflicted.Swap(true) {
+			return false, nil, nil
+		}
+		return true, nil, k8serrors.NewConflict(schema.GroupResource{Resource: resource}, name,
+			fmt.Errorf("the object has been modified"))
+	})
+	return &conflicted
+}
+
+func assertWebhookCABundles(ctx context.Context, t *testing.T, bc *BackendK8sCache, want []byte) {
+	t.Helper()
+	admission := bc.clients.K8s.AdmissionregistrationV1()
+	vwc, err := admission.ValidatingWebhookConfigurations().Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
+	require.NoError(t, err)
+	for _, w := range vwc.Webhooks {
+		assert.Equal(t, want, w.ClientConfig.CABundle, w.Name)
+	}
+	mwc, err := admission.MutatingWebhookConfigurations().Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
+	require.NoError(t, err)
+	for _, w := range mwc.Webhooks {
+		assert.Equal(t, want, w.ClientConfig.CABundle, w.Name)
+	}
+}
+
+// A Secret that appears between the read and the create must be updated to the
+// desired content rather than reported as an AlreadyExists error.
+func TestCreateOrUpdateSecret_RecoversFromAlreadyExists(t *testing.T) {
+	ctx := newTestContext()
+	bc, nb := newWebhookCertTestCache()
+	now := time.Now().UTC()
+	cs := bc.clients.K8s.(*fake.Clientset)
+
+	stale, err := generateWebhookCerts(nb, now)
+	require.NoError(t, err)
+	desired, err := generateWebhookCerts(nb, now)
+	require.NoError(t, err)
+	require.NoError(t, bc.setupTLSCASecret(ctx, nb, stale))
+
+	hideFirstGet(cs, "secrets", NVCAWebhookTLSCASecretName)
+	require.NoError(t, bc.setupTLSCASecret(ctx, nb, desired))
+
+	caSecret, err := cs.CoreV1().Secrets(getSystemNamespace(nb)).Get(ctx, NVCAWebhookTLSCASecretName, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, desired.CACertBytes, caSecret.Data[TLSCAName])
+}
+
+// A webhook configuration that appears between the read and the create must be
+// updated to the desired caBundle rather than left stale behind an AlreadyExists error.
+func TestCreateOrUpdateWebhookConfiguration_RecoversFromAlreadyExists(t *testing.T) {
+	ctx := newTestContext()
+	bc, nb := newWebhookCertTestCache()
+	now := time.Now().UTC()
+	cs := bc.clients.K8s.(*fake.Clientset)
+
+	stale, err := generateWebhookCerts(nb, now)
+	require.NoError(t, err)
+	desired, err := generateWebhookCerts(nb, now)
+	require.NoError(t, err)
+	require.NoError(t, bc.setupMiniServiceValidatingWebhook(ctx, nb, stale))
+	require.NoError(t, bc.setupNVCAMutatingWebhookConfiguration(ctx, nb, stale))
+
+	hideFirstGet(cs, "validatingwebhookconfigurations", nvcaoptypes.NVCAModuleName)
+	hideFirstGet(cs, "mutatingwebhookconfigurations", nvcaoptypes.NVCAModuleName)
+	require.NoError(t, bc.setupMiniServiceValidatingWebhook(ctx, nb, desired))
+	require.NoError(t, bc.setupNVCAMutatingWebhookConfiguration(ctx, nb, desired))
+
+	assertWebhookCABundles(ctx, t, bc, desired.CACertBytes)
+}
+
+// An update that conflicts with another writer must re-read the live object and
+// apply the desired caBundle rather than fail.
+func TestCreateOrUpdateWebhookConfiguration_RetriesOnConflict(t *testing.T) {
+	ctx := newTestContext()
+	bc, nb := newWebhookCertTestCache()
+	now := time.Now().UTC()
+	cs := bc.clients.K8s.(*fake.Clientset)
+
+	stale, err := generateWebhookCerts(nb, now)
+	require.NoError(t, err)
+	desired, err := generateWebhookCerts(nb, now)
+	require.NoError(t, err)
+	require.NoError(t, bc.setupMiniServiceValidatingWebhook(ctx, nb, stale))
+	require.NoError(t, bc.setupNVCAMutatingWebhookConfiguration(ctx, nb, stale))
+
+	vConflicted := conflictFirstUpdate(cs, "validatingwebhookconfigurations", nvcaoptypes.NVCAModuleName)
+	mConflicted := conflictFirstUpdate(cs, "mutatingwebhookconfigurations", nvcaoptypes.NVCAModuleName)
+	require.NoError(t, bc.setupMiniServiceValidatingWebhook(ctx, nb, desired))
+	require.NoError(t, bc.setupNVCAMutatingWebhookConfiguration(ctx, nb, desired))
+
+	assert.True(t, vConflicted.Load())
+	assert.True(t, mConflicted.Load())
+	assertWebhookCABundles(ctx, t, bc, desired.CACertBytes)
 }
 
 // A newly minted certificate is stored together with its CA in the serving cert
