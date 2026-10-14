@@ -206,8 +206,11 @@ export STARGATE_BENCH=/secure/path/stargate-dev-bench
 ```
 
 List or preview the reduced suite without cluster access or traffic.
-`loadtest/reduced.yaml` defines the suites and their workloads. Without
-`--suite-file`, the CLI uses the embedded `loadtest/suite.yaml`.
+`loadtest/reduced.yaml` defines the `reduced` suite and its single-scenario
+parts, `reduced-session-affinity`, `reduced-mixed-sessions`, and
+`reduced-capacity`. Without `--suite-file`, the CLI uses the embedded
+`loadtest/suite.yaml`, which defines `smoke` and `canonical`.
+`list` prints each suite's scenarios and minimum measured time.
 
 ```sh
 "$STARGATE_BENCH" --suite-file deploy/stacks/stargate-dev/loadtest/reduced.yaml list

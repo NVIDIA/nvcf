@@ -18,11 +18,11 @@ suites:
   - session-affinity
   - mixed-sessions
   - saturation
-  session-affinity:
+  reduced-session-affinity:
   - session-affinity
-  mixed-sessions:
+  reduced-mixed-sessions:
   - mixed-sessions
-  capacity:
+  reduced-capacity:
   - saturation
 scenarios:
   session-affinity:

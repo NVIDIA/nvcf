@@ -1154,7 +1154,7 @@ scenarios:
             1,
         );
         let error = Suite::from_yaml(&source)?
-            .plan("capacity", &Algorithm::DEFAULT_PAIR)
+            .plan("canonical", &Algorithm::DEFAULT_PAIR)
             .unwrap_err();
         assert!(
             format!("{error:#}").contains("sweep worker count"),
@@ -1199,22 +1199,22 @@ scenarios:
             ),
             (
                 CANONICAL.replacen("workersPerRps: 2", "workersPerRps: 268435456", 1),
-                "capacity",
+                "canonical",
                 "workers",
             ),
             (
                 CANONICAL.replacen("sessions: 512", "sessions: 178956971", 1),
-                "session-affinity",
+                "canonical",
                 "requests",
             ),
             (
                 CANONICAL.replacen("workers: 32", "workers: 89478486", 1),
-                "long-context",
+                "canonical",
                 "requests",
             ),
             (
                 CANONICAL.replacen("workers: 128", &format!("workers: {too_large}"), 1),
-                "cache-affinity",
+                "canonical",
                 "workers",
             ),
         ] {

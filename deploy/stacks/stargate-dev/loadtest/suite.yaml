@@ -19,20 +19,6 @@ algorithms:
 suites:
   smoke:
     - smoke
-  capacity:
-    - smoke
-    - saturation
-  cache-affinity:
-    - smoke
-    - session-affinity
-    - long-context-affinity
-    - mixed-sessions
-  long-context:
-    - smoke
-    - long-context-affinity
-  session-affinity:
-    - smoke
-    - session-affinity
   canonical:
     - smoke
     - saturation
