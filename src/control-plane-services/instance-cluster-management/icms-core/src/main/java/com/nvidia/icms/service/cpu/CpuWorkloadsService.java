@@ -28,7 +28,13 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.cloud.context.scope.refresh.RefreshScopeRefreshedEvent;
@@ -48,7 +54,7 @@ import org.springframework.stereotype.Service;
  */
 @Service
 @Slf4j
-public class CpuWorkloadsService {
+public class CpuWorkloadsService implements DisposableBean {
 
     private static final String RESERVED_NAME_MESSAGE =
             "GPU name '%s' is reserved for CPU-only workloads. Register it only as 'CPU' with "
@@ -73,15 +79,42 @@ public class CpuWorkloadsService {
 
     private final CpuWorkloadsConfigurationProperties properties;
     private final ClusterRepository clusterRepository;
+    // Runs the guard after a configuration refresh, so the refresh thread never waits for the scan.
+    private final Executor refreshExecutor;
+    private final AtomicBoolean refreshQueued = new AtomicBoolean();
 
     // Written only by the collision guard, read by every request without a lock.
     private volatile GuardResult guardResult = GuardResult.UNEVALUATED;
 
+    // Counts the registrations that were let through while the guard was not ready and that may hold a
+    // GPU under the reserved name. A scan that ran while the count changed cannot call the result
+    // clean, because the registration may have been stored after the scan read its cluster.
+    private final AtomicLong possibleCollisionRegistrations = new AtomicLong();
+
     @Autowired
     public CpuWorkloadsService(
             CpuWorkloadsConfigurationProperties properties, ClusterRepository clusterRepository) {
+        this(properties, clusterRepository, Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "cpu-workloads-guard");
+            thread.setDaemon(true);
+            return thread;
+        }));
+    }
+
+    CpuWorkloadsService(
+            CpuWorkloadsConfigurationProperties properties,
+            ClusterRepository clusterRepository,
+            Executor refreshExecutor) {
         this.properties = properties;
         this.clusterRepository = clusterRepository;
+        this.refreshExecutor = refreshExecutor;
+    }
+
+    @Override
+    public void destroy() {
+        if (refreshExecutor instanceof ExecutorService executorService) {
+            executorService.shutdownNow();
+        }
     }
 
     /**
@@ -109,9 +142,22 @@ public class CpuWorkloadsService {
         reevaluate();
     }
 
+    /**
+     * A configuration refresh runs on the publisher's thread, so the scan is handed to a background
+     * thread. Until it finishes, requests keep reading the previous result.
+     */
     @EventListener(RefreshScopeRefreshedEvent.class)
     public void onRefresh() {
-        reevaluate();
+        if (!properties.isEnabled()) {
+            guardResult = GuardResult.UNEVALUATED;
+            return;
+        }
+        if (refreshQueued.compareAndSet(false, true)) {
+            refreshExecutor.execute(() -> {
+                refreshQueued.set(false);
+                evaluateGuard();
+            });
+        }
     }
 
     private void reevaluate() {
@@ -140,12 +186,19 @@ public class CpuWorkloadsService {
      * name that is not a valid CPU shape. Details go to the log only.
      */
     private synchronized void evaluateGuard() {
+        long registrationsBefore = possibleCollisionRegistrations.get();
         try {
             List<String> collisions = new ArrayList<>();
             clusterRepository.forEachClusterPage(
                     properties.getGuardPageSize(),
                     page -> page.forEach(cluster -> findCollision(cluster).ifPresent(collisions::add)));
-            if (collisions.isEmpty()) {
+            if (collisions.isEmpty() && possibleCollisionRegistrations.get() != registrationsBefore) {
+                // A GPU under the reserved name was registered while the scan ran, and it may have been
+                // stored after its cluster was read. Do not call that clean. The next attempt reads it.
+                guardResult = GuardResult.UNEVALUATED;
+                log.warn("CPU workloads guard saw a registration under the reserved name during its scan, "
+                        + "will scan again");
+            } else if (collisions.isEmpty()) {
                 guardResult = GuardResult.CLEAN;
                 log.info("CPU workloads guard passed: no GPU is registered under the reserved name");
             } else {
@@ -231,6 +284,10 @@ public class CpuWorkloadsService {
             } else if (gpu.instanceTypes().stream().anyMatch(
                     i -> CpuShapes.isCpuShapeEntry(gpu.name(), i.name(), i.gpuCount()))) {
                 throw new CpuWorkloadsNotReadyException(status);
+            } else {
+                // Let through while the guard is not ready: a real GPU under the reserved name. It may be
+                // stored while a scan is running, so a scan in progress must not end clean.
+                possibleCollisionRegistrations.incrementAndGet();
             }
         }
     }

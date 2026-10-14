@@ -230,6 +230,92 @@ class CpuWorkloadsServiceTest {
     }
 
     @Test
+    void guard_registrationDuringAScan_isNotMissedByACleanResult() {
+        CpuWorkloadsConfigurationProperties properties = new CpuWorkloadsConfigurationProperties();
+        properties.setEnabled(true);
+        ClusterRepository repository = mock(ClusterRepository.class);
+        AtomicReference<CpuWorkloadsService> serviceRef = new AtomicReference<>();
+        AtomicReference<List<ClusterEntity>> stored = new AtomicReference<>(List.of());
+        AtomicReference<Boolean> registerDuringScan = new AtomicReference<>(true);
+        doAnswer(invocation -> {
+            Consumer<List<ClusterEntity>> consumer = invocation.getArgument(1);
+            // The scan reads its page, which has no collision yet.
+            consumer.accept(stored.get());
+            if (registerDuringScan.getAndSet(false)) {
+                // A real GPU named cpu is registered now. The guard is not ready, so it is let through, and
+                // it is stored after the row it would have been in was read.
+                serviceRef.get().validateGpus(Set.of(gpu("cpu", gpuType(1))));
+                stored.set(List.of(cluster("c1", Set.of(gpu("cpu", gpuType(1))))));
+            }
+            return null;
+        }).when(repository).forEachClusterPage(anyInt(), any());
+        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository, Runnable::run);
+        serviceRef.set(service);
+
+        service.onApplicationReady();
+
+        // The scan found nothing, but a registration raced it, so the result must not be clean.
+        assertEquals(CpuWorkloadsState.BLOCKED, service.status().state());
+        assertFalse(service.isReady());
+
+        // The next attempt reads the stored GPU and reports the collision.
+        service.retryGuard();
+        assertEquals(CpuWorkloadsStatus.REASON_COLLISION_DETECTED, service.status().reason());
+    }
+
+    @Test
+    void guard_scanWithNoConcurrentRegistration_stillBecomesClean() {
+        CpuWorkloadsConfigurationProperties properties = new CpuWorkloadsConfigurationProperties();
+        properties.setEnabled(true);
+        ClusterRepository repository = mock(ClusterRepository.class);
+        doAnswer(invocation -> {
+            Consumer<List<ClusterEntity>> consumer = invocation.getArgument(1);
+            consumer.accept(List.of());
+            return null;
+        }).when(repository).forEachClusterPage(anyInt(), any());
+        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository, Runnable::run);
+
+        service.onApplicationReady();
+
+        assertEquals(CpuWorkloadsState.READY, service.status().state());
+    }
+
+    @Test
+    void onRefresh_doesNotWaitForTheScan() throws Exception {
+        CpuWorkloadsConfigurationProperties properties = new CpuWorkloadsConfigurationProperties();
+        properties.setEnabled(true);
+        ClusterRepository repository = mock(ClusterRepository.class);
+        CountDownLatch scanStarted = new CountDownLatch(1);
+        CountDownLatch releaseScan = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            scanStarted.countDown();
+            releaseScan.await();
+            Consumer<List<ClusterEntity>> consumer = invocation.getArgument(1);
+            consumer.accept(List.of());
+            return null;
+        }).when(repository).forEachClusterPage(anyInt(), any());
+        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository);
+        try {
+            // The refresh returns at once, while the scan is stuck in a slow read.
+            assertTimeoutPreemptively(Duration.ofSeconds(2), service::onRefresh);
+            assertTrue(scanStarted.await(5, TimeUnit.SECONDS), "the background scan did not start");
+            assertTimeoutPreemptively(Duration.ofSeconds(2),
+                    () -> assertEquals(CpuWorkloadsState.BLOCKED, service.status().state()));
+
+            // Once the scan ends, the result shows up.
+            releaseScan.countDown();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (!service.isReady() && System.nanoTime() < deadline) {
+                Thread.sleep(10);
+            }
+            assertEquals(CpuWorkloadsState.READY, service.status().state());
+        } finally {
+            releaseScan.countDown();
+            service.destroy();
+        }
+    }
+
+    @Test
     void retryGuard_doesNothingWhenTheSwitchIsOff() {
         CpuWorkloadsConfigurationProperties properties = new CpuWorkloadsConfigurationProperties();
         ClusterRepository repository = mock(ClusterRepository.class);
@@ -307,7 +393,7 @@ class CpuWorkloadsServiceTest {
             consumer.accept(stored.get());
             return null;
         }).when(repository).forEachClusterPage(anyInt(), any());
-        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository);
+        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository, Runnable::run);
         service.onApplicationReady();
         assertTrue(service.isReady());
 
@@ -322,7 +408,7 @@ class CpuWorkloadsServiceTest {
         CpuWorkloadsConfigurationProperties properties = new CpuWorkloadsConfigurationProperties();
         properties.setEnabled(true);
         ClusterRepository repository = mock(ClusterRepository.class);
-        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository);
+        CpuWorkloadsService service = new CpuWorkloadsService(properties, repository, Runnable::run);
         service.onApplicationReady();
         assertTrue(service.isReady());
 
