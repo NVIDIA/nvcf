@@ -33,6 +33,7 @@ test:
 	@tests/ess-base-url-wiring.sh
 	@tests/nvct-remote-config-wiring.sh
 	@tests/icms-condition-wiring.sh
+	@tests/admin-issuer-proxy-wiring.sh
 	@tests/nonroot-icms-migrations.sh
 	@tests/nats-placement-tags.sh
 	@tests/nats-tls-wiring.sh
