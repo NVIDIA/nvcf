@@ -700,15 +700,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 	// Timing: AFTER cuda Lock + cleanupSharedMemory + quiesce — no GPU
 	// process is writing into the snapshot path at this point. Per-mount
 	// failures are logged and skipped (warn-and-continue, Q6 in design).
-	// A member of a group capture that keeps running is dumped stopped at
-	// its group's freeze point: its files are copied while it is stopped,
-	// as they were at the dump (dumpV2Opts.WhileStopped). Otherwise they
-	// are copied before the dump, the tree still running.
-	copyWhileStopped := req.GroupFreeze && req.LeaveRunning
-	var replayMounts []ReplayMount
-	if !copyWhileStopped {
-		replayMounts = a.captureReplayMounts(ctx, containerInfo, checkpointDir, log)
-	}
+	replayMounts := a.captureReplayMounts(ctx, containerInfo, checkpointDir, log)
 
 	// Step 4.9: drop external TCP_ESTABLISHED sockets before CRIU dump.
 	//
@@ -753,15 +745,6 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 			return a.awaitGroupFreeze(ctx, session, req.Namespace, req.PodName, log)
 		}
 	}
-	rootfsMirrored := false
-	if copyWhileStopped {
-		dopts.WhileStopped = func() error {
-			replayMounts = a.captureReplayMounts(ctx, containerInfo, checkpointDir, log)
-			a.mirrorRootfsDiff(ctx, checkpointDir, sourceUpperdir, sourceMountPoints, log)
-			rootfsMirrored = true
-			return nil
-		}
-	}
 	gpushareInfo, err := a.dumpV2(ctx, containerInfo, checkpointDir, sourceUpperdir, gpuPIDs, dopts, log)
 	if err != nil {
 		criuSpan.RecordError(err)
@@ -799,9 +782,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 	// source PID is gone and /proc/<pid>/mountinfo no longer exists, but
 	// the directory itself persists on the host until the runtime cleans
 	// up the container. The on-disk path is what we need.
-	if !rootfsMirrored {
-		a.mirrorRootfsDiff(ctx, checkpointDir, sourceUpperdir, sourceMountPoints, log)
-	}
+	a.mirrorRootfsDiff(ctx, checkpointDir, sourceUpperdir, sourceMountPoints, log)
 
 	// Step 6: Unlock GPU (if leave-running, restore first)
 	// Step 7: Parse dump.log to extract skipped resources.

@@ -102,17 +102,12 @@ const (
 	dumpKill dumpFinal = iota
 	// dumpLeaveRunning: the tree runs on.
 	dumpLeaveRunning
-	// dumpLeaveStopped: the tree stays stopped (SIGSTOP) until continued,
-	// so state outside the images (its files) can be read as it was dumped.
-	dumpLeaveStopped
 )
 
 func (f dumpFinal) flag() string {
 	switch f {
 	case dumpLeaveRunning:
 		return "--leave-running"
-	case dumpLeaveStopped:
-		return "--leave-stopped"
 	}
 	return ""
 }
@@ -276,12 +271,9 @@ type dumpV2Opts struct {
 	LeaveRunning  bool
 	FabricSession string
 	// Freeze, for a member of a group capture, returns once every member
-	// of the group is ready to be dumped (group_freeze.go), so they all
-	// stop together. A tree left running is then dumped stopped:
-	// WhileStopped reads what the images do not hold (its files) as it was
-	// at the dump, and the tree is continued after it.
-	Freeze       func(context.Context) error
-	WhileStopped func() error
+	// of the group is ready to be dumped (group_freeze.go), so their dumps
+	// start together.
+	Freeze func(context.Context) error
 }
 
 func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, o dumpV2Opts, log *logrus.Entry) (*GPUShareInfo, error) {
@@ -404,34 +396,12 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 			}
 			return nil, err
 		}
-		if leaveRunning {
-			final = dumpLeaveStopped
-		}
 	}
-	// whileStopped runs the hook on a tree dumped stopped, then lets it run
-	// again: criu keeps the network of a tree it leaves stopped locked, for
-	// a restore elsewhere; this one runs on.
-	whileStopped := func() error {
-		if final != dumpLeaveStopped {
-			return nil
-		}
-		var err error
-		if o.WhileStopped != nil {
-			err = o.WhileStopped()
-		}
-		if uerr := a.unlockDumpedNetwork(ctx, targetHostPID, checkpointDir, log); uerr != nil {
-			err = errors.Join(err, fmt.Errorf("%w: %w", errSourceLeftSuspended, uerr))
-		}
-		log.WithField("processes", continueTree(procBase, targetHostPID)).Info("criu-v2: dumped tree continued")
-		return err
-	}
-
 	if nsPID == 1 {
 		// The workload is the container's pid 1: dump it with its pid
 		// namespace, from outside (pidns_capture.go).
 		_ = os.RemoveAll(imgsDir)
 		if err := a.dumpPIDNamespace(ctx, procBase, targetHostPID, checkpointDir, externals, final, gsOn, log); err != nil {
-			_ = whileStoppedOnFailure(final, procBase, targetHostPID)
 			if gsOn {
 				if rerr := resumeSource(ctx, hostPID, gsPIDs, fabricDir, log); rerr != nil {
 					return nil, errors.Join(err, fmt.Errorf("%w: %w", errSourceLeftSuspended, rerr))
@@ -439,7 +409,6 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 			}
 			return nil, err
 		}
-		stoppedErr := whileStopped()
 		if gsOn {
 			if leaveRunning {
 				if err := resumeSource(ctx, hostPID, gsPIDs, fabricDir, log); err != nil {
@@ -450,9 +419,6 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 			if err := a.gpushareCollectStore(containerInfo, root, checkpointDir, gpuMap); err != nil {
 				return nil, err
 			}
-		}
-		if stoppedErr != nil {
-			return nil, stoppedErr
 		}
 		log.Info("criu-v2: pid-namespace dump complete")
 		return gsInfo, nil
@@ -519,9 +485,6 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		_ = os.RemoveAll(imgsHost)
 	}
 
-	if runErr != nil {
-		_ = whileStoppedOnFailure(final, procBase, targetHostPID)
-	}
 	if runErr != nil && gsOn {
 		// CRIU puts a failed dump's tasks back as they were: stopped, GPU
 		// state checkpointed. Bring the workload back rather than leave it
@@ -548,9 +511,8 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		}
 		return nil, fmt.Errorf("criu-v2 dump: %w (output: %s; dump.log tail: %s)", runErr, strings.TrimSpace(string(out)), tail)
 	}
-	stoppedErr := whileStopped()
 	if moveErr != nil {
-		return nil, errors.Join(fmt.Errorf("criu-v2: move images: %w", moveErr), stoppedErr)
+		return nil, fmt.Errorf("criu-v2: move images: %w", moveErr)
 	}
 	if gsOn {
 		if leaveRunning {
@@ -563,36 +525,8 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 			return nil, err
 		}
 	}
-	if stoppedErr != nil {
-		return nil, stoppedErr
-	}
 	log.Info("criu-v2: dump complete, images moved to checkpoint dir")
 	return gsInfo, nil
-}
-
-// unlockDumpedNetwork lifts the network lock of a dump from the images in
-// imagesDir, in the network namespace of host pid hostPID.
-func (a *Agent) unlockDumpedNetwork(ctx context.Context, hostPID int, imagesDir string, log *logrus.Entry) error {
-	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-	out, err := exec.CommandContext(cctx, "nsenter", "-t", strconv.Itoa(hostPID), "-n", "--", //nolint:gosec // fixed binary; args are a pid and a path built here
-		a.config.CRIUPath, "net-unlock", "-D", imagesDir, "-o", "net-unlock.log").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("criu net-unlock: %w (output: %s; net-unlock.log tail: %s)", err,
-			strings.TrimSpace(string(out)), tailOfFile(filepath.Join(imagesDir, "net-unlock.log"), 6))
-	}
-	log.Info("criu-v2: network of the dumped tree unlocked")
-	return nil
-}
-
-// whileStoppedOnFailure continues a tree whose dump to a stopped state
-// failed: criu puts a failed dump's tasks back as they were, and a
-// continue makes sure none is left stopped.
-func whileStoppedOnFailure(final dumpFinal, procBase string, hostPID int) int {
-	if final != dumpLeaveStopped {
-		return 0
-	}
-	return continueTree(procBase, hostPID)
 }
 
 // gpuDevPatterns are the character devices a GPU workload may hold open that

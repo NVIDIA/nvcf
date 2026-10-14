@@ -11,7 +11,7 @@ package agent
 // while its client had already stopped expired the client's lease, and the
 // restored client found its lease gone. So every member waits at a freeze
 // point once ready, and the group's driver releases them together: their
-// dumps start, and stop their trees, at the same moment.
+// dumps start at the same moment.
 
 import (
 	"context"
