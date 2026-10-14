@@ -88,6 +88,14 @@ marking the Pull Request ready or merging.
   requires explicit user approval with the measured impact before merge.
   Mock results support the tested workload, not production capacity claims.
 
+## Routing methods
+
+`crates/stargate/src/load_balancer/routing_methods.json` lists every
+load-balancing algorithm name, alias, and routing-expression parameter. When
+you add, rename, or remove one, update that file and run
+`cargo test --locked -p stargate --lib routing_method`. A failure names the
+other code, docs, and configs to update.
+
 ## Code style
 
 Use Rust 2024 and the workspace formatter and Clippy rules. Match existing

@@ -50,7 +50,9 @@ src/libraries/ts
 # An ignored directory contributes no files to the sandbox, so the tests fail
 # to read it. deploy contains no BUILD files, so leaving it loadable adds no
 # packages: `bazel query //...` reports the same target count either way.
-docs
+# docs is also loadable, for the same reason: Stargate's routing-method drift
+# test reads two routing docs exported from the root package. docs contains no
+# BUILD files.
 fern
 infra
 migrations
