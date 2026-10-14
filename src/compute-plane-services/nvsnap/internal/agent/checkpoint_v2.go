@@ -755,7 +755,8 @@ func dumpV2Args(hostPID, nsPID int, externals []string, final dumpFinal, gpushar
 		"--shell-job", "--tcp-established", "--ext-unix-sk",
 		"--link-remap", "--ghost-links", "--ghost-limit", "1073741824",
 	}
-	if !gpushare {
+	// The CUDA plugin only for a tree with GPU devices (pidNSDumpArgs).
+	if !gpushare && len(externals) > 0 {
 		args = append(args, "--libdir", v2BinDirInContainer)
 	}
 	args = append(args,

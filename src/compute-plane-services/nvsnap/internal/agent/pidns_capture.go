@@ -391,7 +391,10 @@ func pidNSDumpArgs(hostPID int, procBase, imgsDir, pluginDir string, netNSInode 
 		// The pod's network stays the pod's: restore joins the placeholder's.
 		"--external", fmt.Sprintf("net[%d]:%s", netNSInode, pidNSExtNetKey),
 	}
-	if !gpushare {
+	// The CUDA plugin only for a tree with GPU devices: for one without
+	// (an etcd, a NATS) it runs cuda-checkpoint for nothing, seconds before
+	// criu even freezes the tree.
+	if !gpushare && len(deviceExternals) > 0 {
 		args = append(args, "--libdir", pluginDir)
 	}
 	if directIO {
