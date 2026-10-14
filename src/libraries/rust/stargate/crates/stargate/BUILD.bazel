@@ -109,8 +109,8 @@ rust_test(
     # The routing-method drift tests include the manifest and the NVCF
     # routing docs at compile time.
     compile_data = [
-        "src/load_balancer/routing_methods.json",
         "//:stargate-routing-method-docs",
+        "//src/libraries/rust/stargate:routing_methods.json",
     ],
     # Tests read `benches/` and the routing simulator configs through
     # `env!("CARGO_MANIFEST_DIR")`. Resolve it within the test's runfiles

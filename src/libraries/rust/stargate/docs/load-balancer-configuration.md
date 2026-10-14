@@ -734,10 +734,11 @@ was promoted. For a promoted `pulsar-wait-and-widen` request, the rank in
 ## Implementation sources
 
 - `crates/stargate/src/load_balancer/config.rs`
-- `crates/stargate/src/load_balancer/routing_methods.json`: algorithm names,
-  aliases, and routing-expression parameters. Tests compare it with the code,
-  this page, the NVCF routing docs, `benches/`, and the routing simulator
-  configs.
+- `routing_methods.json`: algorithm names, aliases, and routing-expression
+  parameters. Tests compare it with the code, this page, the NVCF routing
+  docs, `benches/`, and the routing simulator configs. NVCF function API tests
+  check that the API's `routingMethod` format check accepts every name, alias,
+  and parameter it lists.
 - `crates/stargate/src/load_balancer/factory.rs`
 - `crates/stargate/src/load_balancer/router.rs`
 - `crates/stargate/src/load_balancer/wait_and_widen.rs`

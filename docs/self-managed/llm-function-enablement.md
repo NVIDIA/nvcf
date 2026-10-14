@@ -311,7 +311,7 @@ the trust bundle in every compute cluster. A successful Helm render and
 accepted Gateway routes do not prove remote TCP or UDP reachability. Test both
 paths and an LLM invocation from each region before production use.
 
-The request router uses `power-of-two` when no load-balancer configuration is
+The request router uses `power-of-n` when no load-balancer configuration is
 set, and accepts any supported `routingMethod` from a function. When a
 load-balancer configuration is set, a function can only select an algorithm
 that the configuration enables.

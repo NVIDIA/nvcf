@@ -13,8 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Test view of `routing_methods.json`, the expected routing method names,
-//! aliases, and routing-expression parameters.
+//! Test view of `routing_methods.json` at the Stargate workspace root, the
+//! expected routing method names, aliases, and routing-expression parameters.
 //!
 //! `http_proxy/routing_method_drift_tests.rs` compares this list with the
 //! parsers, load balancers, metrics, published docs, and bundled configs.
@@ -29,7 +29,7 @@ use super::LoadBalancerAlgorithm;
 /// Printed with every drift failure: the places that spell routing methods.
 pub(crate) const UPDATE_HINT: &str = "Routing method names, aliases, and parameters must \
 agree everywhere. Update together, from the repository root: \
-src/libraries/rust/stargate/crates/stargate/src/load_balancer/routing_methods.json; \
+src/libraries/rust/stargate/routing_methods.json; \
 LoadBalancerAlgorithm (variants, serde aliases, Display, ALL) and the \
 RawLoadBalancerAlgorithmConfig aliases in load_balancer/config.rs; parameter applicability \
 in load_balancer/expression.rs; the algorithm and parameter tables in \
@@ -60,7 +60,7 @@ pub(crate) struct RoutingMethod {
 pub(crate) fn routing_methods() -> &'static RoutingMethods {
     static ROUTING_METHODS: OnceLock<RoutingMethods> = OnceLock::new();
     ROUTING_METHODS.get_or_init(|| {
-        serde_json::from_str(include_str!("routing_methods.json"))
+        serde_json::from_str(include_str!("../../../../routing_methods.json"))
             .unwrap_or_else(|error| panic!("routing_methods.json is invalid: {error}"))
     })
 }
