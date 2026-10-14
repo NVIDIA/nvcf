@@ -431,6 +431,13 @@ class MonitoringChartTests(unittest.TestCase):
         self.assertTrue(mount['readOnly'])
         self.assertEqual({v['name'] for v in dashboard['templating']['list']}, {'release', 'namespace'})
         self.assertEqual(len({p['id'] for p in dashboard['panels']}), len(dashboard['panels']))
+        errors = next(p for p in dashboard['panels'] if p['title'] == 'Failed and refused metric points')
+        for metric in ('otelcol_exporter_send_failed_metric_points_total',
+                       'otelcol_exporter_enqueue_failed_metric_points_total'):
+            target = next((t for t in errors['targets'] if f'rate({metric}{{' in t['expr']), None)
+            self.assertIsNotNone(target, metric)
+            self.assertIn('sum by (instance, exporter)', target['expr'])
+        self.assertEqual(len({t['refId'] for t in errors['targets']}), len(errors['targets']))
         for panel in dashboard['panels']:
             self.assertEqual(panel['datasource']['uid'], 'demo-metrics')
             self.assertEqual(panel['fieldConfig']['defaults']['noValue'], 'No data')

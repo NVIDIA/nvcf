@@ -100,7 +100,7 @@
       "id": 2,
       "title": "Failed and refused metric points",
       "type": "timeseries",
-      "description": "Receiver failures/refusals and exporter send failures per second. Exporter failures can be retried.",
+      "description": "Receiver failures/refusals and exporter send/enqueue failures per second. Send failures can be retried. Enqueue failures indicate metric points rejected by the sending queue.",
       "datasource": {
         "type": "prometheus",
         "uid": "demo-metrics"
@@ -137,6 +137,11 @@
           "refId": "C",
           "expr": "sum by (instance, exporter) (rate(otelcol_exporter_send_failed_metric_points_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"}[$__rate_interval]))",
           "legendFormat": "send failed {{exporter}} / {{instance}}"
+        },
+        {
+          "refId": "D",
+          "expr": "sum by (instance, exporter) (rate(otelcol_exporter_enqueue_failed_metric_points_total{monitoring_release=\"$release\",namespace=~\"${namespace}\",component=\"monitoring-collector\"}[$__rate_interval]))",
+          "legendFormat": "enqueue failed {{exporter}} / {{instance}}"
         }
       ],
       "options": {
