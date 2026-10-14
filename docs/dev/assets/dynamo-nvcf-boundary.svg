@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">Dynamo NVCF Boundary</title>
+  <desc id="desc">Sequence diagram showing the responsibility boundary between NVCF, NVCA, Kubernetes, the Dynamo Operator, Grove and KAI, and the Dynamo runtime.</desc>
+
+  <defs>
+    <marker id="arrow-dark" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path class="arrow-dark-head" d="M 0 0 L 10 5 L 0 10 z"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path class="arrow-green-head" d="M 0 0 L 10 5 L 0 10 z"/>
+    </marker>
+    <style>
+      svg {
+        color-scheme: light dark;
+        --svg-background: #ffffff;
+        --svg-panel: #ffffff;
+        --svg-muted-panel: #f4f6f7;
+        --svg-border: #aeb4b8;
+        --svg-text: #111820;
+        --svg-muted-text: #33383e;
+        --svg-connector: #20242a;
+        --svg-green: #5a9e00;
+        --svg-blue: #1475b8;
+        --svg-red: #d32f2f;
+        --svg-amber: #cc8a00;
+        --svg-icon-on-accent: #ffffff;
+      }
+      @media (prefers-color-scheme: dark) {
+        svg {
+          --svg-background: #111418;
+          --svg-panel: #1b2026;
+          --svg-muted-panel: #242b32;
+          --svg-border: #737c84;
+          --svg-text: #f2f4f5;
+          --svg-muted-text: #c9cfd4;
+          --svg-connector: #e1e5e8;
+          --svg-green: #76b900;
+          --svg-blue: #52a7e0;
+          --svg-red: #ff6b6b;
+          --svg-amber: #ffbf47;
+          --svg-icon-on-accent: #ffffff;
+        }
+      }
+      .background { fill: var(--svg-background); }
+      .title { font: 700 48px "NVIDIA Sans", Arial, sans-serif; fill: var(--svg-text); }
+      .header { font: 700 20px "NVIDIA Sans", Arial, sans-serif; fill: var(--svg-text); }
+      .subheader { font: 400 17px "NVIDIA Sans", Arial, sans-serif; fill: var(--svg-muted-text); }
+      .message { font: 600 17px "NVIDIA Sans", Arial, sans-serif; fill: var(--svg-connector); }
+      .status-label { fill: var(--svg-green); }
+      .section { font: 700 25px "NVIDIA Sans", Arial, sans-serif; fill: var(--svg-text); }
+      .footer { font: 500 19px "NVIDIA Sans", Arial, sans-serif; fill: var(--svg-muted-text); }
+      .participant-green { fill: var(--svg-panel); stroke: var(--svg-green); stroke-width: 3; rx: 8; }
+      .participant-blue { fill: var(--svg-panel); stroke: var(--svg-blue); stroke-width: 3; rx: 8; }
+      .runtime-box { fill: var(--svg-panel); stroke: var(--svg-green); stroke-width: 3; rx: 8; }
+      .lifeline { stroke: var(--svg-border); stroke-width: 2.5; stroke-dasharray: 8 7; }
+      .action { stroke: var(--svg-connector); stroke-width: 2.5; fill: none; marker-end: url(#arrow-dark); }
+      .status { stroke: var(--svg-green); stroke-width: 3; stroke-dasharray: 9 7; fill: none; marker-end: url(#arrow-green); }
+      .divider { stroke: var(--svg-border); stroke-width: 2; stroke-dasharray: 6 5; }
+      .lifeline-end { stroke: var(--svg-border); stroke-width: 2.5; }
+      .routing-arrow { stroke: var(--svg-green); stroke-width: 9; }
+      .arrow-dark-head { fill: var(--svg-connector); }
+      .arrow-green-head { fill: var(--svg-green); }
+    </style>
+  </defs>
+
+  <rect class="background" width="1600" height="900"/>
+
+  <text class="title" x="800" y="58" text-anchor="middle">Dynamo NVCF Boundary</text>
+
+  <!-- Participants -->
+  <rect class="participant-green" x="35" y="95" width="250" height="86"/>
+  <text class="header" x="160" y="132" text-anchor="middle">NVCF Control Plane</text>
+  <text class="subheader" x="160" y="160" text-anchor="middle">Deployment intent</text>
+
+  <rect class="participant-green" x="305" y="95" width="230" height="86"/>
+  <text class="header" x="420" y="132" text-anchor="middle">NVCA 3.2.5</text>
+  <text class="subheader" x="420" y="160" text-anchor="middle">Cluster lifecycle</text>
+
+  <rect class="participant-blue" x="555" y="95" width="250" height="86"/>
+  <text class="header" x="680" y="132" text-anchor="middle">Kubernetes API</text>
+  <text class="subheader" x="680" y="160" text-anchor="middle">DynamoGraphDeployment</text>
+
+  <rect class="participant-blue" x="815" y="95" width="250" height="86"/>
+  <text class="header" x="940" y="132" text-anchor="middle">Dynamo Operator 1.2.1</text>
+  <text class="subheader" x="940" y="160" text-anchor="middle">Graph reconciliation</text>
+
+  <rect class="participant-green" x="1075" y="95" width="250" height="86"/>
+  <text class="header" x="1200" y="128" text-anchor="middle">Grove alpha.11 + KAI 0.17</text>
+  <text class="subheader" x="1200" y="160" text-anchor="middle">Placement and scheduling</text>
+
+  <rect class="participant-green" x="1345" y="95" width="220" height="86"/>
+  <text class="header" x="1455" y="132" text-anchor="middle">Dynamo Runtime</text>
+  <text class="subheader" x="1455" y="160" text-anchor="middle">Frontend + GPU workers</text>
+
+  <!-- Lifelines -->
+  <line class="lifeline" x1="160" y1="181" x2="160" y2="640"/>
+  <line class="lifeline" x1="420" y1="181" x2="420" y2="640"/>
+  <line class="lifeline" x1="680" y1="181" x2="680" y2="640"/>
+  <line class="lifeline" x1="940" y1="181" x2="940" y2="640"/>
+  <line class="lifeline" x1="1200" y1="181" x2="1200" y2="640"/>
+  <line class="lifeline" x1="1455" y1="181" x2="1455" y2="640"/>
+
+  <!-- Deployment and reconciliation sequence -->
+  <text class="message" x="290" y="222" text-anchor="middle">Create &#8226; Update &#8226; Terminate</text>
+  <line class="action" x1="160" y1="235" x2="420" y2="235"/>
+
+  <text class="message" x="550" y="272" text-anchor="middle">Apply desired graph</text>
+  <line class="action" x1="420" y1="285" x2="680" y2="285"/>
+
+  <text class="message" x="810" y="322" text-anchor="middle">Desired graph event</text>
+  <line class="action" x1="680" y1="335" x2="940" y2="335"/>
+
+  <text class="message" x="810" y="372" text-anchor="middle">Update graph status</text>
+  <line class="action" x1="940" y1="385" x2="680" y2="385"/>
+
+  <text class="message" x="1070" y="422" text-anchor="middle">Create and reconcile resources</text>
+  <line class="action" x1="940" y1="435" x2="1200" y2="435"/>
+
+  <text class="message" x="1328" y="472" text-anchor="middle">Group and schedule GPU pods</text>
+  <line class="action" x1="1200" y1="485" x2="1455" y2="485"/>
+
+  <!-- Status flows -->
+  <text class="message status-label" x="938" y="532" text-anchor="middle">Worker readiness</text>
+  <line class="status" x1="1455" y1="545" x2="420" y2="545"/>
+
+  <text class="message status-label" x="290" y="592" text-anchor="middle">Deployment status</text>
+  <line class="status" x1="420" y1="605" x2="160" y2="605"/>
+
+  <!-- Lifeline endpoints -->
+  <g class="lifeline-end">
+    <line x1="148" y1="640" x2="172" y2="640"/>
+    <line x1="408" y1="640" x2="432" y2="640"/>
+    <line x1="668" y1="640" x2="692" y2="640"/>
+    <line x1="928" y1="640" x2="952" y2="640"/>
+    <line x1="1188" y1="640" x2="1212" y2="640"/>
+    <line x1="1443" y1="640" x2="1467" y2="640"/>
+  </g>
+
+  <!-- Runtime data path -->
+  <line class="divider" x1="25" y1="665" x2="1575" y2="665"/>
+  <text class="section" x="800" y="703" text-anchor="middle">Inference routing boundary after the deployment is ready</text>
+
+  <rect class="runtime-box" x="35" y="725" width="220" height="76"/>
+  <text class="header" x="145" y="772" text-anchor="middle">Inference Request</text>
+
+  <line class="routing-arrow" x1="270" y1="763" x2="325" y2="763" marker-end="url(#arrow-green)"/>
+
+  <rect class="runtime-box" x="340" y="725" width="250" height="76"/>
+  <text class="header" x="465" y="756" text-anchor="middle">NVCF Multi-Cluster</text>
+  <text class="subheader" x="465" y="782" text-anchor="middle">Routing</text>
+
+  <line class="routing-arrow" x1="605" y1="763" x2="660" y2="763" marker-end="url(#arrow-green)"/>
+
+  <rect class="runtime-box" x="675" y="725" width="270" height="76"/>
+  <text class="header" x="810" y="756" text-anchor="middle">Dynamo Frontend</text>
+  <text class="subheader" x="810" y="782" text-anchor="middle">In-cluster routing</text>
+
+  <line class="routing-arrow" x1="960" y1="763" x2="1015" y2="763" marker-end="url(#arrow-green)"/>
+
+  <rect class="runtime-box" x="1030" y="725" width="220" height="76"/>
+  <text class="header" x="1140" y="772" text-anchor="middle">GPU Workers</text>
+
+  <line class="routing-arrow" x1="1265" y1="763" x2="1320" y2="763" marker-end="url(#arrow-green)"/>
+
+  <rect class="runtime-box" x="1335" y="725" width="230" height="76"/>
+  <text class="header" x="1450" y="772" text-anchor="middle">Response</text>
+
+  <!-- Responsibility summary -->
+  <line class="divider" x1="25" y1="825" x2="1575" y2="825"/>
+  <text class="footer" x="800" y="866" text-anchor="middle">NVCF owns deployment intent and multi-cluster routing. NVCA reports lifecycle status. Dynamo owns graph reconciliation and in-cluster routing.</text>
+</svg>
