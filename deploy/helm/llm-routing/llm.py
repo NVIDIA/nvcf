@@ -194,7 +194,78 @@ def deployment_command(report, catalog, context, namespace, args, capabilities):
             'guide': deployment['guide'].removeprefix('../')}
 
 
-def model_releases(context, namespace, model):
+def release_values(context, namespace, release, values_cache):
+    key = (namespace, release)
+    if key not in values_cache:
+        try:
+            values = json.loads(run(['helm', '--kube-context', context, '--namespace', namespace,
+                                     'get', 'values', release, '--all', '--output', 'json']))
+            if not isinstance(values, dict):
+                raise ValueError('Helm values must be an object.')
+            values_cache[key] = values
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
+            values_cache[key] = error
+    values = values_cache[key]
+    if isinstance(values, Exception):
+        raise values
+    return values
+
+
+def runtime_profile(context, namespace, release, recipe):
+    """Read a chart-selected default profile from its deployed configuration."""
+    if recipe['runtime']['backend'] == 'sglang':
+        suffix, key, identity, expected, claims_key = 'runtime', 'config.json', ('model', 'id'), recipe['id'], 'claimNames'
+    else:
+        suffix, key, identity, expected, claims_key = 'automatic', 'automatic.json', ('recipe', 'name'), recipe['name'], 'claims'
+    resource = read_json(context, namespace, 'configmap', release + '-' + suffix)
+    annotations = resource.get('metadata', {}).get('annotations', {})
+    if (annotations.get('meta.helm.sh/release-name'), annotations.get('meta.helm.sh/release-namespace')) != (release, namespace):
+        raise ValueError('Runtime configuration has different or unknown Helm ownership.')
+    config = json.loads(resource.get('data', {}).get(key, '{}'))
+    if (not isinstance(config, dict) or not isinstance(config.get(identity[0]), dict)
+            or config[identity[0]].get(identity[1]) != expected):
+        raise ValueError('Runtime configuration does not match the owning recipe.')
+    if not isinstance(config.get('profile'), dict) or not isinstance(config.get(claims_key), list):
+        raise ValueError('Runtime configuration is missing its profile or cache claims.')
+    return {'profile': config.get('profile', {}).get('id'), 'claims': config.get(claims_key, [])}
+
+
+def cache_recipe_metadata(context, storage, values_cache, catalog):
+    """Describe each cache's owning recipe and profile from release metadata."""
+    claims = {(claim['namespace'], claim['claim']): claim for claim in storage.get('claims', [])}
+    recipes = {recipe['id']: recipe for recipe in catalog['recipes'] if recipe.get('runtime')}
+    configurations = {}
+    for cache in storage['caches']:
+        owner = claims.get((cache['namespace'], cache['claim']), {})
+        cache.update(release=owner.get('release') or None, recipe=None, profile=None)
+        if not cache['release'] or owner.get('releaseNamespace') != cache['namespace']:
+            continue
+        try:
+            values = release_values(context, cache['namespace'], cache['release'], values_cache)
+            for field, key in (('recipe', 'recipe'), ('profile', 'profileName')):
+                value = values.get(key)
+                if isinstance(value, str) and value.strip():
+                    cache[field] = value
+            recipe = recipes.get(cache['recipe'])
+            if cache['profile'] is None and recipe and recipe['runtime']['backend'] in ('sglang', 'llama.cpp'):
+                key = (cache['namespace'], cache['release'])
+                if key not in configurations:
+                    try:
+                        configurations[key] = runtime_profile(context, *key, recipe)
+                    except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
+                        configurations[key] = error
+                config = configurations[key]
+                if isinstance(config, Exception):
+                    raise config
+                profile = config['profile']
+                if cache['claim'] in config['claims'] and isinstance(profile, str) and profile.strip():
+                    cache['profile'] = profile
+        except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
+            cache['metadataError'] = str(error)
+
+
+def model_releases(context, namespace, model, values_cache=None):
+    values_cache = {} if values_cache is None else values_cache
     helm = ['helm', '--kube-context', context, '--namespace', namespace]
     releases = []
     while True:
@@ -209,7 +280,7 @@ def model_releases(context, namespace, model):
     for release in releases:
         if not any(release.get('chart', '').startswith(name + '-') for name in chart_names):
             continue
-        values = json.loads(run(helm + ['get', 'values', release['name'], '--all', '--output', 'json']))
+        values = release_values(context, namespace, release['name'], values_cache)
         if values.get('recipe') != model['id']:
             continue
         matching.append({'release': release['name'], 'status': release.get('status'),
@@ -271,6 +342,7 @@ def capacity_plan(context, args):
     snapshot = analyzer.inventory(context)
     import model_storage
     storage = model_storage.collect(context, snapshot, run)
+    values_cache = {}
     prerequisites, existing_releases, required_nodes, cache_capacities = [], [], {}, {}
     if model['availability']['deployable']:
         release = args.release or model['profiles'][0]['deployment']['releaseName']
@@ -279,11 +351,12 @@ def capacity_plan(context, args):
         if storage['warnings']:
             prerequisites.append('Storage inventory is incomplete; inspect retained claims before installing.')
         try:
-            existing_releases, names = model_releases(context, args.namespace, model)
+            existing_releases, names = model_releases(context, args.namespace, model, values_cache)
             if release in names and not any(item['release'] == release for item in existing_releases):
                 prerequisites.append('Helm release name is already in use: ' + release)
         except (RuntimeError, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
             prerequisites.append('Helm release inventory failed: ' + str(error))
+    cache_recipe_metadata(context, storage, values_cache, catalog)
     report = analyzer.analyze(snapshot, catalog, args.model, capabilities=capabilities,
                               profile_id=args.profile, context_length=args.context_length,
                               concurrency=args.concurrency, required_nodes=required_nodes, cache_capacities=cache_capacities)
@@ -734,7 +807,12 @@ def print_capacity_plan(report, verbose=False):
         print_capacity_details(report)
     else:
         print(f"Model: {report['model']} | Cluster: {report['context']}")
-        print_capacity_status(report['status'])
+        if report['status'] == 'existing':
+            names = sorted({item.get('release') or item.get('endpoint')
+                            for item in report['existingDeployments']} - {None})
+            print('EXISTING DEPLOYMENT: ' + ', '.join(names))
+        else:
+            print_capacity_status(report['status'])
         for profile in report.get('profiles', []):
             if report['status'] != 'fits' or profile['id'] != report['chosenProfile']:
                 continue
@@ -774,14 +852,23 @@ def print_capacity_plan(report, verbose=False):
     storage = report.get('storage', {'caches': [], 'warnings': []})
     statuses = {'not-mounted': 'Not mounted', 'not-provisioned': 'Not provisioned', 'unavailable': 'Unavailable'}
     rows = []
-    for cache in storage['caches']:
+    node_order = {node['name']: index for index, node in enumerate(report.get('nodes', []))}
+    def node_key(node):
+        return node_order.get(node, len(node_order)), node
+    def cache_key(cache):
+        nodes = sorted(cache['nodes'], key=node_key)
+        return ([node_key(node) for node in nodes] or [(len(node_order) + 1, '')],
+                cache['namespace'], cache.get('recipe') or '', cache.get('profile') or '', cache['claim'])
+    for cache in sorted(storage['caches'], key=cache_key):
         used = (f"{cache['bytesUsed'] / 1024**3:.1f} GiB" if cache['bytesUsed'] is not None
                 else statuses.get(cache['usageStatus'], 'Unknown'))
         # Keep small but nonempty caches distinct from empty volumes.
         if cache['bytesUsed'] is not None and 0 < cache['bytesUsed'] < 1024**3 / 10:
             used = f"{cache['bytesUsed'] / 1024:.0f} KiB"
-        rows.append([cache['claim'], cache['namespace'], ', '.join(cache['nodes']) or '-', used])
-    print_table(['CACHE', 'NAMESPACE', 'NODE', 'DISK USED'], rows)
+        rows.append([', '.join(sorted(cache['nodes'], key=node_key)) or 'Unknown',
+                     cache.get('recipe') or 'Unknown', cache.get('profile') or 'Unknown',
+                     cache['claim'], cache['namespace'], used])
+    print_table(['NODE', 'RECIPE', 'PROFILE', 'CACHE', 'NAMESPACE', 'DISK USED'], rows)
     if not rows and not storage['warnings']:
         print('No model cache claims found.')
     if storage['warnings']:
@@ -792,6 +879,8 @@ def print_capacity_plan(report, verbose=False):
         for cache in storage['caches']:
             if cache.get('measurementError'):
                 print(f"  {cache['namespace']}/{cache['claim']}: {cache['measurementError']}")
+            if cache.get('metadataError'):
+                print(f"  {cache['namespace']}/{cache['claim']} recipe/profile: {cache['metadataError']}")
 
 
 def main(argv=None):
