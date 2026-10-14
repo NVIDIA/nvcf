@@ -150,11 +150,13 @@ llmRequestRouter:
     pylonReverseTunnelDialAddress: llm-router.example.com:8080
 ```
 
-The chart uses the main Stargate image for both workloads. The backend router
-inherits the main image registry, repository, tag, and digest, falling back to
-the chart appVersion. That image must contain
-`/usr/local/bin/stargate-k8s-router`; override `backendRouter.image.*` only to
-validate a different Stargate build. An override drops the inherited digest.
+The backend router inherits the main image registry and repository. Its tag is
+pinned separately by default (`backendRouter.image.tag`) so
+`stargate-k8s-router` can follow its own release schedule. The image must
+contain `/usr/local/bin/stargate-k8s-router`. The main `image.digest` applies to
+the backend router only when every `backendRouter.image` field is empty; set
+`backendRouter.image.tag: ""` to run both workloads from the same
+digest-pinned image. Any `backendRouter.image` override drops the digest.
 
 The backend router watches the headless Service's EndpointSlices and publishes
 their non-terminating targets directly through `WatchStargates`, including

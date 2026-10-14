@@ -45,8 +45,8 @@ llmRequestRouter:
     repository: ""
     tag: "0.26.1"
     # When set, the Pod image is repository@digest and tag is ignored for the
-    # image. The backend router uses this digest unless backendRouter.image
-    # overrides the image.
+    # image. The backend router uses this digest only when every
+    # backendRouter.image field is empty, so clear its pinned tag to apply it.
     digest: ""
     pullPolicy: IfNotPresent
 

@@ -480,8 +480,8 @@ jq -e '
   exit 1
 }
 
-# A main image digest pins both workloads unless the backend router image is
-# overridden.
+# A main image digest pins both workloads when the backend router follows the
+# main image (its pinned tag cleared), and only the router otherwise.
 digest="sha256:$(printf '%064d' 0)"
 digest_images="$(helm template llm-request-router "$chart_dir" \
   --namespace nvcf \
@@ -489,6 +489,7 @@ digest_images="$(helm template llm-request-router "$chart_dir" \
   --set llmRequestRouter.image.repository=nvcf/stargate \
   --set llmRequestRouter.image.digest="$digest" \
   --set llmRequestRouter.backendRouter.enabled=true \
+  --set-string llmRequestRouter.backendRouter.image.tag= \
   | yq ea -r '[select(.kind == "Deployment") | .spec.template.spec.containers[].image] | .[]' | sort -u)"
 if [[ "$digest_images" != "registry.example.invalid/nvcf/stargate@${digest}" ]]; then
   echo "FAIL: image digest must pin Stargate and the backend router; rendered ${digest_images}" >&2

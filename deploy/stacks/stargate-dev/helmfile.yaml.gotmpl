@@ -146,6 +146,10 @@ releases:
           backendRouter:
             enabled: true
             replicaCount: 3
+            # Clear the chart's pinned tag so the backend router runs the
+            # same digest-pinned image as the router.
+            image:
+              tag: ""
             pylonGrpcDialAddress: {{ $grpcScheme }}://{{ $routerAddress }}:50071
             pylonReverseTunnelDialAddress: {{ $routerAddress }}:50072
             podAnnotations:
