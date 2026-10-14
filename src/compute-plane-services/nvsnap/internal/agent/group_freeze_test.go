@@ -7,6 +7,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,7 +48,7 @@ func TestGroupFreeze_ReleasesTogether(t *testing.T) {
 		released[1].Store(time.Now().UnixNano())
 		errs <- err
 	}()
-	ok := driveGroupFreeze(ctx, http.DefaultClient, "s1", []freezeMember{
+	ok := driveGroupFreeze(ctx, http.DefaultClient, "s1", "", []freezeMember{
 		{Base: b1, Namespace: "ns", Pod: "worker-0"}, {Base: b2, Namespace: "ns", Pod: "etcd-0"},
 	}, 20*time.Millisecond, log)
 	if !ok {
@@ -69,7 +72,7 @@ func TestGroupFreeze_AbortsWhenAMemberEnds(t *testing.T) {
 	ctx := context.Background()
 	errs := make(chan error, 1)
 	go func() { errs <- a1.awaitGroupFreeze(ctx, "s2", "ns", "worker-0", log) }()
-	ok := driveGroupFreeze(ctx, http.DefaultClient, "s2", []freezeMember{
+	ok := driveGroupFreeze(ctx, http.DefaultClient, "s2", "", []freezeMember{
 		{Base: b1, Namespace: "ns", Pod: "worker-0"},
 		{Base: b2, Namespace: "ns", Pod: "etcd-0", Done: func() bool { return true }},
 	}, 20*time.Millisecond, log)
@@ -99,5 +102,63 @@ func TestGroupFreeze_EarlyReleaseIsKept(t *testing.T) {
 	defer cancel()
 	if err := a.awaitGroupFreeze(ctx, "s3", "ns", "p", log); err != nil {
 		t.Fatalf("awaitGroupFreeze = %v", err)
+	}
+}
+
+// The post-dump hook passes other actions, reports the member dumped at
+// post-dump and waits: exit 0 on go, non-zero on abort (criu then rolls
+// the dump back).
+func TestPostDumpScript(t *testing.T) {
+	run := func(action string, release func(dir string)) (bool, error) {
+		dir := t.TempDir()
+		script, err := writePostDumpScript(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(script)
+		cmd.Env = append(os.Environ(), "CRTOOLS_SCRIPT_ACTION="+action)
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		reached := false
+		if release != nil {
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				if _, err := os.Stat(filepath.Join(dir, "reached")); err == nil {
+					reached = true
+					break
+				}
+			}
+			release(dir)
+		}
+		return reached, cmd.Wait()
+	}
+	if _, err := run("pre-dump", nil); err != nil {
+		t.Errorf("pre-dump: %v, want a pass", err)
+	}
+	reached, err := run("post-dump", func(d string) { _ = os.WriteFile(filepath.Join(d, "go"), nil, 0o644) })
+	if !reached || err != nil {
+		t.Errorf("post-dump released: reached=%v err=%v, want reached and exit 0", reached, err)
+	}
+	reached, err = run("post-dump", func(d string) { _ = os.WriteFile(filepath.Join(d, "abort"), nil, 0o644) })
+	if !reached || err == nil {
+		t.Errorf("post-dump aborted: reached=%v err=%v, want reached and a failure", reached, err)
+	}
+}
+
+// The post-dump phase: a member that reports itself past its dump and
+// returns (no hook) does not abort the group.
+func TestGroupFreeze_PostPhaseAcceptsAMemberWithoutHook(t *testing.T) {
+	log := logrus.NewEntry(logrus.New())
+	a, base := freezeServer(t)
+	a.config.CheckpointDir = t.TempDir()
+	markPostDumpReached(a.postDumpDir("s4", "ns", "etcd-0"), log)
+	ok := driveGroupFreeze(context.Background(), http.DefaultClient, "s4", "post", []freezeMember{
+		{Base: base, Namespace: "ns", Pod: "etcd-0", Done: func() bool { return true }},
+	}, 20*time.Millisecond, log)
+	if !ok {
+		t.Fatal("a member past its dump aborted the group")
+	}
+	if _, err := os.Stat(filepath.Join(a.postDumpDir("s4", "ns", "etcd-0"), "go")); err != nil {
+		t.Errorf("member not released: %v", err)
 	}
 }

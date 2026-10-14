@@ -12,6 +12,14 @@ package agent
 // restored client found its lease gone. So every member waits at a freeze
 // point once ready, and the group's driver releases them together: their
 // dumps start at the same moment.
+//
+// Starting together is not stopping together for long enough: a member
+// dumped first resumed while another was still being dumped and talked to it
+// (a NATS ping and its pong), so the two images held the same TCP connection
+// at different points and the restored connection never resynchronised. So
+// each member's criu also waits in its post-dump hook, its tree still
+// stopped and its network still locked, until every member is dumped; then
+// they all resume.
 
 import (
 	"context"
@@ -19,6 +27,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,11 +99,83 @@ func (a *Agent) awaitGroupFreeze(ctx context.Context, session, ns, pod string, l
 	}
 }
 
+// postDumpWait bounds how long a dumped member waits, stopped, for the
+// others: the slowest member's dump.
+const postDumpWait = 10 * time.Minute
+
+// postDumpDir is the post-dump barrier of a member of group session: its
+// hook writes "reached" there and waits for "go" or "abort".
+func (a *Agent) postDumpDir(session, ns, pod string) string {
+	return filepath.Join(a.config.CheckpointDir, ".group-freeze", session, ns+"_"+pod)
+}
+
+// writePostDumpScript writes the member's criu action script into dir: at
+// post-dump (the tree dumped, still stopped, the network still locked) it
+// reports the member dumped and waits for the driver. Any other action
+// passes. A non-zero exit makes criu roll the dump back and resume the tree.
+func writePostDumpScript(dir string) (string, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("post-dump barrier: %w", err)
+	}
+	steps := int(postDumpWait / (50 * time.Millisecond))
+	script := fmt.Sprintf(`#!/bin/sh
+[ "$CRTOOLS_SCRIPT_ACTION" = post-dump ] || exit 0
+D=%q
+: > "$D/reached"
+i=0
+while [ ! -e "$D/go" ]; do
+	[ -e "$D/abort" ] && exit 1
+	i=$((i+1)); [ "$i" -gt %d ] && exit 1
+	sleep 0.05
+done
+`, dir, steps)
+	path := filepath.Join(dir, "post-dump.sh")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		return "", fmt.Errorf("post-dump barrier: %w", err)
+	}
+	return path, nil
+}
+
+// markPostDumpReached reports a member that has no post-dump hook as past
+// its dump.
+func markPostDumpReached(dir string, log *logrus.Entry) {
+	if err := os.MkdirAll(dir, 0o755); err == nil {
+		err = os.WriteFile(filepath.Join(dir, "reached"), nil, 0o644)
+		if err == nil {
+			return
+		}
+	}
+	log.Warn("group capture: cannot report the member dumped; its group's driver will abort the capture")
+}
+
 // freezeHandler serves a member's freeze point to its group's driver:
 // GET reports whether the member waits there, POST ?go=true|false releases
-// or aborts it.
+// or aborts it. ?phase=post is the member's post-dump barrier.
 func (a *Agent) freezeHandler(w http.ResponseWriter, r *http.Request) {
 	v := mux.Vars(r)
+	if r.URL.Query().Get("phase") == "post" {
+		dir := a.postDumpDir(v["session"], v["namespace"], v["pod"])
+		if r.Method == http.MethodPost {
+			name := "abort"
+			if r.URL.Query().Get("go") == "true" {
+				name = "go"
+			}
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		_, err := os.Stat(filepath.Join(dir, "reached"))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"reached": err == nil})
+		return
+	}
 	key := freezeKey(v["session"], v["namespace"], v["pod"])
 	if r.Method == http.MethodPost {
 		p := a.freezes.get(key)
@@ -125,18 +208,22 @@ type freezeMember struct {
 	Done func() bool
 }
 
-// driveGroupFreeze releases every member from the freeze point once all
-// wait there, or aborts them all when one ends before it, or none of
-// that happens within groupFreezeWait.
-func driveGroupFreeze(ctx context.Context, client *http.Client, session string, members []freezeMember, poll time.Duration, log *logrus.Entry) bool {
-	deadline := time.Now().Add(groupFreezeWait)
+// driveGroupFreeze releases every member from the freeze point of phase
+// ("" before the dump, "post" after it) once all wait there, or aborts them
+// all when one ends before it, or none of that happens in time.
+func driveGroupFreeze(ctx context.Context, client *http.Client, session, phase string, members []freezeMember, poll time.Duration, log *logrus.Entry) bool {
+	wait := groupFreezeWait
+	if phase == "post" {
+		wait = postDumpWait
+	}
+	deadline := time.Now().Add(wait)
 	release := func(ok bool) {
 		var wg sync.WaitGroup
 		for _, m := range members {
 			wg.Add(1)
 			go func(m freezeMember) {
 				defer wg.Done()
-				u := fmt.Sprintf("%s/v1/group-freeze/%s/%s/%s?go=%t", m.Base, url.PathEscape(session), url.PathEscape(m.Namespace), url.PathEscape(m.Pod), ok)
+				u := fmt.Sprintf("%s/v1/group-freeze/%s/%s/%s?go=%t&phase=%s", m.Base, url.PathEscape(session), url.PathEscape(m.Namespace), url.PathEscape(m.Pod), ok, url.QueryEscape(phase))
 				req, err := http.NewRequestWithContext(context.WithoutCancel(ctx), http.MethodPost, u, nil)
 				if err != nil {
 					return
@@ -153,18 +240,22 @@ func driveGroupFreeze(ctx context.Context, client *http.Client, session string, 
 	for {
 		all := true
 		for _, m := range members {
-			if m.Done != nil && m.Done() {
-				log.WithField("pod", m.Namespace+"/"+m.Pod).Warn("group capture: a member ended before the freeze point; aborting the others")
+			// Read the end before the point: a member without a post-dump
+			// hook reports it and returns at once.
+			done := m.Done != nil && m.Done()
+			if freezeReached(ctx, client, m.Base, session, phase, m.Namespace, m.Pod) {
+				continue
+			}
+			if done {
+				log.WithFields(logrus.Fields{"pod": m.Namespace + "/" + m.Pod, "phase": phaseName(phase)}).Warn("group capture: a member ended before the freeze point; aborting the others")
 				release(false)
 				return false
 			}
-			if !freezeReached(ctx, client, m.Base, session, m.Namespace, m.Pod) {
-				all = false
-			}
+			all = false
 		}
 		if all {
 			release(true)
-			log.WithField("members", len(members)).Info("group capture: every member at the freeze point; released together")
+			log.WithFields(logrus.Fields{"members": len(members), "phase": phaseName(phase)}).Info("group capture: every member at the freeze point; released together")
 			return true
 		}
 		if time.Now().After(deadline) || ctx.Err() != nil {
@@ -176,8 +267,15 @@ func driveGroupFreeze(ctx context.Context, client *http.Client, session string, 
 	}
 }
 
-func freezeReached(ctx context.Context, client *http.Client, base, session, ns, pod string) bool {
-	u := fmt.Sprintf("%s/v1/group-freeze/%s/%s/%s", base, url.PathEscape(session), url.PathEscape(ns), url.PathEscape(pod))
+func phaseName(phase string) string {
+	if phase == "" {
+		return "before the dump"
+	}
+	return strings.TrimSpace(phase) + "-dump"
+}
+
+func freezeReached(ctx context.Context, client *http.Client, base, session, phase, ns, pod string) bool {
+	u := fmt.Sprintf("%s/v1/group-freeze/%s/%s/%s?phase=%s", base, url.PathEscape(session), url.PathEscape(ns), url.PathEscape(pod), url.QueryEscape(phase))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return false

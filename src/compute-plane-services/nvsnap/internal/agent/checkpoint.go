@@ -744,6 +744,7 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (_ *Check
 		dopts.Freeze = func(ctx context.Context) error {
 			return a.awaitGroupFreeze(ctx, session, req.Namespace, req.PodName, log)
 		}
+		dopts.PostDumpDir = a.postDumpDir(session, req.Namespace, req.PodName)
 	}
 	gpushareInfo, err := a.dumpV2(ctx, containerInfo, checkpointDir, sourceUpperdir, gpuPIDs, dopts, log)
 	if err != nil {

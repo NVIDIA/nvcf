@@ -271,9 +271,13 @@ type dumpV2Opts struct {
 	LeaveRunning  bool
 	FabricSession string
 	// Freeze, for a member of a group capture, returns once every member
-	// of the group is ready to be dumped (group_freeze.go), so their dumps
-	// start together.
+	// of the group is ready to be dumped (group_freeze.go); it runs right
+	// before criu starts, so the members stop together.
 	Freeze func(context.Context) error
+	// PostDumpDir, for a member of a group capture, is its post-dump
+	// barrier: criu's post-dump hook waits there, the tree still stopped,
+	// until every member is dumped (group_freeze.go).
+	PostDumpDir string
 }
 
 func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, o dumpV2Opts, log *logrus.Entry) (*GPUShareInfo, error) {
@@ -387,21 +391,26 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}
 
 	final := finalOf(leaveRunning)
-	if o.Freeze != nil {
-		if err := o.Freeze(ctx); err != nil {
-			if gsOn {
-				if rerr := resumeSource(ctx, hostPID, gsPIDs, fabricDir, log); rerr != nil {
-					return nil, errors.Join(err, fmt.Errorf("%w: %w", errSourceLeftSuspended, rerr))
-				}
-			}
-			return nil, err
+	freeze := func() error {
+		if o.Freeze == nil {
+			return nil
 		}
+		return o.Freeze(ctx)
 	}
 	if nsPID == 1 {
+		hooks := pidnsDumpHooks{Before: freeze}
+		if o.PostDumpDir != "" {
+			script, err := writePostDumpScript(o.PostDumpDir)
+			if err != nil {
+				return nil, err
+			}
+			defer func() { _ = os.RemoveAll(o.PostDumpDir) }()
+			hooks.ActionScript = script
+		}
 		// The workload is the container's pid 1: dump it with its pid
 		// namespace, from outside (pidns_capture.go).
 		_ = os.RemoveAll(imgsDir)
-		if err := a.dumpPIDNamespace(ctx, procBase, targetHostPID, checkpointDir, externals, final, gsOn, log); err != nil {
+		if err := a.dumpPIDNamespace(ctx, procBase, targetHostPID, checkpointDir, externals, final, gsOn, hooks, log); err != nil {
 			if gsOn {
 				if rerr := resumeSource(ctx, hostPID, gsPIDs, fabricDir, log); rerr != nil {
 					return nil, errors.Join(err, fmt.Errorf("%w: %w", errSourceLeftSuspended, rerr))
@@ -448,7 +457,17 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		"PATH=" + v2BinDirInContainer + ":/usr/sbin:/usr/bin:/sbin:/bin",
 		"HOME=/root",
 	}
-	out, runErr := cmd.CombinedOutput()
+	var out []byte
+	runErr := freeze()
+	if runErr == nil {
+		out, runErr = cmd.CombinedOutput()
+		if runErr == nil && o.PostDumpDir != "" {
+			// No post-dump hook here (criu runs in the container's mount
+			// namespace): this member resumed with its dump, and only says
+			// so, for the group's driver not to wait for it.
+			markPostDumpReached(o.PostDumpDir, log)
+		}
+	}
 
 	// 6. Move images host-side into the standard checkpoint dir. After a
 	// non-leave-running dump the target tree is gone and /proc/<pid>/root

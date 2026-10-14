@@ -547,7 +547,15 @@ func parentPID(procBase string, pid int) (int, error) {
 // dumpPIDNamespace dumps the container whose pid 1 is hostPID into
 // checkpointDir, running the agent's criu from the agent's namespaces, and
 // records the external mounts for the restore.
-func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID int, checkpointDir string, deviceExternals []string, final dumpFinal, gpushare bool, log *logrus.Entry) error {
+// pidnsDumpHooks are a group member's steps around its dump
+// (group_freeze.go): Before runs right before criu starts, ActionScript is
+// criu's --action-script.
+type pidnsDumpHooks struct {
+	Before       func() error
+	ActionScript string
+}
+
+func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID int, checkpointDir string, deviceExternals []string, final dumpFinal, gpushare bool, hooks pidnsDumpHooks, log *logrus.Entry) error {
 	if err := awaitSettledZombies(procBase, hostPID, 15*time.Second); err != nil {
 		return fmt.Errorf("pid-namespace dump: %w", err)
 	}
@@ -584,6 +592,14 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 		mounts, gpuMounts, deviceExternals, final, gpushare, gpushare && bundledSupportsDirectImageIO())
 	log.WithFields(logrus.Fields{"argv": a.config.CRIUPath + " " + strings.Join(args, " "), "externalMounts": len(mounts)}).
 		Info("criu-v2: dumping the pid namespace from outside the container")
+	if hooks.ActionScript != "" {
+		args = append(args, "--action-script", hooks.ActionScript)
+	}
+	if hooks.Before != nil {
+		if err := hooks.Before(); err != nil {
+			return err
+		}
+	}
 	dctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	// CRIU locks TCP in the network namespace it runs in. The agent runs on
