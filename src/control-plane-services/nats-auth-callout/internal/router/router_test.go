@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/nats-io/nats.go"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/zap"
 )
 
@@ -206,6 +207,29 @@ func TestHealthProbes_FollowNATSStatus(t *testing.T) {
 				if w.Code != want {
 					t.Errorf("GET %s = %d, want %d", path, w.Code, want)
 				}
+			}
+		})
+	}
+}
+
+func TestPrometheusMiddleware_ProbePaths_NotCounted(t *testing.T) {
+	router := New(zap.NewNop(), &Config{ServiceName: "test-service", Metrics: &MetricsConfig{Enabled: true}})
+	tests := []struct {
+		path        string
+		wantCounted bool
+	}{
+		{"/healthz", false},
+		{"/readyz", false},
+		{"/health", false},
+		{"/v1/ping", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			counter := RequestCounter.WithLabelValues(tt.path, http.MethodGet, "200")
+			before := testutil.ToFloat64(counter)
+			router.engine.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, tt.path, nil))
+			if counted := testutil.ToFloat64(counter) > before; counted != tt.wantCounted {
+				t.Errorf("GET %s counted = %v, want %v", tt.path, counted, tt.wantCounted)
 			}
 		})
 	}
