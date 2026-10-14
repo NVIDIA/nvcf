@@ -89,7 +89,9 @@ go_test(
     srcs = [
         "auth_middleware_test.go",
         "body_limit_test.go",
+        "embedding_input_test.go",
         "embeddings_handler_test.go",
+        "fidelity_corpus_test.go",
         "info_test.go",
         "last_cluster_keys_test.go",
         "last_cluster_test.go",
@@ -113,6 +115,7 @@ go_test(
         "upstream_framing_test.go",
         "write_deadline_test.go",
     ],
+    data = glob(["testdata/**"]),
     embed = [":api"],
     deps = [
         "//src/invocation-plane-services/llm-api-gateway/api/adapters/openairesponses",
