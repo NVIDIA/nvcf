@@ -406,6 +406,9 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		if c.a.gpushareEnabledFor(ranks[0]) {
 			data["gpushare"] = "true"
 		}
+		if aliases := c.a.instanceServiceAliases(ctx, members); aliases != "" {
+			data["serviceAddrs"] = aliases
+		}
 		log.WithField("duration", time.Since(t0).Round(time.Second).String()).Info("CRIU group capture: recorded")
 	}
 	started := record.Data["startedAt"]
@@ -746,7 +749,7 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 	// the driver to delete them first, their replacements could be admitted
 	// as placeholders of the same checkpoints and wait for a restore that
 	// never comes.
-	req := GroupRestoreRequest{Members: make([]GroupRestoreMember, size), KeepFailedPods: true}
+	req := GroupRestoreRequest{Members: make([]GroupRestoreMember, size), KeepFailedPods: true, ServiceAddrs: c.groupServiceAddrs(ctx, key)}
 	for i, p := range ranks {
 		req.Members[i] = GroupRestoreMember{
 			CheckpointID:             p.Annotations[webhook.CRIURestoreAnnotation],
@@ -874,4 +877,15 @@ func truncate(s string, n int) string {
 		return s[:n]
 	}
 	return s
+}
+
+// groupServiceAddrs returns the Service aliases group key's capture
+// recorded (serviceAliases), "" when there are none or the record cannot
+// be read.
+func (c *criuAutoRestorer) groupServiceAddrs(ctx context.Context, key string) string {
+	cm, err := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace()).Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{})
+	if err != nil {
+		return ""
+	}
+	return cm.Data["serviceAddrs"]
 }

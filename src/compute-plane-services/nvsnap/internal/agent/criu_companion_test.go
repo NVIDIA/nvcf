@@ -167,3 +167,52 @@ func TestNvidiaDevExternalsWithoutGPUs(t *testing.T) {
 		t.Fatalf("got %v %v, want no externals and no error", exts, err)
 	}
 }
+
+func TestServiceAliases(t *testing.T) {
+	ready, notReady := true, false
+	pod := func(name, ip string) *corev1.Pod {
+		return &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name}, Status: corev1.PodStatus{PodIP: ip}}
+	}
+	members := []*corev1.Pod{pod("worker-0", "10.1.0.10"), pod("etcd-x", "10.1.0.20"), pod("nats-y", "10.1.0.30")}
+	svc := func(name, cip string, port, target int32) corev1.Service {
+		return corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: corev1.ServiceSpec{ClusterIP: cip,
+			Ports: []corev1.ServicePort{{Name: "p", Port: port}}}}
+	}
+	slice := func(svcName string, target int32, eps ...discoveryv1.Endpoint) discoveryv1.EndpointSlice {
+		name := "p"
+		return discoveryv1.EndpointSlice{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{discoveryv1.LabelServiceName: svcName}},
+			Endpoints: eps, Ports: []discoveryv1.EndpointPort{{Name: &name, Port: &target}}}
+	}
+	ep := func(pod string, r *bool) discoveryv1.Endpoint {
+		return discoveryv1.Endpoint{TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: pod}, Conditions: discoveryv1.EndpointConditions{Ready: r}}
+	}
+	svcs := []corev1.Service{
+		svc("etcd", "172.20.0.1", 2379, 2379),
+		svc("nats", "172.20.0.2", 4222, 4222),
+		svc("web", "172.20.0.3", 80, 8080),   // port translated
+		svc("ext", "172.20.0.4", 9000, 9000), // an endpoint outside the instance
+		svc("two", "172.20.0.5", 7000, 7000), // two members behind one address
+		{ObjectMeta: metav1.ObjectMeta{Name: "headless"}, Spec: corev1.ServiceSpec{ClusterIP: corev1.ClusterIPNone}},
+	}
+	slices := []discoveryv1.EndpointSlice{
+		slice("etcd", 2379, ep("etcd-x", &ready)),
+		slice("nats", 4222, ep("nats-y", nil), ep("old-nats", &notReady)),
+		slice("web", 8080, ep("worker-0", &ready)),
+		slice("ext", 9000, ep("etcd-x", &ready), ep("someone-else", &ready)),
+		slice("two", 7000, ep("etcd-x", &ready), ep("nats-y", &ready)),
+	}
+	got := serviceAliases(svcs, slices, members)
+	if want := "172.20.0.1=10.1.0.20,172.20.0.2=10.1.0.30"; got != want {
+		t.Errorf("serviceAliases = %q, want %q", got, want)
+	}
+}
+
+func TestAliasAddrMap(t *testing.T) {
+	got := aliasAddrMap("10.1.0.10=10.2.0.10,10.1.0.20=10.2.0.20", "172.20.0.1=10.1.0.20,172.20.0.9=10.9.9.9")
+	if want := "10.1.0.10=10.2.0.10,10.1.0.20=10.2.0.20,172.20.0.1=10.2.0.20"; got != want {
+		t.Errorf("aliasAddrMap = %q, want %q", got, want)
+	}
+	if got := aliasAddrMap("10.1.0.10=10.2.0.10", ""); got != "10.1.0.10=10.2.0.10" {
+		t.Errorf("no aliases = %q", got)
+	}
+}

@@ -17,11 +17,14 @@ package agent
 // every GPU rank has resumed, so the leases its etcd holds do not run out
 // before the workers renew them.
 //
-// A companion's connections are not kept: the ranks reach it through a
-// Service whose address is new in the new instance. Once restored, every
-// pod of the group closes its connections to peers outside the group
-// (resetDeadPeers), so the engine sees them fail at once and reconnects by
-// name.
+// The members reach a companion through a Service, whose address is new in
+// the new instance and leads to the new pods only once they are Ready. A
+// connection through a Service that led to one member at capture is
+// restored straight to that member's new address (serviceAliases), so it
+// survives the restore: a lease held over it does not have to outlast the
+// new Service's endpoints. Every other connection to a peer outside the
+// group is closed once restored (resetDeadPeers), so the engine sees it fail
+// at once and reconnects by name.
 
 import (
 	"bytes"
@@ -400,4 +403,115 @@ func hostProcBase() string {
 		return "/host/proc"
 	}
 	return "/proc"
+}
+
+// serviceAliases returns the cluster addresses of the namespace's Services
+// that lead to exactly one pod of the instance (members), with no port
+// translation, each with that pod's address ("CLUSTERIP=PODIP,..."). A
+// connection a member holds through such a Service is restored straight to
+// the pod that serves it, so it survives the restore: the new instance's
+// Service only leads to its pods once they are Ready, later than a lease
+// held over the connection allows. Any other Service's connections are
+// closed at restore and reconnect.
+func serviceAliases(svcs []corev1.Service, slices []discoveryv1.EndpointSlice, members []*corev1.Pod) string {
+	memberIP := map[string]string{}
+	for _, p := range members {
+		if p.Status.PodIP != "" {
+			memberIP[p.Name] = p.Status.PodIP
+		}
+	}
+	bySvc := map[string][]discoveryv1.EndpointSlice{}
+	for _, sl := range slices {
+		name := sl.Labels[discoveryv1.LabelServiceName]
+		bySvc[name] = append(bySvc[name], sl)
+	}
+	var out []string
+	for _, svc := range svcs {
+		ip := svc.Spec.ClusterIP
+		if ip == "" || ip == corev1.ClusterIPNone || net.ParseIP(ip) == nil {
+			continue
+		}
+		target, ok := soleMemberEndpoint(svc, bySvc[svc.Name], memberIP)
+		if !ok {
+			continue
+		}
+		out = append(out, ip+"="+target)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
+}
+
+// soleMemberEndpoint returns the address of the one ready endpoint of svc,
+// when it is a member's pod and every port of svc reaches it on the same
+// number.
+func soleMemberEndpoint(svc corev1.Service, slices []discoveryv1.EndpointSlice, memberIP map[string]string) (string, bool) {
+	target := ""
+	for _, sl := range slices {
+		for _, ep := range sl.Endpoints {
+			if ep.Conditions.Ready != nil && !*ep.Conditions.Ready {
+				continue
+			}
+			if ep.TargetRef == nil || ep.TargetRef.Kind != "Pod" || memberIP[ep.TargetRef.Name] == "" {
+				return "", false
+			}
+			ip := memberIP[ep.TargetRef.Name]
+			if target != "" && target != ip {
+				return "", false
+			}
+			target = ip
+		}
+		for _, sp := range svc.Spec.Ports {
+			for _, ep := range sl.Ports {
+				if ep.Port != nil && (ep.Name == nil && sp.Name == "" || ep.Name != nil && *ep.Name == sp.Name) && *ep.Port != sp.Port {
+					return "", false
+				}
+			}
+		}
+	}
+	return target, target != ""
+}
+
+// aliasAddrMap extends an inet address map ("OLD=NEW,...") with the
+// Service aliases recorded at capture ("CLUSTERIP=OLDPODIP,..."): each
+// cluster address leads to the new address of the pod that served it.
+func aliasAddrMap(addrMap, aliases string) string {
+	moved := map[string]string{}
+	for _, pair := range strings.Split(addrMap, ",") {
+		if o, n, ok := strings.Cut(pair, "="); ok {
+			moved[strings.TrimSpace(o)] = strings.TrimSpace(n)
+		}
+	}
+	out := addrMap
+	for _, pair := range strings.Split(aliases, ",") {
+		cip, pod, ok := strings.Cut(pair, "=")
+		if !ok {
+			continue
+		}
+		cip = strings.TrimSpace(cip)
+		if nw := moved[strings.TrimSpace(pod)]; nw != "" && moved[cip] == "" {
+			out += "," + cip + "=" + nw
+			moved[cip] = nw
+		}
+	}
+	return out
+}
+
+// instanceServiceAliases lists the Services of the members' namespace and
+// returns their serviceAliases; "" when they cannot be listed (the
+// connections through them are then closed at restore, as for any other
+// Service).
+func (a *Agent) instanceServiceAliases(ctx context.Context, members []*corev1.Pod) string {
+	if len(members) == 0 {
+		return ""
+	}
+	ns := members[0].Namespace
+	svcs, err := a.kubeClient.CoreV1().Services(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return ""
+	}
+	slices, err := a.kubeClient.DiscoveryV1().EndpointSlices(ns).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return ""
+	}
+	return serviceAliases(svcs.Items, slices.Items, members)
 }

@@ -53,6 +53,10 @@ type GroupRestoreRequest struct {
 	// their network lock until their pod (and its network namespace) is
 	// gone.
 	KeepFailedPods bool `json:"keepFailedPods,omitempty"`
+	// ServiceAddrs are the cluster addresses of the instance's Services
+	// that led to one of its pods at capture ("CLUSTERIP=OLDPODIP,...");
+	// connections through them are restored to that pod's new address.
+	ServiceAddrs string `json:"serviceAddrs,omitempty"`
 }
 
 // GroupRestoreMemberResult is one member's outcome.
@@ -207,6 +211,7 @@ func (a *Agent) groupRestore(ctx context.Context, req GroupRestoreRequest, log *
 	if err != nil {
 		return nil, err
 	}
+	addrMap = aliasAddrMap(addrMap, req.ServiceAddrs)
 	res.InetAddrMap = addrMap
 	res.Session = newFabricSession()
 	log = log.WithFields(logrus.Fields{"fabricSession": res.Session, "inetAddrMap": addrMap})
