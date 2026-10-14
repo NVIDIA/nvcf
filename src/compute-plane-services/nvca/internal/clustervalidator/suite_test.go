@@ -566,6 +566,12 @@ func TestSuite_EveryBlockingRowIsRechecked(t *testing.T) {
 		"GPU unobserved": {compute, func(s *ValidationState) {
 			s.markUnobserved(CheckKeyGPUResources)
 		}, GPUResourcesLabel},
+		"HA Topology failed": {controlPlane, func(s *ValidationState) {
+			s.HAMode, s.HATopologyOK = HAModeEnforced, cpRow(false)
+		}, haTopologyLabel},
+		"HA Topology unobserved": {controlPlane, func(s *ValidationState) {
+			s.HAMode, s.HATopologyOK = HAModePreferred, nil
+		}, haTopologyLabel},
 		"critical pair failed": {compute, func(s *ValidationState) {
 			s.ConfigurableNetPolOK, s.ConfigurableNetPolCriticalOK = cpRow(false), cpRow(false)
 		}, "Configurable Network Policies"},
@@ -595,6 +601,9 @@ func TestSuite_EveryBlockingRowIsRechecked(t *testing.T) {
 		"HA Guarantee under mode none": {controlPlane, func(s *ValidationState) { s.HAMode = HAModeNone }},
 		"HA Guarantee under mode none, with a result": {controlPlane, func(s *ValidationState) {
 			s.HAMode, s.HAGuaranteeOK = HAModeNone, cpRow(false)
+		}},
+		"HA Topology without an HA mode": {controlPlane, func(s *ValidationState) {
+			s.HAMode, s.HATopologyOK = HAModeNone, nil
 		}},
 		"NotReady worker and unconfirmed policies": {compute, func(s *ValidationState) {
 			s.NodesAllReady, s.NotReadyNodes, s.NetworkPoliciesSupported = false, 1, false
@@ -647,6 +656,7 @@ func TestSuite_RecheckRunsTheRowsThatJudgeTheSameWorkloadsTogether(t *testing.T)
 		"HA Guarantee failed": {haGuaranteeLabel, []string{tier1, tier2, haGuaranteeLabel}},
 		"Tier-2 failed":       {tier2, []string{tier1, tier2, haGuaranteeLabel}},
 		"Tier-1 failed":       {tier1, []string{tier1, tier2, haGuaranteeLabel}},
+		"HA Topology failed":  {haTopologyLabel, []string{haTopologyLabel}},
 		"storage failed":      {"Default StorageClass", []string{"Default StorageClass"}},
 	} {
 		su := &suite{}
@@ -661,7 +671,7 @@ func TestSuite_RecheckRunsTheRowsThatJudgeTheSameWorkloadsTogether(t *testing.T)
 				// sees the cluster as it now is, with every row failed.
 				ok := runs[name] == 1 && name != tc.failing
 				s.DefaultStorageClassOK, s.Tier1DeploymentsOK, s.Tier2StatefulSetsOK = cpRow(ok), cpRow(ok), cpRow(ok)
-				s.HAGuaranteeOK = cpRow(ok)
+				s.HAGuaranteeOK, s.HATopologyOK = cpRow(ok), cpRow(ok)
 			}
 		}
 		state := healthyControlPlaneState()

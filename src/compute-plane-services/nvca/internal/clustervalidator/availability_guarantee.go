@@ -52,7 +52,7 @@ const (
 		"then delete one co-located pod so it is rescheduled."
 	haZoneSkewAdvice = "Even out a quorum crowded into one zone: delete one member in the crowded zone, a standby " +
 		"first, and wait for it to be Ready in the zone short of members before the next. A member whose volume " +
-		"is node-local stays on its node."
+		"is node-local stays on its node; the HA Topology row names such members."
 	haZoneLabelAdvice = "Label every node that runs or can run the control plane with topology.kubernetes.io/zone: " +
 		"under mode enforced the zone spread is DoNotSchedule, so no such pod can be placed on an unlabelled node."
 	haMissingAdvice = "Install every always-on control-plane release, or check that the kube context points at the " +

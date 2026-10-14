@@ -149,6 +149,10 @@ var (
 		// result where it found no workload to judge, which a warning says.
 		CheckKeyHAGuarantee: "HA Guarantee:",
 	}
+	// Published only under an HA mode (NVCF_HA_MODE preferred or enforced),
+	// which the role tests do not set; the warning that no mode was supplied
+	// says why it is absent.
+	haModeCheckKeys = []string{CheckKeyHATopology}
 )
 
 func TestCheckKeyGroupsPartitionAllCheckKeys(t *testing.T) {
@@ -156,6 +160,7 @@ func TestCheckKeyGroupsPartitionAllCheckKeys(t *testing.T) {
 	grouped = append(grouped, bothRoleCheckKeys...)
 	grouped = append(grouped, computePlaneCheckKeys...)
 	grouped = append(grouped, configuredCheckKeys...)
+	grouped = append(grouped, haModeCheckKeys...)
 	for k := range controlPlaneCheckRows {
 		grouped = append(grouped, k)
 	}
@@ -193,6 +198,9 @@ func TestRun_ControlPlaneRoleDispatch(t *testing.T) {
 	assert.True(t, hasWarningFor(s, controlPlaneCheckRows[CheckKeyNodeToNode]))
 	for _, k := range append(append([]string(nil), computePlaneCheckKeys...), configuredCheckKeys...) {
 		assert.NotContains(t, s.Checks, k, "check %q must not be published under the control-plane role", k)
+	}
+	for _, k := range haModeCheckKeys {
+		assert.NotContains(t, s.Checks, k, "check %q must not be published without an HA mode", k)
 	}
 	assert.Contains(t, s.Warnings, haModeNotSuppliedWarning)
 }
