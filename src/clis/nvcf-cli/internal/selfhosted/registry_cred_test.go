@@ -562,6 +562,25 @@ func TestParseHAMode(t *testing.T) {
 	}
 }
 
+// ValuesFileReadable holds an environment file to the test loadValuesFiles
+// applies: a file that fails to read or to parse as a values map would be
+// skipped, so it does not count as readable.
+func TestValuesFileReadable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "prod.yaml")
+
+	require.NoError(t, writeFile(path, []byte("highAvailability:\n  mode: enforced\n")))
+	assert.True(t, ValuesFileReadable(path), "a values map is readable")
+
+	require.NoError(t, writeFile(path, []byte("highAvailability: [unclosed\n")))
+	assert.False(t, ValuesFileReadable(path), "malformed YAML is not readable")
+
+	require.NoError(t, writeFile(path, []byte("highAvailability:\n  mode: enforced\n")))
+	prev := readValuesFile
+	readValuesFile = func(string) ([]byte, error) { return nil, os.ErrPermission }
+	t.Cleanup(func() { readValuesFile = prev })
+	assert.False(t, ValuesFileReadable(path), "a file that fails to read is not readable")
+}
+
 // A registry value carrying a path is valid for the stack, which renders
 // registry + "/" + repository. It must still be probed, and it must still
 // suppress the nvcr.io guess, rather than dropping the whole category.

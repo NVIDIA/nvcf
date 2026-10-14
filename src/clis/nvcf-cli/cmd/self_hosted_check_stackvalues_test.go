@@ -102,7 +102,8 @@ func TestStackValuesForRun_NeedsTheNamedEnvironmentFile(t *testing.T) {
 // An environment file that exists but cannot be read or parsed is not read
 // at all: LoadStackValues would skip it, and base.yaml alone, whose
 // highAvailability.mode is preferred, would then describe an install the
-// environment file may set to enforced or none.
+// environment file may set to enforced or none. A failed read is covered by
+// TestValuesFileReadable in internal/selfhosted, which injects it.
 func TestStackValuesForRun_NeedsAReadableEnvironmentFile(t *testing.T) {
 	stack := stackWithEnvs(t, "prod")
 	withStackFlag(t, &selfHostedControlPlaneStack, stack)
@@ -117,14 +118,6 @@ func TestStackValuesForRun_NeedsAReadableEnvironmentFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(envFile, []byte("highAvailability:\n  mode: enforced\n"), 0o644))
 	_, ok = stackValuesForRun(controlPlaneStackTarget())
 	assert.True(t, ok, "a readable environment file is read")
-
-	if os.Geteuid() == 0 {
-		t.Skip("root reads a file whatever its mode")
-	}
-	require.NoError(t, os.Chmod(envFile, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(envFile, 0o644) })
-	_, ok = stackValuesForRun(controlPlaneStackTarget())
-	assert.False(t, ok, "an unreadable environment file is not read")
 }
 
 // A plane --pre checks before its install is read with --env's default: up
