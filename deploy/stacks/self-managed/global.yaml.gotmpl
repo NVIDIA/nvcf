@@ -1174,6 +1174,9 @@ grpcproxy:
     RATE_LIMIT_ENABLED: "true"
     RATE_LIMIT_ADDR: "http://ratelimiter.nvcf.svc.cluster.local:7777"
     {{- end }}
+    {{- if dig "addons" "eventLedger" "enabled" false .Values }}
+    EVENT_LEDGER_ADDR: "http://event-ledger.nvcf.svc.cluster.local:8080"
+    {{- end }}
   {{- /* No HA PDB at a single replica: minAvailable 1 on a singleton blocks drains. */}}
   {{- with dig "grpcproxy" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:

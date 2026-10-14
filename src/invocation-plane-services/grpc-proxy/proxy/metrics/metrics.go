@@ -95,6 +95,13 @@ var (
 			Help:      "total number of lame duck messages",
 		})
 
+	EventLedgerPublishCounter = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: RootNamespace,
+			Name:      "event_ledger_publish_total",
+			Help:      "total events published to the event ledger, by event type and result",
+		}, []string{"event_type", "result"})
+
 	_ = promauto.NewGaugeFunc(prometheus.GaugeOpts{
 		Namespace: NatsNamespace,
 		Name:      "out_bytes",

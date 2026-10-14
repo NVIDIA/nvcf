@@ -472,9 +472,26 @@ Configuration is primarily handled through environment variables or command-line
 - `ENABLE_HTTP1_CONNECT`: Enable HTTP/1 CONNECT endpoints
 - `ENABLE_HTTP3_CONNECT`: Enable HTTP/3 CONNECT endpoints
 - `SELF_WORKER_FQDN`: Optional worker callback endpoint advertised for CONNECT traffic
+- `EVENT_LEDGER_ADDR`: Event ledger base URL, for example `http://event-ledger.nvcf.svc.cluster.local:8080`. Events are not published when empty
 
 See the `Config` struct in the code for a complete list of configuration options.
 
 GRPC Client credentials are provided by either OAuth2 Client Credentials or a bearer token loaded from the secrets.json file.
 OAuth2 Client Credentials should be provided at the json key "id" and "secret".
-Alternatively, bearer token credentials should be provided at the json key "nvcfApiToken" and "ratelimiterToken".
+Alternatively, bearer token credentials should be provided at the json key "nvcfApiToken", "ratelimiterToken", and "eventLedgerToken".
+
+#### Event ledger publisher
+
+When `EVENT_LEDGER_ADDR` is set, the proxy sends CloudEvents to
+`POST <EVENT_LEDGER_ADDR>/v3/ledger/cloudevents`. Delivery is best effort.
+Each send retries network errors, 429, and 5xx up to 3 times with jittered
+backoff, within 10 seconds. At
+most 1000 sends run at once and further events are dropped. Results are
+counted in `nvcf_grpc_proxy_service_event_ledger_publish_total` by
+`event_type` (the CloudEvent `type`) and `result` (`sent`, `failed`,
+`dropped`).
+
+Authentication follows the same rule as the NVCF API client. If the secrets
+file has an `eventLedgerToken` key, that token is sent as a bearer token and
+reloaded when the file changes. Otherwise the proxy uses OAuth2 client
+credentials against `OAUTH2_FQDN` with the scope `fnds:createEvent`.
