@@ -550,6 +550,13 @@ webhook:
   # captured loses its worker. Costs only a slower removal of a crashed
   # component from routing. 0 keeps Dynamo's default.
   dynamoLeaseTTL: 60
+  # Seconds of silence every liveness probe is widened to tolerate (its
+  # failureThreshold raised, never lowered). Capturing a running pod freezes
+  # it for seconds; a probe that fails after one miss (Dynamo workers:
+  # every 5 s, threshold 1) has the kubelet restart the engine being
+  # captured. Costs only a slower restart of an engine that really hangs.
+  # 0 leaves probes as they are.
+  captureLivenessBudget: 60
 
   # Operator salt folded into every cache identity the webhook composes.
   # The identity covers image, model, arguments, cache-relevant env, driver

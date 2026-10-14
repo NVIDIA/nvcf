@@ -64,6 +64,8 @@ type WebhookConfig struct {
 	DynamoNamespace string
 	// DynamoLeaseTTL is webhook.Mutator.DynamoLeaseTTL.
 	DynamoLeaseTTL int
+	// CaptureLivenessBudget is webhook.Mutator.CaptureLivenessBudget.
+	CaptureLivenessBudget int
 
 	// CacheSalt is folded into every cache identity the webhook composes
 	// (rootfsonly.HashInputComposer.Salt). Bump it to start fresh captures
@@ -145,10 +147,11 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 	}
 
 	mut := &webhook.Mutator{
-		Backend:         backend,
-		AgentPlacement:  placement,
-		DynamoNamespace: cfg.DynamoNamespace,
-		DynamoLeaseTTL:  cfg.DynamoLeaseTTL,
+		Backend:               backend,
+		AgentPlacement:        placement,
+		DynamoNamespace:       cfg.DynamoNamespace,
+		DynamoLeaseTTL:        cfg.DynamoLeaseTTL,
+		CaptureLivenessBudget: cfg.CaptureLivenessBudget,
 		// nvsnap#194 + #88: per-pod OverlayFS unions over every captured
 		// volume (rootfs-extract subpaths AND hostPath/emptyDir user-data
 		// volumes). The Mutator calls PrepareOverlay synchronously during

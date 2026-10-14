@@ -206,6 +206,9 @@ func main() {
 	flag.IntVar(&config.Webhook.DynamoLeaseTTL, "webhook-dynamo-lease-ttl", 0,
 		"etcd lease TTL in seconds (ETCD_LEASE_TTL) for the Dynamo components that get the fixed Dynamo namespace, unless they set one; it must outlast a capture's freeze. 0 keeps Dynamo's default.")
 
+	flag.IntVar(&config.Webhook.CaptureLivenessBudget, "webhook-capture-liveness-budget", 0,
+		"Seconds of silence every liveness probe is widened to tolerate (its failureThreshold raised), so a capture's freeze does not get the pod restarted; 0 leaves probes as they are.")
+
 	flag.StringVar(&config.Webhook.HostBundleRoot, "webhook-host-bundle-root", "",
 		"On-host path the nvsnap-agent DaemonSet stages the restore bundle into (default /var/lib/nvsnap/bundle). Function pods mount {root}/nvsnap + {root}/nvsnap-lib via hostPath.")
 

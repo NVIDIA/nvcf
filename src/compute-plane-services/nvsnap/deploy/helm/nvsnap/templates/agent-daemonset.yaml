@@ -154,6 +154,9 @@ spec:
             {{- with .Values.webhook.dynamoLeaseTTL }}
             - --webhook-dynamo-lease-ttl={{ . }}
             {{- end }}
+            {{- with .Values.webhook.captureLivenessBudget }}
+            - --webhook-capture-liveness-budget={{ . }}
+            {{- end }}
             {{- if and .Values.agent.l2.waitImage .Values.agent.l2.waitImage.repository .Values.agent.l2.waitImage.tag }}
             # nvsnap#147: nvsnap-l2-wait init container for L2 restore.
             # Webhook prepends this onto pods annotated with
