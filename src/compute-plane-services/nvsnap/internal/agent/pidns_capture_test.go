@@ -96,7 +96,7 @@ func TestPIDNSExternalMounts_SharedFilesystem(t *testing.T) {
 
 func TestPIDNSArgs(t *testing.T) {
 	dump := strings.Join(pidNSDumpArgs(4242, "/proc", "/ck/x", "/criu-bundle/plugins", 4026538391,
-		[]string{"/etc/hosts"}, []string{"/dev/nvidia0"}, []string{"dev[195/0]:nvidia0"}, true, true, false), " ")
+		[]string{"/etc/hosts"}, []string{"/dev/nvidia0"}, []string{"dev[195/0]:nvidia0"}, dumpLeaveRunning, true, false), " ")
 	if !strings.Contains(dump, "--skip-mnt /dev/nvidia0") {
 		t.Errorf("GPU-identity mount not skipped: %s", dump)
 	}

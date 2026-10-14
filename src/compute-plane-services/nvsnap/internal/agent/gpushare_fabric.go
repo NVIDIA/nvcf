@@ -828,6 +828,7 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 			m.GPUShareFabricSession = session
 		}
 		m.GPUShareGroupIndex, m.GPUShareGroupSize = i, len(req.Members)
+		m.GroupFreeze = true
 		wg.Add(1)
 		go func(i int, m CheckpointRequest) {
 			defer wg.Done()
@@ -846,8 +847,25 @@ func (a *Agent) groupCheckpoint(ctx context.Context, req GroupCheckpointRequest,
 		defer mu.Unlock()
 		return finished[fabricIdx[i]]
 	}
+	// Every member, GPU rank or companion, waits at the group's freeze
+	// point once ready; released together, they stop together.
+	freezeMembers := make([]freezeMember, len(req.Members))
+	for i, m := range req.Members {
+		i := i
+		freezeMembers[i] = freezeMember{Base: bases[i], Namespace: m.Namespace, Pod: m.PodName, Done: func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return finished[i]
+		}}
+	}
+	freezeDone := make(chan struct{})
+	go func() {
+		defer close(freezeDone)
+		driveGroupFreeze(ctx, fabricHTTPClient, session, freezeMembers, 200*time.Millisecond, log)
+	}()
 	res.Fabric = driveFabric(ctx, fabric, done, fabricDriveOpts{Vote: true}, log)
 	wg.Wait()
+	<-freezeDone
 
 	var failed []string
 	for _, m := range res.Members {

@@ -374,7 +374,7 @@ func pathUnder(p, dir string) bool {
 
 // pidNSDumpArgs is the criu dump argv for a pid-1 workload, run from the
 // agent's namespaces against the container's host pid.
-func pidNSDumpArgs(hostPID int, procBase, imgsDir, pluginDir string, netNSInode uint64, mounts, skipMounts, deviceExternals []string, leaveRunning, gpushare, directIO bool) []string {
+func pidNSDumpArgs(hostPID int, procBase, imgsDir, pluginDir string, netNSInode uint64, mounts, skipMounts, deviceExternals []string, final dumpFinal, gpushare, directIO bool) []string {
 	args := []string{
 		"dump",
 		"-t", strconv.Itoa(hostPID),
@@ -397,8 +397,8 @@ func pidNSDumpArgs(hostPID int, procBase, imgsDir, pluginDir string, netNSInode 
 	if directIO {
 		args = append(args, "--image-io-mode", "direct")
 	}
-	if leaveRunning {
-		args = append(args, "--leave-running")
+	if f := final.flag(); f != "" {
+		args = append(args, f)
 	}
 	for _, mp := range mounts {
 		args = append(args, "--external", fmt.Sprintf("mnt[%s]:%s", mp, mp))
@@ -547,7 +547,7 @@ func parentPID(procBase string, pid int) (int, error) {
 // dumpPIDNamespace dumps the container whose pid 1 is hostPID into
 // checkpointDir, running the agent's criu from the agent's namespaces, and
 // records the external mounts for the restore.
-func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID int, checkpointDir string, deviceExternals []string, leaveRunning, gpushare bool, log *logrus.Entry) error {
+func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID int, checkpointDir string, deviceExternals []string, final dumpFinal, gpushare bool, log *logrus.Entry) error {
 	if err := awaitSettledZombies(procBase, hostPID, 15*time.Second); err != nil {
 		return fmt.Errorf("pid-namespace dump: %w", err)
 	}
@@ -581,7 +581,7 @@ func (a *Agent) dumpPIDNamespace(ctx context.Context, procBase string, hostPID i
 	// a dump that stops the tree closes them.
 	stdout, stderr := pipeInode(procBase, hostPID, 1), pipeInode(procBase, hostPID, 2)
 	args := pidNSDumpArgs(hostPID, procBase, checkpointDir, resolveCRIUPluginDir(a.config.CRIUPath, log), st.Ino,
-		mounts, gpuMounts, deviceExternals, leaveRunning, gpushare, gpushare && bundledSupportsDirectImageIO())
+		mounts, gpuMounts, deviceExternals, final, gpushare, gpushare && bundledSupportsDirectImageIO())
 	log.WithFields(logrus.Fields{"argv": a.config.CRIUPath + " " + strings.Join(args, " "), "externalMounts": len(mounts)}).
 		Info("criu-v2: dumping the pid namespace from outside the container")
 	dctx, cancel := context.WithTimeout(ctx, 20*time.Minute)

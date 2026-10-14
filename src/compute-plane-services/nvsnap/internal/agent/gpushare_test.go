@@ -106,11 +106,11 @@ func TestGPUShareTargets_NoShim(t *testing.T) {
 }
 
 func TestDumpV2Args_GPUShare(t *testing.T) {
-	plain := dumpV2Args(10, 51, []string{"dev[195/0]:nvidia0"}, false, false, false, "")
+	plain := dumpV2Args(10, 51, []string{"dev[195/0]:nvidia0"}, dumpKill, false, false, "")
 	if !slices.Contains(plain, "--libdir") || slices.Contains(plain, "--image-io-mode") {
 		t.Errorf("plain dump must load the CUDA plugin and keep buffered I/O: %v", plain)
 	}
-	gs := dumpV2Args(10, 51, []string{"dev[195/0]:nvidia0"}, true, true, true, "")
+	gs := dumpV2Args(10, 51, []string{"dev[195/0]:nvidia0"}, dumpLeaveRunning, true, true, "")
 	if slices.Contains(gs, "--libdir") {
 		t.Errorf("gpushare dump must not load the CUDA plugin: %v", gs)
 	}
@@ -123,7 +123,7 @@ func TestDumpV2Args_GPUShare(t *testing.T) {
 			t.Errorf("gpushare dump lacks %q: %v", want, gs)
 		}
 	}
-	if slices.Contains(dumpV2Args(10, 51, nil, false, true, false, ""), "--image-io-mode") {
+	if slices.Contains(dumpV2Args(10, 51, nil, dumpKill, true, false, ""), "--image-io-mode") {
 		t.Errorf("--image-io-mode added although the bundled CRIU lacks it")
 	}
 }
