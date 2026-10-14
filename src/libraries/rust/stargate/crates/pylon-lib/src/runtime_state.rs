@@ -139,10 +139,12 @@ pub(crate) struct OutputCalibrationFacts {
     pub(crate) reasoning_tokens: Option<u64>,
 }
 
+/// When Pylon submitted a request to the engine and when the engine produced
+/// its first output.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RequestInputInterval {
-    pub(crate) submitted_at: Instant,
-    pub(crate) first_generated_output_at: Instant,
+pub struct RequestInputInterval {
+    pub submitted_at: Instant,
+    pub first_generated_output_at: Instant,
 }
 
 #[derive(Debug, PartialEq, Eq)]

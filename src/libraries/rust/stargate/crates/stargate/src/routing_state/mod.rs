@@ -40,7 +40,7 @@ pub(crate) use keys::RegistrationIdentity;
 pub(crate) use registration::test_registration_generation;
 pub(crate) use registration::{RegistrationGeneration, RunningRegistration};
 pub(crate) use reservations::RoutingReservation;
-pub use reservations::apply_reservation;
+pub use reservations::{DetachedRoutingReservation, apply_reservation, routing_reservation_ttl};
 
 #[cfg(test)]
 use snapshots::RoutingTargetState;

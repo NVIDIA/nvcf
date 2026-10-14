@@ -165,6 +165,60 @@ impl Drop for RoutingReservation {
     }
 }
 
+/// The soft TTL of a reservation on a backend whose health-check RTT is `rtt`.
+pub fn routing_reservation_ttl(rtt: Duration, min: Duration, max: Duration) -> Duration {
+    // Startup rejects min > max; `Duration::clamp` would panic on every
+    // dispatch if a programmatic config bypassed that check, so max wins.
+    rtt.max(min).min(max)
+}
+
+/// A routing reservation that the caller holds instead of a routed cluster,
+/// for simulators that run load balancers outside `StargateState`. It follows
+/// the proxy's rules: it counts from creation, its soft expiry starts when it
+/// is armed, and it ends only when released or when an update from its own
+/// backend is received at or after the soft expiry. The caller routes each
+/// update from the reserved backend to it.
+#[derive(Debug)]
+pub struct DetachedRoutingReservation(Arc<PendingClusterReservation>);
+
+impl DetachedRoutingReservation {
+    pub fn new(input_tokens: u64, priority: u32, ttl: Duration, target: &RoutingTargetKey) -> Self {
+        Self(PendingClusterReservation::new_unarmed(
+            None,
+            input_tokens,
+            priority,
+            ttl,
+            None,
+            target,
+        ))
+    }
+
+    /// Starts the soft expiry once the request head is sent. Only the first
+    /// call takes effect.
+    pub fn arm_at(&self, sent_at: Instant) {
+        self.0.arm_at(sent_at);
+    }
+
+    /// Applies an update from the reserved backend received at `received_at`.
+    pub fn settle_on_backend_update(&self, received_at: Instant) {
+        self.0.settle_on_backend_update(received_at);
+    }
+
+    /// Ends the reservation early, as a queue-mismatch rejection does.
+    pub fn release(&self) {
+        self.0.deactivate();
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.0.is_active()
+    }
+
+    /// Adds the request to `stats` while the reservation is active.
+    pub fn apply(&self, stats: &mut ModelStats) {
+        apply_pending_cluster_reservations(stats, std::slice::from_ref(&self.0));
+    }
+}
+
 pub(super) fn update_reserved_priority_queue_time(
     stats: &mut ModelStats,
     input_tokens: u64,
@@ -285,6 +339,36 @@ mod tests {
         );
         pending.settle_on_backend_update(at(60));
         assert!(!pending.is_active());
+    }
+
+    #[test]
+    fn detached_reservation_follows_the_proxy_lifecycle() {
+        let target = RoutingTargetKey::new(None, "model");
+        let ttl = routing_reservation_ttl(
+            Duration::from_millis(60),
+            Duration::from_millis(1),
+            Duration::from_millis(1000),
+        );
+        let reservation = DetachedRoutingReservation::new(100, 0, ttl, &target);
+        let reserved_stats = |reservation: &DetachedRoutingReservation| {
+            let mut stats = ModelStats::default();
+            reservation.apply(&mut stats);
+            (stats.queue_size, stats.queued_input_size)
+        };
+        let sent_at = Instant::now();
+
+        reservation.settle_on_backend_update(sent_at + Duration::from_secs(3600));
+        assert_eq!(reserved_stats(&reservation), (1, 100), "unarmed");
+        reservation.arm_at(sent_at);
+        reservation.settle_on_backend_update(sent_at + Duration::from_millis(59));
+        assert!(reservation.is_active());
+        reservation.settle_on_backend_update(sent_at + Duration::from_millis(60));
+        assert!(!reservation.is_active());
+        assert_eq!(reserved_stats(&reservation), (0, 0));
+
+        let released = DetachedRoutingReservation::new(100, 0, ttl, &target);
+        released.release();
+        assert_eq!(reserved_stats(&released), (0, 0));
     }
 
     #[test]

@@ -41,6 +41,10 @@ pub struct FleetSummary {
     pub e2e_ms: Percentiles,
     pub input_tokens: Percentiles,
     pub reused_input_token_fraction: f64,
+    /// Measured requests sent with a last-cluster hint.
+    pub hinted_requests: usize,
+    /// Successful hinted requests served by their hinted cluster.
+    pub hinted_on_last_cluster_fraction: f64,
     pub backends: Vec<FleetBackendSummary>,
 }
 
@@ -154,6 +158,23 @@ fn summarize_run(
                 .collect(),
         ),
         reused_input_token_fraction: reuse_fraction(&succeeded),
+        hinted_requests: measured
+            .iter()
+            .filter(|record| record.last_cluster_id.is_some())
+            .count(),
+        hinted_on_last_cluster_fraction: {
+            let hinted: Vec<&&FleetRecord> = succeeded
+                .iter()
+                .filter(|record| record.last_cluster_id.is_some())
+                .collect();
+            ratio(
+                hinted
+                    .iter()
+                    .filter(|record| record.cluster_id == record.last_cluster_id)
+                    .count(),
+                hinted.len(),
+            )
+        },
         backends: by_backend
             .into_iter()
             .map(|(cluster_id, served)| FleetBackendSummary {
@@ -204,6 +225,7 @@ mod tests {
             ttft_us: ttft_ms.map(|value| value * 1000),
             e2e_us: ttft_ms.map(|value| value * 1000 + 500_000),
             cluster_id: Some("backend-a".to_string()),
+            last_cluster_id: None,
             reused_input_tokens: Some(800),
             abandoned_session: false,
         }
@@ -211,13 +233,16 @@ mod tests {
 
     #[test]
     fn summary_counts_only_the_measured_window_and_classifies_outcomes() {
-        let records = vec![
+        let mut records = vec![
             record(1.0, Some(100), None),
             record(15.0, Some(100), None),
             record(16.0, Some(20_000), None),
             record(17.0, None, Some("overloaded_error")),
             record(40.0, Some(100), None),
         ];
+        records[1].last_cluster_id = Some("backend-a".to_string());
+        records[2].last_cluster_id = Some("backend-b".to_string());
+        records[3].last_cluster_id = Some("backend-a".to_string());
         let window = Window::new(10.0, 20.0, 10_000);
         let gpus = HashMap::from([("backend-a".to_string(), 4)]);
         let summaries = summarize(&records, &window, &gpus);
@@ -229,6 +254,8 @@ mod tests {
         assert_eq!(summary.good, 1);
         assert_eq!(summary.failures.get("overloaded_error"), Some(&1));
         assert!((summary.reused_input_token_fraction - 0.8).abs() < 1e-9);
+        assert_eq!(summary.hinted_requests, 3);
+        assert!((summary.hinted_on_last_cluster_fraction - 0.5).abs() < 1e-9);
         assert_eq!(summary.backends[0].gpu_workers, Some(4));
         assert_eq!(summary.backends[0].succeeded, 2);
     }

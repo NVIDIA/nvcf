@@ -88,9 +88,15 @@ pub enum InputTpsModel {
     /// Fixed values per GPU worker and unit of backend speed, as if seeded and
     /// never observed.
     Constant { mean: f64, max: f64 },
-    /// OpenAI fallback stats: the rate over the most recent requests' input
-    /// tokens divided by the union of their submit-to-first-output intervals
-    /// (`pylon-lib/src/stats/aggregator.rs`). The maximum is a high-water mark.
+    /// OpenAI fallback stats from Pylon's own window
+    /// (`pylon-lib/src/stats/aggregator.rs`): the most recent requests'
+    /// uncached prompt tokens divided by the union of their
+    /// submit-to-first-output intervals. Every request expects usage, as with
+    /// `--force-chat-completions-include-usage`, and its usage reports cached
+    /// prompt tokens at completion. A request waiting for usage holds newer
+    /// requests out of the rate, and cache hits that leave fewer than 256
+    /// uncached tokens are left out. The maximum is a high-water mark of
+    /// windows whose requests all reported usage.
     FallbackWindow {
         /// Value left by startup calibration, per GPU worker and unit of
         /// backend speed.
@@ -114,6 +120,21 @@ pub struct StargateConfig {
     pub max_request_retries: u32,
     pub routing_key: String,
     pub model_id: String,
+    /// Bounds on a routing reservation's soft TTL, which is the selected
+    /// backend's RTT. Same defaults as Stargate's
+    /// `--routing-reservation-ttl-min-ms` and `--routing-reservation-ttl-max-ms`.
+    #[serde(default = "default_routing_reservation_ttl_min_ms")]
+    pub routing_reservation_ttl_min_ms: u64,
+    #[serde(default = "default_routing_reservation_ttl_max_ms")]
+    pub routing_reservation_ttl_max_ms: u64,
+}
+
+fn default_routing_reservation_ttl_min_ms() -> u64 {
+    1
+}
+
+fn default_routing_reservation_ttl_max_ms() -> u64 {
+    1000
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -298,6 +319,14 @@ impl SimConfig {
         };
         if !input_tps_valid {
             bail!("pylon.input_tps needs positive rates, max >= mean, and a positive window");
+        }
+        // Stargate rejects inverted bounds at startup.
+        if self.stargate.routing_reservation_ttl_min_ms
+            > self.stargate.routing_reservation_ttl_max_ms
+        {
+            bail!(
+                "stargate.routing_reservation_ttl_min_ms must not exceed routing_reservation_ttl_max_ms"
+            );
         }
         if self.client.timeout_ms == 0 {
             bail!("client.timeout_ms must be positive");

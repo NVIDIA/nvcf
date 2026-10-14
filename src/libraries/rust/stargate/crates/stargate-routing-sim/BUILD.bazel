@@ -10,6 +10,7 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
 _WORKSPACE_DEPS = [
     "//src/libraries/rust/stargate/crates/mock-engine",
     "//src/libraries/rust/stargate/crates/proto:stargate-proto",
+    "//src/libraries/rust/stargate/crates/pylon-lib:pylon-lib",
     "//src/libraries/rust/stargate/crates/protocol:stargate-protocol",
     "//src/libraries/rust/stargate/crates/stargate:stargate_lib",
 ]

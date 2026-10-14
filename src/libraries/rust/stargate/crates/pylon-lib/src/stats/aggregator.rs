@@ -165,33 +165,38 @@ struct RetainedInputInterval {
     pending: bool,
 }
 
-pub(super) struct InputIntervalSample<'a> {
-    pub(super) request_id: &'a str,
-    pub(super) interval: RequestInputInterval,
+/// One observation of a request for the fallback input-throughput window.
+pub struct InputIntervalSample<'a> {
+    pub request_id: &'a str,
+    pub interval: RequestInputInterval,
     // Total prompt tokens; the minimum-size filter applies to this count.
-    pub(super) prompt_tokens: u64,
+    pub prompt_tokens: u64,
     // Rate numerator: uncached prompt tokens when known, else the total.
-    pub(super) input_tokens: u64,
-    pub(super) input_tokens_explicit: bool,
+    pub input_tokens: u64,
+    pub input_tokens_explicit: bool,
     // True when `input_tokens` is known to count prefill work: usage split out
     // cached prompt tokens, or the request is a Pylon calibration probe.
-    pub(super) max_input_tps_eligible: bool,
+    pub max_input_tps_eligible: bool,
     // True while the request still expects usage that has not arrived. The entry
     // keeps its first-output position but is excluded from the rate until resolved.
-    pub(super) pending: bool,
+    pub pending: bool,
 }
 
+/// The window's rate after an observation, and whether it may raise the
+/// maximum input throughput.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct InputIntervalRate {
-    pub(super) input_tps: f64,
-    pub(super) max_input_tps_eligible: bool,
+pub struct InputIntervalRate {
+    pub input_tps: f64,
+    pub max_input_tps_eligible: bool,
 }
 
 // Entries are ordered by first output. The rate covers the resolved entries
 // before the oldest pending entry, so it always describes a contiguous run of
 // requests; newer resolved entries are held back until that request resolves.
+//
+// Public so the routing simulator runs this window rather than a copy of it.
 #[derive(Debug, Default)]
-pub(super) struct RequestInputIntervalWindow {
+pub struct RequestInputIntervalWindow {
     intervals: VecDeque<RetainedInputInterval>,
     evicted_through: Option<Instant>,
     newest_first_output: Option<Instant>,
@@ -208,7 +213,7 @@ impl RequestInputIntervalWindow {
         self.has_observed_rate
     }
 
-    pub(super) fn observe(
+    pub fn observe(
         &mut self,
         sample: InputIntervalSample<'_>,
         config: &StatsCollectorConfig,

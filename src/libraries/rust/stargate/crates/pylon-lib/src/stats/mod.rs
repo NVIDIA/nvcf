@@ -40,6 +40,7 @@ mod metrics;
 mod projection;
 pub(crate) mod token_metrics;
 
+pub use aggregator::{InputIntervalRate, InputIntervalSample, RequestInputIntervalWindow};
 pub(crate) use collector::{ModelStatsInitialization, StatsCollectorControl};
 pub use collector::{
     RequestCounterUpdate, RequestCounterUpdateInput, StatsAggregatorUpdate, StatsCollectorConfig,

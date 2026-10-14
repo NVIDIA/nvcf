@@ -93,7 +93,8 @@ pub mod registration {
 pub mod routing {
     pub use crate::queue_estimate::queue_time_estimate_ms_for_priority;
     pub use crate::routing_state::{
-        RoutedClusterSnapshot, RoutedInferenceServerSnapshot, RoutingTargetKey, apply_reservation,
+        DetachedRoutingReservation, RoutedClusterSnapshot, RoutedInferenceServerSnapshot,
+        RoutingTargetKey, apply_reservation, routing_reservation_ttl,
     };
 }
 

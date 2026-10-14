@@ -1329,7 +1329,7 @@
           "FILE:@@//src/invocation-plane-services/http-invocation/.cargo/config.toml ae53cb1d2d7a3b0ce4fb0c2172ef6f4fc8476673fef154d2efffbdf435e383c6",
           "FILE:@@//src/invocation-plane-services/http-invocation/Cargo.toml a092a718b3d93b3664e2434c5c89025e8db88a1971a995650977f6d03edaaaf9",
           "FILE:@@//src/invocation-plane-services/http-invocation/crates/server/Cargo.toml fd58955d67ba6d2f03a63f582f937a783a9ffa9590c52e5969ac7b993d95b97a",
-          "FILE:@@//src/libraries/rust/stargate/Cargo.lock fc988e9c77a2618c4a776d4ad95f4f32b1ad249e2dc5e952331f01355ddfbc9b",
+          "FILE:@@//src/libraries/rust/stargate/Cargo.lock 2e6f59f825f29b61b129f911c1eb092c19d2b65404669c62f26b60f537a9845a",
           "FILE:@@//src/libraries/rust/stargate/Cargo.toml 2fb0ddf39cc6006b2074b627c03b8ebf5fe6dad405cfb7c5f433bc7bfc570eb5",
           "FILE:@@//src/libraries/rust/stargate/crates/mock-dynamo/Cargo.toml 234038ec0266ae116131399e5c601529af215a9fc524c41101ef949c3c18376b",
           "FILE:@@//src/libraries/rust/stargate/crates/mock-engine/Cargo.toml 5e4719af928811005f889cee9255763ed1eb5fb3001883dc790d329630621a7e",
@@ -1342,7 +1342,7 @@
           "FILE:@@//src/libraries/rust/stargate/crates/stargate-bench/Cargo.toml 93eb4c79a40d25cd89c6e234b6282684897e2493ac429af1034ae2c4b91c7129",
           "FILE:@@//src/libraries/rust/stargate/crates/stargate-forwarding/Cargo.toml dc4ac520de615087a33277b7d3b13954d900fdde0ab9f9c76f27e463512839b6",
           "FILE:@@//src/libraries/rust/stargate/crates/stargate-k8s-router/Cargo.toml 43939aae9aae3fc4ed8466e6f5b64dd9319f8262a942021bb78aeb239b7eab62",
-          "FILE:@@//src/libraries/rust/stargate/crates/stargate-routing-sim/Cargo.toml 7a15eafa8047f82bfe87c7c9838430a7f33821f36a47ab5d28198df8834d78e6",
+          "FILE:@@//src/libraries/rust/stargate/crates/stargate-routing-sim/Cargo.toml 1435d024dcb72d153c44088a2ef8eef1d9b2aed2d923ec95de5ac9b62d8f0ceb",
           "FILE:@@//src/libraries/rust/stargate/crates/stargate-runtime/Cargo.toml 0e2c02e4b7776ebf618d06344ba24a4b95c3f16a93d0797ea8e287e4996e24b4",
           "FILE:@@//src/libraries/rust/stargate/crates/stargate-telemetry/Cargo.toml 7a4e61021ddebe91257379c87cdc7724ed4622baae4e76f749ad383a25145c60",
           "FILE:@@//src/libraries/rust/stargate/crates/stargate-tls/Cargo.toml ff0b78114554c285513992280d6841f19caa4784e134284aec3972eee5dcbde4"

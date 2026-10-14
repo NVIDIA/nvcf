@@ -16,13 +16,16 @@
 //! Discrete-event loop around the production load balancers.
 //!
 //! Each Stargate owns one real `LoadBalancer` instance and a view of backend
-//! stats that is only as fresh as the last Pylon heartbeat it received, plus
-//! its own optimistic reservations. The proxy routing loop
+//! stats that is only as fresh as the last Pylon update it received, plus its
+//! own routing reservations, which settle by Stargate's own rules. The proxy
+//! routing loop
 //! (`stargate/src/http_proxy/run.rs` and `routing.rs`) is mirrored here: timed
 //! waits recheck at most every 25 ms until the routing wait deadline, generic
 //! no-choice retries sleep 1-9 ms while the max-wait budget remains, and
 //! Pylon queue-mismatch rejections release the reservation and reroute with
-//! the backend excluded.
+//! the backend excluded. Growing-session turns carry the cluster that served
+//! the session's last successful turn as their last-cluster hint, as the
+//! gateway sends it in `x-stargate-last-cluster-id`.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
@@ -34,14 +37,16 @@ use mock_engine::{EngineEvent, RequestSpec};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use stargate::load_balancer::{
-    LoadBalancer, LoadBalancerDecision, LoadBalancerRequest, create_load_balancer_with_config,
+    LastClusterHint, LoadBalancer, LoadBalancerDecision, LoadBalancerRequest,
+    create_load_balancer_with_config,
 };
 use stargate::routing::{
-    RoutedClusterSnapshot, RoutingTargetKey, apply_reservation, queue_time_estimate_ms_for_priority,
+    DetachedRoutingReservation, RoutedClusterSnapshot, RoutingTargetKey,
+    queue_time_estimate_ms_for_priority, routing_reservation_ttl,
 };
 use stargate_proto::pb::{InferenceServerStatus, ModelStats};
 
-use crate::backend::Backend;
+use crate::backend::{Backend, InputInterval};
 use crate::config::{PolicyConfig, SimConfig};
 use crate::metrics::{RequestRecord, RunSummary, summarize};
 use crate::time::{Micros, micros_from_duration, micros_from_ms};
@@ -127,7 +132,7 @@ enum EngineState {
 
 struct Reservation {
     id: u64,
-    input_tokens: u64,
+    pending: DetachedRoutingReservation,
 }
 
 struct StargateView {
@@ -140,6 +145,9 @@ struct StargateView {
 struct RequestState {
     plan: PlannedRequest,
     cache_affinity_key: String,
+    /// Pins the session classification across this request's routing waits
+    /// and reroutes, as the proxy's per-request hint does.
+    last_cluster: LastClusterHint,
     excluded: HashSet<String>,
     record: RequestRecord,
     engine: EngineState,
@@ -161,11 +169,46 @@ struct Simulation<'a> {
     unresolved: usize,
     last_publish: Vec<Micros>,
     publish_pending: Vec<bool>,
+    /// Backend that served each growing session's last successful turn.
+    session_last_backend: Vec<Option<usize>>,
+    /// Virtual time zero as a real instant, for Stargate's reservation clock.
+    epoch: Instant,
 }
 
 pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
+    let started = Instant::now();
+    let simulation = simulate(spec)?;
+    let records = simulation
+        .requests
+        .into_iter()
+        .map(|request| request.record)
+        .collect::<Vec<_>>();
+    Ok(summarize(
+        spec,
+        &records,
+        simulation.workload.measure_start,
+        simulation.workload.measure_end,
+        &simulation.backends,
+        started.elapsed(),
+    ))
+}
+
+/// Runs every request in the plan to resolution.
+fn simulate<'a>(spec: &RunSpec<'a>) -> anyhow::Result<Simulation<'a>> {
+    let mut simulation = build(spec)?;
+    simulation.schedule_initial_events();
+    simulation.run_to_completion();
+    debug_assert!(
+        simulation.backends.iter().all(Backend::is_idle),
+        "every resolved request left Pylon and the engine"
+    );
+    Ok(simulation)
+}
+
+fn build<'a>(spec: &RunSpec<'a>) -> anyhow::Result<Simulation<'a>> {
     let config = spec.config;
     let algorithm = spec.policy.algorithm_config()?;
+    let epoch = Instant::now();
     let mut backends = Vec::new();
     let mut stargates = Vec::new();
     for (region_index, region) in config.topology.regions.iter().enumerate() {
@@ -176,6 +219,7 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
                 region.backend_speed,
                 config.backend_engine(region, backend_index),
                 &config.pylon,
+                epoch,
             )?);
         }
         for _ in 0..region.stargates {
@@ -209,12 +253,12 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
     );
     let requests = std::mem::take(&mut workload.requests)
         .into_iter()
-        .map(|plan| request_state(plan, &stargates))
+        .map(|plan| request_state(plan, &stargates, None))
         .collect::<Vec<_>>();
 
-    let (measure_start, measure_end) = (workload.measure_start, workload.measure_end);
     let backend_count = backends.len();
-    let mut simulation = Simulation {
+    let session_count = workload.sessions.len();
+    Ok(Simulation {
         config,
         workload,
         now: 0,
@@ -234,37 +278,28 @@ pub fn run(spec: &RunSpec<'_>) -> anyhow::Result<RunSummary> {
         next_reservation: 0,
         last_publish: vec![0; backend_count],
         publish_pending: vec![false; backend_count],
-    };
-    simulation.schedule_initial_events();
-    let started = Instant::now();
-    simulation.run_to_completion();
-    debug_assert!(
-        simulation.backends.iter().all(Backend::is_idle),
-        "every resolved request left Pylon and the engine"
-    );
-    let records = simulation
-        .requests
-        .into_iter()
-        .map(|request| request.record)
-        .collect::<Vec<_>>();
-    Ok(summarize(
-        spec,
-        &records,
-        measure_start,
-        measure_end,
-        &simulation.backends,
-        started.elapsed(),
-    ))
+        session_last_backend: vec![None; session_count],
+        epoch,
+    })
 }
 
-fn request_state(plan: PlannedRequest, stargates: &[StargateView]) -> RequestState {
+/// `last_cluster` is the backend that served the session's last successful
+/// turn; its ID is the cluster ID in that backend's routing snapshots.
+fn request_state(
+    plan: PlannedRequest,
+    stargates: &[StargateView],
+    last_cluster: Option<(usize, String)>,
+) -> RequestState {
+    let (last_backend, last_cluster_id) = last_cluster.unzip();
     RequestState {
         cache_affinity_key: format!("session-{}", plan.session),
+        last_cluster: LastClusterHint::new(last_cluster_id),
         record: RequestRecord {
             arrival: plan.arrival,
             input_tokens: plan.input_tokens,
             stargate_region: stargates[plan.stargate].region,
             attempt: plan.attempt,
+            last_backend,
             ..RequestRecord::default()
         },
         plan,
@@ -343,13 +378,22 @@ impl Simulation<'_> {
                 stargate,
                 stats,
             } => {
+                let received_at = self.instant(self.now);
                 let view = &mut self.stargates[stargate];
                 view.stats[backend] = stats;
-                // A processed heartbeat replaces every pending reservation
-                // for that backend (`cluster_snapshots.rs`).
-                view.reservations[backend].clear();
+                // Only the reserved backend's own update, received at or
+                // after a reservation's soft expiry, ends it
+                // (`cluster_snapshots.rs`).
+                view.reservations[backend].retain(|reservation| {
+                    reservation.pending.settle_on_backend_update(received_at);
+                    reservation.pending.is_active()
+                });
             }
         }
+    }
+
+    fn instant(&self, at: Micros) -> Instant {
+        self.epoch + Duration::from_micros(at)
     }
 
     fn one_way(&self, region_a: usize, region_b: usize) -> Micros {
@@ -374,7 +418,7 @@ impl Simulation<'_> {
             .map(|(index, backend)| {
                 let mut stats = ModelStats::clone(&view.stats[index]);
                 for reservation in &view.reservations[index] {
-                    apply_reservation(&mut stats, reservation.input_tokens, 0);
+                    reservation.pending.apply(&mut stats);
                 }
                 RoutedClusterSnapshot {
                     cluster_id: backend.id.clone(),
@@ -418,12 +462,17 @@ impl Simulation<'_> {
             received_at,
             request_slo: self.config.client.request_slo_ms.map(Duration::from_millis),
             excluded_cluster_ids: (!excluded.is_empty()).then_some(excluded),
-            last_cluster: None,
+            last_cluster: Some(&state.last_cluster),
         };
         let decision = self.stargates[stargate]
             .load_balancer
             .decide(&lb_request, &candidates);
-        self.requests[request].record.route_attempts += 1;
+        let state = &mut self.requests[request];
+        state.record.route_attempts += 1;
+        state.record.session_state = state
+            .last_cluster
+            .classification()
+            .map(|classification| classification.state);
 
         match decision {
             LoadBalancerDecision::Selected(choice) => {
@@ -475,11 +524,32 @@ impl Simulation<'_> {
     fn dispatch(&mut self, request: usize, backend: usize, expected_queue_ms: Option<u64>) {
         let stargate = self.requests[request].plan.stargate;
         self.next_reservation += 1;
-        let reservation = Reservation {
+        // The soft TTL is the selected backend's health-check RTT within the
+        // configured bounds (`http_proxy/attempt.rs`).
+        let stargate_config = &self.config.stargate;
+        let ttl = routing_reservation_ttl(
+            Duration::from_secs_f64(
+                self.rtt_ms(
+                    self.stargates[stargate].region,
+                    self.backends[backend].region,
+                ) / 1000.0,
+            ),
+            Duration::from_millis(stargate_config.routing_reservation_ttl_min_ms),
+            Duration::from_millis(stargate_config.routing_reservation_ttl_max_ms),
+        );
+        let pending = DetachedRoutingReservation::new(
+            self.requests[request].plan.input_tokens,
+            0,
+            ttl,
+            &self.target,
+        );
+        // Tunnel stream opening is not modeled, so the request head leaves
+        // Stargate as soon as the backend is selected.
+        pending.arm_at(self.instant(self.now));
+        self.stargates[stargate].reservations[backend].push(Reservation {
             id: self.next_reservation,
-            input_tokens: self.requests[request].plan.input_tokens,
-        };
-        self.stargates[stargate].reservations[backend].push(reservation);
+            pending,
+        });
         let record = &mut self.requests[request].record;
         record.dispatched_at = Some(self.now);
         record.backend = Some(backend);
@@ -539,7 +609,13 @@ impl Simulation<'_> {
 
     fn mismatch_rejected(&mut self, request: usize, backend: usize, reservation: u64) {
         let stargate = self.requests[request].plan.stargate;
-        self.stargates[stargate].reservations[backend].retain(|pending| pending.id != reservation);
+        // The rejection releases the reservation early.
+        self.stargates[stargate].reservations[backend].retain(|pending| {
+            if pending.id == reservation {
+                pending.pending.release();
+            }
+            pending.pending.is_active()
+        });
         if self.requests[request].resolved {
             return;
         }
@@ -607,12 +683,9 @@ impl Simulation<'_> {
         let state = &mut self.requests[request];
         state.record.reused_input_tokens = reused;
         state.record.backend_first_token_at = Some(at);
-        let submitted = state
-            .record
-            .backend_received_at
-            .expect("engine requests reached their backend");
+        let interval = input_interval(&state.record).expect("first output was recorded");
         let (input_tokens, stargate) = (state.plan.input_tokens, state.plan.stargate);
-        self.backends[backend].first_token(input_tokens, submitted, at, &self.config.pylon);
+        self.backends[backend].first_token(request, input_tokens, interval);
         let return_delay = self.one_way(
             self.backends[backend].region,
             self.stargates[stargate].region,
@@ -625,7 +698,15 @@ impl Simulation<'_> {
         let state = &mut self.requests[request];
         state.engine = EngineState::Finished;
         let (input_tokens, stargate) = (state.plan.input_tokens, state.plan.stargate);
-        self.backends[backend].complete(input_tokens);
+        let interval = input_interval(&state.record).expect("completed requests had first output");
+        let reused = state.record.reused_input_tokens;
+        if let Some(last) = self
+            .session_last_backend
+            .get_mut(self.requests[request].plan.session as usize)
+        {
+            *last = Some(backend);
+        }
+        self.backends[backend].complete(request, input_tokens, reused, interval);
         let return_delay = self.one_way(
             self.backends[backend].region,
             self.stargates[stargate].region,
@@ -698,8 +779,11 @@ impl Simulation<'_> {
             .workload
             .turn_request(session, turn, attempt, self.now)
             .expect("scheduled turns exist in the plan");
+        let last_cluster = self.session_last_backend[session as usize]
+            .map(|backend| (backend, self.backends[backend].id.clone()));
         let request = self.requests.len();
-        self.requests.push(request_state(plan, &self.stargates));
+        self.requests
+            .push(request_state(plan, &self.stargates, last_cluster));
         self.schedule_arrival(request);
     }
 
@@ -709,7 +793,7 @@ impl Simulation<'_> {
         }
         self.fail(request, |record| record.timed_out = true);
         // Disconnects propagate to the engine; free the slot the way a dropped
-        // MockDynamo stream does. Reservations stay until the next heartbeat.
+        // MockDynamo stream does. Reservations settle as usual.
         let state = &mut self.requests[request];
         let Some(backend_index) = state.record.backend else {
             return;
@@ -719,8 +803,8 @@ impl Simulation<'_> {
         }
         state.engine = EngineState::Finished;
         let input_tokens = state.plan.input_tokens;
-        let decoding = state.record.backend_first_token_at.is_some();
-        self.backends[backend_index].cancel(self.now, request, input_tokens, decoding);
+        let interval = input_interval(&state.record);
+        self.backends[backend_index].cancel(self.now, request, input_tokens, interval);
         self.reschedule_wake(backend_index);
         self.stats_changed(backend_index);
     }
@@ -770,8 +854,18 @@ impl Simulation<'_> {
     }
 }
 
+/// Engine submit to first output, once the request has produced first output.
+fn input_interval(record: &RequestRecord) -> Option<InputInterval> {
+    Some(InputInterval {
+        submitted: record.backend_received_at?,
+        first_output: record.backend_first_token_at?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    use stargate::load_balancer::SessionState;
+
     use super::*;
 
     fn config(workload: serde_json::Value) -> SimConfig {
@@ -853,6 +947,18 @@ mod tests {
         }
     }
 
+    fn growing() -> serde_json::Value {
+        serde_json::json!({
+            "rates_rps": [1.0], "warmup_s": 1.0, "measure_s": 4.0,
+            "growing": {
+                "system_prompt_tokens": 500, "user_tokens_min": 50, "user_tokens_max": 200,
+                "output_tokens_min": 16, "output_tokens_max": 64,
+                "turns_min": 2, "turns_max": 4, "think_time_mean_s": 0.2,
+                "max_context_tokens": 8000, "max_turn_attempts": 2, "retry_backoff_s": 0.1
+            }
+        })
+    }
+
     #[test]
     fn fixed_sessions_resolve_every_request() {
         let config = config(serde_json::json!({
@@ -867,29 +973,13 @@ mod tests {
 
     #[test]
     fn growing_sessions_resolve_with_retries() {
-        let config = config(serde_json::json!({
-            "rates_rps": [1.0], "warmup_s": 1.0, "measure_s": 4.0,
-            "growing": {
-                "system_prompt_tokens": 500, "user_tokens_min": 50, "user_tokens_max": 200,
-                "output_tokens_min": 16, "output_tokens_max": 64,
-                "turns_min": 2, "turns_max": 4, "think_time_mean_s": 0.2,
-                "max_context_tokens": 8000, "max_turn_attempts": 2, "retry_backoff_s": 0.1
-            }
-        }));
+        let config = config(growing());
         assert_runs_resolve_every_request(&config, 60.0);
     }
 
     #[test]
     fn short_client_timeouts_cancel_engine_work_and_retry_turns() {
-        let mut config = config(serde_json::json!({
-            "rates_rps": [1.0], "warmup_s": 1.0, "measure_s": 4.0,
-            "growing": {
-                "system_prompt_tokens": 500, "user_tokens_min": 50, "user_tokens_max": 200,
-                "output_tokens_min": 16, "output_tokens_max": 64,
-                "turns_min": 2, "turns_max": 4, "think_time_mean_s": 0.2,
-                "max_context_tokens": 8000, "max_turn_attempts": 2, "retry_backoff_s": 0.1
-            }
-        }));
+        let mut config = config(growing());
         config.client.timeout_ms = 250;
         config.client.max_wait_ms = Some(100);
         let summaries = run_policies(&config, 60.0);
@@ -904,6 +994,134 @@ mod tests {
                 .iter()
                 .any(|summary| summary.abandoned_sessions > 0)
         );
+    }
+
+    #[test]
+    fn last_cluster_affinity_classifies_later_turns_as_returning() {
+        let mut config = config(growing());
+        config.policies = [false, true]
+            .into_iter()
+            .flat_map(|enabled| {
+                [
+                    serde_json::json!({
+                        "algorithm": "wait-and-widen",
+                        "cache_affinity_backend_selection_count": 1,
+                        "cache_affinity_wait_ms": 100,
+                        "last_cluster_affinity": enabled
+                    }),
+                    serde_json::json!({
+                        "algorithm": "pulsar-wait-and-widen", "seed": "s",
+                        "cache_affinity_wait_ms": 100,
+                        "last_cluster_affinity": enabled
+                    }),
+                ]
+                .map(|load_balancer| PolicyConfig {
+                    name: format!("{}-{enabled}", load_balancer["algorithm"]),
+                    load_balancer,
+                })
+            })
+            .collect();
+        config.validate().expect("session-aware policies are valid");
+        for policy in &config.policies {
+            let enabled = policy.load_balancer["last_cluster_affinity"] == true;
+            let simulation = simulate(&RunSpec {
+                config: &config,
+                policy,
+                rate_rps: 60.0,
+                seed: 1,
+            })
+            .expect("run completes");
+            let served = |record: &RequestRecord| {
+                record
+                    .completed_at
+                    .is_some_and(|_| !record.timed_out)
+                    .then_some(record.backend)
+                    .flatten()
+            };
+            let mut returning = 0;
+            for request in &simulation.requests {
+                let (plan, record) = (&request.plan, &request.record);
+                // The hint names the backend that served the previous turn.
+                let previous = (plan.turn > 0).then(|| {
+                    simulation
+                        .requests
+                        .iter()
+                        .filter(|earlier| {
+                            earlier.plan.session == plan.session
+                                && earlier.plan.turn + 1 == plan.turn
+                        })
+                        .find_map(|earlier| served(&earlier.record))
+                        .expect("a later turn follows a successful turn")
+                });
+                assert_eq!(record.last_backend, previous, "{}", policy.name);
+                if record.route_attempts == 0 {
+                    continue;
+                }
+                let expected = match (enabled, plan.turn) {
+                    (false, _) => None,
+                    (true, 0) => Some(SessionState::New),
+                    (true, _) => Some(SessionState::Returning),
+                };
+                assert_eq!(record.session_state, expected, "{}", policy.name);
+                returning += usize::from(previous.is_some());
+            }
+            assert!(returning > 0, "{}: later turns ran", policy.name);
+        }
+    }
+
+    #[test]
+    fn reservations_settle_on_the_first_own_backend_update_after_the_soft_ttl() {
+        let mut config = config(serde_json::json!({
+            "rates_rps": [1.0], "warmup_s": 0.0, "measure_s": 1.0,
+            "fixed": {"sessions": 4, "input_tokens_min": 100, "input_tokens_max": 100, "output_tokens": 1}
+        }));
+        // Region a to region b is 40 ms; a 30 ms maximum caps the TTL.
+        for (max_ttl_ms, ttl_ms) in [(1000, 40.0), (30, 30.0)] {
+            config.stargate.routing_reservation_ttl_max_ms = max_ttl_ms;
+            let spec = RunSpec {
+                config: &config,
+                policy: &config.policies[0],
+                rate_rps: 20.0,
+                seed: 1,
+            };
+            let mut simulation = build(&spec).expect("simulation builds");
+            let stargate = simulation.requests[0].plan.stargate;
+            let region = simulation.stargates[stargate].region;
+            let remote: Vec<usize> = (0..simulation.backends.len())
+                .filter(|&backend| simulation.backends[backend].region != region)
+                .collect();
+            let (backend, other) = (remote[0], remote[1]);
+            let reserved = |simulation: &Simulation<'_>| {
+                simulation.candidates(stargate)[backend].stats.queue_size
+            };
+            let update_at = |simulation: &mut Simulation<'_>, from: usize, at_ms: f64| {
+                simulation.now = micros_from_ms(at_ms);
+                let stats = Rc::new(simulation.backends[from].stats());
+                simulation.handle(Event::StatsArrive {
+                    backend: from,
+                    stargate,
+                    stats,
+                });
+            };
+
+            simulation.dispatch(0, backend, None);
+            assert_eq!(reserved(&simulation), 1);
+            update_at(&mut simulation, backend, ttl_ms - 1.0);
+            assert_eq!(reserved(&simulation), 1, "update before the soft expiry");
+            update_at(&mut simulation, other, ttl_ms);
+            assert_eq!(reserved(&simulation), 1, "another backend's update");
+            update_at(&mut simulation, backend, ttl_ms);
+            assert_eq!(reserved(&simulation), 0, "own update at the soft expiry");
+
+            // A queue-mismatch rejection releases the reservation at once.
+            let rejected = (1..simulation.requests.len())
+                .find(|&request| simulation.requests[request].plan.stargate == stargate)
+                .expect("another request enters through the same Stargate");
+            simulation.dispatch(rejected, backend, None);
+            assert_eq!(reserved(&simulation), 1);
+            simulation.mismatch_rejected(rejected, backend, simulation.next_reservation);
+            assert_eq!(reserved(&simulation), 0, "released by the rejection");
+        }
     }
 
     #[test]
@@ -950,7 +1168,7 @@ mod tests {
             "fixed": {"sessions": 1, "input_tokens_min": 1, "input_tokens_max": 1, "output_tokens": 1}
         }));
         type Breakage = (&'static str, fn(&mut SimConfig));
-        let breakages: [Breakage; 6] = [
+        let breakages: [Breakage; 7] = [
             ("heartbeat_ms", |config| config.pylon.heartbeat_ms = 0.0004),
             ("measure_s", |config| config.workload.measure_s = 0.0),
             ("rtt_ms", |config| config.topology.rtt_ms[0][1] = f64::NAN),
@@ -962,6 +1180,9 @@ mod tests {
             }),
             ("gpu_workers", |config| {
                 config.topology.regions[0].gpu_workers = Some(0);
+            }),
+            ("routing_reservation_ttl_min_ms", |config| {
+                config.stargate.routing_reservation_ttl_min_ms = 2000;
             }),
         ];
         for (field, break_config) in breakages {
