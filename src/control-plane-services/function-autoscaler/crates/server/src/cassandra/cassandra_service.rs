@@ -1017,6 +1017,7 @@ mod tests {
         }
     }
 
+    /// Builds a manager against the local test Cassandra; requires a running cluster.
     async fn create_test_manager() -> Arc<CassandraServiceManager> {
         let settings = create_test_settings().await;
         let secrets_path = get_test_secrets_path();
@@ -1032,7 +1033,7 @@ mod tests {
         )
     }
 
-    // Unique per test so ignored tests running in parallel do not share a lock row.
+    /// Unique per test so ignored tests running in parallel do not share a lock row.
     fn create_unique_test_lock() -> DistributedLock {
         DistributedLock {
             lock_name: format!("test_lock_{}", Uuid::new_v4()),

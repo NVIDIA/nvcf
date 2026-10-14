@@ -104,6 +104,9 @@ pub struct DistributedLockGuard {
 }
 
 impl DistributedLockGuard {
+    /// Inserts the lock row with a TTL of `lock_duration_seconds` if no live row exists.
+    /// Returns `Some(guard)` if acquired, `None` if another holder owns the lock.
+    /// The guard records `node_id` and `acquired_at` so release only targets this acquisition.
     pub async fn try_acquire(
         lock_name: String,
         node_id: String,
@@ -138,6 +141,9 @@ impl DistributedLockGuard {
 }
 
 impl Drop for DistributedLockGuard {
+    /// Releases the lock from a spawned task with an ownership-conditional delete.
+    /// A stale guard, whose lock expired or was re-acquired (even by this node), deletes
+    /// nothing and logs a warning. On error, retries once after 5s with the same condition.
     fn drop(&mut self) {
         if !self.released {
             let lock_name = self.lock_name.clone();
