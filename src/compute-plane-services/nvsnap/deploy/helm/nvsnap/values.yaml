@@ -544,6 +544,12 @@ webhook:
   # not find it. Components that reach a shared etcd or NATS keep the
   # operator's name. Empty disables.
   dynamoNamespace: nvcf-nvsnap
+  # etcd lease TTL in seconds (ETCD_LEASE_TTL) for those components, unless
+  # they set one. Capturing a running instance freezes its GPU workers for
+  # seconds; Dynamo's 10 s lease can run out meanwhile and the instance being
+  # captured loses its worker. Costs only a slower removal of a crashed
+  # component from routing. 0 keeps Dynamo's default.
+  dynamoLeaseTTL: 60
   # Seconds of silence every liveness probe is widened to tolerate (its
   # failureThreshold raised, never lowered). Capturing a running pod freezes
   # it for seconds; a probe that fails after one miss (Dynamo workers:

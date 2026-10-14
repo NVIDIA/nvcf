@@ -353,6 +353,9 @@ type Mutator struct {
 	// every Dynamo component whose etcd and NATS are its instance's own
 	// (dynamo.go). Empty leaves the operator's.
 	DynamoNamespace string
+	// DynamoLeaseTTL, in seconds, is the etcd lease TTL (ETCD_LEASE_TTL)
+	// those components get unless they set one; 0 leaves Dynamo's default.
+	DynamoLeaseTTL int
 	// CaptureLivenessBudget, in seconds, is the silence every liveness
 	// probe is widened to tolerate, so a capture's freeze does not get the
 	// pod restarted (liveness.go); 0 leaves probes as they are.

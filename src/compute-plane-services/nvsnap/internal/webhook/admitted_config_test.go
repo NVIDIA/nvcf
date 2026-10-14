@@ -17,7 +17,7 @@ import (
 // capture records a companion by it and its replacement is admitted by it.
 func TestAdmittedConfigSurvivesTheWebhooksOwnPatches(t *testing.T) {
 	m := &Mutator{Composer: &rootfsonly.HashInputComposer{CUDADriverMajor: 610}, DynamoNamespace: "nvcf-nvsnap",
-		CaptureLivenessBudget: 60}
+		DynamoLeaseTTL: 60, CaptureLivenessBudget: 60}
 	tight := &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/live"}}, PeriodSeconds: 5, FailureThreshold: 1}
 	env := []corev1.EnvVar{
 		{Name: "DYN_NAMESPACE", Value: "sr-1-graph"},

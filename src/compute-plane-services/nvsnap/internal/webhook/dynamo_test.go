@@ -63,3 +63,34 @@ func TestDynamoDiscovery(t *testing.T) {
 		t.Errorf("env wins: %q", got)
 	}
 }
+
+// The profile gives its components a lease that outlasts a capture, unless
+// they set their own.
+func TestDynamoLeaseTTL(t *testing.T) {
+	m := &Mutator{DynamoNamespace: "nvcf-nvsnap", DynamoLeaseTTL: 60}
+	base := []corev1.EnvVar{
+		{Name: "DYN_NAMESPACE", Value: "sr-1-graph"},
+		{Name: "ETCD_ENDPOINTS", Value: "mini-service-etcd:2379"},
+		{Name: "NATS_SERVER", Value: "nats://mini-service-nats:4222"},
+	}
+	env := func(p *corev1.Pod) map[string]string {
+		out := map[string]string{}
+		for _, e := range p.Spec.Containers[0].Env {
+			out[e.Name] = e.Value
+		}
+		return out
+	}
+	pod := dynamoPod(base...)
+	if got := env(applyPatches(t, pod, m.dynamoNamespacePatches(pod))); got["ETCD_LEASE_TTL"] != "60" {
+		t.Errorf("ETCD_LEASE_TTL = %q, want 60", got["ETCD_LEASE_TTL"])
+	}
+	own := dynamoPod(append(append([]corev1.EnvVar{}, base...), corev1.EnvVar{Name: "ETCD_LEASE_TTL", Value: "20"})...)
+	if got := env(applyPatches(t, own, m.dynamoNamespacePatches(own))); got["ETCD_LEASE_TTL"] != "20" {
+		t.Errorf("a workload's own ETCD_LEASE_TTL was replaced: %q", got["ETCD_LEASE_TTL"])
+	}
+	shared := dynamoPod(corev1.EnvVar{Name: "DYN_NAMESPACE", Value: "a"}, corev1.EnvVar{Name: "ETCD_ENDPOINTS", Value: "etcd.dynamo-system:2379"},
+		corev1.EnvVar{Name: "NATS_SERVER", Value: "nats://mini-service-nats:4222"})
+	if p := m.dynamoNamespacePatches(shared); p != nil {
+		t.Errorf("outside the profile (shared etcd): patched %v", p)
+	}
+}
