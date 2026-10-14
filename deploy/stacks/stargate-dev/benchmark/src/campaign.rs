@@ -792,11 +792,13 @@ fn accept_report(
         );
     }
     crate::schedule::verify(path, stream, &verified.metrics)?;
-    ensure!(
-        !(warmup || arm.kind == ArmKind::Smoke) || verified.metrics.failed == 0,
-        "smoke or warm-up requests failed: {}",
-        path.display()
-    );
+    if warmup || arm.kind == ArmKind::Smoke {
+        ensure!(
+            verified.metrics.failed == 0,
+            "smoke or warm-up requests failed: {}",
+            path.display()
+        );
+    }
     Ok(verified)
 }
 
@@ -823,33 +825,34 @@ fn load_receipt(output: &Path, arm: &Arm) -> Result<Option<AcceptedArm>> {
         receipt.warmup.is_some() == arm.warmup.is_some(),
         "accepted receipt has incomplete warm-up evidence"
     );
-    let verify = |stream: &Stream, accepted: &AcceptedReport, warmup: bool| {
-        ensure!(
-            stream.name == accepted.stream
-                && accepted.path
-                    == receipt
-                        .attempt
-                        .join(stream.name.as_deref().unwrap_or("main"))
-                        .join("spark.json"),
-            "accepted report does not match the planned stream"
-        );
-        let verified = accept_report(
-            &below(output, &accepted.path)?,
-            stream,
-            arm,
-            warmup,
-            Some(&accepted.sha256),
-        )?;
-        if !stream.rate_steps.is_empty() {
+    let verify =
+        |stream: &Stream, accepted: &AcceptedReport, warmup: bool| -> Result<report::Metrics> {
             ensure!(
-                receipt
-                    .evidence
-                    .contains_key(&accepted.path.with_extension("requests.jsonl")),
-                "accepted rate schedule lacks request timeline evidence"
+                stream.name == accepted.stream
+                    && accepted.path
+                        == receipt
+                            .attempt
+                            .join(stream.name.as_deref().unwrap_or("main"))
+                            .join("spark.json"),
+                "accepted report does not match the planned stream"
             );
-        }
-        Ok::<_, anyhow::Error>(verified.metrics)
-    };
+            let verified = accept_report(
+                &below(output, &accepted.path)?,
+                stream,
+                arm,
+                warmup,
+                Some(&accepted.sha256),
+            )?;
+            if !stream.rate_steps.is_empty() {
+                ensure!(
+                    receipt
+                        .evidence
+                        .contains_key(&accepted.path.with_extension("requests.jsonl")),
+                    "accepted rate schedule lacks request timeline evidence"
+                );
+            }
+            Ok(verified.metrics)
+        };
     if let (Some(stream), Some(accepted)) = (&arm.warmup, &receipt.warmup) {
         verify(stream, accepted, true)?;
     }

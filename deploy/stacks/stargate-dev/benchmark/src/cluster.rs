@@ -447,23 +447,28 @@ impl Topology {
         Ok(serde_json::to_value(stats)?)
     }
 
-    /// Restart every (context, namespace, deployment) target, then wait for
-    /// all of them to roll out.
+    /// Restart every (context, namespace, Deployment name) target, then wait
+    /// for all of them to roll out.
     async fn restart_and_wait(&self, targets: &[(&str, &str, String)]) -> Result<()> {
-        for (context, namespace, deployment) in targets {
+        for (context, namespace, name) in targets {
             self.write(
                 context,
                 namespace,
-                &["rollout", "restart", deployment.as_str()],
+                &["rollout", "restart", &format!("deployment/{name}")],
                 Duration::from_secs(120),
             )
             .await?;
         }
-        for (context, namespace, deployment) in targets {
+        for (context, namespace, name) in targets {
             self.read(
                 context,
                 namespace,
-                &["rollout", "status", deployment.as_str(), "--timeout=5m"],
+                &[
+                    "rollout",
+                    "status",
+                    &format!("deployment/{name}"),
+                    "--timeout=5m",
+                ],
                 Duration::from_secs(330),
             )
             .await?;
@@ -480,7 +485,7 @@ impl Topology {
                 (
                     cluster.kube_context.as_str(),
                     region.namespace.as_str(),
-                    format!("deployment/{name}"),
+                    name,
                 )
             })
             .collect();
@@ -492,7 +497,7 @@ impl Topology {
                 (
                     region.clusters.stargate.kube_context.as_str(),
                     region.namespace.as_str(),
-                    "deployment/llm-request-router".to_owned(),
+                    "llm-request-router".to_owned(),
                 )
             })
             .collect();

@@ -158,9 +158,15 @@ pub fn mockdc_pod(name: &str, identity: &str) -> Value {
 
 /// Respond to `verify --region us-west-2` reads for a healthy region: the hub
 /// Deployments and registration Service, three routers that each see the
-/// four backends, and two calibrated MockDC Pods per MockDC cluster.
+/// four backends, and two calibrated MockDC Pods per MockDC cluster. Contexts,
+/// cluster names, namespace, model, and routing key come from the
+/// environment file the controller embeds.
 pub fn healthy_west_region(fake: &FakeCommand) {
-    let (hub, namespace, model) = ("stargate-usw2", "stargate-dev", "stargate-dev-model");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../environments/us-west-2.yaml");
+    let region: Value = serde_yaml_ng::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+    let field = |pointer: &str| region.pointer(pointer).and_then(Value::as_str).unwrap();
+    let (hub, namespace) = (field("/clusters/stargate/kubeContext"), field("/namespace"));
+    let (model, routing_key) = (field("/modelName"), field("/routingKey"));
     for (name, replicas) in [
         ("stargate-dev-auth", 1),
         ("llm-request-router", 3),
@@ -216,7 +222,7 @@ pub fn healthy_west_region(fake: &FakeCommand) {
         &[(0, &json!({"items": routers}).to_string(), "")],
     );
     let membership = format!(
-        "stargate_active_inference_servers{{model=\"{model}\",routing_key=\"stargate-dev\"}} 4\n"
+        "stargate_active_inference_servers{{model=\"{model}\",routing_key=\"{routing_key}\"}} 4\n"
     );
     for index in 0..3 {
         let path =
@@ -239,19 +245,23 @@ pub fn healthy_west_region(fake: &FakeCommand) {
         ),
         model
     );
-    for mockdc in ["mockdc-usw2-a", "mockdc-usw2-b"] {
+    for mockdc in region["clusters"]["mockdcs"].as_array().unwrap() {
+        let (name, context) = (
+            mockdc["name"].as_str().unwrap(),
+            mockdc["kubeContext"].as_str().unwrap(),
+        );
         let pods: Vec<_> = (0..2)
             .map(|index| {
                 mockdc_pod(
                     &format!("backend-{index}"),
-                    &format!("{mockdc}-backend-{index}"),
+                    &format!("{name}-backend-{index}"),
                 )
             })
             .collect();
-        let selector = format!("app.kubernetes.io/instance={mockdc}");
+        let selector = format!("app.kubernetes.io/instance={name}");
         kubectl(
             fake,
-            mockdc,
+            context,
             namespace,
             &["get", "pods", "-l", &selector, "-o", "json"],
             &[(0, &json!({"items": pods}).to_string(), "")],
@@ -262,7 +272,7 @@ pub fn healthy_west_region(fake: &FakeCommand) {
             );
             kubectl(
                 fake,
-                mockdc,
+                context,
                 namespace,
                 &["get", &path],
                 &[(0, &calibration, "")],
