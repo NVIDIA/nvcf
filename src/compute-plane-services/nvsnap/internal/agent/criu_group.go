@@ -742,7 +742,11 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 		time.Sleep(5 * time.Second)
 	}
 
-	req := GroupRestoreRequest{Members: make([]GroupRestoreMember, size)}
+	// failGroup deletes the pods after it has blocked their checkpoints. Were
+	// the driver to delete them first, their replacements could be admitted
+	// as placeholders of the same checkpoints and wait for a restore that
+	// never comes.
+	req := GroupRestoreRequest{Members: make([]GroupRestoreMember, size), KeepFailedPods: true}
 	for i, p := range ranks {
 		req.Members[i] = GroupRestoreMember{
 			CheckpointID:             p.Annotations[webhook.CRIURestoreAnnotation],

@@ -12,8 +12,10 @@ import (
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook"
 )
@@ -239,5 +241,28 @@ func TestRecoverInterruptedCaptures(t *testing.T) {
 		if cm.Data["state"] != want {
 			t.Errorf("record %s = %q, want %q", key, cm.Data["state"], want)
 		}
+	}
+}
+
+// A replacement pod is admitted as soon as its predecessor is gone, so the
+// checkpoints must be blocked before any pod of the group is deleted.
+func TestFailGroup_BlocksBeforeDeleting(t *testing.T) {
+	c, kc, leader := groupFixture(t)
+	ctx := context.Background()
+	var deletedUnblocked []string
+	kc.PrependReactor("delete", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		name := action.(k8stesting.DeleteAction).GetName()
+		obj, err := kc.Tracker().Get(corev1.SchemeGroupVersion.WithResource("configmaps"), c.a.criuFailedNamespace(), criuRestoreFailedConfigMap)
+		if cm, ok := obj.(*corev1.ConfigMap); err != nil || !ok || cm.Data["c0"] == "" || cm.Data["c1"] == "" {
+			deletedUnblocked = append(deletedUnblocked, name)
+		}
+		return false, nil, nil
+	})
+	c.failGroup(ctx, leader, "k1", true, errors.New("criu restore: exit status 1"), logrus.NewEntry(logrus.New()))
+	if len(deletedUnblocked) > 0 {
+		t.Errorf("pods %v deleted before their checkpoints were blocked", deletedUnblocked)
+	}
+	if got := remainingPods(t, kc); len(got) != 1 {
+		t.Errorf("pods left = %v, want only the other instance", got)
 	}
 }
