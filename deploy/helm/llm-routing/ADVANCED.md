@@ -352,7 +352,7 @@ Run the printed Helm command when all placement checks pass. It contains the rec
 For a direct one-node install, replace `NODE_FROM_PLANNER` in both places below. The entire block installs the model and waits for gateway registration:
 
 ```bash
-helm upgrade --install qwen-flash oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.3.0-iiab \
+helm upgrade --install qwen-flash oci://nvcr.io/0651155215864979/ncp-dev/pylon-sglang-recipe --version 0.3.1-iiab \
   --namespace llm-stack \
   --set recipe=qwen3.8-flash-next --set profileName=spark-nvfp4-nvme \
   --set 'nodes[0]=NODE_FROM_PLANNER' \
@@ -373,13 +373,13 @@ All supported recipes use the same Helm lifecycle. Preparation, startup and endp
 
 | Model | Release | Chart | Served model ID |
 | --- | --- | --- | --- |
-| Qwen FP8 | `qwen-fp8` | `pylon-sglang-recipe` 0.3.0-iiab | `qwen3.8-27b` |
-| Qwen NVFP4 | `qwen-nvfp4` | `pylon-sglang-recipe` 0.3.0-iiab | `qwen3.8-27b-nvfp4` |
-| Qwen3.5-4B | `qwen35-4b` | `pylon-sglang-recipe` 0.3.0-iiab | `qwen3.5-4b` |
-| Nemotron Nano 12B v2 | `nemotron-nano` | `pylon-sglang-recipe` 0.3.0-iiab | `nemotron-nano-12b-v2` |
-| Nemotron 3.5 Lightning | `nemotron-lightning` | `pylon-sglang-recipe` 0.3.0-iiab | `nemotron-3.5-lightning` |
-| DeepSeek V4 Flash | `deepseek-v4` | `pylon-sglang-recipe` 0.3.0-iiab | `deepseek-v4-flash` |
-| Flash-Next, either profile | `qwen-flash` | `pylon-sglang-recipe` 0.3.0-iiab | `qwen3.8-flash-next` |
+| Qwen FP8 | `qwen-fp8` | `pylon-sglang-recipe` 0.3.1-iiab | `qwen3.8-27b` |
+| Qwen NVFP4 | `qwen-nvfp4` | `pylon-sglang-recipe` 0.3.1-iiab | `qwen3.8-27b-nvfp4` |
+| Qwen3.5-4B | `qwen35-4b` | `pylon-sglang-recipe` 0.3.1-iiab | `qwen3.5-4b` |
+| Nemotron Nano 12B v2 | `nemotron-nano` | `pylon-sglang-recipe` 0.3.1-iiab | `nemotron-nano-12b-v2` |
+| Nemotron 3.5 Lightning | `nemotron-lightning` | `pylon-sglang-recipe` 0.3.1-iiab | `nemotron-3.5-lightning` |
+| DeepSeek V4 Flash | `deepseek-v4` | `pylon-sglang-recipe` 0.3.1-iiab | `deepseek-v4-flash` |
+| Flash-Next, either profile | `qwen-flash` | `pylon-sglang-recipe` 0.3.1-iiab | `qwen3.8-flash-next` |
 | GLM | `glm` | `pylon-gguf-backend` 0.3.0-iiab | `GLM-5.3-UD-IQ2_M` |
 
 For the commands below, select the Kubernetes context, existing release and its chart. Use the chart version that installed it for stop and resume. For example:
@@ -747,9 +747,9 @@ The charts and shared images are published to `nvcr.io/0651155215864979/ncp-dev`
 Publish by creating a prerelease GitHub Release for each tag; a tag without a Release is not published:
 
 ```bash
-gh release create deploy/helm/llm-routing/recipes/charts/sglang/v0.3.0-iiab \
+gh release create deploy/helm/llm-routing/recipes/charts/sglang/v0.3.1-iiab \
   --repo NVIDIA/nvcf --target COMMIT_SHA --prerelease \
-  --title deploy/helm/llm-routing/recipes/charts/sglang/v0.3.0-iiab --notes ''
+  --title deploy/helm/llm-routing/recipes/charts/sglang/v0.3.1-iiab --notes ''
 ```
 
 A chart's tag version must equal its `Chart.yaml` version, because the catalog and the commands in these guides install that version. Recipe metadata is part of the model charts, so a recipe change needs a chart version bump and a new chart release. After publishing new images, update their tags in [values.registry.yaml](values.registry.yaml).
