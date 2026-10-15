@@ -596,4 +596,46 @@ assert_render_fails "llmRequestRouter.tls.upstreamCaPath must be in the director
   --set llmRequestRouter.tls.keyPath=/etc/stargate/tls/tls.key \
   --set llmRequestRouter.tls.upstreamCaPath=/etc/stargate/ca/ca.crt
 
+for service_type in ClusterIP LoadBalancer; do
+  for monitor_enabled in false true; do
+    metrics_manifest="$(helm template llm-request-router "$chart_dir" \
+      --namespace release-namespace \
+      --set llmRequestRouter.namespace=router-system \
+      --set llmRequestRouter.image.repository=nvcf/stargate \
+      --set llmRequestRouter.backendRouter.enabled=true \
+      --set llmRequestRouter.backendRouter.service.type="$service_type" \
+      --set llmRequestRouter.backendRouter.service.healthPort=19082 \
+      --set llmRequestRouter.metrics.enabled=true \
+      --set llmRequestRouter.metrics.serviceMonitor.enabled="$monitor_enabled")"
+    yq ea -o=json -I=0 '.' <<<"$metrics_manifest" | jq -se \
+      --arg service_type "$service_type" --argjson monitor_enabled "$monitor_enabled" '
+      [ .[] | select(.kind == "Service" and
+          .metadata.name == "llm-request-router-backend-router") ][0] as $router |
+      [ .[] | select(.kind == "Service" and
+          .metadata.name == "llm-request-router-backend-router-metrics") ] as $metrics |
+      [ .[] | select(.kind == "ServiceMonitor" and
+          .metadata.name == "llm-request-router-backend-router-metrics") ] as $monitors |
+      ($router.spec.type == $service_type) and
+      (if $service_type == "LoadBalancer" then
+        ($router.spec.ports | map(.name) | sort) == ["grpc", "quic"]
+      else ($router.spec.ports | map(.name) | index("health")) != null end) and
+      ($metrics | length) == (if $service_type == "LoadBalancer" and $monitor_enabled then 1 else 0 end) and
+      ($monitors | length) == (if $monitor_enabled then 1 else 0 end) and
+      (if $monitor_enabled then
+        $monitors[0] as $monitor |
+        [ .[] | select(.kind == "Service" and .metadata.namespace == "router-system") |
+          select((.metadata.labels | contains($monitor.spec.selector.matchLabels))) |
+          .spec.ports[] | select(.name == $monitor.spec.endpoints[0].port) ] as $ports |
+        ($monitor.metadata.namespace == "router-system") and
+        ($ports | length) == 1 and
+        ($ports[0] == {"name":"health", "port":19082, "targetPort":"health", "protocol":"TCP"}) and
+        all($metrics[]; .spec.type == "ClusterIP" and .spec.selector == $router.spec.selector)
+      else true end)
+    ' >/dev/null || {
+      echo "FAIL: backend metrics discovery failed for ${service_type}, monitor=${monitor_enabled}" >&2
+      exit 1
+    }
+  done
+done
+
 echo "PASS: LLM request-router backend routing renders correctly"

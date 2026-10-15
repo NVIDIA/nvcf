@@ -173,7 +173,10 @@ When `rbac.create=false`, grant `get`, `list`, and `watch` on
 Route HTTPS gRPC traffic on port `50071` and UDP traffic on port `50072` to the
 `llm-request-router-backend-router` Service. Keep its default `ClusterIP` type
 in self-managed stacks. `LoadBalancer` is for development stacks only; see
-`backendRouter.service` in `values.yaml` for its caveats. The NVCF
+`backendRouter.service` in `values.yaml` for its caveats. With metrics and the
+ServiceMonitor enabled, this mode creates a separate internal ClusterIP Service
+for the backend router's `health` port. The LoadBalancer exposes only worker
+registration and QUIC. The NVCF
 gateway-routes chart can
 terminate TLS on a dedicated HTTPS listener and create the matching
 `GRPCRoute`, `UDPRoute`, `ReferenceGrant`, gRPC `Certificate`, and stream
