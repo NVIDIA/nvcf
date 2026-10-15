@@ -79,7 +79,7 @@ func pipeInode(procBase string, pid, fd int) uint64 {
 // placeholder's own on: right after the unix listeners.
 func stdioInheritFDs(c pidNSCapture) []string {
 	var args []string
-	base := pidNSUnixListenerFD + len(c.UnixListeners)
+	base := PIDNSUnixListenerFD + len(c.UnixListeners)
 	if c.StdoutPipe != 0 {
 		args = append(args, "--inherit-fd", fmt.Sprintf("fd[%d]:pipe:[%d]", base, c.StdoutPipe))
 	}
@@ -199,12 +199,21 @@ func parseListeningUnixSockets(data string) []UnixListener {
 	return out
 }
 
-// pidNSUnixListenerFD is the first fd the restore helper hands CRIU a
-// listener on (fd 3 is the network namespace).
-const pidNSUnixListenerFD = 4
+// PIDNSNetFD is the fd the restore helper hands CRIU the pod's network
+// namespace on; the unix listeners follow from PIDNSUnixListenerFD, then the
+// placeholder's stdout and stderr. The helper is a Go program, and its
+// runtime keeps descriptors of its own (the netpoller's epoll and eventfd) on
+// the lowest free fds: a fixed low fd here would replace one under the
+// running runtime, which then aborts at its next poll. The helper opens a
+// handful of fds, so 100 and up are free.
+const PIDNSNetFD = 100
+
+// PIDNSUnixListenerFD is the first fd the restore helper hands CRIU a
+// listener on.
+const PIDNSUnixListenerFD = PIDNSNetFD + 1
 
 // PIDNSUnixListenersEnv passes the listeners to the restore helper:
-// "<type>:<path>" per line, in fd order from pidNSUnixListenerFD.
+// "<type>:<path>" per line, in fd order from PIDNSUnixListenerFD.
 const PIDNSUnixListenersEnv = "NVSNAP_PIDNS_UNIX_LISTENERS"
 
 func encodeUnixListeners(ls []UnixListener) string {
@@ -421,7 +430,7 @@ const pidNSExtNetKey = "extNetNs"
 // pidNSRestoreArgs is the criu restore argv for a checkpoint that carries
 // its pid namespace, run inside the placeholder's mount and pid namespaces
 // (behind the pidns-restore-exec helper, which hands it the network
-// namespace on fd 3).
+// namespace on PIDNSNetFD).
 func pidNSRestoreArgs(imgsInContainer string, mounts []string, listeners []UnixListener, gpushare, directIO bool, inetAddrMap string) []string {
 	args := []string{
 		"restore",
@@ -432,7 +441,7 @@ func pidNSRestoreArgs(imgsInContainer string, mounts []string, listeners []UnixL
 		"--network-lock", "nftables",
 		"--manage-cgroups=ignore",
 		"--restore-detached",
-		"--inherit-fd", "fd[3]:" + pidNSExtNetKey,
+		"--inherit-fd", fmt.Sprintf("fd[%d]:%s", PIDNSNetFD, pidNSExtNetKey),
 		// SysV IPC is the pod's; the hostname stays the source pod's, in a
 		// nested UTS namespace (the placeholder's /proc/sys is read-only).
 		"--join-ns", "ipc:/proc/1/ns/ipc",
@@ -450,7 +459,7 @@ func pidNSRestoreArgs(imgsInContainer string, mounts []string, listeners []UnixL
 		args = append(args, "--external", fmt.Sprintf("mnt[%s]:%s", mp, mp))
 	}
 	for i, l := range listeners {
-		args = append(args, "--inherit-fd", fmt.Sprintf("fd[%d]:socket:[%d]", pidNSUnixListenerFD+i, l.Inode))
+		args = append(args, "--inherit-fd", fmt.Sprintf("fd[%d]:socket:[%d]", PIDNSUnixListenerFD+i, l.Inode))
 	}
 	return args
 }
