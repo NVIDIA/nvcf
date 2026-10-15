@@ -95,6 +95,17 @@ impl DistributedLockManager {
     }
 }
 
+/// Outcome of an ownership-conditional lock release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockRelease {
+    /// This acquisition still held the lock and it was deleted.
+    Released,
+    /// The lock row was already gone, so its TTL expired before release.
+    Expired,
+    /// The lock expired and was acquired again, by another node or by this one.
+    Reacquired,
+}
+
 pub struct DistributedLockGuard {
     lock_name: String,
     node_id: String,
@@ -142,8 +153,9 @@ impl DistributedLockGuard {
 
 impl Drop for DistributedLockGuard {
     /// Releases the lock from a spawned task with an ownership-conditional delete.
-    /// A stale guard, whose lock expired or was re-acquired (even by this node), deletes
-    /// nothing and logs a warning. On error, retries once after 5s with the same condition.
+    /// A stale guard deletes nothing. Expiry is routine when work outlasts the lock, so it
+    /// logs at debug; re-acquisition (even by this node) means holders overlapped, so it
+    /// logs a warning. On error, retries once after 5s with the same condition.
     fn drop(&mut self) {
         if !self.released {
             let lock_name = self.lock_name.clone();
@@ -156,14 +168,15 @@ impl Drop for DistributedLockGuard {
                     .delete_lock_if_owner(&lock_name, &node_id, acquired_at)
                     .await
                 {
-                    Ok(true) => {
+                    Ok(LockRelease::Released) => {
                         tracing::info!("Released lock {} during drop", lock_name);
                     }
-                    // The lock already expired or was re-acquired after expiry, by another
-                    // node or by this one; there is nothing left for this guard to release.
-                    Ok(false) => {
+                    Ok(LockRelease::Expired) => {
+                        tracing::debug!("Lock {} expired before drop, skipping release", lock_name);
+                    }
+                    Ok(LockRelease::Reacquired) => {
                         tracing::warn!(
-                            "Lock {} no longer owned by node {} at drop, skipping release",
+                            "Lock {} was re-acquired after node {}'s hold expired, skipping release at drop",
                             lock_name,
                             node_id
                         );
@@ -181,7 +194,7 @@ impl Drop for DistributedLockGuard {
                                 .delete_lock_if_owner(&retry_lock_name, &retry_node_id, acquired_at)
                                 .await
                             {
-                                Ok(true) => {
+                                Ok(LockRelease::Released) => {
                                     tracing::info!(
                                         "Successfully released lock {} during retry",
                                         retry_lock_name
@@ -189,9 +202,15 @@ impl Drop for DistributedLockGuard {
                                 }
                                 // Includes the case where the first attempt actually applied
                                 // but its response was lost.
-                                Ok(false) => {
+                                Ok(LockRelease::Expired) => {
+                                    tracing::debug!(
+                                        "Lock {} already gone at retry, skipping release",
+                                        retry_lock_name
+                                    );
+                                }
+                                Ok(LockRelease::Reacquired) => {
                                     tracing::warn!(
-                                        "Lock {} no longer owned by node {} at retry, skipping release",
+                                        "Lock {} was re-acquired after node {}'s hold expired, skipping release at retry",
                                         retry_lock_name,
                                         retry_node_id
                                     );

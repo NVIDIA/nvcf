@@ -34,6 +34,7 @@ use scylla::client::{
 use scylla::policies::retry::DefaultRetryPolicy;
 use scylla::policies::speculative_execution::SimpleSpeculativeExecutionPolicy;
 use scylla::statement::{Consistency, SerialConsistency, Statement};
+use scylla::value::{CqlValue, Row};
 use std::num::NonZero;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -41,6 +42,7 @@ use tracing::{self, Instrument};
 use uuid::Uuid;
 
 use super::cassandra_settings::CassandraSettings;
+use super::distributed_lock::LockRelease;
 use super::statements::*;
 use crate::secrets::secrets_file_watcher::SecretFileWatcher;
 pub const CASSANDRA_TOKEN_RANGE: [i64; 2] = [i64::MIN, i64::MAX];
@@ -116,6 +118,31 @@ pub struct CassandraServiceManager {
 
 fn health_check_cache_ttl(config: &CassandraSettings) -> Duration {
     Duration::from_secs(config.health_check_cache_ttl_seconds)
+}
+
+/// Classifies the LWT response row of the ownership-conditional lock delete.
+/// A non-applied response carries the current node_id/acquired_at only while the row
+/// still exists. Cassandra omits those columns for a missing row; Scylla may return them
+/// as nulls. Deciding on values rather than column presence handles both.
+fn lock_release_from_lwt_row(column_names: &[&str], row: &Row) -> Result<LockRelease> {
+    let value_of = |name: &str| {
+        column_names
+            .iter()
+            .position(|column| *column == name)
+            .and_then(|index| row.columns.get(index))
+            .and_then(Option::as_ref)
+    };
+    let applied = match value_of("[applied]") {
+        Some(CqlValue::Boolean(applied)) => *applied,
+        other => anyhow::bail!("LWT response has no boolean [applied] column: {:?}", other),
+    };
+    if applied {
+        Ok(LockRelease::Released)
+    } else if value_of("node_id").is_some() || value_of("acquired_at").is_some() {
+        Ok(LockRelease::Reacquired)
+    } else {
+        Ok(LockRelease::Expired)
+    }
 }
 
 impl CassandraServiceManager {
@@ -612,14 +639,14 @@ impl CassandraServiceManager {
     }
 
     /// LWT delete: only applies if the lock still holds this acquisition's node_id and acquired_at.
-    /// Returns Ok(true) if the lock was deleted, Ok(false) if it expired or was re-acquired.
+    /// Returns whether the lock was released, had already expired, or was re-acquired.
     #[tracing::instrument(skip(self))]
     pub async fn delete_lock_if_owner(
         &self,
         lock_name: &str,
         node_id: &str,
         acquired_at: DateTime<Utc>,
-    ) -> Result<bool> {
+    ) -> Result<LockRelease> {
         let session = self.get_session().await?;
         with_cassandra_timing("delete_lock_if_owner", || async {
             let mut prepared = session
@@ -632,15 +659,16 @@ impl CassandraServiceManager {
                 .execute_unpaged(&prepared, (lock_name, node_id, acquired_at))
                 .await?;
             let rows = result.into_rows_result()?;
-            // On a CAS miss, Scylla returns [applied]=false + the IF-clause columns (node_id).
-            // Check for that shape first; if node_id is present we know applied=false.
-            if rows.column_specs().get_by_name("node_id").is_some() {
-                return Ok(false);
-            }
-            if let Some(row) = rows.rows::<(bool,)>()?.next() {
-                return Ok(row?.0);
-            }
-            Ok(false)
+            let column_names: Vec<&str> = rows
+                .column_specs()
+                .as_slice()
+                .iter()
+                .map(|spec| spec.name())
+                .collect();
+            let Some(row) = rows.rows::<Row>()?.next() else {
+                anyhow::bail!("LWT delete of lock {} returned no rows", lock_name);
+            };
+            lock_release_from_lwt_row(&column_names, &row?)
         })
         .await
     }
@@ -826,6 +854,7 @@ mod tests {
     use crate::cassandra::distributed_lock::DistributedLockManager;
     use crate::secrets::secrets_file_watcher::SecretFileWatcher;
     use chrono::Utc;
+    use scylla::value::CqlTimestamp;
     use std::path::Path;
     use std::sync::{Once, OnceLock};
     use tempfile::TempDir;
@@ -842,6 +871,82 @@ mod tests {
         };
 
         assert_eq!(health_check_cache_ttl(&settings), Duration::from_secs(17));
+    }
+
+    const LWT_DELETE_COLUMNS: [&str; 3] = ["[applied]", "node_id", "acquired_at"];
+
+    fn lwt_row(columns: Vec<Option<CqlValue>>) -> Row {
+        Row { columns }
+    }
+
+    fn owner_values() -> Vec<Option<CqlValue>> {
+        vec![
+            Some(CqlValue::Text("node-b".to_string())),
+            Some(CqlValue::Timestamp(CqlTimestamp(1_700_000_000_000))),
+        ]
+    }
+
+    #[test]
+    fn lock_release_applied_is_released() {
+        let row = lwt_row(vec![Some(CqlValue::Boolean(true))]);
+        assert_eq!(
+            lock_release_from_lwt_row(&["[applied]"], &row).unwrap(),
+            LockRelease::Released
+        );
+
+        // Some servers also return the condition columns on a successful apply.
+        let mut columns = vec![Some(CqlValue::Boolean(true))];
+        columns.extend(owner_values());
+        assert_eq!(
+            lock_release_from_lwt_row(&LWT_DELETE_COLUMNS, &lwt_row(columns)).unwrap(),
+            LockRelease::Released
+        );
+    }
+
+    #[test]
+    fn lock_release_not_applied_without_row_is_expired() {
+        let row = lwt_row(vec![Some(CqlValue::Boolean(false))]);
+        assert_eq!(
+            lock_release_from_lwt_row(&["[applied]"], &row).unwrap(),
+            LockRelease::Expired
+        );
+
+        // Some servers return the condition columns as nulls when the row does not exist.
+        let row = lwt_row(vec![Some(CqlValue::Boolean(false)), None, None]);
+        assert_eq!(
+            lock_release_from_lwt_row(&LWT_DELETE_COLUMNS, &row).unwrap(),
+            LockRelease::Expired
+        );
+    }
+
+    #[test]
+    fn lock_release_not_applied_with_live_row_is_reacquired() {
+        let mut columns = vec![Some(CqlValue::Boolean(false))];
+        columns.extend(owner_values());
+        assert_eq!(
+            lock_release_from_lwt_row(&LWT_DELETE_COLUMNS, &lwt_row(columns)).unwrap(),
+            LockRelease::Reacquired
+        );
+
+        // Lock columns carry independent TTLs, so one can be null while the row is live.
+        let row = lwt_row(vec![
+            Some(CqlValue::Boolean(false)),
+            None,
+            Some(CqlValue::Timestamp(CqlTimestamp(1_700_000_000_000))),
+        ]);
+        assert_eq!(
+            lock_release_from_lwt_row(&LWT_DELETE_COLUMNS, &row).unwrap(),
+            LockRelease::Reacquired
+        );
+    }
+
+    #[test]
+    fn lock_release_without_applied_column_is_an_error() {
+        let row = lwt_row(vec![Some(CqlValue::Text("node-b".to_string()))]);
+        assert!(lock_release_from_lwt_row(&["node_id"], &row).is_err());
+
+        let row = lwt_row(vec![None]);
+        assert!(lock_release_from_lwt_row(&["[applied]"], &row).is_err());
     }
 
     fn init_temp_dir() {
@@ -958,18 +1063,18 @@ mod tests {
         let delete_result = manager
             .delete_lock_if_owner(&lock.lock_name, &lock.node_id, lock.acquired_at)
             .await;
-        assert!(delete_result.is_ok());
+        assert_eq!(delete_result.unwrap(), LockRelease::Released);
 
         // Test get operation again- it should be None
         let get_result = manager.get_lock(&lock.lock_name).await;
         assert!(get_result.is_ok());
         assert!(get_result.unwrap().is_none());
 
-        // Test delete operation again- it should fail
+        // Test delete operation again- the row is gone, so it reports expired
         let delete_result = manager
             .delete_lock_if_owner(&lock.lock_name, &lock.node_id, lock.acquired_at)
             .await;
-        assert!(delete_result.is_ok());
+        assert_eq!(delete_result.unwrap(), LockRelease::Expired);
     }
 
     #[tokio::test]
@@ -1049,23 +1154,29 @@ mod tests {
         let lock = create_unique_test_lock();
         assert!(manager.put_lock(&lock, 30).await.unwrap());
 
-        assert!(manager
-            .delete_lock_if_owner(&lock.lock_name, &lock.node_id, lock.acquired_at)
-            .await
-            .unwrap());
+        assert_eq!(
+            manager
+                .delete_lock_if_owner(&lock.lock_name, &lock.node_id, lock.acquired_at)
+                .await
+                .unwrap(),
+            LockRelease::Released
+        );
         assert!(manager.get_lock(&lock.lock_name).await.unwrap().is_none());
     }
 
     #[tokio::test]
     #[ignore = "Requires running Cassandra"]
-    async fn test_delete_lock_if_owner_on_missing_lock_is_not_applied() {
+    async fn test_delete_lock_if_owner_on_missing_lock_reports_expired() {
         let manager = create_test_manager().await;
         let lock = create_unique_test_lock();
 
-        assert!(!manager
-            .delete_lock_if_owner(&lock.lock_name, &lock.node_id, lock.acquired_at)
-            .await
-            .unwrap());
+        assert_eq!(
+            manager
+                .delete_lock_if_owner(&lock.lock_name, &lock.node_id, lock.acquired_at)
+                .await
+                .unwrap(),
+            LockRelease::Expired
+        );
         assert!(manager.get_lock(&lock.lock_name).await.unwrap().is_none());
     }
 
@@ -1084,10 +1195,13 @@ mod tests {
         };
         assert!(manager.put_lock(&node_b, 30).await.unwrap());
 
-        assert!(!manager
-            .delete_lock_if_owner(&node_a.lock_name, &node_a.node_id, node_a.acquired_at)
-            .await
-            .unwrap());
+        assert_eq!(
+            manager
+                .delete_lock_if_owner(&node_a.lock_name, &node_a.node_id, node_a.acquired_at)
+                .await
+                .unwrap(),
+            LockRelease::Reacquired
+        );
         let current = manager.get_lock(&node_a.lock_name).await.unwrap().unwrap();
         assert_eq!(current.node_id, node_b.node_id);
 

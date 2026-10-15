@@ -26,7 +26,8 @@ pub(crate) fn get_select_locks_stmt(keyspace: &str) -> String {
 /// LWT conditional delete: only removes the lock if node_id and acquired_at still match
 /// this acquisition, so a stale holder cannot delete a lock acquired after expiry,
 /// whether by another node or by the same node again.
-/// Returns `[applied]=true` if the row was deleted, false if it expired or was re-acquired.
+/// Returns `[applied]=true` if the row was deleted. When not applied, a live row's
+/// node_id/acquired_at come back too (re-acquired); a missing row has none (expired).
 /// Bind order: (lock_name, node_id, acquired_at)
 pub(crate) fn get_stmt_delete_lock_if_owner(keyspace: &str) -> String {
     format!(
