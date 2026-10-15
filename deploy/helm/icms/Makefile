@@ -106,3 +106,7 @@ push-oci:
 
 # License headers are enforced repo-wide by tools/ci/check-license, so this
 # chart does not carry its own apply/check targets.
+
+.PHONY: test
+test:
+	bash ./tests/nonroot-icms-migrations.sh
