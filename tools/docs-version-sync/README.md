@@ -613,3 +613,53 @@ Run `go test -C tools/docs-version-sync -run TestUmbrellaDocsRevisionE2E -v`.
 The test uses the real binary and temporary Git remotes for a mixed registry,
 same-version correction, unapproved branch advancement, rollback, product-pin
 rejection, stale generated content, and unchanged legacy immutability checks.
+
+### Canonical publishing with maintained docs
+
+`tools/ci/publish-docs --check` validates the production inputs without
+publishing. `--publish` validates and generates the canonical site. A
+legacy-only registry follows the existing `check-docs` and Fern generation
+path. An opt-in umbrella entry enables isolated staging for all registered
+versions, including legacy editions. Development, site settings, selectors,
+redirects, and hidden historical routes remain in the canonical configuration.
+
+Mixed builds verify the public stable product release and its assets, fetch
+approved docs commits, and replace remote version refs with local navigation
+paths in a temporary build tree. Validation and generation use that same tree.
+A source branch advancing between those steps cannot change the output.
+The canonical publisher requires clean `docs/` and `fern/` trees, including
+untracked and ignored files, so the receipt identifies the published inputs.
+Commit reviewed inputs first. Use `preview-docs` for working-tree edits.
+Missing artifacts, moved product tags, unavailable approved commits, and
+invalid navigation stop the build before generation.
+
+`umbrella docs-stage --repo /path/to/nvcf --out /tmp/nvcf-docs-build` exposes
+this staging operation for investigation. `--local-refs` is restricted to
+fixtures and local rehearsals; it skips public asset verification and must not
+be used by the production publisher. `docs-build-receipt.json` records the
+canonical SHA, registry/configuration digests, approved source commits,
+product identities, and Fern pin. The publishing workflow retains that receipt
+and reports Fern's output URL in its job summary.
+
+Maintained docs branch pushes validate and can be used for isolated hosted
+previews. They never publish production. Production still runs only from main;
+its existing concurrency group serializes publication. Roll back with a
+reviewed canonical registry change selecting an earlier approved docs commit,
+or revert the canonical activation PR. Do not mutate product releases or old
+immutable docs branches.
+
+Run these integration checks before enabling an umbrella selector:
+
+```bash
+go test -C tools/docs-version-sync -run 'TestUmbrellaCanonicalDocs|TestCanonicalDocsStage' -v
+bash tools/scripts/test/test-publish-docs
+bash tools/scripts/test/test-preview-docs
+tools/ci/publish-docs --check
+DOCS_PREVIEW_CONFIG=fern/docs.yml tools/ci/preview-docs --check
+```
+
+The fixture tests cover approved staging, a branch advance between validation
+and generation, unchanged legacy configuration, rollback, and fail-before-
+publish behavior. Hosted Development-first and canonical previews still need
+navigation, search, anchor, download, and redirect readback before the first
+production activation. Local checks do not substitute for hosted validation.

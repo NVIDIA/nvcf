@@ -34,6 +34,7 @@ on:
       - 'tools/ci/check-doc-version-sync'
       - 'tools/ci/check-doc-editions'
       - 'tools/ci/preview-docs'
+      - 'tools/ci/publish-docs'
       - 'tools/docs-version-sync/**'
       - 'tools/scripts/test/test-run-fern'
       - 'tools/scripts/test/test-preview-docs'
@@ -69,16 +70,21 @@ jobs:
         with:
           go-version-file: tools/go-toolchain/go.mod
 
-      - name: Validate the checkout being published
-        run: ./tools/ci/check-docs
-
       - name: Publish docs
         env:
           FERN_TOKEN: ${{ secrets.DOCS_FERN_TOKEN }}
+          DOCS_BUILD_RECEIPT: ${{ runner.temp }}/docs-build-receipt.json
         run: |
           set -o pipefail
-          ./tools/ci/run-fern generate --docs --strict-broken-links 2>&1 | tee /tmp/fern-output.log
+          ./tools/ci/publish-docs --publish 2>&1 | tee /tmp/fern-output.log
           URL=$(grep -oP 'Published docs to \K.*(?= \()' /tmp/fern-output.log || true)
           if [ -n "$URL" ]; then
             echo "### Published: [$URL]($URL)" >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Retain approved docs build receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: docs-build-receipt
+          path: ${{ runner.temp }}/docs-build-receipt.json
+          if-no-files-found: ignore
