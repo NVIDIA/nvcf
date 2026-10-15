@@ -21,7 +21,7 @@ The cluster agent and operator emit Prometheus-style metrics. The following metr
 | nvca_cluster_group | The NVCA cluster group           |
 | nvca_version       | The NVCA version                 |
 
-Cluster maintainers can scrape the available metrics. See a full example of how to do this with an OpenTelemetry Collector in the cluster [here](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main/examples/cluster_monitoring_sample).
+Cluster maintainers can scrape the available metrics. See a full example of how to do this with an OpenTelemetry Collector in the cluster [cluster monitoring example](https://github.com/NVIDIA/nvcf/tree/main/examples/cluster-monitoring-sample).
 
 Use the following examples of a PodMonitor for NVCA Operator and ServiceMonitor for NVCA for reference:
 
@@ -115,7 +115,7 @@ The NVIDIA Cluster Agent provides OpenTelemetry integration for exporting traces
 nvcf_cluster_name="$(kubectl get nvcfbackends -n nvca-operator -o name | cut -d'/' -f2)"
 ```
 
-3. Apply the tracing configuration:
+1. Apply the tracing configuration:
 
 ```bash
 kubectl patch nvcfbackends.nvcf.nvidia.io -n nvca-operator "$nvcf_cluster_name"  --type=merge --patch="{\"spec\":{\"overrides\":{\"featureGate\":{\"otelConfig\":{\"exporter\":\"lightstep\",\"serviceName\":\"nvcf-nvca\",\"accessToken\":\"${LS_ACCESS_TOKEN}\"}}}}}"

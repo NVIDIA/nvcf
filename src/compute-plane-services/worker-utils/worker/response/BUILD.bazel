@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "response",
+    srcs = ["error.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/response",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//proto/nvcf",
+        "@org_golang_google_protobuf//encoding/protojson",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":response",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "response_test",
+    srcs = ["error_extra_test.go"],
+    embed = [":response"],
+    deps = [
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//proto/nvcf",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_protobuf//encoding/protojson",
+    ],
+)

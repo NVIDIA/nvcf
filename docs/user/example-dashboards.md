@@ -32,6 +32,13 @@ The example stack includes:
   (Prometheus, Grafana, Loki, Tempo, and OpenTelemetry Collector)
 - **nvcf-example-dashboards**: Pre-configured Grafana dashboards showing key NVCF control-plane metrics
 
+<Note>
+The observability reference stack supports a single-cluster deployment or the
+control-plane cluster in a split-topology deployment. A separate observability
+reference stack for an individual GPU cluster is not currently supported.
+
+</Note>
+
 ## Prerequisites
 
 Before deploying the example dashboards, you need:
@@ -42,6 +49,9 @@ Before deploying the example dashboards, you need:
 4. `kubectl` configured to access your cluster
 
 <Note>
+To populate Prometheus-backed dashboards, deploy the control-plane with
+`global.observability.metrics.enabled` set to `true`.
+
 To view traces in the example stack, the control-plane must be deployed
 with tracing enabled and configured to send OTLP traces to the
 observability collector. See [Tracing Configuration](./observability.md)
@@ -51,21 +61,23 @@ for the required Helm overrides under `global.observability.tracing` (e.g.,
 
 </Note>
 
-### Enabling tracing after initial deployment
+### Enabling metrics and tracing after initial deployment
 
 If observability was not configured during the initial self-hosted NVCF cluster
-deployment (i.e., `global.observability.tracing.enabled` was set to `false`),
-you can enable tracing later so that the control-plane sends OTLP traces to the
-deployed observability collector. Use the following steps.
+deployment, you can enable metrics later so that control-plane services expose
+Prometheus metrics. Enable tracing if you also want the control-plane to send
+OTLP traces to the deployed observability collector. Use the following steps.
 
-1. **Edit the environment file** (`environments/<environment-name>.yaml`) to
-   enable tracing and set `collectorEndpoint` to the deployed collector's
-   service address. For the example observability reference stack, the collector
-   runs in the `observability` namespace. Example:
+1. Edit the environment file (`environments/<environment-name>.yaml`) to
+   enable metrics and tracing. Set `collectorEndpoint` to the deployed
+   collector's service address. For the example observability reference stack,
+   the collector runs in the `observability` namespace. Example:
 
    ```yaml
    global:
      observability:
+       metrics:
+         enabled: true
        tracing:
          enabled: true
          collectorEndpoint: "otel-collector-gateway-collector.observability.svc.cluster.local"
@@ -73,8 +85,7 @@ deployed observability collector. Use the following steps.
          collectorProtocol: http
    ```
 
-2. **Apply the configuration changes** from your control-plane deployment
-   directory:
+2. Apply the configuration changes from your control-plane deployment directory:
 
    ```bash
    HELMFILE_ENV=<environment-name> helmfile sync
@@ -90,16 +101,37 @@ Once your self-managed NVCF control-plane is up and running, install the observa
 reference stack:
 
 ```bash
+# Add and update the public NVCF Helm repository
+helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
+helm repo update
+
 # Check NGC for the latest version of this Helm chart:
-# https://registry.ngc.nvidia.com/orgs/0833294136851237/teams/nvcf-ncp-staging/containers/nvcf-observability-reference-stack/tags
+# https://catalog.ngc.nvidia.com/orgs/nvidia/teams/nvcf/helm-charts/nvcf-observability-reference-stack
 
 helm upgrade \
   --install observability \
-  oci://nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-observability-reference-stack \
-  --version 1.7.0 \
+  nvcf/nvcf-observability-reference-stack \
+  --version 1.10.0 \
   --namespace observability \
   --create-namespace
 ```
+
+For a split-topology deployment, run the command against the control-plane
+cluster and disable the NVCA ServiceMonitor. NVCA runs on the GPU cluster, so
+the control-plane observability stack does not have an NVCA scrape target.
+
+```bash
+helm upgrade \
+  --install observability \
+  nvcf/nvcf-observability-reference-stack \
+  --version 1.10.0 \
+  --namespace observability \
+  --create-namespace \
+  --set nvcfServiceMonitors.nvcaEnabled=false
+```
+
+Do not install this reference stack on the GPU cluster. GPU cluster-specific
+observability stack support is not currently available.
 
 This will deploy:
 
@@ -142,10 +174,13 @@ These services are needed for the control-plane to send OTLP traces to Tempo.
 
 Run the following upgrade (use the same chart version and namespace as in Step 1):
 
+For split-topology deployments, `--reuse-values` preserves
+`nvcfServiceMonitors.nvcaEnabled=false` from the initial installation.
+
 ```bash
 helm upgrade observability \
-  oci://nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-observability-reference-stack \
-  --version 1.7.0 \
+  nvcf/nvcf-observability-reference-stack \
+  --version 1.10.0 \
   --namespace observability \
   --reuse-values \
   --set fluentBitClusterConfig.enabled=true \
@@ -171,11 +206,11 @@ enabled, install the example dashboards:
 
 ```bash
 # Check NGC for the latest version of this Helm chart:
-# https://registry.ngc.nvidia.com/orgs/0833294136851237/teams/nvcf-ncp-staging/containers/nvcf-example-dashboards/tags
+# https://catalog.ngc.nvidia.com/orgs/nvidia/teams/nvcf/helm-charts/nvcf-example-dashboards
 
 helm upgrade \
   --install nvcf-example-dashboards \
-  oci://nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-example-dashboards \
+  nvcf/nvcf-example-dashboards \
   --version 1.6.0 \
   --namespace observability \
   --create-namespace
@@ -317,5 +352,5 @@ with your own observability infrastructure.
 ## Related Documentation
 
 - [self-hosted-observability](./observability.md): Production observability configuration
-- [nvcf-observability-reference-stack on NGC](https://catalog.ngc.nvidia.com/orgs/0833294136851237/teams/nvcf-ncp-staging/helm-charts/nvcf-observability-reference-stack)
-- [nvcf-example-dashboards on NGC](https://catalog.ngc.nvidia.com/orgs/0833294136851237/teams/nvcf-ncp-staging/helm-charts/nvcf-example-dashboards)
+- [nvcf-observability-reference-stack on NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/nvcf/helm-charts/nvcf-observability-reference-stack)
+- [nvcf-example-dashboards on NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/nvcf/helm-charts/nvcf-example-dashboards)

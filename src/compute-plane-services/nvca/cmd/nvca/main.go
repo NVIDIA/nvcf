@@ -19,13 +19,9 @@ package main
 
 import (
 	"context"
-	"os"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
-	cli "github.com/urfave/cli/v2"
 
-	internalutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/internal"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca"
 	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
 )
@@ -34,23 +30,8 @@ func main() {
 	ctx := core.NewDefaultContext(context.Background())
 	log := core.GetLogger(ctx)
 
-	var err error
-	if internalutil.ArgsContainConfigFlag(os.Args[1:]) {
-		cmd := nvca.NewCobraCommand()
-		err = cmd.ExecuteContext(ctx)
-	} else {
-		cmd := nvca.NewCommand()
-		app := &cli.App{
-			Name:    cmd.Name,
-			Usage:   cmd.Usage,
-			Version: version.ReleaseString(),
-			Flags:   cmd.Flags,
-			Action:  cmd.Action,
-		}
-		err = app.RunContext(ctx, os.Args)
-	}
-
-	if err != nil {
+	cmd := nvca.NewCommand()
+	if err := cmd.ExecuteContext(ctx); err != nil {
 		nvcaerrors.ExitReason(ctx, err)
 		log.Fatal(err)
 	}

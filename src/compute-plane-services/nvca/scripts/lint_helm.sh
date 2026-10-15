@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+set -euo pipefail
+
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 
 install_kubeconform() {
@@ -43,9 +45,237 @@ run_lint() {
   echo -e "Test passed"
 }
 
-set -euo pipefail
+assert_eq() {
+  local want=${1}
+  local got=${2}
+  local message=${3}
 
+  if [[ "${got}" != "${want}" ]]; then
+    printf 'FAIL %s: got %q, want %q\n' "${message}" "${got}" "${want}" >&2
+    return 1
+  fi
+  printf 'ok %s\n' "${message}"
+}
+
+assert_pre_delete_cleanup_rbac() {
+  local rendered
+  rendered="$(mktemp)"
+  trap 'rm -f "${rendered}"' RETURN
+
+  local release_name="test-release"
+  local cleanup_name="${release_name}-nvca-operator-pre-delete-cleanup"
+
+  helm template "${release_name}" "${repo_root}/deployments/nvca-operator" \
+    --set "ngcConfig.serviceKey=fakekey" >"${rendered}"
+
+  assert_eq "${cleanup_name}" \
+    "$(yq 'select(.kind == "Job" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .spec.template.spec.serviceAccountName' "${rendered}")" \
+    "pre-delete cleanup Job uses hook-scoped ServiceAccount"
+  assert_eq "pre-delete" \
+    "$(yq 'select(.kind == "ServiceAccount" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .metadata.annotations."helm.sh/hook"' "${rendered}")" \
+    "pre-delete cleanup ServiceAccount is a pre-delete hook"
+  assert_eq "-20" \
+    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .metadata.annotations."helm.sh/hook-weight"' "${rendered}")" \
+    "pre-delete cleanup RBAC runs before cleanup Job"
+  assert_eq "${cleanup_name}" \
+    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .subjects[0].name' "${rendered}")" \
+    "pre-delete cleanup ClusterRoleBinding binds hook ServiceAccount"
+  assert_eq "${cleanup_name}" \
+    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .roleRef.name' "${rendered}")" \
+    "pre-delete cleanup ClusterRoleBinding uses hook ClusterRole"
+  assert_eq "before-hook-creation,hook-succeeded" \
+    "$(yq 'select(.kind == "ClusterRoleBinding" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .metadata.annotations."helm.sh/hook-delete-policy"' "${rendered}")" \
+    "pre-delete cleanup ClusterRoleBinding is removed by Helm after job succeeds"
+  assert_eq "before-hook-creation" \
+    "$(yq 'select(.kind == "ClusterRole" and .metadata.name == "test-release-nvca-operator-pre-delete-cleanup") | .metadata.annotations."helm.sh/hook-delete-policy"' "${rendered}")" \
+    "pre-delete cleanup hook RBAC is kept for the running Job"
+}
+
+assert_storage_capability_catalog() (
+  local service_chart="${repo_root}/deployments/nvca-operator"
+  local release_chart="${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator"
+  local catalog="files/nvcf-storage-capabilities-v1alpha1.yaml"
+  local schema="files/nvcf-storage-capabilities-v1alpha1.schema.json"
+  local template="templates/storage-capabilities-configmap.yaml"
+  local rendered missing_chart schema_python tmpdir invalid_catalog schema_check
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "${tmpdir}"' EXIT
+  missing_chart="${tmpdir}/missing-chart"
+  schema_python="${tmpdir}/venv/bin/python"
+  python3 -m venv --system-site-packages "${tmpdir}/venv"
+  "${schema_python}" -m pip install --disable-pip-version-check --quiet \
+    --requirement "${repo_root}/scripts/requirements-lint.txt"
+  schema_check='import json,sys,yaml,jsonschema; schema=json.load(open(sys.argv[1])); jsonschema.Draft202012Validator.check_schema(schema); jsonschema.Draft202012Validator(schema).validate(yaml.safe_load(open(sys.argv[2])))'
+
+  for relative in "${catalog}" "${schema}" "${template}"; do
+    diff -u "${service_chart}/${relative}" "${release_chart}/${relative}"
+  done
+
+  rendered="${tmpdir}/rendered.yaml"
+  helm template test-release "${service_chart}" --namespace nvca-system \
+    --set "ngcConfig.serviceKey=fakekey" \
+    --show-only "${template}" >"${rendered}"
+  assert_eq "nvcf-storage-capabilities" "$(yq -r ".metadata.name" "${rendered}")" \
+    "storage capability ConfigMap uses the stable name"
+  assert_eq "nvca-system" "$(yq -r ".metadata.namespace" "${rendered}")" \
+    "storage capability ConfigMap is owned by the chart release namespace"
+  assert_eq "$(<"${service_chart}/${catalog}")" \
+    "$(yq -r ".data.\"storage-provider-capabilities.yaml\"" "${rendered}")" \
+    "storage capability ConfigMap embeds the exact catalog payload"
+  "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${service_chart}/${catalog}"
+
+  invalid_catalog="${tmpdir}/invalid-catalog.yaml"
+  for mutation in \
+    'del((.drivers[] | select(.name == "csi.weka.io")).accessModes)' \
+    '(.drivers[] | select(.name == "csi.weka.io")).accessModes = null'; do
+    yq "${mutation}" "${service_chart}/${catalog}" >"${invalid_catalog}"
+    if "${schema_python}" -c "${schema_check}" \
+      "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+      echo "Expected schema to reject missing or null accessModes" >&2
+      return 1
+    fi
+  done
+  echo "PASS: schema rejects missing and null accessModes"
+
+  for mutation in \
+    'del((.drivers[] | select(.name == "csi.weka.io")).readerMountOptions)' \
+    '(.drivers[] | select(.name == "csi.weka.io")).readerMountOptions = null'; do
+    yq "${mutation}" "${service_chart}/${catalog}" >"${invalid_catalog}"
+    if "${schema_python}" -c "${schema_check}" \
+      "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+      echo "Expected schema to reject missing or null readerMountOptions" >&2
+      return 1
+    fi
+  done
+  echo "PASS: schema rejects missing and null readerMountOptions"
+
+  yq '(.drivers[] | select(.name == "nvmesh-csi.excelero.com")).readerMountOptions = ["ro", " norecovery", "nouuid"]' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject readerMountOptions with surrounding whitespace" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects readerMountOptions with surrounding whitespace"
+
+  yq '(.drivers[] | select(.name == "csi.weka.io")).transitions.regularModelCache = "roxReadOnly"' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject a declared transition" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects a declared transition, the flow is derived"
+
+  for options in \
+    '["ro", "rw", "norecovery", "nouuid"]' \
+    '["ro", "recovery", "norecovery", "nouuid"]' \
+    '["ro", "norecovery", "uuid", "nouuid"]'; do
+    yq "(.drivers[] | select(.name == \"nvmesh-csi.excelero.com\")).readerMountOptions = ${options}" \
+      "${service_chart}/${catalog}" >"${invalid_catalog}"
+    if "${schema_python}" -c "${schema_check}" \
+      "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+      echo "Expected schema to reject conflicting readerMountOptions" >&2
+      return 1
+    fi
+  done
+  echo "PASS: schema rejects conflicting readerMountOptions"
+
+  yq '((.drivers[] | select(.name == "csi.weka.io")).accessModes = ["ReadWriteOnce", "ReadOnlyMany"]) |
+      ((.drivers[] | select(.name == "csi.weka.io")).readerMountOptions = [])' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject a ReadOnlyMany reader shape without ro" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects a ReadOnlyMany reader shape without a read-only mount"
+
+  yq '(.drivers[] | select(.name == "csi.weka.io")).accessModes = ["ReadOnlyMany"]' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject ReadOnlyMany with no writer mode" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects ReadOnlyMany with no writer mode"
+
+  yq '(.drivers[] | select(.name == "csi.weka.io")).accessModes = ["ReadWriteMany"]' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if ! "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}"; then
+    echo "Expected schema to accept a shared claim driver with no reader options" >&2
+    return 1
+  fi
+  echo "PASS: schema accepts a shared claim driver with no reader options"
+
+  yq 'del((.drivers[] | select(.name == "csi.weka.io")).name)' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject a driver with no name" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects a driver with no name"
+
+  yq '(.drivers[] | select(.name == "csi.weka.io")).unexpected = true' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject an unknown driver field" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects an unknown driver field"
+
+  helm template test-release "${release_chart}" --namespace nvca-system \
+    --show-only "${template}" >"${rendered}"
+  assert_eq "nvca-system" "$(yq -r ".metadata.namespace" "${rendered}")" \
+    "release-chart storage capability ConfigMap is owned by the release namespace"
+  assert_eq "$(<"${service_chart}/${catalog}")" \
+    "$(yq -r ".data.\"storage-provider-capabilities.yaml\"" "${rendered}")" \
+    "release chart embeds the exact catalog payload"
+
+  mkdir -p "${missing_chart}"
+  cp -a "${service_chart}/." "${missing_chart}/"
+  rm -f "${missing_chart}/${catalog}"
+  if helm template test-release "${missing_chart}" --set "ngcConfig.serviceKey=fakekey" >"${rendered}" 2>&1; then
+    echo "Expected rendering without the storage capability catalog to fail" >&2
+    return 1
+  fi
+  grep -q "required NVCF storage capability catalog" "${rendered}"
+  echo "PASS: storage capability catalog schema, render, payload, and chart parity"
+)
+
+assert_storage_capability_catalog
+
+# The Bazel-built NVCA operator image is distroless, so the rendered workload
+# commands must execute the packaged binaries directly. A /tini wrapper would
+# fail at container startup because that binary is not present in the image.
+assert_distroless_operator_commands() {
+  local chart_dir=${1}
+  local chart_label=${2}
+  local rendered
+  rendered="$(mktemp)"
+  trap 'rm -f "${rendered}"' RETURN
+
+  helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" >"${rendered}"
+
+  assert_eq "/usr/bin/nvca-operator" \
+    "$(yq 'select(.kind == "Deployment") | .spec.template.spec.containers[0].args[0]' "${rendered}")" \
+    "${chart_label} operator starts the packaged binary directly"
+  assert_eq "/usr/bin/nvca-mirror" \
+    "$(yq 'select(.kind == "Deployment") | .spec.template.spec.containers[1].args[0]' "${rendered}")" \
+    "${chart_label} mirror starts the packaged binary directly"
+  assert_eq "/usr/bin/nvca-operator-cleanup" \
+    "$(yq 'select(.kind == "Job") | .spec.template.spec.containers[0].args[0]' "${rendered}")" \
+    "${chart_label} cleanup Job starts the packaged binary directly"
+}
+
+assert_distroless_operator_commands "${repo_root}/deployments/nvca-operator" "service chart"
+assert_distroless_operator_commands "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "release chart"
 install_kubeconform
+assert_pre_delete_cleanup_rbac
 run_lint nvca-operator --set "ngcConfig.serviceKey=fakekey"
 run_lint nvca-operator --set "generateImagePullSecret=false" --set "imagePullSecretName=foo-bar-image-pull"
 
@@ -86,6 +316,154 @@ run_lint nvca-operator \
   --set-string "selfManaged.revalServiceURL=http://reval.nvcf-control-plane.test:18080" \
   --set-string "selfManaged.natsURL=nats://nats.nvcf-control-plane.test:14222"
 
+# Regression test: `helm upgrade --reuse-values` from a pre-3.0.0-rc.12 chart leaves
+# agent.serviceOAuth unset (the new chart defaults are not merged). The cluster-dto
+# ConfigMaps must render nil-safely instead of failing at template render with
+# "nil pointer evaluating interface {}.helmReVal".
+echo -e "\nTesting nil-safe agent.serviceOAuth (reuse-values upgrade simulation)..."
+reuse_values_file="${repo_root}/test/test-reuse-values-no-service-oauth.yaml"
+
+assert_service_oauth_nil_safe() {
+  local label="${1}"
+  shift
+  local render_output
+  render_output="$(mktemp)"
+  if ! helm template test-release "${repo_root}/deployments/nvca-operator" "$@" \
+    --values "${reuse_values_file}" > "${render_output}" 2>&1; then
+    echo "Expected ${label} cluster-dto to render without agent.serviceOAuth defaults"
+    cat "${render_output}"
+    rm -f "${render_output}"
+    exit 1
+  fi
+  if ! grep -q 'helmReValStageOAuthTokenURL: ""' "${render_output}"; then
+    echo "Expected ${label} cluster-dto to emit empty nil-safe serviceOAuth values"
+    cat "${render_output}"
+    rm -f "${render_output}"
+    exit 1
+  fi
+  rm -f "${render_output}"
+  echo "ok ${label} cluster-dto renders nil-safely without agent.serviceOAuth defaults"
+}
+
+assert_service_oauth_nil_safe "helm-managed" \
+  --set "ngcConfig.serviceKey=fakekey" \
+  --set "ngcConfig.clusterSource=helm-managed" \
+  --set-string "clusterName=ncp-helm-managed-1" \
+  --show-only templates/helm-managed-nvcfbackend-cm.yaml
+
+# Helm-managed Vault authentication must carry an explicit, usable server URL
+# into the cluster DTO. This keeps environment selection outside the OSS chart.
+assert_helm_managed_vault_address() {
+  local chart_dir=${1}
+  local chart_label=${2}
+  local rendered
+  local invalid_address
+  rendered="$(mktemp)"
+  trap 'rm -f "${rendered}"' RETURN
+
+  helm template test-release "${chart_dir}" \
+    --set "ngcConfig.serviceKey=fakekey" \
+    --set "ngcConfig.clusterSource=helm-managed" \
+    --set-string "helmManaged.oAuthClientID=oauth-client-1" \
+    --set-string "vaultConfig.address=https://vault.example.test:443" \
+    --show-only templates/helm-managed-nvcfbackend-cm.yaml >"${rendered}"
+
+  assert_eq "https://vault.example.test:443" \
+    "$(yq '.data."cluster-dto.yaml" | from_yaml | .vaultConfig.address' "${rendered}")" \
+    "${chart_label} helm-managed cluster DTO includes the configured Vault address"
+
+  for invalid_address in \
+    "" \
+    "https://:443" \
+    " https://vault.example.test:443 " \
+    "https://user@vault.example.test:443" \
+    "https://vault.example.test:443?namespace=test" \
+    "https://vault.example.test:443#test"; do
+    if helm template test-release "${chart_dir}" \
+      --set "ngcConfig.serviceKey=fakekey" \
+      --set "ngcConfig.clusterSource=helm-managed" \
+      --set-string "helmManaged.oAuthClientID=oauth-client-1" \
+      --set-string "vaultConfig.address=${invalid_address}" \
+      --show-only templates/helm-managed-nvcfbackend-cm.yaml >"${rendered}" 2>&1; then
+      printf 'Expected %s helm-managed render with invalid Vault address %q to fail\n' "${chart_label}" "${invalid_address}"
+      return 1
+    fi
+    grep -q "vaultConfig.address" "${rendered}"
+  done
+}
+
+assert_helm_managed_vault_address "${repo_root}/deployments/nvca-operator" "service chart"
+assert_helm_managed_vault_address "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "release chart"
+
+assert_service_oauth_nil_safe "self-managed" \
+  --set "generateImagePullSecret=false" \
+  --set "ngcConfig.clusterSource=self-managed" \
+  --set-string "clusterID=id" \
+  --set-string "clusterGroupID=group" \
+  --set-string "clusterName=ncp-local-compute-1" \
+  --set-string "selfManaged.nvcaVersion=3.0.0-test" \
+  --set-string "selfManaged.icmsServiceURL=http://sis.nvcf-control-plane.test:18080" \
+  --set-string "selfManaged.revalServiceURL=http://reval.nvcf-control-plane.test:18080" \
+  --set-string "selfManaged.natsURL=nats://nats.nvcf-control-plane.test:14222" \
+  --show-only templates/self-managed-nvcfbackend-cm.yaml
+
+# Secret-backed workload transport trust is operator-owned configuration, not a
+# raw agentConfig.mergeConfig overlay. Confirm its ConfigMap is rendered with
+# defaults, configured values, and values inherited by reuse-values upgrades.
+echo -e "\nTesting workload transport trust ConfigMap renders..."
+assert_transport_trust_config() {
+  local label="${1}"
+  local expected_name="${2}"
+  local expected_fingerprint="${3}"
+  local expected_mount_path="${4}"
+  shift 4
+  local render_output
+  render_output="$(mktemp)"
+
+  if ! helm template test-release "${repo_root}/deployments/nvca-operator" "$@" \
+    --show-only templates/operator-config-cm.yaml > "${render_output}" 2>&1; then
+    echo "Expected ${label} workload transport trust ConfigMap to render"
+    cat "${render_output}"
+    rm -f "${render_output}"
+    exit 1
+  fi
+  if ! grep -Fq "name: \"${expected_name}\"" "${render_output}" ||
+    ! grep -Fq "fingerprint: \"${expected_fingerprint}\"" "${render_output}"; then
+    echo "Expected ${label} workload transport trust configuration"
+    cat "${render_output}"
+    rm -f "${render_output}"
+    exit 1
+  fi
+  if [[ -z "${expected_mount_path}" ]]; then
+    if grep -Fq "installedBundleMountPath:" "${render_output}"; then
+      echo "Expected ${label} workload transport trust configuration to omit installedBundleMountPath"
+      cat "${render_output}"
+      rm -f "${render_output}"
+      exit 1
+    fi
+  elif ! grep -Fq "installedBundleMountPath: \"${expected_mount_path}\"" "${render_output}"; then
+    echo "Expected ${label} workload transport trust configuration to set installedBundleMountPath"
+    cat "${render_output}"
+    rm -f "${render_output}"
+    exit 1
+  fi
+  rm -f "${render_output}"
+  echo "ok ${label} workload transport trust ConfigMap renders"
+}
+
+assert_transport_trust_config "default" "" "" "" --set "ngcConfig.serviceKey=fakekey"
+assert_transport_trust_config "configured" "nvcf-trust" "sha256:example" "/nvcf/transport-tls" \
+  --set "ngcConfig.serviceKey=fakekey" \
+  --set "operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.name=nvcf-trust" \
+  --set "operatorConfig.workload.transportTLS.fingerprint=sha256:example" \
+  --set "operatorConfig.workload.transportTLS.installedBundleMountPath=/nvcf/transport-tls"
+assert_transport_trust_config "reuse-values upgrade simulation" "" "" "" \
+  --set "ngcConfig.serviceKey=fakekey" \
+  --values "${reuse_values_file}" \
+  --set "operatorConfig=null"
+
+bash "${repo_root}/scripts/test_transport_trust_validation.sh"
+
 # Test secret mirroring feature
 # Test with only source namespace (should not add args)
 run_lint nvca-operator --set "agent.secretMirror.sourceNamespace=custom-ns" --set "ngcConfig.serviceKey=fakekey"
@@ -115,22 +493,22 @@ helm template test-release "${repo_root}/deployments/nvca-operator" \
   --values "${repo_root}/test/test-network-policies.yaml" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-network-policies-configmap.yaml \
-  | grep -q "nvcf-custom-network-policies" && echo "✓ Network policies ConfigMap created" || echo "✗ Network policies ConfigMap missing"
+  | grep -q "nvcf-custom-network-policies" && echo "ok Network policies ConfigMap created" || echo "FAIL Network policies ConfigMap missing"
 
 helm template test-release "${repo_root}/deployments/nvca-operator" \
   --values "${repo_root}/test/test-custom-annotations.yaml" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-annotations-configmap.yaml \
-  | grep -q "nvca-namespace-pod-annotations" && echo "✓ Custom annotations ConfigMap created" || echo "✗ Custom annotations ConfigMap missing"
+  | grep -q "nvca-namespace-pod-annotations" && echo "ok Custom annotations ConfigMap created" || echo "FAIL Custom annotations ConfigMap missing"
 
 # Test ConfigMaps are created even without custom values (always created behavior)
 echo "Testing ConfigMaps are always created..."
 helm template test-release "${repo_root}/deployments/nvca-operator" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-annotations-configmap.yaml \
-  | grep -q "nvca-namespace-pod-annotations" && echo "✓ Annotations ConfigMap always created" || echo "✗ Annotations ConfigMap not created"
+  | grep -q "nvca-namespace-pod-annotations" && echo "ok Annotations ConfigMap always created" || echo "FAIL Annotations ConfigMap not created"
 
 helm template test-release "${repo_root}/deployments/nvca-operator" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-network-policies-configmap.yaml \
-  | grep -q "nvcf-custom-network-policies" && echo "✓ Network policies ConfigMap always created" || echo "✗ Network policies ConfigMap not created"
+  | grep -q "nvcf-custom-network-policies" && echo "ok Network policies ConfigMap always created" || echo "FAIL Network policies ConfigMap not created"

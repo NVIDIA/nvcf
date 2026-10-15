@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# namespace-transformer.yaml
+    apiVersion: builtin
+    kind: NamespaceTransformer
+    metadata:
+      name: nginx-namespace-transformer
+    namespace: sample # The namespace to be applied
+    unsetOnly: true # Only apply namespace if not already defined

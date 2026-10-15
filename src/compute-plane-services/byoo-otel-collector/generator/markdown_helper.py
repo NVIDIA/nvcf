@@ -73,10 +73,10 @@ class MetricsSectionGenerator:
                     or []
                 )
                 for category in metric_lists:
-                    # Insert heading level 3 for non-generic catagory values
+                    # Insert a child heading for non-generic category values.
                     cat_value = category.get("catagory")  # YAML uses 'catagory'
                     if cat_value and str(cat_value).lower() != "generic":
-                        sections.append(f"##### {cat_value}")
+                        sections.append(f"#### {cat_value}")
 
                     docstring = category.get("docstring")
                     if docstring:

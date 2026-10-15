@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Separate Go workspace member (see go.work / sdk/go.mod). Same prefix
+# story as api/: without this directive Gazelle would inherit the root
+# module's path and emit the wrong importpath.
+# gazelle:prefix github.com/hashicorp/vault/sdk

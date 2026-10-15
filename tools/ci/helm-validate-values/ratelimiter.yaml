@@ -1,0 +1,8 @@
+# CI-only values for helm lint/template validation.
+rateLimiter:
+  image:
+    registry: example.com
+    repository: foo/bar/nvcf-ratelimiter
+  env:
+    OAUTH2_ISSUER: https://issuer.example.com
+    AUDIENCE: ratelimit:check_invocation

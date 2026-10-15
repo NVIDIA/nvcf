@@ -1,0 +1,55 @@
+openbao:
+
+  # Enable if needed
+  global:
+    imagePullSecrets:
+      - name: nvcr-secret
+
+  migrations:
+    image:
+      registry: ""
+      repository: ""
+      pullPolicy: IfNotPresent
+    env:
+      - name: DEFAULT_CASSANDRA_PASSWORD
+        value: "ch@ng3m3"
+      - name: NVCF_API_SIDECARS_IMAGE_PULL_SECRET
+        value: "your-actual-image-pull-secret-value"  # Replace with real value
+
+  server:
+    image:
+      registry: ""
+      repository: ""
+      pullPolicy: IfNotPresent
+
+    # Keep HA and 3 replicas
+    ha:
+      enabled: true
+      replicas: 3
+
+    # Override anti-affinity for single-node testing (allows all 3 pods on 1 node)
+    # Use soft affinity instead of hard requirement
+    affinity: |
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: {{ template "openbao.name" . }}
+                app.kubernetes.io/instance: "{{ .Release.Name }}"
+                component: server
+            topologyKey: kubernetes.io/hostname
+
+  injector:
+    # Disable anti-affinity for single-node clusters (allows rolling updates to work)
+    affinity: ""
+    image:
+      registry: ""
+      repository: ""
+      tag: 1.7.4
+      pullPolicy: IfNotPresent
+    agentImage:
+      registry: ""
+      repository: ""
+      pullPolicy: IfNotPresent

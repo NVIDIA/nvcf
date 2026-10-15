@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "dynamic",
+    srcs = [
+        "interface.go",
+        "scheme.go",
+        "simple.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic",
+    importpath = "k8s.io/client-go/dynamic",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1/unstructured",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/serializer/cbor",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/serializer/json",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/watch",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/features",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/util/apply",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":dynamic",
+    visibility = ["//visibility:public"],
+)

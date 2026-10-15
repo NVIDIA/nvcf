@@ -1,8 +1,6 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /*
-Copyright The Kubernetes Authors.
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -33,6 +31,10 @@ type FakeNvcaV2beta1 struct {
 
 func (c *FakeNvcaV2beta1) ICMSRequests(namespace string) v2beta1.ICMSRequestInterface {
 	return newFakeICMSRequests(c, namespace)
+}
+
+func (c *FakeNvcaV2beta1) ModelCacheBindings(namespace string) v2beta1.ModelCacheBindingInterface {
+	return newFakeModelCacheBindings(c, namespace)
 }
 
 func (c *FakeNvcaV2beta1) StorageRequests(namespace string) v2beta1.StorageRequestInterface {

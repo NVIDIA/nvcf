@@ -26,14 +26,14 @@ import (
 // lives in the teardown package; the orchestrator wires whichever production
 // SIS client implements it. Tests use a fake.
 type ClusterDeleter interface {
-	DeleteCluster(ctx context.Context, sisURL, clusterID string) error
+	DeleteCluster(ctx context.Context, sisURL, ncaID, clusterID string) error
 }
 
 // Unregister deletes the cluster's SIS row. HTTP 404 / "not found" errors are
-// treated as success (idempotent — the row is already gone). 5xx errors
+// treated as success (idempotent: the row is already gone). 5xx errors
 // propagate.
-func Unregister(ctx context.Context, sis ClusterDeleter, sisURL, clusterID string) error {
-	if err := sis.DeleteCluster(ctx, sisURL, clusterID); err != nil {
+func Unregister(ctx context.Context, sis ClusterDeleter, sisURL, ncaID, clusterID string) error {
+	if err := sis.DeleteCluster(ctx, sisURL, ncaID, clusterID); err != nil {
 		if isNotFound(err) {
 			return nil
 		}

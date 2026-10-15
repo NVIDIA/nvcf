@@ -226,10 +226,10 @@ func enrichGoLicensesFromGoModuleList(allModules map[string]struct{}, goLicenses
 	}
 	if !goListHintLogged {
 		goListHintLogged = true
-		fmt.Fprintln(os.Stderr, "collect-dependencies: resolving Go licenses via `go list -mod=mod -m -json all` in each umbrella module (module-cache LICENSE; use COLLECT_DEPS_NO_GO_LIST=1 to skip).")
+		fmt.Fprintln(os.Stderr, "collect-dependencies: resolving Go licenses via `go list -mod=readonly -m -json all` in each umbrella module (module-cache LICENSE; use COLLECT_DEPS_NO_GO_LIST=1 to skip).")
 	}
 	for _, root := range goModuleRoots {
-		stdout, _, err := runCommand(root, nil, 10*time.Minute, "go", "list", "-mod=mod", "-m", "-json", "all")
+		stdout, _, err := runCommand(root, nil, 10*time.Minute, "go", "list", "-mod=readonly", "-m", "-json", "all")
 		if err != nil {
 			var execErr *exec.Error
 			if errors.As(err, &execErr) {

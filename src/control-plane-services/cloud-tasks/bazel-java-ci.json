@@ -1,0 +1,6 @@
+{
+  "ci_lane": "docker-host",
+  "component_kind": "java-service",
+  "id": "cloud-tasks",
+  "tests_skip": false
+}
