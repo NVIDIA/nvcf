@@ -37,6 +37,12 @@ const (
 	ReasonSchedulingTimeout  = "scheduling_timeout"
 	ReasonAdmissionRejected  = "admission_rejected"
 	ReasonInitJobFailed      = "init_job_failed"
+	// ReasonSambaInfraFailed covers non-transient errors bootstrapping the
+	// per-handle Samba server (Deployment, Service, backing PVC).
+	ReasonSambaInfraFailed = "samba_infra_failed"
+	// ReasonSambaInfraTimeout is the per-handle Samba server staying unavailable
+	// past its readiness threshold, usually an unbindable backing PVC.
+	ReasonSambaInfraTimeout = "samba_infra_timeout"
 )
 
 // AllFailureReasons is the complete set of known failure reasons.
@@ -54,4 +60,10 @@ var AllFailureReasons = []string{
 	ReasonSchedulingTimeout,
 	ReasonAdmissionRejected,
 	ReasonInitJobFailed,
+	ReasonSambaInfraFailed,
+	ReasonSambaInfraTimeout,
 }
+
+// Backend label values come from the HelmCacheBackend constants in pkg/types
+// (shared with pkg/storage); callers pass string(backend) directly. See
+// nvcatypes.AllSelectableHelmCacheBackends for the pre-initialization set.

@@ -20,6 +20,7 @@ package clustermgmt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -64,6 +65,8 @@ clusterGroupId: "grp-1"
 ncaID: "test-nca"
 nvcaVersion: "1.0.0"
 oAuthClientId: "oauth-client-1"
+vaultConfig:
+  address: "https://vault.example.test:443"
 icmsConfig:
   tokenURL: "https://oauth.example.test/token"
   publicKeysetEndpoint: "https://oauth.example.test/.well-known/jwks.json"
@@ -80,10 +83,6 @@ agent:
   functionDeploymentStagesStageOAuthPublicKeysetEndpoint: "https://stage-fnds-oauth.example.test/.well-known/jwks.json"
   functionDeploymentStagesProdOAuthTokenURL: "https://prod-fnds-oauth.example.test/token"
   functionDeploymentStagesProdOAuthPublicKeysetEndpoint: "https://prod-fnds-oauth.example.test/.well-known/jwks.json"
-  rolloverServiceStageOAuthTokenURL: "https://stage-ros-oauth.example.test/token"
-  rolloverServiceStageOAuthPublicKeysetEndpoint: "https://stage-ros-oauth.example.test/.well-known/jwks.json"
-  rolloverServiceProdOAuthTokenURL: "https://prod-ros-oauth.example.test/token"
-  rolloverServiceProdOAuthPublicKeysetEndpoint: "https://prod-ros-oauth.example.test/.well-known/jwks.json"
 `
 
 	fetcher := func(ctx context.Context) (*corev1.ConfigMap, error) {
@@ -111,7 +110,7 @@ agent:
 	assert.ElementsMatch(t, []string{"attr1=true", "attr2=value2"}, nb.Spec.ClusterConfig.Attributes)
 
 	// Defaults applied (prod)
-	assert.Equal(t, "https://icms.nvcf.nvidia.com", nb.Spec.ICMSConfig.ICMSServiceURL)
+	assert.Equal(t, "https://spot.gdn.nvidia.com", nb.Spec.ICMSConfig.ICMSServiceURL)
 	assert.Equal(t, "https://oauth.example.test/token", nb.Spec.ICMSConfig.TokenURL)
 	assert.Equal(t, "https://stage-reval-oauth.example.test/token", nb.Spec.AgentConfig.HelmReValStageOAuthTokenURL)
 	assert.Equal(t, "https://stage-reval-oauth.example.test/.well-known/jwks.json", nb.Spec.AgentConfig.HelmReValStageOAuthPublicKeysetEndpoint)
@@ -121,12 +120,49 @@ agent:
 	assert.Equal(t, "https://stage-fnds-oauth.example.test/.well-known/jwks.json", nb.Spec.AgentConfig.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint)
 	assert.Equal(t, "https://prod-fnds-oauth.example.test/token", nb.Spec.AgentConfig.FunctionDeploymentStagesProdOAuthTokenURL)
 	assert.Equal(t, "https://prod-fnds-oauth.example.test/.well-known/jwks.json", nb.Spec.AgentConfig.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
-	assert.Equal(t, "https://stage-ros-oauth.example.test/token", nb.Spec.AgentConfig.RolloverServiceStageOAuthTokenURL)
-	assert.Equal(t, "https://stage-ros-oauth.example.test/.well-known/jwks.json", nb.Spec.AgentConfig.RolloverServiceStageOAuthPublicKeysetEndpoint)
-	assert.Equal(t, "https://prod-ros-oauth.example.test/token", nb.Spec.AgentConfig.RolloverServiceProdOAuthTokenURL)
-	assert.Equal(t, "https://prod-ros-oauth.example.test/.well-known/jwks.json", nb.Spec.AgentConfig.RolloverServiceProdOAuthPublicKeysetEndpoint)
-	assert.Equal(t, "https://:443", nb.Spec.VaultConfig.Address)
+	assert.Equal(t, "https://vault.example.test:443", nb.Spec.VaultConfig.Address)
 	assert.True(t, nb.Spec.VaultConfig.Enabled)
+}
+
+func TestHelmManagedClient_GetCluster_RequiresValidVaultAddress(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("OAuth disabled", func(t *testing.T) {
+		client := NewHelmManagedClient(
+			nvidiaiov1.EnvTypeProd,
+			dummyFetcher("clusterName: test-backend", nil),
+			DefaultVaultOAuthClientMountPathTemplate,
+		)
+
+		cluster, err := client.GetCluster(ctx, "test-cluster")
+		require.NoError(t, err)
+		assert.False(t, cluster.NVCFBackend.Spec.VaultConfig.Enabled)
+	})
+
+	for name, address := range map[string]string{
+		"missing address":        "",
+		"address without host":   "https://:443",
+		"surrounding whitespace": " https://vault.example.test:443 ",
+		"credentials":            "https://user@vault.example.test:443",
+		"query":                  "https://vault.example.test:443?namespace=test",
+		"fragment":               "https://vault.example.test:443#test",
+	} {
+		t.Run(name, func(t *testing.T) {
+			clusterYAML := "clusterName: test-backend\noAuthClientId: oauth-client-1"
+			if address != "" {
+				clusterYAML += fmt.Sprintf("\nvaultConfig:\n  address: %q", address)
+			}
+			client := NewHelmManagedClient(
+				nvidiaiov1.EnvTypeProd,
+				dummyFetcher(clusterYAML, nil),
+				DefaultVaultOAuthClientMountPathTemplate,
+			)
+
+			_, err := client.GetCluster(ctx, "test-cluster")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "vaultConfig.address")
+		})
+	}
 }
 
 func TestHelmManagedClient_GetCluster_InvalidYAML(t *testing.T) {

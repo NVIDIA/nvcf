@@ -26,6 +26,8 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	cli "github.com/urfave/cli/v2"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -89,6 +91,11 @@ func newCleanupApp() *cli.App {
 				Name:  "service-account-name",
 				Value: cleanup.NVCAOperatorName,
 				Usage: "Operator ServiceAccount name to unblock after cleanup",
+			},
+			&cli.StringFlag{
+				Name:  "hook-cluster-role-binding-name",
+				Value: "",
+				Usage: "Hook ClusterRoleBinding to remove after successful cleanup",
 			},
 		},
 		Action: runCleanup,
@@ -162,7 +169,27 @@ func runCleanupWithDeps(c *cli.Context, deps cleanupDeps) error {
 	if resp.Error != "" {
 		return fmt.Errorf("%s: %s", resp.Message, resp.Error)
 	}
+	if err := removeHookClusterRoleBinding(ctx, k8sClient, c.String("hook-cluster-role-binding-name")); err != nil {
+		return err
+	}
 	log.Infof("NVCA operator cleanup result: %s", resp.Message)
+	return nil
+}
+
+func removeHookClusterRoleBinding(ctx context.Context, k8sClient kubernetes.Interface, name string) error {
+	if name == "" {
+		return nil
+	}
+	log := core.GetLogger(ctx)
+	err := k8sClient.RbacV1().ClusterRoleBindings().Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			log.Infof("Hook ClusterRoleBinding %s is already removed", name)
+			return nil
+		}
+		return fmt.Errorf("remove hook ClusterRoleBinding %s: %w", name, err)
+	}
+	log.Infof("Removed hook ClusterRoleBinding %s", name)
 	return nil
 }
 

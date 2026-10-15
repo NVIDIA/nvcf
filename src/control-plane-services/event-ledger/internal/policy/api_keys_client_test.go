@@ -1,0 +1,108 @@
+/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+package policy
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	pdpv1 "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestAPIKeysClient_PolicyConfig(t *testing.T) {
+	cfg := &PolicyConfig{Namespace: "event-ledger", PolicyFQDN: "apikey.allow"}
+	client := NewApiKeysClient("http://example.com", cfg, &http.Client{})
+	assert.Equal(t, cfg, client.PolicyConfig())
+}
+
+func TestAPIKeysClient_Evaluate(t *testing.T) {
+	// api-keys-api returns result.allowed, not result.allow.
+	allowResponse := map[string]any{
+		"result": map[string]any{"allowed": true, "ncaId": "nca-1", "ownerId": "owner-1"},
+	}
+
+	tests := []struct {
+		name           string
+		serverResponse any
+		serverStatus   int
+		wantErr        bool
+		checkNoAuth    bool
+		checkURL       bool
+	}{
+		{
+			name:           "sends no Authorization header and correct URL",
+			serverStatus:   http.StatusOK,
+			serverResponse: allowResponse,
+			checkNoAuth:    true,
+			checkURL:       true,
+		},
+		{
+			name:           "returns parsed response on success",
+			serverStatus:   http.StatusOK,
+			serverResponse: allowResponse,
+		},
+		{
+			name:         "returns error on non-200 status",
+			serverStatus: http.StatusInternalServerError,
+			wantErr:      true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var capturedAuth, capturedURL string
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				capturedAuth = r.Header.Get("Authorization")
+				capturedURL = r.URL.Path
+				w.WriteHeader(tc.serverStatus)
+				if tc.serverResponse != nil {
+					json.NewEncoder(w).Encode(tc.serverResponse)
+				}
+			}))
+			defer srv.Close()
+
+			cfg := &PolicyConfig{Namespace: "event-ledger", PolicyFQDN: "apikey.allow"}
+			client := NewApiKeysClient(srv.URL, cfg, &http.Client{})
+
+			req := &pdpv1.RuleRequest{
+				Namespace: "event-ledger",
+				RuleName:  "apikey.allow",
+			}
+
+			_, err := client.Evaluate(context.Background(), req)
+
+			if tc.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+
+			if tc.checkNoAuth {
+				assert.Empty(t, capturedAuth, "expected no Authorization header")
+			}
+			if tc.checkURL {
+				assert.Equal(t, "/v1/namespaces/event-ledger/evaluations/apikey.allow", capturedURL)
+			}
+		})
+	}
+}

@@ -299,8 +299,7 @@ type jsOpts struct {
 }
 
 const (
-	defaultRequestWait  = 5 * time.Second
-	defaultAccountCheck = 20 * time.Second
+	defaultRequestWait = 5 * time.Second
 )
 
 // JetStream returns a JetStreamContext for messaging and stream management.
@@ -1135,7 +1134,7 @@ func (js *js) PublishMsgAsync(m *Msg, opts ...PubOpt) (PubAckFuture, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := js.nc.publish(m.Subject, reply, hdr, m.Data); err != nil {
+	if err := js.nc.publish(m.Subject, reply, false, hdr, m.Data); err != nil {
 		js.clearPAF(id)
 		return nil, err
 	}
@@ -2033,10 +2032,7 @@ func (js *js) subscribe(subj, queue string, cb MsgHandler, ch chan *Msg, isSync,
 	// If maxap is greater than the default sub's pending limit, use that.
 	if maxap > DefaultSubPendingMsgsLimit {
 		// For bytes limit, use the min of maxp*1MB or DefaultSubPendingBytesLimit
-		bl := maxap * 1024 * 1024
-		if bl < DefaultSubPendingBytesLimit {
-			bl = DefaultSubPendingBytesLimit
-		}
+		bl := max(maxap*1024*1024, DefaultSubPendingBytesLimit)
 		if err := sub.SetPendingLimits(maxap, bl); err != nil {
 			return nil, err
 		}
@@ -2838,12 +2834,15 @@ func ConsumerFilterSubjects(subjects ...string) SubOpt {
 func (sub *Subscription) ConsumerInfo() (*ConsumerInfo, error) {
 	sub.mu.Lock()
 	// TODO(dlc) - Better way to mark especially if we attach.
-	if sub.jsi == nil || sub.jsi.consumer == _EMPTY_ {
-		if sub.jsi.ordered {
-			sub.mu.Unlock()
+	if sub.jsi == nil {
+		sub.mu.Unlock()
+		return nil, ErrTypeSubscription
+	} else if sub.jsi.consumer == _EMPTY_ {
+		ordered := sub.jsi.ordered
+		sub.mu.Unlock()
+		if ordered {
 			return nil, ErrConsumerInfoOnOrderedReset
 		}
-		sub.mu.Unlock()
 		return nil, ErrTypeSubscription
 	}
 
@@ -3115,10 +3114,7 @@ func (sub *Subscription) Fetch(batch int, opts ...PullOpt) ([]*Msg, error) {
 			}
 
 			// Make our request expiration a bit shorter than the current timeout.
-			expiresDiff := time.Duration(float64(ttl) * 0.1)
-			if expiresDiff > 5*time.Second {
-				expiresDiff = 5 * time.Second
-			}
+			expiresDiff := min(time.Duration(float64(ttl)*0.1), 5*time.Second)
 			expires := ttl - expiresDiff
 
 			nr.Batch = batch - len(msgs)
@@ -3399,10 +3395,7 @@ func (sub *Subscription) FetchBatch(batch int, opts ...PullOpt) (MessageBatch, e
 	ttl = time.Until(deadline)
 
 	// Make our request expiration a bit shorter than the current timeout.
-	expiresDiff := time.Duration(float64(ttl) * 0.1)
-	if expiresDiff > 5*time.Second {
-		expiresDiff = 5 * time.Second
-	}
+	expiresDiff := min(time.Duration(float64(ttl)*0.1), 5*time.Second)
 	expires := ttl - expiresDiff
 
 	connStatusChanged := nc.StatusChanged()
@@ -3563,7 +3556,7 @@ func (js *js) apiRequestWithContext(ctx context.Context, subj string, data []byt
 	}
 	if js.opts.shouldTrace {
 		ctrace := js.opts.ctrace
-		if ctrace.RequestSent != nil {
+		if ctrace.ResponseReceived != nil {
 			ctrace.ResponseReceived(subj, resp.Data, resp.Header)
 		}
 	}

@@ -1,0 +1,55 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "workloadapi",
+    srcs = [
+        "addr.go",
+        "addr_posix.go",
+        "addr_windows.go",
+        "backoff.go",
+        "bundlesource.go",
+        "client.go",
+        "client_posix.go",
+        "client_windows.go",
+        "convenience.go",
+        "jwtsource.go",
+        "option.go",
+        "option_windows.go",
+        "watcher.go",
+        "witsource.go",
+        "x509context.go",
+        "x509source.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/workloadapi",
+    importpath = "github.com/spiffe/go-spiffe/v2/workloadapi",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/bundle/jwtbundle",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/bundle/spiffebundle",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/bundle/x509bundle",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/exp/bundle/witbundle",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/exp/svid/witsvid",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/logger",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/proto/spiffe/workload",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/spiffeid",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/svid/jwtsvid",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/svid/x509svid",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/codes",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/credentials/insecure",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/metadata",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/status",
+    ] + select({
+        "@rules_go//go/platform:windows": [
+            "//src/compute-plane-services/nvca/vendor/github.com/Microsoft/go-winio",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":workloadapi",
+    visibility = ["//visibility:public"],
+)

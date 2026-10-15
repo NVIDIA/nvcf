@@ -20,6 +20,7 @@ package clustervalidator
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -86,6 +87,13 @@ func (e *enforcementEnv) probeWithDelay(role string, delay int) (bool, error) {
 		e.image, role, e.serverIP, e.timeout, delay,
 	)
 }
+
+// orphanNamespaceTTL is the age beyond which a netpol-validation-* namespace
+// is considered orphaned (deferred cleanup in a previous run didn't fire
+// because the pod was SIGKILLed / OOMed / force-deleted) and is eligible for
+// sweep. Set well above any legitimate run duration but below the CronJob
+// interval so the next scheduled run will reclaim stale namespaces.
+const orphanNamespaceTTL = 1 * time.Hour
 
 // checkNetworkPolicyEnforcement deploys ephemeral workloads in a temporary
 // namespace, applies NetworkPolicy objects, and verifies the CNI data-plane
@@ -379,6 +387,54 @@ func cleanupTestNamespace(log *logrus.Entry, client kubernetes.Interface, ns str
 	err := client.CoreV1().Namespaces().Delete(ctx, ns, metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		log.Warnf("Failed to clean up namespace %s: %v", ns, err)
+	}
+}
+
+// sweepOrphanTestNamespaces lists all netpol-validation-* namespaces and
+// deletes any whose age exceeds ttl. Used to reclaim leaks from prior runs
+// that died before their deferred cleanup could fire (SIGKILL, OOM,
+// force-delete, node failure). Namespaces younger than ttl are left alone
+// in case they belong to a concurrent run.
+func sweepOrphanTestNamespaces(
+	ctx context.Context, log *logrus.Entry, client kubernetes.Interface, ttl time.Duration,
+) {
+	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	nsList, err := client.CoreV1().Namespaces().List(listCtx, metav1.ListOptions{
+		LabelSelector: "app=netpol-validation",
+	})
+	if err != nil {
+		log.Warnf("Orphan sweep: failed to list namespaces: %v", err)
+		return
+	}
+	if len(nsList.Items) == 0 {
+		return
+	}
+
+	cutoff := time.Now().Add(-ttl)
+	deleted := 0
+	for i := range nsList.Items {
+		ns := &nsList.Items[i]
+		if !strings.HasPrefix(ns.Name, "netpol-validation-") {
+			continue
+		}
+		if ns.CreationTimestamp.After(cutoff) {
+			continue // still within TTL — might be a concurrent run
+		}
+		delCtx, delCancel := context.WithTimeout(ctx, 30*time.Second)
+		err := client.CoreV1().Namespaces().Delete(delCtx, ns.Name, metav1.DeleteOptions{})
+		delCancel()
+		if err != nil && !apierrors.IsNotFound(err) {
+			log.Warnf("Orphan sweep: failed to delete namespace %s: %v", ns.Name, err)
+			continue
+		}
+		deleted++
+	}
+	if deleted > 0 {
+		printInfo(log, fmt.Sprintf(
+			"Orphan sweep: deleted %d stale netpol-validation-* namespace(s) older than %s",
+			deleted, ttl))
 	}
 }
 

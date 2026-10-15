@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+schemaVersion: 1
+# These charts are released independently and might not yet be mirrored into
+# the composite stack's release chart repository. Render each pinned chart from
+# its immutable public GitHub release tag, then report the public self-managed
+# catalog destination.
+sourceCharts:
+  helm-nvcf-invocation-service:
+    tagPrefix: deploy/helm/http-invocation/v
+    path: deploy/helm/http-invocation/nvcf-invocation-service
+  helm-nvcf-nats-auth-callout-service:
+    tagPrefix: deploy/helm/nats-auth-callout/v
+    path: deploy/helm/nats-auth-callout
+    # Chart v1.2.0 expects this unscoped value while the tagged stack keeps the
+    # intended public repository under natsAuthCalloutService.
+    renderValues:
+      image.repository: nvcr.io/nvidia/nvcf/nvcf-nats-auth-callout-service
+  helm-nvca-operator:
+    tagPrefix: deploy/helm/nvca-operator/v
+    path: deploy/helm/nvca-operator/nvca-operator
+  helm-nvcf-rate-limiter:
+    tagPrefix: deploy/helm/ratelimiter/v
+    path: deploy/helm/ratelimiter/nvcf-ratelimiter
+# The release workflow authenticates before evaluating the remaining charts and
+# permits states that contain only third-party or local charts.
+publishedChartRepository: https://helm.ngc.nvidia.com/nvidia/nvcf

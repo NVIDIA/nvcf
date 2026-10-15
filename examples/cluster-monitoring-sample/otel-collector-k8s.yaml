@@ -97,6 +97,13 @@ data:
                   target_label: kubernetes_pod_name
 
     processors:
+      # Attach a start timestamp to cumulative metrics (counters, histograms,
+      # summaries) using the target's process_start_time_seconds. Without this,
+      # the prometheus receiver emits start_time = 0 and downstream backends
+      # such as Lightstep drop those points with "zero start time is invalid".
+      metricstarttime:
+        strategy: start_time_metric
+        start_time_metric_regex: '^process_start_time_seconds$'
       batch:
 
     exporters:
@@ -113,7 +120,7 @@ data:
       pipelines:
         metrics:
           receivers: [prometheus, hostmetrics]
-          processors: [batch]
+          processors: [metricstarttime, batch]
           exporters: [debug, otlp/lightstep]
 
 ---

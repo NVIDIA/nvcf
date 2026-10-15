@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+script="${repo_root}/tools/scripts/cut-docs-version.sh"
+workdir="$(mktemp -d)"
+trap 'rm -rf "${workdir}"' EXIT
+
+mkdir -p "${workdir}/tools/scripts" "${workdir}/docs/user" "${workdir}/fern/versions"
+cp "${script}" "${workdir}/tools/scripts/cut-docs-version.sh"
+
+cat > "${workdir}/docs/user/overview.md" <<'EOF'
+# Overview
+EOF
+
+cat > "${workdir}/fern/versions/dev.yml" <<'EOF'
+navigation:
+  - page: Overview
+    path: ../../docs/user/overview.md
+EOF
+
+cat > "${workdir}/fern/docs.yml" <<'EOF'
+versions:
+- display-name: "Latest (0.5.0)"
+  path: versions/v0.5.yml
+  slug: ""
+- display-name: dev
+  path: versions/dev.yml
+  slug: dev
+- display-name: "0.5.0"
+  path: versions/v0.5.yml
+  slug: "v0.5"
+
+redirects:
+  - source: "/nvcf/index.html"
+    destination: "/nvcf/"
+  - source: "/nvcf/v0.5/index.html"
+    destination: "/nvcf/v0.5/"
+EOF
+
+"${workdir}/tools/scripts/cut-docs-version.sh" v0.6.0 > "${workdir}/output.txt"
+
+if ! grep -q 'source: "/nvcf/v0.6.0/index.html"' "${workdir}/fern/docs.yml"; then
+  echo "expected generated docs.yml to include the new version index redirect"
+  cat "${workdir}/fern/docs.yml"
+  exit 1
+fi
+
+if ! grep -q 'destination: "/nvcf/v0.6.0/"' "${workdir}/fern/docs.yml"; then
+  echo "expected generated docs.yml to redirect the new version index to the version root"
+  cat "${workdir}/fern/docs.yml"
+  exit 1
+fi
+
+echo "test-cut-docs-version: PASS"

@@ -1,0 +1,14 @@
+spring:
+  main:
+    allow-bean-definition-overriding: true
+
+management:
+  tracing:
+    enabled: false  # Overridden to true in test properties when needed
+  endpoints:
+    web:
+      exposure:
+        include: "*"
+  otlp:
+    tracing:
+      endpoint: https://dummy:8282  # Dummy endpoint when not using InMemorySpanExporter
