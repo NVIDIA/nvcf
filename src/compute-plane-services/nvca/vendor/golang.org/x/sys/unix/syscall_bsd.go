@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2009 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -191,7 +188,7 @@ func (sa *SockaddrUnix) sockaddr() (unsafe.Pointer, _Socklen, error) {
 	}
 	sa.raw.Len = byte(3 + n) // 2 for Family, Len; 1 for NUL
 	sa.raw.Family = AF_UNIX
-	for i := 0; i < n; i++ {
+	for i := range n {
 		sa.raw.Path[i] = int8(name[i])
 	}
 	return unsafe.Pointer(&sa.raw), _Socklen(sa.raw.Len), nil

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2014 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -124,10 +121,7 @@ func (b *dataBuffer) Write(p []byte) (int, error) {
 		// If the last chunk is empty, allocate a new chunk. Try to allocate
 		// enough to fully copy p plus any additional bytes we expect to
 		// receive. However, this may allocate less than len(p).
-		want := int64(len(p))
-		if b.expected > want {
-			want = b.expected
-		}
+		want := max(int64(len(p)), b.expected)
 		chunk := b.lastChunkOrAlloc(want)
 		n := copy(chunk[b.w:], p)
 		p = p[n:]

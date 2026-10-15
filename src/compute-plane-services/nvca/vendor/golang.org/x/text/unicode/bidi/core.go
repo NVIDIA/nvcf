@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2015 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -9,7 +6,6 @@ package bidi
 
 import (
 	"fmt"
-	"log"
 )
 
 // This implementation is a port based on the reference implementation found at:
@@ -251,7 +247,7 @@ func (p *paragraph) determineParagraphEmbeddingLevel(start, end int) level {
 		} else if t.in(FSI, LRI, RLI) {
 			i = p.matchingPDI[i] // skip over to the matching PDI
 			if i > end {
-				log.Panic("assert (i <= end)")
+				panic("assert (i <= end)")
 			}
 		}
 	}
@@ -732,7 +728,7 @@ loop:
 				continue loop
 			}
 		}
-		log.Panicf("invalid bidi code %v present in assertOnly at position %d", t, s.indexes[i])
+		panic(fmt.Errorf("invalid bidi code %v present in assertOnly at position %d", t, s.indexes[i]))
 	}
 }
 

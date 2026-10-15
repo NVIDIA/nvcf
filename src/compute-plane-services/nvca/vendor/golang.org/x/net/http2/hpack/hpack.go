@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2014 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -108,7 +105,6 @@ func NewDecoder(maxDynamicTableSize uint32, emitFunc func(f HeaderField)) *Decod
 		emitEnabled: true,
 		firstField:  true,
 	}
-	d.dynTab.table.init()
 	d.dynTab.allowedMaxSize = maxDynamicTableSize
 	d.dynTab.setMaxSize(maxDynamicTableSize)
 	return d
