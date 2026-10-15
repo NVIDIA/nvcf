@@ -1,0 +1,84 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if and .Values.prometheus.enabled (and .Values.prometheus.podmonitor.enabled .Values.prometheus.servicemonitor.enabled) }}
+{{- fail "Either .Values.prometheus.podmonitor.enabled or .Values.prometheus.servicemonitor.enabled can be enabled at a time, but not both." }}
+{{- else if and .Values.prometheus.enabled .Values.prometheus.servicemonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ template "cert-manager.fullname" . }}
+{{- if .Values.prometheus.servicemonitor.namespace }}
+  namespace: {{ .Values.prometheus.servicemonitor.namespace }}
+{{- else }}
+  namespace: {{ include "cert-manager.namespace" . }}
+{{- end }}
+  labels:
+    app: {{ include "cert-manager.name" . }}
+    app.kubernetes.io/name: {{ include "cert-manager.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: "controller"
+    {{- include "labels" . | nindent 4 }}
+    {{- if .Values.prometheus.servicemonitor.prometheusInstance }}
+    prometheus: {{ .Values.prometheus.servicemonitor.prometheusInstance }}
+    {{- end }}
+    {{- with .Values.prometheus.servicemonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- if .Values.prometheus.servicemonitor.annotations }}
+  annotations:
+    {{- with .Values.prometheus.servicemonitor.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+spec:
+  jobLabel: app.kubernetes.io/name
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+        - {{ include "cainjector.name" . }}
+        - {{ template "cert-manager.name" . }}
+        - {{ include "webhook.name" . }}
+      - key: app.kubernetes.io/instance
+        operator: In
+        values:
+        - {{ .Release.Name }}
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+        - cainjector
+        - controller
+        - webhook
+{{- if .Values.prometheus.servicemonitor.namespace }}
+  namespaceSelector:
+    matchNames:
+      - {{ include "cert-manager.namespace" . }}
+{{- end }}
+  endpoints:
+  - targetPort: {{ .Values.prometheus.servicemonitor.targetPort }}
+    path: {{ .Values.prometheus.servicemonitor.path }}
+    {{- if .Values.prometheus.servicemonitor.interval }}
+    interval: {{ .Values.prometheus.servicemonitor.interval }}
+    {{- end }}
+    {{- if .Values.prometheus.servicemonitor.scrapeTimeout }}
+    scrapeTimeout: {{ .Values.prometheus.servicemonitor.scrapeTimeout }}
+    {{- end }}
+    honorLabels: {{ .Values.prometheus.servicemonitor.honorLabels }}
+    {{- with .Values.prometheus.servicemonitor.endpointAdditionalProperties }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

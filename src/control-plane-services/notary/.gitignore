@@ -1,0 +1,23 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**
+!**/src/test/**
+logs/**
+tmp/**
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+.classpath
+.factorypath
+.project
+.settings/
+
+### secrets
+vault-agent/certs
+vault-agent/secrets
+
+### flatten-maven-plugin output
+.flattened-pom.xml

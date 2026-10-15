@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+# libnvsnap_intercept.so: LD_PRELOAD interposition library loaded into
+# checkpointed workloads. Source breakdown matches the legacy
+# Makefile:
+#   - OS-level intercepts (C):     src/*.c
+#   - GPU sub-module helpers (C):  src/gpu/*.c
+#   - GPU sub-module core (C++17): src/gpu/*.cpp
+# The library uses its own cuda_types.h header so we do not need an
+# actual CUDA SDK at build time. libuv_intercept.c is gated by
+# ENABLE_LIBUV_INTERCEPT in the Makefile; included unconditionally
+# here because rules_cc has no equivalent toggle and the symbol set
+# is always shipped.
+#
+# Single cc_binary(linkshared=True) instead of cc_library +
+# cc_shared_library, because rules_cc's cc_shared_library forces
+# its dep cc_libraries to build their own intermediate `.so` outputs.
+# Those intermediates have versioned glibc symbol refs
+# (sigaction@@GLIBC_2.2.5 etc.) that fail to link cleanly without
+# the cc_binary's full link recipe (proper -lc, version script,
+# etc.). cc_binary linkshared=True is the long-standing Bazel
+# pattern for shared libraries and produces exactly the same .so
+# layout cc_shared_library does.
+
+cc_binary(
+    name = "libnvsnap_intercept.so",
+    srcs = [
+        "src/abort_intercept.c",
+        "src/cuda_intercept.c",
+        "src/gpu_checkpoint.c",
+        "src/init.c",
+        "src/io_uring_intercept.c",
+        "src/libuv_intercept.c",
+        "src/nccl_intercept.c",
+        "src/quiesce.c",
+        "src/seccomp_intercept.c",
+        "src/zmq_intercept.c",
+        "src/gpu/checkpoint.cpp",
+        "src/gpu/config.c",
+        "src/gpu/init.c",
+        "src/gpu/interpose_cudart.c",
+        "src/gpu/interpose_cudrv.c",
+        "src/gpu/interpose_nccl.c",
+        "src/gpu/metrics.c",
+        "src/gpu/symbol_table.c",
+        "src/gpu/tracker.cpp",
+    ] + glob(["include/**/*.h"]),
+    additional_linker_inputs = ["libnvsnap.map"],
+    copts = [
+        "-Wall",
+        "-Wextra",
+        "-fPIC",
+        "-O2",
+        "-D_GNU_SOURCE",
+        # C++17 only takes effect on .cpp files; gcc silently ignores
+        # it on .c. rules_cc does not split conlyopts/cxxopts on
+        # cc_binary so the joint copts list is the simplest option.
+        "-std=gnu++17",
+    ],
+    includes = ["include"],
+    linkopts = [
+        # ld.bfd is the gcc default the upstream Makefile uses;
+        # Bazel's auto-detected C++ toolchain on ubuntu prefers
+        # ld.gold which is too strict on versioned glibc symbol refs
+        # (sigaction@@GLIBC_2.2.5, etc.). Force bfd to match the
+        # Makefile's link recipe.
+        "-fuse-ld=bfd",
+        "-ldl",
+        "-lpthread",
+        "-rdynamic",
+        "-Wl,--version-script,$(location libnvsnap.map)",
+    ],
+    linkshared = True,
+    linkstatic = True,
+    visibility = ["//visibility:public"],
+)

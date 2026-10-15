@@ -22,6 +22,10 @@ metadata:
     {{- include "nv_api_keys.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.apikeys.replicaCount }}
+  {{- with .Values.apikeys.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "nv_api_keys.selectorLabels" . | nindent 6 }}
@@ -54,6 +58,9 @@ spec:
             - name: http
               containerPort: {{ .Values.apikeys.service.port }}
               protocol: TCP
+            - name: management-port
+              containerPort: {{ .Values.apikeys.managementPort }}
+              protocol: TCP
           env:
             - name: POD_IP
               valueFrom:
@@ -63,6 +70,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "nv_api_keys.fullname" . }}-env
+          {{- end }}
+          {{- with .Values.apikeys.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- with .Values.apikeys.livenessProbe }}
           livenessProbe:
@@ -89,6 +100,14 @@ spec:
               mountPath: /var/run/secrets/kubernetes.io/serviceaccount
               readOnly: true
             
+      {{- with .Values.apikeys.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.apikeys.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       volumes:
         - name: vault-config-templates
           configMap:

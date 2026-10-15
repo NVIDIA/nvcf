@@ -160,8 +160,9 @@ func (c *NGCManagedClient) GetCluster(ctx context.Context, clusterID string) (*C
 
 func (c *NGCManagedClient) getCluster(ctx context.Context, clusterID string) (*clusterDTO, error) {
 	log := core.GetLogger(ctx)
-	// Create the cluster retrieval URL using the legacy /v2/icms/clusters endpoint.
-	clusterReqURL, err := url.JoinPath(c.rootNGCAPIURL, "/v2/icms/clusters", clusterID)
+	// NGC-managed clusters use the /v2/sis/clusters endpoint.
+	// This path is served by the NGC API and has not been renamed to "icms" yet.
+	clusterReqURL, err := url.JoinPath(c.rootNGCAPIURL, "/v2/sis/clusters", clusterID)
 	if err != nil {
 		log.WithError(err).Errorf("failed to generate cluster retrieval URL with root %s", c.rootNGCAPIURL)
 		return nil, err
@@ -274,8 +275,9 @@ func withRootNVCFBackendMapper() clusterMapper {
 
 		// ICMSConfig
 		dest.NVCFBackend.Spec.ICMSConfig = nvidiaiov1.ICMSConfig{
-			ICMSServiceURL: src.ICMSConfig.ICMSServiceURL,
-			TokenURL:       src.ICMSConfig.TokenURL,
+			ICMSServiceURL:                src.ICMSConfig.ICMSServiceURL,
+			ICMSServiceHostHeaderOverride: src.ICMSConfig.ICMSServiceHostHeaderOverride,
+			TokenURL:                      src.ICMSConfig.TokenURL,
 		}
 
 		clientID := src.getClientID()
@@ -296,8 +298,10 @@ func withRootNVCFBackendMapper() clusterMapper {
 
 		// ---- Apply dynamic defaults previously handled by Helm ----
 		const (
-			icmsURLProd  = "https://icms.nvcf.nvidia.com"
-			icmsURLStage = "https://stg.icms.nvcf.nvidia.com"
+			// ICMS/SIS backend URLs. The backend still serves on the legacy "spot.gdn" hostnames.
+			// Do not rename until the backend has been updated to serve on the new hostnames.
+			icmsURLProd  = "https://spot.gdn.nvidia.com"
+			icmsURLStage = "https://stg.spot.gdn.nvidia.com"
 		)
 
 		// ICMSServiceURL
@@ -454,11 +458,12 @@ func withSharedStorageImageMapper() clusterMapper {
 
 func withMiniServiceMapper() clusterMapper {
 	return func(_ context.Context, _ nvidiaiov1.EnvType, src *clusterDTO, dest *Cluster) error {
-		if src.MiniService != nil && src.MiniService.HelmReValServiceURL != "" {
+		if src.MiniService != nil && (src.MiniService.HelmReValServiceURL != "" || src.MiniService.HelmReValServiceHostHeaderOverride != "") {
 			if dest.NVCFBackend.Spec.ClusterConfig.MiniService == nil {
 				dest.NVCFBackend.Spec.ClusterConfig.MiniService = &nvidiaiov1.MiniServiceConfig{}
 			}
 			dest.NVCFBackend.Spec.ClusterConfig.MiniService.HelmReValServiceURL = src.MiniService.HelmReValServiceURL
+			dest.NVCFBackend.Spec.ClusterConfig.MiniService.HelmReValServiceHostHeaderOverride = src.MiniService.HelmReValServiceHostHeaderOverride
 		}
 		return nil
 	}
@@ -497,10 +502,6 @@ func withAgentConfigMapper() clusterMapper {
 			dest.NVCFBackend.Spec.AgentConfig.HelmReValStageOAuthPublicKeysetEndpoint = src.Agent.HelmReValStageOAuthPublicKeysetEndpoint
 			dest.NVCFBackend.Spec.AgentConfig.HelmReValProdOAuthTokenURL = src.Agent.HelmReValProdOAuthTokenURL
 			dest.NVCFBackend.Spec.AgentConfig.HelmReValProdOAuthPublicKeysetEndpoint = src.Agent.HelmReValProdOAuthPublicKeysetEndpoint
-			dest.NVCFBackend.Spec.AgentConfig.RolloverServiceStageOAuthTokenURL = src.Agent.RolloverServiceStageOAuthTokenURL
-			dest.NVCFBackend.Spec.AgentConfig.RolloverServiceStageOAuthPublicKeysetEndpoint = src.Agent.RolloverServiceStageOAuthPublicKeysetEndpoint
-			dest.NVCFBackend.Spec.AgentConfig.RolloverServiceProdOAuthTokenURL = src.Agent.RolloverServiceProdOAuthTokenURL
-			dest.NVCFBackend.Spec.AgentConfig.RolloverServiceProdOAuthPublicKeysetEndpoint = src.Agent.RolloverServiceProdOAuthPublicKeysetEndpoint
 			dest.NVCFBackend.Spec.AgentConfig.FunctionDeploymentStagesStageOAuthTokenURL = src.Agent.FunctionDeploymentStagesStageOAuthTokenURL
 			dest.NVCFBackend.Spec.AgentConfig.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint =
 				src.Agent.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint
@@ -514,6 +515,10 @@ func withAgentConfigMapper() clusterMapper {
 			if src.Agent.NATSURL != "" {
 				dest.NVCFBackend.Spec.AgentConfig.NATSURL = ptr.To(src.Agent.NATSURL)
 			}
+			if src.Agent.NATSHostOverride != "" {
+				dest.NVCFBackend.Spec.AgentConfig.NATSHostOverride = ptr.To(src.Agent.NATSHostOverride)
+			}
+			dest.NVCFBackend.Spec.AgentConfig.LLMRequestRouterAddress = src.Agent.LLMRequestRouterAddress
 		}
 
 		// Parse CacheMountOptionsEnabled from string.

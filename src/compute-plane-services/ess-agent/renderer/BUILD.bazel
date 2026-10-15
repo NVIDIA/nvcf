@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "renderer",
+    srcs = [
+        "file_ownership.go",
+        "file_ownership_windows.go",
+        "file_perms.go",
+        "file_perms_windows.go",
+        "renderer.go",
+    ],
+    importpath = "github.com/hashicorp/consul-template/renderer",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_pkg_errors//:errors"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":renderer",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "renderer_test",
+    srcs = ["renderer_test.go"],
+    embed = [":renderer"],
+)

@@ -1020,7 +1020,7 @@ func TestSetNVCFInfraContainerResources(t *testing.T) {
 			// Create a deep copy of the input pod to compare
 			originalPod := tt.pod.DeepCopy()
 
-			SetNVCFInfraContainerResources(defaultUtilsContainerResources.Limits.DeepCopy(), tt.pod)
+			SetNVCFInfraContainerResources(defaultUtilsContainerResources.Limits.DeepCopy(), tt.pod, true)
 
 			if tt.shouldModify {
 				// Check if the pod was modified as expected

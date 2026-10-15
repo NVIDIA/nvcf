@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "gracefulswitch",
+    srcs = [
+        "config.go",
+        "gracefulswitch.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/balancer/gracefulswitch",
+    importpath = "google.golang.org/grpc/internal/balancer/gracefulswitch",
+    visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/balancer",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/balancer/base",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/connectivity",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/resolver",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/serviceconfig",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gracefulswitch",
+    visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
+)

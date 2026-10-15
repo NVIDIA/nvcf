@@ -25,8 +25,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper/credhelper"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	credhelper "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/sourcegraph/conc/pool"
 	"go.uber.org/zap"

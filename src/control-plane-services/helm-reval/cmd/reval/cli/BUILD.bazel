@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "cli",
+    srcs = [
+        "root.go",
+        "server.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/cmd/reval/cli",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/control-plane-services/helm-reval/pkg/authorizers",
+        "//src/control-plane-services/helm-reval/pkg/httpapi",
+        "//src/control-plane-services/helm-reval/pkg/reval/authz",
+        "//src/control-plane-services/helm-reval/pkg/reval/config",
+        "//src/control-plane-services/helm-reval/pkg/reval/service",
+        "//src/control-plane-services/helm-reval/pkg/telemetry/logging",
+        "//src/control-plane-services/helm-reval/pkg/telemetry/metrics",
+        "//src/control-plane-services/helm-reval/pkg/telemetry/tracing",
+        "//src/control-plane-services/helm-reval/reval",
+        "@com_github_go_chi_chi_v5//:chi",
+        "@com_github_go_chi_chi_v5//middleware",
+        "@com_github_go_chi_render//:render",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/cobraautobind",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
+        "@com_github_spf13_cobra//:cobra",
+        "@com_github_spf13_viper//:viper",
+        "@io_opentelemetry_go_otel//:otel",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cli",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "cli_test",
+    srcs = [
+        "root_test.go",
+        "server_internal_test.go",
+    ],
+    embed = [":cli"],
+    deps = [
+        "//src/control-plane-services/helm-reval/pkg/authorizers",
+        "//src/control-plane-services/helm-reval/pkg/reval/config",
+        "@com_github_spf13_viper//:viper",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_uber_go_zap//:zap",
+    ],
+)

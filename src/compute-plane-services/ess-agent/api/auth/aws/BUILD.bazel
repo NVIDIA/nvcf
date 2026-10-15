@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "aws",
+    srcs = ["aws.go"],
+    importpath = "github.com/hashicorp/consul-template/api/auth/aws",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_aws_aws_sdk_go//aws/credentials:go_default_library",
+        "@com_github_aws_aws_sdk_go//aws/ec2metadata:go_default_library",
+        "@com_github_aws_aws_sdk_go//aws/session:go_default_library",
+        "@com_github_hashicorp_go_hclog//:go-hclog",
+        "@com_github_hashicorp_go_secure_stdlib_awsutil//:go_default_library",
+        "@com_github_hashicorp_go_uuid//:go-uuid",
+        "@com_github_hashicorp_vault_api//:api",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":aws",
+    visibility = ["//visibility:public"],
+)

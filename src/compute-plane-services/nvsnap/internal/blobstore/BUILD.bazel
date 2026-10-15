@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "blobstore",
+    srcs = [
+        "server.go",
+        "store.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/blobstore",
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
+    deps = ["@com_github_gorilla_mux//:mux"],
+)
+
+go_test(
+    name = "blobstore_test",
+    srcs = [
+        "server_test.go",
+        "store_test.go",
+    ],
+    embed = [":blobstore"],
+)

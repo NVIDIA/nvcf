@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "base62",
+    srcs = ["base62.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/base62",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_hashicorp_go_secure_stdlib_base62//:base62"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":base62",
+    visibility = ["//visibility:public"],
+)

@@ -82,6 +82,7 @@ pub struct AllowedFunctionInvocations {
     pub function_version_ids: Vec<AllowedFunctionVersion>,
     pub authed_client_subject: String,
     pub authed_client_nca_id: String,
+    pub authed_client_owner_nca_id: String,
 }
 
 #[derive(Clone, Debug)]
@@ -272,6 +273,7 @@ impl NVCFService {
             function_version_ids: versions,
             authed_client_subject: response.client_auth_subject,
             authed_client_nca_id: response.client_nca_id,
+            authed_client_owner_nca_id: response.client_owner_nca_id,
         })
     }
 }

@@ -74,6 +74,15 @@ func NewClient(ctx context.Context, clusterID string, secretsFetcher auth.NATSSe
 
 // NewClientWithURL creates a JetStream-backed queue client for a configured NATS URL.
 func NewClientWithURL(ctx context.Context, natsURL, clusterID string, secretsFetcher auth.NATSSecretsFetcher) (queue.Client, error) {
+	return NewClientWithURLAndHostOverride(ctx, natsURL, "", clusterID, secretsFetcher)
+}
+
+// NewClientWithURLAndHostOverride creates a JetStream-backed queue client for a configured NATS URL and optional TLS SNI host.
+func NewClientWithURLAndHostOverride(
+	ctx context.Context,
+	natsURL, natsHostOverride, clusterID string,
+	secretsFetcher auth.NATSSecretsFetcher,
+) (queue.Client, error) {
 	secrets, err := secretsFetcher.FetchNATSSecrets(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("fetch NATS secrets: %w", err)
@@ -88,9 +97,13 @@ func NewClientWithURL(ctx context.Context, natsURL, clusterID string, secretsFet
 		return nil, fmt.Errorf("create nkey auth option: %w", err)
 	}
 
-	nc, err := nats.Connect(natsURLOrDefault(natsURL),
+	opts := []nats.Option{
 		nkeyAuthOption,
-		nats.Name(fmt.Sprintf("nvca-queue-client/%s", clusterID)))
+		nats.Name(fmt.Sprintf("nvca-queue-client/%s", clusterID)),
+	}
+	opts = append(opts, natsHostOverrideOptions(natsURL, natsHostOverride)...)
+
+	nc, err := nats.Connect(natsURLOrDefault(natsURL), opts...)
 	if err != nil {
 		return nil, fmt.Errorf("connect to NATS: %w", err)
 	}

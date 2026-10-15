@@ -23,8 +23,8 @@ import (
 	"time"
 
 	cmnoauth "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/oauth"
-	"github.com/go-jose/go-jose/v3"
-	"github.com/go-jose/go-jose/v3/jwt"
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/mock/utils"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
@@ -73,7 +73,7 @@ func (f *tokenFetcher) FetchToken(context.Context) (string, error) {
 		Issuer:  f.iss,
 		Subject: f.sub,
 		Expiry:  jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
-	}).CompactSerialize()
+	}).Serialize()
 	if err != nil {
 		return "", err
 	}
@@ -85,7 +85,7 @@ type tokenVerifier struct {
 }
 
 func (v *tokenVerifier) VerifyToken(ctx context.Context, token string) (bool, error) {
-	tok, err := jwt.ParseSigned(token)
+	tok, err := jwt.ParseSigned(token, []jose.SignatureAlgorithm{jose.RS256})
 	if err != nil {
 		return false, err
 	}

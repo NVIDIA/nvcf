@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+{{- if .Values.webhook.enabled }}
+# cert-manager-managed TLS for the in-agent admission webhook.
+# Requires cert-manager already installed in the cluster.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: nvsnap-webhook-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: nvsnap-webhook-tls
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: nvsnap-webhook-tls
+  duration: {{ .Values.webhook.cert.duration }}
+  renewBefore: {{ .Values.webhook.cert.renewBefore }}
+  issuerRef:
+    name: nvsnap-webhook-selfsigned
+    kind: Issuer
+  dnsNames:
+    - {{ .Values.webhook.serviceName }}
+    - {{ .Values.webhook.serviceName }}.{{ .Release.Namespace }}
+    - {{ .Values.webhook.serviceName }}.{{ .Release.Namespace }}.svc
+    - {{ .Values.webhook.serviceName }}.{{ .Release.Namespace }}.svc.cluster.local
+---
+# Selector points at the agent DaemonSet (not a separate webhook Pod).
+# The Service load-balances admission traffic across agent pods.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.webhook.serviceName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvsnap.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "nvsnap.agent.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: 443
+      targetPort: 8443
+      protocol: TCP
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: nvsnap-rootfs-restore
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/nvsnap-webhook-tls
+webhooks:
+  - name: rootfs-restore.nvsnap.io
+    clientConfig:
+      service:
+        name: {{ .Values.webhook.serviceName }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+        port: 443
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+        operations: ["CREATE"]
+        scope: Namespaced
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    sideEffects: None
+    admissionReviewVersions: ["v1"]
+    timeoutSeconds: 5
+{{- end }}

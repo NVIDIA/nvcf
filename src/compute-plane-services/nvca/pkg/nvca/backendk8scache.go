@@ -20,6 +20,7 @@ package nvca
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -78,8 +79,10 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures/sharedcluster"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kaischeduler"
 	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/fnds"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/profiling"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
@@ -101,7 +104,8 @@ const (
 )
 
 var (
-	useUUIDForRequestObjName atomic.Bool
+	errICMSRequestFinalizerRetained = errors.New("ICMS request finalizer retained")
+	useUUIDForRequestObjName        atomic.Bool
 )
 
 func init() {
@@ -167,6 +171,9 @@ type BackendK8sCache struct {
 	helmSharedStorageEnabled             bool
 	helmInternalPersistentStorageEnabled bool
 	featureFlagFetcher                   featureflag.Fetcher
+	// nsightProfilingAllowlist tracks which functions should have NVIDIA Nsight GPU
+	// profiling enabled. Populated from an optional ConfigMap and refreshed periodically.
+	nsightProfilingAllowlist *profiling.Allowlist
 	// If true, nvca will request once for PVC rebind for model-cache setup
 	pvcRebindEnabled bool
 	// For credential updater jobs.
@@ -180,8 +187,14 @@ type BackendK8sCache struct {
 	// Use Function Deployment Stages to log state transition events.
 	fndsClient fnds.Client
 
-	icmsRequestWQ workqueue.RateLimitingInterface
-	nodeUpdateWQ  workqueue.RateLimitingInterface
+	icmsRequestWQ      workqueue.RateLimitingInterface
+	nodeUpdateWQ       workqueue.RateLimitingInterface
+	notFoundInstanceWQ workqueue.RateLimitingInterface
+	// notFoundInstanceReporter posts a terminated status to ICMS for an
+	// instance whose ICMSRequest CR was deleted locally before ICMS itself
+	// was ever told the instance is gone. Wired by Agent, which owns the
+	// ICMS HTTP client; nil in builds/tests that don't need it.
+	notFoundInstanceReporter func(ctx context.Context, reqID, instanceID string) error
 
 	podLister                            listersv1.PodLister
 	podSpecLister                        listersv1.PodNamespaceLister
@@ -220,7 +233,7 @@ type BackendK8sCache struct {
 	taskEnvOverrides     map[string]string
 }
 
-// BackendK8sCacheBuilder builds Backendk8sCache and start related egde K8s
+// BackendK8sCacheBuilder builds Backendk8sCache and start related edge K8s
 // informers, monitored K8s events are sent to a event channel that is
 // returned by Start()
 type BackendK8sCacheBuilder struct {
@@ -447,6 +460,17 @@ func (b *BackendK8sCacheBuilder) WithFNDSClient(client fnds.Client) *BackendK8sC
 	return &next
 }
 
+// WithNotFoundInstanceStatusReporter wires the callback used to tell ICMS an
+// instance is terminated immediately when its ICMSRequest CR is deleted
+// locally, instead of waiting for the next periodic instance status sync.
+func (b *BackendK8sCacheBuilder) WithNotFoundInstanceStatusReporter(
+	reporter func(ctx context.Context, reqID, instanceID string) error,
+) *BackendK8sCacheBuilder {
+	next := *b
+	next.notFoundInstanceReporter = reporter
+	return &next
+}
+
 func (b *BackendK8sCacheBuilder) WithPVCRebind(on bool) *BackendK8sCacheBuilder {
 	next := *b
 	next.pvcRebindEnabled = on
@@ -476,8 +500,8 @@ func (b *BackendK8sCacheBuilder) WithSecretMirrorConfig(namespace, selector stri
 // WithEnvOverrides sets the environment variable overrides for function and task workloads
 func (b *BackendK8sCacheBuilder) WithEnvOverrides(functionOverrides, taskOverrides map[string]string) *BackendK8sCacheBuilder {
 	next := *b
-	next.functionEnvOverrides = functionOverrides
-	next.taskEnvOverrides = taskOverrides
+	next.functionEnvOverrides = envutil.NormalizeEnvOverrides(functionOverrides)
+	next.taskEnvOverrides = envutil.NormalizeEnvOverrides(taskOverrides)
 	return &next
 }
 
@@ -491,7 +515,11 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		return nil, nil, fmt.Errorf("addSharedClusterNodePublisher is required")
 	}
 
-	eventBroadcaster := record.NewBroadcaster()
+	// Per-instance spam/aggregation keys so multi-instance heartbeats on one
+	// ICMSRequest keep ledger annotations (see NewLedgerEventCorrelatorOptions).
+	eventBroadcaster := record.NewBroadcasterWithCorrelatorOptions(
+		NewLedgerEventCorrelatorOptions(b.periodicInstanceStatusUpdateInterval),
+	)
 	// Certain features must be turned on for security in OVC environments.
 	ovcSecEnforcementsEnabled := b.enabledAttrs.Enabled(featureflag.AttrOVCSecurityEnforcements)
 
@@ -523,7 +551,10 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		autoPurgeDegradedWorkers:             b.autoPurgeDegradedWorkers,
 		icmsRequestWQ:                        workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 		nodeUpdateWQ:                         workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		notFoundInstanceWQ:                   workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+		notFoundInstanceReporter:             b.notFoundInstanceReporter,
 		featureFlagFetcher:                   b.featureFlagFetcher,
+		nsightProfilingAllowlist:             profiling.New(),
 		lowLatencyStreamingEnabled:           b.lowLatencyStreamingEnabled,
 		helmRepositoryPrefix:                 b.helmRepositoryPrefix,
 		pvcRebindEnabled:                     b.pvcRebindEnabled,
@@ -545,6 +576,10 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		<-ctx.Done()
 		c.nodeUpdateWQ.ShutDown()
 	}()
+	go func() {
+		<-ctx.Done()
+		c.notFoundInstanceWQ.ShutDown()
+	}()
 
 	if c.systemNamespace == "" {
 		c.systemNamespace = SystemNamespace
@@ -558,6 +593,10 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 	if c.podInstanceNamespace == "" {
 		c.podInstanceNamespace = c.requestsNamespace
 	}
+
+	// Load the optional Nsight profiling allowlist and keep it refreshed so operators
+	// can change which functions are profiled without restarting NVCA.
+	c.startNsightProfilingAllowlistRefresh(ctx)
 
 	if c.namespaceLabels == nil {
 		return nil, nil, fmt.Errorf("namespace labels are required")
@@ -718,6 +757,13 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		if err != nil && !k8serrors.IsAlreadyExists(err) {
 			return nil, nil, fmt.Errorf("failed to create model cache init namespace: %w", err)
 		}
+		// Patch WorkloadInstanceTypeLabel onto the namespace so the Kyverno
+		// add-unbound-dns policy injects nvcf-unbound nameservers into writer
+		// job pods. Done here (not only in Create) so pre-existing namespaces
+		// on upgraded clusters receive the label immediately at startup.
+		if err := ensureModelCacheNamespaceLabel(ctx, c.clients.K8s.CoreV1().Namespaces(), mcInitNamespace.Name); err != nil {
+			return nil, nil, fmt.Errorf("failed to patch model cache init namespace labels: %w", err)
+		}
 
 		// Network policies must exist in all workload namespaces;
 		// the Helm handler methods will do this for each new namespace.
@@ -727,6 +773,15 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 				return nil, nil, fmt.Errorf("create NetworkPolicies in namespace %s: %v",
 					namespace, err)
 			}
+		}
+
+		// One-time migration for clusters that already had the intra-namespace
+		// egress policy in the shared pod-instance namespace before it was scoped
+		// out; ensureNetworkPolicies above does not remove it on its own. Best
+		// effort: failing to remove a leftover policy should not block agent
+		// startup, since it does not affect the agent's ability to operate.
+		if err := k8sutil.RemoveLegacyIntraNamespaceEgressPolicy(ctx, c.podInstanceNamespace, c.clients.K8s); err != nil {
+			log.WithError(err).Warnf("failed to remove legacy NetworkPolicy in namespace %s", c.podInstanceNamespace)
 		}
 
 		// add configMapInformers for Network Policy for k8s backend only
@@ -795,6 +850,9 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 					return
 				}
 				c.icmsRequestWQ.Add(makeNamespacedName(req))
+			},
+			DeleteFunc: func(obj interface{}) {
+				c.enqueueNotFoundInstancesOnDelete(ctx, obj)
 			},
 		})
 		if err != nil {
@@ -873,7 +931,64 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		}()
 	}
 
+	if c.notFoundInstanceReporter != nil {
+		log.Info("Starting not-found instance status worker")
+		go func() {
+			for c.processNotFoundInstanceWork(ctx) {
+			}
+		}()
+	}
+
 	return c, out, nil
+}
+
+// notFoundInstanceKey identifies one instance to report to ICMS as
+// terminated because its ICMSRequest CR was deleted locally without ICMS
+// ever being told the instance is gone.
+type notFoundInstanceKey struct {
+	RequestID  string
+	InstanceID string
+}
+
+// enqueueNotFoundInstancesOnDelete handles an ICMSRequest informer delete
+// event. Once the CR is gone, nothing will ever enumerate its instances
+// again to tell ICMS they're terminated (see PostICMSInstanceRequestStatusUpdates,
+// which only walks currently-existing CRs), so this reports them now instead
+// of waiting for the periodic instance status sync to notice the CR is
+// missing.
+func (c *BackendK8sCache) enqueueNotFoundInstancesOnDelete(ctx context.Context, obj interface{}) {
+	log := core.GetLogger(ctx)
+
+	// No worker drains notFoundInstanceWQ without a reporter (see the guard
+	// on the worker startup in Start()), so enqueueing here would just leak
+	// entries for the process lifetime. The periodic instance status sync
+	// remains the fallback in builds that don't wire a reporter.
+	if c.notFoundInstanceReporter == nil {
+		return
+	}
+
+	req, ok := obj.(*nvcav2beta1new.ICMSRequest)
+	if !ok {
+		tombstone, isTombstone := obj.(cache.DeletedFinalStateUnknown)
+		if !isTombstone {
+			log.Errorf("Wrong object type in ICMS request delete event handler: %T", obj)
+			return
+		}
+		req, ok = tombstone.Obj.(*nvcav2beta1new.ICMSRequest)
+		if !ok {
+			// The informer lost the object before delivering its delete
+			// event, and the tombstone's last-known object isn't an
+			// ICMSRequest either, so status.instances isn't available here.
+			// The periodic instance status sync remains the fallback.
+			log.Warn("ICMS request delete tombstone: last known instance status unavailable, " +
+				"deferring to periodic instance status sync")
+			return
+		}
+	}
+
+	for instanceID := range req.Status.Instances {
+		c.notFoundInstanceWQ.Add(notFoundInstanceKey{RequestID: req.Spec.RequestID, InstanceID: instanceID})
+	}
 }
 
 type eventWatcher func(ctx context.Context, event *corev1.Event)
@@ -1119,6 +1234,10 @@ func (c *BackendK8sCache) processICMSRequestWork(ctx context.Context) bool {
 				// Forget the ICMS request so it does not stay enqueued.
 				c.icmsRequestWQ.Forget(obj)
 				return
+			case errors.Is(rerr, errICMSRequestFinalizerRetained):
+				log.WithError(rerr).Info("ICMS request is deleting but not ready for finalizer removal")
+				c.icmsRequestWQ.Forget(obj)
+				return
 			case storage.IsRequeableStorageError(rerr):
 				// Do nothing and requeue.
 			default:
@@ -1134,6 +1253,52 @@ func (c *BackendK8sCache) processICMSRequestWork(ctx context.Context) bool {
 		log.Debug("Successfully synced ICMS request")
 	}()
 
+	return true
+}
+
+// processNotFoundInstanceWork drains notFoundInstanceWQ, reporting each
+// queued instance to ICMS as terminated via notFoundInstanceReporter. This
+// is the same corrective action the periodic instance status sync takes for
+// an instance ICMS still thinks is live but that has no local ICMSRequest CR
+// (see ReconcileInstanceStatus), just triggered immediately by the CR's
+// deletion instead of waiting for the next periodic pass.
+func (c *BackendK8sCache) processNotFoundInstanceWork(ctx context.Context) bool {
+	log := core.GetLogger(ctx)
+
+	obj, shutdown := c.notFoundInstanceWQ.Get()
+	if shutdown {
+		log.Info("Not-found instance worker shutting down")
+		return false
+	}
+	defer c.notFoundInstanceWQ.Done(obj)
+
+	key, ok := obj.(notFoundInstanceKey)
+	if !ok {
+		c.notFoundInstanceWQ.Forget(obj)
+		log.Errorf("Unexpected dequeued object type: %T", obj)
+		return true
+	}
+
+	log = log.WithFields(logrus.Fields{
+		"requestID":  key.RequestID,
+		"instanceID": key.InstanceID,
+	})
+	err := nvcaotel.InvokeWithSpan(ctx, c.tracer, "nvca.BackendK8sCache.ReportNotFoundInstance",
+		func(ctx context.Context) error {
+			return c.notFoundInstanceReporter(ctx, key.RequestID, key.InstanceID)
+		},
+		oteltrace.WithSpanKind(oteltrace.SpanKindClient),
+		oteltrace.WithAttributes(
+			otelattr.String(nvcaotel.ICMSRequestIDAttributeKey, key.RequestID),
+			otelattr.String("nvcf.instance.id", key.InstanceID)))
+	if err != nil {
+		log.WithError(err).Error("Failed to report not-found instance as terminated, requeuing")
+		c.notFoundInstanceWQ.AddRateLimited(obj)
+		return true
+	}
+
+	c.notFoundInstanceWQ.Forget(obj)
+	log.Debug("Reported not-found instance as terminated")
 	return true
 }
 
@@ -1171,6 +1336,73 @@ func makeNamespacedName(obj metav1.Object) apitypes.NamespacedName {
 		Namespace: obj.GetNamespace(),
 		Name:      obj.GetName(),
 	}
+}
+
+// nsightProfilingRefreshInterval is how often the Nsight profiling allowlist ConfigMap
+// is re-read from the API server.
+const nsightProfilingRefreshInterval = time.Minute
+
+// startNsightProfilingAllowlistRefresh reads the optional Nsight profiling ConfigMap once
+// and then re-reads it periodically until ctx is cancelled, keeping the in-memory allowlist
+// current. A missing ConfigMap is treated as "profile nothing".
+func (c *BackendK8sCache) startNsightProfilingAllowlistRefresh(ctx context.Context) {
+	// lastSig logs at Info only on change (Debug otherwise) so the per-minute refresh does
+	// not spam Info. Only accessed from refresh, which runs serially.
+	var lastSig string
+
+	refresh := func() {
+		log := core.GetLogger(ctx)
+		allowlist := c.nsightProfilingAllowlist
+		cm, err := c.clients.K8s.CoreV1().ConfigMaps(c.systemNamespace).Get(
+			ctx, profiling.ConfigMapName, metav1.GetOptions{})
+		switch {
+		case err != nil && k8serrors.IsNotFound(err):
+			allowlist.LoadFromConfigMap(nil)
+		case err != nil:
+			log.WithError(err).Warnf("failed to read GPU profiling ConfigMap %s/%s",
+				c.systemNamespace, profiling.ConfigMapName)
+			return
+		default:
+			allowlist.LoadFromConfigMap(cm)
+		}
+
+		fields := logrus.Fields{
+			"configMap":   fmt.Sprintf("%s/%s", c.systemNamespace, profiling.ConfigMapName),
+			"wildcard":    allowlist.IsWildcard(),
+			"functionIDs": allowlist.FunctionIDs(),
+			"labelKey":    allowlist.LabelKey(),
+			"labelValue":  allowlist.LabelValue(),
+		}
+		sig := fmt.Sprintf("wildcard=%t;ids=%s;label=%s=%s",
+			allowlist.IsWildcard(), strings.Join(allowlist.FunctionIDs(), ","),
+			allowlist.LabelKey(), allowlist.LabelValue())
+		if sig != lastSig {
+			lastSig = sig
+			log.WithFields(fields).Info("GPU profiling allowlist updated")
+		} else {
+			log.WithFields(fields).Debug("GPU profiling allowlist unchanged")
+		}
+	}
+
+	refresh()
+
+	go func() {
+		t := time.NewTicker(nsightProfilingRefreshInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				// select is non-deterministic when ctx.Done() and t.C are both ready;
+				// re-check before refreshing to avoid a spurious warning on shutdown.
+				if ctx.Err() != nil {
+					return
+				}
+				refresh()
+			}
+		}
+	}()
 }
 
 // parseCustomAnnotationsFromConfigMap extracts and parses custom annotations from a ConfigMap
@@ -1443,6 +1675,9 @@ func (c *BackendK8sCache) GetNodeInformer() cache.SharedIndexInformer {
 
 func (c *BackendK8sCache) GetComponentStatus(ctx context.Context) (hs types.AgentHealth, err error) {
 	hs.GPUUsage, err = c.getGPUUsageStats(ctx)
+	if hs.GPUUsage == nil {
+		hs.GPUUsage = map[nvcatypes.GPUName]nvcatypes.GPUResource{}
+	}
 	hs.Status = types.HealthStatusHealthy
 	ch := types.ComponentHealth{
 		Status:      types.HealthStatusHealthy,
@@ -1467,6 +1702,17 @@ func getCurrentK8sVersion(ctx context.Context, serverVersionClient discovery.Ser
 		return "", fmt.Errorf("failed to query the running k8s version, error: %w", err)
 	}
 	return ver.GitVersion, nil
+}
+
+func resolveK8sVersion(
+	ctx context.Context,
+	override string,
+	serverVersionClient discovery.ServerVersionInterface,
+) (string, error) {
+	if override != "" {
+		return override, nil
+	}
+	return getCurrentK8sVersion(ctx, serverVersionClient)
 }
 
 // TODO: Revisit to include this info in a new API from NVCA Operator to ICMS (via NGC API)
@@ -1614,7 +1860,7 @@ func (c *BackendK8sCache) getGPUUsageStats(ctx context.Context) (map[nvcatypes.G
 		return nil, fmt.Errorf("failed to get infra overhead: %w", err)
 	}
 	regBackendGPUs := nvcatypes.BackendGPUs(bg).ToRegistration(multiNodeWorkloadsEnabled, infraOverhead)
-	regBackendGPUs, err = nvcatypes.AddInstanceCapacity(ctx, regBackendGPUs, c.nodeLister, c.sharedClusterOn)
+	regBackendGPUs, _, err = nvcatypes.AddInstanceCapacity(ctx, regBackendGPUs, c.nodeLister, c.sharedClusterOn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to add instance availability to backend GPUs: %w", err)
 	}
@@ -1638,13 +1884,14 @@ func (c *BackendK8sCache) getGPUUsageStats(ctx context.Context) (map[nvcatypes.G
 			continue
 		}
 		for _, it := range regGPU.InstanceTypes {
-			if strings.HasSuffix(it.Name, "_1x") {
-				res := gpuUtil[nvcatypes.GPUName(regGPU.Name)]
-				res.Capacity += it.MaxInstances * it.GPUCount
-				res.Allocated += allocatedGPUs[it.Value]
-				gpuUtil[nvcatypes.GPUName(regGPU.Name)] = res
-				break
+			if it.NodeType != nvcatypes.RegistrationInstanceTypeNodeTypeSingle {
+				continue
 			}
+			res := gpuUtil[nvcatypes.GPUName(regGPU.Name)]
+			res.Capacity += it.MaxInstances * it.GPUCount
+			res.Allocated += allocatedGPUs[it.Value]
+			gpuUtil[nvcatypes.GPUName(regGPU.Name)] = res
+			break
 		}
 	}
 	return gpuUtil, nil
@@ -1687,20 +1934,32 @@ func (c *BackendK8sCache) GetRegisteredBackendGPUs(ctx context.Context,
 	var (
 		regBackendGPUs = types.BackendGPUs(backendGPUs).ToRegistration(multiNodeWorkloadsEnabled, infraOverhead)
 	)
-	regBackendGPUs, err = types.AddInstanceCapacity(ctx, regBackendGPUs, c.nodeLister, c.sharedClusterOn)
+	regBackendGPUs, gpuNodeClassifications, err := types.AddInstanceCapacity(ctx, regBackendGPUs, c.nodeLister, c.sharedClusterOn)
 	if err != nil {
 		return nil, err
 	}
-	err = c.UpdateInstanceTypeMetrics(ctx, regBackendGPUs)
+	err = c.UpdateInstanceTypeMetrics(ctx, regBackendGPUs, gpuNodeClassifications)
 	if err != nil {
 		return nil, err
 	}
 	return regBackendGPUs, nil
 }
 
-func (c *BackendK8sCache) UpdateInstanceTypeMetrics(ctx context.Context, gpus []types.RegistrationGPU) error {
+func (c *BackendK8sCache) UpdateInstanceTypeMetrics(
+	ctx context.Context,
+	gpus []types.RegistrationGPU,
+	gpuNodeClassifications []types.GPUNodeClassification,
+) error {
 	log := core.GetLogger(ctx)
 	metrics := nvcametrics.FromContext(ctx)
+	// Reset before repopulating so a gpu_family/gpu_machine combination that disappears from the
+	// cluster (e.g. a node pool decommissioned) doesn't leave a stale nonzero series behind.
+	metrics.GPUNodeUnclassifiedCount.Reset()
+	metrics.GPUNodeTotalCount.Reset()
+	for _, classification := range gpuNodeClassifications {
+		metrics.SetUnclassifiedGPUNodeCount(classification.GPUFamily, classification.GPUMachine, float64(classification.Unclassified))
+		metrics.SetTotalGPUNodeCount(classification.GPUFamily, classification.GPUMachine, float64(classification.Total))
+	}
 
 	allocatedInstanceGPUs, err := c.getAllocatedInstanceGPUs(ctx)
 	if err != nil {
@@ -2149,6 +2408,9 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 			TaskID:         mt.Details.TaskID,
 		})
 	}
+	if err := c.persistModelCacheStorageSelection(ctx, &o); err != nil {
+		return nil, err
+	}
 	obj, err := c.clients.BART.NvcaV2beta1().ICMSRequests(c.requestsNamespace).Create(ctx, &o, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to persist the ICMS request on the backend, err: %v", err)
@@ -2476,7 +2738,7 @@ func (c *BackendK8sCache) syncICMSRequest(ctx context.Context, req *nvcav2beta1n
 		if containsString(req.ObjectMeta.Finalizers, NVCAFinalizer) {
 			// our finalizer is present, so lets handle our external dependency
 			if !c.icmsRequestHelper.AllInstancesTerminatedAndReported(ctx, req) {
-				return fmt.Errorf("instances are not terminated and reported for %s, retain finalizer", req.Name)
+				return fmt.Errorf("%w: instances are not terminated and reported for %s", errICMSRequestFinalizerRetained, req.Name)
 			}
 
 			retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -2507,6 +2769,7 @@ func (c *BackendK8sCache) syncICMSRequest(ctx context.Context, req *nvcav2beta1n
 		return nil
 	}
 
+	requestAction := req.Spec.Action.Normalize()
 	var err error
 	var purgeAttempted bool
 	switch req.Status.RequestStatus {
@@ -2523,7 +2786,7 @@ func (c *BackendK8sCache) syncICMSRequest(ctx context.Context, req *nvcav2beta1n
 		}
 		fallthrough
 	case nvcav2beta1new.ICMSRequestStatusInProgress, nvcav2beta1new.ICMSRequestStatusCachingInProgress:
-		switch req.Spec.Action {
+		switch requestAction {
 		case common.FunctionCreationAction, common.TaskCreationAction:
 			if c.icmsRequestHelper.AllInstancesTerminatedAndReported(ctx, req) {
 				// this occurs when the backend goes unhealthy
@@ -2852,6 +3115,17 @@ func (c *BackendK8sCache) ensureImageCredentialUpdaterCronJob(ctx context.Contex
 	// Use NVCA's service account to run the job for API access and image pull secrets.
 	cj.Namespace = c.systemNamespace
 	cj.Spec.JobTemplate.Spec.Template.Spec.ServiceAccountName = "nvca"
+
+	// All Pods created by NVCA must use the same scheduler.
+	if c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.KAIScheduler) {
+		cj.Spec.JobTemplate.Spec.Template.Spec.SchedulerName = kaischeduler.SchedulerName
+		labels := cj.Spec.JobTemplate.Spec.Template.GetLabels()
+		if labels == nil {
+			labels = make(map[string]string)
+		}
+		labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.DefaultQueue
+		cj.Spec.JobTemplate.Spec.Template.SetLabels(labels)
+	}
 
 	cjClient := c.clients.K8s.BatchV1().CronJobs(cj.Namespace)
 	if _, err := cjClient.Get(ctx, cj.Name, metav1.GetOptions{}); err != nil {

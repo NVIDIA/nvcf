@@ -1,0 +1,92 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Release.Name }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ .Release.Name }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      {{- if .Values.ngcImagePullSecretName }}
+      imagePullSecrets:
+        - name: {{ .Values.ngcImagePullSecretName }}
+      {{- end }}
+      containers:
+        - name: ray-serve
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["bash", "-c"]
+          args:
+            - |
+              ray start --head --port=6379 --dashboard-host=0.0.0.0 --block &
+              until ray health-check 2>/dev/null; do sleep 2; done
+              python /app/serve_app.py
+          ports:
+            - name: inference
+              containerPort: {{ .Values.inferencePort }}
+              protocol: TCP
+            - name: ray-client
+              containerPort: 10001
+              protocol: TCP
+            - name: dashboard
+              containerPort: 8265
+              protocol: TCP
+          resources:
+            requests:
+              cpu: {{ .Values.resources.requests.cpu | quote }}
+              memory: {{ .Values.resources.requests.memory | quote }}
+              {{- if gt (int .Values.gpu.count) 0 }}
+              {{ .Values.gpu.product }}: {{ .Values.gpu.count | quote }}
+              {{- end }}
+            limits:
+              cpu: {{ .Values.resources.limits.cpu | quote }}
+              memory: {{ .Values.resources.limits.memory | quote }}
+              {{- if gt (int .Values.gpu.count) 0 }}
+              {{ .Values.gpu.product }}: {{ .Values.gpu.count | quote }}
+              {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.inferencePort }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.inferencePort }}
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 4
+          volumeMounts:
+            - name: app
+              mountPath: /app
+      volumes:
+        - name: app
+          configMap:
+            name: {{ .Release.Name }}-app

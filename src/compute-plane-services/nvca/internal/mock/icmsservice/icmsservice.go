@@ -30,7 +30,8 @@ import (
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	"github.com/go-jose/go-jose/v3/jwt"
+	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
@@ -44,7 +45,6 @@ import (
 
 const (
 	clusterIsNotRegisteredMsg = "cluster is not registered: "
-	verPrefixV1Bart           = "/v1/bart"
 	verPrefixV1NVCA           = "/v1/nvca"
 )
 
@@ -79,7 +79,6 @@ func newService(ctx context.Context, addr, queueEndpoint string, priv *rsa.Priva
 		ServiceState: ServiceState{
 			BartClusters:        map[string]ClusterInfo{},
 			QueueMetadata:       map[string]ICMSCredentialResponse{},
-			QueueMetadataV1Bart: map[string]ICMSCredentialResponseV1Bart{},
 			ICMSRequestStatuses: map[string]types.ICMSAcknowledgeRequest{},
 			InstanceStatuses:    map[string]map[string]types.ICMSInstanceStatusUpdateRequest{},
 		},
@@ -170,24 +169,8 @@ type ServiceState struct {
 	BartClusters map[string]ClusterInfo `json:"bart_clusters"`
 	// Map of OAuth client ID to a registered cluster's queues.
 	QueueMetadata       map[string]ICMSCredentialResponse                           `json:"queue_metadata"`
-	QueueMetadataV1Bart map[string]ICMSCredentialResponseV1Bart                     `json:"queue_metadata_v1_bart"`
 	ICMSRequestStatuses map[string]types.ICMSAcknowledgeRequest                     `json:"icms_request_status"`
 	InstanceStatuses    map[string]map[string]types.ICMSInstanceStatusUpdateRequest `json:"instance_status"`
-}
-
-type ICMSRegistrationResponseV1 struct {
-	ClusterID      string                 `json:"clusterId,omitempty"`
-	ClusterGroupID string                 `json:"clusterGroupId,omitempty"`
-	Credentials    QueueCredentialsV1Bart `json:"credentials,omitempty"`
-}
-
-type ICMSCredentialResponseV1Bart struct {
-	Credentials QueueCredentialsV1Bart `json:"credentials,omitempty"`
-}
-
-type QueueCredentialsV1Bart struct {
-	CreationQueue    queue.MessageQueueInfo `json:"creationQueue,omitempty"`
-	TerminationQueue queue.MessageQueueInfo `json:"terminationQueue,omitempty"`
 }
 
 type ICMSRegistrationResponse struct {
@@ -530,7 +513,7 @@ func (s *icmsService) parseAuth(r *http.Request) (oauthClientID string, valid bo
 
 	tokStr := strings.TrimPrefix(authHdrVal, "Bearer ")
 
-	tok, err := jwt.ParseSigned(tokStr)
+	tok, err := jwt.ParseSigned(tokStr, []jose.SignatureAlgorithm{jose.RS256})
 	if err != nil {
 		return "", false, err
 	}

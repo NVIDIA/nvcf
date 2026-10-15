@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "sqs",
+    srcs = [
+        "api.go",
+        "checksums.go",
+        "customizations.go",
+        "doc.go",
+        "errors.go",
+        "service.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/service/sqs",
+    importpath = "github.com/aws/aws-sdk-go/service/sqs",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/awserr",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/awsutil",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/client",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/client/metadata",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/request",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/aws/signer/v4:signer",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/private/protocol",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go/private/protocol/jsonrpc",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":sqs",
+    visibility = ["//visibility:public"],
+)

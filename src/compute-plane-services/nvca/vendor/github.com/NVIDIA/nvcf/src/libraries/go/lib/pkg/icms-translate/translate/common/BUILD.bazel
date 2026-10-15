@@ -1,0 +1,44 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "common",
+    srcs = [
+        "auths.go",
+        "decode.go",
+        "env.go",
+        "ess.go",
+        "k8s.go",
+        "otel.go",
+        "translator.go",
+        "types.go",
+        "zz_generated.deepcopy.go",
+    ],
+    embedsrcs = [
+        "manifests/fluent-bit.conf.tmpl",
+        "manifests/parsers.conf",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
+    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/dario.cat/mergo",
+        "//src/compute-plane-services/nvca/vendor/github.com/Masterminds/semver/v3:semver",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/backendconfig",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otelconfig/config",
+        "//src/compute-plane-services/nvca/vendor/github.com/golang-jwt/jwt/v5:jwt",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/go-containerregistry/pkg/name",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/uuid",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/resource",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/intstr",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/validation",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":common",
+    visibility = ["//visibility:public"],
+)
