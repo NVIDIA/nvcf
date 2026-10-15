@@ -21,15 +21,22 @@ import (
 )
 
 func SyncInlineVersions(path, content string, catalog *Catalog) (string, bool, error) {
+	if sync := inlineVersionSyncer(path); sync != nil {
+		return sync(content, catalog)
+	}
+	return content, false, nil
+}
+
+func inlineVersionSyncer(path string) func(string, *Catalog) (string, bool, error) {
 	switch path {
 	case "docs/overview/image-mirroring.md":
-		return syncImageMirroring(content, catalog)
+		return syncImageMirroring
 	case "docs/compute-plane/cluster-management/self-managed.md":
-		return syncClusterManagementSelfManaged(content, catalog)
+		return syncClusterManagementSelfManaged
 	case "docs/compute-plane/cluster-management/reference.md":
-		return syncClusterManagementReference(content, catalog)
+		return syncClusterManagementReference
 	default:
-		return content, false, nil
+		return nil
 	}
 }
 

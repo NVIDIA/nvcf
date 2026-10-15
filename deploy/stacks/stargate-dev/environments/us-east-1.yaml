@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Fill the regional network and TLS values, create the named kube contexts,
+# then set deploymentReady to true. Credentials belong only in the protected
+# file created by scripts/deploy.py init.
+deploymentReady: false
+namespace: stargate-dev
+region: us-east-1
+modelName: stargate-dev-model
+routingKey: stargate-dev
+
+clusters:
+  stargate:
+    name: stargate-ue1
+    kubeContext: stargate-ue1
+  mockdcs:
+    - name: mockdc-ue1-a
+      kubeContext: mockdc-ue1-a
+      mockDynamo:
+        backend0:
+          numGpuWorkers: 14
+        backend1:
+          numGpuWorkers: 6
+    - name: mockdc-ue1-b
+      kubeContext: mockdc-ue1-b
+      mockDynamo:
+        backend0:
+          numGpuWorkers: 12
+        backend1:
+          numGpuWorkers: 9
+
+router:
+  # A non-empty object replaces the complete default routing policy.
+  loadBalancerConfig: {}
+  remoteWatchUrls: []
+  hostname: router.use1.stargate-dev.example.invalid
+  acmCertificateArn: arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000
+  # Include NAT egress IPs of all connected MockDC and hub clusters.
+  loadBalancerSourceRanges:
+    - 192.0.2.1/32
+
+observability:
+  namespace: stargate-dev-observability
+  amp:
+    workspaceId: ws-00000000-0000-0000-0000-000000000000

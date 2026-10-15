@@ -1,9 +1,19 @@
-# Release a docs edition
+# Release and maintain documentation
 
 A docs edition versions one documented combination of Self-Managed, Compute
 Plane, and Observability. Stack artifacts keep their own release versions.
 The site has one edition selector and six tabs. Development reads current
-sources; stable editions read protected `docs/releases/X.Y.Z` branches.
+sources; legacy stable editions read protected `docs/releases/X.Y.Z` branches.
+
+## Choose the docs model
+
+Existing `docs/releases/X.Y.Z` editions use the immutable workflow below.
+For an umbrella product release, use the
+[umbrella release and maintained docs workflow](umbrella-releases.md).
+Its `docs/versions/X.Y.Z` branch accepts reviewed prose corrections without
+allocating a new product or docs patch. The canonical registry selects the
+approved docs commit independently from the immutable product manifest.
+Do not convert a published legacy URL to a different stack combination.
 
 ## Choose the version and combination
 

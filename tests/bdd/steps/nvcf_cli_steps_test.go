@@ -367,30 +367,37 @@ func TestFunctionAPIKeyGenerationSuppressesSecretBearingStdout(t *testing.T) {
 }
 
 func TestNVCFCLIModelInvocationRetriesNoEligibleCandidates(t *testing.T) {
-	sc, fake := newScenarioContext(t)
-	t.Setenv("NVCF_CLI", "nvcf-cli")
-	sc.NVCFCLIConfig = "config.yaml"
-	fake.runResults = []harness.Result{
-		{ExitCode: 1, Stderr: `API error 404: {"code":"no_eligible_candidates"}`},
-		{ExitCode: 0, Stdout: `{"object":"chat.completion"}`},
-	}
-
 	previousInterval := modelInvocationRetryInterval
 	modelInvocationRetryInterval = time.Nanosecond
 	t.Cleanup(func() { modelInvocationRetryInterval = previousInterval })
 
-	err := sc.iSuccessfullyInvokeModel(
-		context.Background(),
-		"model/name",
-		"/v1/chat/completions",
-		"1",
-		&godog.DocString{Content: `{"messages":[]}`},
-	)
-	if err != nil {
-		t.Fatalf("invoke model: %v", err)
-	}
-	if len(fake.runs) != 2 {
-		t.Fatalf("runs = %d, want 2", len(fake.runs))
+	for name, stderr := range map[string]string{
+		"router code":    `API error 404: {"code":"no_eligible_candidates"}`,
+		"router message": `API error 404: {"message":"no eligible candidates"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			sc, fake := newScenarioContext(t)
+			t.Setenv("NVCF_CLI", "nvcf-cli")
+			sc.NVCFCLIConfig = "config.yaml"
+			fake.runResults = []harness.Result{
+				{ExitCode: 1, Stderr: stderr},
+				{ExitCode: 0, Stdout: `{"object":"chat.completion"}`},
+			}
+
+			err := sc.iSuccessfullyInvokeModel(
+				context.Background(),
+				"model/name",
+				"/v1/chat/completions",
+				"1",
+				&godog.DocString{Content: `{"messages":[]}`},
+			)
+			if err != nil {
+				t.Fatalf("invoke model: %v", err)
+			}
+			if len(fake.runs) != 2 {
+				t.Fatalf("runs = %d, want 2", len(fake.runs))
+			}
+		})
 	}
 }
 

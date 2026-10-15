@@ -17,6 +17,8 @@ mod backend;
 mod config;
 mod drive;
 mod fleet;
+#[cfg(test)]
+mod invariants;
 mod metrics;
 mod sim;
 mod time;

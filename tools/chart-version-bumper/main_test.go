@@ -727,6 +727,58 @@ func TestCompositeArtifactVersionMovesDeclaredPathsAndAppVersion(t *testing.T) {
 	}
 }
 
+func TestOlderReleaseKeepsNewerChartPins(t *testing.T) {
+	for _, current := range []string{"2.0.0", "1.15.0", "1.14.11"} {
+		t.Run(current, func(t *testing.T) {
+			f := newFixture(t, `{"services":[
+			 {"id":"svc","path":"src/svc"},
+			 {"id":"c","path":"deploy/helm/c","deploys":["svc"]},
+			 {"id":"older","path":"deploy/helm/older","deploys":["svc"]}
+			]}`)
+			f.chart(t, "c", current, "image:\n  tag: "+current)
+			f.chart(t, "older", "1.14.9", "image:\n  tag: 1.14.9")
+			beforeChart := f.read(t, "c", "Chart.yaml")
+			beforeValues := f.read(t, "c", "values.yaml")
+			code, out, errOut := f.run(t, "src/svc/v1.14.10", true)
+			if code != 0 || !strings.Contains(out, "skipped older release") {
+				t.Fatalf("older release must be skipped: code=%d\n%s%s", code, out, errOut)
+			}
+			if f.read(t, "c", "Chart.yaml") != beforeChart || f.read(t, "c", "values.yaml") != beforeValues {
+				t.Fatal("older release changed newer chart pins")
+			}
+			if !strings.Contains(f.read(t, "older", "values.yaml"), "tag: 1.14.10") {
+				t.Fatal("another chart on an older patch must still advance")
+			}
+		})
+	}
+}
+
+func TestOlderWrapperReleaseKeepsDeclaredImagePaths(t *testing.T) {
+	f := newFixture(t, `{"services":[
+	 {"id":"wrapper","path":"infra/wrapper","artifact_version":{
+	   "source_file":"Dockerfile",
+	   "source_pattern":"(?m)^ARG UPSTREAM=(?P<upstream>[0-9]+\\.[0-9]+\\.[0-9]+)$",
+	   "format":"${upstream}-nv-${release}"
+	 }},
+	 {"id":"c","path":"deploy/helm/c","deploys":[{
+	   "service":"wrapper","values_paths":["server.image.tag"],"app_version":true
+	 }]}
+	]}`)
+	f.chart(t, "c", "2.6.2-nv-1.4.0", "server:\n  image:\n    tag: 2.6.2-nv-1.4.0")
+	// A higher upstream version must not disguise an older wrapper release.
+	f.source(t, "infra/wrapper/Dockerfile", "ARG UPSTREAM=2.7.0\n")
+	f.tag(t, "infra/wrapper/v1.3.9")
+	beforeChart := f.read(t, "c", "Chart.yaml")
+	beforeValues := f.read(t, "c", "values.yaml")
+	code, out, errOut := f.run(t, "infra/wrapper/v1.3.9", true)
+	if code != 0 || !strings.Contains(out, "skipped older release") {
+		t.Fatalf("older wrapper must be skipped: code=%d\n%s%s", code, out, errOut)
+	}
+	if f.read(t, "c", "Chart.yaml") != beforeChart || f.read(t, "c", "values.yaml") != beforeValues {
+		t.Fatal("older wrapper changed the chart")
+	}
+}
+
 func TestAppVersionOwningPathsRefuseExistingDrift(t *testing.T) {
 	f := newFixture(t, `{"services":[
 	 {"id":"svc","path":"src/svc"},

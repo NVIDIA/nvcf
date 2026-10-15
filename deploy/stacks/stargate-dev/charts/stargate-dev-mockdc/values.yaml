@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+clusterId: ""
+modelName: ""
+workerToken: ""
+
+stargate:
+  address: ""
+
+images:
+  mockDynamo:
+    repository: ""
+    digest: ""
+  pylon:
+    repository: ""
+    digest: ""
+
+# Each backend runs MockDynamo's batched h100-llama-3.1-8b engine as a
+# deployment of numGpuWorkers GPU workers with 25 sequences and 1,000,000 KV
+# tokens each. Pylon advertises numGpuWorkers x 25 as its engine concurrency.
+mockDynamo:
+  backend0:
+    numGpuWorkers: 1
+  backend1:
+    numGpuWorkers: 1
+
+resources:
+  mockDynamo:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  pylon:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi

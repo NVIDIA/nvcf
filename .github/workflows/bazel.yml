@@ -446,6 +446,20 @@ jobs:
             if [ "$hit" != "true" ] && [ "$java_shared_changed" = "true" ]; then
               case "$component_kind" in java-*) hit=true ;; esac
             fi
+            # Stargate's routing-method drift test compiles in these NVCF docs
+            # (//:stargate-routing-method-docs), so a docs-only change to them
+            # still runs the stargate row.
+            if [ "$hit" != "true" ] && [ "$id" = "stargate" ]; then
+              for doc in docs/overview/llm-gateway.md docs/self-managed/llm-request-router-load-balancing.md; do
+                if grep -qxF "$doc" <<<"$changed"; then hit=true; break; fi
+              done
+            fi
+            # The nvcf-core tests read Stargate's routing method manifest
+            # (//src/libraries/rust/stargate:routing_methods.json), so a
+            # manifest change also runs the cloud-functions row.
+            if [ "$hit" != "true" ] && [ "$id" = "cloud-functions" ]; then
+              if grep -qxF src/libraries/rust/stargate/routing_methods.json <<<"$changed"; then hit=true; fi
+            fi
             if [ "$hit" = "true" ]; then
               entry=$(jq -cn --arg id "$id" --arg path "$path" --argjson ts "$tests_skip" --arg wd "$workdir" --arg sc "$scope" --arg sm "$scoped" --arg ck "$component_kind" --arg cl "$ci_lane" '{id:$id, path:$path, tests_skip:$ts, workdir:$wd, scope:$sc, scoped:$sm, component_kind:$ck, ci_lane:$cl}')
               case "$ci_lane" in
