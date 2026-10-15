@@ -1910,6 +1910,161 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 	}
 }
 
+// lastClusterHTTPFake answers the NVCF API calls that add and deploy a second
+// function version, and records every request.
+type lastClusterHTTPFake struct {
+	requests []string
+}
+
+func (f *lastClusterHTTPFake) Do(_ context.Context, method, rawURL string, _ map[string]string, _ string) (harness.HTTPResponse, error) {
+	f.requests = append(f.requests, method+" "+rawURL)
+	switch {
+	case method == http.MethodPost && strings.HasSuffix(rawURL, "/v2/nvcf/functions/function-1/versions"):
+		return harness.HTTPResponse{Status: http.StatusOK, Body: `{"function":{"id":"function-1","versionId":"version-2"}}`}, nil
+	case method == http.MethodGet && strings.HasSuffix(rawURL, "/versions/version-2"):
+		return harness.HTTPResponse{Status: http.StatusOK, Body: `{"deployment":{"functionStatus":"ACTIVE"}}`}, nil
+	default:
+		return harness.HTTPResponse{Status: http.StatusOK, Body: `{}`}, nil
+	}
+}
+
+// TestMultiClusterHelmfileLLMLastClusterAffinityFeatureFileWiresToSteps runs
+// the two-compute-cluster last-cluster affinity feature against fakes. It
+// checks that both clusters are registered, the gateway and router settings
+// are applied, version B is added through the API, and version A is killed
+// only on compute-1.
+func TestMultiClusterHelmfileLLMLastClusterAffinityFeatureFileWiresToSteps(t *testing.T) {
+	const cliPrefix = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(home, ".nvcf-cli.nvcf-cli-local.state"), []byte(`{"token":"admin-jwt"}`), 0o600); err != nil {
+		t.Fatalf("seed cli state: %v", err)
+	}
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+	t.Setenv("LLM_API_GATEWAY_IMAGE_TAG", "")
+	t.Setenv("LLM_REQUEST_ROUTER_IMAGE_TAG", "")
+	t.Setenv(lastClusterInstanceTypeEnv, lastClusterDefaultInstanceType)
+
+	canned := map[string]harness.Result{
+		"k3d cluster get ncp-local": {ExitCode: 1},
+		"kubectl --context k3d-ncp-local-cp get configmap llm-request-router-lb --namespace nvcf --output yaml": {
+			ExitCode: 0,
+			Stdout: "data:\n  lb-config.json: |\n" +
+				`    {"default":"power-of-n","models":{"openai-compatible-sample":{"algorithm":"wait-and-widen","cache_affinity_backend_selection_count":1,"last_cluster_affinity":true}}}` + "\n",
+		},
+		"kubectl get configmap/llm-api-gateway --namespace nvcf --context k3d-ncp-local-cp -o yaml": {
+			ExitCode: 0,
+			Stdout:   "data:\n  STARGATE_LAST_CLUSTER_ENABLED: \"true\"\n  STARGATE_LAST_CLUSTER_LOOKUP_TIMEOUT: 250ms\n  STARGATE_LAST_CLUSTER_TTL: 10m\n",
+		},
+		cliPrefix + " status --json": {
+			ExitCode: 0,
+			Stdout:   `{"currentFunction":{"hasFunction":true,"functionId":"function-1","versionId":"version-1"}}`,
+		},
+		cliPrefix + " cluster agent kill-function function-1 version-1 --compute-plane-context k3d-ncp-local-compute-1 --reason bdd-last-cluster-failover --timeout 5m --yes": {
+			ExitCode: 0,
+			Stdout:   "terminated 1 request(s) in namespace nvca-system\n  nvca-system/request-1  function=function-1 version=version-1  [deleted]\n",
+		},
+	}
+	for _, turn := range []string{"A turn 1", "A turn 2", "A turn 3", "A turn 4", "A turn 5", "B turn 1", "A turn 6", "A turn 7"} {
+		session := "bdd-last-cluster-session-" + strings.ToLower(turn[:1])
+		body := `{"messages":[{"role":"user","content":"bdd-last-cluster session ` + turn + `"}],"prompt_cache_key":"` + session + `"}`
+		canned[cliPrefix+" function invoke --inference-url /v1/chat/completions --model-name openai-compatible-sample --request-body '"+body+"' --timeout 120"] = harness.Result{
+			ExitCode: 0,
+			Stdout:   "Function invocation completed!\n\nResponse:\n" + `{"object":"chat.completion","choices":[{"message":{"content":"fixed response"}}]}` + "\n",
+		}
+	}
+	suite := newWiringSuite(t, newFakeRunner(canned))
+	httpFake := &lastClusterHTTPFake{}
+	suite.HTTP = httpFake
+	seedHelmfileLocalBDDMultiFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDMultiFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeMulticlusterProfileHandoffArtifact(t, suite.Config.RepoRoot)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "multi-cluster-helmfile-llm-last-cluster-affinity.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "multi-cluster-helmfile-llm-last-cluster-affinity-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+
+	environmentPath := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd-last-cluster.yaml")
+	lbConfig, found, err := dsl.ReadYAMLKey(environmentPath, "addons.llm.requestRouter.loadBalancer.config")
+	if err != nil || !found || !strings.Contains(lbConfig, `"last_cluster_affinity":true`) {
+		t.Fatalf("router load balancer config = %q, found = %t, err = %v; want last_cluster_affinity", lbConfig, found, err)
+	}
+	// Unset image tag variables leave empty overrides, which the stack treats
+	// as absent so the pinned images apply.
+	for _, key := range []string{"addons.llm.gateway.image.tag", "addons.llm.requestRouter.image.tag"} {
+		if got, found, err := dsl.ReadYAMLKey(environmentPath, key); err != nil || !found || got != "" {
+			t.Fatalf("%s = %q, found = %t, err = %v; want an empty override", key, got, found, err)
+		}
+	}
+
+	runs := suite.Runner.(*fakeRunner).runs
+	if !commandRanThatContains(runs, "build-and-deploy-multicluster COMPUTE_CLUSTER_COUNT=2") {
+		t.Fatal("the two-compute-cluster topology was never requested")
+	}
+	for _, cluster := range []string{"ncp-local-compute-1", "ncp-local-compute-2"} {
+		if !commandRanThatContainsAll(runs,
+			"make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME="+cluster,
+			"COMPUTE_KUBE_CONTEXT=k3d-"+cluster) {
+			t.Fatalf("compute cluster %s was never registered", cluster)
+		}
+		if !commandRanThatContains(runs, "make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME="+cluster+" HELMFILE_ENV=local-bdd-last-cluster") {
+			t.Fatalf("NVCA was never installed on compute cluster %s", cluster)
+		}
+	}
+	if !commandRanThatContainsAll(runs, "upgrade llm-api-gateway", "--reuse-values", "llmApiGateway.config.lastCluster.enabled=true") {
+		t.Fatal("the gateway last-cluster setting was never applied")
+	}
+	if !commandRanThatContainsAll(runs, " function create --name bdd-last-cluster-affinity", "--function-type LLM") ||
+		commandRanThatContains(runs, "routingMethod=") {
+		t.Fatal("the LLM function must be created without a routing method override")
+	}
+	if !commandRanThatContains(runs, "cluster agent kill-function function-1 version-1 --compute-plane-context k3d-ncp-local-compute-1") {
+		t.Fatal("version A was never killed on compute-1")
+	}
+	if !commandRanThatContains(runs, " function delete --deployment-only") {
+		t.Fatal("version A was never undeployed")
+	}
+	if commandRanThatContains(runs, "admin-jwt") {
+		t.Fatal("the admin token leaked into a command line")
+	}
+	for _, want := range []string{
+		"POST http://api.localhost:8080/v2/nvcf/functions/function-1/versions",
+		"POST http://api.localhost:8080/v2/nvcf/deployments/functions/function-1/versions/version-2",
+		"DELETE http://api.localhost:8080/v2/nvcf/deployments/functions/function-1/versions/version-2",
+	} {
+		found := false
+		for _, request := range httpFake.requests {
+			if request == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("HTTP requests = %v, want %q", httpFake.requests, want)
+		}
+	}
+}
+
 // TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps runs the
 // focused upstream-image feature against a fake runner. The seeded global
 // template contains the exact documentation blocks so the ledger-backed
@@ -2721,6 +2876,27 @@ func TestMultiClusterHelmfileLLMRegistrationTLS(t *testing.T) {
 	}
 	runLiveFeature(t, "multi-cluster-helmfile-llm-registration-tls.feature")
 }
+
+// TestMultiClusterHelmfileLLMLastClusterAffinity is the live entry point for
+// last-cluster session affinity across two local compute clusters. Skipped
+// under -short.
+func TestMultiClusterHelmfileLLMLastClusterAffinity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	if os.Getenv(lastClusterInstanceTypeEnv) == "" {
+		t.Setenv(lastClusterInstanceTypeEnv, lastClusterDefaultInstanceType)
+	}
+	runLiveFeature(t, "multi-cluster-helmfile-llm-last-cluster-affinity.feature")
+}
+
+// lastClusterInstanceTypeEnv selects the instance type the last-cluster
+// affinity feature deploys to. Hosts with too few CPUs for the fake GPU
+// sizing register only NCP.GPU.H100_2x, so such hosts set it to that type.
+const (
+	lastClusterInstanceTypeEnv     = "LAST_CLUSTER_INSTANCE_TYPE"
+	lastClusterDefaultInstanceType = "NCP.GPU.H100_1x"
+)
 
 // TestSingleClusterEKSHelmfile is the live entry point for the
 // single-cluster EKS Helmfile feature. Skipped under -short.
