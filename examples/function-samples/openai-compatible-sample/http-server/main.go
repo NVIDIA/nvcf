@@ -47,6 +47,9 @@ const (
 	defaultChunk           = "xxxx"
 	defaultModel           = "test-model"
 	maxOutputChunksEnv     = "LOAD_TESTER_MAX_OUTPUT_CHUNKS"
+	defaultTTFTEnv         = "LOAD_TESTER_DEFAULT_TTFT_MS"
+	defaultITLEnv          = "LOAD_TESTER_DEFAULT_ITL_MS"
+	defaultChunkEnv        = "LOAD_TESTER_DEFAULT_CHUNK"
 
 	headerQueueDelay          = "X-Load-Tester-Queue-Delay-Ms"
 	headerTTFT                = "X-Load-Tester-TTFT-Ms"
@@ -103,6 +106,14 @@ type benchmarkTuning struct {
 
 type serverConfig struct {
 	maxOutputChunks int
+	defaults        controlDefaults
+}
+
+// controlDefaults apply to a request that does not set the matching control.
+type controlDefaults struct {
+	TTFT  time.Duration
+	ITL   time.Duration
+	Chunk string
 }
 
 type benchmarkBodyControls struct {
@@ -343,12 +354,20 @@ func main() {
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
-	log.Printf("listening on %s with max output chunks %d", server.Addr, config.maxOutputChunks)
+	log.Printf("listening on %s with max output chunks %d, default TTFT %s, default ITL %s, default chunk %q",
+		server.Addr, config.maxOutputChunks, config.defaults.TTFT, config.defaults.ITL, config.defaults.Chunk)
 	log.Fatal(server.ListenAndServe())
 }
 
 func newRouter() http.Handler {
-	return newRouterWithConfig(serverConfig{maxOutputChunks: defaultMaxOutputChunks})
+	return newRouterWithConfig(defaultServerConfig())
+}
+
+func defaultServerConfig() serverConfig {
+	return serverConfig{
+		maxOutputChunks: defaultMaxOutputChunks,
+		defaults:        controlDefaults{Chunk: defaultChunk},
+	}
 }
 
 func newRouterWithConfig(config serverConfig) http.Handler {
@@ -580,7 +599,7 @@ func startBenchmark(w http.ResponseWriter, r *http.Request, config serverConfig,
 // startBenchmarkWithErrors applies the shared benchmark controls and writes
 // control failures in the route's protocol error shape.
 func startBenchmarkWithErrors(w http.ResponseWriter, r *http.Request, config serverConfig, body benchmarkBodyControls, writeError func(http.ResponseWriter, int, string, string)) (benchmarkTuning, func(), bool) {
-	tuning, err := resolveBenchmarkTuning(r, body, config.maxOutputChunks)
+	tuning, err := resolveBenchmarkTuning(r, body, config)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), "")
 		return benchmarkTuning{}, nil, false
@@ -607,31 +626,32 @@ func startBenchmarkWithErrors(w http.ResponseWriter, r *http.Request, config ser
 	return tuning, release, true
 }
 
-func resolveBenchmarkTuning(r *http.Request, body benchmarkBodyControls, maxOutputChunks int) (benchmarkTuning, error) {
+func resolveBenchmarkTuning(r *http.Request, body benchmarkBodyControls, config serverConfig) (benchmarkTuning, error) {
 	requestBody := body.requestBody
 	if hasLoadTesterHeader(r) {
 		body = benchmarkBodyControls{}
 	}
 	tuning := benchmarkTuning{
-		Chunk:               defaultChunk,
+		Chunk:               config.defaults.Chunk,
 		OutputChunks:        1,
 		StreamErrorAfter:    -1,
 		StreamTruncateAfter: -1,
 	}
 	var err error
 	for _, setting := range []struct {
-		header string
-		body   string
-		raw    json.RawMessage
-		value  *time.Duration
+		header       string
+		body         string
+		raw          json.RawMessage
+		defaultValue time.Duration
+		value        *time.Duration
 	}{
 		{header: headerQueueDelay, body: bodyQueueDelay, raw: body.QueueDelay, value: &tuning.QueueDelay},
-		{header: headerTTFT, body: bodyTTFT, raw: body.TTFT, value: &tuning.TTFT},
+		{header: headerTTFT, body: bodyTTFT, raw: body.TTFT, defaultValue: config.defaults.TTFT, value: &tuning.TTFT},
 		{header: headerTTFTJitter, body: bodyTTFTJitter, raw: body.TTFTJitter, value: &tuning.TTFTJitter},
-		{header: headerITL, body: bodyITL, raw: body.ITL, value: &tuning.ITL},
+		{header: headerITL, body: bodyITL, raw: body.ITL, defaultValue: config.defaults.ITL, value: &tuning.ITL},
 		{header: headerITLJitter, body: bodyITLJitter, raw: body.ITLJitter, value: &tuning.ITLJitter},
 	} {
-		*setting.value, err = durationControl(r, setting.header, setting.body, setting.raw)
+		*setting.value, err = durationControl(r, setting.header, setting.body, setting.raw, setting.defaultValue)
 		if err != nil {
 			return benchmarkTuning{}, err
 		}
@@ -656,7 +676,7 @@ func resolveBenchmarkTuning(r *http.Request, body benchmarkBodyControls, maxOutp
 		return benchmarkTuning{}, fmt.Errorf("%s and %s cannot be combined", chunkName, chunkBytesName)
 	}
 	var hasOutputChunks bool
-	if tuning.OutputChunks, hasOutputChunks, _, err = integerControl(r, headerOutputChunks, bodyOutputChunks, body.OutputChunks, 1, 1, maxOutputChunks); err != nil {
+	if tuning.OutputChunks, hasOutputChunks, _, err = integerControl(r, headerOutputChunks, bodyOutputChunks, body.OutputChunks, 1, 1, config.maxOutputChunks); err != nil {
 		return benchmarkTuning{}, err
 	}
 	echo, echoName, err := boolControl(r, headerEcho, bodyEcho, body.Echo)
@@ -705,16 +725,37 @@ func resolveBenchmarkTuning(r *http.Request, body benchmarkBodyControls, maxOutp
 }
 
 func loadServerConfig(getenv func(string) string) (serverConfig, error) {
-	config := serverConfig{maxOutputChunks: defaultMaxOutputChunks}
-	value := getenv(maxOutputChunksEnv)
-	if value == "" {
-		return config, nil
+	config := defaultServerConfig()
+	if value := getenv(maxOutputChunksEnv); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > hardMaxOutputChunks {
+			return serverConfig{}, fmt.Errorf("%s must be an integer from 1 through %d", maxOutputChunksEnv, hardMaxOutputChunks)
+		}
+		config.maxOutputChunks = parsed
 	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed < 1 || parsed > hardMaxOutputChunks {
-		return serverConfig{}, fmt.Errorf("%s must be an integer from 1 through %d", maxOutputChunksEnv, hardMaxOutputChunks)
+	for _, setting := range []struct {
+		name  string
+		value *time.Duration
+	}{
+		{name: defaultTTFTEnv, value: &config.defaults.TTFT},
+		{name: defaultITLEnv, value: &config.defaults.ITL},
+	} {
+		value := getenv(setting.name)
+		if value == "" {
+			continue
+		}
+		milliseconds, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || milliseconds < 0 || milliseconds > maxControlMilliseconds {
+			return serverConfig{}, fmt.Errorf("%s must be an integer from 0 through %d milliseconds", setting.name, maxControlMilliseconds)
+		}
+		*setting.value = time.Duration(milliseconds) * time.Millisecond
 	}
-	config.maxOutputChunks = parsed
+	if value := getenv(defaultChunkEnv); value != "" {
+		if len(value) > maxOutputBytes {
+			return serverConfig{}, fmt.Errorf("%s must be at most %d bytes", defaultChunkEnv, maxOutputBytes)
+		}
+		config.defaults.Chunk = value
+	}
 	return config, nil
 }
 
@@ -771,13 +812,13 @@ func bodyInteger(raw json.RawMessage) (int64, error) {
 	return strconv.ParseInt(text, 10, 64)
 }
 
-func durationControl(r *http.Request, header, body string, raw json.RawMessage) (time.Duration, error) {
+func durationControl(r *http.Request, header, body string, raw json.RawMessage, defaultValue time.Duration) (time.Duration, error) {
 	headerValue, bodyValue, present, source, fromHeader, err := controlValue(r, header, body, raw)
 	if err != nil {
 		return 0, err
 	}
 	if !present {
-		return 0, nil
+		return defaultValue, nil
 	}
 	var milliseconds int64
 	if fromHeader {
