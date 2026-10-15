@@ -1,0 +1,56 @@
+# Stargate agent guide
+
+This guidance covers the Rust workspace, including `stargate-k8s-router` and
+the shared `stargate-forwarding` crate.
+
+## Assumed deployment invariants
+
+- `stargate-k8s-router` supports `raw-quic` and `webtransport` tunnel traffic.
+  Plain `http3` tunnel traffic uses an L4 path and does not pass through this router.
+- Raw QUIC request streams are bidirectional. During drain, prioritizing
+  bidirectional acceptance over unidirectional acceptance is intentional.
+- WebTransport uses a separate session bridge. Do not infer a plain HTTP/3
+  stream fairness requirement for the raw QUIC relay from that implementation.
+
+For router transport changes, inspect `crates/stargate-k8s-router/src/quic.rs`
+and `crates/stargate-forwarding/src/lib.rs`. The
+[transport guide](docs/tunnel-transports.md) describes available protocol
+implementations and their routing paths.
+
+## Build and verification
+
+Run commands from this directory. For router and relay Rust changes:
+
+```sh
+cargo build --locked -p stargate-k8s-router
+cargo test --locked -p stargate-k8s-router -p stargate-forwarding -- --test-threads=1
+cargo clippy --locked -p stargate-k8s-router -p stargate-forwarding --all-targets -- -D warnings
+cargo fmt --all -- --check
+```
+
+For other Rust changes, select the affected workspace packages with `-p`.
+For documentation changes, check whitespace and link targets.
+
+## Routing methods
+
+`routing_methods.json` lists every load-balancing algorithm name, alias, and
+routing-expression parameter. When you add, rename, or remove one, update that
+file and run `cargo test --locked -p stargate --lib routing_method`. A failure
+names the other code, docs, and configs to update.
+
+The function API in `src/control-plane-services/cloud-functions/nvcf-core`
+stores `routingMethod` after a format check only. Its
+`LlmRoutingMethodValidatorTest` reads the manifest and fails if that check
+would reject a listed name, alias, or parameter. Run it from the repository
+root:
+
+```sh
+bazel test //src/control-plane-services/cloud-functions/nvcf-core:tests \
+  --test_arg=--exclude-classname='^(?!com\.nvidia\.nvcf\.rest\.function\.management\.dto\.LlmRoutingMethodValidatorTest$).*$'
+```
+
+## Code style
+
+Use Rust 2024 and the workspace formatter and Clippy rules. Match existing
+crate structure and use `tracing` for structured logs. Keep deployment
+assumptions explicit when reviewing transport behavior.

@@ -34,6 +34,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/mirror"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 )
@@ -373,6 +374,33 @@ func TestOperatorCommand_NVCAFlags(t *testing.T) {
 	assert.True(t, flagNames["enable-gxcache"], "enable-gxcache flag should still exist")
 	assert.True(t, flagNames["nca-id"], "nca-id flag should still exist")
 	assert.True(t, flagNames["cluster-name"], "cluster-name flag should still exist")
+}
+
+// The chart tells the operator through NVCA_CLUSTER_VALIDATOR_ENABLED, and an
+// operator without it treats the validator as disabled.
+func TestOperatorCommand_ClusterValidatorEnabledFromEnv(t *testing.T) {
+	for _, tt := range []struct {
+		env  string
+		want bool
+	}{
+		{env: "true", want: true},
+		{env: "false", want: false},
+		{env: "", want: false},
+	} {
+		t.Run("env="+tt.env, func(t *testing.T) {
+			t.Setenv(clustervalidator.EnabledEnv, tt.env)
+			cmd := NewOperatorCommand()
+			var got *bool
+			app := &cli.App{Name: cmd.Name, Flags: cmd.Flags, Action: func(c *cli.Context) error {
+				v := c.Bool("cluster-validator-enabled")
+				got = &v
+				return nil
+			}}
+			require.NoError(t, app.Run([]string{cmd.Name, "--nca-id", "nca", "--cluster-name", "cluster"}))
+			require.NotNil(t, got)
+			assert.Equal(t, tt.want, *got)
+		})
+	}
 }
 
 func TestOperatorCommand_NVCAFlagDefaults(t *testing.T) {

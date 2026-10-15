@@ -202,9 +202,15 @@ spec:
         cpu: 125m
         memory: 64Mi
     securityContext:
+      allowPrivilegeEscalation: false
       capabilities:
+        add:
+        - CHOWN
         drop:
-        - NET_RAW
+        - ALL
+      runAsGroup: 1000
+      runAsNonRoot: true
+      runAsUser: 1000
     volumeMounts:
     - mountPath: /var/secrets
       name: secret-data
@@ -296,6 +302,10 @@ spec:
       successThreshold: 1
       timeoutSeconds: 1
     name: utils
+    ports:
+    - containerPort: 8010
+      name: worker-metrics
+      protocol: TCP
     readinessProbe:
       failureThreshold: 2
       httpGet:
@@ -400,16 +410,16 @@ spec:
         path: /health
         port: 13133
         scheme: HTTP
-      initialDelaySeconds: 30
-      periodSeconds: 30
+      initialDelaySeconds: 5
+      periodSeconds: 5
       successThreshold: 1
       timeoutSeconds: 1
     resources:
       limits:
-        cpu: 500m
+        cpu: "1"
         memory: 2Gi
       requests:
-        cpu: 500m
+        cpu: "1"
         memory: 2Gi
     securityContext:
       capabilities:
@@ -508,9 +518,13 @@ spec:
     name: init
     resources: {}
     securityContext:
+      allowPrivilegeEscalation: false
       capabilities:
         drop:
-        - NET_RAW
+        - ALL
+      runAsGroup: 1000
+      runAsNonRoot: true
+      runAsUser: 1000
     volumeMounts:
     - mountPath: /config/models
       name: model-data
@@ -546,15 +560,24 @@ spec:
         cpu: 125m
         memory: 64Mi
     securityContext:
+      allowPrivilegeEscalation: false
       capabilities:
+        add:
+        - CHOWN
         drop:
-        - NET_RAW
+        - ALL
+      runAsGroup: 1000
+      runAsNonRoot: true
+      runAsUser: 1000
     volumeMounts:
     - mountPath: /var/secrets
       name: secret-data
     - mountPath: /config/ess-agent
       name: ess-data
   restartPolicy: Always
+  securityContext:
+    fsGroup: 1000
+    fsGroupChangePolicy: OnRootMismatch
   serviceAccountName: my-sa
   terminationGracePeriodSeconds: 120
   tolerations:

@@ -1,0 +1,23 @@
+---
+# Source: kai-scheduler/templates/rbac/post-delete-binding.yaml
+# Copyright 2025 NVIDIA CORPORATION
+# SPDX-License-Identifier: Apache-2.0
+---
+# Source: kai-scheduler/templates/rbac/post-delete-binding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: post-delete-cleanup
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-delete-policy": hook-succeeded
+    argocd.argoproj.io/hook: PostDelete
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+subjects:
+  - kind: ServiceAccount
+    name: post-delete-cleanup
+    namespace: kai-scheduler
+roleRef:
+  kind: ClusterRole
+  name: post-delete-cleanup
+  apiGroup: rbac.authorization.k8s.io

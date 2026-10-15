@@ -1,0 +1,256 @@
+# NVCF Vanity Gateway Helm Chart
+
+This directory contains the Helm chart for deploying the NVCF Vanity Gateway on
+Kubernetes. The Vanity Gateway maps OpenAI-compatible and vanity URL routes onto
+NVCF function invocations.
+
+## Overview
+
+The chart renders a Deployment, a Service, a ServiceAccount, two ConfigMaps (one
+for environment configuration, one for the route mapping file), and an optional
+ServiceMonitor.
+
+The route mapping is supplied through `vanityGateway.mappingConfig`, which is
+serialized into `config.yaml` and mounted at
+`/etc/vanity-gateway/config/config.yaml`. The defaults ship an empty mapping, so
+routes must be provided through an override values file.
+
+The default values leave `vanityGateway.image.registry` empty. Set the registry,
+and the tag if you do not want the chart `appVersion`, in your override file.
+
+```yaml
+vanityGateway:
+  image:
+    registry: <your-registry>
+    repository: nvcf-ai-api-gateway-service
+    tag: <appVersion>
+```
+
+## Prerequisites
+
+- Kubernetes cluster
+- Helm 3.x
+- `kubectl`
+- A reachable NVCF invocation endpoint, set through
+  `vanityGateway.config.nvcfApiEndpoint`
+- The Prometheus Operator CRDs, only if `vanityGateway.serviceMonitor.enabled`
+  is `true`
+
+## Getting Started
+
+Install the chart with the default values plus your own overrides:
+
+```bash
+helm install vanity-gateway helm-nvcf-vanity-gateway \
+  --namespace nvcf \
+  --create-namespace \
+  --values helm-nvcf-vanity-gateway/values.yaml \
+  --values path/to/values.yaml \
+  --wait \
+  --timeout 10m
+```
+
+Upgrade an existing release:
+
+```bash
+helm upgrade vanity-gateway helm-nvcf-vanity-gateway \
+  --namespace nvcf \
+  --values helm-nvcf-vanity-gateway/values.yaml \
+  --values path/to/values.yaml \
+  --wait \
+  --timeout 10m
+```
+
+Uninstall the release:
+
+```bash
+helm uninstall vanity-gateway --namespace nvcf
+```
+
+## Configuration
+
+The default chart configuration lives in
+`helm-nvcf-vanity-gateway/values.yaml`, and `values.schema.json` constrains it.
+The schema sets `additionalProperties: false` on `vanityGateway` and most of its
+sub-objects, so an unrecognized key fails the render rather than being ignored.
+
+Important settings to review before deployment:
+
+- `vanityGateway.image.*` for the container image
+- `vanityGateway.imagePullSecrets` for private registry access
+- `vanityGateway.replicaCount`, resource requests, and limits for your
+  environment
+- `vanityGateway.config.nvcfApiEndpoint` for the invocation endpoint
+- `vanityGateway.config.llmGatewayEndpoint` for the LLM Gateway endpoint, used
+  only by models that set `functionType: LLM`
+- `vanityGateway.config.otelExporterOtlpEndpoint` for trace export, empty by
+  default
+- `vanityGateway.mappingConfig.v2config` for the OpenAI, Anthropic, and vanity
+  route tables
+- `vanityGateway.serviceMonitor.enabled` for Prometheus Operator scraping
+
+### Ports
+
+The container listens on 10081 for traffic and 10083 for admin and metrics. The
+Service exposes those as `httpPort` (8080 by default) and `adminPort` (10083 by
+default). Metrics are scraped from `/metrics` on the admin port, and the health
+probes use `/health` on the traffic port.
+
+### Shutdown
+
+`vanityGateway.shutdown` controls draining. `preStopSleepSeconds` (70 by
+default) is how long the preStop hook sleeps before the container is signaled,
+which lets in-flight and newly routed requests settle.
+`terminationGracePeriodSeconds` (330 by default) must stay comfortably above it,
+or the pod is killed mid-drain.
+
+## Route mapping
+
+`vanityGateway.mappingConfig.v2config` has three sections:
+
+- `openai`: per-endpoint model routes, keyed by endpoint (`chatCompletions`,
+  `completions`, `embeddings`, `responses`, and the image endpoints). Each route
+  requires `modelName` and `functionID`.
+- `anthropicMessages`: native Anthropic Messages model routes, served on
+  `POST /v1/messages`. Routes use the same fields as `openai.chatCompletions`
+  and share the API host set by `openai.host`.
+- `vanity`: host-based routes, each requiring a `host` and a `paths` map. Each
+  path requires `path` and `functionID`.
+
+All sections are empty by default.
+`vanityGateway.config.shadowMaxConcurrent` bounds concurrent shadow requests
+across all routes.
+
+A model may set `functionType: LLM` to be served by the LLM Gateway instead of
+the invocation service, supported in `openai.chatCompletions`,
+`openai.responses`, `openai.embeddings`, and `anthropicMessages`. Callers still send the public `modelName`; the gateway
+rewrites the request model to `functionID/modelName` before forwarding.
+
+The values schema enforces what the gateway checks at startup, so a values file
+that would fail the container fails the render instead:
+
+- `functionType` is rejected outside those four endpoints
+- `usePexec`, `outgoingPathOverride`, and `sessionTimeout` are rejected on such
+  a model, since the LLM Gateway ignores them. An explicit `false`, `""`, or `0`
+  is accepted, because that is what an absent key produces
+- an `X-Priority` entry in `customHeaders` is rejected, since the LLM Gateway
+  answers `400 Bad Request` for any request carrying it
+- `vanityGateway.config.llmGatewayEndpoint` must be set, and must be an `http`
+  or `https` origin with no path
+
+A Messages route that targets the LLM Gateway:
+
+```yaml
+vanityGateway:
+  config:
+    llmGatewayEndpoint: http://llm-api-gateway.nvcf.svc.cluster.local:8080
+  mappingConfig:
+    v2config:
+      openai:
+        host: api.example.com
+      anthropicMessages:
+        example_native-model:
+          modelName: example/native-model
+          functionID: <function-id>
+          functionType: LLM
+```
+
+Clients call `POST /v1/messages` on the shared host with the public
+`modelName`. Messages aliases appear in the shared `/v1/models` list with
+`supported_endpoints`, so OpenAI clients can tell which models accept only
+Messages. Upgrade Pylon workers, the Stargate router, and the LLM Gateway
+before enabling Messages routes. See `docs/overview/llm-gateway.md` for the
+request, accounting, and Claude Code details.
+
+Shadow traffic is supported. Each shadow target is resolved from the same model
+table and routed by its own `functionType`, so a shadow of an LLM model reaches
+the LLM Gateway, and an LLM model may shadow a model served by the invocation
+service.
+
+`mappingConfig` is rendered into a ConfigMap, which is not a secret store. Do
+not put credentials in `customHeaders` on any route. Caller `Authorization`
+headers are forwarded to the upstream untouched, so a static credential is not
+needed for authenticated routes.
+
+An `openai` route may mirror traffic to other routes in the same endpoint with
+`shadows`, one entry per target:
+
+```yaml
+primary:
+  modelName: example/primary
+  functionID: primary-function-id
+  promptCacheKeyHeaders:
+    - x-multi-turn-session-id
+  shadows:
+    - modelName: private/example/shadow-a
+      percentage: 10                  # 1-100, default 100
+      samplingMethod:
+        - promptCacheKey
+        - firstMessageHash
+      cancelOnClientDisconnect: true  # default false
+    - modelName: private/example/shadow-b
+shadow-a:
+  modelName: private/example/shadow-a
+  functionID: shadow-a-function-id
+shadow-b:
+  modelName: private/example/shadow-b
+  functionID: shadow-b-function-id
+```
+
+- a route with both legacy form and new form is rejected
+- an entry needs `modelName`; unknown entry keys are rejected
+- `samplingMethod` accepts one method or an ordered list
+- every method list has an implicit terminal `random` fallback
+
+The legacy route-level fields `shadowModelName`, `shadowModelNames`,
+`shadowPercentage`, `shadowSamplingMethod`, and `shadowCancelOnClientDisconnect`
+remain supported; they apply one policy to every target on the route.
+`shadowSamplingMethod` also accepts one method or an ordered list.
+
+The supported methods are `random`, `perBearerKey`, `promptCacheKey`, and
+`firstMessageHash`. The gateway evaluates a list in order and advances only
+when a method cannot find usable source material. A valid bucket rejection is
+final. An explicit `random` must be last. Empty lists and entries, duplicates,
+unknown methods, and methods after `random` are rejected. A `100` percent target
+is admitted without parsing sampling material or drawing a random bucket.
+
+`promptCacheKey` and `firstMessageHash` are limited to `chatCompletions` and
+`responses`. `promptCacheKey` first uses a nonempty string
+`prompt_cache_key` from the JSON body, then checks `promptCacheKeyHeaders` in
+order. The body value is trimmed like header values, and a whitespace-only value
+is unavailable. This route-level header list applies to both shadow forms. It
+defaults to `x-multi-turn-session-id`; set it to `[]` to disable header lookup.
+A header is usable only when it has exactly one nonempty value after trimming.
+Only the value is hashed, so equal values receive equal buckets across body and
+header sources and across both endpoints. `Authorization` and `Proxy-Authorization`
+are rejected case-insensitively so credentials cannot be used as prompt cache
+keys.
+
+`firstMessageHash` uses a versioned, endpoint-specific canonical JSON envelope.
+For Chat Completions it hashes leading `system` and `developer` messages and the
+first `user` message. For Responses it hashes nonempty `instructions` and the
+first user input; a string `input` is user content. Object-key order is
+normalized, while array and content-part order is preserved. Later turns are
+ignored. Sampling is stateless and does not recover input through conversations,
+`previous_response_id`, or streamed deltas. A Responses request that continues
+earlier turns, through a nonempty `previous_response_id` or a `conversation`,
+usually carries only its newest input. The gateway cannot reliably identify the
+original first message from it, so `firstMessageHash` is skipped and sampling
+continues to the next configured method, ending at `random`. Send the same
+`prompt_cache_key` or session header on every turn to keep a conversation in one
+sample.
+
+All deterministic methods use SHA-256, the first 8 digest bytes as a big-endian
+integer, and modulo 100. Missing bearer credentials now reach the implicit
+`random` fallback for scalar `perBearerKey` configuration instead of skipping
+the target. Sampling does not change forwarded request bytes. Raw credentials,
+prompt cache keys, and message content are not added to telemetry.
+
+## Notes
+
+- The chart version is `0.0.0` in `Chart.yaml`. The release pipeline packages
+  the chart at the version in its `deploy/helm/vanity-gateway/v<X.Y.Z>` release
+  tag, so the committed value only affects local renders. See `AGENTS.md`.
+- If you publish or mirror the required images into another registry, set the
+  image registry, repository, tag, and pull secret values explicitly in your
+  override file.

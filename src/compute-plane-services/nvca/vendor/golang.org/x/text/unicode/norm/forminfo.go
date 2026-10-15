@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2011 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -124,7 +121,11 @@ func (p Properties) BoundaryAfter() bool {
 //
 // When all 6 bits are zero, the character is inert, meaning it is never
 // influenced by normalization.
+//
+// We set flags to 0x80 (high bit 7 unused in quick check data) to indicate an invalid rune.
 type qcInfo uint8
+
+func (p Properties) isInvalid() bool { return p.flags == 0x80 }
 
 func (p Properties) isYesC() bool { return p.flags&0x10 == 0 }
 func (p Properties) isYesD() bool { return p.flags&0x4 == 0 }
@@ -250,6 +251,9 @@ func (f Form) PropertiesString(s string) Properties {
 // to a Properties.  See the comment at the top of the file
 // for more information on the format.
 func compInfo(v uint16, sz int) Properties {
+	if sz == 0 {
+		return Properties{flags: 0x80, size: 1}
+	}
 	if v == 0 {
 		return Properties{size: uint8(sz)}
 	} else if v >= 0x8000 {
@@ -257,7 +261,7 @@ func compInfo(v uint16, sz int) Properties {
 			size:  uint8(sz),
 			ccc:   uint8(v),
 			tccc:  uint8(v),
-			flags: qcInfo(v >> 8),
+			flags: qcInfo(v>>8) & 0x3f,
 		}
 		if p.ccc > 0 || p.combinesBackward() {
 			p.nLead = uint8(p.flags & 0x3)

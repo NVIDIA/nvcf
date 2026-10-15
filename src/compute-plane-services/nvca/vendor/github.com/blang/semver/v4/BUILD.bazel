@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "semver",
+    srcs = [
+        "json.go",
+        "range.go",
+        "semver.go",
+        "sort.go",
+        "sql.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/blang/semver/v4",
+    importpath = "github.com/blang/semver/v4",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":semver",
+    visibility = ["//visibility:public"],
+)

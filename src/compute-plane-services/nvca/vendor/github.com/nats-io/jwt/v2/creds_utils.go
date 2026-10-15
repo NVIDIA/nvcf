@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /*
  * Copyright 2019-2020 The NATS Authors
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -66,6 +63,9 @@ func formatJwt(kind string, jwtString string) ([]byte, error) {
 func DecorateSeed(seed []byte) ([]byte, error) {
 	w := bytes.NewBuffer(nil)
 	ts := bytes.TrimSpace(seed)
+	if len(ts) < 2 {
+		return nil, errors.New("seed is too short")
+	}
 	pre := string(ts[0:2])
 	kind := ""
 	switch pre {
@@ -139,6 +139,18 @@ func FormatUserConfig(jwtString string, seed []byte) ([]byte, error) {
 	}
 	if !bytes.HasPrefix(bytes.TrimSpace(seed), []byte("SU")) {
 		return nil, fmt.Errorf("nkey seed is not an user seed")
+	}
+
+	kp, err := nkeys.FromSeed(seed)
+	if err != nil {
+		return nil, err
+	}
+	pk, err := kp.PublicKey()
+	if err != nil {
+		return nil, err
+	}
+	if pk != gc.Claims().Subject {
+		return nil, fmt.Errorf("nkey seed does not match the jwt subject")
 	}
 
 	d, err := DecorateSeed(seed)

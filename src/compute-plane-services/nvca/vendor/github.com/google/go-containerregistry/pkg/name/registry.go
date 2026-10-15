@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2018 Google LLC All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -27,8 +24,8 @@ import (
 	"strings"
 )
 
-// Detect more complex forms of local references.
-var reLocal = regexp.MustCompile(`.*\.local(?:host)?(?::\d{1,5})?$`)
+// Detect more complex forms of localhost references.
+var reLocal = regexp.MustCompile(`.*\.localhost(?::\d{1,5})?$`)
 
 // Detect the loopback IP (127.0.0.1)
 var reLoopback = regexp.MustCompile(regexp.QuoteMeta("127.0.0.1"))

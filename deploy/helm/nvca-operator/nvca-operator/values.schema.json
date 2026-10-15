@@ -1,6 +1,20 @@
 {
     "title": "Chart Values",
     "type": "object",
+    "definitions": {
+        "resourceQuantity": {
+            "type": "string",
+            "pattern": "^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+|[numkMGTPE]|[KMGTPE]i)?$"
+        },
+        "optionalResourceQuantity": {
+            "type": "string",
+            "pattern": "^$|^[+-]?([0-9]+(\\.[0-9]*)?|\\.[0-9]+)([eE][+-]?[0-9]+|[numkMGTPE]|[KMGTPE]i)?$"
+        },
+        "optionalDuration": {
+            "type": "string",
+            "pattern": "^$|^[+-]?0$|^\\+?(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|\u00b5s|\u03bcs|ms|s|m|h))+$"
+        }
+    },
     "properties": {
         "image": {
             "type": "object",
@@ -53,7 +67,7 @@
                 "imageTag": {
                     "type": "string",
                     "description": "Image tag of OpenTelemetry Collector sidecar.",
-                    "default": "0.143.2"
+                    "default": "0.160.0-nv-0.2.5"
                 },
                 "resources": {
                     "type": "object",
@@ -63,11 +77,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU limit for the OTel collector container",
                                     "default": "1000m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory limit for the OTel collector container",
                                     "default": "1Gi"
                                 }
@@ -78,11 +94,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU request for the OTel collector container",
                                     "default": "200m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory request for the OTel collector container",
                                     "default": "256Mi"
                                 }
@@ -132,6 +150,57 @@
             "type": "number",
             "description": "Replica count for the operator deployment",
             "default": 1
+        },
+        "podDisruptionBudget": {
+            "type": "object",
+            "description": "PodDisruptionBudget configuration for the NVCA Operator.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Enable a PodDisruptionBudget for the NVCA Operator.",
+                    "default": false
+                },
+                "minAvailable": {
+                    "description": "Minimum available pods. Set exactly one of minAvailable or maxUnavailable when enabled.",
+                    "default": "",
+                    "oneOf": [
+                        {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        {
+                            "type": "string",
+                            "enum": [
+                                ""
+                            ]
+                        },
+                        {
+                            "type": "string",
+                            "pattern": "^(100|[1-9]?[0-9])%$"
+                        }
+                    ]
+                },
+                "maxUnavailable": {
+                    "description": "Maximum unavailable pods. Set exactly one of minAvailable or maxUnavailable when enabled.",
+                    "default": "",
+                    "oneOf": [
+                        {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        {
+                            "type": "string",
+                            "enum": [
+                                ""
+                            ]
+                        },
+                        {
+                            "type": "string",
+                            "pattern": "^(100|[1-9]?[0-9])%$"
+                        }
+                    ]
+                }
+            }
         },
         "systemNamespace": {
             "type": "string",
@@ -201,8 +270,346 @@
             "properties": {
                 "mergeConfig": {
                     "type": "string",
-                    "description": "Merge fields into the generated NVCA config. Must be a string.",
+                    "description": "Merge fields into the generated NVCA config. Must be a string. Deprecated for BYOO settings; use byoo instead.",
                     "default": ""
+                }
+            }
+        },
+        "byoo": {
+            "type": "object",
+            "description": "First-class BYOO OTel collector and capacity configuration.",
+            "properties": {
+                "resources": {
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/resourceQuantity"
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/resourceQuantity"
+                            }
+                        }
+                    }
+                },
+                "logChunking": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean"
+                        },
+                        "maxPayloadBytes": {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        "dryRun": {
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "otelCollector": {
+                    "type": "object",
+                    "description": "Structured BYOO OTel collector rendering overrides."
+                },
+                "additionalResourceOverhead": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/resourceQuantity"
+                    }
+                },
+                "fluentbit": {
+                    "type": "object",
+                    "properties": {
+                        "resources": {
+                            "type": "object",
+                            "properties": {
+                                "limits": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "$ref": "#/definitions/resourceQuantity"
+                                    }
+                                },
+                                "requests": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "$ref": "#/definitions/resourceQuantity"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "utils": {
+            "type": "object",
+            "properties": {
+                "resources": {
+                    "type": "object",
+                    "description": "Resource requests and limits for the task pod's utils and init containers. Values are applied as both requests and limits.",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/resourceQuantity"
+                    }
+                }
+            }
+        },
+        "storage": {
+            "type": "object",
+            "description": "First-class shared-storage and internal persistent storage configuration.",
+            "properties": {
+                "sharedStorage": {
+                    "type": "object",
+                    "properties": {
+                        "server": {
+                            "type": "object",
+                            "properties": {
+                                "image": {
+                                    "type": "string",
+                                    "default": ""
+                                },
+                                "resources": {
+                                    "type": "object",
+                                    "properties": {
+                                        "limits": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                                "$ref": "#/definitions/resourceQuantity"
+                                            }
+                                        },
+                                        "requests": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                                "$ref": "#/definitions/resourceQuantity"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "taskData": {
+                            "type": "object",
+                            "properties": {
+                                "storageClassName": {
+                                    "type": "string",
+                                    "default": ""
+                                },
+                                "mountOptions": {
+                                    "type": "array",
+                                    "default": [],
+                                    "items": {
+                                        "type": "string"
+                                    }
+                                },
+                                "storageCapacity": {
+                                    "type": "string",
+                                    "$ref": "#/definitions/optionalResourceQuantity",
+                                    "default": ""
+                                }
+                            }
+                        }
+                    }
+                },
+                "internalPersistentStorage": {
+                    "type": "object",
+                    "properties": {
+                        "storageClassName": {
+                            "type": "string",
+                            "default": ""
+                        },
+                        "hardResourceQuota": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "$ref": "#/definitions/resourceQuantity"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "worker": {
+            "type": "object",
+            "description": "First-class worker/agent behavior, scheduling, and timeout configuration.",
+            "properties": {
+                "minHealthcheckRefreshWait": {
+                    "type": "string",
+                    "default": ""
+                },
+                "staticGPUCapacity": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 0
+                },
+                "computeBackend": {
+                    "type": "string",
+                    "default": ""
+                },
+                "requestsNamespace": {
+                    "type": "string",
+                    "default": "",
+                    "maxLength": 63,
+                    "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$",
+                    "not": {
+                        "enum": [
+                            "default",
+                            "kube-system",
+                            "kube-public",
+                            "kube-node-lease"
+                        ]
+                    }
+                },
+                "namespaceLabels": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "featureFlags": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "skipSelfDestruct": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "forceSelfDestruct": {
+                    "type": "boolean",
+                    "default": false
+                },
+                "csiVolumeMountOptions": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "timeouts": {
+                    "type": "object",
+                    "properties": {
+                        "credRenewInterval": {
+                            "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
+                            "default": ""
+                        },
+                        "heartbeatInterval": {
+                            "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
+                            "default": ""
+                        },
+                        "syncQueueInterval": {
+                            "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
+                            "default": ""
+                        },
+                        "syncRequestStatusInterval": {
+                            "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
+                            "default": ""
+                        },
+                        "syncAcknowledgeRequestInterval": {
+                            "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
+                            "default": ""
+                        },
+                        "periodicInstanceStatusInterval": {
+                            "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
+                            "default": ""
+                        },
+                        "icmsRequestAckInterval": {
+                            "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
+                            "default": ""
+                        },
+                        "icmsRequestAckRetryTimeout": {
+                            "type": "string",
+                            "$ref": "#/definitions/optionalDuration",
+                            "default": ""
+                        }
+                    }
+                },
+                "download": {
+                    "type": "object",
+                    "description": "Worker-init artifact downloader tuning. Defaults equal worker-init's built-in values; 0 omits a variable and defers to the image.",
+                    "properties": {
+                        "concurrentDownloads": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 256,
+                            "default": 5
+                        },
+                        "concurrentChunks": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 256,
+                            "default": 4
+                        },
+                        "chunkSizeBytes": {
+                            "type": "integer",
+                            "default": 16777216,
+                            "description": "worker-init's built-in 16 MiB by default; 0 defers to the image; otherwise 1 MiB to 4 GiB inclusive, matching NVCA's validation.",
+                            "anyOf": [
+                                {
+                                    "const": 0
+                                },
+                                {
+                                    "minimum": 1048576,
+                                    "maximum": 4294967296
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+        "operatorConfig": {
+            "type": "object",
+            "properties": {
+                "workload": {
+                    "type": "object",
+                    "properties": {
+                        "transportTLS": {
+                            "type": "object",
+                            "properties": {
+                                "trustBundle": {
+                                    "type": "object",
+                                    "properties": {
+                                        "secretKeyRef": {
+                                            "type": "object",
+                                            "properties": {
+                                                "name": {
+                                                    "type": "string",
+                                                    "description": "Secret containing the workload transport trust bundle. Empty disables Secret-backed transport trust.",
+                                                    "default": ""
+                                                },
+                                                "key": {
+                                                    "type": "string",
+                                                    "description": "Secret data key containing certificate-only PEM.",
+                                                    "default": "ca.crt"
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                "fingerprint": {
+                                    "type": "string",
+                                    "description": "Optional sha256 fingerprint pin for the trust bundle. Empty computes the fingerprint from the selected Secret data.",
+                                    "default": ""
+                                },
+                                "installedBundleMountPath": {
+                                    "type": "string",
+                                    "description": "Optional llm-worker mount path for the installed transport trust bundle. Empty uses /etc/ssl/certs.",
+                                    "default": ""
+                                }
+                            }
+                        }
+                    }
                 }
             }
         },
@@ -214,11 +621,13 @@
                     "properties": {
                         "cpu": {
                             "type": "string",
+                            "$ref": "#/definitions/resourceQuantity",
                             "description": "CPU limit for the nvca-operator container",
                             "default": "500m"
                         },
                         "memory": {
                             "type": "string",
+                            "$ref": "#/definitions/resourceQuantity",
                             "description": "Memory limit for the nvca-operator container",
                             "default": "500Mi"
                         }
@@ -229,11 +638,13 @@
                     "properties": {
                         "cpu": {
                             "type": "string",
+                            "$ref": "#/definitions/resourceQuantity",
                             "description": "CPU request for the nvca-operator container",
                             "default": "50m"
                         },
                         "memory": {
                             "type": "string",
+                            "$ref": "#/definitions/resourceQuantity",
                             "description": "Memory request for the nvca-operator container",
                             "default": "50Mi"
                         }
@@ -252,11 +663,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU limit for the nvca agent container",
                                     "default": "1000m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory limit for the nvca agent container",
                                     "default": "4Gi"
                                 }
@@ -267,11 +680,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU request for the nvca agent container",
                                     "default": "100m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory request for the nvca agent container",
                                     "default": "200Mi"
                                 }
@@ -309,6 +724,43 @@
                     "description": "Map of custom annotations to add to the agent pod",
                     "default": {}
                 },
+                "gpuProfiling": {
+                    "type": "object",
+                    "description": "NVIDIA Nsight GPU profiling opt-in for NVCF function pods",
+                    "properties": {
+                        "functionIds": {
+                            "type": "string",
+                            "description": "Comma/space/newline-separated NVCF function IDs (or \"*\" for all) to enable Nsight GPU profiling for. Empty disables profiling.",
+                            "default": ""
+                        },
+                        "labelKey": {
+                            "type": "string",
+                            "description": "Pod label key NVCA applies to profiled function pods. Empty uses the built-in default \"nvidia-nsight-profile\".",
+                            "default": ""
+                        },
+                        "labelValue": {
+                            "type": "string",
+                            "description": "Pod label value NVCA applies to profiled function pods. Empty uses the built-in default \"enabled\".",
+                            "default": ""
+                        }
+                    }
+                },
+                "byooOtelCollector": {
+                    "type": "object",
+                    "description": "Default BYOO OpenTelemetry Collector image. The repository is derived from image.repository when not set.",
+                    "properties": {
+                        "imageRepository": {
+                            "type": "string",
+                            "description": "Optional BYOO OpenTelemetry Collector image repository. If unset, it is derived from image.repository.",
+                            "default": ""
+                        },
+                        "imageTag": {
+                            "type": "string",
+                            "description": "BYOO OpenTelemetry Collector image tag.",
+                            "default": "0.160.0-nv-0.2.5"
+                        }
+                    }
+                },
                 "functionEnvOverrides": {
                     "type": "object",
                     "description": "Map of environment variable overrides for function workloads (e.g., {\"INIT_CONTAINER\": \"nvcr.io/custom/init:v1.0\", \"UTILS_CONTAINER\": \"nvcr.io/custom/utils:v1.0\"})",
@@ -331,6 +783,16 @@
                     "type": "object",
                     "description": "Map of environment variables to override on the NVCA agent container. These take precedence over default values. Example: {\"LOG_LEVEL\": \"debug\", \"CUSTOM_FLAG\": \"enabled\"}",
                     "default": {}
+                },
+                "llm": {
+                    "type": "object",
+                    "properties": {
+                        "requestRouterAddress": {
+                            "type": "string",
+                            "description": "Default LLM request-router worker address rendered as STARGATE_ADDRESS for LLM workers",
+                            "default": ""
+                        }
+                    }
                 },
                 "serviceOAuth": {
                     "type": "object",
@@ -397,37 +859,6 @@
                                     }
                                 }
                             }
-                        },
-                        "rolloverService": {
-                            "type": "object",
-                            "properties": {
-                                "stage": {
-                                    "type": "object",
-                                    "properties": {
-                                        "tokenURL": {
-                                            "type": "string",
-                                            "default": ""
-                                        },
-                                        "publicKeysetEndpoint": {
-                                            "type": "string",
-                                            "default": ""
-                                        }
-                                    }
-                                },
-                                "prod": {
-                                    "type": "object",
-                                    "properties": {
-                                        "tokenURL": {
-                                            "type": "string",
-                                            "default": ""
-                                        },
-                                        "publicKeysetEndpoint": {
-                                            "type": "string",
-                                            "default": ""
-                                        }
-                                    }
-                                }
-                            }
                         }
                     }
                 }
@@ -457,11 +888,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU limit for the nvca webhook container",
                                     "default": "200m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory limit for the nvca webhook container",
                                     "default": "200Mi"
                                 }
@@ -472,11 +905,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU request for the nvca webhook container",
                                     "default": "50m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory request for the nvca webhook container",
                                     "default": "50Mi"
                                 }
@@ -524,6 +959,11 @@
         "vaultConfig": {
             "type": "object",
             "properties": {
+                "address": {
+                    "type": "string",
+                    "description": "Vault server URL for Helm-managed clusters. Required when helmManaged.oAuthClientID is set; must be HTTP(S), without credentials, query, or fragment.",
+                    "default": ""
+                },
                 "oAuthClientMountPathTemplate": {
                     "type": "string",
                     "description": "Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: \"nvidia/services/oauth/clients/%s/kv/secret\"",
@@ -607,7 +1047,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"nvcf-image-credential-helper\". Only override this if you know what you are doing.",
-                            "default": "0.5.1"
+                            "default": "0.11.1"
                         }
                     }
                 },
@@ -627,7 +1067,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.143.2"
+                            "default": "0.160.0-nv-0.2.5"
                         }
                     }
                 }
@@ -662,6 +1102,11 @@
                     "default": [],
                     "items": {}
                 },
+                "region": {
+                    "type": "string",
+                    "description": "Region reported for a self-managed cluster.",
+                    "default": "us-west-1"
+                },
                 "imageCredHelper": {
                     "type": "object",
                     "properties": {
@@ -673,7 +1118,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"nvcf-image-credential-helper\". Only override this if you know what you are doing.",
-                            "default": "0.5.1"
+                            "default": "0.11.1"
                         }
                     }
                 },
@@ -693,24 +1138,44 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.143.2"
+                            "default": "0.160.0-nv-0.2.5"
                         }
                     }
                 },
                 "icmsServiceURL": {
                     "type": "string",
-                    "description": "URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.",
-                    "default": "http://icms.example.invalid:8080"
+                    "description": "(REQUIRED for self-managed clusters) URL of the ICMS service. Set the endpoint generated during cluster registration.",
+                    "default": ""
+                },
+                "icmsServiceHostHeaderOverride": {
+                    "type": "string",
+                    "description": "Optional Host header override for selfManaged.icmsServiceURL.",
+                    "default": ""
                 },
                 "revalServiceURL": {
                     "type": "string",
-                    "description": "URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.",
-                    "default": "http://reval.example.invalid:8080"
+                    "description": "(REQUIRED for self-managed clusters) URL of the ReVal service. Set the endpoint generated during cluster registration.",
+                    "default": ""
+                },
+                "revalServiceHostHeaderOverride": {
+                    "type": "string",
+                    "description": "Optional Host header override for selfManaged.revalServiceURL.",
+                    "default": ""
                 },
                 "natsURL": {
                     "type": "string",
-                    "description": "URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.",
-                    "default": "nats://nats.example.invalid:4222"
+                    "description": "(REQUIRED for self-managed clusters) URL of the NATS service. Set the endpoint generated during cluster registration.",
+                    "default": ""
+                },
+                "natsHostOverride": {
+                    "type": "string",
+                    "description": "Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.",
+                    "default": ""
+                },
+                "eventLedgerServiceURL": {
+                    "type": "string",
+                    "description": "(Optional) URL of the Event Ledger service that the OTel collector exports to. Defaults to the in-cluster Event Ledger Service when empty.",
+                    "default": ""
                 }
             }
         },
@@ -798,7 +1263,7 @@
             "properties": {
                 "enabled": {
                     "type": "boolean",
-                    "description": "Enable the cluster-validator CronJob and init container",
+                    "description": "Enable the cluster-validator: the operator's init container, the CronJob and, under role control-plane, the runs the operator starts when the validator spec changes",
                     "default": false
                 },
                 "image": {
@@ -830,6 +1295,63 @@
                     "type": "string",
                     "description": "ConfigMap name for user-defined network checks (reachability + network policy validation)",
                     "default": "cluster-validator-network-checks"
+                },
+                "role": {
+                    "type": "string",
+                    "description": "Check set the CronJob runs: control-plane runs the gateway, storage, overlay and HA checks; compute-plane or empty runs the compute-plane checks. Use control-plane only in a single-cluster topology, where the NVCF control plane runs in this cluster; on a compute-only cluster every run is Not-Ready. Matched case-insensitively; other values are rejected.",
+                    "pattern": "^\\s*([Cc][Oo][Nn][Tt][Rr][Oo][Ll]-[Pp][Ll][Aa][Nn][Ee]|[Cc][Oo][Mm][Pp][Uu][Tt][Ee]-[Pp][Ll][Aa][Nn][Ee])?\\s*$",
+                    "default": ""
+                },
+                "openBaoNamespace": {
+                    "type": "string",
+                    "description": "Namespace holding OpenBao when it is not vault-system",
+                    "default": ""
+                },
+                "envoyGatewayNamespace": {
+                    "type": "string",
+                    "description": "Namespace holding Envoy Gateway when it is not envoy-gateway-system",
+                    "default": ""
+                },
+                "gatewayNames": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "pattern": "^[^/\\s]+/[^/\\s]+$"
+                    },
+                    "description": "Every NVCF Gateway as namespace/name (the stack's ingress.gatewayApi.gateways); replaces discovery from the NVCF routes for the Envoy, LoadBalancer and Tier-1 checks. Only named Gateways can fail Tier-1, and a Gateway left out is not assessed",
+                    "default": []
+                },
+                "externalComponents": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "nats",
+                            "openbao",
+                            "cassandra"
+                        ]
+                    },
+                    "uniqueItems": true,
+                    "description": "Stack quorum components (nats, openbao, cassandra) that run outside this cluster, so the Tier-2 check does not report them missing after install",
+                    "default": []
+                },
+                "storageClass": {
+                    "type": "string",
+                    "description": "StorageClass the stack binds its PVCs to (global.storageClass); when set, it must exist and no default StorageClass is required",
+                    "default": ""
+                },
+                "nodeToNodeProbeImage": {
+                    "type": "string",
+                    "description": "Image for the node-to-node overlay probe; needs sh and busybox-style nc and must be pullable without imagePullSecrets. When empty, networkChecks.enforcement.testImage if set, else busybox:1.36 from Docker Hub. make render-values-from-stack sets it to busybox:1.36 under the stack's repository on a registry other than NGC (nvcr.io or a subdomain), and leaves it empty on NGC, which has no busybox",
+                    "default": ""
+                },
+                "tolerations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object"
+                    },
+                    "description": "Extra tolerations for the validator Job pods. The pods also carry the control-plane tolerations and the operator's tolerations and nodeSelector",
+                    "default": []
                 },
                 "networkChecks": {
                     "type": [
@@ -1000,11 +1522,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU limit for the cluster-validator container",
                                     "default": "200m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory limit for the cluster-validator container",
                                     "default": "128Mi"
                                 }
@@ -1015,11 +1539,13 @@
                             "properties": {
                                 "cpu": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "CPU request for the cluster-validator container",
                                     "default": "100m"
                                 },
                                 "memory": {
                                     "type": "string",
+                                    "$ref": "#/definitions/resourceQuantity",
                                     "description": "Memory request for the cluster-validator container",
                                     "default": "64Mi"
                                 }

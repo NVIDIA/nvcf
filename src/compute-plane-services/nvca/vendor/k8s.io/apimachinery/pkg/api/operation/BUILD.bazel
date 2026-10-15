@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "operation",
+    srcs = ["operation.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/operation",
+    importpath = "k8s.io/apimachinery/pkg/api/operation",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":operation",
+    visibility = ["//visibility:public"],
+)

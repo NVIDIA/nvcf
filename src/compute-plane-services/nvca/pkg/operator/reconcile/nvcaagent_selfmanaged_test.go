@@ -75,41 +75,39 @@ func agentDeployment() *appsv1.Deployment {
 	}
 }
 
-func envValue(envs []corev1.EnvVar, name string) (string, bool) {
-	for _, e := range envs {
-		if e.Name == name {
-			return e.Value, true
-		}
-	}
-	return "", false
-}
+func TestApplyPSATIdentity_MountsTokenIntoAgentAndOTelCollector(t *testing.T) {
+	tokenMount := corev1.VolumeMount{Name: "nvca-token", MountPath: "/var/run/secrets/tokens", ReadOnly: true}
 
-func TestApplyPSATIdentity_SetsIdentitySourceEnv(t *testing.T) {
-	dep := agentDeployment()
-	applyPSATIdentity(context.Background(), dep, "cluster-abc")
+	t.Run("collector enabled", func(t *testing.T) {
+		dep := agentDeployment()
+		dep.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: NVCAOTelCollectorContainerName}}
 
-	got, ok := envValue(dep.Spec.Template.Spec.Containers[0].Env, "NVCF_IDENTITY_SOURCE")
-	require.True(t, ok, "agent must receive NVCF_IDENTITY_SOURCE so the JWKS-pusher branch can gate on it")
-	assert.Equal(t, IdentitySourcePSAT, got)
+		applyPSATIdentity(context.Background(), dep, "abc")
 
-	tokenPath, ok := envValue(dep.Spec.Template.Spec.Containers[0].Env, "NVCF_TOKEN_FILE_PATH")
-	require.True(t, ok)
-	assert.Equal(t, "/var/run/secrets/tokens/token", tokenPath)
-}
+		podSpec := dep.Spec.Template.Spec
+		assert.Equal(t, []corev1.VolumeMount{tokenMount}, podSpec.Containers[0].VolumeMounts)
+		assert.Equal(t, []corev1.VolumeMount{tokenMount}, podSpec.InitContainers[0].VolumeMounts)
+		require.Len(t, podSpec.Volumes, 1)
+		assert.Equal(t, "nvcf-icms:abc", podSpec.Volumes[0].Projected.Sources[0].ServiceAccountToken.Audience)
+	})
 
-func TestApplySPIREIdentity_SetsIdentitySourceEnv(t *testing.T) {
-	dep := agentDeployment()
-	applySPIREIdentity(context.Background(), dep, "registry/nvca:v1", "cluster-abc")
+	t.Run("collector disabled", func(t *testing.T) {
+		dep := agentDeployment()
 
-	got, ok := envValue(dep.Spec.Template.Spec.Containers[0].Env, "NVCF_IDENTITY_SOURCE")
-	require.True(t, ok, "agent must receive NVCF_IDENTITY_SOURCE so the JWKS-pusher branch can gate on it")
-	assert.Equal(t, IdentitySourceSPIRE, got)
+		applyPSATIdentity(context.Background(), dep, "abc")
 
-	// Both PSAT and SPIRE share the same token file path; the IDENTITY_SOURCE
-	// env is the only thing that disambiguates them at runtime.
-	tokenPath, ok := envValue(dep.Spec.Template.Spec.Containers[0].Env, "NVCF_TOKEN_FILE_PATH")
-	require.True(t, ok)
-	assert.Equal(t, "/var/run/secrets/tokens/token", tokenPath)
+		assert.Equal(t, []corev1.VolumeMount{tokenMount}, dep.Spec.Template.Spec.Containers[0].VolumeMounts)
+		assert.Empty(t, dep.Spec.Template.Spec.InitContainers)
+	})
+
+	t.Run("other init containers are untouched", func(t *testing.T) {
+		dep := agentDeployment()
+		dep.Spec.Template.Spec.InitContainers = []corev1.Container{{Name: "other"}}
+
+		applyPSATIdentity(context.Background(), dep, "abc")
+
+		assert.Empty(t, dep.Spec.Template.Spec.InitContainers[0].VolumeMounts)
+	})
 }
 
 func TestApplySelfManagedNVCADeployment_RejectsInvalidSource(t *testing.T) {

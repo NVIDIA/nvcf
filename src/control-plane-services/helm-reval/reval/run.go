@@ -29,19 +29,24 @@ import (
 	"io"
 	"maps"
 	"math/big"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"reflect"
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper/credhelper"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	credhelper "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/zapotelspan"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"helm.sh/helm/v3/pkg/chartutil"
@@ -72,8 +77,11 @@ type Handler struct {
 	Logger      *zap.Logger
 	ServiceName string
 
-	httpClient      *http.Client
-	newImageChecker func() imageChecker
+	httpClient                *http.Client
+	safeTransport             *http.Transport // underlying transport for h.httpClient (ORAS / image checks)
+	helmGetterTransport       *http.Transport // Helm requires a concrete transport (DisableCompression: true)
+	helmInstrumentedTransport http.RoundTripper
+	newImageChecker           func() imageChecker
 	// Image cache should be shared between threads.
 	imageCache cache.ImageCache
 	serializer *serializerImpl
@@ -83,7 +91,7 @@ type HandlerOptions struct {
 	// Skip validation of objects.
 	SkipValidateObjects bool
 	// Skip validation of images.
-	SkipValidateImages bool
+	SkipValidateImages *bool
 	// Skip sanitization of object metadata (labels and annotations).
 	SkipSanitizeObjectMetadata bool
 	// Configured labels to preserve
@@ -121,6 +129,8 @@ type Config struct {
 	RenderPolicy ValidationPolicy
 	// ValidatePolicies defines multiple sets validation rules and types are applied to a helm chart.
 	ValidatePolicies []ValidationPolicy
+	// ValidateImages configures whether to validate images, overriding the handler's default SkipValidateImages setting.
+	ValidateImages *bool
 }
 
 type ValidationPolicy struct {
@@ -136,6 +146,8 @@ const (
 	UnrestrictedPolicy PolicyName = "Unrestricted"
 )
 
+const maxRedirects = 10
+
 type Result struct {
 	Valid              bool                     `json:"valid"`
 	ValidationErrors   []error                  `json:"validationErrors,omitempty"`
@@ -149,6 +161,28 @@ type ValidationPolicyResult struct {
 }
 
 type logContextValue struct{}
+
+type httpsOnlyRoundTripper struct{}
+
+func (httpsOnlyRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, fmt.Errorf("redirected chart downloads must use HTTPS")
+}
+
+func shouldTraceOutboundRequest(req *http.Request) bool {
+	return req != nil && req.URL != nil && req.URL.RawQuery == "" && !req.URL.ForceQuery
+}
+
+func newInstrumentedOutboundTransport(base http.RoundTripper) http.RoundTripper {
+	return otelhttp.NewTransport(
+		base,
+		// Query parameters commonly contain short-lived registry or object-store
+		// credentials. Skip those spans because otelhttp records url.full.
+		otelhttp.WithFilter(shouldTraceOutboundRequest),
+		// Hostnames originate in function configuration and chart content. Avoid
+		// unbounded server.address metric cardinality while retaining client spans.
+		otelhttp.WithMeterProvider(metricnoop.NewMeterProvider()),
+	)
+}
 
 func logIntoContext(ctx context.Context, l *zap.Logger) context.Context {
 	return context.WithValue(ctx, logContextValue{}, l)
@@ -172,12 +206,40 @@ func NewHandler(
 		HandlerOptions: opts,
 	}
 
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
 	trpt := http.DefaultTransport.(*http.Transport).Clone()
+	// Destination validation must happen locally. A forward proxy would make
+	// DialContext validate the proxy address while the proxy resolves the
+	// attacker-controlled destination.
+	trpt.Proxy = nil
+	if !disableSafeDialer {
+		trpt.DialContext = newSafeDialContext(dialer)
+	}
 	if plainHTTP {
 		trpt.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
+	h.safeTransport = trpt
+
+	// Helm's HTTPGetter expects raw gzip/tar from the server; Go's http client
+	// must not auto-decompress "Content-Encoding: gzip" responses for it.
+	helmTrpt := trpt.Clone()
+	helmTrpt.DisableCompression = true
+	helmTrpt.RegisterProtocol("http", httpsOnlyRoundTripper{})
+	// Helm's getter accepts only *http.Transport rather than http.RoundTripper.
+	// Route HTTPS through an instrumented clone while retaining the outer
+	// concrete transport for Helm and its explicit HTTP rejection.
+	helmHTTPS := trpt.Clone()
+	helmHTTPS.DisableCompression = true
+	h.helmInstrumentedTransport = newInstrumentedOutboundTransport(helmHTTPS)
+	helmTrpt.RegisterProtocol("https", h.helmInstrumentedTransport)
+	h.helmGetterTransport = helmTrpt
+
 	h.httpClient = &http.Client{
-		Transport: retry.NewTransport(trpt),
+		Transport:     newInstrumentedOutboundTransport(retry.NewTransport(trpt)),
+		CheckRedirect: checkRedirect,
 	}
 	h.imageCache = cache.NewImageCache(h.Logger)
 	h.newImageChecker = func() imageChecker {
@@ -414,6 +476,85 @@ func validateInputs(cfg Config) (errs []error) {
 	return errs
 }
 
+// Carrier-grade NAT is not covered by netip.Addr's standard classifiers.
+var carrierGradeNAT = netip.MustParsePrefix("100.64.0.0/10")
+
+func isPrivateIP(host string) bool {
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	ip = ip.Unmap().WithZone("")
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() {
+		return true
+	}
+	return carrierGradeNAT.Contains(ip)
+}
+
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxRedirects)
+	}
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("redirected requests must use HTTPS, got %q", req.URL.Scheme)
+	}
+	if isPrivateIP(req.URL.Hostname()) {
+		return fmt.Errorf("redirect to blocked address %q is not allowed", req.URL.Hostname())
+	}
+	return nil
+}
+
+var (
+	// disableSafeDialer bypasses newSafeDialContext in NewHandler. For testing only; mirrors plainHTTP.
+	disableSafeDialer bool
+
+	// defaultLookupHost resolves a hostname to IP addresses. Injectable for tests.
+	defaultLookupHost = net.DefaultResolver.LookupHost
+)
+
+// newSafeDialContext returns a DialContext that resolves hostnames, rejects any
+// resolved private or blocked address, and then dials validated IPs directly
+// (preventing DNS rebinding via TOCTOU re-resolution).
+func newSafeDialContext(base *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		candidates := []string{host}
+		if net.ParseIP(host) == nil {
+			// Hostname: resolve DNS, then validate every returned address.
+			ips, err := defaultLookupHost(ctx, host)
+			if err != nil {
+				return nil, err
+			}
+			candidates = ips
+		}
+		if len(candidates) == 0 {
+			return nil, fmt.Errorf("no addresses resolved for %q", host)
+		}
+		for _, ip := range candidates {
+			if isPrivateIP(ip) {
+				return nil, fmt.Errorf("connection to blocked address %q is not allowed (resolved from %q)", ip, host)
+			}
+		}
+		// Dial validated IPs directly; skipping re-resolution prevents DNS rebinding.
+		var firstErr error
+		for _, ip := range candidates {
+			conn, err := base.DialContext(ctx, network, net.JoinHostPort(ip, port))
+			if err == nil {
+				return conn, nil
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+		return nil, firstErr
+	}
+}
+
 func validateHelmChartURL(urlStr string) (errs []error) {
 	u, err := url.Parse(urlStr)
 	if err != nil {
@@ -421,8 +562,16 @@ func validateHelmChartURL(urlStr string) (errs []error) {
 		return
 	}
 
-	if u.Scheme == "" || u.Scheme == "file" || u.Host == "" {
-		errs = append(errs, fmt.Errorf("helm chart URL must be absolute, got %q", urlStr))
+	if u.Scheme != "https" && u.Scheme != "oci" {
+		errs = append(errs, fmt.Errorf("helm chart URL must use https or oci scheme, got %q", u.Scheme))
+	}
+
+	if u.Hostname() == "" {
+		errs = append(errs, fmt.Errorf("helm chart URL must have a host"))
+	}
+
+	if isPrivateIP(u.Hostname()) {
+		errs = append(errs, fmt.Errorf("helm chart URL must not point to private networks"))
 	}
 
 	return errs
@@ -634,7 +783,7 @@ func (h *Handler) validateRenderedRelease(
 	verrs := h.validateReleaseObjects(vTraceCtx, logger, cfg, vp, targetService, matcherSet, matchTargetSet, objs)
 	if h.SkipValidateObjects {
 		if len(verrs) != 0 {
-			logger.Info("Release is sanitized and image validation errors found but validation is skipped")
+			logger.Info("Release is sanitized and validation errors found but validation is skipped")
 		}
 		for _, err := range verrs {
 			logger.Error("Object validation error", zap.Error(err))
@@ -644,23 +793,20 @@ func (h *Handler) validateRenderedRelease(
 		valErrs = append(valErrs, verrs...)
 	}
 
-	logger.Info("Validating object images")
-	extraObjs, ierrs := h.validateReleaseImages(vTraceCtx, logger, cfg, objs)
-	objs = append(objs, extraObjs...)
-	if h.SkipValidateImages {
-		if len(ierrs) != 0 {
-			logger.Info("Release is sanitized and image validation errors found but validation is skipped")
-		}
-		for _, err := range ierrs {
-			logger.Error("Image validation error", zap.Error(err))
-			validateSpan.RecordError(err)
-		}
+	// Validating images adds a lot of network overhead (extra latency for the caller)
+	// so if image skipping is configured, either by reval's config or the request,
+	// skip image validation completely.
+	if h.shouldSkipValidateImages(cfg) {
+		logger.Info("Image validation is skipped")
 	} else {
+		logger.Info("Validating object images")
+		extraObjs, ierrs := h.validateReleaseImages(vTraceCtx, logger, cfg, objs)
+		objs = append(objs, extraObjs...)
 		valErrs = append(valErrs, ierrs...)
 	}
 
 	// For span filtering.
-	validateSpan.SetAttributes(attribute.Bool("isValid", len(verrs) == 0 && len(ierrs) == 0))
+	validateSpan.SetAttributes(attribute.Bool("isValid", len(valErrs) == 0))
 
 	return objs, valErrs, nil
 }
@@ -679,6 +825,16 @@ func createTypeString(obj runtime.Object) string {
 		return fmt.Sprintf("%s/%s.%s", gvk.Group, gvk.Version, gvk.Kind)
 	}
 	return fmt.Sprintf("%T", obj)
+}
+
+func (h *Handler) shouldSkipValidateImages(cfg Config) bool {
+	if cfg.ValidateImages != nil {
+		return !*cfg.ValidateImages
+	}
+	if h.SkipValidateImages != nil {
+		return *h.SkipValidateImages
+	}
+	return false
 }
 
 func (h *Handler) validateReleaseObjects(

@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 package x509svid
 
 import (
@@ -168,6 +165,10 @@ func validateLeafCertificate(leaf *x509.Certificate) (*spiffeid.ID, error) {
 	leafID, err := IDFromCert(leaf)
 	if err != nil {
 		return nil, fmt.Errorf("cannot get leaf certificate SPIFFE ID: %v", err)
+	}
+
+	if leafID.Path() == "" {
+		return nil, errors.New("leaf certificate SPIFFE ID must have a non-root path")
 	}
 	if leaf.IsCA {
 		return nil, errors.New("leaf certificate must not have CA flag set to true")

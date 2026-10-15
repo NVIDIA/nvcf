@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2024 The Go Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
@@ -61,6 +58,7 @@ const (
 	riscv_HWPROBE_EXT_ZBA         = 0x8
 	riscv_HWPROBE_EXT_ZBB         = 0x10
 	riscv_HWPROBE_EXT_ZBS         = 0x20
+	riscv_HWPROBE_EXT_ZBC         = 0x80
 	riscv_HWPROBE_EXT_ZVBB        = 0x20000
 	riscv_HWPROBE_EXT_ZVBC        = 0x40000
 	riscv_HWPROBE_EXT_ZVKB        = 0x80000
@@ -111,6 +109,7 @@ func doinit() {
 			RISCV64.HasZba = isSet(v, riscv_HWPROBE_EXT_ZBA)
 			RISCV64.HasZbb = isSet(v, riscv_HWPROBE_EXT_ZBB)
 			RISCV64.HasZbs = isSet(v, riscv_HWPROBE_EXT_ZBS)
+			RISCV64.HasZbc = isSet(v, riscv_HWPROBE_EXT_ZBC)
 			RISCV64.HasZvbb = isSet(v, riscv_HWPROBE_EXT_ZVBB)
 			RISCV64.HasZvbc = isSet(v, riscv_HWPROBE_EXT_ZVBC)
 			RISCV64.HasZvkb = isSet(v, riscv_HWPROBE_EXT_ZVKB)

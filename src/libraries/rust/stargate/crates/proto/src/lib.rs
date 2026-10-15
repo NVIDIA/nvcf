@@ -1,0 +1,166 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+pub mod gateway_pb {
+    tonic::include_proto!("llm_gateway");
+}
+
+pub const REGISTRATION_HEARTBEAT_MS_METADATA: &str = "x-stargate-registration-heartbeat-ms";
+
+pub mod pb {
+    tonic::include_proto!("stargate");
+
+    pub mod serde_stargates_set {
+        use std::collections::BTreeMap;
+
+        use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+        use super::StargateInfo;
+
+        fn key_for(info: &StargateInfo) -> String {
+            if !info.stargate_id.is_empty() {
+                info.stargate_id.clone()
+            } else {
+                info.advertise_addr.clone()
+            }
+        }
+
+        fn normalize(values: impl IntoIterator<Item = StargateInfo>) -> Vec<StargateInfo> {
+            values
+                .into_iter()
+                .map(|info| (key_for(&info), info))
+                .collect::<BTreeMap<_, _>>()
+                .into_values()
+                .collect()
+        }
+
+        pub fn serialize<S>(value: &[StargateInfo], serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            normalize(value.iter().cloned()).serialize(serializer)
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<StargateInfo>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            Ok(normalize(Vec::<StargateInfo>::deserialize(deserializer)?))
+        }
+    }
+
+    pub mod serde_string_set {
+        use std::collections::BTreeSet;
+
+        use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+        pub fn serialize<S>(value: &[String], serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            value
+                .iter()
+                .filter(|value| !value.is_empty())
+                .collect::<BTreeSet<_>>()
+                .serialize(serializer)
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            Ok(BTreeSet::<String>::deserialize(deserializer)?
+                .into_iter()
+                .filter(|value| !value.is_empty())
+                .collect())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::pb::{StargateInfo, WatchStargatesResponse};
+    use prost::Message;
+
+    #[test]
+    fn model_stats_maximum_is_additive_and_preserves_absence() {
+        #[derive(Clone, PartialEq, Message)]
+        struct LegacyStats {
+            #[prost(double, tag = "1")]
+            last_mean_input_tps: f64,
+        }
+        let current = crate::pb::ModelStats {
+            last_mean_input_tps: 50.0,
+            max_input_tps: Some(200.0),
+            ..Default::default()
+        };
+        let bytes = current.encode_to_vec();
+        let decoded = crate::pb::ModelStats::decode(bytes.as_slice()).unwrap();
+        assert_eq!(decoded.max_input_tps, Some(200.0));
+        let legacy = LegacyStats::decode(bytes.as_slice()).unwrap();
+        assert_eq!(legacy.last_mean_input_tps, 50.0);
+        let old_bytes = legacy.encode_to_vec();
+        let old = crate::pb::ModelStats::decode(old_bytes.as_slice()).unwrap();
+        assert_eq!(old.last_mean_input_tps, 50.0);
+        assert_eq!(old.max_input_tps, None);
+    }
+
+    #[test]
+    fn watch_stargates_response_json_serde_normalizes_set_fields() {
+        let response = WatchStargatesResponse {
+            stargates: vec![
+                StargateInfo {
+                    stargate_id: "stargate-1".to_string(),
+                    advertise_addr: "10.0.0.2:50071".to_string(),
+                    http_advertise_addr: String::new(),
+                    grpc_pylon_dial_addr: String::new(),
+                },
+                StargateInfo {
+                    stargate_id: "stargate-0".to_string(),
+                    advertise_addr: "10.0.0.1:50071".to_string(),
+                    http_advertise_addr: String::new(),
+                    grpc_pylon_dial_addr: String::new(),
+                },
+                StargateInfo {
+                    stargate_id: "stargate-1".to_string(),
+                    advertise_addr: "duplicate-should-be-dropped:50071".to_string(),
+                    http_advertise_addr: String::new(),
+                    grpc_pylon_dial_addr: String::new(),
+                },
+            ],
+            watch_stargate_urls: vec![
+                "remote-b:50071".to_string(),
+                String::new(),
+                "remote-a:50071".to_string(),
+                "remote-b:50071".to_string(),
+            ],
+        };
+
+        let json = serde_json::to_string(&response).expect("response should serialize");
+        let decoded: WatchStargatesResponse =
+            serde_json::from_str(&json).expect("response should deserialize");
+
+        let ids: Vec<&str> = decoded
+            .stargates
+            .iter()
+            .map(|info| info.stargate_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["stargate-0", "stargate-1"]);
+        assert_eq!(
+            decoded.watch_stargate_urls,
+            vec!["remote-a:50071", "remote-b:50071"]
+        );
+    }
+}

@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "difflib",
+    srcs = ["difflib.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/pmezard/go-difflib/difflib",
+    importpath = "github.com/pmezard/go-difflib/difflib",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":difflib",
+    visibility = ["//visibility:public"],
+)

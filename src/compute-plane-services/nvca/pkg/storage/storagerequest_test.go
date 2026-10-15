@@ -289,7 +289,14 @@ func TestNewModelCacheStorageRequest(t *testing.T) {
 			if tt.expError != "" {
 				assert.EqualError(t, err, tt.expError)
 			} else {
+				// The cache-handle label is stamped at creation so the
+				// controller fan-out can map writer-job/PV events back to the SR.
+				if tt.expected.Labels == nil {
+					tt.expected.Labels = map[string]string{}
+				}
+				tt.expected.Labels[modelCacheHandleLabelKey] = tt.expected.Spec.ModelCache.CacheHandle
 				assert.Equal(t, tt.expected, actual)
+				assert.Equal(t, actual.Spec.ModelCache.CacheHandle, actual.Labels[modelCacheHandleLabelKey])
 			}
 		})
 	}
@@ -668,6 +675,24 @@ func TestGetStorageRequestErrorLog(t *testing.T) {
 				},
 			},
 			expectedError: fmt.Sprintf("%s driver must be installed when %s feature flag is enabled. Please contact your cluster administrator to install the driver.", SMBCSIDriverName, featureflag.HelmSharedStorage.Key),
+		},
+		{
+			name: "failed phase with rejected shared-storage object",
+			storageReq: &nvcav2beta1.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-storage"},
+				Status: nvcav2beta1.StorageRequestStatus{
+					Phase: nvcav2beta1.StorageFailed,
+					Conditions: []metav1.Condition{
+						{
+							Type:    ConditionTypeSharedStorageResourcesCreated,
+							Status:  metav1.ConditionFalse,
+							Reason:  ConditionReasonAdmissionRejected,
+							Message: "failed to create shared-storage object nvcf-smb-server: Pod is invalid: requests 500m above limit 100m",
+						},
+					},
+				},
+			},
+			expectedError: "failed to create shared-storage object nvcf-smb-server: Pod is invalid: requests 500m above limit 100m",
 		},
 		{
 			name: "failed phase without SMB CSI driver condition",

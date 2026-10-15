@@ -1,9 +1,6 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 package characters
 
-var invalidAsciiTable = [256]bool{
+var invalidASCIITable = [256]bool{
 	0x00: true,
 	0x01: true,
 	0x02: true,
@@ -40,6 +37,6 @@ var invalidAsciiTable = [256]bool{
 	0x7F: true,
 }
 
-func InvalidAscii(b byte) bool {
-	return invalidAsciiTable[b]
+func InvalidASCII(b byte) bool {
+	return invalidASCIITable[b]
 }

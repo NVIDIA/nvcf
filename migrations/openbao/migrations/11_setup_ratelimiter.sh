@@ -26,7 +26,7 @@ else
   source "${curr_dir}/utils/functions.sh"
 fi
 
-SERVICE_ACCOUNT_NAMESPACE="ratelimiter"
+SERVICE_ACCOUNT_NAMESPACE="nvcf"
 SERVICE_ACCOUNT_NAME="ratelimiter-api"
 
 #-------------------------------------------
@@ -53,6 +53,7 @@ config_jwt_secret_mount_config "${VAULT_SECRET_BASE_PATH}/jwt" "${jwt_secret_mou
 
 NVCF_API_SERVICE_ACCOUNT_NAMESPACE="nvcf"
 NVCF_API_SERVICE_ACCOUNT_NAME="nvcf-api"
+NVCF_API_SERVICE_NAME="api"
 NVCF_API_SECRET_BASE_PATH="services/${NVCF_API_SERVICE_ACCOUNT_NAME}"
 NVCF_API_SECRET_POLICY_PATH="services-${NVCF_API_SERVICE_ACCOUNT_NAME}"
 SCOPES="ratelimit:check_invocation"
@@ -60,7 +61,7 @@ SCOPES="ratelimit:check_invocation"
 #-------------------------------------------
 # Create JWT Secret Role for NVCF JWT Signer
 #-------------------------------------------
-jwt_secret_role=$(generate_jwt_secret_role "${NVCF_API_SERVICE_ACCOUNT_NAMESPACE}" "${NVCF_API_SERVICE_ACCOUNT_NAME}" "${SERVICE_ACCOUNT_NAME}" "${SCOPES}")
+jwt_secret_role=$(generate_jwt_secret_role "${NVCF_API_SERVICE_ACCOUNT_NAMESPACE}" "${NVCF_API_SERVICE_NAME}" "${SERVICE_ACCOUNT_NAME}" "${SCOPES}")
 create_secret_jwt_role "${NVCF_API_SECRET_BASE_PATH}/jwt" "${SERVICE_ACCOUNT_NAME}" "${jwt_secret_role}"
 
 

@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-
 # Copyright 2009 The Go Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style
 # license that can be found in the LICENSE file.
@@ -357,6 +354,9 @@ struct ltchars {
 // Renamed in v6.16, commit c6d732c38f93 ("net: ethtool: remove duplicate defines for family info")
 #define ETHTOOL_FAMILY_NAME	ETHTOOL_GENL_NAME
 #define ETHTOOL_FAMILY_VERSION	ETHTOOL_GENL_VERSION
+
+// Removed in v6.17, commit 760e6f7befba ("futex: Remove support for IMMUTABLE")
+#define PR_FUTEX_HASH_GET_IMMUTABLE 3
 '
 
 includes_NetBSD='

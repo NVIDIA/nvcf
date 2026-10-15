@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- if and (eq (include "llm-request-router.backendRouterEnabled" .) "true") .Values.llmRequestRouter.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "llm-request-router.backendRouterName" . }}-endpointslice-reader
+  namespace: {{ include "llm-request-router.namespace" . }}
+  labels:
+    {{- include "llm-request-router.backendRouterLabels" . | nindent 4 }}
+rules:
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "llm-request-router.backendRouterName" . }}-endpointslice-reader
+  namespace: {{ include "llm-request-router.namespace" . }}
+  labels:
+    {{- include "llm-request-router.backendRouterLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "llm-request-router.backendRouterName" . }}-endpointslice-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "llm-request-router.backendRouterServiceAccountName" . }}
+    namespace: {{ include "llm-request-router.namespace" . }}
+{{- end }}

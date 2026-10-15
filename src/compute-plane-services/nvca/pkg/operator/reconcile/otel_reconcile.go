@@ -18,8 +18,11 @@ limitations under the License.
 package operator
 
 import (
+	"bytes"
 	_ "embed"
+	"fmt"
 	"strings"
+	"text/template"
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 )
@@ -28,7 +31,9 @@ const (
 	NVCAOTelCollectorAuthenticatorOAuth2Client    = "oauth2client"
 	NVCAOTelCollectorAuthenticatorBearerTokenAuth = "bearertokenauth"
 
-	NVCAOTelCollectorOAuthPlaceholderClientID = "nvca-otel-collector-client-id"
+	// selfHostedColocatedEventLedgerURL is the in-cluster Event Ledger Service
+	// on a self-hosted control plane that shares the cluster with NVCA.
+	selfHostedColocatedEventLedgerURL = "http://event-ledger.nvcf.svc.cluster.local:8080"
 )
 
 //go:embed manifests/otel_collector_config.yaml
@@ -40,27 +45,65 @@ type otelCollectorAuthConfig struct {
 	clientSecretFile string
 	tokenURL         string
 	authenticator    string
+	bearerTokenFile  string
+}
+
+// otelCollectorConfigTemplateData contains values used to render the OTel collector configuration template.
+type otelCollectorConfigTemplateData struct {
+	UseOAuth2 bool
+	UsePSAT   bool
 }
 
 // getOTelCollectorConfigData returns the OTel collector configuration data.
-// Values will be substituted by OTel Collector at runtime
-// from environment variables set in the container spec.
-func (bc *BackendK8sCache) getOTelCollectorConfigData() map[string]string {
-	return map[string]string{
-		"config.yaml": otelCollectorConfigTpl,
+// The authentication extension is selected when the ConfigMap is rendered. Remaining
+// values are substituted by the OTel Collector at runtime from the container environment.
+func (bc *BackendK8sCache) getOTelCollectorConfigData(nb *nvidiaiov1.NVCFBackend) (map[string]string, error) {
+	tmpl, err := template.New("otel_collector_config.yaml").Parse(otelCollectorConfigTpl)
+	if err != nil {
+		return nil, fmt.Errorf("parse OTel collector config template: %w", err)
 	}
+
+	var config bytes.Buffer
+	data := otelCollectorConfigTemplateData{
+		UseOAuth2: useOTelCollectorOAuth2(nb),
+		UsePSAT:   useOTelCollectorPSAT(nb),
+	}
+	if err := tmpl.Execute(&config, data); err != nil {
+		return nil, fmt.Errorf("render OTel collector config template: %w", err)
+	}
+
+	return map[string]string{"config.yaml": config.String()}, nil
 }
 
+// useOTelCollectorPSAT reports whether the collector authenticates with the
+// projected ServiceAccount token that applyPSATIdentity mounts. Self-hosted
+// clusters have no NGC service API key, and Event Ledger verifies the PSAT
+// through SIS introspection.
+func useOTelCollectorPSAT(nb *nvidiaiov1.NVCFBackend) bool {
+	return IsSelfHosted(nb)
+}
+
+// useOTelCollectorOAuth2 selects both the rendered auth extension and the
+// collector's authenticator, so the two cannot disagree.
 func useOTelCollectorOAuth2(nb *nvidiaiov1.NVCFBackend) bool {
+	if useOTelCollectorPSAT(nb) {
+		return false
+	}
 	return nb.Spec.VaultConfig.Enabled && getOAuthConfig(nb).ClientID != ""
 }
 
-// getOTelCollectorAuthConfig determines the authentication configuration for the OTel collector.
-// Falls back to NVCAOTelCollectorAuthenticatorBearerTokenAuth when Vault is disabled or client ID is empty.
+// getOTelCollectorAuthConfig selects OAuth2 authentication when Vault is enabled
+// and a client ID is configured; otherwise, it selects bearer-token authentication.
+// The bearer token is the PSAT on self-hosted clusters and the NGC service API
+// key everywhere else.
 func (bc *BackendK8sCache) getOTelCollectorAuthConfig(nb *nvidiaiov1.NVCFBackend) otelCollectorAuthConfig {
-	clientID := NVCAOTelCollectorOAuthPlaceholderClientID
+	clientID := ""
 	vaultSecretFilePath := DefaultVaultSecretFilePath
 	authenticator := NVCAOTelCollectorAuthenticatorBearerTokenAuth
+	bearerTokenFile := fmt.Sprintf("/var/run/secrets/%s/%s", NGCServiceAPIKeySecretName, NGCServiceAPIKeySecretDataKey)
+	if useOTelCollectorPSAT(nb) {
+		bearerTokenFile = clusterIssuedTokenFilePath
+	}
 
 	if useOTelCollectorOAuth2(nb) {
 		if nb.Spec.VaultConfig.SecretFilePath != "" {
@@ -84,7 +127,19 @@ func (bc *BackendK8sCache) getOTelCollectorAuthConfig(nb *nvidiaiov1.NVCFBackend
 		clientSecretFile: clientSecretFile,
 		tokenURL:         tokenURL,
 		authenticator:    authenticator,
+		bearerTokenFile:  bearerTokenFile,
 	}
+}
+
+// getOTelCollectorFNDSEndpoint returns the Event Ledger base URL the collector
+// exports to, without a trailing slash. A self-hosted cluster without a
+// configured URL uses the colocated Event Ledger, not the hosted default.
+func getOTelCollectorFNDSEndpoint(nb *nvidiaiov1.NVCFBackend, envType nvidiaiov1.EnvType) string {
+	fndsCfg := nb.Spec.ClusterConfig.FNDService
+	if IsSelfHosted(nb) && (fndsCfg == nil || fndsCfg.ServiceURL == "") {
+		return selfHostedColocatedEventLedgerURL
+	}
+	return strings.TrimRight(getFNDSEndpoint(fndsCfg, envType), "/")
 }
 
 func getFunctionDeploymentStagesOAuthTokenURL(nb *nvidiaiov1.NVCFBackend, envType nvidiaiov1.EnvType) string {

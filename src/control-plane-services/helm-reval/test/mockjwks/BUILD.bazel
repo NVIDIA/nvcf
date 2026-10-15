@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "mockjwks_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/test/mockjwks",
+    visibility = ["//visibility:private"],
+    deps = ["@com_github_golang_jwt_jwt_v5//:jwt"],
+)
+
+go_binary(
+    name = "mockjwks",
+    embed = [":mockjwks_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "mockjwks_test",
+    srcs = ["main_test.go"],
+    embed = [":mockjwks_lib"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

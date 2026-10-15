@@ -35,6 +35,7 @@ const (
 	defaultPodLaunchThresholdMinutesOnInitFailure    = 2 * time.Hour
 	defaultPodScheduledThreshold                     = 10 * time.Minute
 	defaultInitCacheJobFailureThreshold              = 2 * defaultMaxRunningTimeout
+	defaultSambaModelCacheReadyThreshold             = 30 * time.Minute
 	defaultMaxImagePullErrorThreshold                = 1 * time.Minute
 	defaultNamespaceStuckTimeout                     = 5 * time.Minute
 	defaultFailingObjectsBackoffTimeout              = 90 * time.Second
@@ -64,6 +65,9 @@ type TimeConfig struct {
 	PodScheduledThreshold time.Duration
 	// PodLaunchThresholdMinutesOnInitFailure is the duration after which an init cache Job with unsuccessful Pods is marked failed.
 	InitCacheJobFailureThreshold time.Duration
+	// SambaModelCacheReadyThreshold is the duration after which a per-handle Samba model cache server that is still
+	// unavailable (usually an unbindable backing PVC) is marked failed instead of requeued forever.
+	SambaModelCacheReadyThreshold time.Duration
 	// PodLaunchThresholdMinutesOnInitFailure is the duration after which a Pod with container pull issues is marked failed.
 	MaxImagePullErrorThreshold time.Duration
 	// NamespaceStuckTimeout is the duration after which a terminating Namespace is considered stuck.
@@ -108,6 +112,9 @@ func (t *TimeConfig) Complete() *TimeConfig {
 	}
 	if t.InitCacheJobFailureThreshold == 0 {
 		t.InitCacheJobFailureThreshold = defaultInitCacheJobFailureThreshold
+	}
+	if t.SambaModelCacheReadyThreshold == 0 {
+		t.SambaModelCacheReadyThreshold = defaultSambaModelCacheReadyThreshold
 	}
 	if t.MaxImagePullErrorThreshold == 0 {
 		t.MaxImagePullErrorThreshold = defaultMaxImagePullErrorThreshold

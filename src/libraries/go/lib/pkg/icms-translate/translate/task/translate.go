@@ -37,6 +37,8 @@ import (
 // TODO: k8s version considerations.
 // For now, all task Pod features are supported by all recent k8s versions
 
+// translateContainer converts a container task request into Kubernetes resources.
+//
 //nolint:gocyclo // complex function with many conditional branches
 func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []metav1.Object, err error) {
 	tcfg.Default()
@@ -399,10 +401,11 @@ func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 			Image:           initContainerImage,
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			Env:             common.SortEnvs(initEnvs),
-			SecurityContext: common.NewInfraContainerSecurityContext(),
+			SecurityContext: common.NewWorkerInitContainerSecurityContext(),
 			VolumeMounts:    initContainerVolumeMounts,
 		}
 		pod.Spec.InitContainers = append(pod.Spec.InitContainers, initContainer)
+		common.EnsureWorkerInitFSGroup(&pod.Spec)
 
 		// The ESS init container needs to be added after the init container,
 		// since the init container creates config.hcl.
@@ -424,6 +427,7 @@ func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 				essDataVolumeMount,
 			}
 			pod.Spec.InitContainers = append(pod.Spec.InitContainers, essInitContainer)
+			common.EnsureESSFSGroup(&pod.Spec)
 		}
 
 		utilsContainer := corev1.Container{
@@ -435,7 +439,7 @@ func translateContainer(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 			VolumeMounts:    utilsContainerVolumeMounts,
 		}
 		// mutate startup / liveness / readiness probes
-		common.MutateUtilsProbes(&utilsContainer)
+		common.MutateUtilsContainer(&utilsContainer)
 		pod.Spec.Containers = append(pod.Spec.Containers, utilsContainer)
 
 		// Setup telemetry for the pod

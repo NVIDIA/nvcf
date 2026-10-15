@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 package toml
 
 import (
@@ -48,7 +45,7 @@ func (d *LocalDate) UnmarshalText(b []byte) error {
 type LocalTime struct {
 	Hour       int // Hour of the day: [0; 24[
 	Minute     int // Minute of the hour: [0; 60[
-	Second     int // Second of the minute: [0; 60[
+	Second     int // Second of the minute: [0; 59]
 	Nanosecond int // Nanoseconds within the second:  [0, 1000000000[
 	Precision  int // Number of digits to display for Nanosecond.
 }

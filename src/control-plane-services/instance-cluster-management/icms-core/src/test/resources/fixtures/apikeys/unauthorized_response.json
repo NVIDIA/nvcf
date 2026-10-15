@@ -1,0 +1,10 @@
+{
+  "namespace": "nvcfsis",
+  "rule_name": "apikey.allow",
+  "result": {
+    "allowed": false,
+    "ncaId": "ZP_Whumw18I0fCYSKpMTGIg1Hnlp4FZ2wtqugF93zK0",
+    "ownerId": "abc123",
+    "policy": {}
+  }
+}

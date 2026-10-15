@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 // Copyright 2016-2023 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -98,7 +95,7 @@ func (nc *Conn) oldRequestWithContext(ctx context.Context, subj string, hdr, dat
 	s.AutoUnsubscribe(1)
 	defer s.Unsubscribe()
 
-	err = nc.publish(subj, inbox, hdr, data)
+	err = nc.publish(subj, inbox, false, hdr, data)
 	if err != nil {
 		return nil, err
 	}
