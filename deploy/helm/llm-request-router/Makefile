@@ -95,3 +95,8 @@ push-oci:
 		exit 1; \
 	fi
 	helm push ./packaged-charts/$(CHART_NAME)-$(CHART_VERSION).tgz oci://$(OCI_REGISTRY_HOST)/$(OCI_REGISTRY_NAMESPACE)
+
+.PHONY: test-nonroot
+test: test-nonroot
+test-nonroot:
+	bash ./tests/nonroot-llm-migrations.sh
