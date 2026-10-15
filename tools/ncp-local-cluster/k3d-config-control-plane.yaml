@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: ${K3D_CLUSTER_NAME}
+
+image: rancher/k3s:v1.30.2-k3s2
+servers: 1
+agents: 2
+
+volumes:
+  - volume: ${PWD}/bin/generic-credential-provider:/var/lib/kubelet/plugins/generic-credential-provider
+    nodeFilters:
+      - all
+  - volume: ${PWD}/config/credential-provider-config.yaml:/etc/kubernetes/credential-provider/config.yaml
+    nodeFilters:
+      - all
+  - volume: ${PWD}/secrets/docker-config.json:/etc/kubernetes/secrets/docker-config.json
+    nodeFilters:
+      - all
+  - volume: ${PWD}/apps/node-tuning/node-tuning.yaml:/var/lib/rancher/k3s/server/manifests/node-tuning.yaml
+    nodeFilters:
+      - server:*
+
+ports:
+  - port: ${CONTROL_PLANE_HTTP_PORT}:80
+    nodeFilters:
+      - loadbalancer
+  - port: ${CONTROL_PLANE_HTTPS_PORT}:443
+    nodeFilters:
+      - loadbalancer
+  - port: ${CONTROL_PLANE_GRPC_PORT}:9090
+    nodeFilters:
+      - loadbalancer
+  - port: ${CONTROL_PLANE_GRPC_PROXY_PORT}:10081
+    nodeFilters:
+      - loadbalancer
+  - port: ${CONTROL_PLANE_GRPC_WORKER_PORT}:10086
+    nodeFilters:
+      - loadbalancer
+  - port: ${CONTROL_PLANE_NATS_PORT}:4222
+    nodeFilters:
+      - loadbalancer
+
+options:
+  k3d:
+    wait: true
+  k3s:
+    extraArgs:
+      - arg: "--disable=traefik"
+        nodeFilters:
+          - server:*
+      - arg: "--image-credential-provider-config=/etc/kubernetes/credential-provider/config.yaml"
+        nodeFilters:
+          - all
+      - arg: "--image-credential-provider-bin-dir=/var/lib/kubelet/plugins/"
+        nodeFilters:
+          - all
+    nodeLabels:
+      - label: usage=control-plane
+        nodeFilters:
+          - agent:0
+          - agent:1

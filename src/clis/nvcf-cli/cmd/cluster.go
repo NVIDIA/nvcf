@@ -50,6 +50,7 @@ func init() {
 	rootCmd.AddCommand(clusterCmd)
 	clusterCmd.AddCommand(clusterListCmd)
 	initClusterRegistrationCmds()
+	initClusterAgentCmds()
 }
 
 func runClusterList(cmd *cobra.Command, args []string) error {

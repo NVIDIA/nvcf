@@ -1,0 +1,88 @@
+@startuml
+title Chat Completions Request (End-to-End)
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam participantPadding 15
+skinparam BoxPadding 10
+skinparam sequenceMessageAlign center
+
+participant "LLM Gateway" as Gateway
+
+box "Stargate Pod" #f0f7e8
+  participant "HTTP Proxy\n:8000" as Proxy
+  participant "Load Balancer\nRouter" as LB
+  participant "QUIC Tunnel\nClient" as QuicProxy
+end box
+
+box "pylon" #e8f4fd
+  participant "QUIC Tunnel\nServer" as TunnelSvr
+end box
+
+participant "Inference Server\n/v1/chat/completions" as Upstream
+
+== Request ==
+Gateway -> Proxy: POST /v1/chat/completions\nx-routing-key: my-rk\nx-model: my-model\nx-request-id: req-42\nx-input-tokens: 128\nContent-Type: application/json\n\n{"messages":[...],"stream":true}
+
+note over Proxy
+  Extracts x-model (required) and
+  x-routing-key (optional) to build
+  RoutingTargetKey. x-input-tokens
+  is required. Body is opaque -- never parsed.
+end note
+
+Proxy -> LB: cluster_candidates_for_target(\n  RoutingTargetKey{my-rk, my-model})
+LB --> Proxy: [cluster-A (rtt=5ms), cluster-B (rtt=12ms)]
+
+note over LB
+  Default: power-of-two
+  (sample 2, pick lower prompt-work time).
+  Only clusters with a backend that has an open QUIC
+  connection and a healthy RTT
+  sample are candidates.
+end note
+
+Proxy -> LB: choose(LoadBalancerRequest, candidates)
+LB --> Proxy: cluster-A
+Proxy -> Proxy: select concrete backend\nserver-A in cluster-A
+
+== QUIC Tunnel ==
+Proxy -> QuicProxy: proxy_request_streaming(\n  "server-A",\n  POST, "/v1/chat/completions",\n  forwarded headers, body)
+
+QuicProxy -> QuicProxy: look up pooled QUIC\nconnection for server-A
+
+QuicProxy -> TunnelSvr: open_bi() on existing\nQUIC connection
+
+note over QuicProxy,TunnelSvr
+  Raw QUIC path shown below: Cap'n Proto
+  tunnel frames carry headers and body.
+  HTTP/3 uses an H3 request stream.
+  WebTransport uses its HTTP proxy head
+  blocks plus raw body bytes, not Raw QUIC frames.
+end note
+
+QuicProxy -> TunnelSvr: send_header(\n  x-method: POST,\n  x-path: /v1/chat/completions,\n  x-model, x-request-id, ...)
+QuicProxy -> TunnelSvr: send_body(request body chunks)
+QuicProxy -> TunnelSvr: finish (half-close)
+
+== Upstream ==
+TunnelSvr -> Upstream: POST /v1/chat/completions\n(reconstructed HTTP request)
+Upstream --> TunnelSvr: HTTP 200\nContent-Type: text/event-stream\n\ndata: {"choices":[...]}\ndata: {"choices":[...]}\ndata: [DONE]
+
+== Response ==
+TunnelSvr -> QuicProxy: send_header(x-status: 200,\n  content-type, ...)
+TunnelSvr -> QuicProxy: send_body(SSE chunks)
+
+QuicProxy --> Proxy: StreamingResponse {\n  status: 200,\n  headers,\n  body_stream }
+
+note over Proxy
+  Adds response headers:
+  x-inference-server-id: server-A
+  x-stargate-cluster-id: cluster-A
+  Copies forwardable upstream headers.
+  Records TTFB and metrics.
+end note
+
+Proxy --> Gateway: HTTP 200\nx-inference-server-id: server-A\nx-stargate-cluster-id: cluster-A\nContent-Type: text/event-stream\n\ndata: {"choices":[...]}\ndata: {"choices":[...]}\ndata: [DONE]
+
+@enduml

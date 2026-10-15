@@ -1,6 +1,54 @@
 # NVCF Invocation Service
 
-Run
+## Build with Bazel
+
+CI runs `bazel test //...` and publishes the multi-arch image via
+`bazel run //nvidia-internal:image_push_nvcf_dev` (the legacy
+`nvcr.io/0544956542906249/nvcf-dev` path). The legacy
+`cds/cicd-pipelines/pipelines/nvcf/nvcf-rust-ci-pipeline.yml` template
+is retired.
+
+Requires [bazelisk](https://github.com/bazelbuild/bazelisk) (`bazel` on
+PATH delegating to the version pinned in `.bazelversion`).
+`MODULE.bazel` pulls the Rust toolchain (1.91.1), `rules_rust`,
+`crate_universe`, `rules_oci`, and the distroless/cc base image; no
+host toolchains are needed beyond a recent Linux (or macOS) and the
+`bazel` shim.
+
+```shell
+# Build everything Bazel knows about.
+bazel build //...
+
+# Run the unit test. --flaky_test_attempts=3 lets timing-sensitive
+# tests self-heal instead of needing a manual retry.
+bazel test //... --flaky_test_attempts=3
+
+# Build the multi-arch OCI index for the server binary.
+bazel build //crates/server:image_index
+
+# Load the host-arch image into the local docker daemon for smoke tests.
+bazel run //crates/server:image_load
+
+# Push to nvcr.io/0544956542906249/nvcf-dev/nvcf-invocation-service.
+# Needs DOCKER_CONFIG pointed at credentials for that path (CI uses
+# the NGC_REGISTRY_TOKEN from vault path
+# kv/gitlab/ngc-registry-auth/nvcf-invocation-service).
+bazel run //nvidia-internal:image_push_nvcf_dev
+
+# Repin crate_universe after Cargo.lock changes.
+CARGO_BAZEL_REPIN=1 bazel sync --only=nvcf_invocation_crates
+```
+
+OSS contributors building from the GitHub mirror: the default
+`oci.pull` in `MODULE.bazel` points at `nvcr.io/nvidia/distroless/cc`,
+which requires NGC credentials. To build off-network, swap that entry
+for a public base such as `gcr.io/distroless/cc-debian12` (then
+`bazel mod tidy` to refresh the lockfile). `bazel build //...` and
+`bazel test //...` work without modification.
+
+Local Bazel cache setup is documented in the `nvcf/nvcf-internal` docs.
+
+## Cargo development (still supported)
 
 ```shell
 cargo run --package nvcf-invocation-service --bin server --release -- -c crates/server/resources/settings-stg-local.yaml  2>&1 | grep '^{.*}$' | jq '.'
@@ -40,7 +88,7 @@ cargo run --package nvcf-invocation-service --bin server -- -c crates/server/res
 The ngrok URL will be displayed in the ngrok terminal and can be used to access your service externally.
 
 ```shell
-curl --location 'http://localhost:8080/v2/nvcf/pexec/functions/6c15cde0-d06a-4bbf-a4e1-e587c4ca9a11' \
+curl --location 'http://localhost:8080/echo' \
 --header 'Accept: application/json' \
 --header 'NVCF-POLL-SECONDS: 10' \
 --header 'Content-Type: application/json' \
@@ -218,7 +266,7 @@ Install the Coverage Gutters extension.  From Vscode:
 1. Ctl-Shift-p
 1. Type then select, `Coverage gutters: watch`
 
-From the code editor, see that coveraged lines have green sidebars, otherwise red.
+From the code editor, see that covered lines have green sidebars, otherwise red.
 To see entire lines highlighted in green and red:
 1. Right click the extension and select settings
 1. In the settings pane, select `Show line coverage`

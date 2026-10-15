@@ -6,10 +6,29 @@ environments:
 
 ---
 
+{{- $observabilityProfile := dig "observability" "profile" "disabled" .Values }}
+{{- if not (has $observabilityProfile (list "disabled" "control" "compute" "all")) }}
+{{- fail (printf "observability.profile must be disabled, control, compute, or all, got %q" $observabilityProfile) }}
+{{- end }}
+{{- $functionAutoscalerEnabled := or (eq $observabilityProfile "control") (eq $observabilityProfile "all") }}
+{{- if and $functionAutoscalerEnabled (not (dig "stateMetrics" "enabled" false .Values)) }}
+{{- fail "function-autoscaler requires stateMetrics.enabled=true for control and all observability profiles" }}
+{{- end }}
+
 repositories:
   - name: nvcf
+{{- if dig "global" "helm" "sources" "url" "" .Values }}
+    url: {{ .Values.global.helm.sources.url | quote }}
+    {{- if dig "global" "helm" "sources" "username" "" .Values }}
+    username: {{ dig "global" "helm" "sources" "username" "" .Values | quote }}
+    {{- end }}
+    {{- if dig "global" "helm" "sources" "password" "" .Values }}
+    password: {{ dig "global" "helm" "sources" "password" "" .Values | quote }}
+    {{- end }}
+{{- else }}
     url: {{ .Values.global.helm.sources.registry }}/{{ .Values.global.helm.sources.repository }}
     oci: true
+{{- end }}
 
 helmDefaults:
   createNamespace: true
@@ -28,6 +47,12 @@ templates:
       - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
     labels:
       release-group: observability
+  functionAutoscaler: &functionAutoscaler
+    chart: nvcf/helm-nvcf-function-autoscaler
+    values:
+      - ../global.yaml.gotmpl
+    labels:
+      release-group: observability
 
 releases:
 
@@ -40,3 +65,13 @@ releases:
       - template: service
     # When enabled, this service will export realtime function information that can be
     # scraped by a Prometheus ServiceMonitor
+
+  {{- if $functionAutoscalerEnabled }}
+  - name: function-autoscaler
+    version: {{ dig "functionAutoscaler" "chartVersion" "0.2.1" .Values | quote }}
+    namespace: nvcf
+    inherit:
+      - template: functionAutoscaler
+    needs:
+      - nvcf/state-metrics
+  {{- end }}

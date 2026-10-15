@@ -1,0 +1,206 @@
+---
+# Source: helm-nvca-operator/templates/deployment.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nvca-operator
+  namespace: nvca-operator
+  labels:
+    helm.sh/chart: helm-nvca-operator-1.14.0
+    app.kubernetes.io/name: nvca-operator
+    app.kubernetes.io/instance: nvca-operator
+    app.kubernetes.io/version: "3.0.4"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nvca-operator
+      app.kubernetes.io/instance: nvca-operator
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nvca-operator
+        app.kubernetes.io/instance: nvca-operator
+    spec:
+      serviceAccountName: nvca-operator
+      automountServiceAccountToken: true
+      imagePullSecrets:
+      - name: "nvcr-pull-secret"
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1010
+        fsGroup: 1010
+      terminationGracePeriodSeconds: 600
+      containers:
+      - name: nvca-operator
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: DEPLOYMENT_NAME
+          value: "nvca-operator"
+        - name: NGC_API_URL
+          value: https://api.ngc.nvidia.com
+        - name: NGC_SERVICE_KEY_FILE
+          value: /var/run/secrets/ngc-service-key/ngcServiceKey
+        - name: NVCA_CLUSTER_SOURCE
+          value: self-managed
+        - name: NVCA_IMAGE_REPO
+          value: "nvcr.io/0651155215864979/ncp-dev/nvca"
+        - name: K8S_CLUSTER_NETWORK_CIDRS
+          value: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/12"
+        - name: AGENT_RESOURCES_B64
+          value: "eyJsaW1pdHMiOnsiY3B1IjoiMTAwMG0iLCJtZW1vcnkiOiI0R2kifSwicmVxdWVzdHMiOnsiY3B1IjoiMTAwbSIsIm1lbW9yeSI6IjIwME1pIn19"
+        - name: WEBHOOK_RESOURCES_B64
+          value: "eyJsaW1pdHMiOnsiY3B1IjoiMjAwbSIsIm1lbW9yeSI6IjIwME1pIn0sInJlcXVlc3RzIjp7ImNwdSI6IjUwbSIsIm1lbW9yeSI6IjUwTWkifX0="
+        - name: GENERATE_IMAGE_PULL_SECRET
+          value: "false"
+        - name: ADDITIONAL_IMAGE_PULL_SECRETS_B64
+          value: "W3sibmFtZSI6Im52Y3ItcHVsbC1zZWNyZXQifV0="
+        - name: OTEL_COLLECTOR_ENABLED
+          value: "false"
+        - name: OTEL_COLLECTOR_IMAGE_REPO
+          value: "nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector"
+        - name: OTEL_COLLECTOR_IMAGE_TAG
+          value: "0.143.2"
+        - name: OTEL_COLLECTOR_RESOURCES_B64
+          value: "eyJsaW1pdHMiOnsiY3B1IjoiMTAwMG0iLCJtZW1vcnkiOiIxR2kifSwicmVxdWVzdHMiOnsiY3B1IjoiMjAwbSIsIm1lbW9yeSI6IjI1Nk1pIn19"
+        - name: OPERATOR_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        args:
+          - /tini
+          - --
+          - /usr/bin/nvca-operator
+          - --nca-id
+          - "nvcf-default"
+          - --system-namespace
+          - "nvca-operator"
+          - --cluster-name
+          - "ncp-local"
+          - --log-level
+          - "info"
+          - --priority-class-name
+          - ""
+          - --node-selector-key
+          - "node.kubernetes.io/instance-type"
+          - --node-selector-value
+          - ""
+          - --nvca-helm-repository-prefix
+          - ""
+          - --cluster-id
+          - "de5f65fe-08d7-47e7-bf30-860e2fe88c57"
+          - --enable-gxcache
+          - --nvca-cache-mount-options-enabled
+          - --nvca-cache-mount-options
+          - "ro,norecovery,nouuid"
+        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.0.4
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          # Set here so openbao injection can copy it upon injection
+          runAsUser: 1000
+          runAsGroup: 1010
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+        lifecycle:
+          preStop:
+            httpGet:
+              path: /shutdown
+              port: 8002
+        volumeMounts:
+        - name: ngc-service-key
+          mountPath: /var/run/secrets/ngc-service-key
+          readOnly: true
+        - name: nvcfbackend-config
+          mountPath: /etc/nvcf/backend
+          readOnly: true
+        ports:
+        - name: http
+          containerPort: 8000
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /version
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "200Mi"
+          limits:
+            cpu: "1000m"
+            memory: "4Gi"
+      - name: nvca-mirror
+        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.0.4
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1010
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - "ALL"
+        args:
+          - /tini
+          - --
+          - /usr/bin/nvca-mirror
+          - run
+          - --target-namespace
+          - "nvca-system"
+          - --log-level
+          - "info"
+        env:
+        - name: NVCA_MIRROR_SOURCE_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: NVCA_ADDITIONAL_IMAGE_PULL_SECRETS_JSON_BASE64
+          value: "W3sibmFtZSI6Im52Y3ItcHVsbC1zZWNyZXQifV0="
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "32Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"
+      volumes:
+      - name: ngc-service-key
+        secret:
+          secretName: ngc-service-key
+          # optional only if clusterSource is self-managed
+          optional: true
+      - name: nvcfbackend-config
+        configMap:
+          name: nvcfbackend-self-managed

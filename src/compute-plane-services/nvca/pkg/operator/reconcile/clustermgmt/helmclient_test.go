@@ -80,10 +80,6 @@ agent:
   functionDeploymentStagesStageOAuthPublicKeysetEndpoint: "https://stage-fnds-oauth.example.test/.well-known/jwks.json"
   functionDeploymentStagesProdOAuthTokenURL: "https://prod-fnds-oauth.example.test/token"
   functionDeploymentStagesProdOAuthPublicKeysetEndpoint: "https://prod-fnds-oauth.example.test/.well-known/jwks.json"
-  rolloverServiceStageOAuthTokenURL: "https://stage-ros-oauth.example.test/token"
-  rolloverServiceStageOAuthPublicKeysetEndpoint: "https://stage-ros-oauth.example.test/.well-known/jwks.json"
-  rolloverServiceProdOAuthTokenURL: "https://prod-ros-oauth.example.test/token"
-  rolloverServiceProdOAuthPublicKeysetEndpoint: "https://prod-ros-oauth.example.test/.well-known/jwks.json"
 `
 
 	fetcher := func(ctx context.Context) (*corev1.ConfigMap, error) {
@@ -111,7 +107,7 @@ agent:
 	assert.ElementsMatch(t, []string{"attr1=true", "attr2=value2"}, nb.Spec.ClusterConfig.Attributes)
 
 	// Defaults applied (prod)
-	assert.Equal(t, "https://icms.nvcf.nvidia.com", nb.Spec.ICMSConfig.ICMSServiceURL)
+	assert.Equal(t, "https://spot.gdn.nvidia.com", nb.Spec.ICMSConfig.ICMSServiceURL)
 	assert.Equal(t, "https://oauth.example.test/token", nb.Spec.ICMSConfig.TokenURL)
 	assert.Equal(t, "https://stage-reval-oauth.example.test/token", nb.Spec.AgentConfig.HelmReValStageOAuthTokenURL)
 	assert.Equal(t, "https://stage-reval-oauth.example.test/.well-known/jwks.json", nb.Spec.AgentConfig.HelmReValStageOAuthPublicKeysetEndpoint)
@@ -121,10 +117,6 @@ agent:
 	assert.Equal(t, "https://stage-fnds-oauth.example.test/.well-known/jwks.json", nb.Spec.AgentConfig.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint)
 	assert.Equal(t, "https://prod-fnds-oauth.example.test/token", nb.Spec.AgentConfig.FunctionDeploymentStagesProdOAuthTokenURL)
 	assert.Equal(t, "https://prod-fnds-oauth.example.test/.well-known/jwks.json", nb.Spec.AgentConfig.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
-	assert.Equal(t, "https://stage-ros-oauth.example.test/token", nb.Spec.AgentConfig.RolloverServiceStageOAuthTokenURL)
-	assert.Equal(t, "https://stage-ros-oauth.example.test/.well-known/jwks.json", nb.Spec.AgentConfig.RolloverServiceStageOAuthPublicKeysetEndpoint)
-	assert.Equal(t, "https://prod-ros-oauth.example.test/token", nb.Spec.AgentConfig.RolloverServiceProdOAuthTokenURL)
-	assert.Equal(t, "https://prod-ros-oauth.example.test/.well-known/jwks.json", nb.Spec.AgentConfig.RolloverServiceProdOAuthPublicKeysetEndpoint)
 	assert.Equal(t, "https://:443", nb.Spec.VaultConfig.Address)
 	assert.True(t, nb.Spec.VaultConfig.Enabled)
 }

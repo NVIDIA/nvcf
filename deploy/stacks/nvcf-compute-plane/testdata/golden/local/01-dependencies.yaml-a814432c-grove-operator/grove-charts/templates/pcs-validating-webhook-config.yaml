@@ -1,0 +1,38 @@
+---
+# Source: grove-charts/templates/pcs-validating-webhook-config.yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: podcliqueset-validating-webhook
+  labels:
+    chart: "grove-charts-v0.1.0-alpha.9"
+    release: "grove-operator"
+    app.kubernetes.io/component: operator-pcs-validating-webhook
+    app.kubernetes.io/name: pcs-validating-webhook
+    app.kubernetes.io/part-of: grove
+webhooks:
+  - admissionReviewVersions:
+      - v1
+    clientConfig:
+      service:
+        name: grove-operator
+        namespace: grove-system
+        path: /webhooks/validate-podcliqueset
+        port: 9443
+    failurePolicy: Fail
+    matchPolicy: Exact
+    name: pcs.validating.webhooks.grove.io
+    namespaceSelector: { }
+    rules:
+      - apiGroups:
+          - "grove.io"
+        apiVersions:
+          - "v1alpha1"
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - podcliquesets
+        scope: "Namespaced"
+    sideEffects: None
+    timeoutSeconds: 10

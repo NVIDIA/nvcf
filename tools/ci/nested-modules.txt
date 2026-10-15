@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Every nested MODULE.bazel in the repository, classified. tools/ci/check-nested-modules
+# fails if a nested module exists that is not listed here, and fails if an entry
+# here no longer exists. Both directions matter: the first stops new nested
+# modules appearing by accident, the second stops this file drifting into
+# fiction as migration proceeds.
+#
+# Format: <category> <path-to-directory-containing-MODULE.bazel>
+#
+# Categories, in the sense docs/dev/bazel-consolidation.md gives them:
+#
+#   vendored     Third-party source vendored into the tree. Never in scope for
+#                consolidation, excluded from the count outright, and carries no
+#                exception contract because it is not ours to converge.
+#
+#   scaffolding  Exists to support the migration and is deleted when its
+#                consumers no longer need it. Not a service, so it is not
+#                counted as a module that must converge.
+#
+#   ledger       A first-party service module that has not migrated yet. This is
+#                the migration backlog. Entries leave this file entirely when the
+#                service moves to the root module. An entry here is a statement
+#                that the work is outstanding, not that it is excused.
+#
+#   exception    A first-party service that will keep its own module
+#                permanently. This is the only category that carries the
+#                exception contract in the plan: a recorded owner, a rationale,
+#                and the residual correctness risk in writing. Adding an entry
+#                here reduces the number of modules the end state converges, so
+#                it is a deliberate scope change, not a way to silence this
+#                check.
+
+vendored     src/compute-plane-services/nvca/vendor/cel.dev/expr
+
+scaffolding  rules/oci-destinations
+
+
+# No permanent exceptions today. nvsnap was the open question in Phase 1 and it
+# migrated in NVIDIA/nvcf#471, so it is absent from this file entirely, which is
+# what a completed migration looks like here.

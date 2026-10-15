@@ -4,19 +4,31 @@
 
 ```
 nvcf-self-managed-stack/
-├── helmfile.d/
-│   ├── 000-prepare.yaml.gotmpl      # Validation hooks
-│   ├── 01-dependencies.yaml.gotmpl  # NATS, Cassandra, OpenBao
-│   ├── 02-core.yaml.gotmpl          # NVCF services + ingress
-│   ├── 03-observability.yaml.gotmpl # Observability stack (optional)
-│   └── 04-worker.yaml.gotmpl        # NVCA operator (opt-in via nvcaOperator.enabled)
-├── environments/
-│   ├── base.yaml                    # Default values (all environments)
-│   └── <env-name>.yaml              # Per-environment overrides
-├── secrets/
-│   └── <env-name>-secrets.yaml      # Sensitive values (registry creds, passwords)
-└── global.yaml.gotmpl               # Go template that constructs per-chart values
+|-- helmfile.d/
+|   |-- 01-dependencies.yaml.gotmpl  # NATS, Cassandra, OpenBao
+|   |-- 02-core.yaml.gotmpl          # NVCF services + ingress
+|   `-- 03-observability.yaml.gotmpl # Observability stack (optional)
+|-- environments/
+|   |-- base.yaml                    # Default values (all environments)
+|   `-- <env-name>.yaml              # Per-environment overrides
+|-- secrets/
+|   `-- <env-name>-secrets.yaml      # Sensitive values (registry creds, passwords)
+`-- global.yaml.gotmpl               # Go template that constructs per-chart values
+
+nvcf-compute-plane-stack/
+|-- helmfile.d/
+|   |-- 01-dependencies.yaml.gotmpl  # Compute plane dependency components
+|   `-- 02-nvca.yaml.gotmpl          # nvca-operator chart and nvca configuration
+|-- environments/
+|   |-- base.yaml                    # Default values (all environments)
+|   `-- <env-name>.yaml              # Per-environment overrides
+`-- global.yaml.gotmpl               # Go template that constructs per-chart values
 ```
+
+These stacks have separate environments and cluster contexts. The Helmfile
+values flow authors both environment files. The CLI profile flow instead uses
+the CLI-generated control-plane profile as its endpoint source. Do not mix the
+handoffs. See [Split Compute-Plane Installation](compute-plane-installation.md).
 
 ## Gotmpl Files and Their Releases
 
@@ -42,12 +54,12 @@ Uses `<<: *dependency` template inheritance with `release-group: dependencies` l
 | ess-api | helm-nvcf-ess-api | ess | services |
 | notary-service | helm-nvcf-notary-service | nvcf | services |
 | reval | helm-reval | nvcf | services |
-| llm-request-router | ../../llm-request-router-colocated-deploy/chart | nvcf | services |
-| llm-api-gateway | ../../llm-api-gateway-colocated-deploy/chart | nvcf | services |
+| llm-request-router | nvcf/helm-nvcf-llm-request-router | nvcf | services |
+| llm-api-gateway | nvcf/helm-nvcf-llm-api-gateway | nvcf | services |
 | admin-issuer-proxy | helm-admin-token-issuer-proxy | api-keys | (no release-group label) |
 | ingress | nvcf-gateway-routes | envoy-gateway-system | ingress |
 
-Most services use `inherit: [{template: service}]`. In MR !183 the LLM releases use explicit sibling chart paths and `values: [../global.yaml.gotmpl]` until OCI chart releases are pinned in a follow-up. `admin-issuer-proxy` and `ingress` have standalone `values:` blocks.
+Most services use `inherit: [{template: service}]`. LLM releases use OCI charts from the `nvcf` repository with standalone `values: [../global.yaml.gotmpl]` blocks; they are gated on `addons.llm.enabled`. `admin-issuer-proxy` and `ingress` have standalone `values:` blocks.
 
 ### 03-observability.yaml.gotmpl
 
@@ -56,21 +68,6 @@ Most services use `inherit: [{template: service}]`. In MR !183 the LLM releases 
 | (observability releases) | (various) | observability | observability |
 
 Gated on observability-specific flags in the environment file. Skipped if disabled.
-
-### 04-worker.yaml.gotmpl
-
-| Release | Chart | Version | Namespace | Label | Condition |
-|---------|-------|---------|-----------|-------|-----------|
-| nvca-operator | `nvcf/helm-nvca-operator` | 1.6.6 | nvca-operator | workers | `nvcaOperator.enabled` |
-
-Standalone `values:` block with explicit image path construction. The release is **opt-in**: helmfile sets `nvcaOperator.enabled: false` as its default, and `environments/local.yaml` (plus any other env that needs functions) enables it with:
-
-```yaml
-nvcaOperator:
-  enabled: true
-```
-
-Without this override the release is skipped at sync time and no Deployment is created.
 
 ## Template Inheritance
 
@@ -158,15 +155,95 @@ From lowest to highest priority:
 - `<service>.nodeSelector` (if enabled)
 - `<service>.env.*` (observability settings)
 
-### LLM API Gateway / LLM Request Router
-- `llm.enabled`
-- `llm.gateway.replicaCount`
-- `llm.gateway.auth.grpcInsecure`
-- `llm.requestRouter.replicaCount`
-- `ingress.gatewayApi.routes.llmInvocation.routeAnnotations`
-- Global image registry/repository, image pull secrets, node selectors, and tracing settings are mapped into the LLM chart values.
+### LLM Function Enablement
 
-**Not passed through**: `llm.gateway.image.*`, `llm.requestRouter.image.*`, `resourcePreset`, `resources`, or any other arbitrary key. These must be set via `global.yaml.gotmpl` or release inline `values:` blocks.
+Enable the LLM addon before creating or invoking functions with
+`functionType: "LLM"`. The addon deploys `llm-request-router` and
+`llm-api-gateway`, adds the `llm.invocation.<domain>` route when Gateway API
+ingress is enabled, and configures workers to use the LLM sidecar. The Helmfile
+condition is `addons.llm.enabled`. Do not use the obsolete `llm.enabled` path.
+
+For a single-node isolated test cluster, add this configuration to
+`environments/<env>.yaml` before applying the stack:
+
+```yaml
+addons:
+  llm:
+    enabled: true
+    gateway:
+      replicaCount: 1
+      auth:
+        grpcInsecure: true
+      metrics:
+        serviceMonitor:
+          enabled: false
+    requestRouter:
+      replicaCount: 1
+      metrics:
+        serviceMonitor:
+          enabled: false
+
+agentConfig:
+  mergeConfig: |
+    cluster:
+      validationPolicy:
+        name: Unrestricted
+    workload:
+      stargateQUICInsecure: true
+```
+
+Use `replicaCount: 1` only for local or single-node test clusters. For shared
+or production clusters, use the required replica count and TLS-capable service
+configuration. `addons.llm.gateway.auth.grpcInsecure` and
+`workload.stargateQUICInsecure` enable plaintext transports. Do not use them in
+production.
+
+The request router uses `power-of-two` when no load-balancer configuration is
+set. Configure other routing methods with the
+[LLM Request Router Load Balancing](https://github.com/NVIDIA/nvcf/blob/main/docs/user/llm-request-router-load-balancing.md)
+guide.
+
+If the sidecar image is mirrored outside the stack's default image registry and
+repository, set the generated worker sidecar image explicitly:
+
+```yaml
+api:
+  env:
+    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: <registry>/<repository>/pylon:0.2.1
+```
+
+Render and apply the updated control-plane environment, then refresh every
+registered compute plane using the same handoff used for its installation so
+NVCA receives `agentConfig.mergeConfig`:
+
+```bash
+HELMFILE_ENV=<env> helmfile template
+HELMFILE_ENV=<env> helmfile sync
+```
+
+Use the complete compute-plane install command from
+[Split Compute-Plane Installation](compute-plane-installation.md). A
+CLI-profile installation must remain profile-driven; a Helmfile installation
+must remain values-driven.
+
+Existing LLM function pods keep their existing sidecar arguments. Recreate or
+redeploy those functions after the compute-plane refresh. Verify the control
+plane, route, and worker sidecar:
+
+```bash
+kubectl get deploy -n nvcf llm-api-gateway
+kubectl get statefulset -n nvcf llm-request-router
+kubectl get pods -n nvcf | grep -E 'llm-api-gateway|llm-request-router'
+kubectl get httproute -A | grep llm
+kubectl -n nvcf-backend get pod <function-pod> \
+  -o jsonpath='{range .spec.containers[?(@.name=="llm-worker")].args[*]}{.}{"\\n"}{end}'
+```
+
+For local plaintext clusters, the `llm-worker` args must include
+`--quic-insecure`.
+
+For load-balancer schema and algorithm behavior, see the
+[Stargate configuration guide](https://github.com/NVIDIA/nvcf/blob/main/src/libraries/rust/stargate/docs/load-balancer-configuration.md).
 
 ## Helmfile Selectors
 
@@ -178,7 +255,6 @@ HELMFILE_ENV=<env> helmfile --selector release-group=dependencies sync
 HELMFILE_ENV=<env> helmfile --selector release-group=services sync
 HELMFILE_ENV=<env> helmfile --selector release-group=ingress sync
 HELMFILE_ENV=<env> helmfile --selector release-group=observability sync
-HELMFILE_ENV=<env> helmfile --selector release-group=workers sync   # no-op unless nvcaOperator.enabled=true
 
 # By release name
 HELMFILE_ENV=<env> helmfile --selector name=cassandra sync

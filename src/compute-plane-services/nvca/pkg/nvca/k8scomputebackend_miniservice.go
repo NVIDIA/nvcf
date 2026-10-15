@@ -268,7 +268,8 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForMiniServiceRequest(ctx contex
 			if !v1alpha1.MiniServiceStatusBadReasons[relCond.Reason] {
 				continue
 			}
-			if relCond.Reason == v1alpha1.MiniServiceStatusReasonDegradedWorkerPods &&
+			if (relCond.Reason == v1alpha1.MiniServiceStatusReasonDegradedWorker ||
+				relCond.Reason == v1alpha1.MiniServiceStatusReasonDegradedWorkload) &&
 				!c.bk8s.autoPurgeDegradedWorkers {
 				purgeInstance = false
 			}
@@ -353,13 +354,15 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForMiniServiceRequest(ctx contex
 		// Only increment metric once for each image registry with issues.
 		imgRegSet := sets.New[string]()
 		for _, pod := range pods {
-			if imgTag, _, ok := k8sutil.ImagePullIssuesReported(pod.Status); ok {
-				reg := k8sutil.ParseImageRegistry(imgTag)
-				if imgRegSet.Has(reg) {
-					continue
+			if imagePullIssues, ok := k8sutil.ImagePullIssuesReported(pod.Status); ok {
+				for _, imagePullIssue := range imagePullIssues {
+					reg := k8sutil.ParseImageRegistry(imagePullIssue.Image)
+					if imgRegSet.Has(reg) {
+						continue
+					}
+					metrics.ImagePullIssueTotal.WithLabelValues(metrics.WithDefaultLabelValues(reg)...).Inc()
+					imgRegSet.Insert(reg)
 				}
-				metrics.ImagePullIssueTotal.WithLabelValues(metrics.WithDefaultLabelValues(reg)...).Inc()
-				imgRegSet.Insert(reg)
 			}
 		}
 

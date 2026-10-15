@@ -1,8 +1,8 @@
 # Load Tests
 
-[k6](https://grafana.com/docs/k6/latest/) load testing scripts for self-hosted NVCF function endpoints.
+[k6](https://grafana.com/docs/k6/latest/) load testing scripts for self-hosted NVCF function and NVCT task endpoints.
 
-Many of the function tests target the [Load Tester Supreme](../function-samples/load-tester-supreme/) sample container.
+Many of the function tests target the [Load Tester Supreme](../function-samples/load-tester-supreme/) sample container. The task tests target the [task samples](../task-samples/) ported to the same cluster.
 
 ## Project Structure
 
@@ -10,6 +10,9 @@ Many of the function tests target the [Load Tester Supreme](../function-samples/
 functions/                  NVCF function load tests
   definitions/              Protocol buffer definitions (gRPC)
   test-configs/             k6 configuration files
+tasks/                      NVCT task load tests
+  test-configs/             k6 configuration files
+  *.sh                      Cleanup and counting helpers
 ```
 
 ## NVCF Function Tests
@@ -43,6 +46,36 @@ functions/                  NVCF function load tests
 | `k6_sse_streaming_test_config.json` | Server-sent events streaming configuration. |
 | `k6_scratch_test_config.json` | Development/scratch config. |
 
+## NVCT Task Tests
+
+Task tests hit the NVCT API at `${BASE_URL}/v2/orgs/${ORG_ID}/nvct/tasks`. The create test submits a single-GPU task image and varies the requested runtime per iteration; the list tests paginate tasks, task events, and task results.
+
+| Script | Description |
+|--------|-------------|
+| `nvct_health_load_test.js` | NVCT health endpoint. |
+| `nvct_create_task_load_test.js` | Creates tasks with randomised runtime between 2 and 10 minutes. |
+| `nvct_list_task_load_test.js` | Paginates the task list endpoint. |
+| `nvct_list_event_task_load_test.js` | Paginates task events for a given task ID. |
+| `nvct_list_result_task_load_test.js` | Paginates task results for a given task ID. |
+
+### Task Test Configs
+
+| Config | Description |
+|--------|-------------|
+| `k6_100_iter_5_vu_config.json` | Warm-up: 100 iterations across 5 VUs. |
+| `k6_1000_iter_25_vu_config.json` | Medium load: 1,000 iterations across 25 VUs. |
+| `k6_10k_iter_100_vu_config.json` | Stress: 10,000 iterations across 100 VUs. |
+| `k6_100k_iter_250_vu_config.json` | Peak: 100,000 iterations across 250 VUs. |
+
+### Task Helper Scripts
+
+| Script | Description |
+|--------|-------------|
+| `count_tasks.sh` | Count tasks in an org. Usage: `count_tasks.sh <org-id>`. Requires the `ngc` CLI. |
+| `clear_all_tasks.sh` | Delete all tasks in an org in parallel. Usage: `clear_all_tasks.sh <org-id> [threads]`. Destructive; prompts before deleting. Requires the `ngc` CLI. |
+
+These helpers use the `ngc` CLI today and target cloud NVCF. Porting them to self-hosted NVCT via REST is tracked as a follow-up.
+
 ## Environment Variables
 
 ### Supreme / Function Tests
@@ -70,6 +103,16 @@ functions/                  NVCF function load tests
 | Variable | Description |
 |----------|-------------|
 | `ENDPOINTS` | Comma-separated list of endpoint URLs. |
+
+### Task Tests
+
+| Variable | Description |
+|----------|-------------|
+| `BASE_URL` | Cluster gateway base URL (no trailing slash). |
+| `ORG_ID` | Org or NCA ID that owns the tasks. |
+| `TOKEN` | NVCF API key (see `nvcf-cli api-key generate`). |
+| `TASK_ID` | Task ID to target for list-event and list-result tests. |
+| `CONTAINER_IMAGE` | Container image used by the create-task load test. |
 
 ## Running Tests
 

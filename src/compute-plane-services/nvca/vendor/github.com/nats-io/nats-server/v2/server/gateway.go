@@ -959,8 +959,9 @@ func (s *Server) createGateway(cfg *gatewayCfg, url *url.URL, conn net.Conn) {
 // Builds and sends the CONNECT protocol for a gateway.
 // Client lock held on entry.
 func (c *client) sendGatewayConnect(opts *Options) {
-	// FIXME: This can race with updateRemotesTLSConfig
+	c.gw.cfg.RLock()
 	tlsRequired := c.gw.cfg.TLSConfig != nil
+	c.gw.cfg.RUnlock()
 	url := c.gw.connectURL
 	c.gw.connectURL = nil
 	var user, pass string
@@ -1984,7 +1985,7 @@ func (c *client) processGatewayRUnsub(arg []byte) error {
 		return nil
 	} else {
 		// Plain sub, assume optimistic sends, create entry.
-		e = &outsie{ni: make(map[string]struct{}), sl: NewSublistWithCache()}
+		e = &outsie{ni: make(map[string]struct{}), sl: NewSublistForServer(c.srv)}
 		newe = true
 	}
 	// This is when a sub or queue sub is supposed to be in
@@ -2093,7 +2094,7 @@ func (c *client) processGatewayRSub(arg []byte) error {
 	} else if queue == nil {
 		return nil
 	} else {
-		e = &outsie{ni: make(map[string]struct{}), sl: NewSublistWithCache()}
+		e = &outsie{ni: make(map[string]struct{}), sl: NewSublistForServer(c.srv)}
 		newe = true
 		useSl = true
 	}
@@ -2568,15 +2569,6 @@ func (c *client) sendMsgToGateways(acc *Account, msg, subject, reply []byte, qgr
 	pa := c.pa
 
 	mt, _ := c.isMsgTraceEnabled()
-	if mt != nil {
-		// We are going to replace "pa" with our copy of c.pa, but to restore
-		// to the original copy of c.pa, we need to save it again.
-		cpa := c.pa
-		msg = mt.setOriginAccountHeaderIfNeeded(c, acc, msg)
-		defer func() { c.pa = cpa }()
-		// Update pa with our current c.pa state.
-		pa = c.pa
-	}
 
 	var (
 		queuesa    = [512]byte{}
@@ -2955,6 +2947,16 @@ func getSubjectFromGWRoutedReply(reply []byte, isOldPrefix bool) []byte {
 	return reply[gwSubjectOffset:]
 }
 
+// Returns the subject embedded in the given routed
+// reply subject and whether the prefix was stripped.
+// If the subject is not routed, returns it unchanged.
+func getGWRoutedSubjectOrSelf(subject []byte) ([]byte, bool) {
+	if isGWPrefix, oldPrefix := isGWRoutedSubjectAndIsOldPrefix(subject); isGWPrefix {
+		return getSubjectFromGWRoutedReply(subject, oldPrefix), true
+	}
+	return subject, false
+}
+
 // This should be invoked only from processInboundGatewayMsg() or
 // processInboundRoutedMsg() and is checking if the subject
 // (c.pa.subject) has the _GR_ prefix. If so, this is processed
@@ -3204,7 +3206,7 @@ func (c *client) gatewayAllSubsReceiveStart(info *Info) {
 		e.mode = Transitioning
 		e.Unlock()
 	} else {
-		e := &outsie{sl: NewSublistWithCache()}
+		e := &outsie{sl: NewSublistForServer(c.srv)}
 		e.mode = Transitioning
 		c.mu.Lock()
 		c.gw.outsim.Store(account, e)

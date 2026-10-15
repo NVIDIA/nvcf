@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::metrics;
 use crate::nats::{NatsService, WorkerPollingResponse};
 use crate::nvcf_api::{
     nvcf::{
@@ -184,10 +185,16 @@ pub async fn pexec_status(
         .unwrap_or(WorkerPollingResponse::NoResponse);
 
     if worker_polling_response != WorkerPollingResponse::AckedRequest {
-        return Err(AppError(
+        metrics::record_nvcf_application_error(
+            StatusCode::GATEWAY_TIMEOUT.as_str().to_string(),
+            Some(function_id.to_string()),
+        );
+        Span::current().record("app_error", "true");
+        return Ok(
             ProblemDetails::from_status_code(StatusCode::GATEWAY_TIMEOUT)
-                .with_detail("worker did not acknowledge the status request."),
-        ));
+                .with_detail("worker did not acknowledge the status request.")
+                .into_response(),
+        );
     }
 
     let response = super::post_pexec::handle_streaming_response(

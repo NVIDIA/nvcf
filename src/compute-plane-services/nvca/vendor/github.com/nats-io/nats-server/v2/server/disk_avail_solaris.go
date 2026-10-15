@@ -19,8 +19,8 @@
 package server
 
 import (
-	"os"
 	"golang.org/x/sys/unix"
+	"os"
 )
 
 func diskAvailable(storeDir string) int64 {
@@ -38,4 +38,3 @@ func diskAvailable(storeDir string) int64 {
 	}
 	return ba
 }
-

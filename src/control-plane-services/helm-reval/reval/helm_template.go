@@ -31,7 +31,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper/credhelper"
+	credhelper "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"

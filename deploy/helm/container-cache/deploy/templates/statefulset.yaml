@@ -161,10 +161,16 @@ spec:
             httpGet:
               path: /healthz
               port: http
+            timeoutSeconds: {{ ((.Values.probes).liveness).timeoutSeconds | default 5 }}
+            periodSeconds: {{ ((.Values.probes).liveness).periodSeconds | default 10 }}
+            failureThreshold: {{ ((.Values.probes).liveness).failureThreshold | default 6 }}
           readinessProbe:
             httpGet:
               path: /healthz
               port: http
+            timeoutSeconds: {{ ((.Values.probes).readiness).timeoutSeconds | default 3 }}
+            periodSeconds: {{ ((.Values.probes).readiness).periodSeconds | default 10 }}
+            failureThreshold: {{ ((.Values.probes).readiness).failureThreshold | default 3 }}
           volumeMounts:
             - name: cache
               mountPath: /container_cache
@@ -224,23 +230,10 @@ spec:
           ports:
             - name: metrics
               containerPort: 9113
-    {{- end }}
-    {{- if (.Values.traces).enabled }}
-        - name: opentelemetry-collector
-          image: {{ required "Property '.images.collector' is required." $.Values.images.collector | quote }}
-          imagePullPolicy: IfNotPresent
-          envFrom:
-            - secretRef:
-                name: otel-collector-access-token
-          volumeMounts:
-            - name: nvcf-collector-config
-              mountPath: /etc/otelcol-contrib/config.yaml
-              subPath: config.yaml
-          ports:
-            - name: grpc
-              containerPort: 4317
-            - name: http
-              containerPort: 4318
+          {{- with $.Values.exporter.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
     {{- end }}
       volumes:
       {{- if $.Values.vault.enabled }}
@@ -267,6 +260,10 @@ spec:
               path: lua-gen-key.lua
             - key: lua-ssl.lua
               path: lua-ssl.lua
+            {{- if (.Values.consistentHashRouting).enabled }}
+            - key: cc-route.lua
+              path: cc-route.lua
+            {{- end }}
         - name: nginx-default-config
           configMap:
             name: nvcf-default-config
@@ -290,11 +287,6 @@ spec:
         - name: nginx-proxy-common-config
           configMap:
             name: nvcf-proxy-config
-{{- if (.Values.traces).enabled }}
-        - name: nvcf-collector-config
-          configMap:
-            name: nvcf-collector-config
-{{- end }}
         - name: certs
           emptyDir:
             medium: Memory

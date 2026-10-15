@@ -48,7 +48,7 @@ receivers:
           params:
             "match[]":
               # kubelet (relabel rules aligned with byoo-prometheus servicemonitor_kubelet.yaml)
-              - '{job=~"kubelet", namespace="nvcf-backend", pod=~".*{{ .InstanceID }}.*", container=~"inference|task|", __name__=~"([[container_kubernetes_cadvisor_metric_allow_list]])"}'
+              - '{job=~"kubelet", namespace="nvcf-backend", pod=~".*{{ .InstanceID }}.*", container=~"inference|task|POD|", __name__=~"([[container_kubernetes_cadvisor_metric_allow_list]])"}'
           metric_relabel_configs:
             # for container_fs_.+ metrics
             - source_labels: [device]
@@ -131,7 +131,7 @@ processors:
     actions:
 [[non_gfn_attributes | indent(2, true)]]
 
-  metricstransform:
+  metrics_transform:
     transforms:
       - include: ^.*$
         match_type: regexp
@@ -140,7 +140,7 @@ processors:
 [[non_gfn_metricstransform | indent(2, true)]]
 
 extensions:
-  cgroupruntime:
+  cgroup_runtime:
     gomaxprocs:
       enabled: true
     gomemlimit:

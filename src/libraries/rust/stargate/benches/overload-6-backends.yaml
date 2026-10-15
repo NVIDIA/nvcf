@@ -1,0 +1,114 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: overload-6-backends
+metadata:
+  description: Intentional overload scenario for inspecting failure behavior under pressure.
+  tags: [stress, overload, heterogeneous]
+  expected_runtime: short
+  expected_signal: Some algorithms may show failures or long tail latency; use this for diagnostics, not as a success benchmark.
+model: dummy-model
+seed: 505
+request_count: 120
+max_concurrency: 96
+
+stargates:
+  count: 1
+
+backends:
+  count: 6
+  profile:
+    name: constrained
+    weight: 1.0
+    max_concurrent_requests: 2
+    kv_cache_capacity_tokens: 80000
+    service_time_ms:
+      ttft_mean: 260
+      ttft_jitter_ms: 40
+      decode_jitter_ms: 8
+      prefill_tokens_per_s: 1800
+      decode_tokens_per_s: 45
+    registration:
+      last_mean_input_tps: 60
+  profiles:
+    - count: 2
+      profile:
+        name: fast
+        weight: 1.5
+        max_concurrent_requests: 4
+        kv_cache_capacity_tokens: 120000
+        service_time_ms:
+          ttft_mean: 150
+          ttft_jitter_ms: 20
+          decode_jitter_ms: 4
+          prefill_tokens_per_s: 4200
+          decode_tokens_per_s: 90
+        registration:
+          last_mean_input_tps: 130
+    - count: 4
+      profile:
+        name: constrained
+        weight: 0.6
+        max_concurrent_requests: 2
+        kv_cache_capacity_tokens: 80000
+        service_time_ms:
+          ttft_mean: 260
+          ttft_jitter_ms: 40
+          decode_jitter_ms: 8
+          prefill_tokens_per_s: 1800
+          decode_tokens_per_s: 45
+        registration:
+          last_mean_input_tps: 60
+
+traffic_pattern:
+  kind: bursty
+  routing_keys: 0
+  cache_affinity_keys: 120
+  input_tokens:
+    distribution: lognormal
+    mean: 1800
+    sigma: 0.7
+    p99_cap: 10000
+  output_tokens:
+    distribution: lognormal
+    mean: 280
+    sigma: 0.6
+    p99_cap: 2048
+  quiet_rps: 20
+  burst_rps: 90
+  burst_period_requests: 20
+
+algorithms:
+  - name: power-of-two
+    config:
+      default: power-of-two
+  - name: round-robin
+    config:
+      default: round-robin
+  - name: random
+    config:
+      default: random
+  - name: groq-multiregion
+    config:
+      default: groq-multiregion
+  - name: pulsar
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar
+          seed: overload-v1
+          require_cache_affinity_key: true
+          require_input_tokens: true

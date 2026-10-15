@@ -31,8 +31,9 @@ Complete guide for using the NVIDIA Cloud Functions CLI with direct HTTPS API ca
    - [Smart Configuration Integration](#smart-configuration-integration)
 5. [Registry Credential Management](#registry-credential-management)
 6. [Function Lifecycle](#function-lifecycle)
-7. [Additional Operations](#additional-operations)
-8. [Troubleshooting](#troubleshooting)
+7. [Cloud Tasks (NVCT)](#cloud-tasks-nvct)
+8. [Additional Operations](#additional-operations)
+9. [Troubleshooting](#troubleshooting)
 
 ## Prerequisites
 
@@ -373,7 +374,7 @@ Authorization: Bearer nvapi-nvcf-stg-121e78JIqKdjzxiJvGHtYhYuNAj8EshCuzxSQLYX-AU
 1. Call `/v1/admin/keys` to get a JWT token
 2. Call `/v1/keys` with the JWT token to generate an API key
 3. Use the API key for:
-   - Invoking functions (`POST /v2/nvcf/pexec/functions/{id}`)
+   - Invoking functions (`POST http://<function-id>.invocation.<gateway-addr>/<inference-path>`)
    - Listing functions (`GET /v2/nvcf/functions`)
 
 ### Environment-Specific URLs
@@ -417,7 +418,7 @@ NVCF_API_KEY: "nvapi-nvcf-stg-EIMjEiBR3mRbCBWRTx3EWkLpnXhxVVr2W2P8467WV8I9-dtxUY
 # For production/staging environments
 NVCF_BASE_HTTP_URL: "https://api.nvcf.nvidia.com"
 NVCF_BASE_GRPC_URL: "grpc.nvcf.nvidia.com:443"
-NVCF_INVOKE: "https://invocation.nvcf.nvidia.com"
+NVCF_INVOKE_URL: "https://invocation.nvcf.nvidia.com"
 
 # Client ID (account identifier)
 NVCF_CLIENT_ID: "nvcf-default"
@@ -743,6 +744,15 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
 ./nvcf-cli function create \
   --file examples/create-function.json \
   --secrets DB_HOST=db.example.com,DB_USER=admin,DB_PASS=secret123
+
+# Create an LLM function model with routing metadata
+./nvcf-cli function create \
+  --name my-llm-function \
+  --image nvcr.io/example/openai-compatible:latest \
+  --inference-port 8000 \
+  --inference-url / \
+  --function-type LLM \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
 ```
 
 **Secrets Format:**
@@ -780,6 +790,32 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
   }
 }
 ```
+
+#### LLM Function JSON
+```json
+{
+  "name": "sample-llm-function",
+  "containerImage": "nvcr.io/example/openai-compatible:latest",
+  "inferenceUrl": "/",
+  "inferencePort": 8000,
+  "functionType": "LLM",
+  "models": [
+    {
+      "name": "dummy-model",
+      "llmConfig": {
+        "uris": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"],
+        "routingMethod": "round_robin",
+        "tokenRateLimit": "1000-S"
+      }
+    }
+  ]
+}
+```
+
+For LLM models, `llmConfig.routingMethod` accepts the API/auth spellings
+`round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`. The
+CLI validates these values before sending the create request.
+Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`.
 
 ### 5. List Functions
 
@@ -903,6 +939,36 @@ Error: invalid secret format 'invalid' - expected NAME=VALUE
 ./nvcf-cli invoke --grpc --file examples/invoke-function.json
 ```
 
+Direct HTTP invocation routes through the function-specific invocation host, not function routing headers:
+
+```bash
+curl --request POST \
+  --url "https://${FUNCTION_ID}.invocation.${INVOCATION_DOMAIN}/echo" \
+  --header "Authorization: Bearer ${API_KEY}" \
+  --header "Content-Type: application/json" \
+  --data '{"message": "hello"}'
+```
+
+LLM functions use the OpenAI-compatible LLM invocation route:
+
+```bash
+curl -sS -X POST "https://llm.invocation.${INVOCATION_DOMAIN}/v1/chat/completions" \
+  -H "Authorization: Bearer ${NVCF_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"${FUNCTION_ID}/${MODEL_NAME}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"
+```
+
+Use the OpenAI `model` value `${FUNCTION_ID}/${MODEL_NAME}` for LLM invocation requests.
+
+```bash
+curl -sS -X POST "https://llm.invocation.${INVOCATION_DOMAIN}/v1/embeddings" \
+  -H "Authorization: Bearer ${NVCF_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"${FUNCTION_ID}/${MODEL_NAME}\",\"input\":\"NVCF embeddings check\"}"
+```
+
+For LLM Gateway endpoint behavior, routing, and session stickiness details, see [LLM Gateway](../../../docs/user/llm-gateway.md).
+
 #### Sample Invocation JSON (`examples/invoke-function.json`)
 ```json
 {
@@ -965,10 +1031,11 @@ When `--json` is set:
 
 ### Update Function
 ```bash
-# Using
-
-# Using direct API calls
-./nvcf-cli update --file examples/update-metadata.json
+./nvcf-cli function update --input-file examples/update-metadata.json
+./nvcf-cli function update \
+  --function-id "550e8400-e29b-41d4-a716-446655440000" \
+  --version-id "01234567-89ab-cdef-0123-456789abcdef" \
+  --llm-model-update "name=dummy-model,routingMethod=round_robin,tokenRateLimit=1000-S"
 ```
 
 ### Delete Function or Deployment
@@ -1175,3 +1242,135 @@ Enable `--debug` to see which source is being used:
    ```
 
 Choose the authentication method based on the operations you need to perform. The smart integration ensures tokens are used automatically once generated.
+
+## Cloud Tasks (NVCT)
+
+NVCT exposes a separate API surface for GPU-backed batch jobs. The CLI wraps
+it under `nvcf-cli task ...`, reusing the same authentication, state, config,
+and `--json` output conventions as `nvcf-cli function`.
+
+### NVCT Authentication
+
+Task commands use an NVCT-scoped API key. `nvcf-cli api-key generate` mints
+both the function and task keys by default:
+
+```bash
+nvcf-cli api-key generate
+```
+
+The task key is saved as `NVCF_NVCT_API_KEY` and used automatically for all
+`nvcf-cli task` subcommands. Use `--for task` if you only want the task key.
+
+### NVCT Endpoint Configuration
+
+NVCT uses a dedicated base URL. Configure it via any of:
+
+```yaml
+# ~/.nvcf-cli.yaml
+base_nvct_url: https://api.nvct.nvidia.com         # production (default)
+# base_nvct_url: https://stg.api.nvct.nvidia.com   # staging
+```
+
+```bash
+# One-shot override via env var
+export NVCF_BASE_NVCT_URL=https://stg.api.nvct.nvidia.com
+nvcf-cli task list
+```
+
+### Subcommands at a Glance
+
+| Subcommand | Endpoint |
+| --- | --- |
+| `task create` | `POST /v1/nvct/tasks` |
+| `task list` | `GET /v1/nvct/tasks` |
+| `task bulk` | `POST /v1/nvct/tasks/bulk` |
+| `task get [taskId]` | `GET /v1/nvct/tasks/{taskId}` |
+| `task delete [taskId]` | `DELETE /v1/nvct/tasks/{taskId}` |
+| `task cancel [taskId]` | `POST /v1/nvct/tasks/{taskId}/cancel` |
+| `task events [taskId]` | `GET /v1/nvct/tasks/{taskId}/events` |
+| `task results [taskId]` | `GET /v1/nvct/tasks/{taskId}/results` |
+| `task update-secrets [taskId]` | `PUT /v1/nvct/secrets/tasks/{taskId}` |
+
+### Create a Task
+
+```bash
+# JSON spec (recommended)
+nvcf-cli task create --input-file examples/create-task.json
+
+# Inline flags
+nvcf-cli task create \
+  --name my-job \
+  --gpu H100 --instance-type GPU.H100_1x --backend GFN \
+  --image nvcr.io/0651155215864979/ncp-dev/example-trainer:0.1.0 \
+  --container-args "--epochs 10" \
+  --container-env LOG_LEVEL=INFO \
+  --tags example,demo \
+  --max-runtime PT4H \
+  --result-strategy NONE
+```
+
+`task create` saves the resulting task ID to the state file, so subsequent
+`get`/`events`/`results`/`cancel`/`delete`/`update-secrets` commands can omit
+the positional task ID and reuse the saved context.
+
+### Required vs Optional Fields
+
+`name`, `gpuSpecification.gpu`, and `gpuSpecification.instanceType` are
+mandatory. When `resultHandlingStrategy` is set to `UPLOAD`, you must also
+supply:
+
+- `resultsLocation` in the form `<org>/[<team>/]<model>` (an NGC Model Registry
+  path), and
+- an `NGC_API_KEY` secret with write privileges to that location.
+
+See [`examples/create-task-with-results.json`](./examples/create-task-with-results.json)
+for a fully populated example.
+
+### Listing and Filtering
+
+```bash
+nvcf-cli task list                              # all tasks (server default page)
+nvcf-cli task list --status RUNNING --limit 50  # filter by status
+nvcf-cli task list --cursor "$CURSOR"           # next page via cursor
+```
+
+Status enum: `QUEUED`, `LAUNCHED`, `RUNNING`, `ERRORED`, `CANCELED`,
+`EXCEEDED_MAX_RUNTIME_DURATION`, `EXCEEDED_MAX_QUEUED_DURATION`, `COMPLETED`.
+
+For an explicit set of IDs, use the bulk endpoint (returns `id`, `name`,
+`status` only):
+
+```bash
+nvcf-cli task bulk --task-ids id1,id2,id3
+nvcf-cli task bulk --input-file examples/bulk-tasks.json
+```
+
+### Watching Events and Results
+
+```bash
+nvcf-cli task events --limit 100       # latest events for current task
+nvcf-cli task results                  # results emitted (UPLOAD strategy)
+nvcf-cli --json task events > events.json   # automation-friendly output
+```
+
+### Rotating Secrets
+
+```bash
+# CLI flag style
+nvcf-cli task update-secrets --secrets NGC_API_KEY=nvapi-... HF_TOKEN=hf_...
+
+# JSON file style (lets you pass non-string values)
+nvcf-cli task update-secrets --input-file examples/update-task-secrets.json
+```
+
+The PUT merges the supplied secrets into the existing set: provided secrets are added or updated by name, and existing secrets not included in the request are preserved.
+
+### Cancel and Delete
+
+```bash
+nvcf-cli task cancel    # POST /cancel - runs to graceful shutdown
+nvcf-cli task delete    # DELETE - permanent
+```
+
+`task delete` clears the saved task from state when it matches.
+

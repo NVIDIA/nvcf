@@ -36,9 +36,9 @@ import (
 	"github.com/spf13/pflag"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/config"
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/logs"
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/tracing"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/config"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 
 	"ratelimiter"
 )
@@ -164,7 +164,10 @@ func NewRootCommand() *cobra.Command {
 				c.SecretsPath = "vault/secrets.json"
 			}
 			if c.OAuth2Issuer == "" {
-				return fmt.Errorf("missing required OAUTH2_ISSUER (OAuth2 issuer URL for inbound JWT validation)")
+				return fmt.Errorf("missing required OAUTH2_ISSUER (expected JWT iss claim on inbound gRPC calls)")
+			}
+			if c.OAuth2JwksURL == "" {
+				return fmt.Errorf("missing required OAUTH2_JWKS_URL (URL the validator fetches signing keys from)")
 			}
 			if c.Audience == "" {
 				return fmt.Errorf("missing required audience")

@@ -1,0 +1,384 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.nvidia.icms</groupId>
+        <artifactId>instance-cluster-management</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>icms-core</artifactId>
+    <packaging>jar</packaging>
+    <name>ICMS Core</name>
+    <description>
+        NVIDIA Instance and Cluster Management Core Library - Shared library containing core
+        business logic shared by both open-source/self-hosted and managed environments. Contains
+        REST endpoints to manage instance and cluster lifecycles. Abstracts backend/cluster
+        details from NVCF API and NVCT API.
+    </description>
+
+    <!-- distributionManagement is inherited from nv-boot-parent -->
+
+    <properties>
+        <aws-java-sdk-version>1.12.696</aws-java-sdk-version>
+        <awssdk-java.version>2.20.52</awssdk-java.version>
+        <nvidia-ngn2-game-seats-client.version>1.36.0</nvidia-ngn2-game-seats-client.version>
+        <logstash-logback-encoder.version>8.1</logstash-logback-encoder.version>
+
+        <!-- Pin for CVE-2024-7254 until ancestor projects manage the fixed protobuf-java version. -->
+        <protobuf-java.version>4.27.5</protobuf-java.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
+        </dependency>
+        <!-- Jackson 3 databind + JSON support (Boot 4). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jackson</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>tools.jackson.module</groupId>
+            <artifactId>jackson-module-blackbird</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-aspectj</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
+        </dependency>
+        <!-- Boot 4 WebClient auto-configuration (provides WebClient.Builder). Transitively brings
+             spring-webflux and spring-boot-http-client at compile scope. In Boot 3 WebClient.Builder
+             was auto-configured from the monolithic spring-boot-autoconfigure once spring-webflux was
+             on the classpath; Boot 4 moved it into the dedicated spring-boot-webclient module. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-webclient</artifactId>
+        </dependency>
+        <!-- Spring OAuth2 Client (for client_credentials flow with WebClient) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security-oauth2-client</artifactId>
+        </dependency>
+        <!-- Spring OAuth2 Resource Server (JWT/opaque token auth on inbound APIs) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security-oauth2-resource-server</artifactId>
+        </dependency>
+        <!-- Remote configuration via Kubernetes ConfigMaps. -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-kubernetes-client-config</artifactId>
+        </dependency>
+        <!-- Required for spring.cloud.kubernetes.config.retry to apply when fail-fast: true. -->
+        <!-- Without spring-retry the retry block is a silent no-op and a single transient    -->
+        <!-- K8s API blip at boot crashes the pod.                                            -->
+        <dependency>
+            <groupId>org.springframework.retry</groupId>
+            <artifactId>spring-retry</artifactId>
+        </dependency>
+
+        <!-- nv-boot dependencies -->
+        <dependency>
+            <groupId>com.nvidia.boot</groupId>
+            <artifactId>nv-boot-starter-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia.boot</groupId>
+            <artifactId>nv-boot-starter-exceptions</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia.boot</groupId>
+            <artifactId>nv-boot-starter-reloadable-properties</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia.boot</groupId>
+            <artifactId>nv-boot-starter-audit</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia.boot</groupId>
+            <artifactId>nv-boot-starter-observability</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia.boot</groupId>
+            <artifactId>nv-boot-starter-cassandra</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia.boot</groupId>
+            <artifactId>nv-boot-starter-telemetry</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.nvidia.boot</groupId>
+            <artifactId>nv-boot-starter-data-migration-notification</artifactId>
+        </dependency>
+
+        <!-- Other Dependencies - version managed by ancestor projects -->
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-provider-cassandra</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-spring</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.cassandra</groupId>
+            <artifactId>java-driver-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.cassandra</groupId>
+            <artifactId>java-driver-query-builder</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.cassandra</groupId>
+            <artifactId>java-driver-mapper-runtime</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.httpcomponents.client5</groupId>
+            <artifactId>httpclient5</artifactId>
+        </dependency>
+        <!-- Reactor Netty (HTTP connector for WebClient) -->
+        <dependency>
+            <groupId>io.projectreactor.netty</groupId>
+            <artifactId>reactor-netty-http</artifactId>
+        </dependency>
+
+        <!-- Pinned Dependencies - Version managed by ICMS -->
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+            <version>${logstash-logback-encoder.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+            <version>${protobuf-java.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.mapstruct</groupId>
+            <artifactId>mapstruct</artifactId>
+            <version>1.5.2.Final</version>
+        </dependency>
+        <dependency>
+            <groupId>org.reflections</groupId>
+            <artifactId>reflections</artifactId>
+            <version>0.10.2</version>
+        </dependency>
+        <!-- https://github.com/nats-io/nats.java -->
+        <!-- https://mvnrepository.com/artifact/io.nats/jnats -->
+        <dependency>
+            <groupId>io.nats</groupId>
+            <artifactId>jnats</artifactId>
+            <version>2.23.0</version>
+        </dependency>
+        <!-- https://github.com/nats-io/jwt.java -->
+        <!-- https://mvnrepository.com/artifact/io.nats/jwt-java -->
+        <dependency>
+            <groupId>io.nats</groupId>
+            <artifactId>jwt-java</artifactId>
+            <version>2.2.0</version>
+        </dependency>
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-java-sdk-sns</artifactId>
+            <version>${aws-java-sdk-version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-java-sdk-sqs</artifactId>
+            <version>${aws-java-sdk-version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.amazonaws</groupId>
+            <artifactId>aws-java-sdk-sts</artifactId>
+            <version>${aws-java-sdk-version}</version>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>sts</artifactId>
+            <version>${awssdk-java.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>arns</artifactId>
+            <version>${awssdk-java.version}</version>
+        </dependency>
+        <!-- https://mvnrepository.com/artifact/com.vdurmont/semver4j -->
+        <dependency>
+            <groupId>com.vdurmont</groupId>
+            <artifactId>semver4j</artifactId>
+            <version>3.1.0</version>
+        </dependency>
+
+        <!-- Test Dependencies -->
+        <dependency>
+            <groupId>com.nvidia.boot</groupId>
+            <artifactId>nv-boot-mock-servers-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <groupId>com.vaadin.external.google</groupId>
+                    <artifactId>android-json</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-restclient</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-cassandra</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <release>${java.version}</release>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </path>
+                        <path>
+                            <groupId>org.mapstruct</groupId>
+                            <artifactId>mapstruct-processor</artifactId>
+                            <version>1.5.2.Final</version>
+                        </path>
+                        <path>
+                            <groupId>org.apache.cassandra</groupId>
+                            <artifactId>java-driver-mapper-processor</artifactId>
+                        </path>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok-mapstruct-binding</artifactId>
+                            <version>0.2.0</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+            <!-- Bundle integration-test compose + Localstack/Cassandra/NATS assets into   -->
+            <!-- test-classes/tests-jar so downstream modules such as managed icms-service -->
+            <!-- and icms-service-oss don't have to duplicate.                             -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>copy-integration-local-env</id>
+                        <phase>process-test-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.testOutputDirectory}/local_env</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${project.parent.basedir}/local_env</directory>
+                                    <includes>
+                                        <include>docker-compose.test.yml</include>
+                                        <include>aws/**</include>
+                                        <include>cassandra/**</include>
+                                        <include>nats/**</include>
+                                    </includes>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- Attach test classes as a secondary artifact(classifier `tests`) so icms-service -->
+            <!-- can depend on <type>test-jar</type> with test scope and reuse shared fixtures.  -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>test-jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

@@ -23,11 +23,16 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"nvcf-cli/internal/client"
 	"nvcf-cli/internal/selfhosted"
+	"nvcf-cli/internal/selfhosted/auth"
+	"nvcf-cli/internal/selfhosted/controlplaneprofile"
+	"nvcf-cli/internal/state"
 )
 
 // resetInstallFlags restores the install command flag vars to their zero
@@ -36,8 +41,14 @@ import (
 func resetInstallFlags(t *testing.T) {
 	t.Helper()
 	selfHostedEnv = "local"
+	selfHostedNoApply = false
+	selfHostedToken = ""
 	selfHostedControlPlaneContext = ""
 	selfHostedComputePlaneContext = ""
+	prevFetchRootCA := fetchControlPlaneRootCAPEM
+	fetchControlPlaneRootCAPEM = func(context.Context, string) (string, error) {
+		return "", nil
+	}
 	t.Cleanup(func() {
 		installControlPlane = false
 		installComputePlane = false
@@ -45,8 +56,11 @@ func resetInstallFlags(t *testing.T) {
 		selfHostedICMSURL = ""
 		selfHostedNATSURL = ""
 		selfHostedEnv = "local"
+		selfHostedNoApply = false
+		selfHostedToken = ""
 		selfHostedControlPlaneContext = ""
 		selfHostedComputePlaneContext = ""
+		fetchControlPlaneRootCAPEM = prevFetchRootCA
 	})
 }
 
@@ -67,12 +81,158 @@ func TestSelfHostedInstall_ControlPlane_NoApply(t *testing.T) {
 	rootCmd.SetOut(&stdout)
 	rootCmd.SetArgs([]string{
 		"self-hosted", "install", "--control-plane",
-		"--stack", stackDir,
+		"--control-plane-stack", stackDir,
 		"--no-apply",
 	})
 	require.NoError(t, rootCmd.Execute())
 
 	assert.Contains(t, stdout.String(), "kind: ConfigMap")
+}
+
+func TestSelfHostedInstall_ControlPlane_AppliesByDefault(t *testing.T) {
+	resetInstallFlags(t)
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte("# stub\n"), 0o644))
+
+	fakeBin := filepath.Join(t.TempDir(), "helmfile")
+	require.NoError(t, os.WriteFile(fakeBin,
+		[]byte("#!/bin/sh\nlast=\nfor arg in \"$@\"; do last=\"$arg\"; done\nprintf 'verb=%s\\n' \"$last\"\n"),
+		0o755))
+	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("NVCF_BASE_HTTP_URL", "http://api.localhost:8080")
+
+	sm := state.NewStateManager()
+	require.NoError(t, sm.Load())
+	s := sm.GetState()
+	s.Token = "cached-token"
+	s.TokenExpiration = time.Now().Add(24 * time.Hour)
+	s.SelfHostedAuth = &state.SelfHostedAuth{
+		Token:     "cached-token",
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+		Fingerprint: &state.FingerprintRef{
+			IssuerURL:       "http://api.localhost:8080",
+			JWKSKid:         "kid",
+			APIKeysEndpoint: "http://api-keys.localhost:8080",
+		},
+	}
+	require.NoError(t, sm.Save())
+
+	prevAuthProbe := authProbe
+	prevInit := runSelfHostedInit
+	t.Cleanup(func() {
+		authProbe = prevAuthProbe
+		runSelfHostedInit = prevInit
+	})
+	authProbe = func(context.Context, string) (*auth.Fingerprint, error) {
+		return &auth.Fingerprint{IssuerURL: "http://api.localhost:8080", JWKSKid: "kid", APIKeysEndpoint: "http://api-keys.localhost:8080"}, nil
+	}
+	initCalls := 0
+	runSelfHostedInit = func(context.Context) error {
+		initCalls++
+		return nil
+	}
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetArgs([]string{
+		"self-hosted", "install", "--control-plane",
+		"--control-plane-stack", stackDir,
+	})
+	require.NoError(t, rootCmd.Execute())
+
+	assert.Contains(t, stdout.String(), "verb=apply")
+	assert.Equal(t, 1, initCalls)
+}
+
+// TestSelfHostedInstall_ControlPlane_PostInstallMintRunsWithoutTTY covers the
+// case that motivated the BDD's old `--token DUMMY` workaround: under a
+// non-TTY stdin (CI runs, `go test` invocations, the BDD suite), the
+// post-install admin-token mint should still be attempted because it calls the
+// API Keys admin route directly. The install itself does not consume the token,
+// so failures remain non-fatal.
+func TestSelfHostedInstall_ControlPlane_PostInstallMintRunsWithoutTTY(t *testing.T) {
+	resetInstallFlags(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("NVCF_BASE_HTTP_URL", "http://api.localhost:8080")
+
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte("# stub\n"), 0o644))
+
+	fakeBin := filepath.Join(t.TempDir(), "helmfile")
+	require.NoError(t, os.WriteFile(fakeBin,
+		[]byte("#!/bin/sh\nprintf 'apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n  name: from-fake\\n'\n"),
+		0o755))
+	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))
+
+	prevAuthProbe := authProbe
+	prevInit := runSelfHostedInit
+	t.Cleanup(func() {
+		authProbe = prevAuthProbe
+		runSelfHostedInit = prevInit
+	})
+	authProbe = func(context.Context, string) (*auth.Fingerprint, error) {
+		return &auth.Fingerprint{
+			IssuerURL:       "http://api.localhost:8080",
+			JWKSKid:         "kid",
+			APIKeysEndpoint: "http://api-keys.localhost:8080",
+		}, nil
+	}
+	initCalls := 0
+	runSelfHostedInit = func(context.Context) error {
+		initCalls++
+		return nil
+	}
+	var stdout, stderr bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetArgs([]string{
+		"self-hosted", "install", "--control-plane",
+		"--control-plane-stack", stackDir,
+	})
+	// Install must succeed: the post-install token mint is best-effort.
+	require.NoError(t, rootCmd.Execute())
+
+	assert.Equal(t, 1, initCalls)
+	assert.NotContains(t, stderr.String(), "skipped post-install admin-token mint")
+}
+
+func TestSelfHostedInstall_ControlPlane_WritesProfile(t *testing.T) {
+	resetInstallFlags(t)
+	selfHostedToken = "test-token"
+
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte("# stub\n"), 0o644))
+
+	fakeBin := filepath.Join(t.TempDir(), "helmfile")
+	require.NoError(t, os.WriteFile(fakeBin,
+		[]byte("#!/bin/sh\nprintf 'apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n  name: from-fake\\n'\n"),
+		0o755))
+	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetArgs([]string{
+		"self-hosted", "install", "--control-plane",
+		"--control-plane-stack", stackDir,
+		"--cluster-name=nvcf-cp",
+		"--nca-id=nvcf-default",
+		"--region=us-west-1",
+		"--icms-url=http://sis.localhost:8080",
+	})
+	require.NoError(t, rootCmd.Execute())
+
+	profilePath := filepath.Join(stackDir, "out", "control-plane-profile.yaml")
+	body, err := os.ReadFile(profilePath)
+	require.NoError(t, err)
+	_, err = controlplaneprofile.ParseAndValidate(body, controlplaneprofile.ValidateOptions{Require: controlplaneprofile.RequireBoth})
+	require.NoError(t, err)
+	assert.Contains(t, stderr.String(), "Wrote control-plane profile:")
+	assert.Contains(t, stderr.String(), profilePath)
 }
 
 func TestSelfHostedInstall_ComputePlane_RegistersAndRenders(t *testing.T) {
@@ -103,7 +263,7 @@ func TestSelfHostedInstall_ComputePlane_RegistersAndRenders(t *testing.T) {
 	rootCmd.SetOut(&stdout)
 	rootCmd.SetArgs([]string{
 		"self-hosted", "install", "--compute-plane", "--cluster-name=ncp-A",
-		"--stack", stackDir,
+		"--compute-plane-stack", stackDir,
 		"--icms-url=http://sis.localhost:8080",
 		"--no-apply",
 	})
@@ -115,9 +275,46 @@ func TestSelfHostedInstall_ComputePlane_RegistersAndRenders(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(registerValues), "clusterID: id-A")
 	assert.Contains(t, string(registerValues), "clusterGroupID: grp-A")
-	assert.Contains(t, string(registerValues), "icmsServiceURL: http://sis.localhost:8080")
-	assert.Contains(t, string(registerValues), "revalServiceURL: http://reval.localhost:8080")
-	assert.Contains(t, string(registerValues), "natsURL: nats://nats.localhost:4222")
+	assert.Contains(t, string(registerValues), "icmsServiceURL: http://api.sis.svc.cluster.local:8080")
+	assert.Contains(t, string(registerValues), "revalServiceURL: http://reval.nvcf.svc.cluster.local:8080")
+	assert.Contains(t, string(registerValues), "natsURL: nats://nats.nats-system.svc.cluster.local:4222")
+}
+
+func TestSelfHostedInstall_ComputePlane_AppliesByDefault(t *testing.T) {
+	resetInstallFlags(t)
+	prevClientFactory := newClusterClientForSelfHosted
+	t.Cleanup(func() { newClusterClientForSelfHosted = prevClientFactory })
+	fakeCC := &fakeClusterClient{resp: &selfhosted.RegisterResponse{ClusterID: "id-A", ClusterGroupID: "grp-A"}}
+	newClusterClientForSelfHosted = func(string) (selfhosted.ClusterClient, error) { return fakeCC, nil }
+
+	prevFetcher := fetchClusterIdentity
+	t.Cleanup(func() { fetchClusterIdentity = prevFetcher })
+	fetchClusterIdentity = func(context.Context, string) (string, string, string, error) {
+		return "https://k8s.example/.well-known/oidc", `{"keys":[]}`, "psat", nil
+	}
+
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	// Fake helmfile echoes the verb passed as its last arg so the test can assert
+	// that 'apply' (not 'template') ran when --no-apply is omitted.
+	fakeBin := filepath.Join(t.TempDir(), "helmfile")
+	require.NoError(t, os.WriteFile(fakeBin,
+		[]byte("#!/bin/sh\nlast=\nfor arg in \"$@\"; do last=\"$arg\"; done\nprintf 'verb=%s\\n' \"$last\"\n"),
+		0o755))
+	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetArgs([]string{
+		"self-hosted", "install", "--compute-plane", "--cluster-name=ncp-A",
+		"--compute-plane-stack", stackDir,
+		"--icms-url=http://sis.localhost:8080",
+		// no --no-apply
+	})
+	require.NoError(t, rootCmd.Execute())
+
+	assert.Equal(t, 1, fakeCC.registerCalls)
+	assert.Contains(t, stdout.String(), "verb=apply")
 }
 
 func TestSelfHostedInstall_ComputePlane_LocalSplitWritesExternalControlPlaneEndpoints(t *testing.T) {
@@ -148,7 +345,7 @@ func TestSelfHostedInstall_ComputePlane_LocalSplitWritesExternalControlPlaneEndp
 		"--control-plane-context=admin@cp",
 		"--compute-plane-context=admin@gpu1",
 		"install", "--compute-plane", "--cluster-name=ncp-A",
-		"--stack", stackDir,
+		"--compute-plane-stack", stackDir,
 		"--icms-url=http://sis.localhost:8080",
 		"--no-apply",
 	})
@@ -166,34 +363,51 @@ func TestSelfHostedInstall_ComputePlane_LocalSplitWritesExternalControlPlaneEndp
 	assert.NotContains(t, got, ".svc.cluster.local")
 }
 
-func TestComputePlaneTarget_BundledStack(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "helmfile.d"), 0o755))
+func TestClusterIdentityConfigPreservesLoadedKubeconfigPath(t *testing.T) {
+	prevLoader := loadClusterIdentityConfig
+	t.Cleanup(func() { loadClusterIdentityConfig = prevLoader })
+	loadClusterIdentityConfig = func() (*client.Config, error) {
+		return &client.Config{
+			KubeconfigPath: "/tmp/custom-kubeconfig",
+			KubeContext:    "old-context",
+			BaseHTTPURL:    "http://api.example",
+		}, nil
+	}
 
-	helmfileFile, selector := computePlaneTarget(dir)
-	assert.Equal(t, "", helmfileFile, "bundled layout should leave HelmfileFile empty")
-	assert.Equal(t, "release-group=workers", selector, "bundled layout should filter by release-group")
-}
-
-func TestComputePlaneTarget_MultiClusterSplit(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "helmfile.d"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "helmfile-nvca-operator.yaml.gotmpl"), []byte("releases: []\n"), 0o644))
-
-	helmfileFile, selector := computePlaneTarget(dir)
-	assert.Equal(t, "helmfile-nvca-operator.yaml.gotmpl", helmfileFile)
-	assert.Equal(t, "", selector, "split layout should not narrow with a selector")
+	cfg, err := clusterIdentityConfig("admin@gpu1")
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/custom-kubeconfig", cfg.KubeconfigPath)
+	assert.Equal(t, "admin@gpu1", cfg.KubeContext)
+	assert.Equal(t, "http://api.example", cfg.BaseHTTPURL)
 }
 
 // fakeClusterClient is a test double for selfhosted.ClusterClient.
 type fakeClusterClient struct {
-	registerCalls int
-	resp          *selfhosted.RegisterResponse
+	registerCalls       int
+	deleteCalls         int
+	deletedIDs          []string
+	callOrder           []string
+	resp                *selfhosted.RegisterResponse
+	lastRegisterRequest selfhosted.RegisterRequest
 }
 
-func (f *fakeClusterClient) RegisterCluster(_ context.Context, _ selfhosted.RegisterRequest) (*selfhosted.RegisterResponse, error) {
+func (f *fakeClusterClient) RegisterCluster(_ context.Context, req selfhosted.RegisterRequest) (*selfhosted.RegisterResponse, error) {
 	f.registerCalls++
+	f.lastRegisterRequest = req
+	f.callOrder = append(f.callOrder, "register")
 	return f.resp, nil
+}
+
+func (f *fakeClusterClient) DeleteClusterByName(_ context.Context, _, _ string) (int, error) {
+	f.deleteCalls++
+	f.callOrder = append(f.callOrder, "delete")
+	return 1, nil
+}
+
+func (f *fakeClusterClient) DeleteCluster(_ context.Context, clusterID string) error {
+	f.deletedIDs = append(f.deletedIDs, clusterID)
+	f.callOrder = append(f.callOrder, "delete-id")
+	return nil
 }
 
 func (f *fakeClusterClient) Close() error { return nil }

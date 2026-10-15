@@ -1,0 +1,169 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: lb-balance-prefix-reuse-4c2p-2s
+metadata:
+  description: Coding-session load run with 64k-token initial contexts and small appended turns across heterogeneous routing clusters.
+  tags: [load-balance, grouped-pylons, multi-stargate, heterogeneous, cache, prefix-reuse, coding-session, pulsar]
+  expected_runtime: medium
+  expected_signal: Compare cache-affine GMR and no-SLO PULSAR/PULSAR-multiregion cache-primary behavior against TTFT-first routing while heterogeneous cluster capacity shapes latency under misses.
+model: dummy-model
+seed: 705
+request_count: 128
+max_concurrency: 48
+
+stargates:
+  count: 2
+
+backends:
+  count: 8
+  pylons_per_cluster: 2
+  cluster_id_template: cluster-{cluster_index}
+  profile:
+    name: balanced-prefix
+    weight: 1.0
+    max_concurrent_requests: 8
+    kv_cache_capacity_tokens: 1500000
+    service_time_ms:
+      ttft_mean: 35
+      ttft_jitter_ms: 4
+      decode_jitter_ms: 2
+      prefill_tokens_per_s: 32768
+      decode_tokens_per_s: 220
+    registration:
+      last_mean_input_tps: 32768
+  profiles:
+    - count: 2
+      profile:
+        name: fast-prefix-cluster
+        weight: 1.0
+        max_concurrent_requests: 12
+        kv_cache_capacity_tokens: 2000000
+        service_time_ms:
+          ttft_mean: 20
+          ttft_jitter_ms: 3
+          decode_jitter_ms: 1
+          prefill_tokens_per_s: 65536
+          decode_tokens_per_s: 320
+        registration:
+          last_mean_input_tps: 65536
+    - count: 4
+      profile:
+        name: balanced-prefix-cluster
+        weight: 1.0
+        max_concurrent_requests: 8
+        kv_cache_capacity_tokens: 1500000
+        service_time_ms:
+          ttft_mean: 35
+          ttft_jitter_ms: 4
+          decode_jitter_ms: 2
+          prefill_tokens_per_s: 32768
+          decode_tokens_per_s: 220
+        registration:
+          last_mean_input_tps: 32768
+    - count: 2
+      profile:
+        name: constrained-prefix-cluster
+        weight: 1.0
+        max_concurrent_requests: 4
+        kv_cache_capacity_tokens: 1000000
+        service_time_ms:
+          ttft_mean: 70
+          ttft_jitter_ms: 8
+          decode_jitter_ms: 4
+          prefill_tokens_per_s: 16384
+          decode_tokens_per_s: 120
+        registration:
+          last_mean_input_tps: 16384
+
+traffic_pattern:
+  kind: prefix_reuse
+  routing_keys: 0
+  cache_affinity_keys: 16
+  initial_input_tokens:
+    distribution: constant
+    value: 65536
+  incremental_input_tokens:
+    distribution: uniform
+    min: 256
+    max: 1024
+  output_tokens:
+    distribution: lognormal
+    mean: 96
+    sigma: 0.45
+    p99_cap: 384
+  arrival:
+    distribution: poisson
+    target_rps: 45
+
+algorithms:
+  - name: power-of-two
+    config:
+      default: power-of-two
+  - name: round-robin
+    config:
+      default: round-robin
+  - name: random
+    config:
+      default: random
+  - name: groq-multiregion
+    config:
+      default: groq-multiregion
+  - name: groq-multiregion-affinity
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: groq-multiregion
+          seed: growing-prefix-load-gmr-affinity-v1
+          require_cache_affinity_key: true
+          require_input_tokens: true
+          cache_affinity_backend_selection_count: 1
+  - name: pulsar
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar
+          seed: growing-prefix-load-v1
+          require_cache_affinity_key: true
+          require_input_tokens: true
+  - name: pulsar-consider-kv-free-tokens
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar
+          seed: growing-prefix-load-v1
+          require_cache_affinity_key: true
+          consider_kv_free_tokens: true
+  - name: pulsar-multiregion
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar-multiregion
+          seed: growing-prefix-load-v1
+          require_cache_affinity_key: true
+          require_input_tokens: true
+  - name: pulsar-multiregion-consider-kv-free-tokens
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar-multiregion
+          seed: growing-prefix-load-v1
+          require_cache_affinity_key: true
+          consider_kv_free_tokens: true

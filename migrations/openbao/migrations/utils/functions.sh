@@ -31,8 +31,8 @@ declare SECRETS_MOUNT_LIST
 
 function initialize_mount_lists() {
     log_step "Initializing auth and secrets mount lists..."
-    AUTH_MOUNT_LIST=$(bao auth list)
-    SECRETS_MOUNT_LIST=$(bao secrets list)
+    AUTH_MOUNT_LIST=$(bao auth list -format=json)
+    SECRETS_MOUNT_LIST=$(bao secrets list -format=json)
     log_success "Mount lists initialized."
 }
 
@@ -48,7 +48,9 @@ function enable_auth_mount() {
     local mount_path=$1
     local mount_type=$2
 
-    if bao auth list | grep -q "^$mount_path/"; then
+    local auth_mounts
+    auth_mounts=$(bao auth list -format=json 2>/dev/null) || true
+    if [[ "$auth_mounts" == *"\"${mount_path}/\""* ]]; then
         log_success "$mount_type auth engine mounted at path '$mount_path'"
         return 0
     fi
@@ -63,54 +65,58 @@ function enable_auth_mount() {
 ##
 # Configure the global JWT auth method
 #
-# This function reads the issuer and JWKS URL from environment variables
-# set by the issuer_discovery.sh script and configures the auth/jwt/config endpoint.
+# This function reads the issuer and optional JWKS URL from environment variables
+# set by issuer_discovery.sh and configures the auth/jwt/config endpoint.
 #
 function configure_auth_jwt() {
     log_step "Configuring JWT/OIDC auth method"
 
-    local args=()
-    if [[ -n "${OPENBAO_JWT_JWKS_URL}" ]]; then
-        args+=("jwks_url=${OPENBAO_JWT_JWKS_URL}")
+    if [[ -z "${OPENBAO_JWT_ISSUER:-}" ]]; then
+        log_error "OPENBAO_JWT_ISSUER is not set; cannot configure JWT auth."
+        return 1
     fi
 
-    if [[ -n "${OPENBAO_JWT_ISSUER}" ]]; then
-        # The bound_issuer tells OpenBao to validate the 'iss' claim in the JWT.
-        args+=("bound_issuer=${OPENBAO_JWT_ISSUER}")
-    fi
-
-    # For the default k8s issuer, OpenBao can discover the settings.
-    # For a custom issuer, we must provide at least the jwks_url or oidc_discovery_url.
-    # The issuer_discovery script ensures OPENBAO_JWT_ISSUER is always set.
-    if [[ "${OPENBAO_JWT_ISSUER}" == "https://kubernetes.default.svc.cluster.local" ]]; then
-        log_info "Using default Kubernetes service account issuer. No extra configuration needed."
-        # For the default K8s issuer, we rely on the TokenReview API and the mounted public key,
-        # which is more robust than OIDC discovery within the cluster as it avoids
-        # networking issues from the OpenBao server pod.
+    if [[ -n "${OPENBAO_JWT_JWKS_URL:-}" ]]; then
+        log_info "Configuring with ServiceAccount issuer and anonymously reachable JWKS URL: ${OPENBAO_JWT_ISSUER}"
+        log_step "Writing JWT config with args: jwks_url=${OPENBAO_JWT_JWKS_URL} bound_issuer=${OPENBAO_JWT_ISSUER}"
+        if ! output=$(bao write auth/jwt/config \
+            jwks_url="${OPENBAO_JWT_JWKS_URL}" \
+            bound_issuer="${OPENBAO_JWT_ISSUER}" \
+            2>&1); then
+            log_error "Error configuring JWT auth with JWKS URL: $output"
+            return 1
+        fi
+    else
+        # When the provider's JWKS endpoint is not anonymously reachable by OpenBao,
+        # validate service account tokens with the public signing key mounted by the chart.
         local pub_key=""
         if [[ -f /secrets/jwt/cluster_jwt.pem ]]; then
-            pub_key=$(cat /secrets/jwt/cluster_jwt.pem | base64 -d)
+            if ! pub_key=$(base64 -d < /secrets/jwt/cluster_jwt.pem 2>/dev/null); then
+                log_error "Failed to decode JWT public key at /secrets/jwt/cluster_jwt.pem"
+                return 1
+            fi
         fi
 
+        if [[ -z "${pub_key}" ]]; then
+            log_error "JWT public key not found or empty at /secrets/jwt/cluster_jwt.pem"
+            return 1
+        fi
+
+        if [[ ! -f "${K8S_SA_TOKEN_PATH}" ]]; then
+            log_error "ServiceAccount token not found at ${K8S_SA_TOKEN_PATH}"
+            return 1
+        fi
+
+        log_info "Configuring with ServiceAccount issuer and mounted public key: ${OPENBAO_JWT_ISSUER}"
         log_step "Writing JWT config with args: kubernetes_service_account_token_reviewer_jwt=<redacted> bound_issuer=${OPENBAO_JWT_ISSUER} jwt_validation_pubkeys=<redacted>"
         if ! output=$(bao write auth/jwt/config \
             kubernetes_service_account_token_reviewer_jwt="$(cat "${K8S_SA_TOKEN_PATH}")" \
             bound_issuer="${OPENBAO_JWT_ISSUER}" \
             jwt_validation_pubkeys="${pub_key}" \
             2>&1); then
-            log_error "Error configuring default Kubernetes JWT auth: $output"
+            log_error "Error configuring JWT auth with mounted public key: $output"
             return 1
         fi
-    elif [[ ${#args[@]} -gt 0 ]]; then
-        log_info "Configuring with custom issuer: ${OPENBAO_JWT_ISSUER}"
-        log_step "Writing JWT config with args: ${args[*]}"
-        if ! output=$(bao write auth/jwt/config "${args[@]}" 2>&1); then
-            log_error "Error configuring JWT auth with custom issuer: $output"
-            return 1
-        fi
-    else
-        log_warn "JWT auth configuration skipped: no custom issuer details found."
-        return 0
     fi
 
     log_success "JWT/OIDC auth method configured successfully."
@@ -126,16 +132,20 @@ function enable_secrets_mount() {
     local mount_path=$1
     local mount_type=$2
 
-    if ! bao secrets list | grep -q "^$mount_path/"; then
-      log_step "Enabling $mount_type secrets engine at mount path '$mount_path'"
-      if ! output=$(bao secrets enable -path=$mount_path $mount_type 2>&1); then
-          log_error "Error enabling $mount_type secrets engine: $output"
-          return 1
-      fi
+    local secrets_mounts
+    secrets_mounts=$(bao secrets list -format=json 2>/dev/null) || true
+    if [[ "$secrets_mounts" == *"\"${mount_path}/\""* ]]; then
+        log_info "$mount_type secrets engine already mounted at path '$mount_path'"
+        return 0
     fi
 
-    log_info "$mount_type secrets engine already mounted at path '$mount_path'"
-    return 0
+    log_step "Enabling $mount_type secrets engine at mount path '$mount_path'"
+    if ! output=$(bao secrets enable -path=$mount_path $mount_type 2>&1); then
+        log_error "Error enabling $mount_type secrets engine: $output"
+        return 1
+    fi
+
+    log_success "$mount_type secrets engine enabled at path '$mount_path'"
 }
 
 ##
@@ -150,7 +160,7 @@ function configure_auth_tuning() {
     local default_lease_ttl=$2
     local max_lease_ttl=$3
 
-    if ! echo $AUTH_MOUNT_LIST | grep -q "^$mount_path/"; then
+    if ! echo "$AUTH_MOUNT_LIST" | grep -q "\"${mount_path}/\""; then
         log_error "$mount_type auth engine not mounted at path '$mount_path'"
         return 1
     fi
@@ -176,7 +186,7 @@ function configure_secrets_tuning() {
     local default_lease_ttl=$2
     local max_lease_ttl=$3
 
-    if ! echo $SECRETS_MOUNT_LIST | grep -q "^$mount_path/"; then
+    if ! echo "$SECRETS_MOUNT_LIST" | grep -q "\"${mount_path}/\""; then
         log_error "$mount_type secrets engine not mounted at path '$mount_path'"
         return 1
     fi
@@ -228,6 +238,47 @@ EOF
         return 1
     fi
     log_success "JWT Auth role '$role_name' created/updated successfully"
+}
+
+##
+# Merge a set of policies into an existing JWT auth role's policy list,
+# preserving anything attached by other migrations. Use this everywhere a
+# migration may add policies to a role that other migrations also write to:
+# `bao write auth/jwt/role/<name>` is a full PUT, so a naive write would
+# silently overwrite policies the current caller doesn't know about.
+#
+# Returns the merged comma-separated policy list, suitable for feeding into
+# generate_jwt_auth_role. Each policy from the supplied set is added only if
+# not already present (exact, case-sensitive match). If the role doesn't
+# exist yet, the supplied policies are returned unchanged so the caller can
+# create the role with them.
+#
+# Usage:
+#   merged=$(merge_jwt_role_policies <role_name> <policies_csv>)
+#
+function merge_jwt_role_policies() {
+    local role_name=$1
+    local new_policies_csv=$2
+
+    local existing
+    existing=$(bao read -format=json "auth/jwt/role/${role_name}" 2>/dev/null \
+        | jq -r '.data.token_policies // [] | join(",")' 2>/dev/null) || existing=""
+
+    if [ -z "${existing}" ]; then
+        echo "${new_policies_csv}"
+        return 0
+    fi
+
+    local merged="${existing}"
+    local IFS=,
+    local policy
+    for policy in ${new_policies_csv}; do
+        case ",${merged}," in
+            *",${policy},"*) : ;;
+            *) merged="${merged},${policy}" ;;
+        esac
+    done
+    echo "${merged}"
 }
 
 ##
@@ -418,27 +469,33 @@ EOF
 # @param target_service_account_namespace The namespace of the target service account
 # @param client_service_name The name of the client service
 # @param scopes The scopes to be added to the JWT secret role
+# @param issuer_override Optional. When non-empty, overrides the derived
+#        "http://<target_service_name>.<target_service_account_namespace>.svc.cluster.local"
+#        issuer. Leave empty to preserve the default in-cluster issuer.
 #
 function generate_jwt_secret_role() {
   local target_service_account_namespace=$1
   local target_service_name=$2
   local client_service_name=$3
   local scopes=$4
+  local issuer_override=${5:-""}
 
   local quoted_scopes=$(sed 's/\([^,]*\)/"\1"/g' <<< "$scopes")
-  local issuer="http://${target_service_name}.${target_service_account_namespace}.svc.cluster.local"
 
-  local role_json=$(cat <<EOF
-{
-  "issuer":"${issuer}",
-  "claims":{
-    "azp":"${client_service_name}",
-    "aud":["${client_service_name}","s:${target_service_name}"],
-    "scopes":[${quoted_scopes}],
-    "sub":"${client_service_name}"
-  }
-}
-EOF
-)
+  local issuer="http://${target_service_name}.${target_service_account_namespace}.svc.cluster.local"
+  if [[ -n "${issuer_override}" ]]; then
+    issuer="${issuer_override}"
+  fi
+
+  # Build the role JSON with jq so every string value is escaped correctly.
+  # Delegating to --arg handles quotes, backslashes, and control characters,
+  # which manual interpolation into a heredoc cannot do safely.
+  local role_json
+  role_json=$(jq -n \
+    --arg issuer     "${issuer}" \
+    --arg client     "${client_service_name}" \
+    --arg target     "${target_service_name}" \
+    --argjson scopes "[${quoted_scopes}]" \
+    '{issuer: $issuer, claims: {azp: $client, aud: [$client, ("s:" + $target)], scopes: $scopes, sub: $client}}')
   echo "$role_json"
 }

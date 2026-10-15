@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Single-cluster Helmfile fixture for the BDD suite.
+#
+# The REPLACE_WITH_SAMPLE_NGC_ORG / REPLACE_WITH_SAMPLE_NGC_TEAM
+# placeholders below are overwritten by the feature's Background via
+# `I update yaml file ... with keys:` using ${SAMPLE_NGC_ORG} and
+# ${SAMPLE_NGC_TEAM}. The literal values are never committed here.
+# If a future feature copies this fixture without performing the
+# substitution, helmfile pulls images from a path that obviously
+# does not resolve, which is the intended failure mode.
+
+global:
+  nodeSelectors:
+    enabled: false
+
+  helm:
+    sources:
+      registry: "nvcr.io"
+      repository: "REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM"
+
+  image:
+    registry: nvcr.io
+    repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
+
+  nvcaOperator:
+    selfManaged:
+      icmsServiceURL: http://api.sis.svc.cluster.local:8080
+      revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
+      natsURL: nats://nats.nats-system.svc.cluster.local:4222
+
+agentConfig:
+  mergeConfig: |
+    cluster:
+      validationPolicy:
+        name: Unrestricted
+    workload:
+      stargateQUICInsecure: true

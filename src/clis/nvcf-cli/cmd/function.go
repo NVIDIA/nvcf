@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,6 +37,14 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/structpb"
+)
+
+const (
+	errCreateNVCFClientFmt = "failed to create NVCF client: %w"
+	errLoadConfigFmt       = "failed to load configuration: %w"
+	errParseInputFileFmt   = "failed to parse JSON file '%s': %w"
+	errReadInputFileFmt    = "failed to read input file '%s': %w"
+	inputFileFlag          = "input-file"
 )
 
 // ============================================================================
@@ -57,7 +66,7 @@ Available subcommands:
 - list: List all functions
 - list-ids: List function IDs only
 - list-versions: List versions of a specific function
-- update: Update function metadata
+- update: Update function tags and LLM model config
 - queue: Manage function queues
 
 Examples:
@@ -169,7 +178,7 @@ Examples:
   # Graceful deployment deletion
   nvcf-cli function delete --deployment-only --graceful
 
-Authentication: This command uses NVCF_TOKEN only for authentication.`,
+Authentication: Requires NVCF_TOKEN or NVCF_API_KEY with delete_function scope.`,
 	Args: cobra.RangeArgs(0, 2),
 	RunE: runDelete,
 }
@@ -191,12 +200,13 @@ var invokeCmd = &cobra.Command{
 	Long: `Invokes a function with a JSON request body.
 
 This command sends a request to the specified function and waits for the response.
-The request body must be a valid JSON string. If the function takes longer than
-the polling timeout, the command will poll for results until completion.
+The request body must be a valid JSON string. Use --poll-duration to ask the
+service to hold the invocation connection open for that many seconds before it
+returns pending request metadata.
 
 Invocation Methods:
   --grpc     Use gRPC invocation (native Go client with JSON encoding)
-  (default)  Use direct REST invocation (recommended)
+  (default)  Use direct REST invocation. LLM functions use the LLM invocation route.
 
 Examples:
   # Direct REST invocation (default)
@@ -244,16 +254,17 @@ var listVersionsCmd = &cobra.Command{
 // updateCmd represents the update command
 var updateCmd = &cobra.Command{
 	Use:          "update",
-	Short:        "Update function tags",
+	Short:        "Update function tags and LLM model config",
 	SilenceUsage: true,
-	Long: `Updates function tags.
+	Long: `Updates function tags and LLM model configuration.
 
-This allows you to modify the tags of an existing function version
-without affecting the function's code or deployment configuration.
+This allows you to modify mutable fields of an existing function version
+without affecting the function's code or deployment configuration. LLM model
+updates support routingMethod and tokenRateLimit.
 
 For updating deployments, use: nvcf-cli function deploy update
 
-Authentication: Requires NVCF_TOKEN with admin:update_function scope.`,
+Authentication: Requires NVCF_TOKEN or NVCF_API_KEY with update_function scope.`,
 	RunE: runUpdate,
 }
 
@@ -346,9 +357,17 @@ type CreateConfig struct {
 
 // ArtifactConfig represents a model or resource artifact in CLI configuration
 type ArtifactConfig struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	URI     string `json:"uri"`
+	Name      string          `json:"name"`
+	Version   string          `json:"version,omitempty"`
+	URI       string          `json:"uri,omitempty"`
+	LLMConfig *LLMConfigInput `json:"llmConfig,omitempty"`
+}
+
+// LLMConfigInput represents LLM routing metadata in CLI configuration
+type LLMConfigInput struct {
+	URIs           []string `json:"uris,omitempty"`
+	TokenRateLimit *string  `json:"tokenRateLimit,omitempty"`
+	RoutingMethod  *string  `json:"routingMethod,omitempty"`
 }
 
 // ContainerEnvironmentEntry represents an environment variable in CLI configuration
@@ -382,14 +401,13 @@ type DeleteConfig struct {
 
 // InvokeConfig represents the JSON configuration for invoke command
 type InvokeConfig struct {
-	FunctionID           string                 `json:"functionId"`
-	VersionID            string                 `json:"versionId"`
-	InferenceURL         string                 `json:"inferenceUrl"` // Function's inference endpoint (e.g., "/echo")
-	RequestBody          map[string]interface{} `json:"requestBody"`
-	Timeout              int                    `json:"timeout,omitempty"`
-	PollRate             int                    `json:"pollRate,omitempty"`
-	InputAssetReferences []string               `json:"inputAssetReferences,omitempty"`
-	PollDurationSeconds  int                    `json:"pollDurationSeconds,omitempty"`
+	FunctionID          string                 `json:"functionId"`
+	VersionID           string                 `json:"versionId"`
+	InferenceURL        string                 `json:"inferenceUrl,omitempty"` // Function path, or OpenAI-compatible path for LLM functions.
+	ModelName           string                 `json:"modelName,omitempty"`    // OpenAI model name for LLM functions.
+	RequestBody         map[string]interface{} `json:"requestBody"`
+	Timeout             int                    `json:"timeout,omitempty"`
+	PollDurationSeconds int                    `json:"pollDurationSeconds,omitempty"`
 
 	// gRPC-specific fields
 	GRPCService   string `json:"grpcService,omitempty"`   // gRPC service name (e.g., "nvidia.nvcf.v1.InferenceService")
@@ -397,11 +415,24 @@ type InvokeConfig struct {
 	GRPCPlaintext bool   `json:"grpcPlaintext,omitempty"` // Use plaintext (insecure) gRPC
 }
 
-// UpdateConfig represents the JSON configuration for updating function metadata
+// UpdateConfig represents the JSON configuration for updating a function
 type UpdateConfig struct {
-	FunctionID string   `json:"functionId"`
-	VersionID  string   `json:"versionId"`
-	Tags       []string `json:"tags,omitempty"`
+	FunctionID   string              `json:"functionId"`
+	VersionID    string              `json:"versionId"`
+	Tags         []string            `json:"tags,omitempty"`
+	ModelUpdates []ModelUpdateConfig `json:"modelUpdates,omitempty"`
+}
+
+// ModelUpdateConfig represents LLM model update configuration.
+type ModelUpdateConfig struct {
+	ModelName string                `json:"modelName"`
+	LLMConfig *LLMConfigUpdateInput `json:"llmConfig,omitempty"`
+}
+
+// LLMConfigUpdateInput represents mutable LLM routing fields.
+type LLMConfigUpdateInput struct {
+	TokenRateLimit *string `json:"tokenRateLimit,omitempty"`
+	RoutingMethod  *string `json:"routingMethod,omitempty"`
 }
 
 // ============================================================================
@@ -444,6 +475,7 @@ var createFlags struct {
 
 	// Models and resources
 	models    []string
+	llmModels []string
 	resources []string
 
 	// Rate limiting
@@ -471,24 +503,25 @@ var invokeFlags struct {
 	// Input file
 	inputFile string
 
-	functionID           string
-	versionID            string
-	requestBody          string
-	timeout              int
-	pollRate             int
-	inputAssetReferences []string
-	pollDurationSeconds  int
-	useGRPC              bool // Use gRPC proxy instead of direct REST invocation
-	grpcService          string
-	grpcMethod           string
-	grpcPlaintext        bool
+	functionID          string
+	versionID           string
+	inferenceURL        string
+	modelName           string
+	requestBody         string
+	timeout             int
+	pollDurationSeconds int
+	useGRPC             bool // Use gRPC proxy instead of direct REST invocation
+	grpcService         string
+	grpcMethod          string
+	grpcPlaintext       bool
 }
 
 var updateFlags struct {
-	inputFile  string
-	functionID string
-	versionID  string
-	tags       []string
+	inputFile       string
+	functionID      string
+	versionID       string
+	tags            []string
+	llmModelUpdates []string
 }
 
 // ============================================================================
@@ -515,7 +548,7 @@ func init() {
 	queueCmd.AddCommand(queuePositionCmd)
 
 	// Create command flags
-	createCmd.Flags().StringVar(&createFlags.inputFile, "input-file", "", "JSON file with function configuration (overrides individual flags)")
+	createCmd.Flags().StringVar(&createFlags.inputFile, inputFileFlag, "", "JSON file with function configuration (overrides individual flags)")
 	createCmd.Flags().StringVar(&createFlags.name, "name", "", "Function name (required)")
 	createCmd.Flags().StringVar(&createFlags.containerImage, "image", "", "Container image (required)")
 	createCmd.Flags().StringVar(&createFlags.inferenceURL, "inference-url", "", "Inference URL (required)")
@@ -527,7 +560,7 @@ func init() {
 	createCmd.Flags().IntVar(&createFlags.healthPort, "health-port", 0, "Health endpoint port")
 	createCmd.Flags().StringVar(&createFlags.healthTimeout, "health-timeout", "", "Health check timeout (ISO 8601 duration)")
 	createCmd.Flags().IntVar(&createFlags.healthExpectedStatus, "health-expected-status", 200, "Expected health check status code")
-	createCmd.Flags().StringVar(&createFlags.functionType, "function-type", "DEFAULT", "Function type (DEFAULT or STREAMING)")
+	createCmd.Flags().StringVar(&createFlags.functionType, "function-type", "DEFAULT", "Function type (DEFAULT, STREAMING, or LLM)")
 	createCmd.Flags().StringVar(&createFlags.apiBodyFormat, "api-body-format", "CUSTOM", "API body format")
 	createCmd.Flags().StringVar(&createFlags.containerArgs, "container-args", "", "Arguments for container launch")
 	createCmd.Flags().StringSliceVar(&createFlags.containerEnvironment, "container-env", []string{}, "Container environment variables (key=value)")
@@ -535,6 +568,7 @@ func init() {
 	createCmd.Flags().StringVar(&createFlags.helmChartServiceName, "helm-chart-service", "", "Helm chart service name")
 	createCmd.Flags().StringSliceVar(&createFlags.secrets, "secrets", []string{}, "Secrets in name=value format (e.g., API_KEY=secret123,DB_PASSWORD=pass456)")
 	createCmd.Flags().StringSliceVar(&createFlags.models, "models", []string{}, "Model artifacts (format: name:version:uri)")
+	createCmd.Flags().StringArrayVar(&createFlags.llmModels, "llm-model", []string{}, "LLM model config (format: name=<model>,uris=<uri>|<uri>,routingMethod=<round_robin|power_of_two|groq_multiregion|pulsar|random>,tokenRateLimit=<limit>)")
 	createCmd.Flags().StringSliceVar(&createFlags.resources, "resources", []string{}, "Resource artifacts (format: name:version:uri)")
 	createCmd.Flags().StringVar(&createFlags.rateLimit, "rate-limit", "", "Rate limit pattern (e.g., '100-S', '50-M', '10-H', '5-D')")
 	createCmd.Flags().StringSliceVar(&createFlags.rateLimitExempted, "rate-limit-exempted", []string{}, "NCA IDs exempted from rate limiting")
@@ -544,7 +578,7 @@ func init() {
 	createCmd.Flags().StringVar(&createFlags.tracesTelemetryId, "traces-telemetry-id", "", "UUID for traces telemetry")
 
 	// Delete command flags
-	deleteCmd.Flags().StringVar(&deleteFlags.inputFile, "input-file", "", "JSON file with deletion configuration (overrides individual flags)")
+	deleteCmd.Flags().StringVar(&deleteFlags.inputFile, inputFileFlag, "", "JSON file with deletion configuration (overrides individual flags)")
 	deleteCmd.Flags().StringVar(&deleteFlags.functionID, "function-id", "", "Function ID (optional - uses current function from state if not specified)")
 	deleteCmd.Flags().StringVar(&deleteFlags.versionID, "version-id", "", "Version ID (optional - uses current version from state if not specified)")
 	deleteCmd.Flags().BoolVar(&deleteFlags.graceful, "graceful", false, "Gracefully shutdown deployment (only for deployment deletion)")
@@ -557,24 +591,25 @@ func init() {
 	getFunctionCmd.MarkFlagRequired("version-id")
 
 	// Invoke command flags
-	invokeCmd.Flags().StringVar(&invokeFlags.inputFile, "input-file", "", "JSON file with invocation configuration (overrides individual flags)")
+	invokeCmd.Flags().StringVar(&invokeFlags.inputFile, inputFileFlag, "", "JSON file with invocation configuration (overrides individual flags)")
 	invokeCmd.Flags().StringVar(&invokeFlags.functionID, "function-id", "", "Function ID (required)")
 	invokeCmd.Flags().StringVar(&invokeFlags.versionID, "version-id", "", "Version ID (required)")
+	invokeCmd.Flags().StringVar(&invokeFlags.inferenceURL, "inference-url", "", "Function path, or OpenAI-compatible path for LLM functions (required for LLM)")
+	invokeCmd.Flags().StringVar(&invokeFlags.modelName, "model-name", "", "OpenAI model name for LLM functions (required for LLM)")
 	invokeCmd.Flags().StringVar(&invokeFlags.requestBody, "request-body", "", "JSON request body (required)")
 	invokeCmd.Flags().IntVar(&invokeFlags.timeout, "timeout", 60, "Request timeout in seconds")
-	invokeCmd.Flags().IntVar(&invokeFlags.pollRate, "poll-rate", 3, "Polling rate in seconds")
-	invokeCmd.Flags().StringSliceVar(&invokeFlags.inputAssetReferences, "input-asset-references", []string{}, "Input asset references")
-	invokeCmd.Flags().IntVar(&invokeFlags.pollDurationSeconds, "poll-duration", 5, "Initial polling duration in seconds")
+	invokeCmd.Flags().IntVar(&invokeFlags.pollDurationSeconds, "poll-duration", 5, "Invocation hold-open duration in seconds")
 	invokeCmd.Flags().BoolVar(&invokeFlags.useGRPC, "grpc", false, "Use gRPC invocation (native Go client)")
 	invokeCmd.Flags().StringVar(&invokeFlags.grpcService, "grpc-service", "", "gRPC service name")
 	invokeCmd.Flags().StringVar(&invokeFlags.grpcMethod, "grpc-method", "", "gRPC method name")
 	invokeCmd.Flags().BoolVar(&invokeFlags.grpcPlaintext, "grpc-plaintext", false, "Use plaintext (insecure) gRPC")
 
 	// Update command flags
-	updateCmd.Flags().StringVar(&updateFlags.inputFile, "input-file", "", "JSON file with metadata update configuration")
+	updateCmd.Flags().StringVar(&updateFlags.inputFile, inputFileFlag, "", "JSON file with function update configuration")
 	updateCmd.Flags().StringVar(&updateFlags.functionID, "function-id", "", "Function ID (required)")
 	updateCmd.Flags().StringVar(&updateFlags.versionID, "version-id", "", "Version ID (required)")
-	updateCmd.Flags().StringSliceVar(&updateFlags.tags, "tags", []string{}, "Function tags (comma-separated, required)")
+	updateCmd.Flags().StringSliceVar(&updateFlags.tags, "tags", []string{}, "Function tags (comma-separated)")
+	updateCmd.Flags().StringArrayVar(&updateFlags.llmModelUpdates, "llm-model-update", []string{}, "LLM model update (format: name=<model>,routingMethod=<round_robin|power_of_two|groq_multiregion|pulsar|random>,tokenRateLimit=<limit>)")
 }
 
 // ============================================================================
@@ -594,6 +629,302 @@ func parseArtifactString(s string) (ArtifactConfig, error) {
 		Version: parts[1],
 		URI:     uri,
 	}, nil
+}
+
+// parseLLMModelString parses "name=<model>,uris=<uri>|<uri>,..." into ArtifactConfig.
+func parseLLMModelString(s string) (ArtifactConfig, error) {
+	fields := map[string]string{}
+	for _, item := range strings.Split(s, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		parts := strings.SplitN(item, "=", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+			return ArtifactConfig{}, fmt.Errorf("invalid field %q, expected key=value", item)
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		switch key {
+		case "name", "uris", "routingMethod", "tokenRateLimit":
+			fields[key] = value
+		default:
+			return ArtifactConfig{}, fmt.Errorf("unknown llm model field %q", key)
+		}
+	}
+
+	name := fields["name"]
+	if name == "" {
+		return ArtifactConfig{}, fmt.Errorf("name is required")
+	}
+
+	uris, err := parseLLMModelURIs(fields["uris"])
+	if err != nil {
+		return ArtifactConfig{}, err
+	}
+
+	routingMethod, err := normalizeLLMRoutingMethod(fields["routingMethod"])
+	if err != nil {
+		return ArtifactConfig{}, err
+	}
+	if err := validateLLMTokenRateLimit(fields["tokenRateLimit"]); err != nil {
+		return ArtifactConfig{}, err
+	}
+
+	return ArtifactConfig{
+		Name: name,
+		LLMConfig: &LLMConfigInput{
+			URIs:           uris,
+			TokenRateLimit: optionalString(fields["tokenRateLimit"]),
+			RoutingMethod:  optionalString(routingMethod),
+		},
+	}, nil
+}
+
+func parseLLMModelUpdateString(s string) (ModelUpdateConfig, error) {
+	fields := map[string]string{}
+	for _, item := range strings.Split(s, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		parts := strings.SplitN(item, "=", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+			return ModelUpdateConfig{}, fmt.Errorf("invalid field %q, expected key=value", item)
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.TrimSpace(parts[1])
+		switch key {
+		case "name", "routingMethod", "tokenRateLimit":
+			fields[key] = value
+		default:
+			return ModelUpdateConfig{}, fmt.Errorf("unknown llm model update field %q", key)
+		}
+	}
+
+	name := fields["name"]
+	if name == "" {
+		return ModelUpdateConfig{}, fmt.Errorf("name is required")
+	}
+
+	routingMethod, err := normalizeLLMRoutingMethod(fields["routingMethod"])
+	if err != nil {
+		return ModelUpdateConfig{}, err
+	}
+	if err := validateLLMTokenRateLimit(fields["tokenRateLimit"]); err != nil {
+		return ModelUpdateConfig{}, err
+	}
+
+	update := ModelUpdateConfig{
+		ModelName: name,
+		LLMConfig: &LLMConfigUpdateInput{
+			TokenRateLimit: optionalString(fields["tokenRateLimit"]),
+			RoutingMethod:  optionalString(routingMethod),
+		},
+	}
+	if update.LLMConfig.TokenRateLimit == nil && update.LLMConfig.RoutingMethod == nil {
+		return ModelUpdateConfig{}, fmt.Errorf("at least one of routingMethod or tokenRateLimit is required")
+	}
+	return update, nil
+}
+
+func parseLLMModelUpdateStrings(values []string) ([]ModelUpdateConfig, error) {
+	updates := make([]ModelUpdateConfig, 0, len(values))
+	for _, value := range values {
+		update, err := parseLLMModelUpdateString(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid llm model update format %q: %w", value, err)
+		}
+		updates = append(updates, update)
+	}
+	return updates, nil
+}
+
+func parseLLMModelURIs(value string) ([]string, error) {
+	if value == "" {
+		return nil, fmt.Errorf("uris is required")
+	}
+
+	var uris []string
+	for _, uri := range strings.Split(value, "|") {
+		uri = strings.TrimSpace(uri)
+		if uri == "" {
+			return nil, fmt.Errorf("uris cannot contain empty values")
+		}
+		uris = append(uris, uri)
+	}
+	return uris, nil
+}
+
+func validateLLMModelURIs(uris []string) error {
+	if len(uris) == 0 {
+		return fmt.Errorf("uris is required")
+	}
+
+	for _, uri := range uris {
+		if strings.TrimSpace(uri) == "" {
+			return fmt.Errorf("uris cannot contain empty values")
+		}
+	}
+	return nil
+}
+
+func validateLLMTokenRateLimit(raw string) error {
+	if raw == "" {
+		return nil
+	}
+
+	seenUnits := map[string]bool{}
+	for _, fragment := range strings.Split(raw, ",") {
+		fragment = strings.TrimSpace(fragment)
+		if fragment == "" {
+			return fmt.Errorf("invalid tokenRateLimit: empty fragment")
+		}
+
+		separator := strings.LastIndex(fragment, "-")
+		if separator <= 0 || separator == len(fragment)-1 {
+			return fmt.Errorf("invalid tokenRateLimit fragment %q: expected <positive-int>-<unit>", fragment)
+		}
+		valuePart := strings.TrimSpace(fragment[:separator])
+		unit := strings.TrimSpace(fragment[separator+1:])
+
+		value, err := strconv.ParseInt(valuePart, 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid tokenRateLimit value %q: must be a positive integer", valuePart)
+		}
+		if value <= 0 {
+			return fmt.Errorf("invalid tokenRateLimit value %q: must be positive", valuePart)
+		}
+
+		switch unit {
+		case "S", "M", "H", "D", "W":
+		default:
+			return fmt.Errorf("invalid tokenRateLimit unit %q: expected S, M, H, D, or W", unit)
+		}
+		if seenUnits[unit] {
+			return fmt.Errorf("invalid tokenRateLimit: duplicate %s unit", unit)
+		}
+		seenUnits[unit] = true
+	}
+
+	return nil
+}
+
+func normalizeLLMRoutingMethod(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "round_robin":
+		return "round_robin", nil
+	case "power_of_two":
+		return "power_of_two", nil
+	case "groq_multiregion":
+		return "groq_multiregion", nil
+	case "pulsar":
+		return "pulsar", nil
+	case "random":
+		return "random", nil
+	default:
+		return "", fmt.Errorf("unsupported routingMethod %q (expected round_robin, power_of_two, groq_multiregion, pulsar, or random)", value)
+	}
+}
+
+func optionalString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func optionalStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func artifactConfigToClientArtifact(artifact ArtifactConfig) (client.ArtifactDto, error) {
+	llmConfig, err := llmConfigInputToClient(artifact.LLMConfig)
+	if err != nil {
+		return client.ArtifactDto{}, fmt.Errorf("model %q: %w", artifact.Name, err)
+	}
+
+	return client.ArtifactDto{
+		Name:      artifact.Name,
+		Version:   artifact.Version,
+		URI:       artifact.URI,
+		LLMConfig: llmConfig,
+	}, nil
+}
+
+func llmConfigInputToClient(input *LLMConfigInput) (*client.LLMConfigDto, error) {
+	if input == nil {
+		return nil, nil
+	}
+
+	if err := validateLLMModelURIs(input.URIs); err != nil {
+		return nil, err
+	}
+
+	routingMethod, err := normalizeLLMRoutingMethod(optionalStringValue(input.RoutingMethod))
+	if err != nil {
+		return nil, err
+	}
+	if err := validateLLMTokenRateLimit(optionalStringValue(input.TokenRateLimit)); err != nil {
+		return nil, err
+	}
+
+	return &client.LLMConfigDto{
+		URIs:           input.URIs,
+		TokenRateLimit: input.TokenRateLimit,
+		RoutingMethod:  optionalString(routingMethod),
+	}, nil
+}
+
+func modelUpdateConfigToClient(update ModelUpdateConfig) (client.ModelUpdateDto, error) {
+	if strings.TrimSpace(update.ModelName) == "" {
+		return client.ModelUpdateDto{}, fmt.Errorf("modelName is required")
+	}
+	if update.LLMConfig == nil {
+		return client.ModelUpdateDto{}, fmt.Errorf("llmConfig is required")
+	}
+
+	routingMethod, err := normalizeLLMRoutingMethod(optionalStringValue(update.LLMConfig.RoutingMethod))
+	if err != nil {
+		return client.ModelUpdateDto{}, err
+	}
+	if err := validateLLMTokenRateLimit(optionalStringValue(update.LLMConfig.TokenRateLimit)); err != nil {
+		return client.ModelUpdateDto{}, err
+	}
+
+	llmConfig := &client.LLMConfigUpdateDto{
+		TokenRateLimit: update.LLMConfig.TokenRateLimit,
+		RoutingMethod:  optionalString(routingMethod),
+	}
+	if llmConfig.TokenRateLimit == nil && llmConfig.RoutingMethod == nil {
+		return client.ModelUpdateDto{}, fmt.Errorf("at least one of routingMethod or tokenRateLimit is required")
+	}
+
+	return client.ModelUpdateDto{
+		ModelName: update.ModelName,
+		LLMConfig: llmConfig,
+	}, nil
+}
+
+func updateConfigToClientRequest(config *UpdateConfig) (*client.UpdateFunctionMetadataRequest, error) {
+	req := &client.UpdateFunctionMetadataRequest{
+		Tags: config.Tags,
+	}
+	for _, update := range config.ModelUpdates {
+		clientUpdate, err := modelUpdateConfigToClient(update)
+		if err != nil {
+			return nil, fmt.Errorf("model update %q: %w", update.ModelName, err)
+		}
+		req.ModelUpdates = append(req.ModelUpdates, clientUpdate)
+	}
+	return req, nil
 }
 
 // generateDemoFolder creates a demo folder with JSON stubs for all operations
@@ -640,9 +971,8 @@ func generateDemoFolder(functionID, versionID string, createConfig *CreateConfig
 				"return_logprobs": false,
 			},
 		},
-		"timeout":              120,
-		"pollDurationSeconds":  10,
-		"inputAssetReferences": []string{"asset-123", "asset-456"},
+		"timeout":             120,
+		"pollDurationSeconds": 10,
 	}
 
 	if err := writeJSONFile(filepath.Join(folderName, "invoke.json"), invokeJSON); err != nil {
@@ -724,17 +1054,16 @@ func writeJSONFile(filename string, data interface{}) error {
 	return nil
 }
 
-// loadTokenOnlyConfig loads configuration using only NVCF_TOKEN for delete operations
-func loadTokenOnlyConfig() (*client.Config, error) {
+// loadDeleteClientConfig loads client authentication for delete operations.
+func loadDeleteClientConfig() (*client.Config, error) {
 	// Use the standard config loading which handles state file, etc.
 	config, err := client.LoadConfig()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load configuration: %w", err)
+		return nil, fmt.Errorf(errLoadConfigFmt, err)
 	}
 
-	// Verify we have a token for delete operations
-	if config.Token == "" {
-		return nil, fmt.Errorf("NVCF_TOKEN is required for delete operations (set in environment variable or config file)")
+	if config.Token == "" && config.APIKey == "" {
+		return nil, fmt.Errorf("NVCF_TOKEN or NVCF_API_KEY with delete_function or deploy_function scope is required for delete operations")
 	}
 
 	return config, nil
@@ -751,21 +1080,51 @@ func loadCreateConfig(cmd *cobra.Command) (*CreateConfig, error) {
 		HealthExpectedStatus: 200,
 	}
 
-	// Load from JSON file if provided
-	if createFlags.inputFile != "" {
-		data, err := os.ReadFile(createFlags.inputFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read input file '%s': %w", createFlags.inputFile, err)
-		}
-
-		if err := json.Unmarshal(data, config); err != nil {
-			return nil, fmt.Errorf("failed to parse JSON file '%s': %w", createFlags.inputFile, err)
-		}
-
-		fmt.Printf("Loaded configuration from %s\n", createFlags.inputFile)
+	if err := loadCreateConfigFile(config); err != nil {
+		return nil, err
 	}
 
-	// Override with CLI flags (CLI flags take precedence)
+	if err := applyCreateFlagOverrides(cmd, config); err != nil {
+		return nil, err
+	}
+
+	return config, nil
+}
+
+func loadCreateConfigFile(config *CreateConfig) error {
+	if createFlags.inputFile == "" {
+		return nil
+	}
+
+	data, err := os.ReadFile(createFlags.inputFile)
+	if err != nil {
+		return fmt.Errorf(errReadInputFileFmt, createFlags.inputFile, err)
+	}
+
+	if err := json.Unmarshal(data, config); err != nil {
+		return fmt.Errorf(errParseInputFileFmt, createFlags.inputFile, err)
+	}
+
+	fmt.Printf("Loaded configuration from %s\n", createFlags.inputFile)
+	return nil
+}
+
+func applyCreateFlagOverrides(cmd *cobra.Command, config *CreateConfig) error {
+	applyCreateRequiredFlagOverrides(cmd, config)
+	applyCreateMetadataFlagOverrides(cmd, config)
+	applyCreateHealthFlagOverrides(cmd, config)
+	applyCreateFunctionFlagOverrides(cmd, config)
+	applyCreateHelmFlagOverrides(cmd, config)
+	applyCreateRateLimitFlagOverrides(cmd, config)
+	applyCreateTelemetryFlagOverrides(cmd, config)
+
+	if err := applyCreateContainerEnvFlag(cmd, config); err != nil {
+		return err
+	}
+	return applyCreateArtifactFlagOverrides(cmd, config)
+}
+
+func applyCreateRequiredFlagOverrides(cmd *cobra.Command, config *CreateConfig) {
 	if cmd.Flags().Changed("name") {
 		config.Name = createFlags.name
 	}
@@ -778,12 +1137,18 @@ func loadCreateConfig(cmd *cobra.Command) (*CreateConfig, error) {
 	if cmd.Flags().Changed("inference-port") {
 		config.InferencePort = createFlags.inferencePort
 	}
+}
+
+func applyCreateMetadataFlagOverrides(cmd *cobra.Command, config *CreateConfig) {
 	if cmd.Flags().Changed("description") {
 		config.Description = createFlags.description
 	}
 	if cmd.Flags().Changed("tags") {
 		config.Tags = createFlags.tags
 	}
+}
+
+func applyCreateHealthFlagOverrides(cmd *cobra.Command, config *CreateConfig) {
 	if cmd.Flags().Changed("health-uri") {
 		config.HealthURI = createFlags.healthURI
 	}
@@ -799,6 +1164,9 @@ func loadCreateConfig(cmd *cobra.Command) (*CreateConfig, error) {
 	if cmd.Flags().Changed("health-expected-status") {
 		config.HealthExpectedStatus = createFlags.healthExpectedStatus
 	}
+}
+
+func applyCreateFunctionFlagOverrides(cmd *cobra.Command, config *CreateConfig) {
 	if cmd.Flags().Changed("function-type") {
 		config.FunctionType = createFlags.functionType
 	}
@@ -808,21 +1176,37 @@ func loadCreateConfig(cmd *cobra.Command) (*CreateConfig, error) {
 	if cmd.Flags().Changed("container-args") {
 		config.ContainerArgs = createFlags.containerArgs
 	}
-	if cmd.Flags().Changed("container-env") {
-		// Convert CLI flag format (key=value strings) to struct format
-		var containerEnv []ContainerEnvironmentEntry
-		for _, env := range createFlags.containerEnvironment {
-			parts := strings.SplitN(env, "=", 2)
-			if len(parts) != 2 {
-				return nil, fmt.Errorf("invalid environment variable format '%s', expected 'key=value'", env)
-			}
-			containerEnv = append(containerEnv, ContainerEnvironmentEntry{
-				Key:   parts[0],
-				Value: parts[1],
-			})
-		}
-		config.ContainerEnvironment = containerEnv
+}
+
+func applyCreateContainerEnvFlag(cmd *cobra.Command, config *CreateConfig) error {
+	if !cmd.Flags().Changed("container-env") {
+		return nil
 	}
+
+	containerEnv, err := parseContainerEnvironment(createFlags.containerEnvironment)
+	if err != nil {
+		return err
+	}
+	config.ContainerEnvironment = containerEnv
+	return nil
+}
+
+func parseContainerEnvironment(values []string) ([]ContainerEnvironmentEntry, error) {
+	containerEnv := make([]ContainerEnvironmentEntry, 0, len(values))
+	for _, env := range values {
+		parts := strings.SplitN(env, "=", 2)
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid environment variable format '%s', expected 'key=value'", env)
+		}
+		containerEnv = append(containerEnv, ContainerEnvironmentEntry{
+			Key:   parts[0],
+			Value: parts[1],
+		})
+	}
+	return containerEnv, nil
+}
+
+func applyCreateHelmFlagOverrides(cmd *cobra.Command, config *CreateConfig) {
 	if cmd.Flags().Changed("helm-chart") {
 		config.HelmChart = createFlags.helmChart
 	}
@@ -832,32 +1216,60 @@ func loadCreateConfig(cmd *cobra.Command) (*CreateConfig, error) {
 	if cmd.Flags().Changed("secrets") {
 		config.Secrets = createFlags.secrets
 	}
+}
 
-	// Models and resources overrides
+func applyCreateArtifactFlagOverrides(cmd *cobra.Command, config *CreateConfig) error {
 	if cmd.Flags().Changed("models") {
-		var models []ArtifactConfig
-		for _, model := range createFlags.models {
-			artifact, err := parseArtifactString(model)
-			if err != nil {
-				return nil, fmt.Errorf("invalid model format '%s': %w (expected format: name:version:uri)", model, err)
-			}
-			models = append(models, artifact)
+		models, err := parseArtifactStrings(createFlags.models, "model")
+		if err != nil {
+			return err
 		}
 		config.Models = models
 	}
+
+	if cmd.Flags().Changed("llm-model") {
+		models, err := parseLLMModelStrings(createFlags.llmModels)
+		if err != nil {
+			return err
+		}
+		config.Models = append(config.Models, models...)
+	}
+
 	if cmd.Flags().Changed("resources") {
-		var resources []ArtifactConfig
-		for _, resource := range createFlags.resources {
-			artifact, err := parseArtifactString(resource)
-			if err != nil {
-				return nil, fmt.Errorf("invalid resource format '%s': %w (expected format: name:version:uri)", resource, err)
-			}
-			resources = append(resources, artifact)
+		resources, err := parseArtifactStrings(createFlags.resources, "resource")
+		if err != nil {
+			return err
 		}
 		config.Resources = resources
 	}
+	return nil
+}
 
-	// Rate limiting overrides
+func parseArtifactStrings(values []string, label string) ([]ArtifactConfig, error) {
+	artifacts := make([]ArtifactConfig, 0, len(values))
+	for _, value := range values {
+		artifact, err := parseArtifactString(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s format '%s': %w (expected format: name:version:uri)", label, value, err)
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	return artifacts, nil
+}
+
+func parseLLMModelStrings(values []string) ([]ArtifactConfig, error) {
+	models := make([]ArtifactConfig, 0, len(values))
+	for _, value := range values {
+		artifact, err := parseLLMModelString(value)
+		if err != nil {
+			return nil, fmt.Errorf("invalid llm model format '%s': %w", value, err)
+		}
+		models = append(models, artifact)
+	}
+	return models, nil
+}
+
+func applyCreateRateLimitFlagOverrides(cmd *cobra.Command, config *CreateConfig) {
 	if cmd.Flags().Changed("rate-limit") {
 		config.RateLimit = createFlags.rateLimit
 	}
@@ -867,8 +1279,9 @@ func loadCreateConfig(cmd *cobra.Command) (*CreateConfig, error) {
 	if cmd.Flags().Changed("rate-limit-sync") {
 		config.RateLimitSync = createFlags.rateLimitSync
 	}
+}
 
-	// Telemetry overrides
+func applyCreateTelemetryFlagOverrides(cmd *cobra.Command, config *CreateConfig) {
 	if cmd.Flags().Changed("logs-telemetry-id") {
 		config.LogsTelemetryId = createFlags.logsTelemetryId
 	}
@@ -878,8 +1291,6 @@ func loadCreateConfig(cmd *cobra.Command) (*CreateConfig, error) {
 	if cmd.Flags().Changed("traces-telemetry-id") {
 		config.TracesTelemetryId = createFlags.tracesTelemetryId
 	}
-
-	return config, nil
 }
 
 // loadDeleteConfig loads and merges configuration from JSON file and CLI flags
@@ -890,11 +1301,11 @@ func loadDeleteConfig(cmd *cobra.Command) (*DeleteConfig, error) {
 	if deleteFlags.inputFile != "" {
 		data, err := os.ReadFile(deleteFlags.inputFile)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read input file '%s': %w", deleteFlags.inputFile, err)
+			return nil, fmt.Errorf(errReadInputFileFmt, deleteFlags.inputFile, err)
 		}
 
 		if err := json.Unmarshal(data, config); err != nil {
-			return nil, fmt.Errorf("failed to parse JSON file '%s': %w", deleteFlags.inputFile, err)
+			return nil, fmt.Errorf(errParseInputFileFmt, deleteFlags.inputFile, err)
 		}
 
 		fmt.Printf("Loaded deletion configuration from %s\n", deleteFlags.inputFile)
@@ -922,7 +1333,6 @@ func loadInvokeConfig(cmd *cobra.Command) (*InvokeConfig, error) {
 	config := &InvokeConfig{
 		// Set defaults
 		Timeout:             60,
-		PollRate:            3,
 		PollDurationSeconds: 5,
 	}
 
@@ -930,11 +1340,11 @@ func loadInvokeConfig(cmd *cobra.Command) (*InvokeConfig, error) {
 	if invokeFlags.inputFile != "" {
 		data, err := os.ReadFile(invokeFlags.inputFile)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read input file '%s': %w", invokeFlags.inputFile, err)
+			return nil, fmt.Errorf(errReadInputFileFmt, invokeFlags.inputFile, err)
 		}
 
 		if err := json.Unmarshal(data, config); err != nil {
-			return nil, fmt.Errorf("failed to parse JSON file '%s': %w", invokeFlags.inputFile, err)
+			return nil, fmt.Errorf(errParseInputFileFmt, invokeFlags.inputFile, err)
 		}
 
 		fmt.Printf("Loaded invocation configuration from %s\n", invokeFlags.inputFile)
@@ -947,6 +1357,12 @@ func loadInvokeConfig(cmd *cobra.Command) (*InvokeConfig, error) {
 	if cmd.Flags().Changed("version-id") {
 		config.VersionID = invokeFlags.versionID
 	}
+	if cmd.Flags().Changed("inference-url") {
+		config.InferenceURL = invokeFlags.inferenceURL
+	}
+	if cmd.Flags().Changed("model-name") {
+		config.ModelName = invokeFlags.modelName
+	}
 	if cmd.Flags().Changed("request-body") {
 		// Parse request body JSON from CLI flag
 		var requestBody map[string]interface{}
@@ -957,12 +1373,6 @@ func loadInvokeConfig(cmd *cobra.Command) (*InvokeConfig, error) {
 	}
 	if cmd.Flags().Changed("timeout") {
 		config.Timeout = invokeFlags.timeout
-	}
-	if cmd.Flags().Changed("poll-rate") {
-		config.PollRate = invokeFlags.pollRate
-	}
-	if cmd.Flags().Changed("input-asset-references") {
-		config.InputAssetReferences = invokeFlags.inputAssetReferences
 	}
 	if cmd.Flags().Changed("poll-duration") {
 		config.PollDurationSeconds = invokeFlags.pollDurationSeconds
@@ -980,7 +1390,7 @@ func loadInvokeConfig(cmd *cobra.Command) (*InvokeConfig, error) {
 	return config, nil
 }
 
-// loadUpdateConfig loads configuration for metadata updates
+// loadUpdateConfig loads configuration for function updates
 func loadUpdateConfig(cmd *cobra.Command) (*UpdateConfig, error) {
 	config := &UpdateConfig{}
 
@@ -988,14 +1398,14 @@ func loadUpdateConfig(cmd *cobra.Command) (*UpdateConfig, error) {
 	if updateFlags.inputFile != "" {
 		data, err := os.ReadFile(updateFlags.inputFile)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read input file '%s': %w", updateFlags.inputFile, err)
+			return nil, fmt.Errorf(errReadInputFileFmt, updateFlags.inputFile, err)
 		}
 
 		if err := json.Unmarshal(data, config); err != nil {
-			return nil, fmt.Errorf("failed to parse JSON file '%s': %w", updateFlags.inputFile, err)
+			return nil, fmt.Errorf(errParseInputFileFmt, updateFlags.inputFile, err)
 		}
 
-		fmt.Printf("Loaded metadata update configuration from %s\n", updateFlags.inputFile)
+		fmt.Printf("Loaded function update configuration from %s\n", updateFlags.inputFile)
 	}
 
 	// Override with CLI flags
@@ -1008,8 +1418,28 @@ func loadUpdateConfig(cmd *cobra.Command) (*UpdateConfig, error) {
 	if cmd.Flags().Changed("tags") {
 		config.Tags = updateFlags.tags
 	}
+	if cmd.Flags().Changed("llm-model-update") {
+		updates, err := parseLLMModelUpdateStrings(updateFlags.llmModelUpdates)
+		if err != nil {
+			return nil, err
+		}
+		config.ModelUpdates = append(config.ModelUpdates, updates...)
+	}
 
 	return config, nil
+}
+
+func validateUpdateConfig(config *UpdateConfig) error {
+	if config.FunctionID == "" {
+		return fmt.Errorf("function ID is required (use --function-id or specify in JSON file)")
+	}
+	if config.VersionID == "" {
+		return fmt.Errorf("version ID is required (use --version-id or specify in JSON file)")
+	}
+	if len(config.Tags) == 0 && len(config.ModelUpdates) == 0 {
+		return fmt.Errorf("at least one update is required (use --tags, --llm-model-update, or specify modelUpdates in JSON file)")
+	}
+	return nil
 }
 
 // ============================================================================
@@ -1017,13 +1447,52 @@ func loadUpdateConfig(cmd *cobra.Command) (*UpdateConfig, error) {
 // ============================================================================
 
 func runCreate(cmd *cobra.Command, args []string) error {
-	// Load and merge configuration
 	config, err := loadCreateConfig(cmd)
 	if err != nil {
 		return err
 	}
 
-	// Validate required fields
+	if err := validateCreateConfig(config); err != nil {
+		return err
+	}
+
+	clientConfig, err := client.LoadConfig()
+	if err != nil {
+		return fmt.Errorf(errLoadConfigFmt, err)
+	}
+
+	nvcfClient, err := client.NewClient(clientConfig)
+	if err != nil {
+		return fmt.Errorf(errCreateNVCFClientFmt, err)
+	}
+	defer nvcfClient.Close()
+
+	req, health, err := buildCreateFunctionRequest(config)
+	if err != nil {
+		return err
+	}
+
+	if err := LoadStateForCurrentCommand(); err != nil {
+		logging.Warning("Could not load existing state: %v", err)
+	}
+
+	ctx := context.Background()
+	logging.Info("Creating function '%s'...", config.Name)
+	resp, err := nvcfClient.CreateFunction(ctx, req)
+	if err != nil {
+		return fmt.Errorf("failed to create function: %w", err)
+	}
+
+	SetCurrentFunction(resp.Function.ID, resp.Function.VersionID, resp.Function.Name)
+	if err := SaveStateForCurrentCommand(); err != nil {
+		logging.Warning("Failed to save function state: %v", err)
+	}
+
+	printCreateResult(resp, config, health, clientConfig.Demo)
+	return nil
+}
+
+func validateCreateConfig(config *CreateConfig) error {
 	if config.Name == "" {
 		return fmt.Errorf("function name is required (use --name or specify in JSON file)")
 	}
@@ -1033,237 +1502,238 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	if config.InferencePort == 0 {
 		return fmt.Errorf("inference port is required (use --inference-port or specify in JSON file)")
 	}
+	return nil
+}
 
-	// Load client configuration
-	clientConfig, err := client.LoadConfig()
+func buildCreateFunctionRequest(config *CreateConfig) (*client.CreateFunctionRequest, *client.HealthDto, error) {
+	secrets, err := clientSecretsFromConfig(config)
 	if err != nil {
-		return fmt.Errorf("failed to load configuration: %w", err)
+		return nil, nil, err
 	}
 
-	// Create client
-	nvcfClient, err := client.NewClient(clientConfig)
+	models, err := artifactsToClient(config.Models)
 	if err != nil {
-		return fmt.Errorf("failed to create NVCF client: %w", err)
+		return nil, nil, err
 	}
-	defer nvcfClient.Close()
 
-	// Parse container environment variables
-	var containerEnv []client.ContainerEnvironmentEntry
-	for _, env := range config.ContainerEnvironment {
+	resources, err := artifactsToClient(config.Resources)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	health := healthToClient(config)
+	req := &client.CreateFunctionRequest{
+		Name:                 config.Name,
+		ContainerImage:       config.ContainerImage,
+		InferenceURL:         config.InferenceURL,
+		InferencePort:        config.InferencePort,
+		HealthURI:            config.HealthURI,
+		Health:               health,
+		FunctionType:         createFunctionType(config.FunctionType),
+		APIBodyFormat:        createAPIBodyFormat(config.APIBodyFormat),
+		ContainerArgs:        config.ContainerArgs,
+		ContainerEnvironment: containerEnvironmentToClient(config.ContainerEnvironment),
+		HelmChart:            config.HelmChart,
+		HelmChartServiceName: config.HelmChartServiceName,
+		Secrets:              secrets,
+		Models:               models,
+		Resources:            resources,
+		RateLimit:            rateLimitToClient(config),
+		Telemetries:          telemetriesToClient(config),
+		Description:          config.Description,
+		Tags:                 config.Tags,
+	}
+	return req, health, nil
+}
+
+func containerEnvironmentToClient(entries []ContainerEnvironmentEntry) []client.ContainerEnvironmentEntry {
+	containerEnv := make([]client.ContainerEnvironmentEntry, 0, len(entries))
+	for _, env := range entries {
 		containerEnv = append(containerEnv, client.ContainerEnvironmentEntry{
 			Key:   env.Key,
 			Value: env.Value,
 		})
 	}
+	return containerEnv
+}
 
-	// Prepare secrets
-	var secrets []client.SecretDto
-
-	// Handle CLI flags (convert name=value pairs to SecretDto objects)
-	if len(createFlags.secrets) > 0 {
-		for _, secretPair := range createFlags.secrets {
-			parts := strings.SplitN(secretPair, "=", 2)
-			if len(parts) != 2 {
-				return fmt.Errorf("invalid secret format '%s': must be name=value", secretPair)
-			}
-			secrets = append(secrets, client.SecretDto{
-				Name:  parts[0],
-				Value: parts[1],
-			})
-		}
-	}
-
-	// Handle JSON configuration - parse secrets field
-	if config.Secrets != nil {
-		switch secretsData := config.Secrets.(type) {
-		case []interface{}:
-			for _, item := range secretsData {
-				switch secret := item.(type) {
-				case string:
-					// String in name=value format
-					parts := strings.SplitN(secret, "=", 2)
-					if len(parts) == 2 {
-						secrets = append(secrets, client.SecretDto{
-							Name:  parts[0],
-							Value: parts[1],
-						})
-					} else {
-						return fmt.Errorf("invalid secret format '%s': must be name=value", secret)
-					}
-				case map[string]interface{}:
-					// Full secret object
-					secretDto := client.SecretDto{}
-					if name, ok := secret["name"].(string); ok {
-						secretDto.Name = name
-					}
-					if value, exists := secret["value"]; exists {
-						secretDto.Value = value
-					}
-					secrets = append(secrets, secretDto)
-				}
-			}
-		}
-	}
-
-	// Prepare models
-	var models []client.ArtifactDto
-	for _, model := range config.Models {
-		models = append(models, client.ArtifactDto{
-			Name:    model.Name,
-			Version: model.Version,
-			URI:     model.URI,
-		})
-	}
-
-	// Prepare resources
-	var resources []client.ArtifactDto
-	for _, resource := range config.Resources {
-		resources = append(resources, client.ArtifactDto{
-			Name:    resource.Name,
-			Version: resource.Version,
-			URI:     resource.URI,
-		})
-	}
-
-	// Prepare rate limiting configuration
-	var rateLimit *client.RateLimitDto
-	if config.RateLimit != "" {
-		rateLimit = &client.RateLimitDto{
-			RateLimit:      config.RateLimit,
-			ExemptedNcaIds: config.RateLimitExempted,
-			SyncCheck:      config.RateLimitSync,
-		}
-	}
-
-	// Prepare telemetries configuration
-	var telemetries *client.TelemetriesDto
-	if config.LogsTelemetryId != "" || config.MetricsTelemetryId != "" || config.TracesTelemetryId != "" {
-		telemetries = &client.TelemetriesDto{
-			LogsTelemetryId:    config.LogsTelemetryId,
-			MetricsTelemetryId: config.MetricsTelemetryId,
-			TracesTelemetryId:  config.TracesTelemetryId,
-		}
-	}
-
-	// Build health configuration
-	// Priority: nested health object > flat fields
-	var health *client.HealthDto
-
-	// First check if there's a nested health object from JSON
-	if config.Health != nil {
-		health = &client.HealthDto{
-			Protocol:           config.Health.Protocol,
-			URI:                config.Health.URI,
-			Port:               config.Health.Port,
-			Timeout:            config.Health.Timeout,
-			ExpectedStatusCode: config.Health.ExpectedStatusCode,
-		}
-	} else if config.HealthProtocol != "" && config.HealthPort > 0 {
-		// Full health configuration with protocol and port (flat fields)
-		health = &client.HealthDto{
-			Protocol: config.HealthProtocol,
-			URI:      config.HealthURI,
-			Port:     config.HealthPort,
-		}
-
-		// Set optional health fields if provided
-		if config.HealthTimeout != "" {
-			health.Timeout = config.HealthTimeout
-		}
-		if config.HealthExpectedStatus > 0 {
-			health.ExpectedStatusCode = config.HealthExpectedStatus
-		}
-	} else if config.HealthURI != "" {
-		// Simple health configuration with just URI (fallback to HTTP on inference port)
-		health = &client.HealthDto{
-			Protocol: "HTTP",
-			URI:      config.HealthURI,
-			Port:     config.InferencePort,
-		}
-
-		// Apply expected status if specified
-		if config.HealthExpectedStatus > 0 {
-			health.ExpectedStatusCode = config.HealthExpectedStatus
-		}
-
-		// Apply timeout if specified
-		if config.HealthTimeout != "" {
-			health.Timeout = config.HealthTimeout
-		}
-	}
-
-	// Set defaults
-	functionType := config.FunctionType
-	if functionType == "" {
-		functionType = "DEFAULT"
-	}
-
-	apiBodyFormat := config.APIBodyFormat
-	if apiBodyFormat == "" {
-		apiBodyFormat = "CUSTOM"
-	}
-
-	// Prepare request
-	req := &client.CreateFunctionRequest{
-		// Required fields
-		Name:           config.Name,
-		ContainerImage: config.ContainerImage,
-		InferenceURL:   config.InferenceURL,
-		InferencePort:  config.InferencePort,
-
-		// Health configuration
-		HealthURI: config.HealthURI,
-		Health:    health,
-
-		// Function configuration
-		FunctionType:         functionType,
-		APIBodyFormat:        apiBodyFormat,
-		ContainerArgs:        config.ContainerArgs,
-		ContainerEnvironment: containerEnv,
-
-		// Helm configuration
-		HelmChart:            config.HelmChart,
-		HelmChartServiceName: config.HelmChartServiceName,
-
-		// Secrets configuration
-		Secrets: secrets,
-
-		// Models and resources
-		Models:    models,
-		Resources: resources,
-
-		// Rate limiting
-		RateLimit: rateLimit,
-
-		// Telemetries
-		Telemetries: telemetries,
-
-		// Metadata
-		Description: config.Description,
-		Tags:        config.Tags,
-	}
-
-	// Load current state to preserve any existing settings
-	if err := LoadStateForCurrentCommand(); err != nil {
-		logging.Warning("Could not load existing state: %v", err)
-	}
-
-	// Create function
-	ctx := context.Background()
-
-	logging.Info("Creating function '%s'...", config.Name)
-	resp, err := nvcfClient.CreateFunction(ctx, req)
+func clientSecretsFromConfig(config *CreateConfig) ([]client.SecretDto, error) {
+	secrets, err := secretsFromFlagPairs(createFlags.secrets)
 	if err != nil {
-		return fmt.Errorf("failed to create function: %w", err)
+		return nil, err
 	}
 
-	// Save function state for subsequent operations
-	SetCurrentFunction(resp.Function.ID, resp.Function.VersionID, resp.Function.Name)
-	if err := SaveStateForCurrentCommand(); err != nil {
-		logging.Warning("Failed to save function state: %v", err)
+	jsonSecrets, err := secretsFromJSONConfig(config.Secrets)
+	if err != nil {
+		return nil, err
+	}
+	return append(secrets, jsonSecrets...), nil
+}
+
+func secretsFromFlagPairs(pairs []string) ([]client.SecretDto, error) {
+	secrets := make([]client.SecretDto, 0, len(pairs))
+	for _, pair := range pairs {
+		secret, err := secretFromString(pair)
+		if err != nil {
+			return nil, err
+		}
+		secrets = append(secrets, secret)
+	}
+	return secrets, nil
+}
+
+func secretsFromJSONConfig(raw interface{}) ([]client.SecretDto, error) {
+	items, ok := raw.([]interface{})
+	if !ok {
+		return nil, nil
 	}
 
-	// Print results with enhanced logging
+	secrets := make([]client.SecretDto, 0, len(items))
+	for _, item := range items {
+		secret, ok, err := secretFromJSONItem(item)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		secrets = append(secrets, secret)
+	}
+	return secrets, nil
+}
+
+func secretFromJSONItem(item interface{}) (client.SecretDto, bool, error) {
+	switch secret := item.(type) {
+	case string:
+		secretDto, err := secretFromString(secret)
+		return secretDto, true, err
+	case map[string]interface{}:
+		return secretFromMap(secret), true, nil
+	default:
+		return client.SecretDto{}, false, nil
+	}
+}
+
+func secretFromString(value string) (client.SecretDto, error) {
+	parts := strings.SplitN(value, "=", 2)
+	if len(parts) != 2 {
+		return client.SecretDto{}, fmt.Errorf("invalid secret format '%s': must be name=value", value)
+	}
+	return client.SecretDto{Name: parts[0], Value: parts[1]}, nil
+}
+
+func secretFromMap(secret map[string]interface{}) client.SecretDto {
+	secretDto := client.SecretDto{}
+	if name, ok := secret["name"].(string); ok {
+		secretDto.Name = name
+	}
+	if value, exists := secret["value"]; exists {
+		secretDto.Value = value
+	}
+	return secretDto
+}
+
+func artifactsToClient(configs []ArtifactConfig) ([]client.ArtifactDto, error) {
+	artifacts := make([]client.ArtifactDto, 0, len(configs))
+	for _, config := range configs {
+		artifact, err := artifactConfigToClientArtifact(config)
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	return artifacts, nil
+}
+
+func rateLimitToClient(config *CreateConfig) *client.RateLimitDto {
+	if config.RateLimit == "" {
+		return nil
+	}
+	return &client.RateLimitDto{
+		RateLimit:      config.RateLimit,
+		ExemptedNcaIds: config.RateLimitExempted,
+		SyncCheck:      config.RateLimitSync,
+	}
+}
+
+func telemetriesToClient(config *CreateConfig) *client.TelemetriesDto {
+	if config.LogsTelemetryId == "" && config.MetricsTelemetryId == "" && config.TracesTelemetryId == "" {
+		return nil
+	}
+	return &client.TelemetriesDto{
+		LogsTelemetryId:    config.LogsTelemetryId,
+		MetricsTelemetryId: config.MetricsTelemetryId,
+		TracesTelemetryId:  config.TracesTelemetryId,
+	}
+}
+
+func healthToClient(config *CreateConfig) *client.HealthDto {
+	if config.Health != nil {
+		return healthInputToClient(config.Health)
+	}
+	if config.HealthProtocol != "" && config.HealthPort > 0 {
+		return detailedHealthToClient(config)
+	}
+	if config.HealthURI != "" {
+		return simpleHealthToClient(config)
+	}
+	return nil
+}
+
+func healthInputToClient(input *HealthConfigInput) *client.HealthDto {
+	return &client.HealthDto{
+		Protocol:           input.Protocol,
+		URI:                input.URI,
+		Port:               input.Port,
+		Timeout:            input.Timeout,
+		ExpectedStatusCode: input.ExpectedStatusCode,
+	}
+}
+
+func detailedHealthToClient(config *CreateConfig) *client.HealthDto {
+	health := &client.HealthDto{
+		Protocol: config.HealthProtocol,
+		URI:      config.HealthURI,
+		Port:     config.HealthPort,
+	}
+	applyOptionalHealthFields(health, config)
+	return health
+}
+
+func simpleHealthToClient(config *CreateConfig) *client.HealthDto {
+	health := &client.HealthDto{
+		Protocol: "HTTP",
+		URI:      config.HealthURI,
+		Port:     config.InferencePort,
+	}
+	applyOptionalHealthFields(health, config)
+	return health
+}
+
+func applyOptionalHealthFields(health *client.HealthDto, config *CreateConfig) {
+	if config.HealthTimeout != "" {
+		health.Timeout = config.HealthTimeout
+	}
+	if config.HealthExpectedStatus > 0 {
+		health.ExpectedStatusCode = config.HealthExpectedStatus
+	}
+}
+
+func createFunctionType(functionType string) string {
+	if functionType == "" {
+		return "DEFAULT"
+	}
+	return functionType
+}
+
+func createAPIBodyFormat(apiBodyFormat string) string {
+	if apiBodyFormat == "" {
+		return "CUSTOM"
+	}
+	return apiBodyFormat
+}
+
+func printCreateResult(resp *client.CreateFunctionResponse, config *CreateConfig, health *client.HealthDto, demo bool) {
 	logging.Success("Function created successfully!")
 	logging.Plain("Function ID: %s", resp.Function.ID)
 	logging.Plain("Version ID: %s", resp.Function.VersionID)
@@ -1271,8 +1741,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	logging.Plain("Status: %s", resp.Function.Status)
 	logging.Plain("Creation Time: %s", resp.Function.CreationTime)
 
-	// Generate demo folder and JSON stubs if demo mode is enabled
-	if clientConfig.Demo {
+	if demo {
 		if err := generateDemoFolder(resp.Function.ID, resp.Function.VersionID, config); err != nil {
 			logging.Warning("Failed to generate demo folder: %v", err)
 		} else {
@@ -1280,7 +1749,6 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Show health configuration if set
 	if health != nil {
 		logging.Plain("Health Configuration:")
 		logging.Plain("  Protocol: %s", health.Protocol)
@@ -1295,8 +1763,6 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	} else if config.HealthURI != "" {
 		logging.Plain("Health URI: %s", config.HealthURI)
 	}
-
-	return nil
 }
 
 func runDelete(cmd *cobra.Command, args []string) error {
@@ -1343,16 +1809,15 @@ func runDelete(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("version ID is required - provide as argument, flag, in JSON file, or ensure current function is set in state")
 	}
 
-	// Load client configuration with NVCF_TOKEN only for delete operations
-	clientConfig, err := loadTokenOnlyConfig()
+	clientConfig, err := loadDeleteClientConfig()
 	if err != nil {
-		return fmt.Errorf("failed to load configuration: %w", err)
+		return fmt.Errorf(errLoadConfigFmt, err)
 	}
 
 	// Create client
 	nvcfClient, err := client.NewClient(clientConfig)
 	if err != nil {
-		return fmt.Errorf("failed to create NVCF client: %w", err)
+		return fmt.Errorf(errCreateNVCFClientFmt, err)
 	}
 	defer nvcfClient.Close()
 
@@ -1508,6 +1973,25 @@ func runGetFunction(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	if len(result.Models) > 0 {
+		fmt.Printf("\nModels:\n")
+		fmt.Printf("=======\n")
+		for _, m := range result.Models {
+			fmt.Printf("  Name: %s\n", m.Name)
+			if m.LLMConfig != nil {
+				if len(m.LLMConfig.URIs) > 0 {
+					fmt.Printf("    URIs: %s\n", strings.Join(m.LLMConfig.URIs, ", "))
+				}
+				if m.LLMConfig.TokenRateLimit != nil {
+					fmt.Printf("    Token Rate Limit: %s\n", *m.LLMConfig.TokenRateLimit)
+				}
+				if m.LLMConfig.RoutingMethod != nil {
+					fmt.Printf("    Routing Method: %s\n", *m.LLMConfig.RoutingMethod)
+				}
+			}
+		}
+	}
+
 	if len(result.Secrets) > 0 {
 		fmt.Printf("\nSecrets:\n")
 		fmt.Printf("========\n")
@@ -1541,7 +2025,7 @@ func runGetFunction(cmd *cobra.Command, args []string) error {
 
 func runInvoke(cmd *cobra.Command, args []string) error {
 	// Load state to get saved function context if needed
-	if err := state.Load(); err != nil {
+	if err := LoadStateForCurrentCommand(); err != nil {
 		logging.Warning("Could not load state: %v", err)
 	}
 
@@ -1552,7 +2036,35 @@ func runInvoke(cmd *cobra.Command, args []string) error {
 	}
 
 	// Use saved function context if function ID/version not specified
-	currentState := state.GetState()
+	currentState := GetCurrentState()
+	applySavedInvokeContext(config, currentState)
+	if err := validateInvokeConfig(config); err != nil {
+		return err
+	}
+
+	// Load client configuration
+	clientConfig, err := client.LoadConfig()
+	if err != nil {
+		return fmt.Errorf(errLoadConfigFmt, err)
+	}
+
+	// Create client
+	nvcfClient, err := client.NewClient(clientConfig)
+	if err != nil {
+		return fmt.Errorf(errCreateNVCFClientFmt, err)
+	}
+	defer nvcfClient.Close()
+
+	// Check for gRPC invocation mode
+	if invokeFlags.useGRPC {
+		logging.Info("Using gRPC proxy invocation for function %s (version %s)...", config.FunctionID, config.VersionID)
+		return invokeViaGRPC(clientConfig, currentState, config)
+	}
+
+	return invokeViaREST(context.Background(), nvcfClient, config)
+}
+
+func applySavedInvokeContext(config *InvokeConfig, currentState *state.State) {
 	if config.FunctionID == "" && currentState.FunctionID != "" {
 		config.FunctionID = currentState.FunctionID
 		logging.Info("Using saved function ID: %s", config.FunctionID)
@@ -1561,8 +2073,15 @@ func runInvoke(cmd *cobra.Command, args []string) error {
 		config.VersionID = currentState.VersionID
 		logging.Info("Using saved version ID: %s", config.VersionID)
 	}
+}
 
-	// Validate required fields
+func isSavedAPIKeyExpired(currentState *state.State) bool {
+	return currentState.APIKey != "" &&
+		!currentState.APIKeyExpiration.IsZero() &&
+		time.Now().After(currentState.APIKeyExpiration)
+}
+
+func validateInvokeConfig(config *InvokeConfig) error {
 	if config.FunctionID == "" {
 		return fmt.Errorf("function ID is required (use --function-id, specify in JSON file, or create a function first)")
 	}
@@ -1572,39 +2091,11 @@ func runInvoke(cmd *cobra.Command, args []string) error {
 	if config.RequestBody == nil {
 		return fmt.Errorf("request body is required (use --request-body or specify in JSON file)")
 	}
+	return nil
+}
 
-	// Load client configuration
-	clientConfig, err := client.LoadConfig()
-	if err != nil {
-		return fmt.Errorf("failed to load configuration: %w", err)
-	}
-
-	// Create client
-	nvcfClient, err := client.NewClient(clientConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create NVCF client: %w", err)
-	}
-	defer nvcfClient.Close()
-
-	ctx := context.Background()
-
-	// Check for gRPC invocation mode
-	if invokeFlags.useGRPC {
-		logging.Info("Using gRPC proxy invocation for function %s (version %s)...", config.FunctionID, config.VersionID)
-		return invokeViaGRPC(clientConfig, currentState, config)
-	}
-
+func invokeViaREST(ctx context.Context, nvcfClient *client.Client, config *InvokeConfig) error {
 	logging.Info("Using direct REST invocation for function %s (version %s)...", config.FunctionID, config.VersionID)
-
-	// Prepare invocation options
-	var options *client.InvokeFunctionOptions
-	if config.InferenceURL != "" || len(config.InputAssetReferences) > 0 || config.PollDurationSeconds > 0 {
-		options = &client.InvokeFunctionOptions{
-			InferenceURL:         config.InferenceURL,
-			InputAssetReferences: config.InputAssetReferences,
-			PollDurationSeconds:  config.PollDurationSeconds,
-		}
-	}
 
 	// Invoke function via direct REST
 	resp, err := nvcfClient.InvokeFunctionWithOptions(
@@ -1613,12 +2104,26 @@ func runInvoke(cmd *cobra.Command, args []string) error {
 		config.VersionID,
 		config.RequestBody,
 		config.Timeout,
-		config.PollRate,
-		options,
+		invokeOptionsFromConfig(config),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to invoke function: %w", err)
 	}
+	return outputInvokeResponse(resp)
+}
+
+func invokeOptionsFromConfig(config *InvokeConfig) *client.InvokeFunctionOptions {
+	if config.InferenceURL == "" && config.ModelName == "" && config.PollDurationSeconds <= 0 {
+		return nil
+	}
+	return &client.InvokeFunctionOptions{
+		InferenceURL:        config.InferenceURL,
+		ModelName:           config.ModelName,
+		PollDurationSeconds: config.PollDurationSeconds,
+	}
+}
+
+func outputInvokeResponse(resp *client.InvokeFunctionResponse) error {
 	if IsJSONOutput() {
 		return OutputJSON(resp)
 	}
@@ -1638,26 +2143,25 @@ func runInvoke(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Result Location: %s\n", resp.LocationURL)
 	}
 
-	// Print response body
 	if resp.ResponseBody != nil {
-		fmt.Printf("\nResponse:\n")
-		output, err := json.MarshalIndent(resp.ResponseBody, "", "  ")
-		if err != nil {
-			fmt.Printf("%v\n", resp.ResponseBody)
-		} else {
-			fmt.Printf("%s\n", string(output))
-		}
-	} else if resp.Response != nil {
-		fmt.Printf("\nResponse:\n")
-		output, err := json.MarshalIndent(resp.Response, "", "  ")
-		if err != nil {
-			fmt.Printf("%v\n", resp.Response)
-		} else {
-			fmt.Printf("%s\n", string(output))
-		}
+		printInvokePayload(resp.ResponseBody)
+		return nil
+	}
+	if resp.Response != nil {
+		printInvokePayload(resp.Response)
 	}
 
 	return nil
+}
+
+func printInvokePayload(payload interface{}) {
+	fmt.Printf("\nResponse:\n")
+	output, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		fmt.Printf("%v\n", payload)
+		return
+	}
+	fmt.Printf("%s\n", string(output))
 }
 
 // invokeViaGRPC invokes a function using gRPC protocol
@@ -1680,7 +2184,7 @@ func invokeViaGRPCCluster(clientConfig *client.Config, currentState *state.State
 		return fmt.Errorf("API key required for function invocation")
 	}
 
-	if !state.IsAPIKeyValid() {
+	if isSavedAPIKeyExpired(currentState) {
 		logging.Warning("API key may be expired")
 	}
 
@@ -1770,7 +2274,7 @@ func invokeViaGRPCDirect(clientConfig *client.Config, currentState *state.State,
 		return fmt.Errorf("API key required for function invocation")
 	}
 
-	if !state.IsAPIKeyValid() {
+	if isSavedAPIKeyExpired(currentState) {
 		logging.Warning("API key may be expired")
 	}
 
@@ -1817,7 +2321,7 @@ func invokeViaGRPCDirect(clientConfig *client.Config, currentState *state.State,
 		"function-version-id", config.VersionID,
 	)
 
-	// Add poll duration if specified
+	// Add hold-open duration if specified
 	if config.PollDurationSeconds > 0 {
 		md.Append("nvcf-poll-seconds", fmt.Sprintf("%d", config.PollDurationSeconds))
 	}
@@ -2034,45 +2538,47 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Validate required fields
-	if config.FunctionID == "" {
-		return fmt.Errorf("function ID is required (use --function-id or specify in JSON file)")
-	}
-	if config.VersionID == "" {
-		return fmt.Errorf("version ID is required (use --version-id or specify in JSON file)")
-	}
-
-	// Tags are required
-	if len(config.Tags) == 0 {
-		return fmt.Errorf("tags are required (use --tags or specify in JSON file)")
+	if err := validateUpdateConfig(config); err != nil {
+		return err
 	}
 
 	// Load client configuration
 	clientConfig, err := client.LoadConfig()
 	if err != nil {
-		return fmt.Errorf("failed to load configuration: %w", err)
+		return fmt.Errorf(errLoadConfigFmt, err)
 	}
 
 	// Create client
 	nvcfClient, err := client.NewClient(clientConfig)
 	if err != nil {
-		return fmt.Errorf("failed to create NVCF client: %w", err)
+		return fmt.Errorf(errCreateNVCFClientFmt, err)
 	}
 	defer nvcfClient.Close()
 
 	ctx := context.Background()
 
-	fmt.Printf("Updating tags for function %s (version %s)...\n", config.FunctionID, config.VersionID)
-
-	// Update function tags
-	if err := nvcfClient.UpdateFunctionMetadata(ctx, config.FunctionID, config.VersionID, &client.UpdateFunctionMetadataRequest{
-		Tags: config.Tags,
-	}); err != nil {
-		return fmt.Errorf("failed to update function tags: %w", err)
+	req, err := updateConfigToClientRequest(config)
+	if err != nil {
+		return err
 	}
 
-	fmt.Printf("Function tags updated successfully!\n")
-	fmt.Printf("Tags: %s\n", strings.Join(config.Tags, ", "))
+	fmt.Printf("Updating function %s (version %s)...\n", config.FunctionID, config.VersionID)
+
+	if err := nvcfClient.UpdateFunctionMetadata(ctx, config.FunctionID, config.VersionID, req); err != nil {
+		return fmt.Errorf("failed to update function: %w", err)
+	}
+
+	fmt.Printf("Function updated successfully!\n")
+	if len(config.Tags) > 0 {
+		fmt.Printf("Tags: %s\n", strings.Join(config.Tags, ", "))
+	}
+	if len(config.ModelUpdates) > 0 {
+		modelNames := make([]string, 0, len(config.ModelUpdates))
+		for _, update := range config.ModelUpdates {
+			modelNames = append(modelNames, update.ModelName)
+		}
+		fmt.Printf("Model updates: %s\n", strings.Join(modelNames, ", "))
+	}
 
 	return nil
 }

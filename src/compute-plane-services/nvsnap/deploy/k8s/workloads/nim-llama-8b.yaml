@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# NIM Llama-3.1-8B (single GPU) — criu-v2 checkpoint/restore.
+#
+# No injection stack: the criu-v2 in-namespace CRIU engine handles the
+# process at the OS level, so the container runs the stock NIM entrypoint.
+#
+# The one thing criu-v2 does require is that the workload own its session:
+# the agent dumps the GPU leader's session, and container init cannot be
+# restored into a placeholder whose pid1 slot is already taken. NIM ships
+# its server as the image CMD, so the entrypoint chain is re-launched here
+# under setsid rather than left as pid1. Everything else is stock, and the
+# chain (/opt/nvidia/nvidia_entrypoint.sh /opt/nim/start_server.sh) is the
+# image default, preserved verbatim.
+#
+# Wrapping the command in the manifest is a stop-gap: it belongs in the
+# admission webhook so stock images need no manifest edits at all.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nim-llama-8b
+  namespace: nvsnap-system
+  labels:
+    app: nim-llama-8b
+    nvsnap.io/demo: "true"
+  annotations:
+    nvsnap.io/demo-name: "NIM"
+    nvsnap.io/desc: "Llama-3.1-8B on NVIDIA NIM (single GPU)"
+    nvsnap.io/model: "meta/llama-3.1-8b-instruct"
+    nvsnap.io/port: "8000"
+    nvsnap.io/gpus: "1"
+    nvsnap.io/path: "criu"
+    nvsnap.io/ckpt-size: "76 GB"
+spec:
+  # nodeName intentionally omitted — let the K8s scheduler pick any
+  # GPU node. test-e2e.sh records the chosen node in $POD_NODE and
+  # pins the restore pod there (CRIU restore needs the same hostPath
+  # /var/lib/containerd/nvsnap-checkpoints/<id>). For multi-node
+  # restore via per-capture PVC, the webhook injects a PVC ref.
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+    - name: nim-pull-secret
+
+  containers:
+    - name: nim
+      image: nvcr.io/nim/meta/llama-3.1-8b-instruct:1.8.5
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          # criu-v2 convention: the workload runs in its own session so the
+          # agent can dump it without dumping container init. Stdio goes to a
+          # rootfs file so CRIU restores those fds as plain files; bash stays
+          # pid1, reaps orphans, and tails the file for kubectl logs.
+          nohup setsid /opt/nvidia/nvidia_entrypoint.sh /opt/nim/start_server.sh \
+            > /tmp/nim.out 2>&1 < /dev/null &
+          tail -F /tmp/nim.out &
+          while true; do sleep 30; done
+      env:
+        - name: LD_LIBRARY_PATH
+          value: "/usr/local/nvidia/lib64:/usr/local/cuda/lib64"
+        - name: NVSNAP_LOG_LEVEL
+          value: "3"
+        - name: NVSNAP_SECCOMP_ENABLED
+          value: "0"
+        - name: NGC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ngc-api-key
+              key: NGC_API_KEY
+        - name: NIM_CACHE_PATH
+          value: "/opt/nim/.cache"
+        - name: HF_HUB_DISABLE_XET
+          value: "1"
+        # Force TP=1 — privileged container sees all 8 H100s on the
+        # node regardless of nvidia.com/gpu request, so NIM auto-selects
+        # FP8 latency (TP=2) profile if not pinned. CUDA_VISIBLE_DEVICES
+        # is the belt-and-braces — keeps NIM bound even if it ignores
+        # NIM_TAGS_SELECTOR.
+        - name: NIM_TAGS_SELECTOR
+          value: "tp:1"
+        - name: CUDA_VISIBLE_DEVICES
+          value: "0"
+      ports:
+        - containerPort: 8000
+          name: http
+      readinessProbe:
+        httpGet: { path: /v1/health/ready, port: 8000 }
+        initialDelaySeconds: 60
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 180
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+        requests:
+          nvidia.com/gpu: "1"
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - name: shm
+          mountPath: /dev/shm
+        - name: nim-cache
+          mountPath: /opt/nim/.cache
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 16Gi }
+    - name: nim-cache
+      emptyDir: {}
+
+  restartPolicy: Never

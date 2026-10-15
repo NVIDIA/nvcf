@@ -18,4 +18,4 @@ name: helm-admin-token-issuer-proxy
 description: Admin Issuer Proxy service for minting admin-scoped JWTs from Vault/OpenBao
 type: application
 version: 0.0.0 # Chart version is managed by semantic-release
-appVersion: "1.0.1"
+appVersion: "1.0.2"

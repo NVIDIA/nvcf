@@ -1,0 +1,19 @@
+load("//rules/java:notice.bzl", "nvcf_notice")
+
+package(default_visibility = ["//visibility:public"])
+
+# NOTICE and its generator inputs are owned by this subtree. The third-party
+# artifact lock is the single root //:maven_install.json; the generation
+# algorithm is the root-owned //tools/bazel/java:generate_notice_tool.
+exports_files([
+    "NOTICE",
+    "notice_metadata.json",
+    "notice_roots.json",
+])
+
+nvcf_notice(
+    checked_notice = ":NOTICE",
+    inventory_name = "nv_boot_runtime_inventory",
+    metadata = ":notice_metadata.json",
+    root_manifests = [":notice_roots.json"],
+)

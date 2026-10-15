@@ -1,0 +1,315 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# NVSNAP Agent DaemonSet — CANONICAL containerd variant.
+#
+# For CRI-O clusters, apply deploy/k8s/agent-daemonset-crio.yaml instead
+# (same shape, different runtime-socket and pidns paths).
+#
+# Deploys the checkpoint/restore agent to all GPU nodes
+#
+# The agent:
+# - Runs as privileged to access host namespaces and containerd
+# - Mounts containerd socket for container discovery
+# - Mounts host checkpoint directory for storage
+# - Exposes API on port 8081 (hostPort)
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nvsnap-agent
+  namespace: nvsnap-system
+---
+# ClusterRole for the rootfs-only watcher: pods.list+watch is required
+# for the informer; ConfigMaps store the per-hash manifest registry.
+# (PV/PVC/VolumeAttachment/Job RBAC was for gpdrox PV-flip; removed in 5d.)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nvsnap-agent
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  # ConfigMap-backed manifest registry: any agent reads + writes the
+  # capture manifest CMs in nvsnap-system. Globally-readable manifests
+  # are what makes admission requests resolvable from any agent.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  # Node IP lookup for cross-node peer-fetch. When the admission
+  # webhook on agent A resolves a capture that was committed on agent B,
+  # EnsureCaptureLocal reads Manifest.CapturedOnNodes and dereferences
+  # each entry to its InternalIP via the Node API. Get is enough — we
+  # don't list/watch (the manifest CM provides the discovery surface).
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nvsnap-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nvsnap-agent
+subjects:
+  - kind: ServiceAccount
+    name: nvsnap-agent
+    namespace: nvsnap-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvsnap-agent
+  namespace: nvsnap-system
+  labels:
+    app: nvsnap-agent
+    app.kubernetes.io/name: nvsnap-agent
+    app.kubernetes.io/component: agent
+spec:
+  selector:
+    matchLabels:
+      app: nvsnap-agent
+  template:
+    metadata:
+      labels:
+        app: nvsnap-agent
+    spec:
+      # Only deploy on GPU nodes
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      # To temporarily exclude specific nodes, use:
+      #   kubectl label node <node-name> nvsnap.io/exclude=true
+      # Then add this affinity block:
+      # affinity:
+      #   nodeAffinity:
+      #     requiredDuringSchedulingIgnoredDuringExecution:
+      #       nodeSelectorTerms:
+      #         - matchExpressions:
+      #             - key: nvsnap.io/exclude
+      #               operator: NotIn
+      #               values: ["true"]
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      hostPID: true  # Required to see host processes
+      hostNetwork: true  # Simplifies network access
+      # Required so cluster Service DNS still resolves under hostNetwork.
+      # Phase 5d: agent calls nvsnap-server.nvsnap-system.svc... and
+      # nvsnap-blobstore.nvsnap-system.svc... which need ClusterFirst.
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: nvsnap-agent
+      imagePullSecrets:
+        - name: nvsnap-pull-secret
+      containers:
+        - name: agent
+          image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.32
+          imagePullPolicy: Always
+          args:
+            - --cuda-checkpoint-path=/criu-bundle/cuda-checkpoint
+            - --criu-path=/criu-bundle/criu
+            # Translate in-container --checkpoint-dir → host path for the
+            # capture-write writer Job (which mounts host / at /host and
+            # prefixes SrcPath with /host). MUST match the DaemonSet's
+            # `checkpoints` hostPath mount path below.
+            - --checkpoint-host-dir=/var/lib/containerd/nvsnap-checkpoints
+            # Rootfs-only multi-GPU capture loop. Local backend post-5d:
+            # captures land at --rootfs-cache-dir on this node; cross-node
+            # fanout goes through nvsnap-server's peer catalog +
+            # nvsnap-blobstore (see docs/archive/PHASE5D-PEER-FANOUT-BLOB-STORE.md).
+            - --rootfs-capture
+            - --rootfs-cache-dir=/var/lib/nvsnap/cache
+            - --rootfs-cm-namespace=nvsnap-system
+            # In-agent admission webhook — replaces the standalone
+            # nvsnap-webhook Deployment. The Service in webhook.yaml
+            # load-balances admission requests across agent pods.
+            - --webhook
+            - --webhook-listen=:8443
+            - --webhook-cert=/etc/nvsnap/webhook/tls.crt
+            - --webhook-key=/etc/nvsnap/webhook/tls.key
+            # BYOC auto-inject — when a pod carries
+            # nvsnap.io/auto-inject: "true", the webhook stamps in
+            # the sitecustomize plumbing using these images. All four
+            # must be set or the webhook fails open. Agent image MUST
+            # match this DaemonSet's container image so the
+            # libnvsnap_intercept.so build-ID lines up at restore time.
+            - nvcr.io/0651155215864979/ncp-dev/uvloop-builder:v0.0.1
+            - nvcr.io/0651155215864979/ncp-dev/libuv-builder:v0.0.1
+            - nvcr.io/0651155215864979/ncp-dev/libzmq-builder:v0.0.1
+            - nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.32
+          securityContext:
+            privileged: true  # Required for CRIU and containerd access
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # Phase 5d.1: peer-fanout cascade. HOST_IP comes from the
+            # downward API and is the address other agents reach this
+            # one at (the daemonset uses host networking for hostPort
+            # 8081, so this is the K8s node's external IP).
+            - name: HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            # Catalog endpoint for /sources, /peer-add, /blob-uploaded.
+            - name: NVSNAP_CATALOG_URL
+              value: "http://nvsnap-server.nvsnap-system.svc.cluster.local:8080"
+            # Phase 5d.2: durable backstop. Empty disables both
+            # capture-side upload AND cascade tier-3 fallback —
+            # set when the cluster has nvsnap-blobstore deployed.
+            - name: NVSNAP_BLOB_STORE_URL
+              value: "http://nvsnap-blobstore.nvsnap-system.svc.cluster.local:9000"
+            # Add /criu-bundle to PATH so CRIU plugin can find cuda-checkpoint
+            - name: PATH
+              value: "/criu-bundle:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+          ports:
+            - containerPort: 8081
+              hostPort: 8081
+              name: http-api
+            # Admission webhook TLS — load-balanced via the
+            # `nvsnap-webhook` Service (selector: app=nvsnap-agent).
+            - containerPort: 8443
+              name: webhook
+          volumeMounts:
+            # Checkpoint storage on host
+            - name: checkpoints
+              mountPath: /var/lib/nvsnap/checkpoints
+            # Containerd socket for container discovery
+            - name: containerd-sock
+              mountPath: /run/containerd/containerd.sock
+            # Host proc for process inspection
+            - name: host-proc
+              mountPath: /host/proc
+              readOnly: true
+            # Host NVIDIA driver libs (GKE style - /run/nvidia/driver)
+            - name: host-nvidia-run
+              mountPath: /host/run/nvidia
+              readOnly: true
+            # Host NVIDIA libs (standard path)
+            - name: host-usr
+              mountPath: /host/usr
+              readOnly: true
+            # Universal host-root read-only view. Lets the agent reach
+            # any driver-installer path (GKE COS puts libs under
+            # /home/kubernetes/bin/nvidia; NVIDIA GPU Operator uses
+            # /run/nvidia/driver/; bare-metal uses /usr/lib; etc.).
+            # Runtime libcuda discovery from the workload's /proc/<pid>/maps
+            # resolves through this mount. The host-* mounts above are
+            # subsets that shadow specific paths in here; both work and
+            # the more-specific shadows take precedence.
+            - name: host-root
+              mountPath: /host
+              readOnly: true
+              mountPropagation: HostToContainer
+            # Containerd storage root. Agent reads source containers'
+            # overlay upperdirs from here at checkpoint time (to mirror the
+            # diff into the checkpoint) and the placeholder's upperdir at
+            # restore time. Mounted at the same absolute path so paths
+            # recorded in /proc/<pid>/mountinfo resolve identically inside
+            # the agent container. HostToContainer propagation is required
+            # to see overlay snapshots created after the agent started.
+            - name: containerd-storage
+              mountPath: /var/lib/containerd
+              mountPropagation: HostToContainer
+            # Rootfs-only capture cache (Local backend). Bind-mounted into
+            # restored pods by the webhook; same hostPath is mounted into
+            # restored pods as a volume.
+            - name: nvsnap-cache
+              mountPath: /var/lib/nvsnap/cache
+            # Capture orchestrator's staging dir (build the tree before
+            # handing to Backend.Put).
+            - name: nvsnap-staging
+              mountPath: /var/lib/nvsnap/staging
+            # TLS cert for the in-agent admission webhook.
+            - name: webhook-tls
+              mountPath: /etc/nvsnap/webhook
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              cpu: "4"
+              # Agent-driven restore runs CRIU as a child of the agent;
+              # CRIU's peak RSS during page restore counts against the
+              # agent's cgroup. Sized for our largest single-GPU
+              # checkpoint (~80 GB for 8B vLLM); scale further if you
+              # checkpoint larger workloads.
+              memory: "96Gi"
+      volumes:
+        - name: checkpoints
+          hostPath:
+            path: /var/lib/containerd/nvsnap-checkpoints
+            type: DirectoryOrCreate
+        - name: containerd-sock
+          hostPath:
+            path: /run/containerd/containerd.sock
+            type: Socket
+        - name: host-proc
+          hostPath:
+            path: /proc
+            type: Directory
+        - name: host-nvidia-run
+          hostPath:
+            path: /run/nvidia
+            type: DirectoryOrCreate
+        - name: host-usr
+          hostPath:
+            path: /usr
+            type: Directory
+        - name: host-root
+          hostPath:
+            path: /
+            type: Directory
+        - name: containerd-storage
+          hostPath:
+            path: /var/lib/containerd
+            type: Directory
+        - name: nvsnap-cache
+          hostPath:
+            path: /var/lib/nvsnap/cache
+            type: DirectoryOrCreate
+        - name: nvsnap-staging
+          hostPath:
+            path: /var/lib/nvsnap/staging
+            type: DirectoryOrCreate
+        # TLS Secret produced by cert-manager (see deploy/k8s/webhook.yaml).
+        - name: webhook-tls
+          secret:
+            secretName: nvsnap-webhook-tls
+---
+# Service for agent API (optional, for in-cluster access)
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvsnap-agent
+  namespace: nvsnap-system
+spec:
+  selector:
+    app: nvsnap-agent
+  ports:
+    - port: 8081
+      targetPort: 8081
+      name: http-api
+  clusterIP: None  # Headless service - access agents directly via pod IP

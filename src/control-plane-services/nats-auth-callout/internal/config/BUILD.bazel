@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "config",
+    srcs = [
+        "config.go",
+        "decoder.go",
+        "service_config.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/config",
+    visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
+    deps = [
+        "@com_github_go_viper_mapstructure_v2//:mapstructure",
+        "@com_github_knadh_koanf_parsers_json//:json",
+        "@com_github_knadh_koanf_parsers_yaml//:yaml",
+        "@com_github_knadh_koanf_providers_env//:env",
+        "@com_github_knadh_koanf_providers_file//:file",
+        "@com_github_knadh_koanf_providers_posflag//:posflag",
+        "@com_github_knadh_koanf_providers_rawbytes//:rawbytes",
+        "@com_github_knadh_koanf_v2//:koanf",
+        "@com_github_spf13_cobra//:cobra",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":config",
+    visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
+)
+
+go_test(
+    name = "config_test",
+    srcs = [
+        "config_test.go",
+        "decoder_test.go",
+    ],
+    embed = [":config"],
+    deps = [
+        "//src/control-plane-services/nats-auth-callout/internal/plugins/types",
+        "@com_github_stretchr_testify//assert",
+    ],
+)

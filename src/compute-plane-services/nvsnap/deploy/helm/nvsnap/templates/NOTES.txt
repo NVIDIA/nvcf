@@ -1,0 +1,47 @@
+NvSnap {{ .Chart.AppVersion }} installed in namespace `{{ .Release.Namespace }}`.
+
+Components deployed:
+{{- if .Values.agent.enabled }}
+  - nvsnap-agent (DaemonSet on GPU nodes)
+{{- end }}
+{{- if .Values.server.enabled }}
+  - nvsnap-server (REST API + UI, port {{ .Values.server.service.port }}, type {{ .Values.server.service.type }})
+{{- end }}
+{{- if .Values.blobstore.enabled }}
+  - nvsnap-blobstore (durable backstop, port {{ .Values.blobstore.service.port }})
+{{- end }}
+{{- if .Values.webhook.enabled }}
+  - nvsnap-webhook (mutating admission, in-agent)
+{{- end }}
+
+Next steps:
+
+1. Verify pods are coming up:
+     kubectl -n {{ .Release.Namespace }} get pods
+
+2. Wait for the agent DaemonSet to be ready on every GPU node:
+     kubectl -n {{ .Release.Namespace }} rollout status ds/nvsnap-agent
+{{- if and .Values.server.enabled (eq .Values.server.service.type "LoadBalancer") }}
+
+3. nvsnap-server is exposed via LoadBalancer. Get its external IP:
+     kubectl -n {{ .Release.Namespace }} get svc nvsnap-server
+   Then point a browser at http://<EXTERNAL-IP>:{{ .Values.server.service.port }}
+{{- else if .Values.server.enabled }}
+
+3. nvsnap-server is on a {{ .Values.server.service.type }} service. To
+   access the UI locally:
+     kubectl -n {{ .Release.Namespace }} port-forward svc/nvsnap-server {{ .Values.server.service.port }}:{{ .Values.server.service.port }}
+   Then open http://localhost:{{ .Values.server.service.port }}
+{{- end }}
+{{- if .Values.webhook.enabled }}
+
+4. The admission webhook needs cert-manager installed. Verify the cert
+   is ready:
+     kubectl -n {{ .Release.Namespace }} get certificate nvsnap-webhook-tls
+{{- end }}
+
+Pull-secret reminder: every namespace running NvSnap-managed pods needs
+the nvsnap-pull-secret (or whatever you configured in
+.Values.nvsnap.imagePullSecrets). See docs/PULL-SECRET-SETUP.md.
+
+Documentation: https://github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap

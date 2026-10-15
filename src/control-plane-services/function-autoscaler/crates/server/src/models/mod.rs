@@ -23,10 +23,8 @@ use uuid::Uuid;
 pub struct ActiveFunctionDetails {
     pub function_id: Uuid,
     pub function_version_id: Uuid,
-    /// nca_id is optional for backwards compatibility with existing Cassandra rows
-    /// that don't have this column. New rows will always have it populated.
-    /// Note: nca_id is a string (not UUID) as it comes from TimeseriesDb in base64-like format.
-    #[scylla(rename = "nca_id_string")]
+    /// Optional for backwards compatibility with existing Cassandra rows that predate this column.
+    #[scylla(rename = "account_id")]
     pub nca_id: Option<String>,
     pub last_updated_at: Option<DateTime<Utc>>,
     pub num_workers: Option<i32>,
@@ -62,7 +60,7 @@ impl ActiveFunctionDetails {
 pub struct ActiveFunction {
     pub function_id: Uuid,
     pub function_version_id: Uuid,
-    #[scylla(rename = "nca_id_string")]
+    #[scylla(rename = "account_id")]
     pub nca_id: String,
 }
 
@@ -83,7 +81,10 @@ pub struct NodeHealth {
 pub struct DistributedLockResult {
     #[scylla(rename = "[applied]")]
     pub applied: bool,
-    pub lock_name: String,
-    pub node_id: String,
-    pub acquired_at: DateTime<Utc>,
+    // Conditional writes return the existing row when they are not applied.
+    // Lock columns carry independent TTLs in Cassandra and can therefore be
+    // null while a different column still keeps the row alive.
+    pub lock_name: Option<String>,
+    pub node_id: Option<String>,
+    pub acquired_at: Option<DateTime<Utc>>,
 }

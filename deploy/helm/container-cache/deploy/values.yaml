@@ -24,11 +24,11 @@ targetHost: nvcr.io,stg.nvcr.io
 # Container image information used by container-cache.
 images:
   # Name of the container image containing container-cache Nginx proxy.
-  server: nvcr.io/nv-ngc-devops/nvcf-container-cache:v1.1.34
+  server: nvcr.io/nv-ngc-devops/nvcf-container-cache:v1.1.36
   # Name of the container image containing Nginx Prometheus exporter.
   exporter: nvcr.io/nv-ngc-devops/nginx-prometheus-exporter:1.0
   # Certificate bundle used for cache certificates.
-  certificates: nvcr.io/nv-ngc-devops/nvcf-proxy-tls-certs:1.2.5
+  certificates: nvcr.io/nv-ngc-devops/nvcf-proxy-tls-certs:v1.2.10
   # Optional pull secrets for private registries.
   secrets:
     - nvidia-ngcuser-pull-secret
@@ -37,18 +37,58 @@ images:
 cache:
   # Size for storing cache keys.
   keyStorageSize: 50m
-  # Max cache size.
-  maxSize: 500g
+  # How long a waiter blocks for the in-flight fill of the same key before it
+  # gives up and fetches from origin itself (proxy_cache_lock_timeout).
+  #
+  # Sized for the slowest expected upstream fetch, not the average: a waiter that
+  # gives up mid-fill re-downloads from origin. Observed 10GB fills (2026-07-06)
+  # were p50 707s, p90 1142s, max ~1200s, hence the default.
+  #
+  # Keep consistentHashRouting.relayReadTimeout consistent with this: the relay
+  # waits on exactly this mechanism, so a relay timeout well below lockTimeout
+  # means followers 504 while the owner is still filling normally.
+  lockTimeout: 1200s
+  # How long an existing cache entry may be "being filled" before another request
+  # is allowed to start its own fill (proxy_cache_lock_age).
+  lockAge: 3600s
+  # Read timeout on the NGC CDN origin hop (ngc.conf). Inactivity-between-reads,
+  # so it bounds an origin stall rather than the total transfer. Raise only if
+  # the CDN's first-byte latency for large Range requests proves to need it.
+  originReadTimeout: 30s
   # Period a resource can remain in cache without being accessed.
   # Immutable blobs (SHA256-addressed) are safe to keep long; disk pressure
-  # is handled by min_free watermark, so this only cleans truly abandoned entries.
+  # is handled by the min_free watermark (persistentVolumeClaim.freeProxyPct),
+  # so this only cleans truly abandoned entries.
   inactive: 30d
-  # Cache validity period.
-  valid: 12h
+  # Cache validity period for immutable objects (NGC model blobs, S3
+  # objects, registry blobs). Content-addressed data never changes, so long
+  # validity avoids refetching; disk pressure is handled by the min_free
+  # watermark, not by expiry. Presigned-URL redirect caching (hf.conf) keeps
+  # its own short validity tied to URL lifetime.
+  valid: 31d
   # HTTP/2 for ingress listeners where applicable.
   http2: off
-  # Nginx worker connections.
-  workerConnection: 1000
+  # Nginx worker connections per worker process. Bounded by worker_rlimit_nofile
+  # (default 65536); the MITM uses ~2 fds per proxied request (client + upstream),
+  # so keep this well under half the fd limit. The previous 1000 was exhausted
+  # under heavy concurrent large transfers, which starved even /healthz and
+  # tripped the liveness probe.
+  workerConnection: 16384
+
+# Liveness/readiness probe tuning for the nginx-proxy container. /healthz is
+# served on a dedicated port but by the same worker processes, so under heavy
+# load a 1s timeout can fail and restart the pod mid-transfer. Liveness is kept
+# lenient so only a wedged proxy is restarted; readiness is tighter so an
+# overloaded pod can shed traffic without being killed.
+probes:
+  liveness:
+    timeoutSeconds: 5
+    periodSeconds: 10
+    failureThreshold: 6
+  readiness:
+    timeoutSeconds: 3
+    periodSeconds: 10
+    failureThreshold: 3
 
 # Resource requests/limits for nginx-proxy container.
 resources:
@@ -59,6 +99,32 @@ resources:
     memory: "64Gi"
     cpu: "32"
 
+# Resource requests/limits for the nginx-prometheus-exporter sidecar.
+# Sized from 7d P95 (~0.001 cores, ~22MiB working set); see NVCF Resource
+# Right-Sizing dashboard.
+exporter:
+  # Guaranteed QoS: requests == limits.
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
+
+# Resource requests/limits for the `configure` container in the DaemonSet
+# (writes containerd/CRI-O registry mirror configs to the host).
+# Sized from 7d P95 (~0.001 cores, ~30MiB working set).
+configure:
+  # Guaranteed QoS: requests == limits.
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"
+
 # Configuration options related to persistent/ephemeral storage.
 # Default to emptydir for open-source/cluster-agnostic deployments.
 persistentVolumeClaim:
@@ -67,13 +133,57 @@ persistentVolumeClaim:
   sizeProxyGB: 200
   # Container cache volume size (Gi).
   sizeGB: 100
-  # Cleanup watermark percentage (keep this much free on proxy cache volume).
-  freeProxyPct: 10
+  # Cleanup watermark percentage (keep this much free on the proxy cache
+  # volume): eviction starts when the volume passes (100 - freeProxyPct)
+  # percent usage, i.e. 15 means evict at 85 percent full. This is the only
+  # space-based eviction trigger; there is no per-zone max_size because a
+  # deployment serves either s3 or ngc/hf traffic, and a per-zone split would
+  # strand the idle zone's share of the volume.
+  freeProxyPct: 15
 
 # Service configuration.
 service:
   type: NodePort
   port: 30345
+
+# Proxy service (nvcf-proxy-cache ClusterIP) configuration.
+proxyService:
+  # Optional fixed ClusterIP. Set per-CSP so the IP is stable and can be
+  # referenced in Kyverno egress allow-list policies without dynamic discovery.
+  # Leave empty ("") to let Kubernetes assign one automatically.
+  clusterIP: ""
+
+# Consistent-hash routing of proxy-cache requests across cache pods.
+# When enabled, each pod computes the owner pod for a request
+# as md5(routing key) mod replicaCount and relays requests it does not own
+# to the owner pod, so each blob is cached on exactly one pod instead of on
+# every pod that happens to receive it (R=1 dedup). The relay hop never
+# writes to the local cache; only the owner stores. A request that arrives
+# already relayed is always served locally, so relaying is at most one hop.
+# Owner failure falls back to the next ordinal (availability only).
+# Disabled by default: behavior is identical to today.
+consistentHashRouting:
+  enabled: false
+  # How long the relay waits for the owner pod's RESPONSE HEADER before giving
+  # up and failing over (proxy_read_timeout on @cc_relay). This is an
+  # inactivity-between-reads timeout, not a total transfer deadline.
+  #
+  # Sizing: on a cold cache the owner holds the cache lock while it fills the
+  # object from origin, and emits no header until it has something to send. So
+  # this must exceed a worst-case cold fill for the largest object a client
+  # requests, or followers time out and return 504 to the client while the
+  # owner is still working normally.
+  #
+  # 30s was sized for ~16MB chunks. NGC CLI 4.20.1 issues 512MiB Range
+  # requests, and a cold fill of one of those against a cache that is at its
+  # min_free eviction watermark can take minutes. 300s covers that while
+  # staying well under proxy_cache_lock_timeout (1200s), so a genuinely stuck
+  # owner still fails over rather than hanging the client for the full lock.
+  relayReadTimeout: 300s
+  # How long the relay waits to establish the TCP/TLS connection to the owner.
+  # Owner pods are in-cluster peers, so this stays short: a slow connect means
+  # the owner is down, and failing over fast is correct.
+  relayConnectTimeout: 2s
 
 # Metrics configuration.
 metrics:
@@ -97,10 +207,6 @@ vault:
   # Used only when vault.enabled=true by the containerd daemonset.
   certLocation: ""
 
-# Tracing configuration.
-traces:
-  enabled: false
-
 # CRI-O configuration.
 # When CRI-O is detected on nodes, the DaemonSet configures registry mirrors.
 # CRI-O needs a dedicated listener port per registry (it cannot pass `?ns=`
@@ -117,3 +223,7 @@ crio:
 # Monitoring configuration.
 monitoring:
   enabled: false
+
+updateStrategy:
+  rollingUpdate:
+    maxUnavailable: 1

@@ -22,8 +22,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"nvcf-cli/internal/client"
 	"nvcf-cli/internal/logging"
@@ -71,6 +75,13 @@ const (
 	errFailedToCreateClient = "failed to create client: %w"
 )
 
+var directOIDCHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
+type oidcDiscoveryDocument struct {
+	Issuer  string `json:"issuer"`
+	JwksURI string `json:"jwks_uri"`
+}
+
 func initClusterRegistrationCmds() {
 	clusterCmd.AddCommand(clusterRegisterCmd)
 	clusterCmd.AddCommand(clusterRotateCmd)
@@ -96,10 +107,12 @@ func initClusterRegistrationCmds() {
 	_ = clusterRotateCmd.MarkFlagRequired(clusterFlagClusterID)
 
 	clusterDeleteCmd.Flags().String(clusterFlagClusterID, "", "Cluster UUID (required)")
+	clusterDeleteCmd.Flags().String(clusterFlagNcaID, "", "NCA/tenant ID (required)")
 	clusterDeleteCmd.Flags().Bool("force", false, "Skip confirmation prompt")
 	clusterDeleteCmd.Flags().Bool("ignore-missing", false, "Exit 0 when the cluster row is already gone (useful for `down` re-runs)")
 	addClusterICMSURLFlags(clusterDeleteCmd)
 	_ = clusterDeleteCmd.MarkFlagRequired(clusterFlagClusterID)
+	_ = clusterDeleteCmd.MarkFlagRequired(clusterFlagNcaID)
 }
 
 func addClusterICMSURLFlags(cmd *cobra.Command) {
@@ -156,10 +169,7 @@ func fetchJWKSFromURL(config *client.Config, baseURL string) (issuer string, jwk
 		return "", "", fmt.Errorf("failed to fetch OIDC config from %s: %w", oidcURL, err)
 	}
 
-	var oidcDoc struct {
-		Issuer  string `json:"issuer"`
-		JwksURI string `json:"jwks_uri"`
-	}
+	var oidcDoc oidcDiscoveryDocument
 	if err := json.Unmarshal([]byte(oidcRaw), &oidcDoc); err != nil {
 		return "", "", fmt.Errorf("failed to parse OIDC config from %s: %w", oidcURL, err)
 	}
@@ -186,6 +196,105 @@ func fetchJWKSFromURL(config *client.Config, baseURL string) (issuer string, jwk
 	}
 
 	return oidcDoc.Issuer, jwksData, nil
+}
+
+func supportsDirectOIDCDiscovery(issuer string) bool {
+	u, err := url.Parse(issuer)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return false
+	}
+	return host != "kubernetes.default.svc.cluster.local" &&
+		host != "kubernetes.default.svc" &&
+		host != "kubernetes.default" &&
+		!strings.HasSuffix(host, ".svc") &&
+		!strings.HasSuffix(host, ".svc.cluster.local")
+}
+
+func fetchDirectOIDCJWKS(ctx context.Context, issuerURL string, httpClient *http.Client) (issuer string, jwks string, err error) {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+
+	discoveryURL := strings.TrimRight(issuerURL, "/") + "/.well-known/openid-configuration"
+	logging.Info("Fetching OIDC discovery from issuer %s ...", discoveryURL)
+
+	oidcRaw, err := getHTTPString(ctx, httpClient, discoveryURL)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to fetch OIDC config from %s: %w", discoveryURL, err)
+	}
+
+	var oidcDoc oidcDiscoveryDocument
+	if err := json.Unmarshal([]byte(oidcRaw), &oidcDoc); err != nil {
+		return "", "", fmt.Errorf("failed to parse OIDC config from %s: %w", discoveryURL, err)
+	}
+	if oidcDoc.Issuer == "" || oidcDoc.JwksURI == "" {
+		return "", "", fmt.Errorf("OIDC config at %s missing issuer or jwks_uri", discoveryURL)
+	}
+	if oidcDoc.Issuer != issuerURL {
+		return "", "", fmt.Errorf("OIDC config at %s issuer %q does not match requested issuer %q", discoveryURL, oidcDoc.Issuer, issuerURL)
+	}
+
+	jwksURL, err := resolveOIDCJWKSURL(discoveryURL, oidcDoc.JwksURI)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to resolve JWKS URI %q: %w", oidcDoc.JwksURI, err)
+	}
+
+	logging.Info("Fetching JWKS from issuer %s ...", jwksURL)
+	jwksData, err := getHTTPString(ctx, httpClient, jwksURL)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to fetch JWKS from %s: %w", jwksURL, err)
+	}
+
+	var check json.RawMessage
+	if err := json.Unmarshal([]byte(jwksData), &check); err != nil {
+		return "", "", fmt.Errorf("JWKS from %s is not valid JSON: %w", jwksURL, err)
+	}
+
+	return oidcDoc.Issuer, jwksData, nil
+}
+
+func getHTTPString(ctx context.Context, httpClient *http.Client, rawURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return "", fmt.Errorf("%d from %s: %s", resp.StatusCode, rawURL, strings.TrimSpace(string(body)))
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(body)), nil
+}
+
+func resolveOIDCJWKSURL(discoveryURL, jwksURI string) (string, error) {
+	base, err := url.Parse(discoveryURL)
+	if err != nil {
+		return "", err
+	}
+	ref, err := url.Parse(jwksURI)
+	if err != nil {
+		return "", err
+	}
+	return base.ResolveReference(ref).String(), nil
 }
 
 // fetchClusterJWKS fetches JWKS using the following precedence:
@@ -245,10 +354,7 @@ func fetchK8sOIDCJWKS(config *client.Config) (issuer string, jwks string, err er
 	logging.Debug("OIDC configuration: %s", oidcConfigRaw)
 
 	// Parse issuer from OIDC config
-	var oidcResponse struct {
-		Issuer  string `json:"issuer"`
-		JwksURI string `json:"jwks_uri"`
-	}
+	var oidcResponse oidcDiscoveryDocument
 	if err := json.Unmarshal([]byte(oidcConfigRaw), &oidcResponse); err != nil {
 		return "", "", fmt.Errorf("failed to parse OIDC configuration: %w", err)
 	}
@@ -258,6 +364,19 @@ func fetchK8sOIDCJWKS(config *client.Config) (issuer string, jwks string, err er
 	}
 
 	logging.Info("Detected OIDC issuer: %s", oidcResponse.Issuer)
+
+	if supportsDirectOIDCDiscovery(oidcResponse.Issuer) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		var directIssuer, directJWKS string
+		directIssuer, directJWKS, err = fetchDirectOIDCJWKS(ctx, oidcResponse.Issuer, directOIDCHTTPClient)
+		if err == nil {
+			logging.Success("Successfully fetched issuer JWKS (%d bytes)", len(directJWKS))
+			return directIssuer, directJWKS, nil
+		}
+		logging.Warning("Direct OIDC issuer discovery failed (%v), falling back to Kubernetes API server JWKS", err)
+	}
 
 	// Fetch JWKS from K8s API server
 	logging.Info("Fetching JWKS from cluster...")
@@ -286,6 +405,9 @@ func getICMSURL(cmd *cobra.Command, config *client.Config) string {
 	}
 	if v := os.Getenv("NVCF_ICMS_URL"); v != "" {
 		return v
+	}
+	if config.ICMSURL != "" {
+		return config.ICMSURL
 	}
 	if derived, ok := deriveICMSFromAPI(config.BaseHTTPURL); ok {
 		return derived
@@ -380,6 +502,20 @@ func runClusterRegister(cmd *cobra.Command, args []string) error {
 			if lookupErr != nil {
 				return fmt.Errorf("cluster already exists but failed to look up IDs: %w", lookupErr)
 			}
+			// Refresh JWKS + OIDC issuer on the existing cluster row. ICMS's
+			// create-on-conflict returns 400 without touching the row, so the
+			// row keeps whatever JWKS was there or none. NVCA then fails to
+			// validate PSATs against a stale or missing JWKS. The same call
+			// is already made by the orchestrator path in
+			// internal/selfhosted/register.go.
+			updateReq := &client.UpdateClusterJWKSRequest{
+				JWKS:       jwks,
+				OIDCIssuer: &issuer,
+			}
+			if updateErr := c.UpdateClusterJWKS(ctx, icmsURL, clusterID, updateReq); updateErr != nil {
+				return fmt.Errorf("failed to refresh JWKS on existing cluster %s: %w", clusterID, updateErr)
+			}
+			logging.Success("Refreshed JWKS for existing cluster %s", clusterID)
 			printRegistrationOutput(name, clusterGroupID, clusterID, ncaID, region, issuer, identitySource, icmsURL, natsURL)
 			return nil
 		}
@@ -418,6 +554,7 @@ func registeredClusterIDs(resp *client.RegisterClusterResponse) (clusterGroupID,
 // only knob (PSAT vs SPIRE) and the chart's `selfManaged:` block already
 // houses other self-managed-specific fields like `nvcaVersion`.
 type helmValues struct {
+	ClusterName    string            `yaml:"clusterName,omitempty"`
 	ClusterID      string            `yaml:"clusterID"`
 	ClusterGroupID string            `yaml:"clusterGroupID"`
 	NcaID          string            `yaml:"ncaID"`
@@ -426,10 +563,13 @@ type helmValues struct {
 }
 
 type selfManagedValues struct {
-	IdentitySource  string `yaml:"identitySource"`
-	ICMSServiceURL  string `yaml:"icmsServiceURL,omitempty"`
-	ReValServiceURL string `yaml:"revalServiceURL,omitempty"`
-	NATSURL         string `yaml:"natsURL,omitempty"`
+	IdentitySource                 string `yaml:"identitySource"`
+	ICMSServiceURL                 string `yaml:"icmsServiceURL,omitempty"`
+	ICMSServiceHostHeaderOverride  string `yaml:"icmsServiceHostHeaderOverride,omitempty"`
+	ReValServiceURL                string `yaml:"revalServiceURL,omitempty"`
+	ReValServiceHostHeaderOverride string `yaml:"revalServiceHostHeaderOverride,omitempty"`
+	NATSURL                        string `yaml:"natsURL,omitempty"`
+	NATSHostOverride               string `yaml:"natsHostOverride,omitempty"`
 }
 
 // printRegistrationOutput prints the registration result and helm values YAML.
@@ -474,15 +614,15 @@ func newSelfManagedValues(identitySource, icmsServiceURL, natsURL string) selfMa
 }
 
 func newSelfManagedValuesFromEndpoints(identitySource string, endpoints registerEndpointValues) selfManagedValues {
-	vals := selfManagedValues{
-		IdentitySource: identitySource,
-		ICMSServiceURL: endpoints.ICMSServiceURL,
-		NATSURL:        endpoints.NATSURL,
+	return selfManagedValues{
+		IdentitySource:                 identitySource,
+		ICMSServiceURL:                 endpoints.ICMSServiceURL,
+		ICMSServiceHostHeaderOverride:  endpoints.ICMSServiceHostHeaderOverride,
+		ReValServiceURL:                endpoints.ReValServiceURL,
+		ReValServiceHostHeaderOverride: endpoints.ReValServiceHostHeaderOverride,
+		NATSURL:                        endpoints.NATSURL,
+		NATSHostOverride:               endpoints.NATSHostOverride,
 	}
-	if endpoints.ReValServiceURL != "" {
-		vals.ReValServiceURL = endpoints.ReValServiceURL
-	}
-	return vals
 }
 
 // lookupExistingCluster finds an existing cluster by name via the ICMS
@@ -587,6 +727,7 @@ func runClusterRotate(cmd *cobra.Command, args []string) error {
 
 func runClusterDelete(cmd *cobra.Command, args []string) error {
 	clusterID, _ := cmd.Flags().GetString(clusterFlagClusterID)
+	ncaID, _ := cmd.Flags().GetString(clusterFlagNcaID)
 	force, _ := cmd.Flags().GetBool("force")
 	ignoreMissing, _ := cmd.Flags().GetBool("ignore-missing")
 
@@ -623,7 +764,7 @@ func runClusterDelete(cmd *cobra.Command, args []string) error {
 
 	logging.Info("Deleting cluster '%s' from ICMS at %s...", clusterID, icmsURL)
 
-	if err := c.DeleteCluster(ctx, icmsURL, clusterID); err != nil {
+	if err := c.DeleteCluster(ctx, icmsURL, ncaID, clusterID); err != nil {
 		// --ignore-missing: 404 → silent 0-exit; other errors still bubble up.
 		// Heuristic: ICMS DeleteCluster returns errors that wrap "not found"
 		// or "404" in their message when the row is already gone.

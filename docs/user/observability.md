@@ -2,6 +2,19 @@
 
 This page provides guidance on configuring observability for self-hosted NVCF control-plane, including metrics, logging, and tracing.
 
+## Find the answer to your question
+
+Common operator questions and where to look on this page or in linked references.
+
+| Question | Where to look |
+|----------|---------------|
+| How do I see application-level NVCF stats (number of functions, queue depth, request latency)? | [State Metrics Service metrics](./metrics/state-metrics/metrics.md). The page documents per-function instance count, queue depth, and request latency, plus other function-level signals. |
+| How do I debug a single request end-to-end? | Combine the per-hop signals: enable tracing per [Tracing Configuration](#tracing-configuration), correlate with the [Metrics Overview](./metrics/metrics-index.md) for each service in the request path, and tail the matching service logs. A consolidated hop-by-hop walkthrough is in development. |
+| Where are per-service metrics? | [Metrics Overview](./metrics/metrics-index.md). |
+| Where are gRPC proxy metrics? | [gRPC Proxy metrics](./metrics/grpc-proxy/metrics.md). The page documents client connection counts, NATS pipe health, gRPC worker session-attach latency, and HTTP RED metrics. |
+| How do I add custom spans or metrics in a Kit application? | Use the OpenTelemetry API directly, the OmniTrace helper, the Carbonite static metrics API, or the `omni::observability::IMeter` interface. Refer to the Omniverse Kit and Carbonite documentation for details. |
+| Where are reference dashboards? | [Example dashboards](./example-dashboards.md) and the [Dashboards](#dashboards) section below. |
+
 ## Overview
 
 Self-hosted NVCF control-plane observability enables users to monitor the health and performance of their NVCF deployment. The observability solution is designed to be:
@@ -57,7 +70,7 @@ The following control-plane services expose metrics and logs for monitoring:
 - **NVCF API**: Main API for function management and invocation
 - **Invocation Service**: Handles function invocation requests
 - **SPOT Instance Service (SIS)**: Manages worker pod and cluster state
-- **State Metrics Service**: *(Available in GA)* Aggregates and exports NVCF-specific metrics
+- **State Metrics Service**: Aggregates and exports NVCF-specific metrics
 
 **Supporting Services:**
 
@@ -125,6 +138,16 @@ You configure observability by integrating with your own backend:
 
 ### Metrics Scraping
 
+Metrics export is opt-in and disabled by default. Enable it in your Helmfile
+environment before configuring scrape targets:
+
+```yaml
+global:
+  observability:
+    metrics:
+      enabled: true
+```
+
 Use Prometheus Operator with the provided ServiceMonitor examples:
 
 ```yaml
@@ -147,6 +170,44 @@ spec:
 ```
 
 Or configure Prometheus scrape targets manually in your prometheus.yml.
+
+#### Application-level NVCF stats
+
+The State Metrics Service exposes per-function signals you can query in
+Prometheus. The following PromQL examples cover the three most common
+operator questions. Metric names and labels are sourced from
+[State Metrics Service metrics](./metrics/state-metrics/metrics.md).
+
+Number of registered functions:
+
+```promql
+# nvcf_function_info is emitted per function with descriptive labels.
+# Dedupe by function_id so multiple label series do not inflate the count.
+count(count by (function_id) (nvcf_function_info))
+```
+
+Queue depth per function:
+
+```promql
+# nvcf_function_queue_depth is a gauge keyed by function_id.
+sum by (function_id, name) (nvcf_function_queue_depth)
+```
+
+Function request latency (p50 and p95) over a 5 minute window:
+
+```promql
+# p50
+histogram_quantile(
+  0.50,
+  sum by (le, function_id) (rate(function_request_latency_bucket[5m]))
+)
+
+# p95
+histogram_quantile(
+  0.95,
+  sum by (le, function_id) (rate(function_request_latency_bucket[5m]))
+)
+```
 
 ### Log Collection
 
@@ -171,10 +232,11 @@ Configure your log collector to:
 Enable distributed tracing by setting Helm values under
 `global.observability.tracing`. The control-plane exports traces via OTLP
 to your own OTLP-compatible collector. Set `collectorEndpoint`,
-`collectorPort`, and `collectorProtocol` to match your collector's
-address and protocol.
+`collectorPort`, and `collectorProtocol` to match your collector's address.
+`collectorProtocol` is the endpoint URI scheme expected by the stack, not the
+OTLP transport.
 
-**Helm overrides example:**
+Helm overrides example:
 
 ```yaml
 global:
@@ -186,18 +248,18 @@ global:
       collectorProtocol: http
 ```
 
-**Configuration fields:**
+Configuration fields:
 
-- **enabled**: Set to `true` to enable OTLP trace export from control-plane
+- `enabled`: Set to `true` to enable OTLP trace export from control-plane
   services.
-- **collectorEndpoint**: DNS name or address of your OTLP collector (e.g.,
+- `collectorEndpoint`: DNS name or address of your OTLP collector (e.g.,
   OpenTelemetry Collector, Jaeger collector). Use a Kubernetes service DNS name
   such as `<service>.<namespace>.svc.cluster.local` when the collector runs
   in-cluster.
-- **collectorPort**: Port on which the collector accepts OTLP traffic (e.g.,
-  4317 for HTTP, 4318 for gRPC depending on your collector setup).
-- **collectorProtocol**: OTLP protocol: `http` or `grpc`. Must match how
-  your collector is configured.
+- `collectorPort`: Port on which the collector accepts OTLP traffic (e.g.,
+  4317 for gRPC, 4318 for HTTP depending on your collector setup).
+- `collectorProtocol`: URI scheme used to build the collector endpoint
+  (`http` or `https`). This value does not select the OTLP transport.
 
 Ensure your collector is deployed and reachable from the NVCF control-plane
 namespace, and that it forwards traces to your backend (Jaeger, Tempo, Zipkin,
@@ -224,7 +286,7 @@ Reference Grafana dashboards are provided for control-plane services showing cri
   - Note: Worker Pods are deployed in the backend cluster, not the control-plane
     cluster, but their configuration is globally controlled as part of the control-plane
 
-- State Metrics Service (Available in GA)
+- State Metrics Service
 
 **Dashboard Location:**
 
@@ -233,7 +295,7 @@ Dashboards are provided in native Grafana JSON format for [file-provisioning](ht
 Load dashboards into Grafana by placing them in `/etc/grafana/provisioning/dashboards/` on startup.
 
 Published dashboards will be available in the
-[nv-cloud-function-helpers](https://github.com/NVIDIA/nv-cloud-function-helpers) public GitHub repository.
+[NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples) public GitHub repository.
 
 ## Troubleshooting
 
@@ -344,7 +406,7 @@ For troubleshooting common observability issues:
 
 NVCF self-hosted control-plane observability is compatible with:
 
-- Any official supported Kubernetes version
+- Supported versions are the latest Kubernetes minor release and the two prior minor releases (N-2). See official Kubernetes docs for current supported [versions](https://kubernetes.io/releases/version-skew-policy/#supported-versions). 
 - Any Prometheus-compatible metrics collection system
 - Any log aggregation system that can collect from Kubernetes stdout/stderr or read
   from the filesystem (depending on K8s cluster configuration)

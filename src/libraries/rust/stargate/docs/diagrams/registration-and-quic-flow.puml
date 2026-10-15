@@ -1,0 +1,123 @@
+@startuml
+title Stargate Registration And QUIC Connection Flow
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam participantPadding 20
+skinparam BoxPadding 10
+skinparam sequenceMessageAlign center
+
+box "pylon" #e8f4fd
+  participant "RegistrationClient" as BackendCli
+  participant "QUIC Tunnel\n(forward or reverse)" as Tunnel
+end box
+
+box "stargate" #f0f7e8
+  participant "StargateService\n(gRPC)" as Service
+  participant "StargateState" as State
+  participant "ConnectionWatcher" as Watcher
+  participant "QuicHttpProxy" as Quic
+  participant "Reverse Listener\n(Quinn)" as Reverse
+end box
+
+box "NVCF API" #fde8e8
+  participant "NVCF API" as NVCF
+end box
+
+box "Dynamo Instance" #fdf5e6
+  participant "Upstream HTTP\n(/v1/chat/completions)" as Upstream
+end box
+
+== Registration Stream ==
+BackendCli -> Service: RegisterInferenceServer(stream open)\nmetadata: Authorization: Bearer <token>
+
+Service -> NVCF: AuthLlmWorker(worker_token)
+NVCF --> Service: routing_key
+
+loop heartbeat / model stats updates
+  BackendCli -> Service: InferenceServerRegistration\n(id, inference_server_url,\nreverse_tunnel, models)
+
+  alt first update on stream
+    Service -> State: begin_registration(identity)\nidentity.routing_key from AuthResult
+    State --> Service: RunningRegistration
+    Service -> Watcher: new ConnectionWatcher(...)
+  else subsequent update
+    Service -> Service: validate id/url/reverse_tunnel unchanged
+  end
+
+  == QUIC Connectivity Gate ==
+  Service -> Watcher: ensure_connected(id, url, reverse_tunnel)
+
+  alt direct QUIC backend
+    note over BackendCli,Quic
+      Direct backends advertise a quic:// URL.
+    end note
+    Watcher -> Quic: preconnect(id, quic://ip:port)
+    Quic -> Tunnel: QUIC connect
+    Tunnel --> Quic: connection established
+    Quic --> Watcher: Connected
+  else reverse tunnel backend
+    note over Watcher,Quic
+      Reverse backends advertise their upstream HTTP URL
+      and set reverse_tunnel=true.
+      First update is allowed to continue so the reverse
+      handshake can authenticate against registered state.
+    end note
+    Watcher -> Quic: await_reverse_connection(id, timeout)
+    alt reverse connection arrives in time
+      Tunnel -> Reverse: QUIC connect + handshake stream\n(includes auth_token)
+      Reverse -> State: registered_reverse_tunnel(id)?
+      alt registered
+        State --> Reverse: stored registration routing_key
+        Reverse -> NVCF: AuthLlmWorker(handshake.auth_token)
+        NVCF --> Reverse: routing_key
+        alt routing_key matches stored registration
+          Reverse -> Quic: store_reverse_connection(id, conn)
+          alt stored successfully
+            Quic --> Watcher: Connected
+          else duplicate connection exists
+            Reverse --> Tunnel: NACK (duplicate)
+            Quic --> Watcher: ReverseDisconnected
+          end
+        else routing_key mismatch
+          Reverse --> Tunnel: NACK (routing key mismatch)
+        end
+      else not registered
+        Reverse --> Tunnel: NACK (unauthorized)
+      end
+    else no reverse connection yet
+      Quic --> Watcher: ReverseDisconnected
+    end
+  else direct preconnect failed
+    Quic --> Watcher: Unavailable
+  end
+
+  == Health Probe Gate ==
+  Service -> Service: ensure_health_check_started()
+  Service -> Quic: health_check_rtt(id)\nGET /health over tunnel
+  Quic -> Tunnel: open protocol-specific request stream
+  Tunnel -> Upstream: HTTP GET /health
+  Upstream --> Tunnel: HTTP response
+  Tunnel --> Quic: streamed HTTP response
+  Quic --> Service: RTT or error
+
+  alt connection unavailable
+    Service -> Service: skip routing update for this heartbeat
+  else connection available, RTT pending or ready
+    Service -> State: apply_registration_update(...,\nreverse_connected, rtt)
+    note right of State
+      Backend enters active routing only after:
+      1. QUIC connection exists
+      2. /health RTT succeeds
+    end note
+    State --> Service: routing state updated
+    Service --> BackendCli: InferenceServerAck\n(reverse_tunnel_target,\noptional pylon dial addr)
+  end
+end
+
+== Stream Cleanup ==
+BackendCli -> Service: registration stream closes / errors
+Service -> State: end_registration(id)
+State --> Service: remove routable backend state
+
+@enduml

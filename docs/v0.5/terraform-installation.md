@@ -35,7 +35,7 @@ This guide covers infrastructure deployment only. Some Terraform options configu
 
 - **AWS Account** with permissions for EKS, VPC, EC2, IAM, S3
 - **NGC API Key** from [ngc.nvidia.com](https://ngc.nvidia.com) authenticated with `nvcf-onprem` organization
-  \- See [self-hosted-image-mirroring](./image-mirroring.md) for more details on required NGC Service Key scopes.
+  \- See [self-hosted-image-mirroring](./image-mirroring.md) for more details on required registry access.
 - The `nvcf-base` repository must be downloaded to your local machine (see [download-nvcf-base](./image-mirroring.md)).
 
 ### Configure AWS Credentials

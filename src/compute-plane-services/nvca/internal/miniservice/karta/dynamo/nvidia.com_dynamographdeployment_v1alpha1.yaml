@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: run.ai/v1alpha1
+kind: Karta
+metadata:
+  name: nvidia-com-dynamographdeployment-v1alpha1
+spec:
+  structureDefinition:
+    rootComponent:
+      name: dynamographdeployment
+      kind:
+        group: nvidia.com
+        version: v1alpha1
+        kind: DynamoGraphDeployment
+      statusDefinition:
+        phaseDefinition:
+          path: .status.state
+        statusMappings:
+          initializing:
+          - byPhase: pending
+          running:
+          - byPhase: successful
+          failed:
+          - byPhase: failed
+    childComponents:
+      - name: service
+        ownerRef: dynamographdeployment
+        specDefinition:
+          fragmentedPodSpecDefinition:
+            schedulerNamePath: .spec.services | .[] | .extraPodSpec.schedulerName
+            labelsPath: .spec.services | .[] | .labels
+            annotationsPath: .spec.services | .[] | .annotations
+            resourcesPath: .spec.services | .[] | .resources
+            resourceClaimsPath: .spec.services | .[] | .extraPodSpec.resourceClaims
+            podAffinityPath: .spec.services | .[] | .extraPodSpec.affinity.podAffinity
+            nodeAffinityPath: .spec.services | .[] | .extraPodSpec.affinity.nodeAffinity
+            containerPath: .spec.services | .[] | .extraPodSpec.mainContainer
+            priorityClassNamePath: .spec.services | .[] | .extraPodSpec.priorityClassName
+            imagePath: .spec.services | .[] | .extraPodSpec.mainContainer.image
+        scaleDefinition:
+          replicasPath: .spec.services[] | (.replicas // 1) * (.multinode.nodeCount // 1)
+          minReplicasPath: .spec.services | .[] | .autoscaling.minReplicas
+          maxReplicasPath: .spec.services | .[] | .autoscaling.maxReplicas
+        instanceIdPath: .spec.services | to_entries[] | .key
+        podSelector:
+          componentInstanceSelector:
+            idPath: .metadata.labels["nvidia.com/dynamo-component"]
+          replicaSelector:
+            keyPath: .metadata.labels["grove.io/podcliquescalinggroup-replica-index"] // .metadata.labels["leaderworkerset.sigs.k8s.io/group-index"]

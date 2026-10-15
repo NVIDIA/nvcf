@@ -1,14 +1,14 @@
 2026-04-29T03:45:12Z status snapshot cluster=ncp-local verdict=healthy reconcile-age=18s
-2026-04-29T03:45:12Z component sis             ready=2/2  uptime=14d
-2026-04-29T03:45:12Z component nats            ready=3/3  uptime=14d
-2026-04-29T03:45:12Z component cassandra       ready=1/1  uptime=14d
-2026-04-29T03:45:12Z component openbao         ready=3/3  uptime=14d
-2026-04-29T03:45:12Z component api-keys        ready=1/1  uptime=14d
-2026-04-29T03:45:12Z component nvcf-api        ready=3/3  uptime=14d
-2026-04-29T03:45:12Z component reval           ready=2/2  uptime=14d
-2026-04-29T03:45:12Z component gateway         ready=1/1  uptime=14d
-2026-04-29T03:45:12Z component nvca-operator   ready=1/1  uptime=7d
-2026-04-29T03:45:12Z component nvca-worker     cluster=ncp-local ready=2/2 uptime=7d
+2026-04-29T03:45:12Z component sis                ready=2/2  uptime=14d
+2026-04-29T03:45:12Z component nats               ready=3/3  uptime=14d
+2026-04-29T03:45:12Z component cassandra          ready=1/1  uptime=14d
+2026-04-29T03:45:12Z component openbao            ready=3/3  uptime=14d
+2026-04-29T03:45:12Z component api-keys           ready=1/1  uptime=14d
+2026-04-29T03:45:12Z component nvcf-api           ready=3/3  uptime=14d
+2026-04-29T03:45:12Z component reval              ready=2/2  uptime=14d
+2026-04-29T03:45:12Z component gateway            ready=1/1  uptime=14d
+2026-04-29T03:45:12Z component nvca-operator      ready=1/1  uptime=7d
+2026-04-29T03:45:12Z component nvca-worker        cluster=ncp-local ready=2/2 uptime=7d
 2026-04-29T03:45:12Z compute-cluster ncp-local      gpu=A100 count=4 active-deployments=2  last-seen-age=45s
 2026-04-29T03:45:12Z compute-cluster yotta-east-1   gpu=H100 count=8 active-deployments=0  last-seen-age=02m00s
 2026-04-29T03:45:12Z event age=02m41s kind=function-deploy status=ACTIVE name=my-fn version=3

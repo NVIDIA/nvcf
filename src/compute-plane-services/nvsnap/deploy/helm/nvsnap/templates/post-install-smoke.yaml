@@ -1,0 +1,212 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+{{- if .Values.postInstallSmoke.enabled }}
+# Post-install / post-upgrade smoke test.
+#
+# Runs after every `helm install` / `helm upgrade`. Probes each NvSnap
+# component's health endpoint and fails the install if anything is
+# broken — giving operators a clear PASS/FAIL beyond raw pod-readiness.
+#
+# Hook delete policy:
+#   - before-hook-creation: clear any prior Job before creating a new one
+#   - hook-succeeded:       delete on success (no clutter in nvsnap-system)
+#   - hook-failed:          KEEP on failure (so operator can `kubectl logs`)
+#
+# Reads the ServiceAccount permissions from a minimal Role/RoleBinding
+# scoped to the release namespace.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nvsnap-post-install-smoke
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "nvsnap.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nvsnap-post-install-smoke
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "nvsnap.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-4"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "endpoints", "secrets"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["daemonsets", "deployments"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nvsnap-post-install-smoke
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "nvsnap.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-3"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nvsnap-post-install-smoke
+subjects:
+  - kind: ServiceAccount
+    name: nvsnap-post-install-smoke
+    namespace: {{ .Release.Namespace }}
+---
+# Cluster-scoped read for `nodes` (used by the GPU-node count check).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nvsnap-post-install-smoke-{{ .Release.Namespace }}
+  labels: {{- include "nvsnap.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-4"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nvsnap-post-install-smoke-{{ .Release.Namespace }}
+  labels: {{- include "nvsnap.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-3"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nvsnap-post-install-smoke-{{ .Release.Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: nvsnap-post-install-smoke
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nvsnap-post-install-smoke
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "nvsnap.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ .Values.postInstallSmoke.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: nvsnap-post-install-smoke
+    spec:
+      restartPolicy: Never
+      serviceAccountName: nvsnap-post-install-smoke
+      {{- include "nvsnap.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: smoke
+          image: {{ .Values.postInstallSmoke.image.repository }}:{{ .Values.postInstallSmoke.image.tag }}
+          imagePullPolicy: {{ .Values.postInstallSmoke.image.pullPolicy }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -eo pipefail
+              FAIL=0
+              echo "=== NvSnap post-install smoke test ==="
+
+              echo "--- [1/5] nvsnap-agent DaemonSet ready ---"
+              kubectl rollout status ds/nvsnap-agent -n {{ .Release.Namespace }} --timeout=120s
+
+              {{- if .Values.server.enabled }}
+              echo "--- [2/5] nvsnap-server reachable ---"
+              kubectl rollout status deploy/nvsnap-server -n {{ .Release.Namespace }} --timeout=60s
+              if ! curl -fsS --max-time 10 \
+                   http://nvsnap-server.{{ .Release.Namespace }}.svc.cluster.local:8080/healthz \
+                   >/dev/null; then
+                echo "  FAIL: nvsnap-server /healthz not responding"
+                FAIL=1
+              else
+                echo "  OK"
+              fi
+              {{- end }}
+
+              {{- if .Values.blobstore.enabled }}
+              echo "--- [3/5] nvsnap-blobstore Deployment ready ---"
+              # Blobstore has no /healthz endpoint — the readinessProbe in
+              # its Deployment is the source of truth, so rollout status
+              # already proves it's serving.
+              kubectl rollout status deploy/nvsnap-blobstore -n {{ .Release.Namespace }} --timeout=60s
+              echo "  OK"
+              {{- end }}
+
+              {{- if .Values.webhook.enabled }}
+              echo "--- [4/5] webhook TLS cert issued ---"
+              # cert-manager populates this Secret once the Certificate is ready.
+              for i in {1..30}; do
+                if kubectl get secret nvsnap-webhook-tls -n {{ .Release.Namespace }} \
+                     -o jsonpath='{.data.tls\.crt}' 2>/dev/null | grep -q .; then
+                  echo "  OK (TLS cert present)"
+                  break
+                fi
+                sleep 2
+                [ $i -eq 30 ] && { echo "  FAIL: nvsnap-webhook-tls not populated after 60s"; FAIL=1; }
+              done
+              {{- end }}
+
+              echo "--- [5/5] agent → containerd liveness ---"
+              # Each agent's readiness probe already proves containerd
+              # connectivity (per GitLab #42). DS rollout in step 1
+              # implicitly verifies this — just confirm pod count matches
+              # GPU node count.
+              # Read the DaemonSet status snapshot (numberReady vs
+              # desiredNumberScheduled) rather than counting pods in
+              # status.phase=Running. The pod-count approach raced the
+              # rolling-restart window on `helm upgrade` — an agent
+              # mid-restart isn't Running yet, so the count briefly
+              # mismatched and falsely failed the smoke (flipping the
+              # release to "failed" even though step 1's rollout already
+              # passed). The DS status is a single consistent object and
+              # numberReady==desiredNumberScheduled is exactly what
+              # step 1 waited for.
+              DESIRED=$(kubectl get ds nvsnap-agent -n {{ .Release.Namespace }} -o jsonpath='{.status.desiredNumberScheduled}')
+              READY=$(kubectl get ds nvsnap-agent -n {{ .Release.Namespace }} -o jsonpath='{.status.numberReady}')
+              if [ "${DESIRED:-0}" -gt 0 ] && [ "${READY:-0}" -ne "${DESIRED}" ]; then
+                echo "  FAIL: $READY/$DESIRED agents ready"
+                FAIL=1
+              else
+                echo "  OK ($READY/$DESIRED agents ready)"
+              fi
+
+              echo
+              if [ "$FAIL" -ne 0 ]; then
+                echo "=== SMOKE TEST FAILED ==="
+                exit 1
+              fi
+              echo "=== SMOKE TEST PASSED ==="
+{{- end }}

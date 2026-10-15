@@ -19,18 +19,30 @@
 # - bash
 # - kubectl
 # - jq
+# - jwker
+{{- $serverFullname := include "nvcf-openbao.serverFullname" . }}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ .Release.Name }}-initialize-cluster
+  name: {{ $serverFullname }}-initialize-cluster
+  namespace: {{ include "nvcf-openbao.namespace" . }}
   annotations:
     helm.sh/hook: post-install
     helm.sh/hook-weight: "-5"
 spec:
   template:
+    {{- with .Values.openbao.hooks.initializeCluster.podAnnotations }}
+    metadata:
+      annotations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
     spec:
       {{- with .Values.openbao.global.imagePullSecrets }}
       imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.openbao.hooks.initializeCluster.schedulingGates }}
+      schedulingGates:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
@@ -39,7 +51,7 @@ spec:
           command: ["/bin/bash"]
           args:
             - -c
-            - /scripts/deploy.sh {{ .Release.Namespace }} {{ .Release.Name }} helm
+            - /scripts/deploy.sh {{ include "nvcf-openbao.namespace" . }} {{ $serverFullname }} helm
           volumeMounts:
             - name: init-script
               readOnly: true
@@ -47,26 +59,33 @@ spec:
             - name: utils-script
               readOnly: true
               mountPath: "/scripts/utils"
+          resources:
+            {{- toYaml .Values.openbao.hooks.initializeCluster.resources | nindent 12 }}
       restartPolicy: Never
-      serviceAccountName: {{ .Release.Name }}-initialize-cluster
+      serviceAccountName: {{ $serverFullname }}-initialize-cluster
       volumes:
         - name: init-script
           configMap:
-            name: {{ .Release.Name }}-init-script
+            name: {{ $serverFullname }}-init-script
             defaultMode: 0500
         - name: utils-script
           configMap:
-            name: {{ .Release.Name }}-utils-script
+            name: {{ $serverFullname }}-utils-script
             defaultMode: 0500
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .Release.Name }}-init-script
+  name: {{ $serverFullname }}-init-script
+  namespace: {{ include "nvcf-openbao.namespace" . }}
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "-6"
-    helm.sh/hook-delete-policy: hook-failed,hook-succeeded
+    # Do NOT include `hook-failed`: if the init Job's first pod errors, the
+    # Job's native retry creates new pods. Those retries can't mount these
+    # configmaps if they've already been deleted on hook-failed. Keep them
+    # around until the Job ultimately succeeds.
+    helm.sh/hook-delete-policy: hook-succeeded
 data:
   deploy.sh: |-
     {{- .Files.Get "scripts/deploy.sh" | nindent 4 }}
@@ -74,16 +93,18 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .Release.Name }}-utils-script
+  name: {{ $serverFullname }}-utils-script
+  namespace: {{ include "nvcf-openbao.namespace" . }}
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "-6"
-    helm.sh/hook-delete-policy: hook-failed,hook-succeeded
+    # Do NOT include `hook-failed`: if the init Job's first pod errors, the
+    # Job's native retry creates new pods. Those retries can't mount these
+    # configmaps if they've already been deleted on hook-failed. Keep them
+    # around until the Job ultimately succeeds.
+    helm.sh/hook-delete-policy: hook-succeeded
 data:
   utils.sh: |-
     {{- .Files.Get "scripts/utils.sh" | nindent 4 }}
   log.sh: |-
     {{- .Files.Get "scripts/log.sh" | nindent 4 }}
-  install_deps.sh: |-
-    {{- .Files.Get "scripts/install_deps.sh" | nindent 4 }}
-

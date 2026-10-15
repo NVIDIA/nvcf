@@ -1,3 +1,5 @@
+# /usr/bin/bash
+#
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -12,8 +14,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-# /usr/bin/bash
 
 # check that the correct env vars are set
 ENV_VARS=(
@@ -65,7 +65,7 @@ else # else (this is head node)
         echo "Waiting for replica $i to start";
         while ! ssh_helper "${pod_hostname}" hostname ;
         do
-            echo "pod $pod_hostname not ready yet, sleeping for 10 seconds";
+            echo "pod $pod_hostname not ready yet, sleeping for 1 second";
             sleep 1;
         done;
         echo "pod $pod_hostname is ready!"
@@ -74,4 +74,3 @@ else # else (this is head node)
 # run main app
 uvicorn server:app --host=0.0.0.0
 fi
-

@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+topology:
+  nodePools:
+    default:
+      gpuProduct: NVIDIA-H100-SXM4-80GB
+      gpuCount: 128
+      gpuMemory: 81559
+  nodePoolLabelKey: run.ai/simulated-gpu-node-pool
+  migStrategy: mixed

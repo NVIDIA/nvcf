@@ -19,9 +19,9 @@ description: OpenBao self-managed deployment
 type: application
 
 version: 0.0.0 # managed by semantic-release
-appVersion: 2.5.1-nv-1 # todo update via renovate when bao image is updated
+appVersion: 2.5.5-nv-1.3.1 # todo update via renovate when bao image is updated
 
 dependencies:
   - name: openbao
-    version: 0.15.1
+    version: 0.28.3
     repository: oci://ghcr.io/openbao/charts

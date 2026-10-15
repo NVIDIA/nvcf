@@ -16,12 +16,13 @@
  */
 
 use super::{CustomScalingConfig, ScalingFactors, ScalingThresholds, Stickiness};
+use crate::nvcf_api::lazy_grpc_channel;
 use crate::nvcf_api::oauth2_client::OAuth2Client;
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use std::sync::Arc;
 use tonic::metadata::MetadataValue;
-use tonic::transport::{Channel, ClientTlsConfig};
+use tonic::transport::Channel;
 use uuid::Uuid;
 
 // Include the generated proto code from nvcf.proto
@@ -42,19 +43,7 @@ pub struct PolicyClient {
 impl PolicyClient {
     /// Create a PolicyClient with lazy connection (connects on first use).
     pub fn new_lazy(endpoint: String, oauth2_client: Arc<OAuth2Client>) -> Result<Self> {
-        let channel = if endpoint.starts_with("https") {
-            let tls = ClientTlsConfig::new().with_native_roots();
-            Channel::from_shared(endpoint)
-                .context("Invalid gRPC endpoint URL")?
-                .tls_config(tls)
-                .context("Failed to configure TLS")?
-                .connect_lazy()
-        } else {
-            Channel::from_shared(endpoint)
-                .context("Invalid gRPC endpoint URL")?
-                .connect_lazy()
-        };
-
+        let channel = lazy_grpc_channel(&endpoint)?;
         Ok(Self {
             channel,
             oauth2_client,

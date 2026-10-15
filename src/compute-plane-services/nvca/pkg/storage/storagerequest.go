@@ -56,6 +56,16 @@ func NewModelCacheStorageRequest(req *nvcav2beta1.ICMSRequest, fff featureflag.F
 	st.Spec.ModelCache = &nvcav2beta1.ModelCacheSpec{
 		CacheHandle: cacheLaunchSpec.CacheHandle,
 	}
+	// Stamp the cache-handle label at creation. The model-cache controller's
+	// fan-out maps writer-job / PV(C) events back to the StorageRequest by
+	// listing on this label (getModelCacheFanOutEventHandlerMapFunc); the
+	// reconcile loop persists only status, so a label set during reconcile is
+	// not durable. Without it the SR never re-reconciles when the writer job
+	// completes, and the cache stays stuck in Pending (all backends).
+	if st.Labels == nil {
+		st.Labels = map[string]string{}
+	}
+	st.Labels[modelCacheHandleLabelKey] = cacheLaunchSpec.CacheHandle
 	if fff.IsFeatureFlagEnabled(featureflag.NVMeshEncryption) {
 		st.Spec.ModelCache.Encryption = &nvcav2beta1.ModelCacheEncryption{
 			Required: true,

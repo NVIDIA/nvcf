@@ -17,7 +17,7 @@ Use `down` for normal teardown. Use `uninstall` for GitOps (commit YAML; Argo/Fl
 
 | Mode | Lives on | Invokes helm/helmfile? | Output |
 |---|---|---|---|
-| `--plan-only` | `up` / `down` (orchestrators) | **No.** Walks helmfile.d/ tree, emits phase plan + ETAs + helm uninstall command strings. | Event stream |
+| `--plan-only` | `up` / `down` (orchestrators) | **No.** Walks resolved stack entrypoint files, emits phase plan + ETAs + helm uninstall command strings. | Event stream |
 | `--no-apply` | `install` / `uninstall` (primitives) | **Yes.** `helmfile template` for install; `helm get manifest` for uninstall. | YAML on stdout |
 
 So:
@@ -145,6 +145,10 @@ nvcf-cli cluster delete --cluster-id=<id>
 # Control plane teardown (on its kubectl context):
 cd nvcf-self-managed-stack
 make destroy   # invokes helmfile destroy across all releases
+
+# If using split stack bundles, teardown compute plane releases too:
+cd ../nvcf-compute-plane-stack
+make destroy
 ```
 
 This is the manual path; prefer the new subcommands whenever they're installed.

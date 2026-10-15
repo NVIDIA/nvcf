@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+set -euo pipefail
+
+CHECK="./tools/ci/check-byoo-otel-collector-version"
+SERVICE_PATH="src/compute-plane-services/byoo-otel-collector"
+VERSION_FILE="${SERVICE_PATH}/VERSION"
+
+assert_pass() {
+    local name="$1"
+    shift
+    if ! "$CHECK" "$@" >/tmp/check-byoo-otel-collector-version.out 2>&1; then
+        echo "FAIL: expected pass: ${name}" >&2
+        cat /tmp/check-byoo-otel-collector-version.out >&2
+        exit 1
+    fi
+}
+
+assert_fail() {
+    local name="$1"
+    shift
+    if "$CHECK" "$@" >/tmp/check-byoo-otel-collector-version.out 2>&1; then
+        echo "FAIL: expected failure: ${name}" >&2
+        cat /tmp/check-byoo-otel-collector-version.out >&2
+        exit 1
+    fi
+}
+
+assert_pass "non-collector change" "README.md"
+assert_pass "version-only collector change" "$VERSION_FILE"
+assert_pass "collector change with version" \
+    "${SERVICE_PATH}/otel-collector-build.yaml" \
+    "$VERSION_FILE"
+assert_fail "collector change without version" \
+    "${SERVICE_PATH}/otel-collector-build.yaml"
+assert_fail "nested collector change without version" \
+    "${SERVICE_PATH}/internal/otelconfig/render.go"
+
+echo "check-byoo-otel-collector-version tests passed"

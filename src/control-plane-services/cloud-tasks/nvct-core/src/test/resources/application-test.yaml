@@ -1,0 +1,350 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+spring.main.allow-bean-definition-overriding: true
+
+# Faster JVM exit after integration tests (avoids Surefire fork exit timeout when many
+# @SpringBootTest contexts shut down gRPC + Tomcat + file watchers sequentially).
+server:
+  shutdown: immediate
+
+grpc:
+  server:
+    port: 0  # Random port to avoid BindException when running multiple integration tests
+
+management:
+  tracing:
+    export:
+      enabled: false
+    sampling:
+      probability: 1.0
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: https://dummy:8282
+  endpoints:
+    web:
+      base-path: /actuator
+      exposure:
+        include: health,metrics,prometheus
+  endpoint:
+    health:
+      cache:
+        time-to-live: 2s
+      probes:
+        enabled: true
+      show-details: always
+      group:
+        readiness:
+          include:
+            - readinessState
+            - cassandra
+        liveness:
+          include:
+            - livenessState
+            - cassandra
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+    vault:
+      enabled: false
+    kubernetes:
+      enabled: false
+  metrics:
+    enable:
+      all: true
+    tags:
+      env: ${spring.application.env}
+      micro_service: ${spring.application.name}
+      service_version: ${spring.application.version}
+      host_id: ${spring.application.host.id}
+      host_dc: ${spring.application.host.dc}
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+  observations:
+    annotations:
+      enabled: true
+  server:
+    port: 8181
+
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 5s
+  cassandra:
+    contact-points: 127.0.0.1
+    keyspace-name: nvct
+    username: ${kv.cassandra.username}
+    password: ${kv.cassandra.password}
+    request:
+      timeout: 30s
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:9092
+          jwk-set-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/.well-known/jwks.json
+          jws-algorithms: ES256
+      client:
+        registration:
+          # API Keys - used for authorizing requests
+          api-keys:
+            provider: api-keys
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: pdp-evaluate
+          # ICMS(Instance and Cluster Management Service) - used for instance and cluster management
+          icms:
+            provider: icms
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: instance-request,cluster_listing,instance_types,cluster-management
+          # NVCF API - used for account setup
+          nvcf:
+            provider: nvcf
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: account_setup
+          # Notary Service - used for token assertions
+          notary:
+            provider: notary
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: make-assertion
+          # ESS (Enterprise Secret Service) - used for secrets management
+          ess:
+            provider: ess
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: ess:secrets-admin,ess:entities-admin
+          # Reval Service - used for Helm chart validation
+          reval:
+            provider: reval
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: helmreval:validate
+        provider:
+          api-keys:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          icms:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          nvcf:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          notary:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          ess:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          reval:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+
+logging:
+  level:
+    root: WARN   # To see [AUDIT] logs in stdout, this should be set to INFO
+    com.nvidia: DEBUG
+    com.nvidia.nvct.configuration: INFO
+    com.nvidia.nvct.util: INFO
+    # Default org.springframework.web: DEBUG would log full MethodArgumentNotValidException text
+    # (including multi‑KB rejected values) from ExceptionHandlerExceptionResolver.
+    org.springframework.web.servlet.mvc.method.annotation.ExceptionHandlerExceptionResolver: INFO
+    # RestTemplate at DEBUG logs full serialized objects (e.g. CreateTaskRequest with multi‑KB secrets).
+    org.springframework.web.client.RestTemplate: INFO
+    # HttpLogging at DEBUG logs request/response bodies (same risk as RestTemplate for tests using testRestTemplate).
+    org.springframework.web.HttpLogging: INFO
+    org.springframework.web: DEBUG
+    org.springframework.data.cassandra.core.cql.CqlTemplate: INFO
+
+nvct:
+  fqdn: http://localhost:${server.port}
+  global-fqdn-grpc: http://localhost:9090
+  sidecars:
+    tracing-key: ${kv.worker-tracing}
+    hostname: fake.registry.test
+    image-pull-secret: ${kv.sidecars.image-pull-secret}
+    init-container: stg.nvcr.io/nv-cf/nvcf-core/nvcf_worker_init:0.7.0
+    utils-container: stg.nvcr.io/nv-cf/nvcf-core/nvcf_worker_utils:2.2.1
+    otel-container: docker.io/otel/opentelemetry-collector:0.74.0
+    ess-agent-container: stg.nvcr.io/nv-cf/nvcf-core/ess-agent:0.0.4
+    otel-collector-container: stg.nvcr.io/nv-cf/nvcf-core/byoo-otel-collector:1.2.3
+  aws:
+    region: us-east-1
+  ess:
+    base-url: http://localhost:9098
+  notary:
+    audiences:
+      ess: dummy-ess-audience
+      nvct: dummy-nvct-audience
+    base-url: http://localhost:9097
+    jwt:
+      issuer-uri: ${nvct.notary.base-url}
+      jwk-set-uri: ${nvct.notary.jwt.issuer-uri}/.well-known/jwks.json
+  nvcf:
+    base-url: http://localhost:9119
+    cache-ttl: PT1S
+  reval:
+    base-url: http://localhost:9099
+  icms:
+    base-url: http://localhost:9096
+    allocator:
+      enabled: true
+  api-keys:
+    base-url: http://localhost:9093
+  rate-limiters:
+    account-rate-limiter:
+      allowed-invocations-per-second: 200
+    task-rate-limiter:
+      allowed-invocations-per-second: 200
+  scheduled-routines:
+    enabled: true
+    lock-consistency: QUORUM
+    clean-terminal-tasks-routine:
+      enabled: false
+    monitor-launched-tasks-routine:
+      enabled: false
+    monitor-queued-tasks-routine:
+      enabled: false
+    monitor-worker-heartbeat-routine:
+      enabled: false
+  registries:
+    recognized:
+      container:
+        docker:
+          name: "Docker Hub Registry"
+          hostname: http://localhost-docker:9101
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost:9102
+            group-scope: pull
+        ngc:
+          name: "NGC Private Registry"
+          hostname: "http://localhost-ngc:9100"
+          call-timeout: PT60S
+          read-timeout: PT30S
+          write-timeout: PT30S
+          connection-timeout: PT60S
+        ecr:
+          name: "AWS ECR Private Registry"
+          hostname: http://localhost-ecr:9103
+          call-timeout: PT10S
+        ecr-public:
+          name: "AWS ECR Public Registry"
+          hostname: http://localhost-ecr-public:9104
+          call-timeout: PT10S
+        volcengine:
+          name: "Volcano Engine Registry"
+          hostname: http://localhost-volcengine:9105
+          call-timeout: PT10S
+        acr:
+          name: "Azure Container Registry"
+          hostname: http://localhost-acr:9106
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost-acr:9107
+        harbor:
+          name: "Harbor Registry"
+          hostname: http://localhost-harbor:9108
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost:9109
+        artifactory:
+          name: "Artifactory Registry"
+          hostname: http://localhost-artifactory:9110
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost-artifactory:9111
+        custom-1:
+          name: "Custom Registry Test 1"
+          hostname: "custom-registry-test-1.com"
+      helm:
+        ngc:
+          name: "NGC Private Registry"
+          hostname: "http://localhost-ngc:9094"
+          call-timeout: PT60S
+          read-timeout: PT30S
+          write-timeout: PT30S
+          connection-timeout: PT60S
+          oauth2:
+            base-url: "http://localhost:9095"
+            group-scope: ngc-stg
+        docker:
+          name: "Docker Hub Registry"
+          hostname: http://localhost-docker:9101
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost:9102
+            group-scope: pull
+        ecr:
+          name: "AWS ECR Private Registry"
+          hostname: http://localhost-ecr:9103
+          call-timeout: PT10S
+        ecr-public:
+          name: "AWS ECR Public Registry"
+          hostname: http://localhost-ecr-public:9104
+          call-timeout: PT10S
+        volcengine:
+          name: "Volcano Engine Registry"
+          hostname: http://localhost-volcengine:9105
+          call-timeout: PT10S
+        acr:
+          name: "Azure Container Registry"
+          hostname: http://localhost-acr:9106
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost-acr:9107
+        harbor:
+          name: "Harbor Registry"
+          hostname: http://localhost-harbor:9108
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost:9109
+        artifactory:
+          name: "JFrog Artifactory"
+          hostname: http://localhost-artifactory:9110
+          call-timeout: PT10S
+          oauth2:
+            base-url: http://localhost-artifactory:9111
+        custom-1:
+          name: "Custom Registry Test 1"
+          hostname: "custom-registry-test-1.com"
+      model:
+        ngc:
+          name: "NGC Private Registry"
+          hostname: "http://localhost-ngc:9094"
+          call-timeout: PT60S
+          read-timeout: PT30S
+          write-timeout: PT30S
+          connection-timeout: PT60S
+          oauth2:
+            base-url: "http://localhost:9095"
+            group-scope: ngc-stg
+      resource:
+        ngc:
+          name: "NGC Private Registry"
+          hostname: "http://localhost-ngc:9094"
+          call-timeout: PT60S
+          read-timeout: PT30S
+          write-timeout: PT30S
+          connection-timeout: PT60S
+          oauth2:
+            base-url: "http://localhost:9095"
+            group-scope: ngc-stg

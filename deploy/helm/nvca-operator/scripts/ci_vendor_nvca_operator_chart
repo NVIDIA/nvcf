@@ -1,0 +1,292 @@
+#!/bin/bash
+set -euo pipefail
+root_dir="$(cd "$(dirname "$0")/.." && pwd)"
+
+update_yaml_key() {
+  local yaml_update_expr yaml_file tmp_file
+  yaml_update_expr="$1"
+  yaml_file="$2"
+  tmp_file="$(mktemp)"
+  echo "Updating $yaml_file with expression '$yaml_update_expr'"
+  yq eval "${yaml_update_expr}" "$yaml_file" > "$tmp_file"
+  mv "$tmp_file" "$yaml_file"
+}
+
+update_json_key() {
+  local json_update_expr json_file tmp_file
+  json_update_expr="$1"
+  json_file="$2"
+  tmp_file="$(mktemp)"
+  echo "Updating $json_file with expression '$json_update_expr'"
+  yq eval --output-format=json --indent 4 "${json_update_expr}" "$json_file" > "$tmp_file"
+  mv "$tmp_file" "$json_file"
+}
+
+replace_text() {
+  local sed_expr target_file tmp_file
+  sed_expr="$1"
+  target_file="$2"
+  tmp_file="$(mktemp)"
+  sed "${sed_expr}" "$target_file" > "$tmp_file"
+  mv "$tmp_file" "$target_file"
+}
+
+insert_after_line_once() {
+  local target_line inserted_text target_file inserted_first_line tmp_file
+  target_line="$1"
+  inserted_text="$2"
+  target_file="$3"
+  inserted_first_line="$(printf '%s' "$inserted_text" | sed 's/\\n.*//')"
+
+  if grep -Fxq "$inserted_first_line" "$target_file"; then
+    return
+  fi
+
+  tmp_file="$(mktemp)"
+  awk -v target_line="$target_line" -v inserted_text="$inserted_text" '
+    BEGIN {
+      gsub(/\\n/, "\n", inserted_text)
+    }
+    {
+      print
+      if (!inserted && $0 == target_line) {
+        print inserted_text
+        inserted = 1
+      }
+    }
+    END {
+      if (!inserted) {
+        exit 1
+      }
+    }
+  ' "$target_file" > "$tmp_file" || {
+    rm -f "$tmp_file"
+    echo "Failed to insert text after '${target_line}' in ${target_file}" >&2
+    exit 1
+  }
+  mv "$tmp_file" "$target_file"
+}
+
+insert_release_artifact_image_annotations() {
+  local target_file tmp_file
+  local nvca_annotation_line image_credential_helper_annotation_line samba_annotation_line
+  local has_nvca_annotation has_image_credential_helper_annotation has_samba_annotation
+  target_file="$1"
+  nvca_annotation_line='    release-artifact-nvca-image: {{ printf "%s:%s" .Values.nvcaImage.repositoryOverride .Values.selfManaged.nvcaVersion | quote }}'
+  image_credential_helper_annotation_line='    release-artifact-nvcf-image-credential-helper-image: {{ printf "%s:%s" (include "nvcaop.imageCredHelperRepository" (dict "imageRepository" .Values.selfManaged.imageCredHelper.imageRepository "defaultRepository" .Values.image.repository)) .Values.selfManaged.imageCredHelper.imageTag | quote }}'
+  samba_annotation_line='    release-artifact-samba-image: {{ printf "%s:%s" .Values.selfManaged.sharedStorage.imageRepository .Values.selfManaged.sharedStorage.imageTag | quote }}'
+
+  has_nvca_annotation=0
+  has_image_credential_helper_annotation=0
+  has_samba_annotation=0
+
+  if grep -Fq "release-artifact-nvca-image" "$target_file"; then
+    has_nvca_annotation=1
+  fi
+
+  if grep -Fq "release-artifact-nvcf-image-credential-helper-image" "$target_file"; then
+    has_image_credential_helper_annotation=1
+  fi
+  if grep -Fq "release-artifact-samba-image" "$target_file"; then
+    has_samba_annotation=1
+  fi
+
+  if [ "$has_nvca_annotation" -eq 0 ] && [ "$has_image_credential_helper_annotation" -eq 0 ] && [ "$has_samba_annotation" -eq 0 ]; then
+    tmp_file="$(mktemp)"
+    awk '
+      {
+        print
+        if ($0 == "  namespace: {{ .Release.Namespace }}") {
+          print "  {{- $releaseArtifactNvcaImageRepository := .Values.nvcaImage.repositoryOverride }}"
+          print "  {{- $releaseArtifactImageCredentialHelperRepository := .Values.selfManaged.imageCredHelper.imageRepository }}"
+          print "  {{- $releaseArtifactSambaRepository := .Values.selfManaged.sharedStorage.imageRepository }}"
+          print "  {{- if or $releaseArtifactNvcaImageRepository $releaseArtifactImageCredentialHelperRepository $releaseArtifactSambaRepository }}"
+          print "  annotations:"
+          print "    {{- if $releaseArtifactNvcaImageRepository }}"
+          print "    release-artifact-nvca-image: {{ printf \"%s:%s\" .Values.nvcaImage.repositoryOverride .Values.selfManaged.nvcaVersion | quote }}"
+          print "    {{- end }}"
+          print "    {{- if $releaseArtifactImageCredentialHelperRepository }}"
+          print "    release-artifact-nvcf-image-credential-helper-image: {{ printf \"%s:%s\" (include \"nvcaop.imageCredHelperRepository\" (dict \"imageRepository\" .Values.selfManaged.imageCredHelper.imageRepository \"defaultRepository\" .Values.image.repository)) .Values.selfManaged.imageCredHelper.imageTag | quote }}"
+          print "    {{- end }}"
+          print "    {{- if $releaseArtifactSambaRepository }}"
+          print "    release-artifact-samba-image: {{ printf \"%s:%s\" .Values.selfManaged.sharedStorage.imageRepository .Values.selfManaged.sharedStorage.imageTag | quote }}"
+          print "    {{- end }}"
+          print "  {{- end }}"
+          inserted = 1
+        }
+      }
+      END {
+        if (!inserted) {
+          exit 1
+        }
+      }
+    ' "$target_file" > "$tmp_file" || {
+      rm -f "$tmp_file"
+      echo "Failed to insert release-artifact image annotations into $target_file" >&2
+      exit 1
+    }
+    mv "$tmp_file" "$target_file"
+    return
+  fi
+
+  if [ "$has_nvca_annotation" -eq 0 ]; then
+    insert_after_line_once "  annotations:" "${nvca_annotation_line}" "$target_file"
+  fi
+
+  if [ "$has_image_credential_helper_annotation" -eq 0 ]; then
+    if grep -Fq "${nvca_annotation_line}" "$target_file"; then
+      insert_after_line_once "${nvca_annotation_line}" "${image_credential_helper_annotation_line}" "$target_file"
+    else
+      insert_after_line_once "  annotations:" "${image_credential_helper_annotation_line}" "$target_file"
+    fi
+  fi
+
+  if [ "$has_samba_annotation" -eq 0 ]; then
+    if grep -Fq "${image_credential_helper_annotation_line}" "$target_file"; then
+      insert_after_line_once "${image_credential_helper_annotation_line}" "${samba_annotation_line}" "$target_file"
+    elif grep -Fq "${nvca_annotation_line}" "$target_file"; then
+      insert_after_line_once "${nvca_annotation_line}" "${samba_annotation_line}" "$target_file"
+    else
+      insert_after_line_once "  annotations:" "${samba_annotation_line}" "$target_file"
+    fi
+  fi
+}
+
+apply_license_headers_if_missing() {
+  local target_dir header_file file
+  target_dir="$1"
+  header_file="${root_dir}/.license-header.txt"
+
+  while IFS= read -r -d '' file; do
+    # Some source templates already carry SPDX headers below Helm guard lines.
+    # Do not prepend another header when an SPDX marker is already present.
+    if grep -Fq "SPDX-FileCopyrightText:" "$file"; then
+      continue
+    fi
+    sh "${root_dir}/scripts/apply-license-header.sh" "${header_file}" "${file}"
+  done < <(find "${target_dir}" -type f \( -name '*.yaml' -o -name '*.yml' \) -print0)
+}
+
+# Vendor NVCA Operator chart from the monorepo source chart
+main() {
+    # Load local defaults when present; CI supplies these values as variables.
+    if [ -f "${root_dir}/.env" ]; then
+        source "${root_dir}/.env"
+    fi
+
+    TARGET_DIR="${root_dir}/nvca-operator"
+    SOURCE_DIR="${root_dir}/../../../src/compute-plane-services/nvca/deployments/nvca-operator"
+
+    if [ ! -d "${SOURCE_DIR}" ]; then
+        echo "❌ [vendor] Error: monorepo source chart not found at ${SOURCE_DIR}"
+        exit 1
+    fi
+
+    echo "📂 [vendor] Copying monorepo source chart from ${SOURCE_DIR}..."
+    SUBDIR_PATH="${SOURCE_DIR}"
+    SOURCE_LABEL="monorepo source chart"
+
+    # Remove the existing chart only after the replacement source is available.
+    if [ -d "${TARGET_DIR}" ]; then
+        echo "🗑️ [vendor] Removing existing ${TARGET_DIR} directory..."
+        rm -rf "${TARGET_DIR}"
+    fi
+
+    # Copy only the deployments/nvca-operator subdirectory to target
+    echo "📂 [vendor] Copying deployments/nvca-operator subdirectory..."
+    mkdir -p "${TARGET_DIR}"
+    cp -r "${SUBDIR_PATH}"/* "${TARGET_DIR}/"
+
+    # Default various values so chart works OOTB
+    echo "🔧 [vendor] Defaulting various values so chart works OOTB..."
+    update_yaml_key ".ngcConfig.clusterSource = \"self-managed\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".ngcConfig.serviceKey = \"dummy-api-key\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".image.tag = \"${NVCA_OPERATOR_VERSION:?"NVCA_OPERATOR_VERSION is not set"}\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".selfManaged.nvcaVersion = \"${NVCA_VERSION:?"NVCA_VERSION is not set"}\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".selfManaged.icmsServiceURL = \"http://icms.example.invalid:8080\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".selfManaged.revalServiceURL = \"http://reval.example.invalid:8080\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".selfManaged.natsURL = \"nats://nats.example.invalid:4222\"" "${TARGET_DIR}/values.yaml"
+    insert_after_line_once \
+        '  icmsServiceURL: "http://icms.example.invalid:8080"' \
+        '  ## @param selfManaged.icmsServiceHostHeaderOverride Optional Host header override for selfManaged.icmsServiceURL.\n  icmsServiceHostHeaderOverride: ""' \
+        "${TARGET_DIR}/values.yaml"
+    insert_after_line_once \
+        '  revalServiceURL: "http://reval.example.invalid:8080"' \
+        '  ## @param selfManaged.revalServiceHostHeaderOverride Optional Host header override for selfManaged.revalServiceURL.\n  revalServiceHostHeaderOverride: ""' \
+        "${TARGET_DIR}/values.yaml"
+    insert_after_line_once \
+        '  natsURL: "nats://nats.example.invalid:4222"' \
+        '  ## @param selfManaged.natsHostOverride Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.\n  natsHostOverride: ""' \
+        "${TARGET_DIR}/values.yaml"
+    replace_text 's|^  ## @param selfManaged\.icmsServiceURL .*|  ## @param selfManaged.icmsServiceURL URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.|' "${TARGET_DIR}/values.yaml"
+    replace_text 's#URL of the ReVal service for self-managed clusters\. Required when ngcConfig\.clusterSource is "self-managed"\.#URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.#' "${TARGET_DIR}/values.yaml"
+    replace_text 's#URL of the NATS service for self-managed clusters\. Required when ngcConfig\.clusterSource is "self-managed"\.#URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.#' "${TARGET_DIR}/values.yaml"
+    replace_text '/"icmsServiceURL": {/,/}/ s#"description": ".*"#"description": "URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration."#' "${TARGET_DIR}/values.schema.json"
+    replace_text 's#URL of the ReVal service for self-managed clusters\. Required when ngcConfig\.clusterSource is \\"self-managed\\"\.#URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.#' "${TARGET_DIR}/values.schema.json"
+    replace_text 's#URL of the NATS service for self-managed clusters\. Required when ngcConfig\.clusterSource is \\"self-managed\\"\.#URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.#' "${TARGET_DIR}/values.schema.json"
+    replace_text '/"icmsServiceURL": {/,/}/ s#"default": ""#"default": "http://icms.example.invalid:8080"#' "${TARGET_DIR}/values.schema.json"
+    replace_text '/"revalServiceURL": {/,/}/ s#"default": ""#"default": "http://reval.example.invalid:8080"#' "${TARGET_DIR}/values.schema.json"
+    replace_text '/"natsURL": {/,/}/ s#"default": ""#"default": "nats://nats.example.invalid:4222"#' "${TARGET_DIR}/values.schema.json"
+    update_json_key '.properties.selfManaged.properties.icmsServiceHostHeaderOverride = {"type": "string", "description": "Optional Host header override for selfManaged.icmsServiceURL.", "default": ""}' "${TARGET_DIR}/values.schema.json"
+    update_json_key '.properties.selfManaged.properties.revalServiceHostHeaderOverride = {"type": "string", "description": "Optional Host header override for selfManaged.revalServiceURL.", "default": ""}' "${TARGET_DIR}/values.schema.json"
+    update_json_key '.properties.selfManaged.properties.natsHostOverride = {"type": "string", "description": "Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.", "default": ""}' "${TARGET_DIR}/values.schema.json"
+    replace_text 's#^| `selfManaged.icmsServiceURL`.*#| `selfManaged.icmsServiceURL`                  | URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.                                                                 | `http://icms.example.invalid:8080`        |#' "${TARGET_DIR}/README.md"
+    replace_text 's#| `selfManaged.revalServiceURL`                 | URL of the ReVal service for self-managed clusters. Required when ngcConfig.clusterSource is "self-managed".                                                                         | `""`                                      |#| `selfManaged.revalServiceURL`                 | URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.                                                                | `http://reval.example.invalid:8080`       |#' "${TARGET_DIR}/README.md"
+    replace_text 's#| `selfManaged.natsURL`                         | URL of the NATS service for self-managed clusters. Required when ngcConfig.clusterSource is "self-managed".                                                                          | `""`                                      |#| `selfManaged.natsURL`                         | URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.                                                                 | `nats://nats.example.invalid:4222`        |#' "${TARGET_DIR}/README.md"
+    insert_after_line_once \
+        '| `selfManaged.icmsServiceURL`                  | URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.                                                                 | `http://icms.example.invalid:8080`        |' \
+        '| `selfManaged.icmsServiceHostHeaderOverride`                 | Optional Host header override for selfManaged.icmsServiceURL.                                                                                                                       | `""`                                      |' \
+        "${TARGET_DIR}/README.md"
+    insert_after_line_once \
+        '| `selfManaged.revalServiceURL`                 | URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.                                                                | `http://reval.example.invalid:8080`       |' \
+        '| `selfManaged.revalServiceHostHeaderOverride`                | Optional Host header override for selfManaged.revalServiceURL.                                                                                                                      | `""`                                      |' \
+        "${TARGET_DIR}/README.md"
+    insert_after_line_once \
+        '| `selfManaged.natsURL`                         | URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.                                                                 | `nats://nats.example.invalid:4222`        |' \
+        '| `selfManaged.natsHostOverride`                        | Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.                                                                                            | `""`                                      |' \
+        "${TARGET_DIR}/README.md"
+    insert_after_line_once \
+        '      icmsServiceURL: {{ .Values.selfManaged.icmsServiceURL | quote }}' \
+        '      {{- with .Values.selfManaged.icmsServiceHostHeaderOverride }}\n      icmsServiceHostHeaderOverride: {{ . | quote }}\n      {{- end }}' \
+        "${TARGET_DIR}/templates/self-managed-nvcfbackend-cm.yaml"
+    insert_after_line_once \
+        '      helmReValServiceURL: {{ .Values.selfManaged.revalServiceURL | quote }}' \
+        '      {{- with .Values.selfManaged.revalServiceHostHeaderOverride }}\n      helmReValServiceHostHeaderOverride: {{ . | quote }}\n      {{- end }}' \
+        "${TARGET_DIR}/templates/self-managed-nvcfbackend-cm.yaml"
+    insert_after_line_once \
+        '      natsURL: {{ .Values.selfManaged.natsURL | quote }}' \
+        '      {{- with .Values.selfManaged.natsHostOverride }}\n      natsHostOverride: {{ . | quote }}\n      {{- end }}' \
+        "${TARGET_DIR}/templates/self-managed-nvcfbackend-cm.yaml"
+    insert_release_artifact_image_annotations "${TARGET_DIR}/templates/self-managed-nvcfbackend-cm.yaml"
+    update_yaml_key ".version = \"0.0.0\"" "${TARGET_DIR}/Chart.yaml"
+    update_yaml_key ".name = \"helm-nvca-operator\"" "${TARGET_DIR}/Chart.yaml"
+    # appVersion tracks the NVCA Operator binary version this chart deploys,
+    # not the chart's published semver (which CI sets from the git tag at
+    # release time). Without this overlay the upstream's stale "1.0"
+    # placeholder leaks through and helm releases report appVersion="1.0"
+    # regardless of which NVCA Operator the chart is actually wired to.
+    update_yaml_key ".appVersion = \"${NVCA_OPERATOR_VERSION:?"NVCA_OPERATOR_VERSION is not set"}\"" "${TARGET_DIR}/Chart.yaml"
+    update_yaml_key ".generateImagePullSecret = false" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".selfManaged.sharedStorage.imageTag = \"${NVCA_SHARED_STORAGE_IMAGE_TAG:?"NVCA_SHARED_STORAGE_IMAGE_TAG is not set"}\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".nameOverride = \"nvca-operator\"" "${TARGET_DIR}/values.yaml"
+    update_yaml_key ".fullnameOverride = \"nvca-operator\"" "${TARGET_DIR}/values.yaml"
+    
+    # Set default validation policy to Unrestricted for self-managed clusters
+    yq eval -i '.agentConfig.mergeConfig = "cluster:\n  validationPolicy:\n    name: Unrestricted" | .agentConfig.mergeConfig style="literal"' "${TARGET_DIR}/values.yaml"
+
+    # OSS scrub: clear the upstream's hardcoded image.repository so OSS
+    # consumers must supply it via an override values file at install time.
+    update_yaml_key ".image.repository = \"\"" "${TARGET_DIR}/values.yaml"
+
+    # Apply Apache-2.0 / NVIDIA copyright headers to all yaml files in the
+    # vendored chart. Skip files that already carry an SPDX marker so this
+    # step stays idempotent and does not duplicate headers.
+    echo "📝 [vendor] Applying license headers..."
+    apply_license_headers_if_missing "${TARGET_DIR}"
+
+    echo "✅ [vendor] Successfully vendored NVCA Operator deployments (${SOURCE_LABEL}) to ${TARGET_DIR}/"
+    echo "📁 [vendor] Contents:"
+    ls -la "${TARGET_DIR}/"
+}
+
+main "$@"

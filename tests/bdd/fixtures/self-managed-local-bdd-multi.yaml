@@ -1,0 +1,105 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Multi-cluster Helmfile fixture for the BDD suite.
+#
+# The values-driven Helmfile install path expects the operator to
+# author topology-correct URLs in the environment file. This fixture
+# keeps the same service-DNS URL shape as the single-cluster local
+# fixture. In the multi-cluster topology those names resolve to alias
+# Services in the compute cluster, and the alias Endpoints point at
+# the control-plane load balancer.
+global:
+  nodeSelectors:
+    enabled: false
+
+  storageClass: local-path
+  storageSize: 2Gi
+
+  # REPLACE_WITH_SAMPLE_NGC_ORG / REPLACE_WITH_SAMPLE_NGC_TEAM
+  # are overwritten by the feature's Background via
+  # `I update yaml file ... with keys:` using ${SAMPLE_NGC_ORG} and
+  # ${SAMPLE_NGC_TEAM}. See self-managed-local-bdd.yaml header for
+  # the rationale.
+  helm:
+    sources:
+      registry: "nvcr.io"
+      repository: "REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM"
+
+  image:
+    registry: nvcr.io
+    repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
+
+  workerEndpoints:
+    essServiceURL: http://ess-api.ess.svc.cluster.local:8080
+    invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
+
+cassandra:
+  replicaCount: 1
+  resourcesPreset: "large"
+  jvm:
+    # this should only be set for local development with only 1 replica is used.
+    # use of this with more than 1 replica will cause node startups to unexpectedly fail.
+    extraOpts: "-Dcassandra.superuser_setup_delay_ms=100 -Dcassandra.gossip_settle_min_wait_ms=1000"
+
+openbao:
+  migrations:
+    issuerDiscovery:
+      enabled: true
+  injector:
+    # Single-node local cluster: hard anti-affinity would leave the 2nd replica Pending.
+    replicas: 1
+
+api:
+  env:
+    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: nvcr.io/REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM/stargate-client:0.2.0
+
+# LLM gateway talks to nvcf-api over plaintext gRPC in local dev
+# (api.nvcf.svc.cluster.local:9090 has no TLS).
+addons:
+  llm:
+    enabled: true
+    gateway:
+      replicaCount: 1
+      auth:
+        grpcInsecure: true
+      metrics:
+        serviceMonitor:
+          enabled: false
+    requestRouter:
+      replicaCount: 1
+      metrics:
+        serviceMonitor:
+          enabled: false
+
+grpcproxy:
+  workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086
+
+# Gateway API Ingress (POC)
+# Application Developer role: Only HTTPRoutes
+# Expects Cluster Operator to provision Gateway resource
+ingress:
+  gatewayApi:
+    enabled: true
+    chart: ../../../helm/gateway-routes/chart
+    version: ""
+    controllerNamespace: envoy-gateway-system
+    gateways:
+      shared:
+        name: shared-gw
+        namespace: envoy-gateway-system
+      grpc:
+        name: grpc-gw
+        namespace: envoy-gateway-system
+      nats:
+        name: shared-gw
+        namespace: envoy-gateway-system
+        listenerName: nats
+    routes:
+      grpcWorker:
+        enabled: true
+        listenerName: worker-tcp
+      nats:
+        enabled: true
+      ess: 
+        enabled: true

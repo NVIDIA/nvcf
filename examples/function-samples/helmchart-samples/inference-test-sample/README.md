@@ -5,7 +5,7 @@ This sample is a Helm chart that deploys the `fastapi-echo-sample` container.
 
 ### Set up a Kubernetes cluster
 
-To deploy the Helm chart you need a local Kubernetes cluster. One convenient option is [microk8s](https://microk8s.io/docs/getting-started). For a full self-hosted NVCF control plane on k3d, see [examples/self-hosted-local-development/](../../../self-hosted-local-development/).
+To deploy the Helm chart you need a local Kubernetes cluster. One convenient option is [microk8s](https://microk8s.io/docs/getting-started). For a full self-hosted NVCF control plane on k3d, see [`tools/ncp-local-cluster/`](../../../../tools/ncp-local-cluster/).
 
 ### Build and upload the container image
 

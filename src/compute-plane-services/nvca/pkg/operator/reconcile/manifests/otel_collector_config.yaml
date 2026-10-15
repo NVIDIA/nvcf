@@ -98,15 +98,16 @@ processors:
         - log.attributes["event_name"] == ""
 
 extensions:
-  bearertokenauth:
-    filename: "${env:NGC_SERVICE_API_KEY_FILE}"
-
+{{ if .UseOAuth2 }}
   oauth2client:
     client_id: ${env:NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_ID}
     client_secret_file: ${env:NVCA_OTEL_COLLECTOR_OAUTH_CLIENT_SECRET_FILE}
     token_url: "${env:NVCA_OTEL_COLLECTOR_OAUTH_TOKEN_URL}"
     scopes: ["write"]
-
+{{ else }}
+  bearertokenauth:
+    filename: "${env:NGC_SERVICE_API_KEY_FILE}"
+{{ end }}
   health_check:
     endpoint: ":${env:NVCA_OTEL_COLLECTOR_HEALTH_CHECK_PORT}"
 

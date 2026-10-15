@@ -20,14 +20,17 @@ package client
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -35,6 +38,7 @@ import (
 	"nvcf-cli/internal/state"
 
 	"github.com/spf13/viper"
+	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -46,6 +50,13 @@ type AuthType string
 const (
 	AuthTypeOAuth2 AuthType = "oauth2"
 	AuthTypeBearer AuthType = "bearer"
+
+	headerContentType = "Content-Type"
+	contentTypeJSON   = "application/json"
+	apiErrorFormat    = "API error %d: %s"
+	functionTypeLLM   = "LLM"
+
+	functionVersionEndpointFormat = "/v2/nvcf/functions/%s/versions/%s"
 )
 
 // Config holds the configuration for the NVCF client
@@ -56,8 +67,9 @@ type Config struct {
 	OAuth2TokenEndpoint string
 
 	// Authentication tokens
-	APIKey string // General API operations token (NVCF_API_KEY)
-	Token  string // Function creation specific token (NVCF_TOKEN)
+	APIKey     string // General API operations token (NVCF_API_KEY)
+	Token      string // Function creation specific token (NVCF_TOKEN)
+	NVCTAPIKey string // NVCT-scoped API key for task operations (NVCF_NVCT_API_KEY)
 
 	// Account configuration
 	ClientID string // NVIDIA Cloud Account client ID (NVCF_CLIENT_ID)
@@ -66,6 +78,8 @@ type Config struct {
 	BaseHTTPURL    string
 	BaseGRPCURL    string
 	BaseInvokeURL  string // Dedicated endpoint for function invocations
+	BaseNVCTURL    string // Dedicated endpoint for NVIDIA Cloud Tasks (NVCT) API
+	ICMSURL        string // ICMS/SIS endpoint for self-hosted cluster registration
 	DefaultTimeout time.Duration
 	AuthType       AuthType
 	Debug          bool
@@ -74,10 +88,18 @@ type Config struct {
 	// Host header overrides for hostname-based routing (self-hosted deployments)
 	APIHost    string // Host header for NVCF API requests (e.g., "api.gateway.example.com")
 	InvokeHost string // Host header for invocation requests (e.g., "invocation.gateway.example.com")
+	ICMSHost   string // Host header for SIS/ICMS requests; allows pairing icms_url=http://<bare-elb> with Host: sis.<elb> for gateway-routed self-hosted deployments where sis.<elb> does not DNS-resolve.
+	NVCTHost   string // Host header for NVCT (task) API requests; allows pairing base_nvct_url=http://<bare-gateway> with Host: tasks.<domain> for gateway-routed self-hosted deployments where tasks.<domain> does not DNS-resolve.
+
+	// TLSConfig, when set, establishes the management-API TLS trust (R-4):
+	// system roots or a configured CA bundle. It is applied to the HTTP transport
+	// without disabling certificate verification. Built by internal/selfhosted/managementtls.
+	TLSConfig *tls.Config
 
 	// Cluster mode configuration
 	ClusterMode    bool           // Enable cluster mode (uses kubectl instead of direct HTTP)
 	KubeconfigPath string         // Path to kubeconfig file for cluster access
+	KubeContext    string         // kubeconfig context for cluster access
 	ClusterConfig  *ClusterConfig // Cluster-specific configuration
 }
 
@@ -151,16 +173,28 @@ func getTokenSource(configKey string, stateToken string, stateExpiration time.Ti
 	return "none"
 }
 
+func loadStateForActiveConfig() (*state.State, error) {
+	configFile := viper.ConfigFileUsed()
+	if configFile != "" {
+		sm := state.GetStateManagerForConfig(configFile)
+		err := sm.Load()
+		return sm.GetState(), err
+	}
+
+	err := state.Load()
+	return state.GetState(), err
+}
+
 // Environment variables take precedence over config file values, with state file fallback
 func LoadConfig() (*Config, error) {
 	// Load state first to get potential token fallbacks
-	if err := state.Load(); err != nil {
+	currentState, err := loadStateForActiveConfig()
+	if err != nil {
 		// Don't fail on state loading error, just log it
 		if viper.GetBool("debug") {
 			log.Printf("DEBUG: Could not load state file (not an error): %v", err)
 		}
 	}
-	currentState := state.GetState()
 	config := &Config{
 		// OAuth2 configuration (Viper maps: oauth2_client_id → NVCF_OAUTH2_CLIENT_ID)
 		OAuth2ClientID:      getConfigValue("oauth2_client_id"),
@@ -168,8 +202,9 @@ func LoadConfig() (*Config, error) {
 		OAuth2TokenEndpoint: getConfigValue("oauth2_token_endpoint"),
 
 		// Authentication tokens with state fallback (Viper maps: api_key → NVCF_API_KEY, token → NVCF_TOKEN)
-		APIKey: getTokenWithFallback("api_key", currentState.APIKey, currentState.APIKeyExpiration),
-		Token:  getTokenWithFallback("token", currentState.Token, currentState.TokenExpiration),
+		APIKey:     getTokenWithFallback("api_key", currentState.APIKey, currentState.APIKeyExpiration),
+		Token:      getTokenWithFallback("token", currentState.Token, currentState.TokenExpiration),
+		NVCTAPIKey: getTokenWithFallback("nvct_api_key", currentState.NVCTAPIKey, currentState.NVCTAPIKeyExpiration),
 
 		// Account configuration (Viper maps: client_id → NVCF_CLIENT_ID)
 		ClientID: getConfigValueWithDefault("client_id", "nvcf-default"),
@@ -178,6 +213,8 @@ func LoadConfig() (*Config, error) {
 		BaseHTTPURL:    getConfigValueWithDefault("base_http_url", "https://api.nvcf.nvidia.com"),
 		BaseGRPCURL:    getConfigValueWithDefault("grpc_url", getConfigValueWithDefault("base_grpc_url", "grpc.nvcf.nvidia.com:443")),
 		BaseInvokeURL:  getConfigValueWithDefault("invoke_url", getConfigValueWithDefault("base_http_url", "https://api.nvcf.nvidia.com")),
+		BaseNVCTURL:    getConfigValueWithDefault("base_nvct_url", "https://api.nvct.nvidia.com"),
+		ICMSURL:        getConfigValue("icms_url"),
 		DefaultTimeout: 300 * time.Second,
 		Debug:          viper.GetBool("debug"),
 		Demo:           viper.GetBool("demo"),
@@ -185,6 +222,8 @@ func LoadConfig() (*Config, error) {
 		// Host header overrides for self-hosted deployments
 		APIHost:    getConfigValue("api_host"),
 		InvokeHost: getConfigValue("invoke_host"),
+		ICMSHost:   getConfigValue("icms_host"),
+		NVCTHost:   getConfigValue("nvct_host"),
 
 		// Cluster mode configuration (deprecated, always false)
 		ClusterMode:    false,
@@ -297,7 +336,7 @@ func LoadConfig() (*Config, error) {
 				missing = append(missing, "NVCF_OAUTH2_TOKEN_ENDPOINT")
 			}
 
-			return nil, fmt.Errorf("missing authentication credentials. Please set NVCF_API_KEY environment variable")
+			return nil, fmt.Errorf("missing authentication credentials, unset: %s", strings.Join(missing, ", "))
 		}
 	}
 
@@ -308,13 +347,13 @@ func LoadConfig() (*Config, error) {
 // This is used by commands like 'init' and 'refresh' that generate tokens.
 func LoadConfigWithoutAuth() (*Config, error) {
 	// Load state first to get potential token fallbacks
-	if err := state.Load(); err != nil {
+	currentState, err := loadStateForActiveConfig()
+	if err != nil {
 		// Don't fail on state loading error, just log it
 		if viper.GetBool("debug") {
 			log.Printf("DEBUG: Could not load state file (not an error): %v", err)
 		}
 	}
-	currentState := state.GetState()
 	config := &Config{
 		// OAuth2 configuration (Viper maps: oauth2_client_id → NVCF_OAUTH2_CLIENT_ID)
 		OAuth2ClientID:      getConfigValue("oauth2_client_id"),
@@ -322,8 +361,9 @@ func LoadConfigWithoutAuth() (*Config, error) {
 		OAuth2TokenEndpoint: getConfigValue("oauth2_token_endpoint"),
 
 		// Authentication tokens with state fallback (Viper maps: api_key → NVCF_API_KEY, token → NVCF_TOKEN)
-		APIKey: getTokenWithFallback("api_key", currentState.APIKey, currentState.APIKeyExpiration),
-		Token:  getTokenWithFallback("token", currentState.Token, currentState.TokenExpiration),
+		APIKey:     getTokenWithFallback("api_key", currentState.APIKey, currentState.APIKeyExpiration),
+		Token:      getTokenWithFallback("token", currentState.Token, currentState.TokenExpiration),
+		NVCTAPIKey: getTokenWithFallback("nvct_api_key", currentState.NVCTAPIKey, currentState.NVCTAPIKeyExpiration),
 
 		// Account configuration (Viper maps: client_id → NVCF_CLIENT_ID)
 		ClientID: getConfigValueWithDefault("client_id", "nvcf-default"),
@@ -332,6 +372,8 @@ func LoadConfigWithoutAuth() (*Config, error) {
 		BaseHTTPURL:    getConfigValueWithDefault("base_http_url", "https://api.nvcf.nvidia.com"),
 		BaseGRPCURL:    getConfigValueWithDefault("grpc_url", getConfigValueWithDefault("base_grpc_url", "grpc.nvcf.nvidia.com:443")),
 		BaseInvokeURL:  getConfigValueWithDefault("invoke_url", getConfigValueWithDefault("base_http_url", "https://api.nvcf.nvidia.com")),
+		BaseNVCTURL:    getConfigValueWithDefault("base_nvct_url", "https://api.nvct.nvidia.com"),
+		ICMSURL:        getConfigValue("icms_url"),
 		DefaultTimeout: 300 * time.Second,
 		Debug:          viper.GetBool("debug"),
 		Demo:           viper.GetBool("demo"),
@@ -339,6 +381,8 @@ func LoadConfigWithoutAuth() (*Config, error) {
 		// Host header overrides for self-hosted deployments
 		APIHost:    getConfigValue("api_host"),
 		InvokeHost: getConfigValue("invoke_host"),
+		ICMSHost:   getConfigValue("icms_host"),
+		NVCTHost:   getConfigValue("nvct_host"),
 
 		// Cluster mode configuration (deprecated, always false)
 		ClusterMode:    false,
@@ -404,6 +448,41 @@ func baseHTTPURLHost(baseURL string) string {
 	return u.Host
 }
 
+func directInvocationURL(baseInvokeURL, functionID, inferenceURL string) (string, error) {
+	u, err := url.Parse(baseInvokeURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse invoke URL %q: %w", baseInvokeURL, err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("invoke URL must include scheme and host: %q", baseInvokeURL)
+	}
+
+	hostname := u.Hostname()
+	if strings.HasPrefix(hostname, functionID+".") {
+		// Already function-specific.
+	} else if strings.HasPrefix(hostname, "invocation.") {
+		hostname = functionID + "." + hostname
+	} else if strings.HasPrefix(hostname, "api.") {
+		hostname = functionID + ".invocation." + strings.TrimPrefix(hostname, "api.")
+	} else {
+		hostname = functionID + ".invocation." + hostname
+	}
+	if port := u.Port(); port != "" {
+		u.Host = hostname + ":" + port
+	} else {
+		u.Host = hostname
+	}
+
+	u.Path = path.Join(u.Path, inferenceURL)
+	if !strings.HasPrefix(u.Path, "/") {
+		u.Path = "/" + u.Path
+	}
+	if strings.HasSuffix(inferenceURL, "/") && !strings.HasSuffix(u.Path, "/") {
+		u.Path += "/"
+	}
+	return u.String(), nil
+}
+
 // expandTildePath expands ~ to the user's home directory
 func expandTildePath(path string) string {
 	if path == "" || !strings.HasPrefix(path, "~/") {
@@ -442,11 +521,12 @@ func getNamespaceFromKubeconfig(kubeconfigPath string) string {
 
 // Client is the NVCF API client
 type Client struct {
-	httpClient *http.Client
-	grpcConn   *grpc.ClientConn
-	config     *Config
-	baseURL    string
-	debug      bool
+	httpClient     *http.Client
+	nvctHTTPClient *http.Client // dedicated client for NVCT requests; nil means use httpClient
+	grpcConn       *grpc.ClientConn
+	config         *Config
+	baseURL        string
+	debug          bool
 }
 
 // BearerTokenTransport implements http.RoundTripper for bearer token authentication
@@ -472,17 +552,27 @@ func (t *BearerTokenTransport) base() http.RoundTripper {
 func NewClient(config *Config) (*Client, error) {
 	var httpClient *http.Client
 
+	// baseTransport applies the management-API TLS trust (R-4) when configured,
+	// otherwise the shared default transport. http.DefaultTransport is shared and
+	// must not be mutated, so it is cloned before setting TLSClientConfig.
+	baseTransport := http.RoundTripper(http.DefaultTransport)
+	if config.TLSConfig != nil {
+		cloned := http.DefaultTransport.(*http.Transport).Clone()
+		cloned.TLSClientConfig = config.TLSConfig
+		baseTransport = cloned
+	}
+
 	// Create HTTP client based on authentication type
 	switch config.AuthType {
 	case AuthTypeBearer:
 		// Set up transport chain: Debug -> Auth -> HTTP
 		// This way auth transport adds headers first, then debug transport sees them
 
-		var finalTransport http.RoundTripper = http.DefaultTransport
+		var finalTransport http.RoundTripper = baseTransport
 
 		// Add authentication transport layer (this adds the Authorization header)
 		if config.Token != "" {
-			// Use multi-token transport when we have a function creation specific token
+			// Use multi-token transport when a management token is configured.
 			finalTransport = newMultiTokenTransport(config.APIKey, config.Token, finalTransport)
 			if config.Debug {
 				log.Println("DEBUG: HTTP debugging enabled with multi-token support")
@@ -504,11 +594,11 @@ func NewClient(config *Config) (*Client, error) {
 		if config.Debug {
 			// Replace the base transport in the auth layer with debug transport
 			if config.Token != "" {
-				finalTransport = newMultiTokenTransport(config.APIKey, config.Token, newDebugTransport(http.DefaultTransport))
+				finalTransport = newMultiTokenTransport(config.APIKey, config.Token, newDebugTransport(baseTransport))
 			} else {
 				finalTransport = &BearerTokenTransport{
 					Token: config.APIKey,
-					Base:  newDebugTransport(http.DefaultTransport),
+					Base:  newDebugTransport(baseTransport),
 				}
 			}
 		}
@@ -543,8 +633,12 @@ func NewClient(config *Config) (*Client, error) {
 			},
 		}
 
-		// Create HTTP client with OAuth2 transport
-		ctx := context.Background()
+		// Create HTTP client with OAuth2 transport. The context client is used
+		// by oauth2 for both token acquisition and the returned transport base.
+		ctx := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{
+			Transport: baseTransport,
+			Timeout:   config.DefaultTimeout,
+		})
 		httpClient = oauth2Config.Client(ctx)
 		httpClient.Timeout = config.DefaultTimeout
 
@@ -572,12 +666,21 @@ func NewClient(config *Config) (*Client, error) {
 		return nil, fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
 
+	var nvctHTTPClient *http.Client
+	if config.NVCTAPIKey != "" {
+		nvctHTTPClient = &http.Client{
+			Transport: &BearerTokenTransport{Token: config.NVCTAPIKey},
+			Timeout:   config.DefaultTimeout,
+		}
+	}
+
 	return &Client{
-		httpClient: httpClient,
-		grpcConn:   grpcConn,
-		config:     config,
-		baseURL:    config.BaseHTTPURL,
-		debug:      config.Debug,
+		httpClient:     httpClient,
+		nvctHTTPClient: nvctHTTPClient,
+		grpcConn:       grpcConn,
+		config:         config,
+		baseURL:        config.BaseHTTPURL,
+		debug:          config.Debug,
 	}, nil
 }
 
@@ -608,9 +711,9 @@ func (c *Client) makeRequest(ctx context.Context, method, endpoint string, body 
 	}
 
 	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set(headerContentType, contentTypeJSON)
 	}
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", contentTypeJSON)
 
 	return c.httpClient.Do(req)
 }
@@ -711,9 +814,17 @@ type ContainerEnvironmentEntry struct {
 
 // ArtifactDto represents a model or resource artifact
 type ArtifactDto struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	URI     string `json:"uri"`
+	Name      string        `json:"name"`
+	Version   string        `json:"version,omitempty"`
+	URI       string        `json:"uri,omitempty"`
+	LLMConfig *LLMConfigDto `json:"llmConfig,omitempty"`
+}
+
+// LLMConfigDto represents LLM routing metadata for a model artifact
+type LLMConfigDto struct {
+	URIs           []string `json:"uris,omitempty"`
+	TokenRateLimit *string  `json:"tokenRateLimit,omitempty"`
+	RoutingMethod  *string  `json:"routingMethod,omitempty"`
 }
 
 // SecretDto represents a secret configuration
@@ -749,7 +860,7 @@ type CreateFunctionRequest struct {
 	Health    *HealthDto `json:"health,omitempty"`    // Detailed health configuration
 
 	// Function configuration
-	FunctionType         string                      `json:"functionType,omitempty"`         // DEFAULT or STREAMING
+	FunctionType         string                      `json:"functionType,omitempty"`         // DEFAULT, STREAMING, or LLM
 	APIBodyFormat        string                      `json:"apiBodyFormat,omitempty"`        // Invocation request body format
 	ContainerArgs        string                      `json:"containerArgs,omitempty"`        // Args to be passed when launching container
 	ContainerEnvironment []ContainerEnvironmentEntry `json:"containerEnvironment,omitempty"` // Environment settings for container
@@ -852,7 +963,7 @@ func (c *Client) CreateFunction(ctx context.Context, req *CreateFunctionRequest)
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
 	}
 
 	var result CreateFunctionResponse
@@ -871,7 +982,7 @@ func (c *Client) DeleteFunction(ctx context.Context, functionID, versionID strin
 	}
 
 	// Use regular endpoint (works with both JWT and API key)
-	endpoint := fmt.Sprintf("/v2/nvcf/functions/%s/versions/%s",
+	endpoint := fmt.Sprintf(functionVersionEndpointFormat,
 		url.PathEscape(functionID), url.PathEscape(versionID))
 
 	resp, err := c.makeRequest(ctx, "DELETE", endpoint, nil)
@@ -882,7 +993,7 @@ func (c *Client) DeleteFunction(ctx context.Context, functionID, versionID strin
 
 	if resp.StatusCode != http.StatusNoContent {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
 	}
 
 	return nil
@@ -924,7 +1035,7 @@ type HealthInfo struct {
 func (c *Client) GetFunction(ctx context.Context, functionID, versionID string) (*GetFunctionResponse, error) {
 	// Choose endpoint based on available authentication
 	// Use regular endpoint (works with both JWT and API key)
-	endpoint := fmt.Sprintf("/v2/nvcf/functions/%s/versions/%s",
+	endpoint := fmt.Sprintf(functionVersionEndpointFormat,
 		url.PathEscape(functionID), url.PathEscape(versionID))
 
 	resp, err := c.makeRequest(ctx, "GET", endpoint, nil)
@@ -935,7 +1046,7 @@ func (c *Client) GetFunction(ctx context.Context, functionID, versionID string) 
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
 	}
 
 	var result GetFunctionResponse
@@ -1073,16 +1184,29 @@ func (c *Client) DeployFunction(ctx context.Context, functionID, versionID strin
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
 	}
 
 	return nil
 }
 
-// UpdateFunctionMetadataRequest represents a metadata update request
+// UpdateFunctionMetadataRequest represents a function update request
 type UpdateFunctionMetadataRequest struct {
-	Description string   `json:"description,omitempty"` // Function description
-	Tags        []string `json:"tags,omitempty"`        // Function tags
+	Description  string           `json:"description,omitempty"`  // Function description
+	Tags         []string         `json:"tags,omitempty"`         // Function tags
+	ModelUpdates []ModelUpdateDto `json:"modelUpdates,omitempty"` // Model-specific updates
+}
+
+// ModelUpdateDto represents updates for one model.
+type ModelUpdateDto struct {
+	ModelName string              `json:"modelName"`
+	LLMConfig *LLMConfigUpdateDto `json:"llmConfig,omitempty"`
+}
+
+// LLMConfigUpdateDto represents mutable LLM config fields.
+type LLMConfigUpdateDto struct {
+	TokenRateLimit *string `json:"tokenRateLimit,omitempty"`
+	RoutingMethod  *string `json:"routingMethod,omitempty"`
 }
 
 // UpdateGpuSpecification updates a single GPU specification of an existing
@@ -1104,7 +1228,7 @@ func (c *Client) UpdateGpuSpecification(ctx context.Context, deploymentID, gpuSp
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -1119,15 +1243,13 @@ func (c *Client) UpdateGpuSpecification(ctx context.Context, deploymentID, gpuSp
 	return &result, nil
 }
 
-// UpdateFunctionMetadata updates a function's metadata
+// UpdateFunctionMetadata updates mutable function fields
 func (c *Client) UpdateFunctionMetadata(ctx context.Context, functionID, versionID string, req *UpdateFunctionMetadataRequest) error {
-	// Function metadata update requires authentication with update_function scope
 	if c.config.Token == "" && c.config.APIKey == "" {
-		return fmt.Errorf("function metadata update requires NVCF_TOKEN or NVCF_API_KEY with 'update_function' scope")
+		return fmt.Errorf("function update requires NVCF_TOKEN or NVCF_API_KEY with 'update_function' scope")
 	}
 
-	// Use metadata endpoint (works with both JWT and API key)
-	endpoint := fmt.Sprintf("/v2/nvcf/metadata/functions/%s/versions/%s",
+	endpoint := fmt.Sprintf(functionVersionEndpointFormat,
 		url.PathEscape(functionID), url.PathEscape(versionID))
 
 	resp, err := c.makeRequest(ctx, "PUT", endpoint, req)
@@ -1138,7 +1260,7 @@ func (c *Client) UpdateFunctionMetadata(ctx context.Context, functionID, version
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
 	}
 
 	return nil
@@ -1168,7 +1290,7 @@ func (c *Client) DeleteDeployment(ctx context.Context, functionID, versionID str
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
 	}
 
 	return nil
@@ -1187,7 +1309,7 @@ func (c *Client) GetDeployment(ctx context.Context, functionID, versionID string
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
 	}
 
 	var result DeploymentResponse
@@ -1275,9 +1397,8 @@ func (c *Client) WaitForFunctionDeployment(ctx context.Context, functionID, vers
 
 // InvokeFunctionRequest represents a function invocation request
 type InvokeFunctionRequest struct {
-	RequestBody          map[string]interface{} `json:"requestBody"`
-	InputAssetReferences []string               `json:"inputAssetReferences,omitempty"`
-	PollDurationSeconds  int                    `json:"pollDurationSeconds,omitempty"`
+	RequestBody         map[string]interface{} `json:"requestBody"`
+	PollDurationSeconds int                    `json:"pollDurationSeconds,omitempty"`
 }
 
 // InvokeFunctionResponse represents a function invocation response
@@ -1294,81 +1415,35 @@ type InvokeFunctionResponse struct {
 
 // InvokeFunctionOptions represents options for function invocation
 type InvokeFunctionOptions struct {
-	InferenceURL         string   // Function's inference endpoint (e.g., "/echo")
-	InputAssetReferences []string // Optional input asset references
-	PollDurationSeconds  int      // Optional polling duration in seconds
+	InferenceURL        string // Function inference endpoint, or OpenAI path for LLM functions.
+	ModelName           string // OpenAI model name for LLM functions.
+	PollDurationSeconds int    // Optional invocation hold-open duration in seconds
 }
 
-// InvokeFunction invokes a function and polls for results
-func (c *Client) InvokeFunction(ctx context.Context, functionID, versionID string, requestBody map[string]interface{}, timeoutSec, maxPollRate int) (*InvokeFunctionResponse, error) {
-	return c.InvokeFunctionWithOptions(ctx, functionID, versionID, requestBody, timeoutSec, maxPollRate, nil)
+// InvokeFunction invokes a function.
+func (c *Client) InvokeFunction(ctx context.Context, functionID, versionID string, requestBody map[string]interface{}, timeoutSec int) (*InvokeFunctionResponse, error) {
+	return c.InvokeFunctionWithOptions(ctx, functionID, versionID, requestBody, timeoutSec, nil)
 }
 
 // InvokeFunctionWithOptions invokes a function with additional options using direct invocation
-func (c *Client) InvokeFunctionWithOptions(ctx context.Context, functionID, versionID string, requestBody map[string]interface{}, timeoutSec, maxPollRate int, options *InvokeFunctionOptions) (*InvokeFunctionResponse, error) {
-	// Get inference URL from options or fetch from function details
-	var inferenceURL string
-	if options != nil && options.InferenceURL != "" {
-		inferenceURL = options.InferenceURL
-	} else {
-		// Try to get function details to retrieve the inferenceUrl
-		funcDetails, err := c.GetFunctionDetails(ctx, functionID, versionID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get function details for invocation (hint: specify inferenceUrl in config to skip this): %w", err)
-		}
-		if funcDetails.InferenceURL == "" {
-			return nil, fmt.Errorf("function has no inferenceUrl configured")
-		}
-		inferenceURL = funcDetails.InferenceURL
+func (c *Client) InvokeFunctionWithOptions(ctx context.Context, functionID, versionID string, requestBody map[string]interface{}, timeoutSec int, options *InvokeFunctionOptions) (*InvokeFunctionResponse, error) {
+	if timeoutSec > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+		defer cancel()
 	}
 
-	// Direct mode invocation (always use direct HTTP calls)
-	invokeURL := c.config.BaseInvokeURL
-	if invokeURL == "" {
-		invokeURL = c.baseURL
-	}
-
-	// Create request with standard body
-	var reqBody io.Reader
-	jsonBody, err := json.Marshal(requestBody)
+	fullURL, isLLM, err := c.invokeURL(ctx, functionID, versionID, options)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request body: %w", err)
+		return nil, err
 	}
-	reqBody = bytes.NewReader(jsonBody)
-
-	// Create HTTP request for transparent load balancer (TLB) invocation
-	// POST directly to the inference URL with function routing headers
-	fullURL := invokeURL + inferenceURL
-	req, err := http.NewRequestWithContext(ctx, "POST", fullURL, reqBody)
+	resolvedBody, err := invokeRequestBody(functionID, isLLM, requestBody, options)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, err
 	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "*/*")
-
-	// Add function routing headers for transparent load balancer
-	req.Header.Set("function-id", functionID)
-	req.Header.Set("function-version-id", versionID)
-
-	// Set Host header for hostname-based routing (self-hosted deployments)
-	if c.config.InvokeHost != "" {
-		req.Host = c.config.InvokeHost
-		if c.config.Debug {
-			log.Printf("DEBUG: Using Invoke Host header override: %s", c.config.InvokeHost)
-		}
-	}
-
-	// Add optional headers
-	if options != nil {
-		if len(options.InputAssetReferences) > 0 {
-			for _, ref := range options.InputAssetReferences {
-				req.Header.Add("NVCF-INPUT-ASSET-REFERENCES", ref)
-			}
-		}
-		if options.PollDurationSeconds > 0 {
-			req.Header.Set("NVCF-POLL-SECONDS", fmt.Sprintf("%d", options.PollDurationSeconds))
-		}
+	req, err := c.newInvokeRequest(ctx, fullURL, functionID, isLLM, resolvedBody, options)
+	if err != nil {
+		return nil, err
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -1383,7 +1458,219 @@ func (c *Client) InvokeFunctionWithOptions(ctx context.Context, functionID, vers
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	// Create result and extract response headers
+	return decodeInvokeFunctionResponse(resp, bodyBytes)
+}
+
+func (c *Client) invokeURL(ctx context.Context, functionID, versionID string, options *InvokeFunctionOptions) (string, bool, error) {
+	funcDetails, err := c.GetFunctionDetails(ctx, functionID, versionID)
+	if err != nil {
+		if options != nil && options.InferenceURL != "" {
+			fullURL, directErr := c.directInvokeURL(functionID, options.InferenceURL)
+			if directErr == nil && options.ModelName != "" {
+				log.Printf("WARNING: model-name ignored because function details lookup failed; falling back to direct invocation path")
+			}
+			return fullURL, false, directErr
+		}
+		return "", false, fmt.Errorf("failed to get function details for invocation (hint: specify inferenceUrl in config to skip this): %w", err)
+	}
+
+	if strings.EqualFold(funcDetails.FunctionType, functionTypeLLM) {
+		if options == nil || options.InferenceURL == "" {
+			return "", true, fmt.Errorf("inference-url is required when invoking LLM functions")
+		}
+		fullURL, err := c.llmInvokeURL(options.InferenceURL)
+		return fullURL, true, err
+	}
+
+	inferenceURL := funcDetails.InferenceURL
+	if options != nil && options.InferenceURL != "" {
+		inferenceURL = options.InferenceURL
+	}
+	if inferenceURL == "" {
+		return "", false, fmt.Errorf("function has no inferenceUrl configured")
+	}
+	fullURL, err := c.directInvokeURL(functionID, inferenceURL)
+	return fullURL, false, err
+}
+
+func (c *Client) invokeBaseURL() string {
+	if c.config.BaseInvokeURL != "" {
+		return c.config.BaseInvokeURL
+	}
+	return c.baseURL
+}
+
+func (c *Client) directInvokeURL(functionID, inferenceURL string) (string, error) {
+	if c.config.InvokeHost != "" {
+		return gatewayInvocationURL(c.invokeBaseURL(), inferenceURL)
+	}
+	return directInvocationURL(c.invokeBaseURL(), functionID, inferenceURL)
+}
+
+func (c *Client) llmInvokeURL(inferenceURL string) (string, error) {
+	if c.config.InvokeHost != "" {
+		return gatewayInvocationURL(c.invokeBaseURL(), inferenceURL)
+	}
+	return llmInvocationURL(c.invokeBaseURL(), inferenceURL)
+}
+
+func llmInvocationURL(baseInvokeURL, inferenceURL string) (string, error) {
+	u, err := url.Parse(baseInvokeURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse invoke URL %q: %w", baseInvokeURL, err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("invoke URL must include scheme and host: %q", baseInvokeURL)
+	}
+
+	hostname := llmInvocationHostname(u.Hostname())
+	if port := u.Port(); port != "" {
+		u.Host = net.JoinHostPort(hostname, port)
+	} else {
+		u.Host = hostname
+	}
+	u.Path = path.Join(u.Path, inferenceURL)
+	if !strings.HasPrefix(u.Path, "/") {
+		u.Path = "/" + u.Path
+	}
+	if strings.HasSuffix(inferenceURL, "/") && !strings.HasSuffix(u.Path, "/") {
+		u.Path += "/"
+	}
+	return u.String(), nil
+}
+
+func llmInvocationHost(host string) string {
+	u := url.URL{Scheme: "http", Host: host}
+	hostname := u.Hostname()
+	if hostname == "" {
+		return llmInvocationHostname(host)
+	}
+
+	llmHost := llmInvocationHostname(hostname)
+	if port := u.Port(); port != "" {
+		return net.JoinHostPort(llmHost, port)
+	}
+	return llmHost
+}
+
+func llmInvocationHostname(hostname string) string {
+	switch {
+	case strings.HasPrefix(hostname, "llm."):
+		return hostname
+	case hostname == "invocation.localhost":
+		return "llm.localhost"
+	case strings.HasPrefix(hostname, "invocation."):
+		return "llm." + hostname
+	case strings.HasPrefix(hostname, "api."):
+		return "llm.invocation." + strings.TrimPrefix(hostname, "api.")
+	default:
+		return "llm." + hostname
+	}
+}
+
+func gatewayInvocationURL(baseInvokeURL, inferenceURL string) (string, error) {
+	u, err := url.Parse(baseInvokeURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse invoke URL %q: %w", baseInvokeURL, err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("invoke URL must include scheme and host: %q", baseInvokeURL)
+	}
+
+	u.Path = path.Join(u.Path, inferenceURL)
+	if !strings.HasPrefix(u.Path, "/") {
+		u.Path = "/" + u.Path
+	}
+	if strings.HasSuffix(inferenceURL, "/") && !strings.HasSuffix(u.Path, "/") {
+		u.Path += "/"
+	}
+	return u.String(), nil
+}
+
+func (c *Client) newInvokeRequest(ctx context.Context, fullURL, functionID string, isLLM bool, requestBody map[string]interface{}, options *InvokeFunctionOptions) (*http.Request, error) {
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", fullURL, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set(headerContentType, contentTypeJSON)
+	req.Header.Set("Accept", "*/*")
+	c.applyInvokeRouting(req, functionID, isLLM)
+	applyInvokeOptions(req, options)
+	return req, nil
+}
+
+func invokeRequestBody(functionID string, isLLM bool, requestBody map[string]interface{}, options *InvokeFunctionOptions) (map[string]interface{}, error) {
+	if !isLLM {
+		return requestBody, nil
+	}
+	if options == nil || options.ModelName == "" {
+		return nil, fmt.Errorf("model-name is required when invoking LLM functions")
+	}
+
+	resolvedModel := functionID + "/" + options.ModelName
+	if _, ok := requestBody["model"]; ok {
+		log.Printf("WARNING: request body model was overridden with %q for LLM invocation", resolvedModel)
+	}
+
+	body := make(map[string]interface{}, len(requestBody)+1)
+	for key, value := range requestBody {
+		body[key] = value
+	}
+	body["model"] = resolvedModel
+	return body, nil
+}
+
+func (c *Client) applyInvokeRouting(req *http.Request, functionID string, isLLM bool) {
+	if c.config.InvokeHost == "" {
+		return
+	}
+
+	if isLLM {
+		req.Host = llmInvocationHost(c.config.InvokeHost)
+	} else {
+		req.Host = functionID + "." + c.config.InvokeHost
+	}
+	if c.config.Debug {
+		log.Printf("DEBUG: Using Invoke Host header override: %s", req.Host)
+	}
+}
+
+func applyInvokeOptions(req *http.Request, options *InvokeFunctionOptions) {
+	if options == nil {
+		return
+	}
+
+	if options.PollDurationSeconds > 0 {
+		req.Header.Set("NVCF-POLL-SECONDS", fmt.Sprintf("%d", options.PollDurationSeconds))
+	}
+}
+
+func decodeInvokeFunctionResponse(resp *http.Response, bodyBytes []byte) (*InvokeFunctionResponse, error) {
+	result := invokeFunctionResponseFromHeaders(resp)
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		if len(bodyBytes) > 0 {
+			result.Response = decodeInvokeResponsePayload(bodyBytes, resp.Header.Get(headerContentType))
+		}
+		return &result, nil
+	case resp.StatusCode == http.StatusFound:
+		return &result, nil
+	case resp.StatusCode >= 400:
+		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(bodyBytes))
+	default:
+		if len(bodyBytes) > 0 {
+			result.ResponseBody = decodeInvokeResponsePayload(bodyBytes, resp.Header.Get(headerContentType))
+		}
+		return &result, nil
+	}
+}
+
+func invokeFunctionResponseFromHeaders(resp *http.Response) InvokeFunctionResponse {
 	var result InvokeFunctionResponse
 	if reqID := resp.Header.Get("NVCF-REQID"); reqID != "" {
 		result.RequestID = reqID
@@ -1397,114 +1684,24 @@ func (c *Client) InvokeFunctionWithOptions(ctx context.Context, functionID, vers
 	if location := resp.Header.Get("Location"); location != "" {
 		result.LocationURL = location
 	}
-
-	// Handle successful response (200) - direct function result
-	if resp.StatusCode == http.StatusOK {
-		// Try to parse as JSON, but handle non-JSON responses gracefully
-		if len(bodyBytes) > 0 {
-			var responseData interface{}
-			if err := json.Unmarshal(bodyBytes, &responseData); err != nil {
-				// Not JSON - store as raw string
-				result.Response = map[string]interface{}{
-					"rawResponse": string(bodyBytes),
-					"contentType": resp.Header.Get("Content-Type"),
-				}
-			} else {
-				// Valid JSON - store the parsed data
-				if respMap, ok := responseData.(map[string]interface{}); ok {
-					result.Response = respMap
-				} else {
-					// JSON but not an object - wrap it
-					result.Response = map[string]interface{}{
-						"result": responseData,
-					}
-				}
-			}
-		}
-		return &result, nil
-	}
-
-	// Handle redirect (302) - result is available at location URL
-	if resp.StatusCode == http.StatusFound {
-		return &result, nil
-	}
-
-	// Handle pending (202) and other responses that need JSON parsing
-	if len(bodyBytes) > 0 {
-		// Try to parse as JSON for structured responses
-		var jsonData interface{}
-		if err := json.Unmarshal(bodyBytes, &jsonData); err == nil {
-			if respMap, ok := jsonData.(map[string]interface{}); ok {
-				result.ResponseBody = respMap
-			} else {
-				result.ResponseBody = map[string]interface{}{
-					"result": jsonData,
-				}
-			}
-		} else {
-			// Not JSON - store as raw response
-			result.ResponseBody = map[string]interface{}{
-				"rawResponse": string(bodyBytes),
-				"contentType": resp.Header.Get("Content-Type"),
-			}
-		}
-	}
-
-	// If response is pending (202), poll for result
-	if resp.StatusCode == http.StatusAccepted && result.RequestID != "" {
-		return c.pollForResult(ctx, result.RequestID, timeoutSec, maxPollRate)
-	}
-
-	// Handle error responses (4xx, 5xx)
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	return &result, nil
+	return result
 }
 
-// pollForResult polls for function invocation result
-func (c *Client) pollForResult(ctx context.Context, requestID string, timeoutSec, maxPollRate int) (*InvokeFunctionResponse, error) {
-	timeout := time.Duration(timeoutSec) * time.Second
-	deadline := time.Now().Add(timeout)
-	pollInterval := time.Duration(maxPollRate) * time.Second
-
-	for time.Now().Before(deadline) {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		lastPoll := time.Now()
-
-		endpoint := fmt.Sprintf("/v2/nvcf/pexec/status/%s", url.PathEscape(requestID))
-		resp, err := c.makeRequest(ctx, "GET", endpoint, nil)
-		if err != nil {
-			return nil, err
-		}
-
-		var result InvokeFunctionResponse
-		err = json.NewDecoder(resp.Body).Decode(&result)
-		resp.Body.Close()
-
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode response: %w", err)
-		}
-
-		// Check if result is ready
-		if resp.StatusCode == http.StatusOK {
-			return &result, nil
-		}
-
-		// Don't overload the server if it responds too quickly
-		elapsed := time.Since(lastPoll)
-		if elapsed < pollInterval {
-			time.Sleep(pollInterval - elapsed)
+func decodeInvokeResponsePayload(bodyBytes []byte, contentType string) map[string]interface{} {
+	var responseData interface{}
+	if err := json.Unmarshal(bodyBytes, &responseData); err != nil {
+		return map[string]interface{}{
+			"rawResponse": string(bodyBytes),
+			"contentType": contentType,
 		}
 	}
 
-	return nil, fmt.Errorf("timeout while fetching result for request ID %s after %d seconds", requestID, timeoutSec)
+	if respMap, ok := responseData.(map[string]interface{}); ok {
+		return respMap
+	}
+	return map[string]interface{}{
+		"result": responseData,
+	}
 }
 
 // GetHTTPClient returns the underlying HTTP client for advanced usage
@@ -1553,6 +1750,7 @@ type FunctionDto struct {
 	FunctionType            string                      `json:"functionType"`
 	Secrets                 []string                    `json:"secrets,omitempty"`
 	RateLimit               *RateLimitDto               `json:"rateLimit,omitempty"`
+	Models                  []ArtifactDto               `json:"models,omitempty"`
 }
 
 // ClusterGroupsResponse represents the response from listing cluster groups
@@ -1579,33 +1777,6 @@ type GPU struct {
 type Cluster struct {
 	ID   string `json:"id,omitempty"`
 	Name string `json:"name,omitempty"`
-}
-
-// CreateAssetRequest represents the request to create an asset
-type CreateAssetRequest struct {
-	ContentType string `json:"contentType"`
-	Description string `json:"description"`
-}
-
-// CreateAssetResponse represents the response from creating an asset
-type CreateAssetResponse struct {
-	AssetID     string `json:"assetId,omitempty"`
-	UploadURL   string `json:"uploadUrl,omitempty"`
-	ContentType string `json:"contentType,omitempty"`
-	Description string `json:"description,omitempty"`
-}
-
-// AssetResponse represents an asset details response
-type AssetResponse struct {
-	AssetID     string `json:"assetId,omitempty"`
-	ContentType string `json:"contentType,omitempty"`
-	Description string `json:"description,omitempty"`
-	CreatedAt   string `json:"createdAt,omitempty"`
-}
-
-// ListAssetsResponse represents the response from listing assets
-type ListAssetsResponse struct {
-	Assets []AssetResponse `json:"assets,omitempty"`
 }
 
 // GetPositionInQueueResponse represents queue position response
@@ -1642,7 +1813,7 @@ func (c *Client) ListFunctionIDs(ctx context.Context) (*ListFunctionIdsResponse,
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
 	}
 
 	var result ListFunctionIdsResponse
@@ -1667,7 +1838,7 @@ func (c *Client) ListFunctions(ctx context.Context) (*ListFunctionsResponse, err
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
 	}
 
 	var result ListFunctionsResponse
@@ -1691,7 +1862,7 @@ func (c *Client) ListFunctionVersions(ctx context.Context, functionID string) (*
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
 	}
 
 	var result ListFunctionsResponse
@@ -1704,7 +1875,7 @@ func (c *Client) ListFunctionVersions(ctx context.Context, functionID string) (*
 
 // GetFunctionDetails retrieves details for a specific function version
 func (c *Client) GetFunctionDetails(ctx context.Context, functionID, versionID string) (*FunctionDto, error) {
-	endpoint := fmt.Sprintf("/v2/nvcf/functions/%s/versions/%s", url.PathEscape(functionID), url.PathEscape(versionID))
+	endpoint := fmt.Sprintf(functionVersionEndpointFormat, url.PathEscape(functionID), url.PathEscape(versionID))
 
 	resp, err := c.makeRequest(ctx, "GET", endpoint, nil)
 	if err != nil {
@@ -1714,7 +1885,7 @@ func (c *Client) GetFunctionDetails(ctx context.Context, functionID, versionID s
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
 	}
 
 	// API returns wrapped response: {"function": {...}}
@@ -1740,7 +1911,7 @@ func (c *Client) ListClusterGroups(ctx context.Context) (*ClusterGroupsResponse,
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
 	}
 
 	var result ClusterGroupsResponse
@@ -1749,99 +1920,6 @@ func (c *Client) ListClusterGroups(ctx context.Context) (*ClusterGroupsResponse,
 	}
 
 	return &result, nil
-}
-
-// === Asset Management ===
-
-// CreateAsset creates a new asset and returns upload URL
-func (c *Client) CreateAsset(ctx context.Context, req *CreateAssetRequest) (*CreateAssetResponse, error) {
-	// Validate required fields (per OpenAPI spec)
-	if req.ContentType == "" {
-		return nil, fmt.Errorf("contentType is required")
-	}
-	if req.Description == "" {
-		return nil, fmt.Errorf("description is required")
-	}
-
-	resp, err := c.makeRequest(ctx, "POST", "/v2/nvcf/assets", req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result CreateAssetResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &result, nil
-}
-
-// GetAsset retrieves details for a specific asset
-func (c *Client) GetAsset(ctx context.Context, assetID string) (*AssetResponse, error) {
-	endpoint := fmt.Sprintf("/v2/nvcf/assets/%s", url.PathEscape(assetID))
-
-	resp, err := c.makeRequest(ctx, "GET", endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result AssetResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &result, nil
-}
-
-// ListAssets retrieves a list of assets for the account
-func (c *Client) ListAssets(ctx context.Context) (*ListAssetsResponse, error) {
-	resp, err := c.makeRequest(ctx, "GET", "/v2/nvcf/assets", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result ListAssetsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &result, nil
-}
-
-// DeleteAsset deletes a specific asset
-func (c *Client) DeleteAsset(ctx context.Context, assetID string) error {
-	endpoint := fmt.Sprintf("/v2/nvcf/assets/%s", url.PathEscape(assetID))
-
-	resp, err := c.makeRequest(ctx, "DELETE", endpoint, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
-	}
-
-	return nil
 }
 
 // === Queue Management ===
@@ -1858,7 +1936,7 @@ func (c *Client) GetQueuePosition(ctx context.Context, requestID string) (*GetPo
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
 	}
 
 	var result GetPositionInQueueResponse
@@ -1881,7 +1959,7 @@ func (c *Client) GetQueueDetails(ctx context.Context, functionID string) (*GetQu
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
 	}
 
 	var result GetQueuesResponse
@@ -1904,7 +1982,7 @@ func (c *Client) GetQueueDetailsForVersion(ctx context.Context, functionID, vers
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf(apiErrorFormat, resp.StatusCode, string(body))
 	}
 
 	var result GetQueuesResponse

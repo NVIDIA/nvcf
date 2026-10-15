@@ -35,6 +35,8 @@ SERVICE_ACCOUNT_NAME="api-keys-api"
 # and the NVCT_SERVICE_ID env var consumed by NAK and NVCT.
 NVCT_SERVICE_ID="nvidia-cloud-tasks-ncp-service-id-nvcttasks"
 
+EVENT_LEDGER_SERVICE_ID="nvidia-cloud-events-ncp-service-id-ckozoh6f"
+
 #-------------------------------------------
 # Set defaults for secret paths and policies
 #-------------------------------------------
@@ -85,6 +87,7 @@ write_secrets_kv "${VAULT_SECRET_BASE_PATH}/kv" "keys/data-domain-key" "key=$DAT
 
 SVC_VALUE=$(base64_encode '[
   {"serviceId":"nvidia-cloud-functions-ncp-service-id-aketm","serviceName":"nvcf-api","audienceServiceIds":["nvidia-cloud-functions-ncp-service-id-aketm"],"maxApiKeysPerUser":8,"maxApiKeyTtlDays":365,"maxAuthzSizeChars":2048,"minAuthzUpdateIntervalSeconds":3},
-  {"serviceId":"'"${NVCT_SERVICE_ID}"'","serviceName":"nvct-api","audienceServiceIds":["'"${NVCT_SERVICE_ID}"'"],"maxApiKeysPerUser":8,"maxApiKeyTtlDays":365,"maxAuthzSizeChars":2048,"minAuthzUpdateIntervalSeconds":3}
+  {"serviceId":"'"${NVCT_SERVICE_ID}"'","serviceName":"nvct-api","audienceServiceIds":["'"${NVCT_SERVICE_ID}"'"],"maxApiKeysPerUser":8,"maxApiKeyTtlDays":365,"maxAuthzSizeChars":2048,"minAuthzUpdateIntervalSeconds":3},
+  {"serviceId":"'"${EVENT_LEDGER_SERVICE_ID}"'","serviceName":"event-ledger","audienceServiceIds":["'"${EVENT_LEDGER_SERVICE_ID}"'"],"maxApiKeysPerUser":8,"maxApiKeyTtlDays":365,"maxAuthzSizeChars":2048,"minAuthzUpdateIntervalSeconds":3}
 ]')
-write_secrets_kv "${VAULT_SECRET_BASE_PATH}/kv" "registrations/services" "services=$SVC_VALUE"
+write_secrets_kv "${VAULT_SECRET_BASE_PATH}/kv" "registrations/services" "services=$SVC_VALUE" true

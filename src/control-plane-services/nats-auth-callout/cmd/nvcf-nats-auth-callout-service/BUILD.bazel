@@ -1,0 +1,73 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+go_library(
+    name = "nvcf-nats-auth-callout-service_lib",
+    srcs = ["main.go"],
+    embedsrcs = ["config.yaml"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/cmd/nvcf-nats-auth-callout-service",
+    visibility = ["//visibility:private"],
+    # Build-time stamping into internal/version, resolved by
+    # tools/workspace_status.sh when bazel is invoked with --stamp (the CI
+    # release jobs pass it). STABLE_VERSION is the release semver, which is
+    # also the primary container tag, so the service.version reported to
+    # tracing via version.GetVersion() matches the image tag. Unstamped
+    # builds keep the "dev" / "unknown" defaults.
+    x_defs = {
+        "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/version.Version": "{STABLE_VERSION}",
+        "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/version.GitCommit": "{STABLE_GIT_COMMIT}",
+        "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/version.BuildDate": "{BUILD_DATE}",
+    },
+    deps = ["//src/control-plane-services/nats-auth-callout/cmd/nvcf-nats-auth-callout-service/cli"],
+)
+
+go_binary(
+    name = "nvcf-nats-auth-callout-service",
+    embed = [":nvcf-nats-auth-callout-service_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "nvcf-nats-auth-callout-service_test",
+    srcs = ["main_test.go"],
+    embed = [":nvcf-nats-auth-callout-service_lib"],
+)
+
+# Build/load/index/tar targets live here. Release publishing is owned
+# by the private release repo: source CI pushes :image_index to a
+# staging registry and emits release-manifest.json; the private repo
+# copies the digest by reference to the production NVCR destinations.
+go_oci_image(
+    name = "image",
+    base = "@distroless_go",
+    binary = ":nvcf-nats-auth-callout-service",
+    binary_path = "/usr/bin/app",
+    tags = ["nvcf-nats-auth-callout-service"],
+    visibility = ["//visibility:public"],
+)
+
+# Regression guard for the rules_pkg default-0644 startup-failure
+# pattern: if rules_pkg ever stops applying mode 0755 to the
+# entrypoint, this test catches it before the image is pushed.
+sh_test(
+    name = "image_entrypoint_mode_test",
+    srcs = ["image_entrypoint_mode_test.sh"],
+    args = ["$(location :image.tar)"],
+    data = [":image.tar"],
+)

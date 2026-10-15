@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"nvcf-cli/internal/client"
+	"nvcf-cli/internal/selfhosted"
 	"nvcf-cli/internal/selfhosted/teardown"
 )
 
@@ -214,23 +215,41 @@ func TestDown_PlanOnly_NoDestroyInvoked(t *testing.T) {
 type fakeClusterDeleter struct {
 	deleteCalls int
 	deleteErr   error
+	deletedIDs  []string
 }
 
-func (f *fakeClusterDeleter) DeleteCluster(_ context.Context, _, _ string) error {
+func (f *fakeClusterDeleter) DeleteCluster(_ context.Context, _, _, clusterID string) error {
 	f.deleteCalls++
+	f.deletedIDs = append(f.deletedIDs, clusterID)
 	return f.deleteErr
 }
 
 type fakeDownClusterClient struct {
 	fakeClusterDeleter
 	listCalls int
-	clusters  []client.SISCluster
+	clusters  []client.ICMSCluster
 	listErr   error
 }
 
-func (f *fakeDownClusterClient) ListClusters(_ context.Context, _, _ string) ([]client.SISCluster, error) {
+func (f *fakeDownClusterClient) ListClusters(_ context.Context, _, _ string) ([]client.ICMSCluster, error) {
 	f.listCalls++
-	return f.clusters, f.listErr
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	var remaining []client.ICMSCluster
+	for _, cluster := range f.clusters {
+		deleted := false
+		for _, deletedID := range f.deletedIDs {
+			if cluster.ClusterID == deletedID {
+				deleted = true
+				break
+			}
+		}
+		if !deleted {
+			remaining = append(remaining, cluster)
+		}
+	}
+	return remaining, nil
 }
 
 func installFakeHelmfile(t *testing.T) string {
@@ -248,28 +267,58 @@ printf '%s\n' "$PWD|$*|CLUSTER_NAME=${CLUSTER_NAME}" >> "$NVCF_TEST_HELMFILE_LOG
 	return logPath
 }
 
-func makeDownStack(t *testing.T) string {
+func TestReadRegisterValuesYAML_ReadsNVCAValuesBeforeLegacyRegisterValues(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "out"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "out", "gpu-a-register-values.yaml"), []byte("clusterID: legacy-id\nclusterGroupID: legacy-group\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "out", "gpu-a-nvca-values.yaml"), []byte("clusterID: new-id\nclusterGroupID: new-group\n"), 0o644))
+
+	got, err := readRegisterValuesYAML(dir, "gpu-a")
+	require.NoError(t, err)
+	assert.Equal(t, "new-id", got.ClusterID)
+	assert.Equal(t, "new-group", got.ClusterGroupID)
+}
+
+func makeDownStacks(t *testing.T) (computePlaneStack, controlPlaneStack string) {
 	t.Helper()
 
 	dir := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(dir, "helmfile.d"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "helmfile-nvca-operator.yaml.gotmpl"), []byte("releases: []\n"), 0o644))
-	return dir
+	computePlaneStack = filepath.Join(dir, "compute-plane-stack")
+	controlPlaneStack = filepath.Join(dir, "control-plane-stack")
+	require.NoError(t, os.MkdirAll(filepath.Join(computePlaneStack, "helmfile.d"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(controlPlaneStack, "helmfile.d"), 0o755))
+	return computePlaneStack, controlPlaneStack
 }
 
 func TestDown_ClusterNameCleansControlPlaneWhenLastClusterRemoved(t *testing.T) {
 	resetDownFlags(t)
 
-	stack := makeDownStack(t)
+	computePlaneStack, controlPlaneStack := makeDownStacks(t)
 	helmfileLog := installFakeHelmfile(t)
 
-	prevStack, prevICMS := selfHostedStack, selfHostedICMSURL
+	prevComputePlaneStack, prevControlPlaneStack, prevICMS, prevEnv := selfHostedComputePlaneStack, selfHostedControlPlaneStack,
+		selfHostedICMSURL, selfHostedEnv
 	t.Cleanup(func() {
-		selfHostedStack = prevStack
+		selfHostedComputePlaneStack = prevComputePlaneStack
+		selfHostedControlPlaneStack = prevControlPlaneStack
 		selfHostedICMSURL = prevICMS
+		selfHostedEnv = prevEnv
 	})
-	selfHostedStack = stack
+	selfHostedComputePlaneStack = computePlaneStack
+	selfHostedControlPlaneStack = controlPlaneStack
 	selfHostedICMSURL = "http://sis.test"
+	selfHostedEnv = "local"
+
+	prevRuntimeResolver := resolveSelfHostedHelmRuntimeMode
+	t.Cleanup(func() { resolveSelfHostedHelmRuntimeMode = prevRuntimeResolver })
+	resolveSelfHostedHelmRuntimeMode = func(context.Context) (selfhosted.HelmRuntimeMode, error) {
+		return selfhosted.HelmRuntimeHelm4Compat, nil
+	}
+	prevControlPlaneInstalled := downControlPlaneInstalled
+	t.Cleanup(func() { downControlPlaneInstalled = prevControlPlaneInstalled })
+	downControlPlaneInstalled = func(context.Context, string) (bool, error) {
+		return true, nil
+	}
 
 	fakeClient := &fakeDownClusterClient{}
 	prevDeleterFactory := newClusterDeleterForDown
@@ -284,7 +333,8 @@ func TestDown_ClusterNameCleansControlPlaneWhenLastClusterRemoved(t *testing.T) 
 	rootCmd.SetArgs([]string{
 		"self-hosted", "down",
 		"--cluster-name=test-cluster",
-		"--stack", stack,
+		"--compute-plane-stack", computePlaneStack,
+		"--control-plane-stack", controlPlaneStack,
 		"--json",
 	})
 
@@ -296,7 +346,195 @@ func TestDown_ClusterNameCleansControlPlaneWhenLastClusterRemoved(t *testing.T) 
 	require.NoError(t, err)
 	invocations := strings.Split(strings.TrimSpace(string(body)), "\n")
 	require.Len(t, invocations, 2, "last cluster removal must destroy compute and control planes")
-	assert.Contains(t, invocations[0], "helmfile-nvca-operator.yaml.gotmpl")
+	assert.Contains(t, invocations[0], filepath.Join(computePlaneStack, "helmfile.d")+"/")
 	assert.Contains(t, invocations[0], "CLUSTER_NAME=test-cluster")
-	assert.Contains(t, invocations[1], filepath.Join(stack, "helmfile.d")+"/")
+	assert.Contains(t, invocations[1], filepath.Join(controlPlaneStack, "helmfile.d")+"/")
+	assert.Contains(t, invocations[1], "--sequential-helmfiles")
+}
+
+func TestDown_LocalAbsentControlPlaneIsNoOpWithoutAuth(t *testing.T) {
+	resetDownFlags(t)
+
+	computePlaneStack, controlPlaneStack := makeDownStacks(t)
+	_ = installFakeHelmfile(t)
+
+	prevComputePlaneStack, prevControlPlaneStack, prevEnv := selfHostedComputePlaneStack, selfHostedControlPlaneStack, selfHostedEnv
+	t.Cleanup(func() {
+		selfHostedComputePlaneStack = prevComputePlaneStack
+		selfHostedControlPlaneStack = prevControlPlaneStack
+		selfHostedEnv = prevEnv
+	})
+	selfHostedComputePlaneStack = computePlaneStack
+	selfHostedControlPlaneStack = controlPlaneStack
+	selfHostedEnv = "local"
+
+	prevRuntimeResolver := resolveSelfHostedHelmRuntimeMode
+	t.Cleanup(func() { resolveSelfHostedHelmRuntimeMode = prevRuntimeResolver })
+	resolveSelfHostedHelmRuntimeMode = func(context.Context) (selfhosted.HelmRuntimeMode, error) {
+		return selfhosted.HelmRuntimeHelm4Compat, nil
+	}
+
+	prevControlPlaneInstalled := downControlPlaneInstalled
+	t.Cleanup(func() { downControlPlaneInstalled = prevControlPlaneInstalled })
+	downControlPlaneInstalled = func(context.Context, string) (bool, error) {
+		return false, nil
+	}
+
+	prevDeleterFactory := newClusterDeleterForDown
+	t.Cleanup(func() { newClusterDeleterForDown = prevDeleterFactory })
+	newClusterDeleterForDown = func(_ string) (teardown.ClusterDeleter, func(), error) {
+		return nil, func() {}, assert.AnError
+	}
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted",
+		"--compute-plane-stack", computePlaneStack,
+		"--control-plane-stack", controlPlaneStack,
+		"--env", "local",
+		"--plain",
+		"down",
+		"--cluster-name=test-cluster",
+		"--confirm",
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	assert.Contains(t, stderr.String(), "remove-cluster-row")
+	assert.Contains(t, stderr.String(), "final: success=true")
+}
+
+func TestDownAll_LocalAbsentControlPlaneUninstallsFallbackComputePlanes(t *testing.T) {
+	resetDownFlags(t)
+
+	computePlaneStack, controlPlaneStack := makeDownStacks(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(computePlaneStack, "out"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(computePlaneStack, "out", "gpu-a-nvca-values.yaml"), []byte("clusterID: a\nclusterGroupID: group-a\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(computePlaneStack, "out", "gpu-b-register-values.yaml"), []byte("clusterID: b\nclusterGroupID: group-b\n"), 0o644))
+	helmfileLog := installFakeHelmfile(t)
+
+	prevComputePlaneStack, prevControlPlaneStack, prevEnv := selfHostedComputePlaneStack, selfHostedControlPlaneStack, selfHostedEnv
+	t.Cleanup(func() {
+		selfHostedComputePlaneStack = prevComputePlaneStack
+		selfHostedControlPlaneStack = prevControlPlaneStack
+		selfHostedEnv = prevEnv
+	})
+	selfHostedComputePlaneStack = computePlaneStack
+	selfHostedControlPlaneStack = controlPlaneStack
+	selfHostedEnv = "local"
+
+	prevRuntimeResolver := resolveSelfHostedHelmRuntimeMode
+	t.Cleanup(func() { resolveSelfHostedHelmRuntimeMode = prevRuntimeResolver })
+	resolveSelfHostedHelmRuntimeMode = func(context.Context) (selfhosted.HelmRuntimeMode, error) {
+		return selfhosted.HelmRuntimeHelm4Compat, nil
+	}
+
+	prevControlPlaneInstalled := downControlPlaneInstalled
+	t.Cleanup(func() { downControlPlaneInstalled = prevControlPlaneInstalled })
+	downControlPlaneInstalled = func(context.Context, string) (bool, error) {
+		return false, nil
+	}
+
+	prevDeleterFactory := newClusterDeleterForDown
+	t.Cleanup(func() { newClusterDeleterForDown = prevDeleterFactory })
+	newClusterDeleterForDown = func(_ string) (teardown.ClusterDeleter, func(), error) {
+		return nil, func() {}, assert.AnError
+	}
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted",
+		"--compute-plane-stack", computePlaneStack,
+		"--control-plane-stack", controlPlaneStack,
+		"--env", "local",
+		"--plain",
+		"down",
+		"--all",
+		"--confirm",
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	assert.Contains(t, stderr.String(), "final: success=true")
+
+	body, err := os.ReadFile(helmfileLog)
+	require.NoError(t, err)
+	invocations := strings.Split(strings.TrimSpace(string(body)), "\n")
+	require.Len(t, invocations, 2, "--all should uninstall compute planes discovered from local stack artifacts")
+	assert.Contains(t, invocations[0], "CLUSTER_NAME=gpu-a")
+	assert.Contains(t, invocations[1], "CLUSTER_NAME=gpu-b")
+	for _, invocation := range invocations {
+		assert.Contains(t, invocation, filepath.Join(computePlaneStack, "helmfile.d")+"/")
+	}
+}
+
+func TestDown_ClusterNameUsesPersistedClusterIDBeforeCheckingRemainingClusters(t *testing.T) {
+	resetDownFlags(t)
+
+	computePlaneStack, controlPlaneStack := makeDownStacks(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(computePlaneStack, "out"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(computePlaneStack, "out", "ncp-local-nvca-values.yaml"),
+		[]byte("clusterID: cl-ncp-local\nclusterGroupID: cg-ncp-local\n"),
+		0o644,
+	))
+	helmfileLog := installFakeHelmfile(t)
+
+	prevComputePlaneStack, prevControlPlaneStack, prevICMS, prevEnv := selfHostedComputePlaneStack, selfHostedControlPlaneStack, selfHostedICMSURL, selfHostedEnv
+	t.Cleanup(func() {
+		selfHostedComputePlaneStack = prevComputePlaneStack
+		selfHostedControlPlaneStack = prevControlPlaneStack
+		selfHostedICMSURL = prevICMS
+		selfHostedEnv = prevEnv
+	})
+	selfHostedComputePlaneStack = computePlaneStack
+	selfHostedControlPlaneStack = controlPlaneStack
+	selfHostedICMSURL = "http://sis.test"
+	selfHostedEnv = "local"
+
+	prevRuntimeResolver := resolveSelfHostedHelmRuntimeMode
+	t.Cleanup(func() { resolveSelfHostedHelmRuntimeMode = prevRuntimeResolver })
+	resolveSelfHostedHelmRuntimeMode = func(context.Context) (selfhosted.HelmRuntimeMode, error) {
+		return selfhosted.HelmRuntimeHelm4Compat, nil
+	}
+
+	prevControlPlaneInstalled := downControlPlaneInstalled
+	t.Cleanup(func() { downControlPlaneInstalled = prevControlPlaneInstalled })
+	downControlPlaneInstalled = func(context.Context, string) (bool, error) {
+		return true, nil
+	}
+
+	fakeClient := &fakeDownClusterClient{}
+	fakeClient.clusters = []client.ICMSCluster{{ClusterID: "cl-ncp-local", ClusterName: "ncp-local", ClusterGroupID: "cg-ncp-local"}}
+	prevDeleterFactory := newClusterDeleterForDown
+	t.Cleanup(func() { newClusterDeleterForDown = prevDeleterFactory })
+	newClusterDeleterForDown = func(_ string) (teardown.ClusterDeleter, func(), error) {
+		return fakeClient, func() {}, nil
+	}
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted",
+		"--env", "local",
+		"down",
+		"--cluster-name=ncp-local",
+		"--compute-plane-stack", computePlaneStack,
+		"--control-plane-stack", controlPlaneStack,
+		"--json",
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	assert.Equal(t, []string{"cl-ncp-local"}, fakeClient.deletedIDs)
+	assert.Equal(t, 1, fakeClient.listCalls, "down must check whether other clusters remain after unregister")
+
+	body, err := os.ReadFile(helmfileLog)
+	require.NoError(t, err)
+	invocations := strings.Split(strings.TrimSpace(string(body)), "\n")
+	require.Len(t, invocations, 2, "single-cluster down must destroy compute and control planes after deleting the persisted cluster ID")
+	assert.Contains(t, invocations[0], filepath.Join(computePlaneStack, "helmfile.d")+"/")
+	assert.Contains(t, invocations[1], filepath.Join(controlPlaneStack, "helmfile.d")+"/")
 }

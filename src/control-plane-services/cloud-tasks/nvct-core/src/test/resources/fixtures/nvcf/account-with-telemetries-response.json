@@ -1,0 +1,79 @@
+{
+  "account": {
+    "ncaId": "%s",
+    "clientIds": [ "%s" ],
+    "name": "%s",
+    "telemetries": [
+      {
+        "telemetryId": "edc4cd0a-80cd-4a7b-90d9-706b9eae9b4c",
+        "name": "datadog-prod-traces",
+        "endpoint": "https://otlp-gateway-prod-us-east-0.grafana.net/otlp",
+        "protocol": "GRPC",
+        "provider": "GRAFANA_CLOUD",
+        "types": [
+          "TRACES"
+        ],
+        "createdAt": "_instant_"
+      },
+      {
+        "telemetryId": "4df8cb5b-94e0-4fcc-ac12-ddb8da2f25aa",
+        "name": "grafana-prod-logs",
+        "endpoint": "https://otlp-gateway-prod-us-east-0.grafana.net/otlp",
+        "protocol": "GRPC",
+        "provider": "GRAFANA_CLOUD",
+        "types": [
+          "LOGS"
+        ],
+        "createdAt": "_instant_"
+      },
+      {
+        "telemetryId": "d49695b0-86b1-4a84-9b82-2ea823f51d78",
+        "name": "datadog-prod",
+        "endpoint": "datadoghq.com",
+        "protocol": "GRPC",
+        "provider": "DATADOG",
+        "types": [
+          "METRICS"
+        ],
+        "createdAt": "_instant_"
+      }
+    ],
+    "registryCredentials": [
+      {
+        "registryHostname": "stg.nvcr.io",
+        "secret": {
+          "name": "ngc-container-registry-credential",
+          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtY29udGFpbmVyLXJlZ2lzdHJ5LWNyZWQ="
+        },
+        "artifactTypes": [
+          "CONTAINER"
+        ]
+      },
+      {
+        "registryHostname": "api.stg.ngc.nvidia.com",
+        "secret": {
+          "name": "ngc-model-resource-registry-credential",
+          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtbW9kZWwtcmVnaXN0cnktY3JlZA=="
+        },
+        "artifactTypes": [
+          "MODEL",
+          "RESOURCE"
+        ]
+      },
+      {
+        "registryHostname": "helm.stg.ngc.nvidia.com",
+        "secret": {
+          "name": "ngc-helm-registry-credential",
+          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtY29udGFpbmVyLXJlZ2lzdHJ5LWNyZWQ="
+        },
+        "artifactTypes": [
+          "HELM"
+        ]
+      }
+    ],
+    "maxFunctionsAllowed": 146,
+    "maxTasksAllowed": "%d",
+    "currentNumberFunctions": 98,
+    "lastUpdatedAt": "_instant_"
+  }
+}

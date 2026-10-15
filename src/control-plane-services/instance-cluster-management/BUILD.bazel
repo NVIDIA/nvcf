@@ -1,0 +1,47 @@
+load("//rules/java:defs.bzl", "nv_boot_workspace_runfiles")
+load("//rules/java:notice.bzl", "nvcf_notice", "nvcf_notice_delta")
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "integration_local_env_files",
+    srcs = [
+        "local_env/docker-compose.test.yml",
+    ] + glob([
+        "local_env/aws/**",
+        "local_env/cassandra/**",
+        "local_env/nats/**",
+        "local_env/vault/**",
+    ]),
+)
+
+# Tests open local_env paths relative to the runfiles workspace root. Strip the
+# imported package prefix to preserve the standalone repository layout.
+nv_boot_workspace_runfiles(
+    name = "integration_local_env",
+    srcs = [":integration_local_env_files"],
+    strip_prefix = "src/control-plane-services/instance-cluster-management/",
+)
+
+exports_files([
+    "NOTICE",
+    "notice_metadata.json",
+])
+
+nvcf_notice(
+    checked_notice = ":NOTICE",
+    first_party_groups = ["com.nvidia.icms"],
+    inventory_name = "instance_cluster_management_runtime_inventory",
+    metadata = ":notice_metadata.json",
+    runtime_target = "//src/control-plane-services/instance-cluster-management/icms-service:app",
+    shared_metadata = [
+        "//src/libraries/java/nv-boot-parent:notice_metadata.json",
+    ],
+)
+
+nvcf_notice_delta(
+    baseline_inventories = [
+        "//src/libraries/java/nv-boot-parent:runtime_inventory.json",
+    ],
+    inventory = ":runtime_inventory.json",
+)

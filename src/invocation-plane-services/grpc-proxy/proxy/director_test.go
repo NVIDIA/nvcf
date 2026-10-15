@@ -36,7 +36,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"github.com/samber/lo"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -59,6 +58,8 @@ func (m *mockInvoker) InvokeStatefulFunction(_ context.Context, _ net.Conn, _, _
 }
 
 func TestStreamDirector(t *testing.T) {
+	proxyListener, proxyAddr := bindEphemeral(t)
+	inferenceListener, inferenceAddr := bindEphemeral(t)
 	proxyResponse := &invocation.Result{
 		RequestId:                uuid.New(),
 		WorkerAuthorizationToken: "123abc",
@@ -71,38 +72,18 @@ func TestStreamDirector(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://localhost:10081", nil)
+	healthManager, err := healthManager("http://" + proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
-	http2Server := createHttp2Server(director, "0.0.0.0:10081", healthManager)
-	listenAndServe := lo.Async(http2Server.ListenAndServe)
-	defer func() {
-		err := <-listenAndServe
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			t.Fatalf("failed to listen and serve %s", err)
-		}
-	}()
-	t.Log("started proxy h2c listener")
+	http2Server := createHttp2Server(director, "", healthManager)
+	defer serveProxy(t, http2Server, proxyListener)()
 
 	inferenceContainer := grpc.NewServer()
 	inferenceContainer.RegisterService(&echo.Echo_ServiceDesc, &echo.Server{})
-	listener, err := net.Listen("tcp", "0.0.0.0:8001")
-	if err != nil {
-		t.Fatalf("failed to listen as local grpc server %s", err)
-	}
-	grpcServe := lo.Async(func() error {
-		return inferenceContainer.Serve(listener)
-	})
-	defer func() {
-		err := <-grpcServe
-		if err != nil {
-			t.Fatalf("failed to serve grpc %s", err)
-		}
-	}()
-	t.Log("started grpc inference server")
+	defer serveGRPC(t, inferenceContainer, inferenceListener)()
 
-	dial, err := net.Dial("tcp", "localhost:8001")
+	dial, err := net.Dial("tcp", inferenceAddr)
 	if err != nil {
 		t.Fatalf("failed to connect to local grpc server %s", err)
 	}
@@ -112,7 +93,7 @@ func TestStreamDirector(t *testing.T) {
 	}
 	t.Logf("registered connection to inference server with director")
 
-	clientConn, err := grpc.Dial("localhost:10081", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	clientConn, err := grpc.Dial(proxyAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("failed to dial grpc client connection %s", err)
 	}
@@ -179,16 +160,17 @@ func TestStreamDirector(t *testing.T) {
 	}
 
 	t.Logf("finished, shutting down")
-	inferenceContainer.GracefulStop()
-	_ = http2Server.Close()
+
+
 }
 
 func TestUnauthenticatedError(t *testing.T) {
+	proxyListener, proxyAddr := bindEphemeral(t)
 	proxyResponse := &invocation.Result{
 		RequestId:                uuid.New(),
 		WorkerAuthorizationToken: "123abc",
 	}
-	selfFqdn := "http://localhost:10081"
+	selfFqdn := "http://" + proxyAddr
 	director := NewStreamDirector((*mockInvoker)(proxyResponse))
 	defer func() {
 		err := director.Close()
@@ -197,20 +179,12 @@ func TestUnauthenticatedError(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://localhost:10081", nil)
+	healthManager, err := healthManager("http://" + proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
-	http2Server := createHttp2Server(director, "0.0.0.0:10081", healthManager)
-	listenAndServe := lo.Async(http2Server.ListenAndServe)
-	defer func() {
-		err := <-listenAndServe
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			t.Fatalf("failed to listen and serve %s", err)
-		}
-	}()
-	defer http2Server.Close()
-	t.Log("started proxy h2c listener")
+	http2Server := createHttp2Server(director, "", healthManager)
+	defer serveProxy(t, http2Server, proxyListener)()
 
 	t.Log("performing http test")
 	request, _ := http.NewRequest(http.MethodPost, selfFqdn+"/asdf", nil)
@@ -242,6 +216,7 @@ func TestUnauthenticatedError(t *testing.T) {
 }
 
 func TestGatewayTimeoutError(t *testing.T) {
+	proxyListener, proxyAddr := bindEphemeral(t)
 	timeout := consts.Timeout
 	consts.Timeout = 100 * time.Millisecond
 	t.Cleanup(func() {
@@ -259,22 +234,14 @@ func TestGatewayTimeoutError(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://localhost:10081", nil)
+	healthManager, err := healthManager("http://" + proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
-	http2Server := createHttp2Server(director, "0.0.0.0:10081", healthManager)
-	listenAndServe := lo.Async(http2Server.ListenAndServe)
-	defer func() {
-		err := <-listenAndServe
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			t.Fatalf("failed to listen and serve %s", err)
-		}
-	}()
-	defer http2Server.Close()
-	t.Log("started proxy h2c listener")
+	http2Server := createHttp2Server(director, "", healthManager)
+	defer serveProxy(t, http2Server, proxyListener)()
 
-	selfFqdn := "http://localhost:10081"
+	selfFqdn := "http://" + proxyAddr
 
 	t.Run("http", func(t *testing.T) {
 		request, _ := http.NewRequest(http.MethodPost, selfFqdn+"/asdf", nil)
@@ -309,6 +276,7 @@ func TestGatewayTimeoutError(t *testing.T) {
 }
 
 func TestRequestIdHeader(t *testing.T) {
+	proxyListener, proxyAddr := bindEphemeral(t)
 	proxyResponse := &invocation.Result{
 		RequestId:                uuid.New(),
 		WorkerAuthorizationToken: "123abc",
@@ -321,22 +289,14 @@ func TestRequestIdHeader(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://localhost:10081", nil)
+	healthManager, err := healthManager("http://" + proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
-	http2Server := createHttp2Server(director, "0.0.0.0:10081", healthManager)
-	listenAndServe := lo.Async(http2Server.ListenAndServe)
-	defer func() {
-		err := <-listenAndServe
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			t.Fatalf("failed to listen and serve %s", err)
-		}
-	}()
-	defer http2Server.Close()
-	t.Log("started proxy h2c listener")
+	http2Server := createHttp2Server(director, "", healthManager)
+	defer serveProxy(t, http2Server, proxyListener)()
 
-	inferenceContainer, err := test.NewHttpServer("0.0.0.0:8001", func(writer http.ResponseWriter, request *http.Request) {
+	inferenceContainer, err := test.NewHttpServer("", func(writer http.ResponseWriter, request *http.Request) {
 		if request.Header.Get(consts.RequestIdHeaderName) != proxyResponse.RequestId.String() {
 			t.Log("mismatched request id")
 			t.Fail()
@@ -351,7 +311,7 @@ func TestRequestIdHeader(t *testing.T) {
 	defer inferenceContainer.Close()
 	t.Log("started http inference server")
 
-	dial, err := net.Dial("tcp", "localhost:8001")
+	dial, err := net.Dial("tcp", inferenceContainer.Listener.Addr().String())
 	if err != nil {
 		t.Fatalf("failed to connect to local http server %s", err)
 	}
@@ -361,7 +321,7 @@ func TestRequestIdHeader(t *testing.T) {
 	}
 	t.Logf("registered connection to inference server with director")
 
-	request, _ := http.NewRequest(http.MethodPost, "http://localhost:10081/asdf", nil)
+	request, _ := http.NewRequest(http.MethodPost, "http://" + proxyAddr + "/asdf", nil)
 	request.Header.Set("authorization", "Bearer asdf")
 	request.Header.Set("function-id", testFunctionId)
 	response, err := http.DefaultClient.Do(request)
@@ -379,6 +339,7 @@ func TestRequestIdHeader(t *testing.T) {
 }
 
 func TestRequestIdCookie(t *testing.T) {
+	proxyListener, proxyAddr := bindEphemeral(t)
 	proxyResponse := &invocation.Result{
 		RequestId:                uuid.New(),
 		WorkerAuthorizationToken: "123abc",
@@ -391,22 +352,14 @@ func TestRequestIdCookie(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://localhost:10081", nil)
+	healthManager, err := healthManager("http://" + proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
-	http2Server := createHttp2Server(director, "0.0.0.0:10081", healthManager)
-	listenAndServe := lo.Async(http2Server.ListenAndServe)
-	defer func() {
-		err := <-listenAndServe
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			t.Fatalf("failed to listen and serve %s", err)
-		}
-	}()
-	defer http2Server.Close()
-	t.Log("started proxy h2c listener")
+	http2Server := createHttp2Server(director, "", healthManager)
+	defer serveProxy(t, http2Server, proxyListener)()
 
-	inferenceContainer, err := test.NewHttpServer("0.0.0.0:8001", func(writer http.ResponseWriter, request *http.Request) {
+	inferenceContainer, err := test.NewHttpServer("", func(writer http.ResponseWriter, request *http.Request) {
 		cookie := (&http.Cookie{
 			Name:  "my-cookie",
 			Value: "my-value",
@@ -420,7 +373,7 @@ func TestRequestIdCookie(t *testing.T) {
 	defer inferenceContainer.Close()
 	t.Log("started http inference server")
 
-	dial, err := net.Dial("tcp", "localhost:8001")
+	dial, err := net.Dial("tcp", inferenceContainer.Listener.Addr().String())
 	if err != nil {
 		t.Fatalf("failed to connect to local http server %s", err)
 	}
@@ -430,7 +383,7 @@ func TestRequestIdCookie(t *testing.T) {
 	}
 	t.Logf("registered connection to inference server with director")
 
-	request, _ := http.NewRequest(http.MethodPost, "http://localhost:10081/asdf", nil)
+	request, _ := http.NewRequest(http.MethodPost, "http://" + proxyAddr + "/asdf", nil)
 	request.Header.Set("authorization", "Bearer asdf")
 	request.Header.Set("function-id", testFunctionId)
 	response, err := http.DefaultClient.Do(request)
@@ -726,6 +679,7 @@ func TestGetRequestIdFromHeaderOrCookie(t *testing.T) {
 }
 
 func TestStreamDirectorWebSocket(t *testing.T) {
+	proxyListener, proxyAddr := bindEphemeral(t)
 	proxyResponse := &invocation.Result{
 		RequestId:                uuid.New(),
 		WorkerAuthorizationToken: "123abc",
@@ -738,20 +692,12 @@ func TestStreamDirectorWebSocket(t *testing.T) {
 		}
 	}()
 	// this is our own address, not a mock nvcf, but it doesn't matter
-	healthManager, err := healthManager("http://localhost:10082", nil)
+	healthManager, err := healthManager("http://" + proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
-	http2Server := createHttp2Server(director, "0.0.0.0:10082", healthManager)
-	listenAndServe := lo.Async(http2Server.ListenAndServe)
-	defer func() {
-		err := <-listenAndServe
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			t.Fatalf("failed to listen and serve %s", err)
-		}
-	}()
-	defer http2Server.Close()
-	t.Log("started proxy h2c listener")
+	http2Server := createHttp2Server(director, "", healthManager)
+	defer serveProxy(t, http2Server, proxyListener)()
 
 	// Create a WebSocket server as the inference backend
 	upgrader := websocket.Upgrader{
@@ -790,21 +736,11 @@ func TestStreamDirectorWebSocket(t *testing.T) {
 		}
 	})
 
-	wsServer := &http.Server{
-		Addr:    "0.0.0.0:8002",
-		Handler: mux,
-	}
+	wsListener, wsAddr := bindEphemeral(t)
+	wsServer := &http.Server{Handler: mux}
+	defer serveHTTP(t, wsServer, wsListener)()
 
-	go func() {
-		err := wsServer.ListenAndServe()
-		if err != nil && err != http.ErrServerClosed {
-			t.Logf("WebSocket server error: %v", err)
-		}
-	}()
-	defer wsServer.Close()
-	t.Log("started WebSocket inference server")
-
-	dial, err := net.Dial("tcp", "localhost:8002")
+	dial, err := net.Dial("tcp", wsAddr)
 	if err != nil {
 		t.Fatalf("failed to connect to local WebSocket server %s", err)
 	}
@@ -822,7 +758,7 @@ func TestStreamDirectorWebSocket(t *testing.T) {
 		header.Add("Sec-WebSocket-Protocol", fmt.Sprintf("function-id.%s", testFunctionId))
 
 		dialer := websocket.Dialer{}
-		conn, resp, err := dialer.Dial("ws://localhost:10082/ws", header)
+		conn, resp, err := dialer.Dial("ws://" + proxyAddr + "/ws", header)
 		if err != nil {
 			t.Fatal("failed to create WebSocket client:", err)
 		}
@@ -1133,6 +1069,7 @@ func getValueAtIndex(values []string, index int) string {
 }
 
 func TestCorsPreflightRequest(t *testing.T) {
+	proxyListener, proxyAddr := bindEphemeral(t)
 	proxyResponse := &invocation.Result{
 		RequestId:                uuid.New(),
 		WorkerAuthorizationToken: "123abc",
@@ -1145,22 +1082,14 @@ func TestCorsPreflightRequest(t *testing.T) {
 		}
 	}()
 
-	healthManager, err := healthManager("http://localhost:10085", nil)
+	healthManager, err := healthManager("http://" + proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
-	http2Server := createHttp2Server(director, "0.0.0.0:10085", healthManager)
-	listenAndServe := lo.Async(http2Server.ListenAndServe)
-	defer func() {
-		err := <-listenAndServe
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			t.Fatalf("failed to listen and serve %s", err)
-		}
-	}()
-	defer http2Server.Close()
-	t.Log("started proxy h2c listener")
+	http2Server := createHttp2Server(director, "", healthManager)
+	defer serveProxy(t, http2Server, proxyListener)()
 
-	selfFqdn := "http://localhost:10085"
+	selfFqdn := "http://" + proxyAddr
 
 	t.Run("cors_preflight_options_request", func(t *testing.T) {
 		// Create a preflight CORS request
@@ -1219,6 +1148,7 @@ func TestCorsPreflightRequest(t *testing.T) {
 }
 
 func TestCorsErrorResponses(t *testing.T) {
+	proxyListener, proxyAddr := bindEphemeral(t)
 	proxyResponse := &invocation.Result{
 		RequestId:                uuid.New(),
 		WorkerAuthorizationToken: "123abc",
@@ -1231,22 +1161,14 @@ func TestCorsErrorResponses(t *testing.T) {
 		}
 	}()
 
-	healthManager, err := healthManager("http://localhost:10086", nil)
+	healthManager, err := healthManager("http://" + proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
-	http2Server := createHttp2Server(director, "0.0.0.0:10086", healthManager)
-	listenAndServe := lo.Async(http2Server.ListenAndServe)
-	defer func() {
-		err := <-listenAndServe
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			t.Fatalf("failed to listen and serve %s", err)
-		}
-	}()
-	defer http2Server.Close()
-	t.Log("started proxy h2c listener")
+	http2Server := createHttp2Server(director, "", healthManager)
+	defer serveProxy(t, http2Server, proxyListener)()
 
-	selfFqdn := "http://localhost:10086"
+	selfFqdn := "http://" + proxyAddr
 
 	t.Run("unauthenticated_error_with_cors_http", func(t *testing.T) {
 		// Create an HTTP request without authorization
@@ -1338,6 +1260,7 @@ func TestCorsErrorResponses(t *testing.T) {
 }
 
 func TestCorsWithTimeoutError(t *testing.T) {
+	proxyListener, proxyAddr := bindEphemeral(t)
 	timeout := consts.Timeout
 	consts.Timeout = 100 * time.Millisecond
 	t.Cleanup(func() {
@@ -1356,22 +1279,14 @@ func TestCorsWithTimeoutError(t *testing.T) {
 		}
 	}()
 
-	healthManager, err := healthManager("http://localhost:10087", nil)
+	healthManager, err := healthManager("http://" + proxyAddr, nil)
 	if err != nil {
 		t.Fatalf("failed to create dummy health manager")
 	}
-	http2Server := createHttp2Server(director, "0.0.0.0:10087", healthManager)
-	listenAndServe := lo.Async(http2Server.ListenAndServe)
-	defer func() {
-		err := <-listenAndServe
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			t.Fatalf("failed to listen and serve %s", err)
-		}
-	}()
-	defer http2Server.Close()
-	t.Log("started proxy h2c listener")
+	http2Server := createHttp2Server(director, "", healthManager)
+	defer serveProxy(t, http2Server, proxyListener)()
 
-	selfFqdn := "http://localhost:10087"
+	selfFqdn := "http://" + proxyAddr
 
 	t.Run("timeout_error_with_cors_http", func(t *testing.T) {
 		request, _ := http.NewRequest(http.MethodPost, selfFqdn+"/test", nil)
@@ -1758,4 +1673,60 @@ type FunctionInvokerFunc func(context.Context, net.Conn, string, string, string,
 
 func (f FunctionInvokerFunc) InvokeStatefulFunction(ctx context.Context, conn net.Conn, auth, functionId, functionVersionId string, requestId *uuid.UUID, onWorkerAuth func(workerAuthToken string, requestId uuid.UUID, apiFunctionId string, apiFunctionVersionId string)) (invocation.Result, context.CancelFunc, error) {
 	return f(ctx, conn, auth, functionId, functionVersionId, requestId, onWorkerAuth)
+}
+
+// bindEphemeral pre-binds an ephemeral 127.0.0.1 TCP port and returns the
+// listener plus its bound address (eg "127.0.0.1:42371"). Tests use this
+// to discover the proxy's address BEFORE handing the listener to the
+// server's Serve goroutine, eliminating the prior race where the test
+// would dial a hardcoded port before the goroutine had bound it.
+func bindEphemeral(t *testing.T) (net.Listener, string) {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to bind ephemeral listener: %s", err)
+	}
+	return l, l.Addr().String()
+}
+
+// serveProxy starts srv.Serve(l) in a goroutine and returns a cleanup
+// function that closes srv and waits for the goroutine to exit. Used as
+// `defer serveProxy(t, http2Server, proxyListener)()`.
+func serveProxy(t *testing.T, srv *InterceptedHttpServer, l net.Listener) func() {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(l) }()
+	return func() {
+		_ = srv.Close()
+		if err := <-done; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("proxy serve returned unexpected error: %s", err)
+		}
+	}
+}
+
+// serveGRPC mirrors serveProxy for grpc.Server.
+func serveGRPC(t *testing.T, srv *grpc.Server, l net.Listener) func() {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(l) }()
+	return func() {
+		srv.GracefulStop()
+		if err := <-done; err != nil {
+			t.Errorf("grpc serve returned unexpected error: %s", err)
+		}
+	}
+}
+
+// serveHTTP mirrors serveProxy/serveGRPC for a plain http.Server (the
+// WebSocket inference backend in TestStreamDirectorWebSocket).
+func serveHTTP(t *testing.T, srv *http.Server, l net.Listener) func() {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(l) }()
+	return func() {
+		_ = srv.Close()
+		if err := <-done; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("http serve returned unexpected error: %s", err)
+		}
+	}
 }

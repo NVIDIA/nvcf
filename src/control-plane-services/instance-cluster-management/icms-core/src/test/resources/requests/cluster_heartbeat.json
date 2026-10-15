@@ -1,0 +1,15 @@
+{
+  "status": "healthy",
+  "gpuUsage": {
+    "B200": {
+      "capacity": 20,
+      "allocated": 11,
+      "available": 9
+    },
+    "B500": {
+      "capacity": 20,
+      "allocated": 11,
+      "available": 9
+    }
+  }
+}

@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "clients",
+    srcs = [
+        "baseclient.go",
+        "grpc.go",
+        "http.go",
+        "http_client.go",
+        "retry_logger.go",
+        "tokenrefresher.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/libraries/go/lib/pkg/nvkit/auth",
+        "//src/libraries/go/lib/pkg/nvkit/errors",
+        "@com_github_go_co_op_gocron//:gocron",
+        "@com_github_grpc_ecosystem_go_grpc_middleware//:go-grpc-middleware",
+        "@com_github_grpc_ecosystem_go_grpc_middleware//retry",
+        "@com_github_hashicorp_go_cleanhttp//:go-cleanhttp",
+        "@com_github_hashicorp_go_retryablehttp//:go-retryablehttp",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_golang//prometheus/promauto",
+        "@com_github_spf13_cobra//:cobra",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+        "@io_opentelemetry_go_contrib_instrumentation_google_golang_org_grpc_otelgrpc//:otelgrpc",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_httptrace_otelhttptrace//:otelhttptrace",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//propagation",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_grpc//keepalive",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+go_test(
+    name = "clients_test",
+    srcs = [
+        "grpc_test.go",
+        "http_client_test.go",
+        "http_test.go",
+        "retry_logger_test.go",
+        "tokenrefresher_test.go",
+    ],
+    data = glob(["testdata/**"]),
+    embed = [":clients"],
+    deps = [
+        "//src/libraries/go/lib/pkg/nvkit/auth",
+        "@com_github_hashicorp_go_retryablehttp//:go-retryablehttp",
+        "@com_github_spf13_cobra//:cobra",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_x_oauth2//:oauth2",
+        "@org_uber_go_zap//:zap",
+    ],
+)

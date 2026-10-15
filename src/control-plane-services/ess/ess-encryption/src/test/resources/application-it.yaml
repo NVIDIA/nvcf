@@ -1,0 +1,93 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+logging:
+  config: "classpath:logback-test.xml"
+  exception-conversion-word: "%wEx"
+  level:
+    com.nvidia: WARN
+    org.springframework.web: WARN
+    com.github.benmanes.caffeine.cache.LocalAsyncCache: ERROR # warn causes any exceptions through cache to get auto-logged even if used for control flow
+    com.nvidia.ess.encryption.config.properties.CryptoProperties: ERROR # non UUIDv1 warn logs are noisy
+
+# Faster JVM exit after integration tests (avoids Surefire fork exit timeout when many
+# @SpringBootTest contexts shut down gRPC + Tomcat + file watchers sequentially).
+server:
+  shutdown: immediate
+
+spring:
+  main:
+    web-application-type: reactive
+  cassandra:
+    repositories:
+      type: auto
+    request:
+      consistency: ALL
+      page-size: 5000
+      serial-consistency: local_serial
+      throttler:
+        type: none
+      timeout: 10000
+    advanced:
+      speculative-execution-policy:
+        class: ConstantSpeculativeExecutionPolicy
+        max-executions: 2
+        delay: 1000 # milliseconds
+    local-datacenter: datacenter1
+    ssl:
+      enabled: false
+    keyspace-name: ess
+
+kv:
+  # Do not be alarmed: these are sample GENERATED keys. The values are not the same as the ones in Vault.
+  defaultkey: # global key - used as part of `encryption.rollout.useDefaultKey`
+    # kid - GTKPgJogH7bhxBkHNVvXekt9-3Cxu1CFVIVjBIW7L5g
+    defaultKey: eyJrdHkiOiJvY3QiLCJ1c2UiOiJlbmMiLCJraWQiOiJHVEtQZ0pvZ0g3Ymh4QmtITlZ2WGVrdDktM0N4dTFDRlZJVmpCSVc3TDVnIiwia2V5X29wcyI6WyJlbmNyeXB0IiwiZGVjcnlwdCJdLCJrIjoiY08zNmQxTHVPZjFVcGF1WnBCVXlaSXVvUE9USjA5ZXIxQWJ0d3FUUmh1NCIsImFsZyI6IkEyNTZHQ00ifQ==
+    allDefaultKeys: W3sia3R5Ijoib2N0IiwidXNlIjoiZW5jIiwia2lkIjoiR1RLUGdKb2dIN2JoeEJrSE5Wdlhla3Q5LTNDeHUxQ0ZWSVZqQklXN0w1ZyIsImtleV9vcHMiOlsiZW5jcnlwdCIsImRlY3J5cHQiXSwiayI6ImNPMzZkMUx1T2YxVXBhdVpwQlV5Wkl1b1BPVEowOWVyMUFidHdxVFJodTQiLCJhbGciOiJBMjU2R0NNIn1d
+  crypto: # master key - used to encrypt encryption keys
+    # Sample master key and allMasterKeys(contains 2 keys) in base64 encoded format.
+    # kid - 53e923c8-803d-11ef-b864-0242ac120002
+    masterKey: eyJrdHkiOiJvY3QiLCJraWQiOiI1M2U5MjNjOC04MDNkLTExZWYtYjg2NC0wMjQyYWMxMjAwMDIiLCJrIjoiTllVajljLWJaZkRyaUIzVldhTXgycGR6ZGE3TWpzTkY4cTNVWE8xSURFQSJ9
+    # kids - 2ce14d62-8035-11ef-b864-0242ac120002, 53e923c8-803d-11ef-b864-0242ac120002, 3ba0b5db-914b-40d5-929f-4013a65306fa (backwards compatibility locally)
+    allMasterKeys: W3sia3R5Ijoib2N0IiwidXNlIjoiZW5jIiwia2lkIjoiMmNlMTRkNjItODAzNS0xMWVmLWI4NjQtMDI0MmFjMTIwMDAyIiwia2V5X29wcyI6WyJkZWNyeXB0IiwiZW5jcnlwdCJdLCJrIjoiOC1nODZSbnFqN0xtME9KRC1tQThiZ0gzLWVaTGVhcjVlcGRRTElQOFNtWSIsImFsZyI6IkEyNTZHQ00ifSwgeyJrIjogIk5ZVWo5Yy1iWmZEcmlCM1ZXYU14MnBkemRhN01qc05GOHEzVVhPMUlERUEiLCAia3R5IjogIm9jdCIsICJraWQiOiAiNTNlOTIzYzgtODAzZC0xMWVmLWI4NjQtMDI0MmFjMTIwMDAyIn0seyJrdHkiOiAib2N0Iiwia2lkIjogIjNiYTBiNWRiLTkxNGItNDBkNS05MjlmLTQwMTNhNjUzMDZmYSIsImsiOiAidUJWNUVGeWh2NjJxMm54Z3BqZ1hucnp2VElWSVhMYVdBOEFwMDFablJxMCJ9XQo=
+
+encryption:
+  # Negative grace period absorbs WSL2 wall-clock backward jumps (Hyper-V time-sync corrections
+  # can rewind System.currentTimeMillis() by > ~1s at a time on WSL2 hosts).
+  mekRotationGracePeriod: PT-10S
+  integrityChecks:
+    populationEnabled: false
+    validationEnabled: false
+  rollout:
+    enabled: true
+    useDefaultKey: true
+    useAllowList: false
+    allowList: "org1,org2,org3,org4,org5,org6,org7"
+  rotation:
+    enabled: true
+    scheduled:
+      enabled: false # trigger manually
+      period: 77d
+      fetchSize: 100
+      backpressurePageCount: 4
+      cron: "${random.int[0,60)} ${random.int[0,60)} ${random.int[0,24)} * * * *" # Every day at random hour, minute and second. To reduce likelihood of collision, randomize day as well
+  reencryption:
+    enabled: true
+    scheduled:
+      enabled: false # trigger manually
+  promotion:
+    validation-payloads:
+      - "xyz"
+      - "test value"
+      - '{"data": {"field1": "asd", "field2": {"subfield3": "agoaldksglgsaldsagoaldksglgsaldsagoaldksglgsaldsagoaldksglgsaldsagoa"}}}'

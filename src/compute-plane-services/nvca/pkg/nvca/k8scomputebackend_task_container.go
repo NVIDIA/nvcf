@@ -131,6 +131,14 @@ func (c K8sComputeBackend) applyContainerTaskCreationMessage(ctx context.Context
 		metrics.EventErrorTotal.WithLabelValues(metricLabels...).Inc()
 		return err
 	}
+	envs := c.bk8s.cfg.Agent.BYOOOTelCollectorEnvVars()
+	for _, obj := range objs {
+		pod, ok := obj.(*corev1.Pod)
+		if !ok {
+			continue
+		}
+		k8sutil.AddBYOOOTelCollectorEnvVarsToPodSpec(&pod.Spec, envs)
+	}
 
 	ownerRefsForReq := getOwnerRefForRequest(req)
 
@@ -194,7 +202,11 @@ func (c K8sComputeBackend) applyContainerTaskCreationMessage(ctx context.Context
 
 	podClient := c.clients.K8s.CoreV1().Pods(instanceNamespace)
 
-	var newActiveInstances []nvcav2beta1.InstanceStatus
+	var (
+		newActiveInstances []nvcav2beta1.InstanceStatus
+		createdPodCount    int
+		existingPodCount   int
+	)
 	for _, workloadPod := range workloadPods {
 		plog := log.WithField("pod", workloadPod.Name)
 		instanceID := workloadPod.Name
@@ -212,7 +224,7 @@ func (c K8sComputeBackend) applyContainerTaskCreationMessage(ctx context.Context
 
 		if c.bk8s.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.KAIScheduler) {
 			workloadPod.Spec.SchedulerName = kaischeduler.SchedulerName
-			workloadPod.Labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.GetQName()
+			workloadPod.Labels[kaischeduler.SchedulerQueueLabel] = kaischeduler.DefaultQueue
 		}
 
 		// Task pods must only be created once.
@@ -255,21 +267,34 @@ func (c K8sComputeBackend) applyContainerTaskCreationMessage(ctx context.Context
 			}
 		}
 
-		// Container task utils and init resources are toggled by feature flag.
-		if c.bk8s.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.EnforceContainerTaskResourceLimits) {
-			k8sutil.SetNVCFInfraContainerResources(corev1.ResourceList(c.bk8s.cfg.Agent.UtilsResources), workloadPod)
+		// Container task utils and init resource limits are toggled by feature flag.
+		setResourceLimits := c.bk8s.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.EnforceContainerTaskResourceLimits)
+		k8sutil.SetNVCFInfraContainerResources(corev1.ResourceList(c.bk8s.cfg.Agent.UtilsResources), workloadPod, setResourceLimits)
+		// Only validate the whole pod if limits are required, since other containers may not have them
+		// when the feature flag is disabled.
+		if setResourceLimits {
 			if err := k8sutil.ValidateAllContainerResourcesSet(workloadPod); err != nil {
 				log.WithError(err).Error("Container task pod resources are invalid")
 				return nvcaerrors.TerminalError(err)
 			}
 		}
 
+		podCreated := true
 		if _, err := podClient.Create(ctx, workloadPod, metav1.CreateOptions{}); err != nil {
-			plog.WithError(err).Error("Create Pod instance")
-			return err
+			if !errors.IsAlreadyExists(err) {
+				plog.WithError(err).Error("Create Pod instance")
+				return err
+			}
+			podCreated = false
+			plog.Debug("Task pod already exists")
 		}
 
-		plog.Infof("Created task Pod %s", workloadPod.GetName())
+		if podCreated {
+			plog.Infof("Created task Pod %s", workloadPod.GetName())
+			createdPodCount++
+		} else {
+			existingPodCount++
+		}
 
 		newActiveInstances = append(newActiveInstances, nvcav2beta1.InstanceStatus{
 			ID:                    instanceID,
@@ -279,21 +304,22 @@ func (c K8sComputeBackend) applyContainerTaskCreationMessage(ctx context.Context
 			LastReportedTimestamp: nil,
 		})
 
-		c.bk8s.eventRecorder.Eventf(req, corev1.EventTypeNormal,
-			string(types.EventCategoryInstanceCreation), "Created %v Instance %v",
-			nvcav2beta1.InstanceTypePod, instanceID,
-		)
-	}
-
-	newActiveInstancesCount := 0
-	for _, activeInstance := range newActiveInstances {
-		if _, ok := activeInstances[activeInstance.ID]; !ok {
-			activeInstances[activeInstance.ID] = activeInstance
-			newActiveInstancesCount++
+		if podCreated {
+			c.bk8s.eventRecorder.Eventf(req, corev1.EventTypeNormal,
+				string(types.EventCategoryInstanceCreation), "Created %v Instance %v",
+				nvcav2beta1.InstanceTypePod, instanceID,
+			)
 		}
 	}
 
-	log.Debugf("Successfully created %v Pod instances", newActiveInstancesCount)
+	for _, activeInstance := range newActiveInstances {
+		if _, ok := activeInstances[activeInstance.ID]; !ok {
+			activeInstances[activeInstance.ID] = activeInstance
+		}
+	}
+
+	log.Debugf("Successfully created %v Pod instances, found %v existing Pod instances",
+		createdPodCount, existingPodCount)
 
 	// update timestamp only once for InProgress
 	if req.Status.RequestStatus != nvcav2beta1.ICMSRequestStatusInProgress {
@@ -426,7 +452,7 @@ func (c K8sComputeBackend) reconcileContainerTaskPodState(ctx context.Context,
 	} else {
 		// An extra 5 minutes is added to max runtime duration to ensure utils has time to send
 		// a heartbeat with EXCEEDED_MAX_RUNTIME_DURATION.
-		maxRuntimeDuration += k8sutil.TaskCleanupExtraGracePeriod
+		maxRuntimeDuration = k8sutil.AddTaskCleanupGracePeriod(maxRuntimeDuration)
 		isMaxRuntimeExceeded := k8sutil.HasTaskPodExceededTimeout(pod, maxQueuedDuration, maxRuntimeDuration, now)
 
 		if (isUtilsTerminated && utilsExitCode == 0) || (!isUtilsTerminated && !isMaxRuntimeExceeded) {

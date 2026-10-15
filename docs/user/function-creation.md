@@ -17,25 +17,38 @@ Functions can be created in one of two ways:
 
 Additionally, Cloud Functions supports [Low Latency Streaming (LLS) functions](./streaming-functions.md) for video, audio, and data streaming via WebRTC.
 
+For LLM functions, see [LLM Gateway](./llm-gateway.md#function-configuration) for OpenAI-compatible model route configuration.
+
+## Invocation Types
+
+- [Generic HTTP function invocation](./generic-http-function-invocation.md):
+  Invoke HTTP functions through the standard invocation route.
+- [gRPC function invocation](./grpc-function-invocation.md): Invoke gRPC
+  functions through the Gateway TCP listener.
+- [LLM invocation](./llm-gateway.md#endpoint-behavior): Invoke
+  OpenAI-compatible LLM functions through `llm.invocation.<domain>`.
+- [LLS/WebRTC client connection](./streaming-functions.md#connecting-to-a-streaming-function-with-a-client):
+  Connect browser or proxy clients to streaming functions.
+
 ## Best Practices
 
 ### Container Versioning
 
 - Ensure that any resources that you tag for deployment into production environments are not simply using "latest" and are following a standard version control convention.
-  - During autoscaling, a function scaling any additional instances will pull the same specificed container image and version. If version is set to "latest", and the "latest" container image is updated between instance scaling, this can lead to undefined behavior.
+  - During autoscaling, a function scaling any additional instances will pull the same specified container image and version. If version is set to "latest", and the "latest" container image is updated between instance scaling, this can lead to undefined behavior.
 
 - Function versions created are immutable, this means that the container image and version cannot be updated for a function without creating a new version of the function.
 
 ### Security
 
-- **Do not run containers as root user**: Running containers as root is not supported in Cloud Functions. Always specify a non-root user in your Dockerfile using the `USER` instruction.
-- **Use Kubernetes Secrets**: For sensitive information like API keys, credentials, or tokens, use Kubernetes Secrets instead of environment variables. This provides better security and follows Kubernetes best practices for secret management.
+- Do not run containers as root user: Running containers as root is not supported in Cloud Functions. Always specify a non-root user in your Dockerfile using the `USER` instruction.
+- Use Kubernetes Secrets: For sensitive information like API keys, credentials, or tokens, use Kubernetes Secrets instead of environment variables. This provides better security and follows Kubernetes best practices for secret management.
 
 #### Available Container Variables
 
 The following is a reference of available variables via the headers of the invocation message (auto-populated by Cloud Functions), accessible within the container.
 
-For examples of how to extract and use some of these variables, see [NVCF Container Helper Functions](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main).
+For examples of how to extract and use some of these variables, see [NVCF Container Helper Functions](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/python/nv-cloud-function-helpers).
 
 | Name                         | Description                                             |
 | ---------------------------- | ------------------------------------------------------- |

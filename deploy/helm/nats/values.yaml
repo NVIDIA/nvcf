@@ -19,13 +19,13 @@ nats:
   global:
     image:
       pullSecretNames: []
-      registry: docker.io
+      registry: ""
       pullPolicy: IfNotPresent
   container:
     image:
-      registry: docker.io
-      repository: synadia/nats-server
-      tag: 2.11.10-alpine3.22
+      registry: ""
+      repository: ""
+      tag: 2.11.17-alpine3.22
       pullPolicy: IfNotPresent
     env:
       NKEY_USER_KEY:
@@ -51,30 +51,36 @@ nats:
     # Use js-server-only health probes. With explicit accounts (AUTH/APP),
     # the default $G account has no streams, causing the standard JetStream
     # health check to fail with 503.
+    # js-server-only must be set to an explicit "true". nats-server 2.11.17
+    # parses the valueless "?js-server-only" query arg as false, which leaves
+    # the full account/stream/consumer JetStream health check active. During a
+    # rolling upgrade a rejoining node can stay 503 on stream-current errors,
+    # wedging Helm --wait. The explicit value scopes the probe to server
+    # readiness only.
     patch:
       - op: replace
         path: /startupProbe/httpGet/path
-        value: "/healthz?js-server-only"
+        value: "/healthz?js-server-only=true"
       - op: replace
         path: /readinessProbe/httpGet/path
-        value: "/healthz?js-server-only"
+        value: "/healthz?js-server-only=true"
       - op: replace
         path: /livenessProbe/httpGet/path
-        value: "/healthz?js-server-only"
+        value: "/healthz?js-server-only=true"
   reloader:
     enabled: true
     image:
-      registry: docker.io
-      repository: natsio/nats-server-config-reloader
-      tag: 0.20.0
+      registry: ""
+      repository: ""
+      tag: 0.23.0
       pullPolicy: IfNotPresent
   natsBox:
     enabled: true
     container:
       image:
-        registry: docker.io
-        repository: natsio/nats-box
-        tag: 0.19.2-nonroot
+        registry: ""
+        repository: ""
+        tag: 0.19.5-nonroot
         pullPolicy: IfNotPresent
     # Add contexts configuration to mount the nkeys secret
     contexts:

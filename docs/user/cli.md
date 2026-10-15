@@ -6,27 +6,58 @@ This page provides documentation for the NVCF Self-hosted CLI, a command-line in
 
 The NVCF Self-hosted CLI provides:
 
-- **Automatic Token Generation**: Generate admin tokens and API keys via direct API calls
-- **Smart State Management**: Persistent workflow context eliminates manual ID copying
-- **Multi-Environment Support**: Separate configurations for dev/staging/production
-- **gRPC Invocation**: Native support for gRPC function invocation
-- **Shell Completion**: Autocompletion for bash, zsh, fish, and PowerShell
-
-<Note>
-The CLI is available as a container image from NGC. See [self-hosted-artifact-manifest](./manifest.md) for the full artifact path.
-
-</Note>
+- Automatic Token Generation: Generate `NVCF_TOKEN` and API keys via direct API calls
+- Smart State Management: Persistent workflow context eliminates manual ID copying
+- Multi-Environment Support: Separate configurations for dev/staging/production
+- gRPC Invocation: Native support for gRPC function invocation
+- Shell Completion: Autocompletion for bash, zsh, fish, and PowerShell
 
 ## Prerequisites
 
 - Network access to NVCF API endpoints
-- [NGC CLI installed](https://org.ngc.nvidia.com/setup/installers/cli) (for downloading the CLI release from NGC)
+- A source checkout with Bazel/Bazelisk when you build from the repository
+- [NGC CLI installed](https://org.ngc.nvidia.com/setup/installers/cli) when you download the CLI release from NGC
 
 ## Installation
 
+You can build `nvcf-cli` from this repository or download a packaged CLI release
+from NGC. Use the source build when you are validating local changes or running
+the local k3d quickstart from a repository checkout.
+
+### Build from the repository
+
+Run the build from the repository root:
+
+```bash
+bazel build //src/clis/nvcf-cli:nvcf-cli
+```
+
+The binary is written to:
+
+```text
+bazel-bin/src/clis/nvcf-cli/nvcf-cli_/nvcf-cli
+```
+
+Install it on your `PATH`:
+
+```bash
+install -m 0755 \
+  bazel-bin/src/clis/nvcf-cli/nvcf-cli_/nvcf-cli \
+  /usr/local/bin/nvcf-cli
+```
+
+If your environment cannot reach the configured Bazel remote cache, disable the
+remote cache for this build:
+
+```bash
+bazel build --remote_cache= //src/clis/nvcf-cli:nvcf-cli
+```
+
 ### Download from NGC
 
-The CLI is available as a resource from NGC. See [download-nvcf-cli](./image-mirroring.md) for detailed download and extraction instructions.
+The CLI is available as a resource from NGC. See
+[download-nvcf-cli](./image-mirroring.md) for detailed download and extraction
+instructions.
 
 The downloaded package includes:
 
@@ -37,17 +68,21 @@ The downloaded package includes:
 
 ## Configuration
 
-The CLI uses YAML configuration files. After extracting the CLI, copy the included template:
+The CLI uses YAML configuration files. If you downloaded the packaged CLI, copy
+the included template:
 
 ```bash
 cp .nvcf-cli.yaml.template .nvcf-cli.yaml
 ```
 
+If you built the CLI from source, create `.nvcf-cli.yaml` from the examples
+below or from `src/clis/nvcf-cli/examples/config-dev.yaml`.
+
 Configuration files are searched in this order:
 
-1. **Explicit path** via `--config` flag (highest priority)
-2. **Current directory**: `./.nvcf-cli.yaml`
-3. **Home directory**: `~/.nvcf-cli.yaml`
+1. Explicit path via `--config` flag (highest priority)
+2. Current directory: `./.nvcf-cli.yaml`
+3. Home directory: `~/.nvcf-cli.yaml`
 
 <Tip>
 Place your `.nvcf-cli.yaml` in the directory where you run the CLI for project-specific configuration, or in your home directory for global configuration.
@@ -60,21 +95,21 @@ For self-hosted deployments, the CLI must be configured to communicate with
 your gateway. The gateway uses hostname-based routing for HTTP services.
 
 <Note>
-For a complete understanding of how the gateway routes traffic, including architecture diagrams, verification commands, and production DNS/HTTPS setup, see [gateway-routing](./gateway-routing.md).
+For Gateway routing details, including architecture diagrams, verification commands, and production DNS/HTTPS setup, see [gateway-routing](./gateway-routing.md).
 
 </Note>
 
 #### Prepare Gateway API ingress
 
-For one-click installs on a remote cluster, set up Gateway API ingress before
-running `self-hosted up`. The command installs the control plane, then calls
-the configured API, API Keys, invocation, and gRPC endpoints during health and
-cluster registration phases.
+For remote Helmfile deployments, set up Gateway API ingress before you configure
+the CLI. The CLI calls the configured API, API Keys,
+invocation, and gRPC endpoints during token minting, cluster registration,
+health checks, and function operations.
 
 Complete [Gateway quickstart](./gateway-routing.md#gateway-quickstart) before you
-configure the CLI. The shared Gateway quickstart installs the Gateway API CRDs,
-creates and labels the required namespaces, installs Envoy Gateway, creates the
-GatewayClass and Gateway, waits for the Gateway to be programmed, and exports:
+configure the CLI. That procedure installs the Gateway API CRDs, creates and
+labels the required namespaces, installs Envoy Gateway, creates the GatewayClass
+and Gateway, waits for the Gateway to be programmed, and exports:
 
 ```bash
 echo "$HTTP_GATEWAY_NAMESPACE/$HTTP_GATEWAY_NAME"
@@ -83,9 +118,9 @@ echo "$GATEWAY_ADDR"
 echo "$GRPC_GATEWAY_ADDR"
 ```
 
-These are the same Gateway setup steps used by the one-click, Helmfile, and
-standalone install paths. Keep the exported values in your shell, then configure
-the CLI.
+These are the same Gateway setup steps used by the Helmfile and standalone
+install paths. Keep the exported values in your shell, then configure the CLI.
+The local k3d quickstart uses local route hostnames instead.
 
 For test environments without production DNS, use the Gateway load balancer
 address as the stack domain:
@@ -125,6 +160,10 @@ base_grpc_url: "<GRPC_GATEWAY_ADDR>:10081"
 # API Keys service endpoint
 api_keys_service_url: "http://<GATEWAY_ADDR>"
 
+# NVCT (task) API endpoint. Required for `nvcf-cli task` commands; without it the
+# CLI falls back to the production URL and requests fail with 403.
+base_nvct_url: "http://<GATEWAY_ADDR>"
+
 # ==============================================================================
 # Host Header Overrides (Required for Hostname-Based Routing)
 # ==============================================================================
@@ -143,6 +182,9 @@ api_host: "api.<STACK_DOMAIN>"
 
 # Host header for Invocation service
 invoke_host: "invocation.<STACK_DOMAIN>"
+
+# Host header for NVCT (task) API
+nvct_host: "tasks.<STACK_DOMAIN>"
 
 # ==============================================================================
 # API Keys Service Configuration
@@ -227,7 +269,7 @@ service without hostname matching.
 
 #### Production Setup: DNS and HTTPS
 
-The Host header configuration above is designed for **testing and development**. For **production deployments**, configure proper DNS and TLS to eliminate the need for Host header overrides.
+The Host header configuration above is designed for testing and development. For production deployments, configure proper DNS and TLS to eliminate the need for Host header overrides.
 
 With proper DNS and HTTPS configured:
 
@@ -302,21 +344,34 @@ Or use the `--debug` flag or `NVCF_DEBUG=true` environment variable per-command.
 ```
 
 <Note>
-For immediate testing, you can use `load_tester_supreme` from `nvcf-onprem` (see [self-hosted-artifact-manifest](./manifest.md)), which supports the `{"message": "hello world"}` request body above. For more function samples, see the [nv-cloud-function-helpers](https://github.com/NVIDIA/nv-cloud-function-helpers) repository and [function-creation](./function-creation.md) for function creation documentation.
+For immediate testing, you can use `load_tester_supreme` from `nvcf-onprem` (see [self-hosted-artifact-manifest](./manifest.md)), which supports the `{"message": "hello world"}` request body above. For more function samples, see the [NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples) repository and [function-creation](./function-creation.md) for function creation documentation.
 
 </Note>
 
 ## Authentication
 
-The CLI supports two types of authentication tokens:
+The CLI stores three bearer credential types:
 
-- **Admin Token (NVCF_TOKEN)**: For function management (create, deploy, update, delete)
-- **API Key (NVCF_API_KEY)**: For user operations (invoke, list, queue status)
+- `NVCF_TOKEN`: Generated by `nvcf-cli init`. The default CLI credential for
+  management operations and self-hosted cluster management.
+- `NVCF_API_KEY`: Generated by `nvcf-cli api-key generate`. The default CLI
+  credential for function invocation, function discovery, and queue status.
+- `NVCF_NVCT_API_KEY`: Generated by `nvcf-cli api-key generate`. Used
+  automatically for all `task` subcommands.
 
-### Generate Admin Token
+For NVCF API endpoints, either bearer type can be used when it includes the
+required scope. The CLI prefers `NVCF_API_KEY` for read, invoke, and queue
+commands. It prefers `NVCF_TOKEN` for management commands when both credentials
+are configured. Self-hosted SIS cluster management uses `NVCF_TOKEN`. Task
+commands always use `NVCF_NVCT_API_KEY`.
+
+See [Scope reference](./api.md#scope-reference) for the self-hosted scope
+matrix used by CLI commands and API endpoints.
+
+### Generate NVCF_TOKEN
 
 ```bash
-# Generate fresh admin token (clears existing state)
+# Generate fresh NVCF_TOKEN (clears existing state)
 ./nvcf-cli init
 
 # With debug output
@@ -330,12 +385,12 @@ The CLI supports two types of authentication tokens:
 # Expires: 2025-11-19 06:08:15
 ```
 
-### Refresh Admin Token
+### Refresh NVCF_TOKEN
 
 Refresh your token while preserving function context:
 
 ```bash
-# Refresh token (keeps current function state)
+# Refresh NVCF_TOKEN (keeps current function state)
 ./nvcf-cli refresh
 
 # Example output:
@@ -343,23 +398,32 @@ Refresh your token while preserving function context:
 # Function ID: func-abc123  (preserved)
 ```
 
-### Generate API Key
+### Generate API Keys
+
+`api-key generate` mints both a function key (`NVCF_API_KEY`) and a task key
+(`NVCF_NVCT_API_KEY`) in a single command. Use `--for` to generate only one.
 
 ```bash
-# Generate with defaults (24h expiration)
+# Generate both keys with defaults (24h expiration)
 ./nvcf-cli api-key generate
+
+# Generate only the function key
+./nvcf-cli api-key generate --for function
+
+# Generate only the task key
+./nvcf-cli api-key generate --for task
 
 # Custom expiration and description
 ./nvcf-cli api-key generate --expires-in 48h --description "Production key"
 
-# Generate with custom scopes
-./nvcf-cli api-key generate --scopes invoke_function,list_functions
+# Generate with custom scopes (requires --for)
+./nvcf-cli api-key generate --for function --scopes invoke_function,list_functions
 
 # Generate and validate
 ./nvcf-cli api-key generate --validate
 ```
 
-Available scopes for API keys (all included by default):
+Default function key scopes:
 
 | Scope | Description |
 | --- | --- |
@@ -367,37 +431,121 @@ Available scopes for API keys (all included by default):
 | `list_functions` | View available functions |
 | `list_functions_details` | View detailed function metadata |
 | `queue_details` | Monitor function execution queues |
-| `manage_registries` | Manage registry credentials |
+
+Default task key scopes:
+
+| Scope | Description |
+| --- | --- |
+| `launch_task` | Submit new tasks |
+| `list_tasks` | List tasks |
+| `task_details` | Get task status and details |
+| `cancel_task` | Cancel a running task |
+| `delete_task` | Delete a task |
+| `list_events` | List task events |
+| `list_results` | Retrieve task results |
+| `update_secrets` | Update secrets for a task |
 
 ## Command Reference
 
 ### Self-hosted Deployment Commands
 
-Use these commands to install and inspect self-hosted NVCF deployments. For the full fresh-install walkthrough, see [Quickstart](./quickstart.md).
+Use these commands to install and inspect self-hosted NVCF deployments. For the local k3d installation flow, see [Quickstart](./quickstart.md).
 
 | Command | Description |
 | --- | --- |
 | `self-hosted check --pre` | Check local tools and Kubernetes access before installation. |
 | `self-hosted check --all` | Run all currently available self-hosted checks. Use this with pod, route, and function smoke validation. |
-| `self-hosted up --cluster-name <cluster-name> --nca-id <nca-id> --region <region>` | Run the one-click fresh-install flow. |
+| `self-hosted up --cluster-name <cluster-name> --nca-id <nca-id> --region <region>` | Run the local k3d fresh-install flow. |
 | `self-hosted status` | Show a deployment health summary. |
 | `self-hosted install --control-plane` | Run the control-plane installation primitive. |
 | `self-hosted install --compute-plane --cluster-name <cluster-name>` | Run the compute-plane installation primitive for a registered GPU cluster. |
 | `self-hosted uninstall --compute-plane --cluster-name <cluster-name>` | Remove compute-plane components for the GPU cluster. |
 | `self-hosted uninstall --control-plane` | Remove control-plane components. |
 
-For separate control-plane and GPU clusters, pass both kube contexts:
+Bundle source overrides:
+
+- `--control-plane-stack` selects the control-plane stack bundle.
+- `--compute-plane-stack` selects the compute-plane stack bundle.
+- Both flags accept local paths, git URLs, and `oci://` references.
+
+`self-hosted up` supports only a single local k3d cluster. It requires
+`--env local`, a current `k3d-*` kube context, and no split-context flags. For
+separate control-plane and GPU clusters, use the explicit control-plane and
+compute-plane install primitives with [Self-Managed Clusters](./cluster-management/self-managed.md).
+
+### Cluster Registration
+
+Self-managed GPU clusters must be registered with the control plane before the NVCA
+operator can start an agent. Registration records the GPU cluster's OIDC issuer and public
+JWKS with the control plane (ICMS) so the agent's projected service account tokens (PSAT)
+validate at runtime. The `cluster register` command performs this registration and prints
+the Helm values the operator install needs.
+
+<Note>
+`init` does double duty: it mints the admin token and discovers the control-plane issuer.
+Run `init` before `cluster register`. The one-click `self-hosted up` flow runs both
+internally.
+
+</Note>
 
 ```bash
-./nvcf-cli self-hosted up \
-  --control-plane-context <control-plane-context> \
-  --compute-plane-context <gpu-cluster-context> \
-  --cluster-name <cluster-name> \
+# 1. Mint the admin token and discover the control-plane issuer
+./nvcf-cli init
+
+# 2. Register the GPU cluster (prints a summary and a Helm values block)
+./nvcf-cli cluster register \
+  --name <cluster-name> \
   --nca-id <nca-id> \
-  --region <region>
+  --region <region> \
+  --icms-url "http://<GATEWAY_ADDR>" \
+  --ignore-existing
 ```
 
-For a single cluster, omit both context flags.
+`cluster register` flags:
+
+| Flag | Description |
+| --- | --- |
+| `--name` | Cluster name (required) |
+| `--nca-id` | NCA/tenant ID (required) |
+| `--region` | Cluster region (default: `us-west-1`) |
+| `--icms-url` | SIS/ICMS endpoint URL the agent uses to reach the control plane |
+| `--nats-url` | NATS endpoint URL for the agent (optional) |
+| `--kubeconfig` | Path to the target GPU cluster kubeconfig (defaults to the current context) |
+| `--oidc-issuer-url` | OIDC issuer URL. Overrides auto-detection and skips SPIRE and Kubernetes discovery |
+| `--ignore-existing` | Return existing IDs instead of failing if the cluster is already registered |
+
+Issuer and JWKS discovery: `cluster register` detects the GPU cluster's OIDC issuer and
+fetches its public JWKS, then sends them to ICMS. Detection precedence:
+
+1. `--oidc-issuer-url` if provided (manual override).
+2. A SPIRE OIDC discovery service in the cluster, if present.
+3. The Kubernetes API server OIDC endpoint (default).
+
+The detected source is recorded as `identitySource` in the output: `psat` for the
+Kubernetes API server, `spire` for SPIRE, or `custom` for a manual issuer.
+
+Output: the command prints a summary (cluster group ID, cluster ID, OIDC issuer, region)
+followed by a `--- Helm values for nvca-operator ---` block. Copy that YAML block into a
+`<cluster-name>-register-values.yaml` file and pass it to the operator install. The values
+schema:
+
+```yaml
+clusterID: <uuid>
+clusterGroupID: <uuid>
+ncaID: <nca-id>
+region: <region>
+selfManaged:
+  identitySource: psat
+  icmsServiceURL: "http://<GATEWAY_ADDR>"
+  revalServiceURL: "http://<GATEWAY_ADDR>"
+  natsURL: "nats://<GATEWAY_ADDR>:4222"
+```
+
+For load-balancer-fronted gateways that route by hostname, add the matching host-header
+overrides (`selfManaged.icmsServiceHostHeaderOverride`,
+`selfManaged.revalServiceHostHeaderOverride`, `selfManaged.natsHostOverride`) to these
+values. See [self-managed-clusters](./cluster-management/self-managed.md) for how the
+register values feed the operator install and when host-header overrides are required.
 
 ### General Commands
 
@@ -413,7 +561,7 @@ For a single cluster, omit both context flags.
 
 | Command | Description |
 | --- | --- |
-| `api-key generate` | Generate a new API key for function operations |
+| `api-key generate` | Generate function and task API keys (both by default; use `--for function` or `--for task` for one) |
 | `api-key list` | List all API keys |
 | `api-key show` | Show the current saved API key |
 | `api-key delete` | Delete a specific API key (supports `--force`) |
@@ -421,9 +569,50 @@ For a single cluster, omit both context flags.
 | `api-key clear` | Clear saved API key from state (supports `--force`) |
 | `api-key clear-all` | Delete all API keys for an owner (supports `--force`) |
 
+### Task Commands
+
+Task commands manage NVCT (NVIDIA Cloud Tasks) workloads. They require a task
+API key, which `api-key generate` mints automatically alongside the function key.
+
+| Command | Description |
+| --- | --- |
+| `task create` | Submit a new task (saves task ID to state) |
+| `task list` | List tasks, optionally filtered by status |
+| `task get` | Get details for a task by ID |
+| `task cancel` | Cancel a running task |
+| `task delete` | Delete a task |
+| `task events` | List events for a task |
+| `task results` | Retrieve results for a completed task |
+| `task update-secrets` | Update secrets for a task |
+| `task bulk` | Retrieve details for multiple tasks by ID |
+
+```bash
+# Generate both keys (required before task commands)
+./nvcf-cli api-key generate
+
+# Submit a container task
+./nvcf-cli task create \
+  --name my-training-job \
+  --gpu H100 \
+  --instance-type GPU.H100_1x \
+  --image my-registry/training:latest
+
+# Check task details
+./nvcf-cli task get
+
+# Stream lifecycle events
+./nvcf-cli task events
+
+# Cancel a running task
+./nvcf-cli task cancel
+
+# List recent tasks
+./nvcf-cli task list
+```
+
 ### Function Management Commands
 
-**Create Function**
+#### Create Function
 
 ```bash
 # Create from JSON file
@@ -449,6 +638,15 @@ For a single cluster, omit both context flags.
   --secrets "API_KEY=secret123" \
   --tags "production,v2" \
   --rate-limit "100-S"
+
+# Create an LLM function with model routing metadata
+./nvcf-cli function create \
+  --name "my-llm-function" \
+  --image "nvcr.io/example/openai-compatible:latest" \
+  --inference-url "/" \
+  --inference-port 8000 \
+  --function-type LLM \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
 ```
 
 All `function create` flags:
@@ -461,7 +659,7 @@ All `function create` flags:
 | `--inference-port` | Inference endpoint port (required) |
 | `--input-file` | JSON file with function configuration |
 | `--description` | Function description |
-| `--function-type` | `DEFAULT` or `STREAMING` (default: `DEFAULT`) |
+| `--function-type` | `DEFAULT`, `STREAMING`, or `LLM` (default: `DEFAULT`) |
 | `--api-body-format` | API body format (default: `CUSTOM`) |
 | `--health-uri` | Health check endpoint URI |
 | `--health-port` | Health check endpoint port |
@@ -473,6 +671,7 @@ All `function create` flags:
 | `--secrets` | Secrets in `name=value` format (repeatable) |
 | `--tags` | Comma-separated tags |
 | `--models` | Model artifacts in `name:version:uri` format (repeatable) |
+| `--llm-model` | LLM model config in `name=MODEL,uris=URI\|URI,routingMethod=round_robin\|power_of_two\|groq_multiregion\|pulsar\|random,tokenRateLimit=LIMIT` format (repeatable). Token limits use `<value>-<unit>` with `S`, `M`, `H`, `D`, or `W`, for example `1000-S`. Use JSON input for combined token limits because inline model specs use commas as field separators. |
 | `--resources` | Resource artifacts in `name:version:uri` format (repeatable) |
 | `--helm-chart` | Helm chart specification |
 | `--helm-chart-service` | Helm chart service name |
@@ -498,7 +697,33 @@ Example function JSON:
 }
 ```
 
-**Deploy Function**
+LLM functions use `functionType: "LLM"` and define model routing metadata under `models[].llmConfig`:
+
+```json
+{
+  "name": "sample-llm-function",
+  "containerImage": "nvcr.io/example/openai-compatible:latest",
+  "inferenceUrl": "/",
+  "inferencePort": 8000,
+  "functionType": "LLM",
+  "models": [
+    {
+      "name": "dummy-model",
+      "llmConfig": {
+        "uris": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"],
+        "routingMethod": "round_robin",
+        "tokenRateLimit": "1000-S"
+      }
+    }
+  ]
+}
+```
+
+For LLM models, `llmConfig.routingMethod` accepts `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`.
+Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`.
+`llmConfig.tokenRateLimit` accepts one or more comma-separated positive integer token limits in `<value>-<unit>` format. Supported units are `S` (seconds), `M` (minutes), `H` (hours), `D` (days), and `W` (weeks). Use `1000-S` for a single limit, or `1000-S,5000-M,100000-H,500000-D,1000000-W` for a combined limit with distinct units. Use JSON input for combined limits because inline CLI model specs use commas as field separators.
+
+#### Deploy Function
 
 The `function deploy` command group manages deployments with the following subcommands:
 
@@ -581,7 +806,7 @@ Example deployment JSON:
 }
 ```
 
-**List and Get Functions**
+#### List and Get Functions
 
 ```bash
 # List all functions
@@ -605,7 +830,7 @@ Example deployment JSON:
   --json
 ```
 
-**Update Function**
+#### Update Function
 
 ```bash
 # Update function tags
@@ -614,6 +839,12 @@ Example deployment JSON:
   --version-id <version-id> \
   --tags "production,v2"
 
+# Update LLM model routing config
+./nvcf-cli function update \
+  --function-id <function-id> \
+  --version-id <version-id> \
+  --llm-model-update "name=dummy-model,routingMethod=round_robin,tokenRateLimit=1000-S"
+
 # Update from JSON file
 ./nvcf-cli function update \
   --function-id <function-id> \
@@ -621,7 +852,25 @@ Example deployment JSON:
   --input-file metadata-update.json
 ```
 
-**Invoke Function**
+LLM model updates can also be provided in the input file:
+
+```json
+{
+  "functionId": "<function-id>",
+  "versionId": "<version-id>",
+  "modelUpdates": [
+    {
+      "modelName": "dummy-model",
+      "llmConfig": {
+        "routingMethod": "round_robin",
+        "tokenRateLimit": "1000-S,5000-M,100000-H,500000-D,1000000-W"
+      }
+    }
+  ]
+}
+```
+
+#### Invoke Function
 
 ```bash
 # Invoke using saved context
@@ -642,7 +891,32 @@ Example deployment JSON:
   --version-id <version-id> \
   --request-body '{"input": "Hello!"}' \
   --timeout 120
+
+# Invoke an LLM function with the chat completions path
+./nvcf-cli function invoke \
+  --function-id <function-id> \
+  --version-id <version-id> \
+  --model-name dummy-model \
+  --inference-url /v1/chat/completions \
+  --request-body '{"messages":[{"role":"user","content":"Hello"}],"stream":true}'
+
+# Invoke another OpenAI-compatible LLM path
+./nvcf-cli function invoke \
+  --function-id <function-id> \
+  --version-id <version-id> \
+  --model-name dummy-model \
+  --inference-url /v1/embeddings \
+  --request-body '{"input":"NVCF embeddings check"}'
 ```
+
+Note: The CLI `function invoke` command detects LLM functions automatically.
+For LLM functions, `--model-name` and `--inference-url` are required. The CLI uses the LLM invocation route and sets the OpenAI `model` value to `<function-id>/<model-name>`.
+
+For LLM Gateway endpoint behavior, routing, and session stickiness details, see [LLM Gateway](./llm-gateway.md).
+
+For raw HTTP invocation, HTTP streaming, gRPC metadata, and invocation error
+behavior, see [Generic HTTP Function Invocation](./generic-http-function-invocation.md)
+and [gRPC Function Invocation](./grpc-function-invocation.md).
 
 Additional `function invoke` flags:
 
@@ -652,13 +926,13 @@ Additional `function invoke` flags:
 | `--grpc-service` | gRPC service name |
 | `--grpc-method` | gRPC method name |
 | `--grpc-plaintext` | Use plaintext (insecure) gRPC |
+| `--inference-url` | Function path, or OpenAI-compatible path for LLM functions (required for LLM) |
+| `--model-name` | OpenAI model name for LLM functions |
 | `--timeout` | Request timeout in seconds (default: 60) |
-| `--poll-duration` | Initial polling duration in seconds (default: 5) |
-| `--poll-rate` | Polling rate in seconds (default: 3) |
+| `--poll-duration` | Invocation hold-open duration in seconds (default: 5) |
 | `--input-file` | JSON file with invocation configuration |
-| `--input-asset-references` | Input asset references (repeatable) |
 
-**Queue Management**
+#### Queue Management
 
 ```bash
 # Get queue status for a function
@@ -668,7 +942,7 @@ Additional `function invoke` flags:
 ./nvcf-cli function queue position <request-id>
 ```
 
-**Delete Function**
+#### Delete Function
 
 ```bash
 # Delete current function from state
@@ -687,54 +961,58 @@ Manage container registry credentials for function images and Helm charts. For c
 
 | Command | Description |
 | --- | --- |
-| `registry-credentials add` | Add a new registry credential |
-| `registry-credentials list` | List all registry credentials |
-| `registry-credentials get` | Get details of a specific credential |
-| `registry-credentials update` | Update an existing credential |
-| `registry-credentials delete` | Delete a registry credential |
-| `registry-credentials list-recognized` | List all recognized registries |
+| `registry-credential add` | Add a new registry credential |
+| `registry-credential list` | List all registry credentials |
+| `registry-credential get` | Get details of a specific credential |
+| `registry-credential update` | Update an existing credential |
+| `registry-credential delete` | Delete a registry credential |
+| `registry-credential list-recognized` | List all recognized registries |
 
 ```bash
 # Add registry credentials using base64 secret
-./nvcf-cli registry-credentials add \
+./nvcf-cli registry-credential add \
   --hostname "nvcr.io" \
   --secret "<BASE64_ENCODED_USERNAME:PASSWORD>" \
   --artifact-type CONTAINER \
   --description "NGC Container Registry"
 
 # Add registry credentials using username/password
-./nvcf-cli registry-credentials add \
+./nvcf-cli registry-credential add \
   --hostname "nvcr.io" \
   --username "<USERNAME>" \
   --password "<PASSWORD>" \
   --artifact-type CONTAINER
 
 # List registry credentials (with optional filters)
-./nvcf-cli registry-credentials list
-./nvcf-cli registry-credentials list --artifact-type CONTAINER
-./nvcf-cli registry-credentials list --provisioned-by USER
+./nvcf-cli registry-credential list
+./nvcf-cli registry-credential list --artifact-type CONTAINER
+./nvcf-cli registry-credential list --provisioned-by USER
 
 # Get details for a specific credential
-./nvcf-cli registry-credentials get <credential-id>
+./nvcf-cli registry-credential get <credential-id>
 
 # Update a credential
-./nvcf-cli registry-credentials update <credential-id> \
+./nvcf-cli registry-credential update <credential-id> \
   --username "<NEW_USERNAME>" \
   --password "<NEW_PASSWORD>"
 
 # Delete registry credentials
-./nvcf-cli registry-credentials delete <credential-id>
-./nvcf-cli registry-credentials delete <credential-id> --force
+./nvcf-cli registry-credential delete <credential-id>
+./nvcf-cli registry-credential delete <credential-id> --force
 
 # List recognized registries
-./nvcf-cli registry-credentials list-recognized
+./nvcf-cli registry-credential list-recognized
 ```
+
+<Note>
+Registry credential changes take up to about 5 minutes to take effect for task creation. `nvcf-cli registry-credential list` and `get` show the new value immediately, but task processing caches account credentials for about 5 minutes (`nvct.nvcf.cache-ttl`), so a task can keep using the previous value until the cache refreshes. After rotating or deleting a credential, allow up to about 5 minutes, or restart the task service to apply it immediately. See [Credential Propagation Delay](./third-party-registries.md).
+</Note>
 
 ## Troubleshooting
 
 ### Authentication Errors
 
-**401 Unauthorized on function creation:**
+401 Unauthorized on function creation:
 
 ```bash
 # Regenerate admin token
@@ -745,7 +1023,7 @@ Manage container registry credentials for function images and Helm charts. For c
 # Look for: "Using FUNCTION TOKEN for POST"
 ```
 
-**403 Forbidden on invocation:**
+403 Forbidden on invocation:
 
 ```bash
 # Regenerate API key
@@ -781,12 +1059,27 @@ Manage container registry credentials for function images and Helm charts. For c
 
 ### Token Usage Summary
 
-| Operation | Required Token | Notes |
-| --- | --- | --- |
-| `function create` | `NVCF_TOKEN` | Admin token required |
-| `function deploy create` | `NVCF_TOKEN` | Falls back to API key |
-| `function delete` | `NVCF_TOKEN` | **No fallback** - admin only |
-| `function invoke` | `NVCF_API_KEY` | Falls back to admin token |
-| `function list` | `NVCF_API_KEY` | Falls back to admin token |
+| Operation | Accepted bearer | Scope | CLI preference |
+| --- | --- | --- | --- |
+| `function create` | `NVCF_TOKEN` or `NVCF_API_KEY` | `register_function` | `NVCF_TOKEN` |
+| `function deploy create` | `NVCF_TOKEN` or `NVCF_API_KEY` | `deploy_function` | `NVCF_TOKEN` |
+| `function deploy get` | `NVCF_TOKEN` or `NVCF_API_KEY` | `deploy_function` | `NVCF_TOKEN` |
+| `function deploy update` | `NVCF_TOKEN` or `NVCF_API_KEY` | `deploy_function` | `NVCF_TOKEN` |
+| `function deploy remove` | `NVCF_TOKEN` or `NVCF_API_KEY` | `deploy_function` | `NVCF_TOKEN` |
+| `function delete` | `NVCF_TOKEN` or `NVCF_API_KEY` | `delete_function` | `NVCF_TOKEN` |
+| `function update` | `NVCF_TOKEN` or `NVCF_API_KEY` | `update_function` | `NVCF_TOKEN` |
+| `function invoke` | `NVCF_TOKEN` or `NVCF_API_KEY` | `invoke_function` | `NVCF_API_KEY` |
+| `function list`, `function list-ids`, `function list-versions`, `function get` | `NVCF_TOKEN` or `NVCF_API_KEY` | `list_functions` or `list_functions_details` | `NVCF_API_KEY` |
+| `function queue status`, `function queue position`, `function queue details` | `NVCF_TOKEN` or `NVCF_API_KEY` | `queue_details` | `NVCF_API_KEY` |
+| `registry-credential` commands | `NVCF_TOKEN` or `NVCF_API_KEY` | `manage_registry_credentials` | `NVCF_TOKEN` |
+| Self-hosted cluster register, list, rotate, delete | `NVCF_TOKEN` | `cluster-management` | `NVCF_TOKEN` |
+| `task create` | `NVCF_NVCT_API_KEY` | `launch_task` | `NVCF_NVCT_API_KEY` |
+| `task list` | `NVCF_NVCT_API_KEY` | `list_tasks` | `NVCF_NVCT_API_KEY` |
+| `task get` | `NVCF_NVCT_API_KEY` | `task_details` | `NVCF_NVCT_API_KEY` |
+| `task cancel` | `NVCF_NVCT_API_KEY` | `cancel_task` | `NVCF_NVCT_API_KEY` |
+| `task delete` | `NVCF_NVCT_API_KEY` | `delete_task` | `NVCF_NVCT_API_KEY` |
+| `task events` | `NVCF_NVCT_API_KEY` | `list_events` | `NVCF_NVCT_API_KEY` |
+| `task results` | `NVCF_NVCT_API_KEY` | `list_results` | `NVCF_NVCT_API_KEY` |
+| `task update-secrets` | `NVCF_NVCT_API_KEY` | `update_secrets` | `NVCF_NVCT_API_KEY` |
 
 For additional troubleshooting, see [self-hosted-troubleshooting](./troubleshooting.md).
