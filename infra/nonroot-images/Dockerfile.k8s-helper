@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+FROM docker.io/alpine/k8s:1.37.0@sha256:b421c2e9419edb98db39b6ab641669f4db7bb2acf354f22450c6b7e7176d1ff4
+LABEL org.opencontainers.image.source="https://github.com/NVIDIA/nvcf" \
+      org.opencontainers.image.base.name="docker.io/alpine/k8s:1.37.0" \
+      org.opencontainers.image.base.digest="sha256:b421c2e9419edb98db39b6ab641669f4db7bb2acf354f22450c6b7e7176d1ff4"
+ENV HOME=/tmp XDG_CACHE_HOME=/tmp/.cache
+WORKDIR /tmp
+USER 1000:1000
