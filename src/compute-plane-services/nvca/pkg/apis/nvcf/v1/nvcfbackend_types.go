@@ -96,27 +96,23 @@ type ClusterConfig struct {
 	BackendType            string   `json:"backendType,omitempty"`
 	Attributes             []string `json:"attributes,omitempty"`
 	K8sClusterNetworkCIDRs []string `json:"k8sClusterNetworkCIDRs,omitempty"`
-}
 
-const (
-	RolloverServiceURLStaging = "https://stg.api.ros.nvidia.com"
-	RolloverServiceURLProd    = "https://api.ros.nvidia.com"
-)
-
-// RolloverServiceURL returns the Rollover Service URL for the given environment type.
-func (cfg *ClusterConfig) RolloverServiceURL(envType EnvType) string {
-	if envType == EnvTypeStage {
-		return RolloverServiceURLStaging
-	}
-	return RolloverServiceURLProd
+	// NvSnap configures the per-cluster behavior of the NvSnap
+	// checkpoint/restore integration. Empty (or unset Enabled flag)
+	// → integration disabled on this cluster; pod creation behaves
+	// identically to today. The global featureflag.NvSnapCheckpointRestore
+	// short-circuits this field — both must be true for either hook
+	// to fire. See docs/users/nvsnap/NVSNAP-INTEGRATION-DESIGN.md.
+	NvSnap *NvSnapConfig `json:"nvsnap,omitempty"`
 }
 
 // +k8s:openapi-gen=true
 type ICMSConfig struct {
-	ICMSServiceURL string `json:"icmsServiceURL"`
-	AWSEndpointURL string `json:"awsEndpointURL,omitempty"`
-	IsLocal        bool   `json:"isLocal,omitempty"`
-	TokenURL       string `json:"tokenURL"`
+	ICMSServiceURL                string `json:"icmsServiceURL"`
+	ICMSServiceHostHeaderOverride string `json:"icmsServiceHostHeaderOverride,omitempty"`
+	AWSEndpointURL                string `json:"awsEndpointURL,omitempty"`
+	IsLocal                       bool   `json:"isLocal,omitempty"`
+	TokenURL                      string `json:"tokenURL"`
 }
 
 // +k8s:openapi-gen=true
@@ -215,8 +211,112 @@ const (
 
 // +k8s:openapi-gen=true
 type MiniServiceConfig struct {
-	HelmReValServiceURL string             `json:"helmReValServiceURL"`
-	CacheDirSize        *resource.Quantity `json:"cacheDirSize"`
+	HelmReValServiceURL                string             `json:"helmReValServiceURL"`
+	HelmReValServiceHostHeaderOverride string             `json:"helmReValServiceHostHeaderOverride,omitempty"`
+	CacheDirSize                       *resource.Quantity `json:"cacheDirSize"`
+}
+
+const (
+	// DefaultNvSnapServerURL is the in-cluster nvsnap-server Service URL.
+	// Operators can override per cluster for off-cluster deployments
+	// (e.g., a hosted nvsnap-server fronting a fleet of NVCA clusters).
+	DefaultNvSnapServerURL = "http://nvsnap-server.nvsnap-system.svc.cluster.local:8080"
+
+	// DefaultNvSnapWarmupTimeoutSeconds caps how long NVCA polls
+	// /v1/health/ready on the inference container before giving up on
+	// a checkpoint attempt. 15 min covers TRT-LLM 70B engine compile.
+	DefaultNvSnapWarmupTimeoutSeconds = 15 * 60
+
+	// DefaultNvSnapWarmupBufferSeconds is the gap between the first
+	// /health 200 and the actual checkpoint POST. Flipped from 10 → 0
+	// in the v0.0.49 / rootfs-everywhere design: an honest readiness
+	// probe is the contract; padding every capture by 10s adds latency
+	// for no benefit and can capture mid-flight CUDA-graph builds that
+	// destabilize the snapshot. Operators that need a workload-specific
+	// dwell can still set spec.nvsnap.warmupBufferSeconds explicitly
+	// per-NVCFBackend.
+	DefaultNvSnapWarmupBufferSeconds = 0
+)
+
+// NvSnapConfig is the per-cluster configuration for the NvSnap
+// checkpoint/restore integration. All fields default to "off" or to
+// the in-cluster Service URL — a default-constructed NvSnapConfig is
+// a no-op.
+//
+// Layered disable order (any false short-circuits):
+//
+//	featureflag.NvSnapCheckpointRestore  (global kill switch)
+//	→ NvSnapConfig.IntegrationEnabled    (per-cluster)
+//	→ NvSnapFunctionState.spec.optOut    (per-function-version)
+//
+// IntegrationEnabled controls the checkpoint side (Hook B).
+// RestoreEnabled controls the restore side (Hook A) — split so we
+// can roll out checkpoint-only first, then restore once we've
+// gathered timing data.
+//
+// +k8s:openapi-gen=true
+type NvSnapConfig struct {
+	// IntegrationEnabled turns on the post-Ready checkpoint reconciler
+	// (Hook B). When false, no pod is checkpointed on this cluster.
+	IntegrationEnabled bool `json:"integrationEnabled,omitempty"`
+
+	// RestoreEnabled turns on the restore-on-create hook (Hook A).
+	// When false, NVCA does not stamp nvsnap.io/restore-from on new
+	// pods even if a checkpoint hash exists in NGC. Lets us validate
+	// checkpoint capture independently of restore.
+	RestoreEnabled bool `json:"restoreEnabled,omitempty"`
+
+	// ServerURL is the nvsnap-server endpoint NVCA's checkpoint reconciler
+	// POSTs to. Empty → DefaultNvSnapServerURL (in-cluster Service).
+	ServerURL string `json:"serverURL,omitempty"`
+
+	// WarmupTimeoutSeconds caps the per-pod health-check polling
+	// window before NVCA gives up on triggering a checkpoint. 0 →
+	// DefaultNvSnapWarmupTimeoutSeconds (15 min).
+	WarmupTimeoutSeconds int32 `json:"warmupTimeoutSeconds,omitempty"`
+
+	// WarmupBufferSeconds is the dwell time between first /health 200
+	// and the checkpoint POST. Default 0 (no extra dwell — the
+	// readiness probe is the contract). Set explicitly to override
+	// per-NVCFBackend for workloads that need post-Ready dwell time
+	// (e.g., lazy-JIT engines that finish compiling shortly after the
+	// first 200). The previous semantics ("0 means use 10s default")
+	// conflated "I want zero" with "I didn't set this", so this field
+	// no longer treats 0 as a sentinel; the value you set is the
+	// value used.
+	WarmupBufferSeconds int32 `json:"warmupBufferSeconds,omitempty"`
+}
+
+// Complete returns a copy of NvSnapConfig with empty fields filled from
+// the defaults. Returns a non-nil pointer even when called on nil,
+// so callers can rely on the result for field reads without nil
+// checks. The returned value has the same enable bits as the input
+// (defaults do not opt anything in).
+func (c *NvSnapConfig) Complete(_ EnvType) *NvSnapConfig {
+	var tmp *NvSnapConfig
+	if c == nil {
+		tmp = &NvSnapConfig{}
+	} else {
+		tmp = c.DeepCopy()
+	}
+	if tmp.ServerURL == "" {
+		tmp.ServerURL = DefaultNvSnapServerURL
+	}
+	if tmp.WarmupTimeoutSeconds == 0 {
+		tmp.WarmupTimeoutSeconds = DefaultNvSnapWarmupTimeoutSeconds
+	}
+	// WarmupBufferSeconds: NO fallback. The value you set is the
+	// value used. Default 0 (DefaultNvSnapWarmupBufferSeconds) is a
+	// real choice, not a sentinel — see the field's doc comment.
+	return tmp
+}
+
+// IsEnabled reports whether the per-cluster integration is on AT ALL
+// — either checkpoint-side, restore-side, or both. The global feature
+// flag (featureflag.NvSnapCheckpointRestore) is a separate AND-gate
+// checked by callers.
+func (c *NvSnapConfig) IsEnabled() bool {
+	return c != nil && (c.IntegrationEnabled || c.RestoreEnabled)
 }
 
 func (msCfg *MiniServiceConfig) Complete(envType EnvType) *MiniServiceConfig {
@@ -339,6 +439,28 @@ type NVCFBackendSpec struct {
 	Overrides *NVCFBackendSpecT `json:"overrides,omitempty"`
 }
 
+// UnmarshalJSON implements custom deserialization for NVCFBackendSpec.
+// The embedded NVCFBackendSpecT has its own UnmarshalJSON which consumes the
+// full JSON data, preventing Go from populating the Overrides field. This
+// method explicitly handles both the inline fields and the Overrides pointer.
+func (spec *NVCFBackendSpec) UnmarshalJSON(data []byte) error {
+	// Unmarshal the inline NVCFBackendSpecT fields.
+	if err := json.Unmarshal(data, &spec.NVCFBackendSpecT); err != nil {
+		return err
+	}
+
+	// Unmarshal the Overrides field separately since the inline struct's
+	// custom UnmarshalJSON prevents Go from handling it automatically.
+	var raw struct {
+		Overrides *NVCFBackendSpecT `json:"overrides,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	spec.Overrides = raw.Overrides
+	return nil
+}
+
 // +k8s:openapi-gen=true
 type DeploymentConfig struct {
 	// PriorityClassName for pod preference during evictions
@@ -447,14 +569,12 @@ type AgentConfig struct {
 	ByooResources                                          *corev1.ResourceRequirements `json:"byooResources,omitempty"`
 	OTelCollectorConfig                                    *OTelCollectorConfig         `json:"otelCollectorConfig,omitempty"`
 	NATSURL                                                *string                      `json:"natsURL,omitempty"`
+	NATSHostOverride                                       *string                      `json:"natsHostOverride,omitempty"`
+	LLMRequestRouterAddress                                string                       `json:"llmRequestRouterAddress,omitempty"`
 	HelmReValStageOAuthTokenURL                            string                       `json:"helmReValStageOAuthTokenURL,omitempty"`
 	HelmReValStageOAuthPublicKeysetEndpoint                string                       `json:"helmReValStageOAuthPublicKeysetEndpoint,omitempty"`
 	HelmReValProdOAuthTokenURL                             string                       `json:"helmReValProdOAuthTokenURL,omitempty"`
 	HelmReValProdOAuthPublicKeysetEndpoint                 string                       `json:"helmReValProdOAuthPublicKeysetEndpoint,omitempty"`
-	RolloverServiceStageOAuthTokenURL                      string                       `json:"rolloverServiceStageOAuthTokenURL,omitempty"`
-	RolloverServiceStageOAuthPublicKeysetEndpoint          string                       `json:"rolloverServiceStageOAuthPublicKeysetEndpoint,omitempty"`
-	RolloverServiceProdOAuthTokenURL                       string                       `json:"rolloverServiceProdOAuthTokenURL,omitempty"`
-	RolloverServiceProdOAuthPublicKeysetEndpoint           string                       `json:"rolloverServiceProdOAuthPublicKeysetEndpoint,omitempty"`
 	FunctionDeploymentStagesStageOAuthTokenURL             string                       `json:"functionDeploymentStagesStageOAuthTokenURL,omitempty"`
 	FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint string                       `json:"functionDeploymentStagesStageOAuthPublicKeysetEndpoint,omitempty"` //nolint:lll
 	FunctionDeploymentStagesProdOAuthTokenURL              string                       `json:"functionDeploymentStagesProdOAuthTokenURL,omitempty"`

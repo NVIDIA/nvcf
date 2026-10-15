@@ -1,0 +1,46 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "config",
+    srcs = [
+        "cliargs.go",
+        "cloudevents.go",
+        "config.go",
+        "http.go",
+        "publisher.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/config",
+    visibility = ["//src/control-plane-services/event-ledger:__subpackages__"],
+    deps = [
+        "//src/control-plane-services/event-ledger/internal/observability/common",
+        "//src/control-plane-services/event-ledger/internal/observability/logging",
+        "//src/control-plane-services/event-ledger/internal/observability/tracing",
+        "@com_github_spf13_cobra//:cobra",
+        "@com_github_spf13_viper//:viper",
+        "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":config",
+    visibility = ["//src/control-plane-services/event-ledger:__subpackages__"],
+)
+
+go_test(
+    name = "config_test",
+    srcs = [
+        "auth_config_test.go",
+        "cloudevents_test.go",
+        "config_test.go",
+    ],
+    embed = [":config"],
+    deps = [
+        "@com_github_spf13_cobra//:cobra",
+        "@com_github_spf13_viper//:viper",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
+    ],
+)

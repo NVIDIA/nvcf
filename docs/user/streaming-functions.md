@@ -6,6 +6,66 @@ Cloud Functions supports the ability to stream video, audio, and other data usin
 
 For complete examples of LLS streaming functions, contact your NVIDIA representative for access to sample function containers.
 
+## Cloud Provider Network Requirements
+
+WebRTC streaming uses UDP NodePort services to carry media traffic between
+the browser client and the streaming application. Cloud providers apply
+network security rules at multiple layers. If any layer blocks UDP inbound
+traffic on the NodePort range (30000-32767), streaming sessions fail even
+though the function shows ACTIVE.
+
+### Azure (AKS)
+
+AKS attaches two Network Security Groups (NSGs) to every node: one on the
+subnet and one on the NIC in the managed resource group
+(`MC_<resource-group>_<cluster>_<region>`). Both NSGs must allow inbound UDP
+traffic on the NodePort range. The subnet NSG alone is not sufficient.
+
+After `helmfile sync` completes, add the NIC NSG rule:
+
+```bash
+# Identify the managed resource group
+MC_RG="MC_${RESOURCE_GROUP}_${CLUSTER_NAME}_${LOCATION}"
+
+# Add the UDP rule to every NIC NSG in the managed resource group.
+# Multi-pool clusters have one NSG per pool; streaming pods may
+# schedule on any pool, so all NSGs need the rule.
+for NIC_NSG in $(az network nsg list -g "$MC_RG" --query "[].name" -o tsv); do
+  echo "Adding UDP rule to NSG: $NIC_NSG"
+  az network nsg rule create -g "$MC_RG" --nsg-name "$NIC_NSG" \
+    -n allow-udp-nodeports-webrtc --priority 510 \
+    --direction Inbound --access Allow --protocol Udp \
+    --source-address-prefix Internet --source-port-range "*" \
+    --destination-address-prefix "*" --destination-port-range "30000-32767"
+done
+```
+
+Verify the rules are present:
+
+```bash
+# Subnet NSG (your own, created during cluster setup)
+az network nsg rule list -g "$RESOURCE_GROUP" --nsg-name "$SUBNET_NSG" \
+  --query "[?protocol=='Udp']" -o table
+
+# NIC NSGs (AKS-managed, one per node pool)
+MC_RG="MC_${RESOURCE_GROUP}_${CLUSTER_NAME}_${LOCATION}"
+for NIC_NSG in $(az network nsg list -g "$MC_RG" --query "[].name" -o tsv); do
+  echo "=== $NIC_NSG ==="
+  az network nsg rule list -g "$MC_RG" --nsg-name "$NIC_NSG" \
+    --query "[?protocol=='Udp']" -o table
+done
+```
+
+If the NIC NSG rule is missing, WebRTC clients receive
+`NVST_R_GENERIC_ERROR` while the function remains ACTIVE. See
+[streaming-troubleshooting](./troubleshooting.md#webrtc-streaming-fails-after-function-shows-active)
+for diagnosis steps.
+
+### AWS (EKS)
+
+For LLS streaming on EKS, security group and NLB configuration is covered
+in [LLS Installation](./lls-installation.md#security-group).
+
 ## Building the Streaming Server Application
 
 The streaming application needs to be packaged inside a container and should be leveraging the StreamSDK. The streaming application needs to follow the below guidelines:

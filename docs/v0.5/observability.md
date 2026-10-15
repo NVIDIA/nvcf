@@ -171,8 +171,9 @@ Configure your log collector to:
 Enable distributed tracing by setting Helm values under
 `global.observability.tracing`. The control-plane exports traces via OTLP
 to your own OTLP-compatible collector. Set `collectorEndpoint`,
-`collectorPort`, and `collectorProtocol` to match your collector's
-address and protocol.
+`collectorPort`, and `collectorProtocol` to match your collector's address.
+`collectorProtocol` is the endpoint URI scheme expected by the stack, not the
+OTLP transport.
 
 **Helm overrides example:**
 
@@ -195,9 +196,9 @@ global:
   such as `<service>.<namespace>.svc.cluster.local` when the collector runs
   in-cluster.
 - **collectorPort**: Port on which the collector accepts OTLP traffic (e.g.,
-  4317 for HTTP, 4318 for gRPC depending on your collector setup).
-- **collectorProtocol**: OTLP protocol: `http` or `grpc`. Must match how
-  your collector is configured.
+  4317 for gRPC, 4318 for HTTP depending on your collector setup).
+- **collectorProtocol**: URI scheme used to build the collector endpoint
+  (`http` or `https`). This value does not select the OTLP transport.
 
 Ensure your collector is deployed and reachable from the NVCF control-plane
 namespace, and that it forwards traces to your backend (Jaeger, Tempo, Zipkin,
@@ -233,7 +234,7 @@ Dashboards are provided in native Grafana JSON format for [file-provisioning](ht
 Load dashboards into Grafana by placing them in `/etc/grafana/provisioning/dashboards/` on startup.
 
 Published dashboards will be available in the
-[nv-cloud-function-helpers](https://github.com/NVIDIA/nv-cloud-function-helpers) public GitHub repository.
+[NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples) public GitHub repository.
 
 ## Troubleshooting
 
@@ -344,7 +345,7 @@ For troubleshooting common observability issues:
 
 NVCF self-hosted control-plane observability is compatible with:
 
-- Any official supported Kubernetes version
+- Supported versions are the latest Kubernetes minor release and the two prior minor releases (N-2). See official Kubernetes docs for current supported [versions](https://kubernetes.io/releases/version-skew-policy/#supported-versions). 
 - Any Prometheus-compatible metrics collection system
 - Any log aggregation system that can collect from Kubernetes stdout/stderr or read
   from the filesystem (depending on K8s cluster configuration)

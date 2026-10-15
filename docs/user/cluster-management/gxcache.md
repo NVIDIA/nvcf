@@ -32,18 +32,6 @@ kubectl create namespace gxcache
 Create an image pull secret so that pods can pull container images from your registry.
 
 <Tabs>
-<Tab title="BYOC / NGC">
-
-```bash
-kubectl create secret docker-registry nvcr-creds \
-  --docker-server=nvcr.io \
-  --docker-username='$oauthtoken' \
-  --docker-password="${NGC_API_KEY}" \
-  --namespace=gxcache
-```
-
-</Tab>
-
 <Tab title="Amazon ECR">
 
 ```bash
@@ -92,17 +80,6 @@ and the node selector for your GPU nodes.
 ### Step 4. Install the chart
 
 <Tabs>
-<Tab title="BYOC (NGC Helm Repo)">
-
-```bash
-helm upgrade --install gxcache \
-  nvcf-byoc/gxcache \
-  --namespace gxcache \
-  --values values.yaml
-```
-
-</Tab>
-
 <Tab title="Self-Hosted (OCI)">
 
 Replace `<your-registry>/<your-repo>` with your mirrored registry path.
@@ -391,21 +368,25 @@ GXCache logs include:
 ### Common Issues
 
 **Webhook Not Working**
+
 - Verify webhook is running and healthy
 - Check webhook configuration and secrets
 - Ensure proper RBAC permissions
 
 **Cache Not Storing Shaders**
+
 - Verify GXCache service is running
 - Check storage configuration and persistent volumes
 - Review application logs for shader compilation errors
 
 **Low Cache Hit Ratio**
+
 - Review cache size configuration
 - Check cache eviction policies
 - Monitor storage performance
 
 **Storage Issues**
+
 - Verify storage class availability
 - Check persistent volume claims
 - Monitor disk space usage

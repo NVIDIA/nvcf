@@ -27,7 +27,8 @@ FROM golang:1.25.7-bookworm AS builder
 
 ARG REVAL_VERSION=dev
 ARG REVAL_GIT_COMMIT=dev
-ARG TARGETARCH=amd64
+ARG TARGETARCH
+ARG TARGETOS
 
 ENV CGO_ENABLED=0
 ENV GOPRIVATE="github.com/NVIDIA"
@@ -46,7 +47,7 @@ COPY cmd/ ./cmd/
 COPY pkg/ ./pkg/
 COPY reval/ ./reval/
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 	go build \
 	-ldflags "-X main.Version=${REVAL_VERSION} -X main.GitCommit=${REVAL_GIT_COMMIT} -extldflags '-static' -w -s" \
 	-o /reval ./cmd/reval-service

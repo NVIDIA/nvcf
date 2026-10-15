@@ -43,19 +43,22 @@ func (r *Reconciler) doStorageRequests(ctx context.Context,
 	workerImagePullSecrets []*corev1.Secret,
 	cacheInitJob *batchv1.Job,
 	cacheInitPVC *corev1.PersistentVolumeClaim,
-) (allReady bool, err error) {
+	cacheBackend nvcastorage.HelmCacheBackend,
+) (allReady bool, ready *nvcav2beta1.StorageRequestList, err error) {
 	log := logf.FromContext(ctx)
 
-	sts, err := r.makeStorageRequests(icmsReq, workerImagePullSecrets, cacheInitJob, cacheInitPVC)
+	sts, err := r.makeStorageRequests(icmsReq, workerImagePullSecrets, cacheInitJob, cacheInitPVC, cacheBackend)
 	if err != nil {
 		log.Error(err, "Failed to make StorageRequests")
-		return false, reconcile.TerminalError(err)
+		// makeStorageRequests marks genuinely terminal errors (invalid spec)
+		// with reconcile.TerminalError itself; anything else is retried.
+		return false, nil, err
 	}
 	stNames := sets.New[string]()
 	for _, st := range sts {
 		if err := r.create(ctx, ms, objMutators, nil, r.Client, st); err != nil {
 			log.Error(err, "Failed to create StorageRequest")
-			return false, err
+			return false, nil, err
 		}
 		// Mark the miniservice as caching in progress for agent to handle.
 		if st.Spec.Type == nvcav2beta1.ModelCacheRequest {
@@ -66,15 +69,35 @@ func (r *Reconciler) doStorageRequests(ctx context.Context,
 
 	stList := &nvcav2beta1.StorageRequestList{}
 	if err := r.Client.List(ctx, stList, client.InNamespace(ms.Spec.Namespace)); err != nil {
-		return false, err
+		return false, nil, err
 	}
+	ready = &nvcav2beta1.StorageRequestList{}
 
-	for _, st := range stList.Items {
+	for _, st := range storageRequestsWithNames(stList, stNames) {
+		if st.Spec.Type == nvcav2beta1.ModelCacheRequest &&
+			icmsReq.Annotations[nvcastorage.ModelCacheStorageSelectionAnnotationKey] != "" {
+			if err := validatePersistedModelCacheStorageRequest(
+				&st,
+				icmsReq,
+				icmsReq.Annotations[nvcastorage.ModelCacheStorageSelectionAnnotationKey],
+				cacheBackend,
+			); err != nil {
+				return false, nil, reconcile.TerminalError(err)
+			}
+		}
 		switch st.Status.Phase {
 		case nvcav2beta1.StorageFailed, nvcav2beta1.StorageRuntimeError:
 			lerr := fmt.Errorf("storage request %s has failed", st.Spec.Type)
 			switch st.Spec.Type {
 			case nvcav2beta1.ModelCacheRequest:
+				durable, err := persistedDurableHelmCacheSelection(icmsReq)
+				if err != nil {
+					return false, nil, reconcile.TerminalError(err)
+				}
+				if durable {
+					log.Error(lerr, "Durable model caching failed", "phase", st.Status.Phase)
+					return false, nil, reconcile.TerminalError(lerr)
+				}
 				log.Error(lerr, "Storage failed, model caching will be disabled", "phase", st.Status.Phase)
 				meta.SetStatusCondition(&ms.Status.Conditions, metav1.Condition{
 					Type:    v1alpha1.MiniServiceConditionCacheSuccessful,
@@ -86,14 +109,23 @@ func (r *Reconciler) doStorageRequests(ctx context.Context,
 				stNames.Delete(st.Name)
 			case nvcav2beta1.SharedStorageRequest:
 				log.Error(lerr, "Shared storage failed", "phase", st.Status.Phase)
-				return false, reconcile.TerminalError(lerr)
+				return false, nil, reconcile.TerminalError(lerr)
 			case nvcav2beta1.InternalPersistentStorageRequest:
 				log.Error(lerr, "Internal persistent storage failed", "phase", st.Status.Phase)
-				return false, reconcile.TerminalError(lerr)
+				return false, nil, reconcile.TerminalError(lerr)
 			}
 		case nvcav2beta1.StorageReady:
 			switch st.Spec.Type {
 			case nvcav2beta1.ModelCacheRequest:
+				durable, selectionErr := persistedDurableHelmCacheSelection(icmsReq)
+				if selectionErr != nil {
+					return false, nil, reconcile.TerminalError(selectionErr)
+				}
+				if durable {
+					if err := validateReadyPersistedModelCacheStorageRequest(&st, icmsReq); err != nil {
+						return false, nil, reconcile.TerminalError(err)
+					}
+				}
 				meta.SetStatusCondition(&ms.Status.Conditions, metav1.Condition{
 					Type:   v1alpha1.MiniServiceConditionCacheSuccessful,
 					Status: metav1.ConditionTrue,
@@ -104,6 +136,7 @@ func (r *Reconciler) doStorageRequests(ctx context.Context,
 			}
 
 			stNames.Delete(st.Name)
+			ready.Items = append(ready.Items, *st.DeepCopy())
 
 			log.V(1).Info("StorageRequest succeeded", "type", st.Spec.Type)
 		default:
@@ -122,7 +155,47 @@ func (r *Reconciler) doStorageRequests(ctx context.Context,
 		}
 	}
 
-	return stNames.Len() == 0, nil
+	return stNames.Len() == 0, ready, nil
+}
+
+func storageRequestsWithNames(
+	stList *nvcav2beta1.StorageRequestList,
+	names sets.Set[string],
+) []nvcav2beta1.StorageRequest {
+	if stList == nil || names.Len() == 0 {
+		return nil
+	}
+	result := make([]nvcav2beta1.StorageRequest, 0, names.Len())
+	for i := range stList.Items {
+		if names.Has(stList.Items[i].Name) {
+			result = append(result, *stList.Items[i].DeepCopy())
+		}
+	}
+	return result
+}
+
+func validateReadyPersistedModelCacheStorageRequest(
+	st *nvcav2beta1.StorageRequest,
+	icmsReq *nvcav2beta1.ICMSRequest,
+) error {
+	if _, err := nvcastorage.ParsePersistedModelCacheStorageSelection(
+		icmsReq.Annotations[nvcastorage.ModelCacheStorageSelectionAnnotationKey]); err != nil {
+		return err
+	}
+	expectedROPVCName := "ro-pvc-" + helmModelCacheHandle(icmsReq)
+	if st.Status.ModelCache == nil || st.Status.ModelCache.ROPVCName != expectedROPVCName {
+		return fmt.Errorf(
+			"durable model cache StorageRequest %s/%s reported reader PVC %q, want %q",
+			st.Namespace, st.Name, modelCacheROPVCName(st), expectedROPVCName)
+	}
+	return nil
+}
+
+func modelCacheROPVCName(st *nvcav2beta1.StorageRequest) string {
+	if st == nil || st.Status.ModelCache == nil {
+		return ""
+	}
+	return st.Status.ModelCache.ROPVCName
 }
 
 func (r *Reconciler) makeStorageRequests(
@@ -130,15 +203,31 @@ func (r *Reconciler) makeStorageRequests(
 	workerImagePullSecrets []*corev1.Secret,
 	cacheInitJob *batchv1.Job,
 	cacheInitPVC *corev1.PersistentVolumeClaim,
+	backend nvcastorage.HelmCacheBackend,
 ) (sts []*nvcav2beta1.StorageRequest, err error) {
-	if r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.CachingSupport) &&
-		r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.HelmCachingSupport) &&
-		cacheInitJob != nil && cacheInitPVC != nil {
-		st, err := nvcastorage.NewModelCacheStorageRequest(icmsReq, r.FeatureFlagFetcher)
-		if err != nil {
-			return nil, err
+	// The caching backend is selected ONCE per reconcile by the caller
+	// (selectHelmCacheBackend in doInstall, gated on cacheLaunchRequested) and
+	// passed in, so StorageRequest creation and the ephemeral annotation
+	// decision always agree even if the cluster's storage classes change
+	// mid-reconcile.
+	// NVMesh, shared-FS, and Samba all populate the cache via a ModelCacheRequest;
+	// the Backend field tells the storage controller which populate path to run
+	// (Samba stands up its own server and serves via static PVs). Only the
+	// ephemeral backend is handled outside the storage controller.
+	// cacheLaunchRequested is the same predicate that gates the ephemeral
+	// injection, so a request either caches on every backend or on none.
+	switch backend {
+	case nvcastorage.HelmCacheBackendNVMesh, nvcastorage.HelmCacheBackendSharedFS, nvcastorage.HelmCacheBackendSamba:
+		if cacheInitJob != nil && cacheInitPVC != nil && cacheLaunchRequested(icmsReq) {
+			st, err := nvcastorage.NewModelCacheStorageRequest(icmsReq, r.FeatureFlagFetcher)
+			if err != nil {
+				// Invalid cache spec is not retryable; keep it terminal (the
+				// caller no longer wraps makeStorageRequests errors as terminal).
+				return nil, reconcile.TerminalError(err)
+			}
+			st.Spec.ModelCache.Backend = string(backend)
+			sts = append(sts, st)
 		}
-		sts = append(sts, st)
 	}
 	if r.FeatureFlagFetcher.IsFeatureFlagEnabled(&featureflag.HelmSharedStorage.FeatureFlag) {
 		sts = append(sts, nvcastorage.NewSharedStorageRequest(icmsReq, r.FeatureFlagFetcher, r.cfg,

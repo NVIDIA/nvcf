@@ -17,4 +17,4 @@ apiVersion: v1
 appVersion: "0.1"
 description: A Helm chart for Validating NVCF Mini-Service Feature
 name: inference-test
-version: "0.1"
+version: "0.1.2"

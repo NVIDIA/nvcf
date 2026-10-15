@@ -1,0 +1,110 @@
+@startuml
+title Stargate System DFD
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam rectangle {
+  RoundCorner 12
+}
+
+rectangle "LLM Gateway" as Client #fde8e8
+
+cloud "K8s ClusterIP Service\nstargate\n(gRPC + QUIC)" as ClusterIP
+cloud "K8s ClusterIP Service\nstargate-model-discovery\n(ListModels)" as ModelSvc
+cloud "K8s ClusterIP Service\nstargate-proxy\n(OpenAI HTTP)" as ProxySvc
+
+note bottom of ClusterIP
+  Backend clients use ClusterIP for
+  gRPC registration and QUIC reverse
+  tunnel connections. A DNS rewrite rule
+  maps the configured wildcard domain
+  (e.g. *.stargate.external) to the
+  ClusterIP service DNS name.
+end note
+
+note bottom of ModelSvc
+  The LLM gateway calls ListModels through
+  service load balancing. The selected
+  stargate pod serves its local snapshot
+  and never forwards ListModels.
+end note
+
+note bottom of ProxySvc
+  The LLM gateway sends HTTP proxy
+  requests through service load balancing.
+end note
+
+rectangle "NVCF API" #fde8e8 {
+  rectangle "LlmGateway\n(AuthLlmWorker)" as NVCF
+}
+
+rectangle "stargate" #f0f7e8 {
+  rectangle "Control Plane gRPC\nRegisterInferenceServer\nWatchStargates" as ControlPlane
+  rectangle "Model Discovery gRPC\nListModels" as ModelDiscovery
+  rectangle "Forwarding Dispatch\ngRPC: :authority check\nQUIC: SNI check" as Forwarding
+  rectangle "HTTP Proxy\n/v1/chat/completions\n/v1/responses\n/v1/embeddings" as HttpProxy
+  rectangle "QUIC Tunnel Client\n+ Reverse Listener" as Quic
+  rectangle "Load Balancer Router" as Router
+  database "Routing State\nkeyed by RoutingTargetKey\n(conn + RTT gated)" as State
+  rectangle "Discovery\n(headless Service DNS\nor hickory DNS)" as Discovery
+  rectangle "Telemetry / Metrics" as Telemetry
+}
+
+rectangle "pylon" #e8f4fd {
+  rectangle "Registration Client" as RegCli
+  rectangle "QUIC Tunnel\n(forward or reverse)" as TunnelCli
+  rectangle "Bringup Supervisor\n(health + canary)" as Bringup
+  rectangle "Input-TPS Bootstrap\n(local calibration XOR\noperator initial value)" as Bootstrap
+  rectangle "Stats Collector\n(request observation +\nengine stats stream)" as Stats
+}
+
+rectangle "Dynamo Instance" #fdf5e6 {
+  rectangle "Upstream HTTP\n/v1/chat/completions\n/v1/responses\n/v1/embeddings\n/pylon/v1/stats/stream\n/health" as Upstream
+}
+
+cloud "Metrics / OTEL\nCollectors" as Obs
+
+' layout anchors
+Client -[hidden]down-> HttpProxy
+
+' inference path -- Kubernetes service load balancing selects the stargate pod
+Client --> ModelSvc : model discovery\n(load-balanced)
+Client --> ProxySvc : inference POST\n(load-balanced)
+ModelSvc --> ModelDiscovery
+ProxySvc --> HttpProxy
+HttpProxy --> Router : RoutingTargetKey\n(routing_key + model_id)\n+ request metadata
+HttpProxy --> Quic : proxy request
+Router --> State : candidate lookup
+
+' QUIC data path
+Quic --> TunnelCli : framed HTTP request\n+ /health probe
+TunnelCli --> Upstream : HTTP relay to upstream
+TunnelCli ..> ClusterIP : reverse tunnel connect\n(optional outbound QUIC)
+
+' registration path
+RegCli --> ClusterIP : registration + WatchStargates\n(Bearer token in gRPC metadata)
+ClusterIP --> ControlPlane
+ControlPlane --> Forwarding : check if request is for a peer
+Forwarding --> Discovery : resolve peer via\nheadless Service DNS
+ControlPlane --> NVCF : AuthLlmWorker(bearer token)\n-> routing_key
+ControlPlane --> State : routing updates\n(routing_key from auth)
+ControlPlane --> Quic : preconnect / reverse wait
+Quic --> NVCF : reverse tunnel handshake auth\n(verify routing_key matches)
+
+' client-internal
+Bringup --> Upstream : health + canary\n(local HTTP)
+Bootstrap --> Upstream : generation-owned calibration ramp\n(local HTTP; expected timeout completes)
+Upstream --> Stats : exact-generation calibration observations\npopulate runtime windows once
+Bootstrap --> Stats : snapshot current stats for logging\n(no reinjection)
+Stats --> RegCli : start registration only\nafter local startup
+Stats --> Upstream : engine stats side channel
+
+' discovery
+Discovery --> ControlPlane : peer snapshots\n(polled)
+
+' observability
+Telemetry --> Obs : Prometheus / OTLP
+HttpProxy --> Telemetry : spans + latency
+Router --> Telemetry : routing duration
+
+@enduml

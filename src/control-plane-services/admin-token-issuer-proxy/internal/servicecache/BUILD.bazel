@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "servicecache",
+    srcs = ["cache.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/servicecache",
+    visibility = ["//src/control-plane-services/admin-token-issuer-proxy:__subpackages__"],
+    deps = ["//src/control-plane-services/admin-token-issuer-proxy/internal/models"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":servicecache",
+    visibility = ["//src/control-plane-services/admin-token-issuer-proxy:__subpackages__"],
+)
+
+go_test(
+    name = "servicecache_test",
+    srcs = ["cache_test.go"],
+    embed = [":servicecache"],
+    deps = ["//src/control-plane-services/admin-token-issuer-proxy/internal/models"],
+)

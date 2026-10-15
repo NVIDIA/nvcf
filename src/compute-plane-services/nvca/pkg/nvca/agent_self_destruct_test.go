@@ -494,11 +494,6 @@ func (m *MockICMSRequestHelper) HandleInstanceStatusPreconditionFailure(ctx cont
 	return args.Error(0)
 }
 
-func (m *MockICMSRequestHelper) GetROSUpdatesForRequest(ctx context.Context, req *nvcav2beta1.ICMSRequest) ([]types.ROSUpdateInfo, error) {
-	args := m.Called(ctx, req)
-	return args.Get(0).([]types.ROSUpdateInfo), args.Error(1)
-}
-
 // MockBackendK8sCache provides minimal BackendK8sCache functionality with mocked dependencies
 type MockBackendK8sCache struct {
 	icmsRequestLister *MockICMSRequestLister

@@ -26,6 +26,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	coordv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/sets"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -38,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 func NewModelCacheInitNamespace() *corev1.Namespace {
@@ -45,8 +47,58 @@ func NewModelCacheInitNamespace() *corev1.Namespace {
 	namespace.Name = ModelCacheInitNamespace
 	namespace.Labels = map[string]string{
 		"app.kubernetes.io/managed-by": "nvca",
+		// The nvcf-unbound Kyverno ClusterPolicy (add-unbound-dns) matches on
+		// this label to inject the cluster's nvcf-unbound nameserver into pods.
+		// Without it the model-cache writer job falls back to the kube-dns
+		// ClusterIP, which is unreachable on clusters where node-local-dns
+		// serves it from the host network (e.g. node-local-dns DaemonSet with
+		// hostNetwork=true binding the kube-dns VIP), causing DNS timeouts and
+		// a ~7m45s backoff before the deploy continues without a cache.
+		types.WorkloadInstanceTypeLabel: types.WorkloadInstanceTypeValueMiniService,
 	}
 	return namespace
+}
+
+// NewCacheMountOptionsConfigMap returns the ConfigMap mapping a CSI provisioner
+// to the mount options its model cache volumes require, seeded with NVMesh.
+//
+// NVMesh provisions XFS and the read-only volume attaches the same filesystem as
+// the volume it was populated from, so the kernel rejects the mount as a
+// duplicate filesystem UUID without nouuid, and rejects a dirty log on a
+// read-only mount without norecovery.
+//
+// Operators add a provisioner by adding a key. A provisioner with no entry uses
+// the configured mount options instead.
+func NewCacheMountOptionsConfigMap(name string) *corev1.ConfigMap {
+	cm := &corev1.ConfigMap{}
+	cm.Name = name
+	cm.Namespace = ModelCacheInitNamespace
+	cm.Labels = map[string]string{
+		"app.kubernetes.io/managed-by": "nvca",
+	}
+	cm.Data = map[string]string{
+		NVMeshStorageClassProvisioner: NVMeshCacheMountOptions,
+	}
+	return cm
+}
+
+// EnsureCacheMountOptionsConfigMap creates the mount option ConfigMap if it is
+// absent, so the defaults exist before any model cache is reconciled. It is
+// called once at agent start-up when caching is enabled.
+//
+// The ConfigMap is only ever created, never updated, so operator edits are
+// preserved across restarts.
+func EnsureCacheMountOptionsConfigMap(ctx context.Context, c client.Client, name string) error {
+	if name == "" {
+		name = DefaultCacheMountOptionsConfigMapName
+	}
+
+	cm := NewCacheMountOptionsConfigMap(name)
+	if err := c.Create(ctx, cm); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create cache mount options ConfigMap %s: %w", name, err)
+	}
+
+	return nil
 }
 
 // buildControllerModelCache is different from other controller builders because it adds runnables
@@ -98,7 +150,7 @@ func buildControllerModelCache(r *Reconciler, mgr ctrl.Manager, _ ControllerOpti
 		return acceptEvent
 	}))
 	fanOutEventHandler := handler.TypedEnqueueRequestsFromMapFunc(getModelCacheFanOutEventHandlerMapFunc(mgr.GetClient()))
-	return builder.
+	err := builder.
 		ControllerManagedBy(mgr).
 		Named(string(storageReqType)).
 		For(&nvcav1new.StorageRequest{}, fanOutPredicateOption).
@@ -108,6 +160,8 @@ func buildControllerModelCache(r *Reconciler, mgr ctrl.Manager, _ ControllerOpti
 		Watches(&coordv1.Lease{}, fanOutEventHandler).
 		Watches(&corev1.PersistentVolume{}, fanOutEventHandler).
 		Complete(r)
+	logf.Log.Info("buildControllerModelCache: controller registration complete", "type", string(storageReqType), "error", err)
+	return err
 }
 
 func checkModelCacheFanOutEvent(obj client.Object) (

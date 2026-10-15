@@ -1,0 +1,6 @@
+# CODEOWNERS for ncp-local-cluster.
+* @NVIDIA/nvcf-dev
+
+# Monitoring components
+/apps/kube-state-metrics/ @NVIDIA/nvcf-dev
+/apps/kube-prometheus-stack/ @NVIDIA/nvcf-dev

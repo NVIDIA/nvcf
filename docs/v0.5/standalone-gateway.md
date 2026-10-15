@@ -139,7 +139,7 @@ to NVCF services through the Gateway.
 
 ### Configuration
 
-Create `gateway-routes-values.yaml` ([download template](samples/configs/standalone/gateway-routes-values.yaml)):
+Create `gateway-routes-values.yaml` ([download template](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/v0.5/samples/configs/standalone/gateway-routes-values.yaml)):
 
 <Accordion title="gateway-routes-values.yaml">
 ```yaml title="gateway-routes-values.yaml"

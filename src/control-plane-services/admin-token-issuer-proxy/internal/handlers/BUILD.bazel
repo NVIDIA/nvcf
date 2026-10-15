@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "handlers",
+    srcs = ["handlers.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy/internal/handlers",
+    visibility = ["//src/control-plane-services/admin-token-issuer-proxy:__subpackages__"],
+    deps = [
+        "//src/control-plane-services/admin-token-issuer-proxy/internal/config",
+        "//src/control-plane-services/admin-token-issuer-proxy/internal/models",
+        "//src/control-plane-services/admin-token-issuer-proxy/internal/platform/vault",
+        "//src/control-plane-services/admin-token-issuer-proxy/internal/servicecache",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":handlers",
+    visibility = ["//src/control-plane-services/admin-token-issuer-proxy:__subpackages__"],
+)
+
+go_test(
+    name = "handlers_test",
+    srcs = ["handlers_test.go"],
+    embed = [":handlers"],
+    deps = [
+        "//src/control-plane-services/admin-token-issuer-proxy/internal/config",
+        "//src/control-plane-services/admin-token-issuer-proxy/internal/models",
+        "//src/control-plane-services/admin-token-issuer-proxy/internal/platform/vault",
+        "@com_github_hashicorp_vault_api//:go_default_library",
+    ],
+)

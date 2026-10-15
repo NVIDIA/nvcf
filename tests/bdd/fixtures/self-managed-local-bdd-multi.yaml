@@ -1,0 +1,122 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Multi-cluster Helmfile fixture for the BDD suite.
+#
+# The values-driven Helmfile install path expects the operator to
+# author topology-correct URLs in the environment file. This fixture
+# keeps the same service-DNS URL shape as the single-cluster local
+# fixture. In the multi-cluster topology those names resolve to alias
+# Services in the compute cluster, and the alias Endpoints point at
+# the control-plane load balancer.
+global:
+  storageClass: local-path
+  storageSize: 2Gi
+
+  # REPLACE_WITH_SAMPLE_NGC_ORG / REPLACE_WITH_SAMPLE_NGC_TEAM
+  # are overwritten by the feature's Background via
+  # `I update yaml file ... with keys:` using ${SAMPLE_NGC_ORG} and
+  # ${SAMPLE_NGC_TEAM}. See self-managed-local-bdd.yaml header for
+  # the rationale.
+  helm:
+    sources:
+      repository: "REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM"
+
+  image:
+    repository: REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM
+
+  workerEndpoints:
+    # This DNS name is local to each cluster. On the compute cluster, the
+    # ncp-local alias Service forwards it to the control-plane load balancer.
+    # NVCF API advertises this value as LLM_REQUEST_ROUTER_ADDRESS.
+    llmRequestRouterAddress: https://llm-request-router.nvcf.svc.cluster.local:50071
+
+# Local BDD does not install the optional observability stack.
+observability:
+  profile: disabled
+
+# The published chart defaults target production-sized nodes. Keep the local
+# split-cluster fixture schedulable after the core services are placed.
+stateMetrics:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+cassandra:
+  replicaCount: 1
+  resourcesPreset: "large"
+  jvm:
+    # this should only be set for local development with only 1 replica is used.
+    # use of this with more than 1 replica will cause node startups to unexpectedly fail.
+    extraOpts: "-Dcassandra.superuser_setup_delay_ms=100 -Dcassandra.gossip_settle_min_wait_ms=1000"
+
+openbao:
+  migrations:
+    issuerDiscovery:
+      enabled: true
+  injector:
+    # Single-node local cluster: hard anti-affinity would leave the 2nd replica Pending.
+    replicas: 1
+
+# The bundled NVCF API serves plaintext gRPC on port 9090. This fixture relies
+# on the self-managed stack default for the gateway authentication hop.
+addons:
+  llm:
+    enabled: true
+    gateway:
+      replicaCount: 1
+      metrics:
+        serviceMonitor:
+          enabled: false
+    requestRouter:
+      # Validate authority/SNI demultiplexing across three concrete Stargates.
+      chartPath: ../../../helm/llm-request-router/llm-request-router
+      grpcTls:
+        enabled: true
+      backendRouter:
+        # These are control-plane-local for Stargate and compute-reachable
+        # through the identically named alias Service in the compute cluster.
+        pylonGrpcDialAddress: https://llm-request-router.nvcf.svc.cluster.local:50071
+        pylonReverseTunnelDialAddress: llm-request-router.nvcf.svc.cluster.local:50072
+
+grpcproxy:
+  workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086
+
+# Gateway API Ingress (POC)
+# Application Developer role: Only HTTPRoutes
+# Expects Cluster Operator to provision Gateway resource
+ingress:
+  gatewayApi:
+    chartPath: ../../../helm/gateway-routes/chart
+    controllerNamespace: envoy-gateway-system
+    gateways:
+      shared:
+        name: shared-gw
+        namespace: envoy-gateway-system
+      grpc:
+        name: grpc-gw
+        namespace: envoy-gateway-system
+      nats:
+        name: shared-gw
+        namespace: envoy-gateway-system
+      llmGrpc:
+        name: grpc-gw
+        namespace: envoy-gateway-system
+      llmQuic:
+        name: grpc-gw
+        namespace: envoy-gateway-system
+    routes:
+      grpcWorker:
+        enabled: true
+      nats:
+        enabled: true
+      llmWorker:
+        enabled: true
+        backend:
+          namespace: nvcf
+      ess:
+        enabled: true

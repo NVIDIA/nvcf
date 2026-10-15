@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- if and .Values.nvcfGatewayRoutes.enabled .Values.nvcfGatewayRoutes.routes.llmWorker.enabled }}
+{{- include "nvcf-gateway.validateLLMWorkerGrpcTls" . }}
+{{- $backendNamespace := include "nvcf-gateway.llmWorkerBackendNamespace" . }}
+{{- $tlsEnabled := .Values.llmRequestRouter.grpcTls.enabled }}
+apiVersion: gateway.networking.k8s.io/{{ if $tlsEnabled }}v1{{ else }}v1alpha2{{ end }}
+kind: {{ if $tlsEnabled }}GRPCRoute{{ else }}TCPRoute{{ end }}
+metadata:
+  name: {{ .Values.nvcfGatewayRoutes.routes.llmWorker.name }}-grpc
+  namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmGrpc.namespace }}
+  labels:
+    {{- include "nvcf-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm-worker-grpc-route
+  {{- with .Values.nvcfGatewayRoutes.routes.llmWorker.routeAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    - name: {{ .Values.nvcfGatewayRoutes.gateways.llmGrpc.name }}
+      namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmGrpc.namespace }}
+      sectionName: {{ .Values.nvcfGatewayRoutes.gateways.llmGrpc.listenerName }}
+  rules:
+    - backendRefs:
+        - name: {{ .Values.nvcfGatewayRoutes.routes.llmWorker.backend.name }}
+          namespace: {{ $backendNamespace }}
+          port: {{ .Values.nvcfGatewayRoutes.routes.llmWorker.backend.grpcPort }}
+{{- end }}

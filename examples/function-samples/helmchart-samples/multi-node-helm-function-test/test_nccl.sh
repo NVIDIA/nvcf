@@ -41,30 +41,28 @@ if [ -z "$FUNCTION_ID" ] || [ "$FUNCTION_ID" = "your-multi-node-function-id" ] |
     exit 1
 fi
 
-if [ -z "$GATEWAY_ADDR" ] || [ "$GATEWAY_ADDR" = "your-gateway-address-here" ]; then
-    echo "Error: GATEWAY_ADDR not set in config.env"
-    exit 1
-fi
+CLUSTER_TYPE="ncp-mlx5" # "aws-gb200" for AWS/EFA, "aws-gb300" for AWS GB300, "ncp-mlx5" for NCP/Mellanox
+NUM_GPUS=72 # number of GPUs to test, must match at most the number of GPUs in the helm chart
 
 RESPONSE=$(curl --silent --request POST \
---url "http://${GATEWAY_ADDR}/nccl-test" \
---header "Host: ${FUNCTION_ID}.invocation.${GATEWAY_ADDR}" \
+--url https://${FUNCTION_ID}.invocation.api.nvcf.nvidia.com/nccl-test \
 --header "Authorization: Bearer ${KEY}" \
---header "NVCF-POLL-SECONDS: 300" \
+--header "NVCF-POLL-SECONDS: 600" \
 --header 'Content-Type: application/json' \
---data '{
-  "np": 8,
-  "n": "20",
-  "b": "1K",
-  "e": "16G",
-  "f": "2",
-  "g": "1",
-  "npernode": 4,
-  "mnnvl": true,
-  "debug": true
-}')
+--data "{
+  \"np\": ${NUM_GPUS},
+  \"n\": \"20\",
+  \"b\": \"1K\",
+  \"e\": \"16G\",
+  \"f\": \"2\",
+  \"g\": \"1\",
+  \"npernode\": 4,
+  \"mnnvl\": true,
+  \"debug\": false,
+  \"cluster_type\": \"${CLUSTER_TYPE}\"
+}")
 
-# echo "$RESPONSE"
+echo "$RESPONSE"
 
 echo ""
 echo "======================================================================================================"
@@ -76,5 +74,4 @@ echo ""
 echo "======================================================================================================"
 
 # save the formatted response to a file
-echo "$RESPONSE" | jq -r '.command' > nccl_test_response.json
-echo "$RESPONSE" | jq -r '.output' >> nccl_test_response.json
+echo "$RESPONSE" | jq '{command, output}' > nccl_test_response.json
