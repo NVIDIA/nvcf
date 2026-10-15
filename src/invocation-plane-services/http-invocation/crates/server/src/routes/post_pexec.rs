@@ -14,7 +14,7 @@
 // limitations under the License.
 
 use crate::metrics;
-use crate::nats::NatsService;
+use crate::nats::{NatsService, PollingRequestOwner};
 use crate::nvcf_api::{
     nvcf::{
         worker_invoke_function_request::{
@@ -519,9 +519,8 @@ pub(crate) async fn handle_streaming_response(
                     function_id: function_id.to_string(),
                     function_version_id: function_version_id.to_string(),
                     request_time: Some(start_time.into()),
-                    client_nca_id: nca_id,
-                    client_subject: subject,
                 },
+                &PollingRequestOwner { nca_id, subject },
             )
             .await?;
     }

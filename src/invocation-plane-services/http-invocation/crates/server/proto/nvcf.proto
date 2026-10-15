@@ -184,8 +184,6 @@ message WorkerResultTracking {
     string functionId = 1;
     string functionVersionId = 2;
     google.protobuf.Timestamp requestTime = 3;
-    string clientNcaId = 4;
-    string clientSubject = 5;
 }
 
 message ProxyAuthRequest {

@@ -44,7 +44,7 @@ use async_nats::{
     AuthError, Client, ConnectOptions, Event, HeaderMap, RequestErrorKind, SubscribeError,
 };
 use bytes::Bytes;
-use futures::{FutureExt, StreamExt, TryFutureExt};
+use futures::{FutureExt, StreamExt};
 use http::HeaderValue;
 use oauth2::Scope;
 use opentelemetry::propagation::Injector;
@@ -192,7 +192,41 @@ impl Default for NatsProperties {
 #[derive(Debug)]
 pub struct ExistingInvocationDetails {
     pub worker_result_tracking: WorkerResultTracking,
+    pub polling_owner: Option<PollingRequestOwner>,
     pub region: String,
+}
+
+const POLLING_OWNER_HEADER: &str = "Nvcf-Http-Invocation-Owner";
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PollingRequestOwner {
+    pub nca_id: String,
+    pub subject: String,
+}
+
+impl PollingRequestOwner {
+    fn to_headers(&self) -> anyhow::Result<HeaderMap> {
+        anyhow::ensure!(
+            !self.nca_id.is_empty() && !self.subject.is_empty(),
+            "polling request owner must include tenant and subject"
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            POLLING_OWNER_HEADER,
+            serde_json::to_string(self)?.parse::<async_nats::HeaderValue>()?,
+        );
+        Ok(headers)
+    }
+
+    fn from_headers(headers: &HeaderMap) -> Option<Self> {
+        let mut values = headers.get_all(POLLING_OWNER_HEADER);
+        let value = values.next()?;
+        if values.next().is_some() {
+            return None;
+        }
+        let owner: Self = serde_json::from_str(value.as_str()).ok()?;
+        (!owner.nca_id.is_empty() && !owner.subject.is_empty()).then_some(owner)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -790,22 +824,25 @@ impl NatsService {
         )
     }
 
-    #[tracing::instrument(level = Level::TRACE, skip(self, tracking), err)]
+    #[tracing::instrument(level = Level::TRACE, skip(self, tracking, owner), err)]
     pub async fn record_polling_request(
         &self,
         region: Option<&str>,
         request_id: RequestId,
         tracking: &WorkerResultTracking,
+        owner: &PollingRequestOwner,
     ) -> anyhow::Result<()> {
         let region = region.unwrap_or(&self.nats_properties.region);
+        // Keep invocation-service metadata outside the shared protobuf payload.
+        let headers = owner.to_headers()?;
         let pub_ack = self
-            .publish_to_request_mapping(region, request_id, tracking)
+            .publish_to_request_mapping(region, request_id, tracking, &headers)
             .await?;
         match pub_ack.await {
             Err(err) if err.kind() == PublishErrorKind::StreamNotFound => {
                 // create stream and try again
                 self.create_request_tracking_stream().await?;
-                self.publish_to_request_mapping(region, request_id, tracking)
+                self.publish_to_request_mapping(region, request_id, tracking, &headers)
                     .await?
                     .await
                     .inspect_err(|_err| {
@@ -823,16 +860,19 @@ impl NatsService {
         }
     }
 
-    #[tracing::instrument(level = Level::TRACE, skip(self, tracking), err)]
+    #[tracing::instrument(level = Level::TRACE, skip(self, tracking, headers), err)]
     async fn publish_to_request_mapping(
         &self,
         region: &str,
         request_id: RequestId,
         tracking: &WorkerResultTracking,
+        headers: &HeaderMap,
     ) -> Result<PublishAckFuture, PublishError> {
         let payload = tracking.encode_to_vec().into();
         let subject = format!("requestToFunctionVersion.{}.{}", region, request_id);
-        self.jetstream.publish(subject, payload).await
+        self.jetstream
+            .publish_with_headers(subject, headers.clone(), payload)
+            .await
     }
 
     #[tracing::instrument(level = Level::TRACE, skip(self), err)]
@@ -843,25 +883,14 @@ impl NatsService {
         let own_region_mapping = self
             .get_request_mapping_by_region(request_id, &self.nats_properties.region)
             .await?;
-        if let Some(worker_result_tracking) = own_region_mapping {
-            return Ok(Some(ExistingInvocationDetails {
-                worker_result_tracking,
-                region: self.nats_properties.region.clone(),
-            }));
+        if own_region_mapping.is_some() {
+            return Ok(own_region_mapping);
         }
         tracing::trace!("did not find request in current region");
         let other_regions_lookup =
             futures::stream::iter(self.nats_properties.other_regions.clone().into_iter())
                 .flat_map_unordered(None, move |region| {
                     self.get_request_mapping_by_region(request_id, region.clone())
-                        .map_ok(|worker_result_tracking| {
-                            worker_result_tracking.map(|worker_result_tracking| {
-                                ExistingInvocationDetails {
-                                    worker_result_tracking,
-                                    region,
-                                }
-                            })
-                        })
                         .boxed()
                         .into_stream()
                 })
@@ -875,7 +904,7 @@ impl NatsService {
         &self,
         request_id: RequestId,
         region: impl AsRef<str> + Debug,
-    ) -> anyhow::Result<Option<WorkerResultTracking>> {
+    ) -> anyhow::Result<Option<ExistingInvocationDetails>> {
         let region = region.as_ref();
         let subject = format!("requestToFunctionVersion.{}.{}", region, request_id);
         // TODO handle creation if missing with self.create_request_tracking_stream()
@@ -897,7 +926,11 @@ impl NatsService {
                 }
             }
         };
-        Ok(Some(WorkerResultTracking::decode(message.payload.clone())?))
+        Ok(Some(ExistingInvocationDetails {
+            worker_result_tracking: WorkerResultTracking::decode(message.payload)?,
+            polling_owner: PollingRequestOwner::from_headers(&message.headers),
+            region: region.into(),
+        }))
     }
 
     #[tracing::instrument(level = Level::TRACE, skip(self), err)]
@@ -979,6 +1012,47 @@ mod tests {
     use tempfile::NamedTempFile;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn polling_owner_header_round_trips_without_header_injection() {
+        let owner = PollingRequestOwner {
+            nca_id: "tenant".into(),
+            subject: "subject\r\nother: value".into(),
+        };
+        let headers = owner.to_headers().unwrap();
+        let value = headers.get(POLLING_OWNER_HEADER).unwrap().as_str();
+        assert!(!value.contains(['\r', '\n']));
+        assert_eq!(PollingRequestOwner::from_headers(&headers), Some(owner));
+    }
+
+    #[test]
+    fn polling_owner_rejects_missing_malformed_or_ambiguous_metadata() {
+        assert!(PollingRequestOwner::from_headers(&HeaderMap::new()).is_none());
+        for value in [
+            "invalid-json",
+            r#"{"nca_id":"tenant"}"#,
+            r#"{"nca_id":"","subject":"caller"}"#,
+            r#"{"nca_id":"tenant","subject":""}"#,
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(POLLING_OWNER_HEADER, value);
+            assert!(PollingRequestOwner::from_headers(&headers).is_none());
+        }
+        let owner = PollingRequestOwner {
+            nca_id: "tenant".into(),
+            subject: "caller".into(),
+        };
+        let mut headers = owner.to_headers().unwrap();
+        let value = headers.get(POLLING_OWNER_HEADER).unwrap().clone();
+        headers.append(POLLING_OWNER_HEADER, value);
+        assert!(PollingRequestOwner::from_headers(&headers).is_none());
+        assert!(PollingRequestOwner {
+            nca_id: "tenant".into(),
+            subject: String::new()
+        }
+        .to_headers()
+        .is_err());
+    }
 
     #[test]
     fn invocation_region_headers_reject_invalid_config() {

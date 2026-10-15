@@ -55,10 +55,15 @@ authorization to the control plane. Status polling also requires the authenticat
 tenant and subject that started the invocation. A replacement token for the same
 identity can continue polling.
 
-Polling records created by older versions lack caller identity and return 404
-after this upgrade. Drain pending legacy invocations before upgrading, and
-upgrade every serving replica before relying on the new ownership checks.
-The added protobuf fields are compatible with readers that ignore unknown fields.
+The invocation service stores caller identity in the NATS message header
+`Nvcf-Http-Invocation-Owner`. The shared `WorkerResultTracking` protobuf payload
+is preserved so other services can continue decoding the same message.
+
+Polling records without this header, including records written by legacy
+producers, return 404 through these status routes. Drain pending legacy
+invocations before upgrading, and upgrade every serving invocation replica
+before relying on the ownership checks. Other producers must also supply trusted
+caller metadata to resume their requests through these routes.
 
 Browser access to legacy routes requires an explicit list of exact HTTP or HTTPS
 origins in the service configuration. The default list is empty. Cookie

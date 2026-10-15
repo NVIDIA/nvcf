@@ -29,6 +29,7 @@ use mocks::{
 };
 use nvcf_invocation_service::app::app;
 use nvcf_invocation_service::{nats::NatsService, request_id::RequestId};
+use prost::Message;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -112,6 +113,10 @@ async fn test_poll() -> anyhow::Result<()> {
             let request = http::Request::builder()
                 .uri(format!("/v2/nvcf/{route}/status/{request_id}"))
                 .header(AUTHORIZATION, format!("Bearer {token}"))
+                .header(
+                    "Nvcf-Http-Invocation-Owner",
+                    r#"{"nca_id":"test-nca-id","subject":"test-subject"}"#,
+                )
                 .body(Body::empty())?;
             assert_eq!(app.call(request).await?.status(), expected);
         }
@@ -129,18 +134,47 @@ async fn test_poll() -> anyhow::Result<()> {
         .get_request_mapping(request_id.parse::<uuid::Uuid>()?.into())
         .await?
         .unwrap();
-    assert_eq!(mapping.worker_result_tracking.client_nca_id, NCA_ID);
+    let owner = mapping.polling_owner.as_ref().unwrap();
+    assert_eq!(owner.nca_id, NCA_ID);
+    assert_eq!(owner.subject, "test-subject");
+
+    // Other services read the same protobuf payload without the private header.
+    let client = async_nats::connect(&config.nats_properties.nats_address).await?;
+    let jetstream = async_nats::jetstream::new(client);
+    let stream = jetstream
+        .get_stream_no_info(format!(
+            "requestToFunctionVersion_{}",
+            config.nats_properties.region
+        ))
+        .await?;
+    let message = stream
+        .direct_get_last_for_subject(format!(
+            "requestToFunctionVersion.{}.{request_id}",
+            config.nats_properties.region
+        ))
+        .await?;
     assert_eq!(
-        mapping.worker_result_tracking.client_subject,
-        "test-subject"
+        message.payload.as_ref(),
+        mapping.worker_result_tracking.encode_to_vec()
     );
+
+    // Legacy NVCF producers write only the shared payload, without owner headers.
     let legacy_id = RequestId::new();
     let mut legacy_mapping = mapping.worker_result_tracking;
-    legacy_mapping.client_nca_id.clear();
-    legacy_mapping.client_subject.clear();
-    nats_service
-        .record_polling_request(None, legacy_id, &legacy_mapping)
+    legacy_mapping.request_time = None;
+    jetstream
+        .publish(
+            format!(
+                "requestToFunctionVersion.{}.{legacy_id}",
+                config.nats_properties.region
+            ),
+            legacy_mapping.encode_to_vec().into(),
+        )
+        .await?
         .await?;
+    let legacy = nats_service.get_request_mapping(legacy_id).await?.unwrap();
+    assert!(legacy.polling_owner.is_none());
+    assert_eq!(legacy.worker_result_tracking, legacy_mapping);
     for route in ["exec", "pexec"] {
         let request = http::Request::builder()
             .uri(format!("/v2/nvcf/{route}/status/{legacy_id}"))

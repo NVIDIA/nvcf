@@ -14,7 +14,7 @@
 // limitations under the License.
 
 use crate::metrics;
-use crate::nats::{NatsService, WorkerPollingResponse};
+use crate::nats::{NatsService, PollingRequestOwner, WorkerPollingResponse};
 use crate::nvcf_api::{
     nvcf::{
         worker_invoke_function_request::{
@@ -24,7 +24,7 @@ use crate::nvcf_api::{
             },
             StatelessConfig,
         },
-        WorkerInvokeFunctionRequest, WorkerResultTracking,
+        WorkerInvokeFunctionRequest,
     },
     AllowedFunctionInvocations, NVCFService,
 };
@@ -114,6 +114,7 @@ pub async fn pexec_status(
             existing
         }
     };
+    let polling_owner = existing_request.polling_owner;
     let existing_region = existing_request.region;
     inject_invocation_region_header(
         headers,
@@ -149,7 +150,7 @@ pub async fn pexec_status(
 
     // Function access does not grant access to another caller's invocation.
     // Older records have no owner and must fail closed.
-    if !request_owned_by(&existing_request, &allowed_functions) {
+    if !request_owned_by(polling_owner.as_ref(), &allowed_functions) {
         span.record("error", true);
         return Err(AppError(ProblemDetails::from_status_code(
             StatusCode::NOT_FOUND,
@@ -239,11 +240,13 @@ pub async fn pexec_status(
     Ok(response)
 }
 
-fn request_owned_by(request: &WorkerResultTracking, caller: &AllowedFunctionInvocations) -> bool {
-    !request.client_nca_id.is_empty()
-        && !request.client_subject.is_empty()
-        && request.client_nca_id == caller.authed_client_nca_id
-        && request.client_subject == caller.authed_client_subject
+fn request_owned_by(
+    owner: Option<&PollingRequestOwner>,
+    caller: &AllowedFunctionInvocations,
+) -> bool {
+    owner.is_some_and(|owner| {
+        owner.nca_id == caller.authed_client_nca_id && owner.subject == caller.authed_client_subject
+    })
 }
 
 fn request_time_to_system_time(request_start_time: Option<prost_types::Timestamp>) -> SystemTime {
