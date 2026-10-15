@@ -116,6 +116,8 @@ pub struct AppConfig {
     pub tcp_nodelay: bool,
     pub worker_stream_properties: WorkerStreamProperties,
     pub pod_ip: Option<String>,
+    #[serde(default)]
+    pub cors_allowed_origins: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -157,6 +159,7 @@ impl AppConfig {
             tcp_nodelay: true,
             worker_stream_properties,
             pod_ip: None,
+            cors_allowed_origins: Vec::new(),
         }
     }
 }

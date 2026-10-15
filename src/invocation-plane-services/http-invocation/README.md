@@ -48,6 +48,30 @@ for a public base such as `gcr.io/distroless/cc-debian12` (then
 
 Local Bazel cache setup is documented in the `nvcf/nvcf-internal` docs.
 
+## Legacy route access
+
+The legacy exec/pexec handlers delegate bearer-token validation and function
+authorization to the control plane. Status polling also requires the authenticated
+tenant and subject that started the invocation. A replacement token for the same
+identity can continue polling.
+
+Polling records created by older versions lack caller identity and return 404
+after this upgrade. Drain pending legacy invocations before upgrading, and
+upgrade every serving replica before relying on the new ownership checks.
+The added protobuf fields are compatible with readers that ignore unknown fields.
+
+Browser access to legacy routes requires an explicit list of exact HTTP or HTTPS
+origins in the service configuration. The default list is empty. Cookie
+credentials are not enabled; callers send their bearer token explicitly.
+
+```yaml
+cors_allowed_origins:
+  - https://console.example.com
+```
+
+The transparent load-balancer routes continue to forward CORS requests to the
+workload, which owns their browser policy.
+
 ## Cargo development (still supported)
 
 ```shell
@@ -175,6 +199,10 @@ end group
 inference --> worker: http response header
 
 group if http response is 202
+    note over client,is
+        The invocation service records the authenticated tenant and subject.
+        Status polls must authenticate as the same caller before reaching the worker.
+    end note
     loop
         worker -> nats: listen for more http requests for this request id on core-nats subject rq_polling.${rq-id} 
         note right

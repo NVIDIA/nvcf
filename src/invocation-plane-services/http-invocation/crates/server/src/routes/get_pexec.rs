@@ -24,9 +24,9 @@ use crate::nvcf_api::{
             },
             StatelessConfig,
         },
-        WorkerInvokeFunctionRequest,
+        WorkerInvokeFunctionRequest, WorkerResultTracking,
     },
-    NVCFService,
+    AllowedFunctionInvocations, NVCFService,
 };
 use crate::request_id::RequestId;
 use crate::routes::app_error::AppError;
@@ -110,7 +110,7 @@ pub async fn pexec_status(
             return Ok(ProblemDetails::from_status_code(StatusCode::NOT_FOUND).into_response());
         }
         Some(existing) => {
-            tracing::trace!("request located: {:?}", existing);
+            tracing::trace!("request located");
             existing
         }
     };
@@ -123,8 +123,11 @@ pub async fn pexec_status(
 
     let function_id: Uuid = existing_request.function_id.parse()?;
     let function_version_id: Uuid = existing_request.function_version_id.parse()?;
-    span.record("function_id", existing_request.function_id);
-    span.record("function_version_id", existing_request.function_version_id);
+    span.record("function_id", existing_request.function_id.as_str());
+    span.record(
+        "function_version_id",
+        existing_request.function_version_id.as_str(),
+    );
 
     let original_start_time = request_time_to_system_time(existing_request.request_time);
     // will error if the client is not allowed
@@ -144,6 +147,15 @@ pub async fn pexec_status(
     };
     span.record("nca_id", allowed_functions.authed_client_nca_id.clone());
 
+    // Function access does not grant access to another caller's invocation.
+    // Older records have no owner and must fail closed.
+    if !request_owned_by(&existing_request, &allowed_functions) {
+        span.record("error", true);
+        return Err(AppError(ProblemDetails::from_status_code(
+            StatusCode::NOT_FOUND,
+        )));
+    }
+
     let (response_tx, response_rx) = tokio::sync::oneshot::channel();
     let response_authorization_token =
         worker_stream_service.generate_response_token(request_id, response_tx);
@@ -154,7 +166,7 @@ pub async fn pexec_status(
     let payload = WorkerInvokeFunctionRequest {
         request_id: request_id.to_string(),
         nca_id: allowed_functions.authed_client_nca_id.clone(),
-        subject: allowed_functions.authed_client_subject,
+        subject: allowed_functions.authed_client_subject.clone(),
         large_response_url: Default::default(),
         max_direct_response_size_bytes: five_mb as u32,
         input_asset_reference: Default::default(), // assets only supported for initial call
@@ -206,6 +218,7 @@ pub async fn pexec_status(
         function_id,
         function_version_id,
         allowed_functions.authed_client_nca_id,
+        allowed_functions.authed_client_subject,
         request_id,
         poll_duration,
         original_start_time,
@@ -224,6 +237,13 @@ pub async fn pexec_status(
         }
     }
     Ok(response)
+}
+
+fn request_owned_by(request: &WorkerResultTracking, caller: &AllowedFunctionInvocations) -> bool {
+    !request.client_nca_id.is_empty()
+        && !request.client_subject.is_empty()
+        && request.client_nca_id == caller.authed_client_nca_id
+        && request.client_subject == caller.authed_client_subject
 }
 
 fn request_time_to_system_time(request_start_time: Option<prost_types::Timestamp>) -> SystemTime {

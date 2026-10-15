@@ -24,7 +24,7 @@ use crate::nvcf_api::{
             },
             StatelessConfig,
         },
-        InputAssetReference, StringKv, WorkerInvokeFunctionRequest,
+        InputAssetReference, StringKv, WorkerInvokeFunctionRequest, WorkerResultTracking,
     },
     AllowedFunctionInvocations, AllowedFunctionVersion, NVCFService,
 };
@@ -391,6 +391,7 @@ pub async fn pexec(
         function_id,
         function_version_id,
         nca_id,
+        allowed_functions.authed_client_subject,
         request_id,
         poll_duration,
         start_time,
@@ -480,7 +481,8 @@ fn is_tlb(extensions: &Extensions) -> bool {
     skip(
         nats_service,
         attach_response_rx,
-        start_time
+        start_time,
+        subject
     )
 )]
 pub(crate) async fn handle_streaming_response(
@@ -488,6 +490,7 @@ pub(crate) async fn handle_streaming_response(
     function_id: Uuid,
     function_version_id: Uuid,
     nca_id: String,
+    subject: String,
     request_id: RequestId,
     poll_duration: Duration,
     start_time: SystemTime,
@@ -512,9 +515,13 @@ pub(crate) async fn handle_streaming_response(
             .record_polling_request(
                 region,
                 request_id,
-                function_id,
-                function_version_id,
-                start_time,
+                &WorkerResultTracking {
+                    function_id: function_id.to_string(),
+                    function_version_id: function_version_id.to_string(),
+                    request_time: Some(start_time.into()),
+                    client_nca_id: nca_id,
+                    client_subject: subject,
+                },
             )
             .await?;
     }

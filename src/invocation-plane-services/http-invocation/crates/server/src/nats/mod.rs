@@ -55,7 +55,7 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::pin::pin;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 use sync_wrapper;
 use tracing::{Level, Span};
 use uom::si::information;
@@ -790,43 +790,29 @@ impl NatsService {
         )
     }
 
-    #[tracing::instrument(level = Level::TRACE, skip(self), err)]
+    #[tracing::instrument(level = Level::TRACE, skip(self, tracking), err)]
     pub async fn record_polling_request(
         &self,
         region: Option<&str>,
         request_id: RequestId,
-        function_id: Uuid,
-        function_version_id: Uuid,
-        request_time: SystemTime,
+        tracking: &WorkerResultTracking,
     ) -> anyhow::Result<()> {
         let region = region.unwrap_or(&self.nats_properties.region);
         let pub_ack = self
-            .publish_to_request_mapping(
-                region,
-                request_id,
-                function_id,
-                function_version_id,
-                request_time,
-            )
+            .publish_to_request_mapping(region, request_id, tracking)
             .await?;
         match pub_ack.await {
             Err(err) if err.kind() == PublishErrorKind::StreamNotFound => {
                 // create stream and try again
                 self.create_request_tracking_stream().await?;
-                self.publish_to_request_mapping(
-                    region,
-                    request_id,
-                    function_id,
-                    function_version_id,
-                    request_time,
-                )
-                .await?
-                .await
-                .inspect_err(|_err| {
-                    // track the error if it fails to wait for the actual publish acknowledgment from NATS.
-                    // use inspect_err here as cargo clippy suggested
-                    record_nats_error_total();
-                })?;
+                self.publish_to_request_mapping(region, request_id, tracking)
+                    .await?
+                    .await
+                    .inspect_err(|_err| {
+                        // track the error if it fails to wait for the actual publish acknowledgment from NATS.
+                        // use inspect_err here as cargo clippy suggested
+                        record_nats_error_total();
+                    })?;
                 Ok(())
             }
             Err(err) => {
@@ -837,22 +823,14 @@ impl NatsService {
         }
     }
 
-    #[tracing::instrument(level = Level::TRACE, skip(self), err)]
+    #[tracing::instrument(level = Level::TRACE, skip(self, tracking), err)]
     async fn publish_to_request_mapping(
         &self,
         region: &str,
         request_id: RequestId,
-        function_id: Uuid,
-        function_version_id: Uuid,
-        request_time: SystemTime,
+        tracking: &WorkerResultTracking,
     ) -> Result<PublishAckFuture, PublishError> {
-        let payload = WorkerResultTracking {
-            function_id: function_id.to_string(),
-            function_version_id: function_version_id.to_string(),
-            request_time: Some(request_time.into()),
-        }
-        .encode_to_vec()
-        .into();
+        let payload = tracking.encode_to_vec().into();
         let subject = format!("requestToFunctionVersion.{}.{}", region, request_id);
         self.jetstream.publish(subject, payload).await
     }

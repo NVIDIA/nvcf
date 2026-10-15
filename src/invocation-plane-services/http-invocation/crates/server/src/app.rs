@@ -40,7 +40,7 @@ use std::{sync::Arc, time::Duration};
 use tower::ServiceExt;
 use tower_http::{
     catch_panic::CatchPanicLayer,
-    cors::CorsLayer,
+    cors::{AllowHeaders, CorsLayer},
     timeout::TimeoutLayer,
     trace::{DefaultOnRequest, TraceLayer},
 };
@@ -60,6 +60,7 @@ pub async fn app(
     config: AppConfig,
     secrets: Option<Arc<SecretFileWatcher>>,
 ) -> anyhow::Result<Router> {
+    let cors_layer = legacy_cors_layer(&config.cors_allowed_origins)?;
     let baggage_attribute_allowlist = config.server.tracing.baggage_attribute_allowlist.clone();
     let app_state = AppState {
         nvcf_service: NVCFService::new(
@@ -145,7 +146,7 @@ pub async fn app(
         .layer(axum_mw::from_fn(nvcf_mw::auth::auth_middleware)) // Everything above this layer will require auth DON'T MOVE IT
         .route("/health", get(routes::get_health)) // Needs to be ahead of other layers to avoid auth, and after metrics layer to get recorded
         .route("/info", get(routes::get_info)) // unauthenticated, same as /health above
-        .layer(CorsLayer::very_permissive().max_age(Duration::from_secs(86400))) // only on the path based router. for full path passthrough we send the OPTIONS and all other requests all the way to the worker.
+        .layer(cors_layer) // For TLB routes, OPTIONS is passed through to the worker.
         .layer(axum_mw::from_fn(routes::info_method_guard))
         .layer(
             PrometheusMetricLayerBuilder::new()
@@ -218,4 +219,92 @@ pub async fn app(
 
 async fn handler_404() -> impl IntoResponse {
     ProblemDetails::from_status_code(StatusCode::NOT_FOUND)
+}
+
+fn legacy_cors_layer(origins: &[String]) -> anyhow::Result<CorsLayer> {
+    let origins = origins
+        .iter()
+        .map(|origin| {
+            let url = reqwest::Url::parse(origin)?;
+            anyhow::ensure!(
+                matches!(url.scheme(), "http" | "https")
+                    && url.host_str().is_some_and(|host| !host.contains('*'))
+                    && url.origin().ascii_serialization() == *origin,
+                "CORS allowlist entries must be exact HTTP or HTTPS origins"
+            );
+            Ok(origin.parse::<hyper::header::HeaderValue>()?)
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(CorsLayer::new()
+        .allow_origin(origins)
+        .allow_methods([hyper::Method::GET, hyper::Method::HEAD, hyper::Method::POST])
+        .allow_headers(AllowHeaders::mirror_request())
+        .max_age(Duration::from_secs(86400)))
+}
+
+#[cfg(test)]
+mod cors_tests {
+    use super::*;
+    use http::{header, Request};
+
+    #[tokio::test]
+    async fn only_configured_origins_receive_cors_access() {
+        for (allowlist, origin, allowed) in [
+            (vec![], "https://console.example", false),
+            (
+                vec!["https://console.example".into()],
+                "https://console.example",
+                true,
+            ),
+            (
+                vec!["https://console.example".into()],
+                "https://other.example",
+                false,
+            ),
+        ] {
+            let app = Router::new()
+                .route("/", get(|| async { StatusCode::OK }))
+                .layer(legacy_cors_layer(&allowlist).unwrap());
+            let request = Request::builder()
+                .method(hyper::Method::OPTIONS)
+                .header(header::ORIGIN, origin)
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .header(
+                    header::ACCESS_CONTROL_REQUEST_HEADERS,
+                    "authorization,content-type",
+                )
+                .body(Body::empty())
+                .unwrap();
+            let response = app.oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response
+                    .headers()
+                    .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                    .map(|v| v.to_str().unwrap()),
+                allowed.then_some(origin)
+            );
+            assert!(!response
+                .headers()
+                .contains_key(header::ACCESS_CONTROL_ALLOW_CREDENTIALS));
+            assert_eq!(
+                response.headers()[header::ACCESS_CONTROL_ALLOW_HEADERS],
+                "authorization,content-type"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_wildcards_and_non_origin_allowlist_entries() {
+        for origin in [
+            "*",
+            "null",
+            "https://*.example",
+            "https://console.example/path",
+            "https://console.example?query",
+            "https://user@console.example",
+        ] {
+            assert!(legacy_cors_layer(&[origin.into()]).is_err(), "{origin}");
+        }
+    }
 }

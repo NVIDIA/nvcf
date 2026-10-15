@@ -23,10 +23,12 @@ use axum::http::{HeaderValue, Method, StatusCode};
 use http_body_util::BodyExt;
 use mocks::{
     fixtures,
+    nvcf_api_mock::ApiClient,
     nvcf_worker_mock::{PollAwareHandler, Worker, WorkerProperties},
-    API_KEY, FUNCTION_ID, INSTANCE_ID, VERSION_ID_1,
+    API_KEY, FUNCTION_ID, INSTANCE_ID, NCA_ID, OWNER_NCA_ID, VERSION_ID_1,
 };
 use nvcf_invocation_service::app::app;
+use nvcf_invocation_service::{nats::NatsService, request_id::RequestId};
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -34,7 +36,23 @@ use tower::{Service, ServiceExt};
 
 #[tokio::test]
 async fn test_poll() -> anyhow::Result<()> {
-    let (_localstack, _nats, _mock_nvcf_api, mut config) = fixtures().await;
+    let (_localstack, _nats, mock_nvcf_api, mut config) = fixtures().await;
+    for (token, nca_id, subject) in [
+        ("different-tenant", "other-nca-id", "test-subject"),
+        ("different-subject", NCA_ID, "other-subject"),
+        ("rotated-token", NCA_ID, "test-subject"),
+    ] {
+        mock_nvcf_api
+            .add_client(
+                token,
+                ApiClient {
+                    subject: subject.into(),
+                    nca_id: nca_id.into(),
+                    owner_nca_id: OWNER_NCA_ID.into(),
+                },
+            )
+            .await;
+    }
     config.nats_properties.region = "server-region".into();
     let mut app = app(config.clone(), None).await?;
     let app = ServiceExt::<http::Request<Body>>::ready(&mut app).await?;
@@ -83,10 +101,58 @@ async fn test_poll() -> anyhow::Result<()> {
     // the mock worker will wait until we consume the response body before moving onto the next request.
     drop(response);
 
+    // Both clients can invoke the function, but neither owns this request.
+    // A rejected poll must leave the original result available to its owner.
+    for route in ["exec", "pexec"] {
+        for (token, expected) in [
+            ("different-tenant", StatusCode::NOT_FOUND),
+            ("different-subject", StatusCode::NOT_FOUND),
+            ("unknown-token", StatusCode::UNAUTHORIZED),
+        ] {
+            let request = http::Request::builder()
+                .uri(format!("/v2/nvcf/{route}/status/{request_id}"))
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty())?;
+            assert_eq!(app.call(request).await?.status(), expected);
+        }
+    }
+
+    // Legacy mappings cannot establish an owner and must also fail closed.
+    let nats_service = NatsService::new(
+        &config.nats_properties,
+        &config.oauth2_base_url,
+        None,
+        &config.grpc_client,
+    )
+    .await?;
+    let mapping = nats_service
+        .get_request_mapping(request_id.parse::<uuid::Uuid>()?.into())
+        .await?
+        .unwrap();
+    assert_eq!(mapping.worker_result_tracking.client_nca_id, NCA_ID);
+    assert_eq!(
+        mapping.worker_result_tracking.client_subject,
+        "test-subject"
+    );
+    let legacy_id = RequestId::new();
+    let mut legacy_mapping = mapping.worker_result_tracking;
+    legacy_mapping.client_nca_id.clear();
+    legacy_mapping.client_subject.clear();
+    nats_service
+        .record_polling_request(None, legacy_id, &legacy_mapping)
+        .await?;
+    for route in ["exec", "pexec"] {
+        let request = http::Request::builder()
+            .uri(format!("/v2/nvcf/{route}/status/{legacy_id}"))
+            .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
+            .body(Body::empty())?;
+        assert_eq!(app.call(request).await?.status(), StatusCode::NOT_FOUND);
+    }
+
     let request = axum::http::Request::builder()
         .method(Method::GET)
         .uri(format!("/v2/nvcf/pexec/status/{request_id}"))
-        .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
+        .header(AUTHORIZATION, "Bearer rotated-token")
         .body(Body::empty())?;
     let response = app.call(request).await?;
     assert_eq!(response.status(), StatusCode::OK);
