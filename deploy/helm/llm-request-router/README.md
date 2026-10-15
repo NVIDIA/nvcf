@@ -114,7 +114,7 @@ The default chart configuration lives in `llm-request-router/values.yaml`.
 
 Important settings to review before deployment:
 
-- `llmRequestRouter.image.*` for the router container image
+- `llmRequestRouter.image.*` for the router container image. Set `image.digest` (`sha256:...`) to pin the Pod image by digest; the Pod image is then `repository@digest` and `tag` is ignored for the image.
 - `llmRequestRouter.imagePullSecrets` for private registry access
 - `llmRequestRouter.workload.kind` to select `Deployment` (default) or `StatefulSet`
 - `llmRequestRouter.workload.deployment.strategy` and `llmRequestRouter.workload.statefulSet.*` for workload-specific rollout settings
@@ -126,10 +126,12 @@ Important settings to review before deployment:
 - `llmRequestRouter.metrics.serviceMonitor.enabled` to create a Prometheus `ServiceMonitor` (requires `metrics.enabled`)
 - `llmRequestRouter.certificate.*` to let cert-manager issue the Stargate QUIC server certificate
 - `llmRequestRouter.tls.*` to mount the TLS Secret and pass cert/key paths to Stargate
+- `llmRequestRouter.tls.upstreamCaPath` to give the backend router a CA bundle for verifying Stargate QUIC targets. It requires `tls.secretName`, `tls.certPath`, and `tls.keyPath`, must use the same directory, and the Secret must provide a `ca.crt` entry.
 - `llmRequestRouter.tls.mode` to choose the source of the QUIC server identity. `certManager` (default) mounts the Secret cert-manager writes for `certificate.*`. `existingSecret` mounts a pre-created Secret instead: the chart renders no `Certificate` and adds no issuer dependency, `certificate.enabled` must stay `false`, `tls.secretName`, `tls.certPath`, and `tls.keyPath` are required, and the operator owns issuance, renewal, rotation, and recovery. The Secret must provide the `tls.crt` and `tls.key` entries. The chart cannot read a pre-created Secret, so it does not validate its SANs or expiry.
 - `llmRequestRouter.pki.*` to provision the OpenBao service-issuing PKI hierarchy that cert-manager mints the Certificate from. Opt-in via `pki.enabled=true`. Mirrors the SIS chart's `hook-lls-migrations.yaml` pattern: a Helm pre-install/pre-upgrade Job runs the `nvcf-openbao-migrations` image with `CORE_MIGRATIONS_ENABLED=false` + `ADDONS_LLM_ENABLED=true` so only the LLM addon executes. `pki.allowedDomains` (comma-separated DNS suffixes) is required when enabled and is the OpenBao PKI role's `allowed_domains` security constraint. Typically this is `<customer-domain>,cluster.local`. Job-level fail-hard is handled by `restartPolicy: OnFailure` + `pki.backoffLimit` combined with the migrations image's `FAILED_MIGRATIONS` accumulator (image `>= 0.12.1`).
 - `llmRequestRouter.vault.audience` for the projected ServiceAccount token audience used to authenticate to OpenBao
 - `llmRequestRouter.vault.noVaultAnnotations` to disable Vault Agent injection (useful for local testing without OpenBao)
+- `llmRequestRouter.auth.existingSecret.name` to read the worker-auth service token from a pre-created Secret instead of Vault. The Secret must have a `service-token.json` key holding JSON with an `nvcfApiToken` field; only that key is mounted. Requires `vault.noVaultAnnotations=true`.
 
 The default values include development-oriented placeholders. Override them before using the chart in any shared or production environment.
 
@@ -148,11 +150,13 @@ llmRequestRouter:
     pylonReverseTunnelDialAddress: llm-router.example.com:8080
 ```
 
-The chart uses the main Stargate image for both workloads. The backend router
-inherits the main image registry, repository, and tag, falling back to the
-chart appVersion. That image must contain
-`/usr/local/bin/stargate-k8s-router`; override `backendRouter.image.*` only to
-validate a different Stargate build.
+The backend router inherits the main image registry and repository. Its tag is
+pinned separately by default (`backendRouter.image.tag`) so
+`stargate-k8s-router` can follow its own release schedule. The image must
+contain `/usr/local/bin/stargate-k8s-router`. The main `image.digest` applies to
+the backend router only when every `backendRouter.image` field is empty; set
+`backendRouter.image.tag: ""` to run both workloads from the same
+digest-pinned image. Any `backendRouter.image` override drops the digest.
 
 The backend router watches the headless Service's EndpointSlices and publishes
 their non-terminating targets directly through `WatchStargates`, including
@@ -167,7 +171,13 @@ When `rbac.create=false`, grant `get`, `list`, and `watch` on
 `discovery.k8s.io/endpointslices` to that account outside this chart.
 
 Route HTTPS gRPC traffic on port `50071` and UDP traffic on port `50072` to the
-`llm-request-router-backend-router` Service. The NVCF gateway-routes chart can
+`llm-request-router-backend-router` Service. Keep its default `ClusterIP` type
+in self-managed stacks. `LoadBalancer` is for development stacks only; see
+`backendRouter.service` in `values.yaml` for its caveats. With metrics and the
+ServiceMonitor enabled, this mode creates a separate internal ClusterIP Service
+for the backend router's `health` port. The LoadBalancer exposes only worker
+registration and QUIC. The NVCF
+gateway-routes chart can
 terminate TLS on a dedicated HTTPS listener and create the matching
 `GRPCRoute`, `UDPRoute`, `ReferenceGrant`, gRPC `Certificate`, and stream
 timeout policy. The gRPC route forwards h2c to the Service. The Gateway
@@ -200,6 +210,8 @@ The chart can pass a Stargate load-balancer config in either of two ways:
 - `llmRequestRouter.loadBalancer.configPath` points Stargate at an existing file path and starts it with `--lb-config-path=<configPath>`.
 
 `config` takes precedence over `configPath` when both are set. If neither value is set, Stargate uses its built-in default algorithm, `power-of-n`.
+
+Stargate reads the load-balancer config only at startup. When `config` is set, the chart adds a `checksum/load-balancer-config` annotation to the router Pod template, so changing the policy rolls the router Pods and they load the new config. Releases that already set `config` see one router rollout when they upgrade from a chart version without this annotation. Releases that use `configPath` or neither value get no annotation; restart the router Pods yourself after changing a file referenced by `configPath`.
 
 See the
 [Stargate load balancer configuration](../../../src/libraries/rust/stargate/docs/load-balancer-configuration.md)
