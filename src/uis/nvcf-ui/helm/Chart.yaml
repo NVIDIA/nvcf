@@ -15,7 +15,7 @@
 
 apiVersion: v2
 appVersion: 1.1.2
-description: NVCF UI — Graphical User Interface for NVIDIA Cloud Foundation
+description: NVCF UI - Graphical User Interface for NVIDIA Cloud Foundation
 name: helm-nvcf-ui
 type: application
-version: 1.1.2
+version: 1.1.3
