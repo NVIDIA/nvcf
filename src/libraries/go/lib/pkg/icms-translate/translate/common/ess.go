@@ -64,7 +64,7 @@ func NewESSContainerSecurityContext() *corev1.SecurityContext {
 		RunAsNonRoot:             &nonRoot,
 		AllowPrivilegeEscalation: &allowPrivilegeEscalation,
 		Capabilities: &corev1.Capabilities{
-			Drop: []corev1.Capability{"ALL"},
+			Drop: []corev1.Capability{allCapabilities},
 			Add:  []corev1.Capability{"CHOWN"},
 		},
 	}

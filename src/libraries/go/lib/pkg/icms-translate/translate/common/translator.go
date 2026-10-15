@@ -31,6 +31,8 @@ import (
 )
 
 const (
+	allCapabilities corev1.Capability = "ALL"
+
 	UtilsHealthPort int32 = 8080
 	// UtilsMetricsPort is the TCP port exposed by worker-utils for Prometheus metrics.
 	UtilsMetricsPort int32 = 8010
@@ -231,7 +233,7 @@ func NewCommonMetadata(
 func NewWorkloadContainerSecurityContext() *corev1.SecurityContext {
 	return &corev1.SecurityContext{
 		Capabilities: &corev1.Capabilities{
-			Drop: []corev1.Capability{"ALL"},
+			Drop: []corev1.Capability{allCapabilities},
 			Add:  []corev1.Capability{"NET_BIND_SERVICE"},
 		},
 	}
@@ -250,7 +252,7 @@ func NewWorkerInitContainerSecurityContext() *corev1.SecurityContext {
 		RunAsGroup:               &uid,
 		RunAsNonRoot:             &nonRoot,
 		AllowPrivilegeEscalation: &allowPrivilegeEscalation,
-		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{allCapabilities}},
 	}
 }
 
