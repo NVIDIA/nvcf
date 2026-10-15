@@ -40,7 +40,7 @@ func TestParseCRIUGroup(t *testing.T) {
 		"checkpoint.0": "a", "checkpoint.1": "b", "node.0": "n0", "node.1": "n1"}
 	g, ok := parseCRIUGroup("k1", data)
 	if !ok || !reflect.DeepEqual(g, webhook.CRIUGroup{Key: "k1", Checkpoints: []string{"a", "b"}, Nodes: []string{"n0", "n1"}, GPUShare: true,
-		Companion: []bool{false, false}, Containers: []string{"", ""}, Slot: -1}) {
+		Companion: []bool{false, false}, Containers: []string{"", ""}}) {
 		t.Fatalf("got %+v %v", g, ok)
 	}
 	for name, mut := range map[string]func(map[string]string){

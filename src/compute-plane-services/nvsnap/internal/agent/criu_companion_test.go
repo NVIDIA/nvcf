@@ -137,10 +137,10 @@ func TestCompanionAliasNamesItsSlot(t *testing.T) {
 	}
 	c.writeGroupAliases(ctx, key, "fv", uris, 1, logrus.NewEntry(logrus.New()))
 	g, ok := a.lookupCRIUGroup(ctx, criuGroupKey("cache://etcd", "fv"))
-	if !ok || g.Key != key || g.Slot != 1 || !g.Companion[1] || g.Ranks() != 1 {
+	if !ok || g.Key != key || !reflect.DeepEqual(g.Slots, []int{1}) || !g.Companion[1] || g.Ranks() != 1 {
 		t.Fatalf("the companion's configuration must find the record and its slot: %+v %v", g, ok)
 	}
-	if g, ok := a.lookupCRIUGroup(ctx, criuGroupKey("cache://worker", "fv")); !ok || g.Slot != -1 {
+	if g, ok := a.lookupCRIUGroup(ctx, criuGroupKey("cache://worker", "fv")); !ok || g.Slots != nil {
 		t.Fatalf("the rank's alias names no slot: %+v %v", g, ok)
 	}
 }
@@ -152,12 +152,6 @@ func TestGPUShareGroupInfoCompanion(t *testing.T) {
 	}
 	if gpushareGroupInfo(CheckpointRequest{}) != nil {
 		t.Error("a capture outside a group has no group info")
-	}
-}
-
-func TestDuplicateURI(t *testing.T) {
-	if duplicateURI([]string{"a", "b"}) != "" || duplicateURI([]string{"a", "b", "a"}) != "a" {
-		t.Error("duplicateURI")
 	}
 }
 

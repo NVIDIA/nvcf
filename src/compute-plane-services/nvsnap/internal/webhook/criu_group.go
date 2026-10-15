@@ -13,6 +13,7 @@ package webhook
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 
 	"github.com/sirupsen/logrus"
@@ -51,9 +52,11 @@ type CRIUGroup struct {
 	// Containers names the container each member's checkpoint was taken
 	// from (by slot); empty in records from before it was recorded.
 	Containers []string
-	// Slot is the member a companion's own configuration names, when the
-	// record was found through a companion's alias; -1 otherwise.
-	Slot int
+	// Slots are the members a companion's own configuration names, when
+	// the record was found through a companion's alias: one, or several
+	// for identical companions (replicas of one template), any of which a
+	// pod of that configuration can restore. Empty otherwise.
+	Slots []int
 }
 
 // Ranks is the number of GPU ranks of the group.
@@ -67,13 +70,20 @@ func (g CRIUGroup) Ranks() int {
 	return n
 }
 
-// companionSlot reports whether the record names the looked-up pod as one
-// of its companions.
-func (g CRIUGroup) companionSlot() (int, bool) {
-	if g.Slot < 0 || g.Slot >= len(g.Checkpoints) || g.Slot >= len(g.Companion) || !g.Companion[g.Slot] {
-		return 0, false
+// CompanionSlots returns the companion slots the record names for the
+// looked-up pod; none when it is no companion of the record.
+func (g CRIUGroup) CompanionSlots() []int {
+	if len(g.Slots) == 0 {
+		return nil
 	}
-	return g.Slot, true
+	out := make([]int, 0, len(g.Slots))
+	for _, s := range g.Slots {
+		if s < 0 || s >= len(g.Checkpoints) || s >= len(g.Companion) || !g.Companion[s] {
+			return nil
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // criuGroupRestorePatches admits pod as its member's restore placeholder
@@ -94,14 +104,14 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 	}
 	key := g.Key
 	log := m.logger().WithFields(logrus.Fields{"pod": election.PodIdentity(pod), "criuGroup": key})
-	slot, companion := g.companionSlot()
+	slots := g.CompanionSlots()
+	companion := len(slots) > 0
 	if gpuRequest(pod) == 0 && !companion {
 		return nil
 	}
 	size := len(g.Checkpoints)
 	var ordinal int
 	if companion {
-		ordinal = slot
 		if m.CRIUCompanionAdmits != nil {
 			if ok, why := m.CRIUCompanionAdmits(ctx, pod); !ok {
 				log.WithField("reason", why).Info("CRIU group restore: the companion cannot restore with its instance; cold start")
@@ -135,6 +145,14 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 				log.WithField("checkpoint", id).Warn("CRIU group restore: a checkpoint of this group failed to restore before; cold start")
 				return nil
 			}
+		}
+	}
+	if companion {
+		// Last, so a pod refused above holds no slot.
+		var err error
+		if ordinal, err = m.companionSlot(ctx, pod, g, slots); err != nil {
+			log.WithError(err).Info("CRIU group restore: no slot of the capture for the companion; cold start")
+			return nil
 		}
 	}
 	man := checkpointstore.Manifest{SourcePodMeta: map[string]string{}}
@@ -178,4 +196,17 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 	}
 	log.WithFields(logrus.Fields{"checkpoint": id, "ordinal": ordinal, "size": size}).Info("CRIU group restore: pod admitted as its rank's restore placeholder")
 	return mergePatchPlan(append(cp, vp...))
+}
+
+// companionSlot picks the slot a companion placeholder restores: its
+// configuration's only one, else one of the identical companions' slots
+// that no other placeholder of the instance holds (CRIUCompanionSlot).
+func (m *Mutator) companionSlot(ctx context.Context, pod *corev1.Pod, g CRIUGroup, slots []int) (int, error) {
+	if len(slots) == 1 {
+		return slots[0], nil
+	}
+	if m.CRIUCompanionSlot == nil {
+		return 0, fmt.Errorf("%d identical companions and no slot claims", len(slots))
+	}
+	return m.CRIUCompanionSlot(ctx, pod, g, slots)
 }

@@ -96,7 +96,7 @@ func parseCRIUGroup(key string, data map[string]string) (webhook.CRIUGroup, bool
 	if err != nil || size < 1 {
 		return webhook.CRIUGroup{}, false
 	}
-	g := webhook.CRIUGroup{Key: key, GPUShare: data["gpushare"] == "true", Slot: -1,
+	g := webhook.CRIUGroup{Key: key, GPUShare: data["gpushare"] == "true",
 		Checkpoints: make([]string, size), Nodes: make([]string, size), Companion: make([]bool, size), Containers: make([]string, size)}
 	for i := range size {
 		g.Checkpoints[i] = data[fmt.Sprintf("checkpoint.%d", i)]
@@ -122,15 +122,13 @@ func (a *Agent) lookupCRIUGroup(ctx context.Context, key string) (webhook.CRIUGr
 	if cm.Data["state"] == criuGroupStateAlias {
 		// A rank of an instance whose ranks differ in configuration finds
 		// the instance's record through the alias of its own.
-		// A companion's alias also names its slot.
-		target, slot := cm.Data["alias"], cm.Data["slot"]
+		// A companion's alias also names its slots.
+		target, slots := cm.Data["alias"], parseSlots(cm.Data)
 		if cm, err = a.kubeClient.CoreV1().ConfigMaps(a.criuFailedNamespace()).Get(ctx, criuGroupConfigMapName(target), metav1.GetOptions{}); err != nil {
 			return webhook.CRIUGroup{}, false
 		}
 		g, ok := parseCRIUGroup(target, cm.Data)
-		if n, err := strconv.Atoi(slot); ok && slot != "" && err == nil {
-			g.Slot = n
-		}
+		g.Slots = slots
 		return g, ok
 	}
 	return parseCRIUGroup(key, cm.Data)
@@ -352,10 +350,6 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 		}
 		uris = append(uris, u)
 	}
-	if dup := duplicateURI(uris[len(ranks):]); dup != "" {
-		log.WithField("configuration", dup).Warn("CRIU group capture: skipped; two companions share a configuration, so a replacement could not tell which it restores")
-		return false
-	}
 	key := criuGroupKey(instanceConfigURIOf(uris), scope)
 	log = log.WithField("criuGroup", key)
 	if prev, err := cms.Get(ctx, criuGroupConfigMapName(key), metav1.GetOptions{}); err == nil && !criuGroupRecaptures(prev.Data, time.Now()) {
@@ -499,6 +493,14 @@ func ranksAgreePerTemplate(ranks []*corev1.Pod) error {
 // uniform instance of that configuration) is left alone.
 func (c *criuAutoRestorer) writeGroupAliases(ctx context.Context, key, scope string, uris []string, ranks int, log *logrus.Entry) {
 	cms := c.a.kubeClient.CoreV1().ConfigMaps(c.a.criuFailedNamespace())
+	// A companion is admitted by its own configuration alone: its alias
+	// names its slot, or the slots of every companion of that
+	// configuration (replicas of one template), which are
+	// interchangeable.
+	slots := map[string][]string{}
+	for i := ranks; i < len(uris); i++ {
+		slots[uris[i]] = append(slots[uris[i]], strconv.Itoa(i))
+	}
 	done := map[string]bool{key: true}
 	for i, uri := range uris {
 		akey := criuGroupKey(uri, scope)
@@ -508,9 +510,10 @@ func (c *criuAutoRestorer) writeGroupAliases(ctx context.Context, key, scope str
 		done[akey] = true
 		data := map[string]string{"state": criuGroupStateAlias, "alias": key}
 		if i >= ranks {
-			// A companion is admitted by its own configuration alone: the
-			// alias names its slot.
-			data["slot"] = strconv.Itoa(i)
+			data["slots"] = strings.Join(slots[uri], ",")
+			if len(slots[uri]) == 1 {
+				data["slot"] = slots[uri][0] // for agents that read one slot
+			}
 		}
 		alias := &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{Name: criuGroupConfigMapName(akey), Labels: map[string]string{"app.kubernetes.io/managed-by": "nvsnap"}},
@@ -519,7 +522,8 @@ func (c *criuAutoRestorer) writeGroupAliases(ctx context.Context, key, scope str
 		_, err := cms.Create(ctx, alias, metav1.CreateOptions{})
 		if apierrors.IsAlreadyExists(err) {
 			prev, gerr := cms.Get(ctx, alias.Name, metav1.GetOptions{})
-			if gerr != nil || prev.Data["state"] != criuGroupStateAlias || (prev.Data["alias"] == key && prev.Data["slot"] == data["slot"]) {
+			if gerr != nil || prev.Data["state"] != criuGroupStateAlias ||
+				(prev.Data["alias"] == key && prev.Data["slot"] == data["slot"] && prev.Data["slots"] == data["slots"]) {
 				continue
 			}
 			prev.Data = data
@@ -653,18 +657,6 @@ func (c *criuAutoRestorer) checkpointInstance(ctx context.Context, ranks, compan
 	return out, nil
 }
 
-// duplicateURI returns a configuration that occurs twice, or "".
-func duplicateURI(uris []string) string {
-	seen := map[string]bool{}
-	for _, u := range uris {
-		if seen[u] {
-			return u
-		}
-		seen[u] = true
-	}
-	return ""
-}
-
 // identityBlocksCapture returns the env variable through which a GPU pod
 // names its own instance, unless a group restore keeps that identity
 // consistent: a Dynamo component that runs under the fixed Dynamo
@@ -739,6 +731,11 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 	for {
 		pods, err := a.kubeClient.CoreV1().Pods(leader.Namespace).List(ctx, metav1.ListOptions{})
 		if err == nil {
+			if err := doubledSlot(pods.Items, leader, key); err != nil {
+				// No restore can use both; replacements are admitted anew.
+				c.failGroup(ctx, leader, key, false, err, log)
+				return
+			}
 			ranks, waitErr = instanceRanks(pods.Items, leader, size, webhook.CRIUGroupOrdinalAnnotation, webhook.CRIUGroupSizeAnnotation, func(p *corev1.Pod) bool {
 				_, _, running := criuRestoreTarget(p)
 				return p.Annotations[webhook.CRIUGroupAnnotation] == key && running

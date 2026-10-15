@@ -365,6 +365,11 @@ type Mutator struct {
 	// as a companion of a group restore: not while a GPU rank of its
 	// namespace already runs. Nil admits.
 	CRIUCompanionAdmits func(ctx context.Context, pod *corev1.Pod) (bool, string)
+	// CRIUCompanionSlot claims for pod one of slots, the slots of identical
+	// companions of group g, that no other placeholder of its instance
+	// holds; two pods admitted together never get the same one. Nil
+	// leaves identical companions to start cold.
+	CRIUCompanionSlot func(ctx context.Context, pod *corev1.Pod, g CRIUGroup, slots []int) (int, error)
 
 	// NvSnapServerURL is the in-cluster URL the nvsnap-l2-wait init
 	// container POSTs to. Typically

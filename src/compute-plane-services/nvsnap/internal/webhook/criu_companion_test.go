@@ -5,6 +5,7 @@ package webhook
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -34,7 +35,7 @@ func singleGPUPod() *corev1.Pod {
 
 func TestCRIUGroupRestore_Companion(t *testing.T) {
 	g := CRIUGroup{Checkpoints: []string{"w__1", "etcd__1"}, Nodes: []string{"n0", "n1"}, GPUShare: true,
-		Companion: []bool{false, true}, Slot: 1}
+		Companion: []bool{false, true}, Slots: []int{1}}
 	m, asked := groupMutator(t, g, "")
 	pod := etcdPod()
 	patches, err := m.Mutate(context.Background(), pod)
@@ -64,7 +65,7 @@ func TestCRIUGroupRestore_Companion(t *testing.T) {
 
 func TestCRIUGroupRestore_RankOfInstanceWithCompanions(t *testing.T) {
 	// The GPU rank finds the record through its own configuration: no slot.
-	g := CRIUGroup{Checkpoints: []string{"w__1", "etcd__1"}, Companion: []bool{false, true}, Slot: -1}
+	g := CRIUGroup{Checkpoints: []string{"w__1", "etcd__1"}, Companion: []bool{false, true}}
 	m, _ := groupMutator(t, g, "")
 	pod := singleGPUPod()
 	patches, err := m.Mutate(context.Background(), pod)
@@ -80,6 +81,59 @@ func TestCRIUGroupRestore_RankOfInstanceWithCompanions(t *testing.T) {
 	// left alone.
 	if p := m.criuGroupRestorePatches(context.Background(), etcdPod()); p != nil {
 		t.Errorf("a pod without GPUs restored as a rank: %d patches", len(p))
+	}
+}
+
+// Identical companions: the pod gets the slot the claim hands it, and
+// without a claim (or with every slot taken) it starts cold.
+func TestCRIUGroupRestore_IdenticalCompanions(t *testing.T) {
+	g := CRIUGroup{Checkpoints: []string{"w__1", "fe__1", "fe__2"}, Nodes: []string{"n0", "n1", "n2"},
+		Companion: []bool{false, true, true}, Slots: []int{1, 2}}
+	m, _ := groupMutator(t, g, "")
+	if p := m.criuGroupRestorePatches(context.Background(), etcdPod()); p != nil {
+		t.Fatalf("identical companions without slot claims must start cold, got %d patches", len(p))
+	}
+	var offered []int
+	m.CRIUCompanionSlot = func(_ context.Context, _ *corev1.Pod, _ CRIUGroup, slots []int) (int, error) {
+		offered = slots
+		return 2, nil
+	}
+	pod := etcdPod()
+	patches, err := m.Mutate(context.Background(), pod)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := applyPatches(t, pod, patches).Annotations
+	if a[CRIURestoreAnnotation] != "fe__2" || a[CRIUGroupOrdinalAnnotation] != "2" || a[CRIUGroupCompanionAnnotation] != "true" {
+		t.Fatalf("companion annotations: %v", a)
+	}
+	if !reflect.DeepEqual(offered, []int{1, 2}) {
+		t.Errorf("slots offered = %v, want [1 2]", offered)
+	}
+	m.CRIUCompanionSlot = func(context.Context, *corev1.Pod, CRIUGroup, []int) (int, error) {
+		return 0, errors.New("every slot taken")
+	}
+	if p := m.criuGroupRestorePatches(context.Background(), etcdPod()); p != nil {
+		t.Errorf("a companion without a slot must start cold, got %d patches", len(p))
+	}
+	m.CRIUCompanionSlot = func(context.Context, *corev1.Pod, CRIUGroup, []int) (int, error) {
+		t.Error("a refused companion must not claim a slot")
+		return 1, nil
+	}
+	m.CRIUCompanionAdmits = func(context.Context, *corev1.Pod) (bool, string) { return false, "GPU pod runs" }
+	_ = m.criuGroupRestorePatches(context.Background(), etcdPod())
+}
+
+func TestCompanionSlots(t *testing.T) {
+	g := CRIUGroup{Checkpoints: []string{"a", "b", "c"}, Companion: []bool{false, true, true}}
+	for _, tc := range []struct {
+		slots []int
+		want  []int
+	}{{nil, nil}, {[]int{1}, []int{1}}, {[]int{1, 2}, []int{1, 2}}, {[]int{0}, nil}, {[]int{1, 3}, nil}, {[]int{-1}, nil}} {
+		g.Slots = tc.slots
+		if got := g.CompanionSlots(); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("slots %v: got %v, want %v", tc.slots, got, tc.want)
+		}
 	}
 }
 

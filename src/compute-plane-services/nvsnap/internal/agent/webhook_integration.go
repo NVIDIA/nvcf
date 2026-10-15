@@ -241,6 +241,7 @@ func (a *Agent) startWebhook(ctx context.Context, cfg WebhookConfig, backend che
 			mut.CRIUGroups = a.lookupCRIUGroupFor
 			mut.CRIUGroupAdmits = a.criuGroupAdmits
 			mut.CRIUCompanionAdmits = a.criuCompanionAdmits
+			mut.CRIUCompanionSlot = a.claimCompanionSlot
 			a.specCacheURI = mut.SpecCacheURI
 		}
 	}
