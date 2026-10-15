@@ -110,6 +110,9 @@ test "$(yq -r '.service.account_configs.APP.enabled_plugins | length' "$plugin_c
 test "$(yq -r '.service.account_configs.APP.enabled_plugins[0].id' "$plugin_config")" = "sis"
 test "$(yq -r '.service.account_configs.APP.enabled_plugins[0].alias' "$plugin_config")" = "oidc"
 test "$(yq -r '.service.account_configs.APP.enabled_plugins[1].id' "$plugin_config")" = "nkey"
+# Worker token authentication is opt-in: by default nothing routes to the API webhook.
+test "$(yq -r '.service.plugin_configs | has("nvcf-api")' "$plugin_config")" = "false"
+test "$(yq -r '.service.account_configs | has("Worker")' "$plugin_config")" = "false"
 # nkey-bao-access RBAC must grant openbao-migrations read on both the
 # shared-worker Secret and the auth-callout Secret so 19_setup_nats-auth-callout.sh
 # can mirror seeds into KV.
@@ -136,3 +139,34 @@ render --set nats.authCallout.secretName=custom-auth-callout-nkeys > "$custom_re
 assert_contains "$custom_render" "name: custom-auth-callout-nkeys"
 assert_contains "$custom_render" "- custom-auth-callout-nkeys"
 assert_not_contains "$custom_render" "name: nats-auth-callout-nkeys"
+
+token_render="$tmpdir/worker-token-auth.yaml"
+render --set nats.authCallout.workerTokenAuth.enabled=true > "$token_render"
+token_plugin_config="$tmpdir/worker-token-auth-plugin.yaml"
+yq -r 'select(.kind == "Secret" and .metadata.name == "nats-nkeys") | .data."auth-callout-plugin.yaml"' "$token_render" | base64 -d > "$token_plugin_config"
+test "$(yq -r '.service.plugin_configs["nvcf-api"].plugin_type' "$token_plugin_config")" = "webhook"
+test "$(yq -r '.service.plugin_configs["nvcf-api"].config.url' "$token_plugin_config")" = "http://api.nvcf.svc.cluster.local:8080/v2/nvcf/webhook/nats-auth"
+# Workers ask for APP with plugin webhook, so APP gains the API webhook under that alias.
+test "$(yq -r '.service.account_configs | keys | join(",")' "$token_plugin_config")" = "APP"
+test "$(yq -r '.service.account_configs.APP.enabled_plugins | length' "$token_plugin_config")" = "3"
+test "$(yq -r '.service.account_configs.APP.enabled_plugins[2].id' "$token_plugin_config")" = "nvcf-api"
+test "$(yq -r '.service.account_configs.APP.enabled_plugins[2].alias' "$token_plugin_config")" = "webhook"
+# NVCA's and the services' plugins stay as they are, in the same order.
+for i in 0 1; do
+  test "$(yq -o=json -I=0 ".service.account_configs.APP.enabled_plugins[$i]" "$token_plugin_config")" = "$(yq -o=json -I=0 ".service.account_configs.APP.enabled_plugins[$i]" "$plugin_config")"
+done
+test "$(yq -o=json -I=0 '.service.plugin_configs.sis' "$token_plugin_config")" = "$(yq -o=json -I=0 '.service.plugin_configs.sis' "$plugin_config")"
+test "$(yq -r '.service.plugin_configs.nkey.config.nkey_mappings[0].account' "$token_plugin_config")" = "APP"
+
+custom_url_render="$tmpdir/worker-token-auth-custom-url.yaml"
+render --set nats.authCallout.workerTokenAuth.enabled=true \
+  --set nats.authCallout.workerTokenAuth.webhookUrl=http://api.example.svc.cluster.local:8080/v2/nvcf/webhook/nats-auth > "$custom_url_render"
+custom_url_plugin_config="$tmpdir/worker-token-auth-custom-url-plugin.yaml"
+yq -r 'select(.kind == "Secret" and .metadata.name == "nats-nkeys") | .data."auth-callout-plugin.yaml"' "$custom_url_render" | base64 -d > "$custom_url_plugin_config"
+test "$(yq -r '.service.plugin_configs["nvcf-api"].config.url' "$custom_url_plugin_config")" = "http://api.example.svc.cluster.local:8080/v2/nvcf/webhook/nats-auth"
+
+if render --set nats.authCallout.workerTokenAuth.enabled=true --set nats.authCallout.workerTokenAuth.webhookUrl= > "$tmpdir/no-url.yaml" 2> "$tmpdir/no-url.err"; then
+  echo "expected the render to fail when workerTokenAuth.webhookUrl is empty" >&2
+  exit 1
+fi
+assert_contains "$tmpdir/no-url.err" "workerTokenAuth.webhookUrl is required"

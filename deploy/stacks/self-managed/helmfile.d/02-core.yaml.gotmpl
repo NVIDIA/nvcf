@@ -218,6 +218,12 @@ releases:
           name: nats-nkeys
           key: auth-callout-plugin.yaml
           mountPath: /etc/plugin-config/plugin.yaml
+      {{- if eq (dig "nats" "workerAuth" "nkey" .Values | toString) "token" }}
+      # The plugin config is read only at start-up, so a change of worker auth
+      # mode must restart the auth callout.
+      - podAnnotations:
+          nvcf.nvidia.com/nats-worker-auth: token
+      {{- end }}
       - extraEnvs:
           - name: NVCF_NATS_AUTH_CALLOUT_SERVICE_SERVICE_NKEY__SEED
             valueFrom:

@@ -156,3 +156,16 @@ vault.hashicorp.com/agent-run-as-same-user: "true"
 vault.hashicorp.com/agent-inject-template-file-secrets.json: "/vault/config/templates/secrets.json.tmpl"
 vault.hashicorp.com/secret-volume-path: "/home/app/vault"
 {{- end }}
+
+{{/*
+Vault Agent template for secrets.json. Without kv.worker-nkey-seed the API
+sends workers no NKEY_SEED, and they authenticate to NATS with their worker
+token instead.
+*/}}
+{{- define "nvcf-api.vaultAgentTemplate" -}}
+{{- $template := .Files.Get "vault-agent-templates/secrets.json.tmpl" -}}
+{{- if not .Values.api.workerNkeySeed.enabled -}}
+{{- $template = regexReplaceAll `(?m)^[ \t]*"worker-nkey-seed":.*\n` $template "" -}}
+{{- end -}}
+{{- $template -}}
+{{- end }}

@@ -223,6 +223,10 @@ topologySpreadConstraints:
 {{- fail (printf "highAvailability.mode must be none, preferred, or enforced, got %q" $haMode) }}
 {{- end }}
 {{- $haEnabled := or (eq $haMode "preferred") (eq $haMode "enforced") }}
+{{- $natsWorkerAuth := dig "nats" "workerAuth" "nkey" .Values | toString }}
+{{- if not (has $natsWorkerAuth (list "nkey" "token")) }}
+{{- fail (printf "nats.workerAuth must be nkey or token, got %q" $natsWorkerAuth) }}
+{{- end }}
 {{- range $key := list "affinity" "topologySpreadConstraints" }}
 {{- $byClass := dig "global" $key dict $.Values }}
 {{- if not (kindIs "map" $byClass) }}
@@ -506,6 +510,11 @@ nats:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/alpine-k8s
+  {{- if eq $natsWorkerAuth "token" }}
+  authCallout:
+    workerTokenAuth:
+      enabled: true
+  {{- end }}
   {{- $natsNs := include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) -}}
   {{- $natsTol := include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) -}}
   {{- /* nats-box shares the release's instance label; select server Pods only. */}}
@@ -873,6 +882,10 @@ api:
   remoteConfig:
     configData:
       {{- toYaml $apiRemoteConfigData | nindent 6 }}
+  {{- end }}
+  {{- if eq $natsWorkerAuth "token" }}
+  workerNkeySeed:
+    enabled: false
   {{- end }}
   {{- $accountBootstrapRegistry := dig "api" "accountBootstrap" "image" "registry" "" .Values }}
   {{- $accountBootstrapRepository := dig "api" "accountBootstrap" "image" "repository" "" .Values }}

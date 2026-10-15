@@ -221,6 +221,17 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  # How workers authenticate to NATS.
+  #   nkey: the NVCF API gives every worker the control plane's shared NATS
+  #     NKey as NKEY_SEED. The default.
+  #   token: each worker authenticates with its own worker token, into APP. The
+  #     NATS auth callout passes it to the NVCF API, which returns that function
+  #     version's permissions, and the API stops sending NKEY_SEED. Needs an NVCF
+  #     API and worker-utils that support NVCF_NATS_ACCOUNT. Use it when workers
+  #     run outside the control-plane cluster.
+  # Switching an existing install: see "Worker NATS Authentication" in
+  # docs/self-managed/control-plane-operations.md.
+  workerAuth: nkey
   # The control plane places request-queue streams by its logical NCP region.
   # Keep both tags so NATS can host shared and region-scoped streams.
   config:
