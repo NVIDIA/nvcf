@@ -63,6 +63,16 @@ go build ./...
 
 Stay on Go versions listed in each `go.mod`. Do not tie load-tester build configuration to the monorepo-wide Go toolchain; these run out-of-tree.
 
+`function-samples/openai-compatible-sample` is the exception: it is a registered
+release subproject, and its release image is built from the hand-written
+`http-server/BUILD.bazel`. `examples/` is excluded from Gazelle, so update that
+file's `srcs` when you add or rename a Go file, then run:
+
+```bash
+bazel build //examples/function-samples/openai-compatible-sample/http-server:image_index
+bazel test //examples/function-samples/openai-compatible-sample/http-server:http-server_test
+```
+
 ### k6 load tests
 
 ```bash
