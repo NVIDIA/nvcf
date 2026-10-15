@@ -5,9 +5,9 @@ name: build-test
 
 on:
   push:
-    branches: [main, 'release-**']
+    branches: [main, 'release-**', 'release/**']
   pull_request:
-    branches: [main, 'release-**', 'docs/**']
+    branches: [main, 'release-**', 'release/**', 'docs/**']
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
