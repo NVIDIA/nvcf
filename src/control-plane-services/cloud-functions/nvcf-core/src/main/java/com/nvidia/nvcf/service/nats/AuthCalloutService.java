@@ -17,6 +17,7 @@
 package com.nvidia.nvcf.service.nats;
 
 import com.nvidia.boot.exceptions.ForbiddenException;
+import com.nvidia.nvcf.configuration.nats.NatsConfiguration.NatsProperties;
 import com.nvidia.nvcf.service.token.GrpcTokenService;
 import com.nvidia.nvcf.service.token.GrpcTokenService.NvcfIssuedToken.TokenType;
 import io.nats.jwt.Permission;
@@ -40,10 +41,12 @@ public class AuthCalloutService {
     public static final String API_USER_ACCOUNT = "Worker";
 
     private final GrpcTokenService grpcTokenService;
+    private final NatsProperties natsProperties;
 
     /**
      * Validates a webhook plugin token and returns the user claim and user ID.
-     * Only supports webhook plugin and the NATS Worker account.
+     * Only supports webhook plugin and the NATS Worker account. The result carries the
+     * configured worker account, which the auth callout assigns to the connection.
      */
     public WebhookValidationResult validateWebhookPlugin(
             String account, String pluginName, String payload) {
@@ -64,7 +67,7 @@ public class AuthCalloutService {
 
         return new WebhookValidationResult(
                 "worker-" + nvcfIssuedToken.functionVersionId(),
-                account,
+                natsProperties.getAuthCalloutWorkerAccount(),
                 userClaim
         );
     }
