@@ -159,8 +159,8 @@ public class NatsConfiguration {
         // as the default value. Overridden in the managed service.
         private String authCalloutPluginName = "oidc";
 
-        // The account the worker webhook assigns. Workers always request Worker, but a
-        // deployment whose services use another account sets that account here.
+        // The NATS account workers join. Every worker is told it at launch, and the worker
+        // webhook accepts and assigns only this account.
         private String authCalloutWorkerAccount = AuthCalloutService.API_USER_ACCOUNT;
 
         public record OAuth2Properties(boolean enabled, String baseUrl, String clientId,

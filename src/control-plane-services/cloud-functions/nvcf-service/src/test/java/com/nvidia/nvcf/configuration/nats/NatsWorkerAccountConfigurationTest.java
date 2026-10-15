@@ -28,19 +28,20 @@ import org.springframework.core.env.StandardEnvironment;
 import org.springframework.core.io.ClassPathResource;
 
 /**
- * Binds the shipped profiles, so the account the worker webhook returns is the one that ships.
+ * Binds the shipped profiles, so the account workers are told, and the webhook accepts, is the
+ * one that ships.
  */
 class NatsWorkerAccountConfigurationTest {
 
     @Test
-    void ncpProfileReturnsTheAppAccountForWebhookWorkers() throws IOException {
+    void ncpProfilePutsWorkersInTheAppAccount() throws IOException {
         var properties = natsProperties("application-ncp.yaml", "application.yaml");
 
         assertThat(properties.getAuthCalloutWorkerAccount()).isEqualTo("APP");
     }
 
     @Test
-    void baseConfigurationReturnsTheAccountWorkersRequest() throws IOException {
+    void baseConfigurationKeepsTheWorkerAccount() throws IOException {
         var properties = natsProperties("application.yaml");
 
         assertThat(properties.getAuthCalloutWorkerAccount()).isEqualTo(API_USER_ACCOUNT);

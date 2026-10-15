@@ -86,22 +86,29 @@ class AuthCalloutServiceTest {
     }
 
     @Test
-    void validateWebhookPluginReturnsConfiguredWorkerAccount() {
+    void validateWebhookPluginAcceptsAndReturnsConfiguredWorkerAccount() {
         natsProperties.setAuthCalloutWorkerAccount("APP");
         when(grpcTokenService.validateToken(VALID_PAYLOAD, TokenType.WORKER)).thenReturn(
                 workerToken());
 
-        var result = authCalloutService.validateWebhookPlugin(API_USER_ACCOUNT, "webhook",
-                                                              VALID_PAYLOAD);
+        var result = authCalloutService.validateWebhookPlugin("APP", "webhook", VALID_PAYLOAD);
 
         assertThat(result.account()).isEqualTo("APP");
         assertThat(result.userId()).isEqualTo("worker-" + TEST_VERSION_ID_1);
     }
 
     @Test
-    void validateWebhookPluginConfiguredWorkerAccountDoesNotWidenAcceptedRequests() {
+    void validateWebhookPluginConfiguredWorkerAccountRejectsTheDefaultAccount() {
         natsProperties.setAuthCalloutWorkerAccount("APP");
 
+        assertThatThrownBy(() -> authCalloutService.validateWebhookPlugin(
+                API_USER_ACCOUNT, "webhook", VALID_PAYLOAD))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessageContaining("APP");
+    }
+
+    @Test
+    void validateWebhookPluginDefaultWorkerAccountRejectsApp() {
         assertThatThrownBy(() -> authCalloutService.validateWebhookPlugin(
                 "APP", "webhook", VALID_PAYLOAD))
                 .isInstanceOf(ForbiddenException.class);
