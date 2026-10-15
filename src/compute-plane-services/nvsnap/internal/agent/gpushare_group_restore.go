@@ -134,6 +134,16 @@ func planGroupRestore(entries []groupRestoreEntry) (string, error) {
 		}
 		seenOld[oldIP.String()], seenNew[newIP.String()] = e.Name, e.Name
 	}
+	var collide []string
+	for _, e := range entries {
+		if other, ok := seenOld[net.ParseIP(e.NewIP).String()]; ok && other != e.Name {
+			collide = append(collide, e.Name)
+		}
+	}
+	if len(collide) > 0 {
+		sort.Strings(collide)
+		return "", &addressCollision{Pods: collide}
+	}
 	sorted := append([]groupRestoreEntry(nil), entries...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Group.Index < sorted[j].Group.Index })
 	pairs := make([]string, len(sorted))
@@ -334,6 +344,19 @@ func (a *Agent) groupRestore(ctx context.Context, req GroupRestoreRequest, log *
 // checkpoints themselves are suspect. Any other error of groupRestore
 // (a pod without an IP, a fetch that did not finish) says nothing about
 // them.
+// addressCollision is a placement the instance cannot restore into: a
+// target pod got the address another pod of the instance had at capture.
+// The restored instance reaches its pods under the addresses it captured
+// (DNAT to the new ones), so inside it that address would name two pods: a
+// connection to the remembered pod and one to the new pod found afresh
+// (DNS, a registry) cannot both go where they mean. Pods (namespace/name)
+// are the target pods to replace; nothing has been restored yet.
+type addressCollision struct{ Pods []string }
+
+func (e *addressCollision) Error() string {
+	return "target pods " + strings.Join(e.Pods, ", ") + " got addresses other pods of the instance had at capture"
+}
+
 type groupRestoreFailure struct{ err error }
 
 func (e *groupRestoreFailure) Error() string { return e.err.Error() }

@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"k8s.io/apimachinery/pkg/types"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -68,6 +69,10 @@ const (
 	// get to run (a rank never scheduled, a checkpoint never fetched).
 	// Past it the configuration starts cold, keeping its checkpoints.
 	criuGroupMaxStalls = 3
+	// criuGroupMaxReplacements bounds the target pods one capture's
+	// restores replace for an address collision (see addressCollision).
+	// Past it the instance starts cold, keeping its checkpoints.
+	criuGroupMaxReplacements = 3
 
 	lwsGroupKeyLabel = "leaderworkerset.sigs.k8s.io/group-key"
 
@@ -768,6 +773,10 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 	rctx, cancel := context.WithTimeout(ctx, criuAutoRestoreTimeout)
 	defer cancel()
 	_, err := a.groupRestore(rctx, req, log)
+	if ac := new(addressCollision); errors.As(err, &ac) {
+		c.replaceColliding(ctx, leader, key, ac, log)
+		return
+	}
 	if err == nil {
 		log.WithField("duration", time.Since(t0).Round(time.Millisecond).String()).Info("CRIU group restore: restored")
 		for _, p := range ranks {
@@ -781,6 +790,47 @@ func (c *criuAutoRestorer) restoreGroup(ctx context.Context, leader *corev1.Pod,
 		return // the agent stops before the restore ran
 	}
 	c.failGroup(ctx, leader, key, errors.As(err, new(*groupRestoreFailure)), err, log)
+}
+
+// replaceColliding deletes the target pods of an address collision so their
+// replacements get other addresses; nothing has been restored. The
+// replacements are admitted as placeholders of the same checkpoints, and
+// their instance's leader drives the restore again (this one, unless it is
+// among them). The group record counts the replacements across leaders;
+// past criuGroupMaxReplacements the instance starts cold.
+func (c *criuAutoRestorer) replaceColliding(agentCtx context.Context, leader *corev1.Pod, key string, ac *addressCollision, log *logrus.Entry) {
+	ctx := context.WithoutCancel(agentCtx)
+	id := leader.Annotations[webhook.CRIURestoreAnnotation]
+	n := 0
+	if err := c.updateGroupRecord(ctx, key, func(d map[string]string) bool {
+		if !recordOf(d, id) {
+			return false
+		}
+		n, _ = strconv.Atoi(d["replacements"])
+		n++
+		d["replacements"] = strconv.Itoa(n)
+		return true
+	}); err != nil && !apierrors.IsNotFound(err) {
+		log.WithError(err).Warn("CRIU group restore: cannot update the group record")
+	}
+	log = log.WithFields(logrus.Fields{"replace": ac.Pods, "replacements": n})
+	if n > criuGroupMaxReplacements {
+		c.failGroup(ctx, leader, key, false, fmt.Errorf("%w; replaced target pods %d times", ac, n-1), log)
+		return
+	}
+	log.Warn("CRIU group restore: a target pod got an address another pod of the instance had at capture; replacing it before restoring")
+	for _, name := range ac.Pods {
+		ns, pod, _ := strings.Cut(name, "/")
+		if err := c.a.kubeClient.CoreV1().Pods(ns).Delete(ctx, pod, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			log.WithError(err).WithField("placeholder", name).Error("CRIU group restore: could not replace the target pod")
+		}
+	}
+	if slices.Contains(ac.Pods, leader.Namespace+"/"+leader.Name) {
+		return // the leader's replacement drives the restore
+	}
+	// The same leader drives it again once the replacements run.
+	c.attempted.Delete("restore/" + string(leader.UID))
+	c.considerGroupRestore(agentCtx, leader)
 }
 
 // failGroup ends a group restore that did not succeed: it deletes every
@@ -855,10 +905,11 @@ func recordFailure(d map[string]string, id string, restoreFailed bool, cause err
 // recordRestored clears the stalls of the capture checkpoint id belongs to:
 // its restores run.
 func recordRestored(d map[string]string, id string) bool {
-	if d["stalls"] == "" || !recordOf(d, id) {
+	if (d["stalls"] == "" && d["replacements"] == "") || !recordOf(d, id) {
 		return false
 	}
 	delete(d, "stalls")
+	delete(d, "replacements")
 	return true
 }
 

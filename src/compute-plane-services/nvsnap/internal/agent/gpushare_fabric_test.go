@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -522,6 +523,37 @@ func TestDriveFabric_AbortRestoreWhenAMemberFails(t *testing.T) {
 	ds.set(0)
 	if out := <-res; out.Unlocked {
 		t.Errorf("outcome = %+v: must not unlock without every member", out)
+	}
+}
+
+// A target pod that got the address another pod had at capture is named for
+// replacement; one that got its own address back is fine.
+func TestPlanGroupRestore_AddressCollision(t *testing.T) {
+	g := func(i int) *GPUShareGroupInfo { return &GPUShareGroupInfo{Session: "s1", Index: i, Size: 3} }
+	_, err := planGroupRestore([]groupRestoreEntry{
+		{Name: "ns/frontend", OldIP: "10.1.56.35", NewIP: "10.1.48.132", Group: g(0)},
+		{Name: "ns/worker", OldIP: "10.1.48.132", NewIP: "10.1.160.209", Group: g(1)},
+		{Name: "ns/etcd", OldIP: "10.1.83.107", NewIP: "10.1.83.107", Group: g(2)},
+	})
+	var ac *addressCollision
+	if !errors.As(err, &ac) || strings.Join(ac.Pods, ",") != "ns/frontend" {
+		t.Fatalf("err = %v; want a collision naming ns/frontend only", err)
+	}
+	if got, err := planGroupRestore([]groupRestoreEntry{
+		{Name: "a", OldIP: "10.0.0.1", NewIP: "10.0.0.1", Group: g(0)},
+		{Name: "b", OldIP: "10.0.0.2", NewIP: "10.0.0.3", Group: g(1)},
+		{Name: "c", OldIP: "10.0.0.4", NewIP: "10.0.0.5", Group: g(2)},
+	}); err != nil || got == "" {
+		t.Errorf("own address back: %q, %v", got, err)
+	}
+	// Two pods that swapped addresses collide both ways.
+	_, err = planGroupRestore([]groupRestoreEntry{
+		{Name: "a", OldIP: "10.0.0.1", NewIP: "10.0.0.2", Group: g(0)},
+		{Name: "b", OldIP: "10.0.0.2", NewIP: "10.0.0.1", Group: g(1)},
+		{Name: "c", OldIP: "10.0.0.4", NewIP: "10.0.0.5", Group: g(2)},
+	})
+	if !errors.As(err, &ac) || strings.Join(ac.Pods, ",") != "a,b" {
+		t.Errorf("swap: %v", err)
 	}
 }
 

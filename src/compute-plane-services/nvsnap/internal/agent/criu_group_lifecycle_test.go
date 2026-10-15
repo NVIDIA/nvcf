@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -264,5 +265,41 @@ func TestFailGroup_BlocksBeforeDeleting(t *testing.T) {
 	}
 	if got := remainingPods(t, kc); len(got) != 1 {
 		t.Errorf("pods left = %v, want only the other instance", got)
+	}
+}
+
+// An address collision replaces only the target pods it names, counts the
+// replacement on the capture's record, and past the bound gives up like a
+// restore that did not run: every pod goes, the checkpoints stay.
+func TestReplaceColliding(t *testing.T) {
+	c, kc, leader := groupFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	log := logrus.NewEntry(logrus.New())
+	record := func() map[string]string {
+		cm, err := kc.CoreV1().ConfigMaps("nvsnap-system").Get(ctx, criuGroupConfigMapName("k1"), metav1.GetOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cm.Data
+	}
+	c.replaceColliding(ctx, leader, "k1", &addressCollision{Pods: []string{"fn/kimi-1"}}, log)
+	if got := remainingPods(t, kc); !slices.Contains(got, "kimi-0") || slices.Contains(got, "kimi-1") {
+		t.Fatalf("pods left = %v, want the leader without kimi-1", got)
+	}
+	if d := record(); d["replacements"] != "1" || d["state"] != "complete" {
+		t.Fatalf("record = %v, want one replacement and the capture still complete", d)
+	}
+	for i := 0; i < criuGroupMaxReplacements; i++ {
+		c.replaceColliding(ctx, leader, "k1", &addressCollision{Pods: []string{"fn/kimi-0"}}, log)
+	}
+	if got := remainingPods(t, kc); slices.Contains(got, "kimi-0") {
+		t.Errorf("pods left = %v after the bound, want the instance gone", got)
+	}
+	if d := record(); d["state"] != "complete" || d["stalls"] != "1" {
+		t.Errorf("record = %v, want the capture kept and one stall", d)
+	}
+	if !recordRestored(record(), "c0") {
+		t.Error("a restore did not clear the replacements")
 	}
 }
