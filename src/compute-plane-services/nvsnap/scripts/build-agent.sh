@@ -209,6 +209,13 @@ build_base() {
     # (the wrapper that the CRIU plugin actually invokes via PATH).
     cp "${PROJECT_ROOT}/docker/agent/cuda-checkpoint-wrapper.sh" "${BUILD_CTX}/cuda-checkpoint-wrapper.sh"
 
+    # gpushare sources (Dockerfile.base's gpushare-builder stage builds
+    # libnvsnap_gpushare.so and nvsnap-gpu-suspend from them). Sources
+    # only: binaries from a local build would look up to date to make and
+    # end up in the image, possibly for the wrong architecture.
+    mkdir -p "${BUILD_CTX}/gpushare"
+    cp "${PROJECT_ROOT}"/docker/agent/gpushare/{Makefile,*.c,*.h} "${BUILD_CTX}/gpushare/"
+
     # PLATFORMS with a comma builds a multi-arch manifest with buildx and
     # pushes it straight to the registry (multi-platform images cannot be
     # loaded into the local daemon); the CRIU verification below then runs
@@ -319,7 +326,8 @@ build_app() {
     # cuda-checkpoint wrapper only: the real binary is built from source in
     # the BASE image (Dockerfile.base cuda-cli-builder stage); Dockerfile.app
     # just re-overlays the wrapper at /criu-bundle/cuda-checkpoint.
-    cp "${PROJECT_ROOT}/docker/agent/cuda-checkpoint-wrapper.sh" "${BUILD_CTX}/"
+    mkdir -p "${BUILD_CTX}/docker/agent"
+    cp "${PROJECT_ROOT}/docker/agent/cuda-checkpoint-wrapper.sh" "${BUILD_CTX}/docker/agent/"
 
     # Support NO_CACHE=1 environment variable to force rebuild
     local cache_flag=""

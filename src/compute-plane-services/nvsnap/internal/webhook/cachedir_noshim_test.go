@@ -104,15 +104,15 @@ func TestTryL2CacheDir_NoShim_PodCommandUntouched(t *testing.T) {
 	if pw.Image != pod.Spec.Containers[0].Image {
 		t.Errorf("prewarm should reuse the workload image (already pulled), got %q", pw.Image)
 	}
-	if len(pw.VolumeMounts) != 1 || !pw.VolumeMounts[0].ReadOnly || pw.VolumeMounts[0].Name != cacheDirVolumeName {
-		t.Errorf("prewarm must mount only the rox, read-only, got %+v", pw.VolumeMounts)
+	if len(pw.VolumeMounts) != 2 || !pw.VolumeMounts[0].ReadOnly || pw.VolumeMounts[0].Name != cacheDirVolumeName || pw.VolumeMounts[1] != helperMount() {
+		t.Errorf("prewarm must mount only the rox and the helper, read-only, got %+v", pw.VolumeMounts)
 	}
 	if pw.SecurityContext == nil || pw.SecurityContext.RunAsUser == nil || *pw.SecurityContext.RunAsUser != 0 {
 		t.Error("prewarm must run as root: the rox files are root-owned")
 	}
 	cmd := strings.Join(pw.Command, " ")
-	if !strings.Contains(cmd, cacheSeedSrcPath) || !strings.Contains(cmd, "|| true") {
-		t.Errorf("prewarm must read the rox tree and be best-effort, got %q", cmd)
+	if !strings.HasPrefix(cmd, HelperBin+" prewarm --root "+cacheSeedSrcPath+" ") {
+		t.Errorf("prewarm must run the helper over the rox tree, got %q", cmd)
 	}
 }
 
@@ -193,10 +193,10 @@ func TestTryL2CacheDir_PrewarmFollowsStorageProfile(t *testing.T) {
 	}
 	off, on := false, true
 
-	if cmd, ok := prewarmCmd(t, newMutator(nil), newPod()); !ok || !strings.Contains(cmd, "-P 6 ") {
+	if cmd, ok := prewarmCmd(t, newMutator(nil), newPod()); !ok || !strings.Contains(cmd, "--workers 6 ") {
 		t.Errorf("no profile: want the prewarm with the default 6 readers, got ok=%v cmd=%q", ok, cmd)
 	}
-	if cmd, ok := prewarmCmd(t, newMutator(&checkpointstore.StorageProfile{PrewarmParallelism: 16}), newPod()); !ok || !strings.Contains(cmd, "-P 16 ") {
+	if cmd, ok := prewarmCmd(t, newMutator(&checkpointstore.StorageProfile{PrewarmParallelism: 16}), newPod()); !ok || !strings.Contains(cmd, "--workers 16 ") {
 		t.Errorf("profile parallelism 16 not applied, got ok=%v cmd=%q", ok, cmd)
 	}
 	if _, ok := prewarmCmd(t, newMutator(&checkpointstore.StorageProfile{Prewarm: &off}), newPod()); ok {
@@ -207,29 +207,6 @@ func TestTryL2CacheDir_PrewarmFollowsStorageProfile(t *testing.T) {
 	}
 	if _, ok := prewarmCmd(t, newMutator(&checkpointstore.StorageProfile{Prewarm: &on}), newPod(corev1.EnvVar{Name: "NVSNAP_PREWARM", Value: "0"})); ok {
 		t.Error("NVSNAP_PREWARM=0 on the pod must override a profile that turns the prewarm on")
-	}
-}
-
-// The sweep gets its parallelism from byte ranges, not files: a checkpoint
-// tree is a dozen files, so a per-file fan-out collapses to one reader.
-// It follows symlinks so a Hugging Face snapshot is read by entry name,
-// skips original/ (the .pth copy nothing opens) and the blobs directory
-// (the same bytes again), and never fails the restore.
-func TestPrewarmCommand_RangeParallelAndSelective(t *testing.T) {
-	cmd := prewarmCommand("/nvsnap-cachedir-src", 8)
-	for _, want := range []string{
-		"find -L /nvsnap-cachedir-src -type f -size +64M",
-		"! -path '*/original/*'", "! -path '*/blobs/*'",
-		"-v c=268435456", "xargs -d '\\n' -r -P 8 -n 1",
-		"dd if=\"$f\" of=/dev/null bs=16M skip=$((i*16)) count=16",
-		"! -size +64M", "xargs -0 -r -P 8 -n 16 cat", "|| true",
-	} {
-		if !strings.Contains(cmd, want) {
-			t.Errorf("prewarm command lacks %q:\n%s", want, cmd)
-		}
-	}
-	if strings.Contains(prewarmCommand("/x", 3), "-P 8") {
-		t.Error("reader count must come from the argument")
 	}
 }
 
@@ -263,8 +240,9 @@ func TestTryL2CacheDir_PrewarmValueFromGatesAtRuntime(t *testing.T) {
 				continue
 			}
 			cmd := strings.Join(c.Command, " ")
-			if !strings.Contains(cmd, `[ "${NVSNAP_PREWARM:-1}" != "0" ] || exit 0`) {
-				t.Errorf("prewarm command must gate on the resolved NVSNAP_PREWARM, got %q", cmd)
+			// The helper reads the resolved NVSNAP_PREWARM at run time.
+			if !strings.HasPrefix(cmd, HelperBin+" prewarm ") {
+				t.Errorf("prewarm step must run the helper, got %q", cmd)
 			}
 			if len(c.Env) != 1 || c.Env[0].Name != "NVSNAP_PREWARM" || c.Env[0].ValueFrom == nil || c.Env[0].ValueFrom.ConfigMapKeyRef == nil || c.Env[0].ValueFrom.ConfigMapKeyRef.Name != "tuning" {
 				t.Errorf("prewarm step must carry the workload's NVSNAP_PREWARM reference, got %+v", c.Env)

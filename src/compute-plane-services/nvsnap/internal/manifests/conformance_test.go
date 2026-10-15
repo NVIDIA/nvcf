@@ -112,10 +112,15 @@ func TestMultiGPUSourcesAreNotCRIU(t *testing.T) {
 		if p.Metadata.Annotations["nvsnap.io/path"] != "criu" {
 			continue
 		}
+		// gpushare is what makes multi-GPU CRIU possible (the agent accepts
+		// it when the workload loads libnvsnap_gpushare.so).
+		if p.Metadata.Annotations["nvsnap.io/gpushare"] == "true" {
+			continue
+		}
 		for _, c := range p.Spec.Containers {
 			if gpus := c.Resources.Limits["nvidia.com/gpu"]; gpus != "" && gpus != "0" && gpus != "1" {
-				t.Errorf("%s requests %s GPUs but declares nvsnap.io/path: \"criu\"; "+
-					"the agent rejects multi-GPU CRIU, so this must be \"rootfs\"",
+				t.Errorf("%s requests %s GPUs but declares nvsnap.io/path: \"criu\" without "+
+					"nvsnap.io/gpushare: \"true\"; the agent rejects plain multi-GPU CRIU",
 					base, gpus)
 			}
 		}

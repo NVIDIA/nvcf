@@ -435,6 +435,9 @@ func (d *DB) LookupCheckpoints(c LookupCriteria) ([]Checkpoint, error) {
 		"status = 'Completed'",
 		"hash != ''",
 		"image_ref = ?",
+		// One rank of a workload instance's capture restores only with
+		// its instance, through the agent's group record.
+		"workload_type != 'criu-instance'", // checkpointstore.InstanceCaptureWorkloadType
 	}
 	args := []interface{}{c.ImageRef}
 

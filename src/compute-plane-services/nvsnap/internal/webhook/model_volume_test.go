@@ -6,6 +6,7 @@ package webhook
 import (
 	"context"
 	appsv1 "k8s.io/api/apps/v1"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -20,6 +21,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/checkpointstore"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/election"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelid"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/modelvolume"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly"
 )
@@ -54,7 +56,7 @@ func mvMutatorReader(t *testing.T, mode modelvolume.Mode, reader modelvolume.Rea
 	}, el
 }
 
-// The prd11 function shape: NGC init download into an emptyDir, engine
+// A production function shape: NGC init download into an emptyDir, engine
 // from a positional MODEL_PATH, two pods per instance.
 func ngcFunctionPod() *corev1.Pod {
 	gpu := corev1.ResourceRequirements{Limits: corev1.ResourceList{"nvidia.com/gpu": resource.MustParse("4")}}
@@ -99,7 +101,7 @@ type mvView struct {
 	labels, annotations map[string]string
 	volumes             map[string]corev1.Volume // by name, from replace/add ops
 	roMounts            []string
-	initScripts         map[string]string
+	initScripts         map[string]string // init name -> its new command, joined
 	newInits            []corev1.Container
 	env                 map[string]string
 }
@@ -114,9 +116,9 @@ func viewMV(pod *corev1.Pod, patches []PatchOp) mvView {
 			v.annotations[strings.ReplaceAll(strings.TrimPrefix(p.Path, "/metadata/annotations/"), "~1", "/")] = p.Value.(string)
 		case strings.HasSuffix(p.Path, "/readOnly") && p.Value == true:
 			v.roMounts = append(v.roMounts, p.Path)
-		case strings.HasPrefix(p.Path, "/spec/initContainers/") && strings.HasSuffix(p.Path, "/args"):
+		case strings.HasPrefix(p.Path, "/spec/initContainers/") && strings.HasSuffix(p.Path, "/command"):
 			idx := strings.Split(strings.TrimPrefix(p.Path, "/spec/initContainers/"), "/")[0]
-			v.initScripts[pod.Spec.InitContainers[atoi(idx)].Name] = p.Value.([]string)[0]
+			v.initScripts[pod.Spec.InitContainers[atoi(idx)].Name] = strings.Join(p.Value.([]string), " ")
 		}
 		switch val := p.Value.(type) {
 		case corev1.Volume:
@@ -218,9 +220,12 @@ func TestModelVolume_FirstPodBlock_NGCInit_CreatesJob(t *testing.T) {
 		t.Fatalf("staging pod shape: inits=%d containers=%+v", len(job.Spec.Template.Spec.InitContainers), job.Spec.Template.Spec.Containers)
 	}
 	jc := job.Spec.Template.Spec.InitContainers[0]
-	script := jc.Args[0]
-	if jc.Image != "nvcr.io/org/ultra:vllm" || !strings.Contains(script, "ngc registry model download-version") || !strings.Contains(script, "> /config/models/.nvsnap-complete") {
-		t.Errorf("job must run the chart's own download then touch the marker:\n%s", script)
+	script := strings.Join(jc.Command, " ")
+	if jc.Image != "nvcr.io/org/ultra:vllm" || len(jc.Args) != 0 || !strings.Contains(script, "-- /bin/bash -c set -euo pipefail") || !strings.HasPrefix(script, HelperBin+" write --marker /config/models/.nvsnap-complete ") {
+		t.Errorf("job must run the chart's own download under the helper, which leaves the marker:\n%s", script)
+	}
+	if hold := job.Spec.Template.Spec.Containers[0]; !reflect.DeepEqual(hold.Command, []string{IdleBin}) {
+		t.Errorf("the hold container idles on the helper, whatever the image has: %v", hold.Command)
 	}
 	landing := job.Spec.Template.Spec.Volumes[0]
 	if len(jc.Env) != 2 || jc.VolumeMounts[0].MountPath != "/config/models" || landing.EmptyDir == nil || landing.Name != "ngc-models" || job.Annotations[modelvolume.StagingAnnotation] != "ngc-models" {
@@ -235,10 +240,10 @@ func TestModelVolume_FirstPodBlock_NGCInit_CreatesJob(t *testing.T) {
 	for _, vol := range job.Spec.Template.Spec.Volumes {
 		jobVols[vol.Name] = vol
 	}
-	if len(jc.VolumeMounts) != 3 || jobVols["secrets"].Secret == nil || jobVols["secrets"].Secret.SecretName != "function-secrets" || jobVols["scripts"].ConfigMap == nil {
+	if len(jc.VolumeMounts) != 4 || jobVols[helperVolumeName].HostPath == nil || jobVols["secrets"].Secret == nil || jobVols["secrets"].Secret.SecretName != "function-secrets" || jobVols["scripts"].ConfigMap == nil {
 		t.Errorf("job must carry every volume the init mounted, only the landing one redirected: mounts=%v volumes=%v", jc.VolumeMounts, jobVols)
 	}
-	if _, dshm := jobVols["dshm"]; dshm || len(jobVols) != 3 {
+	if _, dshm := jobVols["dshm"]; dshm || len(jobVols) != 4 {
 		t.Errorf("volumes the init does not mount stay behind: %v", jobVols)
 	}
 	ps := job.Spec.Template.Spec
@@ -248,7 +253,7 @@ func TestModelVolume_FirstPodBlock_NGCInit_CreatesJob(t *testing.T) {
 		t.Errorf("job pod must satisfy the function-namespace baselines (requests/limits, seccomp, no escalation, dropped caps, no SA token): %+v %+v", jc.Resources, ps.SecurityContext)
 	}
 	s := v.initScripts["download-ngc-model"]
-	if !strings.Contains(s, "while [ ! -f /config/models/.nvsnap-complete ]") {
+	if !strings.Contains(s, HelperBin+" wait --marker /config/models/.nvsnap-complete") {
 		t.Errorf("the pod's own init becomes a wait:\n%s", s)
 	}
 	if v.env["VLLM_ENABLE_STARTUP_PLAN"] != "1" {
@@ -285,7 +290,7 @@ func TestModelVolume_ReaderBlock_PendingBind(t *testing.T) {
 		t.Errorf("engine and download init mounts must propagate host mounts in, got %d", propagations)
 	}
 	s := v.initScripts["download-ngc-model"]
-	if !strings.Contains(s, "while [ ! -f /config/models/.nvsnap-complete ]") || !strings.Contains(s, "ngc registry model download-version") || !strings.Contains(s, "deadline passed") {
+	if !strings.Contains(s, HelperBin+" wait --marker /config/models/.nvsnap-complete") || !strings.Contains(s, "ngc registry model download-version") || !strings.Contains(s, "--in-place") {
 		t.Errorf("reader init must wait for the marker and fall back to its own download:\n%s", s)
 	}
 	for _, p := range patches {
@@ -319,14 +324,15 @@ func TestModelVolume_ReaderBlockPVC_ReferencesReadOnlyClaim(t *testing.T) {
 		if strings.HasSuffix(p.Path, "/mountPropagation") {
 			t.Error("no mount propagation in PVC mode")
 		}
-		if vv, ok := p.Value.(corev1.Volume); ok && vv.HostPath != nil {
-			t.Error("no hostPath in PVC mode")
+		// The read-only node bundle the helper runs from is the only one.
+		if vv, ok := p.Value.(corev1.Volume); ok && vv.HostPath != nil && vv.Name != helperVolumeName {
+			t.Errorf("no hostPath for the model in PVC mode: %+v", vv)
 		}
 	}
 	if _, err := kc.CoreV1().PersistentVolumeClaims("sr-fn").Get(context.Background(), modelvolume.ReadOnlyClaimName(uri), metav1.GetOptions{}); err == nil {
 		t.Error("the read-only claim is minted by the agent after completion, not at admission of an incomplete volume")
 	}
-	if s := v.initScripts["download-ngc-model"]; !strings.Contains(s, "while [ ! -f /config/models/.nvsnap-complete ]") {
+	if s := v.initScripts["download-ngc-model"]; !strings.Contains(s, HelperBin+" wait --marker /config/models/.nvsnap-complete") {
 		t.Errorf("reader init still waits for the marker on the bound claim:\n%s", s)
 	}
 }
@@ -483,8 +489,8 @@ func TestModelVolume_ReaderBlockPVC_CompletePrewarms(t *testing.T) {
 	if pw.Image != pod.Spec.Containers[0].Image {
 		t.Errorf("sweep runs in the engine image: %q", pw.Image)
 	}
-	if len(pw.VolumeMounts) != 1 || !pw.VolumeMounts[0].ReadOnly || !strings.Contains(pw.Command[2], pw.VolumeMounts[0].MountPath) {
-		t.Errorf("sweep mounts the model read-only and reads that path: %+v %q", pw.VolumeMounts, pw.Command[2])
+	if len(pw.VolumeMounts) != 2 || !pw.VolumeMounts[0].ReadOnly || pw.VolumeMounts[1] != helperMount() || pw.Command[3] != pw.VolumeMounts[0].MountPath {
+		t.Errorf("sweep mounts the model and the helper read-only and reads the model: %+v %v", pw.VolumeMounts, pw.Command)
 	}
 	if pw.Resources.Limits.Cpu().MilliValue() < 1000 || pw.SecurityContext == nil || pw.SecurityContext.Capabilities == nil {
 		t.Errorf("sweep needs real CPU limits and a hardened security context: %+v %+v", pw.Resources, pw.SecurityContext)
@@ -597,7 +603,7 @@ func TestModelVolume_SharedFilesystem_FirstPodWritesThroughView(t *testing.T) {
 	if vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != cfg.ReadOnlyClaimName(uri) || len(v.roMounts) != 1 {
 		t.Errorf("landing becomes the read-only view mounted read-only, got %+v ro=%v", vol, v.roMounts)
 	}
-	if sc := v.initScripts["download-ngc-model"]; !strings.Contains(sc, "while [ ! -f /config/models/.nvsnap-complete ]") {
+	if sc := v.initScripts["download-ngc-model"]; !strings.Contains(sc, HelperBin+" wait --marker /config/models/.nvsnap-complete") {
 		t.Errorf("the chart's init waits for the marker:\n%s", sc)
 	}
 	if v.env["TORCHINDUCTOR_CACHE_DIR"] != "/opt/nvsnap/cache/torchinductor" {
@@ -664,8 +670,12 @@ func TestModelVolume_EngineDownload_JobRunsHF(t *testing.T) {
 		t.Fatalf("engine-download needs a download Job: %v", err)
 	}
 	jc := job.Spec.Template.Spec.Containers[0]
-	s := jc.Args[0]
-	if jc.Image != pod.Spec.Containers[0].Image || !strings.Contains(s, "hf download Qwen/Qwen2.5-32B-Instruct") || !strings.Contains(s, "> /nvsnap-model/.nvsnap-complete") || jc.VolumeMounts[0].MountPath != downloadMount {
+	s := strings.Join(jc.Command, " ")
+	if vols := job.Spec.Template.Spec.Volumes; vols[len(vols)-1].Name != helperVolumeName || vols[len(vols)-1].HostPath == nil {
+		t.Errorf("a Job writing straight into the claim mounts the helper from the node bundle: %v", vols)
+	}
+	if jc.Image != pod.Spec.Containers[0].Image || len(jc.Args) != 0 || !strings.HasSuffix(s, "--try hf --try huggingface-cli -- download Qwen/Qwen2.5-32B-Instruct") ||
+		!strings.HasPrefix(s, HelperBin+" write --marker /nvsnap-model/.nvsnap-complete ") || jc.VolumeMounts[0].MountPath != downloadMount {
 		t.Errorf("job must run hf download on the engine image into the landing mounted at %s: image=%s mounts=%v\n%s", downloadMount, jc.Image, jc.VolumeMounts, s)
 	}
 	// The download never touches the engine's /root: HF_HOME and HOME both
@@ -687,26 +697,29 @@ func TestModelVolume_EngineDownload_JobRunsHF(t *testing.T) {
 	if !sawToken {
 		t.Error("registry credentials must be forwarded to the download Job")
 	}
-	ienv := map[string]string{}
-	for _, e := range v.newInits[0].Env {
-		ienv[e.Name] = e.Value
-	}
-	if ienv["HF_HOME"] != downloadMount || ienv["HOME"] != downloadMount || v.newInits[0].VolumeMounts[0].MountPath != downloadMount || !strings.Contains(v.newInits[0].Args[0], "/nvsnap-model/.nvsnap-complete") {
-		t.Errorf("the injected init mounts the landing at %s and waits for the marker there: env=%v mounts=%v", downloadMount, ienv, v.newInits[0].VolumeMounts)
-	}
-	// The wait init plus the cachedir init: compile caches stay local in
-	// every mode because the shared claim is read-only for readers.
-	var wait, cachedir bool
+	var wait corev1.Container
 	for _, c := range v.newInits {
-		switch c.Name {
-		case "nvsnap-model-download":
-			wait = strings.Contains(c.Args[0], "while [ ! -f")
-		case "nvsnap-cachedir-init":
-			cachedir = true
+		if c.Name == injectedDownloadInit {
+			wait = c
 		}
 	}
-	if !wait || !cachedir || len(v.newInits) != 2 {
-		t.Errorf("the pod gets a wait init and the cachedir init, got %v", v.newInits)
+	ienv := map[string]string{}
+	for _, e := range wait.Env {
+		ienv[e.Name] = e.Value
+	}
+	if ienv["HF_HOME"] != downloadMount || ienv["HOME"] != downloadMount || len(wait.VolumeMounts) == 0 || wait.VolumeMounts[0].MountPath != downloadMount ||
+		!strings.Contains(strings.Join(wait.Command, " "), " wait --marker /nvsnap-model/.nvsnap-complete ") {
+		t.Errorf("the injected init mounts the landing at %s and waits for the marker there: env=%v mounts=%v cmd=%v", downloadMount, ienv, wait.VolumeMounts, wait.Command)
+	}
+	// The wait init only: compile caches stay local in every mode (the
+	// shared claim is read-only for readers), in the cachedir, whose
+	// subtrees the kubelet creates as subPath mounts.
+	names := []string{}
+	for _, c := range v.newInits {
+		names = append(names, c.Name)
+	}
+	if !reflect.DeepEqual(names, []string{injectedDownloadInit}) {
+		t.Errorf("the pod gets the wait init only, got %v", names)
 	}
 	if v.env["HF_HUB_OFFLINE"] != "1" {
 		t.Error("engine must start offline and read the volume")
@@ -903,7 +916,7 @@ func TestCacheVolume_CompleteSeedsCachedir(t *testing.T) {
 	if seed == nil {
 		t.Fatalf("seed init missing: %v", v.newInits)
 	}
-	if seed.Image != pod.Spec.Containers[0].Image || !strings.Contains(seed.Args[0], "cp -a /nvsnap-cache-seed/0/. /opt/nvsnap/cache/") || !strings.HasSuffix(seed.Args[0], "exit 0") ||
+	if seed.Image != pod.Spec.Containers[0].Image || !strings.HasPrefix(strings.Join(seed.Command, " "), HelperBin+" seed --from /nvsnap-cache-seed/0 --to /opt/nvsnap/cache ") ||
 		seed.SecurityContext == nil || seed.SecurityContext.Capabilities == nil || seed.Resources.Limits.Cpu().IsZero() {
 		t.Errorf("seed init copies best effort with the baselines: %+v", seed)
 	}
@@ -974,9 +987,7 @@ func TestModelVolume_EngineNGCDownload_FirstPodCapturedAfterReady(t *testing.T) 
 		t.Errorf("the pod keeps its own writable claim: volumes=%v ro=%v", v.volumes, v.roMounts)
 	}
 	for _, init := range v.newInits {
-		if init.Name != "nvsnap-cachedir-init" {
-			t.Errorf("a capture source gets no wait or download init, only the cachedir: %s", init.Name)
-		}
+		t.Errorf("a capture source gets no init container: %s", init.Name)
 	}
 	// The compile caches are collected from the capture source like from
 	// any reader, so the first warm deployment does not profile again.
@@ -1091,8 +1102,27 @@ func TestModelVolume_DefaultHFCache_PinsHFHomeToLanding(t *testing.T) {
 	if v.env["HOME"] != "/opt/nvsnap/cache" {
 		t.Fatalf("precondition: HOME is moved to the cachedir, got %q (env %v)", v.env["HOME"], v.env)
 	}
-	if v.env["HF_HOME"] != "/root/.cache/huggingface" {
+	if v.env["HF_HOME"] != modelid.NVSnapHFHome {
 		t.Errorf("HF_HOME must pin the cache to the mounted model, got %q (env %v)", v.env["HF_HOME"], v.env)
+	}
+	// Mounted outside /root (0700): an engine running as another user
+	// (uid 1000) must reach it.
+	mounted := false
+	for _, vm := range pod.Spec.Containers[0].VolumeMounts {
+		mounted = mounted || vm.MountPath == modelid.NVSnapHFHome
+	}
+	for _, p := range patches {
+		if strings.HasSuffix(p.Path, "/volumeMounts/-") {
+			if vm, ok := p.Value.(corev1.VolumeMount); ok && vm.MountPath == modelid.NVSnapHFHome {
+				mounted = true
+			}
+			if vm, ok := p.Value.(corev1.VolumeMount); ok && strings.HasPrefix(vm.MountPath, "/root/") {
+				t.Errorf("the model is mounted under /root: %s", vm.MountPath)
+			}
+		}
+	}
+	if !mounted {
+		t.Errorf("the model is not mounted at %s", modelid.NVSnapHFHome)
 	}
 	if v.env["HF_MODULES_CACHE"] != "/opt/nvsnap/cache/hf_modules" {
 		t.Errorf("a pinned HF_HOME is on the read-only landing; HF_MODULES_CACHE must leave it, got %q", v.env["HF_MODULES_CACHE"])
@@ -1192,7 +1222,7 @@ func TestModelVolume_SameFlowOnEveryStorage(t *testing.T) {
 			if vol := v.volumes["ngc-models"]; vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != cfg.ReadOnlyClaimName(uri) || len(v.roMounts) != 1 {
 				t.Errorf("landing is the read-only view, mounted read-only: %+v %v", vol, v.roMounts)
 			}
-			if sc := v.initScripts["download-ngc-model"]; !strings.Contains(sc, "while [ ! -f /config/models/.nvsnap-complete ]") {
+			if sc := v.initScripts["download-ngc-model"]; !strings.Contains(sc, HelperBin+" wait --marker /config/models/.nvsnap-complete") {
 				t.Errorf("the chart's init waits for the marker:\n%s", sc)
 			}
 			if v.env["TORCHINDUCTOR_CACHE_DIR"] != "/opt/nvsnap/cache/torchinductor" || v.env["HF_HOME"] != "" {
@@ -1337,41 +1367,19 @@ func TestModelVolume_SharedFilesystem_PrimaryNotBoundYet(t *testing.T) {
 	}
 }
 
-// The writer waits for its landing to become writable before downloading:
-// a fresh shared filesystem is root-owned until the agent on the Job's
-// node opens it, and the Job runs as the function's user.
-func TestWriterScript_WaitsForWritableLanding(t *testing.T) {
-	script := writerScript("hf download org/model", "/model/.nvsnap-complete")
-	wait := strings.Index(script, "while [ ! -w /model ]")
-	dl := strings.Index(script, "hf download org/model")
-	if wait < 0 || dl < 0 || wait > dl {
-		t.Fatalf("the writable wait must precede the download:\n%s", script)
+// The helper argv carries everything the step decides at admission; the
+// helper's own tests cover what it does with it.
+func TestHelperArgv(t *testing.T) {
+	w := strings.Join(helperWrite("/model/.nvsnap-complete", "/model/.nvsnap-failed", "/model", hfDownloaders, []string{"download", "org/model"}), " ")
+	if w != HelperBin+" write --marker /model/.nvsnap-complete --failed /model/.nvsnap-failed --dir /model --writable-wait 600 --try hf --try huggingface-cli -- download org/model" {
+		t.Errorf("write argv: %s", w)
 	}
-	if !strings.Contains(script, "if [ -f /model/.nvsnap-complete ]") || strings.Index(script, "if [ -f /model/.nvsnap-complete ]") > wait {
-		t.Errorf("the completed-marker check still comes first:\n%s", script)
+	r := strings.Join(helperWait("/model/.nvsnap-complete", "/model/.nvsnap-failed", 1800, false, nil, []string{"ngc", "registry"}), " ")
+	if r != HelperBin+" wait --marker /model/.nvsnap-complete --failed /model/.nvsnap-failed --deadline 1800 -- ngc registry" {
+		t.Errorf("wait argv on a read-only view: %s", r)
 	}
-	// A retry after a failed Job clears the failure marker before it
-	// downloads, so readers admitted meanwhile wait for the new attempt.
-	rm := strings.Index(script, "rm -f /model/.nvsnap-failed")
-	if rm < 0 || rm > dl || rm < wait {
-		t.Errorf("the failure marker is removed after the landing is writable and before the download:\n%s", script)
-	}
-}
-
-// A reader waiting on the completion marker falls back the moment the
-// failure marker appears, with the reason in its log, instead of waiting
-// out its deadline; the deadline fallback stays as the last resort.
-// A reader whose landing is the read-only view of the shared primary
-// cannot download into it: on a failure or past its deadline it stops
-// with the reason instead of writing, and the agent recreates it on its
-// own download path.
-func TestReaderScript_NoInPlaceFallbackOnReadOnlyView(t *testing.T) {
-	script := readerScript("hf download org/model", "/model/.nvsnap-complete", 1800, false)
-	if strings.Contains(script, "hf download org/model") {
-		t.Errorf("a read-only landing must not run the download:\n%s", script)
-	}
-	if strings.Count(script, "exit 1") != 2 || !strings.Contains(script, "cat /model/.nvsnap-failed") {
-		t.Errorf("both branches stop with an error, the failure branch with the reason:\n%s", script)
+	if !strings.Contains(strings.Join(helperWait("/m", "/f", 60, true, nil, nil), " "), " --in-place") {
+		t.Error("a writable landing must fall back in place")
 	}
 }
 
@@ -1389,29 +1397,10 @@ func TestModelVolume_SharedFilesystem_ReaderHasNoInPlaceFallback(t *testing.T) {
 	var wait string
 	for _, c := range viewMV(pod, patches).newInits {
 		if c.Name == injectedDownloadInit {
-			wait = c.Args[0]
+			wait = strings.Join(c.Command, " ")
 		}
 	}
-	if wait == "" || strings.Contains(wait, "hf download") || strings.Contains(wait, "snapshot_download") {
+	if !strings.HasPrefix(wait, HelperBin+" wait ") || strings.Contains(wait, "--in-place") {
 		t.Errorf("the reader's wait must not download into the read-only view:\n%s", wait)
-	}
-}
-
-func TestReaderScript_FallsBackOnFailureMarker(t *testing.T) {
-	script := readerScript("hf download org/model", "/model/.nvsnap-complete", 1800, true)
-	failed := strings.Index(script, "if [ -f /model/.nvsnap-failed ]")
-	deadline := strings.Index(script, "if [ $d -ge 1800 ]")
-	if failed < 0 || deadline < 0 || failed > deadline {
-		t.Fatalf("the failure check comes before the deadline check:\n%s", script)
-	}
-	if strings.Count(script, "hf download org/model") != 2 {
-		t.Errorf("both the failure and the deadline branch run the fallback download:\n%s", script)
-	}
-	if !strings.Contains(script, "cat /model/.nvsnap-failed") {
-		t.Errorf("the reader logs the recorded reason:\n%s", script)
-	}
-	none := readerScript("", "/model/.nvsnap-complete", 60, true)
-	if strings.Count(none, "no download step to fall back to") != 2 {
-		t.Errorf("without a download step both branches exit cleanly:\n%s", none)
 	}
 }

@@ -378,6 +378,50 @@ func TestCompose_RoleNeutralAcrossPrefillAndDecode(t *testing.T) {
 	}
 }
 
+// The ranks of one multi-node engine share its configuration, whether the
+// chart spells each rank's flags out or computes them in a shared script.
+func TestCompose_RanksOfOneEngineHashTheSame(t *testing.T) {
+	c := &HashInputComposer{CUDADriverMajor: 580}
+	hashOf := func(args []string, env ...corev1.EnvVar) string {
+		p := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "main", Image: "vllm/vllm-openai:v0.20.0", Command: []string{"vllm"}, Args: args, Env: env,
+		}}}}
+		return checkpointstore.ComputeHash(c.Compose(p, 0))
+	}
+	base := []string{"serve", "m", "--tensor-parallel-size", "2", "--nnodes", "2", "--master-addr", "vllm-0.vllm"}
+	r0 := hashOf(append(append([]string{}, base...), "--node-rank", "0"), corev1.EnvVar{Name: "NODE_RANK", Value: "0"})
+	r1 := hashOf(append(append([]string{}, base...), "--node-rank=1", "--headless"), corev1.EnvVar{Name: "NODE_RANK", Value: "1"})
+	if r0 != r1 {
+		t.Error("ranks of one vLLM multi-node engine must hash the same")
+	}
+	sh := func(rank string) string {
+		p := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Image: "lmsysorg/sglang:v0.5",
+			Command: []string{"/bin/bash", "-lc"}, Args: []string{"python3 -m sglang.launch_server --model-path m --tp 8 --nnodes 2 --node-rank " + rank + " --dist-init-addr x:5000"}}}}}
+		return checkpointstore.ComputeHash(c.Compose(p, 0))
+	}
+	if sh("0") != sh("1") {
+		t.Error("ranks of one SGLang multi-node engine in a shell string must hash the same")
+	}
+	lws := func(idx, leader string) string {
+		return hashOf(base, corev1.EnvVar{Name: "LWS_WORKER_INDEX", Value: idx}, corev1.EnvVar{Name: "LWS_LEADER_ADDRESS", Value: leader},
+			corev1.EnvVar{Name: "LOCAL_RANK", Value: idx})
+	}
+	if lws("0", "kimi-0.kimi") != lws("1", "kimi-1.kimi") {
+		t.Error("the ranks of LeaderWorkerSet groups must hash the same")
+	}
+	cmd := func(rank string) string {
+		p := &corev1.Pod{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Image: "vllm/vllm-openai:v0.20.0",
+			Command: []string{"vllm", "serve", "m", "--node-rank", rank}}}}}
+		return checkpointstore.ComputeHash(c.Compose(p, 0))
+	}
+	if cmd("0") != cmd("1") {
+		t.Error("a rank flag in the command must not split the hash")
+	}
+	if hashOf(base) == hashOf([]string{"serve", "m", "--tensor-parallel-size", "4", "--nnodes", "2", "--master-addr", "vllm-0.vllm"}) {
+		t.Error("a different parallel layout must hash differently")
+	}
+}
+
 func TestStripRoleFlags(t *testing.T) {
 	got := stripRoleFlags([]string{"--model", "m", "--is-decode-worker", "--disaggregation-mode", "decode", "--disaggregation-strategy=prefill_first", "--tp", "2", "--kv-transfer-config"})
 	want := []string{"--model", "m", "--tp", "2"}

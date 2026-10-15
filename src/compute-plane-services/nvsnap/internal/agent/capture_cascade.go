@@ -236,7 +236,7 @@ func (a *Agent) fetchCaptureFromPeer(ctx context.Context, peerURL, hash, destDir
 func (a *Agent) fetchOneCaptureFile(ctx context.Context, peerURL, hash, relPath string, expectedSize int64, destDir string) error {
 	fileURL := fmt.Sprintf("%s/v1/captures/%s/file?path=%s",
 		peerURL, url.PathEscape(hash), url.QueryEscape(relPath))
-	fileCtx, cancel := context.WithTimeout(ctx, peerFetchTimeoutPerFile)
+	fileCtx, cancel := context.WithTimeout(ctx, peerFetchTimeout(expectedSize))
 	defer cancel()
 	req, err := http.NewRequestWithContext(fileCtx, http.MethodGet, fileURL, http.NoBody)
 	if err != nil {

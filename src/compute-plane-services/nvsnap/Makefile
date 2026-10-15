@@ -9,7 +9,7 @@ CONTAINER_TOOL ?= docker
 GO_FLAGS ?= -ldflags="-s -w -X main.version=$(VERSION)"
 BUILD_DIR ?= bin
 
-.PHONY: all build agent nvsnap-server clean test test-coverage test-checkpoint test-server deploy install-crds generate
+.PHONY: all build agent nvsnap-server clean test test-coverage test-checkpoint test-server deploy install-crds generate check-gpushare
 
 all: build
 
@@ -70,6 +70,10 @@ test:
 
 # Run all unit tests with coverage profile (used by CI).
 # Coverage output lands in coverage/coverage.out for Codecov upload.
+# Compile the gpushare C code for amd64 and arm64 (Docker, no GPU); same check as CI.
+check-gpushare:
+	./scripts/check-gpushare-build.sh
+
 test-coverage:
 	mkdir -p coverage
 	go test -v -race -coverprofile=coverage/coverage.out -covermode=atomic $(GO_TEST_PKGS)

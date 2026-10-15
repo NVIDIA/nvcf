@@ -73,7 +73,7 @@ func TestResolve_EngineDownloads(t *testing.T) {
 	}{
 		"stock vllm, default HF_HOME on rootfs": {
 			c:       corev1.Container{Image: "vllm/vllm-openai:v0.20.0", Command: []string{"/bin/bash", "-lc"}, Args: []string{"vllm serve --model Qwen/Qwen2.5-32B-Instruct --tensor-parallel-size 4 > /vllm.out 2>&1 &"}},
-			wantURI: "hf://Qwen/Qwen2.5-32B-Instruct", wantSrc: "--model", path: "/root/.cache/huggingface", kind: VolumeRootfs,
+			wantURI: "hf://Qwen/Qwen2.5-32B-Instruct", wantSrc: "--model", path: NVSnapHFHome, kind: VolumeRootfs,
 		},
 		"positional model with revision, HF_HOME on emptyDir": {
 			c: corev1.Container{Image: "vllm/vllm-openai", Args: []string{"vllm serve meta-llama/Llama-3.1-70B-Instruct --revision abc123 --tensor-parallel-size 4"},
@@ -83,11 +83,11 @@ func TestResolve_EngineDownloads(t *testing.T) {
 		},
 		"dynamo list form": {
 			c:       corev1.Container{Image: "nvcr.io/nvidia/ai-dynamo/vllm-runtime:1.1.1", Command: []string{"python3", "-m", "dynamo.vllm"}, Args: []string{"--model", "Qwen/Qwen3-0.6B", "--is-prefill-worker"}},
-			wantURI: "hf://Qwen/Qwen3-0.6B", wantSrc: "--model", path: "/root/.cache/huggingface", kind: VolumeRootfs,
+			wantURI: "hf://Qwen/Qwen3-0.6B", wantSrc: "--model", path: NVSnapHFHome, kind: VolumeRootfs,
 		},
 		"sglang model-path": {
 			c:       corev1.Container{Image: "lmsysorg/sglang", Args: []string{"python3 -m sglang.launch_server --model-path google/gemma-4-31B-it --tp 2"}},
-			wantURI: "hf://google/gemma-4-31B-it", wantSrc: "--model", path: "/root/.cache/huggingface", kind: VolumeRootfs,
+			wantURI: "hf://google/gemma-4-31B-it", wantSrc: "--model", path: NVSnapHFHome, kind: VolumeRootfs,
 		},
 		"customer already mounts a PVC at HF_HOME": {
 			c:       corev1.Container{Image: "vllm/vllm-openai", Args: []string{"--model", "Qwen/Qwen3-0.6B"}, VolumeMounts: []corev1.VolumeMount{{Name: "cache", MountPath: "/root/.cache/huggingface"}}},
@@ -100,7 +100,7 @@ func TestResolve_EngineDownloads(t *testing.T) {
 		},
 		"HF_MODEL_ID env": {
 			c:       corev1.Container{Image: "x", Command: []string{"/start.sh"}, Env: []corev1.EnvVar{{Name: "HF_MODEL_ID", Value: "openai/whisper-large-v3"}}},
-			wantURI: "hf://openai/whisper-large-v3", wantSrc: "env HF_MODEL_ID", path: "/root/.cache/huggingface", kind: VolumeRootfs,
+			wantURI: "hf://openai/whisper-large-v3", wantSrc: "env HF_MODEL_ID", path: NVSnapHFHome, kind: VolumeRootfs,
 		},
 	}
 	for name, tc := range cases {

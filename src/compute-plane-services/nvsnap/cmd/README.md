@@ -24,6 +24,8 @@ Entry points (`main` packages). One directory per binary.
   injects to stage restore mounts.
 - [`nvsnap-l2-wait/`](nvsnap-l2-wait/) — init container that blocks until the L2
   per-capture PVC is promoted.
+- [`nvsnap-helper/`](nvsnap-helper/): static helper that runs the steps the
+  webhook adds to a pod (wait, write, seed, prewarm, idle) in any image.
 - [`nvsnap-gpu-restore/`](nvsnap-gpu-restore/) — GPU restore helper (C) invoking
   the CUDA Checkpoint API.
 

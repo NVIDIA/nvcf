@@ -66,8 +66,11 @@ type Config struct {
 	ContainerdNamespace string
 	CudaCheckpointPath  string
 	CRIUPath            string
-	NodeName            string
-	LogLevel            string
+	// CaptureOptIn opts matching pods into the multi-pod instance capture
+	// (criu_group.go); NVSNAP_CRIU_CAPTURE_OPT_IN, JSON.
+	CaptureOptIn []CaptureOptIn
+	NodeName     string
+	LogLevel     string
 
 	// AuthToken is the shared bearer token callers must present on the
 	// agent API. Sourced from a Secret rather than a flag so it does not
@@ -285,6 +288,21 @@ const DefaultWriterPullSecret = "nvsnap-agent-pull" //nolint:gosec // secret nam
 
 // Agent is the NVSNAP node agent
 type Agent struct {
+	// capturing holds the container IDs with a checkpoint in progress: two
+	// captures of one workload would each suspend it and both fail.
+	capturing sync.Map
+
+	// fabricSessions maps a multi-node gpushare session's pod key to its
+	// directory on this node (see gpushare_fabric.go).
+	fabricSessions sync.Map
+
+	// criuRestore restores CRIU checkpoints into placeholder pods when CRIU
+	// is the cluster's capture method (criu_auto_restore.go).
+	criuRestore     *criuAutoRestorer
+	criuRestoreOnce sync.Once
+	// checkpointing holds the pods being checkpointed (namespace/pod).
+	checkpointing sync.Map
+
 	config     Config
 	log        *logrus.Logger
 	runtime    runtime.Runtime
@@ -537,6 +555,14 @@ func (a *Agent) Run(ctx context.Context) error {
 	// API routes
 	router.HandleFunc("/health", a.healthHandler).Methods("GET")
 	router.HandleFunc("/v1/checkpoint", a.checkpointHandler).Methods("POST")
+	// Multi-node gpushare: a group checkpoint drives one fabric session; the
+	// fabric routes serve this node's pods in a session to that driver.
+	router.HandleFunc("/v1/gpushare/group-checkpoint", a.groupCheckpointHandler).Methods("POST")
+	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}", a.fabricStateHandler).Methods("GET")
+	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}/verdict", a.fabricVerdictHandler).Methods("PUT")
+	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}/in", a.fabricInHandler).Methods("PUT")
+	router.HandleFunc("/v1/gpushare/fabric/{session}/{namespace}/{pod}/unlock", a.fabricUnlockHandler).Methods("PUT")
+	router.HandleFunc("/v1/gpushare/group-restore", a.groupRestoreHandler).Methods("POST")
 	router.HandleFunc("/v1/restore", a.restoreHandler).Methods("POST")
 	router.HandleFunc("/v1/restore/manifest", a.getPlaceholderManifestHandler).Methods("POST")
 	router.HandleFunc("/v1/checkpoints", a.listCheckpointsHandler).Methods("GET")
@@ -664,6 +690,10 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.startWebhook(ctx, a.config.Webhook, backend); err != nil {
 		a.log.WithError(err).Error("agent admission webhook failed to start; continuing without it")
 	}
+	if err := a.startCRIUAutoRestore(ctx); err != nil {
+		a.log.WithError(err).Error("CRIU auto-restore failed to start; CRIU captures will not restore into new pods")
+	}
+	a.startGPUShareStoreReaper(ctx)
 	if a.modelVolume != nil {
 		// Completes writer volumes and binds them into pending readers on
 		// this node (docs/proposals/helm-shared-model-volume.md).
