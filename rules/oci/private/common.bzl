@@ -39,7 +39,8 @@ def create_oci_image(
         tags = None,
         env = None,
         cmd = None,
-        workdir = None):
+        workdir = None,
+        user = None):
     """Creates OCI image targets with platform transitions and tarball output.
 
     Generates:
@@ -50,14 +51,14 @@ def create_oci_image(
       - {name}_push: Push to `registry` (if set)
       - {name}_push_{suffix}: Push to each entry in `extra_registries`
 
-    env, workdir and extra_registries are optional. env and workdir default to
-    leaving the base image's values untouched, so existing callers are
-    unaffected.
+    env, workdir, user and extra_registries are optional. env, workdir and user
+    leave the base image's values untouched when unset. A non-empty user
+    overrides the image's runtime identity, for example "1000:1000".
     """
     all_tags = ["manual"] + (tags or [])
 
     pre_transitioned = name + "_pre_transitioned"
-    oci_image(
+    image_attrs = dict(
         name = pre_transitioned,
         base = base,
         tars = tars + COMMON_LAYERS,
@@ -68,6 +69,9 @@ def create_oci_image(
         visibility = ["//visibility:private"],
         tags = all_tags,
     )
+    if user:
+        image_attrs["user"] = user
+    oci_image(**image_attrs)
 
     platform_transition_filegroup(
         name = name,
