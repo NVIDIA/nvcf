@@ -67,26 +67,51 @@ concurrency, scheduling, resource limits, or performance measurements, compare
 the merge-base baseline and candidate on the same test environment before
 marking the Pull Request ready or merging.
 
+Scope the comparison before running it:
+
+- Compare baseline and candidate image digests and runtime settings for each
+  component on the measured path. When both match, record them and skip the
+  comparison for that component; identical builds measure only noise.
+- Benchmark only the components that differ. For example, a change limited to
+  charts and the auth fixture needs the integration gate plus an auth RPC
+  benchmark, not a routing comparison.
+- Select the policies and workload profiles that exercise the changed path.
+  Do not run the full policy and profile matrix by default.
+
+Run the comparison:
+
 - Use release builds and identical hardware, resource allocation, topology,
   mock-engine settings, policy, load-generator version, workload/seed, offered
   load, concurrency, cache state, warmup, and run duration. Change only the
   component or setting under test. Exclude unrelated traffic and overlapping
   campaigns. Local and AWS measurements must be compared within their own
   environments.
-- Run at least three measured repetitions per revision, alternate revision
-  order, and report individual results and variation. Choose representative
-  sustained load, including saturation, affinity, mixed sessions, or transport
-  profiles relevant to the change. A short smoke run alone is insufficient.
+- Run at least three measured repetitions per revision for each selected
+  profile, alternate revision order, and report individual results and
+  variation. Use representative sustained load. A short smoke run alone is
+  insufficient.
 - Compare successful throughput, p95/p99 time to first token and end-to-end
   latency, failures/timeouts/retries, and CPU/memory where relevant. Include
   admission failures and cancellations, not only completed-request latency.
 - Retain raw baseline and candidate reports and a comparison table. Algorithm
   comparisons within one build do not establish revision-level performance.
   Explain unavailable metrics and collect another observable for that risk.
-- Investigate any worse result. Any reproducible degradation blocks merge;
-  inconclusive or noisy results require more evidence. An intentional tradeoff
-  requires explicit user approval with the measured impact before merge.
-  Mock results support the tested workload, not production capacity claims.
+
+Judge the results:
+
+- Treat a candidate metric as worse only when it falls outside the baseline
+  range across repetitions and moves in the same direction in every pair.
+  Report smaller or mixed differences as within run-to-run variation.
+- Policies that sample backends without a fixed seed, such as PowerOfN, choose
+  different backends for the same workload on each run. Note this in the
+  report; their tail variation alone does not establish a regression.
+- Investigate any result that meets the worse-result rule. Any reproducible
+  degradation blocks merge. For an inconclusive profile, run at most one
+  additional reversed-order pair, then report the result and ask the user to
+  decide instead of collecting more runs.
+- An intentional tradeoff requires explicit user approval with the measured
+  impact before merge. Mock results support the tested workload, not
+  production capacity claims.
 
 ## Routing methods
 
