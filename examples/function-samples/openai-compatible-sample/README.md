@@ -153,6 +153,15 @@ docker build --platform linux/amd64 -t openai-compatible-sample .
 docker run --rm -p 18000:8000 openai-compatible-sample
 ```
 
+Release images are built with Bazel for linux/amd64 and linux/arm64. A
+`feat`, `fix`, or `perf` commit under this directory cuts an
+`examples/function-samples/openai-compatible-sample/vX.Y.Z` release, and the
+release pipeline publishes that version. Build the same image locally with:
+
+```bash
+bazel build //examples/function-samples/openai-compatible-sample/http-server:image_index
+```
+
 ## Smoke test
 
 ```bash
