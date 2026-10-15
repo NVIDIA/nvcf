@@ -49,6 +49,33 @@ Downloadable archives contain public runtime files and secret templates, never
 local environments or credentials. Supply separate environment and secrets
 files when testing or installing. Keep the exact packaged chart/image pins.
 
+## Install with existing stack interfaces
+
+Verify the downloaded archive against the released manifest and a trusted
+archive digest before extracting it into a new directory:
+
+```bash
+go run -C tools/docs-version-sync . umbrella verify-bundle \
+  --manifest /tmp/product-assets/manifest.json \
+  --bundle /tmp/product-assets/nvcf-X.Y.Z.tar.gz \
+  --sha256 sha256:TRUSTED_ARCHIVE_DIGEST
+
+bundle_dir="$(mktemp -d)"
+tar -xzf /tmp/product-assets/nvcf-X.Y.Z.tar.gz -C "$bundle_dir"
+```
+
+Use the bundle's README and existing per-stack Helmfile/Make entrypoints.
+Preserve the `deploy/stacks/` layout so the self-managed stack can find its
+sibling Observability stack. Select cluster contexts and environment/secrets
+files explicitly, and follow the existing deployment and upgrade order.
+
+The existing `nvcf-cli` remains unchanged. After verification and extraction,
+its `--control-plane-stack` flag can select
+`$bundle_dir/deploy/stacks/self-managed`, and `--compute-plane-stack` can select
+`$bundle_dir/deploy/stacks/nvcf-compute-plane`. Its default sources do not select
+an umbrella combination automatically. The CLI does not verify or report an
+umbrella identity; retain the manifest and digest with the deployment evidence.
+
 ## Qualify and publish
 
 Use fresh isolated environments and retain the candidate identity, toolchain,
@@ -57,6 +84,10 @@ paths, repeat apply, rollback limits, single/split cluster topologies, and
 supported observability profiles. Validate real workloads, original function
 and deployment identities, migrations, registration, and invocation continuity.
 Fixture chart tests validate the packaging machinery only.
+
+Run qualification through the existing packaged Helmfile/Make entrypoints.
+Any CLI-assisted step must use the existing component-source interface with
+explicit paths to the verified bundle. No umbrella-aware CLI is required.
 
 An umbrella selection does not make a staged upgrade atomic. Follow each
 component's supported migration and major-version sequence. A docs rollback
