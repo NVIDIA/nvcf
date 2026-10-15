@@ -34,8 +34,8 @@ import (
 // here. omitempty means old state files (without this field) load cleanly with
 // SelfHostedAuth == nil.
 type SelfHostedAuth struct {
-	Token       string         `json:"token,omitempty"`
-	ExpiresAt   time.Time      `json:"expiresAt,omitempty"`
+	Token       string          `json:"token,omitempty"`
+	ExpiresAt   time.Time       `json:"expiresAt,omitempty"`
 	Fingerprint *FingerprintRef `json:"fingerprint,omitempty"`
 }
 
@@ -65,6 +65,14 @@ type State struct {
 	FunctionID   string `json:"functionId,omitempty"`
 	VersionID    string `json:"versionId,omitempty"`
 	FunctionName string `json:"functionName,omitempty"`
+
+	// Current Task Context (NVCT)
+	TaskID   string `json:"taskId,omitempty"`
+	TaskName string `json:"taskName,omitempty"`
+
+	// NVCT API key (separate from the NVCF API key — different issuer/scopes)
+	NVCTAPIKey           string    `json:"nvctApiKey,omitempty"`
+	NVCTAPIKeyExpiration time.Time `json:"nvctApiKeyExpiration,omitempty"`
 
 	// Last used endpoints and settings
 	LastBaseURL   string `json:"lastBaseUrl,omitempty"`
@@ -111,7 +119,12 @@ func NewStateManagerForConfig(configName string) *StateManager {
 		if ext := filepath.Ext(contextName); ext != "" {
 			contextName = contextName[:len(contextName)-len(ext)]
 		}
-		statePath = filepath.Join(homeDir, fmt.Sprintf(".nvcf-cli.%s.state", contextName))
+		// ".nvcf-cli" is the default config name; map it back to the default state path
+		if contextName == ".nvcf-cli" {
+			statePath = filepath.Join(homeDir, ".nvcf-cli.state")
+		} else {
+			statePath = filepath.Join(homeDir, fmt.Sprintf(".nvcf-cli.%s.state", contextName))
+		}
 	}
 
 	return &StateManager{
@@ -205,6 +218,8 @@ func (sm *StateManager) ClearTokens() {
 	sm.state.APIKey = ""
 	sm.state.TokenExpiration = time.Time{}
 	sm.state.APIKeyExpiration = time.Time{}
+	sm.state.NVCTAPIKey = ""
+	sm.state.NVCTAPIKeyExpiration = time.Time{}
 }
 
 // SetConfig updates configuration settings
@@ -250,6 +265,40 @@ func (sm *StateManager) HasFunction() bool {
 	return sm.state.FunctionID != "" && sm.state.VersionID != ""
 }
 
+// SetTask updates the current task context (NVCT)
+func (sm *StateManager) SetTask(taskID, taskName string) {
+	sm.state.TaskID = taskID
+	sm.state.TaskName = taskName
+}
+
+// ClearTask clears the current task context
+func (sm *StateManager) ClearTask() {
+	sm.state.TaskID = ""
+	sm.state.TaskName = ""
+}
+
+// HasTask checks if there's a current task context
+func (sm *StateManager) HasTask() bool {
+	return sm.state.TaskID != ""
+}
+
+// SetNVCTAPIKey stores an NVCT-scoped API key and its expiration.
+func (sm *StateManager) SetNVCTAPIKey(key string, expiration time.Time) {
+	sm.state.NVCTAPIKey = key
+	sm.state.NVCTAPIKeyExpiration = expiration
+}
+
+// ClearNVCTAPIKey removes the stored NVCT API key.
+func (sm *StateManager) ClearNVCTAPIKey() {
+	sm.state.NVCTAPIKey = ""
+	sm.state.NVCTAPIKeyExpiration = time.Time{}
+}
+
+// HasNVCTAPIKey reports whether an NVCT API key is stored.
+func (sm *StateManager) HasNVCTAPIKey() bool {
+	return sm.state.NVCTAPIKey != ""
+}
+
 // PrintStatus prints the current state in a human-readable format
 func (sm *StateManager) PrintStatus() {
 	state := sm.state
@@ -287,6 +336,14 @@ func (sm *StateManager) PrintStatus() {
 		fmt.Printf("    (no function selected)\n")
 	}
 
+	fmt.Printf("\n  Current Task:\n")
+	if sm.HasTask() {
+		fmt.Printf("    Task ID: %s\n", state.TaskID)
+		fmt.Printf("    Name: %s\n", valueOrDefault(state.TaskName, "(unknown)"))
+	} else {
+		fmt.Printf("    (no task selected)\n")
+	}
+
 	fmt.Printf("\n  Last Modified: %s\n", state.LastModified.Format(time.RFC3339))
 }
 
@@ -314,6 +371,20 @@ func formatTime(t time.Time) string {
 
 // Global state manager instance (default context)
 var DefaultStateManager = NewStateManager()
+
+// ResetDefaultStateManager rebuilds the default state manager, re-reading the
+// home directory.
+//
+// The default manager is constructed at package init, so it captures $HOME
+// before a test can change it. Without this, a test that points HOME at a temp
+// directory still reads the real ~/.nvcf-cli.state, and any credentials there
+// leak into it through the state fallback in LoadConfig.
+//
+// Production never calls this: a CLI process's home directory does not change
+// after start.
+func ResetDefaultStateManager() {
+	DefaultStateManager = NewStateManager()
+}
 
 // GetStateManagerForCurrentConfig returns a state manager for the current config context
 // This function should be called from commands that need config-aware state management
@@ -345,7 +416,13 @@ func SetConfig(configFile, kubeconfigPath string, clusterMode bool) {
 func SetEndpoints(baseURL, invokeURL, account string) {
 	DefaultStateManager.SetEndpoints(baseURL, invokeURL, account)
 }
-func HasFunction() bool   { return DefaultStateManager.HasFunction() }
-func IsTokenValid() bool  { return DefaultStateManager.IsTokenValid() }
-func IsAPIKeyValid() bool { return DefaultStateManager.IsAPIKeyValid() }
-func PrintStatus()        { DefaultStateManager.PrintStatus() }
+func HasFunction() bool                       { return DefaultStateManager.HasFunction() }
+func IsTokenValid() bool                      { return DefaultStateManager.IsTokenValid() }
+func IsAPIKeyValid() bool                     { return DefaultStateManager.IsAPIKeyValid() }
+func PrintStatus()                            { DefaultStateManager.PrintStatus() }
+func SetTask(taskID, taskName string)         { DefaultStateManager.SetTask(taskID, taskName) }
+func ClearTask()                              { DefaultStateManager.ClearTask() }
+func HasTask() bool                           { return DefaultStateManager.HasTask() }
+func SetNVCTAPIKey(key string, exp time.Time) { DefaultStateManager.SetNVCTAPIKey(key, exp) }
+func ClearNVCTAPIKey()                        { DefaultStateManager.ClearNVCTAPIKey() }
+func HasNVCTAPIKey() bool                     { return DefaultStateManager.HasNVCTAPIKey() }

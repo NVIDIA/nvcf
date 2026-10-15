@@ -624,6 +624,89 @@ func TestNewShutdownHandler_WithV1ICMSRequests(t *testing.T) {
 	assert.True(t, resp.Cleanup, "should trigger cleanup even with ICMS requests present")
 }
 
+func TestRunShutdownCleanup_StripsICMSRequestFinalizersAfterDrain(t *testing.T) {
+	ctx := context.Background()
+
+	sentinel := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              ShutdownSentinelConfigMapName,
+			Namespace:         "test-namespace",
+			Finalizers:        []string{SentinelFinalizer},
+			DeletionTimestamp: &metav1.Time{Time: time.Now()},
+		},
+	}
+	backend := &nvidiaiov1.NVCFBackend{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "test-backend",
+			Namespace:  "test-namespace",
+			Finalizers: []string{NVCAOperatorFinalizer},
+		},
+	}
+	agentConfig := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "agent-config",
+			Namespace: DefaultNVCASystemNamespace,
+		},
+		Data: map[string]string{
+			"config.yaml": "agent:\n  featureFlags: []",
+		},
+	}
+	replicas := int32(1)
+	nvcaDeployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: NVCAModuleName, Namespace: DefaultNVCASystemNamespace},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status: appsv1.DeploymentStatus{
+			UpdatedReplicas:     1,
+			AvailableReplicas:   1,
+			UnavailableReplicas: 0,
+		},
+	}
+
+	k8sClient := fake.NewSimpleClientset(sentinel, agentConfig, nvcaDeployment)
+	nvcaClient := fakenvcaop.NewSimpleClientset(backend)
+
+	scheme := runtime.NewScheme()
+	icmsGVR := schema.GroupVersionResource{
+		Group:    "nvca.nvcf.nvidia.io",
+		Version:  "v2beta1",
+		Resource: "icmsrequests",
+	}
+	icmsRequest := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "nvca.nvcf.nvidia.io/v2beta1",
+			"kind":       "ICMSRequest",
+			"metadata": map[string]interface{}{
+				"name":       "sr-1",
+				"namespace":  DefaultNVCARequestsNamespace,
+				"finalizers": []interface{}{"nvca.finalizers.nvidia.io"},
+			},
+		},
+	}
+	dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(scheme,
+		map[schema.GroupVersionResource]string{icmsGVR: "ICMSRequestList"}, icmsRequest)
+
+	// A drain timeout shorter than the fixed 5s poll interval in drainWorkloads
+	// forces the "timeout reached, proceeding with forced cleanup" branch on
+	// the very first loop iteration, which is the code path this test targets:
+	// the ICMSRequest still has its finalizer and is never observed as drained.
+	resp := RunShutdownCleanup(ctx, ShutdownHandlerOptions{
+		K8sClient:           k8sClient,
+		NVCAClient:          nvcaClient,
+		DynamicClient:       dynamicClient,
+		Namespace:           "test-namespace",
+		DrainTimeout:        1 * time.Millisecond,
+		RolloutTimeout:      1 * time.Millisecond,
+		SetGracefulShutdown: func(shutdown bool) {},
+	})
+
+	require.True(t, resp.Cleanup)
+	require.Empty(t, resp.Error)
+
+	_, err := dynamicClient.Resource(icmsGVR).Namespace(DefaultNVCARequestsNamespace).Get(ctx, "sr-1", metav1.GetOptions{})
+	assert.True(t, k8serrors.IsNotFound(err),
+		"ICMSRequest should be deleted once its finalizer is stripped, even on the forced-cleanup (drain-timeout) path")
+}
+
 func TestNewShutdownHandler_MultipleBackends(t *testing.T) {
 	ctx := context.Background()
 

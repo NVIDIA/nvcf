@@ -14,6 +14,14 @@
 coverage.html
 
 # Dependency directories
+# Nothing under vendor/ is tracked in git. Bazel fetches every module
+# (public + private NVIDIA ones) through Gazelle's go_deps extension,
+# which `go mod download`s them from GOPROXY at build time. The CI
+# bazel job sets up a `git config url.insteadOf` rewrite using
+# GITHUB_TOKEN so the private nvcf-go / image-credential-helper paths
+# resolve. Local developers' own git credentials cover the same.
+# Run `go mod vendor` locally if you want a complete vendor/ tree for
+# plain `go build -mod=vendor` flows; it stays gitignored.
 vendor/
 
 # Editor / OS

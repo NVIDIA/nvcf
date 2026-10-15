@@ -19,18 +19,30 @@
 # - bash
 # - kubectl
 # - jq
+{{- if .Values.cassandra.hooks.initializeCluster.enabled }}
+{{- $fullname := include "cassandra.fullname" . }}
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ .Release.Name }}-initialize-cluster
+  name: {{ $fullname }}-initialize-cluster
+  namespace: {{ include "cassandra.namespace" . }}
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "-5"
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
   template:
+    {{- with .Values.cassandra.hooks.initializeCluster.podAnnotations }}
+    metadata:
+      annotations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
     spec:
-      {{- include "nvcf-cassandra.imagePullSecrets" . | nindent 6 }}
+      {{- include "cassandra.imagePullSecrets" . | nindent 6 }}
+      {{- with .Values.cassandra.hooks.initializeCluster.schedulingGates }}
+      schedulingGates:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: cassandra-init
           image: "{{ .Values.cassandra.migrations.image.registry }}/{{ .Values.cassandra.migrations.image.repository }}:{{ .Values.cassandra.migrations.image.tag }}"
@@ -40,7 +52,7 @@ spec:
           command: ["/bin/bash"]
           args:
             - -c
-            - /scripts/initdb.sh {{ .Release.Namespace }} {{ .Release.Name }}
+            - /scripts/initdb.sh {{ include "cassandra.namespace" . }} {{ $fullname }}
           env:
             - name: CASSANDRA_USER
               value: {{ .Values.cassandra.dbUser.user | quote }}
@@ -50,8 +62,10 @@ spec:
             - name: init-script
               readOnly: true
               mountPath: "/scripts"
+          resources:
+            {{- toYaml .Values.cassandra.hooks.initializeCluster.resources | nindent 12 }}
       restartPolicy: Never
-      serviceAccountName: {{ .Release.Name }}-initialize-cluster
+      serviceAccountName: {{ $fullname }}-initialize-cluster
       volumes:
         - name: init-script
           configMap:
@@ -62,6 +76,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: cassandra-init-script
+  namespace: {{ include "cassandra.namespace" . }}
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "-6"
@@ -70,3 +85,4 @@ data:
   initdb.sh: |-
     {{- .Files.Get "scripts/initdb.sh" | nindent 4 }}
 ---
+{{- end }}

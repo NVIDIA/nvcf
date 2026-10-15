@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "spiffe-token-fetcher_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/spiffe-token-fetcher",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4/jwt",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/svid/jwtsvid",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/workloadapi",
+    ],
+)
+
+go_binary(
+    name = "spiffe-token-fetcher",
+    embed = [":spiffe-token-fetcher_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "spiffe-token-fetcher_test",
+    srcs = ["main_test.go"],
+    embed = [":spiffe-token-fetcher_lib"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4/jwt",
+        "//src/compute-plane-services/nvca/vendor/github.com/spiffe/go-spiffe/v2/svid/jwtsvid",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+    ],
+)

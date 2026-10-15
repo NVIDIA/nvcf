@@ -1,0 +1,70 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "middleware",
+    srcs = [
+        "body_limit.go",
+        "constants.go",
+        "cors.go",
+        "http_client.go",
+        "jwt.go",
+        "metrics.go",
+        "policy.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/middleware",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//src/control-plane-services/event-ledger/cmd/api/error",
+        "//src/control-plane-services/event-ledger/internal/config",
+        "//src/control-plane-services/event-ledger/internal/observability/logging",
+        "//src/control-plane-services/event-ledger/internal/policy",
+        "//src/control-plane-services/event-ledger/pkg/constants",
+        "@com_github_felixge_httpsnoop//:httpsnoop",
+        "@com_github_golang_jwt_jwt_v5//:jwt",
+        "@com_github_gorilla_mux//:mux",
+        "@com_github_lestrrat_go_jwx_v2//jwk",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/clients/pdp_types",
+        "@com_github_prometheus_client_golang//prometheus/promhttp",
+        "@com_github_sirupsen_logrus//:logrus",
+        "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_httptrace_otelhttptrace//:otelhttptrace",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_exporters_prometheus//:prometheus",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":middleware",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "middleware_test",
+    srcs = [
+        "jwt_test.go",
+        "metrics_test.go",
+        "policy_test.go",
+    ],
+    embed = [":middleware"],
+    deps = [
+        "//src/control-plane-services/event-ledger/internal/config",
+        "//src/control-plane-services/event-ledger/internal/observability/logging",
+        "//src/control-plane-services/event-ledger/internal/policy",
+        "//src/control-plane-services/event-ledger/pkg/testutils",
+        "@com_github_golang_jwt_jwt_v5//:jwt",
+        "@com_github_lestrrat_go_jwx_v2//jwk",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/clients/pdp_types",
+        "@com_github_prometheus_client_golang//prometheus/promhttp",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
+        "@org_golang_google_protobuf//types/known/structpb",
+        "@org_uber_go_zap//zaptest",
+    ],
+)

@@ -1,50 +1,43 @@
-<!--
-SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-SPDX-License-Identifier: Apache-2.0
+# AGENTS.md - ess-agent
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+Native Go image-source subtree for the ESS Agent sidecar and init-container
+used to fetch and render secrets from ESS.
 
-    http://www.apache.org/licenses/LICENSE-2.0
+## Build and Test
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
--->
-# AGENTS.md
+```bash
+bazel build //...
+bazel test //... --test_env=SKIP_INTEGRATION_TESTS=1 --flaky_test_attempts=3
+bazel build //:image_index
+bazel run //:image_load
+```
 
-## Repo Role
-- Repo: `ess-agent`
-- Workspace(s): `self-hosted-nvcf`
-- Tier: `image-source`
-- Team: `@NVIDIA/nvcf-dev`
-- Default owner: `@NVIDIA/nvcf-dev`.
-- Manifest description: ESS Agent — sidecar/init-container for fetching and rendering secrets from ESS
+Internal image push targets:
 
-## Use `nvcf-agentic-dev` As The Routing Layer
-Before making changes, use the `nvcf-agentic-dev` workspace repo to confirm whether this repo is actually the right place for the task. Treat that repo as the source of truth for workspace membership, repo ownership, deployment dependencies, and available agent skills.
+```bash
+bazel run //:image_push
+bazel run //:image_push_devops
+bazel run //:image_push_ncp_dev
+```
 
-Check these files first when they exist in your local workspace:
-- `nvcf-agentic-dev/workspaces/self-hosted-nvcf/repos.yaml`: repo ownership and workspace membership
-- `nvcf-agentic-dev/workspaces/self-hosted-nvcf/skills.yaml`: related agent skills and sourced commands
-- `nvcf-agentic-dev/workspaces/self-hosted-nvcf/docs/deployment-sequence.md`: deployment order and stage gates
-- `nvcf-agentic-dev/workspaces/self-hosted-nvcf/docs/deployment-dependencies-with-links.yaml`: release dependencies and upstream/downstream links
+Regenerate Bazel metadata after Go or module changes:
 
-## Routing Rules
-- Stay in this repo for application logic, template rendering, dependency management, ESS client behavior, container build logic, and tests for the shipped image.
-- If the request is only about Helm values, templates, hook jobs, or Kubernetes manifests, route to the colocated chart repo.
-- If the request is about environment composition or multi-service rollout ordering, route to `nvcf-self-managed-stack`.
+```bash
+bazel run //:gazelle
+bazel mod tidy
+```
 
-## Working In This Repo
-- Read this repo's top-level `README*`, build files, and CI config before making assumptions about language or tooling.
-- Search for existing patterns with `rg` before adding new structure.
-- Keep changes scoped to the owning repo once routing is confirmed; only fan out when the workspace docs show an explicit dependency.
-- This repo is derived from HashiCorp consul-template with vendored Vault API/SDK. The `api/` and `sdk/` directories contain modified upstream code.
+CI subproject id: `ess-agent`. Native Bazel validation and release wiring live
+in `tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
+present in this public snapshot.
 
-## Completion Expectations
-- Validate with the repo-native command set if one exists (`make`, Maven, Helm, npm, etc.).
-- If you change cross-repo behavior, mention the adjacent repo(s) that may also need follow-up.
-- In your final summary, state that routing was confirmed through `nvcf-agentic-dev` and name the workspace context used.
+## Local Gotchas
+
+- This subtree is derived from HashiCorp consul-template.
+- `api/` and `sdk/` are local workspace modules for modified Vault API/SDK
+  code. Keep `go.work` and Gazelle prefixes aligned when changing them.
+- Unused Vault auth backends are listed in `.bazelignore` to keep heavy cloud
+  SDK dependencies out of `//...`.
+- `child_test.TestReload_noSignal` is skipped through `go_test.args`; upstream
+  vendored tests are tagged `manual` and excluded from the default test suite.
+- `ESS_AGENT_INIT=true` makes the agent render templates and exit immediately.

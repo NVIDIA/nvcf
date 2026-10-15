@@ -27,6 +27,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/hashicorp/go-retryablehttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 )
 
 const ClientTimeoutEnvKey string = "NV_HTTP_CLIENT_TIMEOUT"
@@ -38,6 +39,8 @@ type features struct {
 	reqHeaders map[string]string
 
 	co ClientOptions
+
+	transportWrapper func(http.RoundTripper) http.RoundTripper
 }
 
 // Retryable client options.
@@ -87,6 +90,15 @@ func WithClientOptions(co ClientOptions) Option {
 	return func(f *features) { f.co = co }
 }
 
+// WithTransportWrapper wraps the client's transport with the provided function.
+// The wrapper is applied as the outermost transport layer, so it observes each
+// logical request (including retries) and its final outcome. It lets callers add
+// cross-cutting transport behaviour such as metrics without this package taking a
+// dependency on the wrapper's implementation. A nil wrapper is ignored.
+func WithTransportWrapper(wrap func(http.RoundTripper) http.RoundTripper) Option {
+	return func(f *features) { f.transportWrapper = wrap }
+}
+
 // NewRetryableClient creates a retryablehttp.Client with the provided options
 func NewRetryableClient(ctx context.Context, opts ...Option) *http.Client {
 	log := core.GetLogger(ctx)
@@ -112,7 +124,16 @@ func NewRetryableClient(ctx context.Context, opts ...Option) *http.Client {
 
 	httpClient := rhc.StandardClient()
 	httpClient.Timeout = f.clientTimeout
-	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport)
+	// otelhttp provides client tracing (unchanged for all callers). Its own HTTP
+	// client metrics are suppressed only when a metrics transport wrapper is
+	// present, so that wrapper is the single source for the semconv HTTP client
+	// series and does not double-count. Callers without a transport wrapper keep
+	// otelhttp's default metric behaviour.
+	var otelOpts []otelhttp.Option
+	if f.transportWrapper != nil {
+		otelOpts = append(otelOpts, otelhttp.WithMeterProvider(metricnoop.NewMeterProvider()))
+	}
+	httpClient.Transport = otelhttp.NewTransport(httpClient.Transport, otelOpts...)
 
 	if f.appName != "" {
 		httpClient.Transport = version.NewTransport(httpClient.Transport, f.appName)
@@ -120,6 +141,10 @@ func NewRetryableClient(ctx context.Context, opts ...Option) *http.Client {
 
 	if len(f.reqHeaders) > 0 {
 		httpClient.Transport = newClientRequestHeadersTransport(httpClient.Transport, f.reqHeaders)
+	}
+
+	if f.transportWrapper != nil {
+		httpClient.Transport = f.transportWrapper(httpClient.Transport)
 	}
 
 	return httpClient

@@ -84,6 +84,7 @@ func storageRequestSpecFromV1(s *nvcav1.StorageRequestSpec) StorageRequestSpec {
 	if s.ModelCache != nil {
 		out.ModelCache = &ModelCacheSpec{
 			CacheHandle: s.ModelCache.CacheHandle,
+			Backend:     s.ModelCache.Backend,
 			Encryption:  nil,
 		}
 		if s.ModelCache.Encryption != nil {
@@ -111,6 +112,7 @@ func storageRequestSpecToV1(s *StorageRequestSpec) nvcav1.StorageRequestSpec {
 	if s.ModelCache != nil {
 		out.ModelCache = &nvcav1.ModelCacheSpec{
 			CacheHandle: s.ModelCache.CacheHandle,
+			Backend:     s.ModelCache.Backend,
 			Encryption:  nil,
 		}
 		if s.ModelCache.Encryption != nil {

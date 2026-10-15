@@ -38,7 +38,10 @@ type GitLabClient struct {
 func NewGitLabClientFromEnvironment() (*GitLabClient, error) {
 	baseURL := strings.TrimRight(os.Getenv("DOC_VERSION_SYNC_GITLAB_BASE_URL"), "/")
 	if baseURL == "" {
-		baseURL = "https://github.com/NVIDIA"
+		baseURL = strings.TrimRight(os.Getenv("CI_SERVER_URL"), "/")
+	}
+	if baseURL == "" {
+		return nil, fmt.Errorf("set DOC_VERSION_SYNC_GITLAB_BASE_URL or CI_SERVER_URL")
 	}
 	parsed, err := url.Parse(baseURL)
 	if err != nil {
@@ -80,50 +83,14 @@ func NewGitLabClientFromEnvironment() (*GitLabClient, error) {
 }
 
 func (client *GitLabClient) LatestStackVersion(projectID int, packageName string) (string, error) {
-	var packageErr error
-	for page := 1; ; {
-		query := url.Values{}
-		query.Set("package_type", "generic")
-		query.Set("package_name", packageName)
-		query.Set("order_by", "created_at")
-		query.Set("sort", "desc")
-		query.Set("per_page", "100")
-		query.Set("page", strconv.Itoa(page))
-		path := fmt.Sprintf("/api/v4/projects/%d/packages?%s", projectID, query.Encode())
-		body, headers, err := client.getWithHeaders(path)
-		if err != nil {
-			packageErr = err
-			break
-		}
-		var packages []struct {
-			Name    string `json:"name"`
-			Version string `json:"version"`
-		}
-		if err := json.Unmarshal(body, &packages); err != nil {
-			return "", fmt.Errorf("decode GitLab packages: %w", err)
-		}
-		for _, pkg := range packages {
-			if pkg.Name == packageName && pkg.Version != "" {
-				return pkg.Version, nil
-			}
-		}
-		nextPage, ok := nextGitLabPage(headers)
-		if !ok {
-			break
-		}
-		if nextPage <= page {
-			packageErr = fmt.Errorf("GitLab packages pagination did not advance past page %d", page)
-			break
-		}
-		page = nextPage
+	version, packageErr := client.LatestGenericPackageVersion(projectID, packageName)
+	if packageErr == nil {
+		return version, nil
 	}
 
 	releaseBody, releaseErr := client.get(fmt.Sprintf("/api/v4/projects/%d/releases?order_by=released_at&sort=desc&per_page=20", projectID))
 	if releaseErr != nil {
-		if packageErr != nil {
-			return "", fmt.Errorf("discover latest stack package: %w; release fallback: %v", packageErr, releaseErr)
-		}
-		return "", releaseErr
+		return "", fmt.Errorf("discover latest stack package: %w; release fallback: %v", packageErr, releaseErr)
 	}
 	var releases []struct {
 		TagName string `json:"tag_name"`
@@ -139,46 +106,43 @@ func (client *GitLabClient) LatestStackVersion(projectID int, packageName string
 	return "", fmt.Errorf("no package or release version found for %s", packageName)
 }
 
-func nextGitLabPage(headers http.Header) (int, bool) {
-	if value := strings.TrimSpace(headers.Get("X-Next-Page")); value != "" {
-		if page, err := strconv.Atoi(value); err == nil && page > 0 {
-			return page, true
+// LatestGenericPackageVersion returns the newest matching GitLab generic package version.
+func (client *GitLabClient) LatestGenericPackageVersion(projectID int, packageName string) (string, error) {
+	for page := 1; ; {
+		query := url.Values{}
+		query.Set("package_type", "generic")
+		query.Set("package_name", packageName)
+		query.Set("order_by", "created_at")
+		query.Set("sort", "desc")
+		query.Set("per_page", "100")
+		query.Set("page", strconv.Itoa(page))
+		path := fmt.Sprintf("/api/v4/projects/%d/packages?%s", projectID, query.Encode())
+		body, headers, err := client.getWithHeaders(path)
+		if err != nil {
+			return "", err
 		}
+		var packages []struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		}
+		if err := json.Unmarshal(body, &packages); err != nil {
+			return "", fmt.Errorf("decode GitLab packages: %w", err)
+		}
+		for _, pkg := range packages {
+			if pkg.Name == packageName && pkg.Version != "" {
+				return pkg.Version, nil
+			}
+		}
+		nextPage, ok := nextPageFromHeaders(headers)
+		if !ok {
+			break
+		}
+		if nextPage <= page {
+			return "", fmt.Errorf("GitLab packages pagination did not advance past page %d", page)
+		}
+		page = nextPage
 	}
-	for _, header := range headers.Values("Link") {
-		for _, link := range strings.Split(header, ",") {
-			parts := strings.Split(link, ";")
-			if len(parts) < 2 || !linkHasRelNext(parts[1:]) {
-				continue
-			}
-			rawURL := strings.Trim(strings.TrimSpace(parts[0]), "<>")
-			parsed, err := url.Parse(rawURL)
-			if err != nil {
-				continue
-			}
-			page, err := strconv.Atoi(parsed.Query().Get("page"))
-			if err == nil && page > 0 {
-				return page, true
-			}
-		}
-	}
-	return 0, false
-}
-
-func linkHasRelNext(params []string) bool {
-	for _, param := range params {
-		param = strings.TrimSpace(param)
-		if !strings.HasPrefix(param, "rel=") {
-			continue
-		}
-		rel := strings.Trim(strings.TrimPrefix(param, "rel="), `"`)
-		for _, value := range strings.Fields(rel) {
-			if value == "next" {
-				return true
-			}
-		}
-	}
-	return false
+	return "", fmt.Errorf("no generic package version found for %s", packageName)
 }
 
 func (client *GitLabClient) FetchArtifactList(projectID int, packageName, stackVersion string) (string, error) {

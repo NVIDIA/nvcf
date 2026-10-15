@@ -1,0 +1,68 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# vLLM-specific Placeholder Image for GPU Checkpoint/Restore
+#
+# This is a pre-built placeholder for vLLM workloads.
+# Build:
+#   docker build -t nvsnap-placeholder-vllm:latest -f placeholder/Dockerfile.vllm .
+
+FROM golang:1.22 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /restore-entrypoint ./cmd/restore-entrypoint
+
+# Use vLLM base image
+FROM docker.io/vllm/vllm-openai:latest
+
+ENV ORIGINAL_BASE_IMAGE=docker.io/vllm/vllm-openai:latest
+
+# Install CRIU build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libbsd0 libcap2 libnet1 libnl-3-200 libnl-route-3-200 \
+    libprotobuf-c1 libnftables1 iproute2 iptables procps tar ca-certificates \
+    git build-essential pkg-config libbsd-dev libcap-dev libnet1-dev \
+    libnl-3-dev libnl-route-3-dev libprotobuf-dev libprotobuf-c-dev \
+    protobuf-c-compiler protobuf-compiler python3-protobuf \
+    libgnutls28-dev libnftables-dev uuid-dev libaio-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build CRIU with CUDA plugin
+RUN git clone --depth 1 --branch v4.2 https://github.com/checkpoint-restore/criu.git /tmp/criu \
+    && cd /tmp/criu \
+    && make -j$(nproc) \
+    && make install-criu install-cuda_plugin \
+    && rm -rf /tmp/criu
+
+RUN criu --version
+
+# Cleanup build deps
+RUN apt-get purge -y --auto-remove \
+    git build-essential pkg-config libbsd-dev libcap-dev libnet1-dev \
+    libnl-3-dev libnl-route-3-dev libprotobuf-dev libprotobuf-c-dev \
+    protobuf-c-compiler protobuf-compiler python3-protobuf \
+    libgnutls28-dev libnftables-dev uuid-dev libaio-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /checkpoints /var/run/criu /tmp /var/criu-work /embedded-checkpoint
+
+COPY --from=builder /restore-entrypoint /restore-entrypoint
+RUN chmod +x /restore-entrypoint
+
+ENV CHECKPOINT_BASE_DIR=/checkpoints \
+    RESTORE_TRIGGER=/tmp/restore-trigger \
+    RESTORE_WAIT_TIMEOUT=300 \
+    CRIU_LOG_LEVEL=4 \
+    WAIT_FOR_CHECKPOINT=0 \
+    DEBUG=0 \
+    CRIU_LIB_DIR=/usr/local/lib/criu
+
+ENTRYPOINT ["/restore-entrypoint"]
+CMD []

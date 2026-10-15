@@ -1,0 +1,111 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+{{- if .Values.blobstore.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nvsnap-blobstore
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvsnap.blobstore.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # Recreate not rolling: data PVC is RWO; rolling races on volume attach.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "nvsnap.blobstore.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nvsnap.blobstore.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 65532
+      {{- include "nvsnap.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: blobstore
+          image: {{ include "nvsnap.blobstore.image" . }}
+          imagePullPolicy: {{ .Values.blobstore.image.pullPolicy }}
+          args:
+            - --listen=:{{ .Values.blobstore.service.port }}
+            - --data-dir=/data
+            - --log-level=info
+          ports:
+            - containerPort: {{ .Values.blobstore.service.port }}
+              name: http
+          livenessProbe:
+            httpGet:
+              path: /v1/healthz
+              port: {{ .Values.blobstore.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /v1/healthz
+              port: {{ .Values.blobstore.service.port }}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.blobstore.resources | nindent 12 }}
+          {{- if .Values.blobstore.persistence.enabled }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          {{- end }}
+      {{- if .Values.blobstore.persistence.enabled }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: nvsnap-blobstore-data
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvsnap-blobstore
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvsnap.blobstore.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.blobstore.service.type }}
+  selector:
+    {{- include "nvsnap.blobstore.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: {{ .Values.blobstore.service.port }}
+      targetPort: {{ .Values.blobstore.service.port }}
+      name: http
+{{- if .Values.blobstore.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nvsnap-blobstore-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvsnap.blobstore.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.blobstore.persistence.storageClassName }}
+  storageClassName: {{ .Values.blobstore.persistence.storageClassName | quote }}
+  {{- end }}
+  accessModes:
+    - {{ .Values.blobstore.persistence.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.blobstore.persistence.size | quote }}
+{{- end }}
+{{- end }}

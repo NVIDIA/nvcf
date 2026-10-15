@@ -1,0 +1,380 @@
+{
+  "T10": [
+    {
+      "name": "g6.full",
+      "value": "g6.full",
+      "description": "1 NVIDIA T10 GPU",
+      "cpuCores": 0,
+      "systemMemory": "64G",
+      "gpuMemory": "48G",
+      "gpuCount": 1,
+      "clusters": [],
+      "regions": [
+        "EU-NORTH-1",
+        "EU-SOUTH-1",
+        "EU-WEST-1",
+        "US-WEST-1",
+        "EU-CENTRAL-1"
+      ],
+      "attributes": [
+        "Graphics Optimized",
+        "Streaming Optimized"
+      ],
+      "gpuName": "T10",
+      "defaultable": true,
+      "cpuArch": "x86",
+      "os": "Linux 64 bit",
+      "driverVersion": "v.353.145.36",
+      "storage": "80G"
+    }
+  ],
+  "L40S": [
+    {
+      "name": "gl40s_1x2.br25_4xlarge",
+      "value": "gl40s_1x2.br25_4xlarge",
+      "description": "2 NVIDIA L40S GPU",
+      "cpuCores": 0,
+      "systemMemory": null,
+      "gpuMemory": null,
+      "gpuCount": 2,
+      "clusters": [],
+      "regions": [
+        "EU-WEST-1",
+        "US-WEST-1"
+      ],
+      "attributes": [
+        "Graphics Optimized",
+        "Streaming Optimized"
+      ],
+      "gpuName": "L40S",
+      "defaultable": false
+    },
+    {
+      "name": "gl40s_1.br25_2xlarge",
+      "value": "gl40s_1.br25_2xlarge",
+      "description": "1 NVIDIA L40S GPU",
+      "cpuCores": 0,
+      "systemMemory": null,
+      "gpuMemory": null,
+      "gpuCount": 1,
+      "clusters": [],
+      "regions": [
+        "EU-WEST-1",
+        "US-WEST-1"
+      ],
+      "attributes": [
+        "Graphics Optimized",
+        "Streaming Optimized"
+      ],
+      "gpuName": "L40S",
+      "defaultable": true,
+      "cpuArch": "x86",
+      "os": "Linux 64 bit",
+      "driverVersion": "v.353.145.36",
+      "storage": "80G"
+    }
+  ],
+  "A10G": [
+    {
+      "name": "ga10g_1x2.br20_4xlarge",
+      "value": "ga10g_1x2.br20_4xlarge",
+      "description": "2 NVIDIA A10G GPU",
+      "cpuCores": 0,
+      "systemMemory": null,
+      "gpuMemory": null,
+      "gpuCount": 2,
+      "clusters": [],
+      "regions": [
+        "US-WEST-1"
+      ],
+      "attributes": [
+        "SOC2 Compliant"
+      ],
+      "gpuName": "A10G",
+      "defaultable": false
+    },
+    {
+      "name": "ga10g_1.br20_2xlarge",
+      "value": "ga10g_1.br20_2xlarge",
+      "description": "1 NVIDIA A10G GPU",
+      "cpuCores": 0,
+      "systemMemory": null,
+      "gpuMemory": null,
+      "gpuCount": 1,
+      "clusters": [],
+      "regions": [
+        "US-WEST-1"
+      ],
+      "attributes": [
+        "SOC2 Compliant"
+      ],
+      "gpuName": "A10G",
+      "defaultable": true
+    }
+  ],
+  "L40": [
+    {
+      "name": "DGX-CLOUD.GPU.L40_2x",
+      "value": "DGX-CLOUD.GPU.L40",
+      "description": "NVIDIA-L40 (ampere family) on a ThinkSystem-SR670-V2 machine",
+      "cpuCores": 128,
+      "systemMemory": "1056451744Ki",
+      "gpuMemory": "98280M",
+      "gpuCount": 2,
+      "clusters": [],
+      "regions": [
+        "EU-WEST-1"
+      ],
+      "attributes": [],
+      "gpuName": "L40",
+      "defaultable": false,
+      "cpuArch": "x86",
+      "os": "Linux 64 bit",
+      "driverVersion": "v.353.145.36",
+      "storage": "80G"
+
+    },
+    {
+      "name": "DGX-CLOUD.GPU.L40_4x",
+      "value": "DGX-CLOUD.GPU.L40",
+      "description": "NVIDIA-L40 (ampere family) on a ThinkSystem-SR670-V2 machine",
+      "cpuCores": 128,
+      "systemMemory": "1056451744Ki",
+      "gpuMemory": "196560M",
+      "gpuCount": 4,
+      "clusters": [],
+      "regions": [
+        "EU-WEST-1"
+      ],
+      "attributes": [],
+      "gpuName": "L40",
+      "defaultable": false,
+      "cpuArch": "x86",
+      "os": "Linux 64 bit",
+      "driverVersion": "v.353.145.36",
+      "storage": "80G"
+    },
+    {
+      "name": "gl40_1x2.br20_4xlarge",
+      "value": "gl40_1x2.br20_4xlarge",
+      "description": "2 NVIDIA L40 GPU",
+      "cpuCores": 0,
+      "systemMemory": null,
+      "gpuMemory": null,
+      "gpuCount": 2,
+      "clusters": [],
+      "regions": [
+        "EU-WEST-1",
+        "US-EAST-1"
+      ],
+      "attributes": [
+        "Graphics Optimized",
+        "Streaming Optimized"
+      ],
+      "gpuName": "L40",
+      "defaultable": false
+    },
+    {
+      "name": "DGX-CLOUD.GPU.L40_8x",
+      "value": "DGX-CLOUD.GPU.L40",
+      "description": "NVIDIA-L40 (ampere family) on a ThinkSystem-SR670-V2 machine",
+      "cpuCores": 128,
+      "systemMemory": "1056451744Ki",
+      "gpuMemory": "393120M",
+      "gpuCount": 8,
+      "clusters": [],
+      "regions": [
+        "EU-WEST-1"
+      ],
+      "attributes": [],
+      "gpuName": "L40",
+      "defaultable": false
+    },
+    {
+      "name": "gl40_1.br20_2xlarge",
+      "value": "gl40_1.br20_2xlarge",
+      "description": "1 NVIDIA L40 GPU",
+      "cpuCores": 0,
+      "systemMemory": null,
+      "gpuMemory": null,
+      "gpuCount": 1,
+      "clusters": [],
+      "regions": [
+        "EU-WEST-1",
+        "US-EAST-1"
+      ],
+      "attributes": [
+        "Graphics Optimized",
+        "Streaming Optimized"
+      ],
+      "gpuName": "L40",
+      "defaultable": true
+    },
+    {
+      "name": "DGX-CLOUD.GPU.L40_1x",
+      "value": "DGX-CLOUD.GPU.L40",
+      "description": "NVIDIA-L40 (ampere family) on a ThinkSystem-SR670-V2 machine",
+      "cpuCores": 128,
+      "systemMemory": "1056451744Ki",
+      "gpuMemory": "49140M",
+      "gpuCount": 1,
+      "clusters": [],
+      "regions": [
+        "EU-WEST-1"
+      ],
+      "attributes": [],
+      "gpuName": "L40",
+      "defaultable": true
+    }
+  ],
+  "L40G": [
+    {
+      "name": "gl40g_1x2.br20_4xlarge",
+      "value": "gl40g_1x2.br20_4xlarge",
+      "description": "2 NVIDIA L40G GPU",
+      "cpuCores": 0,
+      "systemMemory": null,
+      "gpuMemory": null,
+      "gpuCount": 2,
+      "clusters": [],
+      "regions": [
+        "US-EAST-1"
+      ],
+      "attributes": [
+        "Graphics Optimized",
+        "Streaming Optimized"
+      ],
+      "gpuName": "L40G",
+      "defaultable": false
+    },
+    {
+      "name": "gl40g_1x2.br25_4xlarge",
+      "value": "gl40g_1x2.br25_4xlarge",
+      "description": "2 NVIDIA L40G GPU",
+      "cpuCores": 0,
+      "systemMemory": null,
+      "gpuMemory": null,
+      "gpuCount": 2,
+      "clusters": [],
+      "regions": [
+        "EU-WEST-1",
+        "US-EAST-1"
+      ],
+      "attributes": [
+        "Graphics Optimized",
+        "Streaming Optimized"
+      ],
+      "gpuName": "L40G",
+      "defaultable": false
+    },
+    {
+      "name": "gl40g_1.br25_2xlarge",
+      "value": "gl40g_1.br25_2xlarge",
+      "description": "1 NVIDIA L40G GPU",
+      "cpuCores": 0,
+      "systemMemory": "64G",
+      "gpuMemory": "48G",
+      "gpuCount": 1,
+      "clusters": [],
+      "regions": [
+        "EU-WEST-1",
+        "US-EAST-1"
+      ],
+      "attributes": [
+        "Graphics Optimized",
+        "Streaming Optimized"
+      ],
+      "gpuName": "L40G",
+      "defaultable": true,
+      "cpuArch": "x86",
+      "os": "Linux 64 bit",
+      "driverVersion": "v.353.145.36",
+      "storage": "80G"
+    },
+    {
+      "name": "gl40g_1.br20_2xlarge",
+      "value": "gl40g_1.br20_2xlarge",
+      "description": "1 NVIDIA L40G GPU",
+      "cpuCores": 0,
+      "systemMemory": null,
+      "gpuMemory": null,
+      "gpuCount": 1,
+      "clusters": [],
+      "regions": [
+        "US-EAST-1"
+      ],
+      "attributes": [
+        "Graphics Optimized",
+        "Streaming Optimized"
+      ],
+      "gpuName": "L40G",
+      "defaultable": false
+    }
+  ],
+  "A100": [
+    {
+      "name": "AZURE.GPU.A100_2x",
+      "value": "AZURE.GPU.A100",
+      "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a Virtual-Machine machine",
+      "cpuCores": 96,
+      "systemMemory": "1857800896Ki",
+      "gpuMemory": "163840M",
+      "gpuCount": 2,
+      "clusters": [],
+      "regions": [
+        "US-WEST-1"
+      ],
+      "attributes": [],
+      "gpuName": "A100",
+      "defaultable": false
+    },
+    {
+      "name": "AZURE.GPU.A100_8x",
+      "value": "AZURE.GPU.A100",
+      "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a Virtual-Machine machine",
+      "cpuCores": 96,
+      "systemMemory": "1857800896Ki",
+      "gpuMemory": "655360M",
+      "gpuCount": 8,
+      "clusters": [],
+      "regions": [
+        "US-WEST-1"
+      ],
+      "attributes": [],
+      "gpuName": "A100",
+      "defaultable": false
+    },
+    {
+      "name": "AZURE.GPU.A100_4x",
+      "value": "AZURE.GPU.A100",
+      "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a Virtual-Machine machine",
+      "cpuCores": 96,
+      "systemMemory": "1857800896Ki",
+      "gpuMemory": "327680M",
+      "gpuCount": 4,
+      "clusters": [],
+      "regions": [
+        "US-WEST-1"
+      ],
+      "attributes": [],
+      "gpuName": "A100",
+      "defaultable": false
+    },
+    {
+      "name": "AZURE.GPU.A100_1x",
+      "value": "AZURE.GPU.A100",
+      "description": "NVIDIA-A100-SXM4-80GB (ampere family) on a Virtual-Machine machine",
+      "cpuCores": 96,
+      "systemMemory": "1857800896Ki",
+      "gpuMemory": "81920M",
+      "gpuCount": 1,
+      "clusters": [],
+      "regions": [
+        "US-WEST-1"
+      ],
+      "attributes": [],
+      "gpuName": "A100",
+      "defaultable": true
+    }
+  ]
+}

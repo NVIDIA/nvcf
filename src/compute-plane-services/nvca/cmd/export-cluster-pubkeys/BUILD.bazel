@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+MODULE_PATH = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
+
+go_library(
+    name = "export-cluster-pubkeys_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/export-cluster-pubkeys",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/compute-plane-services/nvca/cmd/internal",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//src/compute-plane-services/nvca/vendor/github.com/urfave/cli/v2:cli",
+        "//src/compute-plane-services/nvca/vendor/gopkg.in/yaml.v3:yaml_v3",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+    ],
+)
+
+go_binary(
+    name = "export-cluster-pubkeys",
+    embed = [":export-cluster-pubkeys_lib"],
+    visibility = ["//visibility:public"],
+    # Mirrors ldflags.
+    x_defs = {
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT}",
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.ReleaseTag": "{STABLE_OCI_TAG}",
+    },
+)
+
+go_test(
+    name = "export-cluster-pubkeys_test",
+    srcs = ["main_test.go"],
+    embed = [":export-cluster-pubkeys_lib"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/scheme",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+    ],
+)

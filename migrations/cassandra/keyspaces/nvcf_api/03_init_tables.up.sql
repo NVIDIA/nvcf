@@ -4,32 +4,10 @@
 -- User-Defined Types
 -- ============================================================
 
-CREATE TYPE IF NOT EXISTS nvcf_api.model_udt (
-    name    TEXT,
-    version TEXT,
-    url     TEXT
-);
-
 CREATE TYPE IF NOT EXISTS nvcf_api.resource_udt (
     name    TEXT,
     version TEXT,
     url     TEXT
-);
-
-CREATE TYPE IF NOT EXISTS nvcf_api.gpu_spec_udt (
-    gpu_specification_id    UUID,
-    backend                 TEXT,
-    gpu                     TEXT,
-    min_instances           INT,
-    max_instances           INT,
-    instance_type           TEXT,
-    availability_zones      FROZEN<SET<TEXT>>,
-    max_request_concurrency INT,
-    configuration           TEXT,
-    clusters                FROZEN<SET<TEXT>>,
-    regions                 FROZEN<SET<TEXT>>,
-    attributes              FROZEN<SET<TEXT>>,
-    preferred_order         INT
 );
 
 CREATE TYPE IF NOT EXISTS nvcf_api.deployment_health_udt (
@@ -52,7 +30,8 @@ CREATE TYPE IF NOT EXISTS nvcf_api.ratelimit_udt_v2 (
     rate             TEXT,
     exempted_nca_ids FROZEN<SET<TEXT>>,
     per_nca_id_rate  FROZEN<MAP<TEXT, TEXT>>,
-    sync_check       BOOLEAN
+    sync_check       BOOLEAN,
+    per_user_rate    TEXT
 );
 
 CREATE TYPE IF NOT EXISTS nvcf_api.telemetries_udt (
@@ -79,7 +58,7 @@ CREATE TABLE IF NOT EXISTS nvcf_api.accounts (
     PRIMARY KEY ((nca_id))
 );
 
--- Maps SSA Client IDs to NVIDIA Cloud Account IDs.
+-- Maps OAuth2 Client IDs to NVIDIA Cloud Account IDs.
 CREATE TABLE IF NOT EXISTS nvcf_api.clients (
     client_id  TEXT,
     nca_id     TEXT,
@@ -103,7 +82,7 @@ CREATE TABLE IF NOT EXISTS nvcf_api.functions_v3 (
     container_image               TEXT,
     utils_container_image         TEXT,
     model_specs                   MAP<TEXT, TEXT>,
-    models                        FROZEN<SET<model_udt>>,
+    llm_config                    TEXT,
     container_args                TEXT,
     container_environment         TEXT,
     helm_chart                    TEXT,
@@ -137,11 +116,9 @@ CREATE TABLE IF NOT EXISTS nvcf_api.functions_deployment_v2 (
     deployment_id       UUID,
     function_id         UUID,
     nca_id              TEXT,
-    gpu_specs           MAP<UUID, FROZEN<gpu_spec_udt>>,
     health_info         FROZEN<SET<deployment_health_udt>>,
     created_at          TIMESTAMP,
     last_updated_at     TIMESTAMP,
-    autoscaling_config  MAP<UUID, blob>,
     PRIMARY KEY ((function_version_id))
 );
 
@@ -149,6 +126,28 @@ CREATE CUSTOM INDEX IF NOT EXISTS deployment_v2_by_deployment_id_sai_idx
     ON nvcf_api.functions_deployment_v2 (deployment_id) USING 'StorageAttachedIndex';
 CREATE CUSTOM INDEX IF NOT EXISTS deployment_v2_by_nca_id_sai_idx
     ON nvcf_api.functions_deployment_v2 (nca_id) USING 'StorageAttachedIndex';
+
+-- GPU specifications per deployment.
+CREATE TABLE IF NOT EXISTS nvcf_api.gpu_specifications (
+    gpu_specification_id      UUID,
+    deployment_id             UUID,
+    nca_id                    TEXT,
+    backend                   TEXT,
+    gpu                       TEXT,
+    min_instances             INT,
+    max_instances             INT,
+    instance_type             TEXT,
+    availability_zones        SET<TEXT>,
+    max_request_concurrency   INT,
+    configuration             TEXT,
+    clusters                  SET<TEXT>,
+    regions                   SET<TEXT>,
+    attributes                SET<TEXT>,
+    preferred_order           INT,
+    autoscaling_configuration TEXT,
+    helm_validation_policy    TEXT,
+    PRIMARY KEY ((nca_id), deployment_id, gpu_specification_id)
+);
 
 -- Tracks active SIS requests per function version.
 -- Tuned for high-churn write/delete workload: UCS + short gc_grace.
@@ -196,28 +195,6 @@ CREATE TABLE IF NOT EXISTS nvcf_api.registry_credentials_by_account (
     created_at               TIMESTAMP,
     last_updated_at          TIMESTAMP,
     PRIMARY KEY ((nca_id), registry_credential_id)
-);
-
--- GPU specifications per deployment, migrated from functions_deployment_v2.gpu_specs.
-CREATE TABLE IF NOT EXISTS nvcf_api.gpu_specifications (
-    gpu_specification_id      UUID,
-    deployment_id             UUID,
-    nca_id                    TEXT,
-    backend                   TEXT,
-    gpu                       TEXT,
-    min_instances             INT,
-    max_instances             INT,
-    instance_type             TEXT,
-    availability_zones        SET<TEXT>,
-    max_request_concurrency   INT,
-    configuration             TEXT,
-    clusters                  SET<TEXT>,
-    regions                   SET<TEXT>,
-    attributes                SET<TEXT>,
-    preferred_order           INT,
-    autoscaling_configuration TEXT,
-    helm_validation_policy    TEXT,
-    PRIMARY KEY ((nca_id), deployment_id, gpu_specification_id)
 );
 
 -- Distributed lock table for scheduled tasks.
