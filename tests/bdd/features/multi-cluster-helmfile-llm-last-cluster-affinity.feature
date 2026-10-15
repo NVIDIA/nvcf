@@ -209,7 +209,7 @@ Feature: Route returning LLM sessions to the cluster that served their last requ
         {"messages":[{"role":"user","content":"bdd-last-cluster session A turn 3"}],"prompt_cache_key":"bdd-last-cluster-session-a"}
         """
       Then the command output should contain "chat.completion"
-      Then Prometheus metrics on port "9090" of pods selected by "app.kubernetes.io/name=helm-nvcf-llm-request-router,app.kubernetes.io/instance=llm-request-router" in namespace "nvcf" using context "k3d-ncp-local-cp" should total within "2m":
+      Then Prometheus metrics on port "9090" of pods selected by "app.kubernetes.io/name=llm-request-router,app.kubernetes.io/instance=llm-request-router" in namespace "nvcf" using context "k3d-ncp-local-cp" should total within "2m":
         | metric                                    | labels                                                                                                     | comparison | total |
         | stargate_routing_session_selections_total | routing_key=${LAST_CLUSTER_FUNCTION_ID},algorithm=wait-and-widen,session_state=new                         | exactly    | 1     |
         | stargate_routing_session_selections_total | routing_key=${LAST_CLUSTER_FUNCTION_ID},algorithm=wait-and-widen,session_state=returning,selection=primary | exactly    | 2     |
@@ -262,13 +262,13 @@ Feature: Route returning LLM sessions to the cluster that served their last requ
         {"messages":[{"role":"user","content":"bdd-last-cluster session B turn 1"}],"prompt_cache_key":"bdd-last-cluster-session-b"}
         """
       Then the command output should contain "chat.completion"
-      Then Prometheus metrics on port "9090" of pods selected by "app.kubernetes.io/name=helm-nvcf-llm-request-router,app.kubernetes.io/instance=llm-request-router" in namespace "nvcf" using context "k3d-ncp-local-cp" should total within "2m":
+      Then Prometheus metrics on port "9090" of pods selected by "app.kubernetes.io/name=llm-request-router,app.kubernetes.io/instance=llm-request-router" in namespace "nvcf" using context "k3d-ncp-local-cp" should total within "2m":
         | metric                                    | labels                                                                                                      | comparison | total |
         | stargate_routing_session_selections_total | routing_key=${LAST_CLUSTER_FUNCTION_ID},algorithm=wait-and-widen,session_state=new                          | exactly    | 2     |
         | stargate_routing_session_selections_total | routing_key=${LAST_CLUSTER_FUNCTION_ID},algorithm=wait-and-widen,session_state=returning,selection=primary  | exactly    | 4     |
         | stargate_routing_session_selections_total | routing_key=${LAST_CLUSTER_FUNCTION_ID},algorithm=wait-and-widen,session_state=returning,selection=fallback | exactly    | 0     |
         | stargate_routing_session_selections_total | routing_key=${LAST_CLUSTER_FUNCTION_ID},algorithm=wait-and-widen,session_state=stale                        | exactly    | 0     |
-      And Prometheus metrics on port "9464" of pods selected by "app.kubernetes.io/name=helm-nvcf-llm-api-gateway,app.kubernetes.io/instance=llm-api-gateway" in namespace "nvcf" using context "k3d-ncp-local-cp" should total within "2m":
+      And Prometheus metrics on port "9464" of pods selected by "app.kubernetes.io/name=llm-api-gateway,app.kubernetes.io/instance=llm-api-gateway" in namespace "nvcf" using context "k3d-ncp-local-cp" should total within "2m":
         | metric                                     | labels         | comparison | total |
         | llm_api_gateway_last_cluster_lookups_total | result=hit     | at least   | 4     |
         | llm_api_gateway_last_cluster_lookups_total | result=miss    | at least   | 2     |
@@ -293,7 +293,7 @@ Feature: Route returning LLM sessions to the cluster that served their last requ
         {"messages":[{"role":"user","content":"bdd-last-cluster session A turn 7"}],"prompt_cache_key":"bdd-last-cluster-session-a"}
         """
       Then the command output should contain "chat.completion"
-      Then Prometheus metrics on port "9090" of pods selected by "app.kubernetes.io/name=helm-nvcf-llm-request-router,app.kubernetes.io/instance=llm-request-router" in namespace "nvcf" using context "k3d-ncp-local-cp" should total within "2m":
+      Then Prometheus metrics on port "9090" of pods selected by "app.kubernetes.io/name=llm-request-router,app.kubernetes.io/instance=llm-request-router" in namespace "nvcf" using context "k3d-ncp-local-cp" should total within "2m":
         | metric                                    | labels                                                                                                      | comparison | total |
         | stargate_routing_session_selections_total | routing_key=${LAST_CLUSTER_FUNCTION_ID},algorithm=wait-and-widen,session_state=new                          | exactly    | 2     |
         | stargate_routing_session_selections_total | routing_key=${LAST_CLUSTER_FUNCTION_ID},algorithm=wait-and-widen,session_state=stale                        | exactly    | 1     |
