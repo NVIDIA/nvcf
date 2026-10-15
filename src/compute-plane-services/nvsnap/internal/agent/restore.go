@@ -410,7 +410,15 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		// loopback so CRIU's TCP socket restore can re-bind to it.
 		// Without this, bind(2) returns EADDRNOTAVAIL — the placeholder
 		// was assigned a different pod IP by the K8s CNI.
-		if metadata.SourcePodIP != "" {
+		//
+		// Not when the inet address map moves that address: criu then
+		// re-binds the sockets to the new one, and the instance's DNAT
+		// rules send the pod's own traffic to its old address here. An
+		// alias would make the old address local, and capture the traffic
+		// of another pod of the instance that now has it.
+		if inetAddrMapMoves(req.InetAddrMap, metadata.SourcePodIP) {
+			log.WithField("sourcePodIP", metadata.SourcePodIP).Info("Source pod IP moved by the inet address map; no alias on placeholder lo")
+		} else if metadata.SourcePodIP != "" {
 			if aerr := addSourcePodIPToPlaceholderLo(placeholderMntnsPID, metadata.SourcePodIP); aerr != nil {
 				log.WithError(aerr).Warn("Failed to alias source pod IP on placeholder lo; TCP restore may fail")
 			} else {

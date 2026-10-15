@@ -25,3 +25,27 @@ func TestInstanceNATRules(t *testing.T) {
 		t.Errorf("empty map = %v %v", v4, v6)
 	}
 }
+
+// A restored pod's old address can be another member's new one (pod IPs are
+// reused): here the worker had 10.1.48.132 and the new frontend got it. The
+// map moves the worker's own address, so the worker gets no loopback alias
+// for it; with one, its traffic to the frontend was delivered to itself.
+func TestInetAddrMapMoves(t *testing.T) {
+	m := "10.1.48.132=10.1.160.209,10.1.56.35=10.1.48.132,172.20.151.38=10.1.48.132,fd00::1=fd00::2"
+	for ip, want := range map[string]bool{
+		"10.1.48.132":  true,  // the worker's old address, now the frontend's
+		"10.1.56.35":   true,  // the frontend's old address
+		"10.1.160.209": false, // only a new address
+		"fd00::1":      true,
+		"10.9.9.9":     false,
+		"":             false,
+		"not-an-ip":    false,
+	} {
+		if got := inetAddrMapMoves(m, ip); got != want {
+			t.Errorf("inetAddrMapMoves(%q) = %v, want %v", ip, got, want)
+		}
+	}
+	if inetAddrMapMoves("", "10.1.48.132") {
+		t.Error("an empty map moves nothing")
+	}
+}

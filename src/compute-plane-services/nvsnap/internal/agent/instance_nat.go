@@ -45,6 +45,22 @@ func instanceNATRules(inetAddrMap string) (v4, v6 [][]string) {
 	return v4, v6
 }
 
+// inetAddrMapMoves reports whether inetAddrMap ("OLD=NEW,...") has an entry
+// for ip as an old address.
+func inetAddrMapMoves(inetAddrMap, ip string) bool {
+	a := net.ParseIP(strings.TrimSpace(ip))
+	if a == nil {
+		return false
+	}
+	for _, pair := range strings.Split(inetAddrMap, ",") {
+		o, _, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		if ok && a.Equal(net.ParseIP(strings.TrimSpace(o))) {
+			return true
+		}
+	}
+	return false
+}
+
 // natInstanceAddresses installs instanceNATRules in the network namespace of
 // host pid hostPID.
 func natInstanceAddresses(hostPID int, inetAddrMap string, log *logrus.Entry) error {
