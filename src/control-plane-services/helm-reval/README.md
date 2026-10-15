@@ -20,15 +20,45 @@ Helm ReVal HTTP service — render/validate API, `pkg/authorizers`, and related 
     make run
     ```
 
-## Build
+## Build with Bazel
 
-All dependencies are public. No credentials needed.
+helm-reval builds via Bazel. CI runs `bazel test //...` and publishes
+the image to internal NGC registries from the default branch. The
+legacy `make container` Dockerfile path is retired; the Dockerfile
+under `docker/` is kept for local-only ad-hoc builds.
+
+Requires [bazelisk](https://github.com/bazelbuild/bazelisk) (`bazel` on
+PATH delegating to the version pinned in `.bazelversion`). MODULE.bazel
+pulls the Go toolchain (1.25.1), `rules_go`, Gazelle, `rules_oci`, and
+the distroless Go base image; no host toolchains are needed beyond a
+recent Linux (or macOS) and the `bazel` shim.
 
 ```bash
-make build      # go build → _output/bin/reval
-make test       # go test ./...
-make container  # docker build
+# Build every Bazel target.
+bazel build //...
+
+# Run all tests. --flaky_test_attempts=3 lets timing-sensitive tests
+# self-heal instead of needing a manual retry.
+bazel test //... --flaky_test_attempts=3
+
+# Build the multi-arch OCI index for the reval-service binary.
+bazel build //cmd/reval-service:image_index
+
+# Load the host-arch image into the local docker daemon for smoke tests.
+bazel run //cmd/reval-service:image_load
+
+# Refresh BUILD.bazel files after adding a Go file or changing imports.
+bazel run //:gazelle
 ```
+
+OSS contributors building from the GitHub mirror: the default `oci.pull`
+in `MODULE.bazel` points at `urm.nvidia.com/sw-gpu-ucs-hardened-docker/distroless/go`,
+which is NVIDIA-internal Artifactory. To build off-network, swap that
+entry for a public base such as `gcr.io/distroless/static-debian12`
+(then `bazel mod tidy` to refresh the lockfile). `bazel build //...` and
+`bazel test //...` work without modification.
+
+Local Bazel cache setup is documented in the `nvcf/nvcf-internal` docs.
 
 ## API Endpoints
 
@@ -155,7 +185,7 @@ curl -X POST http://localhost:8080/v1/render \
 
 ## Kubernetes
 
-- Chart: [`deploy/helm/reval-service/`](./deploy/helm/reval-service/README.md)
+- Chart: [`deploy/helm/helm-reval`](../../../deploy/helm/helm-reval/README.md)
 - Config samples: [`examples/`](./examples/)
 
 ## License

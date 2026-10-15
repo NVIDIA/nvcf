@@ -1,0 +1,366 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+openapi: 3.1.0
+info:
+  title: Gfn Spot
+  termsOfService: https://www.nvidia.com/en-us/legal_info
+  contact:
+    name: NVIDIA
+    url: https://www.nvidia.com/
+  version: "1.0"
+paths:
+  /v1/si/accounts/{ncaId}/clusters:
+    get:
+      tags:
+        - Clusters
+      summary: Get NVCA Clusters
+      description: API to get the cluster details for given NcaId
+      operationId: getClusters
+      parameters:
+        - name: ncaId
+          in: path
+          description: NVIDIA Cloud Account ID
+          required: true
+          schema:
+            type: string
+            format: UTF-8
+            description: NVIDIA Cloud Account ID
+        - name: includeAuthorizedClusters
+          in: query
+          description: Set this param to include all clusters authorized to given ncaId
+          required: false
+          schema:
+            type: boolean
+            description: Set this param to include all clusters authorized to given ncaId
+        - name: includeGfnInAuthorizedClusters
+          in: query
+          description: If includeAuthorizedClusters=true then this param will be considered else ignored
+          required: false
+          schema:
+            type: boolean
+            description: If includeAuthorizedClusters=true then this param will be considered else ignored
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GetClusterResponse"
+                minItems: 0
+        "400":
+          description: Bad request
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden - invalid token provided
+        "404":
+          description: Cluster not found
+        "500":
+          description: Internal server error
+  /v1/si/accounts/{ncaId}/clusters/{clusterId}:
+    get:
+      tags:
+        - Clusters
+      summary: Get NVCA Cluster
+      description: API to get the cluster details for ncaId and clusterId
+      operationId: getClusterForNcaIdAndClusterId
+      parameters:
+        - name: ncaId
+          in: path
+          description: NVIDIA Cloud Account ID
+          required: true
+          schema:
+            type: string
+            format: UTF-8
+            description: NVIDIA Cloud Account ID
+        - name: clusterId
+          in: path
+          description: Cluster ID
+          required: true
+          schema:
+            type: string
+            format: UTF-8
+            description: Cluster ID
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetClusterResponse"
+        "400":
+          description: Bad request
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden - invalid token provided
+        "404":
+          description: Cluster not found
+        "500":
+          description: Internal server error
+components:
+  schemas:
+    GetClusterResponse:
+      type: object
+      description: Get Cluster Response
+      properties:
+        clusterName:
+          type: string
+          description: Name of the cluster
+        clusterGroupName:
+          type: string
+          description: Group to which the custer belongs
+        clusterDescription:
+          type: string
+          description: Description of the cluster
+        ncaId:
+          type: string
+          description: NVIDIA Cloud Account ID
+        authorizedNCAIds:
+          type: array
+          description: AuthorizedNcaIds for the cluster
+          items:
+            type: string
+          uniqueItems: true
+        cloudProvider:
+          type: string
+          description: Cloud Provider for the cluster
+          enum:
+            - ON-PREM
+            - DGX-CLOUD
+            - AWS
+            - OCI
+            - AZURE
+            - GDN
+            - GFN
+            - GCP
+            - NCP
+        region:
+          type: string
+          description: Region of the cluster
+        capabilities:
+          type: array
+          description: Capabilities of the cluster
+          items:
+            type: string
+          uniqueItems: true
+        attributes:
+          type: array
+          description: Attributes related to the cluster
+          items:
+            type: string
+          uniqueItems: true
+        customAttributes:
+          type: array
+          description: Custom attributes related to the cluster
+          items:
+            type: string
+          uniqueItems: true
+        gpus:
+          type: array
+          description: GPUs supported in cluster
+          items:
+            $ref: "#/components/schemas/GpuResponseSchema"
+          uniqueItems: true
+        nvcaVersion:
+          type: string
+          description: Nvca version
+        clusterId:
+          type: string
+          description: Cluster ID
+        clusterGroupId:
+          type: string
+          description: Cluster Group ID
+        status:
+          type: string
+          description: Cluster status
+          enum:
+            - READY
+            - PAUSED
+            - FAILED
+            - ABANDONED
+            - NOT_READY
+            - UNHEALTHY
+            - DELETED
+            - CORDON
+            - CORDON_AND_DRAIN
+        clusterSource:
+          type: string
+          description: Cluster Source
+        nvcaLastConnected:
+          type: string
+          format: date-time
+          description: NVCA last connected timestamp
+        k8sVersion:
+          type: string
+          description: K8s version on cluster
+        gpuUsage:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/GpuCapacity"
+          description: Gpu usage shared by cluster
+        sisConfig:
+          $ref: "#/components/schemas/SisConfig"
+          description: Sis Config
+        vaultConfig:
+          $ref: "#/components/schemas/VaultConfig"
+          description: Vault Config
+        imageCredentialHelper:
+          $ref: "#/components/schemas/ImageCredentialHelper"
+          description: Image Credential Helper Config
+        clusterUpgradeStatus:
+          type: string
+          description: Cluster upgrade status
+          enum:
+            - IN_PROGRESS
+            - AVAILABLE
+            - PAUSED
+            - SUCCESS
+            - FAILED
+        clusterKeyId:
+          type: string
+          description: Cluster key Id
+        clusterConfigurations:
+          type: object
+          additionalProperties:
+            type: string
+          description: Advanced BYOC cluster configurations as key-value string map
+        clusterConfigurationFiles:
+          type: object
+          additionalProperties:
+            type: string
+          description: Advanced BYOC cluster configuration files as base64-encoded string map
+    GpuCapacity:
+      type: object
+      properties:
+        capacity:
+          type: integer
+          format: int32
+        allocated:
+          type: integer
+          format: int32
+        available:
+          type: integer
+          format: int32
+    GpuResponseSchema:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Name of the gpu
+          minLength: 1
+        capacity:
+          type: integer
+          format: int32
+          description: Total gpu capacity
+        instanceTypes:
+          type: array
+          description: List of instance types for that Gpu
+          items:
+            $ref: "#/components/schemas/InstanceTypeResponseSchema"
+          uniqueItems: true
+      required:
+        - name
+    ImageConfig:
+      type: object
+      description: ImageConfig
+      properties:
+        repository:
+          type: string
+          description: Image repository
+          minLength: 1
+        tag:
+          type: string
+          description: Image tag
+          minLength: 1
+      required:
+        - repository
+        - tag
+    ImageCredentialHelper:
+      type: object
+      description: ImageCredentialHelper
+      properties:
+        imageConfig:
+          $ref: "#/components/schemas/ImageConfig"
+          description: Image config for credential helper
+    InstanceTypeResponseSchema:
+      type: object
+      properties:
+        cpuCores:
+          type: integer
+          format: int32
+          description: Number of cpu cores for the instance type
+        systemMemory:
+          type: string
+          description: Memory of the System. e.g. 24G
+        gpuMemory:
+          type: string
+          description: Memory of the GPU. e.g. 24G
+        gpuCount:
+          type: integer
+          format: int32
+          description: Number of GPUs to be attached to the worker pod. Supported values 1, 2, 4, 8 (Default value is 1)
+        name:
+          type: string
+          description: Name of the instance type
+          minLength: 1
+        description:
+          type: string
+          description: Description of the instance type
+        value:
+          type: string
+          description: Value of the instance type
+          minLength: 1
+        cpuArch:
+          type: string
+          description: Architecture details of the CPU
+        os:
+          type: string
+          description: Operating system details
+        driverVersion:
+          type: string
+          description: GPU driver version
+        storage:
+          type: string
+          description: The amount of available storage, e.g. 80G
+        default:
+          type: boolean
+          description: Indicates if its the default instance type for the GPU
+      required:
+        - name
+        - value
+    SisConfig:
+      type: object
+      description: SisConfig
+      properties:
+        publicKeysetEndpoint:
+          type: string
+          description: Public Keyset Endpoint
+        tokenURL:
+          type: string
+          description: Token Endpoint URL
+        spotServiceURL:
+          type: string
+          description: Spot Instance Service Endpoint URL
+    VaultConfig:
+      type: object
+      description: VaultConfig
+      properties:
+        address:
+          type: string
+          description: Vault address

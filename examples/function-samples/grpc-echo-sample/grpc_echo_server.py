@@ -43,6 +43,8 @@ def _configure_health_server(server: grpc.Server):
             experimental_non_blocking=True,
             experimental_thread_pool=futures.ThreadPoolExecutor(max_workers=10),
     )
+    health_servicer.set("", health_pb2.HealthCheckResponse.SERVING)
+    health_servicer.set("Echo", health_pb2.HealthCheckResponse.SERVING)
     health_pb2_grpc.add_HealthServicer_to_server(health_servicer, server)
 
     # Use a daemon thread to toggle health status

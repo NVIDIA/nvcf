@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Integration test for the OpenBao migrations helper functions. Runs a real
+# OpenBao server in Docker and drives the helpers through the kv-v2
+# storage-upgrade window that every mount setup opens, asserting the
+# readiness wait rides it out, unwaited writes fail without overwriting,
+# and other errors fail fast.
+
+name: openbao-migrations
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'migrations/openbao/**'
+      - '.github/workflows/openbao-migrations.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'migrations/openbao/**'
+      - '.github/workflows/openbao-migrations.yml'
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openbao-migrations-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  kv-write-retry:
+    name: kv write retry integration test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run kv write retry test
+        run: migrations/openbao/tests/kv-write-retry-test.sh

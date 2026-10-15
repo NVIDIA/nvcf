@@ -1,0 +1,389 @@
+{
+  "version": 1,
+  "release_generated_paths": [
+    "MODULE.bazel.lock",
+    ".oss-allowlist"
+  ],
+  "services": [
+    {
+      "id": "worker-init",
+      "path": "src/compute-plane-services/worker-init",
+      "service_name": "nvcf-worker-init",
+      "legacy_tag_prefix": "nvcf-worker-init-v"
+    },
+    {
+      "id": "worker-utils",
+      "path": "src/compute-plane-services/worker-utils",
+      "service_name": "nvcf-worker-utils",
+      "legacy_tag_prefix": "nvcf-worker-utils-v"
+    },
+    {
+      "id": "worker-llm-credentials",
+      "path": "src/compute-plane-services/worker-llm-credentials",
+      "service_name": "nvcf-worker-llm-credentials",
+      "legacy_tag_prefix": "nvcf-worker-llm-credentials-v"
+    },
+    {
+      "id": "nvcf-cli",
+      "path": "src/clis/nvcf-cli",
+      "service_name": "nvcf-cli",
+      "legacy_tag_prefix": "nvcf-cli-v"
+    },
+    {
+      "id": "nvcf-compute-plane-stack",
+      "path": "deploy/stacks/nvcf-compute-plane",
+      "service_name": "nvcf-compute-plane-stack",
+      "legacy_tag_prefix": "nvcf-compute-plane-stack-v",
+      "initial_version": "0.2.0"
+    },
+    {
+      "id": "nvcf-self-managed-stack",
+      "path": "deploy/stacks/self-managed",
+      "service_name": "nvcf-self-managed-stack",
+      "tag_format": "deploy/stacks/self-managed/v${version}",
+      "initial_version": "0.8.0"
+    },
+    {
+      "id": "nvcf-observability-stack",
+      "path": "deploy/stacks/observability",
+      "service_name": "nvcf-observability-stack",
+      "tag_format": "deploy/stacks/observability/v${version}",
+      "initial_version": "0.0.0"
+    },
+    {
+      "id": "grpc-proxy",
+      "path": "src/invocation-plane-services/grpc-proxy",
+      "service_name": "nvcf-grpc-proxy",
+      "legacy_tag_prefix": "nvcf-grpc-proxy-v"
+    },
+    {
+      "id": "grpc-proxy-helm",
+      "path": "deploy/helm/grpc-proxy",
+      "service_name": "helm-nvcf-grpc-proxy",
+      "legacy_tag_prefix": "helm-nvcf-grpc-proxy-v",
+      "deploys": [
+        "grpc-proxy"
+      ]
+    },
+    {
+      "id": "ratelimiter",
+      "path": "src/invocation-plane-services/ratelimiter",
+      "service_name": "nvcf-ratelimiter",
+      "legacy_tag_prefix": "nvcf-ratelimiter-v"
+    },
+    {
+      "id": "ratelimiter-helm",
+      "path": "deploy/helm/ratelimiter",
+      "service_name": "helm-nvcf-rate-limiter",
+      "legacy_tag_prefix": "helm-nvcf-rate-limiter-v",
+      "deploys": [
+        "ratelimiter"
+      ]
+    },
+    {
+      "id": "http-invocation",
+      "path": "src/invocation-plane-services/http-invocation",
+      "service_name": "nvcf-invocation-service",
+      "legacy_tag_prefix": "nvcf-invocation-service-v"
+    },
+    {
+      "id": "http-invocation-helm",
+      "path": "deploy/helm/http-invocation",
+      "service_name": "helm-nvcf-invocation-service",
+      "deploys": [
+        "http-invocation"
+      ]
+    },
+    {
+      "id": "stargate",
+      "path": "src/libraries/rust/stargate",
+      "service_name": "stargate",
+      "legacy_tag_prefix": "stargate-v"
+    },
+    {
+      "id": "llm-api-gateway",
+      "path": "src/invocation-plane-services/llm-api-gateway",
+      "service_name": "nvcf-llm-api-gateway",
+      "legacy_tag_prefix": "nvcf-llm-api-gateway-v"
+    },
+    {
+      "id": "llm-api-gateway-helm",
+      "path": "deploy/helm/llm-api-gateway",
+      "service_name": "helm-nvcf-llm-api-gateway",
+      "legacy_tag_prefix": "helm-nvcf-llm-api-gateway-v",
+      "deploys": [
+        "llm-api-gateway"
+      ]
+    },
+    {
+      "id": "vanity-gateway",
+      "path": "src/invocation-plane-services/vanity-gateway",
+      "service_name": "nvcf-ai-api-gateway-service",
+      "legacy_tag_prefix": "nvcf-ai-api-gateway-service-v"
+    },
+    {
+      "id": "function-autoscaler",
+      "path": "src/control-plane-services/function-autoscaler",
+      "service_name": "nvcf-function-autoscaler",
+      "legacy_tag_prefix": "nvcf-function-autoscaler-v"
+    },
+    {
+      "id": "function-autoscaler-helm",
+      "path": "deploy/helm/function-autoscaler",
+      "service_name": "helm-nvcf-function-autoscaler",
+      "deploys": [
+        "function-autoscaler"
+      ]
+    },
+    {
+      "id": "nats-auth-callout",
+      "path": "src/control-plane-services/nats-auth-callout",
+      "service_name": "nvcf-nats-auth-callout-service",
+      "legacy_tag_prefix": "nvcf-nats-auth-callout-service-v"
+    },
+    {
+      "id": "admin-token-issuer-proxy-app",
+      "path": "src/control-plane-services/admin-token-issuer-proxy",
+      "service_name": "admin-token-issuer-proxy"
+    },
+    {
+      "id": "nvcf-unbound",
+      "path": "src/compute-plane-services/nvcf-unbound",
+      "service_name": "nvcf-unbound",
+      "legacy_tag_prefix": "nvcf-unbound-v"
+    },
+    {
+      "id": "helm-reval",
+      "path": "src/control-plane-services/helm-reval",
+      "service_name": "nvcf-helm-reval-api",
+      "legacy_tag_prefix": "nvcf-helm-reval-api-v"
+    },
+    {
+      "id": "ess-agent",
+      "path": "src/compute-plane-services/ess-agent",
+      "service_name": "nvcf-ess-agent",
+      "legacy_tag_prefix": "nvcf-ess-agent-v"
+    },
+    {
+      "id": "byoo-otel-collector",
+      "path": "src/compute-plane-services/byoo-otel-collector",
+      "service_name": "byoo-otel-collector",
+      "tag_format": "src/compute-plane-services/byoo-otel-collector/v${upstream_version}-nv-${version}",
+      "tag_upstream_version_file": "otel-collector-build.yaml",
+      "tag_upstream_version_pattern": "(?m)^\\s*otelcol_version:\\s*(?P<version>(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*))\\s*$",
+      "initial_version": "0.0.0",
+      "reset_release_history": true,
+      "release_history_marker_file": "RELEASE_SERIES_START",
+      "legacy_tag_prefixes": [
+        "src/compute-plane-services/byoo-otel-collector/v",
+        "byoo-otel-collector-v"
+      ]
+    },
+    {
+      "id": "nvca",
+      "path": "src/compute-plane-services/nvca",
+      "service_name": "nvca",
+      "legacy_tag_prefix": "nvca-v",
+      "initial_version": "3.3.0"
+    },
+    {
+      "id": "container-cache",
+      "path": "deploy/helm/container-cache",
+      "service_name": "nvcf-container-cache",
+      "legacy_tag_prefix": "nvcf-container-cache-v"
+    },
+    {
+      "id": "nats",
+      "path": "deploy/helm/nats",
+      "service_name": "helm-nvcf-nats",
+      "legacy_tag_prefix": "helm-nvcf-nats-v",
+      "deploys": []
+    },
+    {
+      "id": "admin-token-issuer-proxy",
+      "path": "deploy/helm/admin-token-issuer-proxy",
+      "service_name": "helm-admin-token-issuer-proxy",
+      "legacy_tag_prefix": "helm-admin-token-issuer-proxy-v",
+      "deploys": [
+        "admin-token-issuer-proxy-app"
+      ]
+    },
+    {
+      "id": "cassandra",
+      "path": "deploy/helm/cassandra",
+      "service_name": "helm-nvcf-cassandra",
+      "legacy_tag_prefix": "helm-nvcf-cassandra-v"
+    },
+    {
+      "id": "api-keys-colocated",
+      "path": "deploy/helm/api-keys-colocated",
+      "service_name": "helm-nvcf-api-keys",
+      "legacy_tag_prefix": "helm-nvcf-api-keys-v"
+    },
+    {
+      "id": "openbao",
+      "path": "deploy/helm/openbao",
+      "service_name": "helm-nvcf-openbao-server",
+      "legacy_tag_prefix": "helm-nvcf-openbao-server-v"
+    },
+    {
+      "id": "cert-manager",
+      "path": "deploy/helm/cert-manager",
+      "service_name": "helm-nvcf-cert-manager",
+      "legacy_tag_prefix": "helm-nvcf-cert-manager-v",
+      "deploys": []
+    },
+    {
+      "id": "nvcf-pki",
+      "path": "deploy/helm/nvcf-pki",
+      "service_name": "helm-nvcf-pki",
+      "deploys": []
+    },
+    {
+      "id": "llm-request-router",
+      "path": "deploy/helm/llm-request-router",
+      "service_name": "helm-nvcf-llm-request-router",
+      "legacy_tag_prefix": "helm-nvcf-llm-request-router-v"
+    },
+    {
+      "id": "gateway-routes",
+      "path": "deploy/helm/gateway-routes",
+      "service_name": "nvcf-gateway-routes",
+      "legacy_tag_prefix": "nvcf-gateway-routes-v",
+      "deploys": []
+    },
+    {
+      "id": "vanity-gateway-helm",
+      "path": "deploy/helm/vanity-gateway",
+      "service_name": "helm-nvcf-vanity-gateway",
+      "initial_version": "0.2.0",
+      "deploys": [
+        "vanity-gateway"
+      ]
+    },
+    {
+      "id": "nvca-operator",
+      "path": "deploy/helm/nvca-operator",
+      "service_name": "helm-nvca-operator",
+      "legacy_tag_prefix": "helm-nvca-operator-v",
+      "deploys": [
+        "nvca"
+      ]
+    },
+    {
+      "id": "cassandra-migrations",
+      "path": "migrations/cassandra",
+      "service_name": "nvcf-cassandra-migrations",
+      "legacy_tag_prefix": "nvcf-cassandra-migrations-v"
+    },
+    {
+      "id": "openbao-migrations",
+      "path": "migrations/openbao",
+      "service_name": "nvcf-openbao-migrations",
+      "legacy_tag_prefix": "nvcf-openbao-migrations-v"
+    },
+    {
+      "id": "image-credential-helper",
+      "path": "src/compute-plane-services/image-credential-helper",
+      "service_name": "nvcf-image-credential-helper",
+      "legacy_tag_prefix": "nvcf-image-credential-helper-v"
+    },
+    {
+      "id": "worker-task",
+      "path": "src/compute-plane-services/worker-task",
+      "service_name": "nvcf-worker-task",
+      "legacy_tag_prefix": "nvcf-worker-task-v"
+    },
+    {
+      "id": "cloud-tasks",
+      "path": "src/control-plane-services/cloud-tasks",
+      "service_name": "nvcf-cloud-tasks"
+    },
+    {
+      "id": "cloud-functions",
+      "path": "src/control-plane-services/cloud-functions",
+      "service_name": "nvcf-cloud-functions"
+    },
+    {
+      "id": "notary",
+      "path": "src/control-plane-services/notary",
+      "service_name": "nvcf-notary"
+    },
+    {
+      "id": "api-keys",
+      "path": "src/control-plane-services/api-keys",
+      "service_name": "nvcf-api-keys"
+    },
+    {
+      "id": "event-ledger",
+      "path": "src/control-plane-services/event-ledger",
+      "service_name": "nvcf-event-ledger"
+    },
+    {
+      "id": "event-ledger-helm",
+      "path": "deploy/helm/event-ledger",
+      "service_name": "helm-nvcf-event-ledger",
+      "deploys": [
+        "event-ledger"
+      ]
+    },
+    {
+      "id": "ess",
+      "path": "src/control-plane-services/encrypted-secret-store",
+      "service_name": "nvcf-ess",
+      "legacy_tag_prefix": "src/control-plane-services/ess/v"
+    },
+    {
+      "id": "ess-helm",
+      "path": "deploy/helm/encrypted-secret-store",
+      "service_name": "helm-nvcf-ess-api",
+      "legacy_tag_prefix": "deploy/helm/ess/v",
+      "deploys": [
+        "ess"
+      ]
+    },
+    {
+      "id": "cloud-tasks-helm",
+      "path": "deploy/helm/cloud-tasks",
+      "service_name": "helm-nvcf-nvct-api",
+      "initial_version": "1.4.4",
+      "deploys": [
+        "cloud-tasks"
+      ]
+    },
+    {
+      "id": "notary-helm",
+      "path": "deploy/helm/notary",
+      "service_name": "helm-nvcf-notary-service",
+      "initial_version": "1.4.2",
+      "deploys": [
+        "notary"
+      ]
+    },
+    {
+      "id": "cloud-functions-helm",
+      "path": "deploy/helm/cloud-functions",
+      "service_name": "helm-nvcf-api",
+      "initial_version": "1.23.11",
+      "deploys": [
+        "cloud-functions"
+      ]
+    },
+    {
+      "id": "instance-cluster-management",
+      "path": "src/control-plane-services/instance-cluster-management",
+      "service_name": "nvcf-instance-cluster-management"
+    },
+    {
+      "id": "icms-helm",
+      "path": "deploy/helm/icms",
+      "service_name": "helm-nvcf-sis",
+      "initial_version": "2.0.2"
+    },
+    {
+      "id": "nvcf-ui",
+      "path": "src/uis/nvcf-ui",
+      "service_name": "nvcf-ui"
+    }
+  ]
+}

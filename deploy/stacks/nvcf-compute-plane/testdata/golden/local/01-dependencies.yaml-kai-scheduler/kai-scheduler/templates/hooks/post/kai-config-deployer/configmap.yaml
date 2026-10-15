@@ -1,0 +1,205 @@
+---
+# Source: kai-scheduler/templates/hooks/post/kai-config-deployer/configmap.yaml
+# Copyright 2025 NVIDIA CORPORATION
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kai-config-manifest
+  namespace: kai-scheduler
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+data:
+  kai-config.yaml: |
+    apiVersion: kai.scheduler/v1
+    kind: Config
+    metadata:
+      name: kai-config
+    spec:
+      namespace: kai-scheduler
+      global:
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 10000
+        additionalImagePullSecrets:
+          - nvcr-pull-secret
+        replicaCount: 1
+        vpa:
+          enabled: false
+          resourcePolicy:
+            containerPolicies:
+            - containerName: '*'
+              maxAllowed:
+                cpu: 2
+                memory: 5Gi
+              minAllowed:
+                cpu: 50m
+                memory: 500Mi
+          updatePolicy:
+            minReplicas: 1
+            updateMode: InPlaceOrRecreate
+        queueLabelKey: "kai.scheduler/queue"
+    
+      binder:
+        service:
+          enabled: true
+          image:
+            name: binder
+            repository: ghcr.io/kai-scheduler/kai-scheduler
+            tag: v0.16.7
+            pullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: 4000m
+              memory: 4Gi
+            requests:
+              cpu: 50m
+              memory: 2Gi
+        metricsPort: 8080
+        resourceReservation:
+          namespace: kai-resource-reservation
+          serviceAccountName: kai-resource-reservation
+          appLabel: kai-resource-reservation
+          image:
+            name: resourcereservation
+            repository: ghcr.io/kai-scheduler/kai-scheduler
+            tag: v0.16.7
+            pullPolicy: IfNotPresent
+    
+      podGrouper:
+        service:
+          enabled: true
+          image:
+            name: podgrouper
+            repository: ghcr.io/kai-scheduler/kai-scheduler
+            tag: v0.16.7
+            pullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 4Gi
+            requests:
+              cpu: 50m
+              memory: 512Mi
+    
+      podGroupController:
+        service:
+          enabled: true
+          image:
+            name: podgroupcontroller
+            repository: ghcr.io/kai-scheduler/kai-scheduler
+            tag: v0.16.7
+            pullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 50m
+              memory: 256Mi
+    
+      queueController:
+        service:
+          enabled: true
+          image:
+            name: queuecontroller
+            repository: ghcr.io/kai-scheduler/kai-scheduler
+            tag: v0.16.7
+            pullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 50m
+              memory: 256Mi
+    
+      admission:
+        service:
+          enabled: true
+          image:
+            name: admission
+            repository: ghcr.io/kai-scheduler/kai-scheduler
+            tag: v0.16.7
+            pullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 50m
+              memory: 256Mi
+          podDisruptionBudget:
+            enabled: true
+            maxUnavailable: 1
+        gpuSharing: false
+        blockNvidiaVisibleDevices: false
+        queueLabelSelector: false
+        webhook:
+          port: 443
+          targetPort: 9443
+          probePort: 8081
+          metricsPort: 8080
+        gpuFractionRuntimeClassName: "nvidia"
+    
+      nodeScaleAdjuster:
+        service:
+          enabled: false
+          image:
+            name: nodescaleadjuster
+            repository: ghcr.io/kai-scheduler/kai-scheduler
+            tag: v0.16.7
+            pullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 50m
+              memory: 256Mi
+        args:
+          nodeScaleNamespace: kai-scale-adjust
+          scalingPodImage:
+            name: scalingpod
+            repository: ghcr.io/kai-scheduler/kai-scheduler
+            tag: v0.16.7
+            pullPolicy: IfNotPresent
+    
+      scheduler:
+        service:
+          enabled: true
+          image:
+            name: scheduler
+            repository: ghcr.io/kai-scheduler/kai-scheduler
+            tag: v0.16.7
+            pullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: 2000m
+              memory: 6Gi
+            requests:
+              cpu: 500m
+              memory: 3Gi
+        schedulerService:
+          port: 8080
+    
+      numaPlacementExporter:
+        service:
+          image:
+            name: numa-placement-exporter
+            repository: ghcr.io/kai-scheduler/kai-scheduler
+            tag: v0.16.7
+            pullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 50m
+              memory: 64Mi

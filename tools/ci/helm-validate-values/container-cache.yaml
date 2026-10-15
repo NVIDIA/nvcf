@@ -1,0 +1,8 @@
+# CI-only values for helm lint/template validation.
+# Exercise the optional surfaces so their templates render in CI too.
+replicaCount: 3
+consistentHashRouting:
+  enabled: true
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

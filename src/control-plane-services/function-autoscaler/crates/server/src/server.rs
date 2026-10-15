@@ -17,7 +17,6 @@
  * limitations under the License.
  */
 
-use rs_autoscaler::health::HealthStatus;
 use rs_autoscaler::{
     health::Health,
     metrics,
@@ -26,7 +25,7 @@ use rs_autoscaler::{
     scaling::{policy_cache::PolicyCache, ScalingPolicy, ScalingSettings},
     secrets::secrets_file_watcher::SecretFileWatcher,
     settings, startup, timeseries_db, work,
-    work::new_function_state_cache,
+    work::{new_function_state_cache, new_metric_routing_cache},
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -72,7 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut tracing_settings = config.server.tracing.clone();
     if let Some(tracing_key) = tracing_key {
-        // Ensure headers is initialized to a default HashMap if None
+        // Preserve configured tracing headers while replacing the token placeholder.
         let headers = tracing_settings.headers.get_or_insert_with(HashMap::new);
         headers.insert("lightstep-access-token".to_string(), tracing_key.access_key);
     }
@@ -127,10 +126,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cassandra_service_manager =
         startup::wait_for_cassandra(&config.cassandra, secrets_file_watcher.clone()).await;
 
-    health.register_health_checker(cassandra_service_manager.clone());
+    health
+        .register_health_checker(cassandra_service_manager.clone())
+        .await;
 
     tracing::info!("Initializing TimeseriesDb client (waiting with exponential backoff until up)");
-    let timeseries_db_credential_provider = if !config.timeseries_db.disable_auth {
+    let timeseries_db_credential_provider = if config.timeseries_db.effective_auth_mode()
+        == timeseries_db::TimeseriesDbAuthMode::Token
+    {
         tracing::info!("Initializing TimeseriesDb credentials provider for token generation");
         Some(Arc::new(
             timeseries_db::timeseries_db_client::AuthnCredentialProvider::new(
@@ -145,11 +148,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    let timeseries_db_client =
-        startup::wait_for_timeseries_db(&config.timeseries_db, timeseries_db_credential_provider)
-            .await?;
+    let timeseries_db_client = startup::wait_for_timeseries_db(
+        &config.timeseries_db,
+        timeseries_db_credential_provider,
+        Some(secrets_file_watcher.clone()),
+    )
+    .await?;
 
-    health.register_health_checker(timeseries_db_client.clone());
+    health
+        .register_health_checker(timeseries_db_client.clone())
+        .await;
 
     // Start coordinated health monitoring for all registered services
     health
@@ -161,6 +169,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scaling_settings = initialize_scaling_settings(
         config.scaling.clone(),
         config.nvcf_api.oauth2_token_api_address.clone(),
+        config.nvcf_api.oauth2_token_scope.clone(),
+        config.nvcf_api.nvcf_api_grpc_address.clone(),
         secrets_file_watcher.clone(),
     )
     .await;
@@ -170,23 +180,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let health_monitor = Arc::clone(&health);
     let node_id_health = node_id.clone();
 
-    tracing::info!(
-        "Creating a new node entry for {} if not exists",
-        node_id_health
-    );
-    // Create a new node entry in Cassandra
+    tracing::info!("Reporting initial node health for {}", node_id_health);
     let current_health = health_monitor.get_health();
-    if current_health.overall_status == HealthStatus::Healthy {
-        work::create_new_node(
-            &node_id_health,
-            &HealthStatus::Healthy,
-            &cassandra_health_manager,
-        )
-        .await?;
-    } else {
-        panic!(
-            "Node is not healthy, cannot start service: {:?}",
-            current_health.overall_status
+    if let Err(e) = work::create_new_node(
+        &node_id_health,
+        &current_health.overall_status,
+        &cassandra_health_manager,
+    )
+    .await
+    {
+        tracing::warn!(
+            error = %e,
+            health = ?current_health.overall_status,
+            "Initial node health report failed; background health reporting will retry"
         );
     }
 
@@ -225,6 +231,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let function_state_cache = Arc::new(new_function_state_cache());
+    let metric_routing_cache = Arc::new(new_metric_routing_cache());
 
     tracing::info!("Initializing NVCF API client");
     let cassandra_service_manager_nvcf = Arc::clone(&cassandra_service_manager);
@@ -243,7 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let timeseries_db_env_discover = config.timeseries_db.env.clone();
     let timeseries_db_ignore_env = config.timeseries_db.ignore_env;
     let lock_manager_discover = Arc::clone(&lock_manager);
-    tokio::spawn(async move {
+    let discovery_task = tokio::spawn(async move {
         let jitter_millis = rand::rng().random_range(0..5000);
         let discovery_interval =
             config.scaling.discover_new_functions_interval + Duration::from_millis(jitter_millis);
@@ -295,6 +302,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bucket_manager_p0 = Arc::clone(&bucket_manager);
     let lock_manager_p0 = Arc::clone(&lock_manager);
     let function_state_cache_p0 = Arc::clone(&function_state_cache);
+    let metric_routing_cache_p0 = Arc::clone(&metric_routing_cache);
     let scaling_loop_interval = config.scaling.scaling_loop_interval;
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(scaling_loop_interval);
@@ -309,6 +317,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &bucket_manager_p0,
                 &lock_manager_p0,
                 Arc::clone(&function_state_cache_p0),
+                Arc::clone(&metric_routing_cache_p0),
             )
             .await
             {
@@ -339,9 +348,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("Listening on {}", addr);
 
-    axum::serve(listener, app.into_make_service())
-        .with_graceful_shutdown(shutdown_signal)
-        .await?;
+    let server =
+        axum::serve(listener, app.into_make_service()).with_graceful_shutdown(shutdown_signal);
+
+    tokio::select! {
+        result = server => result?,
+        result = discovery_task => {
+            let message = match result {
+                Ok(()) => "function discovery task exited unexpectedly".to_string(),
+                Err(error) => format!("function discovery task failed: {error}"),
+            };
+            tracing::error!("{message}");
+            return Err(std::io::Error::other(message).into());
+        }
+    }
 
     tracing::warn!("Server terminated");
     Ok(())
@@ -355,6 +375,8 @@ async fn handler_404() -> impl IntoResponse {
 async fn initialize_scaling_settings(
     mut settings: ScalingSettings,
     oauth2_token_api_address: String,
+    oauth2_token_scope: String,
+    nvcf_api_grpc_address: String,
     secrets_watcher: Arc<SecretFileWatcher>,
 ) -> ScalingSettings {
     match &settings.policy {
@@ -367,12 +389,16 @@ async fn initialize_scaling_settings(
         ScalingPolicy::Custom(config) => {
             tracing::info!(
                 "Using Custom scaling policy - per-function configs from gRPC endpoint: {}",
-                config.grpc_endpoint
+                nvcf_api_grpc_address
             );
             tracing::info!("Cache configuration: TTL={}s", config.ttl_seconds);
 
             // Create OAuth2 client for gRPC auth (same auth mechanism as NVCF API)
-            let oauth2_client = match OAuth2Client::new(oauth2_token_api_address, secrets_watcher) {
+            let oauth2_client = match OAuth2Client::new(
+                oauth2_token_api_address,
+                oauth2_token_scope,
+                secrets_watcher,
+            ) {
                 Ok(client) => Arc::new(client),
                 Err(e) => {
                     tracing::error!("Failed to create OAuth2 client for policy cache: {}. Falling back to default thresholds.", e);
@@ -380,9 +406,11 @@ async fn initialize_scaling_settings(
                 }
             };
 
-            // Initialize the policy cache
+            // Initialize the policy cache. Uses the same NVCF API gRPC
+            // endpoint as the scaling loop's Autoscaler client, since both
+            // are the same upstream Autoscaler service.
             match PolicyCache::new(
-                config.grpc_endpoint.clone(),
+                nvcf_api_grpc_address,
                 oauth2_client,
                 config.ttl_seconds,
                 settings.policy_cache_max_capacity,

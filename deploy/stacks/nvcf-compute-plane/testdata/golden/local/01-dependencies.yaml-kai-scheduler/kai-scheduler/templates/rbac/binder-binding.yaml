@@ -1,0 +1,18 @@
+---
+# Source: kai-scheduler/templates/rbac/binder-binding.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kai-binder
+subjects:
+  - kind: ServiceAccount
+    name: binder
+    namespace: kai-scheduler
+roleRef:
+  kind: ClusterRole
+  name: kai-binder
+  apiGroup: rbac.authorization.k8s.io
+---
+# Source: kai-scheduler/templates/rbac/binder-binding.yaml
+# Copyright 2025 NVIDIA CORPORATION
+# SPDX-License-Identifier: Apache-2.0

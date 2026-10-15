@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/../../.." && pwd)"
+script_path="${repo_root}/ci/check-github-commit-message.sh"
+
+workdir="$(mktemp -d)"
+trap 'rm -rf "${workdir}"' EXIT
+
+run_checker() {
+    local description="$1"
+    local output_path="$2"
+
+    set +e
+    CI_MERGE_REQUEST_IID=136 \
+        CI_MERGE_REQUEST_DESCRIPTION="${description}" \
+        CI_MERGE_REQUEST_DESCRIPTION_IS_TRUNCATED=false \
+        CI_MERGE_REQUEST_PROJECT_URL="https://gitlab.example.com/nvcf/nvcf" \
+        bash "${script_path}" >"${output_path}" 2>&1
+    status=$?
+    set -e
+}
+
+assert_contains() {
+    local needle="$1"
+    local output_path="$2"
+
+    if ! grep -Fq "${needle}" "${output_path}"; then
+        echo "expected output to contain: ${needle}"
+        cat "${output_path}"
+        exit 1
+    fi
+}
+
+assert_status() {
+    local expected="$1"
+    local actual="$2"
+
+    if [[ "${actual}" -ne "${expected}" ]]; then
+        echo "expected status ${expected}, got ${actual}"
+        exit 1
+    fi
+}
+
+output="${workdir}/output.txt"
+
+run_checker $'JIRA: NO-REF\n\nNVBug: https://nvbugspro.nvidia.com/bug/6137490' "${output}"
+assert_status 1 "${status}"
+assert_contains "Add this exact footer as the final section of the GitLab MR description:" "${output}"
+assert_contains "Github commit:" "${output}"
+assert_contains "Everything after the marker becomes the exact public GitHub commit message" "${output}"
+assert_contains "MR: https://gitlab.example.com/nvcf/nvcf/-/merge_requests/136" "${output}"
+
+run_checker $'JIRA: NO-REF\n\nGithub commit:\n   ' "${output}"
+assert_status 1 "${status}"
+assert_contains "The MR description has a Github commit section, but it is empty." "${output}"
+assert_contains "Use a Conventional Commit subject on the first line" "${output}"
+
+run_checker $'JIRA: NO-REF\n\nGithub commit:\ndocs: update public docs\n\nExplain public docs update.' "${output}"
+assert_status 0 "${status}"
+assert_contains "MR Github commit section found." "${output}"
+
+echo "test-check-github-commit-message: PASS"

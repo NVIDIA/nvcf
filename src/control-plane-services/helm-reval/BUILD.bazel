@@ -1,0 +1,134 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@gazelle//:def.bzl", "gazelle")
+
+# gazelle:prefix github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval
+# gazelle:proto disable_global
+# gazelle:go_naming_convention import_alias
+
+# Non-Go top-level dirs.
+# gazelle:exclude api-tests
+# gazelle:exclude deploy
+# gazelle:exclude docker
+# gazelle:exclude examples
+# gazelle:exclude scripts
+
+# The private NVIDIA go/lib module is fetched by go_deps. Its upstream
+# BUILD.bazel files reference @rules_go, which is invisible from inside
+# the fetched module's bzlmod context, so MODULE.bazel regenerates them
+# with go_deps.gazelle_override(build_file_generation = "clean").
+#
+# Everything else under vendor/ is excluded so Gazelle does not generate
+# BUILD files for the public deps (which arrive via go_deps).
+# gazelle:exclude vendor/dario.cat
+# gazelle:exclude vendor/golang.org
+# gazelle:exclude vendor/google.golang.org
+# gazelle:exclude vendor/go.opentelemetry.io
+# gazelle:exclude vendor/gopkg.in
+# gazelle:exclude vendor/go.uber.org
+# gazelle:exclude vendor/go.yaml.in
+# gazelle:exclude vendor/helm.sh
+# gazelle:exclude vendor/k8s.io
+# gazelle:exclude vendor/oras.land
+# gazelle:exclude vendor/sigs.k8s.io
+# gazelle:exclude vendor/github.com/ajg
+# gazelle:exclude vendor/github.com/asaskevich
+# gazelle:exclude vendor/github.com/aws
+# gazelle:exclude vendor/github.com/awslabs
+# gazelle:exclude vendor/github.com/Azure
+# gazelle:exclude vendor/github.com/beorn7
+# gazelle:exclude vendor/github.com/blang
+# gazelle:exclude vendor/github.com/BurntSushi
+# gazelle:exclude vendor/github.com/cenkalti
+# gazelle:exclude vendor/github.com/cespare
+# gazelle:exclude vendor/github.com/chai2010
+# gazelle:exclude vendor/github.com/containerd
+# gazelle:exclude vendor/github.com/cyphar
+# gazelle:exclude vendor/github.com/davecgh
+# gazelle:exclude vendor/github.com/decred
+# gazelle:exclude vendor/github.com/docker
+# gazelle:exclude vendor/github.com/emicklei
+# gazelle:exclude vendor/github.com/evanphx
+# gazelle:exclude vendor/github.com/exponent-io
+# gazelle:exclude vendor/github.com/fatih
+# gazelle:exclude vendor/github.com/felixge
+# gazelle:exclude vendor/github.com/fsnotify
+# gazelle:exclude vendor/github.com/fxamacker
+# gazelle:exclude vendor/github.com/gobwas
+# gazelle:exclude vendor/github.com/goccy
+# gazelle:exclude vendor/github.com/go-chi
+# gazelle:exclude vendor/github.com/go-errors
+# gazelle:exclude vendor/github.com/gogo
+# gazelle:exclude vendor/github.com/go-gorp
+# gazelle:exclude vendor/github.com/golang-jwt
+# gazelle:exclude vendor/github.com/go-logr
+# gazelle:exclude vendor/github.com/google
+# gazelle:exclude vendor/github.com/go-openapi
+# gazelle:exclude vendor/github.com/gorilla
+# gazelle:exclude vendor/github.com/gosuri
+# gazelle:exclude vendor/github.com/go-viper
+# gazelle:exclude vendor/github.com/gregjones
+# gazelle:exclude vendor/github.com/grpc-ecosystem
+# gazelle:exclude vendor/github.com/hashicorp
+# gazelle:exclude vendor/github.com/huandu
+# gazelle:exclude vendor/github.com/inconshreveable
+# gazelle:exclude vendor/github.com/jmespath
+# gazelle:exclude vendor/github.com/jmoiron
+# gazelle:exclude vendor/github.com/josharian
+# gazelle:exclude vendor/github.com/json-iterator
+# gazelle:exclude vendor/github.com/klauspost
+# gazelle:exclude vendor/github.com/lann
+# gazelle:exclude vendor/github.com/lestrrat-go
+# gazelle:exclude vendor/github.com/lib
+# gazelle:exclude vendor/github.com/liggitt
+# gazelle:exclude vendor/github.com/mailru
+# gazelle:exclude vendor/github.com/MakeNowJust
+# gazelle:exclude vendor/github.com/Masterminds
+# gazelle:exclude vendor/github.com/mattn
+# gazelle:exclude vendor/github.com/mitchellh
+# gazelle:exclude vendor/github.com/moby
+# gazelle:exclude vendor/github.com/modern-go
+# gazelle:exclude vendor/github.com/monochromegane
+# gazelle:exclude vendor/github.com/munnerz
+# gazelle:exclude vendor/github.com/mxk
+# gazelle:exclude vendor/github.com/opencontainers
+# gazelle:exclude vendor/github.com/pelletier
+# gazelle:exclude vendor/github.com/peterbourgon
+# gazelle:exclude vendor/github.com/pkg
+# gazelle:exclude vendor/github.com/pmezard
+# gazelle:exclude vendor/github.com/prometheus
+# gazelle:exclude vendor/github.com/rubenv
+# gazelle:exclude vendor/github.com/russross
+# gazelle:exclude vendor/github.com/sagikazarmark
+# gazelle:exclude vendor/github.com/santhosh-tekuri
+# gazelle:exclude vendor/github.com/segmentio
+# gazelle:exclude vendor/github.com/shopspring
+# gazelle:exclude vendor/github.com/sirupsen
+# gazelle:exclude vendor/github.com/sourcegraph
+# gazelle:exclude vendor/github.com/spf13
+# gazelle:exclude vendor/github.com/stretchr
+# gazelle:exclude vendor/github.com/subosito
+# gazelle:exclude vendor/github.com/vbatts
+# gazelle:exclude vendor/github.com/volcengine
+# gazelle:exclude vendor/github.com/x448
+# gazelle:exclude vendor/github.com/xlab
+
+# Private NVIDIA module comes in via Gazelle's go_deps extension, with
+# MODULE.bazel's go_deps.gazelle_override(build_file_generation = "clean",
+# path = "...") forcing Gazelle to regenerate their BUILD.bazel files
+# in this repo's bzlmod context so the @rules_go references resolve.
+# `git config url."https://oauth2:$GITHUB_TOKEN@github.com/".insteadOf`
+# in the bazel job's before_script lets `go mod download` reach them.
+
+gazelle(
+    name = "gazelle",
+)
+
+# Top-level alias to the production server binary, matching the legacy
+# Dockerfile entry (`go build -o reval-server ./cmd/reval-service`).
+alias(
+    name = "reval-service",
+    actual = "//src/control-plane-services/helm-reval/cmd/reval-service",
+    visibility = ["//visibility:public"],
+)

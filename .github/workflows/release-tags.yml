@@ -1,0 +1,113 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: release-tags
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - '*-v*'
+      - '**/v*'
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Optional service id or service_name to scope the run to. Defaults to every registered service.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-tags-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Keep GitHub release automation inert until the migration cutover is ready.
+  # Set the repository variable NVCF_GITHUB_AUTO_TAGGING_ENABLED=true after
+  # GitHub has the required path-format release anchors.
+  NVCF_GITHUB_AUTO_TAGGING_ENABLED: ${{ vars.NVCF_GITHUB_AUTO_TAGGING_ENABLED || 'false' }}
+  NVCF_GITHUB_RELEASE_DRY_RUN: ${{ vars.NVCF_GITHUB_RELEASE_DRY_RUN || 'true' }}
+  NVCF_GITHUB_RELEASE_DRAFT: ${{ vars.NVCF_GITHUB_RELEASE_DRAFT || 'false' }}
+  NV_GITHUB_TOKEN_CONFIGURED: ${{ secrets.NV_GITHUB_TOKEN != '' }}
+  GH_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+  GITHUB_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+
+jobs:
+  # NVIDIA self-hosted runners. Eligible without a conditional because this
+  # workflow has no pull_request trigger: it fires on pushes to main, on tags,
+  # and on manual dispatch, all of which run trusted reviewed code. The bazel
+  # matrix needs an event-conditional runs-on for exactly that reason; this
+  # does not.
+  #
+  # cpu4 rather than cpu16: these jobs shell out to the GitHub API to cut tags
+  # and create releases. They are latency-bound, not CPU-bound, and were sitting
+  # in the GitHub-hosted queue behind the build matrix while doing almost no
+  # work.
+  service-release:
+    name: service release automation
+    if: github.ref_type != 'tag'
+    runs-on: linux-amd64-cpu4
+    permissions:
+      contents: write
+      packages: read
+      # Releases comment the version they shipped on the pull requests that went
+      # into them. Needed for the github.token fallback; a PAT carries its own.
+      pull-requests: write
+    steps:
+      # ref is the branch, not the pushed SHA. Two reasons, both about the gap
+      # between when a push happens and when this job actually runs:
+      #
+      # 1. semantic-release refuses to publish from a branch behind its remote.
+      #    A checkout pinned to the pushed SHA goes stale as soon as anything
+      #    else merges, and the release is silently skipped.
+      # 2. The concurrency group cancels queued runs, so a superseded commit
+      #    never gets a run of its own. Only a run that releases from the branch
+      #    tip covers the commits whose runs were cancelled.
+      #
+      # Releasing from the tip is also simply what this job means: cut whatever
+      # tags the branch is currently due, not what it was due minutes ago.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Fetch semantic-release notes
+        run: git fetch origin '+refs/notes/semantic-release:refs/notes/semantic-release' || true
+
+      - name: Run service release automation
+        env:
+          NVCF_GITHUB_RELEASE_SERVICE: ${{ inputs.service || '' }}
+        run: |
+          set -euo pipefail
+          if [ "${NVCF_GITHUB_AUTO_TAGGING_ENABLED}" = "true" ] && \
+             [ "${NVCF_GITHUB_RELEASE_DRY_RUN}" = "false" ] && \
+             [ "${NV_GITHUB_TOKEN_CONFIGURED}" != "true" ]; then
+            echo "ERROR: set secret NV_GITHUB_TOKEN before enabling GitHub auto-tag publish mode." >&2
+            echo "The default GITHUB_TOKEN cannot trigger the tag workflow that publishes release notes." >&2
+            exit 1
+          fi
+          ./tools/ci/github-release auto
+
+  tag-release-notes:
+    name: tag release notes
+    if: github.ref_type == 'tag'
+    runs-on: linux-amd64-cpu4
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Validate tag and create release notes
+        run: ./tools/ci/github-release tag "$GITHUB_REF_NAME"

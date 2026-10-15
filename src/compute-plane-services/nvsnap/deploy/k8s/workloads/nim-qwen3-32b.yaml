@@ -1,0 +1,78 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# nim-qwen3-32b SOURCE pod (TP=2, multi-GPU). Customer-shape minimal
+# yaml — no CRIU init container ladder. The nvsnap agent's rootfs
+# watcher captures this pod's HF model cache + NIM model store +
+# overlay diff after the warmup window, writes a manifest CM
+# (nvsnap-capture-<shortHash>) cluster-wide, and stores the file tree
+# under /var/lib/nvsnap/cache/<hash>/ on the source node.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nim-qwen3-32b
+  namespace: nvsnap-system
+  labels:
+    app: nim-qwen3-32b
+    nvsnap.io/demo: "true"
+    nvsnap.io/capture: "true"   # opt-in to rootfs capture (multi-GPU only)
+  annotations:
+    nvsnap.io/demo-name: "NIM"
+    nvsnap.io/desc: "Qwen3-32B multi-GPU TP=2 (rootfs)"
+    nvsnap.io/model: "qwen/qwen3-32b"
+    nvsnap.io/port: "8000"
+    nvsnap.io/gpus: "2"
+    nvsnap.io/path: "rootfs"
+    nvsnap.io/ckpt-size: "61 GB"
+spec:
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+    - name: nim-pull-secret
+
+  containers:
+    - name: nim
+      image: nvcr.io/nim/qwen/qwen3-32b:1.0.0
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: NGC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ngc-api-key
+              key: NGC_API_KEY
+        - name: NIM_CACHE_PATH
+          value: "/opt/nim/.cache"
+        - name: HF_HUB_DISABLE_XET
+          value: "1"
+        - name: CUDA_VISIBLE_DEVICES
+          value: "0,1"
+      ports:
+        - containerPort: 8000
+          name: http
+      readinessProbe:
+        httpGet: { path: /v1/health/ready, port: 8000 }
+        initialDelaySeconds: 60
+        periodSeconds: 15
+        failureThreshold: 80
+      resources:
+        limits:
+          nvidia.com/gpu: "2"
+        requests:
+          nvidia.com/gpu: "2"
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+        - { name: nim-cache, mountPath: /opt/nim/.cache }
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 16Gi }
+    - name: nim-cache
+      emptyDir: {}
+
+  restartPolicy: Never

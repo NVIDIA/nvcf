@@ -1,0 +1,25 @@
+---
+# Source: dynamo-platform/charts/dynamo-operator/templates/gpu-discovery-preflight.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Best-effort template-time check for cluster-scoped RBAC access required by GPU discovery.
+# Runs only when namespaceRestriction.enabled=true and gpuDiscovery.enabled=true (the default).
+#
+# Limitation: Helm's lookup function can only test list/get access, not create. This check
+# verifies the installer can read ClusterRole resources as a proxy for full cluster RBAC
+# access. In the rare case where an installer has create but not list permissions, this
+# check will false-fail; if that happens Helm's native error on the actual ClusterRole
+# creation (in gpu-discovery-rbac.yaml) will still be clear about the missing permission.

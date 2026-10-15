@@ -158,7 +158,7 @@ microk8s kubectl delete secret gitlab-secret
 ```
 
 Note: If you need to modify the config.yaml to remove the Grafana exporter section, you should edit the file and remove these sections:
-- The `otlphttp/GRAFANA_CLOUD-Grafana_prd-metrics` from the exporters section
+- The `otlp_http/GRAFANA_CLOUD-Grafana_prd-metrics` from the exporters section
 - The `basicauth/GRAFANA_CLOUD-Grafana_prd-metrics` from the extensions section
 - Any references to these exporters in the pipelines section
 

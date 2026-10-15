@@ -1,0 +1,121 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "api",
+    srcs = [
+        "auth_middleware.go",
+        "chat_handler.go",
+        "context.go",
+        "handlers.go",
+        "middleware.go",
+        "model_ids.go",
+        "model_uris.go",
+        "observability.go",
+        "openai_endpoint_handlers.go",
+        "openai_remaining_handlers.go",
+        "openai_surface.go",
+        "priority_guard.go",
+        "provider_error.go",
+        "proxy_handler.go",
+        "ratelimit.go",
+        "request_models.go",
+        "responses_converter.go",
+        "responses_handler.go",
+        "routes.go",
+        "session_affinity.go",
+        "token_count.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/api",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/invocation-plane-services/llm-api-gateway/api/adapters/openairesponses",
+        "//src/invocation-plane-services/llm-api-gateway/config",
+        "//src/invocation-plane-services/llm-api-gateway/internal/must",
+        "//src/invocation-plane-services/llm-api-gateway/internal/ptr",
+        "//src/invocation-plane-services/llm-api-gateway/internal/servicetier",
+        "//src/invocation-plane-services/llm-api-gateway/mcp",
+        "//src/invocation-plane-services/llm-api-gateway/models",
+        "//src/invocation-plane-services/llm-api-gateway/nvcf",
+        "//src/invocation-plane-services/llm-api-gateway/provider",
+        "//src/invocation-plane-services/llm-api-gateway/ratelimit",
+        "//src/invocation-plane-services/llm-api-gateway/requestctx",
+        "//src/invocation-plane-services/llm-api-gateway/telemetry",
+        "//src/invocation-plane-services/llm-api-gateway/templating/prompt",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_labstack_echo_v4//:echo",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
+        "@com_github_rs_zerolog//:zerolog",
+        "@com_github_rs_zerolog//log",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//codes",
+        "@io_opentelemetry_go_otel//propagation",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@io_opentelemetry_go_otel_trace//:trace",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//status",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":api",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "api_test",
+    srcs = [
+        "auth_middleware_test.go",
+        "embeddings_handler_test.go",
+        "info_test.go",
+        "middleware_telemetry_test.go",
+        "middleware_test.go",
+        "model_ids_test.go",
+        "model_uris_test.go",
+        "openai_routes_test.go",
+        "priority_guard_test.go",
+        "rate_limit_accounting_test.go",
+        "responses_handler_test.go",
+        "routing_key_case_test.go",
+        "session_affinity_test.go",
+        "token_count_test.go",
+    ],
+    embed = [":api"],
+    deps = [
+        "//src/invocation-plane-services/llm-api-gateway/api/adapters/openairesponses",
+        "//src/invocation-plane-services/llm-api-gateway/config",
+        "//src/invocation-plane-services/llm-api-gateway/internal/ptr",
+        "//src/invocation-plane-services/llm-api-gateway/models",
+        "//src/invocation-plane-services/llm-api-gateway/nvcf",
+        "//src/invocation-plane-services/llm-api-gateway/provider",
+        "//src/invocation-plane-services/llm-api-gateway/ratelimit",
+        "//src/invocation-plane-services/llm-api-gateway/requestctx",
+        "//src/invocation-plane-services/llm-api-gateway/telemetry",
+        "@com_github_labstack_echo_v4//:echo",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//propagation",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_sdk//trace/tracetest",
+        "@io_opentelemetry_go_otel_sdk_metric//:metric",
+        "@io_opentelemetry_go_otel_sdk_metric//metricdata",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)

@@ -1,26 +1,31 @@
-## Customer Summary (required for feat, fix, and perf PRs)
-<!--To include in the release notes. Use customer facing language to describe the effect on them.-->
-
 ## TL;DR
-<!--Provide a brief description of the changes in this MR.-->
+<!--Provide a brief description of what changed and why it is needed.-->
 
 ## Additional Details (optional for docs, build, test, refactor, ci, chore, style, and revert PRs)
-<!-- - describe the intent of this PR -->
+<!-- - explain the problem, requirement, review comment, or CI blocker driving this MR -->
+<!-- - explain how the changed pieces connect -->
+<!-- - link upstream MRs/PRs, tickets, bugs, or related reviews when relevant -->
 <!-- - any limitations or possible things missing from this PR -->
-<!-- - what led to this change being made? this is optional extra information to help the reviewer -->
 
 ## For the Reviewer
 <!--mention reviewers you wish to review this MR-->
 <!--call out specific files that should be looked at closely-->
-<!--any questions you need answered pertaining to this review-->
+<!--anything you need answered pertaining to this review-->
 
 ## For QA (optional for docs, build, test, refactor, ci, chore, style, and revert PRs)
 <!--list steps you took to verify this change-->
 <!--Is QA Needed?-->
 
-## Issues: (use one of the action keywords Closes / Fixes / Resolves / Relates to)
-- Closes #XXX
-- If no issues are associated, use NO-REF
+## Issues
+<!--
+Required: add a valid NVIDIA/nvcf issue reference below.
+Accepted: "Closes #123", "Fixes #123", "Resolves NVIDIA/nvcf#123",
+"Relates to #123", or last-resort "NO-REF".
+Do not use Jira/private tracker keys, private bug IDs, private URLs, title-only
+refs, other-repo refs, or commented-out template examples. If context is
+private, create a generic public issue without private details.
+-->
+
 
 ## Checklist
 - [ ] I am familiar with the [Contributing Guidelines](../CONTRIBUTING.md).

@@ -32,18 +32,6 @@ kubectl create namespace container-caching
 Create an image pull secret so that pods can pull container images from your registry.
 
 <Tabs>
-<Tab title="BYOC / NGC">
-
-```bash
-kubectl create secret docker-registry nvcr-creds \
-  --docker-server=nvcr.io \
-  --docker-username='$oauthtoken' \
-  --docker-password="${NGC_API_KEY}" \
-  --namespace=container-caching
-```
-
-</Tab>
-
 <Tab title="Amazon ECR">
 
 ```bash
@@ -90,17 +78,6 @@ Adjust `storageClassName` for your environment (e.g., `gp3` for AWS EKS).
 ### Step 4. Install the chart
 
 <Tabs>
-<Tab title="BYOC (NGC Helm Repo)">
-
-```bash
-helm upgrade --install container-cache \
-  nvcf-byoc/nvcf-container-cache \
-  --namespace container-caching \
-  --values values.yaml
-```
-
-</Tab>
-
 <Tab title="Self-Hosted (OCI)">
 
 Replace `<your-registry>/<your-repo>` with your mirrored registry path.
@@ -108,7 +85,7 @@ Replace `<your-registry>/<your-repo>` with your mirrored registry path.
 ```bash
 helm upgrade --install container-cache \
   oci://<your-registry>/<your-repo>/nvcf-container-cache \
-  --version 0.25.6 \
+  --version 0.25.22 \
   --namespace container-caching \
   --values values.yaml
 ```
@@ -313,18 +290,28 @@ persistentVolumeClaim:
 
 ### Service Configuration
 
-The service type and port can be configured based on your access requirements:
+The service port is configurable. The service type is not: Container Cache is
+always exposed as a `NodePort`.
 
 ```yaml
 # values.yaml
 
 service:
-  # Service type: ClusterIP, NodePort, or LoadBalancer
-  type: ClusterIP
-
   # Port for the Container Cache service
   port: 30345
 ```
+
+The service is always `NodePort` and the type is not configurable. The container
+runtime on each node reaches the cache at `${NODE_IP}:${port}` from the host
+network namespace, where cluster service DNS and ClusterIP addresses are not
+dependable, so the port must be published on every node.
+
+`service.type` was never a safe setting. A ClusterIP service publishes no node
+port, so the registry mirror written to each node points at a port nothing
+listens on, and image pulls fall back to the upstream registry with no error and
+no cache involvement, which looks identical to a working cache until you check
+cache metrics. The chart now fails the render on any value other than `NodePort`
+so a leftover override cannot silently disable caching.
 
 ### Metrics Configuration
 

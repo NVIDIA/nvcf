@@ -1,0 +1,120 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+notary:
+  image:
+    registry: "" # must be supplied
+    repository: "" # must be supplied
+    pullPolicy: IfNotPresent
+    tag: "1.14.0"
+
+  # Namespace to deploy the resources. The default value is the release name.
+  namespace: ""
+
+  nameOverride: ""
+  fullnameOverride: ""
+
+  replicaCount: 1
+
+  podAnnotations: {}
+  podLabels: {}
+
+  podSecurityContext: {}
+  securityContext:
+    capabilities:
+      drop:
+        - ALL
+      add:
+        - NET_BIND_SERVICE
+    runAsUser: 1000
+
+  service:
+    type: ClusterIP
+    ports:
+      - name: http
+        port: 8080
+        targetPort: 8080
+        protocol: TCP
+
+  resources:
+    limits:
+      cpu: 2
+      memory: 4Gi
+    requests:
+      cpu: 1
+      memory: 2Gi
+
+  livenessProbe:
+    httpGet:
+      path: /actuator/health/liveness
+      port: management
+    periodSeconds: 10
+    timeoutSeconds: 1
+    failureThreshold: 6
+
+  readinessProbe:
+    httpGet:
+      path: /actuator/health/readiness
+      port: management
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 1
+    failureThreshold: 1
+
+  startupProbe:
+    httpGet:
+      path: /actuator/health/readiness
+      port: management
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 30
+
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 80
+
+  volumes:
+    - name: token
+      projected:
+        sources:
+        - serviceAccountToken:
+            path: token
+            expirationSeconds: 3600
+            audience: http://openbao-server.vault-system.svc.cluster.local:8200
+
+  volumeMounts:
+    - name: token
+      mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+      readOnly: true
+    - name: vault-config-templates
+      mountPath: /vault/config/templates
+      readOnly: true
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  ports:
+    - name: http
+      containerPort: 8080
+      protocol: TCP
+    - name: management
+      containerPort: 8181
+      protocol: TCP
+
+  env:
+    SPRING_PROFILES_ACTIVE: "ncp"

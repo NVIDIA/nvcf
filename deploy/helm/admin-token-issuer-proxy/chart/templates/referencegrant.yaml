@@ -33,7 +33,7 @@ apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
   name: {{ include "admin-issuer-proxy.fullname" . }}
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ include "admin-issuer-proxy.namespace" . }}
 spec:
   from:
     - group: gateway.networking.k8s.io

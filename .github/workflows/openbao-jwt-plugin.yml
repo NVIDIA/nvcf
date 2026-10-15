@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Build and test the OpenBao JWT secrets plugin.
+#
+# This module is deliberately NOT in go.work.bazel and has no BUILD.bazel, so
+# the Bazel matrix in bazel.yml never sees it. That is the point: its graph is
+# 278 modules including hashicorp/vault/api and hashicorp/vault/sdk, none of
+# which the root module uses today. Joining the root graph would put all of it
+# into minimal version selection for every service in the repository, to build
+# one plugin binary that ships inside a single image.
+#
+# The cost of that isolation is that nothing else would compile or test this
+# code, and NVIDIA now owns modifications to it. Hence this job: plain go,
+# scoped to the one directory, so the tests actually run.
+
+name: openbao-jwt-plugin
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/openbao/plugins/vault-plugin-secrets-jwt/**'
+      - '.github/workflows/openbao-jwt-plugin.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'infra/openbao/plugins/vault-plugin-secrets-jwt/**'
+      - '.github/workflows/openbao-jwt-plugin.yml'
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openbao-jwt-plugin-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build-test:
+    name: build and test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/openbao/plugins/vault-plugin-secrets-jwt
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: infra/openbao/plugins/vault-plugin-secrets-jwt/go.mod
+          cache-dependency-path: infra/openbao/plugins/vault-plugin-secrets-jwt/go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./...
+
+      # The plugin must not regain a dependency on friendlyid-go. That project
+      # carries no license and is not redistributable; plugin/friendlyid.go is
+      # the independently authored replacement. A `go get` that reintroduces it
+      # would be a licensing regression, not a build failure, so nothing else
+      # would catch it.
+      - name: Assert no unlicensed dependency
+        run: |
+          # Capture first rather than piping into grep. Inside `if`, a failing
+          # `go list` would otherwise read as "dependency absent", and under
+          # pipefail grep can close the pipe on a match and leave go list
+          # killed by SIGPIPE. Either way the gate would pass while blind.
+          modules="$(go list -m all)" || {
+            echo "::error::failed to enumerate the Go module graph" >&2
+            exit 1
+          }
+          if grep -Fq 'github.com/mariuszs/friendlyid-go' <<<"$modules"; then
+            echo "::error::friendlyid-go is back in the module graph; it carries no license and cannot be redistributed" >&2
+            exit 1
+          fi
+          echo "friendlyid-go absent from the module graph"

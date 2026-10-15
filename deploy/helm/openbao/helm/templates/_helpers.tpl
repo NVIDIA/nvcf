@@ -35,6 +35,33 @@ If release name contains chart name it will be used as a full name.
 {{- end -}}
 
 {{/*
+Resolve the fullname used by the embedded OpenBao chart.
+*/}}
+{{- define "nvcf-openbao.serverFullname" -}}
+{{- $openbaoValues := default dict (get .Values "openbao") -}}
+{{- if get $openbaoValues "fullnameOverride" -}}
+{{- get $openbaoValues "fullnameOverride" | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- $name := default "openbao" (get $openbaoValues "nameOverride") -}}
+{{- if contains $name .Release.Name -}}
+{{- .Release.Name | trunc 63 | trimSuffix "-" -}}
+{{- else -}}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Allow the release namespace to be overridden.
+*/}}
+{{- define "nvcf-openbao.namespace" -}}
+{{- $openbaoValues := default dict (get .Values "openbao") -}}
+{{- $globalValues := default dict (get $openbaoValues "global") -}}
+{{- $namespace := default .Release.Namespace (get $openbaoValues "namespace") -}}
+{{- default $namespace (get $globalValues "namespace") -}}
+{{- end -}}
+
+{{/*
 Create chart name and version as used by the chart label.
 */}}
 
