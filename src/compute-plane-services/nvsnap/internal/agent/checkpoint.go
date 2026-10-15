@@ -1344,7 +1344,11 @@ func (a *Agent) captureReplayMounts(ctx context.Context, containerInfo *containe
 		}
 		tarRel := filepath.Join("mounts", SanitizeMountPath(mi.MountPoint)+".tar")
 		tarAbs := filepath.Join(checkpointDir, tarRel)
-		if err := tarMount(int(containerInfo.PID), mi.MountPoint, tarAbs, log); err != nil {
+		var mountPoints []string
+		for _, m := range mis {
+			mountPoints = append(mountPoints, m.MountPoint)
+		}
+		if err := tarMount(int(containerInfo.PID), mi.MountPoint, tarAbs, nestedMountPoints(mountPoints, mi.MountPoint), log); err != nil {
 			log.WithError(err).WithField("mp", mi.MountPoint).
 				Warn("Replay-mount snapshot failed; restore may fail for this mount")
 			continue

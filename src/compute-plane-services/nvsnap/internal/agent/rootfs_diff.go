@@ -18,13 +18,18 @@ limitations under the License.
 package agent
 
 import (
+	"archive/tar"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/sirupsen/logrus"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/criu/mountinfo"
 )
 
 // excludeArgsForMountpoints converts a list of absolute container-side
@@ -279,7 +284,13 @@ func mirrorIntoMntns(srcDiff string, placeholderPID int, excludeMountpoints []st
 //
 // Returns nil if the source path is missing or empty — a captured-but-
 // empty mount on restore is the same as no capture (untar is a no-op).
-func tarMount(srcPID int, mp, outFile string, log *logrus.Entry) error {
+// tarMount archives the mount at mp (as seen by srcPID) into outFile,
+// leaving out the mounts nested in it (exclude: paths relative to mp). A
+// nested mount is the restore pod's own volume (the model under nvsnap's
+// cachedir); --one-file-system already leaves out its contents, but its
+// mountpoint directory stayed in the archive, and extracting that over a
+// read-only mount failed the whole replay.
+func tarMount(srcPID int, mp, outFile string, exclude []string, log *logrus.Entry) error {
 	if srcPID <= 0 || mp == "" || outFile == "" {
 		return fmt.Errorf("tarMount: empty pid/mp/out")
 	}
@@ -310,8 +321,11 @@ func tarMount(srcPID int, mp, outFile string, log *logrus.Entry) error {
 		"--numeric-owner",
 		"--sparse",
 		"--one-file-system",
-		".",
 	}
+	for _, e := range exclude {
+		args = append(args, "--exclude=./"+e)
+	}
+	args = append(args, ".")
 	cmd := exec.Command("tar", args...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -372,16 +386,23 @@ func untarIntoMntns(placeholderPID int, mp, tarFile string, log *logrus.Entry) e
 	if out, err := mkdir.CombinedOutput(); err != nil {
 		return fmt.Errorf("nsenter+mkdir (pid=%d, mp=%s): %w (output: %s)", placeholderPID, mp, err, strings.TrimSpace(string(out)))
 	}
-	cmd := exec.Command("nsenter", "--mount="+mntnsPath, "--", //nolint:gosec // args are internally constructed (PIDs/paths), not user input
-		inContainerTool(placeholderPID, "tar"),
-		"-C", mp,
-		"-xf", "-",
-		"--xattrs",
-		"--acls",
-		"--numeric-owner",
-		"--preserve-permissions",
-		"--overwrite",
-	)
+	// The placeholder's own mounts under mp (the model volume under
+	// nvsnap's cachedir) are its volumes, not the source's: never extract
+	// over them. Archives from before tarMount left them out still carry
+	// their mountpoint directory.
+	var nested []string
+	if mis, err := mountinfo.ParseMountinfo(mountinfo.ProcMountinfoPath(placeholderPID)); err == nil {
+		var mps []string
+		for _, m := range mis {
+			mps = append(mps, m.MountPoint)
+		}
+		nested = nestedMountPoints(mps, mp)
+	}
+	args := []string{"-C", mp, "-xf", "-", "--xattrs", "--acls", "--numeric-owner", "--preserve-permissions", "--overwrite"}
+	for _, e := range nested {
+		args = append(args, "--exclude=./"+e, "--exclude="+e)
+	}
+	cmd := exec.Command("nsenter", append([]string{"--mount=" + mntnsPath, "--", inContainerTool(placeholderPID, "tar")}, args...)...) //nolint:gosec // args are internally constructed (PIDs/paths), not user input
 	cmd.Stdin = f
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -389,14 +410,85 @@ func untarIntoMntns(placeholderPID int, mp, tarFile string, log *logrus.Entry) e
 		return fmt.Errorf("nsenter+tar (pid=%d, mp=%s): %w (stderr: %s)",
 			placeholderPID, mp, err, stderr.String())
 	}
+	n, err := verifyReplayed(placeholderPID, mp, tarFile, nested)
+	if err != nil {
+		return err
+	}
 	if log != nil {
 		log.WithFields(logrus.Fields{
-			"pid": placeholderPID,
-			"mp":  mp,
-			"tar": tarFile,
+			"pid":     placeholderPID,
+			"mp":      mp,
+			"tar":     tarFile,
+			"entries": n,
 		}).Info("Replayed mount snapshot into placeholder mntns")
 	}
 	return nil
+}
+
+// underAny reports whether the relative path name is one of dirs or under one.
+func underAny(name string, dirs []string) bool {
+	for _, d := range dirs {
+		if name == d || strings.HasPrefix(name, d+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// nestedMountPoints returns the mountpoints strictly under mp, relative to
+// it.
+func nestedMountPoints(mountPoints []string, mp string) []string {
+	var out []string
+	prefix := strings.TrimSuffix(mp, "/") + "/"
+	for _, m := range mountPoints {
+		if strings.HasPrefix(m, prefix) {
+			out = append(out, strings.TrimPrefix(m, prefix))
+		}
+	}
+	return out
+}
+
+// verifyReplayed checks that every entry of the archive tarFile exists under
+// mp in the placeholder's mount namespace (through /proc/<pid>/root), and
+// returns how many it checked. CRIU re-opens the workload's files by path and
+// re-creates its deleted ones next to their old path: an entry missing here
+// fails the restore inside CRIU, far from its cause.
+func verifyReplayed(placeholderPID int, mp, tarFile string, skip []string) (int, error) {
+	f, err := os.Open(tarFile)
+	if err != nil {
+		return 0, fmt.Errorf("reopen %s: %w", tarFile, err)
+	}
+	defer func() { _ = f.Close() }()
+	root := filepath.Join(hostProcBase(), strconv.Itoa(placeholderPID), "root", mp)
+	tr := tar.NewReader(f)
+	var n int
+	var missing []string
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return n, fmt.Errorf("read %s: %w", tarFile, err)
+		}
+		name := filepath.Clean(strings.TrimPrefix(h.Name, "./"))
+		if name == "." || underAny(name, skip) {
+			continue
+		}
+		n++
+		if _, err := os.Lstat(filepath.Join(root, name)); err != nil {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		shown := missing
+		if len(shown) > 10 {
+			shown = shown[:10]
+		}
+		return n, fmt.Errorf("replay of %s incomplete: %d of %d entries missing in the placeholder, e.g. %s",
+			mp, len(missing), n, strings.Join(shown, ", "))
+	}
+	return n, nil
 }
 
 // SanitizeMountPath converts an absolute mount path into a safe filename

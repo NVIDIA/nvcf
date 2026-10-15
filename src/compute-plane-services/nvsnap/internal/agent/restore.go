@@ -476,27 +476,18 @@ func (a *Agent) Restore(ctx context.Context, req RestoreRequest) (*RestoreResult
 		// checkpoint can't be reopened. See
 		// docs/archive/CROSS-POD-MOUNT-REPLAY-DESIGN.md.
 		//
-		// Per-mount failures are logged and skipped — CRIU may still
-		// succeed if the workload didn't depend on the missing content
-		// (Q6 in design). Rootfs mirror failure above is fatal; this is
-		// not.
-		var replayed, replayFailed int
+		// A failed or incomplete replay fails the restore: the archive
+		// holds files the workload has open or mapped (and the parent
+		// directories of its deleted ones), and CRIU would fail on the
+		// first one missing, or restore a workload without them.
 		for _, rm := range metadata.ReplayMounts {
 			tarAbs := filepath.Join(checkpointDir, rm.Tarball)
 			if rErr := untarIntoMntns(placeholderMntnsPID, rm.Path, tarAbs, log); rErr != nil {
-				log.WithError(rErr).WithField("mp", rm.Path).
-					Warn("Failed to replay mount into placeholder; CRIU may fail for this mount")
-				replayFailed++
-				continue
+				return nil, fmt.Errorf("replay %s into the placeholder: %w", rm.Path, rErr)
 			}
-			replayed++
 		}
-		if replayed > 0 || replayFailed > 0 {
-			log.WithFields(logrus.Fields{
-				"replayed": replayed,
-				"failed":   replayFailed,
-				"total":    len(metadata.ReplayMounts),
-			}).Info("Cross-pod mount replay complete")
+		if len(metadata.ReplayMounts) > 0 {
+			log.WithField("total", len(metadata.ReplayMounts)).Info("Cross-pod mount replay complete")
 		}
 	}
 
