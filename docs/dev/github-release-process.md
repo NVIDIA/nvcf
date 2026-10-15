@@ -283,7 +283,8 @@ The `branch-cut` command is restricted to version-file registrations; it does
 not create ordinary service or chart maintenance branches.
 
 A service or chart maintenance merge does not create a tag automatically. After
-review and validation, publish the unused `<component-path>/vX.Y.Z` tag from the
+review and validation, publish the unused tag rendered from the registration's
+`tag_format`, or `<component-path>/vX.Y.Z` when no override exists, from the
 reviewed maintenance commit. Tag publication creates the GitHub Release and
 starts the existing downstream artifact delivery. Confirm the tag and workflow
 behavior in historical source before creating a branch or publishing a tag.
