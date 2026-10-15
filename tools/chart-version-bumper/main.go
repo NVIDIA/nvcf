@@ -134,6 +134,10 @@ func Run(root, tag string, write bool, out, errOut io.Writer) (int, error) {
 				refused++
 				continue
 			}
+			if BumpLevel(release.Version, currentRelease) != "" {
+				fmt.Fprintf(out, "  %s: skipped older release %s; keeping %s\n", chart.ID, release.ArtifactVersion, p.Current)
+				continue
+			}
 			fmt.Fprintf(out, "  %s: %s -> %s (%s)\n", chart.ID, p.Current, release.ArtifactVersion, p.Detail)
 			level = HigherLevel(level, BumpLevel(currentRelease, release.Version))
 			if write {

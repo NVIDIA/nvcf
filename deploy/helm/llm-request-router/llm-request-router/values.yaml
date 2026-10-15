@@ -44,6 +44,10 @@ llmRequestRouter:
     registry: ""
     repository: ""
     tag: "0.26.1"
+    # When set, the Pod image is repository@digest and tag is ignored for the
+    # image. The backend router uses this digest only when every
+    # backendRouter.image field is empty, so clear its pinned tag to apply it.
+    digest: ""
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
@@ -131,6 +135,15 @@ llmRequestRouter:
       annotations: {}
       name: ""
     service:
+      # Keep ClusterIP in self-managed stacks; the Gateway data-plane Service
+      # owns external exposure. LoadBalancer is for development stacks only.
+      # It omits the health port from this Service, so the ServiceMonitor has
+      # nothing to scrape and load balancer health checks must probe the pod
+      # health port directly.
+      type: ClusterIP
+      annotations: {}
+      loadBalancerClass: ""
+      loadBalancerSourceRanges: []
       grpcPort: 50071
       reverseTunnelPort: 50072
       healthPort: 8080
@@ -270,9 +283,16 @@ llmRequestRouter:
 
   auth:
     workerAuthEndpoint: "http://api.nvcf.svc.cluster.local:9090"
+    # Read the worker-auth service token from a pre-created Secret instead of
+    # Vault injection, for static development credentials. The Secret must
+    # have a service-token.json key holding JSON with an nvcfApiToken field.
+    # Requires vault.noVaultAnnotations=true.
+    existingSecret:
+      name: ""
 
   vault:
     audience: ""
+    noVaultAnnotations: false
 
   tls:
     # Source of the QUIC server identity.
@@ -299,6 +319,10 @@ llmRequestRouter:
     mountPath: ""
     certPath: ""
     keyPath: ""
+    # Optional CA bundle the backend router uses to verify Stargate QUIC
+    # targets. Requires the TLS Secret, certPath, and keyPath; the file must
+    # sit next to them and the Secret must provide it under the ca.crt key.
+    upstreamCaPath: ""
     quicInsecure: true
 
   metrics:

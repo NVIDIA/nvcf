@@ -8,6 +8,8 @@ on:
     paths:
       - 'tools/docs-version-sync/**'
       - '.github/workflows/umbrella-release-validation.yml'
+      - '.github/workflows/publish-umbrella-release.yml'
+      - '.github/workflows/release-tags.yml'
 
 permissions:
   contents: read

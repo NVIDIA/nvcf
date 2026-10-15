@@ -96,7 +96,7 @@ func TestNatsAuthOption_WithTokenHandler(t *testing.T) {
 			tokenProvider := auth.NewSettableTokenSource(mockSource)
 
 			// Call function with nil nkeySeed to trigger token handler path
-			option, err := natsAuthOption(nil, tokenProvider)
+			option, err := natsAuthOption(nil, "", tokenProvider)
 
 			// Should not return error for token handler path
 			assert.NoError(t, err)
@@ -185,7 +185,7 @@ func TestNatsAuthOption_WithNKey(t *testing.T) {
 				token: &oauth2.Token{AccessToken: "dummy"},
 			})
 
-			option, err := natsAuthOption(&tt.nkeySeed, tokenProvider)
+			option, err := natsAuthOption(&tt.nkeySeed, "", tokenProvider)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -237,7 +237,7 @@ func TestNatsAuthOption_TokenHandlerWithSpecialCases(t *testing.T) {
 		}
 
 		tokenProvider := auth.NewSettableTokenSource(mockSource)
-		option, err := natsAuthOption(nil, tokenProvider)
+		option, err := natsAuthOption(nil, "", tokenProvider)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, option)
@@ -279,7 +279,7 @@ func TestNatsAuthOption_TokenHandlerWithSpecialCases(t *testing.T) {
 		}
 
 		tokenProvider := auth.NewSettableTokenSource(mockSource)
-		option, err := natsAuthOption(nil, tokenProvider)
+		option, err := natsAuthOption(nil, "", tokenProvider)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, option)
@@ -300,6 +300,53 @@ func TestNatsAuthOption_TokenHandlerWithSpecialCases(t *testing.T) {
 	})
 }
 
+func TestNatsAuthOption_TokenNamesTheAccount(t *testing.T) {
+	tests := []struct {
+		name    string
+		account string
+		want    string
+	}{
+		{name: "named account", account: "APP", want: "APP"},
+		{name: "no account named", account: "", want: DefaultNatsAccount},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tokenProvider := auth.NewSettableTokenSource(&mockTokenSource{token: &oauth2.Token{AccessToken: "worker-token"}})
+			option, err := natsAuthOption(nil, tt.account, tokenProvider)
+			require.NoError(t, err)
+
+			opts := &nats.Options{}
+			require.NoError(t, option(opts))
+
+			decodedJSON, err := base64.RawURLEncoding.DecodeString(opts.TokenHandler())
+			require.NoError(t, err)
+			var tokenData struct {
+				Account    string `json:"account"`
+				PluginName string `json:"pluginName"`
+				Payload    string `json:"payload"`
+			}
+			require.NoError(t, json.Unmarshal(decodedJSON, &tokenData))
+			assert.Equal(t, tt.want, tokenData.Account)
+			assert.Equal(t, "webhook", tokenData.PluginName)
+			assert.Equal(t, "worker-token", tokenData.Payload)
+		})
+	}
+}
+
+func TestNatsAuthOption_NkeyIgnoresTheAccount(t *testing.T) {
+	tokenProvider := auth.NewSettableTokenSource(&mockTokenSource{token: &oauth2.Token{AccessToken: "worker-token"}})
+	nkeySeed := generateValidUserNKeySeed(t)
+
+	option, err := natsAuthOption(&nkeySeed, "APP", tokenProvider)
+	require.NoError(t, err)
+
+	opts := &nats.Options{}
+	require.NoError(t, option(opts))
+	assert.NotEmpty(t, opts.Nkey)
+	assert.Nil(t, opts.TokenHandler)
+}
+
 func TestNatsAuthOption_BothPathsComparison(t *testing.T) {
 	// Test that both paths produce different but valid options
 	token := &oauth2.Token{AccessToken: "test-token"}
@@ -307,7 +354,7 @@ func TestNatsAuthOption_BothPathsComparison(t *testing.T) {
 	tokenProvider := auth.NewSettableTokenSource(mockSource)
 
 	// Test token handler path
-	tokenOption, err := natsAuthOption(nil, tokenProvider)
+	tokenOption, err := natsAuthOption(nil, "", tokenProvider)
 	assert.NoError(t, err)
 	assert.NotNil(t, tokenOption)
 
@@ -319,7 +366,7 @@ func TestNatsAuthOption_BothPathsComparison(t *testing.T) {
 
 	// Test nkey path
 	nkeySeed := generateValidUserNKeySeed(t)
-	nkeyOption, err := natsAuthOption(&nkeySeed, tokenProvider)
+	nkeyOption, err := natsAuthOption(&nkeySeed, "", tokenProvider)
 	assert.NoError(t, err)
 	assert.NotNil(t, nkeyOption)
 

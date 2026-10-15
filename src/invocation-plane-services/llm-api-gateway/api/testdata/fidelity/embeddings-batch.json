@@ -1,0 +1,94 @@
+{
+  "description": "Batch input, encoding, dimensions and vendor request fields reach upstream unchanged.",
+  "path": "/v1/embeddings",
+  "request": {
+    "model": "fn-alpha/company/model",
+    "input": [
+      "hello",
+      "world"
+    ],
+    "dimensions": 256,
+    "encoding_format": "base64",
+    "user": "fixture-user",
+    "input_type": "query",
+    "truncate": "END",
+    "vendor_options": {
+      "precision": 0.12345678901234567890123456789,
+      "empty": null
+    }
+  },
+  "upstream_request": {
+    "model": "company/model",
+    "input": [
+      "hello",
+      "world"
+    ],
+    "dimensions": 256,
+    "encoding_format": "base64",
+    "user": "fixture-user",
+    "input_type": "query",
+    "truncate": "END",
+    "vendor_options": {
+      "precision": 0.12345678901234567890123456789,
+      "empty": null
+    }
+  },
+  "upstream_response": {
+    "json": {
+      "object": "list",
+      "data": [
+        {
+          "object": "embedding",
+          "index": 0,
+          "embedding": "AAAAAA=="
+        },
+        {
+          "object": "embedding",
+          "index": 1,
+          "embedding": "AACAPw=="
+        }
+      ],
+      "model": "company/model",
+      "usage": {
+        "prompt_tokens": 2,
+        "total_tokens": 2,
+        "vendor_usage": {
+          "cached_tokens": 0
+        }
+      },
+      "vendor_response": {
+        "revision": 9007199254740993,
+        "empty": null
+      }
+    }
+  },
+  "response": {
+    "json": {
+      "object": "list",
+      "data": [
+        {
+          "object": "embedding",
+          "index": 0,
+          "embedding": "AAAAAA=="
+        },
+        {
+          "object": "embedding",
+          "index": 1,
+          "embedding": "AACAPw=="
+        }
+      ],
+      "model": "company/model",
+      "usage": {
+        "prompt_tokens": 2,
+        "total_tokens": 2,
+        "vendor_usage": {
+          "cached_tokens": 0
+        }
+      },
+      "vendor_response": {
+        "revision": 9007199254740993,
+        "empty": null
+      }
+    }
+  }
+}

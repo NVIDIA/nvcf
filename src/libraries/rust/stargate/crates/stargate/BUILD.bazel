@@ -103,22 +103,42 @@ py_test(
     size = "small",
 )
 
+rust_binary(
+    name = "stargate-dev-auth",
+    srcs = ["src/bin/stargate-dev-auth.rs"],
+    aliases = aliases(),
+    crate_root = "src/bin/stargate-dev-auth.rs",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = _WORKSPACE_DEPS + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "stargate_dev_auth_test",
+    crate = ":stargate-dev-auth",
+)
+
 rust_test(
     name = "stargate_test",
     crate = ":stargate_lib",
-    # The load_balancer suite's `bundled_benchmark_lb_configs_parse` test
-    # reads the workspace's `benches/` directory via
-    # `env!("CARGO_MANIFEST_DIR")/../../benches`. CARGO_MANIFEST_DIR
-    # resolves to the source path in Bazel's sandbox, not the runfiles
-    # tree where `data` files land, so just adding the filegroup is not
-    # enough -- the test still panics. Skip it in Bazel (`cargo test`
-    # keeps running it). A follow-up can re-enable it via the `runfiles`
-    # crate + a separate env-var pointing at the data-staged path.
-    args = [
-        "--skip",
-        "load_balancer::tests::bundled_benchmark_lb_configs_parse",
+    # The routing-method drift tests include the manifest and the NVCF
+    # routing docs at compile time.
+    compile_data = [
+        "//:stargate-routing-method-docs",
+        "//src/libraries/rust/stargate:routing_methods.json",
     ],
-    data = ["//src/libraries/rust/stargate:benches"],
+    # Tests read `benches/` and the routing simulator configs through
+    # `env!("CARGO_MANIFEST_DIR")`. Resolve it within the test's runfiles
+    # tree, where `data` lands, instead of the build sandbox's source
+    # directory.
+    data = [
+        "//src/libraries/rust/stargate:benches",
+        "//src/libraries/rust/stargate/crates/stargate-routing-sim:configs",
+    ],
+    rustc_env = {
+        "CARGO_MANIFEST_DIR": "src/libraries/rust/stargate/crates/stargate",
+    },
     # Test target needs the workspace-local deps in addition to the
     # third-party dev deps. `pylon-lib` is a dev-dependency only here.
     deps = _WORKSPACE_DEPS + [
@@ -136,6 +156,25 @@ rust_oci_image(
     extra_layers = ["//src/libraries/rust/stargate/crates/stargate-k8s-router:stargate-k8s-router-image_layer"],
     tags = ["stargate"],
     visibility = ["//visibility:public"],
+)
+
+rust_oci_image(
+    name = "dev_auth_image",
+    base = "@distroless_cc",
+    binary = ":stargate-dev-auth",
+    binary_path = "/usr/local/bin/stargate-dev-auth",
+    tags = ["stargate-dev-auth"],
+    visibility = ["//visibility:public"],
+)
+
+sh_test(
+    name = "dev_auth_image_entrypoint_mode_test",
+    srcs = ["//src/libraries/rust/stargate/tools/ci:image_entrypoint_mode_test.sh"],
+    args = [
+        "$(location :dev_auth_image_layer)",
+        "/usr/local/bin/stargate-dev-auth",
+    ],
+    data = [":dev_auth_image_layer"],
 )
 
 # Entrypoint exec-bit guard. Inspect the assembled image layer and fail if

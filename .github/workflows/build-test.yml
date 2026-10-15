@@ -5,9 +5,9 @@ name: build-test
 
 on:
   push:
-    branches: [main, 'release-**']
+    branches: [main, 'release-**', 'release/**']
   pull_request:
-    branches: [main, 'release-**', 'docs/**']
+    branches: [main, 'release-**', 'release/**', 'docs/**']
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -142,6 +142,12 @@ jobs:
 
       - name: Run observability Helmfile profile tests
         run: make -C deploy/stacks/observability test
+
+      - name: Test LLM request router chart rendering
+        run: make -C deploy/helm/llm-request-router test
+
+      - name: Run Stargate dev stack render tests
+        run: python3 -m unittest discover -s deploy/stacks/stargate-dev/tests
 
       - name: Test OpenBao auto-unseal retry behavior
         run: bash deploy/helm/openbao/tests/auto-unseal-sidecar.sh
@@ -278,3 +284,27 @@ jobs:
         run: |
           bash tools/ci/test-check-gazelle
           bash tools/ci/check-gazelle
+
+  stargate-dev-benchmark:
+    name: Stargate development benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: deploy/stacks/stargate-dev/benchmark
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Test the benchmark controller
+        run: cargo test --locked --all-targets
+
+      - name: Check Rust diagnostics
+        run: cargo clippy --locked --all-targets -- -D warnings

@@ -77,6 +77,7 @@ Important settings to review before deployment:
 - `grpcproxy.config.*` for service endpoints, NATS connection settings, and tracing configuration
 - `grpcproxy.workerConnectBaseURL` for split deployments where workers need a routable HTTP/1 CONNECT callback endpoint instead of the grpc-proxy pod IP. The chart maps this value to `SELF_WORKER_FQDN` for the grpc-proxy container.
 - `grpcproxy.vault.*` for JWT authentication path, role, and audience values used by the Vault Agent injector
+- `grpcproxy.env.EVENT_LEDGER_ADDR` to publish events to the event ledger. The Vault Agent template renders an `eventLedgerToken` from `services/event-ledger/jwt/sign/grpc-proxy-proxy`, so the OpenBao migrations must include the grpc-proxy event ledger role before this chart version is deployed.
 
 The default values include development-oriented placeholders. Override them before using the chart in any shared or production environment.
 

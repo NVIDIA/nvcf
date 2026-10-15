@@ -157,7 +157,7 @@ func (sc *ScenarioContext) iSuccessfullyInvokeModel(
 			return nil
 		}
 		if retryTimeoutErr != nil || retryFor <= 0 ||
-			!strings.Contains(combinedOutput(sc.LastResult), "no_eligible_candidates") {
+			!isNoEligibleCandidates(combinedOutput(sc.LastResult)) {
 			return err
 		}
 
@@ -186,6 +186,14 @@ func (sc *ScenarioContext) iSuccessfullyInvokeModel(
 			return err
 		}
 	}
+}
+
+// isNoEligibleCandidates reports whether the router has not registered the
+// model yet. Chat completions return the router message; passthrough
+// endpoints return the router code.
+func isNoEligibleCandidates(output string) bool {
+	return strings.Contains(output, "no_eligible_candidates") ||
+		strings.Contains(output, "no eligible candidates")
 }
 
 func (sc *ScenarioContext) iSuccessfullyInvokeFunctionThroughVanityGateway(
@@ -258,7 +266,11 @@ func isTransientVanityRouteNotFound(stderr string) bool {
 }
 
 func (sc *ScenarioContext) iSuccessfullyUndeploySelectedFunction(ctx context.Context) error {
-	return sc.runNVCFCLI(ctx, "function", "delete", "--deployment-only")
+	if err := sc.runNVCFCLI(ctx, "function", "delete", "--deployment-only"); err != nil {
+		return err
+	}
+	sc.FunctionUndeployed = true
+	return nil
 }
 
 func (sc *ScenarioContext) runNVCFCLIWithOptions(
