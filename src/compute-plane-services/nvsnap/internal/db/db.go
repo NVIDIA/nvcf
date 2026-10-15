@@ -32,23 +32,29 @@ type DB struct {
 }
 
 // Open opens (or creates) a SQLite database at path.
-// Configures WAL mode and busy timeout for concurrent access.
+//
+// The pragmas go in the DSN so that every connection of the pool gets them:
+// set with Exec, they applied to one pooled connection only, and the others
+// failed concurrent writes at once with "database is locked (SQLITE_BUSY)".
+// Transactions take the write lock when they begin (_txlock=immediate): a
+// read that upgrades to a write in WAL mode gets SQLITE_BUSY without waiting
+// for the busy timeout. ":memory:" is one database per connection, so it
+// gets a single connection.
 func Open(path string) (*DB, error) {
-	sqlDB, err := sql.Open("sqlite", path)
+	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate"
+	if path == ":memory:" {
+		dsn = ":memory:?_pragma=busy_timeout(5000)"
+	}
+	sqlDB, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
-
-	// WAL mode for concurrent reads during writes
-	if _, err := sqlDB.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("set WAL mode: %w", err)
+	if path == ":memory:" {
+		sqlDB.SetMaxOpenConns(1)
 	}
-
-	// 5s busy timeout to avoid "database is locked" under contention
-	if _, err := sqlDB.Exec("PRAGMA busy_timeout=5000"); err != nil {
+	if err := sqlDB.Ping(); err != nil {
 		_ = sqlDB.Close()
-		return nil, fmt.Errorf("set busy timeout: %w", err)
+		return nil, fmt.Errorf("open sqlite %s: %w", path, err)
 	}
 
 	d := &DB{db: sqlDB}
