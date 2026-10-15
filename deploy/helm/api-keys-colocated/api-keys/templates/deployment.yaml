@@ -84,6 +84,9 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           securityContext:
+            runAsNonRoot: true
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
             capabilities:
               drop:
                 - ALL
