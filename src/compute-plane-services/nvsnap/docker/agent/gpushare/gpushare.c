@@ -441,13 +441,15 @@ VEC(struct map, mcmaps);  /* .imp: index into mcs */
  * driver checkpoint saves it otherwise, and on driver 610 it fails with
  * OUT_OF_MEMORY on some (a 512 MiB FlashInfer MNNVL workspace in a
  * multi-node vLLM worker). "release" saves it like a valloc and frees it;
- * "load" creates it again at the same VA with the same access. */
+ * "load" creates it again at the same VA with the same access. Host
+ * memory shared this way (NCCL's SHM transport, between GPUs without P2P)
+ * too: the driver checkpoints it but cannot restore it (UNKNOWN). */
 struct xdrop {
     CUdeviceptr va; size_t size;
     CUmemGenericAllocationHandle old;
     int app_rel;
     CUmemAllocationProp prop;
-    CUmemAccessDesc acc[MAX_DEV]; int na;
+    CUmemAccessDesc acc[MAX_DEV + 1]; int na;  /* devices, and the CPU for host memory */
     struct valloc sv;  /* contents, as for a valloc */
     CUmemGenericAllocationHandle nh;  /* "load": the new one */
 };
@@ -2414,18 +2416,27 @@ static CUresult xdrop_save_all(int *nx, size_t *nb)
         r = CU(cuMemGetAllocationPropertiesFromHandle, &x.prop, rh);
         REAL(r_release, "cuMemRelease")(rh);
         if (r != CUDA_SUCCESS) break;
-        if (x.prop.location.type != CU_MEM_LOCATION_TYPE_DEVICE) continue;
+        int host = x.prop.location.type == CU_MEM_LOCATION_TYPE_HOST_NUMA;
+        if (x.prop.location.type != CU_MEM_LOCATION_TYPE_DEVICE && !host) continue;
         int ndev = 0;
         CU(cuDeviceGetCount, &ndev);
+        x.sv.dev = host ? -1 : x.prop.location.id;
         for (int d = 0; d < ndev && d < MAX_DEV; d++) {
             CUmemLocation loc = { CU_MEM_LOCATION_TYPE_DEVICE, d };
             unsigned long long f = CU_MEM_ACCESS_FLAGS_PROT_NONE;
-            if (CU(cuMemGetAccess, &f, &loc, l->va) == CUDA_SUCCESS && f != CU_MEM_ACCESS_FLAGS_PROT_NONE)
+            if (CU(cuMemGetAccess, &f, &loc, l->va) == CUDA_SUCCESS && f != CU_MEM_ACCESS_FLAGS_PROT_NONE) {
                 x.acc[x.na++] = (CUmemAccessDesc){ loc, (CUmemAccess_flags)f };
+                if (x.sv.dev < 0) x.sv.dev = d;  /* host memory: copied through a device that maps it */
+            }
+        }
+        if (host) {
+            unsigned long long f = CU_MEM_ACCESS_FLAGS_PROT_NONE;
+            if (CU(cuMemGetAccess, &f, &x.prop.location, l->va) == CUDA_SUCCESS && f != CU_MEM_ACCESS_FLAGS_PROT_NONE)
+                x.acc[x.na++] = (CUmemAccessDesc){ x.prop.location, (CUmemAccess_flags)f };
+            if (x.sv.dev < 0) continue;
         }
         x.sv.va = l->va;
         x.sv.size = l->size;
-        x.sv.dev = x.prop.location.id;
         /* Drop the app's reference (its handle then stands for the new
          * allocation, see swaps) or ours; one the app released already
          * goes with the unmap. */
