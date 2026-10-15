@@ -162,10 +162,20 @@ spec:
               {{- if .Values.server.enabled }}
               echo "--- [2/5] nvsnap-server reachable ---"
               kubectl rollout status deploy/nvsnap-server -n {{ .Release.Namespace }} --timeout=60s
-              if ! curl -fsS --max-time 10 \
-                   http://nvsnap-server.{{ .Release.Namespace }}.svc.cluster.local:8080/healthz \
-                   >/dev/null; then
-                echo "  FAIL: nvsnap-server /healthz not responding"
+              # The Service can still lead to the replaced pod for a few
+              # seconds after a rollout (Recreate): retry for a minute.
+              ok=0
+              for i in $(seq 1 12); do
+                if curl -fsS --max-time 5 \
+                     http://nvsnap-server.{{ .Release.Namespace }}.svc.cluster.local:8080/healthz \
+                     >/dev/null; then
+                  ok=1
+                  break
+                fi
+                sleep 5
+              done
+              if [ "$ok" != 1 ]; then
+                echo "  FAIL: nvsnap-server /healthz not responding after 1 minute"
                 FAIL=1
               else
                 echo "  OK"
