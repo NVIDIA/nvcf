@@ -39,21 +39,21 @@ public class OwnerStatusByAccountDao {
     private final OwnerStatusByAccountRepository accountRepository;
     private final OwnerStatusByAccountAndServiceRepository serviceRepository;
 
-    public Optional<OwnerStatusByAccountModel> getAccountStatus(
+    public Optional<OwnerStatusByAccountModel> getOwnerStatusByAccount(
             String ncaId, KeyOwnerType ownerType, String ownerId) {
         return accountRepository.findByNcaIdAndOwnerTypeAndOwnerId(ncaId, ownerType, ownerId);
     }
 
-    public Optional<OwnerStatusByAccountAndServiceModel> getServiceStatus(
+    public Optional<OwnerStatusByAccountAndServiceModel> getOwnerStatusByAccountAndService(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId) {
         return serviceRepository.findByNcaIdAndOwnerTypeAndOwnerIdAndIssuerServiceId(
                 ncaId, ownerType, ownerId, issuerServiceId);
     }
 
-    public OwnerStatusByAccountModel saveAccountStatus(
+    public OwnerStatusByAccountModel saveOwnerStatusByAccount(
             String ncaId, KeyOwnerType ownerType, String ownerId, KeyOwnerStatus status) {
         var now = Instant.now();
-        var createdAt = getAccountStatus(ncaId, ownerType, ownerId)
+        var createdAt = getOwnerStatusByAccount(ncaId, ownerType, ownerId)
                 .map(OwnerStatusByAccountModel::getCreatedAt)
                 .orElse(now);
         return accountRepository.save(OwnerStatusByAccountModel.builder()
@@ -66,11 +66,12 @@ public class OwnerStatusByAccountDao {
                                               .build());
     }
 
-    public OwnerStatusByAccountAndServiceModel saveServiceStatus(
+    public OwnerStatusByAccountAndServiceModel saveOwnerStatusByAccountAndService(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId,
             KeyOwnerStatus status) {
         var now = Instant.now();
-        var createdAt = getServiceStatus(ncaId, ownerType, ownerId, issuerServiceId)
+        var createdAt = getOwnerStatusByAccountAndService(
+                ncaId, ownerType, ownerId, issuerServiceId)
                 .map(OwnerStatusByAccountAndServiceModel::getCreatedAt)
                 .orElse(now);
         return serviceRepository.save(OwnerStatusByAccountAndServiceModel.builder()
@@ -89,14 +90,14 @@ public class OwnerStatusByAccountDao {
      */
     public KeyOwnerStatus getEffectiveStatus(
             String ncaId, KeyOwnerType ownerType, String ownerId, String issuerServiceId) {
-        var accountSuspended = getAccountStatus(ncaId, ownerType, ownerId)
+        var accountSuspended = getOwnerStatusByAccount(ncaId, ownerType, ownerId)
                 .map(OwnerStatusByAccountModel::getOwnerStatus)
                 .filter(KeyOwnerStatus.SUSPENDED::equals)
                 .isPresent();
         if (accountSuspended) {
             return KeyOwnerStatus.SUSPENDED;
         }
-        return getServiceStatus(ncaId, ownerType, ownerId, issuerServiceId)
+        return getOwnerStatusByAccountAndService(ncaId, ownerType, ownerId, issuerServiceId)
                 .map(OwnerStatusByAccountAndServiceModel::getOwnerStatus)
                 .filter(KeyOwnerStatus.SUSPENDED::equals)
                 .orElse(KeyOwnerStatus.ACTIVE);
