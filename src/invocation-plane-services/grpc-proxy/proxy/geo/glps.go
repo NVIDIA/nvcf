@@ -26,8 +26,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/auth"
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/clients"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
 	"github.com/goccy/go-json"
 	"go.uber.org/zap"
 )

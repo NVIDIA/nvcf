@@ -516,6 +516,38 @@ WEAK=$(GOWORK="${effective_gowork}" GOFLAGS="-mod=vendor" go-licenses csv ./... 
 set -e
 
 # ---------------------------------------------------------------------------
+# Source file SPDX license header check
+# ---------------------------------------------------------------------------
+# Checks that all non-generated, non-vendor .go source files contain an
+# SPDX-License-Identifier header. Generated files (zz_generated*, *.pb.go,
+# generated.openapi.go) and codegen client/informer/lister files are excluded.
+MISSING_HEADERS=""
+if [[ -d cmd || -d pkg || -d internal ]]; then
+    while IFS= read -r srcfile; do
+        if ! head -10 "${srcfile}" | grep -q "SPDX-License-Identifier"; then
+            MISSING_HEADERS="${MISSING_HEADERS}[MISSING SPDX HEADER] ${srcfile}\n"
+        fi
+    done < <(find cmd/ pkg/ internal/ -name "*.go" \
+        -not -path "*/vendor/*" \
+        -not -name "zz_generated*" \
+        -not -name "*.pb.go" \
+        -not -name "generated.openapi.go" \
+        -not -path "*/client/clientset/*" \
+        -not -path "*/client/informers/*" \
+        -not -path "*/client/listers/*" \
+        2>/dev/null | sort)
+fi
+
+MISSING_HEADER_COUNT=0
+if [[ -n "${MISSING_HEADERS}" ]]; then
+    MISSING_HEADERS=$(echo -e "${MISSING_HEADERS}" | grep -v '^$' | sort -u)
+    MISSING_HEADER_COUNT=$(echo "${MISSING_HEADERS}" | wc -l | tr -d ' ')
+    echo "Source files missing SPDX license header (${MISSING_HEADER_COUNT}):"
+    echo "${MISSING_HEADERS}" | sed 's/^/  /'
+    echo ""
+fi
+
+# ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
 echo ""
@@ -558,13 +590,31 @@ echo "  Total violations:    ${CURRENT_COUNT}"
 echo "  Baseline (known):    ${BASELINE_COUNT}"
 echo "  New violations:      ${NEW_COUNT}"
 echo "  Resolved:            ${RESOLVED_COUNT}"
+echo "  Missing SPDX headers: ${MISSING_HEADER_COUNT}"
 echo ""
+
+EXIT_CODE=0
 
 if [[ ${NEW_COUNT} -gt 0 ]]; then
     echo "FAIL: ${NEW_COUNT} new license violation(s) not in baseline."
     echo "Fix the issue or add to .license-baseline.txt with justification."
-    exit 1
+    EXIT_CODE=1
 fi
 
-echo "PASS: no new license violations."
-exit 0
+if [[ ${MISSING_HEADER_COUNT} -gt 0 ]]; then
+    echo "FAIL: ${MISSING_HEADER_COUNT} source file(s) missing SPDX license header."
+    echo "Add the following header to the top of each file:"
+    echo ""
+    echo '  /*'
+    echo '  SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.'
+    echo '  SPDX-License-Identifier: Apache-2.0'
+    echo '  */'
+    echo ""
+    EXIT_CODE=1
+fi
+
+if [[ ${EXIT_CODE} -eq 0 ]]; then
+    echo "PASS: no new license violations, all source files have SPDX headers."
+fi
+
+exit ${EXIT_CODE}

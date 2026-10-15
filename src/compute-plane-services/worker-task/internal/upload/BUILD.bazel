@@ -1,0 +1,40 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "upload",
+    srcs = [
+        "mock_uploader.go",
+        "upload.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/upload",
+    visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/worker-task/internal/metrics",
+        "//src/compute-plane-services/worker-task/internal/secrets",
+        "//src/compute-plane-services/worker-task/pkg/ngc",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//utils",
+        "@com_github_samber_lo//:lo",
+        "@com_github_valyala_bytebufferpool//:bytebufferpool",
+        "@org_golang_x_sync//errgroup",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":upload",
+    visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
+)
+
+go_test(
+    name = "upload_test",
+    srcs = ["upload_test.go"],
+    embed = [":upload"],
+    deps = [
+        "//src/compute-plane-services/worker-task/internal/secrets",
+        "//src/compute-plane-services/worker-task/pkg/ngc",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//utils",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

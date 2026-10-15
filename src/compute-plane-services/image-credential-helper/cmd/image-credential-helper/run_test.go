@@ -27,14 +27,13 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
-
-	credhelper "github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper/credhelper"
 )
 
 func Test_runGlobal(t *testing.T) {
@@ -85,7 +84,7 @@ func Test_runGlobal(t *testing.T) {
 		},
 	}
 
-	credhelper.RegisterAuthHelper("fake", authHelper)
+	imagecredential.RegisterAuthHelper("fake", authHelper)
 
 	ctx := context.Background()
 
@@ -350,6 +349,217 @@ func Test_runGlobal(t *testing.T) {
 	assert.Equal(t, otherSecret2.Data, gotOtherSecret2.Data)
 }
 
+func Test_runNamespaced(t *testing.T) {
+	const namespaceName = "sr-test"
+	const wlIDComponent = namespaceName
+	const workloadHost = "namespaced.example.com"
+	const workerHost = "namespaced-worker.example.com"
+
+	imagecredential.RegisterAuthHelper("fake-run-namespaced", fakeAuthHelper{
+		matchers: []string{
+			workloadHost,
+			workerHost,
+		},
+		public: []bool{
+			false,
+			false,
+		},
+		creds: []map[string]map[string]struct {
+			username string
+			password string
+		}{
+			{
+				"basicuser_workload": {
+					"basicpassword_workload": {
+						username: "authuser_new_workload",
+						password: "authtoken_new_workload",
+					},
+				},
+			},
+			{
+				"basicuser_worker": {
+					"basicpassword_worker": {
+						username: "authuser_new_worker",
+						password: "authtoken_new_worker",
+					},
+				},
+			},
+		},
+	})
+
+	workloadCredCfg := common.RegistryAuthConfig{
+		K8sSecrets: []common.RegistryAuthSecret{
+			{
+				Auths: map[string]common.RegistryAuth{
+					workloadHost: {
+						Auth: base64.StdEncoding.EncodeToString([]byte("basicuser_workload:basicpassword_workload")),
+					},
+				},
+			},
+		},
+	}
+	workloadCredCfgData, err := json.Marshal(workloadCredCfg)
+	require.NoError(t, err)
+	workerCredSecret := common.RegistryAuthSecret{
+		Auths: map[string]common.RegistryAuth{
+			workerHost: {
+				Auth: base64.StdEncoding.EncodeToString([]byte("basicuser_worker:basicpassword_worker")),
+			},
+		},
+	}
+	workerCredSecretData, err := json.Marshal(workerCredSecret)
+	require.NoError(t, err)
+
+	workloadPullSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "workload-" + wlIDComponent + "-regcred-0",
+			Namespace: namespaceName,
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+		Data: map[string][]byte{
+			corev1.DockerConfigJsonKey: []byte(
+				`{"auths":{"` + workloadHost + `":{"auth":"` + base64.StdEncoding.EncodeToString([]byte("authuser_old_workload:authtoken_old_workload")) + `"}}}`,
+			),
+		},
+	}
+	workerPullSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "worker-" + wlIDComponent + "-regcred-0",
+			Namespace: namespaceName,
+		},
+		Type: corev1.SecretTypeDockerConfigJson,
+		Data: map[string][]byte{
+			corev1.DockerConfigJsonKey: []byte(
+				`{"auths":{"` + workerHost + `":{"auth":"` + base64.StdEncoding.EncodeToString([]byte("authuser_old_worker:authtoken_old_worker")) + `"}}}`,
+			),
+		},
+	}
+	k8sClient := k8sfake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespaceName}},
+		workloadPullSecret.DeepCopy(),
+		workerPullSecret.DeepCopy(),
+	)
+
+	env := map[string]string{
+		"NAMESPACE":                              namespaceName,
+		"WORKLOAD_ID_COMPONENT":                  wlIDComponent,
+		common.ContainerRegistriesCredentialsEnv: base64.StdEncoding.EncodeToString(workloadCredCfgData),
+		common.SidecarRegistryCredentialEnv:      base64.StdEncoding.EncodeToString(workerCredSecretData),
+	}
+	require.NoError(t, runNamespaced(context.Background(), k8sClient, func(key string) string {
+		return env[key]
+	}))
+
+	gotWorkloadPullSecret, err := k8sClient.CoreV1().Secrets(namespaceName).Get(context.Background(), workloadPullSecret.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.JSONEq(t,
+		`{"auths":{"`+workloadHost+`":{"auth":"`+base64.StdEncoding.EncodeToString([]byte("authuser_new_workload:authtoken_new_workload"))+`"}}}`,
+		string(gotWorkloadPullSecret.Data[corev1.DockerConfigJsonKey]),
+	)
+	gotWorkerPullSecret, err := k8sClient.CoreV1().Secrets(namespaceName).Get(context.Background(), workerPullSecret.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.JSONEq(t,
+		`{"auths":{"`+workerHost+`":{"auth":"`+base64.StdEncoding.EncodeToString([]byte("authuser_new_worker:authtoken_new_worker"))+`"}}}`,
+		string(gotWorkerPullSecret.Data[corev1.DockerConfigJsonKey]),
+	)
+}
+
+func Test_runNamespacedEnvErrors(t *testing.T) {
+	ctx := context.Background()
+	k8sClient := k8sfake.NewSimpleClientset()
+	tests := []struct {
+		name    string
+		env     map[string]string
+		wantErr string
+	}{
+		{
+			name:    "missing namespace",
+			env:     map[string]string{},
+			wantErr: "env NAMESPACE not set",
+		},
+		{
+			name: "missing workload ID",
+			env: map[string]string{
+				"NAMESPACE": "ns",
+			},
+			wantErr: "env WORKLOAD_ID_COMPONENT not set",
+		},
+		{
+			name: "missing workload registry creds",
+			env: map[string]string{
+				"NAMESPACE":             "ns",
+				"WORKLOAD_ID_COMPONENT": "id",
+			},
+			wantErr: "env CONTAINER_REGISTRIES_CREDENTIALS not set",
+		},
+		{
+			name: "invalid workload registry creds",
+			env: map[string]string{
+				"NAMESPACE":                              "ns",
+				"WORKLOAD_ID_COMPONENT":                  "id",
+				common.ContainerRegistriesCredentialsEnv: "not-base64",
+			},
+			wantErr: "illegal base64",
+		},
+		{
+			name: "missing worker registry creds",
+			env: map[string]string{
+				"NAMESPACE":                              "ns",
+				"WORKLOAD_ID_COMPONENT":                  "id",
+				common.ContainerRegistriesCredentialsEnv: base64.StdEncoding.EncodeToString([]byte(`{"k8sSecrets":[]}`)),
+			},
+			wantErr: "env SIDECAR_REGISTRY_CREDENTIAL not set",
+		},
+		{
+			name: "invalid worker registry creds",
+			env: map[string]string{
+				"NAMESPACE":                              "ns",
+				"WORKLOAD_ID_COMPONENT":                  "id",
+				common.ContainerRegistriesCredentialsEnv: base64.StdEncoding.EncodeToString([]byte(`{"k8sSecrets":[]}`)),
+				common.SidecarRegistryCredentialEnv:      "not-base64",
+			},
+			wantErr: "illegal base64",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := runNamespaced(ctx, k8sClient, func(key string) string {
+				return tt.env[key]
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func Test_buildAuthCfgsAndPullSecretsDecodeErrors(t *testing.T) {
+	secrets := []corev1.Secret{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "bad-workload" + imagecredential.ImageCredsSecretNameSuffix,
+			},
+			Data: map[string][]byte{
+				common.ContainerRegistriesCredentialsEnv: []byte("not-base64"),
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "bad-worker" + imagecredential.ImageCredsSecretNameSuffix,
+			},
+			Data: map[string][]byte{
+				common.ContainerRegistriesCredentialsEnv: []byte(base64.StdEncoding.EncodeToString([]byte(`{"k8sSecrets":[]}`))),
+				common.SidecarRegistryCredentialEnv:      []byte("not-base64"),
+			},
+		},
+	}
+
+	authCfgsByID, matchingPullSecretsByID, errs := buildAuthCfgsAndPullSecrets(secrets, logrus.NewEntry(logrus.New()))
+
+	assert.Empty(t, authCfgsByID)
+	assert.Empty(t, matchingPullSecretsByID)
+	require.Len(t, errs, 2)
+}
+
 type fakeAuthHelper struct {
 	matchers []string
 	public   []bool
@@ -368,7 +578,7 @@ func (h fakeAuthHelper) Matches(serverURL *url.URL) (match bool, isPublic bool) 
 	return false, false
 }
 
-func (h fakeAuthHelper) Run(ctx context.Context, refURL *url.URL, creds credhelper.AuthHelperCredentials) (username, password string, err error) {
+func (h fakeAuthHelper) Run(ctx context.Context, refURL *url.URL, creds imagecredential.AuthHelperCredentials) (username, password string, err error) {
 	idx := -1
 	hostname := refURL.Hostname()
 	for i, m := range h.matchers {

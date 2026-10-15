@@ -39,18 +39,18 @@ openbao:
   migrations:
     image:
       registry: nvcr.io
-      repository: 0651155215864979/ncp-dev/nvcf-openbao-migrations
+      repository: <your-org>/nvcf-openbao-migrations
   server:
     image:
       registry: nvcr.io
-      repository: 0651155215864979/ncp-dev/nvcf-openbao
+      repository: <your-org>/nvcf-openbao
   injector:
     image:
       registry: nvcr.io
-      repository: 0651155215864979/ncp-dev/oss-vault-k8s
+      repository: <your-org>/oss-vault-k8s
     agentImage:
       registry: nvcr.io
-      repository: 0651155215864979/ncp-dev/nvcf-openbao
+      repository: <your-org>/nvcf-openbao
 ```
 
 ## Installation
@@ -63,7 +63,7 @@ This chart is intended to be installed by invoking Helm directly from source.
 helm dependency build helm
 ```
 
-2. Install the chart:
+1. Install the chart:
 
 ```bash
 helm install openbao-server helm \

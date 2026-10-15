@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "smithy",
+    srcs = [
+        "bearer_token_adapter.go",
+        "bearer_token_signer_adapter.go",
+        "credentials_adapter.go",
+        "smithy.go",
+        "v4signer_adapter.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/auth/smithy",
+    importpath = "github.com/aws/aws-sdk-go-v2/internal/auth/smithy",
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/aws/signer/v4:signer",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/context",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2/internal/sdk",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/auth",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/auth/bearer",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/logging",
+        "//src/compute-plane-services/nvca/vendor/github.com/aws/smithy-go/transport/http",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":smithy",
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/aws/aws-sdk-go-v2:__subpackages__"],
+)

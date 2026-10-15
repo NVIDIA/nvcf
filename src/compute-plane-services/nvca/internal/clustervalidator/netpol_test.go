@@ -490,6 +490,20 @@ func TestCheckDirection(t *testing.T) {
 		result := checkDirection(ctx, client,
 			"src-ns", nil, "dst-ns", nil, 8080, corev1.ProtocolTCP)
 		assert.False(t, result.Allowed)
+		// Directional breakdown: egress is unrestricted, ingress is the
+		// blocked side. This is what the directional metric surfaces.
+		assert.True(t, result.EgressAllowed, "no egress policy means egress is open")
+		assert.False(t, result.IngressAllowed, "ingress policy blocks the source namespace")
+	})
+
+	t.Run("both sides open reports both allowed", func(t *testing.T) {
+		client := fake.NewSimpleClientset(
+			makeNamespace("src-ns"), makeNamespace("dst-ns"))
+		result := checkDirection(ctx, client,
+			"src-ns", nil, "dst-ns", nil, 8080, corev1.ProtocolTCP)
+		assert.True(t, result.Allowed)
+		assert.True(t, result.EgressAllowed)
+		assert.True(t, result.IngressAllowed)
 	})
 }
 
@@ -569,6 +583,16 @@ func TestCheckConfigurableNetworkPolicies(t *testing.T) {
 		checkConfigurableNetworkPolicies(ctx, client, state, cfg)
 		require.NotNil(t, state.ConfigurableNetPolOK)
 		assert.False(t, *state.ConfigurableNetPolOK)
+
+		// ns-b is missing, so neither direction could be evaluated. The pair
+		// must record NO per-direction status: emitting EgressAllowed=false /
+		// IngressAllowed=false would misreport a policy block when the real
+		// cause is the missing namespace. The metric is absent for this pair
+		// instead; the failure still shows via ConfigurableNetPolOK=false.
+		pair, ok := state.NetpolPairResults["A to B"]
+		require.True(t, ok)
+		assert.Empty(t, pair.Directions,
+			"unevaluated directions must be omitted, not recorded as false")
 	})
 
 	t.Run("ingress from wrong namespace fails", func(t *testing.T) {
@@ -603,6 +627,59 @@ func TestCheckConfigurableNetworkPolicies(t *testing.T) {
 		require.NotNil(t, state.ConfigurableNetPolOK)
 		assert.False(t, *state.ConfigurableNetPolOK)
 		assert.NotEmpty(t, state.Warnings)
+
+		// The pair result must carry the per-direction breakdown so the
+		// agent can publish the directional metric. ns-b's ingress only
+		// admits "monitoring", so A→B ingress is the blocked side while
+		// egress (no policy on ns-a) stays open.
+		pair, ok := state.NetpolPairResults["A to B"]
+		require.True(t, ok)
+		require.NotNil(t, pair.Directions)
+		aToB := pair.Directions[NetpolDirectionAToB]
+		assert.True(t, aToB.EgressAllowed, "ns-a has no egress policy")
+		assert.False(t, aToB.IngressAllowed, "ns-b ingress admits only monitoring")
+	})
+
+	t.Run("critical pair failure yields a per-side recommendation", func(t *testing.T) {
+		port := intstr.FromInt32(8080)
+		objects := []runtime.Object{
+			makeNamespace("ns-a"),
+			makeNamespace("ns-b"),
+			// ns-b ingress admits only "monitoring" → A→B ingress is blocked,
+			// egress from ns-a stays open. The recommendation must name that
+			// exact side ("ingress into ns-b"), not blame egress generically.
+			makeNetworkPolicy("b-ingress", "ns-b", nil,
+				[]networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
+				[]networkingv1.NetworkPolicyIngressRule{{
+					From: []networkingv1.NetworkPolicyPeer{{
+						NamespaceSelector: nsSelector("monitoring"),
+					}},
+					Ports: []networkingv1.NetworkPolicyPort{{
+						Protocol: protocolPtr(corev1.ProtocolTCP),
+						Port:     &port,
+					}},
+				}}, nil),
+		}
+		client := fake.NewSimpleClientset(objects...)
+		state := &ValidationState{Log: testLog()}
+		cfg := &NetworkPoliciesConfig{
+			Pairs: []NetworkPolicyPair{{
+				Name:     "agent-to-api",
+				A:        NetworkPolicyEndpoint{Namespace: "ns-a"},
+				B:        NetworkPolicyEndpoint{Namespace: "ns-b"},
+				Port:     8080,
+				Protocol: "TCP",
+				Critical: true,
+			}},
+		}
+		checkConfigurableNetworkPolicies(ctx, client, state, cfg)
+
+		require.NotEmpty(t, state.Recommendations, "a failing critical pair must yield a recommendation")
+		rec := state.Recommendations[0]
+		assert.Contains(t, rec, `"agent-to-api"`, "names the failing pair")
+		assert.Contains(t, rec, "TCP/8080", "names the protocol/port")
+		assert.Contains(t, rec, `ingress into "ns-b"`, "names the exact blocked side")
+		assert.NotContains(t, rec, "egress from", "egress from ns-a is allowed; must not be blamed")
 	})
 }
 

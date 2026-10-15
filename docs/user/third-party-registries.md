@@ -92,6 +92,19 @@ After initial deployment, registry credentials can be managed dynamically using 
 
 This is the recommended approach for credential rotation and adding or modifying registries post-deployment of the control plane.
 
+### Credential Propagation Delay
+
+Registry credential changes do not take effect for task creation immediately. Task processing caches each account's registry credentials with a time-to-live of about 5 minutes (`nvct.nvcf.cache-ttl`, default `PT5M` in the self-managed stack). After you add, update, or delete a credential, allow up to about 5 minutes for the change to apply to new tasks. The API and `nvcf-cli registry-credential list` and `get` reflect the change immediately, but task validation can keep using the previous value until the cached entry expires.
+
+<Warning>
+After you rotate or delete a credential, allow up to the cache TTL (about 5 minutes) for task creation to start using the new value. To apply the change immediately, restart the task service:
+
+```bash
+kubectl -n nvcf rollout restart deployment/nvct-api
+```
+
+</Warning>
+
 ## Adding AWS ECR Registry Credentials
 
 AWS ECR requires **permanent IAM credentials** (Access Key ID + Secret Access Key). Temporary SSO/STS credentials will not work.
@@ -252,7 +265,7 @@ SECRET_ACCESS_KEY="<secret-access-key>"
 ECR_SECRET=$(echo -n "${ACCESS_KEY_ID}:${SECRET_ACCESS_KEY}" | base64 -w 0)
 
 # Add the registry credential for Private ECR
-./nvcf-cli registry-credentials add \
+./nvcf-cli registry-credential add \
   --hostname <account-id>.dkr.ecr.<region>.amazonaws.com \
   --secret "${ECR_SECRET}" \
   --artifact-type CONTAINER \
@@ -269,7 +282,7 @@ SECRET_ACCESS_KEY="<secret-access-key>"
 ECR_SECRET=$(echo -n "${ACCESS_KEY_ID}:${SECRET_ACCESS_KEY}" | base64 -w 0)
 
 # Add the registry credential for Public ECR
-./nvcf-cli registry-credentials add \
+./nvcf-cli registry-credential add \
   --hostname public.ecr.aws \
   --secret "${ECR_SECRET}" \
   --artifact-type CONTAINER \
@@ -325,14 +338,14 @@ NGC_API_KEY="<nvapi-xxxxxxxxxxxx>"
 NGC_SECRET=$(echo -n '$oauthtoken:'"${NGC_API_KEY}" | base64 -w 0)
 
 # Add the registry credential for containers
-./nvcf-cli registry-credentials add \
+./nvcf-cli registry-credential add \
   --hostname nvcr.io \
   --secret "${NGC_SECRET}" \
   --artifact-type CONTAINER \
   --description "NGC Container Registry"
 
 # Add the registry credential for Helm charts (if needed)
-./nvcf-cli registry-credentials add \
+./nvcf-cli registry-credential add \
   --hostname helm.ngc.nvidia.com \
   --secret "${NGC_SECRET}" \
   --artifact-type HELM \
@@ -360,7 +373,7 @@ REGISTRY_NAME="<registry-name>"
 VCR_SECRET=$(echo -n "${ACCESS_KEY_ID}:${SECRET_ACCESS_KEY}" | base64 -w 0)
 
 # Add the registry credential for containers and Helm charts
-./nvcf-cli registry-credentials add \
+./nvcf-cli registry-credential add \
   --hostname ${REGISTRY_NAME}.cr.volces.com \
   --secret "${VCR_SECRET}" \
   --artifact-type CONTAINER,HELM \
@@ -372,7 +385,7 @@ VCR_SECRET=$(echo -n "${ACCESS_KEY_ID}:${SECRET_ACCESS_KEY}" | base64 -w 0)
 To view all configured registry credentials:
 
 ```bash
-./nvcf-cli registry-credentials list
+./nvcf-cli registry-credential list
 ```
 
 ## Deleting Registry Credentials
@@ -381,7 +394,7 @@ To remove a registry credential:
 
 ```bash
 # Delete by credential ID
-./nvcf-cli registry-credentials delete <credential-id>
+./nvcf-cli registry-credential delete <credential-id>
 ```
 
 ## How NVCF Matches Registries to Images
@@ -470,7 +483,7 @@ No registry credential found for hostname: example.dkr.ecr.us-west-2.amazonaws.c
 
 **Solution:**
 
-1. List your credentials with `./nvcf-cli registry-credentials list`
+1. List your credentials with `./nvcf-cli registry-credential list`
 2. Verify the hostname matches exactly (no trailing slashes, no repository paths)
 3. Add the missing registry credential if needed
 
