@@ -18,9 +18,14 @@ limitations under the License.
 package agent
 
 import (
+	"bytes"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/sirupsen/logrus"
@@ -178,6 +183,69 @@ func destroyTCPInNS(pidInNS int, keep func(remote net.IP) bool, msg string, log 
 
 // tcpPeersInNS returns the peer addresses of the established TCP sockets
 // of the network namespace of pidInNS, loopback excluded.
+// tcpPeersOfContainer returns the remote addresses of the established TCP
+// connections whose sockets belong to the processes of the container of
+// host pid pid: the processes in its cgroup, whether or not the pod shares
+// one pid namespace between its containers. The containers of a pod share a
+// network namespace, so the namespace alone cannot tell a sidecar's
+// connections from the engine's.
+func tcpPeersOfContainer(pid int, log *logrus.Entry) ([]net.IP, error) {
+	inodes, err := containerSocketInodes(hostProcBase(), pid)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var peers []net.IP
+	err = inNetNS(pid, func() error {
+		for _, s := range establishedTCP(log) {
+			ip := s.ID.Destination
+			if !inodes[s.INode] || ip.IsLoopback() || seen[ip.String()] {
+				continue
+			}
+			seen[ip.String()] = true
+			peers = append(peers, ip)
+		}
+		return nil
+	})
+	return peers, err
+}
+
+// containerSocketInodes returns the inodes of the sockets open in the
+// processes that share host pid pid's cgroup.
+func containerSocketInodes(procBase string, pid int) (map[uint32]bool, error) {
+	cg, err := os.ReadFile(filepath.Join(procBase, strconv.Itoa(pid), "cgroup"))
+	if err != nil {
+		return nil, fmt.Errorf("cgroup of pid %d: %w", pid, err)
+	}
+	ents, err := os.ReadDir(procBase)
+	if err != nil {
+		return nil, err
+	}
+	inodes := map[uint32]bool{}
+	for _, e := range ents {
+		if _, err := strconv.Atoi(e.Name()); err != nil {
+			continue
+		}
+		if c, err := os.ReadFile(filepath.Join(procBase, e.Name(), "cgroup")); err != nil || !bytes.Equal(c, cg) {
+			continue
+		}
+		fds, err := os.ReadDir(filepath.Join(procBase, e.Name(), "fd"))
+		if err != nil {
+			continue
+		}
+		for _, fd := range fds {
+			l, err := os.Readlink(filepath.Join(procBase, e.Name(), "fd", fd.Name()))
+			if err != nil || !strings.HasPrefix(l, "socket:[") {
+				continue
+			}
+			if n, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimPrefix(l, "socket:["), "]"), 10, 32); err == nil {
+				inodes[uint32(n)] = true
+			}
+		}
+	}
+	return inodes, nil
+}
+
 func tcpPeersInNS(pidInNS int, log *logrus.Entry) ([]net.IP, error) {
 	seen := map[string]bool{}
 	var peers []net.IP

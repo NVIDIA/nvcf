@@ -97,7 +97,7 @@ func parseCRIUGroup(key string, data map[string]string) (webhook.CRIUGroup, bool
 		return webhook.CRIUGroup{}, false
 	}
 	g := webhook.CRIUGroup{Key: key, GPUShare: data["gpushare"] == "true", Slot: -1,
-		Checkpoints: make([]string, size), Nodes: make([]string, size), Companion: make([]bool, size)}
+		Checkpoints: make([]string, size), Nodes: make([]string, size), Companion: make([]bool, size), Containers: make([]string, size)}
 	for i := range size {
 		g.Checkpoints[i] = data[fmt.Sprintf("checkpoint.%d", i)]
 		if g.Checkpoints[i] == "" {
@@ -105,6 +105,7 @@ func parseCRIUGroup(key string, data map[string]string) (webhook.CRIUGroup, bool
 		}
 		g.Nodes[i] = data[fmt.Sprintf("node.%d", i)]
 		g.Companion[i] = data[fmt.Sprintf("companion.%d", i)] == "true"
+		g.Containers[i] = data[fmt.Sprintf("container.%d", i)]
 	}
 	return g, true
 }
@@ -323,7 +324,7 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 			return false
 		}
 	}
-	companions, err := a.discoverCompanions(ctx, ranks, log)
+	companions, companionContainers, err := a.discoverCompanions(ctx, ranks, log)
 	if err != nil {
 		log.WithError(err).Warn("CRIU group capture: skipped; a companion of the instance cannot be captured")
 		return false
@@ -388,7 +389,7 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 	cctx, cancel := context.WithTimeout(ctx, criuGroupCaptureTimeout)
 	defer cancel()
 	t0 := time.Now()
-	results, err := c.checkpointInstance(cctx, ranks, companions, log)
+	results, err := c.checkpointInstance(cctx, ranks, companions, companionContainers, log)
 	data := record.Data
 	if err != nil {
 		log.WithError(err).Error("CRIU group capture failed; this configuration starts fresh")
@@ -411,6 +412,9 @@ func (c *criuAutoRestorer) captureGroup(ctx context.Context, leader *corev1.Pod,
 			data[fmt.Sprintf("node.%d", i)] = members[i].Spec.NodeName
 			if i >= len(ranks) {
 				data[fmt.Sprintf("companion.%d", i)] = "true"
+				data[fmt.Sprintf("container.%d", i)] = companionContainers[members[i].Name]
+			} else {
+				data[fmt.Sprintf("container.%d", i)] = gpuContainer(members[i])
 			}
 		}
 		if c.a.gpushareEnabledFor(ranks[0]) {
@@ -618,14 +622,14 @@ func recordOf(d map[string]string, id string) bool {
 
 // checkpointInstance checkpoints the ranks in place and returns their
 // results in rank order.
-func (c *criuAutoRestorer) checkpointInstance(ctx context.Context, ranks, companions []*corev1.Pod, log *logrus.Entry) ([]*CheckpointResult, error) {
+func (c *criuAutoRestorer) checkpointInstance(ctx context.Context, ranks, companions []*corev1.Pod, companionContainers map[string]string, log *logrus.Entry) ([]*CheckpointResult, error) {
 	capture := time.Now().UTC().Format("20060102T150405.000000000")
 	reqs := make([]CheckpointRequest, 0, len(ranks)+len(companions))
 	for _, p := range ranks {
 		reqs = append(reqs, CheckpointRequest{Namespace: p.Namespace, PodName: p.Name, ContainerName: gpuContainer(p), LeaveRunning: true, CaptureID: capture})
 	}
 	for _, p := range companions {
-		reqs = append(reqs, CheckpointRequest{Namespace: p.Namespace, PodName: p.Name, ContainerName: p.Spec.Containers[0].Name,
+		reqs = append(reqs, CheckpointRequest{Namespace: p.Namespace, PodName: p.Name, ContainerName: companionContainers[p.Name],
 			LeaveRunning: true, CaptureID: capture, Companion: true})
 	}
 	if len(reqs) == 1 {

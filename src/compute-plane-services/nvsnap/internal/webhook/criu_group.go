@@ -48,6 +48,9 @@ type CRIUGroup struct {
 	// Companion marks the members without GPUs (by slot), captured with
 	// the GPU ranks, which hold slots 0 to Ranks()-1.
 	Companion []bool
+	// Containers names the container each member's checkpoint was taken
+	// from (by slot); empty in records from before it was recorded.
+	Containers []string
 	// Slot is the member a companion's own configuration names, when the
 	// record was found through a companion's alias; -1 otherwise.
 	Slot int
@@ -140,6 +143,9 @@ func (m *Mutator) criuGroupRestorePatches(ctx context.Context, pod *corev1.Pod) 
 	}
 	if ordinal < len(g.Nodes) && g.Nodes[ordinal] != "" {
 		man.CapturedOnNodes = []string{g.Nodes[ordinal]}
+	}
+	if ordinal < len(g.Containers) && g.Containers[ordinal] != "" {
+		man.SourcePodMeta[restoreContainerMeta] = g.Containers[ordinal]
 	}
 	id := g.Checkpoints[ordinal]
 	cp, err := m.criuRestorePatches(pod, id, man)

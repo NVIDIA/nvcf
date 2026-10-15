@@ -73,34 +73,35 @@ func hasGPU(p *corev1.Pod) bool { return gpuContainer(p) != "" }
 
 // discoverCompanions returns the companions of an instance: the pods of
 // its namespace without GPUs that its ranks hold TCP connections to,
-// directly or through a Service, in a stable order. It fails when one
-// cannot be captured, rather than capture an instance without it.
-func (a *Agent) discoverCompanions(ctx context.Context, ranks []*corev1.Pod, log *logrus.Entry) ([]*corev1.Pod, error) {
+// directly or through a Service, in a stable order, and the container to
+// capture of each (companionContainer). It fails when one cannot be
+// captured, rather than capture an instance without it.
+func (a *Agent) discoverCompanions(ctx context.Context, ranks []*corev1.Pod, log *logrus.Entry) ([]*corev1.Pod, map[string]string, error) {
 	ns := ranks[0].Namespace
 	peers := map[string]bool{}
 	for _, r := range ranks {
 		base, err := a.peerAgentURL(ctx, r.Spec.NodeName)
 		if err != nil {
-			return nil, fmt.Errorf("rank %s: %w", r.Name, err)
+			return nil, nil, fmt.Errorf("rank %s: %w", r.Name, err)
 		}
 		ips, err := fetchPeers(ctx, base, r.Namespace, r.Name, gpuContainer(r))
 		if err != nil {
-			return nil, fmt.Errorf("rank %s: connections: %w", r.Name, err)
+			return nil, nil, fmt.Errorf("rank %s: connections: %w", r.Name, err)
 		}
 		for _, ip := range ips {
 			peers[ip] = true
 		}
 	}
 	if len(peers) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	pods, err := a.kubeClient.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	svcs, err := a.kubeClient.CoreV1().Services(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var slices []discoveryv1.EndpointSlice
 	for _, svc := range svcs.Items {
@@ -109,27 +110,89 @@ func (a *Agent) discoverCompanions(ctx context.Context, ranks []*corev1.Pod, log
 		}
 		l, err := a.kubeClient.DiscoveryV1().EndpointSlices(ns).List(ctx, metav1.ListOptions{LabelSelector: discoveryv1.LabelServiceName + "=" + svc.Name})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		slices = append(slices, l.Items...)
 	}
 	found := matchCompanions(peers, pods.Items, svcs.Items, slices, ranks)
 	out := make([]*corev1.Pod, 0, len(found))
+	containers := map[string]string{}
 	for _, p := range found {
 		if err := a.companionCapturable(ctx, p); err != nil {
-			return nil, fmt.Errorf("companion %s: %w", p.Name, err)
+			return nil, nil, fmt.Errorf("companion %s: %w", p.Name, err)
 		}
+		c, err := a.companionContainer(ctx, p, ranks)
+		if err != nil {
+			return nil, nil, fmt.Errorf("companion %s: %w", p.Name, err)
+		}
+		containers[p.Name] = c
 		out = append(out, p)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	if len(out) > 0 {
 		names := make([]string, len(out))
 		for i, p := range out {
-			names[i] = p.Name
+			names[i] = p.Name + "/" + containers[p.Name]
 		}
 		log.WithField("companions", strings.Join(names, ",")).Info("CRIU group capture: the instance's companions")
 	}
-	return out, nil
+	return out, containers, nil
+}
+
+// companionContainer is the container of companion p to capture: its only
+// one, or the one whose own processes hold connections to the ranks. The
+// other containers of the pod (a readiness sidecar, say) start fresh in the
+// restored pod, as a rank's sidecars do.
+func (a *Agent) companionContainer(ctx context.Context, p *corev1.Pod, ranks []*corev1.Pod) (string, error) {
+	if len(p.Spec.Containers) == 1 {
+		return p.Spec.Containers[0].Name, nil
+	}
+	rankIPs := map[string]bool{}
+	for _, r := range ranks {
+		for _, ip := range r.Status.PodIPs {
+			rankIPs[ip.IP] = true
+		}
+		if r.Status.PodIP != "" {
+			rankIPs[r.Status.PodIP] = true
+		}
+	}
+	base, err := a.peerAgentURL(ctx, p.Spec.NodeName)
+	if err != nil {
+		return "", err
+	}
+	var talking []string
+	for _, c := range p.Spec.Containers {
+		ips, err := fetchPeers(ctx, base, p.Namespace, p.Name, c.Name)
+		if err != nil {
+			return "", fmt.Errorf("container %s: connections: %w", c.Name, err)
+		}
+		if anyIn(ips, rankIPs) {
+			talking = append(talking, c.Name)
+		}
+	}
+	return pickCompanionContainer(len(p.Spec.Containers), talking)
+}
+
+// pickCompanionContainer chooses among a companion's containers: exactly
+// one of them may hold connections to the ranks.
+func pickCompanionContainer(containers int, talking []string) (string, error) {
+	switch len(talking) {
+	case 1:
+		return talking[0], nil
+	case 0:
+		return "", fmt.Errorf("none of its %d containers holds a connection to the ranks", containers)
+	default:
+		return "", fmt.Errorf("containers %s all hold connections to the ranks; a companion is captured with one", strings.Join(talking, ", "))
+	}
+}
+
+func anyIn(ips []string, set map[string]bool) bool {
+	for _, ip := range ips {
+		if set[ip] {
+			return true
+		}
+	}
+	return false
 }
 
 // matchCompanions maps the ranks' peer addresses to the pods without GPUs
@@ -195,12 +258,9 @@ func servesAny(svc corev1.Service, peers map[string]bool) bool {
 }
 
 // companionCapturable checks what a companion's capture and restore need:
-// one container, ready, run by a controller (so a replacement pod comes to
-// restore into), on a node with an agent.
+// ready, run by a controller (so a replacement pod comes to restore into),
+// on a node with an agent. companionContainer picks the container.
 func (a *Agent) companionCapturable(ctx context.Context, p *corev1.Pod) error {
-	if len(p.Spec.Containers) != 1 {
-		return fmt.Errorf("has %d containers; a companion is captured with one", len(p.Spec.Containers))
-	}
 	if !rootfsonly.IsPodReady(p) {
 		return fmt.Errorf("is not Ready")
 	}
@@ -270,7 +330,12 @@ func (a *Agent) peersHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("container not found: %v", err), http.StatusNotFound)
 		return
 	}
-	ips, err := tcpPeersInNS(int(info.PID), a.log.WithField("pod", v["namespace"]+"/"+v["pod"]))
+	log := a.log.WithFields(logrus.Fields{"pod": v["namespace"] + "/" + v["pod"], "container": r.URL.Query().Get("container")})
+	ips, err := tcpPeersOfContainer(int(info.PID), log)
+	if err != nil {
+		log.WithError(err).Warn("connections of the container unreadable; using the pod's network namespace")
+		ips, err = tcpPeersInNS(int(info.PID), log)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

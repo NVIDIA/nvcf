@@ -333,3 +333,35 @@ func TestCRIURestore_PlaceholderSkipsInitsWithNoSharedOutput(t *testing.T) {
 		}
 	}
 }
+
+// A companion's checkpoint names its container (one of several, picked by
+// its connections to the ranks); the placeholder is that container, and the
+// pod's other containers run unchanged.
+func TestCRIURestore_PlaceholderIsTheRecordedContainer(t *testing.T) {
+	pod := criuFunctionPod()
+	pod.Spec.Containers[0].Name, pod.Spec.Containers[1].Name = "frontend-readiness-http", "main"
+	for i := range pod.Spec.Containers {
+		pod.Spec.Containers[i].Resources.Limits = nil
+	}
+	man := criuCaptureRecord()
+	man.SourcePodMeta[restoreContainerMeta] = "main"
+	m := criuMutator(t, man)
+	patches, err := m.criuRestorePatches(pod, "abc123__20261008-101010", man)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var placeholder bool
+	for _, p := range patches {
+		if strings.HasPrefix(p.Path, "/spec/containers/0/") {
+			t.Errorf("patched the sidecar: %s %s", p.Op, p.Path)
+		}
+		placeholder = placeholder || p.Path == "/spec/containers/1/command"
+	}
+	if !placeholder {
+		t.Error("the recorded container did not become the placeholder")
+	}
+	man.SourcePodMeta[restoreContainerMeta] = "gone"
+	if _, err := m.criuRestorePatches(pod, "abc123__20261008-101010", man); err == nil {
+		t.Error("restored into a pod without the recorded container")
+	}
+}

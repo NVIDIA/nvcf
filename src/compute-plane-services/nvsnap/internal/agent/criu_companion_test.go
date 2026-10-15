@@ -5,6 +5,8 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"testing"
@@ -214,5 +216,66 @@ func TestAliasAddrMap(t *testing.T) {
 	}
 	if got := aliasAddrMap("10.1.0.10=10.2.0.10", ""); got != "10.1.0.10=10.2.0.10" {
 		t.Errorf("no aliases = %q", got)
+	}
+}
+
+func TestPickCompanionContainer(t *testing.T) {
+	if c, err := pickCompanionContainer(2, []string{"main"}); err != nil || c != "main" {
+		t.Errorf("one talking: %q, %v", c, err)
+	}
+	if _, err := pickCompanionContainer(2, nil); err == nil {
+		t.Error("none talking: accepted")
+	}
+	if _, err := pickCompanionContainer(2, []string{"main", "sidecar"}); err == nil {
+		t.Error("two talking: accepted")
+	}
+}
+
+// The sockets of a container are those of the processes in its cgroup;
+// another container's processes in the same pod are left out.
+func TestContainerSocketInodes(t *testing.T) {
+	proc := t.TempDir()
+	mk := func(pid, cgroup string, fds map[string]string) {
+		d := filepath.Join(proc, pid)
+		if err := os.MkdirAll(filepath.Join(d, "fd"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "cgroup"), []byte(cgroup), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for fd, target := range fds {
+			if err := os.Symlink(target, filepath.Join(d, "fd", fd)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	mk("100", "0::/kubepods/pod1/main\n", map[string]string{"3": "socket:[111]", "4": "/dev/null"})
+	mk("101", "0::/kubepods/pod1/main\n", map[string]string{"5": "socket:[112]"})
+	mk("200", "0::/kubepods/pod1/sidecar\n", map[string]string{"3": "socket:[222]"})
+	if err := os.MkdirAll(filepath.Join(proc, "self"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := containerSocketInodes(proc, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got[111] || !got[112] || got[222] || len(got) != 2 {
+		t.Errorf("inodes = %v, want 111 and 112 only", got)
+	}
+}
+
+// The record keeps the container of each member, and an older record
+// without it parses with empty names.
+func TestParseCRIUGroup_Containers(t *testing.T) {
+	d := map[string]string{"state": "complete", "size": "2", "checkpoint.0": "c0", "checkpoint.1": "c1",
+		"companion.1": "true", "container.0": "main", "container.1": "frontend"}
+	g, ok := parseCRIUGroup("k", d)
+	if !ok || len(g.Containers) != 2 || g.Containers[0] != "main" || g.Containers[1] != "frontend" {
+		t.Fatalf("parsed %+v, %v", g, ok)
+	}
+	delete(d, "container.0")
+	delete(d, "container.1")
+	if g, ok := parseCRIUGroup("k", d); !ok || g.Containers[0] != "" || g.Containers[1] != "" {
+		t.Errorf("old record: %+v, %v", g.Containers, ok)
 	}
 }

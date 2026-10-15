@@ -81,9 +81,18 @@ func (m *Mutator) criuRestoreFor(ctx context.Context, pod *corev1.Pod, hash stri
 // container before the restored process answers them. The readiness probe
 // stays, so the pod becomes Ready when the restored engine serves.
 func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man checkpointstore.Manifest) ([]PatchOp, error) {
-	// The capture checkpoints the first container with GPUs; that one
-	// becomes the placeholder, wherever the chart put it.
+	// The capture checkpoints the first container with GPUs, or the
+	// container the record names (a companion's, captured by its
+	// connections to the ranks); that one becomes the placeholder,
+	// wherever the chart put it. The pod's other containers run as they
+	// are.
 	i := gpuContainerIndex(pod, m.MainContainer)
+	if name := man.SourcePodMeta[restoreContainerMeta]; name != "" {
+		i = containerIndex(pod, name)
+		if i < 0 {
+			return nil, fmt.Errorf("the checkpoint was taken from container %q, which this pod does not have", name)
+		}
+	}
 	if i < 0 || i >= len(pod.Spec.Containers) {
 		return nil, fmt.Errorf("MainContainer index %d out of range (have %d containers)", i, len(pod.Spec.Containers))
 	}
@@ -166,6 +175,20 @@ func (m *Mutator) criuRestorePatches(pod *corev1.Pod, checkpointID string, man c
 
 // gpuContainerIndex is the index of the first container with GPUs, else
 // fallback.
+// restoreContainerMeta is the manifest key naming the container a
+// checkpoint was taken from.
+const restoreContainerMeta = "restore_container"
+
+// containerIndex returns the index of the container named name, or -1.
+func containerIndex(pod *corev1.Pod, name string) int {
+	for i, c := range pod.Spec.Containers {
+		if c.Name == name {
+			return i
+		}
+	}
+	return -1
+}
+
 func gpuContainerIndex(pod *corev1.Pod, fallback int) int {
 	for i, c := range pod.Spec.Containers {
 		if _, ok := c.Resources.Limits["nvidia.com/gpu"]; ok {
