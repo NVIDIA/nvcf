@@ -58,6 +58,7 @@ service RateLimit {
 
 service Autoscaler {
     rpc RequestDeploymentConfiguration (DeploymentConfigurationRequest) returns (DeploymentConfigurationResponse);
+    rpc AutoscaleFunction (AutoscalerRequest) returns (AutoscalerResponse);
 }
 
 message WorkerConnect {
@@ -445,6 +446,23 @@ message DeploymentConfigurationRequest {
 
 message DeploymentConfigurationResponse {
     map<string, AutoscalingConfiguration> configs = 1; //key is gpuSpecId
+}
+
+message AutoscalerRequest {
+    string functionId = 1;
+    string functionVersionId = 2;
+    optional string deploymentId = 3;
+    optional string gpuSpecificationId = 4;
+    int32 requiredNumberOfInstances = 5;
+}
+
+message AutoscalerResponse {
+    int32 activeInstances = 1;
+    int32 pendingInstances = 2;
+    int32 allocatingInstances = 3;
+    int32 terminatingInstances = 4;
+    string functionStatus = 5;
+    string scalingStatus = 6;
 }
 
 message AutoscalingConfiguration {

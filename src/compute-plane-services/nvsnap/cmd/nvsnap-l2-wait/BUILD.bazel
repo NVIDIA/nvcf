@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "nvsnap-l2-wait_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap-l2-wait",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "nvsnap-l2-wait",
+    embed = [":nvsnap-l2-wait_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "nvsnap-l2-wait_test",
+    srcs = ["main_test.go"],
+    embed = [":nvsnap-l2-wait_lib"],
+)

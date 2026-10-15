@@ -3,9 +3,9 @@
 # HTTP Load Test SLI Guide
 
 This document describes which metrics to watch when load testing a self-hosted
-NVCF deployment using HTTP (`/pexec`) invocations, what each metric indicates,
-and how to interpret the failure sequence. Values are hardware-dependent --
-what is transferable is the order in which signals appear and what they mean.
+NVCF deployment using direct HTTP invocations, what each metric indicates, and
+how to interpret the failure sequence. Values are hardware-dependent -- what is
+transferable is the order in which signals appear and what they mean.
 
 For run commands and cluster setup, see {ref}`self-managed-http-load-test`.
 
@@ -18,8 +18,9 @@ For run commands and cluster setup, see {ref}`self-managed-http-load-test`.
   immediately or are rejected. Envoy enforces TCP connection timeouts: if a
   connection is held open beyond the LB timeout, Envoy closes the socket
   directly, producing an `EOF` error at the client with no HTTP status code.
-- The **Invocation Service (IS)** receives `/pexec` requests, dispatches to
-  the worker via NATS, and holds the connection open until the worker responds.
+- The **Invocation Service (IS)** receives direct HTTP invocation requests,
+  dispatches to the worker via NATS, and holds the connection open until the
+  worker responds or the configured hold-open duration expires.
 - The **worker pod** serves inference over HTTP. Its concurrency limit
   (`maxRequestConcurrency`) and inference time per request set the maximum
   sustainable req/s.
@@ -111,9 +112,10 @@ These confirm saturation after it has occurred. k6 is the primary source.
 
 - Stays at 0% through moderate overload.
 - **Error mode is `EOF`** -- TCP connection closed by Envoy, not the IS.
-  The IS holds each connection open via long-polling. When the Envoy connection
-  timeout fires, the socket is closed directly. The IS never sends an HTTP
-  error response. The client sees `EOF` with no status code.
+  The IS holds each direct HTTP invocation connection open while waiting for
+  the worker. When the Envoy connection timeout fires first, the socket is
+  closed directly. The IS never sends an HTTP error response. The client sees
+  `EOF` with no status code.
 - **Non-zero `http_req_failed` is a breaking-point signal**, not an early
   warning. The system is well past the capacity wall by the time EOF errors
   appear.

@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Bazel module exposing the OCI image-push macro. Services consume it
+# via bazel_dep + local_path_override in their own MODULE.bazel; see
+# any of the cut-over services' MODULE.bazel for the wiring pattern.
+#
+# This module is data-free: it contains only the macro implementation,
+# not the destination URLs. Each caller passes its own registry
+# prefixes inline. That lets the file live in the OSS-mirrored
+# rules/** tree so the local_path_override resolves on both the
+# private GitLab build and the public NVIDIA/nvcf GitHub mirror,
+# while keeping all NGC tenant identifiers (which never appear in
+# this module) out of the public mirror -- they live in the per-
+# service nvidia-internal/BUILD.bazel call-sites, which the OSS
+# allowlist excludes via **/*nvidia-internal*/**.
+module(
+    name = "nvcf_nvcr_destinations",
+    version = "0.0.0",
+    compatibility_level = 1,
+)
+
+bazel_dep(name = "rules_oci", version = "2.2.7")

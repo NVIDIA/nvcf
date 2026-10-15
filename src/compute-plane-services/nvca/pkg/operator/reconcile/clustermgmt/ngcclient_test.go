@@ -103,7 +103,7 @@ func TestGetCluster(t *testing.T) {
 	sisClusterErr := &atomic.Value{}
 	sisServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, r.Header.Get("Authorization"), "Bearer abcd-1234")
-		assert.Contains(t, r.URL.Path, "/v2/icms/clusters")
+		assert.Contains(t, r.URL.Path, "/v2/sis/clusters")
 
 		err := sisClusterErr.Load()
 		if err != nil {
@@ -237,6 +237,7 @@ func TestGetCluster_StageDefaultsAndGPUB64(t *testing.T) {
 		OAuthClientID: uuid.NewString(),
 	}
 	dto.ICMSConfig.TokenURL = "https://stage-oauth.example.test/token"
+	dto.ICMSConfig.ICMSServiceHostHeaderOverride = "sis.gateway.example.test"
 	sisClusterResp.Store(dto)
 
 	cluster, err := client.GetCluster(ctx, dto.ID)
@@ -244,7 +245,8 @@ func TestGetCluster_StageDefaultsAndGPUB64(t *testing.T) {
 
 	nb := cluster.NVCFBackend
 	// Stage defaults
-	assert.Equal(t, "https://stg.icms.nvcf.nvidia.com", nb.Spec.ICMSConfig.ICMSServiceURL)
+	assert.Equal(t, "https://stg.spot.gdn.nvidia.com", nb.Spec.ICMSConfig.ICMSServiceURL)
+	assert.Equal(t, "sis.gateway.example.test", nb.Spec.ICMSConfig.ICMSServiceHostHeaderOverride)
 	assert.Equal(t, "https://stage-oauth.example.test/token", nb.Spec.ICMSConfig.TokenURL)
 	assert.Equal(t, "https://stg.vault.nvidia.com:443", nb.Spec.VaultConfig.Address)
 
@@ -259,7 +261,7 @@ func TestGetCluster_MergeAttributes(t *testing.T) {
 	sisClusterResp := &atomic.Value{}
 	sisServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, r.Header.Get("Authorization"), "Bearer abcd-1234")
-		assert.Contains(t, r.URL.Path, "/v2/icms/clusters")
+		assert.Contains(t, r.URL.Path, "/v2/sis/clusters")
 
 		sisCluster := sisClusterResp.Load().(clusterDTO)
 		err := json.NewEncoder(w).Encode(sisCluster)
@@ -705,14 +707,11 @@ func TestWithAgentConfigMapper(t *testing.T) {
 					Effect:   corev1.TaintEffectNoSchedule,
 				}},
 				NATSURL:                                                "nats://nats.localhost:14222",
+				NATSHostOverride:                                       "nats.gateway.example.test",
 				HelmReValStageOAuthTokenURL:                            "https://stage-reval-oauth.example.test/token",
 				HelmReValStageOAuthPublicKeysetEndpoint:                "https://stage-reval-oauth.example.test/.well-known/jwks.json",
 				HelmReValProdOAuthTokenURL:                             "https://prod-reval-oauth.example.test/token",
 				HelmReValProdOAuthPublicKeysetEndpoint:                 "https://prod-reval-oauth.example.test/.well-known/jwks.json",
-				RolloverServiceStageOAuthTokenURL:                      "https://stage-ros-oauth.example.test/token",
-				RolloverServiceStageOAuthPublicKeysetEndpoint:          "https://stage-ros-oauth.example.test/.well-known/jwks.json",
-				RolloverServiceProdOAuthTokenURL:                       "https://prod-ros-oauth.example.test/token",
-				RolloverServiceProdOAuthPublicKeysetEndpoint:           "https://prod-ros-oauth.example.test/.well-known/jwks.json",
 				FunctionDeploymentStagesStageOAuthTokenURL:             "https://stage-fnds-oauth.example.test/token",
 				FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint: "https://stage-fnds-oauth.example.test/.well-known/jwks.json",
 				FunctionDeploymentStagesProdOAuthTokenURL:              "https://prod-fnds-oauth.example.test/token",
@@ -745,14 +744,12 @@ func TestWithAgentConfigMapper(t *testing.T) {
 		}}, dest.NVCFBackend.Spec.AgentConfig.DeploymentConfig.Tolerations)
 		require.NotNil(t, dest.NVCFBackend.Spec.AgentConfig.NATSURL)
 		assert.Equal(t, "nats://nats.localhost:14222", *dest.NVCFBackend.Spec.AgentConfig.NATSURL)
+		require.NotNil(t, dest.NVCFBackend.Spec.AgentConfig.NATSHostOverride)
+		assert.Equal(t, "nats.gateway.example.test", *dest.NVCFBackend.Spec.AgentConfig.NATSHostOverride)
 		assert.Equal(t, "https://stage-reval-oauth.example.test/token", dest.NVCFBackend.Spec.AgentConfig.HelmReValStageOAuthTokenURL)
 		assert.Equal(t, "https://stage-reval-oauth.example.test/.well-known/jwks.json", dest.NVCFBackend.Spec.AgentConfig.HelmReValStageOAuthPublicKeysetEndpoint)
 		assert.Equal(t, "https://prod-reval-oauth.example.test/token", dest.NVCFBackend.Spec.AgentConfig.HelmReValProdOAuthTokenURL)
 		assert.Equal(t, "https://prod-reval-oauth.example.test/.well-known/jwks.json", dest.NVCFBackend.Spec.AgentConfig.HelmReValProdOAuthPublicKeysetEndpoint)
-		assert.Equal(t, "https://stage-ros-oauth.example.test/token", dest.NVCFBackend.Spec.AgentConfig.RolloverServiceStageOAuthTokenURL)
-		assert.Equal(t, "https://stage-ros-oauth.example.test/.well-known/jwks.json", dest.NVCFBackend.Spec.AgentConfig.RolloverServiceStageOAuthPublicKeysetEndpoint)
-		assert.Equal(t, "https://prod-ros-oauth.example.test/token", dest.NVCFBackend.Spec.AgentConfig.RolloverServiceProdOAuthTokenURL)
-		assert.Equal(t, "https://prod-ros-oauth.example.test/.well-known/jwks.json", dest.NVCFBackend.Spec.AgentConfig.RolloverServiceProdOAuthPublicKeysetEndpoint)
 		assert.Equal(t, "https://stage-fnds-oauth.example.test/token", dest.NVCFBackend.Spec.AgentConfig.FunctionDeploymentStagesStageOAuthTokenURL)
 		assert.Equal(t, "https://stage-fnds-oauth.example.test/.well-known/jwks.json", dest.NVCFBackend.Spec.AgentConfig.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint)
 		assert.Equal(t, "https://prod-fnds-oauth.example.test/token", dest.NVCFBackend.Spec.AgentConfig.FunctionDeploymentStagesProdOAuthTokenURL)

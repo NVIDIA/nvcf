@@ -41,18 +41,12 @@ if [ -z "$FUNCTION_ID" ] || [ "$FUNCTION_ID" = "your-multi-node-function-id" ] |
     exit 1
 fi
 
-if [ -z "$GATEWAY_ADDR" ] || [ "$GATEWAY_ADDR" = "your-gateway-address-here" ]; then
-    echo "Error: GATEWAY_ADDR not set in config.env"
-    exit 1
-fi
-
 # Test 1: Run all bandwidth tests with default settings
 # echo "======================================================================================================"
 # echo " Test 1: Running all bandwidth tests with default settings"
 # echo "======================================================================================================"
 # RESPONSE=$(curl --silent --request POST \
-# --url "http://${GATEWAY_ADDR}/bandwidth-test" \
-# --header "Host: ${FUNCTION_ID}.invocation.${GATEWAY_ADDR}" \
+# --url https://${FUNCTION_ID}.invocation.api.nvcf.nvidia.com/bandwidth-test \
 # --header "Authorization: Bearer ${KEY}" \
 # --header 'NVCF-POLL-SECONDS: 300' \
 # --header 'Content-Type: application/json' \
@@ -70,8 +64,7 @@ echo "==========================================================================
 echo " Test 2: Running device-to-device memcpy test"
 echo "======================================================================================================"
 RESPONSE=$(curl --silent --request POST \
---url "http://${GATEWAY_ADDR}/bandwidth-test" \
---header "Host: ${FUNCTION_ID}.invocation.${GATEWAY_ADDR}" \
+--url https://${FUNCTION_ID}.invocation.api.nvcf.nvidia.com/bandwidth-test \
 --header "Authorization: Bearer ${KEY}" \
 --header 'NVCF-POLL-SECONDS: 300' \
 --header 'Content-Type: application/json' \
@@ -90,8 +83,7 @@ echo "==========================================================================
 echo " Test 3: Running host-to-device tests"
 echo "======================================================================================================"
 RESPONSE=$(curl --silent --request POST \
---url "http://${GATEWAY_ADDR}/bandwidth-test" \
---header "Host: ${FUNCTION_ID}.invocation.${GATEWAY_ADDR}" \
+--url https://${FUNCTION_ID}.invocation.api.nvcf.nvidia.com/bandwidth-test \
 --header "Authorization: Bearer ${KEY}" \
 --header 'NVCF-POLL-SECONDS: 300' \
 --header 'Content-Type: application/json' \
@@ -110,8 +102,7 @@ echo "==========================================================================
 echo " Test 4: Running multinode bandwidth tests"
 echo "======================================================================================================"
 RESPONSE=$(curl --silent --request POST \
---url "http://${GATEWAY_ADDR}/bandwidth-test" \
---header "Host: ${FUNCTION_ID}.invocation.${GATEWAY_ADDR}" \
+--url https://${FUNCTION_ID}.invocation.api.nvcf.nvidia.com/bandwidth-test \
 --header "Authorization: Bearer ${KEY}" \
 --header 'NVCF-POLL-SECONDS: 300' \
 --header 'Content-Type: application/json' \
@@ -128,4 +119,3 @@ RESPONSE=$(curl --silent --request POST \
 echo "$RESPONSE" | jq -r '.command'
 echo "$RESPONSE" | jq -r '.output'
 echo ""
-

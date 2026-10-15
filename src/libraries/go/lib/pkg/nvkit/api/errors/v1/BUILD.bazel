@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+# Phase 1: protobuf toolchain is not wired in MODULE.bazel yet, so this
+# package builds the pre-generated nverrors.pb.go directly. When rules_proto
+# and protobuf are added, switch back to gazelle's proto_library +
+# go_proto_library + embed pattern (see git history).
+# gazelle:proto disable
+
+go_library(
+    name = "errors",
+    srcs = ["nverrors.pb.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_grpc_ecosystem_grpc_gateway_v2//protoc-gen-openapiv2/options",
+        "@org_golang_google_protobuf//reflect/protoreflect",
+        "@org_golang_google_protobuf//runtime/protoimpl",
+        "@org_golang_google_protobuf//types/descriptorpb",
+    ],
+)
+
+go_test(
+    name = "errors_test",
+    srcs = ["nverrors_test.go"],
+    embed = [":errors"],
+    deps = ["@com_github_stretchr_testify//assert"],
+)

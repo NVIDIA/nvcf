@@ -19,7 +19,7 @@ limitations under the License.
 // +k8s:defaulter-gen=TypeMeta
 // +groupName=nvca.nvcf.nvidia.io
 //
-// Package v2beta1 contains the NVCA storage request API (StorageRequest).
+// Package v2beta1 contains the NVCA request, storage, and model-cache binding APIs.
 // Prefer v2beta1 for new code; it uses RequestName/RequestNamespace instead of
 // the legacy prefixed fields, with ICMS request semantics in comments.
 

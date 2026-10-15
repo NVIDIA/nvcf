@@ -297,7 +297,7 @@ type Server struct {
 	// to know if it should update the cluster's URLs array.
 	varzUpdateRouteURLs bool
 
-	// Keeps a sublist of of subscriptions attached to leafnode connections
+	// Keeps a sublist of subscriptions attached to leafnode connections
 	// for the $GNR.*.*.*.> subject so that a server can send back a mapped
 	// gateway reply.
 	gwLeafSubs *Sublist
@@ -404,9 +404,13 @@ type nodeInfo struct {
 
 type stats struct {
 	inMsgs           int64
-	outMsgs          int64
 	inBytes          int64
+	inClientMsgs     int64
+	inClientBytes    int64
+	outMsgs          int64
 	outBytes         int64
+	outClientMsgs    int64
+	outClientBytes   int64
 	slowConsumers    int64
 	staleConnections int64
 	stalls           int64
@@ -687,6 +691,8 @@ func s2WriterOptions(cm string) []s2.WriterOption {
 	switch cm {
 	case CompressionS2Uncompressed:
 		return append(opts, s2.WriterUncompressed())
+	case CompressionS2Fast:
+		return opts
 	case CompressionS2Best:
 		return append(opts, s2.WriterBestCompression())
 	case CompressionS2Better:
@@ -1063,7 +1069,10 @@ func (s *Server) setClusterName(name string) {
 		l.closeConnection(ClusterNameConflict)
 	}
 	if resetCh != nil {
-		resetCh <- struct{}{}
+		select {
+		case resetCh <- struct{}{}:
+		case <-s.quitCh:
+		}
 	}
 	s.Noticef("Cluster name updated to %s", name)
 }
@@ -1959,12 +1968,7 @@ func (s *Server) registerAccount(acc *Account) *Account {
 // Helper to set the sublist based on preferences.
 func (s *Server) setAccountSublist(acc *Account) {
 	if acc != nil && acc.sl == nil {
-		opts := s.getOpts()
-		if opts != nil && opts.NoSublistCache {
-			acc.sl = NewSublistNoCache()
-		} else {
-			acc.sl = NewSublistWithCache()
-		}
+		acc.sl = NewSublistForServer(s)
 	}
 }
 
@@ -1997,7 +2001,7 @@ func (s *Server) registerAccountNoLock(acc *Account) *Account {
 	// TODO(dlc)- Double check that we need this for GWs.
 	if acc.rm == nil && s.opts != nil && s.shouldTrackSubscriptions() {
 		acc.rm = make(map[string]int32)
-		acc.lqws = make(map[string]int32)
+		acc.lws = make(map[string]int32)
 	}
 	acc.srv = s
 	acc.updated = time.Now()
@@ -2587,6 +2591,10 @@ func (s *Server) Shutdown() {
 	if s == nil {
 		return
 	}
+	// Prevent issues with multiple calls.
+	if !s.shutdown.CompareAndSwap(false, true) {
+		return
+	}
 	// This is for JetStream R1 Pull Consumers to allow signaling
 	// that pending pull requests are invalid.
 	s.signalPullConsumers()
@@ -2600,11 +2608,6 @@ func (s *Server) Shutdown() {
 	// eventing items associated with accounts.
 	s.shutdownEventing()
 
-	// Prevent issues with multiple calls.
-	if s.isShuttingDown() {
-		return
-	}
-
 	s.mu.Lock()
 	s.Noticef("Initiating Shutdown...")
 
@@ -2612,7 +2615,6 @@ func (s *Server) Shutdown() {
 
 	opts := s.getOpts()
 
-	s.shutdown.Store(true)
 	s.running.Store(false)
 	s.grMu.Lock()
 	s.grRunning = false
@@ -3380,7 +3382,7 @@ func (s *Server) createClientEx(conn net.Conn, inProcess bool) *client {
 
 	// If there is a max connections specified, check that adding
 	// this new client would not push us over the max
-	if opts.MaxConn > 0 && len(s.clients) >= opts.MaxConn {
+	if opts.MaxConn < 0 || (opts.MaxConn > 0 && len(s.clients) >= opts.MaxConn) {
 		s.mu.Unlock()
 		c.maxConnExceeded()
 		return nil
@@ -3430,21 +3432,22 @@ func (s *Server) createClientEx(conn net.Conn, inProcess bool) *client {
 	// If we have both TLS and non-TLS allowed we need to see which
 	// one the client wants. We'll always allow this for in-process
 	// connections.
-	if !isClosed && !tlsFirst && opts.TLSConfig != nil && (inProcess || opts.AllowNonTLS) {
+	sniffTLS := !tlsFirst && opts.TLSConfig != nil && (inProcess || opts.AllowNonTLS)
+	if !isClosed && sniffTLS {
 		pre = make([]byte, 6) // Minimum 6 bytes for proxy proto in next step.
 		c.nc.SetReadDeadline(time.Now().Add(secondsToDuration(opts.TLSTimeout)))
 		n, _ := io.ReadFull(c.nc, pre[:])
 		c.nc.SetReadDeadline(time.Time{})
 		pre = pre[:n]
-		if n > 0 && pre[0] == 0x16 {
-			tlsRequired = true
-		} else {
-			tlsRequired = false
-		}
+		tlsRequired = n > 0 && pre[0] == 0x16
 	}
 
-	// Check for proxy protocol if enabled.
-	if !isClosed && !tlsRequired && opts.ProxyProtocol {
+	// Check for proxy protocol if enabled. The PROXY header is sent as
+	// plaintext before any TLS handshake per the spec, so we must read it
+	// before doing TLS even when TLS is required. Any bytes read past the
+	// header are kept in `pre` and replayed into the TLS handshake (or the
+	// non-TLS protocol parser) by the tlsMixConn wrapper used below.
+	if !isClosed && opts.ProxyProtocol {
 		if len(pre) == 0 {
 			// There has been no pre-read yet, do so so we can work out
 			// if the client is trying to negotiate PROXY.
@@ -3455,7 +3458,7 @@ func (s *Server) createClientEx(conn net.Conn, inProcess bool) *client {
 			pre = pre[:n]
 		}
 		conn = &tlsMixConn{conn, bytes.NewBuffer(pre)}
-		addr, err := readProxyProtoHeader(conn)
+		addr, proxyPre, err := readProxyProtoHeader(conn)
 		if err != nil && err != errProxyProtoUnrecognized {
 			// err != errProxyProtoUnrecognized implies that we detected a proxy
 			// protocol header but we failed to parse it, so don't continue.
@@ -3476,14 +3479,26 @@ func (s *Server) createClientEx(conn net.Conn, inProcess bool) *client {
 			c.port = addr.srcPort
 		}
 		// At this point, err is either:
-		//  - nil => we parsed the proxy protocol header successfully
-		//  - errProxyProtoUnrecognized => we didn't detect proxy protocol at all
-		// We only clear the pre-read if we successfully read the protocol header
-		// so that the next step doesn't re-read it. Otherwise we have to assume
-		// that it's a non-proxied connection and we want the pre-read to remain
-		// for the next step.
-		if err == nil {
-			pre = nil
+		//  - nil => we parsed the proxy protocol header successfully and
+		//    proxyPre holds any bytes read past the header
+		//  - errProxyProtoUnrecognized => we didn't detect proxy protocol at
+		//    all and proxyPre holds the bytes that detection consumed (which
+		//    may include bytes read directly from the socket beyond the
+		//    original pre-read), so they must be replayed to the next step.
+		pre = proxyPre
+		if err == nil && sniffTLS {
+			// If we sniffed for TLS-vs-plaintext above, the byte we looked
+			// at belonged to the PROXY header, not to the client's actual
+			// traffic. Re-evaluate using the first byte that follows the
+			// header (reading it from the connection if needed).
+			if len(pre) == 0 {
+				buf := make([]byte, 1)
+				c.nc.SetReadDeadline(time.Now().Add(secondsToDuration(opts.TLSTimeout)))
+				n, _ := io.ReadFull(c.nc, buf)
+				c.nc.SetReadDeadline(time.Time{})
+				pre = buf[:n]
+			}
+			tlsRequired = len(pre) > 0 && pre[0] == 0x16
 		}
 		// Because we have ProxyProtocol enabled, our earlier INFO message didn't
 		// include the client_ip. If we need to send it again then we will include
@@ -3589,7 +3604,7 @@ func (s *Server) saveClosedClient(c *client, nc net.Conn, subs map[string]*subsc
 	if c.acc != nil && c.acc.Name != globalAccountName {
 		cc.acc = c.acc.Name
 	}
-	cc.JWT = c.opts.JWT
+	cc.JWT = redactBearerJWT(c.opts.JWT)
 	cc.IssuerKey = issuerForClient(c)
 	cc.Tags = c.tags
 	cc.NameTag = c.nameTag
@@ -3672,7 +3687,11 @@ func tlsTimeout(c *client, conn *tls.Conn) {
 	}
 	cs := conn.ConnectionState()
 	if !cs.HandshakeComplete {
-		c.Errorf("TLS handshake timeout")
+		if c.kind == CLIENT || c.kind == LEAF {
+			c.Debugf("TLS handshake timeout")
+		} else {
+			c.Errorf("TLS handshake timeout")
+		}
 		c.sendErr("Secure Connection - TLS Required")
 		c.closeConnection(TLSHandshakeError)
 	}
@@ -4418,7 +4437,7 @@ func (s *Server) isLameDuckMode() bool {
 // LameDuckShutdown will perform a lame duck shutdown of NATS, whereby
 // the client listener is closed, existing client connections are
 // kicked, Raft leaderships are transferred, JetStream is shutdown
-// and then finally shutdown the the NATS Server itself.
+// and then finally shutdown the NATS Server itself.
 // This function blocks and will not return until the NATS Server
 // has completed the entire shutdown operation.
 func (s *Server) LameDuckShutdown() {

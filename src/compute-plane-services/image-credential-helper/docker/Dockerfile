@@ -22,7 +22,6 @@ WORKDIR /app
 COPY go.mod go.sum ./
 COPY vendor ./vendor
 COPY cmd ./cmd
-COPY credhelper ./credhelper
 
 # ------------------------------------------------------------------------------
 # Builder stage – compile image-credential-helper binary for all TARGETARCHS
@@ -46,7 +45,7 @@ RUN set -eux; \
 
 # This distroless image already provides a non-root runtime user, so do not add a USER override here unless
 # the runtime requirements change.
-FROM nvcr.io/nvidia/distroless/go:v4.0.4
+FROM nvcr.io/nvidia/distroless/go:v4.1.2
 LABEL io.k8s.display-name="NVCF Image Credential Helper"
 
 # The following build args are automatically populated by BuildKit.
