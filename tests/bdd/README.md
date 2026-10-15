@@ -194,6 +194,9 @@ If a new step is genuinely needed:
 
 - Docker + k3d on `PATH`. The Make target the suite invokes does the
   cluster create.
+- 8 CPUs visible to Docker. The local compute-plane fixtures reserve about
+  1.75 CPU per function instance, so 8 CPUs are enough for the
+  `NCP.GPU.H100_1x` instance type the features deploy.
 - `kubectl` and `helm` on `PATH` for the assertion-side commands.
 - `make` in the repo root so the `make -C deploy/stacks/self-managed`
   invocations resolve.
