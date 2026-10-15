@@ -1,0 +1,123 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+global:
+
+  # Domain for external access (used by Gateway API HTTPRoutes)
+  domain: "GATEWAY_ADDR" # Replace with ELB domain
+
+  # =============================================================================
+  # Helm Chart Sources Configuration
+  # =============================================================================
+  # Configure the OCI registry where NVCF Helm charts are stored.
+  # This must point to a registry containing the NVCF chart packages.
+  # =============================================================================
+  helm:
+    sources:
+      registry: <your-account-id>.dkr.ecr.<your-region>.amazonaws.com
+      repository: <your-ecr-repository-name>
+      # NGC Example:
+      # registry: nvcr.io
+      # repository: YOUR_ORG/YOUR_TEAM # e.g. 123456789102/YOUR_TEAM
+      # ECR Example:
+      # registry: <your-account-id>.dkr.ecr.<your-region>.amazonaws.com
+      # repository: <your-ecr-repository-name>
+
+  # =============================================================================
+  # Container Image Registry Configuration
+  # =============================================================================
+  # Configure the container registry where NVCF service images are stored.
+  # These images are pulled by Kubernetes when deploying the NVCF stack.
+  # =============================================================================
+  image:
+    registry: <your-account-id>.dkr.ecr.<your-region>.amazonaws.com
+    repository: <your-ecr-repository-name>
+    # NGC Example:
+    # registry: nvcr.io
+    # repository: YOUR_ORG/YOUR_TEAM # e.g. 123456789102/YOUR_TEAM
+    # ECR Example:
+    # registry: <your-account-id>.dkr.ecr.<your-region>.amazonaws.com
+    # repository: <your-ecr-repository-name>
+
+  nodeSelectors:
+    enabled: true # Set true when using dedicated node labels for NVCF workloads
+    vault:
+      key: nvcf.nvidia.com/workload
+      value: vault
+    cassandra:
+      key: nvcf.nvidia.com/workload
+      value: cassandra
+    controlplane:
+      key: nvcf.nvidia.com/workload
+      value: control-plane
+
+  storageClass: "gp3" # Customize to your storage class
+  storageSize: "10Gi" # Customize to your storage size
+
+  # =============================================================================
+  # Observability Configuration
+  # =============================================================================
+  # Enable distributed tracing via OTLP (dsiabled by default).
+  # This must point to an OTLP-compatible collector.
+  # =============================================================================
+  observability:
+    tracing:
+      enabled: false
+      collectorEndpoint: ""
+      collectorPort: 4317
+      collectorProtocol: http
+      # Example:
+      # enabled: true
+      # collectorEndpoint: <your-collector-endpoint>
+      # collectorPort: <your-collector-port>
+      # collectorProtocol: <your-collector-protocol>
+
+fakeGpuOperator:
+  enabled: false # If deploying locally with no GPUs, true
+  ubuntu:
+    imageName: alpine-k8s
+    tag: 1.30.12
+
+accounts: # Default NVCF account configuration
+  limits:
+    maxFunctions: 10
+    maxTasks: 10 # Note: Tasks (NVCT) are not currently supported for EA
+    maxTelemetries: 10 # Note: BYOO is not currently supported for EA
+    maxRegistryCreds: 10
+
+# These static global values are processed in the values template
+nats:
+  enabled: true
+
+cassandra:
+  enabled: true
+
+openbao:
+  enabled: true
+  migrations:
+    issuerDiscovery:
+      enabled: true # Recommended true for EKS - discovers OIDC issuer automatically
+
+# Ingress Gateway Configuration
+ingress:
+  gatewayApi:
+    enabled: true
+    controllerNamespace: "envoy-gateway-system" # must be set by the environment
+    routes:
+      nvcfApi:
+        routeAnnotations: {}
+      apiKeys:
+        routeAnnotations: {}
+      invocation:
+        routeAnnotations: {}
+      grpc:
+        routeAnnotations: {}
+    gateways:
+      shared:
+        name: "nvcf-gateway" # must be set by the environment
+        namespace: "envoy-gateway" # must be set by the environment
+        listenerName: http
+      grpc:
+        name: "nvcf-gateway" # must be set by the environment
+        namespace: "envoy-gateway" # must be set by the environment
+        listenerName: tcp

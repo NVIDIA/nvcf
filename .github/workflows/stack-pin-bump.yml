@@ -1,0 +1,181 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# When a chart release is published, open a pull request moving the
+# self-managed stack's pin to that version.
+#
+# The released tag carries the version, so there is no "newest version" lookup
+# and none of the ordering questions that come with one. A tag of
+# deploy/helm/nats/v0.8.0 states the answer.
+#
+# The failure this is built to avoid is silence. A chart releases, nothing in
+# the stack resolves to it, no pin moves, and the run goes green. The resolver
+# therefore enumerates every release in the stack and treats one it cannot
+# resolve as an error, so a gap shows up as a red run rather than as nothing.
+
+name: stack pin bump
+
+on:
+  release:
+    types: [published]
+  # Manual entry point for re-running a release whose bump did not land, and
+  # for exercising the job without cutting a tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Chart release tag, for example deploy/helm/nats/v0.8.0
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  # One bump at a time. Several releases landing together refresh the same
+  # pull request rather than racing on the same file.
+  group: stack-pin-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The default for a release event is the tagged commit, but the pull
+          # request targets the default branch. Pinning against the tag's tree
+          # would carry whatever the stack looked like then onto a branch cut
+          # from today's main.
+          ref: ${{ github.event.repository.default_branch }}
+          # The shared bump branch can predate new release metadata. Its pin
+          # commits must be rebased onto the complete default-branch history
+          # before the resolver runs there.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          # Derived from the anchor, never a literal: tools/ci/check-go-version
+          # fails any workflow that pins one.
+          go-version-file: tools/go-toolchain/go.mod
+
+      - name: Test the resolver
+        # The resolver decides which line in the shipped stack gets rewritten,
+        # so its tests run here rather than somewhere that might not be
+        # reached. A test that gates nothing is not a test.
+        run: go test -C tools/stack-pin-resolver ./...
+
+      - name: Select the tag
+        id: tag
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.event.release.tag_name }}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          # Only chart releases move stack pins. Everything else is a normal
+          # release and is not this job's business.
+          case "${tag}" in
+            deploy/helm/*/v*) echo "applies=true"  >> "${GITHUB_OUTPUT}" ;;
+            *)                echo "applies=false" >> "${GITHUB_OUTPUT}"
+                              echo "${tag} is not a chart release; nothing to do" ;;
+          esac
+
+      - name: Audit the stack
+        if: steps.tag.outputs.applies == 'true'
+        # Runs before the edit so an unresolvable release fails the job with a
+        # name attached, rather than being quietly skipped over.
+        run: tools/ci/stack-pin-resolver --audit
+
+      - name: Check out the bump branch
+        if: steps.tag.outputs.applies == 'true'
+        env:
+          BRANCH: chore/stack-pin-bumps
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          # The bump is applied ON the pull request branch, not on the default
+          # branch and moved across afterwards. Bumping first and stashing the
+          # result over a checkout collides whenever the branch already carries
+          # a bump for the same pin, and a swallowed stash conflict either drops
+          # that earlier bump or commits conflict markers. Starting here also
+          # makes the tool idempotent: it sees the existing value and reports
+          # "already <version>". Refreshing from the default branch first keeps
+          # new release metadata available without dropping accumulated pins.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          tools/ci/prepare-stack-pin-branch "${BRANCH}" "${BASE_BRANCH}"
+
+      - name: Apply the bump
+        id: bump
+        if: steps.tag.outputs.applies == 'true'
+        env:
+          # Through env, never expanded into the script body: a tag is chosen by
+          # whoever pushes it, and ${{ }} interpolation into a run: block is the
+          # standard Actions injection shape.
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          tools/ci/stack-pin-resolver --tag "${TAG}" --write
+          # Scoped to the same paths the commit below stages. Repo-wide, any
+          # unrelated modification in the workspace would set changed=true and
+          # the commit would then abort with nothing staged.
+          if git diff --quiet -- deploy/stacks/self-managed/helmfile.d; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            echo "stack already pins this version"
+          else
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+            git --no-pager diff --stat -- deploy/stacks/self-managed/helmfile.d
+          fi
+
+      - name: Open or refresh the pull request
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          branch="chore/stack-pin-bumps"
+
+          git add deploy/stacks/self-managed/helmfile.d
+          # Separate -m flags rather than an embedded multi-line string: the
+          # continuation lines of one would have to sit at column zero, which
+          # ends the YAML block scalar this script lives in.
+          # fix, not chore. deploy/stacks/self-managed is itself a release
+          # subproject, and tools/ci/github-release feeds RELEASE_RULES to
+          # semantic-release, where chore carries "release": false. A chore
+          # commit would move the pin on main without ever cutting a stack
+          # release, so nothing downstream would see the new pin.
+          git commit \
+            -m "fix(stack): pin ${TAG#deploy/helm/}" \
+            -m "Opened by the stack pin bump workflow on release of ${TAG}."
+          git push --force-with-lease origin "${branch}"
+
+          body="$(printf '%s\n' \
+            "Opened by \`.github/workflows/stack-pin-bump.yml\` when \`${TAG}\` was published." \
+            "" \
+            "The released tag carries the version, so this is a direct pin update rather than a lookup of the newest published chart." \
+            "" \
+            "Release notes: ${SERVER_URL}/${REPO}/releases/tag/${TAG}" \
+            "" \
+            "If this pull request sits unmerged, later chart releases add their bumps to the same branch, so merging it applies all of them." \
+            "" \
+            "Github commit:" \
+            "fix(stack): pin ${TAG#deploy/helm/}" \
+            "")"
+
+          # gh api, not `gh pr edit`. Against this repository `gh pr edit` fails
+          # with "Projects (classic) is being deprecated ...
+          # (repository.pullRequest.projectCards)", because it queries project
+          # cards it does not need. The REST endpoint has no such dependency.
+          number="$(gh api "repos/${REPO}/pulls?head=${REPO%%/*}:${branch}&state=open" -q '.[0].number')"
+          if [ -n "${number}" ] && [ "${number}" != "null" ]; then
+            jq -n --arg b "${body}" '{body: $b}' \
+              | gh api -X PATCH "repos/${REPO}/pulls/${number}" --input - >/dev/null
+            echo "refreshed pull request #${number}"
+          else
+            gh pr create --base main --head "${branch}" \
+              --title "fix(stack): bump self-managed stack chart pins" \
+              --body "${body}"
+          fi

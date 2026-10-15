@@ -40,7 +40,7 @@ receivers:
         - job_name: opentelemetry-collector
           metric_relabel_configs:
             - action: keep
-              regex: (otelcol_receiver_refused_metric_points_total|otelcol_receiver_refused_spans_total|otelcol_receiver_refused_log_records_total|otelcol_receiver_accepted_metric_points_total|otelcol_receiver_accepted_spans_total|otelcol_receiver_accepted_log_records_total|otelcol_exporter_sent_metric_points_total|otelcol_exporter_sent_spans_total|otelcol_exporter_sent_log_records_total|otelcol_exporter_send_failed_metric_points_total|otelcol_exporter_send_failed_spans_total|otelcol_exporter_send_failed_log_records_total|otelcol_processor_incoming_items_total|otelcol_processor_outgoing_items_total)
+              regex: (otelcol_.*)
               source_labels:
                 - __name__
           scrape_interval: 30s
@@ -138,6 +138,10 @@ receivers:
 exporters:
   azuremonitor/AZURE_MONITOR-azure-monitor-prd-logs:
     connection_string: InstrumentationKey=${file:/etc/byoo-otel-collector/secrets/azure-monitor-prd-instrumentationKey};IngestionEndpoint=endpoint;LiveEndpoint=${file:/etc/byoo-otel-collector/secrets/azure-monitor-prd-liveEndpoint};ApplicationId=${file:/etc/byoo-otel-collector/secrets/azure-monitor-prd-applicationId}
+    sending_queue:
+      enabled: true
+      num_consumers: 10
+      queue_size: 1000
   azuremonitor/AZURE_MONITOR-azure-monitor-prd-metrics:
     connection_string: InstrumentationKey=${file:/etc/byoo-otel-collector/secrets/azure-monitor-prd-instrumentationKey};IngestionEndpoint=endpoint;LiveEndpoint=${file:/etc/byoo-otel-collector/secrets/azure-monitor-prd-liveEndpoint};ApplicationId=${file:/etc/byoo-otel-collector/secrets/azure-monitor-prd-applicationId}
   azuremonitor/AZURE_MONITOR-azure-monitor-prd-traces:
@@ -184,7 +188,7 @@ processors:
     check_interval: 1s
     limit_percentage: 80
     spike_limit_percentage: 10
-  metricstransform:
+  metrics_transform:
     transforms:
       - action: update
         include: ^.*$
@@ -216,7 +220,7 @@ processors:
       - action: delete
         key: service.instance.id
 extensions:
-  cgroupruntime:
+  cgroup_runtime:
     gomaxprocs:
       enabled: true
     gomemlimit:
@@ -242,7 +246,7 @@ service:
         public: "true"
       level: warn
     metrics:
-      level: normal
+      level: detailed
       readers:
         - pull:
             exporter:
@@ -250,17 +254,22 @@ service:
                 host: ${env:OTEL_POD_IP:-0.0.0.0}
                 port: 18888
     resource:
-      service.name: byoo-otel-collector
-      service.namespace: sr-fake-namespace
-      task.id: taskid123
+      attributes:
+        - name: service.namespace
+          value: sr-fake-namespace
+        - name: service.name
+          value: byoo-otel-collector
+        - name: task.id
+          value: taskid123
     traces:
       processors:
         - batch:
             exporter:
               otlp:
-                endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT}
+                endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}
                 headers:
-                  lightstep-access-token: ${env:OTEL_TRACING_ACCESS_TOKEN}
+                  - name: lightstep-access-token
+                    value: ${env:OTEL_TRACING_ACCESS_TOKEN}
                 protocol: grpc
   pipelines:
     logs:
@@ -282,7 +291,7 @@ service:
         - memory_limiter
         - filter/metrics
         - resource
-        - metricstransform
+        - metrics_transform
         - batch
     traces:
       receivers:
@@ -295,4 +304,4 @@ service:
         - batch
   extensions:
     - healthcheckv2
-    - cgroupruntime
+    - cgroup_runtime

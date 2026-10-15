@@ -44,3 +44,10 @@ _output/
 
 vendor/
 bin/
+
+# go.work is intentional Bazel infra (multi-module wiring). Force-tracked
+# despite the generic Go ignore.
+!go.work
+
+# Bazel local symlinks (output, execroot, testlogs).
+/bazel-*

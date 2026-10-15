@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "transporttls",
+    srcs = ["transport_tls.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls",
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/trustbundle",
+        "//src/compute-plane-services/nvca/internal/util/k8sutil",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/validation",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/utils/ptr",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":transporttls",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "transporttls_test",
+    srcs = ["transport_tls_test.go"],
+    embed = [":transporttls"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/evanphx/json-patch/v5:json-patch",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/resource",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/strategicpatch",
+    ],
+)

@@ -1,0 +1,10 @@
+---
+# Source: kai-scheduler/templates/services/resourcereservation-namespace.yaml
+# Copyright 2025 NVIDIA CORPORATION
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kai-resource-reservation
+  annotations:
+    helm.sh/resource-policy: keep

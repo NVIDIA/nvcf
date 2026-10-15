@@ -21,22 +21,28 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sync/atomic"
 	"testing"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	evanphxpatch "github.com/evanphx/json-patch/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	jsonpatch "gomodules.xyz/jsonpatch/v2"
+	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	nvcfdra "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/dra"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures/sharedcluster"
 	cmnnvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
@@ -83,18 +89,7 @@ func testConfigMap(t *testing.T, ns string) *corev1.ConfigMap {
 		NodeAffinityKey:    "nvca.nvcf.nvidia.io/instance-type",
 		NodeAffinityValue:  "ON-PREM.GPU.A100",
 	}
-	data, err := meta.ToConfigMapData()
-	require.NoError(t, err)
-	return &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      nvcatypes.MiniserviceMetadataConfigMapName,
-			Namespace: ns,
-			Labels: map[string]string{
-				nvcatypes.MiniserviceNameLabel: testInstanceID,
-			},
-		},
-		Data: data,
-	}
+	return createConfigMapFromMeta(t, ns, meta)
 }
 
 // testTaskConfigMap returns a populated ConfigMap for a task MiniService.
@@ -125,6 +120,11 @@ func testTaskConfigMap(t *testing.T, ns string) *corev1.ConfigMap {
 		},
 		TerminationGracePeriodSeconds: &gracePeriod,
 	}
+	return createConfigMapFromMeta(t, ns, meta)
+}
+
+func createConfigMapFromMeta(t *testing.T, ns string, meta nvcatypes.MiniserviceMetadata) *corev1.ConfigMap {
+	t.Helper()
 	data, err := meta.ToConfigMapData()
 	require.NoError(t, err)
 	return &corev1.ConfigMap{
@@ -175,6 +175,7 @@ func TestMiniserviceOperatorWebhook_ConfigMapMissing(t *testing.T) {
 	req.Namespace = testNamespace
 	req.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "Pod"}
 	req.Object = runtime.RawExtension{Raw: raw}
+	req.Operation = admissionv1.Create
 
 	resp := wh.Handle(ctx, req)
 	assert.False(t, resp.Allowed)
@@ -190,6 +191,7 @@ func TestMiniserviceOperatorWebhook_ClusterScopedObject(t *testing.T) {
 	req.Namespace = "" // cluster-scoped
 	req.Kind = metav1.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRole"}
 	req.Object = runtime.RawExtension{Raw: raw}
+	req.Operation = admissionv1.Create
 
 	resp := wh.Handle(ctx, req)
 	assert.True(t, resp.Allowed)
@@ -204,6 +206,7 @@ func TestMiniserviceOperatorWebhook_InfraPodObject(t *testing.T) {
 	req.Namespace = testNamespace
 	req.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "Pod"}
 	req.Object = runtime.RawExtension{Raw: raw}
+	req.Operation = admissionv1.Create
 
 	resp := wh.Handle(ctx, req)
 	assert.True(t, resp.Allowed)
@@ -227,6 +230,7 @@ func TestMiniserviceOperatorWebhook_Pod_MetadataAndEnvInjected(t *testing.T) {
 	req.Namespace = testNamespace
 	req.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "Pod"}
 	req.Object = runtime.RawExtension{Raw: raw}
+	req.Operation = admissionv1.Create
 
 	resp := wh.Handle(ctx, req)
 	require.True(t, resp.Allowed, "expected Allowed, got: %v", resp.Result)
@@ -264,6 +268,7 @@ func TestMiniserviceOperatorWebhook_UtilsPod_Function(t *testing.T) {
 	req.Namespace = testNamespace
 	req.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "Pod"}
 	req.Object = runtime.RawExtension{Raw: raw}
+	req.Operation = admissionv1.Create
 
 	resp := wh.Handle(ctx, req)
 	require.True(t, resp.Allowed, "expected Allowed, got: %v", resp.Result)
@@ -313,6 +318,7 @@ func TestMiniserviceOperatorWebhook_Pod_TaskEnvInjected(t *testing.T) {
 	req.Namespace = testNamespace
 	req.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "Pod"}
 	req.Object = runtime.RawExtension{Raw: raw}
+	req.Operation = admissionv1.Create
 
 	resp := wh.Handle(ctx, req)
 	require.True(t, resp.Allowed)
@@ -377,6 +383,7 @@ func TestMiniserviceOperatorWebhook_UtilsPod_Task(t *testing.T) {
 	req.Namespace = testNamespace
 	req.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "Pod"}
 	req.Object = runtime.RawExtension{Raw: raw}
+	req.Operation = admissionv1.Create
 
 	resp := wh.Handle(ctx, req)
 	require.True(t, resp.Allowed, "expected Allowed, got: %v", resp.Result)
@@ -440,6 +447,7 @@ func TestMiniserviceOperatorWebhook_Pod_ExistingEnvNotDuplicated(t *testing.T) {
 	req.Namespace = testNamespace
 	req.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "Pod"}
 	req.Object = runtime.RawExtension{Raw: raw}
+	req.Operation = admissionv1.Create
 
 	resp := wh.Handle(ctx, req)
 	require.True(t, resp.Allowed)
@@ -455,6 +463,293 @@ func TestMiniserviceOperatorWebhook_Pod_ExistingEnvNotDuplicated(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, count, "NVCF_NCA_ID should not be duplicated")
+}
+
+func TestMiniserviceOperatorWebhook_PodSpecCreateThenUpdate_IsIdempotentOrderPreserved(t *testing.T) {
+	ctx := core.WithDefaultLogger(context.Background())
+
+	newPod := func() *corev1.Pod {
+		return &corev1.Pod{
+			TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Pod"},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "idempotent-pod",
+				Namespace: testNamespace,
+				Labels:    miniserviceNameLabels(),
+			},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{Name: "app", Image: "app:latest"}},
+				Affinity: &corev1.Affinity{
+					PodAffinity: &corev1.PodAffinity{
+						PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{
+							{
+								Weight: 100,
+								PodAffinityTerm: corev1.PodAffinityTerm{
+									LabelSelector: &metav1.LabelSelector{
+										MatchExpressions: []metav1.LabelSelectorRequirement{
+											{Key: "foo", Operator: metav1.LabelSelectorOpIn, Values: []string{"bar"}},
+										},
+									},
+									TopologyKey: "topology.kubernetes.io/zone",
+								},
+							},
+						},
+					},
+					NodeAffinity: &corev1.NodeAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+							NodeSelectorTerms: []corev1.NodeSelectorTerm{
+								{
+									MatchExpressions: []corev1.NodeSelectorRequirement{
+										{Key: "baz", Operator: corev1.NodeSelectorOpIn, Values: []string{"buf"}},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+	expAffinity := &corev1.Affinity{
+		PodAffinity: &corev1.PodAffinity{
+			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{
+				{
+					Weight: 100,
+					PodAffinityTerm: corev1.PodAffinityTerm{
+						LabelSelector: &metav1.LabelSelector{
+							MatchExpressions: []metav1.LabelSelectorRequirement{
+								{Key: "foo", Operator: metav1.LabelSelectorOpIn, Values: []string{"bar"}},
+							},
+						},
+						TopologyKey: "topology.kubernetes.io/zone",
+					},
+				},
+				{
+					Weight: 100,
+					PodAffinityTerm: corev1.PodAffinityTerm{
+						LabelSelector: &metav1.LabelSelector{
+							MatchExpressions: []metav1.LabelSelectorRequirement{
+								{
+									Key:      nvcfdra.NVLinkDomainPartitionLabel,
+									Operator: metav1.LabelSelectorOpExists,
+								},
+								{
+									Key:      nvcfdra.NVLinkDomainPartitionLabel,
+									Operator: metav1.LabelSelectorOpIn,
+									Values:   []string{"x16989cf0cc8364fa9ex"},
+								},
+							},
+						},
+						TopologyKey: nvcfdra.GPUCliqueNodeLabel,
+					},
+				},
+			},
+		},
+		NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{
+					{
+						MatchExpressions: []corev1.NodeSelectorRequirement{
+							{Key: "baz", Operator: corev1.NodeSelectorOpIn, Values: []string{"buf"}},
+							{
+								Key:      "nvca.nvcf.nvidia.io/instance-type",
+								Operator: corev1.NodeSelectorOpIn,
+								Values:   []string{"ON-PREM.GPU.A100"},
+							},
+						},
+					},
+					{
+						MatchExpressions: []corev1.NodeSelectorRequirement{
+							{
+								Key:      nvcfdra.GPUCliqueNodeLabel,
+								Operator: corev1.NodeSelectorOpExists,
+							},
+							{
+								Key:      "nvca.nvcf.nvidia.io/instance-type",
+								Operator: corev1.NodeSelectorOpIn,
+								Values:   []string{"ON-PREM.GPU.A100"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	meta := nvcatypes.MiniserviceMetadata{
+		MessageAction: common.FunctionCreationAction,
+		Labels: map[string]string{
+			nvcatypes.FunctionIDKey:        testFunctionID,
+			nvcatypes.FunctionVersionIDKey: testVersionID,
+			nvcatypes.MiniserviceNameLabel: testInstanceID,
+		},
+		Annotations: map[string]string{
+			nvcatypes.ICMSRequestIDKey: testReqID,
+			nvcatypes.NCAIDKey:         testNcaID,
+		},
+		PodAnnotations: map[string]string{
+			cmnnvcastorage.HelmWebhookSharedStorageKNSReadOnlyPVCNameAnnotationKey:       "kns-pvc-ro",
+			cmnnvcastorage.HelmWebhookSharedStorageSecretsReadOnlyPVCNameAnnotationKey:   "secrets-pvc-ro",
+			cmnnvcastorage.HelmWebhookSharedStorageTaskDataReadWritePVCNameAnnotationKey: "task-pvc-rw",
+			cmnnvcastorage.WebhookModelCachePVCNameAnnotationKey:                         "model-cache-pvc",
+		},
+		EnvVars: []corev1.EnvVar{
+			{Name: "NVCF_NCA_ID", Value: testNcaID},
+			{Name: "NVCF_FUNCTION_ID", Value: testFunctionID},
+			{Name: "NVCF_FUNCTION_VERSION_ID", Value: testVersionID},
+			{Name: nvcatypes.NVCFInstIDEnvKey, ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "metadata.labels['" + nvcatypes.MiniserviceNameLabel + "']",
+				},
+			}},
+		},
+		ServiceAccountName: "miniservice-instance-permissions",
+		NodeAffinityKey:    "nvca.nvcf.nvidia.io/instance-type",
+		NodeAffinityValue:  "ON-PREM.GPU.A100",
+	}
+	cm := createConfigMapFromMeta(t, testNamespace, meta)
+
+	t.Run("Update with other mounts applied after", func(t *testing.T) {
+		wh := makeWebhook(t, cm)
+		wh.fff = &featureflagmock.Fetcher{EnabledAttrs: []*featureflag.Attribute{featureflag.AttrNVLinkOptimized}}
+		createPod := newPod()
+
+		createRaw, _ := json.Marshal(createPod)
+		createReq := admission.Request{}
+		createReq.Namespace = testNamespace
+		createReq.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "Pod"}
+		createReq.Operation = admissionv1.Create
+		createReq.Object = runtime.RawExtension{Raw: createRaw}
+
+		createResp := wh.Handle(ctx, createReq)
+		require.True(t, createResp.Allowed, "expected create Allowed, got: %v", createResp.Result)
+		require.NotEmpty(t, createResp.Patches)
+
+		createMutatedRaw := applyPatches(t, createRaw, createResp.Patches)
+		var createdPod corev1.Pod
+		require.NoError(t, json.Unmarshal(createMutatedRaw, &createdPod))
+		require.Equal(t, []string{
+			cmnnvcastorage.SharedStorageVolumeKNSTokenVolumeName,
+			cmnnvcastorage.SharedStorageSecretsVolumeName,
+			cmnnvcastorage.SharedStorageTaskDataVolumeName,
+			cmnnvcastorage.ModelCachePodVolumeName,
+		}, volumeNames(createdPod.Spec.Volumes))
+		require.Equal(t, []string{
+			cmnnvcastorage.SharedStorageVolumeKNSTokenVolumeName + "@" + cmnnvcastorage.SharedStorageVolumeKNSTokenMountPath,
+			cmnnvcastorage.SharedStorageSecretsVolumeName + "@" + cmnnvcastorage.SharedStorageVolumeSecretsMountPath,
+			cmnnvcastorage.SharedStorageTaskDataVolumeName + "@" + cmnnvcastorage.SharedStorageVolumeTaskDataMountPath,
+			cmnnvcastorage.ModelCachePodVolumeName + "@" + cmnnvcastorage.ModelCachePodModelMountPath,
+			cmnnvcastorage.ModelCachePodVolumeName + "@" + cmnnvcastorage.ModelCachePodResourcesMountPath,
+		}, volumeMountKeys(createdPod.Spec.Containers[0].VolumeMounts))
+		require.Equal(t, expAffinity, createdPod.Spec.Affinity)
+
+		// Simulate k8s service-account admission adding kube-api-access after create.
+		createdPod.Spec.Volumes = append(createdPod.Spec.Volumes, corev1.Volume{
+			Name: "kube-api-access-rmxfs",
+			VolumeSource: corev1.VolumeSource{
+				Projected: &corev1.ProjectedVolumeSource{},
+			},
+		})
+		createdPod.Spec.Containers[0].VolumeMounts = append(createdPod.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{
+			Name:      "kube-api-access-rmxfs",
+			MountPath: "/var/run/secrets/kubernetes.io/serviceaccount",
+			ReadOnly:  true,
+		})
+
+		updateRaw, _ := json.Marshal(&createdPod)
+		updateReq := admission.Request{}
+		updateReq.Namespace = testNamespace
+		updateReq.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "Pod"}
+		updateReq.Operation = admissionv1.Update
+		updateReq.Object = runtime.RawExtension{Raw: updateRaw}
+
+		updateResp := wh.Handle(ctx, updateReq)
+		require.True(t, updateResp.Allowed, "expected update Allowed, got: %v", updateResp.Result)
+
+		updateMutatedRaw := applyPatches(t, updateRaw, updateResp.Patches)
+		var gotUpdatedPod corev1.Pod
+		require.NoError(t, json.Unmarshal(updateMutatedRaw, &gotUpdatedPod))
+
+		assert.Equal(t, createdPod.Spec.Volumes, gotUpdatedPod.Spec.Volumes, "volume order must remain stable on update")
+		assert.Equal(
+			t,
+			createdPod.Spec.Containers[0].VolumeMounts,
+			gotUpdatedPod.Spec.Containers[0].VolumeMounts,
+			"volumeMount order must remain stable on update",
+		)
+		require.Equal(t, expAffinity, gotUpdatedPod.Spec.Affinity)
+	})
+
+	t.Run("Update with other mounts applied before", func(t *testing.T) {
+		wh := makeWebhook(t, cm)
+		wh.fff = &featureflagmock.Fetcher{EnabledAttrs: []*featureflag.Attribute{featureflag.AttrNVLinkOptimized}}
+		createPod := newPod()
+		// Simulate k8s service-account admission adding kube-api-access before this webhook receives the create request.
+		createPod.Spec.Volumes = append(createPod.Spec.Volumes, corev1.Volume{
+			Name: "kube-api-access-rmxfs",
+			VolumeSource: corev1.VolumeSource{
+				Projected: &corev1.ProjectedVolumeSource{},
+			},
+		})
+		createPod.Spec.Containers[0].VolumeMounts = append(createPod.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{
+			Name:      "kube-api-access-rmxfs",
+			MountPath: "/var/run/secrets/kubernetes.io/serviceaccount",
+			ReadOnly:  true,
+		})
+
+		createRaw, _ := json.Marshal(createPod)
+		createReq := admission.Request{}
+		createReq.Namespace = testNamespace
+		createReq.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "Pod"}
+		createReq.Operation = admissionv1.Create
+		createReq.Object = runtime.RawExtension{Raw: createRaw}
+
+		createResp := wh.Handle(ctx, createReq)
+		require.True(t, createResp.Allowed, "expected create Allowed, got: %v", createResp.Result)
+		require.NotEmpty(t, createResp.Patches)
+
+		createMutatedRaw := applyPatches(t, createRaw, createResp.Patches)
+		var createdPod corev1.Pod
+		require.NoError(t, json.Unmarshal(createMutatedRaw, &createdPod))
+		require.Equal(t, []string{
+			"kube-api-access-rmxfs",
+			cmnnvcastorage.SharedStorageVolumeKNSTokenVolumeName,
+			cmnnvcastorage.SharedStorageSecretsVolumeName,
+			cmnnvcastorage.SharedStorageTaskDataVolumeName,
+			cmnnvcastorage.ModelCachePodVolumeName,
+		}, volumeNames(createdPod.Spec.Volumes))
+		require.Equal(t, []string{
+			"kube-api-access-rmxfs@/var/run/secrets/kubernetes.io/serviceaccount",
+			cmnnvcastorage.SharedStorageVolumeKNSTokenVolumeName + "@" + cmnnvcastorage.SharedStorageVolumeKNSTokenMountPath,
+			cmnnvcastorage.SharedStorageSecretsVolumeName + "@" + cmnnvcastorage.SharedStorageVolumeSecretsMountPath,
+			cmnnvcastorage.SharedStorageTaskDataVolumeName + "@" + cmnnvcastorage.SharedStorageVolumeTaskDataMountPath,
+			cmnnvcastorage.ModelCachePodVolumeName + "@" + cmnnvcastorage.ModelCachePodModelMountPath,
+			cmnnvcastorage.ModelCachePodVolumeName + "@" + cmnnvcastorage.ModelCachePodResourcesMountPath,
+		}, volumeMountKeys(createdPod.Spec.Containers[0].VolumeMounts))
+		require.Equal(t, expAffinity, createdPod.Spec.Affinity)
+
+		updateRaw, _ := json.Marshal(&createdPod)
+		updateReq := admission.Request{}
+		updateReq.Namespace = testNamespace
+		updateReq.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "Pod"}
+		updateReq.Operation = admissionv1.Update
+		updateReq.Object = runtime.RawExtension{Raw: updateRaw}
+
+		updateResp := wh.Handle(ctx, updateReq)
+		require.True(t, updateResp.Allowed, "expected update Allowed, got: %v", updateResp.Result)
+
+		updateMutatedRaw := applyPatches(t, updateRaw, updateResp.Patches)
+		var gotUpdatedPod corev1.Pod
+		require.NoError(t, json.Unmarshal(updateMutatedRaw, &gotUpdatedPod))
+
+		assert.Equal(t, createdPod.Spec.Volumes, gotUpdatedPod.Spec.Volumes, "volume order must remain stable on update")
+		assert.Equal(
+			t,
+			createdPod.Spec.Containers[0].VolumeMounts,
+			gotUpdatedPod.Spec.Containers[0].VolumeMounts,
+			"volumeMount order must remain stable on update",
+		)
+		require.Equal(t, expAffinity, gotUpdatedPod.Spec.Affinity)
+	})
 }
 
 // ─── Unknown CRD (operator type) ─────────────────────────────────────────────
@@ -484,6 +779,7 @@ func TestMiniserviceOperatorWebhook_UnknownCRD_MetadataOnlyInjected(t *testing.T
 	req.Namespace = testNamespace
 	req.Kind = metav1.GroupVersionKind{Group: "nvidia.com", Version: "v1alpha1", Kind: "DynamoGraphDeployment"}
 	req.Object = runtime.RawExtension{Raw: raw}
+	req.Operation = admissionv1.Create
 
 	resp := wh.Handle(ctx, req)
 	require.True(t, resp.Allowed, "unknown CRD should be allowed with metadata injection, got: %v", resp.Result)
@@ -529,6 +825,7 @@ func TestMiniserviceOperatorWebhook_Pod_InitContainerEnvInjected(t *testing.T) {
 	req.Namespace = testNamespace
 	req.Kind = metav1.GroupVersionKind{Version: "v1", Kind: "Pod"}
 	req.Object = runtime.RawExtension{Raw: raw}
+	req.Operation = admissionv1.Create
 
 	resp := wh.Handle(ctx, req)
 	require.True(t, resp.Allowed)
@@ -644,6 +941,272 @@ func applyPatches(t *testing.T, base []byte, patches []jsonpatch.Operation) []by
 	patched, err := jp.Apply(base)
 	require.NoError(t, err)
 	return patched
+}
+
+// ─── mutatePodSpec ServiceAccountName tests ───────────────────────────────────
+
+func TestMiniserviceMutatePodSpec_ServiceAccountName(t *testing.T) {
+	const msSA = "miniservice-instance-permissions"
+	tests := []struct {
+		name     string
+		fff      featureflag.Fetcher
+		metaSA   string
+		podSA    string
+		expectSA string
+	}{
+		{
+			name:     "flag disabled, pod has no SA: overrides with meta SA",
+			fff:      &featureflagmock.Fetcher{},
+			metaSA:   msSA,
+			podSA:    "",
+			expectSA: msSA,
+		},
+		{
+			name:     "flag disabled, pod has default SA: overrides with meta SA",
+			fff:      &featureflagmock.Fetcher{},
+			metaSA:   msSA,
+			podSA:    "default",
+			expectSA: msSA,
+		},
+		{
+			name:     "flag disabled, pod has custom SA: overrides with meta SA",
+			fff:      &featureflagmock.Fetcher{},
+			metaSA:   msSA,
+			podSA:    "operator-created-sa",
+			expectSA: msSA,
+		},
+		{
+			name: "flag enabled, pod has no SA: overrides with meta SA",
+			fff: &featureflagmock.Fetcher{
+				EnabledFFs: []*featureflag.FeatureFlag{featureflag.AllowWorkloadKubernetesAPIAccess},
+			},
+			metaSA:   msSA,
+			podSA:    "",
+			expectSA: msSA,
+		},
+		{
+			name: "flag enabled, pod has default SA: overrides with meta SA",
+			fff: &featureflagmock.Fetcher{
+				EnabledFFs: []*featureflag.FeatureFlag{featureflag.AllowWorkloadKubernetesAPIAccess},
+			},
+			metaSA:   msSA,
+			podSA:    "default",
+			expectSA: msSA,
+		},
+		{
+			name: "flag enabled, pod has custom SA: preserves pod SA",
+			fff: &featureflagmock.Fetcher{
+				EnabledFFs: []*featureflag.FeatureFlag{featureflag.AllowWorkloadKubernetesAPIAccess},
+			},
+			metaSA:   msSA,
+			podSA:    "operator-created-sa",
+			expectSA: "operator-created-sa",
+		},
+		{
+			name:     "meta has no SA: pod SA unchanged",
+			fff:      &featureflagmock.Fetcher{},
+			metaSA:   "",
+			podSA:    "operator-created-sa",
+			expectSA: "operator-created-sa",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wh := &miniserviceMutatingWebhook{fff: tt.fff}
+			ps := corev1.PodSpec{
+				ServiceAccountName: tt.podSA,
+				Containers:         []corev1.Container{{Name: "app"}},
+			}
+			meta := nvcatypes.MiniserviceMetadata{
+				ServiceAccountName: tt.metaSA,
+			}
+			wh.mutatePodSpec(&ps, meta)
+			assert.Equal(t, tt.expectSA, ps.ServiceAccountName)
+		})
+	}
+}
+
+func TestMiniserviceMutatePodSpec_NodeAffinityWithPodAffinityWebhook(t *testing.T) {
+	const (
+		instanceTypeKey   = "nvca.nvcf.nvidia.io/instance-type"
+		instanceTypeValue = "ON-PREM.GPU.A100"
+	)
+
+	meta := nvcatypes.MiniserviceMetadata{
+		NodeAffinityKey:   instanceTypeKey,
+		NodeAffinityValue: instanceTypeValue,
+	}
+	sharedClusterOn := &atomic.Bool{}
+	sharedClusterOn.Store(true)
+	podWebhook := &podAffinityWebhook{PodAffinityOptions: PodAffinityOptions{
+		SharedClusterOn:       sharedClusterOn,
+		UniformInstanceLabels: true,
+	}}
+	presetInstanceTypeAffinity := func() *corev1.Affinity {
+		return &corev1.Affinity{
+			NodeAffinity: &corev1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+					NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+						MatchExpressions: []corev1.NodeSelectorRequirement{{
+							Key:      instanceTypeKey,
+							Operator: corev1.NodeSelectorOpIn,
+							Values:   []string{"ON-PREM.GPU.H100"},
+						}},
+					}},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name              string
+		podSpec           corev1.PodSpec
+		miniserviceFirst  bool
+		wantInstanceType  bool
+		wantCPUPreference bool
+	}{
+		{
+			name: "GPU pod, miniservice webhook first",
+			podSpec: corev1.PodSpec{Containers: []corev1.Container{{
+				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
+					corev1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+				}},
+			}}},
+			miniserviceFirst: true,
+			wantInstanceType: true,
+		},
+		{
+			name: "GPU pod, pod affinity webhook first",
+			podSpec: corev1.PodSpec{Containers: []corev1.Container{{
+				Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
+					corev1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+				}},
+			}}},
+			wantInstanceType: true,
+		},
+		{
+			name: "GPU pod with preset instance type affinity, miniservice webhook first",
+			podSpec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
+						corev1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+					}},
+				}},
+				Affinity: presetInstanceTypeAffinity(),
+			},
+			miniserviceFirst: true,
+			wantInstanceType: true,
+		},
+		{
+			name: "GPU pod with preset instance type affinity, pod affinity webhook first",
+			podSpec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
+						corev1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+					}},
+				}},
+				Affinity: presetInstanceTypeAffinity(),
+			},
+			wantInstanceType: true,
+		},
+		{
+			name:              "CPU pod, miniservice webhook first",
+			podSpec:           corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+			miniserviceFirst:  true,
+			wantCPUPreference: true,
+		},
+		{
+			name:              "CPU pod, pod affinity webhook first",
+			podSpec:           corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+			wantCPUPreference: true,
+		},
+		{
+			name: "CPU pod with preset instance type affinity, miniservice webhook first",
+			podSpec: corev1.PodSpec{
+				Containers: []corev1.Container{{Name: "app"}},
+				Affinity:   presetInstanceTypeAffinity(),
+			},
+			miniserviceFirst:  true,
+			wantCPUPreference: true,
+		},
+		{
+			name: "CPU pod with preset instance type affinity, pod affinity webhook first",
+			podSpec: corev1.PodSpec{
+				Containers: []corev1.Container{{Name: "app"}},
+				Affinity:   presetInstanceTypeAffinity(),
+			},
+			wantCPUPreference: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wh := &miniserviceMutatingWebhook{fff: &featureflagmock.Fetcher{
+				EnabledFFs: []*featureflag.FeatureFlag{featureflag.HelmAllowCPUNodes},
+			}}
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "workload", Namespace: testNamespace},
+				Spec:       *tt.podSpec.DeepCopy(),
+			}
+
+			applyWebhooks := func() {
+				if tt.miniserviceFirst {
+					wh.mutatePodSpec(&pod.Spec, meta)
+					require.NoError(t, podWebhook.Default(t.Context(), pod))
+				} else {
+					require.NoError(t, podWebhook.Default(t.Context(), pod))
+					wh.mutatePodSpec(&pod.Spec, meta)
+				}
+			}
+
+			applyWebhooks()
+			afterFirstPass := pod.Spec.DeepCopy()
+			applyWebhooks()
+			assert.Equal(t, afterFirstPass, &pod.Spec, "webhook mutations must be idempotent")
+
+			require.NotNil(t, pod.Spec.Affinity)
+			require.NotNil(t, pod.Spec.Affinity.NodeAffinity)
+			required := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+			require.NotNil(t, required)
+			require.Len(t, required.NodeSelectorTerms, 1)
+
+			var instanceTypeRequirements, sharedClusterRequirements int
+			for _, expr := range required.NodeSelectorTerms[0].MatchExpressions {
+				switch expr.Key {
+				case instanceTypeKey:
+					instanceTypeRequirements++
+					assert.Equal(t, corev1.NodeSelectorOpIn, expr.Operator)
+					assert.Equal(t, []string{instanceTypeValue}, expr.Values)
+				case sharedcluster.ScheduleLabelKey:
+					sharedClusterRequirements++
+					assert.Equal(t, corev1.NodeSelectorOpIn, expr.Operator)
+					assert.Equal(t, []string{"true"}, expr.Values)
+				}
+			}
+			if tt.wantInstanceType {
+				assert.Equal(t, 1, instanceTypeRequirements)
+			} else {
+				assert.Zero(t, instanceTypeRequirements)
+			}
+			assert.Equal(t, 1, sharedClusterRequirements)
+
+			var cpuPreferences int
+			for _, term := range pod.Spec.Affinity.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution {
+				for _, expr := range term.Preference.MatchExpressions {
+					if term.Weight == 100 && expr.Key == instanceTypeKey &&
+						expr.Operator == corev1.NodeSelectorOpDoesNotExist {
+						cpuPreferences++
+					}
+				}
+			}
+			if tt.wantCPUPreference {
+				assert.Equal(t, 1, cpuPreferences)
+			} else {
+				assert.Zero(t, cpuPreferences)
+			}
+		})
+	}
 }
 
 // ─── mutatePodSpec BYOObservability tests ─────────────────────────────────────
@@ -820,10 +1383,78 @@ func TestMiniserviceMutatePodSpec_BYOObservability(t *testing.T) {
 	}
 }
 
+func TestMiniserviceMutatePodSpec_BYOOOTelCollectorEnvVarsOnlyCollector(t *testing.T) {
+	meta := nvcatypes.MiniserviceMetadata{
+		EnvVars: []corev1.EnvVar{
+			{Name: "SHARED_ENV", Value: "shared"},
+		},
+		OTelCollectorEnvVars: []corev1.EnvVar{
+			{Name: nvcaconfig.BYOOLogChunkingEnabledEnv, Value: "true"},
+			{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "983040"},
+			{Name: nvcaconfig.BYOODebugModeEnv, Value: "true"},
+			{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
+			{Name: nvcaconfig.BYOOOTelCollectorConfigEnv, Value: "eyJleHBvcnRlckhlbHBlciI6eyJ0aW1lb3V0IjoiMzBzIn19"},
+		},
+	}
+	ps := corev1.PodSpec{
+		InitContainers: []corev1.Container{{Name: "init"}},
+		Containers: []corev1.Container{
+			{Name: "app"},
+			{
+				Name: common.ByooOTelCollectorPodNameBase,
+				Env: []corev1.EnvVar{
+					{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "1000000"},
+				},
+			},
+		},
+	}
+
+	wh := &miniserviceMutatingWebhook{fff: &featureflagmock.Fetcher{}}
+	wh.mutatePodSpec(&ps, meta)
+
+	initByName := envMap(ps.InitContainers[0].Env)
+	appByName := envMap(ps.Containers[0].Env)
+	collectorByName := envMap(ps.Containers[1].Env)
+	assert.Equal(t, "shared", initByName["SHARED_ENV"])
+	assert.Equal(t, "shared", appByName["SHARED_ENV"])
+	assert.Equal(t, "shared", collectorByName["SHARED_ENV"])
+	assert.NotContains(t, initByName, nvcaconfig.BYOOLogChunkingEnabledEnv)
+	assert.NotContains(t, initByName, nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv)
+	assert.NotContains(t, initByName, nvcaconfig.BYOODebugModeEnv)
+	assert.NotContains(t, appByName, nvcaconfig.BYOOLogChunkingEnabledEnv)
+	assert.NotContains(t, appByName, nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv)
+	assert.NotContains(t, initByName, nvcaconfig.BYOOMetricSubsetEnabledEnv)
+	assert.NotContains(t, appByName, nvcaconfig.BYOOMetricSubsetEnabledEnv)
+	assert.NotContains(t, initByName, nvcaconfig.BYOOOTelCollectorConfigEnv)
+	assert.NotContains(t, appByName, nvcaconfig.BYOOOTelCollectorConfigEnv)
+	assert.NotContains(t, appByName, nvcaconfig.BYOODebugModeEnv)
+	assert.Equal(t, "true", collectorByName[nvcaconfig.BYOOLogChunkingEnabledEnv])
+	assert.Equal(t, "983040", collectorByName[nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv])
+	assert.Equal(t, "true", collectorByName[nvcaconfig.BYOODebugModeEnv])
+	assert.Equal(t, "true", collectorByName[nvcaconfig.BYOOMetricSubsetEnabledEnv])
+	assert.Equal(t, "eyJleHBvcnRlckhlbHBlciI6eyJ0aW1lb3V0IjoiMzBzIn19", collectorByName[nvcaconfig.BYOOOTelCollectorConfigEnv])
+}
+
 func envNames(envs []corev1.EnvVar) []string {
 	names := make([]string, len(envs))
 	for i, e := range envs {
 		names[i] = e.Name
 	}
 	return names
+}
+
+func volumeNames(vols []corev1.Volume) []string {
+	names := make([]string, len(vols))
+	for i, v := range vols {
+		names[i] = v.Name
+	}
+	return names
+}
+
+func volumeMountKeys(vms []corev1.VolumeMount) []string {
+	keys := make([]string, len(vms))
+	for i, vm := range vms {
+		keys[i] = vm.Name + "@" + vm.MountPath
+	}
+	return keys
 }

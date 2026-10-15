@@ -1,0 +1,342 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+spring:
+  cassandra:
+    contact-points: 127.0.0.1
+    keyspace-name: nvct
+    local-datacenter: datacenter1
+    advanced:
+      speculative-execution-policy:
+        class: ConstantSpeculativeExecutionPolicy
+        max-executions: 1
+        delay: 1500 #milliseconds
+      connection:
+        max-requests-per-connection: 10000
+        pool:
+          local:
+            size: 2
+      retry-policy:
+        class: com.nvidia.boot.cassandra.retry.NextHostRetryPolicy
+    port: 9042
+    password: ${kv.cassandra.password}
+    username: ${kv.cassandra.username}
+    compression: lz4
+    connection:
+      connect-timeout: 10s
+      init-query-timeout: 10s
+    pool:
+      heartbeat-interval: 30s
+      idle-timeout: 60s
+    request:
+      consistency: local_quorum
+      page-size: 5000
+      serial-consistency: local_serial
+      timeout: 10s
+    session-name: nvct-api-session
+    session-metrics:
+      - bytes-sent
+      - connected-nodes
+      - cql-requests
+    node-metrics:
+      - pool.open-connections
+      - pool.in-flight
+  codec:
+    max-in-memory-size: 10MB
+  threads:
+    virtual:
+      enabled: false
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:9092
+          jwk-set-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/.well-known/jwks.json
+          jws-algorithms: ES256
+      client:
+        registration:
+          api-keys:
+            provider: api-keys
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: pdp-evaluate
+          icms:
+            provider: icms
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: instance-request,cluster_listing,instance_types,cluster-management
+          nvcf:
+            provider: nvcf
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: account_setup
+          notary:
+            provider: notary
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: make-assertion
+          ess:
+            provider: ess
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: ess:secrets-admin,ess:entities-admin
+          reval:
+            provider: reval
+            client-id: ${kv.oauth2.client-id}
+            client-secret: ${kv.oauth2.client-secret}
+            authorization-grant-type: client_credentials
+            scope: helmreval:validate
+        provider:
+          api-keys:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          icms:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          nvcf:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          notary:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          ess:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+          reval:
+            token-uri: ${spring.security.oauth2.resourceserver.jwt.issuer-uri}/token
+
+logging:
+  level:
+    com.nvidia: INFO
+    org.springframework.web: INFO
+
+management:
+  tracing:
+    export:
+      enabled: true
+    sampling:
+      probability: 1.0  # Parity with javaagent based tracing
+    propagation:
+      type: w3c
+  opentelemetry:
+    resource-attributes:     # Resource attributes for traces (attached to every span)
+      cloud.provider: ${CLOUD_PROVIDER:aws}
+      cloud.region: ${nvct.aws.region}
+      deployment.profiles: ${spring.profiles.active}
+      host.dc: ${spring.application.host.dc}
+      host.id: ${spring.application.host.id}
+      host.name: ${spring.application.host.id}
+      service.name: ${spring.application.name}
+      service.version: ${spring.application.version}
+      service.namespace: nvct
+    tracing:
+      export:
+        otlp:
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:https://dummy:8282}
+          compression: gzip
+          transport: http
+          timeout: 30s
+          headers:
+            lightstep-access-token: ${kv.tracing.accessToken}
+  endpoints:
+    web:
+      base-path: /actuator
+      exposure:
+        include: health,metrics,prometheus
+  endpoint:
+    health:
+      cache:
+        time-to-live: 2s
+      probes:
+        enabled: true
+      show-details: always
+      group:
+        readiness:
+          include:
+            - readinessState
+            - cassandra
+        liveness:
+          include:
+            - livenessState
+            - cassandra
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+    vault:
+      enabled: false
+    kubernetes:
+      enabled: false
+  metrics:
+    enable:
+      all: true
+    tags:
+      env: ${spring.application.env}
+      micro_service: ${spring.application.name}
+      service_version: ${spring.application.version}
+      host_id: ${spring.application.host.id}
+      host_dc: ${spring.application.host.dc}
+    distribution:
+      percentiles-histogram:
+        "[http.server.requests]": true
+      slo:
+        "[http.server.requests]": "5ms,10ms,25ms,50ms,75ms,100ms,200ms,300ms,400ms,500ms,750ms,1s,2s,3s,4s,5s,10s,15s,20s,30s"
+  observations:
+    annotations:
+      enabled: true
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+  server:
+    port: 8181
+
+server:
+  port: 8080
+  compression:
+    enabled: true
+  forward-headers-strategy: framework
+
+nvct:
+  fqdn: http://localhost:${server.port}
+  global-fqdn-grpc: http://localhost:${grpc.server.port}
+  sidecars:
+    tracing-key: ${kv.worker-tracing}
+    hostname: stg.nvcr.io
+    repository: nv-cf/nvcf-core
+    image-pull-secret: ${kv.sidecars.image-pull-secret}
+    init-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf_worker_init:2.102.0
+    utils-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf_worker_utils:2.101.0
+    otel-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/opentelemetry-collector:0.126.0
+    ess-agent-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/ess-agent:1.0.5
+    otel-collector-container: ${nvct.sidecars.hostname}/${nvct.sidecars.repository}/byoo-otel-collector:0.126.16
+  scheduled-routines:
+    enabled: true
+    lock-consistency: LOCAL_QUORUM
+  notary:
+    jwt:
+      issuer-uri: ${nvct.notary.base-url}
+      jwk-set-uri: ${nvct.notary.jwt.issuer-uri}/.well-known/jwks.json
+  rate-limiters:
+    account-rate-limiter:
+      allowed-invocations-per-second: 200
+    task-rate-limiter:
+      allowed-invocations-per-second: 200
+  registries:
+    recognized:
+      container:
+        docker:
+          name: "Docker Hub Registry"
+          hostname: "docker.io"
+          call-timeout: PT10S
+          oauth2:
+            base-url: https://auth.docker.io/
+            group-scope: pull
+        ngc:
+          name: "NGC Private Registry"
+          hostname: "stg.nvcr.io"
+          call-timeout: PT60S
+          read-timeout: PT30S
+          write-timeout: PT30S
+          connection-timeout: PT60S
+        ecr:
+          name: "AWS ECR Private Registry"
+          hostname: "dkr.ecr.amazonaws.com"
+          call-timeout: PT10S
+        ecr-public:
+          name: "AWS ECR Public Registry"
+          hostname: "public.ecr.aws"
+          call-timeout: PT10S
+        volcengine:
+          name: "Volcano Engine Registry"
+          hostname: "cr.volces.com"
+          call-timeout: PT10S
+        acr:
+          name: "Azure Container Registry"
+          hostname: "azurecr.io"
+          call-timeout: PT10S
+      helm:
+        ngc:
+          name: "NGC Private Registry"
+          hostname: "helm.stg.ngc.nvidia.com"
+          call-timeout: PT60S
+          read-timeout: PT30S
+          write-timeout: PT30S
+          connection-timeout: PT60S
+          oauth2:
+            base-url: unused
+            group-scope: ngc-stg
+        docker:
+          name: "Docker Hub Registry"
+          hostname: "docker.io"
+          call-timeout: PT10S
+          oauth2:
+            base-url: https://auth.docker.io/
+            group-scope: pull
+        ecr:
+          name: "AWS ECR Private Registry"
+          hostname: "dkr.ecr.amazonaws.com"
+          call-timeout: PT10S
+        ecr-public:
+          name: "AWS ECR Public Registry"
+          hostname: "public.ecr.aws"
+          call-timeout: PT10S
+        volcengine:
+          name: "Volcano Engine Registry"
+          hostname: "cr.volces.com"
+          call-timeout: PT10S
+        acr:
+          name: "Azure Container Registry"
+          hostname: "azurecr.io"
+          call-timeout: PT10S
+      model:
+        ngc:
+          name: "NGC Private Registry"
+          hostname: "api.stg.ngc.nvidia.com"
+          call-timeout: PT60S
+          read-timeout: PT30S
+          write-timeout: PT30S
+          connection-timeout: PT60S
+          oauth2:
+            base-url: unused
+            group-scope: ngc-stg
+      resource:
+        ngc:
+          name: "NGC Private Registry"
+          hostname: "api.stg.ngc.nvidia.com"
+          call-timeout: PT60S
+          read-timeout: PT30S
+          write-timeout: PT30S
+          connection-timeout: PT60S
+          oauth2:
+            base-url: unused
+            group-scope: ngc-stg
+
+grpc:
+  server:
+    port: 9090
+    # enable keep alive pings to all live connections with client to check if they are still connected.
+    enable-keep-alive: true
+    # frequency of sending keep alive pings.
+    keep-alive-time: 15m
+    # duration within which the keep alive ack ping is expected before disconnecting.
+    keep-alive-timeout: 10s
+    # worst keep alive pings frequency the client can set. No client can send keep alive pings with frequency lesser than this.
+    permit-keep-alive-time: 1s
+    # whether keepalive will be performed when there are no outstanding RPC on a connection
+    permit-keep-alive-without-calls: true
+    # support large worker responses
+    max-inbound-message-size: ${spring.codec.max-in-memory-size}
+    shutdown-grace-period: 5m

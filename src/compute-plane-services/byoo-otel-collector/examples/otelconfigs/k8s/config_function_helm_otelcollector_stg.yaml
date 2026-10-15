@@ -144,7 +144,7 @@ receivers:
         - job_name: opentelemetry-collector
           metric_relabel_configs:
             - action: keep
-              regex: (otelcol_exporter_sent_metric_points_total|otelcol_exporter_sent_spans_total|otelcol_exporter_sent_log_records_total|otelcol_exporter_send_failed_log_records_total|otelcol_exporter_send_failed_spans_total|otelcol_exporter_send_failed_metric_points_total|otelcol_processor_incoming_items_total|otelcol_processor_outgoing_items_total|otelcol_receiver_accepted_log_records_total|otelcol_receiver_accepted_metric_points_total|otelcol_receiver_accepted_spans_total|otelcol_receiver_refused_log_records_total|otelcol_receiver_refused_spans_total|otelcol_receiver_refused_metric_points_total)
+              regex: (otelcol_.*)
               source_labels:
                 - __name__
           scrape_interval: 30s
@@ -153,11 +153,11 @@ receivers:
             - targets:
                 - ${env:OTEL_POD_IP:-0.0.0.0}:18888
 exporters:
-  otlphttp/OTEL_COLLECTOR-nv-otelcollector-stg-metrics:
+  otlp_http/OTEL_COLLECTOR-nv-otelcollector-stg-metrics:
     endpoint: endpoint:4317
     headers:
       Authorization: Bearer ${file:/etc/byoo-otel-collector/secrets/nv-otelcollector-stg}
-  otlphttp/OTEL_COLLECTOR-nv-otelcollector-stg-traces:
+  otlp_http/OTEL_COLLECTOR-nv-otelcollector-stg-traces:
     endpoint: endpoint:4318
     headers:
       Authorization: Bearer ${file:/etc/byoo-otel-collector/secrets/nv-otelcollector-stg}
@@ -205,7 +205,7 @@ processors:
     check_interval: 1s
     limit_percentage: 80
     spike_limit_percentage: 10
-  metricstransform:
+  metrics_transform:
     transforms:
       - action: update
         include: ^.*$
@@ -240,7 +240,7 @@ processors:
       - action: delete
         key: service.instance.id
 extensions:
-  cgroupruntime:
+  cgroup_runtime:
     gomaxprocs:
       enabled: true
     gomemlimit:
@@ -266,7 +266,7 @@ service:
         public: "true"
       level: warn
     metrics:
-      level: normal
+      level: detailed
       readers:
         - pull:
             exporter:
@@ -274,18 +274,24 @@ service:
                 host: ${env:OTEL_POD_IP:-0.0.0.0}
                 port: 18888
     resource:
-      function.id: fake-function-id
-      function.version.id: fake-function-version-id
-      service.name: byoo-otel-collector
-      service.namespace: sr-fake-namespace
+      attributes:
+        - name: service.namespace
+          value: sr-fake-namespace
+        - name: service.name
+          value: byoo-otel-collector
+        - name: function.id
+          value: fake-function-id
+        - name: function.version.id
+          value: fake-function-version-id
     traces:
       processors:
         - batch:
             exporter:
               otlp:
-                endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT}
+                endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}
                 headers:
-                  lightstep-access-token: ${env:OTEL_TRACING_ACCESS_TOKEN}
+                  - name: lightstep-access-token
+                    value: ${env:OTEL_TRACING_ACCESS_TOKEN}
                 protocol: grpc
   pipelines:
     metrics:
@@ -293,22 +299,22 @@ service:
         - otlp
         - prometheus
       exporters:
-        - otlphttp/OTEL_COLLECTOR-nv-otelcollector-stg-metrics
+        - otlp_http/OTEL_COLLECTOR-nv-otelcollector-stg-metrics
       processors:
         - memory_limiter
         - filter/metrics
         - resource
-        - metricstransform
+        - metrics_transform
         - batch
     traces:
       receivers:
         - otlp
       exporters:
-        - otlphttp/OTEL_COLLECTOR-nv-otelcollector-stg-traces
+        - otlp_http/OTEL_COLLECTOR-nv-otelcollector-stg-traces
       processors:
         - memory_limiter
         - attributes/add-metadata
         - batch
   extensions:
     - healthcheckv2
-    - cgroupruntime
+    - cgroup_runtime

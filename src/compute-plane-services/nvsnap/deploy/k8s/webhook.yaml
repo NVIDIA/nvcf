@@ -1,0 +1,86 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# NvSnap admission webhook — served by the nvsnap-agent DaemonSet directly.
+# No separate Deployment; each agent on each GPU node listens on :8443
+# and answers AdmissionReview requests. Manifests live in ConfigMaps
+# (any agent can resolve any hash); cache data scheduling is enforced
+# via injected nodeAffinity from Manifest.CapturedOnNodes.
+#
+# What this manifest installs:
+#   - cert-manager Issuer + Certificate producing the TLS Secret
+#     mounted into agent pods at /etc/nvsnap/webhook/.
+#   - A Service whose selector matches the agent DaemonSet (load-balanced
+#     across agent pods).
+#   - The MutatingWebhookConfiguration that points the apiserver at
+#     that Service.
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: nvsnap-webhook-selfsigned
+  namespace: nvsnap-system
+spec:
+  selfSigned: {}
+
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: nvsnap-webhook-tls
+  namespace: nvsnap-system
+spec:
+  secretName: nvsnap-webhook-tls
+  duration: 8760h    # 1 year
+  renewBefore: 720h  # 30 days
+  issuerRef:
+    name: nvsnap-webhook-selfsigned
+    kind: Issuer
+  dnsNames:
+    - nvsnap-webhook
+    - nvsnap-webhook.nvsnap-system
+    - nvsnap-webhook.nvsnap-system.svc
+    - nvsnap-webhook.nvsnap-system.svc.cluster.local
+
+---
+# Selector points at the agent DaemonSet (NOT a separate webhook Pod).
+# The Service load-balances admission traffic across agent pods.
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvsnap-webhook
+  namespace: nvsnap-system
+spec:
+  selector:
+    app: nvsnap-agent
+  ports:
+    - port: 443
+      targetPort: 8443
+      protocol: TCP
+
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: nvsnap-rootfs-restore
+  annotations:
+    cert-manager.io/inject-ca-from: nvsnap-system/nvsnap-webhook-tls
+webhooks:
+  - name: rootfs-restore.nvsnap.io
+    clientConfig:
+      service:
+        name: nvsnap-webhook
+        namespace: nvsnap-system
+        path: /mutate
+        port: 443
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+        operations: ["CREATE"]
+        scope: Namespaced
+    # Fail OPEN — webhook is an optimization, never a gate.
+    failurePolicy: Ignore
+    sideEffects: None
+    admissionReviewVersions: ["v1"]
+    timeoutSeconds: 5

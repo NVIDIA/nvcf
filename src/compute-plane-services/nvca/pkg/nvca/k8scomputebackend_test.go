@@ -115,7 +115,14 @@ func TestK8sComputeBackendEnsureNetPolicy(t *testing.T) {
 		Start(ctx)
 	require.NoError(t, err)
 
-	checkNS := func(t *testing.T, namespace, expLabelVal string, hasIntraEgressNP bool) {
+	// hasIntraNamespaceAccess is true for function namespaces (one
+	// MiniService/Helm release per namespace, single-tenant), where a
+	// same-namespace allow is safe and needed (e.g. the utils pod reaching
+	// its own inference pod on a different pod in the same namespace). It is
+	// false for the namespace shared across every container-function tenant
+	// (nvcf-backend), where the same allow would let one customer's pod
+	// reach another customer's pod.
+	checkNS := func(t *testing.T, namespace, expLabelVal string, hasIntraNamespaceAccess bool) {
 		t.Run(fmt.Sprintf("%s:%s", namespace, expLabelVal), func(t *testing.T) {
 			assert.EventuallyWithT(t, func(c *assert.CollectT) {
 				egressNP, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(ctx,
@@ -134,8 +141,9 @@ func TestK8sComputeBackendEnsureNetPolicy(t *testing.T) {
 				}
 
 				// Check for the intra-namespace egress policy
-				if hasIntraEgressNP {
-					intraEgressNP, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(ctx, k8sutil.AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
+				if hasIntraNamespaceAccess {
+					intraEgressNP, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(
+						ctx, k8sutil.AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
 					if assert.NoError(c, err) {
 						assert.Equal(c, []netv1.PolicyType{"Egress"}, intraEgressNP.Spec.PolicyTypes)
 						if !assert.Len(c, intraEgressNP.Spec.Egress, 1) {
@@ -148,13 +156,22 @@ func TestK8sComputeBackendEnsureNetPolicy(t *testing.T) {
 						assert.NotNil(c, peer.NamespaceSelector)
 						assert.Equal(c, namespace, peer.NamespaceSelector.MatchLabels[k8sutil.K8sNameLabelKey])
 					}
+				} else {
+					_, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(
+						ctx, k8sutil.AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
+					assert.True(c, errors.IsNotFound(err),
+						"allow-egress-intra-namespace should not be created for the shared pod instance namespace")
 				}
 
 				ingressNP, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(ctx,
 					k8sutil.MonitoringIngressNetworkPolicyName, metav1.GetOptions{})
 				if assert.NoError(c, err) {
 					assert.Equal(c, []netv1.PolicyType{"Ingress"}, ingressNP.Spec.PolicyTypes)
-					if !assert.Len(c, ingressNP.Spec.Ingress, 2) {
+					wantRules := 1
+					if hasIntraNamespaceAccess {
+						wantRules = 2
+					}
+					if !assert.Len(c, ingressNP.Spec.Ingress, wantRules) {
 						return
 					}
 					if !assert.Len(c, ingressNP.Spec.Ingress[0].From, 1) {
@@ -165,11 +182,13 @@ func TestK8sComputeBackendEnsureNetPolicy(t *testing.T) {
 						return
 					}
 					assert.Equal(c, expLabelVal, peer1.NamespaceSelector.MatchLabels["foo"])
-					peer2 := ingressNP.Spec.Ingress[1].From[0]
-					if !assert.NotNil(c, peer2.NamespaceSelector) {
-						return
+					if hasIntraNamespaceAccess {
+						peer2 := ingressNP.Spec.Ingress[1].From[0]
+						if !assert.NotNil(c, peer2.NamespaceSelector) {
+							return
+						}
+						assert.Equal(c, namespace, peer2.NamespaceSelector.MatchLabels[k8sutil.K8sNameLabelKey])
 					}
-					assert.Equal(c, namespace, peer2.NamespaceSelector.MatchLabels[k8sutil.K8sNameLabelKey])
 				}
 			}, 5*time.Second, 200*time.Millisecond, "namespace: "+namespace)
 		})
@@ -778,6 +797,56 @@ func Test_translateFunctionLaunchSpecification(t *testing.T) {
 		assert.Equal(t, "128Gi", gotPod.Spec.Containers[0].Resources.Limits.StorageEphemeral().String())
 	}
 
+	llmLaunchSpecification := *cmContainer.LaunchSpecification
+	llmEnvironment, err := base64.StdEncoding.DecodeString(llmLaunchSpecification.EnvironmentB64)
+	require.NoError(t, err)
+	llmLaunchSpecification.EnvironmentB64 = base64.StdEncoding.EncodeToString(append(
+		llmEnvironment,
+		[]byte("\nLLM_REQUEST_ROUTER_ADDRESS=llm-request-router.example.com:50071")...,
+	))
+	llmDetails := cmContainer.Details
+	llmDetails.FunctionType = function.FunctionTypeLLM
+	reqLLM := reqContainer.DeepCopy()
+	reqLLM.Name = "sr-llm"
+	reqLLM.Spec.FunctionDetails = llmDetails
+	reqLLM.Spec.CreationMsgInfo.FunctionLaunchSpecification = &llmLaunchSpecification
+
+	gotArtifactsLLM, err := kc.translateFunctionLaunchSpecification(ctx, reqLLM)
+	require.NoError(t, err)
+	var llmPodArtifact function.LaunchArtifact
+	for _, artifact := range gotArtifactsLLM {
+		if artifact.Type == function.LaunchArtifactTypePod {
+			llmPodArtifact = artifact
+			break
+		}
+	}
+	require.NotEmpty(t, llmPodArtifact.Specification)
+	llmPodArtifactBytes, err := base64.StdEncoding.DecodeString(llmPodArtifact.Specification)
+	require.NoError(t, err)
+	llmPod := &corev1.Pod{}
+	require.NoError(t, json.Unmarshal(llmPodArtifactBytes, llmPod))
+	var llmWorker *corev1.Container
+	for i := range llmPod.Spec.Containers {
+		if llmPod.Spec.Containers[i].Name == function.LLMWorkerContainerName {
+			llmWorker = &llmPod.Spec.Containers[i]
+			break
+		}
+	}
+	require.NotNil(t, llmWorker)
+	var backendConnectivityArgs, initialInputTPSArgs []string
+	for _, arg := range llmWorker.Args {
+		if strings.HasPrefix(arg, "--backend-connectivity=") {
+			backendConnectivityArgs = append(backendConnectivityArgs, arg)
+		}
+		if strings.HasPrefix(arg, "--initial-input-tps=") {
+			initialInputTPSArgs = append(initialInputTPSArgs, arg)
+		}
+		assert.False(t, strings.HasPrefix(arg, "--reverse-tunnel"))
+		assert.False(t, strings.HasPrefix(arg, "--do-calibration"))
+	}
+	assert.Equal(t, []string{"--backend-connectivity=reverse"}, backendConnectivityArgs)
+	assert.Equal(t, []string{"--initial-input-tps=100"}, initialInputTPSArgs)
+
 	// Helm chart basic function.
 	msgMetaHelmChart := cmHelmChart.CreationQueueMessageMetadata
 	reqHelmChart := &nvcav2beta1.ICMSRequest{
@@ -810,6 +879,18 @@ func Test_translateFunctionLaunchSpecification(t *testing.T) {
 	gotArtifactsHelmChart, err := kc.translateFunctionLaunchSpecification(ctx, reqHelmChart)
 	require.NoError(t, err)
 	assert.Len(t, gotArtifactsHelmChart, 6)
+
+	legacyReqContainer := reqContainer.DeepCopy()
+	legacyReqContainer.Name = "sr-legacy-request-instances"
+	legacyReqContainer.Spec.Action = common.MessageAction("RequestInstances")
+	legacyReqContainer.Spec.CreationMsgInfo.CreationQueueMessageMetadata.Action = common.MessageAction("RequestInstances")
+	_, err = kc.clients.BART.NvcaV2beta1().ICMSRequests(legacyReqContainer.Namespace).Create(ctx, legacyReqContainer, metav1.CreateOptions{})
+	require.NoError(t, err)
+	err = kc.ApplyCreationMessage(ctx, legacyReqContainer)
+	require.NoError(t, err)
+	gotLegacyReq, err := kc.clients.BART.NvcaV2beta1().ICMSRequests(legacyReqContainer.Namespace).Get(ctx, legacyReqContainer.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Len(t, gotLegacyReq.Spec.CreationMsgInfo.LaunchArtifacts, 3)
 
 	// For coverage
 	_, err = kc.clients.BART.NvcaV2beta1().ICMSRequests(reqContainer.Namespace).Create(ctx, reqContainer, metav1.CreateOptions{})
@@ -2243,4 +2324,101 @@ func simulateMalformedArgsError(t *testing.T) string {
 	_, err := function.Translate(msg, cfg)
 	require.Error(t, err, "function.Translate should fail on malformed container args")
 	return err.Error()
+}
+
+func TestFunctionTranslateInjectsLegacyStargateAddressFromLLMRequestRouterEnv(t *testing.T) {
+	const (
+		testContainerRegistriesCreds = "eyJrOHNTZWNyZXRzIjpbeyJhdXRocyI6eyJudmNyLmlvIjp7ImF1dGgiOiJjM1JuTFdGaVl6RXlNem8yWmpZek5HUTROUzA1TXpGbExUUXhaall0WVRKbFl5MDJOMkk0TnpVd1pqRXlOMlU9In19fV19"
+		testSidecarRegistryCred      = "eyJhdXRocyI6eyJudmNyLmlvIjp7ImF1dGgiOiJKRzloZFhSb2RHOXJaVzQ2Ym5aaGNHa3RjM1JuTFdGaVl6RXlNdz09In19fQo="
+		testRouterAddress            = "llm-router.example.com:443"
+	)
+	env := strings.Join([]string{
+		common.ContainerFunctionImageEnv + "=nvcr.io/nvidia/fake-image:latest",
+		common.UtilsImageEnv + "=nvcr.io/nvidia/fake-utils:latest",
+		common.InitImageEnv + "=nvcr.io/nvidia/fake-init:latest",
+		common.ContainerRegistriesCredentialsEnv + "=" + testContainerRegistriesCreds,
+		common.SidecarRegistryCredentialEnv + "=" + testSidecarRegistryCred,
+		"INFERENCE_PORT=8080",
+		"LLM_REQUEST_ROUTER_ADDRESS=" + testRouterAddress,
+	}, "\n")
+
+	msg := function.CreationQueueMessage{
+		CreationQueueMessageMetadata: common.CreationQueueMessageMetadata{
+			RequestID:         "request-id",
+			MessageBatchID:    "batch-id",
+			NCAID:             "nca-id",
+			Action:            common.RequestICMSInstances,
+			InstanceCount:     1,
+			InstanceTypeName:  "L40_1x",
+			InstanceTypeValue: "L40",
+			GPUType:           "L40",
+			RequestedGPUCount: 1,
+		},
+		Details: function.Details{
+			FunctionID:        "function-id",
+			FunctionVersionID: "function-version-id",
+			FunctionType:      function.FunctionTypeLLM,
+		},
+		LaunchSpecification: &function.LaunchSpecification{
+			EnvironmentB64:  base64.StdEncoding.EncodeToString([]byte(env)),
+			ICMSEnvironment: "test",
+			CloudProvider:   "DGXCLOUD",
+		},
+	}
+	cfg := function.TranslateConfig{
+		TranslateConfig: common.TranslateConfig{
+			Namespace:                    "test-ns",
+			ObjectNameBase:               "test-worker",
+			InstanceTypeLabelSelectorKey: "nvidia.com/gpu.product",
+			WorkloadResources: corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{
+					"nvidia.com/gpu": resource.MustParse("1"),
+				},
+			},
+		},
+	}
+
+	objs, err := function.Translate(msg, cfg)
+	require.NoError(t, err)
+
+	var pod *corev1.Pod
+	for _, obj := range objs {
+		if candidate, ok := obj.(*corev1.Pod); ok {
+			pod = candidate
+			break
+		}
+	}
+	require.NotNil(t, pod)
+
+	var llmWorker *corev1.Container
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == function.LLMWorkerContainerName {
+			llmWorker = &pod.Spec.Containers[i]
+			break
+		}
+	}
+	require.NotNil(t, llmWorker)
+	assert.Contains(t, llmWorker.Args, "--stargate-address="+testRouterAddress)
+
+	envMap := make(map[string]string, len(llmWorker.Env))
+	for _, envVar := range llmWorker.Env {
+		envMap[envVar.Name] = envVar.Value
+	}
+	assert.Equal(t, testRouterAddress, envMap["LLM_REQUEST_ROUTER_ADDRESS"])
+	assert.Equal(t, testRouterAddress, envMap["STARGATE_ADDRESS"])
+
+	var initContainer *corev1.Container
+	for i := range pod.Spec.InitContainers {
+		if pod.Spec.InitContainers[i].Name == "init" {
+			initContainer = &pod.Spec.InitContainers[i]
+			break
+		}
+	}
+	require.NotNil(t, initContainer)
+	initEnvMap := make(map[string]string, len(initContainer.Env))
+	for _, envVar := range initContainer.Env {
+		initEnvMap[envVar.Name] = envVar.Value
+	}
+	assert.Equal(t, testRouterAddress, initEnvMap["LLM_REQUEST_ROUTER_ADDRESS"])
+	assert.Equal(t, testRouterAddress, initEnvMap["STARGATE_ADDRESS"])
 }

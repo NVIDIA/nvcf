@@ -16,6 +16,68 @@ limitations under the License.
 -->
 # ESS Agent
 
+## Build with Bazel
+
+`bazel build //...` produces the `ess-agent` binary; `bazel test //...`
+runs the unit-test suite. The image lives at
+`//:image_index` (multi-arch OCI), with three push targets for the
+internal NGC registries.
+
+```shell
+# Build everything Bazel knows about.
+bazel build //...
+
+# Run all tests with auto-retry on timing-sensitive failures.
+# child_test.TestReload_noSignal is skipped via go_test.args (race
+# flake in upstream consul-template code, see KNOWN_TEST_ISSUES.md
+# §5). Upstream-vendored test targets are tagged `manual` and excluded
+# from `//...`; run them explicitly when needed.
+bazel test //... --test_env=SKIP_INTEGRATION_TESTS=1 --flaky_test_attempts=3
+
+# Build the multi-arch OCI image index (linux/amd64 + linux/arm64).
+bazel build //:image_index
+
+# Load the host-arch image into the local docker daemon.
+bazel run //:image_load
+```
+
+The OCI image is published to three internal NGC registries from CI on
+the default branch. The macro emits one target per registry; run each
+to push:
+
+```shell
+bazel run //:image_push           # primary ESS registry
+bazel run //:image_push_devops    # nvcr.io/nv-ngc-devops/ess-agent
+bazel run //:image_push_ncp_dev   # nvcr.io/0651155215864979/ncp-dev/ess-agent
+```
+
+### Multi-module workspace
+
+`go.work` lists the root, `./api`, and `./sdk` because the upstream
+HashiCorp vault api / sdk are vendored as local modules via `replace`
+directives in `go.mod`. Each workspace member carries a
+`gazelle:prefix` directive so Gazelle emits the right importpaths and
+references local Bazel targets (`//api`, `//sdk/...`) instead of
+re-fetching the modules.
+
+### Unused vault auth backends
+
+Unused vault auth providers (aws, azure, gcp, ldap, userpass, approle)
+are listed in `.bazelignore`. Only the kubernetes backend is wired in
+via `dependency/client_set.go`, so the heavy cloud-sdk transitive deps
+stay out of the build. Add a directory back to participate in `//...`
+when a new auth backend is genuinely needed.
+
+### Regenerating BUILD files
+
+```shell
+# After Go source changes.
+bazel run //:gazelle
+
+# After go.mod / api/go.mod / sdk/go.mod changes.
+bazel mod tidy
+```
+
 ## Special Envs
 
 | Name | Purpose |
@@ -213,7 +275,7 @@ Will occur when a bad/invalid JWT token used (401), token does not have access t
 When encountered the agent will exit with code 1 as there is no recovery without outside changes applied.
 
 #### 3. 429 Rate-limited
-Too many requests to ESS API have occured from the same IP address.
+Too many requests to ESS API have occurred from the same IP address.
  The agent will exponentially retry for up to 10 minutes and exit is time limit is reached.
 
 #### 4. 50x Server Error
@@ -250,9 +312,9 @@ Similar to 40x errors, the agent will stop rendering the template and reset the 
 
 #### 3. 50x Server Errors
 
-50x errors will use an exponential retry policy starting at 500 miliseconds (e.g. 500ms, 1s, 2s, 4s...) with a max retry duration of 1 minute until a total of 10 minutes has passed.
+50x errors will use an exponential retry policy starting at 500 milliseconds (e.g. 500ms, 1s, 2s, 4s...) with a max retry duration of 1 minute until a total of 10 minutes has passed.
 
-If the 10 minute max duration is reached, retries will be stopped and the refresh secret cadence will be restarted. If this event occurs the total duration betwen secret fetches is 25 minutes (10 retry max + 15 minute refresh cadence).
+If the 10 minute max duration is reached, retries will be stopped and the refresh secret cadence will be restarted. If this event occurs the total duration between secret fetches is 25 minutes (10 retry max + 15 minute refresh cadence).
 
 Note: Exponential retries do not increment the `ess_templates_request_total` metric with `status="fail"` only the first API call failure will be tracked.
 

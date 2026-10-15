@@ -77,6 +77,9 @@ func translateHelmChart(t CreationQueueMessage, tcfg TranslateConfig) (objs []me
 	allEnvSet[common.CloudProviderEnv] = launchSpec.CloudProvider
 	allEnvSet[common.GPUNameEnv] = t.GPUType
 	allEnvSet[common.GPUCountEnv] = strconv.Itoa(int(t.RequestedGPUCount)) //nolint:gosec // G115: intentional uint64->int conversion, values are bounded
+	if isLLM {
+		normalizeLLMRequestRouterAddressEnvAliases(allEnvSet)
+	}
 
 	utilsContainerImage := allEnvSet[common.UtilsImageEnv]
 	if tcfg.UtilsImage != "" {

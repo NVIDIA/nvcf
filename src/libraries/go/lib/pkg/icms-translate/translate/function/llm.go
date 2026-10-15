@@ -15,11 +15,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// TODO(NVCF-9201): unit-test coverage is below the lib module threshold; add tests for this package.
 package function
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -35,11 +36,50 @@ const (
 	//nolint:gosec
 	llmCredentialManagerImageDefault = "nvcr.io/0651155215864979/ncp-dev/nvcf_worker_llm_credentials:2.109.0"
 	llmRouterClientImageEnv          = "LLM_ROUTER_CLIENT_IMAGE"
-	llmRouterClientImageDefault      = "nvcr.io/0651155215864979/ncp-dev/llm-router-client:a9556d67"
+	llmRouterClientImageDefault      = "nvcr.io/0651155215864979/ncp-dev/stargate-client:0.4.0"
+	llmRequestRouterAddressEnv       = "LLM_REQUEST_ROUTER_ADDRESS"
+	legacyStargateAddressEnv         = "STARGATE_ADDRESS"
 
 	llmDirMountPath    = "/var/run/llm"
 	llmWorkerTokenPath = llmDirMountPath + "/worker-token"
+
+	essAssertionTokenPathEnv = "ESS_ASSERTION_TOKEN_PATH"
+	essAssertionTokenPath    = common.EssConfigDir + "/jwt.token"
 )
+
+func normalizeLLMRequestRouterAddressEnvAliases(envSet map[string]string) {
+	llmRequestRouterAddress := envSet[llmRequestRouterAddressEnv]
+	if llmRequestRouterAddress == "" {
+		llmRequestRouterAddress = envSet[legacyStargateAddressEnv]
+	}
+	if llmRequestRouterAddress == "" {
+		return
+	}
+	if envSet[llmRequestRouterAddressEnv] == "" {
+		envSet[llmRequestRouterAddressEnv] = llmRequestRouterAddress
+	}
+	if envSet[legacyStargateAddressEnv] == "" {
+		envSet[legacyStargateAddressEnv] = llmRequestRouterAddress
+	}
+}
+
+// pylon probes the upstream over HTTP on the inference port, so the function's
+// declared health endpoint only carries over when the function keeps both
+// aligned. Otherwise pylon falls back to its own candidate paths.
+func upstreamHealthPath(allEnvSet map[string]string) string {
+	path := strings.TrimSpace(allEnvSet["INFERENCE_HEALTH_ENDPOINT"])
+	if path == "" {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(allEnvSet["INFERENCE_HEALTH_PROTOCOL"]), "grpc") {
+		return ""
+	}
+	healthPort, err := strconv.Atoi(strings.TrimSpace(allEnvSet["INFERENCE_HEALTH_PORT"]))
+	if err == nil && healthPort > 0 && strconv.Itoa(healthPort) != strings.TrimSpace(allEnvSet["INFERENCE_PORT"]) {
+		return ""
+	}
+	return path
+}
 
 func newLLMRouterClientContainer(
 	ls *LaunchSpecification,
@@ -53,15 +93,28 @@ func newLLMRouterClientContainer(
 		llmRouterClientImage = llmRouterClientImageDefault
 		// return corev1.Container{}, fmt.Errorf("LLM router client image is not set")
 	}
-	stargateAddress := allEnvSet["STARGATE_ADDRESS"]
-	if stargateAddress == "" {
-		stargateAddress = tcfg.DefaultStargateAddress
+	llmRequestRouterAddress := allEnvSet[llmRequestRouterAddressEnv]
+	if llmRequestRouterAddress == "" {
+		llmRequestRouterAddress = allEnvSet[legacyStargateAddressEnv]
 	}
-	if stargateAddress == "" {
-		return corev1.Container{}, fmt.Errorf("stargate address is not set (STARGATE_ADDRESS env or default)")
+	if llmRequestRouterAddress == "" {
+		return corev1.Container{}, fmt.Errorf(
+			"LLM request router address is not set (%s env or %s legacy env)",
+			llmRequestRouterAddressEnv,
+			legacyStargateAddressEnv,
+		)
 	}
 
-	envs := common.MapToEnv(allEnvSet)
+	llmEnvSet := make(map[string]string, len(allEnvSet)+2)
+	for k, v := range allEnvSet {
+		llmEnvSet[k] = v
+	}
+	if llmEnvSet[llmRequestRouterAddressEnv] == "" && llmEnvSet[legacyStargateAddressEnv] == "" {
+		llmEnvSet[llmRequestRouterAddressEnv] = llmRequestRouterAddress
+	}
+	normalizeLLMRequestRouterAddressEnvAliases(llmEnvSet)
+
+	envs := common.MapToEnv(llmEnvSet)
 	envs = append(envs,
 		corev1.EnvVar{
 			Name:  "INSTANCE_ID",
@@ -81,17 +134,25 @@ func newLLMRouterClientContainer(
 	svcPort := allEnvSet["INFERENCE_PORT"]
 	if isHelm {
 		svcName := allEnvSet["HELM_CHART_INFERENCE_SERVICE_NAME"]
-		upstreamHttpBaseUrl = fmt.Sprintf("http://%s.%s.svc.cluster.local:%s", svcName, tcfg.Namespace, svcPort)
+		if tcfg.Namespace == "" {
+			upstreamHttpBaseUrl = fmt.Sprintf("http://%s:%s", svcName, svcPort)
+		} else {
+			upstreamHttpBaseUrl = fmt.Sprintf("http://%s.%s.svc.cluster.local:%s", svcName, tcfg.Namespace, svcPort)
+		}
 	} else {
 		upstreamHttpBaseUrl = fmt.Sprintf("http://127.0.0.1:%s", svcPort)
 	}
 
 	args := []string{
 		fmt.Sprintf("--upstream-http-base-url=%s", upstreamHttpBaseUrl),
-		fmt.Sprintf("--stargate-address=%s", stargateAddress),
+		fmt.Sprintf("--stargate-address=%s", llmRequestRouterAddress),
 		fmt.Sprintf("--inference-server-id=%s", instanceID),
 		fmt.Sprintf("--auth-token-file=%s", llmWorkerTokenPath),
-		"--reverse-tunnel",
+		"--backend-connectivity=reverse",
+		"--initial-input-tps=100",
+	}
+	if healthPath := upstreamHealthPath(allEnvSet); healthPath != "" {
+		args = append(args, fmt.Sprintf("--upstream-health-path=%s", healthPath))
 	}
 	if tcfg.StargateQUICInsecure {
 		args = append(args, "--quic-insecure")
@@ -125,6 +186,13 @@ func newLLMRouterClientContainer(
 			{
 				Name:      "llm",
 				MountPath: llmDirMountPath,
+			},
+			// config-data backs SHARED_CONFIG_DIR, shared with the credential
+			// manager. Mount it so the nvcf client does not fail creating
+			// ConfigDirPath at startup.
+			{
+				Name:      "config-data",
+				MountPath: ConfigDirPath,
 			},
 		},
 	}
@@ -170,6 +238,28 @@ func newLLMCredentialManagerContainer(allEnvSet map[string]string, _ TranslateCo
 			Value: llmWorkerTokenPath,
 		},
 	)
+	volumeMounts := []corev1.VolumeMount{
+		{
+			Name:      "llm",
+			MountPath: llmDirMountPath,
+		},
+		// config-data backs SHARED_CONFIG_DIR. The credential manager
+		// creates and caches the worker token here, so it must be mounted.
+		{
+			Name:      "config-data",
+			MountPath: ConfigDirPath,
+		},
+	}
+	if allEnvSet[common.SecretsAssertionTokenEnv] != "" {
+		envs = append(envs, corev1.EnvVar{
+			Name:  essAssertionTokenPathEnv,
+			Value: essAssertionTokenPath,
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      common.EssDataVolumeName,
+			MountPath: common.EssConfigDir,
+		})
+	}
 
 	c := corev1.Container{
 		Name:            "llm-credential-manager",
@@ -186,12 +276,7 @@ func newLLMCredentialManagerContainer(allEnvSet map[string]string, _ TranslateCo
 				corev1.ResourceMemory: *resource.NewQuantity(128*1<<20, resource.BinarySI),
 			},
 		},
-		VolumeMounts: []corev1.VolumeMount{
-			{
-				Name:      "llm",
-				MountPath: llmDirMountPath,
-			},
-		},
+		VolumeMounts: volumeMounts,
 	}
 	return c, nil
 }

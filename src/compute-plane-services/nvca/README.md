@@ -132,7 +132,60 @@ helm upgrade nvca-operator -n nvca-operator --create-namespace -i --reset-values
   --set-file 'networkPolicy.customPolicies={allow-all-ingress.yaml}'
 ```
 
-## Testing and Debugging
+## Building and Testing
+
+NVCA builds via Bazel. The legacy Dockerfile and `goreleaser` paths are
+retired; CI runs `bazel test //...` and publishes images via
+`bazel run //cmd/<bin>:image_push`.
+
+### Bazel
+
+Requires [bazelisk](https://github.com/bazelbuild/bazelisk) (`bazel` on PATH
+delegating to the version pinned in `.bazelversion`). MODULE.bazel pulls
+the Go toolchain (1.25.0), `rules_go`, Gazelle, `rules_oci`, and the
+distroless Go base image — no host toolchains are needed beyond a recent
+Linux (or macOS) and the `bazel` shim.
+
+OSS contributors building from the GitHub mirror: the default `oci.pull`
+in `MODULE.bazel` points at `urm.nvidia.com/sw-gpu-ucs-hardened-docker/distroless/go`,
+which is NVIDIA-internal Artifactory. To build off-network, swap that
+entry for a public base such as `gcr.io/distroless/static-debian12` (then
+`bazel mod tidy` to refresh the lockfile). `bazel build //...` and
+`bazel test //...` work without modification.
+
+Common commands:
+
+```sh
+# Build every Bazel target.
+bazel build //...
+
+# Build the four OCI images (multi-arch index format):
+bazel build //cmd/nvca:image_index \
+            //cmd/nvca-operator:image_index \
+            //cmd/cluster-validator:image_index \
+            //cmd/tools:image_index
+
+# Run all unit + envtest-backed tests:
+eval "$(./scripts/setup_envtest)"  # exports KUBEBUILDER_ASSETS
+bazel test //... --test_env=KUBEBUILDER_ASSETS
+
+# Re-run Gazelle after adding new Go imports or files. Updates
+# srcs / deps lists and refreshes go_deps overrides in MODULE.bazel.
+bazel run @rules_go//go -- mod tidy
+bazel run @rules_go//go -- mod vendor
+find vendor -name BUILD.bazel -delete
+bazel run //:gazelle
+bazel mod tidy
+
+# Load an image into the local Docker daemon for ad-hoc testing:
+bazel run //cmd/nvca:image_load
+```
+
+Push targets live under `//nvidia-internal:image_push*` (see
+`nvidia-internal/BUILD.bazel`); the registry coordinates are
+NVIDIA-internal and intentionally kept out of the public mirror.
+Credentials come from the Docker config that `DOCKER_CONFIG` points
+at — CI fills these from vault-fetched tokens.
 
 ### Envtest
 
@@ -149,6 +202,11 @@ For example, in VSCode `settings.json` add:
 		"KUBEBUILDER_ASSETS": "/home/myuser/.local/share/kubebuilder-envtest/k8s/current"
 	}
 ```
+
+When running under Bazel, the `storage_test` and `miniservice_test`
+targets inherit `KUBEBUILDER_ASSETS` via `env_inherit` and run with
+`rundir = "."`; you must export it (via `setup_envtest`) in the shell
+where you launch `bazel test`.
 
 ### Monitoring and Metrics
 

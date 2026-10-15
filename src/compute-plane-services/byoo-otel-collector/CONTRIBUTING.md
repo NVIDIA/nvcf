@@ -51,9 +51,9 @@ Examples:
 
 The commit title format is "type(scope): short description".
 
-- **type:** the kind of change, see chart below for guidance on choosing type
-- **scope:** a name for the product or area your change affects (required for feat, fix, and perf types)
-- **short description:** one sentence, present-tense description
+- `type`: the kind of change, see chart below for guidance on choosing type
+- `scope`: a name for the product or area your change affects (required for feat, fix, and perf types)
+- `short description`: one sentence, present-tense description
 
 The commit message (or merge request text) should also include motivation for the
 change, and contrast its implementation with previous behavior. The semantic
@@ -68,20 +68,26 @@ The footer of the commit may contain a GitHub issue reference(s), and/or a BREAK
 Getting the actual commit type 100% perfect is not as important as separating
 it into the right category. Namely, whether the end-user will be or should
 be made aware of this change or not (i.e. release notes). If the former use
-types of the **End User** category below; otherwise, use ones from **Foundational**.
+types of the End User category below; otherwise, use ones from Foundational.
 When you absolutely cannot decide just use the _chore_ type.
 
-- **End User:** feat, fix or perf
+- End User: feat, fix or perf
 
-- **Foundational:** docs, build, test, refactor, ci, chore, style, or revert
+- Foundational: docs, build, test, refactor, ci, chore, style, or revert
 
 ### Branches and Versions
 
 The byoo-otel-collector repository does trunk based development in `main`. Your changes should be pushed into a branch in your own fork of the repository and then create a pull request when the code is ready.
 
-**Version Policy**
+### Version policy
 
-The version number in the [VERSION](/VERSION) file must adhere to the [Semantic Versioning](https://semver.org/) convention. Since the `byoo-otel-collector` is based on the third-party project [OpenTelemetry Collector](https://github.com/open-telemetry/opentelemetry-collector) we have decided to align its major and minor version numbers with those of the official OpenTelemetry Collector. For internal changes, we will only increment the patch version.
+The OpenTelemetry Collector version is pinned in `otel-collector-build.yaml`.
+GitHub semantic-release calculates the NVIDIA wrapper SemVer from Conventional
+Commits. The release tag is
+`src/compute-plane-services/byoo-otel-collector/v<upstream>-nv-<wrapper>`.
+
+Use `feat`, `fix`, or `perf` for changes that should publish a wrapper release.
+Do not add or update a `VERSION` file.
 
 ### Signing Your Work
 
@@ -136,10 +142,10 @@ The version number in the [VERSION](/VERSION) file must adhere to the [Semantic 
 
 ### Development Guidelines
 
-**New metrics**
+### New metrics
 
 Any new metric coming from platform should be added for both backends (GFN and non-GFN) in the [source-config.yaml](generator/source-config.yaml).
 
-**New labels**
+### New labels
 
 Labels are controlled using an allow list and also part of the [source-config.yaml](generator/source-config.yaml). If a label must be kept please add it to allow sections in source-config.yaml file.

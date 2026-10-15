@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+{{- include "nvcf-container-cache.validateServiceType" . -}}
 apiVersion: v1
 kind: Service
 metadata:
@@ -21,21 +22,23 @@ metadata:
     app: {{ $.Release.Name }}
     {{- include "nvcf-container-cache.labels" . | nindent 4 }}
 spec:
-  type: {{ .Values.service.type | default "ClusterIP" }}
+  # Always NodePort, and not configurable. The host container runtime
+  # (containerd/CRI-O) reaches this service as ${NODE_IP}:${port} from the host
+  # network namespace, where cluster service DNS and ClusterIP addresses are not
+  # dependable. A ClusterIP service renders no nodePort at all, so the mirror
+  # endpoint the DaemonSet writes points at a port nothing listens on and every
+  # pull silently falls back to the upstream registry.
+  type: NodePort
   ports:
     - port: {{ .Values.service.port | default 30345 }}
-      {{ if eq .Values.service.type "NodePort" }}
       nodePort: {{ .Values.service.port | default 30345 }}
-      {{ end }}
       targetPort: https
       name: https
 {{- $crioPorts := include "nvcf-container-cache.crioRegistryPorts" . | fromYaml -}}
 {{- if $crioPorts }}
 {{- range $name, $val := $crioPorts }}
     - port: {{ $val.port }}
-      {{ if eq $.Values.service.type "NodePort" }}
       nodePort: {{ $val.port }}
-      {{ end }}
       targetPort: crio-{{ $name }}
       name: crio-{{ $name }}
 {{- end }}

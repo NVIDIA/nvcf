@@ -21,8 +21,9 @@ Spec 8.4 of the combined SRD/SDD: the T1-T7 matrix that gates each release.
 ## Prerequisites
 
 - A host with k3d, helmfile, helm, and a working kubectl context.
-- `STACK_PATH` env var pointing at a checked-out `nvcf-self-managed-stack`.
-- `STACK_PATH_NEXT` env var (optional): second stack version for T5 (version-upgrade). T5 self-skips when unset.
+- `CONTROL_PLANE_STACK_PATH` env var pointing at a checked-out control-plane stack (`nvcf-self-managed-stack`).
+- `COMPUTE_PLANE_STACK_PATH` env var pointing at a checked-out compute-plane stack (`nvcf-compute-plane-stack`).
+- `CONTROL_PLANE_STACK_PATH_NEXT` and `COMPUTE_PLANE_STACK_PATH_NEXT` env vars (optional): second stack versions for T5 (version-upgrade). T5 self-skips when unset.
 - A valid admin JWT in `$NVCF_TOKEN` env var. Easiest source: `nvcf-cli init` (interactive), then extract the JWT from `~/.nvcf-cli.state`'s `token` field:
 
 ```bash
@@ -47,14 +48,27 @@ export E2E_CLUSTER_CREATE_CMD='make -C ../../ncp-local-cluster build-and-deploy-
 ## Run
 
 ```bash
-cd nvcf-cli
-export STACK_PATH=/path/to/nvcf-self-managed-stack
+# From the monorepo root
+export CONTROL_PLANE_STACK_PATH=/path/to/nvcf-self-managed-stack
+export COMPUTE_PLANE_STACK_PATH=/path/to/nvcf-compute-plane-stack
 export NVCF_TOKEN=$(jq -r .token ~/.nvcf-cli.state)
-make e2e-self-hosted
+
+# Build the CLI under test
+bazel build //src/clis/nvcf-cli:nvcf-cli
+cp "$(bazel cquery --output=files //src/clis/nvcf-cli:nvcf-cli)" /tmp/nvcf-cli
+
+# Run the e2e suite (still go-tooling because it shells out to k3d/helm/kubectl)
+cd src/clis/nvcf-cli
+NVCF_E2E=1 go test -tags=e2e -v ./test/e2e/...
 ```
 
-The `make e2e-self-hosted` target sets `NVCF_E2E=1`, which is required. The test file panics
-on startup if this guard is absent.
+`NVCF_E2E=1` is required. The test file panics on startup if this guard is absent.
+
+The e2e tests intentionally remain on `go test -tags=e2e` rather than `bazel
+test`: they shell out to `k3d`, `helm`, `helmfile`, `cqlsh`, and `toxiproxy`
+(see `make e2e-self-hosted-faults` history), which do not run inside Bazel
+sandboxes. Migrating them to Bazel is a separate effort tracked outside the
+build-tooling MR that introduced the rest of the Bazel wiring.
 
 ## Expected runtime
 
@@ -64,7 +78,7 @@ on startup if this guard is absent.
 | T2 | ~10-12 min |
 | T3 | ~8 min |
 | T4 | ~8 min |
-| T5 | ~6 min (or skipped if `STACK_PATH_NEXT` is unset) |
+| T5 | ~6 min (or skipped if `CONTROL_PLANE_STACK_PATH_NEXT` and `COMPUTE_PLANE_STACK_PATH_NEXT` are unset) |
 | T6 | skipped (orchestrator lock not yet implemented; see test code) |
 | T7 | ~2 min |
 | Total | ~45-60 min (with T5 and T6 excluded) |
@@ -75,8 +89,9 @@ T6 is unconditionally skipped pending the orchestrator-level lock implementation
 ## Selective runs
 
 ```bash
-make e2e-self-hosted ARGS="-run TestT1"          # Just T1
-make e2e-self-hosted ARGS="-run 'TestT[123]'"    # T1-T3
+# From src/clis/nvcf-cli (after the build step above)
+NVCF_E2E=1 go test -tags=e2e -v -run TestT1 ./test/e2e/...           # Just T1
+NVCF_E2E=1 go test -tags=e2e -v -run 'TestT[123]' ./test/e2e/...     # T1-T3
 ```
 
 ## Release gate
@@ -106,7 +121,9 @@ These tests require two or three k3d clusters and exercise the split-cluster
 context routing in `up` / `status`. These tests are not run in CI.
 
 ```sh
-NVCF_E2E=1 make e2e-self-hosted-split
+# After bazel build //src/clis/nvcf-cli:nvcf-cli (see Run section).
+cd src/clis/nvcf-cli
+NVCF_E2E=1 go test -tags=e2e -v -timeout=60m -run 'TestE2E_T(8|9|10)' ./test/e2e/...
 ```
 
 Prerequisites:

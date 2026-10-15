@@ -1,0 +1,80 @@
+---
+# Source: kai-scheduler/templates/services/operator.yaml
+# Copyright 2025 NVIDIA CORPORATION
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kai-operator
+  namespace: kai-scheduler
+  labels:
+    app: kai-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kai-operator
+  template:
+    metadata:
+      labels:
+        app: kai-operator
+    spec:
+      serviceAccountName: kai-operator
+      containers:
+      - name: operator
+        image: ghcr.io/kai-scheduler/kai-scheduler/operator:v0.16.7
+        imagePullPolicy: IfNotPresent
+        resources:
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+            requests:
+              cpu: 50m
+              memory: 256Mi
+        args:
+          - --metrics-bind-address=:8080
+          - --health-probe-bind-address=:8081
+          - --leader-elect=false
+          - --qps=50
+          - --burst=300
+          - --namespace=kai-scheduler
+        env:
+        - name: WATCH_NAMESPACE
+          value: kai-scheduler
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: OPERATOR_NAME
+          value: "kai-operator"
+        - name: MS_REPOSITORY
+          value: ghcr.io/kai-scheduler/kai-scheduler
+        - name: MS_TAG
+          value: v0.16.7
+        ports:
+        - containerPort: 8080
+          name: metrics
+        - containerPort: 8081
+          name: probe
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 10000
+      imagePullSecrets:
+        - name: nvcr-pull-secret

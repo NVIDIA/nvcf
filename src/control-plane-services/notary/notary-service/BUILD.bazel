@@ -1,0 +1,106 @@
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_library", "nvcf_java_test")
+load("//rules/java:spring.bzl", "spring_boot_app")
+load("//rules/oci:defs.bzl", "java_image_contract_test", "java_oci_image")
+
+package(default_visibility = ["//visibility:public"])
+
+NOTARY_SERVICE_SRCS = glob(["src/main/java/**/*.java"])
+
+NOTARY_SERVICE_RESOURCES = glob(["src/main/resources/**"])
+
+NOTARY_SERVICE_TEST_SRCS = glob(["src/test/java/**/*.java"])
+
+nvcf_java_library(
+    name = "app_classes",
+    srcs = NOTARY_SERVICE_SRCS,
+    deps = [
+        "//src/control-plane-services/notary/notary-core:notary_core",
+        "//src/libraries/java/nv-boot-parent/nv-boot-starter-observability:nv_boot_starter_observability",
+        "@nv_third_party_deps//:org_slf4j_slf4j_api",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_autoconfigure",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_micrometer_tracing",
+        "@nv_third_party_deps//:org_springframework_spring_context",
+    ],
+    resource_strip_prefix = "src/control-plane-services/notary/notary-service/src/main/resources",
+    resources = NOTARY_SERVICE_RESOURCES,
+    runtime_deps = [
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_jarmode_tools",
+    ],
+    visibility = ["//visibility:private"],
+)
+
+spring_boot_app(
+    name = "app",
+    application = ":app_classes",
+    artifact_id = "notary-service-oss",
+    artifact_name = "Notary Service OSS",
+    artifact_version = "0.0.1-SNAPSHOT",
+    description = "NVCF Notary OSS executable",
+    group_id = "com.nvidia.notary",
+    main_class = "com.nvidia.notary.App",
+)
+
+nvcf_java_test(
+    name = "tests",
+    srcs = NOTARY_SERVICE_TEST_SRCS,
+    deps = [
+        ":app_classes",
+        "//src/control-plane-services/notary/notary-core:notary_core",
+        "//src/control-plane-services/notary/notary-core:notary_core_test_fixtures",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_resttestclient",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc_test",
+        "@nv_third_party_deps//:org_springframework_boot_spring_boot_web_server",
+        "@nv_third_party_deps//:org_springframework_spring_beans",
+        "@nv_third_party_deps//:org_springframework_spring_web",
+    ],
+    timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":app_classes",
+    test = ":tests",
+    timeout = "long",
+)
+
+# Multi-arch OCI image, the Bazel equivalent of this service's Dockerfile.
+# jar_path, env and workdir mirror that Dockerfile exactly. The entrypoint comes
+# from the shared macro, which keeps the base's shelless_ulimit shim that
+# oci_image would otherwise silently replace.
+java_oci_image(
+    name = "notary-service-oss-image",
+    jar = ":app",
+    jar_path = "/usr/share/app.jar",
+    env = {
+        "ULIMIT_FLAG": "1",
+        "JDK_JAVA_OPTIONS": "",
+        "SPRING_PROFILES_ACTIVE": "",
+        "AUTH_TOKEN_ISSUER": "",
+        "ASSERTION_ISSUER_URL": "",
+        "AUTH_TOKEN_SCOPE": "notary-sign",
+        "MAX_REQUEST_BODY_SIZE_BYTES": "4096",
+        "VAULT_SECRETS_JSON_PATH": "vault/vault-secrets.json",
+    },
+    workdir = "/home/app",
+)
+
+# The shared guard every Java service uses, so the runtime contract cannot drift
+# between services or between the architectures in the index.
+java_image_contract_test(
+    name = "image_contract_test",
+    image = ":notary-service-oss-image",
+    jar_path = "/usr/share/app.jar",
+    env = {
+        "ULIMIT_FLAG": "1",
+        "JDK_JAVA_OPTIONS": "",
+        "SPRING_PROFILES_ACTIVE": "",
+        "AUTH_TOKEN_ISSUER": "",
+        "ASSERTION_ISSUER_URL": "",
+        "AUTH_TOKEN_SCOPE": "notary-sign",
+        "MAX_REQUEST_BODY_SIZE_BYTES": "4096",
+        "VAULT_SECRETS_JSON_PATH": "vault/vault-secrets.json",
+    },
+    workdir = "/home/app",
+)

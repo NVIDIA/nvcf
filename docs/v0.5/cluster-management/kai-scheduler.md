@@ -15,6 +15,19 @@ Create `values.yaml` with queue attributes:
 
 <Accordion title="kai-scheduler-queues.yaml">
 ```yaml title="kai-scheduler-queues.yaml"
+scheduler:
+  placementStrategy: binpack
+  plugins:
+    nodeplacement:
+      arguments:
+        gpu: binpack
+        cpu: spread
+  actions:
+    preempt:
+      enabled: false
+    consolidation:
+      enabled: false
+
 defaultQueue:
   createDefaultQueue: true
   parentName: default-parent-queue
@@ -49,5 +62,5 @@ defaultQueue:
 </Accordion>
 
 ```bash
-helm install kai-scheduler oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler -f values.yaml -n kai-scheduler --create-namespace --version v0.12.6
+helm install kai-scheduler oci://ghcr.io/kai-scheduler/kai-scheduler/kai-scheduler -f values.yaml -n kai-scheduler --create-namespace --version v0.14.0
 ```

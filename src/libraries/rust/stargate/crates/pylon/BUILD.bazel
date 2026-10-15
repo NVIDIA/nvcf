@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("//rules/oci:defs.bzl", "rust_oci_image")
+
+# `all_crate_deps()` only resolves third-party crate_universe deps;
+# workspace-local crate references (those declared via `workspace = true`
+# against members of this Cargo workspace) have to be added explicitly as
+# Bazel labels.
+_WORKSPACE_DEPS = [
+    "//src/libraries/rust/stargate/crates/proto:stargate-proto",
+    "//src/libraries/rust/stargate/crates/protocol:stargate-protocol",
+    "//src/libraries/rust/stargate/crates/pylon-lib:pylon-lib",
+    "//src/libraries/rust/stargate/crates/stargate-runtime:stargate-runtime",
+    "//src/libraries/rust/stargate/crates/stargate-telemetry:stargate-telemetry",
+    "//src/libraries/rust/stargate/crates/stargate-tls:stargate-tls",
+]
+
+rust_binary(
+    name = "pylon",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    visibility = ["//visibility:public"],
+    deps = _WORKSPACE_DEPS + all_crate_deps(normal = True),
+)
+
+rust_test(
+    name = "pylon_test",
+    crate = ":pylon",
+    deps = _WORKSPACE_DEPS + all_crate_deps(normal_dev = True),
+)
+
+# Multi-arch OCI image. distroless/cc base, binary at /usr/local/bin/pylon.
+rust_oci_image(
+    name = "image",
+    base = "@distroless_cc",
+    binary = ":pylon",
+    binary_path = "/usr/local/bin/pylon",
+    tags = ["pylon"],
+    visibility = ["//visibility:public"],
+)
+
+# Entrypoint exec-bit guard. Inspect the assembled image layer and fail
+# if /usr/local/bin/pylon is missing the executable bits. Required by
+# NVCF MR feedback memory feedback_image_entrypoint_exec_bit.
+sh_test(
+    name = "image_entrypoint_mode_test",
+    srcs = ["//src/libraries/rust/stargate/tools/ci:image_entrypoint_mode_test.sh"],
+    args = [
+        "$(location :image_layer)",
+        "/usr/local/bin/pylon",
+    ],
+    data = [":image_layer"],
+)
