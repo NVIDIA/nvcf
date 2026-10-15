@@ -62,7 +62,8 @@ logic into `dsl/`.
   must be publicly reachable by ReVal, expose an `entrypoint` Service on port
   8000, answer `/health`, and echo the request message from `/echo`. Keep the
   chart reference outside the feature so release versions are not hard-coded.
-- The LLM field-fidelity scenario uses `SAMPLE_LLM_ECHO_IMAGE`, an
+- The LLM field-fidelity scenario uses `SAMPLE_LLM_ECHO_IMAGE` (default: the
+  released in-repo sample), an
   OpenAI-compatible sample that replies with the request it received when
   `x_load_tester_echo` is true. Do not point it at the `:local` sample, which
   returns a fixed reply other scenarios assert.

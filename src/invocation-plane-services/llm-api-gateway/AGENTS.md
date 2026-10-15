@@ -30,29 +30,11 @@ gateway image and the rate-limit sync worker image through
 `tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
 present in this public snapshot.
 
-## LLM routing BDD before push
+## LLM routing BDD
 
-For LLM routing or request-handling changes, run the single-cluster Helmfile
-suite before pushing. Also run the multi-cluster Helmfile suite when changing
-cross-cluster routing or transport. Their `@llm-function-type` scenarios cover
-chat streaming, Responses, classic invocation rejection, and unlisted models.
-The scenarios depend on the earlier install steps; run the whole feature.
-
-Read [BDD prerequisites](../../../tests/bdd/README.md) and follow the root
-local QA safety rules before a live run. From the repository root:
-
-```sh
-cd tests/bdd
-go test -short ./...
-golangci-lint run --config .golangci.yml ./...
-go test -run '^TestSingleClusterHelmfile$' -timeout 90m -v
-go test -run '^TestMultiClusterHelmfile$' -timeout 90m -v
-```
-
-Run the live suites one at a time with an approved environment. Anchors exclude
-the fake-runner wiring siblings. A wiring pass does not validate a deployment.
-If a required live run fails or is blocked, stop before pushing and report the
-unvalidated behavior.
+The `@llm-function-type` scenarios in the single- and multi-cluster Helmfile
+features cover LLM routing and request handling. See `tests/bdd/README.md`
+to run them.
 
 ## Local Gotchas
 

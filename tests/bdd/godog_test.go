@@ -2617,8 +2617,19 @@ func TestSingleClusterHelmfile(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live run skipped under -short")
 	}
+	if os.Getenv(sampleLLMEchoImageEnv) == "" {
+		t.Setenv(sampleLLMEchoImageEnv, "nvcr.io/"+os.Getenv("SAMPLE_NGC_ORG")+"/"+os.Getenv("SAMPLE_NGC_TEAM")+"/"+sampleLLMEchoDefaultImage)
+	}
 	runLiveFeature(t, "single-cluster-helmfile.feature")
 }
+
+// sampleLLMEchoImageEnv selects the OpenAI-compatible sample the LLM
+// field-fidelity scenario deploys. It defaults to the released in-repo sample
+// under the sample registry org and team.
+const (
+	sampleLLMEchoImageEnv     = "SAMPLE_LLM_ECHO_IMAGE"
+	sampleLLMEchoDefaultImage = "nvcf-openai-compatible-sample:5.1.0"
+)
 
 // TestSingleClusterHA is the live entry point for the high-availability
 // Helmfile feature on the single-cluster ncp-local topology. Skipped under
