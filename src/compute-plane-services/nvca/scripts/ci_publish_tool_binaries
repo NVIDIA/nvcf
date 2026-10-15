@@ -1,37 +1,50 @@
 #!/usr/bin/env bash
+#
+# Publishes the Bazel-built tool binaries (discover-gpus,
+# export-cluster-pubkeys) to the GitLab generic package registry.
+# Replaces the legacy flow that extracted binaries out of the byocdev
+# tools docker image; with Bazel owning the tools image, we build the
+# binaries directly and upload from bazel-bin.
+#
+# Required env:
+#   PACKAGE_API_URL       e.g. ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages
+#   PACKAGE_REGISTRY_URL  e.g. ${PACKAGE_API_URL}/generic/${CI_PROJECT_NAME}
+#   CI_JOB_TOKEN          GitLab-provided job token
+#   EGX_VERSION           version string used as the package version
+#
+# Optional env:
+#   BAZEL_REMOTE_FLAGS, BAZEL_DISK_CACHE, BAZEL_REPO_CACHE  (passed through if set)
 
 set -euo pipefail
 
-: ${PACKAGE_API_URL}
-: ${PACKAGE_REGISTRY_URL}
-: ${CI_JOB_TOKEN}
-: ${TOOLS_IMAGE}
+: "${PACKAGE_API_URL}"
+: "${PACKAGE_REGISTRY_URL}"
+: "${CI_JOB_TOKEN}"
+: "${EGX_VERSION}"
 
-rm -rf ./_output/docker/tools-dist/
-mkdir -p ./_output/docker/
+binaries=(
+  "//cmd/discover-gpus:discover-gpus"
+  "//cmd/export-cluster-pubkeys:export-cluster-pubkeys"
+)
 
-nv_docker_extract ${TOOLS_IMAGE} /usr/dist/ ./_output/docker/tools-dist
+bazel build \
+  ${BAZEL_REMOTE_FLAGS:-} \
+  ${BAZEL_DISK_CACHE:+--disk_cache=$BAZEL_DISK_CACHE} \
+  ${BAZEL_REPO_CACHE:+--repository_cache=$BAZEL_REPO_CACHE} \
+  "${binaries[@]}"
 
-cd ./_output/docker/tools-dist/
-
-TOOLS_VERSION=$(echo $TOOLS_IMAGE | awk -F: '{print $2}')
-
-# echo "Finding package ID at version '${TOOLS_VERSION}'"
-# PACKAGE_ID=$(curl -s -H "JOB-TOKEN: ${CI_JOB_TOKEN}" "$PACKAGE_API_URL" | jq -r ".[] | select(.version==\"$TOOLS_VERSION\").id")
-
-# if [ -n "$PACKAGE_ID" ]; then
-#   echo "Deleting potentially existing package for ID '${PACKAGE_ID}'"
-#   curl -sSL -X DELETE \
-#     -H "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-#     "${PACKAGE_API_URL}/${PACKAGE_ID}"
-# fi
-
-for f in `find . -type f -printf '%P\n' | xargs grep -IL . | sort`; do
-  b=$(dirname "$f")
-  b=${b%%"_v1"}
-  echo -e "\nUploading $f to package registry as $b"
-  curl -sSL \
+for target in "${binaries[@]}"; do
+  name=${target##*:}
+  binpath="bazel-bin/cmd/${name}/${name}_/${name}"
+  if [ ! -x "${binpath}" ]; then
+    echo "expected bazel output not found: ${binpath}" >&2
+    exit 1
+  fi
+  upload_url="${PACKAGE_REGISTRY_URL}/${EGX_VERSION}/${name}"
+  echo "Uploading ${name} (${binpath}) -> ${upload_url}"
+  curl --fail --silent --show-error \
     -H "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-    --upload-file "$f" \
-    "${PACKAGE_REGISTRY_URL}/${TOOLS_VERSION}/${b}"
+    --upload-file "${binpath}" \
+    "${upload_url}"
+  echo
 done

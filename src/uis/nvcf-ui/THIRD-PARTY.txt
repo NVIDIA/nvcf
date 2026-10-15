@@ -1,0 +1,624 @@
+NVCF UI — Third-Party Notices and Attributions
+===============================================
+
+This file lists all open-source components bundled or distributed with
+NVCF UI, the licenses under which they are used, and any applicable
+notices. NVIDIA copyright notices are included per NOTICE and per
+per-file SPDX headers throughout the source tree.
+
+-------------------------------------------------------------------------------
+NVIDIA CORPORATION & AFFILIATES
+-------------------------------------------------------------------------------
+
+NVCF UI
+Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+Licensed under the Apache License, Version 2.0 — see LICENSE.
+
+-------------------------------------------------------------------------------
+Go Backend Dependencies
+-------------------------------------------------------------------------------
+
+github.com/beorn7/perks
+  Version:  v1.0.1
+  License:  MIT
+  Homepage: https://github.com/beorn7/perks
+  Notice:   Copyright 2012-2015 The Prometheus Authors
+            Copyright 2013-2015 Blake Mizerany, Björn Rabenstein
+            Copyright 2010 The Go Authors
+            Copyright 2013 Matt T. Proud (BSD-style)
+
+github.com/cespare/xxhash/v2
+  Version:  v2.3.0
+  License:  MIT
+  Homepage: https://github.com/cespare/xxhash
+
+github.com/davecgh/go-spew
+  Version:  v1.1.2-0.20180830191138-d8f796af33cc
+  License:  ISC
+  Homepage: https://github.com/davecgh/go-spew
+  Notice:   Copyright (c) 2012-2016 Dave Collins <dave@davec.name>
+
+github.com/emicklei/go-restful/v3
+  Version:  v3.13.0
+  License:  MIT
+  Homepage: https://github.com/emicklei/go-restful
+
+github.com/evanphx/json-patch/v5
+  Version:  v5.9.11
+  License:  BSD-3-Clause
+  Homepage: https://github.com/evanphx/json-patch
+  Notice:   Copyright (c) 2014, Evan Phoenix
+
+github.com/fsnotify/fsnotify
+  Version:  v1.10.1
+  License:  BSD-3-Clause
+  Homepage: https://github.com/fsnotify/fsnotify
+  Notice:   Copyright (c) 2012 The Go Authors. All rights reserved.
+            Copyright (c) 2012-2019 fsnotify Authors. All rights reserved.
+
+github.com/fxamacker/cbor/v2
+  Version:  v2.9.0
+  License:  MIT
+  Homepage: https://github.com/fxamacker/cbor
+
+github.com/go-logr/logr
+  Version:  v1.4.3
+  License:  Apache-2.0
+  Homepage: https://github.com/go-logr/logr
+
+github.com/go-openapi/jsonpointer
+  Version:  v0.21.0
+  License:  Apache-2.0
+  Homepage: https://github.com/go-openapi/jsonpointer
+
+github.com/go-openapi/jsonreference
+  Version:  v0.20.2
+  License:  Apache-2.0
+  Homepage: https://github.com/go-openapi/jsonreference
+
+github.com/go-openapi/swag
+  Version:  v0.23.0
+  License:  Apache-2.0
+  Homepage: https://github.com/go-openapi/swag
+
+github.com/google/gnostic-models
+  Version:  v0.7.0
+  License:  Apache-2.0
+  Homepage: https://github.com/google/gnostic
+
+github.com/google/uuid
+  Version:  v1.6.0
+  License:  BSD-3-Clause
+  Homepage: https://github.com/google/uuid
+  Notice:   Copyright (c) 2018 Google Inc. All rights reserved.
+
+github.com/josharian/intern
+  Version:  v1.0.0
+  License:  MIT
+  Homepage: https://github.com/josharian/intern
+
+github.com/json-iterator/go
+  Version:  v1.1.12
+  License:  MIT
+  Homepage: https://github.com/json-iterator/go
+
+github.com/mailru/easyjson
+  Version:  v0.7.7
+  License:  MIT
+  Homepage: https://github.com/mailru/easyjson
+
+github.com/mattn/go-colorable
+  Version:  v0.1.14
+  License:  MIT
+  Homepage: https://github.com/mattn/go-colorable
+  Notice:   Copyright (c) 2016 Yasuhiro Matsumoto
+
+github.com/mattn/go-isatty
+  Version:  v0.0.20
+  License:  MIT
+  Homepage: https://github.com/mattn/go-isatty
+  Notice:   Copyright (c) Yasuhiro MATSUMOTO <mattn.jp@gmail.com>
+
+github.com/modern-go/concurrent
+  Version:  v0.0.0-20180306012644-bacd9c7ef1dd
+  License:  Apache-2.0
+  Homepage: https://github.com/modern-go/concurrent
+
+github.com/modern-go/reflect2
+  Version:  v1.0.3-0.20250322232337-35a7c28c31ee
+  License:  Apache-2.0
+  Homepage: https://github.com/modern-go/reflect2
+
+github.com/munnerz/goautoneg
+  Version:  v0.0.0-20191010083416-a7dc8b61c822
+  License:  BSD-3-Clause
+  Homepage: https://github.com/munnerz/goautoneg
+
+github.com/pmezard/go-difflib
+  Version:  v1.0.1-0.20181226105442-5d4384ee4fb2
+  License:  BSD-3-Clause
+  Homepage: https://github.com/pmezard/go-difflib
+
+github.com/prometheus/client_golang
+  Version:  v1.23.2
+  License:  Apache-2.0
+  Homepage: https://github.com/prometheus/client_golang
+  Notice:   Copyright 2012-2015 The Prometheus Authors
+            Copyright 2013-2015 Blake Mizerany, Björn Rabenstein
+            Copyright 2010 The Go Authors
+            Copyright 2013 Matt T. Proud (BSD-style)
+
+github.com/prometheus/client_model
+  Version:  v0.6.2
+  License:  Apache-2.0
+  Homepage: https://github.com/prometheus/client_model
+
+github.com/prometheus/common
+  Version:  v0.67.5
+  License:  Apache-2.0
+  Homepage: https://github.com/prometheus/common
+
+github.com/prometheus/procfs
+  Version:  v0.19.2
+  License:  Apache-2.0
+  Homepage: https://github.com/prometheus/procfs
+  Notice:   Copyright 2014-2015 The Prometheus Authors
+
+github.com/rs/xid
+  Version:  v1.6.0
+  License:  MIT
+  Homepage: https://github.com/rs/xid
+
+github.com/rs/zerolog
+  Version:  v1.35.1
+  License:  MIT
+  Homepage: https://github.com/rs/zerolog
+
+github.com/spf13/pflag
+  Version:  v1.0.9
+  License:  BSD-3-Clause
+  Homepage: https://github.com/spf13/pflag
+  Notice:   Copyright (c) 2012 Alex Ogier. All rights reserved.
+            Copyright (c) 2012 The Go Authors. All rights reserved.
+
+github.com/x448/float16
+  Version:  v0.8.4
+  License:  MIT
+  Homepage: https://github.com/x448/float16
+
+go.yaml.in/yaml/v2
+  Version:  v2.4.3
+  License:  MIT and Apache-2.0
+  Homepage: https://github.com/go-yaml/yaml
+
+go.yaml.in/yaml/v3
+  Version:  v3.0.4
+  License:  MIT and Apache-2.0
+  Homepage: https://github.com/go-yaml/yaml
+
+golang.org/x/net
+  Version:  v0.49.0
+  License:  BSD-3-Clause
+  Homepage: https://golang.org/x/net
+  Notice:   Copyright (c) 2009 The Go Authors. All rights reserved.
+
+golang.org/x/oauth2
+  Version:  v0.34.0
+  License:  BSD-3-Clause
+  Homepage: https://golang.org/x/oauth2
+
+golang.org/x/sync
+  Version:  v0.19.0
+  License:  BSD-3-Clause
+  Homepage: https://golang.org/x/sync
+
+golang.org/x/sys
+  Version:  v0.40.0
+  License:  BSD-3-Clause
+  Homepage: https://golang.org/x/sys
+
+golang.org/x/term
+  Version:  v0.39.0
+  License:  BSD-3-Clause
+  Homepage: https://golang.org/x/term
+
+golang.org/x/text
+  Version:  v0.33.0
+  License:  BSD-3-Clause
+  Homepage: https://golang.org/x/text
+
+golang.org/x/time
+  Version:  v0.14.0
+  License:  BSD-3-Clause
+  Homepage: https://golang.org/x/time
+
+gomodules.xyz/jsonpatch/v2
+  Version:  v2.4.0
+  License:  Apache-2.0
+  Homepage: https://github.com/gomodules/jsonpatch
+
+google.golang.org/protobuf
+  Version:  v1.36.12-0.20260120151049-f2248ac996af
+  License:  BSD-3-Clause
+  Homepage: https://github.com/protocolbuffers/protobuf-go
+  Notice:   Copyright (c) 2018 The Go Authors. All rights reserved.
+
+gopkg.in/evanphx/json-patch.v4
+  Version:  v4.13.0
+  License:  BSD-3-Clause
+  Homepage: https://github.com/evanphx/json-patch
+
+gopkg.in/inf.v0
+  Version:  v0.9.1
+  License:  BSD-3-Clause
+  Homepage: https://github.com/go-inf/inf
+
+gopkg.in/yaml.v3
+  Version:  v3.0.1
+  License:  MIT and Apache-2.0
+  Homepage: https://github.com/go-yaml/yaml
+
+k8s.io/api
+  Version:  v0.36.0
+  License:  Apache-2.0
+  Homepage: https://github.com/kubernetes/api
+  Notice:   Copyright 2014 The Kubernetes Authors.
+
+k8s.io/apimachinery
+  Version:  v0.36.0
+  License:  Apache-2.0
+  Homepage: https://github.com/kubernetes/apimachinery
+  Notice:   Copyright 2014 The Kubernetes Authors.
+
+k8s.io/apiextensions-apiserver
+  Version:  v0.36.0
+  License:  Apache-2.0
+  Homepage: https://github.com/kubernetes/apiextensions-apiserver
+  Notice:   Copyright 2017 The Kubernetes Authors.
+
+k8s.io/client-go
+  Version:  v0.36.0
+  License:  Apache-2.0
+  Homepage: https://github.com/kubernetes/client-go
+  Notice:   Copyright 2014 The Kubernetes Authors.
+
+k8s.io/klog/v2
+  Version:  v2.140.0
+  License:  Apache-2.0
+  Homepage: https://github.com/kubernetes/klog
+
+k8s.io/kube-openapi
+  Version:  v0.0.0-20260317180543-43fb72c5454a
+  License:  Apache-2.0
+  Homepage: https://github.com/kubernetes/kube-openapi
+  Notice:   Copyright 2016 The Kubernetes Authors.
+
+k8s.io/utils
+  Version:  v0.0.0-20260210185600-b8788abfbbc2
+  License:  Apache-2.0
+  Homepage: https://github.com/kubernetes/utils
+
+sigs.k8s.io/controller-runtime
+  Version:  v0.24.1
+  License:  Apache-2.0
+  Homepage: https://github.com/kubernetes-sigs/controller-runtime
+  Notice:   Copyright 2018 The Kubernetes Authors.
+
+sigs.k8s.io/json
+  Version:  v0.0.0-20250730193827-2d320260d730
+  License:  Apache-2.0 and BSD-3-Clause
+  Homepage: https://github.com/kubernetes-sigs/json
+
+sigs.k8s.io/randfill
+  Version:  v1.0.0
+  License:  Apache-2.0 and BSD-3-Clause
+  Homepage: https://github.com/kubernetes-sigs/randfill
+
+sigs.k8s.io/structured-merge-diff/v6
+  Version:  v6.3.2
+  License:  Apache-2.0
+  Homepage: https://github.com/kubernetes-sigs/structured-merge-diff
+
+sigs.k8s.io/yaml
+  Version:  v1.6.0
+  License:  MIT and Apache-2.0
+  Homepage: https://github.com/kubernetes-sigs/yaml
+
+-------------------------------------------------------------------------------
+UI (Node.js / npm) Dependencies
+-------------------------------------------------------------------------------
+
+@biomejs/biome
+  Version:  2.4.5
+  License:  MIT and Apache-2.0
+  Homepage: https://biomejs.dev
+
+@faker-js/faker
+  Version:  ^10.4.0
+  License:  MIT
+  Homepage: https://fakerjs.dev
+
+@nvidia/foundations-react-core
+  Version:  ^1.7.0
+  License:  NVIDIA Proprietary
+  Homepage: https://www.nvidia.com
+  Notice:   Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+            Distributed under NVIDIA's software license agreement.
+
+@nvidia/foundations-tailwind-plugin
+  Version:  ^1.7.0
+  License:  NVIDIA Proprietary
+  Homepage: https://www.nvidia.com
+  Notice:   Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+            Distributed under NVIDIA's software license agreement.
+
+@tailwindcss/typography
+  Version:  ^0.5.16
+  License:  MIT
+  Homepage: https://github.com/tailwindlabs/tailwindcss-typography
+  Notice:   Copyright (c) Tailwind Labs, Inc.
+
+@tailwindcss/vite
+  Version:  ^4.1.18
+  License:  MIT
+  Homepage: https://tailwindcss.com
+
+@tanstack/react-devtools
+  Version:  latest
+  License:  MIT
+  Homepage: https://tanstack.com
+
+@tanstack/react-query
+  Version:  ^5.100.1
+  License:  MIT
+  Homepage: https://tanstack.com/query
+  Notice:   Copyright (c) 2021-present Tanner Linsley
+
+@tanstack/react-query-devtools
+  Version:  ^5.100.0
+  License:  MIT
+  Homepage: https://tanstack.com/query
+
+@tanstack/react-router
+  Version:  latest
+  License:  MIT
+  Homepage: https://tanstack.com/router
+  Notice:   Copyright (c) 2021-present Tanner Linsley
+
+@tanstack/react-router-devtools
+  Version:  latest
+  License:  MIT
+  Homepage: https://tanstack.com/router
+
+@tanstack/react-table
+  Version:  ^8.21.3
+  License:  MIT
+  Homepage: https://tanstack.com/table
+  Notice:   Copyright (c) 2021-present Tanner Linsley
+
+@tanstack/devtools-vite
+  Version:  latest
+  License:  MIT
+  Homepage: https://tanstack.com
+
+@testing-library/dom
+  Version:  ^10.4.1
+  License:  MIT
+  Homepage: https://testing-library.com
+  Notice:   Copyright (c) 2017-present Kent C. Dodds
+
+@testing-library/jest-dom
+  Version:  ^6.9.1
+  License:  MIT
+  Homepage: https://github.com/testing-library/jest-dom
+
+@testing-library/react
+  Version:  ^16.3.0
+  License:  MIT
+  Homepage: https://testing-library.com/react
+
+@testing-library/user-event
+  Version:  ^14.6.1
+  License:  MIT
+  Homepage: https://github.com/testing-library/user-event
+
+@types/lodash-es
+  Version:  ^4.17.12
+  License:  MIT
+  Homepage: https://github.com/DefinitelyTyped/DefinitelyTyped
+
+@types/node
+  Version:  ^22.10.2
+  License:  MIT
+  Homepage: https://github.com/DefinitelyTyped/DefinitelyTyped
+
+@types/react
+  Version:  ^19.2.0
+  License:  MIT
+  Homepage: https://github.com/DefinitelyTyped/DefinitelyTyped
+
+@types/react-dom
+  Version:  ^19.2.0
+  License:  MIT
+  Homepage: https://github.com/DefinitelyTyped/DefinitelyTyped
+
+@vitejs/plugin-react
+  Version:  ^6.0.1
+  License:  MIT
+  Homepage: https://github.com/vitejs/vite-plugin-react
+
+@vitest/coverage-v8
+  Version:  4.1.5
+  License:  MIT
+  Homepage: https://vitest.dev
+
+clsx
+  Version:  ^2.1.1
+  License:  MIT
+  Homepage: https://github.com/lukeed/clsx
+  Notice:   Copyright (c) Luke Edwards <luke.edwards05@gmail.com> (lukeed.com)
+
+dayjs
+  Version:  ^1.11.21
+  License:  MIT
+  Homepage: https://day.js.org
+  Notice:   Copyright (c) 2018-present, iamkun
+
+happy-dom
+  Version:  ^20.9.0
+  License:  MIT
+  Homepage: https://github.com/capricorn86/happy-dom
+
+lodash-es
+  Version:  ^4.18.1
+  License:  MIT
+  Homepage: https://lodash.com
+  Notice:   Copyright OpenJS Foundation and other contributors <https://openjsf.org/>
+            Based on Underscore.js, copyright Jeremy Ashkenas,
+            DocumentCloud and Investigative Reporters & Editors <http://underscorejs.org/>
+
+lucide-react
+  Version:  ^1.3.0
+  License:  ISC
+  Homepage: https://lucide.dev
+  Notice:   Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022
+            as part of Feather (MIT). All other copyright (c) for Lucide are held
+            by Lucide Contributors 2022.
+
+msw
+  Version:  ^2.13.6
+  License:  MIT
+  Homepage: https://mswjs.io
+  Notice:   Copyright (c) 2018-present Artem Zakharchenko
+
+orval
+  Version:  ^8.9.0
+  License:  MIT
+  Homepage: https://orval.dev
+
+react
+  Version:  ^19.2.0
+  License:  MIT
+  Homepage: https://react.dev
+  Notice:   Copyright (c) Meta Platforms, Inc. and affiliates.
+
+react-dom
+  Version:  ^19.2.0
+  License:  MIT
+  Homepage: https://react.dev
+  Notice:   Copyright (c) Meta Platforms, Inc. and affiliates.
+
+react-error-boundary
+  Version:  ^6.1.2
+  License:  MIT
+  Homepage: https://github.com/bvaughn/react-error-boundary
+  Notice:   Copyright (c) 2022 Brian Vaughn
+
+rollup-plugin-visualizer
+  Version:  ^7.0.1
+  License:  MIT
+  Homepage: https://github.com/btd/rollup-plugin-visualizer
+
+tailwindcss
+  Version:  ^4.1.18
+  License:  MIT
+  Homepage: https://tailwindcss.com
+  Notice:   Copyright (c) Tailwind Labs, Inc.
+
+typescript
+  Version:  ^5.7.2
+  License:  Apache-2.0
+  Homepage: https://www.typescriptlang.org
+  Notice:   Copyright (c) Microsoft Corporation. All rights reserved.
+
+vite
+  Version:  ^8.0.0
+  License:  MIT
+  Homepage: https://vite.dev
+  Notice:   Copyright (c) 2019-present, VoidZero Inc. and Vite contributors
+
+vitest
+  Version:  ^4.1.5
+  License:  MIT
+  Homepage: https://vitest.dev
+  Notice:   Copyright (c) 2021-present Matias Capeletto, Antfu and Vitest
+            contributors
+
+zod
+  Version:  ^4.3.6
+  License:  MIT
+  Homepage: https://zod.dev
+  Notice:   Copyright (c) 2020 Colin McDonnell
+
+-------------------------------------------------------------------------------
+Build System and Container Tooling
+-------------------------------------------------------------------------------
+
+Bazel / Bazelisk
+  License:  Apache-2.0
+  Homepage: https://bazel.build
+  Notice:   Copyright 2016 The Bazel Authors. All rights reserved.
+
+rules_oci
+  Version:  2.2.7
+  License:  Apache-2.0
+  Homepage: https://github.com/bazel-contrib/rules_oci
+
+rules_pkg
+  Version:  1.2.0
+  License:  Apache-2.0
+  Homepage: https://github.com/bazelbuild/rules_pkg
+  Notice:   Copyright 2021 The Bazel Authors. All rights reserved.
+
+rules_go
+  Version:  0.60.0
+  License:  Apache-2.0
+  Homepage: https://github.com/bazel-contrib/rules_go
+  Notice:   Copyright 2014 The Bazel Authors. All rights reserved.
+
+gazelle
+  Version:  0.48.0
+  License:  Apache-2.0
+  Homepage: https://github.com/bazelbuild/bazel-gazelle
+  Notice:   Copyright 2017 The Bazel Authors. All rights reserved.
+
+aspect_bazel_lib
+  Version:  2.22.5
+  License:  Apache-2.0
+  Homepage: https://github.com/aspect-build/bazel-lib
+
+hermetic_cc_toolchain
+  Version:  4.1.0
+  License:  Apache-2.0
+  Homepage: https://github.com/uber/hermetic_cc_toolchain
+
+platforms
+  Version:  1.0.0
+  License:  Apache-2.0
+  Homepage: https://github.com/bazelbuild/platforms
+  Notice:   Copyright 2019 The Bazel Authors. All rights reserved.
+
+rules_python
+  Version:  1.4.1
+  License:  Apache-2.0
+  Homepage: https://github.com/bazelbuild/rules_python
+  Notice:   Copyright 2017 The Bazel Authors. All rights reserved.
+
+distroless/static
+  License:  Apache-2.0
+  Homepage: https://github.com/GoogleContainerTools/distroless
+  Notice:   Copyright 2017 Google Inc. All rights reserved.
+
+-------------------------------------------------------------------------------
+License Texts
+-------------------------------------------------------------------------------
+
+Full license texts for all licenses referenced above are available at:
+
+  Apache-2.0  — https://www.apache.org/licenses/LICENSE-2.0
+  MIT         — https://opensource.org/licenses/MIT
+  BSD-3-Clause — https://opensource.org/licenses/BSD-3-Clause
+  ISC         — https://opensource.org/licenses/ISC
+
+NVIDIA proprietary components are distributed under NVIDIA's software
+license agreement and are not open-source. Contact NVIDIA for terms.

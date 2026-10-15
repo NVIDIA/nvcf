@@ -46,6 +46,28 @@ type TemplateConfig struct {
 	TaskID            string
 	InstanceID        string
 	ZoneName          string
+	LogChunking       LogChunkingConfig
+	MetricSubset      MetricSubsetConfig
+	WorkloadMetrics   WorkloadMetricsConfig
+	OTelCollector     OTelCollectorConfig
+	DebugMode         bool
+}
+
+type LogChunkingConfig struct {
+	Enabled         bool
+	MaxPayloadBytes int
+	// Deprecated: use MaxPayloadBytes.
+	MaxBodyBytes int
+	DryRun       bool
+}
+
+type WorkloadMetricsConfig struct {
+	DropLabels []string
+}
+
+type MetricSubsetConfig struct {
+	Enabled      bool
+	FilterConfig map[string]interface{}
 }
 
 func ExecuteTemplate(w io.Writer, tcfg TemplateConfig) error {

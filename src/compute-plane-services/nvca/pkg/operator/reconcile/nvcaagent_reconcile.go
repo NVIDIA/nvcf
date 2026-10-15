@@ -38,6 +38,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/sirupsen/logrus"
+	yamlv3 "gopkg.in/yaml.v3"
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -51,6 +52,8 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	nvcaoperatorerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/errors"
@@ -94,9 +97,15 @@ const (
 	nvcfCustomNetworkPolicyPrefix          = "nvcf-custom-"
 	nvcfBackendHelmManagedConfigMapName    = "nvcfbackend-helm-managed"
 	nvcfBackendSelfManagedConfigMapName    = "nvcfbackend-self-managed"
+	nvcfBackendChartDefaultsConfigMapName  = "nvcfbackend-chart-defaults"
 
 	//nolint:gosec // G101: This is a ConfigMap name, not a credential
 	nvcfCustomAnnotationsConfigMapName = "nvca-namespace-pod-annotations"
+
+	// nvcfGPUProfilingConfigMapName is the operator-managed GPU-profiling ConfigMap. The chart
+	// creates it at deploy/upgrade time and the operator mirrors it into the agent namespace;
+	// optional (absent = profiling off). Must match profiling.ConfigMapName.
+	nvcfGPUProfilingConfigMapName = "nvca-gpu-profiling-config"
 
 	// BYOO Prometheus egress policy
 	EgressBYOOOTelPrometheusNetworkPolicyNameKey = "allow-egress-prometheus-nvcf-byoo"
@@ -112,12 +121,14 @@ const (
 	SrvCertsMountDir           = "/certs/server"
 	CACertsMountDir            = "/certs/ca"
 
-	agentConfigDir                = "/var/run/nvca"
-	agentConfigFile               = "config.yaml"
-	agentConfigFilePath           = agentConfigDir + "/" + agentConfigFile
-	agentConfigConfigMapName      = "agent-config"
-	agentConfigMergeConfigMapName = "agent-config-merge"
-	agentConfigVolumeName         = "agent-config"
+	agentConfigDir                   = "/var/run/nvca"
+	agentConfigFile                  = "config.yaml"
+	agentConfigFilePath              = agentConfigDir + "/" + agentConfigFile
+	agentConfigConfigMapName         = "agent-config"
+	agentConfigMergeConfigMapName    = "agent-config-merge"
+	nvcaOperatorConfigMapName        = "nvca-operator-config"
+	agentConfigVolumeName            = "agent-config"
+	legacyFirstClassConfigAnnotation = "nvcf.nvidia.com/legacy-first-class-config"
 
 	// ReVal config.
 	ReValCacheVolumeName = "reval-rendered-helmcharts"
@@ -485,7 +496,11 @@ func (bc *BackendK8sCache) validateNVCFBackendParams(ctx context.Context, nb *nv
 	return nil
 }
 
-func (bc *BackendK8sCache) setupNVCAAgentInfra(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
+func (bc *BackendK8sCache) setupNVCAAgentInfra(
+	ctx context.Context,
+	nb *nvidiaiov1.NVCFBackend,
+	desiredAgentConfigCM *corev1.ConfigMap,
+) error {
 	var err error
 	log := core.GetLogger(ctx)
 	log.Infof("setting-up NVCAAgent infra %v", nvcaoptypes.NVCAModuleName)
@@ -512,11 +527,7 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(ctx context.Context, nb *nvidiaio
 			nb.Namespace, nb.Name, err)
 	}
 
-	agentCfg, err := bc.newAgentConfig(ctx, nb)
-	if err != nil {
-		return err
-	}
-	if err := bc.setupAgentConfigConfigMap(ctx, nb, agentCfg); err != nil {
+	if err := bc.setupAgentConfigConfigMap(ctx, desiredAgentConfigCM); err != nil {
 		return fmt.Errorf("failed to setup agent config ConfigMap: %w", err)
 	}
 
@@ -533,9 +544,9 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(ctx context.Context, nb *nvidiaio
 			nb.Namespace, nb.Name, err)
 	}
 
-	webhookCert, err := generateWebhookCerts(nb, bc.now())
+	webhookCert, err := bc.ensureWebhookCert(ctx, nb, bc.now())
 	if err != nil {
-		return fmt.Errorf("failed to create webhookCerts, err: %w", err)
+		return fmt.Errorf("failed to ensure webhookCerts, err: %w", err)
 	}
 
 	if err := bc.setupWebhookSecrets(ctx, nb, webhookCert); err != nil {
@@ -569,6 +580,12 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(ctx context.Context, nb *nvidiaio
 	err = bc.mirrorConfigMap(ctx, nb, nvcfCustomAnnotationsConfigMapName)
 	if err != nil {
 		return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", nvcfCustomAnnotationsConfigMapName,
+			nb.Namespace, nb.Name, err)
+	}
+
+	err = bc.setupGPUProfilingConfigMap(ctx, nb)
+	if err != nil {
+		return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", nvcfGPUProfilingConfigMapName,
 			nb.Namespace, nb.Name, err)
 	}
 
@@ -786,6 +803,19 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 				ResourceNames: []string{nvcaoptypes.NVCAModuleName},
 				Verbs:         []string{"get", "list", "watch"},
 			},
+			// NvSnap integration (PR-3 + PR-5): NVCA agent reads and
+			// writes NvSnapFunctionState — cluster-scoped CRD that tracks
+			// per-function-version checkpoint state. Read in Hook A to
+			// decide whether to stamp nvsnap.io/restore-from at pod
+			// apply; written by Hook B's reconciler after a successful
+			// checkpoint. The integration is gated behind
+			// featureflag.NvSnapCheckpointRestore (default off), so this
+			// rule is dormant until that flag is enabled on a cluster.
+			{
+				APIGroups: []string{"nvsnap.nvcf.nvidia.io"},
+				Resources: []string{"nvsnapfunctionstates", "nvsnapfunctionstates/status"},
+				Verbs:     crudVerbs,
+			},
 		},
 	}
 
@@ -871,6 +901,11 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 				APIGroups: []string{"nvca.nvcf.nvidia.io"},
 				Resources: []string{"miniservices", "miniservices/status"},
 				Verbs:     crudVerbs,
+			},
+			{
+				APIGroups: []string{"run.ai"},
+				Resources: []string{"kartas"},
+				Verbs:     readOnlyVerbs,
 			},
 		}
 
@@ -962,6 +997,31 @@ func (bc *BackendK8sCache) mirrorConfigMap(ctx context.Context, nb *nvidiaiov1.N
 	cmTemplate := corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      srcName,
+			Namespace: getSystemNamespace(nb),
+		},
+		Data: srcCM.Data,
+	}
+	return bc.createOrUpdateConfigMap(ctx, &cmTemplate)
+}
+
+// setupGPUProfilingConfigMap mirrors the chart-created nvca-gpu-profiling-config ConfigMap
+// into the agent's system namespace, where NVCA reads it live. Unlike mirrorConfigMap it is
+// optional: an absent source is skipped (profiling stays off) rather than failing reconcile.
+func (bc *BackendK8sCache) setupGPUProfilingConfigMap(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
+	log := core.GetLogger(ctx)
+
+	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get(ctx, nvcfGPUProfilingConfigMapName, metav1.GetOptions{})
+	if err != nil {
+		if k8serr.IsNotFound(err) {
+			log.Debugf("%v configmap not found, skipping GPU profiling config mirror", nvcfGPUProfilingConfigMapName)
+			return nil
+		}
+		return err
+	}
+
+	cmTemplate := corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      nvcfGPUProfilingConfigMapName,
 			Namespace: getSystemNamespace(nb),
 		},
 		Data: srcCM.Data,
@@ -1232,20 +1292,32 @@ func (bc *BackendK8sCache) setupOAuthClientIDSecret(ctx context.Context, nb *nvi
 
 func (bc *BackendK8sCache) setupAgentConfigConfigMap(
 	ctx context.Context,
-	nb *nvidiaiov1.NVCFBackend,
-	cfg nvcaconfig.Config,
+	cm *corev1.ConfigMap,
 ) error {
+	return bc.createOrUpdateConfigMap(ctx, cm)
+}
+
+// newAgentConfigConfigMap generates and maps the NVCA configuration resource
+// to the ConfigMap consumed by the agent. Callers reuse the resulting ConfigMap
+// for both rollout comparison and setup so source data is read once per sync.
+func (bc *BackendK8sCache) newAgentConfigConfigMap(
+	ctx context.Context,
+	nb *nvidiaiov1.NVCFBackend,
+) (*corev1.ConfigMap, error) {
+	cfg, err := bc.newAgentConfig(ctx, nb)
+	if err != nil {
+		return nil, nvcaoperatorerrors.FatalError(err)
+	}
 	mergeCfg, _, err := bc.getAgentConfigToMerge(ctx)
 	if err != nil {
-		return fmt.Errorf("get agent config to merge: %w", err)
+		return nil, fmt.Errorf("get agent config to merge: %w", err)
 	}
-
-	cb, err := encodeAgentConfig(cfg, mergeCfg, nb.Spec.AgentConfig.NATSURL)
+	cb, err := encodeAgentConfig(cfg, mergeCfg, nb.Spec.AgentConfig.NATSURL, agentHostOverrideConfig(nb, bc.envType))
 	if err != nil {
-		return fmt.Errorf("encode config: %v", err)
+		return nil, fmt.Errorf("encode config: %w", err)
 	}
 
-	s := &corev1.ConfigMap{
+	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        agentConfigConfigMapName,
 			Namespace:   getSystemNamespace(nb),
@@ -1255,19 +1327,149 @@ func (bc *BackendK8sCache) setupAgentConfigConfigMap(
 		Data: map[string]string{
 			agentConfigFile: string(cb),
 		},
-	}
-
-	return bc.createOrUpdateConfigMap(ctx, s)
+	}, nil
 }
 
-func encodeAgentConfig(cfg nvcaconfig.Config, mergeCfg nvcaconfig.Config, natsURL *string) ([]byte, error) {
+type agentHostOverrides struct {
+	ICMSHostHeaderOverride             string
+	HelmReValServiceHostHeaderOverride string
+	NATSHostOverride                   *string
+}
+
+func agentHostOverrideConfig(nb *nvidiaiov1.NVCFBackend, envType nvidiaiov1.EnvType) agentHostOverrides {
+	miniService := nb.Spec.ClusterConfig.MiniService.Complete(envType)
+	reValHost := miniService.HelmReValServiceHostHeaderOverride
+	if usesSelfHostedColocatedReVal(nb) {
+		reValHost = ""
+	}
+	return agentHostOverrides{
+		ICMSHostHeaderOverride:             nb.Spec.ICMSConfig.ICMSServiceHostHeaderOverride,
+		HelmReValServiceHostHeaderOverride: reValHost,
+		NATSHostOverride:                   nb.Spec.AgentConfig.NATSHostOverride,
+	}
+}
+
+func encodeAgentConfig(cfg nvcaconfig.Config, mergeCfg nvcaconfig.Config, natsURL *string, hostOverrides agentHostOverrides) ([]byte, error) {
 	if natsURL != nil && *natsURL != "" {
 		mergeCfg.Agent.NATSURL = *natsURL
 	}
-	return nvcaconfig.EncodeConfig(cfg, mergeCfg)
+
+	b, err := nvcaconfig.EncodeConfig(cfg, mergeCfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return applyAgentHostOverrides(b, hostOverrides)
+}
+
+func applyAgentHostOverrides(data []byte, hostOverrides agentHostOverrides) ([]byte, error) {
+	if hostOverrides.ICMSHostHeaderOverride == "" &&
+		hostOverrides.HelmReValServiceHostHeaderOverride == "" &&
+		(hostOverrides.NATSHostOverride == nil || *hostOverrides.NATSHostOverride == "") {
+		return data, nil
+	}
+
+	var doc yamlv3.Node
+	if err := yamlv3.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+
+	root := &doc
+	if doc.Kind == yamlv3.DocumentNode && len(doc.Content) > 0 {
+		root = doc.Content[0]
+	}
+	if root.Kind != yamlv3.MappingNode {
+		return nil, fmt.Errorf("agent config root is not a mapping")
+	}
+
+	agent := getYAMLMappingValue(root, "agent")
+	if agent == nil {
+		agent = &yamlv3.Node{Kind: yamlv3.MappingNode}
+		root.Content = append(root.Content, yamlStringNode("agent"), agent)
+	}
+	if agent.Kind != yamlv3.MappingNode {
+		return nil, fmt.Errorf("agent config agent section is not a mapping")
+	}
+
+	setYAMLString(agent, "icmsHostHeaderOverride", hostOverrides.ICMSHostHeaderOverride)
+	setYAMLString(agent, "helmReValServiceHostHeaderOverride", hostOverrides.HelmReValServiceHostHeaderOverride)
+	if hostOverrides.NATSHostOverride != nil {
+		setYAMLString(agent, "NATSHostOverride", *hostOverrides.NATSHostOverride)
+	}
+
+	return yamlv3.Marshal(&doc)
+}
+
+func getYAMLMappingValue(node *yamlv3.Node, key string) *yamlv3.Node {
+	if node == nil || node.Kind != yamlv3.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		if node.Content[i].Value == key {
+			return node.Content[i+1]
+		}
+	}
+	return nil
+}
+
+func setYAMLString(node *yamlv3.Node, key, value string) {
+	if value == "" {
+		return
+	}
+	valueNode := yamlStringNode(value)
+	existing := getYAMLMappingValue(node, key)
+	if existing != nil {
+		*existing = *valueNode
+		return
+	}
+	node.Content = append(node.Content, yamlStringNode(key), valueNode)
+}
+
+func yamlStringNode(value string) *yamlv3.Node {
+	return &yamlv3.Node{
+		Kind:  yamlv3.ScalarNode,
+		Tag:   "!!str",
+		Value: value,
+	}
 }
 
 func (bc *BackendK8sCache) getAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
+	mergeCfg, foundMergeCfg, err := bc.getRawAgentConfigToMerge(ctx)
+	if err != nil {
+		return nvcaconfig.Config{}, false, err
+	}
+
+	operatorCfg, foundOperatorCfg, err := bc.getNVCAAgentConfig(ctx)
+	if err != nil {
+		return nvcaconfig.Config{}, false, err
+	}
+	if foundOperatorCfg && mergeCfg.Workload.TransportTLS != nil {
+		return nvcaconfig.Config{}, false,
+			nvcaoperatorerrors.FatalError(
+				fmt.Errorf("agent-config-merge and %s both configure workload.transportTLS", nvcaOperatorConfigMapName))
+	}
+
+	if foundOperatorCfg {
+		mergeCfg.Workload.TransportTLS = operatorCfg.Workload.TransportTLS
+	}
+	if err := validateAgentConfigToMerge(mergeCfg); err != nil {
+		return nvcaconfig.Config{}, false,
+			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid combined NVCA agent configuration: %w", err))
+	}
+	return mergeCfg, foundMergeCfg || foundOperatorCfg, nil
+}
+
+func validateAgentConfigToMerge(cfg nvcaconfig.Config) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if cfg.Workload.TransportTLS == nil {
+		return nil
+	}
+	return transporttls.ValidateConfig(transporttls.NormalizeConfig(*cfg.Workload.TransportTLS))
+}
+
+func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
 	log := core.GetLogger(ctx)
 	cm, err := bc.clients.K8s.CoreV1().ConfigMaps(bc.operatorNamespace).Get(ctx, agentConfigMergeConfigMapName, metav1.GetOptions{})
 	if err != nil {
@@ -1283,7 +1485,32 @@ func (bc *BackendK8sCache) getAgentConfigToMerge(ctx context.Context) (nvcaconfi
 
 	data := cm.Data[agentConfigFile]
 	cfg, err := nvcaconfig.DecodeConfig([]byte(data))
-	return cfg, true, err
+	if err != nil {
+		return nvcaconfig.Config{}, false,
+			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err))
+	}
+	if bc.shouldWarnForLegacyFirstClassConfig(cm) {
+		log.WithFields(logrus.Fields{
+			"configmapNamespace": cm.Namespace,
+			"configmapName":      cm.Name,
+		}).Warn("ConfigMap contains deprecated agentConfig.mergeConfig settings that now have first-class chart values; migrate to the top-level byoo/utils/storage/worker chart values before the next minor release")
+	}
+	return cfg, true, nil
+}
+
+func (bc *BackendK8sCache) shouldWarnForLegacyFirstClassConfig(cm *corev1.ConfigMap) bool {
+	if cm.Annotations[legacyFirstClassConfigAnnotation] != "true" {
+		return false
+	}
+
+	bc.legacyFirstClassConfigWarningMu.Lock()
+	defer bc.legacyFirstClassConfigWarningMu.Unlock()
+	if bc.legacyFirstClassConfigWarningSeen && bc.legacyFirstClassConfigWarningResourceVersion == cm.ResourceVersion {
+		return false
+	}
+	bc.legacyFirstClassConfigWarningResourceVersion = cm.ResourceVersion
+	bc.legacyFirstClassConfigWarningSeen = true
+	return true
 }
 
 func (bc *BackendK8sCache) getImageRegistryServerFromRepo(nb *nvidiaiov1.NVCFBackend) string {
@@ -1510,14 +1737,11 @@ func (bc *BackendK8sCache) mergeAgentConfigs(nb *nvidiaiov1.NVCFBackend) nvidiai
 		WebhookResources:                                       &corev1.ResourceRequirements{},
 		OTelCollectorResources:                                 &corev1.ResourceRequirements{},
 		ByooResources:                                          &corev1.ResourceRequirements{},
+		LLMRequestRouterAddress:                                nb.Spec.AgentConfig.LLMRequestRouterAddress,
 		HelmReValStageOAuthTokenURL:                            nb.Spec.AgentConfig.HelmReValStageOAuthTokenURL,
 		HelmReValStageOAuthPublicKeysetEndpoint:                nb.Spec.AgentConfig.HelmReValStageOAuthPublicKeysetEndpoint,
 		HelmReValProdOAuthTokenURL:                             nb.Spec.AgentConfig.HelmReValProdOAuthTokenURL,
 		HelmReValProdOAuthPublicKeysetEndpoint:                 nb.Spec.AgentConfig.HelmReValProdOAuthPublicKeysetEndpoint,
-		RolloverServiceStageOAuthTokenURL:                      nb.Spec.AgentConfig.RolloverServiceStageOAuthTokenURL,
-		RolloverServiceStageOAuthPublicKeysetEndpoint:          nb.Spec.AgentConfig.RolloverServiceStageOAuthPublicKeysetEndpoint,
-		RolloverServiceProdOAuthTokenURL:                       nb.Spec.AgentConfig.RolloverServiceProdOAuthTokenURL,
-		RolloverServiceProdOAuthPublicKeysetEndpoint:           nb.Spec.AgentConfig.RolloverServiceProdOAuthPublicKeysetEndpoint,
 		FunctionDeploymentStagesStageOAuthTokenURL:             nb.Spec.AgentConfig.FunctionDeploymentStagesStageOAuthTokenURL,
 		FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint: nb.Spec.AgentConfig.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint,
 		FunctionDeploymentStagesProdOAuthTokenURL:              nb.Spec.AgentConfig.FunctionDeploymentStagesProdOAuthTokenURL,
@@ -1531,8 +1755,7 @@ func (bc *BackendK8sCache) mergeAgentConfigs(nb *nvidiaiov1.NVCFBackend) nvidiai
 	// OTel collector config: prefer NVCFBackend spec, fall back to bc.* (Helm env vars)
 	config.OTelCollectorConfig = bc.getEffectiveOTelCollectorConfig(nb)
 
-	// ByooResources comes from NVCFBackend spec (after overrides are merged)
-	// This allows Helm values to override via nvcfBackend.overrides.agent.byooResources
+	// ByooResources from NVCFBackend spec override the generated config when present.
 	if nb.Spec.AgentConfig.ByooResources != nil {
 		nb.Spec.AgentConfig.ByooResources.DeepCopyInto(config.ByooResources)
 	}
@@ -1581,6 +1804,88 @@ func (bc *BackendK8sCache) mergeAgentConfigs(nb *nvidiaiov1.NVCFBackend) nvidiai
 	return config
 }
 
+func resourceRequirementsConfigured(rr corev1.ResourceRequirements) bool {
+	return len(rr.Limits) > 0 || len(rr.Requests) > 0 || len(rr.Claims) > 0
+}
+
+func (bc *BackendK8sCache) getEffectiveAgentConfig(ctx context.Context, nb *nvidiaiov1.NVCFBackend) (nvidiaiov1.AgentConfig, error) {
+	config := bc.mergeAgentConfigs(nb)
+
+	var configMapGetter func(ctx context.Context, name string, opts metav1.GetOptions) (*corev1.ConfigMap, error)
+	if bc.clients != nil && bc.clients.K8s != nil {
+		namespace := bc.operatorNamespace
+		if namespace == "" {
+			namespace = NVCAOperatorNamespace
+		}
+		configMapGetter = bc.clients.K8s.CoreV1().ConfigMaps(namespace).Get
+	}
+
+	chartDefaults, found, err := bc.getChartDefaultAgentConfig(ctx, configMapGetter)
+	if err != nil {
+		log := core.GetLogger(ctx)
+		log.WithError(err).Warn("failed to read chart-default agent config, continuing without service OAuth defaults")
+	} else if found {
+		applyServiceOAuthDefaults(&config, chartDefaults)
+	}
+
+	return config, nil
+}
+
+func (bc *BackendK8sCache) getChartDefaultAgentConfig(
+	ctx context.Context,
+	configMapGetter func(ctx context.Context, name string, opts metav1.GetOptions) (*corev1.ConfigMap, error),
+) (nvidiaiov1.AgentConfig, bool, error) {
+	if configMapGetter == nil {
+		return nvidiaiov1.AgentConfig{}, false, nil
+	}
+
+	cm, err := configMapGetter(ctx, nvcfBackendChartDefaultsConfigMapName, metav1.GetOptions{})
+	if k8serr.IsNotFound(err) {
+		return nvidiaiov1.AgentConfig{}, false, nil
+	}
+	if err != nil {
+		return nvidiaiov1.AgentConfig{}, false, fmt.Errorf("failed to read %s ConfigMap: %w", nvcfBackendChartDefaultsConfigMapName, err)
+	}
+
+	raw := strings.TrimSpace(cm.Data["cluster-dto.yaml"])
+	if raw == "" {
+		return nvidiaiov1.AgentConfig{}, false, nil
+	}
+
+	config, found, err := clustermgmt.AgentConfigFromClusterDTO(ctx, raw)
+	if err != nil {
+		return nvidiaiov1.AgentConfig{}, false, fmt.Errorf("failed to parse %s cluster-dto.yaml: %w", nvcfBackendChartDefaultsConfigMapName, err)
+	}
+	return config, found, nil
+}
+
+func applyServiceOAuthDefaults(config *nvidiaiov1.AgentConfig, defaults nvidiaiov1.AgentConfig) {
+	if config.HelmReValStageOAuthTokenURL == "" {
+		config.HelmReValStageOAuthTokenURL = defaults.HelmReValStageOAuthTokenURL
+	}
+	if config.HelmReValStageOAuthPublicKeysetEndpoint == "" {
+		config.HelmReValStageOAuthPublicKeysetEndpoint = defaults.HelmReValStageOAuthPublicKeysetEndpoint
+	}
+	if config.HelmReValProdOAuthTokenURL == "" {
+		config.HelmReValProdOAuthTokenURL = defaults.HelmReValProdOAuthTokenURL
+	}
+	if config.HelmReValProdOAuthPublicKeysetEndpoint == "" {
+		config.HelmReValProdOAuthPublicKeysetEndpoint = defaults.HelmReValProdOAuthPublicKeysetEndpoint
+	}
+	if config.FunctionDeploymentStagesStageOAuthTokenURL == "" {
+		config.FunctionDeploymentStagesStageOAuthTokenURL = defaults.FunctionDeploymentStagesStageOAuthTokenURL
+	}
+	if config.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint == "" {
+		config.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint = defaults.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint
+	}
+	if config.FunctionDeploymentStagesProdOAuthTokenURL == "" {
+		config.FunctionDeploymentStagesProdOAuthTokenURL = defaults.FunctionDeploymentStagesProdOAuthTokenURL
+	}
+	if config.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint == "" {
+		config.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint = defaults.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint
+	}
+}
+
 // getEffectiveK8sNetworkCIDRs returns the effective K8s network CIDRs to use.
 // It prefers values from the NVCFBackend spec (fetched from NGC API) over static Helm values.
 // This ensures that network policy changes from NGC are properly detected and trigger rollouts.
@@ -1609,7 +1914,11 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 
 	// Get effective config by merging ICMS and local configs
 	nb := original.DeepCopy()
-	nb.Spec.AgentConfig = bc.mergeAgentConfigs(original)
+	agentConfig, err := bc.getEffectiveAgentConfig(ctx, original)
+	if err != nil {
+		return err
+	}
+	nb.Spec.AgentConfig = agentConfig
 
 	volumes := []corev1.Volume{{
 		Name: agentConfigVolumeName,
@@ -1696,6 +2005,16 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 	nvcaContainer.VolumeMounts = append(nvcaContainer.VolumeMounts, corev1.VolumeMount{
 		Name:      ReValCacheVolumeName,
 		MountPath: ReValCacheDir,
+	})
+
+	// Tell the agent which namespace the cluster-validator writes its
+	// summary ConfigMap to (the operator/validator namespace), so the
+	// agent's metrics reconciler watches the right namespace. The agent
+	// runs in a different namespace (the system namespace) than the
+	// validator, so it cannot infer this from its own pod.
+	nvcaContainer.Env = append(nvcaContainer.Env, corev1.EnvVar{
+		Name:  clustervalidator.SummaryConfigMapNamespaceEnv,
+		Value: bc.operatorNamespace,
 	})
 
 	// Add OAuth authentication environment variables.
@@ -1885,6 +2204,14 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 			},
 		},
 	}
+	// GracefulNoGPU deliberately keeps the agent NotReady while the cluster has
+	// no GPUs. A rolling update would therefore surge a second singleton agent
+	// and retain the old replica indefinitely. Recreate keeps configuration
+	// rollouts single-active while preserving the default rollout behavior for
+	// clusters that do not opt in.
+	if slices.Contains(strings.Split(bc.getNVCAFeatureFlags(nb), ","), featureflag.GracefulNoGPU.Key) {
+		deployment.Spec.Strategy = appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}
+	}
 
 	if nb.Spec.VaultConfig.Enabled {
 		deployment.Spec.Template.Annotations = mergeMaps(deployment.Spec.Template.Annotations, getVaultAnnotations(nb))
@@ -2056,7 +2383,11 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 		// Note: getOAuthConfig() only returns config when OAuthConfig has a client ID.
 	}
 
-	effectiveConfig := bc.mergeAgentConfigs(nb)
+	effectiveConfig, err := bc.getEffectiveAgentConfig(ctx, nb)
+	if err != nil {
+		return cfg, err
+	}
+	llmRequestRouterAddress := effectiveConfig.LLMRequestRouterAddress
 
 	var featureFlags []string
 	if ffs := bc.getNVCAFeatureFlags(nb); ffs != "" {
@@ -2090,10 +2421,6 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 			HelmReValStageOAuthPublicKeysetEndpoint: effectiveConfig.HelmReValStageOAuthPublicKeysetEndpoint,
 			HelmReValProdOAuthTokenURL:              effectiveConfig.HelmReValProdOAuthTokenURL,
 			HelmReValProdOAuthPublicKeysetEndpoint:  effectiveConfig.HelmReValProdOAuthPublicKeysetEndpoint,
-			RolloverServiceStageOAuthTokenURL:       effectiveConfig.RolloverServiceStageOAuthTokenURL,
-			RolloverServiceStageOAuthPublicKeysetEndpoint:          effectiveConfig.RolloverServiceStageOAuthPublicKeysetEndpoint,
-			RolloverServiceProdOAuthTokenURL:                       effectiveConfig.RolloverServiceProdOAuthTokenURL,
-			RolloverServiceProdOAuthPublicKeysetEndpoint:           effectiveConfig.RolloverServiceProdOAuthPublicKeysetEndpoint,
 			FunctionDeploymentStagesStageOAuthTokenURL:             effectiveConfig.FunctionDeploymentStagesStageOAuthTokenURL,
 			FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint: effectiveConfig.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint,
 			FunctionDeploymentStagesProdOAuthTokenURL:              effectiveConfig.FunctionDeploymentStagesProdOAuthTokenURL,
@@ -2112,7 +2439,8 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 			TLSSecretName: NVCAWebhookTLSCertSecretName,
 		},
 		Workload: nvcaconfig.WorkloadConfig{
-			Tolerations: append([]corev1.Toleration(nil), bc.workloadTolerations...),
+			DefaultStargateAddress: llmRequestRouterAddress,
+			Tolerations:            append([]corev1.Toleration(nil), bc.workloadTolerations...),
 		},
 		Authz: nvcaconfig.AuthzConfig{
 			TokenURL:             tokenURL,
@@ -2121,7 +2449,6 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 		},
 		Tracing: nvcaconfig.TracingConfig{},
 	}
-
 	// Apply worker config
 	if effectiveConfig.NVCFWorkerConfig.WorkerDegradationPeriod != 0 {
 		cfg.Workload.WorkerDegradationTimeout = effectiveConfig.NVCFWorkerConfig.WorkerDegradationPeriod
@@ -2146,6 +2473,17 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 		cfg.Authz.ClientSecretsEnvFile = getClientSecretsEnvFile(vaultSecretFilePath, nb.Spec.Version)
 	}
 
+	// TODO: add SPIRE once it is supported in NVCA
+	switch bc.identitySource {
+	case IdentitySourcePSAT:
+		cfg.Authz.ClusterIssuedTokenSource = nvcaconfig.ClusterIssuedTokenSourcePSAT
+		cfg.Authz.ClusterIssuedTokenFilePath = clusterIssuedTokenFilePath
+	case "":
+		// No identity source set, no need to set paths.
+	default:
+		return cfg, fmt.Errorf("unsupported identity source: %s", bc.identitySource)
+	}
+
 	// Add environment variable overrides for function and task workloads to agent config
 	if bc.functionEnvOverridesB64 != "" {
 		envOverrides, err := decodeEnvOverrides(bc.functionEnvOverridesB64)
@@ -2162,8 +2500,8 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 		cfg.Workload.TaskEnvOverrides = envOverrides
 	}
 
-	// Pass byooResources to NVCA for BYOO otel collector container in function pods
-	if effectiveConfig.ByooResources != nil {
+	// Pass NVCFBackend BYOO collector resources to NVCA when the backend spec overrides them.
+	if effectiveConfig.ByooResources != nil && resourceRequirementsConfigured(*effectiveConfig.ByooResources) {
 		cfg.Agent.BYOOResources = nvcaconfig.ResourceRequirements{
 			Limits:   nvcaconfig.ResourceList(effectiveConfig.ByooResources.Limits),
 			Requests: nvcaconfig.ResourceList(effectiveConfig.ByooResources.Requests),
@@ -2178,7 +2516,7 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 	cfg.Agent.HelmReValServiceURL = nb.Spec.ClusterConfig.MiniService.Complete(bc.envType).HelmReValServiceURL
 
 	// In self-hosted mode, default to the colocated ReVal service unless explicitly configured in the DTO.
-	if IsSelfHosted(nb) && (nb.Spec.ClusterConfig.MiniService == nil || nb.Spec.ClusterConfig.MiniService.HelmReValServiceURL == "") {
+	if usesSelfHostedColocatedReVal(nb) {
 		cfg.Agent.HelmReValServiceURL = "http://reval.nvcf.svc.cluster.local:8080"
 	}
 
@@ -2242,6 +2580,10 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 	return cfg, nil
 }
 
+func usesSelfHostedColocatedReVal(nb *nvidiaiov1.NVCFBackend) bool {
+	return IsSelfHosted(nb) && (nb.Spec.ClusterConfig.MiniService == nil || nb.Spec.ClusterConfig.MiniService.HelmReValServiceURL == "")
+}
+
 func (bc *BackendK8sCache) setupNVCAMutatingWebhookConfiguration(ctx context.Context,
 	nb *nvidiaiov1.NVCFBackend,
 	webhookCert WebhookCert,
@@ -2296,7 +2638,7 @@ func completeInternalPersistentStorageConfig(ctx context.Context, nb *nvidiaiov1
 	return dto, nil
 }
 
-// returns a string of the internal persisten storage configuration base64 encoded
+// returns a string of the internal persistent storage configuration base64 encoded
 func getInternalPersistentStorageConfig(ctx context.Context, nb *nvidiaiov1.NVCFBackend) (string, error) {
 	log := core.GetLogger(ctx)
 	dto, err := completeInternalPersistentStorageConfig(ctx, nb)
@@ -2379,6 +2721,10 @@ func (bc *BackendK8sCache) setupOTelCollectorConfigMap(ctx context.Context, nb *
 	}
 
 	log.Info("setting up OTel collector ConfigMap")
+	configData, err := bc.getOTelCollectorConfigData(nb)
+	if err != nil {
+		return fmt.Errorf("render OTel collector ConfigMap data: %w", err)
+	}
 
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -2387,7 +2733,7 @@ func (bc *BackendK8sCache) setupOTelCollectorConfigMap(ctx context.Context, nb *
 			Annotations: getNBAnnotations(nb),
 			Labels:      getAppLabels(),
 		},
-		Data: bc.getOTelCollectorConfigData(),
+		Data: configData,
 	}
 
 	return bc.createOrUpdateConfigMap(ctx, cm)

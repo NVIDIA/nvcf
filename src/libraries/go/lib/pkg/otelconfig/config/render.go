@@ -15,7 +15,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// TODO(NVCF-9201): unit-test coverage is below the lib module threshold; add tests for this package.
 package otelconfig
 
 import (
@@ -431,7 +430,7 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 			},
 		},
 		"metrics": {
-			"level": "normal",
+			"level": "detailed",
 			"readers": []map[string]interface{}{
 				{
 					"pull": map[string]interface{}{

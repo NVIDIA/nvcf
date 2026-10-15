@@ -13,11 +13,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+{{ $profile := include "multi-node-test.effectiveProfileValues" . | fromYaml -}}
+{{ $image := $profile.image | default dict -}}
+{{ $resources := $profile.resources | default dict -}}
+{{ $resourceClaimTemplate := $profile.resourceClaimTemplate | default dict -}}
+{{ $resourceClaimTemplateEnabled := $resourceClaimTemplate.enabled | default false -}}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   annotations:
-    dra.nvcf.nvidia.io/required-nvlink-domain-index: "0" # force all nodes to use the same NVLink domain
+    # Gang scheduling on an NVLink-optimized cluster running KAI Scheduler. KAI
+    # reads these from the StatefulSet, not the pod template, and holds every
+    # replica until they all fit in one clique. Requires the cluster operator to
+    # have installed the nvcf-mnnvl-topology Topology resource.
+    #
+    # kai.scheduler/topology: "nvcf-mnnvl-topology"
+    # kai.scheduler/topology-required-placement: "nvidia.com/gpu.clique"
   name: {{ include "multi-node-test.name" . }}
   labels:
     {{- include "multi-node-test.labels" . | nindent 4 }}
@@ -25,20 +36,33 @@ spec:
   serviceName: {{ include "multi-node-test.name" . }}-headless
   podManagementPolicy: Parallel
   {{- if not .Values.autoscaling.enabled }}
-  replicas: {{ .Values.nodesPerInstance }}
+  replicas: {{ $profile.nodesPerInstance }}
   {{- end }}
   selector:
     matchLabels:
       {{- include "multi-node-test.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
+      {{- with $profile.podAnnotations }}
       annotations:
+        # Legacy NVCA placement on an NVLink-optimized cluster:
+        # - Set dra.nvcf.nvidia.io/required-nvlink-domain-index to a logical group index,
+        #   such as "0", for required pod affinity among Pods with the same value.
+        # - Omit dra.nvcf.nvidia.io/required-nvlink-domain-index for preferred
+        #   same-clique placement.
+        # These options are best-effort without KAI Scheduler or Grove
+        # topology-aware scheduling. Different indices do not guarantee
+        # placement in different physical NVLink partitions.
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:
         {{- include "multi-node-test.selectorLabels" . | nindent 8 }}
     spec:
+      {{- if $resourceClaimTemplateEnabled }}
+      resourceClaims:
+        - name: {{ $resourceClaimTemplate.claimName }}
+          resourceClaimTemplateName: {{ $resourceClaimTemplate.name }}
+      {{- end }}
       volumes:
         - name: dshm
           emptyDir:
@@ -59,32 +83,41 @@ spec:
             - mountPath: /tmp
               name: temp
           securityContext:
-            {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+            {{- toYaml ($profile.securityContext | default dict) | nindent 12 }}
+          image: "{{ $image.repository }}:{{ $image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ $image.pullPolicy }}
           env:
             - name: POD_NAME
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
             - name: NODES_PER_INSTANCE
-              value: {{ .Values.nodesPerInstance | quote }}
+              value: {{ $profile.nodesPerInstance | quote }}
             - name: HEADLESS_SERVICE_NAME
               value: {{ include "multi-node-test.name" . }}-headless
           ports:
             - name: http
               containerPort: 8000
               protocol: TCP
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: http
           readinessProbe:
             httpGet:
               path: /health
               port: http
+            initialDelaySeconds: 300
+            periodSeconds: 30
+            timeoutSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          {{- if or $resourceClaimTemplateEnabled (not (empty $resources)) }}
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- with $resources }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- if $resourceClaimTemplateEnabled }}
+            claims:
+              - name: {{ $resourceClaimTemplate.claimName }}
+            {{- end }}
+          {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

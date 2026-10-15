@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+workdir="$(mktemp -d)"
+trap 'rm -rf "${workdir}"' EXIT
+
+mkdir -p "${workdir}/bin" "${workdir}/fern"
+cp "${repo_root}/tools/ci/preview-docs" "${workdir}/preview-docs"
+
+cat > "${workdir}/fern/fern.config.json" <<'EOF'
+{"version":"5.38.0"}
+EOF
+
+cat > "${workdir}/bin/node" <<'EOF'
+#!/usr/bin/env sh
+echo "5.38.0"
+EOF
+
+cat > "${workdir}/bin/npm" <<'EOF'
+#!/usr/bin/env sh
+exit 0
+EOF
+
+cat > "${workdir}/bin/jq" <<'EOF'
+#!/usr/bin/env sh
+exit 0
+EOF
+
+cat > "${workdir}/bin/fern" <<'EOF'
+#!/usr/bin/env sh
+echo "Published docs to https://nvidia-preview-nvcf-mr-320.docs.buildwithfern.com/nvcf "
+exit 0
+EOF
+
+cat > "${workdir}/bin/curl" <<'EOF'
+#!/usr/bin/env sh
+exit 22
+EOF
+
+chmod +x "${workdir}/bin/"*
+
+if ! (
+  cd "${workdir}"
+  PATH="${workdir}/bin:${PATH}" \
+    CI_PROJECT_NAME=nvcf \
+    CI_MERGE_REQUEST_IID=320 \
+    CI_MERGE_REQUEST_PROJECT_ID=268903 \
+    CI_API_V4_URL=https://github.com/NVIDIA/api/v4 \
+    FERN_BOT=fake-token \
+    ./preview-docs > output.txt 2>&1
+); then
+  echo "expected preview-docs to tolerate MR comment curl failures"
+  cat "${workdir}/output.txt"
+  exit 1
+fi
+
+if ! grep -q "Skipping MR comment: GitLab API request failed." "${workdir}/output.txt"; then
+  echo "expected preview-docs to explain skipped MR comment"
+  cat "${workdir}/output.txt"
+  exit 1
+fi
+
+echo "test-preview-docs: PASS"

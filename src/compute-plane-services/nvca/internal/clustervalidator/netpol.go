@@ -44,6 +44,13 @@ func checkConfigurableNetworkPolicies(
 	allCriticalOK := true
 	hasCritical := false
 
+	// Per-pair results for the metrics pipeline. Keyed by user-supplied
+	// pair name; the agent emits one Prometheus gauge per entry with
+	// `pair=<name>` as the label value.
+	if state.NetpolPairResults == nil {
+		state.NetpolPairResults = make(map[string]NetpolPairResult, len(cfg.Pairs))
+	}
+
 	for i, pair := range cfg.Pairs {
 		proto := corev1.Protocol(strings.ToUpper(pair.Protocol))
 		port := pair.Port
@@ -111,7 +118,31 @@ func checkConfigurableNetworkPolicies(
 			allOK = false
 			if pair.Critical {
 				allCriticalOK = false
+				// Name the exact failing side(s) so the operator can edit the
+				// right NetworkPolicy instead of auditing both namespaces.
+				state.Recommendations = append(state.Recommendations,
+					netpolPairRecommendation(pair, aToB, bToA, hasIPBlock))
 			}
+		}
+
+		// Only record a direction's per-side status when checkDirection
+		// actually evaluated policies. On a pre-policy short-circuit (missing
+		// namespace, API error) the per-side booleans are zero-valued, so
+		// emitting them would misreport "blocked by policy on both sides".
+		// Omitting the direction leaves the metric absent for it instead; the
+		// real cause is still surfaced via the recommendation and the
+		// configurable_netpol check status.
+		directions := map[string]DirectionStatus{}
+		if aToB.Evaluated {
+			directions[NetpolDirectionAToB] = DirectionStatus{EgressAllowed: aToB.EgressAllowed, IngressAllowed: aToB.IngressAllowed}
+		}
+		if bToA.Evaluated {
+			directions[NetpolDirectionBToA] = DirectionStatus{EgressAllowed: bToA.EgressAllowed, IngressAllowed: bToA.IngressAllowed}
+		}
+		state.NetpolPairResults[pair.Name] = NetpolPairResult{
+			Passed:     pairOK,
+			Critical:   pair.Critical,
+			Directions: directions,
 		}
 	}
 
@@ -127,13 +158,12 @@ func checkConfigurableNetworkPolicies(
 	} else {
 		if !allCriticalOK {
 			printError(log, "Critical network policy checks failed — cluster readiness affected")
-			state.Recommendations = append(state.Recommendations,
-				"Review NetworkPolicy objects for the failing critical namespace pairs "+
-					"and ensure egress/ingress rules allow the required traffic.")
+			// Per-pair, per-side recommendations were already appended in the
+			// loop above (see netpolPairRecommendation).
 		}
-		printWarning(log, "Some configurable network policy checks failed")
+		printWarning(log, "One or more configurable network policy checks failed")
 		state.Warnings = append(state.Warnings,
-			"Configurable Network Policies: Some bidirectional policy checks did not pass")
+			"Configurable Network Policies: One or more bidirectional policy checks did not pass")
 	}
 }
 
@@ -141,9 +171,63 @@ func checkConfigurableNetworkPolicies(
 type directionResult struct {
 	Allowed    bool
 	HasIPBlock bool
+	// EgressAllowed / IngressAllowed are the per-policy-side outcomes that
+	// compose Allowed (Allowed == EgressAllowed && IngressAllowed). They are
+	// surfaced so the directional metric can pinpoint which side is missing.
+	// Both are false when the check short-circuits before evaluation (e.g. a
+	// namespace does not exist) — Evaluated reports whether they are meaningful.
+	EgressAllowed  bool
+	IngressAllowed bool
+	// Evaluated is true only when egress and ingress were actually checked.
+	// It is false on early returns (namespace missing / API error), where the
+	// per-side booleans are zero-valued and must not be read as "blocked by a
+	// policy" — the recommendation uses Reason instead in that case.
+	Evaluated bool
 	// Reason provides additional context when Allowed is false.
 	// Empty when Allowed is true.
 	Reason string
+}
+
+// netpolDirectionFix describes, for one failing direction, which policy side
+// blocks the traffic — egress in the source namespace, ingress in the
+// destination namespace, or both — phrased so the operator knows exactly which
+// NetworkPolicy to edit. Returns "" when the direction is allowed.
+func netpolDirectionFix(label, srcNS, dstNS string, d directionResult) string {
+	if d.Allowed {
+		return ""
+	}
+	if !d.Evaluated {
+		// Short-circuited before policy evaluation (e.g. a namespace is
+		// missing) — surface that cause verbatim rather than blaming a policy.
+		return fmt.Sprintf("%s: %s", label, d.Reason)
+	}
+	var sides []string
+	if !d.EgressAllowed {
+		sides = append(sides, fmt.Sprintf("egress from %q", srcNS))
+	}
+	if !d.IngressAllowed {
+		sides = append(sides, fmt.Sprintf("ingress into %q", dstNS))
+	}
+	return fmt.Sprintf("%s blocked by %s", label, strings.Join(sides, " and "))
+}
+
+// netpolPairRecommendation builds a per-pair, per-side operator recommendation
+// from the directional results, so the operator can go straight to the
+// offending NetworkPolicy instead of auditing every policy in both namespaces.
+func netpolPairRecommendation(pair NetworkPolicyPair, aToB, bToA directionResult, hasIPBlock bool) string {
+	var dirs []string
+	if s := netpolDirectionFix("A→B", pair.A.Namespace, pair.B.Namespace, aToB); s != "" {
+		dirs = append(dirs, s)
+	}
+	if s := netpolDirectionFix("B→A", pair.B.Namespace, pair.A.Namespace, bToA); s != "" {
+		dirs = append(dirs, s)
+	}
+	rec := fmt.Sprintf("Network policy %q (%s/%d): %s — update the NetworkPolicy in the named namespace(s) to allow the traffic.",
+		pair.Name, strings.ToUpper(pair.Protocol), pair.Port, strings.Join(dirs, "; "))
+	if hasIPBlock {
+		rec += " (IPBlock/CIDR rules are present and could not be evaluated statically — verify manually.)"
+	}
+	return rec
 }
 
 // checkDirection evaluates whether Kubernetes NetworkPolicies permit traffic
@@ -183,7 +267,7 @@ func checkDirection(ctx context.Context, client kubernetes.Interface,
 		dstNS, dstSelector, srcNSObj.Labels, srcPodIPs, port, proto)
 
 	if egressOK && ingressOK {
-		return directionResult{Allowed: true}
+		return directionResult{Allowed: true, EgressAllowed: true, IngressAllowed: true, Evaluated: true}
 	}
 
 	// Only flag HasIPBlock when IPBlock rules exist AND the target namespace
@@ -204,9 +288,12 @@ func checkDirection(ctx context.Context, client kubernetes.Interface,
 	}
 
 	return directionResult{
-		Allowed:    false,
-		HasIPBlock: ipBlock,
-		Reason:     reason,
+		Allowed:        false,
+		HasIPBlock:     ipBlock,
+		EgressAllowed:  egressOK,
+		IngressAllowed: ingressOK,
+		Evaluated:      true,
+		Reason:         reason,
 	}
 }
 

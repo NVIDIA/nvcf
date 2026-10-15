@@ -28,6 +28,7 @@ import (
 	"github.com/sony/gobreaker/v2"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	"golang.org/x/time/rate"
 )
 
@@ -44,11 +45,21 @@ var (
 // and will return errors for all client connections after multiple non-retryable codes
 // or max-retried requests (circuit-breaker), or when too many requests were sent
 // in a given time period.
-func NewHTTPClient() *http.Client {
-	return newHTTPClient(defaultCircuitBreakerTimeout, defaultRequestRateLimit, defaultRequestBurst)
+//
+// transportWrappers are applied as the outermost transport layers, so each
+// observes one logical request and its final outcome. This is how the client is
+// instrumented without this package depending on the metrics implementation.
+// A nil wrapper is ignored.
+func NewHTTPClient(transportWrappers ...func(http.RoundTripper) http.RoundTripper) *http.Client {
+	return newHTTPClient(defaultCircuitBreakerTimeout, defaultRequestRateLimit, defaultRequestBurst, transportWrappers...)
 }
 
-func newHTTPClient(cbTimeout time.Duration, rateLimit rate.Limit, burst int) *http.Client {
+func newHTTPClient(
+	cbTimeout time.Duration,
+	rateLimit rate.Limit,
+	burst int,
+	transportWrappers ...func(http.RoundTripper) http.RoundTripper,
+) *http.Client {
 	rhttpClient := retryablehttp.NewClient()
 	cbRT := circuitBreakingRoundTripper{
 		base: rhttpClient.StandardClient().Transport,
@@ -77,14 +88,35 @@ func newHTTPClient(cbTimeout time.Duration, rateLimit rate.Limit, burst int) *ht
 			},
 		}),
 	}
+	// otelhttp always provides client tracing. Its own HTTP client metrics are
+	// suppressed only when a transport wrapper is present, so that wrapper is the
+	// single source for the semconv HTTP client series and does not double-count.
+	// Callers without a wrapper keep otelhttp's default metric behaviour.
+	otelOpts := []otelhttp.Option{
+		otelhttp.WithClientTrace(func(ctx context.Context) *httptrace.ClientTrace {
+			return otelhttptrace.NewClientTrace(ctx)
+		}),
+	}
+	var hasWrapper bool
+	for _, wrap := range transportWrappers {
+		if wrap != nil {
+			hasWrapper = true
+			break
+		}
+	}
+	if hasWrapper {
+		otelOpts = append(otelOpts, otelhttp.WithMeterProvider(metricnoop.NewMeterProvider()))
+	}
+
+	var transport http.RoundTripper = otelhttp.NewTransport(cbRT, otelOpts...)
+	for _, wrap := range transportWrappers {
+		if wrap != nil {
+			transport = wrap(transport)
+		}
+	}
 	return &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: otelhttp.NewTransport(
-			cbRT,
-			otelhttp.WithClientTrace(func(ctx context.Context) *httptrace.ClientTrace {
-				return otelhttptrace.NewClientTrace(ctx)
-			}),
-		),
+		Timeout:   5 * time.Second,
+		Transport: transport,
 	}
 }
 

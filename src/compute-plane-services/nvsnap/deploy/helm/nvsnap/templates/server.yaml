@@ -1,0 +1,227 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+{{- if .Values.server.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nvsnap-server
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvsnap.server.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nvsnap-server
+  labels:
+    {{- include "nvsnap.server.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    # patch is required to label restore-target pods with
+    # nvsnap.io/capture=true during the agent's 422 rootfs redirect
+    # handoff (see internal/server/server.go dispatchRootfsCapture).
+    # Without it nvsnap-server can't activate the rootfsonly Watcher for
+    # NVCA-driven captures in nvcf-backend. Also covers the multi-GPU
+    # auto-route case where nvsnap-server labels nvsnap-system pods.
+    verbs: ["get", "list", "watch", "create", "delete", "deletecollection", "patch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    # delete: the hash-cascade purges the rootfs-capture-manifest CM
+    # (nvsnap-capture-<short>) on checkpoint delete. Without it the
+    # Reconciler re-ingests the deleted row from the surviving CM on
+    # the next tick (resurrection bug, nvsnap).
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    # delete added in nvsnap#137 for the hash-cascade cleanup —
+    # nvsnap-server purges the L2 rox/rwx PVCs in the source pod's
+    # namespace when a hash is deleted. Without delete the catalog
+    # row vanishes but the PVCs leak forever.
+    verbs: ["get", "list", "watch", "delete"]
+  # snapshot.storage.k8s.io VolumeSnapshot — purged alongside the
+  # L2 PVCs on hash delete (nvsnap#137). nvsnap-server doesn't watch
+  # snapshots, only deletes them at end-of-life.
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "delete"]
+  # coordination.k8s.io Lease — the PerCapturePVCBackend uses a
+  # Lease ('nvsnap-promote-<short>') to serialize concurrent promote
+  # attempts on the same hash. Deleted on hash delete so a future
+  # re-capture isn't blocked by a stale lease holder.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["delete"]
+  # services.get: the observability proxy (internal/server/observability_proxy.go)
+  # probes whether the grafana / jaeger / prometheus Services exist
+  # before rendering the matching UI nav tile. Without this rule the
+  # probe Forbidden-fails silently and the UI shows every tile as
+  # "not installed on this cluster" even when the subcharts are
+  # actually deployed. Scoped narrowly: list/watch isn't needed —
+  # the proxy only does point Get(name) on a fixed shortlist.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get"]
+  # Full access to the GPUCheckpoint and GPURestore CRDs the server
+  # creates on POST /api/v1/checkpoints. Without these the API returns
+  # 500 (nvsnap#54).
+  - apiGroups: ["nvsnap.io"]
+    resources: ["gpucheckpoints", "gpucheckpoints/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["nvsnap.io"]
+    resources: ["gpurestores", "gpurestores/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nvsnap-server
+  labels:
+    {{- include "nvsnap.server.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nvsnap-server
+subjects:
+  - kind: ServiceAccount
+    name: nvsnap-server
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nvsnap-server
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvsnap.server.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.server.replicaCount }}
+  # Recreate (not rolling): SQLite DB is RWO; rolling update would
+  # race on volume attach.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "nvsnap.server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "nvsnap.server.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: nvsnap-server
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 65532
+      {{- include "nvsnap.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: server
+          image: {{ include "nvsnap.server.image" . }}
+          imagePullPolicy: {{ .Values.server.image.pullPolicy }}
+          args:
+            - --address=:{{ .Values.server.service.port }}
+            - --agent-port=8081
+            - --log-level=info
+            - --db-path=/data/nvsnap.db
+          {{- if or .Values.jaeger.enabled .Values.agent.auth.enabled }}
+          env:
+            {{- if .Values.jaeger.enabled }}
+            # OTLP/gRPC to the bundled Jaeger collector. nvsnap-server reads
+            # this via internal/tracing.Init — unset means no-op. otelhttp
+            # then emits one server span per API request.
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "nvsnap-jaeger-collector.{{ .Release.Namespace }}.svc.cluster.local:4317"
+            - name: NVSNAP_VERSION
+              value: {{ .Values.server.image.tag | quote }}
+            {{- end }}
+            {{- if .Values.agent.auth.enabled }}
+            # The server is an agent client: it drops L1 dumps during
+            # cascade delete, dispatches captures, and polls the checkpoint
+            # list. Without the token those all 401 once the agent runs with
+            # --auth-mode=required, and the delete path fails silently —
+            # 204 returned, catalog row gone, dump orphaned (nvsnap#736).
+            - name: NVSNAP_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: nvsnap-agent-token
+                  key: token
+            {{- end }}
+          {{- end }}
+          ports:
+            - containerPort: {{ .Values.server.service.port }}
+              name: http
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: {{ .Values.server.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: {{ .Values.server.service.port }}
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          {{- if .Values.server.persistence.enabled }}
+          volumeMounts:
+            - name: db-storage
+              mountPath: /data
+          {{- end }}
+      {{- if .Values.server.persistence.enabled }}
+      volumes:
+        - name: db-storage
+          persistentVolumeClaim:
+            claimName: nvsnap-server-db
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvsnap-server
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvsnap.server.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.server.service.type }}
+  selector:
+    {{- include "nvsnap.server.selectorLabels" . | nindent 4 }}
+  ports:
+    - port: {{ .Values.server.service.port }}
+      targetPort: {{ .Values.server.service.port }}
+      name: http
+{{- if .Values.server.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nvsnap-server-db
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvsnap.server.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.server.persistence.storageClassName }}
+  storageClassName: {{ .Values.server.persistence.storageClassName | quote }}
+  {{- end }}
+  accessModes:
+    - {{ .Values.server.persistence.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.server.persistence.size | quote }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,92 @@
+---
+# Source: helm-nvca-operator/templates/storage-capabilities-configmap.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvcf-storage-capabilities
+  namespace: nvca-operator
+  labels:
+    helm.sh/chart: helm-nvca-operator-1.22.2
+    app.kubernetes.io/name: nvca-operator
+    app.kubernetes.io/instance: nvca-operator
+    app.kubernetes.io/version: "3.5.2"
+    app.kubernetes.io/managed-by: Helm
+data:
+  storage-provider-capabilities.yaml: |
+    # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+    # SPDX-License-Identifier: Apache-2.0
+    #
+    # Licensed under the Apache License, Version 2.0 (the "License");
+    # you may not use this file except in compliance with the License.
+    # You may obtain a copy of the License at
+    #
+    #     http://www.apache.org/licenses/LICENSE-2.0
+    #
+    # Unless required by applicable law or agreed to in writing, software
+    # distributed under the License is distributed on an "AS IS" BASIS,
+    # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    # See the License for the specific language governing permissions and
+    # limitations under the License.
+
+    # NVCA owns this catalog and installs it with the NVCA chart. Each entry is
+    # named by exact CSI provisioner and records the PVC access modes qualified end to end in an
+    # NVCF cache workflow. Nothing else is declared: NVCA derives how caching runs
+    # from these modes.
+    #
+    #   ReadWriteMany              one shared claim; readers mount it read-only
+    #   ReadWriteOnce+ReadOnlyMany writer takes the claim; readers get their own
+    #
+    # An access mode a driver merely accepts is not a qualification. A claim that
+    # binds is not either. An empty accessModes list means nothing is qualified
+    # yet, so caching stays off for that driver, and a provisioner absent from this
+    # file is unsupported. Enabling a backend is an edit here, backed by a
+    # qualification run.
+    apiVersion: storage.nvcf.nvidia.com/v1alpha1
+    kind: StorageCapabilityCatalog
+    drivers:
+      - name: nvmesh-csi.excelero.com
+        provider: nvmesh
+        # Encrypted caches are qualified on NVMesh, through a derived StorageClass
+        # and a per-sharing-domain Secret.
+        encryptionSupported: true
+        accessModes:
+          - ReadWriteOnce
+          - ReadOnlyMany
+        # The reader PV is XFS on the same filesystem as the writer, so it needs
+        # nouuid and norecovery or the mount fails outright.
+        readerMountOptions:
+          - ro
+          - norecovery
+          - nouuid
+      - name: csi.weka.io
+        provider: weka
+        # Fresh ReadWriteMany and ReadOnlyMany claims were tested, but a cache
+        # workflow was not, so nothing is qualified yet.
+        accessModes: []
+        readerMountOptions: []
+      - name: fss.csi.oraclecloud.com
+        provider: ociFss
+        # A ReadWriteMany claim was tested; its readers used read-only Pod mounts,
+        # which is not evidence for a ReadOnlyMany claim. No cache workflow was
+        # qualified.
+        accessModes: []
+        readerMountOptions: []
+      - name: lustre.csi.oraclecloud.com
+        provider: ociLustre
+        # No PVC access mode has been qualified in an NVCF cache workflow.
+        accessModes: []
+        readerMountOptions: []

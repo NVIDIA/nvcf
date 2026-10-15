@@ -47,6 +47,32 @@ func init() {
 	}
 }
 
+func stackPaths(t *testing.T) (controlPlane, computePlane string) {
+	t.Helper()
+	controlPlane = os.Getenv("CONTROL_PLANE_STACK_PATH")
+	computePlane = os.Getenv("COMPUTE_PLANE_STACK_PATH")
+	require.NotEmpty(t, controlPlane, "set CONTROL_PLANE_STACK_PATH")
+	require.NotEmpty(t, computePlane, "set COMPUTE_PLANE_STACK_PATH")
+	return controlPlane, computePlane
+}
+
+func nextStackPaths() (controlPlane, computePlane string) {
+	controlPlane = os.Getenv("CONTROL_PLANE_STACK_PATH_NEXT")
+	computePlane = os.Getenv("COMPUTE_PLANE_STACK_PATH_NEXT")
+	return controlPlane, computePlane
+}
+
+func upArgs(cluster, controlPlaneStack, computePlaneStack string) []string {
+	return []string{
+		"self-hosted", "up",
+		"--cluster-name=" + cluster,
+		"--control-plane-stack=" + controlPlaneStack,
+		"--compute-plane-stack=" + computePlaneStack,
+		"--env=local",
+		"--token=" + os.Getenv("NVCF_TOKEN"),
+	}
+}
+
 // nvcf runs the CLI with the supplied args; returns stdout, stderr, exit code.
 func nvcf(t *testing.T, args ...string) (string, string, int) {
 	t.Helper()
@@ -187,26 +213,15 @@ func requireNoOrphanPodsInSRNamespaces(t *testing.T) {
 
 func TestT1_CleanRerun(t *testing.T) {
 	// Pre-condition: up has succeeded once. We run it again and assert idempotency.
-	out, errb, exit := nvcf(t,
-		"self-hosted", "up",
-		"--cluster-name="+clusterName,
-		"--stack="+os.Getenv("STACK_PATH"),
-		"--env=local",
-		"--token="+os.Getenv("NVCF_TOKEN"),
-	)
+	controlPlaneStack, computePlaneStack := stackPaths(t)
+	out, errb, exit := nvcf(t, upArgs(clusterName, controlPlaneStack, computePlaneStack)...)
 	require.Zero(t, exit, "stdout=%q stderr=%q", out, errb)
 
 	// Capture pod UIDs.
 	preUIDs := podUIDs(t)
 
 	// Re-run.
-	out2, errb2, exit2 := nvcf(t,
-		"self-hosted", "up",
-		"--cluster-name="+clusterName,
-		"--stack="+os.Getenv("STACK_PATH"),
-		"--env=local",
-		"--token="+os.Getenv("NVCF_TOKEN"),
-	)
+	out2, errb2, exit2 := nvcf(t, upArgs(clusterName, controlPlaneStack, computePlaneStack)...)
 	require.Zero(t, exit2, "stdout=%q stderr=%q", out2, errb2)
 
 	// Assert: helmfile reports nothing changed.
@@ -220,17 +235,12 @@ func TestT1_CleanRerun(t *testing.T) {
 func TestT2_InterruptedControlPlane(t *testing.T) {
 	// Setup: tear down to a clean slate.
 	teardownCluster(t)
+	controlPlaneStack, computePlaneStack := stackPaths(t)
 
 	// Action: start `up`, wait for the control-plane phase to begin, kill it.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, cliBin,
-		"self-hosted", "up",
-		"--cluster-name="+clusterName,
-		"--stack="+os.Getenv("STACK_PATH"),
-		"--env=local",
-		"--token="+os.Getenv("NVCF_TOKEN"),
-	)
+	cmd := exec.CommandContext(ctx, cliBin, upArgs(clusterName, controlPlaneStack, computePlaneStack)...)
 	require.NoError(t, cmd.Start())
 	// Give it time to start at least one helmfile-apply phase, then kill.
 	time.Sleep(45 * time.Second)
@@ -238,13 +248,7 @@ func TestT2_InterruptedControlPlane(t *testing.T) {
 	_ = cmd.Wait()
 
 	// Assert: re-run converges.
-	_, errb, exit := nvcf(t,
-		"self-hosted", "up",
-		"--cluster-name="+clusterName,
-		"--stack="+os.Getenv("STACK_PATH"),
-		"--env=local",
-		"--token="+os.Getenv("NVCF_TOKEN"),
-	)
+	_, errb, exit := nvcf(t, upArgs(clusterName, controlPlaneStack, computePlaneStack)...)
 	require.Zero(t, exit, "errb=%q", errb)
 	// Verify NVCFBackend reaches healthy.
 	requireBackendHealthy(t, clusterName)
@@ -253,19 +257,14 @@ func TestT2_InterruptedControlPlane(t *testing.T) {
 func TestT3_InterruptedRegister(t *testing.T) {
 	// Setup: tear down to a clean slate.
 	teardownCluster(t)
+	controlPlaneStack, computePlaneStack := stackPaths(t)
 
 	// Action: start `up`, wait long enough for the control-plane apply to finish
 	// but interrupt before the register call completes (~90s is past helmfile-apply
 	// but before the OIDC registration RPC returns).
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, cliBin,
-		"self-hosted", "up",
-		"--cluster-name="+clusterName,
-		"--stack="+os.Getenv("STACK_PATH"),
-		"--env=local",
-		"--token="+os.Getenv("NVCF_TOKEN"),
-	)
+	cmd := exec.CommandContext(ctx, cliBin, upArgs(clusterName, controlPlaneStack, computePlaneStack)...)
 	require.NoError(t, cmd.Start())
 	// SIGINT timing is environment-specific (depends on cassandra/openbao bootstrap speed).
 	// 90s targets the post-control-plane register window on mcamp-dev-vm but may
@@ -277,13 +276,7 @@ func TestT3_InterruptedRegister(t *testing.T) {
 	_ = cmd.Wait()
 
 	// Assert: re-run converges.
-	_, errb, exit := nvcf(t,
-		"self-hosted", "up",
-		"--cluster-name="+clusterName,
-		"--stack="+os.Getenv("STACK_PATH"),
-		"--env=local",
-		"--token="+os.Getenv("NVCF_TOKEN"),
-	)
+	_, errb, exit := nvcf(t, upArgs(clusterName, controlPlaneStack, computePlaneStack)...)
 	require.Zero(t, exit, "errb=%q", errb)
 
 	// Assert: exactly one OIDC registration row (idempotent upsert, not duplicate insert).
@@ -297,18 +290,13 @@ func TestT3_InterruptedRegister(t *testing.T) {
 func TestT4_InterruptedComputePlane(t *testing.T) {
 	// Setup: tear down to a clean slate.
 	teardownCluster(t)
+	controlPlaneStack, computePlaneStack := stackPaths(t)
 
 	// Action: start `up`, wait long enough for the control-plane + register phases to
 	// finish, then interrupt during compute-plane helmfile apply (~150s).
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, cliBin,
-		"self-hosted", "up",
-		"--cluster-name="+clusterName,
-		"--stack="+os.Getenv("STACK_PATH"),
-		"--env=local",
-		"--token="+os.Getenv("NVCF_TOKEN"),
-	)
+	cmd := exec.CommandContext(ctx, cliBin, upArgs(clusterName, controlPlaneStack, computePlaneStack)...)
 	require.NoError(t, cmd.Start())
 	// SIGINT timing is environment-specific (depends on cassandra/openbao bootstrap speed).
 	// 150s targets the post-control-plane+register window on mcamp-dev-vm but may
@@ -320,13 +308,7 @@ func TestT4_InterruptedComputePlane(t *testing.T) {
 	_ = cmd.Wait()
 
 	// Assert: re-run converges.
-	_, errb, exit := nvcf(t,
-		"self-hosted", "up",
-		"--cluster-name="+clusterName,
-		"--stack="+os.Getenv("STACK_PATH"),
-		"--env=local",
-		"--token="+os.Getenv("NVCF_TOKEN"),
-	)
+	_, errb, exit := nvcf(t, upArgs(clusterName, controlPlaneStack, computePlaneStack)...)
 	require.Zero(t, exit, "errb=%q", errb)
 
 	// Assert: nvca operator + agent reach Ready in nvca-operator namespace.
@@ -352,33 +334,22 @@ func TestT4_InterruptedComputePlane(t *testing.T) {
 }
 
 func TestT5_VersionUpgrade(t *testing.T) {
-	stackV1 := os.Getenv("STACK_PATH")
-	stackV2 := os.Getenv("STACK_PATH_NEXT")
-	if stackV2 == "" {
-		t.Skip("STACK_PATH_NEXT not set; skipping version-upgrade test")
+	controlPlaneV1, computePlaneV1 := stackPaths(t)
+	controlPlaneV2, computePlaneV2 := nextStackPaths()
+	if controlPlaneV2 == "" || computePlaneV2 == "" {
+		t.Skip("set CONTROL_PLANE_STACK_PATH_NEXT and COMPUTE_PLANE_STACK_PATH_NEXT to run version-upgrade test")
+		return
 	}
 
 	// Step 1: baseline deploy with v1 stack.
-	_, errb, exit := nvcf(t,
-		"self-hosted", "up",
-		"--cluster-name="+clusterName,
-		"--stack="+stackV1,
-		"--env=local",
-		"--token="+os.Getenv("NVCF_TOKEN"),
-	)
+	_, errb, exit := nvcf(t, upArgs(clusterName, controlPlaneV1, computePlaneV1)...)
 	require.Zero(t, exit, "baseline up failed: %s", errb)
 
 	// Capture pre-upgrade pod UIDs to detect which pods rolled.
 	preUIDs := podUIDs(t)
 
 	// Step 2: upgrade to v2 stack.
-	_, errb2, exit2 := nvcf(t,
-		"self-hosted", "up",
-		"--cluster-name="+clusterName,
-		"--stack="+stackV2,
-		"--env=local",
-		"--token="+os.Getenv("NVCF_TOKEN"),
-	)
+	_, errb2, exit2 := nvcf(t, upArgs(clusterName, controlPlaneV2, computePlaneV2)...)
 	require.Zero(t, exit2, "upgrade up failed: %s", errb2)
 
 	// Assert: helmfile reports "Updated" for at least one release (upgrade happened).
@@ -414,18 +385,14 @@ func TestT5_VersionUpgrade(t *testing.T) {
 // mutations. The loser detects ErrAlreadyHeld and exits 1 with a user-friendly
 // message containing the winner's hostname, PID, and start-time.
 func TestT6_ConcurrentUp(t *testing.T) {
+	controlPlaneStack, computePlaneStack := stackPaths(t)
+
 	type result struct {
 		stdout, stderr string
 		exit           int
 	}
 	run := func() result {
-		out, errb, exit := nvcf(t,
-			"self-hosted", "up",
-			"--cluster-name="+clusterName,
-			"--stack="+os.Getenv("STACK_PATH"),
-			"--env=local",
-			"--token="+os.Getenv("NVCF_TOKEN"),
-		)
+		out, errb, exit := nvcf(t, upArgs(clusterName, controlPlaneStack, computePlaneStack)...)
 		return result{out, errb, exit}
 	}
 
@@ -462,6 +429,7 @@ func TestT6_ConcurrentUp(t *testing.T) {
 func TestT7_NoApplyRoundTrip(t *testing.T) {
 	// Pre-condition: `up` has succeeded. We render manifests with --no-apply and
 	// assert that `kubectl apply` reports no changes (YAML-layer idempotency).
+	controlPlaneStack, computePlaneStack := stackPaths(t)
 
 	// Render control-plane manifests.
 	cpFile := t.TempDir() + "/control-plane.yaml"
@@ -473,7 +441,8 @@ func TestT7_NoApplyRoundTrip(t *testing.T) {
 			"--control-plane",
 			"--no-apply",
 			"--cluster-name="+clusterName,
-			"--stack="+os.Getenv("STACK_PATH"),
+			"--control-plane-stack="+controlPlaneStack,
+			"--compute-plane-stack="+computePlaneStack,
 			"--env=local",
 			"--token="+os.Getenv("NVCF_TOKEN"),
 		)
@@ -492,7 +461,8 @@ func TestT7_NoApplyRoundTrip(t *testing.T) {
 			"--compute-plane",
 			"--no-apply",
 			"--cluster-name="+clusterName,
-			"--stack="+os.Getenv("STACK_PATH"),
+			"--control-plane-stack="+controlPlaneStack,
+			"--compute-plane-stack="+computePlaneStack,
 			"--env=local",
 			"--token="+os.Getenv("NVCF_TOKEN"),
 		)

@@ -10,47 +10,38 @@ This repository ships:
 - The migration entrypoint (`execute_sqls.sh`)
 - Cassandra DDL migrations under `keyspaces/<service>/*.up.sql`, one keyspace per service
 
-## Driver binaries
+## Migration driver
 
-The container ENTRYPOINT runs the [`golang-migrate`](https://github.com/golang-migrate/migrate) CLI. A pre-built binary for each target architecture is required at build time, placed at:
+The container builds [`golang-migrate`](https://github.com/golang-migrate/migrate) v4.19.1 from its checksum-verified release source. The build enables only the Cassandra database driver. This keeps unrelated database and cloud-provider clients out of the runtime binary.
 
-- `files/migrate-amd64` (for `--platform linux/amd64`)
-- `files/migrate-arm64` (for `--platform linux/arm64`)
-
-Download the release matching your platform (v4.18.2 or compatible) from https://github.com/golang-migrate/migrate/releases, extract the `migrate` binary, rename it to `migrate-amd64` or `migrate-arm64`, place it in `files/`, and ensure it is executable. For example:
-
-```bash
-# amd64
-curl -L https://github.com/golang-migrate/migrate/releases/download/v4.18.2/migrate.linux-amd64.tar.gz \
-  | tar xz -C files/
-mv files/migrate files/migrate-amd64
-chmod +x files/migrate-amd64
-
-# arm64 (run on / for an arm64 build)
-curl -L https://github.com/golang-migrate/migrate/releases/download/v4.18.2/migrate.linux-arm64.tar.gz \
-  | tar xz -C files/
-mv files/migrate files/migrate-arm64
-chmod +x files/migrate-arm64
-```
-
-`execute_sqls.sh` uses the standard `golang-migrate` cassandra driver query parameters: `x-multi-statement`, `x-migrations-table`, `username`, and `password`.
+`execute_sqls.sh` uses the standard `golang-migrate` Cassandra driver query parameters: `x-multi-statement`, `x-migrations-table`, `username`, and `password`.
 
 ## Prerequisites
 
 - A reachable Cassandra cluster (the container connects via `cqlsh` and the migrate driver)
 - Docker or another OCI-compatible builder
-- The driver binaries listed above, placed in `files/`
+- Network access to download the pinned build inputs
 
 ## Building the container
 
-The `Dockerfile` defaults to the `bitnami/cassandra:5.0.6` base image. Override the FROM via your own build pipeline if you need a different base.
+The `Dockerfile` uses the official `cassandra:5.0.9` base image and builds both supported architectures from the same pinned sources.
 
 ```bash
 docker build \
-  --build-arg TARGETARCH=amd64 \
-  --build-arg KUBECTL_VERSION=1.31.0 \
+  --platform linux/amd64 \
   -t <your-registry>/<your-org>/nvcf-cassandra-migrations:<version> .
 ```
+
+To build and publish both supported architectures:
+
+```bash
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  --push \
+  -t <your-registry>/<your-org>/nvcf-cassandra-migrations:<version> .
+```
+
+BuildKit sets `TARGETARCH` from each selected target platform so the downloaded and compiled binaries match the final image architecture.
 
 ## Running the migrations
 
@@ -62,10 +53,11 @@ The container reads the following environment variables:
 | `CASSANDRA_USER` | Cassandra superuser used to apply DDL |
 | `CASSANDRA_PASSWORD` | Cassandra superuser password |
 | `SERVICE_ROLE_PASSWORD` | Substituted into the per-keyspace login role passwords (`02_init_roles.up.sql`) |
+| `REPLICA_COUNT` | Replication factor for service keyspaces (defaults to `3`) |
 
 For each keyspace under `keyspaces/`, the container:
 
-1. Pre-processes any `*.up.sql` and `*.cql` files via `envsubst` so that `${SERVICE_ROLE_PASSWORD}` is substituted (other environment variables are intentionally not substituted).
+1. Pre-processes any `*.sql` and `*.cql` files via `envsubst` so that `${SERVICE_ROLE_PASSWORD}` and `${REPLICA_COUNT}` are substituted (other environment variables are intentionally not substituted).
 2. Runs `migrate up` with the `cassandra://` driver, using the keyspace name as the migrations table name.
 
 A failure in any keyspace's migration set stops the run.
@@ -74,7 +66,7 @@ A failure in any keyspace's migration set stops the run.
 
 If a migration fails partway through, `golang-migrate` marks the row in `schema_migrations` as `dirty=true`. The next `migrate up` refuses to proceed and exits with:
 
-```
+```text
 Dirty database version <N>. Fix and force version.
 ```
 
@@ -86,16 +78,16 @@ The version number `<N>` in the error matches the numeric prefix of a file under
 
 ```bash
 cqlsh -u "$CASSANDRA_USER" -p "$CASSANDRA_PASSWORD" "$CASSANDRA_HOSTS" \
-  -e "SELECT version, dirty FROM <service>.schema_migrations;"
+  -e "SELECT version, dirty FROM schema_migrations.<service>;"
 ```
 
 #### 2. Reconcile partial state
 
 The migration may have applied some statements before the failure. Decide whether to roll the schema back to `<N-1>` or roll it forward to `<N>`:
 
-- **Re-apply migration `<N>` from `<N-1>`** (recommended when the migration is fully idempotent). Most bundled migrations use `CREATE TABLE IF NOT EXISTS`, `CREATE TYPE IF NOT EXISTS`, and similar idempotent forms; if the failing file is fully idempotent, fix the root cause of the failure (network, capacity, malformed CQL) and re-running migration `<N>` will be safe. Plan to `force <N-1>` in step 3.
-- **Roll back manually** to `<N-1>`. If the migration is not idempotent, drop any tables / types / columns the partial run created so the schema matches the post-`<N-1>` state, then `force <N-1>` in step 3.
-- **Roll forward manually** to `<N>`. Run the remaining CQL statements from `<N>` by hand so the schema matches the post-`<N>` state, then `force <N>` in step 3.
+- Re-apply migration `<N>` from `<N-1>` (recommended when the migration is fully idempotent). Most bundled migrations use `CREATE TABLE IF NOT EXISTS`, `CREATE TYPE IF NOT EXISTS`, and similar idempotent forms; if the failing file is fully idempotent, fix the root cause of the failure (network, capacity, malformed CQL) and re-running migration `<N>` will be safe. Plan to `force <N-1>` in step 3.
+- Roll back manually to `<N-1>`. If the migration is not idempotent, drop any tables / types / columns the partial run created so the schema matches the post-`<N-1>` state, then `force <N-1>` in step 3.
+- Roll forward manually to `<N>`. Run the remaining CQL statements from `<N>` by hand so the schema matches the post-`<N>` state, then `force <N>` in step 3.
 
 #### 3. Clear the dirty flag and re-run
 
@@ -149,14 +141,10 @@ NN_description.up.sql
 
 For a brand-new keyspace, the conventional sequence is:
 
-1. `01_init_keyspace.up.sql` - creates the keyspace with `NetworkTopologyStrategy` (uses `{{ $replicaCount }}` template variable, substituted upstream).
+1. `01_init_keyspace.up.sql` - creates the keyspace with `NetworkTopologyStrategy` and substitutes `${REPLICA_COUNT}` before migration.
 2. `02_init_roles.up.sql` - creates the application role and grants, with the login password supplied by `${SERVICE_ROLE_PASSWORD}`.
 3. `03_init_tables.up.sql` - the canonical schema (UDTs, tables, indexes) for the keyspace.
 
-Subsequent files (`04_*`, `05_*`) are incremental DDL deltas applied as the schema evolves.
+Subsequent files (`04_*` and later) are incremental migrations applied as the schema evolves. Most are DDL; `ess_api/04_*` is a data seed.
 
 The `03_init_tables.up.sql` follows a clean-slate model: it is updated in place when the canonical schema changes rather than accumulating `ALTER TABLE` history. Existing clusters apply only the deltas that postdate their last applied migration.
-
-## Notes
-
-- The `golang-migrate` driver binary at `files/migrate-${TARGETARCH}` must be supplied locally before building. See "Driver binaries" above for the download steps.

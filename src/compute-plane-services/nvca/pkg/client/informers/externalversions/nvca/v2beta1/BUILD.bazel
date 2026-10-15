@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "v2beta1",
+    srcs = [
+        "icmsrequest.go",
+        "interface.go",
+        "storagerequest.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions/nvca/v2beta1",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1",
+        "//src/compute-plane-services/nvca/pkg/client/clientset/versioned",
+        "//src/compute-plane-services/nvca/pkg/client/informers/externalversions/internalinterfaces",
+        "//src/compute-plane-services/nvca/pkg/client/listers/nvca/v2beta1",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/watch",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/cache",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":v2beta1",
+    visibility = ["//visibility:public"],
+)

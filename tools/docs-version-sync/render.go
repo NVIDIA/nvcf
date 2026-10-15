@@ -38,246 +38,13 @@ func Render(renderer string, catalog *Catalog) (string, error) {
 		return renderImageMirroringResourceExamples(catalog)
 	case "image-mirroring-stack-snippet":
 		return renderImageMirroringStackSnippet(catalog)
+	case "image-mirroring-compute-stack-snippet":
+		return renderImageMirroringComputeStackSnippet(catalog)
 	case "image-mirroring-cli-snippet":
 		return renderImageMirroringCLISnippet(catalog)
 	default:
 		return "", fmt.Errorf("unknown renderer %q", renderer)
 	}
-}
-
-type manifestCategory struct {
-	Heading     string
-	Description string
-	Names       []string
-	StaticRows  []manifestStaticRow
-}
-
-type manifestStaticRow struct {
-	Type string
-	Name string
-	Path string
-}
-
-func renderManifestArtifactRegistryPaths(catalog *Catalog) (string, error) {
-	used := map[string]struct{}{}
-	var b strings.Builder
-
-	categories := []manifestCategory{
-		{
-			Heading:     "Infrastructure Components",
-			Description: "Core infrastructure services including NATS for messaging, NATS auth callout support, Cassandra for data storage, and OpenBao for secret management.",
-			Names: []string{
-				"nats-box",
-				"nats-server",
-				"nats-server-config-reloader",
-				"helm-nvcf-nats",
-				"nvcf-nats-auth-callout-service",
-				"helm-nvcf-nats-auth-callout-service",
-				"bitnami-cassandra",
-				"nvcf-cassandra-migrations",
-				"helm-nvcf-cassandra",
-				"nvcf-openbao",
-				"nvcf-openbao-migrations",
-				"helm-nvcf-openbao-server",
-				"oss-vault-k8s",
-			},
-		},
-		{
-			Heading:     "Control Plane Components",
-			Description: "Services that manage the NVCF platform including API gateway, deployment orchestration, invocation handling, LLM routing, and security services.",
-			Names: []string{
-				"spot",
-				"strap",
-				"helm-nvcf-api",
-				"helm-nvcf-sis",
-				"nvcf-grpc-proxy",
-				"helm-nvcf-grpc-proxy",
-				"nvcf-invocation-service",
-				"helm-nvcf-invocation-service",
-				"ess-api",
-				"helm-nvcf-ess-api",
-				"notary-service",
-				"helm-nvcf-notary-service",
-				"reval-server",
-				"helm-reval",
-				"nv-api-keys",
-				"helm-nvcf-api-keys",
-				"llm-api-gateway",
-				"llm-request-router",
-				"helm-nvcf-llm-api-gateway",
-				"helm-nvcf-llm-request-router",
-			},
-		},
-		{
-			Heading:     "GPU Workload Components",
-			Description: "Components that run on GPU nodes to manage function execution, including the NVCA operator and supporting containers.",
-			Names: []string{
-				"nvca",
-				"nvca-operator",
-				"helm-nvca-operator",
-				"nvcf_worker_utils",
-				"nvcf_worker_init",
-				"nvcf_worker_niclls",
-				"ess-agent",
-				"nvcf-image-credential-helper",
-			},
-		},
-		{
-			Heading:     "Supporting Components",
-			Description: "Additional utilities and helper services required for the platform, including the NVIDIA GPU Operator for GPU node management.",
-			Names: []string{
-				"alpine-k8s",
-				"load_tester_supreme",
-			},
-			StaticRows: []manifestStaticRow{
-				{Type: "Chart (HTTP)", Name: "gpu-operator", Path: "[Public NGC Helm repo](https://helm.ngc.nvidia.com/nvidia)"},
-				{Type: "Image", Name: "gpu-operator-validator", Path: "[Public NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/cloud-native/containers/gpu-operator-validator)"},
-				{Type: "Image", Name: "k8s-device-plugin", Path: "[Public NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/k8s/containers/device-plugin)"},
-				{Type: "Chart (HTTP)", Name: "ebs-csi-driver", Path: "https://kubernetes-sigs.github.io/aws-ebs-csi-driver"},
-				{Type: "Chart (HTTP)", Name: "csi-driver-smb", Path: "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-smb/master/charts"},
-			},
-		},
-		{
-			Heading:     "Reference Architecture Components",
-			Description: "Optional components for the reference deployment architecture.",
-			Names: []string{
-				"nvcf-gateway-routes",
-				"admin-token-issuer-proxy",
-				"helm-admin-token-issuer-proxy",
-			},
-		},
-		{
-			Heading:     "Observability Components",
-			Description: "Optional example components for monitoring and observability. These are provided as reference implementations only and are not intended for production use. See [self-hosted-example-dashboards](./example-dashboards.md) for deployment instructions.",
-			Names: []string{
-				"nvcf-observability-reference-stack",
-				"nvcf-example-dashboards",
-				"helm-nvcf-state-metrics",
-			},
-		},
-		{
-			Heading:     "Container Caching Components",
-			Description: "Optional components for accelerating container image pulls across all workload types.",
-			Names: []string{
-				"nvcf-container-cache",
-				"helm-nvcf-container-cache",
-				"nvcf-proxy-tls-certs",
-			},
-		},
-		{
-			Heading:     "Simulation Caching Components",
-			Description: "Optional caching components for Low Latency Streaming (LLS) and simulation workloads, including shader caching, derived data caching, and USD content caching.",
-			Names: []string{
-				"gxcache-webhook",
-				"gxcache-init",
-				"gxcache-service",
-				"helm-gxcache",
-				"ddcs-dist-kv",
-				"usd-content-cache",
-			},
-			StaticRows: []manifestStaticRow{
-				{Type: "Chart (HTTP)", Name: "ddcs", Path: "https://helm.ngc.nvidia.com/nvidia/omniverse/ddcs:5.0.0"},
-				{Type: "Chart (HTTP)", Name: "usd-content-cache", Path: "https://helm.ngc.nvidia.com/nvidia/omniverse/usd-content-cache:3.0.3"},
-			},
-		},
-		{
-			Heading:     "Storage API Components",
-			Description: "Optional components for USD Storage API functionality used in simulation workloads.",
-			Names: []string{
-				"storage-service",
-				"simple-nginx",
-			},
-			StaticRows: []manifestStaticRow{
-				{Type: "Chart (HTTP)", Name: "storage-service", Path: "https://helm.ngc.nvidia.com/nvidia/omniverse/storage-service:1.0.2"},
-				{Type: "Chart (HTTP)", Name: "discovery-service", Path: "https://helm.ngc.nvidia.com/nvidia/omniverse/discovery-service:2.3.8"},
-			},
-		},
-		{
-			Heading:     "Low Latency Streaming (LLS) Components",
-			Description: "Components for Low Latency Streaming functionality.",
-			Names: []string{
-				"streaming-proxy",
-				"gdn-streaming",
-			},
-		},
-	}
-
-	for _, category := range categories {
-		b.WriteString(fmt.Sprintf("#### %s\n\n", category.Heading))
-		b.WriteString(category.Description)
-		b.WriteString("\n\n")
-		if err := renderManifestCategoryTable(&b, catalog, category, used); err != nil {
-			return "", err
-		}
-		b.WriteString("\n")
-	}
-
-	otherArtifacts := catalog.uncategorizedArtifacts(used)
-	if len(otherArtifacts) > 0 {
-		b.WriteString("#### Other Published Components\n\n")
-		b.WriteString("Additional components present in the current stack artifact manifest.\n\n")
-		if err := renderArtifactTable(&b, catalog, otherArtifacts); err != nil {
-			return "", err
-		}
-		b.WriteString("\n")
-	}
-
-	b.WriteString("#### Deployment Resources\n\n")
-	b.WriteString("Helmfile and CLI resources for deployment.\n\n")
-	deployment := manifestCategory{
-		Names: []string{defaultStackResourceName, "nvcf-cli"},
-	}
-	for _, artifact := range catalog.resourceArtifacts() {
-		deployment.Names = appendIfMissing(deployment.Names, artifact.Name)
-	}
-	if err := renderManifestCategoryTable(&b, catalog, deployment, used); err != nil {
-		return "", err
-	}
-	return strings.TrimRight(b.String(), "\n") + "\n", nil
-}
-
-func renderManifestCategoryTable(b *strings.Builder, catalog *Catalog, category manifestCategory, used map[string]struct{}) error {
-	var artifacts []Artifact
-	for _, name := range category.Names {
-		for _, artifact := range catalog.findArtifacts(name) {
-			if catalog.isDenied(artifact.Name) {
-				continue
-			}
-			artifacts = append(artifacts, artifact)
-			used[artifact.catalogKey()] = struct{}{}
-		}
-	}
-	if len(artifacts) == 0 && len(category.StaticRows) == 0 {
-		b.WriteString("No artifacts are listed for this category in the current catalog.\n")
-		return nil
-	}
-	if err := renderArtifactTable(b, catalog, artifacts); err != nil {
-		return err
-	}
-	for _, row := range category.StaticRows {
-		b.WriteString(fmt.Sprintf("| %s | %s | %s |\n", row.Type, row.Name, formatStaticPath(row.Path)))
-	}
-	return nil
-}
-
-func formatStaticPath(path string) string {
-	if strings.HasPrefix(path, "[") {
-		return path
-	}
-	return fmt.Sprintf("`%s`", path)
-}
-
-func renderArtifactTable(b *strings.Builder, catalog *Catalog, artifacts []Artifact) error {
-	b.WriteString("| Type | Component Name | Full Path |\n")
-	b.WriteString("| --- | --- | --- |\n")
-	for _, artifact := range artifacts {
-		path, err := catalog.artifactPath(artifact)
-		if err != nil {
-			return err
-		}
-		b.WriteString(fmt.Sprintf("| %s | %s | `%s` |\n", artifactTypeLabel(artifact), artifact.Name, path))
-	}
-	return nil
 }
 
 func renderManifestDeploymentResources(catalog *Catalog) (string, error) {
@@ -286,7 +53,7 @@ func renderManifestDeploymentResources(catalog *Catalog) (string, error) {
 	b.WriteString("| Type | Component Name | Full Path |\n")
 	b.WriteString("| --- | --- | --- |\n")
 	for _, artifact := range resources {
-		path, err := catalog.artifactPath(artifact)
+		path, err := catalog.artifactDistribution(artifact)
 		if err != nil {
 			return "", err
 		}
@@ -297,22 +64,68 @@ func renderManifestDeploymentResources(catalog *Catalog) (string, error) {
 
 func renderImageMirroringResourceExamples(catalog *Catalog) (string, error) {
 	stack := catalog.stackArtifact()
-	ref, err := catalog.resourceRef(stack)
-	if err != nil {
-		return "", err
+	stackPending := catalog.publicationIsPending(stack)
+	ref := ""
+	var err error
+	if !stackPending {
+		ref, err = catalog.resourceRef(stack)
+		if err != nil {
+			return "", err
+		}
 	}
-	refWithVersion := strings.Replace(ref, stack.Version, "${STACK_VERSION}", 1)
-	refWithoutVersion := strings.TrimSuffix(ref, ":"+stack.Version)
-	return fmt.Sprintf("```bash\n# Set the stack version\nexport STACK_VERSION=%q\n\n# Download a specific stack version\nngc registry resource download-version \\\n  %q\n\n# List all stack versions\nngc registry resource list \\\n  %q\n\n# Download latest stack version (omit version)\nngc registry resource download-version \\\n  %q\n```\n",
-		stack.Version,
-		refWithVersion,
-		refWithoutVersion+":*",
-		refWithoutVersion,
-	), nil
+
+	compute, hasComputeStack := catalog.findArtifact(computeStackResourceName)
+	computePending := hasComputeStack && catalog.publicationIsPending(compute)
+	computeRef := ""
+	if hasComputeStack {
+		if compute.Type != ArtifactTypeResource {
+			return "", fmt.Errorf("%s must be a resource artifact", computeStackResourceName)
+		}
+		if !computePending {
+			computeRef, err = catalog.resourceRef(compute)
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString("```bash\n")
+	b.WriteString("# Set stack versions\n")
+	b.WriteString(fmt.Sprintf("export STACK_VERSION=%q\n", stack.Version))
+	if hasComputeStack {
+		b.WriteString(fmt.Sprintf("export COMPUTE_STACK_VERSION=%q\n", compute.Version))
+	}
+	b.WriteString("\n")
+	b.WriteString("# Download a specific control-plane stack version\n")
+	if stackPending {
+		b.WriteString(fmt.Sprintf("# Publication pending: %s %s is not yet available for download.\n", stack.Name, stack.Version))
+	} else {
+		refWithVersion := strings.Replace(ref, stack.Version, "${STACK_VERSION}", 1)
+		b.WriteString("ngc registry resource download-version \\\n")
+		b.WriteString(fmt.Sprintf("  %q\n", refWithVersion))
+	}
+
+	if hasComputeStack {
+		b.WriteString("\n# Download a specific compute-plane stack version\n")
+		if computePending {
+			b.WriteString(fmt.Sprintf("# Publication pending: %s %s is not yet available for download.\n", compute.Name, compute.Version))
+		} else {
+			computeRefWithVersion := strings.Replace(computeRef, compute.Version, "${COMPUTE_STACK_VERSION}", 1)
+			b.WriteString("ngc registry resource download-version \\\n")
+			b.WriteString(fmt.Sprintf("  %q\n", computeRefWithVersion))
+		}
+	}
+
+	b.WriteString("```\n")
+	return b.String(), nil
 }
 
 func renderImageMirroringStackSnippet(catalog *Catalog) (string, error) {
 	stack := catalog.stackArtifact()
+	if catalog.publicationIsPending(stack) {
+		return fmt.Sprintf("```bash\n# Publication pending: %s %s is not yet available for download.\n```\n", stack.Name, stack.Version), nil
+	}
 	ref, err := catalog.resourceRef(stack)
 	if err != nil {
 		return "", err
@@ -328,16 +141,45 @@ func renderImageMirroringStackSnippet(catalog *Catalog) (string, error) {
 	), nil
 }
 
+func renderImageMirroringComputeStackSnippet(catalog *Catalog) (string, error) {
+	compute, ok := catalog.findArtifact(computeStackResourceName)
+	if !ok {
+		return "", fmt.Errorf("supplemental artifact %s is required", computeStackResourceName)
+	}
+	if compute.Type != ArtifactTypeResource {
+		return "", fmt.Errorf("%s must be a resource artifact", computeStackResourceName)
+	}
+	if catalog.publicationIsPending(compute) {
+		return fmt.Sprintf("```bash\n# Publication pending: %s %s is not yet available for download.\n```\n", compute.Name, compute.Version), nil
+	}
+	ref, err := catalog.resourceRef(compute)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("```bash\n# Set the version\nexport COMPUTE_VERSION=%q\n\nngc registry resource download-version %q && \\\n   mkdir -p %s && \\\n   tar -xzf %s_v${COMPUTE_VERSION}/%s-${COMPUTE_VERSION}.tar.gz -C %s && \\\n   rm -rf %s_v${COMPUTE_VERSION}\n```\n",
+		compute.Version,
+		strings.Replace(ref, compute.Version, "${COMPUTE_VERSION}", 1),
+		compute.Name,
+		compute.Name,
+		compute.Name,
+		compute.Name,
+		compute.Name,
+	), nil
+}
+
 func renderImageMirroringCLISnippet(catalog *Catalog) (string, error) {
 	cli, ok := catalog.findArtifact("nvcf-cli")
 	if !ok {
 		return "", fmt.Errorf("supplemental artifact nvcf-cli is required")
 	}
+	if catalog.publicationIsPending(cli) {
+		return fmt.Sprintf("```bash\n# Publication pending: %s %s is not yet available for download.\n```\n\nPackage contents and extraction instructions will be available after publication or mirroring.\n", cli.Name, cli.Version), nil
+	}
 	ref, err := catalog.resourceRef(cli)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("```bash\n# Set the version\nexport VERSION=%q\n\n# Set your platform (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64)\nexport PLATFORM=\"linux-amd64\"\n\nngc registry resource download-version %q\n\ntar -xzf nvcf-cli_v${VERSION}/${PLATFORM}/nvcf-cli-${PLATFORM}-${VERSION}.tar.gz\nmv nvcf-cli-${PLATFORM}-${VERSION} nvcf-cli\nchmod +x nvcf-cli/nvcf-cli\n```\n",
+	return fmt.Sprintf("```bash\n# Set the version\nexport VERSION=%q\n\n# Set your platform (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64)\nexport PLATFORM=\"linux-amd64\"\n\nngc registry resource download-version %q\n\ntar -xzf nvcf-cli_v${VERSION}/${PLATFORM}/nvcf-cli-${PLATFORM}-${VERSION}.tar.gz\nmv nvcf-cli-${PLATFORM}-${VERSION} nvcf-cli\nchmod +x nvcf-cli/nvcf-cli\n```\n\nThe extracted directory contains:\n\n- `nvcf-cli` - The CLI binary\n- `.nvcf-cli.yaml.template` - Configuration template\n- `examples/` - Sample configuration files for different environments\n- `USAGE-GUIDE.md` - Detailed usage documentation\n",
 		cli.Version,
 		strings.Replace(ref, cli.Version, "${VERSION}", 1),
 	), nil
@@ -348,13 +190,16 @@ func (catalog *Catalog) stackArtifact() Artifact {
 		Name:     catalog.Stack.Name,
 		Type:     ArtifactTypeResource,
 		Registry: catalog.Stack.Registry,
-		Version:  catalog.Stack.Version,
+		Version:  catalog.Stack.PublicationVersion,
 	}
 }
 
-func artifactTypeLabel(artifact Artifact) string {
+func (catalog *Catalog) artifactTypeLabel(artifact Artifact) string {
 	switch artifact.Type {
 	case ArtifactTypeChart:
+		if publication, ok := catalog.publicationFor(artifact); ok && publication.ChartFormat == ChartFormatHTTP {
+			return "Chart (HTTP)"
+		}
 		return "Chart (OCI)"
 	case ArtifactTypeResource:
 		return "Resource"
@@ -572,6 +417,10 @@ func markerSyntaxes(marker string) []markerSyntax {
 		{
 			Begin: fmt.Sprintf("{/* docs-version-sync:BEGIN %s */}", marker),
 			End:   fmt.Sprintf("{/* docs-version-sync:END %s */}", marker),
+		},
+		{
+			Begin: fmt.Sprintf("{/*docs-version-sync:BEGIN %s*/}", marker),
+			End:   fmt.Sprintf("{/*docs-version-sync:END %s*/}", marker),
 		},
 		{
 			Begin:  fmt.Sprintf("<!-- docs-version-sync:BEGIN %s -->", marker),

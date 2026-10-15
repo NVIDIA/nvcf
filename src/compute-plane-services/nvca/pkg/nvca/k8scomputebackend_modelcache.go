@@ -175,8 +175,8 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 			if (err != nil && errors.IsNotFound(err)) || (pvObjList != nil && len(pvObjList.Items) == 0) {
 				err = c.SetupInitCacheJobBlockDevice(ctx, rwPVC, initJob, req)
 				if err != nil {
-					c.bk8s.eventRecorder.Event(req, v1.EventTypeWarning,
-						string(types.EventCategoryModelCaching), "failed caching setup, resort to non-caching")
+					c.bk8s.EmitICMSEvent(req, v1.EventTypeWarning,
+						string(types.EventCategoryModelCaching), "failed caching setup, resort to non-caching", nil)
 					log.WithError(err).Error("failed SetupInitCacheJobBlockDevice, model caching will be disabled")
 					return ModelCachingFailed, ""
 				}
@@ -191,8 +191,8 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 					if err != nil {
 						log.WithError(err).Error("failed to cleanup ModelCaching resources, needs manual cleanup")
 					}
-					c.bk8s.eventRecorder.Event(req, v1.EventTypeWarning,
-						string(types.EventCategoryModelCaching), "failed pvc setup, resort to non-caching")
+					c.bk8s.EmitICMSEvent(req, v1.EventTypeWarning,
+						string(types.EventCategoryModelCaching), "failed pvc setup, resort to non-caching", nil)
 					metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(EventModelCachingFailed)...).Inc()
 					mc = ModelCachingFailed
 				}
@@ -206,10 +206,10 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 			if err != nil {
 				log.WithError(err).Error("failed to cleanup ModelCaching resources, needs manual cleanup")
 			}
-			c.bk8s.eventRecorder.Eventf(req, v1.EventTypeWarning,
-				string(types.EventCategoryModelCaching), "%v failed, resort to non-caching", initJob.Name)
+			c.bk8s.EmitICMSEventf(req, v1.EventTypeWarning,
+				string(types.EventCategoryModelCaching), "%v failed, resort to non-caching", nil, initJob.Name)
 			reason := c.getInitCacheJobFailureReason(ctx, initJob)
-			metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, reason)
+			metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, reason, string(types.HelmCacheBackendNVMesh))
 			return ModelCachingFailed, ""
 		case InitCacheJobCompleted:
 			mc := ModelCachingInProgress
@@ -220,10 +220,10 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 				if err != nil {
 					log.WithError(err).Error("failed to cleanup ModelCaching resources, needs manual cleanup")
 				}
-				c.bk8s.eventRecorder.Event(req, v1.EventTypeWarning,
-					string(types.EventCategoryModelCaching), "failed pvc setup, resort to non-caching")
+				c.bk8s.EmitICMSEvent(req, v1.EventTypeWarning,
+					string(types.EventCategoryModelCaching), "failed pvc setup, resort to non-caching", nil)
 				metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(EventModelCachingFailed)...).Inc()
-				metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonPVCSetupFailed)
+				metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonPVCSetupFailed, string(types.HelmCacheBackendNVMesh))
 				mc = ModelCachingFailed
 			}
 			return mc, ""
@@ -246,11 +246,11 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 			// TODO: Perform Deeper Cleanup on reconciliation
 			log.WithError(err).Errorf("failed to cleanup ModelCaching resources, needs manual cleanup")
 		}
-		c.bk8s.eventRecorder.Eventf(req, v1.EventTypeWarning,
-			string(types.EventCategoryModelCaching), "%v bind failed, resort to non-caching", roPVCName)
+		c.bk8s.EmitICMSEventf(req, v1.EventTypeWarning,
+			string(types.EventCategoryModelCaching), "%v bind failed, resort to non-caching", nil, roPVCName)
 		metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(EventPVCModelCachingError)...).Inc()
 		metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(EventModelCachingFailed)...).Inc()
-		metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonPVCBindFailed)
+		metrics.RecordModelCacheResult(modelcachetypes.ResultFailure, modelcachetypes.ReasonPVCBindFailed, string(types.HelmCacheBackendNVMesh))
 		return ModelCachingFailed, ""
 	case PVCFoundBound:
 		log.Infof("ROPVC %v setup completed, Modelcaching will be enabled for request %v/%v", roPVCName, req.Namespace, req.Name)
@@ -265,7 +265,7 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 				c.bk8s.podInstanceNamespace, initJob.Name)
 		}
 		metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(EventModelCachingSuccess)...).Inc()
-		metrics.RecordModelCacheResult(modelcachetypes.ResultSuccess, "")
+		metrics.RecordModelCacheResult(modelcachetypes.ResultSuccess, "", string(types.HelmCacheBackendNVMesh))
 		return ModelCachingCompleted, roPVCName
 	}
 	// Never reached

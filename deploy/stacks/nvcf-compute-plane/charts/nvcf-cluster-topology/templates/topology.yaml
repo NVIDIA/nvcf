@@ -1,0 +1,56 @@
+{{/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/}}
+
+{{- if .Values.kaiScheduler.enabled }}
+{{- $topologies := .Values.topologies | default list }}
+{{- if empty $topologies }}
+{{- fail "nvcf-cluster-topology: topologies must contain at least one entry when kaiScheduler.enabled is true" }}
+{{- end }}
+{{- range $i, $topo := $topologies }}
+{{- $levels := $topo.levels | default list }}
+{{- if empty $levels }}
+{{- fail (printf "nvcf-cluster-topology: topology %q must set at least one level" ($topo.name | default "<unnamed>")) }}
+{{- end }}
+---
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: kai.scheduler/v1alpha1
+kind: Topology
+metadata:
+  name: {{ $topo.name | required "nvcf-cluster-topology: every topology must set name" }}
+  labels:
+    {{- include "nvcf-cluster-topology.labels" $ | nindent 4 }}
+spec:
+  levels:
+  {{- range $levels }}
+  - nodeLabel: {{ .nodeLabel | required "nvcf-cluster-topology: every level must set nodeLabel" | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}

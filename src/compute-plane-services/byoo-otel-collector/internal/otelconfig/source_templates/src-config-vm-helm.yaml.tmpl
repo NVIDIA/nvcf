@@ -130,7 +130,7 @@ processors:
     actions:
 [[ gfn_attributes | indent(2, true) ]]
 
-  metricstransform:
+  metrics_transform:
     transforms:
       - include: ^.*$
         match_type: regexp
@@ -139,7 +139,7 @@ processors:
 [[ gfn_metricstransform | indent(2, true) ]]
 
 extensions:
-  cgroupruntime:
+  cgroup_runtime:
     gomaxprocs:
       enabled: true
     gomemlimit:
