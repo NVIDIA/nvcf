@@ -164,6 +164,7 @@ releases:
     chart: nvcf/helm-admin-token-issuer-proxy
     version: 1.6.0
     namespace: api-keys
+    condition: adminIssuerProxy.enabled
     values:
       - ../global.yaml.gotmpl
     # Finding #22 (E2E 2026-04-20): admin-issuer-proxy was not installed by

@@ -35,6 +35,19 @@ cargo run --release -p stargate-routing-sim -- simulate \
 All policies see the same arrival sequence for a seed. Policy `load_balancer`
 objects use the same JSON shape as Stargate per-model load-balancer config.
 
+## Routing invariants
+
+`cargo test -p stargate-routing-sim` also runs the scenarios in
+`src/invariants.rs` for every algorithm in `routing_methods.json`: several
+Stargates with stale stats, fast and slow versions of one model, and a burst
+to one backend that other Stargates also send work to. They assert that no
+request fails with no route while the routing Stargate sees a backend with a
+free engine slot, that no request exhausts queue-mismatch retries while the
+backend can drain the burst, that overflow reaches the slow version, and that
+each backend's share of requests stays within 0.10 of its capacity share (an
+even split for `round-robin` and `random`). Omitted `pylon.queue_mismatch`
+fields take the production Pylon defaults.
+
 ## Driving a deployed fleet
 
 `drive` sends the same workload to a deployed Stargate in real time, so a

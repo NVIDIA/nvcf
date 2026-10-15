@@ -276,6 +276,7 @@ func runServer(cmd *cobra.Command) error {
 			Enabled: cfg.Metrics.Enabled,
 			Port:    cfg.Metrics.Port,
 		},
+		NATS: service,
 	}
 	r := router.New(appLogger, routerConfig)
 

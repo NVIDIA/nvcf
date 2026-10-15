@@ -18,6 +18,7 @@ limitations under the License.
 package models
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 )
@@ -28,7 +29,19 @@ const (
 	ObjectEmbedding               = "embedding"
 )
 
-type EmbeddingInputField []string
+type EmbeddingInputField []EmbeddingInput
+
+type EmbeddingInput struct {
+	Text   string
+	Tokens []uint32
+}
+
+func (input EmbeddingInput) MarshalJSON() ([]byte, error) {
+	if input.Tokens != nil {
+		return json.Marshal(input.Tokens)
+	}
+	return json.Marshal(input.Text)
+}
 
 type CreateEmbeddingRequest struct {
 	Input          EmbeddingInputField `json:"input"`
@@ -67,21 +80,63 @@ func (ef *EmbeddingInputField) UnmarshalJSON(data []byte) error {
 	var single string
 	if err := json.Unmarshal(data, &single); err == nil {
 		if len(single) > 0 {
-			*ef = []string{single}
+			*ef = EmbeddingInputField{{Text: single}}
+		} else {
+			*ef = nil
 		}
 		return nil
 	}
 
 	var multiple []string
 	if err := json.Unmarshal(data, &multiple); err == nil {
-		*ef = multiple
+		*ef = make(EmbeddingInputField, len(multiple))
+		for i, text := range multiple {
+			(*ef)[i] = EmbeddingInput{Text: text}
+		}
+		return nil
+	}
+
+	var items []json.RawMessage
+	if err := json.Unmarshal(data, &items); err == nil && len(items) > 0 {
+		if bytes.HasPrefix(bytes.TrimSpace(items[0]), []byte("[")) {
+			batch := make(EmbeddingInputField, len(items))
+			for i, item := range items {
+				tokens, err := decodeEmbeddingTokens(item)
+				if err != nil {
+					return err
+				}
+				batch[i] = EmbeddingInput{Tokens: tokens}
+			}
+			*ef = batch
+			return nil
+		}
+		tokens, err := decodeEmbeddingTokens(data)
+		if err != nil {
+			return err
+		}
+		*ef = EmbeddingInputField{{Tokens: tokens}}
 		return nil
 	}
 
 	return &UnmarshalError{
 		Field: "input",
-		Msg:   "Must be either a string or an array of string",
+		Msg:   "must be a string, string array, token array, or array of token arrays",
 	}
+}
+
+func decodeEmbeddingTokens(data []byte) ([]uint32, error) {
+	var values []*uint32
+	if err := json.Unmarshal(data, &values); err != nil || values == nil {
+		return nil, &UnmarshalError{Field: "input", Msg: "token arrays must contain non-negative integers"}
+	}
+	tokens := make([]uint32, len(values))
+	for i, value := range values {
+		if value == nil {
+			return nil, &UnmarshalError{Field: "input", Msg: "token arrays must not contain null"}
+		}
+		tokens[i] = *value
+	}
+	return tokens, nil
 }
 
 func (ee *EmbeddingEmbedding) MarshalJSON() ([]byte, error) {
