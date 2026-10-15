@@ -1679,7 +1679,7 @@
         "image": "lmsysorg/sglang@sha256:1f176b3a1dd1205d2a462ab80ea9fc17769a32e53cb6f3c690efa2dc2c384977",
         "runtime": "SGLang v0.5.21 (e00930c5489053f26d86b179cee0d087f846acbb)",
         "qualification": {
-          "reason": "Previous qualification used a recipe-level thinking override and explicit output-token budgets. Verification with model-default thinking and server-default output and sampling settings is deferred until after merge. Earlier validation is retained below and does not qualify these defaults.",
+          "reason": "Previous qualification used a recipe-level thinking override and explicit output-token budgets. Short chat, streaming and authentication now pass with model-default thinking and server-default output and sampling settings. Earlier context-boundary and lifecycle evidence is retained below and has not been repeated with these defaults.",
           "previousAutomaticHelmValidation": {
             "date": "2026-10-11",
             "status": "smoke-tested",
@@ -1787,6 +1787,110 @@
             "performanceBenchmarked": false,
             "qualityEvaluated": false
           }
+        },
+        "automaticHelmValidation": {
+          "date": "2026-10-15",
+          "profile": "station-fp4-tp2",
+          "modelRevision": "60d8d70770c6776ff598c94bb586a859a38244f1",
+          "runtimeImage": "lmsysorg/sglang@sha256:1f176b3a1dd1205d2a462ab80ea9fc17769a32e53cb6f3c690efa2dc2c384977",
+          "contextLength": 8192,
+          "concurrency": 1,
+          "tokenCapacity": 16384,
+          "requestType": "short-chat-stream-and-auth-with-runtime-defaults",
+          "promptTokens": [
+            11
+          ],
+          "maximumObservedTotalTokens": 14,
+          "generationSettings": {
+            "outputTokenBudget": "server-default",
+            "sampling": "server-default",
+            "thinking": "model-default",
+            "omittedRequestFields": [
+              "max_tokens",
+              "temperature",
+              "seed",
+              "reasoning_effort",
+              "chat_template_kwargs"
+            ]
+          },
+          "fullContextExercised": false,
+          "contextBoundaryExercised": false,
+          "performanceBenchmarked": false,
+          "qualityEvaluated": false,
+          "status": "smoke-tested",
+          "tensorParallelRanks": 2,
+          "reason": "Gateway verification of the existing Helm deployment of this profile passed readiness, registration, discovery, chat, streaming and authentication with model-default thinking and server-default output and sampling settings. Chat and streaming finished with stop and the model pods had no restarts. Context-boundary, lifecycle and fabric checks have not been repeated with these defaults.",
+          "checks": [
+            "readiness",
+            "registration",
+            "discovery",
+            "chat",
+            "streaming",
+            "authentication"
+          ],
+          "pendingChecks": [
+            "context-boundary",
+            "stop-resume",
+            "uninstall-reinstall",
+            "other-model-isolation",
+            "long-thinking-requests",
+            "long-context-streaming",
+            "tool-calling",
+            "quality-evaluation",
+            "throughput-benchmark"
+          ],
+          "observedWorkload": {
+            "chat": {
+              "promptTokens": 11,
+              "completionTokens": 3,
+              "reasoningTokens": 0,
+              "totalTokens": 14,
+              "finishReason": "stop"
+            },
+            "stream": {
+              "promptTokens": 11,
+              "completionTokens": 3,
+              "reasoningTokens": 0,
+              "totalTokens": 14,
+              "events": 5,
+              "completionMarkerReceived": true
+            },
+            "authentication": {
+              "missingOrInvalidKeyStatus": 401,
+              "validKeyStatus": 200
+            }
+          },
+          "modelPodRestarts": 0
+        },
+        "validatedWorkload": {
+          "date": "2026-10-15",
+          "profile": "station-fp4-tp2",
+          "modelRevision": "60d8d70770c6776ff598c94bb586a859a38244f1",
+          "runtimeImage": "lmsysorg/sglang@sha256:1f176b3a1dd1205d2a462ab80ea9fc17769a32e53cb6f3c690efa2dc2c384977",
+          "contextLength": 8192,
+          "concurrency": 1,
+          "tokenCapacity": 16384,
+          "requestType": "short-chat-stream-and-auth-with-runtime-defaults",
+          "promptTokens": [
+            11
+          ],
+          "maximumObservedTotalTokens": 14,
+          "generationSettings": {
+            "outputTokenBudget": "server-default",
+            "sampling": "server-default",
+            "thinking": "model-default",
+            "omittedRequestFields": [
+              "max_tokens",
+              "temperature",
+              "seed",
+              "reasoning_effort",
+              "chat_template_kwargs"
+            ]
+          },
+          "fullContextExercised": false,
+          "contextBoundaryExercised": false,
+          "performanceBenchmarked": false,
+          "qualityEvaluated": false
         }
       }
     ],
